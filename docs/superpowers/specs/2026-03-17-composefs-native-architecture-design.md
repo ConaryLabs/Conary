@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-03-17
-revision: 1
+revision: 2
 summary: Unified design for composefs/EROFS-native architecture throughout Conary
 ---
 
@@ -110,28 +110,116 @@ of the database state. The mount is a pure function of the EROFS image.
 
 No journal is needed. No rollback replay. No backup restoration.
 
-**Recovery on boot:**
-1. Read `/conary/current` symlink to find active generation
-2. If its EROFS image exists, mount it — done
-3. If not (crash during build), query DB for latest SystemState, rebuild EROFS, mount
+**Recovery on boot** (implemented as a Dracut module + early systemd unit):
+
+1. Dracut initramfs reads `/conary/current` symlink to find active generation
+2. If its EROFS image exists and passes basic validation (superblock magic + size
+   check), mount it via composefs — done
+3. If the image is missing or truncated (crash during build):
+   a. Query DB for latest SystemState with `is_active = true`
+   b. Rebuild EROFS image deterministically from that state
+   c. Mount the rebuilt image
+4. If the database is corrupted (unlikely — SQLite WAL + fsync), fall back to the
+   most recent intact EROFS image on disk (scan `/conary/generations/` by number,
+   descending)
 
 ### Conflict Detection
 
 VfsTree remains for preflight conflict detection. Before the DB commit, the
 transaction engine builds the proposed filesystem state in memory and checks for:
 
-- File owned by another package
-- Untracked file on disk blocking a new file
+- File owned by another package (two packages claiming the same path)
 - Path type mismatches (directory where file should go, or vice versa)
+- Duplicate providers (two packages providing the same capability)
 
 If conflicts are found, the transaction aborts before any state changes. This is
-pure in-memory validation — no disk I/O.
+pure in-memory validation — no disk I/O. Note: "untracked file on disk" conflicts
+are no longer relevant since files are never written to a mutable root.
 
 ### Locking
 
-One transaction at a time via lockfile (unchanged). The "danger window" (mutable
-state changes) shrinks from the entire backup/stage/deploy sequence to a single
-SQLite transaction, so the lock is held for much less time.
+One transaction at a time via lockfile (unchanged). The lock is held for the full
+transaction (resolve through mount) to prevent concurrent modifications. However,
+the critical section where mutable state changes (the SQLite transaction) is much
+shorter than the old backup/stage/deploy sequence. Steps outside the DB commit
+(fetch, EROFS build, mount) are idempotent and safe to retry if interrupted.
+
+### Mutable State: /etc, /var, and Other Writable Paths
+
+The EROFS image is read-only. Mutable state lives outside it on separate mounts.
+
+**Path classification:**
+
+| Path | Treatment |
+|---|---|
+| `/usr` | Read-only bind mount from composefs. All package-managed binaries, libraries, share. |
+| `/etc` | overlayfs: EROFS lower (package defaults) + persistent upper (user modifications) |
+| `/var` | Separate persistent mount. Never in the EROFS image. |
+| `/tmp` | tmpfs. Never in the EROFS image. |
+| `/home`, `/root` | Separate persistent mount. Never in the EROFS image. |
+| `/srv`, `/opt` | Separate persistent mounts. Never in the EROFS image. |
+| `/bin`, `/sbin`, `/lib`, `/lib64` | Symlinks to `/usr/*` (USR merge). Included in EROFS as symlinks. |
+
+The EROFS builder excludes `/var`, `/tmp`, `/home`, `/root`, `/srv`, `/opt` from the
+image. Only `/usr` content and root-level USR-merge symlinks are included. The
+existing `is_excluded()` function in `builder.rs` already filters these paths; this
+continues unchanged.
+
+**/etc overlay behavior during transactions:**
+
+When a package installs or updates files under `/etc`, those files appear in the
+EROFS image's `/etc` directory (the overlay lower layer). The overlay upper layer
+holds user modifications. overlayfs semantics handle the interaction:
+
+- Package installs new `/etc/nginx/nginx.conf`: appears in lower, visible to user
+  (no upper override exists)
+- User modifies `/etc/nginx/nginx.conf`: copy-up to upper, user version takes
+  precedence
+- Package updates `/etc/nginx/nginx.conf`: new version in lower (new generation),
+  but upper override still wins. User is notified of the conflict (`.rpmnew`-style
+  mechanism or interactive merge prompt)
+- Package removes a file from `/etc`: gone from lower in new generation. If user had
+  modified it, the upper copy persists as an orphan (GC can detect these)
+
+The `/etc` overlay is rebuilt on every transaction as part of the mount step (step 5
+in the transaction flow). This is the same as today's generation switch behavior,
+just applied to every transaction.
+
+### Scriptlet Execution
+
+Package scriptlets (pre-install, post-install, triggers) run after the EROFS image
+is built and mounted but before the transaction is considered complete.
+
+**Execution environment:**
+- Scriptlets execute in a namespace with the new composefs generation mounted
+- Writable paths available: `/etc` (overlay upper), `/var`, `/tmp`
+- `/usr` is read-only (as it should be — scriptlets should not modify managed content)
+- Standard scriptlet operations work:
+  - `ldconfig` — reads `/usr/lib` (read-only), writes `/etc/ld.so.cache` (writable)
+  - `systemctl daemon-reload` — writes to `/run` (tmpfs, writable)
+  - `update-alternatives` — writes to `/etc/alternatives` (writable overlay)
+  - `useradd`/`groupadd` — writes to `/etc/passwd`, `/etc/group` (writable overlay)
+
+**Updated transaction flow with scriptlets:**
+
+```
+1. Resolve
+2. Fetch
+3. DB Commit
+4. Build EROFS
+5. Mount (composefs + /etc overlay + /var)
+6. Run scriptlets (against newly mounted generation)
+7. Symlink update
+```
+
+**Scriptlet failure handling:**
+- If a scriptlet fails, the new generation's EROFS image and DB state remain valid
+- The mount can be rolled back to the previous generation (remount previous EROFS)
+- The failed generation is marked in metadata but not deleted (allows debugging)
+- The DB commit is not reversed — the generation exists but is not active
+
+This is simpler than the old model where scriptlet failure required journal-based
+filesystem rollback. Here, the previous generation is always intact and mountable.
 
 ## CAS, Generations & GC
 
@@ -146,8 +234,9 @@ objects are read exclusively through composefs at mount time.
 Every transaction produces a generation. They are cheap:
 
 - An EROFS image with 100K files is ~15-20MB (inodes, dirents, xattr CAS references)
-- Building one is CPU-bound metadata serialization — sub-second for typical systems,
-  a few seconds for very large ones
+- Building one is CPU-bound metadata serialization — expected sub-second for typical
+  systems, a few seconds for very large ones (should be benchmarked early in
+  implementation to validate)
 - Disk cost is trivial compared to the CAS objects they reference
 
 Generation numbering is sequential from `system_states.state_number`. One generation
@@ -165,14 +254,15 @@ liveness is inferred from filesystem hardlink counts (nlink > 1). That goes away
 Instead, liveness is a database query:
 
 ```sql
-SELECT DISTINCT hash FROM file_entries
-WHERE trove_id IN (
-    SELECT trove_id FROM state_members
-    WHERE state_id IN (/* surviving generation state IDs */)
-)
+SELECT DISTINCT f.sha256_hash
+FROM files f
+JOIN troves t ON f.trove_id = t.id
+JOIN state_members sm ON sm.trove_name = t.name AND sm.trove_version = t.version
+WHERE sm.state_id IN (/* surviving generation state IDs */)
 ```
 
-Pure database query. No filesystem walk. Fast and correct.
+Three-table join through name/version (state_members records membership by name, not
+foreign key). All columns are indexed. Pure database query. No filesystem walk.
 
 ### fs-verity
 
@@ -225,6 +315,13 @@ Two-track update model:
 
 For a typical update touching 50 packages out of 2000, the EROFS delta is tiny
 (changed inodes + dirents only) while CAS deltas carry actual new file content.
+
+**Determinism constraint:** for server-to-client EROFS deltas to work, both sides
+must produce byte-identical images from the same logical state. This requires that
+`ErofsBuilder`'s sort order, alignment, and xattr encoding remain stable across
+versions. Any change to the builder's output format is a breaking change for deltas
+(clients must do a full image rebuild instead of applying a patch). The existing
+`deterministic_output` test in `conary-erofs` enforces this property.
 
 ### OCI/Container Export
 
@@ -290,9 +387,9 @@ required for initial implementation.
 
 | Module | Change |
 |---|---|
-| `conary-core/src/transaction/mod.rs` | New lifecycle: resolve -> fetch -> DB commit -> EROFS build -> mount. ~300 lines replacing ~1500. |
-| `src/commands/generation/builder.rs` | Core of every transaction. Extracted into conary-core so the transaction engine calls it directly. |
-| `src/commands/generation/switch.rs` | Called after every transaction, not manually. Mount logic stays the same. |
+| `conary-core/src/transaction/mod.rs` | New lifecycle: resolve -> fetch -> DB commit -> EROFS build -> mount. Roughly one-fifth the current size. |
+| `src/commands/generation/builder.rs` | Core of every transaction. Extracted to `conary-core/src/generation/builder.rs` so the transaction engine calls it directly. |
+| `conary-core/src/generation/mount.rs` | Mount logic extracted from `src/commands/generation/switch.rs`. Called after every transaction, not manually. |
 | `conary-core/src/bootstrap/` | Outputs EROFS + CAS + DB instead of qcow2. Same pipeline stages, different final artifact. |
 
 ### Unchanged
@@ -320,6 +417,6 @@ required for initial implementation.
 
 ### Net Effect
 
-Transaction engine: ~1500 lines of journal/backup/recovery -> ~300 lines of
-resolve/fetch/commit/build/mount. Generation builder moves from CLI convenience
-into core loop. conary-erofs stays untouched.
+Transaction engine shrinks to roughly one-fifth its current size. Generation builder
+moves from CLI convenience into the core transaction loop at
+`conary-core/src/generation/`. conary-erofs stays untouched.
