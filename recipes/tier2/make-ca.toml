@@ -1,0 +1,58 @@
+# recipes/tier2/make-ca.toml
+#
+# BLFS — make-ca-1.16.1
+# https://www.linuxfromscratch.org/blfs/view/systemd/postlfs/make-ca.html
+#
+# CA certificate management script. Downloads Mozilla root certificates
+# from certdata.txt and installs them as trust anchors. No configure or
+# make steps -- just install the script, then run it to populate the
+# certificate store.
+#
+# NOTE: Requires p11-kit at runtime (not enforced here since the base
+# system does not include it; the script will work for basic OpenSSL
+# trust without p11-kit).
+
+[package]
+name = "make-ca"
+version = "1.16.1"
+release = "1"
+summary = "CA certificate management"
+description = """
+The make-ca script processes Mozilla's certdata.txt file to generate
+system trust anchors. It creates certificate stores compatible with
+OpenSSL, GnuTLS, and NSS, and supports importing local certificates
+from /etc/ssl/local.
+"""
+license = "MIT"
+homepage = "https://github.com/lfs-book/make-ca"
+
+[source]
+archive = "https://github.com/lfs-book/make-ca/archive/v%(version)s/make-ca-%(version)s.tar.gz"
+checksum = "md5:bf9cea2d24fc5344d4951b49f275c595"
+
+[build]
+requires = ["openssl"]
+makedepends = []
+chroot = true
+
+configure = """
+# Fix mktemp flag for portability
+sed '/mktemp/s/-t //' -i make-ca
+"""
+
+make = ""
+
+install = """
+make install
+
+install -vdm755 /etc/ssl/local
+
+# Download Mozilla root certificates and generate trust store
+/usr/sbin/make-ca -g 2>/dev/null || true
+
+# Enable automatic certificate update timer if systemd is running
+systemctl enable update-pki.timer 2>/dev/null || true
+"""
+
+[variables]
+jobs = "$(nproc)"

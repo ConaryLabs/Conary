@@ -1,0 +1,40 @@
+# recipes/tier2/rust.toml
+#
+# Rust 1.94.0 — Bootstrap binary installation
+#
+# Downloads the official Rust 1.94.0 standalone binary distribution
+# and installs it to the sysroot. NOT built from source. This
+# provides rustc and cargo needed to build Conary itself.
+
+[package]
+name = "rust"
+version = "1.94.0"
+release = "1"
+summary = "Rust programming language toolchain"
+description = """
+The Rust programming language toolchain, installed from the official
+pre-built binary distribution. Provides rustc (compiler) and cargo
+(package manager / build tool) needed to build Conary from source.
+"""
+license = "MIT OR Apache-2.0"
+homepage = "https://www.rust-lang.org/"
+
+[source]
+archive = "https://static.rust-lang.org/dist/rust-%(version)s-x86_64-unknown-linux-gnu.tar.xz"
+checksum = "md5:VERIFY_BEFORE_BUILD"
+
+[build]
+requires = ["glibc"]
+makedepends = []
+chroot = true
+
+configure = ""
+
+make = ""
+
+install = """
+./install.sh --prefix=%(destdir)s/usr --without=rust-docs
+"""
+
+[variables]
+jobs = "$(nproc)"
