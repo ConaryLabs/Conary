@@ -6,7 +6,6 @@ use crate::error::Result;
 use crate::flavor::FlavorSpec;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use strum_macros::{AsRefStr, Display, EnumString};
-use tracing::warn;
 
 /// Type of trove (package, component, collection, or redirect)
 #[derive(Debug, Clone, PartialEq, Eq, AsRefStr, Display, EnumString)]
@@ -318,6 +317,8 @@ impl Trove {
     }
 
     /// Convert a database row to a Trove
+    ///
+    /// Schema v52 guarantees all columns exist -- no compat fallbacks needed.
     pub fn from_row(row: &Row) -> rusqlite::Result<Self> {
         let type_str: String = row.get(3)?;
         let trove_type = type_str.parse::<TroveType>().map_err(|e| {
@@ -328,80 +329,23 @@ impl Trove {
             )
         })?;
 
-        // Handle install_source with default for older databases
-        let source_str: Option<String> = row.get(8)?;
-        let install_source = match &source_str {
-            Some(s) => match s.parse::<InstallSource>() {
-                Ok(src) => src,
-                Err(_) => {
-                    warn!(
-                        value = %s,
-                        "Trove::from_row: failed to parse install_source, falling back to File"
-                    );
-                    InstallSource::File
-                }
-            },
-            None => {
-                warn!("Trove::from_row: missing install_source, falling back to File");
-                InstallSource::File
-            }
-        };
+        let source_str: String = row.get(8)?;
+        let install_source = source_str.parse::<InstallSource>().map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(
+                8,
+                rusqlite::types::Type::Text,
+                Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+            )
+        })?;
 
-        // Handle install_reason with default for older databases
-        let reason_str: Option<String> = row.get(9)?;
-        let install_reason = match &reason_str {
-            Some(s) => match s.parse::<InstallReason>() {
-                Ok(reason) => reason,
-                Err(_) => {
-                    warn!(
-                        value = %s,
-                        "Trove::from_row: failed to parse install_reason, falling back to Explicit"
-                    );
-                    InstallReason::Explicit
-                }
-            },
-            None => {
-                warn!("Trove::from_row: missing install_reason, falling back to Explicit");
-                InstallReason::Explicit
-            }
-        };
-
-        // flavor_spec is nullable
-        let flavor_spec: Option<String> = row.get(10)?;
-
-        // Handle pinned with default for older databases
-        let pinned: i32 = row.get(11).unwrap_or_else(|_| {
-            warn!("Trove::from_row: failed to read pinned column, falling back to 0");
-            0
-        });
-
-        // Handle selection_reason (added in v16)
-        let selection_reason: Option<String> = row.get(12).unwrap_or_else(|_| {
-            warn!("Trove::from_row: failed to read selection_reason column, falling back to None");
-            None
-        });
-
-        // Handle label_id (added in v20)
-        let label_id: Option<i64> = row.get(13).unwrap_or_else(|_| {
-            warn!("Trove::from_row: failed to read label_id column, falling back to None");
-            None
-        });
-
-        // Handle orphan_since (added in v39)
-        let orphan_since: Option<String> = row.get(14).unwrap_or_else(|_| {
-            warn!("Trove::from_row: failed to read orphan_since column, falling back to None");
-            None
-        });
-
-        let source_distro: Option<String> = row.get(15).unwrap_or_else(|_| {
-            warn!("Trove::from_row: failed to read source_distro column, falling back to None");
-            None
-        });
-
-        let version_scheme: Option<String> = row.get(16).unwrap_or_else(|_| {
-            warn!("Trove::from_row: failed to read version_scheme column, falling back to None");
-            None
-        });
+        let reason_str: String = row.get(9)?;
+        let install_reason = reason_str.parse::<InstallReason>().map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(
+                9,
+                rusqlite::types::Type::Text,
+                Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+            )
+        })?;
 
         Ok(Self {
             id: Some(row.get(0)?),
@@ -414,13 +358,13 @@ impl Trove {
             installed_by_changeset_id: row.get(7)?,
             install_source,
             install_reason,
-            flavor_spec,
-            pinned: pinned != 0,
-            selection_reason,
-            label_id,
-            orphan_since,
-            source_distro,
-            version_scheme,
+            flavor_spec: row.get(10)?,
+            pinned: row.get::<_, i32>(11)? != 0,
+            selection_reason: row.get(12)?,
+            label_id: row.get(13)?,
+            orphan_since: row.get(14)?,
+            source_distro: row.get(15)?,
+            version_scheme: row.get(16)?,
         })
     }
 

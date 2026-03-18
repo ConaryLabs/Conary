@@ -355,7 +355,8 @@ impl LabelEntry {
     }
 
     /// Convert a database row to a LabelEntry
-    /// Row columns: id, repository, namespace, tag, description, parent_label_id, created_at, repository_id, delegate_to_label_id
+    ///
+    /// Schema v52 guarantees all columns exist -- no compat fallbacks needed.
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
         Ok(Self {
             id: Some(row.get(0)?),
@@ -365,9 +366,8 @@ impl LabelEntry {
             description: row.get(4)?,
             parent_label_id: row.get(5)?,
             created_at: row.get(6)?,
-            // v30 fields - may not exist in older databases
-            repository_id: row.get(7).unwrap_or(None),
-            delegate_to_label_id: row.get(8).unwrap_or(None),
+            repository_id: row.get(7)?,
+            delegate_to_label_id: row.get(8)?,
         })
     }
 }
