@@ -321,6 +321,14 @@ impl CasStore {
         hash::sha256(content.as_bytes())
     }
 
+    /// Iterate over all objects in the CAS store.
+    ///
+    /// Yields `(hash, path)` pairs by walking the two-level `objects/{prefix}/{suffix}`
+    /// directory. Skips temp files (`.` prefix or `.tmp` suffix) and non-file entries.
+    pub fn iter_objects(&self) -> impl Iterator<Item = crate::Result<(String, PathBuf)>> + '_ {
+        CasIterator::new(&self.objects_dir)
+    }
+
     /// Get the objects directory path
     pub fn objects_dir(&self) -> &Path {
         &self.objects_dir
@@ -522,6 +530,107 @@ impl CasStore {
                 );
                 let content = fs::read(existing_path)?;
                 self.store(&content)
+            }
+        }
+    }
+}
+
+/// Iterator over all objects in a CAS directory.
+///
+/// Walks the two-level layout: `objects/{2-char-prefix}/{suffix}`. Reconstructs
+/// the full hash as `prefix + suffix`. Skips entries starting with `.` or ending
+/// with `.tmp` to avoid temp files left by `atomic_store()`.
+struct CasIterator {
+    /// Outer iterator over prefix directories.
+    prefix_iter: Option<std::fs::ReadDir>,
+    /// Current prefix string (e.g. "ab").
+    current_prefix: String,
+    /// Inner iterator over files in the current prefix directory.
+    suffix_iter: Option<std::fs::ReadDir>,
+}
+
+impl CasIterator {
+    fn new(objects_dir: &Path) -> Self {
+        let prefix_iter = std::fs::read_dir(objects_dir).ok();
+        Self {
+            prefix_iter,
+            current_prefix: String::new(),
+            suffix_iter: None,
+        }
+    }
+
+    /// Advance to the next valid prefix directory.
+    /// Returns `true` if a new prefix directory was found, `false` if exhausted.
+    fn advance_prefix(&mut self) -> crate::Result<bool> {
+        let Some(ref mut iter) = self.prefix_iter else {
+            return Ok(false);
+        };
+
+        loop {
+            let Some(entry) = iter.next() else {
+                return Ok(false);
+            };
+            let entry = entry?;
+
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+
+            // Prefix directories must be exactly 2 characters
+            if name_str.len() != 2 {
+                continue;
+            }
+
+            self.current_prefix = name_str.into_owned();
+            self.suffix_iter = Some(std::fs::read_dir(entry.path())?);
+            return Ok(true);
+        }
+    }
+}
+
+impl Iterator for CasIterator {
+    type Item = crate::Result<(String, PathBuf)>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            // Try to get the next file from the current suffix iterator
+            if let Some(ref mut suffix_iter) = self.suffix_iter {
+                for entry in suffix_iter.by_ref() {
+                    let entry = match entry {
+                        Ok(e) => e,
+                        Err(e) => return Some(Err(e.into())),
+                    };
+
+                    let ft = match entry.file_type() {
+                        Ok(ft) => ft,
+                        Err(e) => return Some(Err(e.into())),
+                    };
+
+                    if !ft.is_file() {
+                        continue;
+                    }
+
+                    let name = entry.file_name();
+                    let name_str = name.to_string_lossy();
+
+                    // Skip temp files
+                    if name_str.starts_with('.') || name_str.ends_with(".tmp") {
+                        continue;
+                    }
+
+                    let hash = format!("{}{}", self.current_prefix, name_str);
+                    return Some(Ok((hash, entry.path())));
+                }
+            }
+
+            // Current prefix exhausted, advance to next
+            match self.advance_prefix() {
+                Ok(true) => continue,
+                Ok(false) => return None,
+                Err(e) => return Some(Err(e)),
             }
         }
     }
@@ -882,5 +991,45 @@ mod tests {
         // Real content should still be retrievable
         let retrieved = cas.retrieve(&hash).unwrap();
         assert_eq!(content, retrieved.as_slice());
+    }
+
+    #[test]
+    fn test_iter_objects_basic() {
+        let temp_dir = TempDir::new().unwrap();
+        let cas = CasStore::new(temp_dir.path()).unwrap();
+
+        // Store two distinct objects
+        let hash1 = cas.store(b"alpha").unwrap();
+        let hash2 = cas.store(b"bravo").unwrap();
+
+        // Also create a temp file that should be skipped
+        let prefix_dir = temp_dir.path().join(&hash1[..2]);
+        fs::write(prefix_dir.join(".tmp_in_progress"), b"temp").unwrap();
+        fs::write(prefix_dir.join("something.tmp"), b"temp2").unwrap();
+
+        let mut results: Vec<(String, PathBuf)> = cas
+            .iter_objects()
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
+        results.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let hashes: Vec<&str> = results.iter().map(|(h, _)| h.as_str()).collect();
+        assert!(hashes.contains(&hash1.as_str()));
+        assert!(hashes.contains(&hash2.as_str()));
+        assert_eq!(
+            hashes.len(),
+            2,
+            "Temp files should be excluded, got: {:?}",
+            hashes
+        );
+    }
+
+    #[test]
+    fn test_iter_objects_empty() {
+        let temp_dir = TempDir::new().unwrap();
+        let cas = CasStore::new(temp_dir.path()).unwrap();
+
+        let results: Vec<_> = cas.iter_objects().collect::<Result<Vec<_>>>().unwrap();
+        assert!(results.is_empty());
     }
 }

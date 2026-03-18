@@ -109,8 +109,8 @@ pub fn enable_fsverity(path: &Path) -> Result<bool, FsVerityError> {
 
 /// Enable fs-verity on all CAS objects in the given objects directory.
 ///
-/// CAS objects are stored as `objects/{2-char-prefix}/{hash}`.
-/// Walks the directory and enables verity on each file.
+/// Uses `CasStore::iter_objects()` to walk the directory and enables verity
+/// on each file.
 ///
 /// Returns `(enabled_count, already_enabled_count, error_count)`.
 pub fn enable_fsverity_on_cas(objects_dir: &Path) -> (u64, u64, u64) {
@@ -118,44 +118,30 @@ pub fn enable_fsverity_on_cas(objects_dir: &Path) -> (u64, u64, u64) {
     let mut already = 0u64;
     let mut errors = 0u64;
 
-    let entries = match std::fs::read_dir(objects_dir) {
-        Ok(e) => e,
+    let cas = match super::CasStore::new(objects_dir) {
+        Ok(c) => c,
         Err(e) => {
-            warn!("Failed to read CAS objects dir: {}", e);
+            warn!("Failed to open CAS objects dir: {}", e);
             return (0, 0, 1);
         }
     };
 
-    for prefix_entry in entries.flatten() {
-        if !prefix_entry
-            .file_type()
-            .map(|ft| ft.is_dir())
-            .unwrap_or(false)
-        {
-            continue;
-        }
-
-        let sub_entries = match std::fs::read_dir(prefix_entry.path()) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-
-        for file_entry in sub_entries.flatten() {
-            if !file_entry
-                .file_type()
-                .map(|ft| ft.is_file())
-                .unwrap_or(false)
-            {
+    for result in cas.iter_objects() {
+        let (_hash, path) = match result {
+            Ok(v) => v,
+            Err(e) => {
+                debug!("fs-verity: error iterating CAS: {}", e);
+                errors += 1;
                 continue;
             }
+        };
 
-            match enable_fsverity(&file_entry.path()) {
-                Ok(true) => enabled += 1,
-                Ok(false) => already += 1,
-                Err(e) => {
-                    debug!("fs-verity error on {}: {}", file_entry.path().display(), e);
-                    errors += 1;
-                }
+        match enable_fsverity(&path) {
+            Ok(true) => enabled += 1,
+            Ok(false) => already += 1,
+            Err(e) => {
+                debug!("fs-verity error on {}: {}", path.display(), e);
+                errors += 1;
             }
         }
     }

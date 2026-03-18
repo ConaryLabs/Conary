@@ -9,6 +9,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+use crate::filesystem::CasStore;
 use rusqlite::Connection;
 use tracing::{debug, info};
 
@@ -77,9 +78,8 @@ pub fn live_cas_hashes(
 
 /// Remove CAS objects not in the live set.
 ///
-/// Walks the objects directory (two-level layout: `{prefix}/{suffix}` where
-/// the full hash is `{prefix}{suffix}`) and deletes any object whose
-/// reconstructed hash is not in `live_hashes`.
+/// Uses `CasStore::iter_objects()` to walk the two-level objects directory
+/// and deletes any object whose hash is not in `live_hashes`.
 pub fn gc_cas_objects(objects_dir: &Path, live_hashes: &HashSet<String>) -> crate::Result<GcStats> {
     let mut stats = GcStats::default();
 
@@ -88,71 +88,40 @@ pub fn gc_cas_objects(objects_dir: &Path, live_hashes: &HashSet<String>) -> crat
         return Ok(stats);
     }
 
-    // Walk the two-level directory: objects/{2-char-prefix}/{rest-of-hash}
-    let prefix_entries = std::fs::read_dir(objects_dir)?;
+    let cas = CasStore::new(objects_dir)?;
 
-    for prefix_entry in prefix_entries {
-        let prefix_entry = prefix_entry?;
-        let prefix_path = prefix_entry.path();
+    for result in cas.iter_objects() {
+        let (hash, path) = result?;
+        stats.objects_checked += 1;
 
-        // Skip non-directories and special files (e.g., lock files)
-        if !prefix_entry.file_type()?.is_dir() {
-            continue;
-        }
-
-        let prefix_name = prefix_entry.file_name();
-        let prefix_str = prefix_name.to_string_lossy();
-
-        // Prefix directories should be exactly 2 hex characters
-        if prefix_str.len() != 2 {
-            continue;
-        }
-
-        let suffix_entries = std::fs::read_dir(&prefix_path)?;
-
-        for suffix_entry in suffix_entries {
-            let suffix_entry = suffix_entry?;
-            let suffix_path = suffix_entry.path();
-
-            // Skip directories and temp files
-            if !suffix_entry.file_type()?.is_file() {
-                continue;
+        if !live_hashes.contains(&hash) {
+            if let Ok(metadata) = path.metadata() {
+                stats.bytes_freed += metadata.len();
             }
 
-            let suffix_name = suffix_entry.file_name();
-            let suffix_str = suffix_name.to_string_lossy();
-
-            // Skip temp files (used during atomic writes)
-            if suffix_str.starts_with('.') || suffix_str.ends_with(".tmp") {
-                continue;
-            }
-
-            // Reconstruct the full hash: prefix + suffix
-            let full_hash = format!("{prefix_str}{suffix_str}");
-
-            stats.objects_checked += 1;
-
-            if !live_hashes.contains(&full_hash) {
-                // Get size before removing
-                if let Ok(metadata) = suffix_path.metadata() {
-                    stats.bytes_freed += metadata.len();
+            match std::fs::remove_file(&path) {
+                Ok(()) => {
+                    stats.objects_removed += 1;
+                    debug!("Removed unreferenced CAS object: {hash}");
                 }
-
-                match std::fs::remove_file(&suffix_path) {
-                    Ok(()) => {
-                        stats.objects_removed += 1;
-                        debug!("Removed unreferenced CAS object: {full_hash}");
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to remove CAS object {full_hash}: {e}");
-                    }
+                Err(e) => {
+                    tracing::warn!("Failed to remove CAS object {hash}: {e}");
                 }
             }
         }
+    }
 
-        // Clean up empty prefix directories
-        if prefix_path.read_dir().is_ok_and(|mut d| d.next().is_none()) {
-            let _ = std::fs::remove_dir(&prefix_path);
+    // Clean up empty prefix directories
+    if let Ok(entries) = std::fs::read_dir(objects_dir) {
+        for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|ft| ft.is_dir())
+                && entry
+                    .path()
+                    .read_dir()
+                    .is_ok_and(|mut d| d.next().is_none())
+            {
+                let _ = std::fs::remove_dir(entry.path());
+            }
         }
     }
 
