@@ -67,7 +67,11 @@ pub fn live_cas_hashes(
         hashes.insert(row?);
     }
 
-    debug!("Found {} live CAS hashes across {} surviving states", hashes.len(), surviving_state_ids.len());
+    debug!(
+        "Found {} live CAS hashes across {} surviving states",
+        hashes.len(),
+        surviving_state_ids.len()
+    );
     Ok(hashes)
 }
 
@@ -248,55 +252,73 @@ mod tests {
             "pkg-a",
             "1.0",
             &[
-                ("/usr/bin/a", "aaaa000000000000000000000000000000000000000000000000000000000001"),
-                ("/usr/lib/liba.so", "aaaa000000000000000000000000000000000000000000000000000000000002"),
+                (
+                    "/usr/bin/a",
+                    "aaaa000000000000000000000000000000000000000000000000000000000001",
+                ),
+                (
+                    "/usr/lib/liba.so",
+                    "aaaa000000000000000000000000000000000000000000000000000000000002",
+                ),
             ],
         );
         insert_trove_with_files(
             &conn,
             "pkg-b",
             "2.0",
-            &[
-                ("/usr/bin/b", "bbbb000000000000000000000000000000000000000000000000000000000001"),
-            ],
+            &[(
+                "/usr/bin/b",
+                "bbbb000000000000000000000000000000000000000000000000000000000001",
+            )],
         );
         insert_trove_with_files(
             &conn,
             "pkg-c",
             "1.0",
-            &[
-                ("/usr/bin/c", "cccc000000000000000000000000000000000000000000000000000000000001"),
-            ],
+            &[(
+                "/usr/bin/c",
+                "cccc000000000000000000000000000000000000000000000000000000000001",
+            )],
         );
 
         // State 1 references pkg-a and pkg-b
-        let state1 = create_state_with_members(
-            &conn,
-            1,
-            &[("pkg-a", "1.0"), ("pkg-b", "2.0")],
-        );
+        let state1 = create_state_with_members(&conn, 1, &[("pkg-a", "1.0"), ("pkg-b", "2.0")]);
 
         // State 2 references pkg-b and pkg-c
-        let state2 = create_state_with_members(
-            &conn,
-            2,
-            &[("pkg-b", "2.0"), ("pkg-c", "1.0")],
-        );
+        let state2 = create_state_with_members(&conn, 2, &[("pkg-b", "2.0"), ("pkg-c", "1.0")]);
 
         // Query with both states surviving
         let hashes = live_cas_hashes(&conn, &[state1, state2]).unwrap();
         assert_eq!(hashes.len(), 4, "All 4 hashes should be live");
-        assert!(hashes.contains("aaaa000000000000000000000000000000000000000000000000000000000001"));
-        assert!(hashes.contains("aaaa000000000000000000000000000000000000000000000000000000000002"));
-        assert!(hashes.contains("bbbb000000000000000000000000000000000000000000000000000000000001"));
-        assert!(hashes.contains("cccc000000000000000000000000000000000000000000000000000000000001"));
+        assert!(
+            hashes.contains("aaaa000000000000000000000000000000000000000000000000000000000001")
+        );
+        assert!(
+            hashes.contains("aaaa000000000000000000000000000000000000000000000000000000000002")
+        );
+        assert!(
+            hashes.contains("bbbb000000000000000000000000000000000000000000000000000000000001")
+        );
+        assert!(
+            hashes.contains("cccc000000000000000000000000000000000000000000000000000000000001")
+        );
 
         // Query with only state 2 surviving
         let hashes = live_cas_hashes(&conn, &[state2]).unwrap();
-        assert_eq!(hashes.len(), 2, "Only pkg-b and pkg-c hashes should be live");
-        assert!(hashes.contains("bbbb000000000000000000000000000000000000000000000000000000000001"));
-        assert!(hashes.contains("cccc000000000000000000000000000000000000000000000000000000000001"));
-        assert!(!hashes.contains("aaaa000000000000000000000000000000000000000000000000000000000001"));
+        assert_eq!(
+            hashes.len(),
+            2,
+            "Only pkg-b and pkg-c hashes should be live"
+        );
+        assert!(
+            hashes.contains("bbbb000000000000000000000000000000000000000000000000000000000001")
+        );
+        assert!(
+            hashes.contains("cccc000000000000000000000000000000000000000000000000000000000001")
+        );
+        assert!(
+            !hashes.contains("aaaa000000000000000000000000000000000000000000000000000000000001")
+        );
     }
 
     #[test]
@@ -304,7 +326,10 @@ mod tests {
         let (_tmp, conn) = create_test_db();
 
         let hashes = live_cas_hashes(&conn, &[]).unwrap();
-        assert!(hashes.is_empty(), "No surviving states means no live hashes");
+        assert!(
+            hashes.is_empty(),
+            "No surviving states means no live hashes"
+        );
     }
 
     #[test]
@@ -351,13 +376,10 @@ mod tests {
         create_cas_object(&objects_dir, hash3, b"content 3");
 
         // All three are live
-        let live_hashes: HashSet<String> = [
-            hash1.to_string(),
-            hash2.to_string(),
-            hash3.to_string(),
-        ]
-        .into_iter()
-        .collect();
+        let live_hashes: HashSet<String> =
+            [hash1.to_string(), hash2.to_string(), hash3.to_string()]
+                .into_iter()
+                .collect();
 
         let stats = gc_cas_objects(&objects_dir, &live_hashes).unwrap();
 

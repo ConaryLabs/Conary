@@ -257,7 +257,11 @@ fn cas_gc(db_path: &str, surviving_gen_numbers: &[i64]) -> Result<()> {
     }
 
     let live_hashes = live_cas_hashes(&conn, &surviving_state_ids)?;
-    info!("{} live CAS hashes across {} surviving states", live_hashes.len(), surviving_state_ids.len());
+    info!(
+        "{} live CAS hashes across {} surviving states",
+        live_hashes.len(),
+        surviving_state_ids.len()
+    );
 
     let obj_dir = objects_dir(db_path);
     let stats = gc_cas_objects(&obj_dir, &live_hashes)?;
