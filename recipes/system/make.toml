@@ -1,0 +1,43 @@
+# recipes/system/make.toml
+#
+# LFS 13 Section 8.67 — Make-4.4.1
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/make.html
+#
+# GNU Make — build automation tool. Standard autotools build.
+
+[package]
+name = "make"
+version = "4.4.1"
+release = "1"
+summary = "GNU build automation tool"
+description = """
+GNU Make is a tool which controls the generation of executables and
+other non-source files of a package from source files. Make gets its
+knowledge of how to build a program from a file called a Makefile.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/make/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/make/make-%(version)s.tar.gz"
+checksum = "md5:c8469a3713cbbe04d955d4ae4be23eeb"
+
+[build]
+requires = ["glibc"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

@@ -1,0 +1,75 @@
+# recipes/system/vim.toml
+#
+# LFS 13 Section 8.71 — Vim-9.2.0161
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/vim.html
+#
+# Vi IMproved — the ubiquitous text editor. Pre-configure sets the
+# system vimrc path. Post-install creates vi symlink and a basic
+# /etc/vimrc configuration file.
+
+[package]
+name = "vim"
+version = "9.2.0161"
+release = "1"
+summary = "Vi IMproved text editor"
+description = """
+Vim is a highly configurable text editor built to enable efficient
+text editing. It is an improved version of the vi editor distributed
+with most UNIX systems. This build sets /etc/vimrc as the system-wide
+configuration file and creates a vi compatibility symlink.
+"""
+license = "Vim"
+homepage = "https://www.vim.org/"
+
+[source]
+archive = "https://github.com/vim/vim/archive/v%(version)s/vim-%(version)s.tar.gz"
+checksum = "md5:f6369455ad984b867977268fb8503c48"
+
+[build]
+requires = ["glibc", "ncurses", "acl", "attr"]
+makedepends = []
+chroot = true
+
+configure = """
+# Set the system vimrc file location
+echo '#define SYS_VIMRC_FILE "/etc/vimrc"' >> src/feature.h
+
+./configure --prefix=/usr
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+
+# Create vi symlink
+ln -sv vim /usr/bin/vi
+
+# Create vi.1 man page symlinks
+for L in /usr/share/man/{,*/}man1/vim.1; do
+    ln -sv vim.1 $(dirname $L)/vi.1
+done
+
+# Create documentation symlink
+ln -sv ../vim/vim92/doc /usr/share/doc/vim-%(version)s
+
+# Create basic /etc/vimrc
+cat > /etc/vimrc << "EOF"
+" Begin /etc/vimrc
+
+" Ensure defaults are set before customizing
+source $VIMRUNTIME/defaults.vim
+let skip_defaults_vim=1
+
+set nocompatible
+set backspace=2
+set mouse=r
+
+" End /etc/vimrc
+EOF
+"""
+
+[variables]
+jobs = "$(nproc)"

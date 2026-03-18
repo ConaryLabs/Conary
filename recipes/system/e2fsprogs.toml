@@ -1,0 +1,65 @@
+# recipes/system/e2fsprogs.toml
+#
+# LFS 13 Section 8.79 — E2fsprogs-1.47.4
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/e2fsprogs.html
+#
+# Ext2/3/4 filesystem utilities (mke2fs, e2fsck, tune2fs, etc.). Built
+# in a separate directory. Libraries that overlap with util-linux
+# (libblkid, libuuid) are disabled. Static libraries and .ss files
+# are removed after install.
+
+[package]
+name = "e2fsprogs"
+version = "1.47.4"
+release = "1"
+summary = "Ext2/3/4 filesystem utilities"
+description = """
+E2fsprogs provides the utilities for creating, checking, and
+maintaining ext2, ext3, and ext4 filesystems. Includes mke2fs,
+e2fsck, tune2fs, dumpe2fs, resize2fs, debugfs, and supporting
+libraries (libext2fs, libcom_err, libe2p, libss).
+"""
+license = "GPL-2.0-only"
+homepage = "https://e2fsprogs.sourceforge.net/"
+
+[source]
+archive = "https://downloads.sourceforge.net/project/e2fsprogs/e2fsprogs/v%(version)s/e2fsprogs-%(version)s.tar.gz"
+checksum = "md5:733a93bc688314834ff2d10530ff4dc4"
+
+[build]
+requires = ["glibc", "util-linux"]
+makedepends = []
+chroot = true
+
+configure = """
+mkdir -v build
+cd build
+
+../configure --prefix=/usr       \
+             --sysconfdir=/etc   \
+             --enable-elf-shlibs \
+             --disable-libblkid  \
+             --disable-libuuid   \
+             --disable-uuidd     \
+             --disable-fsck
+"""
+
+make = """
+cd build
+make -j%(jobs)s
+"""
+
+install = """
+cd build
+make install
+
+# Remove static libraries
+rm -fv /usr/lib/{libcom_err,libe2p,libext2fs,libss}.a
+
+# Install info documentation
+gunzip -v /usr/share/info/libext2fs.info.gz
+install-info --dir-file=/usr/share/info/dir /usr/share/info/libext2fs.info
+"""
+
+[variables]
+jobs = "$(nproc)"

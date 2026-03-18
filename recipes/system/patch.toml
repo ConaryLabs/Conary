@@ -1,0 +1,44 @@
+# recipes/system/patch.toml
+#
+# LFS 13 Section 8.68 — Patch-2.8
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/patch.html
+#
+# GNU Patch — applies diff files to original sources.
+# Standard autotools build.
+
+[package]
+name = "patch"
+version = "2.8"
+release = "1"
+summary = "GNU file patching utility"
+description = """
+Patch takes a patch file produced by the diff program and applies
+those differences to an original file, producing a patched version.
+It is an essential tool for applying source code modifications.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/patch/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/patch/patch-%(version)s.tar.xz"
+checksum = "md5:149327a021d41c8f88d034eab41c039f"
+
+[build]
+requires = ["glibc"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

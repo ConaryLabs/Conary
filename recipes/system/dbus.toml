@@ -1,0 +1,55 @@
+# recipes/system/dbus.toml
+#
+# LFS 13 Section 8.75 — D-Bus-1.16.2
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/dbus.html
+#
+# Desktop Bus — inter-process communication system. Uses Meson build
+# system. Post-install links the machine-id for dbus compatibility.
+
+[package]
+name = "dbus"
+version = "1.16.2"
+release = "1"
+summary = "Inter-process communication system"
+description = """
+D-Bus is a message bus system providing a framework for applications
+to communicate with one another. It supplies both a system daemon
+(for system-wide events) and a per-login-session daemon (for
+inter-application communication).
+"""
+license = "AFL-2.1 OR GPL-2.0-or-later"
+homepage = "https://www.freedesktop.org/wiki/Software/dbus/"
+
+[source]
+archive = "https://dbus.freedesktop.org/releases/dbus/dbus-%(version)s.tar.xz"
+checksum = "md5:97832e6f0a260936d28536e5349c22e5"
+
+[build]
+requires = ["glibc", "expat", "systemd"]
+makedepends = ["meson", "ninja"]
+chroot = true
+
+configure = """
+mkdir -p build
+cd build
+
+meson setup --prefix=/usr          \
+            --buildtype=release    \
+            --wrap-mode=nofallback \
+            ..
+"""
+
+make = """
+cd build
+ninja
+"""
+
+install = """
+cd build
+ninja install
+
+# Link machine-id for D-Bus compatibility
+ln -sfv /etc/machine-id /var/lib/dbus
+"""
+
+[variables]

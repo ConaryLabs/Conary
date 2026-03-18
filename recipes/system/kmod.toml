@@ -1,0 +1,60 @@
+# recipes/system/kmod.toml
+#
+# LFS 13 Section 8.57 — Kmod-34.2
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/kmod.html
+#
+# Kernel module tools. Uses Meson build system (not autotools). Creates
+# symlinks for the traditional module utilities (modprobe, insmod, lsmod,
+# depmod, modinfo, rmmod) pointing to the kmod binary.
+
+[package]
+name = "kmod"
+version = "34.2"
+release = "1"
+summary = "Kernel module utilities"
+description = """
+Kmod provides tools and a library for managing Linux kernel modules.
+It replaces the older module-init-tools package. The kmod binary
+provides all functionality, with traditional command names (modprobe,
+insmod, lsmod, etc.) installed as symlinks.
+"""
+license = "LGPL-2.1-or-later"
+homepage = "https://git.kernel.org/pub/scm/utils/kernel/kmod/kmod.git"
+
+[source]
+archive = "https://www.kernel.org/pub/linux/utils/kernel/kmod/kmod-%(version)s.tar.xz"
+checksum = "md5:36f2cc483745e81ede3406fa55e1065a"
+
+[build]
+requires = ["glibc", "zlib", "xz", "zstd", "openssl"]
+makedepends = ["meson", "ninja"]
+chroot = true
+
+configure = """
+mkdir -p build
+cd build
+
+meson setup --prefix=/usr          \
+            --buildtype=release    \
+            -D manpages=false      \
+            ..
+"""
+
+make = """
+cd build
+ninja
+"""
+
+install = """
+cd build
+ninja install
+
+# Create symlinks for traditional module utility names
+for target in depmod insmod modinfo modprobe rmmod; do
+    ln -sfv ../bin/kmod /usr/sbin/$target
+done
+
+ln -sfv kmod /usr/bin/lsmod
+"""
+
+[variables]

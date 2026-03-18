@@ -1,0 +1,44 @@
+# recipes/system/libpipeline.toml
+#
+# LFS 13 Section 8.66 — Libpipeline-1.5.8
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/libpipeline.html
+#
+# Library for manipulating pipelines of subprocesses. Required by man-db.
+# Standard autotools build with no special flags.
+
+[package]
+name = "libpipeline"
+version = "1.5.8"
+release = "1"
+summary = "Pipeline manipulation library"
+description = """
+Libpipeline is a C library for manipulating pipelines of subprocesses
+in a flexible and convenient way. It is primarily used by man-db to
+implement the man page viewing pipeline.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://libpipeline.nongnu.org/"
+
+[source]
+archive = "https://download.savannah.nongnu.org/releases/libpipeline/libpipeline-%(version)s.tar.gz"
+checksum = "md5:17ac6969b2015386bcb5d278a08a40b5"
+
+[build]
+requires = ["glibc"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

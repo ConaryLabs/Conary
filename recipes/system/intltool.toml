@@ -1,0 +1,49 @@
+# recipes/system/intltool.toml
+#
+# LFS 13 Section 8.43 — Intltool-0.51.0
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/intltool.html
+#
+# Internationalization tool for extracting translatable strings from
+# source files. Requires XML::Parser. Includes a sed fix for Perl 5.22+
+# compatibility (escaped brace in regex).
+
+[package]
+name = "intltool"
+version = "0.51.0"
+release = "1"
+summary = "Internationalization utilities"
+description = """
+Intltool is an internationalization tool used for extracting translatable
+strings from source files. It produces PO template files and merges
+translations back into various file types (XML, desktop, schemas).
+"""
+license = "GPL-2.0-or-later"
+homepage = "https://launchpad.net/intltool"
+
+[source]
+archive = "https://launchpad.net/intltool/trunk/%(version)s/+download/intltool-%(version)s.tar.gz"
+checksum = "md5:12e517cac2b57a0121cda351570f1e63"
+
+[build]
+requires = ["perl", "xml-parser"]
+makedepends = []
+chroot = true
+
+configure = """
+# Fix a warning caused by Perl 5.22 and later
+sed -i 's:\\\\\\${:\\\\\\$\\\\{:' intltool-update.in
+
+./configure --prefix=/usr
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+install -v -Dm644 doc/I18N-HOWTO /usr/share/doc/intltool-%(version)s/I18N-HOWTO
+"""
+
+[variables]
+jobs = "$(nproc)"

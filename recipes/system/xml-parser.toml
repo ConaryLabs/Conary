@@ -1,0 +1,44 @@
+# recipes/system/xml-parser.toml
+#
+# LFS 13 Section 8.42 — XML::Parser-2.47
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/xml-parser.html
+#
+# Perl module providing an interface to James Clark's XML parser, Expat.
+# Uses the standard Perl MakeMaker build system (perl Makefile.PL).
+
+[package]
+name = "xml-parser"
+version = "2.47"
+release = "1"
+summary = "Perl interface to the Expat XML parser"
+description = """
+XML::Parser is a Perl module providing an interface to James Clark's
+XML parser, Expat. It requires the Expat library (already installed)
+and builds a shared object (Expat.so) that Perl loads at runtime.
+"""
+license = "Artistic-1.0 OR GPL-1.0-or-later"
+homepage = "https://metacpan.org/pod/XML::Parser"
+
+[source]
+archive = "https://cpan.metacpan.org/authors/id/T/TO/TODDR/XML-Parser-%(version)s.tar.gz"
+checksum = "md5:89a8e82cfd2ad948b349c0a69c494463"
+
+[build]
+requires = ["perl", "expat"]
+makedepends = []
+chroot = true
+
+configure = """
+perl Makefile.PL
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

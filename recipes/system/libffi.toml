@@ -1,0 +1,49 @@
+# recipes/system/libffi.toml
+#
+# LFS 13 Section 8.48 — Libffi-3.5.2
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/libffi.html
+#
+# Foreign Function Interface library. Provides a portable way for code
+# written in one language to call code written in another. Required by
+# Python and other interpreters. Built with native GCC optimizations.
+
+[package]
+name = "libffi"
+version = "3.5.2"
+release = "1"
+summary = "Foreign Function Interface library"
+description = """
+Libffi provides a portable, high-level programming interface to
+various calling conventions, allowing code written in one language
+to call code written in another. It is used by Python, GJS, and
+other interpreters for calling C functions dynamically.
+"""
+license = "MIT"
+homepage = "https://sourceware.org/libffi/"
+
+[source]
+archive = "https://github.com/libffi/libffi/releases/download/v%(version)s/libffi-%(version)s.tar.gz"
+checksum = "md5:92af9efad4ba398995abf44835c5d9e9"
+
+[build]
+requires = ["glibc", "gcc"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr          \
+            --disable-static       \
+            --with-gcc-arch=native \
+            --disable-exec-static-tramp
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"
