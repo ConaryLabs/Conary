@@ -77,7 +77,10 @@ impl TransactionState {
     /// Returns true if the transaction is past the point of no return.
     /// After commit, recovery means re-deriving the EROFS image and remounting.
     pub fn is_committed(&self) -> bool {
-        matches!(self, Self::Committed | Self::Built | Self::Mounted | Self::Done)
+        matches!(
+            self,
+            Self::Committed | Self::Built | Self::Mounted | Self::Done
+        )
     }
 }
 
@@ -172,10 +175,7 @@ impl TransactionEngine {
         fs::create_dir_all(&config.generations_dir)?;
         fs::create_dir_all(&config.etc_state_dir)?;
 
-        let cas = CasStore::with_algorithm(
-            config.objects_dir.clone(),
-            config.hash_algorithm,
-        )?;
+        let cas = CasStore::with_algorithm(config.objects_dir.clone(), config.hash_algorithm)?;
 
         Ok(Self {
             config,
@@ -309,25 +309,15 @@ impl TransactionEngine {
         let gen_dir = self.config.generations_dir.join(expected.to_string());
 
         // Mount the rebuilt generation
-        crate::generation::mount::mount_generation(
-            &crate::generation::mount::MountOptions {
-                image_path: gen_dir.join("rootfs.erofs"),
-                basedir: self.config.objects_dir.clone(),
-                mount_point: self.config.mount_point.clone(),
-                verity: false,
-                digest: None,
-                upperdir: Some(
-                    self.config
-                        .etc_state_dir
-                        .join(expected.to_string()),
-                ),
-                workdir: Some(
-                    self.config
-                        .etc_state_dir
-                        .join(format!("{expected}-work")),
-                ),
-            },
-        )?;
+        crate::generation::mount::mount_generation(&crate::generation::mount::MountOptions {
+            image_path: gen_dir.join("rootfs.erofs"),
+            basedir: self.config.objects_dir.clone(),
+            mount_point: self.config.mount_point.clone(),
+            verity: false,
+            digest: None,
+            upperdir: Some(self.config.etc_state_dir.join(expected.to_string())),
+            workdir: Some(self.config.etc_state_dir.join(format!("{expected}-work"))),
+        })?;
 
         // Update the current symlink
         crate::generation::mount::update_current_symlink(&self.config.root, expected)?;
@@ -447,6 +437,105 @@ pub struct TransactionResult {
     pub generation_number: i64,
     pub duration_ms: u64,
     pub packages_changed: usize,
+}
+
+#[cfg(all(test, feature = "composefs-rs"))]
+mod integration_tests {
+    use crate::db::models::{FileEntry, SystemState, Trove, TroveType};
+    use crate::generation::builder::build_generation_from_db;
+    use crate::generation::metadata::GenerationMetadata;
+    use tempfile::TempDir;
+
+    fn setup_test_db() -> (TempDir, rusqlite::Connection) {
+        let tmp = TempDir::new().unwrap();
+        let db_path = tmp.path().join("db.sqlite3");
+        crate::db::init(&db_path).unwrap();
+        let conn = crate::db::open(&db_path).unwrap();
+        (tmp, conn)
+    }
+
+    #[test]
+    fn full_transaction_round_trip() {
+        let (tmp, conn) = setup_test_db();
+        let root = tmp.path();
+        let generations_dir = root.join("generations");
+        std::fs::create_dir_all(&generations_dir).unwrap();
+
+        // Insert a mock trove
+        let mut trove = Trove::new(
+            "hello-world".to_string(),
+            "1.0.0-1".to_string(),
+            TroveType::Package,
+        );
+        trove.architecture = Some("x86_64".to_string());
+        let trove_id = trove.insert(&conn).unwrap();
+
+        // Insert file entries for the trove
+        // Use a 64-char hex hash that the EROFS builder will accept
+        let hash = "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd";
+        let mut fe = FileEntry::new(
+            "/usr/bin/hello".to_string(),
+            hash.to_string(),
+            1024,
+            0o755,
+            trove_id,
+        );
+        fe.insert(&conn).unwrap();
+
+        // Run build_generation_from_db
+        let result = build_generation_from_db(
+            &conn,
+            &generations_dir,
+            "Full transaction round-trip test",
+        );
+        assert!(
+            result.is_ok(),
+            "build_generation_from_db failed: {:?}",
+            result.err()
+        );
+        let (gen_num, build_result) = result.unwrap();
+
+        // Verify generation number (first generation is 0 per next_state_number logic)
+        assert_eq!(gen_num, 0);
+
+        // Verify EROFS image exists and is non-empty
+        assert!(
+            build_result.image_path.exists(),
+            "EROFS image must exist at {:?}",
+            build_result.image_path
+        );
+        assert!(build_result.image_size > 0, "EROFS image must be non-empty");
+
+        // Verify at least one CAS object was referenced
+        assert_eq!(
+            build_result.cas_objects_referenced, 1,
+            "Should reference 1 CAS object for the hello binary"
+        );
+
+        // Verify metadata JSON was written
+        let gen_dir = generations_dir.join(gen_num.to_string());
+        let meta_path = gen_dir.join(".conary-gen.json");
+        assert!(
+            meta_path.exists(),
+            "Metadata file must exist at {:?}",
+            meta_path
+        );
+        let meta_json = std::fs::read_to_string(&meta_path).unwrap();
+        let meta: GenerationMetadata = serde_json::from_str(&meta_json).unwrap();
+        assert_eq!(meta.generation, gen_num);
+        assert_eq!(meta.format, "composefs");
+        assert_eq!(meta.package_count, 1);
+
+        // Verify SystemState was created and is active
+        let active_state = SystemState::get_active(&conn).unwrap();
+        assert!(
+            active_state.is_some(),
+            "An active SystemState must exist after build_generation_from_db"
+        );
+        let active_state = active_state.unwrap();
+        assert_eq!(active_state.state_number, gen_num);
+        assert_eq!(active_state.package_count, 1);
+    }
 }
 
 #[cfg(test)]
