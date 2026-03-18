@@ -56,9 +56,8 @@ pub fn compute_delta(old_image: &[u8], new_image: &[u8]) -> Result<Vec<u8>> {
             ))
         })?;
 
-    std::io::Write::write_all(&mut encoder, new_image).map_err(|e| {
-        Error::DeltaError(format!("Failed to write image data to encoder: {e}"))
-    })?;
+    std::io::Write::write_all(&mut encoder, new_image)
+        .map_err(|e| Error::DeltaError(format!("Failed to write image data to encoder: {e}")))?;
 
     encoder
         .finish()
@@ -77,9 +76,12 @@ pub fn compute_delta(old_image: &[u8], new_image: &[u8]) -> Result<Vec<u8>> {
 pub fn apply_delta(old_image: &[u8], delta: &[u8]) -> Result<Vec<u8>> {
     let decoder_dict = zstd::dict::DecoderDictionary::copy(old_image);
 
-    let mut decoder = zstd::Decoder::with_prepared_dictionary(delta, &decoder_dict).map_err(
-        |e| Error::DeltaError(format!("Failed to create zstd decoder with dictionary: {e}")),
-    )?;
+    let mut decoder =
+        zstd::Decoder::with_prepared_dictionary(delta, &decoder_dict).map_err(|e| {
+            Error::DeltaError(format!(
+                "Failed to create zstd decoder with dictionary: {e}"
+            ))
+        })?;
 
     let mut output = Vec::new();
     let mut buf = [0u8; 64 * 1024];
@@ -176,15 +178,15 @@ mod tests {
         let entries_v1 = vec![
             FileEntryRef {
                 path: "/usr/bin/hello".to_string(),
-                sha256_hash:
-                    "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd".to_string(),
+                sha256_hash: "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd"
+                    .to_string(),
                 size: 1024,
                 permissions: 0o755,
             },
             FileEntryRef {
                 path: "/usr/lib/libfoo.so".to_string(),
-                sha256_hash:
-                    "1122334411223344112233441122334411223344112233441122334411223344".to_string(),
+                sha256_hash: "1122334411223344112233441122334411223344112233441122334411223344"
+                    .to_string(),
                 size: 4096,
                 permissions: 0o644,
             },
@@ -192,22 +194,22 @@ mod tests {
         let entries_v2 = vec![
             FileEntryRef {
                 path: "/usr/bin/hello".to_string(),
-                sha256_hash:
-                    "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd".to_string(),
+                sha256_hash: "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd"
+                    .to_string(),
                 size: 1024,
                 permissions: 0o755,
             },
             FileEntryRef {
                 path: "/usr/lib/libfoo.so".to_string(),
-                sha256_hash:
-                    "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_string(),
+                sha256_hash: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+                    .to_string(),
                 size: 8192,
                 permissions: 0o644,
             },
             FileEntryRef {
                 path: "/usr/bin/world".to_string(),
-                sha256_hash:
-                    "cafecafecafecafecafecafecafecafecafecafecafecafecafecafecafecafe".to_string(),
+                sha256_hash: "cafecafecafecafecafecafecafecafecafecafecafecafecafecafecafecafe"
+                    .to_string(),
                 size: 512,
                 permissions: 0o755,
             },
@@ -232,13 +234,28 @@ mod tests {
     #[test]
     fn test_roundtrip_synthetic() {
         let old = make_erofs_image(&[
-            ("/usr/bin/hello", "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd"),
-            ("/usr/lib/libfoo.so", "1122334411223344112233441122334411223344112233441122334411223344"),
+            (
+                "/usr/bin/hello",
+                "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd",
+            ),
+            (
+                "/usr/lib/libfoo.so",
+                "1122334411223344112233441122334411223344112233441122334411223344",
+            ),
         ]);
         let new = make_erofs_image(&[
-            ("/usr/bin/hello", "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd"),
-            ("/usr/lib/libfoo.so", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"),
-            ("/usr/bin/world", "cafecafecafecafecafecafecafecafecafecafecafecafecafecafecafecafe"),
+            (
+                "/usr/bin/hello",
+                "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd",
+            ),
+            (
+                "/usr/lib/libfoo.so",
+                "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+            ),
+            (
+                "/usr/bin/world",
+                "cafecafecafecafecafecafecafecafecafecafecafecafecafecafecafecafe",
+            ),
         ]);
 
         let delta = compute_delta(&old, &new).unwrap();
@@ -305,14 +322,18 @@ mod tests {
     /// the zstd framing overhead with near-zero content).
     #[test]
     fn test_identical_images() {
-        let image = make_erofs_image(&[
-            ("/usr/bin/hello", "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd"),
-        ]);
+        let image = make_erofs_image(&[(
+            "/usr/bin/hello",
+            "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd",
+        )]);
 
         let delta = compute_delta(&image, &image).unwrap();
         let reconstructed = apply_delta(&image, &delta).unwrap();
 
-        assert_eq!(reconstructed, image, "Identity delta must reconstruct image");
+        assert_eq!(
+            reconstructed, image,
+            "Identity delta must reconstruct image"
+        );
         // Allow up to 256 bytes for zstd framing; identical data compresses to nearly nothing
         assert!(
             delta.len() < 256,
@@ -329,9 +350,10 @@ mod tests {
     /// copy of the new image (no shared dictionary content).
     #[test]
     fn test_empty_old_image() {
-        let new = make_erofs_image(&[
-            ("/usr/bin/hello", "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd"),
-        ]);
+        let new = make_erofs_image(&[(
+            "/usr/bin/hello",
+            "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd",
+        )]);
 
         let delta = compute_delta(&[], &new).unwrap();
         let reconstructed = apply_delta(&[], &delta).unwrap();
@@ -341,7 +363,10 @@ mod tests {
             "Empty-old delta must still reconstruct the new image"
         );
         // The delta should be non-empty (it holds the compressed new image)
-        assert!(!delta.is_empty(), "Delta from empty old image must be non-empty");
+        assert!(
+            !delta.is_empty(),
+            "Delta from empty old image must be non-empty"
+        );
     }
 
     // ---------------------------------------------------------------
@@ -354,12 +379,19 @@ mod tests {
         let old_path = tmp.path().join("gen1.erofs");
         let new_path = tmp.path().join("gen2.erofs");
 
-        let old = make_erofs_image(&[
-            ("/usr/bin/hello", "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd"),
-        ]);
+        let old = make_erofs_image(&[(
+            "/usr/bin/hello",
+            "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd",
+        )]);
         let new = make_erofs_image(&[
-            ("/usr/bin/hello", "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd"),
-            ("/usr/bin/world", "cafecafecafecafecafecafecafecafecafecafecafecafecafecafecafecafe"),
+            (
+                "/usr/bin/hello",
+                "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd",
+            ),
+            (
+                "/usr/bin/world",
+                "cafecafecafecafecafecafecafecafecafecafecafecafecafecafecafecafe",
+            ),
         ]);
 
         std::fs::write(&old_path, &old).unwrap();
@@ -386,9 +418,15 @@ mod tests {
         std::fs::write(&other, b"data").unwrap();
 
         let result = compute_generation_delta(&missing, &other);
-        assert!(result.is_err(), "Reading a missing file must return an error");
+        assert!(
+            result.is_err(),
+            "Reading a missing file must return an error"
+        );
 
         let result2 = compute_generation_delta(&other, &missing);
-        assert!(result2.is_err(), "Reading a missing file must return an error");
+        assert!(
+            result2.is_err(),
+            "Reading a missing file must return an error"
+        );
     }
 }

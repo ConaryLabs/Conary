@@ -67,12 +67,12 @@ pub use config::{
     cmd_config_restore,
 };
 pub use convert_pkgbuild::cmd_convert_pkgbuild;
-pub use export::export_oci;
 pub use cook::cmd_cook;
 pub use derived::{
     cmd_derive_build, cmd_derive_create, cmd_derive_delete, cmd_derive_list, cmd_derive_override,
     cmd_derive_patch, cmd_derive_show, cmd_derive_stale,
 };
+pub use export::export_oci;
 pub use install::{DepMode, InstallOptions, cmd_install};
 pub use label::{
     cmd_label_add, cmd_label_delegate, cmd_label_link, cmd_label_list, cmd_label_path,

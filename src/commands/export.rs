@@ -14,8 +14,8 @@ use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
-use flate2::write::GzEncoder;
 use flate2::Compression;
+use flate2::write::GzEncoder;
 use sha2::{Digest, Sha256};
 use tracing::info;
 
@@ -33,11 +33,7 @@ const INDEX_MEDIA_TYPE: &str = "application/vnd.oci.image.index.v1+json";
 /// The generation is identified by number.  Pass `None` to use the
 /// currently active generation.  The `objects_dir` points to the CAS
 /// store (typically `/conary/objects`).
-pub fn export_oci(
-    generation: Option<i64>,
-    objects_dir: &Path,
-    output_dir: &Path,
-) -> Result<()> {
+pub fn export_oci(generation: Option<i64>, objects_dir: &Path, output_dir: &Path) -> Result<()> {
     // Resolve generation number
     let gen_number = match generation {
         Some(n) => n,
@@ -47,7 +43,10 @@ pub fn export_oci(
 
     let gen_dir = generation_path(gen_number);
     if !gen_dir.exists() {
-        bail!("Generation {gen_number} does not exist at {}", gen_dir.display());
+        bail!(
+            "Generation {gen_number} does not exist at {}",
+            gen_dir.display()
+        );
     }
 
     let metadata = GenerationMetadata::read_from(&gen_dir)
@@ -61,12 +60,19 @@ pub fn export_oci(
         );
     }
 
-    info!("Exporting generation {gen_number} as OCI image to {}", output_dir.display());
+    info!(
+        "Exporting generation {gen_number} as OCI image to {}",
+        output_dir.display()
+    );
 
     // Create OCI directory structure
     let blobs_dir = output_dir.join("blobs/sha256");
-    fs::create_dir_all(&blobs_dir)
-        .with_context(|| format!("Failed to create blobs directory at {}", blobs_dir.display()))?;
+    fs::create_dir_all(&blobs_dir).with_context(|| {
+        format!(
+            "Failed to create blobs directory at {}",
+            blobs_dir.display()
+        )
+    })?;
 
     // Step 1: Build the layer tar.gz
     let (layer_digest, layer_size, diff_id) =
@@ -82,12 +88,7 @@ pub fn export_oci(
     info!("Config: sha256:{} ({} bytes)", config_digest, config_size);
 
     // Step 3: Build the manifest JSON
-    let manifest_json = build_manifest_json(
-        &config_digest,
-        config_size,
-        &layer_digest,
-        layer_size,
-    );
+    let manifest_json = build_manifest_json(&config_digest, config_size, &layer_digest, layer_size);
     let (manifest_digest, manifest_size) = write_blob(&blobs_dir, manifest_json.as_bytes())?;
     info!(
         "Manifest: sha256:{} ({} bytes)",
@@ -96,13 +97,11 @@ pub fn export_oci(
 
     // Step 4: Write index.json
     let index_json = build_index_json(&manifest_digest, manifest_size);
-    fs::write(output_dir.join("index.json"), &index_json)
-        .context("Failed to write index.json")?;
+    fs::write(output_dir.join("index.json"), &index_json).context("Failed to write index.json")?;
 
     // Step 5: Write oci-layout
     let oci_layout = r#"{"imageLayoutVersion":"1.0.0"}"#;
-    fs::write(output_dir.join("oci-layout"), oci_layout)
-        .context("Failed to write oci-layout")?;
+    fs::write(output_dir.join("oci-layout"), oci_layout).context("Failed to write oci-layout")?;
 
     println!(
         "Exported generation {gen_number} to {}",
@@ -151,35 +150,30 @@ fn build_layer_tar_gz(
     // Compress and write to a temp file, then compute compressed digest
     let temp_path = blobs_dir.join("layer.tmp");
     {
-        let file = fs::File::create(&temp_path)
-            .context("Failed to create temporary layer file")?;
+        let file = fs::File::create(&temp_path).context("Failed to create temporary layer file")?;
         let mut encoder = GzEncoder::new(file, Compression::default());
         encoder
             .write_all(&tar_bytes)
             .context("Failed to write compressed layer")?;
-        encoder.finish().context("Failed to finish gzip compression")?;
+        encoder
+            .finish()
+            .context("Failed to finish gzip compression")?;
     }
 
     // Read back compressed bytes to compute digest
-    let compressed_bytes = fs::read(&temp_path)
-        .context("Failed to read compressed layer")?;
+    let compressed_bytes = fs::read(&temp_path).context("Failed to read compressed layer")?;
     let compressed_digest = hex_digest(&compressed_bytes);
     let compressed_size = compressed_bytes.len() as u64;
 
     // Move to final location
     let final_path = blobs_dir.join(&compressed_digest);
-    fs::rename(&temp_path, &final_path)
-        .context("Failed to move layer blob to final location")?;
+    fs::rename(&temp_path, &final_path).context("Failed to move layer blob to final location")?;
 
     Ok((compressed_digest, compressed_size, diff_id))
 }
 
 /// Build an uncompressed tar archive with the generation's content.
-fn build_layer_tar(
-    erofs_path: &Path,
-    objects_dir: &Path,
-    gen_dir: &Path,
-) -> Result<Vec<u8>> {
+fn build_layer_tar(erofs_path: &Path, objects_dir: &Path, gen_dir: &Path) -> Result<Vec<u8>> {
     let buf = Vec::new();
     let mut tar_builder = tar::Builder::new(buf);
 
@@ -207,8 +201,8 @@ fn build_layer_tar(
             continue;
         }
 
-        let data = fs::read(&obj_path)
-            .with_context(|| format!("Failed to read CAS object {hash}"))?;
+        let data =
+            fs::read(&obj_path).with_context(|| format!("Failed to read CAS object {hash}"))?;
         let mut obj_header = tar::Header::new_gnu();
         obj_header.set_size(data.len() as u64);
         obj_header.set_mode(0o644);
@@ -222,8 +216,7 @@ fn build_layer_tar(
     // Also include the generation metadata
     let meta_path = gen_dir.join(".conary-gen.json");
     if meta_path.exists() {
-        let meta_data = fs::read(&meta_path)
-            .context("Failed to read generation metadata")?;
+        let meta_data = fs::read(&meta_path).context("Failed to read generation metadata")?;
         let mut meta_header = tar::Header::new_gnu();
         meta_header.set_size(meta_data.len() as u64);
         meta_header.set_mode(0o644);
@@ -246,10 +239,7 @@ fn build_layer_tar(
 /// In a full implementation this would cross-reference the generation's
 /// database state, but for now we include all CAS objects (the generation's
 /// EROFS image already encodes which objects it references).
-fn collect_generation_cas_hashes(
-    _gen_dir: &Path,
-    objects_dir: &Path,
-) -> Result<Vec<String>> {
+fn collect_generation_cas_hashes(_gen_dir: &Path, objects_dir: &Path) -> Result<Vec<String>> {
     let mut hashes = Vec::new();
 
     if !objects_dir.exists() {
@@ -294,8 +284,7 @@ fn collect_generation_cas_hashes(
 fn write_blob(blobs_dir: &Path, data: &[u8]) -> Result<(String, u64)> {
     let digest = hex_digest(data);
     let path = blobs_dir.join(&digest);
-    fs::write(&path, data)
-        .with_context(|| format!("Failed to write blob {digest}"))?;
+    fs::write(&path, data).with_context(|| format!("Failed to write blob {digest}"))?;
     Ok((digest, data.len() as u64))
 }
 
@@ -310,17 +299,10 @@ fn hex_digest(data: &[u8]) -> String {
 ///
 /// Follows the OCI Image Configuration spec:
 ///   https://github.com/opencontainers/image-spec/blob/main/config.md
-fn build_config_json(
-    metadata: &GenerationMetadata,
-    gen_number: i64,
-    diff_id: &str,
-) -> String {
+fn build_config_json(metadata: &GenerationMetadata, gen_number: i64, diff_id: &str) -> String {
     let created = &metadata.created_at;
     let pkg_count = metadata.package_count;
-    let kernel = metadata
-        .kernel_version
-        .as_deref()
-        .unwrap_or("unknown");
+    let kernel = metadata.kernel_version.as_deref().unwrap_or("unknown");
     let summary = &metadata.summary;
 
     // Build the config as a JSON string to avoid pulling in a builder crate.
@@ -441,16 +423,16 @@ mod tests {
         fs::create_dir_all(objects_dir.join("ab")).unwrap();
         fs::create_dir_all(objects_dir.join("cd")).unwrap();
         fs::write(
-            objects_dir.join("ab").join(
-                "cdef0123456789abcdef0123456789abcdef0123456789abcdef01234567",
-            ),
+            objects_dir
+                .join("ab")
+                .join("cdef0123456789abcdef0123456789abcdef0123456789abcdef01234567"),
             b"file-content-one",
         )
         .unwrap();
         fs::write(
-            objects_dir.join("cd").join(
-                "ef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
-            ),
+            objects_dir
+                .join("cd")
+                .join("ef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"),
             b"file-content-two",
         )
         .unwrap();
@@ -576,10 +558,8 @@ mod tests {
             .strip_prefix("sha256:")
             .unwrap();
 
-        let manifest_str = fs::read_to_string(
-            output_dir.join("blobs/sha256").join(manifest_digest),
-        )
-        .unwrap();
+        let manifest_str =
+            fs::read_to_string(output_dir.join("blobs/sha256").join(manifest_digest)).unwrap();
         let manifest: serde_json::Value = serde_json::from_str(&manifest_str).unwrap();
         let layer_digest = manifest["layers"][0]["digest"]
             .as_str()
@@ -651,10 +631,8 @@ mod tests {
             .strip_prefix("sha256:")
             .unwrap();
 
-        let manifest_str = fs::read_to_string(
-            output_dir.join("blobs/sha256").join(manifest_digest),
-        )
-        .unwrap();
+        let manifest_str =
+            fs::read_to_string(output_dir.join("blobs/sha256").join(manifest_digest)).unwrap();
         let manifest: serde_json::Value = serde_json::from_str(&manifest_str).unwrap();
         let config_digest = manifest["config"]["digest"]
             .as_str()
@@ -732,12 +710,16 @@ mod tests {
         fs::create_dir_all(objects_dir.join("ab")).unwrap();
         fs::create_dir_all(objects_dir.join("ff")).unwrap();
         fs::write(
-            objects_dir.join("ab").join("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd"),
+            objects_dir
+                .join("ab")
+                .join("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd"),
             b"data",
         )
         .unwrap();
         fs::write(
-            objects_dir.join("ff").join("0000000000000000000000000000000000000000000000000000000000000000"),
+            objects_dir
+                .join("ff")
+                .join("0000000000000000000000000000000000000000000000000000000000000000"),
             b"data2",
         )
         .unwrap();
@@ -771,10 +753,7 @@ mod tests {
 
         assert_eq!(config["os"], "linux");
         assert_eq!(config["architecture"], "amd64");
-        assert_eq!(
-            config["rootfs"]["diff_ids"][0],
-            "sha256:abcdef1234567890"
-        );
+        assert_eq!(config["rootfs"]["diff_ids"][0], "sha256:abcdef1234567890");
         assert_eq!(config["rootfs"]["type"], "layers");
     }
 
@@ -796,15 +775,9 @@ mod tests {
         let index: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
         assert_eq!(index["schemaVersion"], 2);
-        assert_eq!(
-            index["manifests"][0]["digest"],
-            "sha256:manifestdigest"
-        );
+        assert_eq!(index["manifests"][0]["digest"], "sha256:manifestdigest");
         assert_eq!(index["manifests"][0]["size"], 200);
-        assert_eq!(
-            index["manifests"][0]["platform"]["architecture"],
-            "amd64"
-        );
+        assert_eq!(index["manifests"][0]["platform"]["architecture"], "amd64");
         assert_eq!(index["manifests"][0]["platform"]["os"], "linux");
     }
 }
