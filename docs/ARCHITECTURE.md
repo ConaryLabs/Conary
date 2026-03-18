@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-03-13
-revision: 3
-summary: Update schema to v51, add cross-distro repo capability tables and new modules, fix crate/test counts
+last_updated: 2026-03-18
+revision: 4
+summary: Update for composefs-native architecture -- generation module, transaction engine rewrite, remove deployer/journal references, schema v52
 ---
 
 # Conary Architecture
@@ -42,7 +42,7 @@ Update   SBOM    Diff   Switch      Base/Image
      +------+------+        | (src/      |
      |  Database   |        |  repository|
      | (src/db/)   |        |  /)        |
-     |  SQLite v51 |        +------+-----+
+     |  SQLite v52 |        +------+-----+
      +------+------+               |
             |               +------+------+
      +------+------+        | Remi Server |
@@ -108,13 +108,21 @@ conary-core/             Core library crate
 +-- src/
     +-- lib.rs           Public API surface
     +-- db/              Database layer
-    |   +-- schema.rs    Schema v51, migration dispatcher
-    |   +-- migrations.rs All 51 migration functions
+    |   +-- schema.rs    Schema v52, migration dispatcher
+    |   +-- migrations.rs All 52 migration functions
     |   +-- models/      ORM-style model structs
-    +-- transaction/     Crash-safe atomic operations
-    |   +-- journal.rs   Append-only recovery journal
+    +-- transaction/     Composefs-native transaction engine
+    |   +-- mod.rs       TransactionEngine, state machine (resolve/fetch/commit/build/mount)
     |   +-- planner.rs   VFS preflight conflict detection
-    |   +-- recovery.rs  Roll-forward/roll-back recovery
+    +-- generation/      EROFS generation building and composefs mounting
+    |   +-- builder.rs   Build EROFS images from DB state (uses composefs-rs)
+    |   +-- mount.rs     composefs mount/unmount, current symlink
+    |   +-- metadata.rs  Generation metadata (JSON)
+    |   +-- composefs.rs composefs detection and feature probing
+    |   +-- gc.rs        Old generation garbage collection
+    |   +-- etc_merge.rs Three-way /etc merge across generations
+    |   +-- delta.rs     EROFS image delta computation
+    |   +-- composefs_rs_eval.rs composefs-rs evaluation (feature-gated)
     +-- resolver/        Dependency resolution
     |   +-- graph.rs     Directed dependency graph
     |   +-- engine.rs    Resolution algorithm
@@ -135,7 +143,8 @@ conary-core/             Core library crate
     +-- filesystem/      Storage layer
     |   +-- cas.rs       Content-addressable store (SHA-256 keyed)
     |   +-- vfs/         Virtual filesystem tree (arena allocator)
-    |   +-- deployer.rs  CAS-to-filesystem file deployment
+    |   +-- fsverity.rs  fs-verity content verification
+    |   +-- path.rs      safe_join, sanitize_filename, sanitize_path
     +-- packages/        Format parsers
     |   +-- rpm.rs       RPM parser
     |   +-- deb.rs       DEB parser
@@ -256,23 +265,21 @@ This is the primary operation. The flow from `conary install nginx`:
    +-- Detect package format (magic bytes or extension)
    +-- Optional: convert legacy format to CCS on-the-fly
 
-3. TRANSACTION (crash-safe)
-   +-- Create TransactionEngine with journal
-   +-- PLAN: VFS preflight - detect file conflicts before touching disk
-   +-- PREPARE: Extract files, compute hashes
-   +-- PRE_SCRIPTS: Run pre-install scriptlets (sandboxed)
-   +-- BACKUP: Preserve existing files being overwritten
-   +-- STAGE: Deploy files from CAS to staging area
-   +-- FS_APPLY: Move staged files to final locations
-   +-- DB_APPLY: Record trove, files, components, dependencies in SQLite
-   |   (Point of no return - roll forward after this)
-   +-- POST_SCRIPTS: Run post-install scriptlets (sandboxed)
+3. TRANSACTION (composefs-native)
+   +-- Create TransactionEngine, acquire lock
+   +-- PLAN: VFS preflight - detect file conflicts
+   +-- FETCH: Store package content in CAS
+   +-- DB_COMMIT: Record trove, files, components, dependencies in SQLite
+   |   (Point of no return)
+   +-- BUILD: Construct EROFS image from DB state (composefs-rs)
+   +-- MOUNT: Mount new generation via composefs, update /conary/current symlink
+   +-- POST_SCRIPTS: Run post-install scriptlets (sandboxed against composefs mount)
    +-- TRIGGERS: Fire matching triggers (ldconfig, mime, icons, etc.)
-   +-- SNAPSHOT: Create system state snapshot
 
-4. CLEANUP
-   +-- Delete journal on success
-   +-- On crash: journal enables deterministic recovery
+4. RECOVERY (on crash)
+   +-- Check /conary/current symlink for valid EROFS image
+   +-- If invalid: rebuild EROFS from DB state and remount
+   +-- If DB corrupted: scan generations/ for latest intact image
 ```
 
 ## Data Flow: Remi Server Request
@@ -339,12 +346,22 @@ Current System State
 4. **Rollback**: Switch back to any previous generation
 5. **GC**: Remove old generations, keeping N most recent
 
+### Generation Module (conary-core/src/generation/)
+
+The primary builder for composefs generations. Uses the composefs-rs crate
+(v0.3.0) to produce EROFS images from the current DB state. Submodules:
+builder.rs (EROFS image construction), mount.rs (composefs mount/unmount),
+metadata.rs (JSON metadata), gc.rs (old generation cleanup), etc_merge.rs
+(three-way /etc merge), delta.rs (EROFS image deltas), composefs.rs
+(runtime feature detection).
+
 ### conary-erofs Crate
 
-Dedicated crate for building EROFS (Enhanced Read-Only File System)
-images. Handles superblock construction, inode layout, directory
-entries, data compression (LZ4, LZMA), extended attributes, and
-chunk-based external file references to the CAS.
+Standalone crate for low-level EROFS image construction. Handles superblock
+layout, inode encoding, directory entries, data compression (LZ4, LZMA),
+extended attributes, and chunk-based external file references. The generation
+module now primarily uses composefs-rs instead of conary-erofs directly, but
+conary-erofs remains available for specialized use cases.
 
 ### composefs Integration
 
@@ -391,7 +408,7 @@ sandboxed containers via `ContainerConfig::pristine_for_bootstrap()`.
 Supports x86_64, aarch64, and riscv64 targets. Dry-run mode
 (`--dry-run`) validates the full pipeline without building.
 
-## Database Schema (v51)
+## Database Schema (v52)
 
 All state lives in SQLite. No config files for runtime state. Key tables:
 
@@ -465,10 +482,11 @@ Build examples:
 config files for runtime state. The database is the single source of truth,
 queryable with standard SQL tools.
 
-**Journal-based crash recovery**: The transaction engine writes an append-only
-journal before making filesystem changes. On crash, the journal determines
-whether to roll forward (past the point of no return at DB_APPLY) or roll
-back (before DB_APPLY).
+**Composefs-native transactions**: The transaction engine follows a linear
+pipeline: resolve -> fetch -> DB commit -> EROFS build -> mount. The DB commit
+is the point of no return. Recovery is simple: if the DB says generation N
+should be active but the mount does not match, rebuild the EROFS image from DB
+state and remount. No journal, no backup phase, no staging directory.
 
 **Content-addressable storage**: Files are stored by SHA-256 hash in a flat
 CAS directory. This enables deduplication across packages, instant rollback

@@ -5,14 +5,13 @@ paths:
 
 # Filesystem Module
 
-Content-addressable storage (CAS) and file deployment. Files are stored by
-content hash (SHA-256 or XXH128) enabling deduplication and efficient rollback.
-Deployment uses hardlinks from CAS to install root, falling back to copy for
-cross-device moves.
+Content-addressable storage (CAS) and virtual filesystem tree. Files are stored
+by content hash (SHA-256 or XXH128) enabling deduplication and integrity
+verification. File deployment is handled by composefs-native generation building
+(see `crate::generation`), not by this module.
 
 ## Key Types
 - `CasStore` -- content-addressable store with configurable `HashAlgorithm`
-- `FileDeployer` -- deploys files from CAS to install root via hardlinks
 - `VfsTree` -- in-memory filesystem tree with arena allocation and O(1) path lookup
 - `NodeId` -- lightweight index into VFS arena (just a `usize`)
 - `NodeKind` -- `Directory`, `File { hash, size }`, `Symlink { target }`
@@ -23,19 +22,18 @@ cross-device moves.
 ## Invariants
 - `CasStore::atomic_store()` writes to temp file, fsyncs, then renames -- crash-safe
 - Temp names use PID + monotonic counter to avoid races across threads/processes
-- `FileDeployer::safe_target_path()` rejects `..` components (path traversal prevention)
 - Empty paths after normalization are rejected
 - VFS uses arena allocation (contiguous Vec) for cache-friendly traversal
 
 ## Gotchas
-- Hardlinks require same filesystem -- `EXDEV` triggers copy fallback in transaction module
+- No FileDeployer -- file deployment was removed; composefs generation building
+  mounts the EROFS image over the filesystem instead
 - `CasStore::new()` defaults to SHA-256; use `with_algorithm()` for XXH128
-- `FileDeployer` can be created with existing CAS via `with_cas()` or new CAS via `new()`
 - `VfsTree` path lookup is O(1) via HashMap, not tree traversal
 - The `path` submodule contains `safe_join()` used by transaction recovery
 
 ## Files
 - `cas.rs` -- `CasStore`, atomic storage, content retrieval, hash algorithm selection
-- `deployer.rs` -- `FileDeployer`, hardlink deployment, path traversal prevention
 - `vfs/mod.rs` -- `VfsTree`, `NodeId`, `NodeKind`, arena-based tree
-- `path.rs` -- `safe_join()` path utility
+- `fsverity.rs` -- fs-verity support for content verification
+- `path.rs` -- `safe_join()`, `sanitize_filename()`, `sanitize_path()` path utilities

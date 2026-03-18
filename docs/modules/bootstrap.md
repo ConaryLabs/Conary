@@ -28,9 +28,10 @@ Host System (any Linux)
   ConaryStageBuilder -- [optional] Rust 1.93 + Conary self-build
      |                   Downloads Rust bootstrap, builds from source
      |
-  ImageBuilder -- Bootable disk image (raw / qcow2 / iso)
+  ImageBuilder -- Bootable disk image (raw / qcow2 / iso / erofs)
      |             systemd-repart (fallback: sfdisk/mkfs)
      |             GPT: 512MB ESP (FAT32) + root (ext4)
+     |             EROFS output: CAS + EROFS generation image + DB
      |
   StageManager -- JSON checkpoint file (bootstrap-state.json)
                    Per-stage completion + per-package checkpointing
@@ -73,7 +74,8 @@ on a stage clears it and all subsequent stages.
 `RepartDefinition` generates `repart.d/*.conf` files for ESP and root
 partitions with architecture-aware type GUIDs. Falls back to sfdisk/mkfs
 when systemd-repart is unavailable. Supports raw, qcow2 (via qemu-img),
-and hybrid ISO output.
+hybrid ISO output, and EROFS generation images (CAS + EROFS + DB for
+composefs-native boot).
 
 ## Dry-Run Validation
 

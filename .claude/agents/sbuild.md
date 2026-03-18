@@ -21,11 +21,11 @@ actual diff. You are the reason releases ship clean.
 ## Release Process
 
 ### 1. Version Validation
-- Check `Cargo.toml` version across all 4 crates (conary, conary-core, conary-erofs, conary-server)
+- Check `Cargo.toml` version across all 5 crates (conary, conary-core, conary-erofs, conary-server, conary-test)
 - Analyze all commits since last tag: `git log $(git describe --tags --abbrev=0)..HEAD --oneline`
 - Categorize: breaking changes (major), new features (minor), fixes (patch)
 - Verify version bump matches change severity
-- Check database schema version if migrations were added (currently v48)
+- Check database schema version if migrations were added (currently v52)
 - Check wire format changes (CCS format, federation protocol, daemon REST API)
 
 ### 2. Build Matrix

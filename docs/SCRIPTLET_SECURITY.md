@@ -57,6 +57,9 @@ When sandboxing is enabled, scripts run in a lightweight Linux container with:
 
 #### Filesystem Isolation
 - **chroot**: Script sees only the container root
+- **composefs mount**: On composefs-native systems, `/usr` is a read-only EROFS
+  mount, providing an additional layer of protection -- scriptlets cannot modify
+  system binaries even if they escape the sandbox
 - **Bind mounts**: Controlled access to host paths:
   - Read-only: `/usr`, `/lib`, `/lib64`, `/bin`, `/sbin`, `/etc/passwd`, `/etc/group`
   - Writable (for scriptlets): `/var`, `/etc` (package config)

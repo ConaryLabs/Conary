@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-03-16
-revision: 5
-summary: Ch 6 — add test data API, canonical mapping, chunk GC sections, fix MCP count. Ch 7 — fix capability field names, add three-tier policy docs, Scriptlet profile, enforce/audit commands
+last_updated: 2026-03-18
+revision: 6
+summary: Ch 8 -- rewrite transaction engine section for composefs-native architecture (no journal/backup/staging)
 ---
 
 # Conaryopedia v2
@@ -5282,80 +5282,36 @@ conary automation dismiss <id>     # Dismiss a suggestion
 conary automation history          # Show past actions
 ```
 
-### 8.7 Transaction Engine: Crash-Safe Operations
+### 8.7 Transaction Engine: Composefs-Native Operations
 
-Every package operation in Conary runs inside a transaction (`src/transaction/mod.rs`). The transaction engine guarantees that the system is never left in a half-installed state, even if power is lost mid-operation.
+Every package operation in Conary runs inside a transaction (`conary-core/src/transaction/mod.rs`). The composefs-native transaction engine guarantees that the system is never left in a half-installed state, even if power is lost mid-operation.
 
 #### State Machine
 
-Each transaction moves through 10 phases:
+Each transaction moves through 7 phases:
 
 ```
-NEW          Transaction object created
-PLANNED      Dependency resolution complete, operation plan finalized
-PREPARED     Packages downloaded, checksums verified
-PRE_SCRIPTS  Pre-install/pre-remove scriptlets executed
-BACKED_UP    Existing files backed up (for rollback)
-STAGED       New files staged in temporary directory
-FS_APPLIED   New files moved to final locations      <-- Point of no return
-DB_APPLIED   Database updated (troves, files, deps)
-POST_SCRIPTS Post-install/post-remove scriptlets run
-DONE         Transaction complete, journal cleaned
+NEW        Transaction created, nothing resolved yet
+RESOLVED   Dependencies resolved, install plan computed
+FETCHED    Package content fetched into CAS
+COMMITTED  Database transaction committed              <-- Point of no return
+BUILT      EROFS image built for the new generation
+MOUNTED    New generation mounted and symlink updated
+DONE       Transaction complete
 ```
 
-#### Journal-Based Recovery
+The point of no return is `Committed` -- once the SQLite database has the new package state, everything after it (building the EROFS image, mounting it) is idempotent and can be retried on failure.
 
-Every phase transition is recorded in a journal file before the operation executes:
+#### Recovery Strategy
 
-```rust
-pub struct TransactionJournal {
-    journal_dir: PathBuf,      // /var/lib/conary/journal/
-    tx_uuid: String,           // Unique transaction ID
-}
-```
+If the system crashes, the next Conary operation uses a 4-step fallback:
 
-If the system crashes, the next Conary operation scans the journal directory. For each incomplete transaction:
+1. **Check current symlink**: Read `/conary/current`; if the target EROFS image passes magic-number validation, mount it directly.
+2. **Rebuild from DB**: If the image is missing or truncated, query the DB for the expected active generation and rebuild the EROFS image via `build_generation_from_db()`.
+3. **Scan generations**: If the DB is corrupted, scan `/conary/generations/` by number descending and try each intact EROFS image.
+4. **Fail**: If nothing works, return `RecoveryFailed` requiring manual intervention.
 
-- **Before FS_APPLIED**: Roll back. Restore backups, remove staged files, revert database.
-- **After FS_APPLIED**: Roll forward. The filesystem changes are committed; complete the remaining phases (database update, post-scripts, cleanup).
-
-The FS_APPLIED phase is the point of no return because filesystem operations can't be atomically undone across multiple files. Before that point, we have complete backups. After that point, we've already moved files to their final locations and the old versions are gone.
-
-#### Atomic File Operations
-
-Individual file installations use atomic moves:
-
-```rust
-pub fn move_file_atomic(src: &Path, dest: &Path) -> io::Result<()> {
-    match fs::rename(src, dest) {
-        Ok(()) => Ok(()),
-        Err(e) if e.raw_os_error() == Some(libc::EXDEV) => {
-            // Cross-filesystem: copy + fsync + delete
-            fs::copy(src, dest)?;
-            let file = fs::File::open(dest)?;
-            file.sync_all()?;  // fsync to ensure data on disk
-            fs::remove_file(src)?;
-            Ok(())
-        }
-        Err(e) => Err(e),
-    }
-}
-```
-
-On the same filesystem, `rename()` is atomic -- the file appears at the new path or doesn't. Cross-filesystem moves use copy + fsync + delete. The fsync ensures the file content is on disk before we delete the source.
-
-#### Backup Strategy
-
-Before overwriting any existing file, the transaction engine creates a backup:
-
-```
-/var/lib/conary/backup/{tx-uuid}/
-  usr/sbin/nginx              # Original binary
-  etc/nginx/nginx.conf        # Original config
-  ...
-```
-
-The backup directory mirrors the filesystem hierarchy. On rollback, files are restored from backup to their original locations. After successful completion, backups are deleted.
+This replaces the old journal-based roll-forward/roll-back system. There is no journal, no backup directory, and no staging area. The database is the single source of truth, and EROFS images are re-derivable from it.
 
 #### Configuration
 
@@ -5363,13 +5319,16 @@ The backup directory mirrors the filesystem hierarchy. On rollback, files are re
 pub struct TransactionConfig {
     pub root: PathBuf,          // Filesystem root (usually /)
     pub db_path: PathBuf,       // SQLite database location
-    pub txn_dir: PathBuf,       // Working directory for staging
-    pub journal_dir: PathBuf,   // Journal files
-    pub lock_timeout: Duration, // How long to wait for the transaction lock
+    pub objects_dir: PathBuf,   // CAS objects directory
+    pub generations_dir: PathBuf, // EROFS generation images
+    pub etc_state_dir: PathBuf, // /etc merge state
+    pub mount_point: PathBuf,   // Mount point for active generation
+    pub hash_algorithm: HashAlgorithm,
+    pub lock_timeout_secs: u64, // How long to wait for the transaction lock
 }
 ```
 
-Only one transaction can run at a time, enforced by a file lock. The `lock_timeout` determines how long a second transaction waits before failing with a "database locked" error.
+Only one transaction can run at a time, enforced by a file lock with exponential backoff up to `lock_timeout_secs`.
 
 ### 8.8 Putting It All Together
 
@@ -5391,8 +5350,8 @@ These systems compose into workflows that span the entire lifecycle:
 **Update safely**:
 1. Automation detects available security patches (8.6)
 2. Delta generation computes minimal downloads (8.3)
-3. The transaction engine creates backups before applying changes (8.7)
-4. If a scriptlet fails, the transaction rolls back to the backup state (8.7)
+3. The transaction engine commits new state to the DB and builds a new generation (8.7)
+4. If the EROFS build fails, the previous generation remains mounted; recovery rebuilds from DB (8.7)
 5. The lockfile records the new resolved state (8.4)
 
 **Air-gapped deployment**:
