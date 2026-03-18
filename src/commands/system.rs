@@ -272,13 +272,11 @@ pub fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Result<()>
 
     let files_to_rollback = files_to_rollback.into_inner();
 
-    // Composefs-native: files are removed by rebuilding the EROFS image
-    // from the updated DB state and remounting.
-    // TODO(composefs-native): build_generation_from_db + mount_generation
-    info!(
-        "Composefs-native: DB committed for rollback of changeset {}. EROFS rebuild/mount deferred.",
-        changeset_id
-    );
+    // Composefs-native: rebuild EROFS image from updated DB state and remount
+    let _gen_num = crate::commands::composefs_ops::rebuild_and_mount(
+        &conn,
+        &format!("Rollback changeset {}", changeset_id),
+    )?;
 
     println!(
         "Rollback complete. Changeset {} has been reversed.",
@@ -370,8 +368,10 @@ fn rollback_removal(
     })?;
 
     // Composefs-native: rebuild EROFS image from updated DB state and remount
-    // TODO(composefs-native): build_generation_from_db + mount_generation
-    info!("Composefs-native: DB restored for rollback of removal. EROFS rebuild/mount deferred.");
+    let _gen_num = crate::commands::composefs_ops::rebuild_and_mount(
+        conn,
+        &format!("Rollback removal of {}", snapshot.name),
+    )?;
 
     println!(
         "Rollback complete. Changeset {} has been reversed.",
@@ -475,11 +475,12 @@ fn rollback_upgrade(
         Ok(())
     })?;
 
-    // Composefs-native: the DB now reflects the old version state.
-    // Rebuild EROFS image from DB state and remount to apply the rollback.
-    // TODO(composefs-native): build_generation_from_db + mount_generation
+    // Composefs-native: rebuild EROFS image from DB state and remount
     let _files_to_remove = files_to_remove.into_inner();
-    info!("Composefs-native: DB restored for upgrade rollback. EROFS rebuild/mount deferred.");
+    let _gen_num = crate::commands::composefs_ops::rebuild_and_mount(
+        conn,
+        &format!("Rollback upgrade of {}", snapshot.name),
+    )?;
 
     println!(
         "Rollback complete. Changeset {} has been reversed.",

@@ -1551,15 +1551,8 @@ fn execute_install_transaction(
         }
     };
 
-    // composefs-native: build EROFS image from DB state and mount new generation
-    // This is deferred to a later task that wires up the full generation lifecycle.
-    // For now, files are in CAS and the DB is committed, which is the composefs-native
-    // point of no return. The EROFS build + mount will be added in Task 9.
-    // TODO(composefs-native): build_generation_from_db + mount_generation
-    info!(
-        "Composefs-native: DB committed for {}. EROFS build/mount deferred.",
-        tx_description
-    );
+    // Composefs-native: build EROFS image from DB state and mount new generation
+    let _gen_num = crate::commands::composefs_ops::rebuild_and_mount(conn, &tx_description)?;
 
     // Release transaction lock
     engine.release_lock();

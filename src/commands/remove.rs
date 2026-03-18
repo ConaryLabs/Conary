@@ -283,18 +283,16 @@ pub fn cmd_remove(
         Ok(changeset_id)
     })?;
 
-    // Composefs-native: files are served via EROFS/composefs mount.
-    // After the DB commit, rebuild the EROFS image and remount to reflect removal.
-    // TODO(composefs-native): build_generation_from_db + mount_generation
+    // Composefs-native: rebuild EROFS image and remount to reflect removal
     progress.set_phase(RemovePhase::RemovingFiles);
     let removed_count = regular_files.len();
     let failed_count = 0;
     let dirs_removed = directories.len();
 
-    info!(
-        "Composefs-native: DB committed for removal of {}. EROFS rebuild/mount deferred.",
-        package_name
-    );
+    let _gen_num = crate::commands::composefs_ops::rebuild_and_mount(
+        &conn,
+        &format!("Remove {}", package_name),
+    )?;
 
     // Execute post-remove scriptlet (best effort - warn on failure, don't abort)
     if !no_scripts && !stored_scriptlets.is_empty() {
