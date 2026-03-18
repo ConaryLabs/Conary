@@ -453,8 +453,10 @@ impl<'a> BatchInstaller<'a> {
         super::run_triggers(&conn, Path::new(self.root), changeset_id, &all_file_paths);
 
         // Phase 7: Build EROFS image and mount new generation
-        // TODO(composefs-native): build_generation_from_db + mount_generation
-        info!("Composefs-native: DB committed for batch. EROFS build/mount deferred.");
+        let _gen_num = crate::commands::composefs_ops::rebuild_and_mount(
+            &conn,
+            &format!("Batch install: {}", main_pkg_name),
+        )?;
 
         // Release transaction lock
         engine.release_lock();

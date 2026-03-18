@@ -8,7 +8,7 @@ description = "Core library for the Conary package manager"
 license = "MIT OR Apache-2.0"
 
 [features]
-default = []
+default = ["composefs-rs"]
 server = ["dep:async-trait", "dep:futures"]
 mcp = ["dep:rmcp"]
 composefs-rs = ["dep:composefs"]

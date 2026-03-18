@@ -8,6 +8,7 @@ pub mod canonical;
 mod capability;
 pub mod ccs;
 mod collection;
+pub(crate) mod composefs_ops;
 mod config;
 mod convert_pkgbuild;
 mod cook;

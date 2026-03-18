@@ -102,15 +102,14 @@ pub fn cmd_restore(
 
     // Composefs-native: rebuild EROFS image from DB state and remount.
     // This restores all files atomically via the new generation.
-    // TODO(composefs-native): build_generation_from_db + mount_generation
     let restored = files_to_restore.len();
-    info!(
-        "Composefs-native: would rebuild EROFS to restore {} files for {}. Deferred to Task 9.",
-        restored, package_name
-    );
+    let gen_num = crate::commands::composefs_ops::rebuild_and_mount(
+        &conn,
+        &format!("Restore {}", package_name),
+    )?;
 
-    println!("\nRestore complete:");
-    println!("  Files in CAS: {} (ready for EROFS rebuild)", restored);
+    println!("\nRestore complete (generation {}):", gen_num);
+    println!("  Files restored via EROFS: {}", restored);
 
     // Show warnings for files not in CAS
     if !not_in_cas.is_empty() {
@@ -201,12 +200,14 @@ pub fn cmd_restore_all(db_path: &str, _root: &str, dry_run: bool) -> Result<()> 
         );
     } else {
         // Composefs-native: rebuild EROFS from DB state
-        // TODO(composefs-native): build_generation_from_db + mount_generation
-        println!("\nComposefs-native restore:");
+        let gen_num = crate::commands::composefs_ops::rebuild_and_mount(
+            &conn,
+            "Restore all packages",
+        )?;
+        println!("\nComposefs-native restore (generation {}):", gen_num);
         println!("  Packages checked: {}", packages_checked);
         println!("  Files in CAS:     {}", total_available);
         println!("  Missing from CAS: {}", total_missing);
-        info!("Composefs-native: EROFS rebuild for restore-all deferred to Task 9.");
     }
 
     Ok(())
