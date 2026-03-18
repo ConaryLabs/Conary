@@ -1,0 +1,51 @@
+# recipes/system/procps-ng.toml
+#
+# LFS 13 Section 8.77 — Procps-ng-4.0.6
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/procps-ng.html
+#
+# Process monitoring utilities (ps, top, free, uptime, kill, etc.).
+# The kill command is disabled here as it is provided by util-linux.
+# Built with systemd support and 8-bit watch capability.
+
+[package]
+name = "procps-ng"
+version = "4.0.6"
+release = "1"
+summary = "Process monitoring utilities"
+description = """
+Procps-ng provides system monitoring utilities: ps (process status),
+top (real-time process viewer), free (memory usage), uptime, pgrep,
+pkill, vmstat, w, watch, and others. The kill command is disabled
+as it is provided by util-linux.
+"""
+license = "GPL-2.0-or-later"
+homepage = "https://gitlab.com/procps-ng/procps"
+
+[source]
+archive = "https://sourceforge.net/projects/procps-ng/files/Production/procps-ng-%(version)s.tar.xz"
+checksum = "md5:20c23dc3dd1569a2bb1d1fa93de213ed"
+
+[build]
+requires = ["glibc", "ncurses", "systemd"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr                            \
+            --docdir=/usr/share/doc/procps-ng-%(version)s \
+            --disable-static                         \
+            --disable-kill                           \
+            --enable-watch8bit                       \
+            --with-systemd
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

@@ -1,0 +1,53 @@
+# recipes/system/man-db.toml
+#
+# LFS 13 Section 8.76 — Man-DB-2.13.1
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/man-db.html
+#
+# Man page database and viewer. Disables setuid installation and sets
+# cache owner to bin. External programs (lynx, vgrind, grap) are
+# configured but may not be installed yet.
+
+[package]
+name = "man-db"
+version = "2.13.1"
+release = "1"
+summary = "Man page database and viewer"
+description = """
+Man-DB provides the man command and associated infrastructure for
+viewing, searching, and indexing manual pages. It includes mandb
+for maintaining the page database and supports multiple compression
+formats and localized man pages.
+"""
+license = "GPL-2.0-or-later"
+homepage = "https://man-db.nongnu.org/"
+
+[source]
+archive = "https://download.savannah.nongnu.org/releases/man-db/man-db-%(version)s.tar.xz"
+checksum = "md5:b6335533cbeac3b24cd7be31fdee8c83"
+
+[build]
+requires = ["glibc", "groff", "libpipeline", "gdbm"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr                         \
+            --docdir=/usr/share/doc/man-db-%(version)s \
+            --sysconfdir=/etc                     \
+            --disable-setuid                      \
+            --enable-cache-owner=bin              \
+            --with-browser=/usr/bin/lynx          \
+            --with-vgrind=/usr/bin/vgrind         \
+            --with-grap=/usr/bin/grap
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

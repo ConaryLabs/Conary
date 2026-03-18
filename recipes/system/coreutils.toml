@@ -1,0 +1,62 @@
+# recipes/system/coreutils.toml
+#
+# LFS 13 Section 8.58 — Coreutils-9.10
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/coreutils.html
+#
+# GNU core utilities — the basic file, shell, and text manipulation
+# commands (ls, cp, mv, cat, chmod, etc.). Patched for i18n support.
+# Post-install moves chroot to /usr/sbin per FHS.
+
+[package]
+name = "coreutils"
+version = "9.10"
+release = "1"
+summary = "GNU core utilities"
+description = """
+The GNU Core Utilities provide the basic file, shell, and text
+manipulation commands needed for a Unix-like system: ls, cp, mv,
+rm, cat, chmod, chown, mkdir, and many more. This build includes
+an internationalization patch for proper multibyte character support.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/coreutils/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/coreutils/coreutils-%(version)s.tar.xz"
+checksum = "md5:b0482ebec42fd48e95cb9187d566b9e4"
+
+[[source.patches]]
+url = "https://www.linuxfromscratch.org/patches/lfs/development/coreutils-9.10-i18n-1.patch"
+checksum = "md5:6e9aea31b1662176101e6438a39fdad4"
+
+[build]
+requires = ["glibc", "acl", "attr", "libcap", "gmp"]
+makedepends = ["autoconf", "automake", "perl"]
+chroot = true
+
+configure = """
+# Apply internationalization patch
+patch -Np1 -i ../coreutils-%(version)s-i18n-1.patch
+
+# Regenerate autotools files after patching
+autoreconf -fv
+automake -af
+
+FORCE_UNSAFE_CONFIGURE=1 ./configure --prefix=/usr
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+
+# Move chroot to /usr/sbin per FHS
+mv -v /usr/bin/chroot /usr/sbin
+mv -v /usr/share/man/man1/chroot.1 /usr/share/man/man8/chroot.8
+sed -i 's/"1"/"8"/' /usr/share/man/man8/chroot.8
+"""
+
+[variables]
+jobs = "$(nproc)"

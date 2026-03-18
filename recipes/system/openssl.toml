@@ -1,0 +1,57 @@
+# recipes/system/openssl.toml
+#
+# LFS 13 Section 8.46 — OpenSSL-3.6.1
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/openssl.html
+#
+# Cryptography and TLS library. Uses ./config (not ./configure) for
+# configuration. Static libraries are removed via sed before install.
+# Man page suffix set to "ssl" to avoid conflicts with other packages.
+
+[package]
+name = "openssl"
+version = "3.6.1"
+release = "1"
+summary = "Cryptography and TLS toolkit"
+description = """
+OpenSSL is a robust, full-featured toolkit for general-purpose
+cryptography and secure communication. It provides the libcrypto
+and libssl shared libraries, the openssl command-line tool, and
+development headers for building TLS-enabled applications.
+"""
+license = "Apache-2.0"
+homepage = "https://www.openssl.org/"
+
+[source]
+archive = "https://github.com/openssl/openssl/releases/download/openssl-%(version)s/openssl-%(version)s.tar.gz"
+checksum = "md5:589777dc85ebbfeca70161c0c384d572"
+
+[build]
+requires = ["glibc", "zlib", "perl"]
+makedepends = []
+chroot = true
+
+configure = """
+./config --prefix=/usr         \
+         --openssldir=/etc/ssl \
+         --libdir=lib          \
+         shared                \
+         zlib-dynamic
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+# Remove static library installation
+sed -i '/INSTALL_LIBS/s/libcrypto.a libssl.a//' Makefile
+
+make MANSUFFIX=ssl install
+
+# Move documentation to versioned directory
+mv -v /usr/share/doc/openssl /usr/share/doc/openssl-%(version)s
+cp -vfr doc/* /usr/share/doc/openssl-%(version)s
+"""
+
+[variables]
+jobs = "$(nproc)"

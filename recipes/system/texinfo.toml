@@ -1,0 +1,45 @@
+# recipes/system/texinfo.toml
+#
+# LFS 13 Section 8.70 — Texinfo-7.3
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/texinfo.html
+#
+# GNU documentation system — produces Info documents, HTML, and other
+# formats from a single source. Standard autotools build.
+
+[package]
+name = "texinfo"
+version = "7.3"
+release = "1"
+summary = "GNU documentation system"
+description = """
+Texinfo is the official documentation format of the GNU project.
+It produces output in multiple formats (Info, HTML, PDF, plain text)
+from a single source file. Includes makeinfo, info, install-info,
+and other documentation tools.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/texinfo/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/texinfo/texinfo-%(version)s.tar.xz"
+checksum = "md5:915a09fcdfc2bf0f5ecf9e556d5698ff"
+
+[build]
+requires = ["glibc", "ncurses", "perl"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

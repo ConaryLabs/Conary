@@ -1,0 +1,42 @@
+# recipes/system/packaging.toml
+#
+# LFS 13 Section 8.52 — Packaging-26.0
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/packaging.html
+#
+# Python packaging utilities implementing PEP 440 version handling and
+# PEP 425 compatibility tags. Installed via pip3 from local wheel.
+
+[package]
+name = "packaging"
+version = "26.0"
+release = "1"
+summary = "Python packaging utilities"
+description = """
+The packaging library provides utilities that implement the Python
+interoperability specifications — PEP 440 version handling and
+PEP 425 compatibility tags. It is a dependency of pip, setuptools,
+and other Python build tools.
+"""
+license = "Apache-2.0 OR BSD-2-Clause"
+homepage = "https://packaging.pypa.io/"
+
+[source]
+archive = "https://pypi.org/packages/source/p/packaging/packaging-%(version)s.tar.gz"
+checksum = "md5:2cbdbb5754f038736c3c361826c6872a"
+
+[build]
+requires = ["python", "flit-core"]
+makedepends = []
+chroot = true
+
+configure = ""
+
+make = """
+pip3 wheel -w dist --no-cache-dir --no-build-isolation --no-deps $PWD
+"""
+
+install = """
+pip3 install --no-index --find-links dist packaging
+"""
+
+[variables]

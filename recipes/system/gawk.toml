@@ -1,0 +1,53 @@
+# recipes/system/gawk.toml
+#
+# LFS 13 Section 8.60 — Gawk-5.4.0
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/gawk.html
+#
+# GNU AWK — pattern scanning and processing language. The sed command
+# removes the "extras" directory from the Makefile to prevent installing
+# unnecessary files.
+
+[package]
+name = "gawk"
+version = "5.4.0"
+release = "1"
+summary = "GNU pattern scanning and processing language"
+description = """
+GNU AWK (gawk) is a pattern scanning and text processing language.
+It is useful for data extraction and reporting, and is a standard
+Unix text processing tool. This build removes the non-essential
+extras directory.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/gawk/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/gawk/gawk-%(version)s.tar.xz"
+checksum = "md5:c07cc9beb6c3bf83274741d0c9489357"
+
+[build]
+requires = ["glibc", "mpfr", "readline"]
+makedepends = []
+chroot = true
+
+configure = """
+# Remove extras directory from build (unnecessary files)
+sed -i 's/extras//' Makefile.in
+
+./configure --prefix=/usr
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+rm -f /usr/bin/gawk-%(version)s
+make install
+
+# Create awk.1 man page symlink
+ln -sv gawk.1 /usr/share/man/man1/awk.1
+"""
+
+[variables]
+jobs = "$(nproc)"

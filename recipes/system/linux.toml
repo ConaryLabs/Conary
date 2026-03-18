@@ -1,0 +1,143 @@
+# recipes/system/linux.toml
+#
+# LFS 13 Section 10.3 — Linux-6.19.8
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter10/kernel.html
+#
+# The Linux kernel. Uses defconfig as a base (deviation from LFS which
+# uses interactive menuconfig), then applies required kernel config
+# options deterministically via scripts/config. Includes LFS-required
+# options plus conaryOS additions for containers and security.
+#
+# DEVIATION: Uses defconfig + scripts/config instead of menuconfig for
+# reproducible, non-interactive builds.
+
+[package]
+name = "linux"
+version = "6.19.8"
+release = "1"
+summary = "Linux kernel"
+description = """
+The Linux kernel provides the core operating system interface: process
+scheduling, memory management, device drivers, filesystems, and
+networking. This build uses defconfig with deterministic config
+overrides for reproducible kernel builds without interactive input.
+"""
+license = "GPL-2.0-only"
+homepage = "https://www.kernel.org/"
+
+[source]
+archive = "https://www.kernel.org/pub/linux/kernel/v6.x/linux-%(version)s.tar.xz"
+checksum = "md5:e23cdbfd397f77f7df9dfab9e2d24ec3"
+
+[build]
+requires = ["glibc", "kmod", "elfutils", "openssl", "bc"]
+makedepends = ["perl", "python"]
+chroot = true
+
+configure = """
+# Clean the source tree
+make mrproper
+
+# Start with a default configuration
+make defconfig
+
+# --- LFS required kernel config options ---
+
+# Control groups (required by systemd)
+scripts/config --enable CGROUPS
+scripts/config --enable MEMCG
+
+# Device management
+scripts/config --enable DEVTMPFS
+scripts/config --enable DEVTMPFS_MOUNT
+
+# Tmpfs with POSIX ACLs (required by systemd)
+scripts/config --enable TMPFS
+scripts/config --enable TMPFS_POSIX_ACL
+
+# Inotify (required by udev)
+scripts/config --enable INOTIFY_USER
+
+# Networking
+scripts/config --enable NET
+scripts/config --enable INET
+scripts/config --enable IPV6
+
+# --- conaryOS additions ---
+
+# Namespace isolation (containers, sandboxing)
+scripts/config --enable NAMESPACES
+scripts/config --enable USER_NS
+scripts/config --enable PID_NS
+scripts/config --enable NET_NS
+
+# Overlay filesystem (composefs, containers)
+scripts/config --enable OVERLAY_FS
+
+# Seccomp filtering (sandboxing, systemd)
+scripts/config --enable SECCOMP
+scripts/config --enable SECCOMP_FILTER
+
+# --- Built-in (=y not =m) for no-initramfs boot ---
+
+# Ext4 filesystem (root filesystem)
+scripts/config --enable EXT4_FS
+scripts/config --set-val EXT4_FS y
+
+# Virtio (QEMU/KVM guests)
+scripts/config --enable VIRTIO
+scripts/config --set-val VIRTIO y
+scripts/config --enable VIRTIO_PCI
+scripts/config --set-val VIRTIO_PCI y
+scripts/config --enable VIRTIO_BLK
+scripts/config --set-val VIRTIO_BLK y
+scripts/config --enable VIRTIO_NET
+scripts/config --set-val VIRTIO_NET y
+
+# VFAT filesystem (EFI System Partition)
+scripts/config --enable VFAT_FS
+scripts/config --set-val VFAT_FS y
+
+# Resolve any new dependencies introduced by config changes
+make olddefconfig
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+# Install kernel modules
+make modules_install
+
+# Install the kernel image
+cp -iv arch/x86/boot/bzImage /boot/vmlinuz-%(version)s-conary
+
+# Install System.map and config for debugging
+cp -iv System.map /boot/System.map-%(version)s
+cp -iv .config /boot/config-%(version)s
+
+# Install kernel documentation
+cp -r Documentation -T /usr/share/doc/linux-%(version)s
+"""
+
+[variables]
+jobs = "$(nproc)"
+
+[deviations]
+lfs_section = "10.3"
+lfs_url = "https://www.linuxfromscratch.org/lfs/view/systemd/chapter10/kernel.html"
+changes = [
+    { flag = "defconfig", lfs = "menuconfig (interactive)", conary = "defconfig + scripts/config", reason = "Reproducible non-interactive builds" },
+    { flag = "NAMESPACES", lfs = "not specified", conary = "enabled", reason = "Container and sandbox isolation" },
+    { flag = "USER_NS", lfs = "not specified", conary = "enabled", reason = "Unprivileged user namespaces" },
+    { flag = "PID_NS", lfs = "not specified", conary = "enabled", reason = "PID namespace isolation" },
+    { flag = "NET_NS", lfs = "not specified", conary = "enabled", reason = "Network namespace isolation" },
+    { flag = "OVERLAY_FS", lfs = "not specified", conary = "enabled", reason = "Overlay filesystem for composefs and containers" },
+    { flag = "SECCOMP", lfs = "not specified", conary = "enabled", reason = "Seccomp syscall filtering" },
+    { flag = "SECCOMP_FILTER", lfs = "not specified", conary = "enabled", reason = "Seccomp BPF filter programs" },
+    { flag = "VIRTIO*", lfs = "not specified", conary = "built-in (=y)", reason = "QEMU/KVM guest support without initramfs" },
+    { flag = "EXT4_FS", lfs = "not specified as =y", conary = "built-in (=y)", reason = "Root filesystem without initramfs" },
+    { flag = "VFAT_FS", lfs = "not specified as =y", conary = "built-in (=y)", reason = "EFI System Partition support without initramfs" },
+    { flag = "vmlinuz name", lfs = "vmlinuz-6.19.8-lfs-r13.0-4-systemd", conary = "vmlinuz-6.19.8-conary", reason = "conaryOS branding" },
+]
