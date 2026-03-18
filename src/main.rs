@@ -531,11 +531,22 @@ fn run() -> Result<()> {
                     println!("Rolled back to generation {previous}");
                     Ok(())
                 }
-                cli::GenerationCommands::Gc { keep } => {
-                    commands::generation::commands::cmd_generation_gc(keep)
+                cli::GenerationCommands::Gc { keep, db } => {
+                    commands::generation::commands::cmd_generation_gc(keep, &db.db_path)
                 }
                 cli::GenerationCommands::Info { number } => {
                     commands::generation::commands::cmd_generation_info(number)
+                }
+                cli::GenerationCommands::Recover { db } => {
+                    let conn = conary_core::db::open(&db.db_path)?;
+                    let config = conary_core::transaction::TransactionConfig::from_paths(
+                        std::path::PathBuf::from("/"),
+                        std::path::PathBuf::from(&db.db_path),
+                    );
+                    let engine = conary_core::transaction::TransactionEngine::new(config)?;
+                    engine.recover(&conn)?;
+                    println!("Recovery complete.");
+                    Ok(())
                 }
             },
 

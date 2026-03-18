@@ -7,6 +7,8 @@
 
 pub mod builder;
 pub mod composefs;
+pub mod etc_merge;
+pub mod gc;
 pub mod metadata;
 pub mod mount;
 
