@@ -1,0 +1,43 @@
+# recipes/system/lz4.toml
+#
+# LFS 13 Section 8.9 — Lz4-1.10.0
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/lz4.html
+#
+# Extremely fast lossless compression algorithm. Uses make directly,
+# not autotools.
+
+[package]
+name = "lz4"
+version = "1.10.0"
+release = "1"
+summary = "Extremely fast lossless compression"
+description = """
+LZ4 is a lossless data compression algorithm that provides extremely
+fast compression and decompression speeds. It is used by the Linux
+kernel for real-time compression of file systems and by many
+applications where speed is more important than compression ratio.
+"""
+license = "BSD-2-Clause AND GPL-2.0-only"
+homepage = "https://lz4.github.io/lz4/"
+
+[source]
+archive = "https://github.com/lz4/lz4/releases/download/v%(version)s/lz4-%(version)s.tar.gz"
+checksum = "md5:dead9f5f1966d9ae56e1e32761e4e675"
+
+[build]
+requires = ["glibc"]
+makedepends = []
+chroot = true
+
+configure = ""
+
+make = """
+make BUILD_STATIC=no PREFIX=/usr -j%(jobs)s
+"""
+
+install = """
+make BUILD_STATIC=no PREFIX=/usr install
+"""
+
+[variables]
+jobs = "$(nproc)"

@@ -1,0 +1,48 @@
+# recipes/system/sed.toml
+#
+# LFS 13 Section 8.29 — Sed-4.9
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/sed.html
+#
+# GNU stream editor for filtering and transforming text.
+
+[package]
+name = "sed"
+version = "4.9"
+release = "1"
+summary = "GNU stream editor"
+description = """
+Sed is a non-interactive stream editor. It is used to perform basic
+text transformations on an input stream (a file or input from a
+pipeline). Sed is one of the most fundamental Unix text processing
+tools, used extensively in build scripts and system configuration.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/sed/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/sed/sed-%(version)s.tar.xz"
+checksum = "md5:6aac9b2dbafcd5b7a67a8a9bcb8036c3"
+
+[build]
+requires = ["glibc", "acl"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr
+"""
+
+make = """
+make -j%(jobs)s
+make html
+"""
+
+install = """
+make install
+
+install -d -m755           /usr/share/doc/sed-%(version)s
+install -m644 doc/sed.html /usr/share/doc/sed-%(version)s
+"""
+
+[variables]
+jobs = "$(nproc)"

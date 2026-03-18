@@ -1,0 +1,45 @@
+# recipes/system/man-pages.toml
+#
+# LFS 13 Section 8.3 — Man-pages-6.17
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/man-pages.html
+#
+# Linux man pages. No compilation needed — just install the pre-written
+# manual pages into the system. The crypt* man pages are removed because
+# libxcrypt provides its own versions.
+
+[package]
+name = "man-pages"
+version = "6.17"
+release = "1"
+summary = "Linux manual pages"
+description = """
+The Man-pages package contains over 2,400 manual pages describing
+C library functions, system calls, device special files, and other
+kernel interfaces. These pages document the programming API for Linux.
+"""
+license = "GPL-2.0-or-later AND MIT AND BSD-3-Clause"
+homepage = "https://www.kernel.org/doc/man-pages/"
+
+[source]
+archive = "https://www.kernel.org/pub/linux/docs/man-pages/man-pages-%(version)s.tar.xz"
+checksum = "md5:4327b009d63a6e0fc27df3e4c9e7369b"
+
+[build]
+requires = []
+makedepends = []
+chroot = true
+
+configure = ""
+
+make = ""
+
+install = """
+# Remove crypt man pages — libxcrypt provides its own
+rm -v man3/crypt*
+
+# Install man pages; -R prevents make from setting built-in variables
+# GIT=false suppresses "git: command not found" warnings
+make -R GIT=false prefix=/usr install
+"""
+
+[variables]

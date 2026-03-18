@@ -1,0 +1,53 @@
+# recipes/system/libxcrypt.toml
+#
+# LFS 13 Section 8.25 — Libxcrypt-4.5.2
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/libxcrypt.html
+#
+# Modern password hashing library. Replaces the obsolete libcrypt from
+# glibc with support for strong hashing algorithms (yescrypt, bcrypt,
+# etc.). The obsolete API is disabled to avoid conflicts.
+
+[package]
+name = "libxcrypt"
+version = "4.5.2"
+release = "1"
+summary = "Modern password hashing library"
+description = """
+Libxcrypt is a modern library for one-way hashing of passwords. It
+supports strong algorithms like yescrypt and bcrypt, replacing the
+obsolete DES-based crypt from glibc. This build disables the obsolete
+API and failure tokens for maximum security.
+"""
+license = "LGPL-2.1-or-later"
+homepage = "https://github.com/besser82/libxcrypt"
+
+[source]
+archive = "https://github.com/besser82/libxcrypt/releases/download/v%(version)s/libxcrypt-%(version)s.tar.xz"
+checksum = "md5:25e888919ddcd153a07daa95224fa436"
+
+[build]
+requires = ["glibc"]
+makedepends = []
+chroot = true
+
+configure = """
+# Fix a build issue with some source files
+sed -i '/strchr/s/const//' lib/crypt-{sm3,gost}-yescrypt.c
+
+./configure --prefix=/usr                \
+            --enable-hashes=strong,glibc \
+            --enable-obsolete-api=no     \
+            --disable-static             \
+            --disable-failure-tokens
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

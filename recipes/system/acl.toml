@@ -1,0 +1,47 @@
+# recipes/system/acl.toml
+#
+# LFS 13 Section 8.23 — Acl-2.3.2
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/acl.html
+#
+# Access Control Lists library and utilities. Extends the traditional
+# UNIX file permission model with fine-grained access control.
+
+[package]
+name = "acl"
+version = "2.3.2"
+release = "1"
+summary = "Access Control Lists library and utilities"
+description = """
+The Acl package contains utilities to administer Access Control Lists,
+which provide a more flexible permission mechanism for file systems.
+ACLs allow setting permissions for specific users and groups beyond
+the traditional owner/group/other model.
+"""
+license = "LGPL-2.1-or-later"
+homepage = "https://savannah.nongnu.org/projects/acl"
+
+[source]
+archive = "https://download.savannah.gnu.org/releases/acl/acl-%(version)s.tar.xz"
+checksum = "md5:590765dee95907dbc3c856f7255bd669"
+
+[build]
+requires = ["glibc", "attr"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr    \
+            --disable-static \
+            --docdir=/usr/share/doc/acl-%(version)s
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

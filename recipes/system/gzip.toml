@@ -1,0 +1,44 @@
+# recipes/system/gzip.toml
+#
+# LFS 13 Section 8.63 — Gzip-1.14
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/gzip.html
+#
+# GNU compression utility. Standard autotools build with no special flags.
+
+[package]
+name = "gzip"
+version = "1.14"
+release = "1"
+summary = "GNU compression utility"
+description = """
+Gzip provides the gzip and gunzip commands for compressing and
+decompressing files using the Lempel-Ziv (LZ77) algorithm. Also
+includes helper scripts like zcat, zgrep, zdiff, and zmore for
+working with compressed files directly.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/gzip/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/gzip/gzip-%(version)s.tar.xz"
+checksum = "md5:4bf5a10f287501ee8e8ebe00ef62b2c2"
+
+[build]
+requires = ["glibc"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

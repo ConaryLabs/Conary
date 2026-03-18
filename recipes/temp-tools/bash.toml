@@ -1,0 +1,50 @@
+# recipes/temp-tools/bash.toml
+#
+# LFS 13 Section 6.4 — Bash-5.3
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter06/bash.html
+#
+# The Bourne Again SHell for the temporary toolchain. Provides /bin/sh
+# via a symlink.
+
+[package]
+name = "bash"
+version = "5.3"
+release = "1"
+summary = "Bourne Again SHell (temporary tools)"
+description = """
+Bash is the GNU Project's shell. This cross-compiled version provides
+the shell for the temporary toolchain. A symlink from /bin/sh to bash
+is created after installation.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/bash/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/bash/bash-%(version)s.tar.gz"
+checksum = "md5:977c8c0c5ae6309191e7768e28ebc951"
+
+[build]
+requires = ["binutils-pass1", "gcc-pass1", "glibc", "libstdcxx", "ncurses"]
+makedepends = []
+
+configure = """
+./configure --prefix=/usr                      \
+            --build=$(sh support/config.guess) \
+            --host=$LFS_TGT                    \
+            --without-bash-malloc
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make DESTDIR=$LFS install
+
+# Create /bin/sh symlink pointing to bash
+ln -sv bash $LFS/bin/sh
+"""
+
+[variables]
+jobs = "$(nproc)"
+lfs_tgt = "x86_64-conary-linux-gnu"

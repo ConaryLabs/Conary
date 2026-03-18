@@ -1,0 +1,45 @@
+# recipes/system/diffutils.toml
+#
+# LFS 13 Section 8.59 — Diffutils-3.12
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/diffutils.html
+#
+# GNU file comparison utilities — cmp, diff, diff3, sdiff.
+# Standard autotools build with no special flags.
+
+[package]
+name = "diffutils"
+version = "3.12"
+release = "1"
+summary = "GNU file comparison utilities"
+description = """
+GNU Diffutils provides programs for comparing and merging files:
+diff shows differences between files, cmp shows byte-level
+differences, diff3 compares three files, and sdiff merges two
+files interactively.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/diffutils/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/diffutils/diffutils-%(version)s.tar.xz"
+checksum = "md5:d1b18b20868fb561f77861cd90b05de4"
+
+[build]
+requires = ["glibc"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

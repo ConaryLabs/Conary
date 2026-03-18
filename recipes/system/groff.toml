@@ -1,0 +1,44 @@
+# recipes/system/groff.toml
+#
+# LFS 13 Section 8.62 — Groff-1.24.0
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/groff.html
+#
+# GNU text formatting system (troff). The PAGE environment variable
+# sets the default paper size at compile time. Uses "letter" for US.
+
+[package]
+name = "groff"
+version = "1.24.0"
+release = "1"
+summary = "GNU text formatting system"
+description = """
+Groff (GNU troff) is a typesetting system that reads plain text input
+and produces formatted output for terminal display, PostScript, PDF,
+or HTML. It processes man pages and other technical documentation.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/groff/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/groff/groff-%(version)s.tar.gz"
+checksum = "md5:0087812b25366ebfaeec00bf386384b5"
+
+[build]
+requires = ["glibc", "perl"]
+makedepends = []
+chroot = true
+
+configure = """
+PAGE=letter ./configure --prefix=/usr
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

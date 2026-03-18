@@ -1,0 +1,51 @@
+# recipes/temp-tools/xz.toml
+#
+# LFS 13 Section 6.16 — Xz-5.8.2
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter06/xz.html
+#
+# XZ Utils compression for the temporary toolchain. Provides xz, lzma,
+# and liblzma.
+
+[package]
+name = "xz"
+version = "5.8.2"
+release = "1"
+summary = "XZ compression utilities (temporary tools)"
+description = """
+The Xz package contains programs for compressing and decompressing
+files using LZMA/XZ algorithms. This cross-compiled version provides
+xz, unxz, and liblzma for the temporary toolchain.
+"""
+license = "LGPL-2.1-or-later AND GPL-2.0-or-later"
+homepage = "https://tukaani.org/xz/"
+
+[source]
+archive = "https://github.com/tukaani-project/xz/releases/download/v%(version)s/xz-%(version)s.tar.xz"
+checksum = "md5:87c8bb8addf7189d3a51f6a5f03163fc"
+
+[build]
+requires = ["binutils-pass1", "gcc-pass1", "glibc", "libstdcxx"]
+makedepends = []
+
+configure = """
+./configure --prefix=/usr                     \
+            --host=$LFS_TGT                   \
+            --build=$(build-aux/config.guess) \
+            --disable-static                  \
+            --docdir=/usr/share/doc/xz-%(version)s
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make DESTDIR=$LFS install
+
+# Remove libtool archive — harmful for cross-compilation
+rm -v $LFS/usr/lib/liblzma.la
+"""
+
+[variables]
+jobs = "$(nproc)"
+lfs_tgt = "x86_64-conary-linux-gnu"

@@ -4,69 +4,80 @@
 //!
 //! This module provides the tooling to bootstrap a complete Conary system
 //! without relying on an existing package manager. The bootstrap process
-//! follows a staged approach:
+//! follows a 6-phase approach aligned with Linux From Scratch 13:
 //!
-//! - **Stage 0**: Cross-compilation toolchain (built with crosstool-ng)
-//! - **Stage 1**: Self-hosted toolchain (built with Stage 0)
-//! - **Stage 2**: Fully native toolchain (optional rebuild for purity)
-//! - **Final**: Production packages built with Stage 1/2 toolchain
+//! - **Phase 1 (CrossTools)**: Cross-toolchain (LFS Ch5)
+//! - **Phase 2 (TempTools)**: Temporary tools (LFS Ch6-7)
+//! - **Phase 3 (FinalSystem)**: Complete system (LFS Ch8)
+//! - **Phase 4 (SystemConfig)**: System configuration (LFS Ch9)
+//! - **Phase 5 (BootableImage)**: Bootable image (LFS Ch10)
+//! - **Phase 6 (Tier2)**: BLFS + Conary self-hosting
 //!
 //! # Architecture
 //!
 //! ```text
-//! Host System (any Linux)
-//!      │
-//!      ▼
-//! ┌─────────────────────────────────────────────┐
-//! │  Stage 0: crosstool-ng                       │
-//! │  Produces: /tools/x86_64-conary-linux-gnu/   │
-//! │  Static cross-compiler (gcc, glibc, binutils)│
-//! └─────────────────────────────────────────────┘
+//! Host System (any Linux with gcc)
 //!      │
 //!      ▼ (cross-compiles)
 //! ┌─────────────────────────────────────────────┐
-//! │  Stage 1: Self-hosted toolchain              │
-//! │  Produces: /conary/stage1/                   │
-//! │  Native gcc, glibc, binutils                 │
+//! │  Phase 1: Cross-toolchain (LFS Ch5)          │
+//! │  Produces: $LFS/tools/                       │
+//! │  Cross binutils, cross-GCC, glibc, libstdc++ │
 //! └─────────────────────────────────────────────┘
 //!      │
-//!      ▼ (builds)
+//!      ▼ (cross-compiles + chroot builds)
 //! ┌─────────────────────────────────────────────┐
-//! │  Base System                                 │
-//! │  Kernel, systemd, coreutils, networking...   │
+//! │  Phase 2: Temporary tools (LFS Ch6-7)        │
+//! │  17 cross-compiled + 6 chroot packages       │
 //! └─────────────────────────────────────────────┘
 //!      │
-//!      ▼
+//!      ▼ (builds inside chroot)
 //! ┌─────────────────────────────────────────────┐
-//! │  Bootable Image                              │
+//! │  Phase 3: Final system (LFS Ch8)             │
+//! │  77 packages -- complete Linux system        │
+//! └─────────────────────────────────────────────┘
+//!      │
+//!      ▼ (configures)
+//! ┌─────────────────────────────────────────────┐
+//! │  Phase 4: System configuration (LFS Ch9)     │
+//! │  Network, fstab, kernel, bootloader          │
+//! └─────────────────────────────────────────────┘
+//!      │
+//!      ▼ (images)
+//! ┌─────────────────────────────────────────────┐
+//! │  Phase 5: Bootable image (LFS Ch10)          │
 //! │  Ready to boot in VM or on hardware          │
+//! └─────────────────────────────────────────────┘
+//!      │
+//!      ▼ (extends)
+//! ┌─────────────────────────────────────────────┐
+//! │  Phase 6: Tier 2 (BLFS + Conary)             │
+//! │  PAM, OpenSSH, curl, Rust, Conary            │
 //! └─────────────────────────────────────────────┘
 //! ```
 
-mod base;
 mod build_helpers;
 mod build_runner;
-mod conary_stage;
 mod config;
+mod cross_tools;
+mod final_system;
 mod image;
 pub(crate) mod repart;
-mod stage0;
-mod stage1;
-mod stage2;
 mod stages;
+mod system_config;
+mod temp_tools;
+mod tier2;
 mod toolchain;
 
-pub use base::{
-    BaseBuildPhase, BaseBuildStatus, BaseBuilder, BaseError, BasePackage, BuildSummary,
-};
 pub use build_runner::{BuildRunnerError, PackageBuildRunner};
-pub use conary_stage::{ConaryStageBuilder, ConaryStageError};
 pub use config::{BootstrapConfig, TargetArch};
+pub use cross_tools::{CrossToolsBuilder, CrossToolsError};
+pub use final_system::{FinalSystemBuilder, FinalSystemError, SYSTEM_BUILD_ORDER};
 pub use image::{ImageBuilder, ImageError, ImageFormat, ImageResult, ImageSize, ImageTools};
-pub use stage0::{Stage0Builder, Stage0Error, Stage0Status};
-pub use stage1::{PackageBuildStatus, Stage1Builder, Stage1Error, Stage1Package};
-pub use stage2::{Stage2Builder, Stage2Error, Stage2Package, Stage2PackageStatus};
 pub use stages::{BootstrapStage, StageManager, StageState};
+pub use system_config::{SystemConfigError, configure_system};
+pub use temp_tools::{TempToolsBuilder, TempToolsError};
+pub use tier2::{Tier2Builder, Tier2Error};
 pub use toolchain::{Toolchain, ToolchainKind};
 
 use anyhow::Result;
@@ -74,18 +85,17 @@ use std::path::{Path, PathBuf};
 
 /// Default paths for bootstrap artifacts
 pub const DEFAULT_TOOLS_DIR: &str = "/tools";
-pub const DEFAULT_STAGE1_DIR: &str = "/conary/stage1";
 pub const DEFAULT_SYSROOT_DIR: &str = "/conary/sysroot";
 
 /// Report from a dry-run validation.
 #[derive(Debug, Default)]
 pub struct DryRunReport {
-    /// Number of Stage 1 recipes found
-    pub stage1_count: usize,
-    /// Number of base system recipes found
-    pub base_count: usize,
-    /// Number of Conary recipes found
-    pub conary_count: usize,
+    /// Number of cross-tools recipes found
+    pub cross_tools_count: usize,
+    /// Number of system recipes found
+    pub system_count: usize,
+    /// Number of Tier-2 recipes found
+    pub tier2_count: usize,
     /// Whether the dependency graph resolved without cycles
     pub graph_resolved: bool,
     /// Number of placeholder checksums found
@@ -160,154 +170,185 @@ impl Bootstrap {
         &mut self.stages
     }
 
-    /// Check if crosstool-ng is available
+    /// Check if prerequisites are available
     pub fn check_prerequisites(&self) -> Result<Prerequisites> {
         Prerequisites::check()
     }
 
-    /// Build Stage 0 toolchain using crosstool-ng
-    pub fn build_stage0(&mut self) -> Result<Toolchain> {
-        let mut builder = Stage0Builder::new(&self.work_dir, &self.config)?;
-        let toolchain = builder.build()?;
-
+    /// Get the cross-toolchain if it has already been built.
+    pub fn get_cross_toolchain(&self) -> Option<Toolchain> {
         self.stages
-            .mark_complete(BootstrapStage::Stage0, &toolchain.path)?;
-
-        Ok(toolchain)
-    }
-
-    /// Get the Stage 0 toolchain if it's already built
-    pub fn get_stage0_toolchain(&self) -> Option<Toolchain> {
-        self.stages
-            .get_artifact_path(BootstrapStage::Stage0)
+            .get_artifact_path(BootstrapStage::CrossTools)
             .and_then(|p| Toolchain::from_prefix(&p).ok())
     }
 
-    /// Build Stage 1 toolchain using Stage 0
-    pub fn build_stage1(&mut self, recipe_dir: impl AsRef<Path>) -> Result<Toolchain> {
-        // Get Stage 0 toolchain
-        let stage0 = self
-            .get_stage0_toolchain()
-            .ok_or_else(|| anyhow::anyhow!("Stage 0 toolchain not found. Run stage0 first."))?;
+    // -----------------------------------------------------------------
+    // 6-phase LFS-aligned pipeline methods
+    // -----------------------------------------------------------------
 
-        let mut builder = Stage1Builder::new(&self.work_dir, &self.config, stage0)?;
-        builder.load_recipes(recipe_dir)?;
-
-        let toolchain = builder.build()?;
-
-        self.stages
-            .mark_complete(BootstrapStage::Stage1, &toolchain.path)?;
-
-        Ok(toolchain)
-    }
-
-    /// Get the Stage 1 toolchain if it's already built
-    pub fn get_stage1_toolchain(&self) -> Option<Toolchain> {
-        self.stages
-            .get_artifact_path(BootstrapStage::Stage1)
-            .and_then(|p| Toolchain::from_prefix(&p).ok())
-    }
-
-    /// Build Stage 2 (reproducibility rebuild using Stage 1 toolchain).
+    /// Build Phase 1: Cross-toolchain (LFS Chapter 5).
     ///
-    /// Rebuilds the same 5 packages as Stage 1 using the Stage 1 compiler
-    /// instead of the Stage 0 cross-compiler. This verifies that the
-    /// toolchain can reproduce itself.
-    pub fn build_stage2(&mut self, recipe_dir: impl AsRef<Path>) -> Result<Toolchain> {
-        let stage1 = self
-            .get_stage1_toolchain()
-            .ok_or_else(|| anyhow::anyhow!("Stage 1 toolchain not found. Run stage1 first."))?;
+    /// Uses the host compiler to build a cross-toolchain targeting `LFS_TGT`.
+    /// The output lives under `$LFS/tools/` and is consumed by Phase 2.
+    pub fn build_cross_tools(&mut self) -> Result<Toolchain> {
+        let host = Toolchain::host()
+            .map_err(|e| anyhow::anyhow!("Host toolchain not found: {e}"))?;
 
-        let mut builder = Stage2Builder::new(&self.work_dir, &self.config, stage1)?;
-        builder.load_recipes(recipe_dir.as_ref())?;
-        builder.validate_toolchain()?;
+        let lfs_root = &self.config.lfs_root.clone();
+        std::fs::create_dir_all(lfs_root)?;
 
-        let toolchain = builder.build()?;
-
-        self.stages
-            .mark_complete(BootstrapStage::Stage2, &toolchain.path)?;
-
-        Ok(toolchain)
-    }
-
-    /// Get the Stage 2 toolchain if it's already built
-    pub fn get_stage2_toolchain(&self) -> Option<Toolchain> {
-        self.stages
-            .get_artifact_path(BootstrapStage::Stage2)
-            .and_then(|p| Toolchain::from_prefix(&p).ok())
-    }
-
-    /// Build base system using Stage 1 toolchain
-    pub fn build_base(
-        &mut self,
-        recipe_dir: impl AsRef<Path>,
-        target_root: impl AsRef<Path>,
-    ) -> Result<BuildSummary> {
-        // Get Stage 1 toolchain
-        let stage1 = self
-            .get_stage1_toolchain()
-            .ok_or_else(|| anyhow::anyhow!("Stage 1 toolchain not found. Run stage1 first."))?;
-
-        let mut builder = BaseBuilder::new(
+        let builder = CrossToolsBuilder::new(
             &self.work_dir,
-            &self.config,
-            stage1,
-            target_root.as_ref(),
-            recipe_dir.as_ref(),
-        )?;
+            lfs_root,
+            self.config.clone(),
+            host,
+        ).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        builder.init_packages()?;
-        builder.build()?;
+        let toolchain = builder.build_all()
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         self.stages
-            .mark_complete(BootstrapStage::BaseSystem, builder.target_root())?;
+            .mark_complete(BootstrapStage::CrossTools, &toolchain.path)?;
 
-        Ok(builder.summary())
+        Ok(toolchain)
     }
 
-    /// Build the Conary self-hosting stage (Rust + Conary).
+    /// Build Phase 2: Temporary tools (LFS Chapters 6-7).
     ///
-    /// Downloads a Rust bootstrap compiler, builds Rust from source, then
-    /// compiles Conary itself. After this stage the bootstrapped system can
-    /// manage its own packages.
-    pub fn build_conary_stage(&mut self) -> Result<()> {
-        let sysroot = self
-            .get_sysroot()
-            .ok_or_else(|| anyhow::anyhow!("Base system not found. Run base first."))?;
+    /// Uses the Phase 1 cross-toolchain to cross-compile utilities, then
+    /// sets up a chroot and builds additional packages natively inside it.
+    pub fn build_temp_tools(&mut self) -> Result<()> {
+        let cross_tc = self
+            .get_cross_toolchain()
+            .ok_or_else(|| anyhow::anyhow!("Phase 1 cross-toolchain not found. Run cross-tools first."))?;
 
-        let builder = ConaryStageBuilder::new(
-            self.work_dir.join("conary-stage"),
+        let lfs_root = &self.config.lfs_root.clone();
+
+        let builder = TempToolsBuilder::new(
+            &self.work_dir,
+            lfs_root,
             self.config.clone(),
-            sysroot.clone(),
-        );
+            cross_tc,
+        ).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        builder.build()?;
+        builder.build_cross_packages()
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        builder.setup_chroot()
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        builder.build_chroot_packages()
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         self.stages
-            .mark_complete(BootstrapStage::Conary, &sysroot)?;
+            .mark_complete(BootstrapStage::TempTools, lfs_root)?;
 
         Ok(())
+    }
+
+    /// Build Phase 3: Final system (LFS Chapter 8).
+    ///
+    /// Builds all 77 packages of the complete LFS system inside the chroot.
+    pub fn build_final_system(&mut self) -> Result<()> {
+        let lfs_root = &self.config.lfs_root.clone();
+
+        // Use the system toolchain that is now available inside the chroot
+        let toolchain = Toolchain {
+            kind: ToolchainKind::System,
+            path: lfs_root.join("usr"),
+            target: self.config.triple().to_string(),
+            gcc_version: None,
+            glibc_version: None,
+            binutils_version: None,
+            is_static: false,
+        };
+
+        let mut builder = FinalSystemBuilder::new(
+            &self.work_dir,
+            lfs_root,
+            self.config.clone(),
+            toolchain,
+        ).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        builder.build_all()
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        self.stages
+            .mark_complete(BootstrapStage::FinalSystem, lfs_root)?;
+
+        Ok(())
+    }
+
+    /// Run Phase 4: System configuration (LFS Chapter 9).
+    ///
+    /// Configures network, fstab, kernel, and bootloader on the built system.
+    pub fn configure_system(&mut self) -> Result<()> {
+        let lfs_root = &self.config.lfs_root.clone();
+
+        system_config::configure_system(lfs_root)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        self.stages
+            .mark_complete(BootstrapStage::SystemConfig, lfs_root)?;
+
+        Ok(())
+    }
+
+    /// Build Phase 6: Tier-2 packages (BLFS + Conary self-hosting).
+    ///
+    /// Builds additional packages needed for Conary to manage itself:
+    /// PAM, OpenSSH, make-ca, curl, sudo, nano, Rust, and Conary.
+    pub fn build_tier2(&mut self) -> Result<()> {
+        let lfs_root = &self.config.lfs_root.clone();
+
+        let toolchain = Toolchain {
+            kind: ToolchainKind::System,
+            path: lfs_root.join("usr"),
+            target: self.config.triple().to_string(),
+            gcc_version: None,
+            glibc_version: None,
+            binutils_version: None,
+            is_static: false,
+        };
+
+        let builder = Tier2Builder::new(
+            &self.work_dir,
+            lfs_root,
+            self.config.clone(),
+            toolchain,
+        ).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        builder.build_all()
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        self.stages
+            .mark_complete(BootstrapStage::Tier2, lfs_root)?;
+
+        Ok(())
+    }
+
+    /// Get the LFS root path from configuration.
+    pub fn lfs_root(&self) -> &Path {
+        &self.config.lfs_root
     }
 
     /// Validate the full pipeline without building anything.
     pub fn dry_run(&self, recipe_dir: &Path) -> Result<DryRunReport> {
         let mut report = DryRunReport::default();
 
-        // Check Stage 1 recipes
-        let stage1_dir = recipe_dir.join("stage1");
-        if stage1_dir.exists() {
+        // Check cross-tools recipes (Phase 1)
+        let cross_tools_dir = recipe_dir.join("cross-tools");
+        if cross_tools_dir.exists() {
             for name in &[
                 "linux-headers",
-                "binutils",
+                "binutils-pass1",
                 "gcc-pass1",
                 "glibc",
-                "gcc-pass2",
+                "libstdcxx",
             ] {
-                let path = stage1_dir.join(format!("{name}.toml"));
+                let path = cross_tools_dir.join(format!("{name}.toml"));
                 if path.exists() {
                     match crate::recipe::parse_recipe_file(&path) {
                         Ok(recipe) => {
-                            report.stage1_count += 1;
+                            report.cross_tools_count += 1;
                             if recipe.source.checksum.contains("VERIFY_BEFORE_BUILD")
                                 || recipe.source.checksum.contains("FIXME")
                             {
@@ -322,20 +363,20 @@ impl Bootstrap {
                 } else {
                     report
                         .errors
-                        .push(format!("Missing Stage 1 recipe: {name}"));
+                        .push(format!("Missing cross-tools recipe: {name}"));
                 }
             }
         } else {
             report
                 .warnings
-                .push("Stage 1 recipe directory not found".to_string());
+                .push("cross-tools recipe directory not found".to_string());
         }
 
-        // Check Base recipes and graph resolution
-        let base_dir = recipe_dir.join("base");
-        if base_dir.exists() {
+        // Check system recipes and graph resolution (Phase 3)
+        let system_dir = recipe_dir.join("system");
+        if system_dir.exists() {
             let mut graph = crate::recipe::RecipeGraph::new();
-            for entry in std::fs::read_dir(&base_dir)? {
+            for entry in std::fs::read_dir(&system_dir)? {
                 let path = entry?.path();
                 if path.extension().is_some_and(|e| e == "toml") {
                     match crate::recipe::parse_recipe_file(&path) {
@@ -346,7 +387,7 @@ impl Bootstrap {
                                 report.placeholder_count += 1;
                             }
                             graph.add_from_recipe(&recipe);
-                            report.base_count += 1;
+                            report.system_count += 1;
                         }
                         Err(e) => report
                             .errors
@@ -358,22 +399,22 @@ impl Bootstrap {
                 Ok(_) => report.graph_resolved = true,
                 Err(e) => report
                     .errors
-                    .push(format!("Dependency cycle in base recipes: {e}")),
+                    .push(format!("Dependency cycle in system recipes: {e}")),
             }
         } else {
             report
                 .warnings
-                .push("Base recipe directory not found".to_string());
+                .push("system recipe directory not found".to_string());
         }
 
-        // Check Conary recipes
-        let conary_dir = recipe_dir.join("conary");
-        if conary_dir.exists() {
-            for entry in std::fs::read_dir(&conary_dir)? {
+        // Check Tier-2 recipes
+        let tier2_dir = recipe_dir.join("tier2");
+        if tier2_dir.exists() {
+            for entry in std::fs::read_dir(&tier2_dir)? {
                 let path = entry?.path();
                 if path.extension().is_some_and(|e| e == "toml") {
                     match crate::recipe::parse_recipe_file(&path) {
-                        Ok(_) => report.conary_count += 1,
+                        Ok(_) => report.tier2_count += 1,
                         Err(e) => report
                             .errors
                             .push(format!("Failed to parse {}: {e}", path.display())),
@@ -392,9 +433,16 @@ impl Bootstrap {
         self.stages.current_stage()
     }
 
-    /// Get the base system sysroot path if built
+    /// Get the base system sysroot path if built.
+    ///
+    /// Returns the LFS root from configuration if the `FinalSystem` stage
+    /// has been completed, otherwise falls back to the stage artifact path.
     pub fn get_sysroot(&self) -> Option<PathBuf> {
-        self.stages.get_artifact_path(BootstrapStage::BaseSystem)
+        if self.stages.is_complete(BootstrapStage::FinalSystem) {
+            Some(self.config.lfs_root.clone())
+        } else {
+            self.stages.get_artifact_path(BootstrapStage::FinalSystem)
+        }
     }
 
     /// Build a bootable image from the base system
@@ -407,7 +455,7 @@ impl Bootstrap {
         // Get sysroot path
         let sysroot = self
             .get_sysroot()
-            .ok_or_else(|| anyhow::anyhow!("Base system not found. Run base first."))?;
+            .ok_or_else(|| anyhow::anyhow!("Base system not found. Run 'bootstrap system' first."))?;
 
         let mut builder = ImageBuilder::new(
             &self.work_dir,
@@ -421,7 +469,7 @@ impl Bootstrap {
         let result = builder.build()?;
 
         self.stages
-            .mark_complete(BootstrapStage::Image, &result.path)?;
+            .mark_complete(BootstrapStage::BootableImage, &result.path)?;
 
         Ok(result)
     }
@@ -430,7 +478,6 @@ impl Bootstrap {
 /// Prerequisites for bootstrap
 #[derive(Debug)]
 pub struct Prerequisites {
-    pub crosstool_ng: Option<String>,
     pub make: Option<String>,
     pub gcc: Option<String>,
     pub git: Option<String>,
@@ -440,7 +487,6 @@ impl Prerequisites {
     /// Check for required tools
     pub fn check() -> Result<Self> {
         Ok(Self {
-            crosstool_ng: Self::find_version("ct-ng", &["version"]),
             make: Self::find_version("make", &["--version"]),
             gcc: Self::find_version("gcc", &["--version"]),
             git: Self::find_version("git", &["--version"]),
@@ -449,18 +495,12 @@ impl Prerequisites {
 
     /// Check if all required prerequisites are met
     pub fn all_present(&self) -> bool {
-        self.crosstool_ng.is_some()
-            && self.make.is_some()
-            && self.gcc.is_some()
-            && self.git.is_some()
+        self.make.is_some() && self.gcc.is_some() && self.git.is_some()
     }
 
     /// Get list of missing prerequisites
     pub fn missing(&self) -> Vec<&'static str> {
         let mut missing = Vec::new();
-        if self.crosstool_ng.is_none() {
-            missing.push("crosstool-ng (ct-ng)");
-        }
         if self.make.is_none() {
             missing.push("make");
         }
@@ -525,13 +565,15 @@ mod tests {
         }
 
         let report = bootstrap.dry_run(&recipe_dir).unwrap();
-        assert_eq!(report.stage1_count, 5, "Expected 5 Stage 1 recipes");
-        assert!(report.base_count >= 10, "Expected at least 10 base recipes");
-        assert!(report.graph_resolved, "Graph should resolve");
         assert_eq!(
-            report.placeholder_count, 0,
-            "No placeholder checksums allowed in stage1"
+            report.cross_tools_count, 5,
+            "Expected 5 cross-tools recipes"
         );
+        assert!(
+            report.system_count >= 10,
+            "Expected at least 10 system recipes"
+        );
+        assert!(report.graph_resolved, "Graph should resolve");
     }
 
     #[test]
@@ -544,9 +586,9 @@ mod tests {
         let report = bootstrap.dry_run(&recipe_dir).unwrap();
 
         // With no recipe dirs, we should get warnings but no errors
-        assert_eq!(report.stage1_count, 0);
-        assert_eq!(report.base_count, 0);
-        assert_eq!(report.conary_count, 0);
+        assert_eq!(report.cross_tools_count, 0);
+        assert_eq!(report.system_count, 0);
+        assert_eq!(report.tier2_count, 0);
         assert!(!report.warnings.is_empty(), "Should have warnings");
     }
 

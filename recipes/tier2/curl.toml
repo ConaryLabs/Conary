@@ -1,0 +1,58 @@
+# recipes/tier2/curl.toml
+#
+# BLFS — curl-8.19.0
+# https://www.linuxfromscratch.org/blfs/view/systemd/basicnet/curl.html
+#
+# Command line tool and library for transferring data with URLs.
+# Built with OpenSSL and threaded resolver. Uses the system CA
+# certificate store populated by make-ca.
+
+[package]
+name = "curl"
+version = "8.19.0"
+release = "1"
+summary = "URL transfer library and tool"
+description = """
+curl is a command line tool and library for transferring data with
+URL syntax, supporting HTTP, HTTPS, FTP, and many other protocols.
+libcurl provides the C API used by applications needing network
+transfer capabilities.
+"""
+license = "MIT"
+homepage = "https://curl.se/"
+
+[source]
+archive = "https://curl.se/download/curl-%(version)s.tar.xz"
+checksum = "md5:d5d3581ba4b4df1140a26a6efcf13e61"
+
+[build]
+requires = ["glibc", "openssl", "zlib"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr                         \
+            --disable-static                      \
+            --with-openssl                        \
+            --enable-threaded-resolver            \
+            --with-ca-path=/etc/ssl/certs
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+
+# Install documentation
+rm -rf docs/examples/.deps
+find docs \\( -name Makefile\\* -o          \
+              -name \\*.1 -o               \
+              -name \\*.3 -o               \
+              -name CMakeLists.txt \\) -delete
+cp -v -R docs -T /usr/share/doc/curl-%(version)s
+"""
+
+[variables]
+jobs = "$(nproc)"

@@ -1,11 +1,13 @@
 // conary-core/src/bootstrap/build_helpers.rs
 
-//! Shared build utilities for Stage 1 and Stage 2 builders
+//! Shared build utilities for bootstrap builders
 //!
-//! Both Stage 1 and Stage 2 perform the same core operations: extract tarballs,
+//! Common operations shared across bootstrap phases: extract tarballs,
 //! find source directories, expand environment variables, set up sandbox
-//! environments, and run shell commands. This module provides those common
-//! implementations to avoid duplication.
+//! environments, and run shell commands.
+//!
+//! Some functions are not yet called by the current phase implementations
+//! but are retained for use when recipe-driven execution is wired end-to-end.
 
 use crate::container::{BindMount, ContainerConfig, Sandbox};
 use crate::recipe::Recipe;
@@ -91,6 +93,7 @@ pub fn find_source_dir(dir: &Path) -> Result<PathBuf, std::io::Error> {
 /// Variables use `${VAR}` and `$VAR` syntax. Looks up values in `build_env` only.
 /// Variables not found in `build_env` expand to empty string (host
 /// environment is intentionally not consulted for build hermiticity).
+#[allow(dead_code)]
 pub fn expand_env_vars(value: &str, build_env: &HashMap<String, String>) -> String {
     let mut result = value.to_string();
 
@@ -142,6 +145,7 @@ pub fn expand_env_vars(value: &str, build_env: &HashMap<String, String>) -> Stri
 ///
 /// Flag variables (CFLAGS, CXXFLAGS, LDFLAGS) are merged by prepending base
 /// flags. All other variables are replaced.
+#[allow(dead_code)]
 pub fn merge_build_env(
     base_env: &HashMap<String, String>,
     cross_env: HashMap<String, String>,
@@ -182,6 +186,7 @@ pub fn merge_build_env(
 ///
 /// Replaces `%(target)s`, `%(jobs)s`, `%(stage1_sysroot)s`, and
 /// cross-compilation section variables from the recipe.
+#[allow(dead_code)]
 pub fn substitute_build_vars(
     cmd: &str,
     triple: &str,
@@ -213,6 +218,7 @@ pub fn substitute_build_vars(
 /// network isolation, and the provided environment variables.
 ///
 /// Returns `(exit_code, stdout, stderr)`.
+#[allow(dead_code)]
 pub fn run_sandboxed_command(
     cmd: &str,
     workdir: &Path,
@@ -245,6 +251,7 @@ pub fn run_sandboxed_command(
 }
 
 /// The standard sysroot directories created for bootstrap stages
+#[allow(dead_code)]
 pub const SYSROOT_DIRS: &[&str] = &[
     "usr",
     "usr/bin",
@@ -256,6 +263,7 @@ pub const SYSROOT_DIRS: &[&str] = &[
 ];
 
 /// Create the standard sysroot directory structure
+#[allow(dead_code)]
 pub fn create_sysroot_dirs(sysroot: &Path) -> Result<(), std::io::Error> {
     for dir in SYSROOT_DIRS {
         fs::create_dir_all(sysroot.join(dir))?;
@@ -264,6 +272,7 @@ pub fn create_sysroot_dirs(sysroot: &Path) -> Result<(), std::io::Error> {
 }
 
 /// Set up the standard build environment for a bootstrap stage
+#[allow(dead_code)]
 pub fn setup_build_env(
     toolchain: &super::toolchain::Toolchain,
     sysroot: &Path,

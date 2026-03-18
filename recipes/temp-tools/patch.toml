@@ -1,0 +1,45 @@
+# recipes/temp-tools/patch.toml
+#
+# LFS 13 Section 6.13 — Patch-2.8
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter06/patch.html
+#
+# GNU patch for the temporary toolchain.
+
+[package]
+name = "patch"
+version = "2.8"
+release = "1"
+summary = "GNU patch utility (temporary tools)"
+description = """
+The Patch package contains a program for modifying or creating files
+by applying a diff file. This cross-compiled version provides patch
+for the temporary toolchain.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/patch/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/patch/patch-%(version)s.tar.xz"
+checksum = "md5:149327a021d41c8f88d034eab41c039f"
+
+[build]
+requires = ["binutils-pass1", "gcc-pass1", "glibc", "libstdcxx"]
+makedepends = []
+
+configure = """
+./configure --prefix=/usr \
+            --host=$LFS_TGT \
+            --build=$(build-aux/config.guess)
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make DESTDIR=$LFS install
+"""
+
+[variables]
+jobs = "$(nproc)"
+lfs_tgt = "x86_64-conary-linux-gnu"

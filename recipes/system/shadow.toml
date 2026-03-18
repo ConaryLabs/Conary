@@ -1,0 +1,78 @@
+# recipes/system/shadow.toml
+#
+# LFS 13 Section 8.26 — Shadow-4.19.4
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/shadow.html
+#
+# Shadow password suite — provides secure password management utilities
+# (useradd, usermod, passwd, login, etc). Several programs are disabled
+# because they are provided by other packages (util-linux, coreutils).
+# Post-install enables shadowed passwords and creates defaults.
+
+[package]
+name = "shadow"
+version = "4.19.4"
+release = "1"
+summary = "Shadow password suite"
+description = """
+The Shadow package contains programs for handling passwords in a secure
+way. It provides useradd, usermod, userdel, groupadd, passwd, login, su,
+and other utilities. Passwords are stored in /etc/shadow using strong
+hashing (yescrypt by default).
+"""
+license = "BSD-3-Clause"
+homepage = "https://github.com/shadow-maint/shadow"
+
+[source]
+archive = "https://github.com/shadow-maint/shadow/releases/download/%(version)s/shadow-%(version)s.tar.xz"
+checksum = "md5:ed0f3ff4940822ba75a3b0687a9ce93b"
+
+[build]
+requires = ["glibc", "libxcrypt", "acl", "attr"]
+makedepends = []
+chroot = true
+
+configure = """
+# Remove man pages for programs provided by other packages
+find man -name Makefile.in -exec sed -i 's/getspnam\\.3 / /' {} \\;
+find man -name Makefile.in -exec sed -i 's/passwd\\.5 / /'   {} \\;
+
+# Configure login.defs:
+# - Use YESCRYPT instead of DES for password hashing
+# - Use /var/mail instead of /var/spool/mail
+# - Remove /sbin and /bin from PATH (merged into /usr)
+sed -e 's:#ENCRYPT_METHOD DES:ENCRYPT_METHOD YESCRYPT:' \
+    -e 's:/var/spool/mail:/var/mail:'                   \
+    -e '/PATH=/{s@/sbin:@@;s@/bin:@@}'                  \
+    -i etc/login.defs
+
+# Touch /usr/bin/passwd so shadow does not try to overwrite it
+# during installation before it exists
+touch /usr/bin/passwd
+
+./configure --sysconfdir=/etc   \
+            --disable-static    \
+            --with-{b,yes}crypt \
+            --without-libbsd    \
+            --disable-logind    \
+            --with-group-name-max-length=32
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make exec_prefix=/usr install
+make -C man install-man
+
+# Enable shadowed passwords
+pwconv
+grpconv
+
+# Create /etc/default directory and set default useradd group
+mkdir -p /etc/default
+useradd -D --gid 999
+"""
+
+[variables]
+jobs = "$(nproc)"

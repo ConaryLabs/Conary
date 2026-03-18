@@ -1,0 +1,44 @@
+# recipes/system/automake.toml
+#
+# LFS 13 Section 8.45 — Automake-1.18.1
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/automake.html
+#
+# GNU Automake generates Makefile.in files compliant with GNU coding
+# standards. Standard autotools build with documentation directory.
+
+[package]
+name = "automake"
+version = "1.18.1"
+release = "1"
+summary = "Makefile generator"
+description = """
+Automake generates Makefile.in files compliant with the GNU Coding
+Standards. It requires Autoconf to generate the final Makefiles.
+Together with Autoconf, it forms the GNU build system (autotools).
+"""
+license = "GPL-2.0-or-later"
+homepage = "https://www.gnu.org/software/automake/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/automake/automake-%(version)s.tar.xz"
+checksum = "md5:cea31dbf1120f890cbf2a3032cfb9a68"
+
+[build]
+requires = ["autoconf", "perl"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr --docdir=/usr/share/doc/automake-%(version)s
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

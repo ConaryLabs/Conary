@@ -1,0 +1,46 @@
+# recipes/system/autoconf.toml
+#
+# LFS 13 Section 8.44 — Autoconf-2.72
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/autoconf.html
+#
+# GNU Autoconf produces shell scripts that automatically configure
+# software source code packages to adapt to many kinds of Unix-like
+# systems. Standard autotools build.
+
+[package]
+name = "autoconf"
+version = "2.72"
+release = "1"
+summary = "Automatic configure script builder"
+description = """
+Autoconf is an extensible package of M4 macros that produce shell
+scripts to automatically configure software source code packages.
+These scripts can adapt the packages to many kinds of Unix-like
+systems without manual user intervention.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/autoconf/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/autoconf/autoconf-%(version)s.tar.xz"
+checksum = "md5:1be79f7106ab6767f18391c5e22be701"
+
+[build]
+requires = ["m4", "perl"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

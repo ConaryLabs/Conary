@@ -1,0 +1,70 @@
+# recipes/system/ncurses.toml
+#
+# LFS 13 Section 8.28 — Ncurses-6.6
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/ncurses.html
+#
+# Terminal handling and screen-painting library. Built with wide-character
+# support as the primary library, with non-wide-char compatibility
+# symlinks. Uses a DESTDIR-then-copy installation to apply curses.h fix.
+
+[package]
+name = "ncurses"
+version = "6.6"
+release = "1"
+summary = "Terminal handling library"
+description = """
+The Ncurses library provides terminal-independent screen painting and
+keyboard input. It supports wide characters, shared libraries, and
+pkg-config integration. Non-wide-character compatibility symlinks are
+created for programs that expect the traditional library names.
+"""
+license = "MIT"
+homepage = "https://invisible-island.net/ncurses/"
+
+[source]
+archive = "https://invisible-mirror.net/archives/ncurses/ncurses-%(version)s.tar.gz"
+checksum = "md5:dd45bf6854430af403452a7a6a40652c"
+
+[build]
+requires = ["glibc"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr           \
+            --mandir=/usr/share/man \
+            --with-shared           \
+            --without-debug         \
+            --without-normal        \
+            --with-cxx-shared       \
+            --enable-pc-files       \
+            --with-pkg-config-libdir=/usr/lib/pkgconfig
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+# Install to a temporary DESTDIR, fix curses.h, then copy to /
+make DESTDIR=$PWD/dest install
+
+# Fix curses.h to always enable wide-character support
+sed -e 's/^#if.*XOPEN.*$/#if 1/' \
+    -i dest/usr/include/curses.h
+
+# Copy to final location, overwriting any existing files
+cp --remove-destination -av dest/* /
+
+# Create non-wide-character compatibility symlinks
+for lib in ncurses form panel menu ; do
+    ln -sfv lib${lib}w.so /usr/lib/lib${lib}.so
+    ln -sfv ${lib}w.pc    /usr/lib/pkgconfig/${lib}.pc
+done
+
+# Create libcurses compatibility symlink
+ln -sfv libncursesw.so /usr/lib/libcurses.so
+"""
+
+[variables]
+jobs = "$(nproc)"

@@ -1,0 +1,50 @@
+# recipes/temp-tools/python.toml
+#
+# LFS 13 Section 7.10 — Python-3.14.3
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter07/Python.html
+#
+# Minimal Python 3 build for the temporary toolchain. Needed primarily
+# for Meson build system support. Built natively in chroot without pip
+# or static library. Some optional modules will fail to build (e.g. ssl)
+# which is expected at this stage.
+
+[package]
+name = "python"
+version = "3.14.3"
+release = "1"
+summary = "Python 3 interpreter (temporary tools)"
+description = """
+Minimal Python 3 build for the temporary toolchain. Python is needed
+primarily for Meson, the build system used by systemd and other
+packages. Some modules cannot be built at this stage due to missing
+dependencies (e.g., OpenSSL) — this is expected.
+"""
+license = "PSF-2.0"
+homepage = "https://www.python.org/"
+
+[source]
+archive = "https://www.python.org/ftp/python/%(version)s/Python-%(version)s.tar.xz"
+checksum = "md5:ef513dcb836d219ae0e2b16ac9c87d0f"
+
+[build]
+requires = ["gcc-pass2", "binutils-pass2", "glibc", "bash", "coreutils", "make"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr       \
+            --enable-shared     \
+            --without-ensurepip \
+            --without-static-libpython
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

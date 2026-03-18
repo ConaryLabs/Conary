@@ -17,12 +17,10 @@ use std::process::Command;
 pub enum ToolchainKind {
     /// Host system toolchain
     Host,
-    /// Stage 0: Cross-compiler from crosstool-ng
-    Stage0,
-    /// Stage 1: Self-hosted toolchain
-    Stage1,
-    /// Stage 2: Pure rebuild toolchain
-    Stage2,
+    /// Phase 1: Cross-compiler (LFS Ch5)
+    CrossTools,
+    /// Phase 2-3: Temporary / Final system tools
+    System,
 }
 
 impl ToolchainKind {
@@ -30,9 +28,8 @@ impl ToolchainKind {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Host => "host",
-            Self::Stage0 => "stage0",
-            Self::Stage1 => "stage1",
-            Self::Stage2 => "stage2",
+            Self::CrossTools => "cross-tools",
+            Self::System => "system",
         }
     }
 }
@@ -154,7 +151,7 @@ impl Toolchain {
         let is_static = Self::check_static(&gcc_path);
 
         let mut toolchain = Self {
-            kind: ToolchainKind::Stage0, // Assume Stage0, caller can override
+            kind: ToolchainKind::CrossTools, // Assume cross-tools, caller can override
             path: prefix,
             target,
             gcc_version,
@@ -261,8 +258,8 @@ impl Toolchain {
         } else {
             // Prefer prefixed tool (e.g., x86_64-conary-linux-gnu-ar) but
             // fall back to unprefixed (e.g., ar) if the prefixed version
-            // doesn't exist. Stage1 sysroots typically have unprefixed tools
-            // while stage0 crosstool-ng output has prefixed ones.
+            // doesn't exist. Cross-tools (Phase 1) produce prefixed binaries
+            // while system toolchains (Phase 2-3) typically have unprefixed ones.
             let prefixed = self.bin_dir().join(format!("{}-{}", self.target, name));
             if prefixed.exists() {
                 prefixed
@@ -389,8 +386,8 @@ mod tests {
     #[test]
     fn test_toolchain_kind_name() {
         assert_eq!(ToolchainKind::Host.name(), "host");
-        assert_eq!(ToolchainKind::Stage0.name(), "stage0");
-        assert_eq!(ToolchainKind::Stage1.name(), "stage1");
+        assert_eq!(ToolchainKind::CrossTools.name(), "cross-tools");
+        assert_eq!(ToolchainKind::System.name(), "system");
     }
 
     #[test]
@@ -405,9 +402,18 @@ mod tests {
 
     #[test]
     fn test_toolchain_tool_paths() {
+        // Create a temp dir with the prefixed binaries so the fallback logic
+        // finds them and returns the expected prefixed paths.
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        for tool in &["gcc", "g++", "ar"] {
+            std::fs::write(bin.join(format!("x86_64-conary-linux-gnu-{tool}")), b"").unwrap();
+        }
+
         let toolchain = Toolchain {
-            kind: ToolchainKind::Stage0,
-            path: PathBuf::from("/tools"),
+            kind: ToolchainKind::CrossTools,
+            path: tmp.path().to_path_buf(),
             target: "x86_64-conary-linux-gnu".to_string(),
             gcc_version: Some("13.3.0".to_string()),
             glibc_version: None,
@@ -417,15 +423,15 @@ mod tests {
 
         assert_eq!(
             toolchain.gcc(),
-            PathBuf::from("/tools/bin/x86_64-conary-linux-gnu-gcc")
+            bin.join("x86_64-conary-linux-gnu-gcc")
         );
         assert_eq!(
             toolchain.gxx(),
-            PathBuf::from("/tools/bin/x86_64-conary-linux-gnu-g++")
+            bin.join("x86_64-conary-linux-gnu-g++")
         );
         assert_eq!(
             toolchain.ar(),
-            PathBuf::from("/tools/bin/x86_64-conary-linux-gnu-ar")
+            bin.join("x86_64-conary-linux-gnu-ar")
         );
     }
 
@@ -485,9 +491,17 @@ mod tests {
 
     #[test]
     fn test_toolchain_env() {
+        // Create a temp dir with prefixed binaries so tool() returns prefixed paths
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        for tool in &["gcc", "g++", "ld", "ar", "ranlib", "strip"] {
+            std::fs::write(bin.join(format!("x86_64-conary-linux-gnu-{tool}")), b"").unwrap();
+        }
+
         let toolchain = Toolchain {
-            kind: ToolchainKind::Stage0,
-            path: PathBuf::from("/tools"),
+            kind: ToolchainKind::CrossTools,
+            path: tmp.path().to_path_buf(),
             target: "x86_64-conary-linux-gnu".to_string(),
             gcc_version: None,
             glibc_version: None,
@@ -497,14 +511,15 @@ mod tests {
 
         let env = toolchain.env();
 
-        assert!(env.get("PATH").unwrap().starts_with("/tools/bin:"));
+        let bin_str = bin.display().to_string();
+        assert!(env.get("PATH").unwrap().starts_with(&format!("{bin_str}:")));
         assert_eq!(
             env.get("CC").unwrap(),
-            "/tools/bin/x86_64-conary-linux-gnu-gcc"
+            &format!("{bin_str}/x86_64-conary-linux-gnu-gcc")
         );
         assert_eq!(
             env.get("CXX").unwrap(),
-            "/tools/bin/x86_64-conary-linux-gnu-g++"
+            &format!("{bin_str}/x86_64-conary-linux-gnu-g++")
         );
     }
 }

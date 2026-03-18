@@ -28,15 +28,6 @@ impl TargetArch {
         }
     }
 
-    /// Get the architecture name for crosstool-ng
-    pub fn ct_ng_arch(&self) -> &'static str {
-        match self {
-            Self::X86_64 => "x86_64",
-            Self::Aarch64 => "aarch64",
-            Self::Riscv64 => "riscv64",
-        }
-    }
-
     /// Get the kernel architecture name
     pub fn kernel_arch(&self) -> &'static str {
         match self {
@@ -73,26 +64,14 @@ pub struct BootstrapConfig {
     /// Target architecture
     pub target_arch: TargetArch,
 
-    /// Where to install the Stage 0 toolchain
+    /// LFS root directory ($LFS) -- the target filesystem root
+    pub lfs_root: PathBuf,
+
+    /// Where to install the cross-tools (Phase 1 output: $LFS/tools)
     pub tools_prefix: PathBuf,
-
-    /// Where to install the Stage 1 toolchain
-    pub stage1_prefix: PathBuf,
-
-    /// Sysroot directory for cross-compilation
-    pub sysroot: PathBuf,
 
     /// Number of parallel jobs for building
     pub jobs: usize,
-
-    /// Path to crosstool-ng config (if using custom)
-    pub crosstool_config: Option<PathBuf>,
-
-    /// URL for the Stage 0 seed toolchain
-    pub seed_url: Option<String>,
-
-    /// Checksum for the Stage 0 seed toolchain
-    pub seed_checksum: Option<String>,
 
     /// Enable verbose output
     pub verbose: bool,
@@ -105,13 +84,9 @@ impl Default for BootstrapConfig {
     fn default() -> Self {
         Self {
             target_arch: TargetArch::X86_64,
-            tools_prefix: PathBuf::from("/conary/bootstrap/tools"),
-            stage1_prefix: PathBuf::from("/conary/stage1"),
-            sysroot: PathBuf::from("/conary/sysroot"),
+            lfs_root: PathBuf::from("/mnt/lfs"),
+            tools_prefix: PathBuf::from("/mnt/lfs/tools"),
             jobs: num_cpus(),
-            crosstool_config: None,
-            seed_url: None,
-            seed_checksum: None,
             verbose: false,
             skip_verify: false,
         }
@@ -130,15 +105,17 @@ impl BootstrapConfig {
         self
     }
 
-    /// Set the tools prefix
-    pub fn with_tools_prefix(mut self, path: impl Into<PathBuf>) -> Self {
-        self.tools_prefix = path.into();
+    /// Set the LFS root directory ($LFS)
+    pub fn with_lfs_root(mut self, path: impl Into<PathBuf>) -> Self {
+        let root: PathBuf = path.into();
+        self.tools_prefix = root.join("tools");
+        self.lfs_root = root;
         self
     }
 
-    /// Set the Stage 1 prefix
-    pub fn with_stage1_prefix(mut self, path: impl Into<PathBuf>) -> Self {
-        self.stage1_prefix = path.into();
+    /// Set the tools prefix
+    pub fn with_tools_prefix(mut self, path: impl Into<PathBuf>) -> Self {
+        self.tools_prefix = path.into();
         self
     }
 
@@ -154,22 +131,9 @@ impl BootstrapConfig {
         self
     }
 
-    /// Use a custom crosstool-ng config
-    pub fn with_crosstool_config(mut self, path: impl Into<PathBuf>) -> Self {
-        self.crosstool_config = Some(path.into());
-        self
-    }
-
     /// Skip checksum verification (development only -- not for production)
     pub fn with_skip_verify(mut self, skip: bool) -> Self {
         self.skip_verify = skip;
-        self
-    }
-
-    /// Set the Stage 0 seed toolchain
-    pub fn with_seed(mut self, url: impl Into<String>, checksum: impl Into<String>) -> Self {
-        self.seed_url = Some(url.into());
-        self.seed_checksum = Some(checksum.into());
         self
     }
 
@@ -221,10 +185,8 @@ mod tests {
     fn test_config_defaults() {
         let config = BootstrapConfig::default();
         assert_eq!(config.target_arch, TargetArch::X86_64);
-        assert_eq!(
-            config.tools_prefix,
-            PathBuf::from("/conary/bootstrap/tools")
-        );
+        assert_eq!(config.lfs_root, PathBuf::from("/mnt/lfs"));
+        assert_eq!(config.tools_prefix, PathBuf::from("/mnt/lfs/tools"));
         assert!(config.jobs > 0);
     }
 
@@ -259,7 +221,14 @@ mod tests {
         let config = BootstrapConfig::default();
         assert_eq!(
             config.tool_path("gcc"),
-            PathBuf::from("/conary/bootstrap/tools/bin/x86_64-conary-linux-gnu-gcc")
+            PathBuf::from("/mnt/lfs/tools/bin/x86_64-conary-linux-gnu-gcc")
         );
+    }
+
+    #[test]
+    fn test_with_lfs_root() {
+        let config = BootstrapConfig::new().with_lfs_root("/custom/lfs");
+        assert_eq!(config.lfs_root, PathBuf::from("/custom/lfs"));
+        assert_eq!(config.tools_prefix, PathBuf::from("/custom/lfs/tools"));
     }
 }

@@ -1,0 +1,45 @@
+# recipes/temp-tools/make.toml
+#
+# LFS 13 Section 6.12 — Make-4.4.1
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter06/make.html
+#
+# GNU Make for the temporary toolchain.
+
+[package]
+name = "make"
+version = "4.4.1"
+release = "1"
+summary = "GNU build automation tool (temporary tools)"
+description = """
+The Make package contains a program for controlling the generation of
+executables and other non-source files from source files. This
+cross-compiled version provides make for the temporary toolchain.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/make/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/make/make-%(version)s.tar.gz"
+checksum = "md5:c8469a3713cbbe04d955d4ae4be23eeb"
+
+[build]
+requires = ["binutils-pass1", "gcc-pass1", "glibc", "libstdcxx"]
+makedepends = []
+
+configure = """
+./configure --prefix=/usr \
+            --host=$LFS_TGT \
+            --build=$(build-aux/config.guess)
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make DESTDIR=$LFS install
+"""
+
+[variables]
+jobs = "$(nproc)"
+lfs_tgt = "x86_64-conary-linux-gnu"

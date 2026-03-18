@@ -1,0 +1,73 @@
+# recipes/temp-tools/ncurses.toml
+#
+# LFS 13 Section 6.3 — Ncurses-6.6
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter06/ncurses.html
+#
+# Ncurses provides terminal handling and screen-painting. The tic tool
+# must be built for the host first, then ncurses is cross-compiled for
+# the target.
+
+[package]
+name = "ncurses"
+version = "6.6"
+release = "1"
+summary = "Terminal handling library (temporary tools)"
+description = """
+The Ncurses library provides terminal-independent screen painting and
+keyboard input. This build first creates a host-native tic tool, then
+cross-compiles the library for the target system.
+"""
+license = "MIT"
+homepage = "https://invisible-island.net/ncurses/"
+
+[source]
+archive = "https://invisible-mirror.net/archives/ncurses/ncurses-%(version)s.tar.gz"
+checksum = "md5:dd45bf6854430af403452a7a6a40652c"
+
+[build]
+requires = ["binutils-pass1", "gcc-pass1", "glibc", "libstdcxx"]
+makedepends = []
+
+configure = """
+# First, build the tic program for the host system
+mkdir build
+pushd build
+  ../configure --prefix=$LFS/tools AWK=gawk
+  make -C include
+  make -C progs tic
+  install progs/tic $LFS/tools/bin
+popd
+
+# Now configure ncurses for cross-compilation
+./configure --prefix=/usr                \
+            --host=$LFS_TGT              \
+            --build=$(./config.guess)    \
+            --mandir=/usr/share/man      \
+            --with-manpage-format=normal \
+            --with-shared                \
+            --without-normal             \
+            --with-cxx-shared            \
+            --without-debug              \
+            --without-ada                \
+            --disable-stripping          \
+            AWK=gawk
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make DESTDIR=$LFS install
+
+# Create compatibility symlink for programs expecting libncurses
+ln -sv libncursesw.so $LFS/usr/lib/libncurses.so
+
+# Fix curses.h to always enable wide-character support
+sed -e 's/^#if.*XOPEN.*$/#if 1/' \
+    -i $LFS/usr/include/curses.h
+"""
+
+[variables]
+jobs = "$(nproc)"
+lfs_tgt = "x86_64-conary-linux-gnu"

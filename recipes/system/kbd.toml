@@ -1,0 +1,55 @@
+# recipes/system/kbd.toml
+#
+# LFS 13 Section 8.65 — Kbd-2.9.0
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/kbd.html
+#
+# Keyboard and console font utilities. Patched for backspace/delete
+# consistency. The resizecons program and vlock utility are disabled.
+
+[package]
+name = "kbd"
+version = "2.9.0"
+release = "1"
+summary = "Keyboard and console font utilities"
+description = """
+Kbd provides tools for managing Linux console keymaps, console fonts,
+and virtual terminal settings. Includes loadkeys, setfont, dumpkeys,
+showkey, and other console utilities.
+"""
+license = "GPL-2.0-or-later"
+homepage = "https://kbd-project.org/"
+
+[source]
+archive = "https://www.kernel.org/pub/linux/utils/kbd/kbd-%(version)s.tar.xz"
+checksum = "md5:7be7c6f658f5fb9512e2c490349a8eeb"
+
+[[source.patches]]
+url = "https://www.linuxfromscratch.org/patches/lfs/development/kbd-2.9.0-backspace-1.patch"
+checksum = "md5:f75cca16a38da6caa7d52151f7136895"
+
+[build]
+requires = ["glibc"]
+makedepends = []
+chroot = true
+
+configure = """
+# Apply backspace/delete consistency patch
+patch -Np1 -i ../kbd-%(version)s-backspace-1.patch
+
+# Disable resizecons program (requires obsolete kernel API)
+sed -i '/RESIZECONS_PROGS=/s/yes/no/' configure
+sed -i 's/resizecons.8 //' docs/man/man8/Makefile.in
+
+./configure --prefix=/usr --disable-vlock
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"

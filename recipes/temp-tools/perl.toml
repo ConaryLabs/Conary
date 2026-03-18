@@ -1,0 +1,54 @@
+# recipes/temp-tools/perl.toml
+#
+# LFS 13 Section 7.9 — Perl-5.42.1
+# https://www.linuxfromscratch.org/lfs/view/systemd/chapter07/perl.html
+#
+# Minimal Perl build for the temporary toolchain. Needed by some
+# build systems and for Autoconf/Automake. Built natively in chroot.
+# Uses Perl's Configure script (capital C) with -des for non-interactive mode.
+
+[package]
+name = "perl"
+version = "5.42.1"
+release = "1"
+summary = "Practical Extraction and Report Language (temporary tools)"
+description = """
+Minimal Perl build for the temporary toolchain. Perl is required by
+several build systems and tools like Autoconf and Automake. This
+chroot-native build installs Perl with shared library support.
+"""
+license = "Artistic-1.0 OR GPL-1.0-or-later"
+homepage = "https://www.perl.org/"
+
+[source]
+archive = "https://www.cpan.org/src/5.0/perl-%(version)s.tar.xz"
+checksum = "md5:aea480078218bcc6d6636a622c7d187d"
+
+[build]
+requires = ["gcc-pass2", "binutils-pass2", "glibc", "bash", "coreutils", "make", "sed"]
+makedepends = []
+chroot = true
+
+configure = """
+sh Configure -des \
+             -D prefix=/usr \
+             -D vendorprefix=/usr \
+             -D useshrplib \
+             -D privlib=/usr/lib/perl5/5.42/core_perl \
+             -D archlib=/usr/lib/perl5/5.42/core_perl \
+             -D sitelib=/usr/lib/perl5/5.42/site_perl \
+             -D sitearch=/usr/lib/perl5/5.42/site_perl \
+             -D vendorlib=/usr/lib/perl5/5.42/vendor_perl \
+             -D vendorarch=/usr/lib/perl5/5.42/vendor_perl
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install
+"""
+
+[variables]
+jobs = "$(nproc)"
