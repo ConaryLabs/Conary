@@ -165,11 +165,7 @@ impl RemiClientCore {
         match status.status.as_str() {
             "ready" => {
                 info!("Conversion complete for job {}", status.job_id);
-                status
-                    .manifest
-                    .clone()
-                    .map(|m| Some(Ok(m)))
-                    .unwrap_or(None)
+                status.manifest.clone().map(|m| Some(Ok(m))).unwrap_or(None)
             }
             "failed" => {
                 let error_msg = status
@@ -219,11 +215,7 @@ impl RemiClient {
 
         info!("Requesting package from Remi: {}", url);
 
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .download_context(&url)?;
+        let response = self.client.get(&url).send().download_context(&url)?;
 
         match response.status().as_u16() {
             200 => {
@@ -238,8 +230,7 @@ impl RemiClient {
                 Ok(manifest)
             }
             202 => {
-                let accepted: ConversionAccepted =
-                    response.json().parse_context("202 response")?;
+                let accepted: ConversionAccepted = response.json().parse_context("202 response")?;
                 info!(
                     "Package conversion queued (job {}), ETA: {:?}s",
                     accepted.job_id, accepted.eta_seconds
@@ -365,8 +356,7 @@ impl RemiClient {
                         &status.package,
                         status.version.as_deref(),
                     );
-                    let response =
-                        self.client.get(&url).send().download_context(&url)?;
+                    let response = self.client.get(&url).send().download_context(&url)?;
                     if !response.status().is_success() {
                         return Err(Error::DownloadError(format!(
                             "Re-request for manifest failed: HTTP {}",
@@ -440,10 +430,7 @@ impl RemiClient {
             debug!("Downloading chunk: {} ({} bytes)", chunk.hash, chunk.size);
 
             let data = crate::repository::retry::with_retry(&retry_config, || {
-                let response = chunk_client
-                    .get(&url)
-                    .send()
-                    .download_context(&url)?;
+                let response = chunk_client.get(&url).send().download_context(&url)?;
 
                 let status_code = response.status().as_u16();
                 if status_code >= 500 || status_code == 408 || status_code == 429 {
@@ -509,8 +496,7 @@ impl RemiClient {
         sorted_chunks.sort_by_key(|c| c.offset);
 
         // Create output file
-        let mut file = std::fs::File::create(output_path)
-            .io_context("create output file")?;
+        let mut file = std::fs::File::create(output_path).io_context("create output file")?;
 
         // Write chunks in order
         for chunk_ref in sorted_chunks {
@@ -522,8 +508,7 @@ impl RemiClient {
         }
 
         // Verify total size
-        let metadata = std::fs::metadata(output_path)
-            .io_context("read output file metadata")?;
+        let metadata = std::fs::metadata(output_path).io_context("read output file metadata")?;
 
         if metadata.len() != manifest.total_size {
             return Err(Error::ChecksumMismatch {
@@ -568,11 +553,7 @@ impl RemiClient {
 
         info!("Downloading CCS package from Remi: {}", url);
 
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .download_context(&url)?;
+        let response = self.client.get(&url).send().download_context(&url)?;
 
         match response.status().as_u16() {
             200 => {
@@ -581,8 +562,7 @@ impl RemiClient {
             }
             202 => {
                 // Conversion in progress - poll then retry download
-                let accepted: ConversionAccepted =
-                    response.json().parse_context("202 response")?;
+                let accepted: ConversionAccepted = response.json().parse_context("202 response")?;
                 info!(
                     "Package conversion queued (job {}), ETA: {:?}s",
                     accepted.job_id, accepted.eta_seconds
@@ -600,8 +580,7 @@ impl RemiClient {
                     // Brief delay before retry (increases with each attempt)
                     std::thread::sleep(Duration::from_millis(200 * attempt as u64));
 
-                    let retry_response =
-                        self.client.get(&url).send().download_context(&url)?;
+                    let retry_response = self.client.get(&url).send().download_context(&url)?;
 
                     last_status = retry_response.status().as_u16();
 
@@ -672,8 +651,7 @@ impl RemiClient {
         pb.set_message(format!("Downloading {}", filename));
 
         // Download to file with progress
-        let mut file = std::fs::File::create(&output_path)
-            .io_context("create output file")?;
+        let mut file = std::fs::File::create(&output_path).io_context("create output file")?;
 
         let mut downloaded: u64 = 0;
         let mut reader = response;
@@ -702,10 +680,8 @@ impl RemiClient {
         let mut magic = [0u8; 2];
         {
             use std::io::Read;
-            let mut file = std::fs::File::open(&output_path)
-                .io_context("read downloaded file")?;
-            file.read_exact(&mut magic)
-                .io_context("read magic bytes")?;
+            let mut file = std::fs::File::open(&output_path).io_context("read downloaded file")?;
+            file.read_exact(&mut magic).io_context("read magic bytes")?;
         }
 
         // Gzip magic: 0x1f 0x8b

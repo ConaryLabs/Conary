@@ -38,7 +38,6 @@ pub mod chunk_fetcher;
 
 // Re-export main types and functions
 pub use client::{RepositoryClient, RetryPolicy};
-pub use retry::{RetryConfig, with_retry};
 pub use dependencies::{
     download_dependencies, resolve_dependencies, resolve_dependencies_transitive,
     resolve_dependencies_transitive_requests, resolve_dependency_requests,
@@ -63,6 +62,7 @@ pub use remi::{PackageManifest, RemiClient};
 pub use resolution::{
     PackageResolver, PackageSource, ResolutionOptions, build_gpg_options, resolve_package,
 };
+pub use retry::{RetryConfig, with_retry};
 pub use selector::{PackageSelector, PackageWithRepo, SelectionOptions};
 pub use substituter::{SubstituterChain, SubstituterResult, SubstituterSource};
 pub use sync::{
