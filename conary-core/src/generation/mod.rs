@@ -5,5 +5,10 @@
 //! This module will contain the core logic for building, managing, and
 //! switching between composefs generations (EROFS images backed by CAS).
 
+pub mod builder;
+pub mod composefs;
+pub mod metadata;
+pub mod mount;
+
 #[cfg(feature = "composefs-rs")]
 pub mod composefs_rs_eval;
