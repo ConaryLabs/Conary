@@ -426,26 +426,49 @@ the bloom filter data in the superblock. The hash function is
 `xxh32(name, strlen(name), EROFS_XATTR_FILTER_SEED + index)`. This is a small,
 contained enhancement to `superblock.rs` and `xattr.rs`.
 
-### composefs-rs Compatibility
+### composefs-rs Adoption
 
 The composefs-rs project (Rust, under `containers/composefs-rs`) is positioned to
 become the reference implementation of composefs, replacing the C implementation. It
-provides EROFS image building, OCI integration, fs-verity, and boot infrastructure.
+provides five crates:
 
-We maintain our own EROFS builder (`conary-erofs`) because it is standalone, has no
-external dependencies, and is tailored to our CAS-reference-only images. However, we
-must ensure our EROFS output is mountable by standard `mount.composefs` and
-compatible with the composefs ecosystem. Specifically:
+- `composefs` — core EROFS image building, fs-verity, repository management
+- `composefs-oci` — OCI image handling and container registry integration
+- `composefs-boot` — UKI and BLS boot infrastructure
+- `composefs-http` — HTTP content fetching
+- `composefs-fuse` — FUSE filesystem interface
 
-- EROFS superblock format and feature flags must match what the kernel expects
-- CAS xattr encoding (`trusted.overlay.redirect`) must match composefs conventions
-- fs-verity digest format must be interoperable
+**The default plan is to adopt composefs-rs and retire conary-erofs.** For a
+composefs-native architecture, depending on the reference implementation is the
+right call — it guarantees format compatibility, tracks kernel changes, and gives us
+OCI export, UKI generation, and boot infrastructure that we would otherwise build
+ourselves. Maintaining a parallel EROFS builder is a liability: we *can* diverge from
+the ecosystem, which is the opposite of what we want.
 
-The `verify` module in `conary-erofs` should include a compatibility check that
-validates images against `mount.composefs` expectations. If composefs-rs stabilizes
-and provides clear advantages (e.g., built-in OCI support, UKI generation), we
-should evaluate adopting it as a dependency rather than maintaining a parallel
-implementation.
+**Evaluation criteria (first task in implementation):**
+
+1. Can composefs-rs produce CAS-reference-only EROFS images (no file content, only
+   digest xattrs)? This is our core use case.
+2. Is the `composefs` crate's API stable enough for our builder to depend on? The
+   project acknowledges "ongoing architectural refinement" — check whether the image
+   building API is settled even if other parts are in flux.
+3. Does it handle the xattr bloom filter automatically?
+4. What are the transitive dependencies? conary-erofs has four deps (crc32c, lz4_flex,
+   lzma-rs, thiserror). If composefs-rs pulls in a heavy dependency tree, that's a
+   real cost.
+5. Can we produce byte-deterministic images? Required for delta updates.
+
+**If composefs-rs passes evaluation:** adopt it as a dependency, retire conary-erofs,
+and gain OCI + boot infrastructure for free. The generation builder in
+`conary-core/src/generation/builder.rs` would call composefs-rs instead of
+conary-erofs. The bloom filter and compatibility concerns resolve automatically.
+
+**If composefs-rs is not ready** (unstable API, can't produce our image format, heavy
+deps): keep conary-erofs for EROFS building, add the bloom filter enhancement, and
+add a compatibility test that validates our images against `mount.composefs`. Re-
+evaluate composefs-rs adoption at a later milestone. Even in this case, we may still
+want `composefs-oci` and `composefs-boot` as dependencies for OCI export and UKI
+integration, since those are additive and don't replace core functionality.
 
 ## Code Impact
 
@@ -471,7 +494,7 @@ implementation.
 
 | Module | Reason |
 |---|---|
-| `conary-erofs/` | Minor enhancement: add xattr name bloom filter to superblock (see EROFS Enhancements below). Core builder logic unchanged. |
+| `conary-erofs/` | Retired if composefs-rs is adopted (see EROFS Enhancements). If kept: add xattr bloom filter to superblock. |
 | `conary-core/src/filesystem/cas.rs` | CAS is the right abstraction. |
 | `conary-core/src/filesystem/vfs/` | Still used for preflight conflict detection. |
 | `conary-core/src/resolver/` | Dependency resolution is orthogonal to deployment. |
@@ -496,4 +519,6 @@ implementation.
 
 Transaction engine shrinks to roughly one-fifth its current size. Generation builder
 moves from CLI convenience into the core transaction loop at
-`conary-core/src/generation/`. conary-erofs stays untouched.
+`conary-core/src/generation/`. EROFS image building uses composefs-rs if evaluation
+passes, otherwise conary-erofs with bloom filter enhancement. Either way, OCI export
+and UKI integration come from composefs-rs crates.
