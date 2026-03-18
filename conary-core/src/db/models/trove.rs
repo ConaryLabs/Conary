@@ -112,6 +112,12 @@ pub struct Trove {
 }
 
 impl Trove {
+    /// Column list for SELECT queries.
+    pub(crate) const COLUMNS: &'static str = "id, name, version, type, architecture, description, \
+         installed_at, installed_by_changeset_id, install_source, install_reason, \
+         flavor_spec, pinned, selection_reason, label_id, orphan_since, source_distro, \
+         version_scheme";
+
     /// Create a new Trove
     pub fn new(name: String, version: String, trove_type: TroveType) -> Self {
         Self {
@@ -249,26 +255,16 @@ impl Trove {
 
     /// Find a trove by ID
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, name, version, type, architecture, description, \
-             installed_at, installed_by_changeset_id, install_source, install_reason, \
-             flavor_spec, pinned, selection_reason, label_id, orphan_since, source_distro, \
-             version_scheme \
-             FROM troves WHERE id = ?1",
-        )?;
+        let sql = format!("SELECT {} FROM troves WHERE id = ?1", Self::COLUMNS);
+        let mut stmt = conn.prepare(&sql)?;
         let trove = stmt.query_row([id], Self::from_row).optional()?;
         Ok(trove)
     }
 
     /// Find troves by name
     pub fn find_by_name(conn: &Connection, name: &str) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, name, version, type, architecture, description, \
-             installed_at, installed_by_changeset_id, install_source, install_reason, \
-             flavor_spec, pinned, selection_reason, label_id, orphan_since, source_distro, \
-             version_scheme \
-             FROM troves WHERE name = ?1",
-        )?;
+        let sql = format!("SELECT {} FROM troves WHERE name = ?1", Self::COLUMNS);
+        let mut stmt = conn.prepare(&sql)?;
         let troves = stmt
             .query_map([name], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -277,13 +273,11 @@ impl Trove {
 
     /// List all troves
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, name, version, type, architecture, description, \
-             installed_at, installed_by_changeset_id, install_source, install_reason, \
-             flavor_spec, pinned, selection_reason, label_id, orphan_since, source_distro, \
-             version_scheme \
-             FROM troves ORDER BY name, version",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM troves ORDER BY name, version",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let troves = stmt
             .query_map([], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -295,7 +289,7 @@ impl Trove {
         // Find packages that:
         // 1. Were installed as dependencies (not explicitly)
         // 2. Are not transitively reachable from any explicitly-installed package
-        let mut stmt = conn.prepare(
+        let sql = format!(
             "WITH RECURSIVE reachable(name) AS ( \
                  SELECT DISTINCT depends_on_name FROM dependencies \
                  WHERE trove_id IN (SELECT id FROM troves WHERE install_reason = 'explicit') \
@@ -304,15 +298,13 @@ impl Trove {
                  JOIN troves t ON d.trove_id = t.id \
                  JOIN reachable r ON t.name = r.name \
              ) \
-             SELECT id, name, version, type, architecture, description, \
-             installed_at, installed_by_changeset_id, install_source, install_reason, \
-             flavor_spec, pinned, selection_reason, label_id, orphan_since, source_distro, \
-             version_scheme \
-             FROM troves \
+             SELECT {} FROM troves \
              WHERE install_reason = 'dependency' \
              AND name NOT IN (SELECT name FROM reachable) \
              ORDER BY name, version",
-        )?;
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let troves = stmt
             .query_map([], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -479,13 +471,11 @@ impl Trove {
 
     /// Find all pinned packages
     pub fn find_pinned(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, name, version, type, architecture, description, \
-             installed_at, installed_by_changeset_id, install_source, install_reason, \
-             flavor_spec, pinned, selection_reason, label_id, orphan_since, source_distro, \
-             version_scheme \
-             FROM troves WHERE pinned = 1 ORDER BY name, version",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM troves WHERE pinned = 1 ORDER BY name, version",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let troves = stmt
             .query_map([], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -511,13 +501,11 @@ impl Trove {
     pub fn find_by_reason(conn: &Connection, pattern: &str) -> Result<Vec<Self>> {
         // Convert glob-style pattern to SQL LIKE pattern
         let sql_pattern = pattern.replace('*', "%");
-        let mut stmt = conn.prepare(
-            "SELECT id, name, version, type, architecture, description, \
-             installed_at, installed_by_changeset_id, install_source, install_reason, \
-             flavor_spec, pinned, selection_reason, label_id, orphan_since, source_distro, \
-             version_scheme \
-             FROM troves WHERE selection_reason LIKE ?1 ORDER BY name, version",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM troves WHERE selection_reason LIKE ?1 ORDER BY name, version",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let troves = stmt
             .query_map([sql_pattern], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -575,16 +563,19 @@ impl Trove {
     /// Returns troves with install_source of 'adopted-track' or 'adopted-full'
     /// that do not have a corresponding entry in the converted_packages table.
     pub fn find_adopted_unconverted(conn: &Connection) -> Result<Vec<Self>> {
-        let sql = "SELECT t.id, t.name, t.version, t.type, t.architecture, \
-             t.description, t.installed_at, t.installed_by_changeset_id, t.install_source, \
-             t.install_reason, t.flavor_spec, t.pinned, t.selection_reason, t.label_id, t.orphan_since, \
-             t.source_distro, t.version_scheme \
-             FROM troves t \
+        // Prefix each column with `t.` for the JOIN query
+        let prefixed: String = Self::COLUMNS
+            .split(", ")
+            .map(|c| format!("t.{c}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT {prefixed} FROM troves t \
              LEFT JOIN converted_packages cp ON cp.trove_id = t.id \
              WHERE t.install_source IN ('adopted-track', 'adopted-full') \
              AND cp.id IS NULL \
              ORDER BY t.name"
-            .to_string();
+        );
         let mut stmt = conn.prepare(&sql)?;
         let troves = stmt
             .query_map([], Self::from_row)?

@@ -22,6 +22,10 @@ pub struct FileEntry {
 }
 
 impl FileEntry {
+    /// Column list for SELECT queries.
+    const COLUMNS: &'static str = "id, path, sha256_hash, size, permissions, owner, \
+         group_name, trove_id, installed_at, component_id";
+
     /// Create a new FileEntry
     pub fn new(
         path: String,
@@ -135,22 +139,16 @@ impl FileEntry {
 
     /// Find a file by path
     pub fn find_by_path(conn: &Connection, path: &str) -> Result<Option<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, path, sha256_hash, size, permissions, owner, group_name, \
-             trove_id, installed_at, component_id \
-             FROM files WHERE path = ?1",
-        )?;
+        let sql = format!("SELECT {} FROM files WHERE path = ?1", Self::COLUMNS);
+        let mut stmt = conn.prepare(&sql)?;
         let file = stmt.query_row([path], Self::from_row).optional()?;
         Ok(file)
     }
 
     /// Find all files belonging to a trove
     pub fn find_by_trove(conn: &Connection, trove_id: i64) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, path, sha256_hash, size, permissions, owner, group_name, \
-             trove_id, installed_at, component_id \
-             FROM files WHERE trove_id = ?1",
-        )?;
+        let sql = format!("SELECT {} FROM files WHERE trove_id = ?1", Self::COLUMNS);
+        let mut stmt = conn.prepare(&sql)?;
         let files = stmt
             .query_map([trove_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -159,11 +157,11 @@ impl FileEntry {
 
     /// Find all files belonging to a specific component
     pub fn find_by_component(conn: &Connection, component_id: i64) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, path, sha256_hash, size, permissions, owner, group_name, \
-             trove_id, installed_at, component_id \
-             FROM files WHERE component_id = ?1",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM files WHERE component_id = ?1",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let files = stmt
             .query_map([component_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -175,11 +173,8 @@ impl FileEntry {
     /// Used by the generation builder to collect every tracked file into the
     /// EROFS image without per-trove round-trips.
     pub fn find_all_ordered(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, path, sha256_hash, size, permissions, owner, group_name, \
-             trove_id, installed_at, component_id \
-             FROM files ORDER BY path",
-        )?;
+        let sql = format!("SELECT {} FROM files ORDER BY path", Self::COLUMNS);
+        let mut stmt = conn.prepare(&sql)?;
         let files = stmt
             .query_map([], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -188,11 +183,11 @@ impl FileEntry {
 
     /// Find files matching a path pattern (LIKE query)
     pub fn find_by_path_pattern(conn: &Connection, pattern: &str) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, path, sha256_hash, size, permissions, owner, group_name, \
-             trove_id, installed_at, component_id \
-             FROM files WHERE path LIKE ?1 ORDER BY path",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM files WHERE path LIKE ?1 ORDER BY path",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let files = stmt
             .query_map([pattern], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -201,11 +196,11 @@ impl FileEntry {
 
     /// List all files for a trove with ls -l style information
     pub fn list_files_lsl(conn: &Connection, trove_id: i64) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, path, sha256_hash, size, permissions, owner, group_name, \
-             trove_id, installed_at, component_id \
-             FROM files WHERE trove_id = ?1 ORDER BY path",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM files WHERE trove_id = ?1 ORDER BY path",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let files = stmt
             .query_map([trove_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;

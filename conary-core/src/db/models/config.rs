@@ -83,6 +83,10 @@ pub struct ConfigFile {
 }
 
 impl ConfigFile {
+    /// Column list for SELECT queries.
+    const COLUMNS: &'static str = "id, file_id, path, trove_id, original_hash, current_hash, \
+         noreplace, status, modified_at, source";
+
     /// Create a new config file entry
     pub fn new(path: String, trove_id: i64, original_hash: String) -> Self {
         Self {
@@ -167,33 +171,33 @@ impl ConfigFile {
 
     /// Find a config file by path
     pub fn find_by_path(conn: &Connection, path: &str) -> Result<Option<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, file_id, path, trove_id, original_hash, current_hash, \
-             noreplace, status, modified_at, source \
-             FROM config_files WHERE path = ?1",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM config_files WHERE path = ?1",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let config = stmt.query_row([path], Self::from_row).optional()?;
         Ok(config)
     }
 
     /// Find a config file by ID
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, file_id, path, trove_id, original_hash, current_hash, \
-             noreplace, status, modified_at, source \
-             FROM config_files WHERE id = ?1",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM config_files WHERE id = ?1",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let config = stmt.query_row([id], Self::from_row).optional()?;
         Ok(config)
     }
 
     /// Find all config files for a trove
     pub fn find_by_trove(conn: &Connection, trove_id: i64) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, file_id, path, trove_id, original_hash, current_hash, \
-             noreplace, status, modified_at, source \
-             FROM config_files WHERE trove_id = ?1 ORDER BY path",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM config_files WHERE trove_id = ?1 ORDER BY path",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let configs = stmt
             .query_map([trove_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -202,11 +206,11 @@ impl ConfigFile {
 
     /// Find all config files with a given status
     pub fn find_by_status(conn: &Connection, status: ConfigStatus) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, file_id, path, trove_id, original_hash, current_hash, \
-             noreplace, status, modified_at, source \
-             FROM config_files WHERE status = ?1 ORDER BY path",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM config_files WHERE status = ?1 ORDER BY path",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let configs = stmt
             .query_map([status.as_str()], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -220,11 +224,11 @@ impl ConfigFile {
 
     /// List all config files
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, file_id, path, trove_id, original_hash, current_hash, \
-             noreplace, status, modified_at, source \
-             FROM config_files ORDER BY path",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM config_files ORDER BY path",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let configs = stmt
             .query_map([], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;

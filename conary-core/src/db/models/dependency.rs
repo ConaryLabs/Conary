@@ -20,6 +20,10 @@ pub struct DependencyEntry {
 }
 
 impl DependencyEntry {
+    /// Column list for SELECT queries.
+    const COLUMNS: &'static str = "id, trove_id, depends_on_name, depends_on_version, \
+         dependency_type, version_constraint, kind";
+
     /// Create a new DependencyEntry
     pub fn new(
         trove_id: i64,
@@ -81,11 +85,11 @@ impl DependencyEntry {
 
     /// Find all dependencies for a trove
     pub fn find_by_trove(conn: &Connection, trove_id: i64) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, trove_id, depends_on_name, depends_on_version, \
-             dependency_type, version_constraint, kind \
-             FROM dependencies WHERE trove_id = ?1",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM dependencies WHERE trove_id = ?1",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
 
         let deps = stmt
             .query_map([trove_id], Self::from_row)?
@@ -113,9 +117,8 @@ impl DependencyEntry {
         for chunk in trove_ids.chunks(500) {
             let placeholders: String = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
             let sql = format!(
-                "SELECT id, trove_id, depends_on_name, depends_on_version, \
-                 dependency_type, version_constraint, kind \
-                 FROM dependencies WHERE trove_id IN ({placeholders})"
+                "SELECT {} FROM dependencies WHERE trove_id IN ({placeholders})",
+                Self::COLUMNS
             );
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter()), Self::from_row)?;
@@ -130,10 +133,11 @@ impl DependencyEntry {
 
     /// Find all troves that depend on a given package name (reverse dependencies)
     pub fn find_dependents(conn: &Connection, package_name: &str) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, trove_id, depends_on_name, depends_on_version, dependency_type, version_constraint, kind
-             FROM dependencies WHERE depends_on_name = ?1",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM dependencies WHERE depends_on_name = ?1",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
 
         let deps = stmt
             .query_map([package_name], Self::from_row)?
@@ -144,10 +148,11 @@ impl DependencyEntry {
 
     /// Find all troves that depend on a given typed capability
     pub fn find_typed_dependents(conn: &Connection, kind: &str, name: &str) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, trove_id, depends_on_name, depends_on_version, dependency_type, version_constraint, kind
-             FROM dependencies WHERE kind = ?1 AND depends_on_name = ?2",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM dependencies WHERE kind = ?1 AND depends_on_name = ?2",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
 
         let deps = stmt
             .query_map([kind, name], Self::from_row)?
@@ -162,10 +167,11 @@ impl DependencyEntry {
         trove_id: i64,
         kind: &str,
     ) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, trove_id, depends_on_name, depends_on_version, dependency_type, version_constraint, kind
-             FROM dependencies WHERE trove_id = ?1 AND kind = ?2",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM dependencies WHERE trove_id = ?1 AND kind = ?2",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
 
         let deps = stmt
             .query_map(params![trove_id, kind], Self::from_row)?
@@ -176,13 +182,8 @@ impl DependencyEntry {
 
     /// Find all packages that can satisfy a dependency (by name)
     pub fn find_providers(conn: &Connection, dependency_name: &str) -> Result<Vec<Trove>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, name, version, type, architecture, description, \
-             installed_at, installed_by_changeset_id, install_source, install_reason, \
-             flavor_spec, pinned, selection_reason, label_id, orphan_since, source_distro, \
-             version_scheme \
-             FROM troves WHERE name = ?1",
-        )?;
+        let sql = format!("SELECT {} FROM troves WHERE name = ?1", Trove::COLUMNS);
+        let mut stmt = conn.prepare(&sql)?;
 
         let troves = stmt
             .query_map([dependency_name], Trove::from_row)?

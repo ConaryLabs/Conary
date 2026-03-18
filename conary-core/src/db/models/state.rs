@@ -19,6 +19,10 @@ pub struct SystemState {
 }
 
 impl SystemState {
+    /// Column list for SELECT queries.
+    const COLUMNS: &'static str = "id, state_number, summary, description, created_at, \
+         changeset_id, is_active, package_count";
+
     /// Create a new system state
     pub fn new(state_number: i64, summary: String) -> Self {
         Self {
@@ -55,33 +59,33 @@ impl SystemState {
 
     /// Find a state by ID
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, state_number, summary, description, created_at, changeset_id, \
-             is_active, package_count \
-             FROM system_states WHERE id = ?1",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM system_states WHERE id = ?1",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let state = stmt.query_row([id], Self::from_row).optional()?;
         Ok(state)
     }
 
     /// Find a state by state number
     pub fn find_by_number(conn: &Connection, state_number: i64) -> Result<Option<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, state_number, summary, description, created_at, changeset_id, \
-             is_active, package_count \
-             FROM system_states WHERE state_number = ?1",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM system_states WHERE state_number = ?1",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let state = stmt.query_row([state_number], Self::from_row).optional()?;
         Ok(state)
     }
 
     /// Get the currently active state
     pub fn get_active(conn: &Connection) -> Result<Option<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, state_number, summary, description, created_at, changeset_id, \
-             is_active, package_count \
-             FROM system_states WHERE is_active = 1",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM system_states WHERE is_active = 1",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let state = stmt.query_row([], Self::from_row).optional()?;
         Ok(state)
     }
@@ -98,11 +102,11 @@ impl SystemState {
 
     /// List all states ordered by state number (newest first)
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, state_number, summary, description, created_at, changeset_id, \
-             is_active, package_count \
-             FROM system_states ORDER BY state_number DESC",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM system_states ORDER BY state_number DESC",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let states = stmt
             .query_map([], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -111,11 +115,11 @@ impl SystemState {
 
     /// List states with limit
     pub fn list_recent(conn: &Connection, limit: i64) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, state_number, summary, description, created_at, changeset_id, \
-             is_active, package_count \
-             FROM system_states ORDER BY state_number DESC LIMIT ?1",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM system_states ORDER BY state_number DESC LIMIT ?1",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let states = stmt
             .query_map([limit], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;

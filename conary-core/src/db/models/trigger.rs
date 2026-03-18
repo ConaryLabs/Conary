@@ -39,6 +39,10 @@ pub struct Trigger {
 }
 
 impl Trigger {
+    /// Column list for SELECT queries.
+    const COLUMNS: &'static str = "id, name, description, pattern, handler, priority, \
+         enabled, builtin, created_at";
+
     /// Create a new trigger
     pub fn new(name: String, pattern: String, handler: String) -> Self {
         Self {
@@ -89,33 +93,27 @@ impl Trigger {
 
     /// Find a trigger by ID
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, name, description, pattern, handler, priority, enabled, \
-             builtin, created_at \
-             FROM triggers WHERE id = ?1",
-        )?;
+        let sql = format!("SELECT {} FROM triggers WHERE id = ?1", Self::COLUMNS);
+        let mut stmt = conn.prepare(&sql)?;
         let trigger = stmt.query_row([id], Self::from_row).optional()?;
         Ok(trigger)
     }
 
     /// Find a trigger by name
     pub fn find_by_name(conn: &Connection, name: &str) -> Result<Option<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, name, description, pattern, handler, priority, enabled, \
-             builtin, created_at \
-             FROM triggers WHERE name = ?1",
-        )?;
+        let sql = format!("SELECT {} FROM triggers WHERE name = ?1", Self::COLUMNS);
+        let mut stmt = conn.prepare(&sql)?;
         let trigger = stmt.query_row([name], Self::from_row).optional()?;
         Ok(trigger)
     }
 
     /// List all triggers
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, name, description, pattern, handler, priority, enabled, \
-             builtin, created_at \
-             FROM triggers ORDER BY priority, name",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM triggers ORDER BY priority, name",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let triggers = stmt
             .query_map([], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -124,11 +122,11 @@ impl Trigger {
 
     /// List all enabled triggers
     pub fn list_enabled(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, name, description, pattern, handler, priority, enabled, \
-             builtin, created_at \
-             FROM triggers WHERE enabled = 1 ORDER BY priority, name",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM triggers WHERE enabled = 1 ORDER BY priority, name",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let triggers = stmt
             .query_map([], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -137,11 +135,11 @@ impl Trigger {
 
     /// List built-in triggers
     pub fn list_builtin(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, name, description, pattern, handler, priority, enabled, \
-             builtin, created_at \
-             FROM triggers WHERE builtin = 1 ORDER BY priority, name",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM triggers WHERE builtin = 1 ORDER BY priority, name",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let triggers = stmt
             .query_map([], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -290,6 +288,10 @@ pub struct ChangesetTrigger {
 }
 
 impl ChangesetTrigger {
+    /// Column list for SELECT queries.
+    const COLUMNS: &'static str = "id, changeset_id, trigger_id, status, matched_files, \
+         started_at, completed_at, output";
+
     /// Create a new changeset trigger record
     pub fn new(changeset_id: i64, trigger_id: i64) -> Self {
         Self {
@@ -382,11 +384,11 @@ impl ChangesetTrigger {
 
     /// Get all triggers for a changeset
     pub fn find_by_changeset(conn: &Connection, changeset_id: i64) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, changeset_id, trigger_id, status, matched_files, \
-             started_at, completed_at, output \
-             FROM changeset_triggers WHERE changeset_id = ?1",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM changeset_triggers WHERE changeset_id = ?1",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let triggers = stmt
             .query_map([changeset_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -395,11 +397,11 @@ impl ChangesetTrigger {
 
     /// Get pending triggers for a changeset
     pub fn find_pending(conn: &Connection, changeset_id: i64) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, changeset_id, trigger_id, status, matched_files, \
-             started_at, completed_at, output \
-             FROM changeset_triggers WHERE changeset_id = ?1 AND status = 'pending'",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM changeset_triggers WHERE changeset_id = ?1 AND status = 'pending'",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let triggers = stmt
             .query_map([changeset_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;

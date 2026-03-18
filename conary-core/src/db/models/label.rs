@@ -29,6 +29,10 @@ pub struct LabelEntry {
 }
 
 impl LabelEntry {
+    /// Column list for SELECT queries.
+    pub(super) const COLUMNS: &'static str = "id, repository, namespace, tag, description, \
+         parent_label_id, created_at, repository_id, delegate_to_label_id";
+
     /// Create a new label entry
     pub fn new(repository: String, namespace: String, tag: String) -> Self {
         Self {
@@ -102,11 +106,8 @@ impl LabelEntry {
 
     /// Find a label by ID
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, repository, namespace, tag, description, parent_label_id, \
-             created_at, repository_id, delegate_to_label_id \
-             FROM labels WHERE id = ?1",
-        )?;
+        let sql = format!("SELECT {} FROM labels WHERE id = ?1", Self::COLUMNS);
+        let mut stmt = conn.prepare(&sql)?;
         let label = stmt.query_row([id], Self::from_row).optional()?;
         Ok(label)
     }
@@ -118,11 +119,11 @@ impl LabelEntry {
         namespace: &str,
         tag: &str,
     ) -> Result<Option<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, repository, namespace, tag, description, parent_label_id, \
-             created_at, repository_id, delegate_to_label_id \
-             FROM labels WHERE repository = ?1 AND namespace = ?2 AND tag = ?3",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM labels WHERE repository = ?1 AND namespace = ?2 AND tag = ?3",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let label = stmt
             .query_row([repository, namespace, tag], Self::from_row)
             .optional()?;
@@ -138,11 +139,11 @@ impl LabelEntry {
 
     /// List all labels
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, repository, namespace, tag, description, parent_label_id, \
-             created_at, repository_id, delegate_to_label_id \
-             FROM labels ORDER BY repository, namespace, tag",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM labels ORDER BY repository, namespace, tag",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let labels = stmt
             .query_map([], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -151,11 +152,11 @@ impl LabelEntry {
 
     /// Find labels by repository
     pub fn find_by_repository(conn: &Connection, repository: &str) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, repository, namespace, tag, description, parent_label_id, \
-             created_at, repository_id, delegate_to_label_id \
-             FROM labels WHERE repository = ?1 ORDER BY namespace, tag",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM labels WHERE repository = ?1 ORDER BY namespace, tag",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let labels = stmt
             .query_map([repository], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -168,11 +169,11 @@ impl LabelEntry {
         repository: &str,
         namespace: &str,
     ) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, repository, namespace, tag, description, parent_label_id, \
-             created_at, repository_id, delegate_to_label_id \
-             FROM labels WHERE repository = ?1 AND namespace = ?2 ORDER BY tag",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM labels WHERE repository = ?1 AND namespace = ?2 ORDER BY tag",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let labels = stmt
             .query_map([repository, namespace], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -182,13 +183,13 @@ impl LabelEntry {
     /// Search labels by pattern (LIKE query on full label string)
     pub fn search(conn: &Connection, pattern: &str) -> Result<Vec<Self>> {
         let search_pattern = format!("%{pattern}%");
-        let mut stmt = conn.prepare(
-            "SELECT id, repository, namespace, tag, description, parent_label_id, \
-             created_at, repository_id, delegate_to_label_id \
-             FROM labels \
+        let sql = format!(
+            "SELECT {} FROM labels \
              WHERE repository LIKE ?1 OR namespace LIKE ?1 OR tag LIKE ?1 OR description LIKE ?1 \
              ORDER BY repository, namespace, tag",
-        )?;
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let labels = stmt
             .query_map([&search_pattern], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -239,11 +240,11 @@ impl LabelEntry {
             crate::error::Error::MissingId("Cannot find children without label ID".to_string())
         })?;
 
-        let mut stmt = conn.prepare(
-            "SELECT id, repository, namespace, tag, description, parent_label_id, \
-             created_at, repository_id, delegate_to_label_id \
-             FROM labels WHERE parent_label_id = ?1 ORDER BY tag",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM labels WHERE parent_label_id = ?1 ORDER BY tag",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let labels = stmt
             .query_map([id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -306,11 +307,12 @@ impl LabelEntry {
             crate::error::Error::MissingId("Cannot find delegating labels without ID".to_string())
         })?;
 
-        let mut stmt = conn.prepare(
-            "SELECT id, repository, namespace, tag, description, parent_label_id, \
-             created_at, repository_id, delegate_to_label_id \
-             FROM labels WHERE delegate_to_label_id = ?1 ORDER BY repository, namespace, tag",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM labels WHERE delegate_to_label_id = ?1 \
+             ORDER BY repository, namespace, tag",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let labels = stmt
             .query_map([id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -319,11 +321,12 @@ impl LabelEntry {
 
     /// Find labels by their linked repository
     pub fn find_by_linked_repository(conn: &Connection, repo_id: i64) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, repository, namespace, tag, description, parent_label_id, \
-             created_at, repository_id, delegate_to_label_id \
-             FROM labels WHERE repository_id = ?1 ORDER BY repository, namespace, tag",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM labels WHERE repository_id = ?1 \
+             ORDER BY repository, namespace, tag",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let labels = stmt
             .query_map([repo_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -501,13 +504,19 @@ impl LabelPathEntry {
 ///
 /// Uses a single JOIN query instead of loading each label individually.
 pub fn get_label_path(conn: &Connection) -> Result<Vec<LabelEntry>> {
-    let sql = "SELECT l.id, l.repository, l.namespace, l.tag, l.description, \
-               l.parent_label_id, l.created_at, l.repository_id, l.delegate_to_label_id \
-               FROM labels l \
-               JOIN label_path lp ON lp.label_id = l.id \
-               WHERE lp.enabled = 1 \
-               ORDER BY lp.priority ASC";
-    let mut stmt = conn.prepare(sql)?;
+    // Prefix each column with `l.` for the JOIN query
+    let prefixed: String = LabelEntry::COLUMNS
+        .split(", ")
+        .map(|c| format!("l.{c}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT {prefixed} FROM labels l \
+         JOIN label_path lp ON lp.label_id = l.id \
+         WHERE lp.enabled = 1 \
+         ORDER BY lp.priority ASC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
     let labels = stmt
         .query_map([], LabelEntry::from_row)?
         .collect::<std::result::Result<Vec<_>, _>>()?;
