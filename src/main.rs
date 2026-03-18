@@ -1748,6 +1748,20 @@ fn run() -> Result<()> {
         },
 
         // =====================================================================
+        // Export
+        // =====================================================================
+        Some(Commands::Export {
+            generation,
+            output,
+            objects_dir,
+            oci: _,
+        }) => commands::export_oci(
+            generation,
+            std::path::Path::new(&objects_dir),
+            std::path::Path::new(&output),
+        ),
+
+        // =====================================================================
         // Self-Update
         // =====================================================================
         Some(Commands::SelfUpdate {

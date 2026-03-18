@@ -516,6 +516,29 @@ pub enum Commands {
     #[command(subcommand)]
     Federation(FederationCommands),
 
+    /// Export a generation as an OCI container image
+    ///
+    /// Packages a generation's EROFS image and CAS objects into a
+    /// standards-compliant OCI Image Layout directory that can be
+    /// loaded by podman/docker via skopeo.
+    Export {
+        /// Generation number to export (default: current active generation)
+        #[arg(short, long)]
+        generation: Option<i64>,
+
+        /// Output directory for the OCI image layout
+        #[arg(short, long)]
+        output: String,
+
+        /// Path to the CAS objects directory
+        #[arg(long, default_value = "/conary/objects")]
+        objects_dir: String,
+
+        /// Export in OCI format (currently the only supported format)
+        #[arg(long, default_value_t = true)]
+        oci: bool,
+    },
+
     /// Run the conaryd daemon
     ///
     /// The daemon provides a REST API for package operations with
