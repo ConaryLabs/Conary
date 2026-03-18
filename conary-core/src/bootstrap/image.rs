@@ -1,6 +1,6 @@
 // conary-core/src/bootstrap/image.rs
 
-//! Bootable image generation
+//! Phase 5: Bootable image generation
 //!
 //! Creates bootable images from the built base system. Supports multiple formats:
 //!
@@ -8,23 +8,35 @@
 //! - **qcow2**: QEMU copy-on-write format, efficient for VM testing
 //! - **iso**: Hybrid ISO image, bootable from CD/DVD or USB
 //!
+//! # Build Pipeline
+//!
+//! Phase 5 runs after Phase 4 (system configuration). The kernel must already
+//! be installed into the sysroot by Phase 3 (`system/linux.toml` recipe via
+//! `PackageBuildRunner`). Phase 5 then:
+//!
+//! 1. Verifies the kernel is installed at `/usr/lib/modules/<ver>/vmlinuz`
+//! 2. Writes the systemd-boot BLS entry (no initrd -- kernel has root fs built in)
+//! 3. Copies the systemd-boot EFI binary from the sysroot (no host fallback)
+//! 4. Runs systemd-repart to create the GPT disk image
+//! 5. Converts to qcow2 for QEMU testing
+//!
 //! # Image Layout (GPT)
 //!
 //! ```text
-//! ┌─────────────────────────────────────────────┐
-//! │  GPT Header (LBA 0-33)                      │
-//! ├─────────────────────────────────────────────┤
-//! │  ESP Partition (512MB, FAT32)               │
-//! │  - /EFI/BOOT/BOOTX64.EFI                    │
-//! │  - /EFI/conary/grubx64.efi                  │
-//! │  - /grub/grub.cfg                           │
-//! ├─────────────────────────────────────────────┤
-//! │  Root Partition (remaining, ext4)           │
-//! │  - Full base system                         │
-//! │  - /boot/vmlinuz, /boot/initramfs           │
-//! ├─────────────────────────────────────────────┤
-//! │  GPT Footer                                 │
-//! └─────────────────────────────────────────────┘
+//! +---------------------------------------------+
+//! |  GPT Header (LBA 0-33)                      |
+//! +---------------------------------------------+
+//! |  ESP Partition (512MB, FAT32)               |
+//! |  - /EFI/BOOT/BOOTX64.EFI (systemd-boot)    |
+//! |  - /loader/loader.conf                       |
+//! |  - /loader/entries/conaryos.conf             |
+//! +---------------------------------------------+
+//! |  Root Partition (remaining, ext4)           |
+//! |  - Full base system                         |
+//! |  - /boot/vmlinuz-<ver>                       |
+//! +---------------------------------------------+
+//! |  GPT Footer                                 |
+//! +---------------------------------------------+
 //! ```
 
 use super::config::BootstrapConfig;
@@ -418,6 +430,74 @@ impl ImageBuilder {
     /// Get the output path
     pub fn output_path(&self) -> &Path {
         &self.output
+    }
+
+    /// Default output filename for the Tier 1 base image.
+    pub const TIER1_DEFAULT_NAME: &'static str = "conaryos-base.qcow2";
+
+    /// Build a Tier 1 base image using the standard pipeline.
+    ///
+    /// This is the convenience entry point for Phase 5. It chains:
+    ///
+    /// 1. `BaseBuilder::finalize_sysroot()` -- verify kernel installed, write
+    ///    BLS entry, copy EFI binary (called by the orchestrator before this)
+    /// 2. `build()` -- run systemd-repart to create GPT image, convert to qcow2
+    ///
+    /// The caller (Bootstrap orchestrator) is responsible for calling
+    /// `finalize_sysroot()` first. This method validates the sysroot has the
+    /// expected boot artifacts before proceeding.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ImageError` if the kernel or EFI binary is missing from
+    /// the sysroot, or if image creation fails.
+    pub fn build_tier1_image(&mut self) -> Result<ImageResult, ImageError> {
+        info!("Building Tier 1 base image: {}", self.output.display());
+
+        // Verify kernel is installed in sysroot
+        let boot_dir = self.sysroot.join("boot");
+        let has_kernel = boot_dir.exists()
+            && std::fs::read_dir(&boot_dir)
+                .map(|entries| {
+                    entries
+                        .flatten()
+                        .any(|e| {
+                            e.file_name()
+                                .to_str()
+                                .is_some_and(|n| n.starts_with("vmlinuz"))
+                        })
+                })
+                .unwrap_or(false);
+
+        if !has_kernel {
+            return Err(ImageError::CreationFailed(
+                "Kernel not found in sysroot /boot/. Phase 3 must build the kernel \
+                 (system/linux.toml) before image generation."
+                    .to_string(),
+            ));
+        }
+
+        // Verify EFI binary is in place
+        let efi_binary = self.sysroot.join("boot/EFI/BOOT/BOOTX64.EFI");
+        if !efi_binary.exists() {
+            return Err(ImageError::CreationFailed(
+                "EFI binary not found at boot/EFI/BOOT/BOOTX64.EFI. \
+                 Run BaseBuilder::finalize_sysroot() first."
+                    .to_string(),
+            ));
+        }
+
+        // Verify BLS entry exists
+        let bls_entry = self.sysroot.join("boot/loader/entries/conaryos.conf");
+        if !bls_entry.exists() {
+            return Err(ImageError::CreationFailed(
+                "BLS entry not found at boot/loader/entries/conaryos.conf. \
+                 Run BaseBuilder::finalize_sysroot() first."
+                    .to_string(),
+            ));
+        }
+
+        self.build()
     }
 
     /// Build the image

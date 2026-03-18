@@ -112,11 +112,11 @@ pub enum BootstrapCommands {
         work_dir: String,
 
         /// Output image file
-        #[arg(short, long, default_value = "conary.img")]
+        #[arg(short, long, default_value = "conaryos-base.qcow2")]
         output: String,
 
         /// Image format (raw, qcow2, iso)
-        #[arg(short, long, default_value = "raw")]
+        #[arg(short, long, default_value = "qcow2")]
         format: String,
 
         /// Image size (e.g., "4G", "8G")
