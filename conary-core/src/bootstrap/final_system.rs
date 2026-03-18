@@ -329,7 +329,7 @@ mod tests {
         let lfs = tempfile::tempdir().unwrap();
         let config = BootstrapConfig::new();
         let tc = Toolchain {
-            kind: ToolchainKind::Stage1,
+            kind: ToolchainKind::System,
             path: lfs.path().join("tools"),
             target: "x86_64-conary-linux-gnu".to_string(),
             gcc_version: None,
@@ -350,7 +350,7 @@ mod tests {
 
         let config = BootstrapConfig::new();
         let tc = Toolchain {
-            kind: ToolchainKind::Stage1,
+            kind: ToolchainKind::System,
             path: lfs.path().join("tools"),
             target: "x86_64-conary-linux-gnu".to_string(),
             gcc_version: None,
@@ -371,7 +371,7 @@ mod tests {
 
         let config = BootstrapConfig::new();
         let tc = Toolchain {
-            kind: ToolchainKind::Stage1,
+            kind: ToolchainKind::System,
             path: lfs.path().join("tools"),
             target: "x86_64-conary-linux-gnu".to_string(),
             gcc_version: None,
@@ -394,7 +394,7 @@ mod tests {
 
         let config = BootstrapConfig::new();
         let tc = Toolchain {
-            kind: ToolchainKind::Stage1,
+            kind: ToolchainKind::System,
             path: lfs.path().join("tools"),
             target: "x86_64-conary-linux-gnu".to_string(),
             gcc_version: None,
@@ -418,7 +418,7 @@ mod tests {
 
         let config = BootstrapConfig::new();
         let tc = Toolchain {
-            kind: ToolchainKind::Stage1,
+            kind: ToolchainKind::System,
             path: lfs.path().join("tools"),
             target: "x86_64-conary-linux-gnu".to_string(),
             gcc_version: None,

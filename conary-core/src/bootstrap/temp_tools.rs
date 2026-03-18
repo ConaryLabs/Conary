@@ -266,7 +266,7 @@ mod tests {
         // No tools/bin directory created
         let config = BootstrapConfig::new();
         let cross_tc = Toolchain {
-            kind: ToolchainKind::Stage1,
+            kind: ToolchainKind::CrossTools,
             path: lfs.path().join("tools"),
             target: "x86_64-conary-linux-gnu".to_string(),
             gcc_version: None,
@@ -287,7 +287,7 @@ mod tests {
 
         let config = BootstrapConfig::new();
         let cross_tc = Toolchain {
-            kind: ToolchainKind::Stage1,
+            kind: ToolchainKind::CrossTools,
             path: lfs.path().join("tools"),
             target: "x86_64-conary-linux-gnu".to_string(),
             gcc_version: None,
@@ -308,7 +308,7 @@ mod tests {
 
         let config = BootstrapConfig::new();
         let cross_tc = Toolchain {
-            kind: ToolchainKind::Stage1,
+            kind: ToolchainKind::CrossTools,
             path: lfs.path().join("tools"),
             target: "x86_64-conary-linux-gnu".to_string(),
             gcc_version: None,
