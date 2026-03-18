@@ -543,7 +543,7 @@ impl ImageBuilder {
         use crate::db::schema::migrate;
         use crate::filesystem::CasStore;
         use crate::generation::builder::{FileEntryRef, build_erofs_image};
-        use crate::generation::metadata::GenerationMetadata;
+        use crate::generation::metadata::{GENERATION_FORMAT, GenerationMetadata};
 
         self.log_line("Building composefs-native output (EROFS + CAS + DB)");
 
@@ -624,7 +624,7 @@ impl ImageBuilder {
         #[allow(clippy::cast_possible_wrap)]
         let metadata = GenerationMetadata {
             generation: 1,
-            format: "composefs".to_string(),
+            format: GENERATION_FORMAT.to_string(),
             erofs_size: Some(build_result.image_size as i64),
             cas_objects_referenced: Some(build_result.cas_objects_referenced as i64),
             fsverity_enabled: false,
@@ -1670,6 +1670,7 @@ fn dir_size(path: &Path) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::generation::metadata::GENERATION_FORMAT;
 
     #[test]
     fn test_image_format_from_str() {
@@ -1841,7 +1842,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(metadata.generation, 1);
-        assert_eq!(metadata.format, "composefs");
+        assert_eq!(metadata.format, GENERATION_FORMAT);
         assert_eq!(metadata.package_count, 1);
         assert!(metadata.cas_objects_referenced.unwrap() > 0);
     }

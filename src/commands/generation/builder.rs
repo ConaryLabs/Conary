@@ -94,30 +94,4 @@ pub fn build_generation(conn: &rusqlite::Connection, db_path: &str, summary: &st
     Ok(gen_number)
 }
 
-#[cfg(test)]
-mod tests {
-    use conary_core::generation::builder::hex_to_digest;
-
-    #[test]
-    fn test_hex_to_digest_valid() {
-        let hex = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
-        let digest = hex_to_digest(hex).unwrap();
-        assert_eq!(digest[0], 0xab);
-        assert_eq!(digest[1], 0xcd);
-        assert_eq!(digest[31], 0x89);
-    }
-
-    #[test]
-    fn test_hex_to_digest_wrong_length() {
-        let result = hex_to_digest("abcd");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Expected 64-char"));
-    }
-
-    #[test]
-    fn test_hex_to_digest_invalid_chars() {
-        let hex = "zzcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
-        let result = hex_to_digest(hex);
-        assert!(result.is_err());
-    }
-}
+// hex_to_digest tests live in conary_core::generation::builder::tests

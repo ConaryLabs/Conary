@@ -96,7 +96,7 @@ pub fn gc_cas_objects(objects_dir: &Path, live_hashes: &HashSet<String>) -> crat
         let prefix_path = prefix_entry.path();
 
         // Skip non-directories and special files (e.g., lock files)
-        if !prefix_path.is_dir() {
+        if !prefix_entry.file_type()?.is_dir() {
             continue;
         }
 
@@ -115,7 +115,7 @@ pub fn gc_cas_objects(objects_dir: &Path, live_hashes: &HashSet<String>) -> crat
             let suffix_path = suffix_entry.path();
 
             // Skip directories and temp files
-            if !suffix_path.is_file() {
+            if !suffix_entry.file_type()?.is_file() {
                 continue;
             }
 

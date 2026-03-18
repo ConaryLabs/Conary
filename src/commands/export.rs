@@ -20,6 +20,7 @@ use sha2::{Digest, Sha256};
 use tracing::info;
 
 use super::generation::metadata::{GenerationMetadata, generation_path};
+use conary_core::generation::metadata::{EROFS_IMAGE_NAME, GENERATION_METADATA_FILE};
 use conary_core::generation::mount::current_generation;
 
 /// OCI media types used in the manifest and config.
@@ -52,7 +53,7 @@ pub fn export_oci(generation: Option<i64>, objects_dir: &Path, output_dir: &Path
     let metadata = GenerationMetadata::read_from(&gen_dir)
         .with_context(|| format!("Failed to read metadata for generation {gen_number}"))?;
 
-    let erofs_path = gen_dir.join("root.erofs");
+    let erofs_path = gen_dir.join(EROFS_IMAGE_NAME);
     if !erofs_path.exists() {
         bail!(
             "Generation {gen_number} has no EROFS image at {}",
@@ -185,8 +186,8 @@ fn build_layer_tar(erofs_path: &Path, objects_dir: &Path, gen_dir: &Path) -> Res
     header.set_mode(0o644);
     header.set_cksum();
     tar_builder
-        .append_data(&mut header, "root.erofs", erofs_data.as_slice())
-        .context("Failed to add root.erofs to tar")?;
+        .append_data(&mut header, EROFS_IMAGE_NAME, erofs_data.as_slice())
+        .context("Failed to add EROFS image to tar")?;
 
     // Collect referenced CAS object hashes from the generation's metadata.
     // Walk the objects directory and include objects that exist.
@@ -214,7 +215,7 @@ fn build_layer_tar(erofs_path: &Path, objects_dir: &Path, gen_dir: &Path) -> Res
     }
 
     // Also include the generation metadata
-    let meta_path = gen_dir.join(".conary-gen.json");
+    let meta_path = gen_dir.join(GENERATION_METADATA_FILE);
     if meta_path.exists() {
         let meta_data = fs::read(&meta_path).context("Failed to read generation metadata")?;
         let mut meta_header = tar::Header::new_gnu();
@@ -222,7 +223,7 @@ fn build_layer_tar(erofs_path: &Path, objects_dir: &Path, gen_dir: &Path) -> Res
         meta_header.set_mode(0o644);
         meta_header.set_cksum();
         tar_builder
-            .append_data(&mut meta_header, ".conary-gen.json", meta_data.as_slice())
+            .append_data(&mut meta_header, GENERATION_METADATA_FILE, meta_data.as_slice())
             .context("Failed to add generation metadata to tar")?;
     }
 
@@ -390,6 +391,7 @@ fn build_index_json(manifest_digest: &str, manifest_size: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conary_core::generation::metadata::GENERATION_FORMAT;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -401,12 +403,12 @@ mod tests {
 
         // Write a fake EROFS image (just some bytes for testing)
         let erofs_data = b"EROFS-IMAGE-PLACEHOLDER-DATA-FOR-TESTING";
-        fs::write(gen_dir.join("root.erofs"), erofs_data).unwrap();
+        fs::write(gen_dir.join(EROFS_IMAGE_NAME), erofs_data).unwrap();
 
         // Write generation metadata
         let metadata = GenerationMetadata {
             generation: 5,
-            format: "composefs".to_string(),
+            format: GENERATION_FORMAT.to_string(),
             erofs_size: Some(erofs_data.len() as i64),
             cas_objects_referenced: Some(2),
             fsverity_enabled: false,
@@ -449,7 +451,7 @@ mod tests {
         // Build layer, config, manifest, index manually since export_oci
         // expects real /conary paths.
         let metadata = GenerationMetadata::read_from(gen_dir).unwrap();
-        let erofs_path = gen_dir.join("root.erofs");
+        let erofs_path = gen_dir.join(EROFS_IMAGE_NAME);
         let blobs_dir = output_dir.join("blobs/sha256");
         fs::create_dir_all(&blobs_dir).unwrap();
 
@@ -585,7 +587,7 @@ mod tests {
             let path = entry.path().unwrap().to_string_lossy().to_string();
             entry_names.push(path.clone());
 
-            if path == "root.erofs" {
+            if path == EROFS_IMAGE_NAME {
                 found_erofs = true;
                 // Verify the content matches our test EROFS data
                 let size = entry.header().size().unwrap();
@@ -597,7 +599,7 @@ mod tests {
             if path.starts_with("objects/") {
                 found_objects = true;
             }
-            if path == ".conary-gen.json" {
+            if path == GENERATION_METADATA_FILE {
                 found_metadata = true;
             }
         }
@@ -737,7 +739,7 @@ mod tests {
     fn test_build_config_json_valid() {
         let metadata = GenerationMetadata {
             generation: 3,
-            format: "composefs".to_string(),
+            format: GENERATION_FORMAT.to_string(),
             erofs_size: Some(100),
             cas_objects_referenced: Some(10),
             fsverity_enabled: false,

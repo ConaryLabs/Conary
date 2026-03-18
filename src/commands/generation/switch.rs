@@ -32,7 +32,7 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
     let metadata = GenerationMetadata::read_from(&gen_dir)
         .with_context(|| format!("Failed to read metadata for generation {gen_number}"))?;
 
-    let erofs_img = gen_dir.join("root.erofs");
+    let erofs_img = gen_dir.join(conary_core::generation::metadata::EROFS_IMAGE_NAME);
     if !erofs_img.exists() {
         return Err(anyhow!(
             "EROFS image not found at {} (format: {})",
