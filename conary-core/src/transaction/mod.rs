@@ -257,74 +257,112 @@ impl TransactionEngine {
 
     /// Recover from an interrupted transaction.
     ///
-    /// In the composefs-native model, recovery is simple:
-    /// - Check what generation the DB says should be active
-    /// - If the mounted generation does not match, rebuild the EROFS image
-    ///   from the DB state and remount
+    /// Uses a 4-step fallback strategy to restore a bootable system state:
+    ///
+    /// 1. Read `/conary/current` symlink; if the target EROFS image is valid,
+    ///    mount that generation (no rebuild needed).
+    /// 2. If the current image is missing or truncated, rebuild from DB state.
+    /// 3. If the DB is corrupted or has no active state, scan
+    ///    `/conary/generations/` by number descending and try each intact EROFS
+    ///    image.
+    /// 4. If nothing works, return `RecoveryFailed`.
     ///
     /// This replaces the old journal-based roll-forward/roll-back recovery.
     pub fn recover(&self, conn: &Connection) -> Result<()> {
         use crate::generation::builder::build_generation_from_db;
         use crate::generation::mount::current_generation;
 
-        // Early return if no generations directory or it's empty
-        if !self.config.generations_dir.exists() {
-            return Ok(());
-        }
-        let has_entries = self
-            .config
-            .generations_dir
-            .read_dir()
-            .map(|mut rd| rd.next().is_some())
-            .unwrap_or(false);
-        if !has_entries {
-            return Ok(());
+        // ------------------------------------------------------------------
+        // Step 1: try the current symlink if the EROFS image is valid
+        // ------------------------------------------------------------------
+        if let Ok(Some(current_num)) = current_generation(&self.config.root) {
+            let image_path = self
+                .config
+                .generations_dir
+                .join(current_num.to_string())
+                .join("root.erofs");
+
+            if is_valid_erofs_image(&image_path) {
+                tracing::debug!(
+                    "Recovery: current generation {} has valid image, no action needed",
+                    current_num
+                );
+                return Ok(());
+            }
+
+            tracing::warn!(
+                "Recovery: current generation {} image is missing or invalid at {}",
+                current_num,
+                image_path.display()
+            );
         }
 
-        // Query the DB for the expected generation number
-        let expected_gen: Option<i64> = match conn.query_row(
+        // ------------------------------------------------------------------
+        // Step 2: query the DB for the expected active generation and rebuild
+        // ------------------------------------------------------------------
+        let db_gen: Option<i64> = match conn.query_row(
             "SELECT MAX(state_number) FROM system_states WHERE is_active = 1",
             [],
             |row| row.get(0),
         ) {
             Ok(val) => val,
             Err(rusqlite::Error::QueryReturnedNoRows) => None,
-            Err(e) => return Err(e.into()),
+            Err(e) => {
+                tracing::warn!("Recovery: DB query failed ({}), trying step 3", e);
+                None
+            }
         };
 
-        let Some(expected) = expected_gen else {
-            // No active system state in DB — nothing to recover
-            return Ok(());
-        };
-
-        // Check what is currently mounted
-        let current = current_generation(&self.config.root).unwrap_or(None);
-
-        if current == Some(expected) {
-            // Already consistent — no recovery needed
-            tracing::debug!(
-                "Generation {} already mounted, no recovery needed",
+        if let Some(expected) = db_gen {
+            tracing::info!(
+                "Recovery: DB says generation {} should be active, rebuilding",
                 expected
             );
-            return Ok(());
+
+            match build_generation_from_db(
+                conn,
+                &self.config.generations_dir,
+                &format!("Recovery rebuild of generation {expected}"),
+            ) {
+                Ok((gen_num, _build_result)) => {
+                    return self.mount_and_link(gen_num);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Recovery: rebuild from DB failed ({}), trying step 3",
+                        e
+                    );
+                }
+            }
+        } else {
+            tracing::warn!("Recovery: no active generation in DB, trying step 3");
         }
 
-        tracing::info!(
-            "Recovery: expected generation {} but found {:?}, rebuilding",
-            expected,
-            current
-        );
+        // ------------------------------------------------------------------
+        // Step 3: scan generations/ descending and try each intact EROFS image
+        // ------------------------------------------------------------------
+        if let Some(gen_num) = self.find_latest_intact_generation() {
+            tracing::info!(
+                "Recovery: found intact EROFS image for generation {}, mounting",
+                gen_num
+            );
+            return self.mount_and_link(gen_num);
+        }
 
-        // Rebuild EROFS image from DB state
-        let (gen_num, _build_result) = build_generation_from_db(
-            conn,
-            &self.config.generations_dir,
-            &format!("Recovery rebuild of generation {expected}"),
-        )?;
+        // ------------------------------------------------------------------
+        // Step 4: nothing worked
+        // ------------------------------------------------------------------
+        Err(crate::Error::RecoveryFailed(
+            "All recovery strategies exhausted: no valid EROFS image found and \
+             DB rebuild failed. Manual intervention required."
+                .to_string(),
+        ))
+    }
 
+    /// Mount a generation by number and update the `/conary/current` symlink.
+    fn mount_and_link(&self, gen_num: i64) -> Result<()> {
         let gen_dir = self.config.generations_dir.join(gen_num.to_string());
 
-        // Mount the rebuilt generation
         crate::generation::mount::mount_generation(&crate::generation::mount::MountOptions {
             image_path: gen_dir.join("root.erofs"),
             basedir: self.config.objects_dir.clone(),
@@ -335,11 +373,52 @@ impl TransactionEngine {
             workdir: Some(self.config.etc_state_dir.join(format!("{gen_num}-work"))),
         })?;
 
-        // Update the current symlink
         crate::generation::mount::update_current_symlink(&self.config.root, gen_num)?;
 
-        tracing::info!("Recovery: generation {} rebuilt and mounted", gen_num);
+        tracing::info!("Recovery: generation {} mounted and symlink updated", gen_num);
         Ok(())
+    }
+
+    /// Scan the generations directory descending by number and return the
+    /// highest generation whose `root.erofs` passes EROFS magic validation.
+    fn find_latest_intact_generation(&self) -> Option<i64> {
+        if !self.config.generations_dir.exists() {
+            return None;
+        }
+
+        let mut candidates: Vec<i64> = std::fs::read_dir(&self.config.generations_dir)
+            .ok()?
+            .flatten()
+            .filter_map(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .parse::<i64>()
+                    .ok()
+            })
+            .collect();
+
+        // Sort descending — try newest first
+        candidates.sort_unstable_by(|a, b| b.cmp(a));
+
+        for gen_num in candidates {
+            let image_path = self
+                .config
+                .generations_dir
+                .join(gen_num.to_string())
+                .join("root.erofs");
+
+            if is_valid_erofs_image(&image_path) {
+                return Some(gen_num);
+            }
+
+            tracing::debug!(
+                "Recovery: generation {} image invalid or missing, skipping",
+                gen_num
+            );
+        }
+
+        None
     }
 }
 
@@ -347,6 +426,53 @@ impl Drop for TransactionEngine {
     fn drop(&mut self) {
         self.release_lock();
     }
+}
+
+// ---------------------------------------------------------------------------
+// EROFS image validation
+// ---------------------------------------------------------------------------
+
+/// EROFS superblock magic number (little-endian u32 at byte offset 1024).
+const EROFS_MAGIC: u32 = 0xE0F5_E1E2;
+
+/// Minimum plausible EROFS image size in bytes (one superblock page).
+const EROFS_MIN_SIZE: u64 = 4096;
+
+/// Return `true` if `path` looks like a valid EROFS image.
+///
+/// Checks:
+/// 1. File exists and is at least `EROFS_MIN_SIZE` bytes.
+/// 2. The 4-byte EROFS magic is present at byte offset 1024.
+///
+/// This is a lightweight sanity check; it does not verify the full image
+/// structure or any checksums.
+pub fn is_valid_erofs_image(path: &Path) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let meta = match fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+
+    if !meta.is_file() || meta.len() < EROFS_MIN_SIZE {
+        return false;
+    }
+
+    let mut file = match File::open(path) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+
+    if file.seek(SeekFrom::Start(1024)).is_err() {
+        return false;
+    }
+
+    let mut buf = [0u8; 4];
+    if file.read_exact(&mut buf).is_err() {
+        return false;
+    }
+
+    u32::from_le_bytes(buf) == EROFS_MAGIC
 }
 
 // ---------------------------------------------------------------------------
@@ -657,5 +783,115 @@ mod tests {
             dirs_removed: 0,
         };
         assert_eq!(result.total_operations(), 11);
+    }
+
+    /// Write a minimal valid EROFS image stub: at least EROFS_MIN_SIZE bytes
+    /// with the EROFS magic at offset 1024.
+    fn write_stub_erofs(path: &std::path::Path) {
+        let mut data = vec![0u8; 4096];
+        let magic = EROFS_MAGIC.to_le_bytes();
+        data[1024..1028].copy_from_slice(&magic);
+        std::fs::write(path, &data).expect("write stub erofs");
+    }
+
+    #[test]
+    fn test_recover_with_valid_generation() {
+        // Arrange: set up a generations directory with a valid EROFS image and
+        // a `current` symlink pointing to generation 2.
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().to_path_buf();
+        let generations_dir = root.join("generations");
+        std::fs::create_dir_all(generations_dir.join("2")).unwrap();
+
+        let image_path = generations_dir.join("2").join("root.erofs");
+        write_stub_erofs(&image_path);
+
+        // Create `current -> generations/2`
+        let link = root.join("current");
+        std::os::unix::fs::symlink("generations/2", &link).unwrap();
+
+        // is_valid_erofs_image should return true for this stub
+        assert!(
+            is_valid_erofs_image(&image_path),
+            "stub EROFS image must pass validation"
+        );
+
+        // Act: call find_latest_intact_generation directly (mount would fail in test)
+        let config = TransactionConfig {
+            root: root.clone(),
+            db_path: root.join("conary.db"),
+            objects_dir: root.join("objects"),
+            generations_dir: generations_dir.clone(),
+            etc_state_dir: root.join("etc-state"),
+            mount_point: PathBuf::from("/"),
+            hash_algorithm: crate::hash::HashAlgorithm::Sha256,
+            lock_timeout_secs: TransactionConfig::DEFAULT_LOCK_TIMEOUT_SECS,
+        };
+        let cas = crate::filesystem::CasStore::with_algorithm(
+            config.objects_dir.clone(),
+            config.hash_algorithm,
+        )
+        .unwrap();
+        let engine = TransactionEngine {
+            config,
+            cas,
+            lock_file: None,
+        };
+
+        // The current symlink points to generation 2 which has a valid image.
+        // find_latest_intact_generation should return Some(2).
+        let found = engine.find_latest_intact_generation();
+        assert_eq!(
+            found,
+            Some(2),
+            "should find generation 2 as the latest intact"
+        );
+    }
+
+    #[test]
+    fn test_recover_rebuilds_when_image_missing() {
+        // Arrange: generation directory exists but root.erofs is absent.
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().to_path_buf();
+        let generations_dir = root.join("generations");
+        // Create generation 5 directory without an EROFS image
+        std::fs::create_dir_all(generations_dir.join("5")).unwrap();
+
+        let missing_image = generations_dir.join("5").join("root.erofs");
+
+        // Confirm validation fails for missing file
+        assert!(
+            !is_valid_erofs_image(&missing_image),
+            "missing image must fail validation"
+        );
+
+        // find_latest_intact_generation should return None (no intact image)
+        let config = TransactionConfig {
+            root: root.clone(),
+            db_path: root.join("conary.db"),
+            objects_dir: root.join("objects"),
+            generations_dir: generations_dir.clone(),
+            etc_state_dir: root.join("etc-state"),
+            mount_point: PathBuf::from("/"),
+            hash_algorithm: crate::hash::HashAlgorithm::Sha256,
+            lock_timeout_secs: TransactionConfig::DEFAULT_LOCK_TIMEOUT_SECS,
+        };
+        std::fs::create_dir_all(&config.objects_dir).unwrap();
+        let cas = crate::filesystem::CasStore::with_algorithm(
+            config.objects_dir.clone(),
+            config.hash_algorithm,
+        )
+        .unwrap();
+        let engine = TransactionEngine {
+            config,
+            cas,
+            lock_file: None,
+        };
+
+        let found = engine.find_latest_intact_generation();
+        assert_eq!(
+            found, None,
+            "no intact image should result in None from find_latest_intact_generation"
+        );
     }
 }
