@@ -631,7 +631,7 @@ impl ImageBuilder {
             erofs_verity_digest: None,
             created_at: chrono::Utc::now().to_rfc3339(),
             package_count: 1,
-            kernel_version: detect_kernel_in_sysroot(&self.sysroot),
+            kernel_version: crate::generation::metadata::detect_kernel_version(&self.sysroot),
             summary: "Bootstrap generation 1 (LFS base system)".to_string(),
         };
         metadata.write_to(&gen_dir).map_err(|e| {
@@ -1638,19 +1638,6 @@ impl Drop for ImageBuilder {
     }
 }
 
-/// Detect kernel version from the sysroot's `/usr/lib/modules/` directory.
-fn detect_kernel_in_sysroot(sysroot: &Path) -> Option<String> {
-    let modules_dir = sysroot.join("usr/lib/modules");
-    let entries = fs::read_dir(modules_dir).ok()?;
-
-    for entry in entries.flatten() {
-        if entry.file_type().ok()?.is_dir() {
-            return Some(entry.file_name().to_string_lossy().into_owned());
-        }
-    }
-    None
-}
-
 /// Recursively compute the total size of a directory in bytes.
 fn dir_size(path: &Path) -> u64 {
     let mut total = 0u64;
@@ -1860,14 +1847,16 @@ mod tests {
 
     #[test]
     fn test_detect_kernel_in_sysroot() {
+        use crate::generation::metadata::detect_kernel_version;
+
         let tmp = tempfile::TempDir::new().unwrap();
 
         // No modules dir
-        assert!(detect_kernel_in_sysroot(tmp.path()).is_none());
+        assert!(detect_kernel_version(tmp.path()).is_none());
 
         // Create modules dir with a version
         fs::create_dir_all(tmp.path().join("usr/lib/modules/6.12.1-conary")).unwrap();
-        let version = detect_kernel_in_sysroot(tmp.path());
+        let version = detect_kernel_version(tmp.path());
         assert_eq!(version.as_deref(), Some("6.12.1-conary"));
     }
 }
