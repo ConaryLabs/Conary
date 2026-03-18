@@ -14,6 +14,7 @@ mod convert_pkgbuild;
 mod cook;
 mod derived;
 pub mod distro;
+pub mod export;
 mod federation;
 pub mod generation;
 pub mod groups;
@@ -66,6 +67,7 @@ pub use config::{
     cmd_config_restore,
 };
 pub use convert_pkgbuild::cmd_convert_pkgbuild;
+pub use export::export_oci;
 pub use cook::cmd_cook;
 pub use derived::{
     cmd_derive_build, cmd_derive_create, cmd_derive_delete, cmd_derive_list, cmd_derive_override,
