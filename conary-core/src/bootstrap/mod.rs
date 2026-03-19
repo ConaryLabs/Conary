@@ -225,7 +225,7 @@ impl Bootstrap {
         let builder = CrossToolsBuilder::new(&self.work_dir, lfs_root, self.config.clone(), host)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        let toolchain = builder.build_all().map_err(|e| anyhow::anyhow!("{e}"))?;
+        let toolchain = builder.build_all(&[]).map_err(|e| anyhow::anyhow!("{e}"))?;
 
         self.stages
             .mark_complete(BootstrapStage::CrossTools, &toolchain.path)?;

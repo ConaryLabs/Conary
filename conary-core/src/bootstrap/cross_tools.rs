@@ -21,6 +21,8 @@ use tracing::{debug, info};
 use super::build_runner::PackageBuildRunner;
 use super::config::BootstrapConfig;
 use super::toolchain::{Toolchain, ToolchainKind};
+use crate::recipe::parser::parse_recipe_file;
+use crate::recipe::{Kitchen, KitchenConfig};
 
 /// Target triplet for the LFS cross-toolchain.
 pub const LFS_TGT: &str = "x86_64-conary-linux-gnu";
@@ -77,7 +79,7 @@ pub struct CrossToolsBuilder {
     /// Host toolchain used to compile the cross tools.
     host_toolchain: Toolchain,
     /// Shared build runner for source fetching and verification.
-    _runner: PackageBuildRunner,
+    runner: PackageBuildRunner,
 }
 
 impl CrossToolsBuilder {
@@ -116,7 +118,7 @@ impl CrossToolsBuilder {
             lfs_root: lfs_root.to_path_buf(),
             config,
             host_toolchain,
-            _runner: runner,
+            runner,
         })
     }
 
@@ -125,7 +127,7 @@ impl CrossToolsBuilder {
     /// Iterates through `CROSS_TOOLS_ORDER`, building each package in
     /// sequence. On success, returns a `Toolchain` with `kind: Stage1`
     /// rooted at `$LFS/tools/`.
-    pub fn build_all(&self) -> Result<Toolchain, CrossToolsError> {
+    pub fn build_all(&self, completed: &[String]) -> Result<Toolchain, CrossToolsError> {
         info!(
             "Phase 1: Building cross-tools ({} packages)",
             CROSS_TOOLS_ORDER.len()
@@ -134,7 +136,22 @@ impl CrossToolsBuilder {
         info!("  LFS root: {}", self.lfs_root.display());
         info!("  Host compiler: {}", self.host_toolchain.gcc().display());
 
+        // Set bootstrap environment variables once for all packages
+        // SAFETY: bootstrap is single-threaded at this stage
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::set_var("LFS", &self.lfs_root);
+            std::env::set_var("LFS_TGT", LFS_TGT);
+            std::env::set_var("LC_ALL", "C");
+            std::env::set_var("TZ", "UTC");
+            std::env::set_var("SOURCE_DATE_EPOCH", "0");
+        }
+
         for (i, pkg) in CROSS_TOOLS_ORDER.iter().enumerate() {
+            if completed.contains(&pkg.to_string()) {
+                info!("Skipping already-completed: {}", pkg);
+                continue;
+            }
             info!(
                 "Building cross-tool [{}/{}]: {}",
                 i + 1,
@@ -161,18 +178,75 @@ impl CrossToolsBuilder {
         })
     }
 
-    /// Build a single cross-tools package.
+    /// Build a single cross-tools package using its recipe.
     ///
-    /// Currently a placeholder -- each package will get its own recipe-driven
-    /// build logic in a later task.
+    /// Locates the TOML recipe under `recipes/cross-tools/`, fetches the source
+    /// archive, then runs the Kitchen/Cook pipeline (prep, unpack, patch, simmer)
+    /// with `$LFS` as the destination directory.
     fn build_package(&self, name: &str) -> Result<(), CrossToolsError> {
-        // TODO: implement recipe-driven build for each package
-        debug!(
-            "  build_package({}) -- placeholder (work_dir={}, jobs={})",
-            name,
-            self.work_dir.display(),
-            self.config.jobs
-        );
+        // Map package name to recipe filename (e.g. "libstdc++" -> "libstdcxx.toml")
+        let recipe_filename = name.replace("++", "xx");
+        let recipe_path =
+            std::path::Path::new("recipes/cross-tools").join(format!("{recipe_filename}.toml"));
+        if !recipe_path.exists() {
+            return Err(CrossToolsError::BuildFailed {
+                package: name.to_string(),
+                reason: format!("Recipe not found: {}", recipe_path.display()),
+            });
+        }
+
+        let recipe =
+            parse_recipe_file(&recipe_path).map_err(|e| CrossToolsError::BuildFailed {
+                package: name.to_string(),
+                reason: format!("Failed to parse recipe: {e}"),
+            })?;
+
+        // Fetch source to cache
+        info!("  Fetching source for {name}...");
+        self.runner
+            .fetch_source(name, &recipe)
+            .map_err(|e| CrossToolsError::BuildFailed {
+                package: name.to_string(),
+                reason: format!("Source fetch failed: {e}"),
+            })?;
+
+        // Build using Kitchen with $LFS as dest_dir
+        let config = KitchenConfig {
+            source_cache: self.work_dir.join("sources"),
+            jobs: self.config.jobs as u32,
+            use_isolation: false,
+            ..Default::default()
+        };
+        let kitchen = Kitchen::new(config);
+        let mut cook =
+            kitchen
+                .new_cook_with_dest(&recipe, &self.lfs_root)
+                .map_err(|e| CrossToolsError::BuildFailed {
+                    package: name.to_string(),
+                    reason: format!("Cook setup failed: {e}"),
+                })?;
+
+        info!("  Preparing {name}...");
+        cook.prep().map_err(|e| CrossToolsError::BuildFailed {
+            package: name.to_string(),
+            reason: format!("Prep failed: {e}"),
+        })?;
+        cook.unpack().map_err(|e| CrossToolsError::BuildFailed {
+            package: name.to_string(),
+            reason: format!("Unpack failed: {e}"),
+        })?;
+        cook.patch().map_err(|e| CrossToolsError::BuildFailed {
+            package: name.to_string(),
+            reason: format!("Patch failed: {e}"),
+        })?;
+
+        info!("  Building {name}...");
+        cook.simmer().map_err(|e| CrossToolsError::BuildFailed {
+            package: name.to_string(),
+            reason: format!("Build failed: {e}"),
+        })?;
+
+        info!("  [OK] {name} built successfully");
         Ok(())
     }
 
@@ -319,7 +393,7 @@ mod tests {
         };
 
         let builder = CrossToolsBuilder::new(work.path(), lfs.path(), config, host).unwrap();
-        let toolchain = builder.build_all().unwrap();
+        let toolchain = builder.build_all(&[]).unwrap();
 
         assert_eq!(toolchain.kind, ToolchainKind::CrossTools);
         assert_eq!(toolchain.target, LFS_TGT);
