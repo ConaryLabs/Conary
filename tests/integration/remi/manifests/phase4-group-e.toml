@@ -30,6 +30,7 @@ distro_specific_name = "dnf"
 # Replatform: fedora -> arch
 replatform_target = "arch"
 replatform_repo = "arch-remi"
+replatform_remi_distro = "arch"
 
 [distro_overrides.arch]
 distro_repo = "arch-remi"
@@ -42,6 +43,7 @@ distro_specific_name = "pacman"
 # Replatform: arch -> fedora
 replatform_target = "fedora43"
 replatform_repo = "fedora-remi"
+replatform_remi_distro = "fedora"
 
 [distro_overrides.ubuntu-noble]
 distro_repo = "ubuntu-remi"
@@ -54,6 +56,7 @@ distro_specific_name = "apt"
 # Replatform: ubuntu -> arch
 replatform_target = "arch"
 replatform_repo = "arch-remi"
+replatform_remi_distro = "arch"
 
 # --------------------------------------------------------------------------
 # T230: CCS fixture installs on any distro
@@ -400,9 +403,9 @@ timeout = 180
 group = "E"
 depends_on = ["T242"]
 
-# Add the replatform target repo (may already exist from system init, ignore errors)
+# Add the replatform target repo with Remi strategy (may already exist, ignore errors)
 [[test.step]]
-run = "${CONARY_BIN} repo add ${replatform_repo} https://packages.conary.io --db-path ${DB_PATH} 2>&1; true"
+run = "${CONARY_BIN} repo add ${replatform_repo} https://packages.conary.io --default-strategy remi --remi-endpoint https://packages.conary.io --remi-distro ${replatform_remi_distro} --no-gpg-check --db-path ${DB_PATH} 2>&1; true"
 
 [test.step.assert]
 exit_code = 0
