@@ -14,7 +14,7 @@ mod tests {
     use std::rc::Rc;
 
     use composefs::erofs::writer::mkfs_erofs;
-    use composefs::fsverity::Sha256HashValue;
+    use composefs::fsverity::{FsVerityHashValue, Sha256HashValue};
     use composefs::tree::{Directory, FileSystem, Inode, Leaf, LeafContent, RegularFile, Stat};
 
     /// Helper: create a default Stat with root ownership and 0o755 mode.
