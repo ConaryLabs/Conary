@@ -240,34 +240,6 @@ impl CrossToolsBuilder {
             reason: format!("Patch failed: {e}"),
         })?;
 
-        // Download additional sources (e.g., GCC companion libraries) to source dir
-        for additional in &recipe.source.additional {
-            let url = recipe.substitute(&additional.url, "");
-            let filename = url.rsplit('/').next().unwrap_or("additional-source");
-            let dest_path = cook.source_dir.join(filename);
-            if !dest_path.exists() {
-                info!("  Fetching additional source: {filename}");
-                let output = std::process::Command::new("curl")
-                    .args(["-fsSL", "-o"])
-                    .arg(&dest_path)
-                    .arg(&url)
-                    .output()
-                    .map_err(|e| CrossToolsError::BuildFailed {
-                        package: name.to_string(),
-                        reason: format!("Failed to fetch {filename}: {e}"),
-                    })?;
-                if !output.status.success() {
-                    return Err(CrossToolsError::BuildFailed {
-                        package: name.to_string(),
-                        reason: format!(
-                            "Failed to download {url}: {}",
-                            String::from_utf8_lossy(&output.stderr)
-                        ),
-                    });
-                }
-            }
-        }
-
         info!("  Building {name}...");
         cook.simmer().map_err(|e| CrossToolsError::BuildFailed {
             package: name.to_string(),

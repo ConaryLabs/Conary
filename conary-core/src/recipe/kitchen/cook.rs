@@ -124,19 +124,19 @@ impl<'a> Cook<'a> {
 
         self.log_line(&format!("Fetched source: {}", archive_url));
 
-        // Fetch additional sources
+        // Fetch additional sources (with variable substitution)
         for additional in &self.recipe.source.additional {
+            let url = self.recipe.substitute(&additional.url, "");
             let path = self
                 .kitchen
-                .fetch_source(&additional.url, &additional.checksum)?;
-            let filename = additional
-                .url
+                .fetch_source(&url, &additional.checksum)?;
+            let filename = url
                 .split('/')
                 .next_back()
                 .unwrap_or("additional.tar.gz");
-            let local_path = self.build_dir.as_path().join(filename);
+            let local_path = self.source_dir.join(filename);
             fs::copy(&path, &local_path)?;
-            self.log_line(&format!("Fetched additional source: {}", additional.url));
+            self.log_line(&format!("Fetched additional source: {}", url));
         }
 
         // Fetch patches -- all remote patches MUST have checksums
