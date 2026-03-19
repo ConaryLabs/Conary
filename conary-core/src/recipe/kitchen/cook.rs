@@ -26,7 +26,7 @@ pub struct Cook<'a> {
     /// Build directory path
     pub(super) build_dir: PathBuf,
     /// Source directory within build_dir
-    pub(super) source_dir: PathBuf,
+    pub(crate) source_dir: PathBuf,
     /// Destination directory (where files get installed)
     pub(super) dest_dir: PathBuf,
     /// Build log accumulator

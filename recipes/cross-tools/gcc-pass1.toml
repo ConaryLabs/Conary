@@ -25,16 +25,16 @@ homepage = "https://gcc.gnu.org/"
 archive = "https://ftpmirror.gnu.org/gcc/gcc-%(version)s/gcc-%(version)s.tar.xz"
 checksum = "sha256:438fd996826b0c82485a29da03a72d71d6e3541a83ec702df4271f6fe025d24e"
 
-[[source.companions]]
-archive = "https://ftpmirror.gnu.org/mpfr/mpfr-%(mpfr_version)s.tar.xz"
+[[source.additional]]
+url = "https://ftpmirror.gnu.org/mpfr/mpfr-%(mpfr_version)s.tar.xz"
 checksum = "sha256:b67ba0383ef7e8a8563734e2e889ef5ec3c3b898a01d00fa0a6869ad81c6ce01"
 
-[[source.companions]]
-archive = "https://ftpmirror.gnu.org/gmp/gmp-%(gmp_version)s.tar.xz"
+[[source.additional]]
+url = "https://ftpmirror.gnu.org/gmp/gmp-%(gmp_version)s.tar.xz"
 checksum = "sha256:a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898"
 
-[[source.companions]]
-archive = "https://ftpmirror.gnu.org/mpc/mpc-%(mpc_version)s.tar.gz"
+[[source.additional]]
+url = "https://ftpmirror.gnu.org/mpc/mpc-%(mpc_version)s.tar.gz"
 checksum = "sha256:ab642492f5cf882b74aa0cb730cd410a81edcdbec895183ce930e706c1c759b8"
 
 [build]
