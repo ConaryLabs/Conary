@@ -222,10 +222,14 @@ impl Bootstrap {
         let lfs_root = &self.config.lfs_root.clone();
         std::fs::create_dir_all(lfs_root)?;
 
+        let completed = self.stages.completed_packages(BootstrapStage::CrossTools);
+
         let builder = CrossToolsBuilder::new(&self.work_dir, lfs_root, self.config.clone(), host)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        let toolchain = builder.build_all(&[]).map_err(|e| anyhow::anyhow!("{e}"))?;
+        let toolchain = builder
+            .build_all(&completed)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         self.stages
             .mark_complete(BootstrapStage::CrossTools, &toolchain.path)?;
@@ -244,16 +248,18 @@ impl Bootstrap {
 
         let lfs_root = &self.config.lfs_root.clone();
 
+        let completed = self.stages.completed_packages(BootstrapStage::TempTools);
+
         let builder =
             TempToolsBuilder::new(&self.work_dir, lfs_root, self.config.clone(), cross_tc)
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         builder
-            .build_cross_packages(&[])
+            .build_cross_packages(&completed)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
         let _chroot_env = builder.setup_chroot().map_err(|e| anyhow::anyhow!("{e}"))?;
         builder
-            .build_chroot_packages(&[])
+            .build_chroot_packages(&completed)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         self.stages
@@ -279,11 +285,15 @@ impl Bootstrap {
             is_static: false,
         };
 
+        let completed = self.stages.completed_packages(BootstrapStage::FinalSystem);
+
         let mut builder =
             FinalSystemBuilder::new(&self.work_dir, lfs_root, self.config.clone(), toolchain)
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        builder.build_all().map_err(|e| anyhow::anyhow!("{e}"))?;
+        builder
+            .build_all(&completed)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         self.stages
             .mark_complete(BootstrapStage::FinalSystem, lfs_root)?;
