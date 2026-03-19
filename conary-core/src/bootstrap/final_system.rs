@@ -196,13 +196,17 @@ impl FinalSystemBuilder {
     }
 
     /// Build all 77 packages from the beginning.
-    pub fn build_all(&mut self) -> Result<(), FinalSystemError> {
+    pub fn build_all(&mut self, already_completed: &[String]) -> Result<(), FinalSystemError> {
         info!(
             "Phase 3: Building final system ({} packages)",
             SYSTEM_BUILD_ORDER.len()
         );
 
         for (i, pkg) in SYSTEM_BUILD_ORDER.iter().enumerate() {
+            if already_completed.contains(&pkg.to_string()) {
+                info!("Skipping already-completed: {}", pkg);
+                continue;
+            }
             info!(
                 "Building system package [{}/{}]: {}",
                 i + 1,
@@ -438,7 +442,7 @@ mod tests {
         };
 
         let mut builder = FinalSystemBuilder::new(work.path(), lfs.path(), config, tc).unwrap();
-        assert!(builder.build_all().is_ok());
+        assert!(builder.build_all(&[]).is_ok());
         assert_eq!(builder.completed().len(), 77);
     }
 
