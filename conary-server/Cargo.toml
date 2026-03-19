@@ -82,13 +82,13 @@ toml.workspace = true
 uuid.workspace = true
 walkdir.workspace = true
 hex.workspace = true
+flate2.workspace = true
 
 [features]
 default = []
 polkit = ["dep:zbus"]
 
 [dev-dependencies]
-flate2.workspace = true
 tar.workspace = true
 
 [[bin]]
