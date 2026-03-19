@@ -172,7 +172,7 @@ pub struct RepologyClient {
     base_url: String,
 }
 
-const USER_AGENT: &str = "conary/0.1 (https://conary.io)";
+const USER_AGENT: &str = "conary/0.6.0 (https://conary.io; canonical-registry-sync)";
 
 fn build_client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
@@ -285,6 +285,43 @@ impl RepologyClient {
 }
 
 // ---------------------------------------------------------------------------
+// Cache persistence
+// ---------------------------------------------------------------------------
+
+/// Write a batch of Repology projects to the `repology_cache` table.
+/// Maps Repology repo IDs to Conary distro names, skipping unrecognised repos.
+/// Returns the number of cache entries written.
+pub fn cache_projects_to_db(
+    conn: &rusqlite::Connection,
+    projects: &[RepologyProject],
+) -> Result<usize> {
+    let tx = conn.unchecked_transaction()?;
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut count = 0;
+
+    for project in projects {
+        for imp in &project.implementations {
+            let Some(distro) = repo_to_distro(&imp.repo) else {
+                continue;
+            };
+            let entry = crate::db::models::RepologyCacheEntry {
+                project_name: project.name.clone(),
+                distro,
+                distro_name: imp.visiblename.clone(),
+                version: Some(imp.version.clone()),
+                status: Some(imp.status.clone()),
+                fetched_at: now.clone(),
+            };
+            crate::db::models::RepologyCacheEntry::insert_or_replace(&tx, &entry)?;
+            count += 1;
+        }
+    }
+
+    tx.commit()?;
+    Ok(count)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -355,5 +392,35 @@ mod tests {
     fn test_parse_invalid_json() {
         let result = parse_project_response("bad", "not json");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cache_repology_projects() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::schema::migrate(&conn).unwrap();
+
+        let projects = vec![RepologyProject {
+            name: "python".into(),
+            implementations: vec![
+                RepologyImplementation {
+                    repo: "fedora_43".into(),
+                    visiblename: "python3".into(),
+                    version: "3.12.0".into(),
+                    status: "newest".into(),
+                },
+                RepologyImplementation {
+                    repo: "arch".into(),
+                    visiblename: "python".into(),
+                    version: "3.12.0".into(),
+                    status: "newest".into(),
+                },
+            ],
+        }];
+
+        let count = cache_projects_to_db(&conn, &projects).unwrap();
+        assert_eq!(count, 2);
+
+        let entries = crate::db::models::RepologyCacheEntry::find_all(&conn).unwrap();
+        assert_eq!(entries.len(), 2);
     }
 }
