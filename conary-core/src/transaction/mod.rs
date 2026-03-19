@@ -580,7 +580,7 @@ pub struct TransactionResult {
 mod integration_tests {
     use crate::db::models::{FileEntry, SystemState, Trove, TroveType};
     use crate::generation::builder::build_generation_from_db;
-    use crate::generation::metadata::GenerationMetadata;
+    use crate::generation::metadata::{GenerationMetadata, GENERATION_FORMAT, GENERATION_METADATA_FILE};
     use tempfile::TempDir;
 
     fn setup_test_db() -> (TempDir, rusqlite::Connection) {
@@ -675,7 +675,6 @@ mod integration_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::generation::metadata::{GENERATION_FORMAT, GENERATION_METADATA_FILE};
     use tempfile::TempDir;
 
     #[test]
