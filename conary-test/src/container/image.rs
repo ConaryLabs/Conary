@@ -139,8 +139,16 @@ fn stage_build_context(containerfile: &Path, distro: &str) -> Result<StagedBuild
     }
 
     let binary = find_host_conary_binary(&project_root)?;
-    fs::copy(&binary, root.join("conary"))
+    let staged_binary = root.join("conary");
+    fs::copy(&binary, &staged_binary)
         .with_context(|| format!("failed to stage host conary binary {}", binary.display()))?;
+
+    // Strip debug symbols to shrink the tar context sent over the container
+    // socket. A debug build can be 300MB+; stripped it drops to ~70MB, which
+    // avoids Podman compat-API stream errors on large payloads.
+    let _ = std::process::Command::new("strip")
+        .arg(&staged_binary)
+        .status();
 
     if distro.starts_with("ubuntu-") {
         copy_dir_filtered(
