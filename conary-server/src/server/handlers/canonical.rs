@@ -9,7 +9,7 @@ use crate::server::ServerState;
 use axum::{
     Json,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
@@ -229,14 +229,27 @@ pub struct CanonicalMapResponse {
 ///
 /// Groups all canonical packages with their distro implementations into a
 /// single document suitable for client-side caching during repo sync.
-/// Response is cached for 5 minutes via `Cache-Control`.
+/// Response is cached for 5 minutes via `Cache-Control`. Supports ETag
+/// conditional requests via `If-None-Match` for efficient polling.
 pub async fn canonical_map(
     State(state): State<Arc<RwLock<ServerState>>>,
+    headers: HeaderMap,
 ) -> Result<Response, Response> {
     let db_path = state.read().await.config.db_path.clone();
 
     let response = super::run_blocking("canonical_map", move || {
         let conn = conary_core::db::open(&db_path)?;
+
+        let version: u32 = conary_core::db::models::get_metadata(
+            &conn,
+            "server_metadata",
+            "canonical_map_version",
+        )
+        .map_err(anyhow::Error::from)?
+        .as_deref()
+        .unwrap_or("0")
+        .parse()
+        .unwrap_or(0);
 
         let mut stmt = conn.prepare(
             "SELECT cp.name, pi.distro, pi.distro_name
@@ -274,16 +287,34 @@ pub async fn canonical_map(
             })
             .collect();
 
-        Ok(CanonicalMapResponse {
-            version: 1,
-            generated_at: chrono::Utc::now().to_rfc3339(),
-            entries,
-        })
+        Ok((
+            version,
+            CanonicalMapResponse {
+                version,
+                generated_at: chrono::Utc::now().to_rfc3339(),
+                entries,
+            },
+        ))
     })
     .await?;
 
-    let json = super::serialize_json(&response, "canonical map")?;
-    Ok(super::json_response(json, 300))
+    let (version, map_response) = response;
+    let etag = format!("W/\"v{version}\"");
+
+    if headers.get("if-none-match").and_then(|v| v.to_str().ok()) == Some(etag.as_str()) {
+        return Ok(axum::http::Response::builder()
+            .status(StatusCode::NOT_MODIFIED)
+            .header("ETag", &etag)
+            .body(axum::body::Body::empty())
+            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response()));
+    }
+
+    let json = super::serialize_json(&map_response, "canonical map")?;
+    let mut response = super::json_response(json, 300);
+    response
+        .headers_mut()
+        .insert("ETag", etag.parse().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?);
+    Ok(response)
 }
 
 #[cfg(test)]
