@@ -260,6 +260,34 @@ fn ingest_appstream_inner(
     Ok(count)
 }
 
+/// Write parsed AppStream components to the appstream_cache table.
+/// `pkgname` is always present (components without it are dropped at parse time).
+pub fn cache_components_to_db(
+    conn: &rusqlite::Connection,
+    components: &[AppStreamComponent],
+    distro: &str,
+) -> Result<usize> {
+    let tx = conn.unchecked_transaction()?;
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut count = 0;
+
+    for component in components {
+        let entry = crate::db::models::AppstreamCacheEntry {
+            appstream_id: component.id.clone(),
+            pkgname: component.pkgname.clone(),
+            display_name: Some(component.name.clone()),
+            summary: component.summary.clone(),
+            distro: distro.to_string(),
+            fetched_at: now.clone(),
+        };
+        crate::db::models::AppstreamCacheEntry::insert_or_replace(&tx, &entry)?;
+        count += 1;
+    }
+
+    tx.commit()?;
+    Ok(count)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,5 +405,25 @@ mod tests {
         assert_eq!(count2, 2);
         let impls2 = PackageImplementation::find_by_canonical(&conn, pkg.id.unwrap()).unwrap();
         assert_eq!(impls2.len(), 1);
+    }
+
+    #[test]
+    fn test_cache_appstream_components() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::schema::migrate(&conn).unwrap();
+
+        let components = vec![AppStreamComponent {
+            id: "org.mozilla.firefox".into(),
+            pkgname: "firefox".into(),
+            name: "Firefox".into(),
+            summary: Some("Web Browser".into()),
+        }];
+
+        let count = cache_components_to_db(&conn, &components, "fedora").unwrap();
+        assert_eq!(count, 1);
+
+        let entries = crate::db::models::AppstreamCacheEntry::find_all(&conn).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].pkgname, "firefox");
     }
 }
