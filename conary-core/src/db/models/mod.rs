@@ -21,6 +21,7 @@
 //! return the model struct. New models should prefer struct methods unless there is a
 //! clear reason to use free functions.
 
+mod appstream_cache;
 mod canonical;
 mod changeset;
 mod chunk_access;
@@ -32,6 +33,7 @@ mod converted;
 mod delta;
 mod dependency;
 mod derived;
+mod metadata;
 mod distro_pin;
 mod download_stats;
 mod file_entry;
@@ -41,6 +43,7 @@ mod provenance;
 mod provide_entry;
 mod redirect;
 mod remote_collection;
+mod repology_cache;
 mod repository;
 mod repository_capability;
 mod repository_requirement;
@@ -56,6 +59,7 @@ pub mod audit_log;
 pub mod federation_peer;
 pub mod settings;
 
+pub use appstream_cache::AppstreamCacheEntry;
 pub use canonical::{CanonicalPackage, PackageImplementation};
 pub use changeset::{Changeset, ChangesetStatus};
 pub use chunk_access::{ChunkAccess, ChunkStats};
@@ -72,6 +76,8 @@ pub use download_stats::{DownloadCount, DownloadStat, GlobalDownloadStats};
 pub use file_entry::FileEntry;
 pub use flavor::Flavor;
 pub use label::{LabelEntry, LabelPathEntry, add_to_path, get_label_path, remove_from_path};
+pub use metadata::{get_metadata, set_metadata};
+pub use repology_cache::RepologyCacheEntry;
 pub use provenance::Provenance;
 pub use provide_entry::{ProvideEntry, generate_capability_variations};
 pub use redirect::{Redirect, RedirectType, ResolveResult};
