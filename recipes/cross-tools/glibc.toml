@@ -23,11 +23,11 @@ homepage = "https://www.gnu.org/software/libc/"
 
 [source]
 archive = "https://ftpmirror.gnu.org/glibc/glibc-%(version)s.tar.xz"
-checksum = "md5:7ec2588300b299215a65aec7e6afa04f"
+checksum = "sha256:d9c86c6b5dbddb43a3e08270c5844fc5177d19442cf5b8df4be7c07cd5fa3831"
 
 [[source.patches]]
 url = "https://www.linuxfromscratch.org/patches/lfs/development/glibc-fhs-1.patch"
-checksum = "md5:9a5997c3452909b1769918c759eff8a2"
+checksum = "sha256:643552db030e2f2d7ffde4f558e0f5f83d3fabf34a2e0e56ebdb49750ac27b0d"
 
 [build]
 requires = ["binutils-pass1", "gcc-pass1", "linux-headers"]
