@@ -58,6 +58,7 @@
 
 mod build_helpers;
 mod build_runner;
+pub mod chroot_env;
 mod config;
 mod cross_tools;
 mod final_system;
