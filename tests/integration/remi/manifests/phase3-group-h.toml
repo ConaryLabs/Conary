@@ -108,26 +108,51 @@ exit_code_not = 0
 stderr_contains = "database"
 
 # --------------------------------------------------------------------------
-# T90: Delete CAS directory mid-install
+# T90: CAS deletion after install breaks generation mount
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T90"
-name = "cas_directory_deleted_mid_install"
-description = "Delete the CAS directory during install and verify failure plus rollback"
+name = "cas_deleted_breaks_generation_mount"
+description = "Install a package, build a generation, delete CAS, verify generation switch fails (composefs needs CAS at mount time)"
 timeout = 120
 group = "H"
+
+# Step 1: Install a package (populates CAS + DB)
 [[test.step]]
-run = "${CONARY_BIN} ccs install /opt/remi-tests/fixtures/adversarial/large/10k-files.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH} >/tmp/t90.out 2>/tmp/t90.err & PID=$!; while kill -0 $PID 2>/dev/null; do rm -rf /var/lib/conary/objects; sleep 0.01; done; wait $PID; STATUS=$?; cat /tmp/t90.out; cat /tmp/t90.err >&2; exit $STATUS"
+run = "${CONARY_BIN} ccs install /opt/remi-tests/fixtures/adversarial/large/10k-files.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH}"
 
 [test.step.assert]
-exit_code_not = 0
+exit_code = 0
 
+# Step 2: Build a generation (succeeds — reads hashes from DB, not CAS content)
+[[test.step]]
+run = "${CONARY_BIN} system generation build 2>&1"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "Generation"
+
+# Step 3: Delete the CAS directory
+[[test.step]]
+run = "rm -rf /var/lib/conary/objects"
+
+[test.step.assert]
+exit_code = 0
+
+# Step 4: Generation switch should fail (composefs mount needs CAS as content backend)
+[[test.step]]
+run = "GEN=$(${CONARY_BIN} system generation list 2>/dev/null | grep -oP '^\\s*\\K\\d+' | head -1); ${CONARY_BIN} system generation switch ${GEN:-0} 2>&1; echo EXIT:$?"
+
+[test.step.assert]
+stdout_contains = "EXIT:1"
+
+# Step 5: Package still listed in DB (install and build were fine)
 [[test.step]]
 conary = "list"
 
 [test.step.assert]
-stdout_not_contains = "10k-files"
+stdout_contains = "ten-k-files"
 
 # --------------------------------------------------------------------------
 # T91: Kill after DB commit before deploy

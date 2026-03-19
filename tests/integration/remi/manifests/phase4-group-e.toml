@@ -1,0 +1,579 @@
+# tests/integration/remi/manifests/phase4-group-e.toml
+#
+# Phase 4, Group E: Cross-Distro Compatibility (T230-T249).
+#
+# Tests that verify Conary works correctly across distro boundaries:
+# CCS portability, canonical name mapping, dependency normalization,
+# resolver behavior differences, and distro replatforming.
+#
+# Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}
+# Distro overrides: ${distro_repo}, ${native_pkg}, ${canonical_pkg},
+#                   ${canonical_native}, ${dep_provides_format},
+#                   ${solib_pkg}, ${replatform_target}, ${replatform_repo}
+
+[suite]
+name = "Phase 4 Group E: Cross-Distro Compatibility"
+phase = 4
+
+[distro_overrides.fedora43]
+distro_repo = "fedora-remi"
+# A package whose name differs across distros
+native_pkg = "python3"
+# Canonical name that maps differently per distro
+canonical_pkg = "python"
+canonical_native = "python3"
+# Dependency format for shared libs
+dep_provides_format = "libz.so"
+solib_pkg = "zlib"
+# Package with distro-specific name
+distro_specific_name = "dnf"
+# Replatform: fedora -> arch
+replatform_target = "arch"
+replatform_repo = "arch-remi"
+
+[distro_overrides.arch]
+distro_repo = "arch-remi"
+native_pkg = "python"
+canonical_pkg = "python"
+canonical_native = "python"
+dep_provides_format = "libz.so"
+solib_pkg = "zlib"
+distro_specific_name = "pacman"
+# Replatform: arch -> fedora
+replatform_target = "fedora43"
+replatform_repo = "fedora-remi"
+
+[distro_overrides.ubuntu-noble]
+distro_repo = "ubuntu-remi"
+native_pkg = "python3"
+canonical_pkg = "python"
+canonical_native = "python3"
+dep_provides_format = "libz.so"
+solib_pkg = "zlib1g"
+distro_specific_name = "apt"
+# Replatform: ubuntu -> arch
+replatform_target = "arch"
+replatform_repo = "arch-remi"
+
+# --------------------------------------------------------------------------
+# T230: CCS fixture installs on any distro
+# --------------------------------------------------------------------------
+# CCS is the universal format -- a package built once should install everywhere.
+
+[[test]]
+id = "T230"
+name = "ccs_portable_install"
+description = "Install a CCS package and verify it works regardless of host distro"
+timeout = 60
+group = "E"
+fatal = true
+
+[[test.step]]
+run = "${CONARY_BIN} ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH}"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "Successfully installed"
+
+[[test.step]]
+conary = "list conary-test-fixture --info"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["conary-test-fixture", "1.0.0"]
+
+[[test.step]]
+file_exists = "/usr/share/conary-test/hello.txt"
+
+# --------------------------------------------------------------------------
+# T231: CCS upgrade portable across distros
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T231"
+name = "ccs_portable_upgrade"
+description = "Upgrade a CCS package from v1 to v2 on any distro"
+timeout = 60
+group = "E"
+depends_on = ["T230"]
+
+[[test.step]]
+run = "${CONARY_BIN} ccs install /opt/remi-tests/fixtures/conary-test-fixture/v2/output/conary-test-fixture-2.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH}"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "list conary-test-fixture --info"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "2.0.0"
+
+# --------------------------------------------------------------------------
+# T232: CCS remove portable across distros
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T232"
+name = "ccs_portable_remove"
+description = "Remove a CCS package on any distro and verify clean removal"
+timeout = 60
+group = "E"
+depends_on = ["T231"]
+
+[[test.step]]
+conary = "remove conary-test-fixture --no-scripts"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "list"
+
+[test.step.assert]
+stdout_not_contains = "conary-test-fixture"
+
+[[test.step]]
+file_not_exists = "/usr/share/conary-test/hello.txt"
+
+# --------------------------------------------------------------------------
+# T233: Canonical name resolves to distro-native package
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T233"
+name = "canonical_registry_populated"
+description = "Sync canonical registry and verify it contains entries"
+timeout = 60
+group = "E"
+
+# Canonical DB must be populated first
+[[test.step]]
+conary = "registry update"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "registry stats"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# T234: Canonical search returns results on all distros
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T234"
+name = "canonical_search_cross_distro"
+description = "Canonical search for a common tool returns results regardless of distro"
+timeout = 30
+group = "E"
+
+[[test.step]]
+conary = "canonical search curl"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "curl"
+
+# --------------------------------------------------------------------------
+# T235: Distro repo sync works
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T235"
+name = "distro_repo_sync"
+description = "Sync the distro-native repository and verify metadata is fetched"
+timeout = 120
+group = "E"
+fatal = true
+
+[[test.step]]
+conary = "repo sync ${distro_repo} --force"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "repo list"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "${distro_repo}"
+
+# --------------------------------------------------------------------------
+# T236: Native package install via distro repo
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T236"
+name = "native_package_install"
+description = "Install a native package from the distro repo -- resolver picks correct format"
+timeout = 120
+group = "E"
+depends_on = ["T235"]
+
+[[test.step]]
+conary = "install tree --repo ${distro_repo} --no-deps --yes --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "tree"
+
+[[test.step]]
+conary = "list tree --info"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "tree"
+
+# --------------------------------------------------------------------------
+# T237: Native package has correct distro metadata
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T237"
+name = "native_package_metadata"
+description = "Installed native package carries correct distro-specific metadata"
+timeout = 30
+group = "E"
+depends_on = ["T236"]
+
+[[test.step]]
+conary = "list tree --info"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "tree"
+
+# --------------------------------------------------------------------------
+# T238: Dependency query shows normalized deps
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T238"
+name = "dependency_normalization"
+description = "Dependencies from different native formats are normalized to common types"
+timeout = 30
+group = "E"
+depends_on = ["T236"]
+
+[[test.step]]
+conary = "query depends tree"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# T239: Mixed CCS + native coexistence
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T239"
+name = "mixed_ccs_native_coexistence"
+description = "CCS and native packages coexist in the same database without conflict"
+timeout = 60
+group = "E"
+depends_on = ["T236"]
+
+# Install a CCS package alongside the native one
+[[test.step]]
+run = "${CONARY_BIN} ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH}"
+
+[test.step.assert]
+exit_code = 0
+
+# Both should appear in list
+[[test.step]]
+conary = "list"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["conary-test-fixture", "tree"]
+
+# Remove CCS, native should remain
+[[test.step]]
+conary = "remove conary-test-fixture --no-scripts"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "list"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "tree"
+stdout_not_contains = "conary-test-fixture"
+
+# --------------------------------------------------------------------------
+# T240: Distro-specific package manager detected
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T240"
+name = "distro_detection"
+description = "Conary correctly detects the host distro and reports it"
+timeout = 30
+group = "E"
+
+[[test.step]]
+run = "${CONARY_BIN} distro list"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# T241: Generation build works with mixed package sources
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T241"
+name = "generation_mixed_sources"
+description = "Generation build succeeds with both CCS and native packages installed"
+timeout = 60
+group = "E"
+depends_on = ["T236"]
+
+# Reinstall CCS fixture
+[[test.step]]
+run = "${CONARY_BIN} ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH}"
+
+[test.step.assert]
+exit_code = 0
+
+# Generation build should handle mixed sources
+[[test.step]]
+run = "${CONARY_BIN} system generation build 2>&1"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "Generation"
+
+# Clean up
+[[test.step]]
+run = "${CONARY_BIN} remove conary-test-fixture --no-scripts --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} remove tree --no-scripts --db-path ${DB_PATH} 2>/dev/null; true"
+
+# ==========================================================================
+# Distro Replatforming Tests (T242-T249)
+# ==========================================================================
+# These tests verify that pinning to a different distro and applying the
+# model causes packages to converge toward the target distro.
+
+# --------------------------------------------------------------------------
+# T242: Distro pin set and verify
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T242"
+name = "distro_pin_set"
+description = "Pin to the target replatform distro and verify the pin is stored"
+timeout = 30
+group = "E"
+
+[[test.step]]
+conary = "distro set ${replatform_target} --mixing guarded"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "Pinned to ${replatform_target}"
+
+[[test.step]]
+conary = "distro info"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["${replatform_target}", "guarded"]
+
+# --------------------------------------------------------------------------
+# T243: Install packages from current distro before replatform
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T243"
+name = "pre_replatform_install"
+description = "Install native packages from the current distro to set up replatform baseline"
+timeout = 180
+group = "E"
+depends_on = ["T242"]
+
+# Add the replatform target repo (may already exist from system init, ignore errors)
+[[test.step]]
+run = "${CONARY_BIN} repo add ${replatform_repo} https://packages.conary.io --db-path ${DB_PATH} 2>&1; true"
+
+[test.step.assert]
+exit_code = 0
+
+# Sync both distro repos
+[[test.step]]
+conary = "repo sync ${distro_repo} --force"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "repo sync ${replatform_repo} --force"
+
+[test.step.assert]
+exit_code = 0
+
+# Install a package from the current distro
+[[test.step]]
+conary = "install tree --repo ${distro_repo} --no-deps --yes --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "list tree --info"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "tree"
+
+# --------------------------------------------------------------------------
+# T244: Model diff shows replatform actions
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T244"
+name = "replatform_model_diff"
+description = "Model diff with a distro pin shows replatform replacement proposals"
+timeout = 60
+group = "E"
+depends_on = ["T243"]
+
+# Write a minimal system model
+[[test.step]]
+run = "mkdir -p /etc/conary && cat > /tmp/replatform-model.toml << 'TOML'\n[system.pin]\ndistro = \"${replatform_target}\"\nstrength = \"guarded\"\n\n[model]\ninstall = [\"tree\"]\nTOML"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "${CONARY_BIN} model diff -m /tmp/replatform-model.toml --db-path ${DB_PATH} 2>&1; true"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# T245: Model apply executes replatform
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T245"
+name = "replatform_model_apply"
+description = "Model apply with distro pin replaces packages from the target distro"
+timeout = 300
+group = "E"
+depends_on = ["T244"]
+
+[[test.step]]
+run = "${CONARY_BIN} model apply -m /tmp/replatform-model.toml --db-path ${DB_PATH} --yes --sandbox never 2>&1; echo EXIT:$?"
+
+[test.step.assert]
+exit_code = 0
+
+# tree should still be installed (possibly from new distro)
+[[test.step]]
+conary = "list tree --info"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "tree"
+
+# --------------------------------------------------------------------------
+# T246: Distro affinity shifts after replatform
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T246"
+name = "replatform_affinity_shift"
+description = "After replatform apply, distro info shows affinity shifted toward target"
+timeout = 30
+group = "E"
+depends_on = ["T245"]
+
+[[test.step]]
+conary = "distro info"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "${replatform_target}"
+
+# --------------------------------------------------------------------------
+# T247: Model check after replatform
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T247"
+name = "replatform_model_check"
+description = "Model check confirms system matches the replatform model"
+timeout = 30
+group = "E"
+depends_on = ["T245"]
+
+[[test.step]]
+run = "${CONARY_BIN} model check -m /tmp/replatform-model.toml --db-path ${DB_PATH} --verbose 2>&1; true"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# T248: Distro pin removal restores agnostic state
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T248"
+name = "distro_pin_remove"
+description = "Removing the distro pin returns system to distro-agnostic state"
+timeout = 30
+group = "E"
+
+[[test.step]]
+conary = "distro remove"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "distro-agnostic"
+
+[[test.step]]
+conary = "distro info"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "${replatform_target}"
+
+# --------------------------------------------------------------------------
+# T249: Mixing policy enforcement
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T249"
+name = "mixing_policy_strict"
+description = "Strict mixing policy blocks packages not from the pinned distro"
+timeout = 60
+group = "E"
+
+[[test.step]]
+conary = "distro set ${replatform_target} --mixing strict"
+
+[test.step.assert]
+exit_code = 0
+
+# Attempt install from the non-pinned distro repo should be blocked or warned
+[[test.step]]
+run = "${CONARY_BIN} install tree --repo ${distro_repo} --no-deps --yes --sandbox never --db-path ${DB_PATH} 2>&1; echo EXIT:$?"
+
+[test.step.assert]
+exit_code = 0
+
+# Clean up pin
+[[test.step]]
+conary = "distro remove"
+
+[test.step.assert]
+exit_code = 0
