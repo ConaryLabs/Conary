@@ -20,6 +20,7 @@ pub mod audit;
 pub mod auth;
 mod bloom;
 mod cache;
+pub mod canonical_fetch;
 pub mod canonical_job;
 pub mod chunk_gc;
 pub mod config;
@@ -524,6 +525,17 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
                 }
             }
         });
+    }
+
+    // Start canonical fetch background loop
+    {
+        let canonical_config = remi_config.canonical.clone();
+        let canonical_db = server_config.db_path.clone();
+        tracing::info!(
+            "  Canonical fetch: enabled every {}h",
+            canonical_config.fetch_interval_hours
+        );
+        canonical_fetch::spawn_canonical_fetch_loop(canonical_config, canonical_db);
     }
 
     // Start background pre-warming if enabled
