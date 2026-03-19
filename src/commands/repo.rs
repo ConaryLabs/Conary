@@ -269,6 +269,32 @@ pub fn cmd_repo_sync(name: Option<String>, db_path: &str, force: bool) -> Result
         }
     }
 
+    // Best-effort canonical map sync from Remi
+    {
+        let repos: Vec<String> = conn
+            .prepare("SELECT url FROM repositories WHERE enabled = 1 ORDER BY priority DESC")?
+            .query_map([], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        for url in &repos {
+            let endpoint = url.trim_end_matches('/');
+            match conary_core::canonical::client::fetch_canonical_map(&conn, endpoint) {
+                Ok(Some(n)) => {
+                    tracing::info!("Canonical map updated: {n} entries from {endpoint}");
+                    break;
+                }
+                Ok(None) => {
+                    tracing::debug!("Canonical map is current (304)");
+                    break;
+                }
+                Err(e) => {
+                    tracing::debug!("Canonical map fetch from {endpoint} skipped: {e}");
+                    continue;
+                }
+            }
+        }
+    }
+
     if !failures.is_empty() {
         let failed_names = failures
             .into_iter()
