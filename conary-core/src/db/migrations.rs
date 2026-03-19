@@ -2430,6 +2430,48 @@ pub fn migrate_v52(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+pub fn migrate_v53(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS repology_cache (
+            project_name TEXT NOT NULL,
+            distro TEXT NOT NULL,
+            distro_name TEXT NOT NULL,
+            version TEXT,
+            status TEXT,
+            fetched_at TEXT NOT NULL,
+            PRIMARY KEY (project_name, distro)
+        );
+
+        CREATE TABLE IF NOT EXISTS appstream_cache (
+            appstream_id TEXT NOT NULL,
+            pkgname TEXT NOT NULL,
+            display_name TEXT,
+            summary TEXT,
+            distro TEXT NOT NULL,
+            fetched_at TEXT NOT NULL,
+            PRIMARY KEY (appstream_id, distro)
+        );
+
+        CREATE TABLE IF NOT EXISTS server_metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+
+        INSERT OR IGNORE INTO server_metadata (key, value)
+            VALUES ('canonical_map_version', '0');
+
+        CREATE TABLE IF NOT EXISTS client_metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        ",
+    )?;
+
+    info!("Schema version 53 applied successfully (canonical cache tables, metadata)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2448,7 +2490,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(version, 52);
+        assert_eq!(version, 53);
 
         // Insert into canonical_packages
         conn.execute(
@@ -2515,5 +2557,39 @@ mod tests {
         // Verify v51: version_scheme on repository_provides
         conn.execute("SELECT version_scheme FROM repository_provides LIMIT 0", [])
             .unwrap();
+    }
+
+    #[test]
+    fn test_migrate_v53_cache_tables() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        // Verify repology_cache
+        conn.execute(
+            "INSERT INTO repology_cache (project_name, distro, distro_name, version, status, fetched_at)
+             VALUES ('python', 'arch', 'python', '3.12.0', 'newest', '2026-03-19')",
+            [],
+        ).unwrap();
+
+        // Verify appstream_cache
+        conn.execute(
+            "INSERT INTO appstream_cache (appstream_id, pkgname, display_name, summary, distro, fetched_at)
+             VALUES ('org.mozilla.firefox', 'firefox', 'Firefox', 'Web Browser', 'fedora', '2026-03-19')",
+            [],
+        ).unwrap();
+
+        // Verify server_metadata seeded
+        let version: String = conn.query_row(
+            "SELECT value FROM server_metadata WHERE key = 'canonical_map_version'",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+        assert_eq!(version, "0");
+
+        // Verify client_metadata
+        conn.execute(
+            "INSERT INTO client_metadata (key, value) VALUES ('etag', 'test')",
+            [],
+        ).unwrap();
     }
 }
