@@ -488,6 +488,17 @@ impl Kitchen {
         Ok(results)
     }
 
+    /// Create a Cook that installs to an external destination directory.
+    ///
+    /// Used by bootstrap phases where files install directly to `$LFS`.
+    pub fn new_cook_with_dest<'a>(
+        &'a self,
+        recipe: &'a Recipe,
+        dest_dir: &Path,
+    ) -> Result<Cook<'a>> {
+        Cook::new_with_dest(self, recipe, dest_dir)
+    }
+
     /// Fetch a source archive (with caching)
     pub(crate) fn fetch_source(&self, url: &str, checksum: &str) -> Result<PathBuf> {
         // Create cache directory if needed
