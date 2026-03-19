@@ -88,6 +88,30 @@ use std::path::{Path, PathBuf};
 pub const DEFAULT_TOOLS_DIR: &str = "/tools";
 pub const DEFAULT_SYSROOT_DIR: &str = "/conary/sysroot";
 
+/// Assemble a build script from recipe fields with variable substitution.
+///
+/// Used by chroot builds (Phase 2b and 3) where the Kitchen cannot run
+/// directly. Each build phase (setup, configure, make, install, post_install)
+/// is concatenated into a single `set -e` script.
+pub fn assemble_build_script(recipe: &crate::recipe::Recipe, destdir: &str) -> String {
+    let mut script = String::from("set -e\n");
+    for phase in [
+        &recipe.build.setup,
+        &recipe.build.configure,
+        &recipe.build.make,
+        &recipe.build.install,
+        &recipe.build.post_install,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let substituted = recipe.substitute(phase, destdir);
+        script.push_str(&substituted);
+        script.push('\n');
+    }
+    script
+}
+
 /// Report from a dry-run validation.
 #[derive(Debug, Default)]
 pub struct DryRunReport {

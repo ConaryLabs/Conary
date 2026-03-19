@@ -95,7 +95,7 @@ impl ChrootEnv {
         if !opts.is_empty() {
             cmd.arg("-o").arg(opts);
         }
-        cmd.arg(dev).arg(&dest.to_string_lossy().to_string());
+        cmd.arg(dev).arg(dest);
 
         let status = cmd.status()?;
         if status.success() {
