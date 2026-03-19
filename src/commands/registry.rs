@@ -7,6 +7,38 @@ use anyhow::Result;
 pub fn cmd_registry_update(db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     println!("Syncing canonical registry...");
+
+    // Try fetching from configured Remi servers first
+    let repos: Vec<(String, String)> = {
+        let mut stmt = conn.prepare(
+            "SELECT name, url FROM repositories WHERE enabled = 1 ORDER BY priority DESC",
+        )?;
+        stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+
+    for (name, url) in &repos {
+        let endpoint = url.trim_end_matches('/');
+        match conary_core::canonical::client::fetch_canonical_map(&conn, endpoint) {
+            Ok(Some(count)) => {
+                println!("Fetched {count} canonical mappings from {name} ({endpoint})");
+                println!("[COMPLETE] Registry updated");
+                return Ok(());
+            }
+            Ok(None) => {
+                println!("Canonical map is current (server returned 304)");
+                println!("[COMPLETE] Registry updated");
+                return Ok(());
+            }
+            Err(e) => {
+                tracing::debug!("Canonical fetch from {name} failed: {e}");
+                continue;
+            }
+        }
+    }
+
+    // Fallback: local YAML rules
+    println!("Server fetch unavailable, falling back to local rules...");
     let rules_dir = std::path::Path::new("/usr/share/conary/canonical-rules");
     let local_dir = std::path::Path::new("data/canonical-rules");
     let dir = if rules_dir.exists() {
