@@ -249,11 +249,11 @@ impl Bootstrap {
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         builder
-            .build_cross_packages()
+            .build_cross_packages(&[])
             .map_err(|e| anyhow::anyhow!("{e}"))?;
-        builder.setup_chroot().map_err(|e| anyhow::anyhow!("{e}"))?;
+        let _chroot_env = builder.setup_chroot().map_err(|e| anyhow::anyhow!("{e}"))?;
         builder
-            .build_chroot_packages()
+            .build_chroot_packages(&[])
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         self.stages

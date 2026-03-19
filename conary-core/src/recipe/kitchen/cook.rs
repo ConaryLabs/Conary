@@ -107,7 +107,7 @@ impl<'a> Cook<'a> {
     }
 
     /// Phase 1: Prep - fetch all sources
-    pub(super) fn prep(&mut self) -> Result<()> {
+    pub(crate) fn prep(&mut self) -> Result<()> {
         // Fetch main source archive
         let archive_url = self.recipe.archive_url();
         let archive_path = self
@@ -168,7 +168,7 @@ impl<'a> Cook<'a> {
     }
 
     /// Phase 2a: Unpack sources
-    pub(super) fn unpack(&mut self) -> Result<()> {
+    pub(crate) fn unpack(&mut self) -> Result<()> {
         let archive_path = self.build_dir.as_path().join(self.recipe.archive_filename());
 
         // Detect archive type and extract
@@ -198,7 +198,7 @@ impl<'a> Cook<'a> {
     }
 
     /// Phase 2b: Apply patches
-    pub(super) fn patch(&mut self) -> Result<()> {
+    pub(crate) fn patch(&mut self) -> Result<()> {
         let patches = match &self.recipe.patches {
             Some(p) => &p.files,
             None => return Ok(()),
@@ -244,7 +244,7 @@ impl<'a> Cook<'a> {
     }
 
     /// Phase 3: Simmer - run the build
-    pub(super) fn simmer(&mut self) -> Result<()> {
+    pub(crate) fn simmer(&mut self) -> Result<()> {
         // Mark build start for provenance
         self.provenance.start_build();
         self.provenance
