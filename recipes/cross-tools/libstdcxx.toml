@@ -26,7 +26,7 @@ homepage = "https://gcc.gnu.org/"
 [source]
 # Same source tarball as gcc-pass1 — only libstdc++-v3 is built
 archive = "https://ftpmirror.gnu.org/gcc/gcc-%(version)s/gcc-%(version)s.tar.xz"
-checksum = "md5:b861b092bf1af683c46a8aa2e689a6fd"
+checksum = "sha256:438fd996826b0c82485a29da03a72d71d6e3541a83ec702df4271f6fe025d24e"
 
 [build]
 requires = ["binutils-pass1", "gcc-pass1", "glibc"]

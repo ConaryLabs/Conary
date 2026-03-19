@@ -23,7 +23,7 @@ homepage = "https://www.kernel.org/"
 
 [source]
 archive = "https://www.kernel.org/pub/linux/kernel/v6.x/linux-%(version)s.tar.xz"
-checksum = "md5:e23cdbfd397f77f7df9dfab9e2d24ec3"
+checksum = "sha256:aada4722db8bcfa0b9732851856d405082b6a4fa2e3ab067be8db17cdd115b38"
 
 [build]
 requires = []
