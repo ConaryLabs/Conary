@@ -178,14 +178,17 @@ impl<'a> Cook<'a> {
             self.source_dir.display()
         ));
 
-        // Find the actual source directory (often archives have a top-level dir)
-        let entries: Vec<_> = fs::read_dir(&self.source_dir)?
+        // Find the actual source directory (often archives have a top-level dir).
+        // Only count directories — additional source tarballs placed here by prep()
+        // should not interfere with the single-directory detection.
+        let dir_entries: Vec<_> = fs::read_dir(&self.source_dir)?
             .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
             .collect();
 
-        if entries.len() == 1 && entries[0].file_type().map(|t| t.is_dir()).unwrap_or(false) {
+        if dir_entries.len() == 1 {
             // Single directory - this is the actual source
-            self.source_dir = entries[0].path();
+            self.source_dir = dir_entries[0].path();
             debug!("Source directory: {}", self.source_dir.display());
         }
 
