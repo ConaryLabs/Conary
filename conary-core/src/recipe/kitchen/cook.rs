@@ -21,8 +21,10 @@ use super::provenance_capture::ProvenanceCapture;
 pub struct Cook<'a> {
     pub(super) kitchen: &'a Kitchen,
     pub(super) recipe: &'a Recipe,
-    /// Temporary build directory
-    pub(super) build_dir: TempDir,
+    /// Owner of the temporary build directory (None when an external dest_dir is provided)
+    pub(super) _build_dir_owner: Option<TempDir>,
+    /// Build directory path
+    pub(super) build_dir: PathBuf,
     /// Source directory within build_dir
     pub(super) source_dir: PathBuf,
     /// Destination directory (where files get installed)
@@ -40,8 +42,9 @@ impl<'a> Cook<'a> {
         let build_dir = TempDir::new()
             .map_err(|e| Error::IoError(format!("Failed to create build directory: {}", e)))?;
 
-        let source_dir = build_dir.path().join("source");
-        let dest_dir = build_dir.path().join("destdir");
+        let build_path = build_dir.path().to_path_buf();
+        let source_dir = build_path.join("source");
+        let dest_dir = build_path.join("destdir");
 
         fs::create_dir_all(&source_dir)?;
         fs::create_dir_all(&dest_dir)?;
@@ -58,9 +61,45 @@ impl<'a> Cook<'a> {
         Ok(Self {
             kitchen,
             recipe,
-            build_dir,
+            _build_dir_owner: Some(build_dir),
+            build_dir: build_path,
             source_dir,
             dest_dir,
+            log: String::new(),
+            warnings: Vec::new(),
+            provenance,
+        })
+    }
+
+    /// Create a Cook with a caller-provided destination directory.
+    ///
+    /// Used by bootstrap builds where files install directly to $LFS
+    /// instead of a temporary staging area.
+    pub(crate) fn new_with_dest(
+        kitchen: &'a Kitchen,
+        recipe: &'a Recipe,
+        dest_dir: &Path,
+    ) -> Result<Self> {
+        let build_dir = TempDir::new()
+            .map_err(|e| Error::IoError(format!("Failed to create build directory: {}", e)))?;
+        let build_path = build_dir.path().to_path_buf();
+        let source_dir = build_path.join("source");
+
+        fs::create_dir_all(&source_dir)?;
+        fs::create_dir_all(dest_dir)?;
+
+        let mut provenance = ProvenanceCapture::new();
+        for dep in &recipe.build.makedepends {
+            provenance.add_build_dep(dep, "unknown", None);
+        }
+
+        Ok(Self {
+            kitchen,
+            recipe,
+            _build_dir_owner: Some(build_dir),
+            build_dir: build_path,
+            source_dir,
+            dest_dir: dest_dir.to_path_buf(),
             log: String::new(),
             warnings: Vec::new(),
             provenance,
@@ -80,7 +119,7 @@ impl<'a> Cook<'a> {
             .record_source_fetch(&archive_url, &self.recipe.source.checksum);
 
         // Copy to build directory
-        let local_archive = self.build_dir.path().join(self.recipe.archive_filename());
+        let local_archive = self.build_dir.as_path().join(self.recipe.archive_filename());
         fs::copy(&archive_path, &local_archive)?;
 
         self.log_line(&format!("Fetched source: {}", archive_url));
@@ -95,7 +134,7 @@ impl<'a> Cook<'a> {
                 .split('/')
                 .next_back()
                 .unwrap_or("additional.tar.gz");
-            let local_path = self.build_dir.path().join(filename);
+            let local_path = self.build_dir.as_path().join(filename);
             fs::copy(&path, &local_path)?;
             self.log_line(&format!("Fetched additional source: {}", additional.url));
         }
@@ -105,7 +144,7 @@ impl<'a> Cook<'a> {
             for patch in &patches.files {
                 if is_remote_url(&patch.file) {
                     let filename = patch.file.split('/').next_back().unwrap_or("patch.diff");
-                    let local_path = self.build_dir.path().join("patches").join(filename);
+                    let local_path = self.build_dir.as_path().join("patches").join(filename);
                     fs::create_dir_all(local_path.parent().unwrap())?;
 
                     let checksum = patch.checksum.as_ref().ok_or_else(|| {
@@ -130,7 +169,7 @@ impl<'a> Cook<'a> {
 
     /// Phase 2a: Unpack sources
     pub(super) fn unpack(&mut self) -> Result<()> {
-        let archive_path = self.build_dir.path().join(self.recipe.archive_filename());
+        let archive_path = self.build_dir.as_path().join(self.recipe.archive_filename());
 
         // Detect archive type and extract
         extract_archive(&archive_path, &self.source_dir)?;
@@ -152,7 +191,7 @@ impl<'a> Cook<'a> {
 
         // Override with explicit extract_dir if specified
         if let Some(extract_dir) = &self.recipe.source.extract_dir {
-            self.source_dir = self.build_dir.path().join("source").join(extract_dir);
+            self.source_dir = self.build_dir.as_path().join("source").join(extract_dir);
         }
 
         Ok(())
@@ -172,7 +211,7 @@ impl<'a> Cook<'a> {
                     .split('/')
                     .next_back()
                     .unwrap_or("patch.diff");
-                self.build_dir.path().join("patches").join(filename)
+                self.build_dir.as_path().join("patches").join(filename)
             } else {
                 PathBuf::from(&patch_info.file)
             };
@@ -314,7 +353,7 @@ impl<'a> Cook<'a> {
                 ContainerConfig::pristine_for_bootstrap(
                     sysroot,
                     &self.source_dir,
-                    self.build_dir.path(),
+                    self.build_dir.as_path(),
                     &self.dest_dir,
                 )
             } else {
@@ -384,8 +423,8 @@ impl<'a> Cook<'a> {
 
             // Build directory (writable - for build artifacts)
             container_config.bind_mounts.push(BindMount::writable(
-                self.build_dir.path(),
-                self.build_dir.path(),
+                self.build_dir.as_path(),
+                self.build_dir.as_path(),
             ));
         }
 
