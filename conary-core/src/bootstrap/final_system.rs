@@ -11,11 +11,13 @@
 //! infrastructure.
 
 use std::path::{Path, PathBuf};
-use tracing::{debug, info, warn};
+use std::process::Command;
+use tracing::{info, warn};
 
 use super::build_runner::PackageBuildRunner;
 use super::config::BootstrapConfig;
 use super::toolchain::Toolchain;
+use crate::recipe::parser::parse_recipe_file;
 
 /// Complete build order for the final system (LFS Chapter 8).
 ///
@@ -135,15 +137,17 @@ pub enum FinalSystemError {
 /// progress so builds can be resumed after failure.
 pub struct FinalSystemBuilder {
     /// Working directory for build artifacts.
+    #[allow(dead_code)]
     work_dir: PathBuf,
     /// Root of the LFS filesystem (chroot root).
     lfs_root: PathBuf,
     /// Bootstrap configuration.
     config: BootstrapConfig,
     /// Toolchain available inside the chroot.
+    #[allow(dead_code)]
     toolchain: Toolchain,
     /// Shared build runner for source fetching and verification.
-    _runner: PackageBuildRunner,
+    runner: PackageBuildRunner,
     /// Packages that have been successfully built.
     completed: Vec<String>,
 }
@@ -186,7 +190,7 @@ impl FinalSystemBuilder {
             lfs_root: lfs_root.to_path_buf(),
             config,
             toolchain,
-            _runner: runner,
+            runner,
             completed: Vec::new(),
         })
     }
@@ -252,20 +256,70 @@ impl FinalSystemBuilder {
         Ok(())
     }
 
-    /// Build a single package inside the chroot.
+    /// Map a package name to its recipe filename stem.
     ///
-    /// Currently a placeholder -- each package will get its own recipe-driven
-    /// build logic in a later task.
+    /// Handles special cases like `libstdc++` → `libstdcxx`.
+    fn recipe_filename(pkg: &str) -> String {
+        pkg.replace("++", "xx").replace('+', "p")
+    }
+
+    /// Environment variables for chroot builds (hermetic — `env_clear()` first).
+    fn chroot_env_vars(&self) -> Vec<(String, String)> {
+        vec![
+            ("PATH".into(), "/usr/bin:/usr/sbin".into()),
+            ("HOME".into(), "/root".into()),
+            ("TERM".into(), "xterm".into()),
+            ("LC_ALL".into(), "C".into()),
+            ("TZ".into(), "UTC".into()),
+            ("SOURCE_DATE_EPOCH".into(), "0".into()),
+            ("MAKEFLAGS".into(), format!("-j{}", self.config.jobs)),
+        ]
+    }
+
+    /// Build a single package inside the chroot using its recipe.
     fn build_package(&self, name: &str) -> Result<(), FinalSystemError> {
-        // TODO: implement recipe-driven chroot build for each package
-        debug!(
-            "  build_package({}) -- placeholder (chroot={}, toolchain={})",
-            name,
-            self.lfs_root.display(),
-            self.toolchain.target
-        );
-        let _ = &self.config;
-        let _ = &self.work_dir;
+        let filename = Self::recipe_filename(name);
+        let recipe_path =
+            std::path::Path::new("recipes/system").join(format!("{filename}.toml"));
+        let recipe = parse_recipe_file(&recipe_path).map_err(|e| FinalSystemError::BuildFailed {
+            package: name.to_string(),
+            reason: format!("Failed to parse recipe: {e}"),
+        })?;
+
+        info!("  Fetching source for {name}...");
+        self.runner
+            .fetch_source(name, &recipe)
+            .map_err(|e| FinalSystemError::BuildFailed {
+                package: name.to_string(),
+                reason: format!("Source fetch failed: {e}"),
+            })?;
+
+        let script = super::assemble_build_script(&recipe, "/");
+        let env = self.chroot_env_vars();
+
+        info!("  Building {name} in chroot...");
+        let output = Command::new("chroot")
+            .arg(&self.lfs_root)
+            .arg("/bin/sh")
+            .arg("-c")
+            .arg(&script)
+            .env_clear()
+            .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+            .output()
+            .map_err(|e| FinalSystemError::BuildFailed {
+                package: name.to_string(),
+                reason: format!("Failed to execute chroot: {e}"),
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(FinalSystemError::BuildFailed {
+                package: name.to_string(),
+                reason: format!("Build failed in chroot:\n{stderr}"),
+            });
+        }
+
+        info!("  [OK] {name} built successfully");
         Ok(())
     }
 
