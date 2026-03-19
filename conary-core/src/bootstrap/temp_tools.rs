@@ -11,11 +11,14 @@
 //! make, etc.) to build the final system without any host dependencies.
 
 use std::path::{Path, PathBuf};
-use tracing::{debug, info};
+use tracing::info;
 
 use super::build_runner::PackageBuildRunner;
+use super::chroot_env::ChrootEnv;
 use super::config::BootstrapConfig;
 use super::toolchain::Toolchain;
+use crate::recipe::parser::parse_recipe_file;
+use crate::recipe::{Kitchen, KitchenConfig};
 
 /// Cross-compiled packages (LFS Chapter 6).
 ///
@@ -99,7 +102,7 @@ pub struct TempToolsBuilder {
     /// Phase 1 cross-toolchain (from `$LFS/tools/`).
     cross_toolchain: Toolchain,
     /// Shared build runner for source fetching and verification.
-    _runner: PackageBuildRunner,
+    runner: PackageBuildRunner,
 }
 
 impl TempToolsBuilder {
@@ -137,34 +140,101 @@ impl TempToolsBuilder {
             lfs_root: lfs_root.to_path_buf(),
             config,
             cross_toolchain,
-            _runner: runner,
+            runner,
         })
     }
 
     /// Cross-compile all Chapter 6 packages.
     ///
     /// Uses the Phase 1 cross-toolchain to build each package and installs
-    /// the results into `$LFS/`.
-    pub fn build_cross_packages(&self) -> Result<(), TempToolsError> {
+    /// the results into `$LFS/`. Accepts `completed` for resume support —
+    /// packages whose names appear in the slice are skipped.
+    pub fn build_cross_packages(&self, completed: &[String]) -> Result<(), TempToolsError> {
         info!(
             "Phase 2a: Cross-compiling temp tools ({} packages)",
             CH6_PACKAGES.len()
         );
 
+        // Set bootstrap environment
+        // SAFETY: bootstrap is single-threaded at this stage
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::set_var("LFS", &self.lfs_root);
+            std::env::set_var("LFS_TGT", &self.cross_toolchain.target);
+            std::env::set_var("LC_ALL", "C");
+            std::env::set_var("TZ", "UTC");
+            std::env::set_var("SOURCE_DATE_EPOCH", "0");
+            // Add cross-tools to PATH
+            let tools_bin = self.lfs_root.join("tools/bin");
+            let host_path = std::env::var("PATH").unwrap_or_default();
+            std::env::set_var("PATH", format!("{}:{}", tools_bin.display(), host_path));
+        }
+
         for (i, pkg) in CH6_PACKAGES.iter().enumerate() {
+            if completed.contains(&(*pkg).to_string()) {
+                info!("Skipping already-completed: {}", pkg);
+                continue;
+            }
             info!(
                 "Cross-compiling [{}/{}]: {}",
                 i + 1,
                 CH6_PACKAGES.len(),
                 pkg
             );
-            // TODO: implement recipe-driven cross-compile for each package
-            debug!(
-                "  build_cross_package({}) -- placeholder (toolchain={})",
-                pkg, self.cross_toolchain.target
-            );
-        }
 
+            let recipe_path =
+                std::path::Path::new("recipes/temp-tools").join(format!("{pkg}.toml"));
+            let recipe =
+                parse_recipe_file(&recipe_path).map_err(|e| TempToolsError::BuildFailed {
+                    package: pkg.to_string(),
+                    reason: format!("Failed to parse recipe: {e}"),
+                })?;
+
+            info!("  Fetching source for {pkg}...");
+            self.runner
+                .fetch_source(pkg, &recipe)
+                .map_err(|e| TempToolsError::BuildFailed {
+                    package: pkg.to_string(),
+                    reason: format!("Source fetch failed: {e}"),
+                })?;
+
+            let config = KitchenConfig {
+                source_cache: self.work_dir.join("sources"),
+                jobs: self.config.jobs as u32,
+                use_isolation: false,
+                ..Default::default()
+            };
+            let kitchen = Kitchen::new(config);
+            let mut cook =
+                kitchen
+                    .new_cook_with_dest(&recipe, &self.lfs_root)
+                    .map_err(|e| TempToolsError::BuildFailed {
+                        package: pkg.to_string(),
+                        reason: format!("Cook setup failed: {e}"),
+                    })?;
+
+            info!("  Preparing {pkg}...");
+            cook.prep().map_err(|e| TempToolsError::BuildFailed {
+                package: pkg.to_string(),
+                reason: format!("Prep failed: {e}"),
+            })?;
+            cook.unpack().map_err(|e| TempToolsError::BuildFailed {
+                package: pkg.to_string(),
+                reason: format!("Unpack failed: {e}"),
+            })?;
+            cook.patch().map_err(|e| TempToolsError::BuildFailed {
+                package: pkg.to_string(),
+                reason: format!("Patch failed: {e}"),
+            })?;
+
+            info!("  Building {pkg}...");
+            cook.simmer().map_err(|e| TempToolsError::BuildFailed {
+                package: pkg.to_string(),
+                reason: format!("Build failed: {e}"),
+            })?;
+
+            info!("  [OK] {pkg} built successfully");
+        }
         info!("Phase 2a complete: all Chapter 6 packages cross-compiled");
         Ok(())
     }
@@ -173,49 +243,103 @@ impl TempToolsBuilder {
     ///
     /// Creates essential directories, device nodes, and virtual kernel
     /// filesystems (`/dev`, `/proc`, `/sys`, `/run`) inside `$LFS/`.
-    pub fn setup_chroot(&self) -> Result<(), TempToolsError> {
+    /// Returns a [`ChrootEnv`] that the caller manages (teardown on drop).
+    pub fn setup_chroot(&self) -> Result<ChrootEnv, TempToolsError> {
         info!(
             "Setting up chroot environment at {}",
             self.lfs_root.display()
         );
 
-        // TODO: create directory hierarchy, mount virtual filesystems,
-        //       create essential symlinks and files
-        debug!(
-            "  setup_chroot -- placeholder (lfs_root={})",
-            self.lfs_root.display()
-        );
-
-        Ok(())
+        let mut env = ChrootEnv::new(&self.lfs_root);
+        env.setup()
+            .map_err(|e| TempToolsError::ChrootSetup(e.to_string()))?;
+        Ok(env)
     }
 
     /// Build Chapter 7 packages inside the chroot.
     ///
     /// These are built natively (not cross-compiled) using the tools
-    /// that are now available inside the chroot.
-    pub fn build_chroot_packages(&self) -> Result<(), TempToolsError> {
+    /// that are now available inside the chroot. Accepts `completed` for
+    /// resume support — packages whose names appear in the slice are skipped.
+    pub fn build_chroot_packages(&self, completed: &[String]) -> Result<(), TempToolsError> {
         info!(
             "Phase 2b: Building chroot packages ({} packages)",
             CH7_PACKAGES.len()
         );
 
         for (i, pkg) in CH7_PACKAGES.iter().enumerate() {
+            if completed.contains(&(*pkg).to_string()) {
+                info!("Skipping already-completed: {}", pkg);
+                continue;
+            }
             info!(
                 "Building in chroot [{}/{}]: {}",
                 i + 1,
                 CH7_PACKAGES.len(),
                 pkg
             );
-            // TODO: implement chroot-based build for each package
-            debug!(
-                "  build_chroot_package({}) -- placeholder (work_dir={})",
-                pkg,
-                self.work_dir.display()
-            );
-        }
 
+            let recipe_path =
+                std::path::Path::new("recipes/temp-tools").join(format!("{pkg}.toml"));
+            let recipe =
+                parse_recipe_file(&recipe_path).map_err(|e| TempToolsError::BuildFailed {
+                    package: pkg.to_string(),
+                    reason: format!("Failed to parse recipe: {e}"),
+                })?;
+
+            // Fetch source to $LFS/sources/ (accessible inside chroot)
+            info!("  Fetching source for {pkg}...");
+            self.runner
+                .fetch_source(pkg, &recipe)
+                .map_err(|e| TempToolsError::BuildFailed {
+                    package: pkg.to_string(),
+                    reason: format!("Source fetch failed: {e}"),
+                })?;
+
+            // Assemble build script and run in chroot
+            let script = super::assemble_build_script(&recipe, "/");
+            let env = self.chroot_env_vars();
+
+            info!("  Building {pkg} in chroot...");
+            let output = std::process::Command::new("chroot")
+                .arg(&self.lfs_root)
+                .arg("/bin/sh")
+                .arg("-c")
+                .arg(&script)
+                .env_clear()
+                .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+                .output()
+                .map_err(|e| TempToolsError::BuildFailed {
+                    package: pkg.to_string(),
+                    reason: format!("Failed to execute chroot: {e}"),
+                })?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(TempToolsError::BuildFailed {
+                    package: pkg.to_string(),
+                    reason: format!("Build failed in chroot:\n{stderr}"),
+                });
+            }
+
+            info!("  [OK] {pkg} built successfully in chroot");
+        }
         info!("Phase 2b complete: all Chapter 7 packages built");
         Ok(())
+    }
+
+    /// Environment variables for chroot builds (hermetic — `env_clear()` first).
+    fn chroot_env_vars(&self) -> Vec<(String, String)> {
+        vec![
+            ("PATH".into(), "/usr/bin:/usr/sbin".into()),
+            ("HOME".into(), "/root".into()),
+            ("TERM".into(), "xterm".into()),
+            ("LC_ALL".into(), "C".into()),
+            ("TZ".into(), "UTC".into()),
+            ("SOURCE_DATE_EPOCH".into(), "0".into()),
+            ("MAKEFLAGS".into(), format!("-j{}", self.config.jobs)),
+            ("LFS_TGT".into(), self.cross_toolchain.target.clone()),
+        ]
     }
 
     /// Verify that the temporary tools environment is functional.
@@ -320,6 +444,6 @@ mod tests {
         };
 
         let builder = TempToolsBuilder::new(work.path(), lfs.path(), config, cross_tc).unwrap();
-        assert!(builder.build_cross_packages().is_ok());
+        assert!(builder.build_cross_packages(&[]).is_ok());
     }
 }
