@@ -522,7 +522,7 @@ pub async fn refresh_repositories(
     force: bool,
 ) -> Result<Vec<RepoRefreshResult>, ServiceError> {
     let db = db_path(state).await;
-    blocking(move || {
+    let results = blocking(move || {
         let conn = conary_core::db::open_fast(&db)?;
         let keyring_dir = conary_core::db::paths::keyring_dir(&db.display().to_string());
         let repos = Repository::list_enabled(&conn)?;
@@ -552,7 +552,28 @@ pub async fn refresh_repositories(
 
         Ok(refreshed)
     })
-    .await
+    .await?;
+
+    // After successful sync, trigger canonical rebuild if cooldown elapsed.
+    // Failures here are non-fatal -- the sync result is returned regardless.
+    {
+        let db_path = db_path(state).await;
+        let canonical_cfg = state.read().await.canonical_config.clone();
+        blocking(move || {
+            let conn = conary_core::db::open(&db_path)?;
+            if crate::server::canonical_job::should_rebuild(&conn, canonical_cfg.rebuild_cooldown_minutes) {
+                match crate::server::canonical_job::rebuild_canonical_map(&db_path, &canonical_cfg) {
+                    Ok(count) => tracing::info!("Post-sync canonical rebuild: {count} new mappings"),
+                    Err(e) => tracing::warn!("Post-sync canonical rebuild failed: {e}"),
+                }
+            }
+            Ok(())
+        })
+        .await
+        .unwrap_or_else(|e| tracing::warn!("Post-sync canonical rebuild task failed: {e}"));
+    }
+
+    Ok(results)
 }
 
 // ---------------------------------------------------------------------------

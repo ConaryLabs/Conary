@@ -218,6 +218,8 @@ pub struct ServerState {
     pub admin_events: tokio::sync::broadcast::Sender<AdminEvent>,
     /// Path to the separate test data database (test_db module)
     pub test_db_path: Option<String>,
+    /// Canonical registry configuration (rebuild cooldown, rules dir, etc.)
+    pub canonical_config: crate::server::config::CanonicalSection,
 }
 
 impl ServerState {
@@ -308,6 +310,7 @@ impl ServerState {
                 std::env::var("CONARY_TEST_DB_PATH")
                     .unwrap_or_else(|_| "/conary/test-data.db".to_string()),
             ),
+            canonical_config: crate::server::config::CanonicalSection::default(),
         }
     }
 }
@@ -368,6 +371,12 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
         trusted_proxy_header,
         negative_cache_ttl,
     )));
+
+    // Set canonical config on state
+    {
+        let mut state_w = state.write().await;
+        state_w.canonical_config = remi_config.canonical.clone();
+    }
 
     // Initialize R2 storage if enabled
     if remi_config.r2.enabled {
