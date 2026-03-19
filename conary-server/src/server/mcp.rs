@@ -783,6 +783,39 @@ impl RemiMcpServer {
         }))?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
+
+    /// Trigger an immediate Repology + AppStream fetch cycle.
+    ///
+    /// Populates the cache tables used by `canonical_rebuild`. Returns counts
+    /// of cached entries for each source.
+    #[tool(
+        description = "Trigger immediate Repology + AppStream fetch cycle. Populates the cache tables used by canonical_rebuild. Returns counts of cached entries."
+    )]
+    async fn canonical_fetch(&self) -> Result<CallToolResult, McpError> {
+        let state = self.state.read().await;
+        let db_path = std::path::PathBuf::from(&state.config.db_path);
+        drop(state);
+
+        let mut repology_count = 0usize;
+        let mut appstream_count = 0usize;
+
+        match crate::server::canonical_fetch::fetch_repology_data(&db_path, 5000).await {
+            Ok(n) => repology_count = n,
+            Err(e) => tracing::warn!("Repology fetch failed: {e}"),
+        }
+
+        match crate::server::canonical_fetch::fetch_appstream_data(&db_path).await {
+            Ok(n) => appstream_count = n,
+            Err(e) => tracing::warn!("AppStream fetch failed: {e}"),
+        }
+
+        let text = to_json_text(&serde_json::json!({
+            "status": "ok",
+            "repology_cached": repology_count,
+            "appstream_cached": appstream_count,
+        }))?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -848,6 +881,6 @@ mod tests {
         // Build the tool router directly to inspect registered tools
         let router = RemiMcpServer::tool_router();
         let tools = router.list_all();
-        assert_eq!(tools.len(), 23, "Expected 23 MCP tools");
+        assert_eq!(tools.len(), 24, "Expected 24 MCP tools");
     }
 }
