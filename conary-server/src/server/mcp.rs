@@ -765,10 +765,13 @@ impl RemiMcpServer {
         let db_path = state.config.db_path.clone();
         drop(state);
 
-        let rules_dir = std::path::PathBuf::from("data/canonical-rules");
+        let config = crate::server::config::CanonicalSection {
+            rules_dir: "data/canonical-rules".to_string(),
+            ..Default::default()
+        };
 
         let count = tokio::task::spawn_blocking(move || {
-            crate::server::canonical_job::rebuild_canonical_map(&db_path, &rules_dir)
+            crate::server::canonical_job::rebuild_canonical_map(&db_path, &config)
         })
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?
