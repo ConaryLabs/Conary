@@ -9,6 +9,7 @@
 //!   provides, binary paths, sonames, and stem matching
 
 pub mod appstream;
+pub mod client;
 pub mod discovery;
 pub mod repology;
 pub mod rules;
