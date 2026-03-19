@@ -67,6 +67,10 @@ pub struct RemiConfig {
     /// External admin API settings
     #[serde(default)]
     pub admin: AdminSection,
+
+    /// Canonical registry settings
+    #[serde(default)]
+    pub canonical: CanonicalSection,
 }
 
 /// Server configuration section
@@ -620,6 +624,31 @@ fn default_admin_auth_fail_rpm() -> u32 {
 
 fn default_audit_retention_days() -> u32 {
     30
+}
+
+/// Canonical registry settings
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct CanonicalSection {
+    /// Hours between Repology/AppStream fetch cycles (default: 24)
+    pub fetch_interval_hours: u64,
+    /// Minutes of cooldown between rebuilds (default: 5)
+    pub rebuild_cooldown_minutes: u64,
+    /// Max Repology projects to fetch per cycle (default: 5000)
+    pub repology_batch_size: usize,
+    /// Path to curated rules directory
+    pub rules_dir: String,
+}
+
+impl Default for CanonicalSection {
+    fn default() -> Self {
+        Self {
+            fetch_interval_hours: 24,
+            rebuild_cooldown_minutes: 5,
+            repology_batch_size: 5000,
+            rules_dir: "/usr/share/conary/canonical-rules".to_string(),
+        }
+    }
 }
 
 fn default_max_builds() -> usize {
