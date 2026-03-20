@@ -11,6 +11,7 @@ use conary_core::bootstrap::{
 };
 use std::path::PathBuf;
 use std::str::FromStr;
+use tracing::info;
 
 /// Initialize bootstrap environment
 pub fn cmd_bootstrap_init(work_dir: &str, target: &str, jobs: Option<usize>) -> Result<()> {
@@ -511,6 +512,68 @@ pub fn cmd_bootstrap_tier2(
 
     println!("\n[OK] Phase 6 Tier-2 packages built successfully!");
     println!("  The system is now self-hosting.");
+
+    Ok(())
+}
+
+/// Options for the `bootstrap run` command.
+pub struct BootstrapRunOptions<'a> {
+    /// Path to system manifest TOML.
+    pub manifest: &'a str,
+    /// Working directory for build artifacts.
+    pub work_dir: &'a str,
+    /// Stop after completing this stage.
+    pub up_to: Option<&'a str>,
+    /// Only build these packages.
+    pub only: Option<&'a [String]>,
+    /// Also rebuild reverse dependents of `only` targets.
+    pub cascade: bool,
+    /// Preserve build logs for successful builds.
+    pub keep_logs: bool,
+    /// Spawn interactive shell on build failure.
+    pub shell_on_failure: bool,
+    /// Show verbose build output.
+    pub verbose: bool,
+}
+
+/// Run the derivation pipeline from a system manifest.
+///
+/// Parses the manifest, validates the --up-to stage if given, and runs the
+/// staged build pipeline. Currently a stub pending full pipeline integration.
+pub fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
+    use conary_core::derivation::stages::Stage;
+
+    info!(
+        "bootstrap run: manifest={}, work_dir={}",
+        opts.manifest, opts.work_dir
+    );
+
+    if let Some(stage_name) = opts.up_to {
+        let _stage = Stage::from_str_name(stage_name)
+            .map_err(|e| anyhow::anyhow!("invalid --up-to stage: {e}"))?;
+    }
+
+    let _ = opts.verbose;
+
+    // TODO: Full pipeline wiring -- parse manifest, load seed, assign stages, execute
+    println!("bootstrap run: pipeline integration pending");
+    println!("  manifest: {}", opts.manifest);
+    println!("  work_dir: {}", opts.work_dir);
+    if let Some(s) = opts.up_to {
+        println!("  up_to: {s}");
+    }
+    if let Some(pkgs) = opts.only {
+        println!("  only: {}", pkgs.join(", "));
+    }
+    if opts.cascade {
+        println!("  cascade: true");
+    }
+    if opts.keep_logs {
+        println!("  keep_logs: true");
+    }
+    if opts.shell_on_failure {
+        println!("  shell_on_failure: true");
+    }
 
     Ok(())
 }

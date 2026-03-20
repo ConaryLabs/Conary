@@ -45,6 +45,12 @@ pub struct PipelineConfig {
     pub target_triple: String,
     /// Maximum parallel jobs (informational; actual parallelism is per-recipe).
     pub jobs: usize,
+    /// Directory for build logs. None disables logging.
+    pub log_dir: Option<PathBuf>,
+    /// Preserve logs even for successful builds.
+    pub keep_logs: bool,
+    /// Spawn interactive shell on build failure.
+    pub shell_on_failure: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -86,6 +92,13 @@ pub enum PipelineEvent {
         name: String,
         /// Error description.
         error: String,
+    },
+    /// A build log file was written (preserved on failure or keep_logs).
+    BuildLogWritten {
+        /// Package name.
+        package: String,
+        /// Path to the log file.
+        path: PathBuf,
     },
     /// A stage has completed successfully.
     StageCompleted {

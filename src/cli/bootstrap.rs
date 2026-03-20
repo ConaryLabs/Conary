@@ -187,6 +187,40 @@ pub enum BootstrapCommands {
         verbose: bool,
     },
 
+    /// Run the derivation pipeline from a system manifest
+    Run {
+        /// Path to system manifest TOML
+        manifest: String,
+
+        /// Working directory for build artifacts
+        #[arg(short, long, default_value = ".conary/bootstrap")]
+        work_dir: String,
+
+        /// Stop after completing this stage (toolchain, foundation, system, customization)
+        #[arg(long)]
+        up_to: Option<String>,
+
+        /// Only build these packages (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        only: Option<Vec<String>>,
+
+        /// Also rebuild reverse dependents of --only targets
+        #[arg(long, requires = "only")]
+        cascade: bool,
+
+        /// Preserve build logs for successful builds
+        #[arg(long)]
+        keep_logs: bool,
+
+        /// Spawn interactive shell on build failure
+        #[arg(long)]
+        shell_on_failure: bool,
+
+        /// Show verbose build output
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
     /// Build Phase 6: Tier-2 packages (BLFS + Conary self-hosting)
     #[command(name = "tier2")]
     Tier2 {

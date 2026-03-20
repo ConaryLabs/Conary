@@ -1354,6 +1354,26 @@ fn run() -> Result<()> {
                 skip_verify,
                 lfs_root.as_deref(),
             ),
+
+            cli::BootstrapCommands::Run {
+                manifest,
+                work_dir,
+                up_to,
+                only,
+                cascade,
+                keep_logs,
+                shell_on_failure,
+                verbose,
+            } => commands::cmd_bootstrap_run(commands::BootstrapRunOptions {
+                manifest: &manifest,
+                work_dir: &work_dir,
+                up_to: up_to.as_deref(),
+                only: only.as_deref(),
+                cascade,
+                keep_logs,
+                shell_on_failure,
+                verbose,
+            }),
         },
 
         Some(cli::Commands::Provenance(cmd)) => match cmd {
