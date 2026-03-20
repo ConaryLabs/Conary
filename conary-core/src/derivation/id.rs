@@ -11,6 +11,19 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt;
 
+/// Errors that can occur when validating derivation inputs.
+#[derive(Debug, thiserror::Error)]
+pub enum DerivationError {
+    /// A field in the derivation inputs contains a forbidden character.
+    #[error("invalid character in {field}: {value:?}")]
+    InvalidField {
+        /// Which input field triggered the error.
+        field: String,
+        /// The offending value.
+        value: String,
+    },
+}
+
 /// Version prefix for the canonical derivation format.
 const CANONICAL_PREFIX: &str = "CONARY-DERIVATION-V1";
 
@@ -46,16 +59,15 @@ pub struct DerivationInputs {
 impl DerivationId {
     /// Compute a `DerivationId` from the given inputs.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if any dependency name or build-option key contains newlines or
-    /// colons, which would corrupt the canonical serialization format.
-    #[must_use]
-    pub fn compute(inputs: &DerivationInputs) -> Self {
-        validate_inputs(inputs);
+    /// Returns [`DerivationError::InvalidField`] if any input field contains
+    /// characters that would corrupt the canonical serialization format.
+    pub fn compute(inputs: &DerivationInputs) -> Result<Self, DerivationError> {
+        validate_inputs(inputs)?;
         let canonical = Self::canonical_string(inputs);
         let hash = Sha256::digest(canonical.as_bytes());
-        Self(hex::encode(hash))
+        Ok(Self(hex::encode(hash)))
     }
 
     /// Produce the canonical serialization of the derivation inputs.
@@ -114,35 +126,74 @@ impl fmt::Display for DerivationId {
 
 /// Validate that no input field contains characters that would corrupt the
 /// canonical serialization (newlines inject lines, colons shift field boundaries).
-fn validate_inputs(inputs: &DerivationInputs) {
-    fn check(label: &str, value: &str) {
-        assert!(
-            !value.contains('\n') && !value.contains('\r') && !value.contains(':'),
-            "derivation input {label} contains forbidden character (newline or colon): {value:?}",
-        );
+///
+/// Fields that appear as standalone lines (`source_hash`, `build_script_hash`,
+/// `build_env_hash`, `target_triple`) reject `\n` and `\r`.
+///
+/// Fields that share a line delimited by `:` (dep names, option keys) reject
+/// `\n`, `\r`, and `:`.
+///
+/// Values that come after the last `:` on a line (dep IDs, option values)
+/// reject `\n` and `\r` only.
+fn validate_inputs(inputs: &DerivationInputs) -> Result<(), DerivationError> {
+    /// Check that a value contains no newline characters.
+    fn check_no_newline(field: &str, value: &str) -> Result<(), DerivationError> {
+        if value.contains('\n') || value.contains('\r') {
+            return Err(DerivationError::InvalidField {
+                field: field.to_owned(),
+                value: value.to_owned(),
+            });
+        }
+        Ok(())
     }
-    for name in inputs.dependency_ids.keys() {
-        check("dependency name", name);
+
+    /// Check that a value contains no newlines and no colons.
+    fn check_no_newline_or_colon(field: &str, value: &str) -> Result<(), DerivationError> {
+        if value.contains('\n') || value.contains('\r') || value.contains(':') {
+            return Err(DerivationError::InvalidField {
+                field: field.to_owned(),
+                value: value.to_owned(),
+            });
+        }
+        Ok(())
     }
-    for key in inputs.build_options.keys() {
-        check("build option key", key);
+
+    // Standalone-line fields: reject newlines.
+    check_no_newline("source_hash", &inputs.source_hash)?;
+    check_no_newline("build_script_hash", &inputs.build_script_hash)?;
+    check_no_newline("build_env_hash", &inputs.build_env_hash)?;
+    check_no_newline_or_colon("target_triple", &inputs.target_triple)?;
+
+    // Dependency names are mid-line keys: reject newlines and colons.
+    // Dependency ID values are line-final: reject newlines only.
+    for (name, id) in &inputs.dependency_ids {
+        check_no_newline_or_colon("dependency name", name)?;
+        check_no_newline("dependency id", id.as_str())?;
     }
+
+    // Option keys are mid-line: reject newlines and colons.
+    // Option values are line-final: reject newlines only.
+    for (key, value) in &inputs.build_options {
+        check_no_newline_or_colon("build option key", key)?;
+        check_no_newline("build option value", value)?;
+    }
+
+    Ok(())
 }
 
 impl SourceDerivationId {
     /// Compute a `SourceDerivationId` from the given inputs, excluding
     /// `build_env_hash`.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if any dependency name or build-option key contains newlines or
-    /// colons.
-    #[must_use]
-    pub fn compute(inputs: &DerivationInputs) -> Self {
-        validate_inputs(inputs);
+    /// Returns [`DerivationError::InvalidField`] if any input field contains
+    /// characters that would corrupt the canonical serialization format.
+    pub fn compute(inputs: &DerivationInputs) -> Result<Self, DerivationError> {
+        validate_inputs(inputs)?;
         let canonical = Self::canonical_string(inputs);
         let hash = Sha256::digest(canonical.as_bytes());
-        Self(hex::encode(hash))
+        Ok(Self(hex::encode(hash)))
     }
 
     /// Produce the canonical serialization excluding `build_env_hash`.
@@ -220,8 +271,8 @@ mod tests {
     #[test]
     fn derivation_id_is_deterministic() {
         let inputs = sample_inputs();
-        let id1 = DerivationId::compute(&inputs);
-        let id2 = DerivationId::compute(&inputs);
+        let id1 = DerivationId::compute(&inputs).unwrap();
+        let id2 = DerivationId::compute(&inputs).unwrap();
         assert_eq!(id1, id2);
     }
 
@@ -231,8 +282,8 @@ mod tests {
         let mut inputs2 = sample_inputs();
         inputs2.source_hash = "different_hash".to_owned();
 
-        let id1 = DerivationId::compute(&inputs1);
-        let id2 = DerivationId::compute(&inputs2);
+        let id1 = DerivationId::compute(&inputs1).unwrap();
+        let id2 = DerivationId::compute(&inputs2).unwrap();
         assert_ne!(id1, id2);
     }
 
@@ -272,20 +323,20 @@ mod tests {
         inputs1.build_env_hash = "env_aaa".to_owned();
         inputs2.build_env_hash = "env_zzz".to_owned();
 
-        let source_id1 = SourceDerivationId::compute(&inputs1);
-        let source_id2 = SourceDerivationId::compute(&inputs2);
+        let source_id1 = SourceDerivationId::compute(&inputs1).unwrap();
+        let source_id2 = SourceDerivationId::compute(&inputs2).unwrap();
         assert_eq!(source_id1, source_id2, "SourceDerivationId must ignore env hash");
 
         // But the full DerivationId should differ.
-        let full_id1 = DerivationId::compute(&inputs1);
-        let full_id2 = DerivationId::compute(&inputs2);
+        let full_id1 = DerivationId::compute(&inputs1).unwrap();
+        let full_id2 = DerivationId::compute(&inputs2).unwrap();
         assert_ne!(full_id1, full_id2, "DerivationId must include env hash");
     }
 
     #[test]
     fn derivation_id_is_64_char_hex() {
         let inputs = sample_inputs();
-        let id = DerivationId::compute(&inputs);
+        let id = DerivationId::compute(&inputs).unwrap();
         let s = id.as_str();
 
         assert_eq!(s.len(), 64, "SHA-256 hex is 64 chars");
@@ -298,10 +349,10 @@ mod tests {
     #[test]
     fn display_returns_hex_string() {
         let inputs = sample_inputs();
-        let id = DerivationId::compute(&inputs);
+        let id = DerivationId::compute(&inputs).unwrap();
         assert_eq!(format!("{id}"), id.as_str());
 
-        let source_id = SourceDerivationId::compute(&inputs);
+        let source_id = SourceDerivationId::compute(&inputs).unwrap();
         assert_eq!(format!("{source_id}"), source_id.as_str());
     }
 
@@ -313,21 +364,66 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "forbidden character")]
     fn rejects_newline_in_dep_name() {
         let mut inputs = sample_inputs();
         inputs.dependency_ids.insert(
             "evil\ndep:fake:injected".to_owned(),
             DerivationId("c".repeat(64)),
         );
-        let _ = DerivationId::compute(&inputs);
+        let result = DerivationId::compute(&inputs);
+        assert!(result.is_err(), "should reject newline in dep name");
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, DerivationError::InvalidField { .. }),
+            "expected InvalidField, got: {err}"
+        );
     }
 
     #[test]
-    #[should_panic(expected = "forbidden character")]
     fn rejects_colon_in_option_key() {
         let mut inputs = sample_inputs();
         inputs.build_options.insert("bad:key".to_owned(), "value".to_owned());
-        let _ = DerivationId::compute(&inputs);
+        let result = DerivationId::compute(&inputs);
+        assert!(result.is_err(), "should reject colon in option key");
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, DerivationError::InvalidField { .. }),
+            "expected InvalidField, got: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_newline_in_source_hash() {
+        let mut inputs = sample_inputs();
+        inputs.source_hash = "bad\nhash".to_owned();
+        let result = DerivationId::compute(&inputs);
+        assert!(result.is_err(), "should reject newline in source_hash");
+    }
+
+    #[test]
+    fn rejects_newline_in_build_env_hash() {
+        let mut inputs = sample_inputs();
+        inputs.build_env_hash = "bad\renv".to_owned();
+        let result = DerivationId::compute(&inputs);
+        assert!(result.is_err(), "should reject carriage return in build_env_hash");
+    }
+
+    #[test]
+    fn rejects_newline_in_option_value() {
+        let mut inputs = sample_inputs();
+        inputs.build_options.insert("good_key".to_owned(), "bad\nvalue".to_owned());
+        let result = DerivationId::compute(&inputs);
+        assert!(result.is_err(), "should reject newline in option value");
+    }
+
+    #[test]
+    fn rejects_newline_in_dep_id() {
+        let mut inputs = sample_inputs();
+        inputs.dependency_ids.insert(
+            "valid_name".to_owned(),
+            DerivationId("bad\nid".to_owned()),
+        );
+        let result = DerivationId::compute(&inputs);
+        assert!(result.is_err(), "should reject newline in dep id value");
     }
 }

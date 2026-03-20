@@ -695,7 +695,7 @@ mod tests {
             build_env_hash: "env1".to_owned(),
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
             build_options: BTreeMap::new(),
-        });
+        }).unwrap();
 
         let glibc_manifest = OutputManifest {
             derivation_id: glibc_id.as_str().to_owned(),

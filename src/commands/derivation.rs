@@ -42,7 +42,8 @@ pub fn cmd_derivation_build(
         build_options: BTreeMap::new(),
     };
 
-    let drv_id = DerivationId::compute(&inputs);
+    let drv_id = DerivationId::compute(&inputs)
+        .context("Derivation input validation failed")?;
     println!("Derivation ID: {drv_id}");
     println!("CAS directory: {}", cas_dir.display());
     println!();
@@ -74,7 +75,8 @@ pub fn cmd_derivation_show(recipe: &Path, env_hash: &str) -> Result<()> {
         build_options: BTreeMap::new(),
     };
 
-    let drv_id = DerivationId::compute(&inputs);
+    let drv_id = DerivationId::compute(&inputs)
+        .context("Derivation input validation failed")?;
     println!("Derivation ID: {drv_id}");
 
     Ok(())
