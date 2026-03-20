@@ -34,7 +34,7 @@
 - Repository.id is Option<i64> -- None before insert, Some after
 - `ServerState` behind `Arc<RwLock<>>`, config.db_path used to open fresh connections per request
 - External admin API scopes: admin, ci:read, ci:trigger, repos:read, repos:write, federation:read, federation:write
-- Schema version is v53 (admin_audit_log added in v48, latest migration is v53; uses function dispatch pattern migrate_v{N})
+- Schema version is v54 (derivation_index table added in v54; uses function dispatch pattern migrate_v{N})
 - `audit_log` model uses free functions (insert/query/purge) not struct methods -- differs from Trove/Repository pattern
 - MCP endpoint at /mcp on :8082 requires admin scope
 - SSE broadcast channel bounded at 1024 -- adequate for admin API volume
@@ -133,3 +133,8 @@
 
 ## Bootstrap v2 Implementation Plan Review (2026-03-19)
 - [bootstrap_v2_plan_review](bootstrap_v2_plan_review.md) -- 19 findings: 7 HIGH (API mismatches, type errors), 8 MEDIUM (missing mount integration, spec gaps), 4 LOW
+
+## Derivation Module Audits (2026-03-20)
+- [derivation_code_reuse](derivation_code_reuse.md) -- 8 findings: 10 sites bypass crate::hash, erofs_image_hash OOM risk, duplicated test helpers
+- [derivation_efficiency](derivation_efficiency.md) -- 12 findings (2 HIGH, 6 MEDIUM, 4 LOW): streaming file I/O, allocation reduction, SQLite batching for 114-package pipeline
+- [derivation_code_quality](derivation_code_quality.md) -- 16 findings (5 P1): symlink data loss in compose, output_hash excludes mode/size, canonical_string duplication, profile hash injection, glibc dual membership
