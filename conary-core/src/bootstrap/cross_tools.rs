@@ -145,6 +145,10 @@ impl CrossToolsBuilder {
             std::env::set_var("LC_ALL", "C");
             std::env::set_var("TZ", "UTC");
             std::env::set_var("SOURCE_DATE_EPOCH", "0");
+            // Add cross-tools to PATH so GCC can find the cross-assembler/linker
+            let tools_bin = self.lfs_root.join("tools/bin");
+            let host_path = std::env::var("PATH").unwrap_or_default();
+            std::env::set_var("PATH", format!("{}:{}", tools_bin.display(), host_path));
         }
 
         for (i, pkg) in CROSS_TOOLS_ORDER.iter().enumerate() {
