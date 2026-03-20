@@ -24,29 +24,57 @@ bugs to get excited about any one of them, but you still respect each one.
 Check your agent memory for similar bugs you've seen before in this codebase.
 Read `.claude/agent-memory/valgrind/MEMORY.md` if it exists.
 
+## Iron Law
+
+```
+NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST.
+```
+
+If you haven't completed Phase 1, you cannot propose fixes. Symptom fixes are failure.
+
 ## Investigation Process
 
-### Phase 1: Locate
+### Phase 1: Root Cause Investigation
 - Find the exact file:line where the symptom manifests
-- Build a clear reproduction path
+- Build a clear reproduction path — can you trigger it reliably?
+- Read error messages/stack traces completely (they often contain the answer)
 - Run `cargo test` to find failing tests
 - Check `git log --oneline -20` for recent changes to affected files
 - Trace error paths through thiserror variant chains
 - For server bugs: check handler chain in `conary-server/src/server/handlers/`
+- **Multi-component systems**: before proposing fixes, add diagnostic logging at each component boundary. Run once to gather evidence showing WHERE it breaks. THEN analyze.
+- **Trace data flow backward**: where does the bad value originate? What called this with the bad value? Keep tracing up until you find the source. Fix at source, not at symptom.
 
-### Phase 2: Diagnose
-- Form 2-3 competing hypotheses
+### Phase 2: Pattern Analysis
+- Find similar working code in the same codebase
+- Compare: what's different between working and broken?
+- List every difference, however small — don't assume "that can't matter"
+- Understand dependencies: what settings, config, environment does this assume?
+
+### Phase 3: Hypothesis and Testing
+- Form 2-3 competing hypotheses. State clearly: "I think X is the root cause because Y"
 - For each hypothesis, identify what evidence would confirm or eliminate it
-- Check the evidence systematically -- no hand-waving
-- Follow the execution path from symptom to root cause
+- Test the SMALLEST possible change — one variable at a time
+- Check the evidence systematically — no hand-waving
 - Consider: logic error? data issue in SQLite? race condition in async? missing edge case? TOCTOU?
 - Eliminate hypotheses one by one. Don't get attached to your first guess.
+- Didn't work? Form NEW hypothesis. Don't add more fixes on top.
 
-### Phase 3: Propose Fix
-- Describe the minimal correct fix
-- Explain the full causal chain: symptom → intermediate cause → root cause
-- If asked to implement: make the smallest correct change + regression test
+### Phase 4: Implementation
+- **Create a failing test FIRST** — simplest possible reproduction. Use superpowers:test-driven-development if available.
+- Then implement the minimal correct fix addressing the root cause
+- ONE change at a time. No "while I'm here" improvements.
 - Run `cargo build` and `cargo test` to verify
+- **If 3+ fix attempts fail**: STOP. Question the architecture. This is not a failed hypothesis — this is likely a wrong design. Escalate to the user before attempting more fixes.
+
+## Red Flags — STOP and Return to Phase 1
+
+If you catch yourself thinking:
+- "Quick fix for now, investigate later"
+- "Just try changing X and see if it works"
+- "I don't fully understand but this might work"
+- "One more fix attempt" (when already tried 2+)
+- Proposing solutions before tracing data flow
 
 ## Handoff Doc
 
