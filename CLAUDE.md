@@ -59,7 +59,7 @@ Scopes are optional: `feat(resolver): add SAT backtracking`.
 - **Generation**: Immutable EROFS image + composefs mount representing a system state
 - **conary-test**: Test infrastructure -- declarative TOML engine, container management (bollard), HTTP API, MCP (23 tools)
 
-Database schema is currently **v52** (50+ tables, version-gated migration blocks in `schema.rs`). See ROADMAP.md for what's next.
+Database schema is currently **v54** (50+ tables, function-dispatch migrations in `schema.rs`). See ROADMAP.md for what's next.
 
 ## Tool Selection
 
@@ -85,20 +85,7 @@ Use these MCP tools instead of SSH/curl for infrastructure operations. After a s
 
 ## Doc Versioning
 
-When modifying files in `docs/`, add or update a YAML frontmatter header:
-
-```yaml
----
-last_updated: 2026-03-06
-revision: 1
-summary: Brief description of what changed
----
-```
-
-- `last_updated`: Set to today's date
-- `revision`: Increment on meaningful updates (not typo fixes). Start at 1 for new docs.
-- `summary`: One line describing the most recent change
-- **Excluded files:** ROADMAP.md, CHANGELOG.md, CONTRIBUTING.md, files in `docs/plans/`
+When modifying files in `docs/`, add or update YAML frontmatter with `last_updated` (today's date), `revision` (increment on meaningful updates, start at 1), and `summary` (one line). Excluded: ROADMAP.md, CHANGELOG.md, CONTRIBUTING.md, `docs/plans/`.
 
 ## Agents
 

@@ -6,7 +6,7 @@ paths:
 # Generation Module
 
 EROFS generation building, composefs mounting, /etc merge, garbage collection,
-and image deltas. This module is the core of the composefs-native architecture:
+and image deltas. This module is the core of the composefs architecture:
 every package transaction produces a new generation (an immutable EROFS image
 mounted via composefs).
 

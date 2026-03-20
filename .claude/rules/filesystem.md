@@ -7,7 +7,7 @@ paths:
 
 Content-addressable storage (CAS) and virtual filesystem tree. Files are stored
 by content hash (SHA-256 or XXH128) enabling deduplication and integrity
-verification. File deployment is handled by composefs-native generation building
+verification. File deployment is handled by generation building
 (see `crate::generation`), not by this module.
 
 ## Key Types

@@ -33,7 +33,7 @@
 | `src/components/` | Component classification |
 | `src/dependencies/` | Dependency type definitions, provider matching |
 | `src/derived/` | Derived package builder |
-| `src/transaction/` | Composefs-native transaction engine (resolve/fetch/commit/build/mount) |
+| `src/transaction/` | Composefs transaction engine (resolve/fetch/commit/build/mount) |
 | `src/generation/` | EROFS generation building, composefs mounting, /etc merge, CAS GC, deltas |
 | `src/model/` | System Model - declarative OS state |
 | `src/ccs/` | CCS native package format, builder, policy engine, OCI export |
@@ -49,6 +49,8 @@
 | `src/repository/dependency_model.rs` | Cross-distro normalized dependency/provide types |
 | `src/repository/versioning.rs` | Scheme-aware version comparison (RPM, Debian, ALPM) |
 | `src/repository/resolution_policy.rs` | Policy types for request scope, mixing, and candidate filtering |
+| `src/derivation/` | CAS-layered derivation engine for bootstrap (pipeline, compose, capture, index) |
+| `src/mcp/` | MCP tool definitions for LLM integration |
 | `src/model/replatform.rs` | Source policy replatform and convergence planning |
 
 ### conary-erofs -- EROFS image builder for composefs
