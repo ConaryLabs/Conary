@@ -16,7 +16,7 @@ Two servers, one CI system.
 - **OpenAPI spec:** `https://packages.conary.io:8082/v1/admin/openapi.json`
 - **Releases:** `/conary/releases/{version}/` with CCS, RPM, DEB, Arch packages + SHA256SUMS, `latest` symlink
 - **Self-update:** `/conary/self-update/conary-{version}.ccs` (served by self-update handler)
-- **Note:** `remi.conary.io` does NOT work through Cloudflare; use `packages.conary.io`
+- **Note:** Both `remi.conary.io` and `packages.conary.io` work through Cloudflare and point to the same origin
 
 ## Forge (CI/Test)
 
