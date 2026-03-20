@@ -15,11 +15,12 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use rusqlite::Connection;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::recipe::Recipe;
 
 use super::compose::{compose_erofs, erofs_image_hash, ComposeError};
+use super::environment::BuildEnvironment;
 use super::executor::{DerivationExecutor, ExecutionResult, ExecutorError};
 use super::id::DerivationId;
 use super::output::OutputManifest;
@@ -244,6 +245,10 @@ impl Pipeline {
         // Current build environment hash; starts from the seed.
         let mut build_env_hash = seed.build_env_hash().to_owned();
 
+        // Track the current EROFS image path for mounting as build sysroot.
+        // Starts as the seed image; updated after each stage's compose_erofs().
+        let mut current_image_path = seed.image_path.clone();
+
         // Map package name -> (DerivationId, OutputManifest) for dependency resolution.
         let mut completed: BTreeMap<String, (DerivationId, OutputManifest)> = BTreeMap::new();
 
@@ -264,6 +269,23 @@ impl Pipeline {
             let mut stage_derivations = Vec::new();
             let mut stage_manifests: Vec<OutputManifest> = Vec::new();
 
+            // Mount the current stage's EROFS image as the build sysroot.
+            let sysroot = self.config.work_dir.join("sysroot");
+            std::fs::create_dir_all(&sysroot)
+                .map_err(|e| PipelineError::Io(e.to_string()))?;
+
+            let mut build_env = BuildEnvironment::new(
+                current_image_path.clone(),
+                self.config.cas_dir.clone(),
+                sysroot.clone(),
+                build_env_hash.clone(),
+            );
+            // Mount will fail without root -- that's expected. Log and continue
+            // with unmounted sysroot for non-root builds.
+            if let Err(e) = build_env.mount() {
+                warn!("Could not mount build environment (requires root): {e}");
+            }
+
             for pkg_name in pkgs {
                 let recipe = recipes
                     .get(pkg_name.as_str())
@@ -278,13 +300,6 @@ impl Pipeline {
                 let dep_ids = collect_dep_ids(recipe, &completed);
 
                 let start = Instant::now();
-
-                // The sysroot for building is the work_dir for now; in a real
-                // pipeline this would be the composefs mount from the previous
-                // stage's EROFS image.
-                let sysroot = self.config.work_dir.join("sysroot");
-                std::fs::create_dir_all(&sysroot)
-                    .map_err(|e| PipelineError::Io(e.to_string()))?;
 
                 let result = self.executor.execute(
                     recipe,
@@ -343,6 +358,11 @@ impl Pipeline {
                 }
             }
 
+            // Unmount the build environment after all packages in this stage.
+            if build_env.is_mounted() && let Err(e) = build_env.unmount() {
+                warn!("Failed to unmount build environment: {e}");
+            }
+
             // Compose EROFS from stage outputs and compute new build_env_hash.
             if !stage_manifests.is_empty() {
                 let manifest_refs: Vec<&OutputManifest> = stage_manifests.iter().collect();
@@ -354,6 +374,10 @@ impl Pipeline {
 
                 build_env_hash = erofs_image_hash(&build_result.image_path)?
                     .to_string();
+
+                // Update the image path so the next stage mounts this
+                // stage's composed EROFS as its build sysroot.
+                current_image_path = build_result.image_path;
 
                 info!(
                     "stage {stage_name} composed: {} objects, env_hash={}",
