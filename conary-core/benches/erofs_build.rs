@@ -27,7 +27,7 @@ fn main() {
         std::fs::create_dir_all(&gen_dir).unwrap();
 
         let start = Instant::now();
-        let result = build_erofs_image(&entries, &gen_dir).unwrap();
+        let result = build_erofs_image(&entries, &[], &gen_dir).unwrap();
         let elapsed = start.elapsed();
 
         println!(
