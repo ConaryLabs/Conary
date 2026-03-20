@@ -8,7 +8,7 @@ This project has 6 custom agents. Use them at these workflow points instead of g
 Use `lintian` as the code-quality review step. It knows this codebase's conventions, has project memory, and checks architectural fit. When dispatching lintian, include the superpowers review structure in the prompt (Strengths / Critical / Important / Minor / Assessment / "Ready to merge?") — lintian adds codebase-specific checks on top of that methodology. For the spec-compliance step, use the superpowers spec-reviewer as-is — lintian doesn't replace spec checking.
 
 **When tests fail unexpectedly → dispatch valgrind**
-Instead of guessing at fixes, dispatch `valgrind` to trace root cause. It has project memory and uses competing hypotheses. Use it instead of `superpowers:systematic-debugging` when working in this codebase.
+Dispatch `valgrind` to trace root cause. It has project memory, uses competing hypotheses, and knows Conary-specific investigation paths. valgrind incorporates the superpowers:systematic-debugging methodology (4-phase gated investigation, iron law of root cause first, 3-fix circuit breaker) plus codebase-specific context.
 
 **For parallel independent tasks → dispatch emerge**
 When the plan has 2+ independent tasks (like parser conversions), dispatch `emerge` to parallelize with strict file ownership. It manages dependency order and verifies compilation.
@@ -28,7 +28,7 @@ As part of `superpowers:finishing-a-development-branch`, dispatch `sbuild` to ru
 | Situation | Agent | Instead Of |
 |-----------|-------|------------|
 | Code quality review after task | **lintian** | generic code-reviewer (lintian adds codebase context) |
-| Test failure during work | **valgrind** | systematic-debugging |
+| Test failure during work | **valgrind** | systematic-debugging (valgrind adds codebase context) |
 | Parallel implementation | **emerge** | multiple sequential subagents |
 | Chunk complete, check quality | **autopkgtest** | moving on without QA |
 | Ready to merge/PR | **sbuild** | manual build verification |
