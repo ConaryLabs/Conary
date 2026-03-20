@@ -10,15 +10,27 @@
 pub mod capture;
 pub mod compose;
 pub mod environment;
+pub mod executor;
 pub mod id;
 pub mod index;
+pub mod manifest;
 pub mod output;
+pub mod profile;
 pub mod recipe_hash;
+pub mod seed;
+pub mod stages;
 
 pub use capture::{capture_output, CaptureError};
 pub use compose::{compose_erofs, compose_file_entries, erofs_image_hash, ComposeError};
 pub use environment::{BuildEnvironment, EnvironmentError};
+pub use executor::{DerivationExecutor, ExecutionResult, ExecutorError};
 pub use id::{DerivationId, DerivationInputs, SourceDerivationId};
 pub use index::{DerivationIndex, DerivationRecord};
+pub use manifest::{ManifestError, SystemManifest};
 pub use output::{OutputFile, OutputManifest, OutputSymlink, PackageOutput};
+pub use profile::{
+    BuildProfile, ProfileDerivation, ProfileDiff, ProfileMetadata, ProfileSeedRef, ProfileStage,
+};
 pub use recipe_hash::{build_script_hash, expand_variables, source_hash};
+pub use seed::{Seed, SeedError, SeedMetadata, SeedSource};
+pub use stages::{Stage, StageAssignment, StageError, assign_stages};
