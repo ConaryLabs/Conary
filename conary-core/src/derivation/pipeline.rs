@@ -10,7 +10,7 @@
 //! [`Pipeline::generate_profile`] produces a dry-run [`BuildProfile`] without
 //! executing any builds, marking all derivation IDs as "pending".
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -22,8 +22,10 @@ use crate::recipe::Recipe;
 use super::compose::{compose_erofs, erofs_image_hash, ComposeError};
 use super::environment::BuildEnvironment;
 use super::executor::{DerivationExecutor, ExecutionResult, ExecutorError};
-use super::id::DerivationId;
+use super::id::{DerivationId, DerivationInputs};
+use super::index::DerivationIndex;
 use super::output::OutputManifest;
+use super::recipe_hash;
 use super::profile::{
     BuildProfile, ProfileDerivation, ProfileMetadata, ProfileSeedRef, ProfileStage,
 };
@@ -51,6 +53,12 @@ pub struct PipelineConfig {
     pub keep_logs: bool,
     /// Spawn interactive shell on build failure.
     pub shell_on_failure: bool,
+    /// Stop after completing this stage (inclusive).
+    pub up_to_stage: Option<Stage>,
+    /// Only build these packages. All other packages use cache lookups.
+    pub only_packages: Option<Vec<String>>,
+    /// When combined with `only_packages`, also rebuild reverse dependents.
+    pub cascade: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -138,6 +146,21 @@ pub enum PipelineError {
     /// A general I/O error.
     #[error("I/O error: {0}")]
     Io(String),
+
+    /// A dependency required by --only target has no cached derivation.
+    #[error("package '{package}' depends on '{dependency}' which has no cached derivation -- run a full build first or add '{dependency}' to --only")]
+    UncachedDependency {
+        package: String,
+        dependency: String,
+    },
+
+    /// A --only target is in a stage beyond the --up-to cutoff.
+    #[error("package '{package}' is in stage '{stage}' but --up-to stops at '{cutoff}'")]
+    PackageBeyondCutoff {
+        package: String,
+        stage: String,
+        cutoff: String,
+    },
 }
 
 impl From<ComposeError> for PipelineError {
@@ -255,6 +278,29 @@ impl Pipeline {
 
         let stages_ordered = ordered_stages(assignments);
 
+        // Validate --only targets against --up-to cutoff
+        if let (Some(only_pkgs), Some(cutoff)) = (&self.config.only_packages, &self.config.up_to_stage) {
+            for pkg in only_pkgs {
+                if let Some((stage, _)) = stages_ordered.iter().find(|(_, pkgs)| pkgs.contains(pkg))
+                    && stage > cutoff
+                {
+                    return Err(PipelineError::PackageBeyondCutoff {
+                        package: pkg.clone(),
+                        stage: stage.to_string(),
+                        cutoff: cutoff.to_string(),
+                    });
+                }
+            }
+        }
+
+        let build_set = compute_build_set(
+            self.config.only_packages.as_deref(),
+            self.config.cascade,
+            self.config.up_to_stage,
+            recipes,
+            &stages_ordered,
+        );
+
         // Current build environment hash; starts from the seed.
         let mut build_env_hash = seed.build_env_hash().to_owned();
 
@@ -276,6 +322,13 @@ impl Pipeline {
                 name: stage_name.clone(),
                 package_count: pkgs.len(),
             });
+
+            // Check --up-to: skip stages beyond the cutoff
+            if let Some(cutoff) = self.config.up_to_stage
+                && *stage > cutoff
+            {
+                break;
+            }
 
             info!("stage {stage_name}: {} packages", pkgs.len());
 
@@ -303,6 +356,53 @@ impl Pipeline {
                 let recipe = recipes
                     .get(pkg_name.as_str())
                     .ok_or_else(|| PipelineError::MissingRecipe(pkg_name.clone()))?;
+
+                // --only filter: non-targeted packages require a cached derivation.
+                if let Some(ref set) = build_set
+                    && !set.contains(pkg_name.as_str())
+                {
+                    // Compute derivation ID and do cache-only lookup.
+                    let dep_ids = collect_dep_ids(recipe, &completed);
+                    let src_hash = recipe_hash::source_hash(recipe);
+                    let script_hash = recipe_hash::build_script_hash(recipe);
+                    let inputs = DerivationInputs {
+                        source_hash: src_hash,
+                        build_script_hash: script_hash,
+                        dependency_ids: dep_ids,
+                        build_env_hash: build_env_hash.clone(),
+                        target_triple: self.config.target_triple.clone(),
+                        build_options: BTreeMap::new(),
+                    };
+                    let derivation_id = DerivationId::compute(&inputs)
+                        .map_err(|e| PipelineError::Io(format!("derivation ID: {e}")))?;
+
+                    let index = DerivationIndex::new(conn);
+                    let record = index
+                        .lookup(derivation_id.as_str())
+                        .map_err(|e| PipelineError::Io(format!("index lookup: {e}")))?
+                        .ok_or_else(|| PipelineError::UncachedDependency {
+                            package: pkg_name.clone(),
+                            dependency: pkg_name.clone(),
+                        })?;
+
+                    let manifest =
+                        load_manifest_from_cas(&self.executor, &record.manifest_cas_hash)?;
+
+                    on_event(&PipelineEvent::PackageCached {
+                        name: pkg_name.clone(),
+                    });
+
+                    stage_derivations.push(ProfileDerivation {
+                        package: recipe.package.name.clone(),
+                        version: recipe.package.version.clone(),
+                        derivation_id: derivation_id.as_str().to_owned(),
+                    });
+
+                    stage_manifests.push(manifest.clone());
+                    completed.insert(pkg_name.clone(), (derivation_id, manifest));
+                    total_cached += 1;
+                    continue;
+                }
 
                 on_event(&PipelineEvent::PackageBuilding {
                     name: pkg_name.clone(),
@@ -485,6 +585,55 @@ fn collect_dep_ids(
     }
 
     dep_ids
+}
+
+/// Compute the set of packages to build based on --only and --cascade flags.
+///
+/// Returns `None` if `only_packages` is `None` (build everything).
+/// When `cascade` is true, expands the set with reverse dependents via `RecipeGraph`.
+/// When `up_to_stage` is set, filters out packages beyond the cutoff.
+fn compute_build_set(
+    only_packages: Option<&[String]>,
+    cascade: bool,
+    up_to_stage: Option<Stage>,
+    recipes: &HashMap<String, Recipe>,
+    assignments: &[(Stage, Vec<String>)],
+) -> Option<HashSet<String>> {
+    let targets = only_packages?;
+    let mut build_set: HashSet<String> = targets.iter().cloned().collect();
+
+    if cascade {
+        use crate::recipe::RecipeGraph;
+        let mut graph = RecipeGraph::new();
+        for recipe in recipes.values() {
+            graph.add_from_recipe(recipe);
+        }
+
+        let mut expanded = HashSet::new();
+        for target in &build_set {
+            for dep in graph.transitive_dependents(target) {
+                expanded.insert(dep);
+            }
+        }
+        build_set.extend(expanded);
+    }
+
+    // Filter by up_to_stage if set
+    if let Some(cutoff) = up_to_stage {
+        let allowed_packages: HashSet<String> = assignments
+            .iter()
+            .filter(|(stage, _)| *stage <= cutoff)
+            .flat_map(|(_, pkgs)| pkgs.iter().cloned())
+            .collect();
+
+        let excluded: Vec<String> = build_set.difference(&allowed_packages).cloned().collect();
+        for pkg in &excluded {
+            warn!("skipping reverse dependent '{pkg}' due to --up-to {cutoff}");
+        }
+        build_set.retain(|p| allowed_packages.contains(p));
+    }
+
+    Some(build_set)
 }
 
 /// Load an `OutputManifest` from CAS using the stored manifest hash.
