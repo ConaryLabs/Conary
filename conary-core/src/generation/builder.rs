@@ -4,9 +4,9 @@
 //!
 //! This module provides two levels of API:
 //!
-//! - [`build_erofs_image`]: Low-level function that takes a slice of
-//!   [`FileEntryRef`] and produces an EROFS image at the given path.
-//!   Uses composefs-rs for image building.
+//! - [`build_erofs_image`]: Low-level function that takes slices of
+//!   [`FileEntryRef`] and [`SymlinkEntryRef`] and produces an EROFS image
+//!   at the given path. Uses composefs-rs for image building.
 //!
 //! - [`build_generation_from_db`]: Higher-level function that queries the
 //!   database for installed troves and their files, creates a state
@@ -36,6 +36,18 @@ pub struct FileEntryRef {
     pub size: u64,
     /// Unix permission bits (e.g., 0o755)
     pub permissions: u32,
+}
+
+/// A symbolic link entry for EROFS building.
+///
+/// Decoupled from the database model so callers can construct entries
+/// from any source (derivation output, test fixtures, etc.).
+#[derive(Debug, Clone)]
+pub struct SymlinkEntryRef {
+    /// Absolute path of the symlink (e.g., `/usr/lib/libfoo.so.1`)
+    pub path: String,
+    /// The symlink target (e.g., `libfoo.so`)
+    pub target: String,
 }
 
 /// Result of building an EROFS image.
@@ -68,17 +80,19 @@ pub fn hex_to_digest(hex: &str) -> crate::Result<[u8; 32]> {
     Ok(digest)
 }
 
-/// Build an EROFS image from a slice of file entries.
+/// Build an EROFS image from file entries and symlinks.
 ///
 /// The image is written to `generation_dir/root.erofs`. Entries whose paths
 /// match [`is_excluded`] are silently skipped. Standard root symlinks
-/// (bin -> usr/bin, etc.) are always added.
+/// (bin -> usr/bin, etc.) are always added. Package symlinks from the
+/// `symlinks` slice are inserted using the same `LeafContent::Symlink` path.
 ///
 /// Requires the `composefs-rs` feature. Without it, this function is a
 /// compile-time stub that returns an error.
 #[cfg(feature = "composefs-rs")]
 pub fn build_erofs_image(
     entries: &[FileEntryRef],
+    symlinks: &[SymlinkEntryRef],
     generation_dir: &Path,
 ) -> crate::Result<BuildResult> {
     use std::cell::RefCell;
@@ -98,6 +112,78 @@ pub fn build_erofs_image(
             st_gid: 0,
             st_mtim_sec: 0,
             xattrs: RefCell::new(BTreeMap::new()),
+        }
+    }
+
+    /// Ensure all parent directories for `abs_path` exist in the filesystem tree.
+    ///
+    /// Returns `(dir_path_string, leaf_name)` where `dir_path_string` is the
+    /// cumulative parent path (empty for root-level entries) and `leaf_name`
+    /// is the final path component.
+    fn ensure_parent_dirs(
+        root: &mut Directory<Sha256HashValue>,
+        abs_path: &str,
+    ) -> crate::Result<(String, String)> {
+        let path = abs_path.strip_prefix('/').unwrap_or(abs_path);
+        let components: Vec<&str> = path.split('/').collect();
+
+        if components.is_empty() {
+            return Err(crate::error::Error::ParseError(
+                "empty path components".to_string(),
+            ));
+        }
+
+        let dir_components = &components[..components.len() - 1];
+        let leaf_name = components[components.len() - 1].to_string();
+
+        let mut dir_path = String::new();
+        for comp in dir_components {
+            if dir_path.is_empty() {
+                root.merge(
+                    OsStr::new(comp),
+                    Inode::Directory(Box::new(Directory::new(dir_stat(0o755)))),
+                );
+            } else {
+                let parent = root
+                    .get_directory_mut(OsStr::new(&dir_path))
+                    .map_err(|e| {
+                        crate::error::Error::InternalError(format!(
+                            "Failed to navigate to '{}' for path {}: {e}",
+                            dir_path, abs_path
+                        ))
+                    })?;
+                parent.merge(
+                    OsStr::new(comp),
+                    Inode::Directory(Box::new(Directory::new(dir_stat(0o755)))),
+                );
+            }
+
+            if !dir_path.is_empty() {
+                dir_path.push('/');
+            }
+            dir_path.push_str(comp);
+        }
+
+        Ok((dir_path, leaf_name))
+    }
+
+    /// Navigate to the parent directory described by `dir_path` and return a
+    /// mutable reference to it. Returns the root if `dir_path` is empty.
+    fn get_parent_dir<'a>(
+        root: &'a mut Directory<Sha256HashValue>,
+        dir_path: &str,
+        abs_path: &str,
+    ) -> crate::Result<&'a mut Directory<Sha256HashValue>> {
+        if dir_path.is_empty() {
+            Ok(root)
+        } else {
+            root.get_directory_mut(OsStr::new(dir_path))
+                .map_err(|e| {
+                    crate::error::Error::InternalError(format!(
+                        "Failed to navigate to parent '{}' for path {}: {e}",
+                        dir_path, abs_path
+                    ))
+                })
         }
     }
 
@@ -125,67 +211,12 @@ pub fn build_erofs_image(
             }
         };
 
-        // Ensure parent directories exist in the tree, then insert the file.
-        let path = entry.path.strip_prefix('/').unwrap_or(&entry.path);
-        let components: Vec<&str> = path.split('/').collect();
-
-        if components.is_empty() {
-            continue;
-        }
-
-        let dir_components = &components[..components.len() - 1];
-        let file_name = components[components.len() - 1];
-
-        // Create parent directories using merge (preserves existing entries).
-        // We build the cumulative OsStr path for get_directory_mut navigation.
-        let mut dir_path = String::new();
-        for comp in dir_components {
-            // Use merge at the appropriate level to create the directory if needed.
-            // merge on a directory-on-directory preserves existing entries.
-            if dir_path.is_empty() {
-                fs.root.merge(
-                    OsStr::new(comp),
-                    Inode::Directory(Box::new(Directory::new(dir_stat(0o755)))),
-                );
-            } else {
-                let parent = fs
-                    .root
-                    .get_directory_mut(OsStr::new(&dir_path))
-                    .map_err(|e| {
-                        crate::error::Error::InternalError(format!(
-                            "Failed to navigate to '{}' for path {}: {e}",
-                            dir_path, entry.path
-                        ))
-                    })?;
-                parent.merge(
-                    OsStr::new(comp),
-                    Inode::Directory(Box::new(Directory::new(dir_stat(0o755)))),
-                );
-            }
-
-            if !dir_path.is_empty() {
-                dir_path.push('/');
-            }
-            dir_path.push_str(comp);
-        }
-
-        // Navigate to the parent directory and insert the file leaf.
-        let parent_dir = if dir_path.is_empty() {
-            &mut fs.root
-        } else {
-            fs.root
-                .get_directory_mut(OsStr::new(&dir_path))
-                .map_err(|e| {
-                    crate::error::Error::InternalError(format!(
-                        "Failed to navigate to parent '{}' for path {}: {e}",
-                        dir_path, entry.path
-                    ))
-                })?
-        };
+        let (dir_path, file_name) = ensure_parent_dirs(&mut fs.root, &entry.path)?;
+        let parent_dir = get_parent_dir(&mut fs.root, &dir_path, &entry.path)?;
 
         // Add the file as an External CAS reference
         parent_dir.insert(
-            OsStr::new(file_name),
+            OsStr::new(&file_name),
             Inode::Leaf(Rc::new(Leaf {
                 content: LeafContent::Regular(RegularFile::External(hash, entry.size)),
                 stat: dir_stat(entry.permissions),
@@ -193,6 +224,24 @@ pub fn build_erofs_image(
         );
 
         cas_objects += 1;
+    }
+
+    // Insert package symlinks
+    for symlink in symlinks {
+        if is_excluded(&symlink.path) {
+            continue;
+        }
+
+        let (dir_path, link_name) = ensure_parent_dirs(&mut fs.root, &symlink.path)?;
+        let parent_dir = get_parent_dir(&mut fs.root, &dir_path, &symlink.path)?;
+
+        parent_dir.insert(
+            OsStr::new(&link_name),
+            Inode::Leaf(Rc::new(Leaf {
+                content: LeafContent::Symlink(OsStr::new(&symlink.target).into()),
+                stat: dir_stat(0o777),
+            })),
+        );
     }
 
     // Add root-level symlinks (bin -> usr/bin, lib -> usr/lib, etc.)
@@ -235,6 +284,7 @@ pub fn build_erofs_image(
 #[cfg(not(feature = "composefs-rs"))]
 pub fn build_erofs_image(
     _entries: &[FileEntryRef],
+    _symlinks: &[SymlinkEntryRef],
     _generation_dir: &Path,
 ) -> crate::Result<BuildResult> {
     Err(crate::error::Error::NotImplemented(
@@ -307,8 +357,8 @@ pub fn build_generation_from_db(
         })
         .collect();
 
-    // Step 5: Build EROFS image
-    let result = build_erofs_image(&file_refs, &gen_dir)?;
+    // Step 5: Build EROFS image (no package symlinks from DB yet)
+    let result = build_erofs_image(&file_refs, &[], &gen_dir)?;
 
     // Step 6: Write generation metadata
     #[allow(clippy::cast_possible_wrap)]
@@ -414,7 +464,7 @@ mod tests {
                 },
             ];
 
-            let result = build_erofs_image(&entries, tmp.path()).unwrap();
+            let result = build_erofs_image(&entries, &[], tmp.path()).unwrap();
 
             assert!(result.image_path.exists(), "EROFS image file must exist");
             assert!(result.image_size > 0, "EROFS image must be non-empty");
@@ -454,7 +504,7 @@ mod tests {
                 },
             ];
 
-            let result = build_erofs_image(&entries, tmp.path()).unwrap();
+            let result = build_erofs_image(&entries, &[], tmp.path()).unwrap();
 
             assert_eq!(
                 result.cas_objects_referenced, 1,
@@ -467,7 +517,7 @@ mod tests {
             let tmp = TempDir::new().unwrap();
             let entries: Vec<FileEntryRef> = vec![];
 
-            let result = build_erofs_image(&entries, tmp.path()).unwrap();
+            let result = build_erofs_image(&entries, &[], tmp.path()).unwrap();
 
             assert!(
                 result.image_size > 0,
@@ -500,8 +550,8 @@ mod tests {
                 },
             ];
 
-            let _r1 = build_erofs_image(&entries, tmp1.path()).unwrap();
-            let _r2 = build_erofs_image(&entries, tmp2.path()).unwrap();
+            let _r1 = build_erofs_image(&entries, &[], tmp1.path()).unwrap();
+            let _r2 = build_erofs_image(&entries, &[], tmp2.path()).unwrap();
 
             let bytes1 = std::fs::read(tmp1.path().join(EROFS_IMAGE_NAME)).unwrap();
             let bytes2 = std::fs::read(tmp2.path().join(EROFS_IMAGE_NAME)).unwrap();

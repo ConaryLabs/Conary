@@ -3,7 +3,7 @@
 //! EROFS composition -- merge multiple package outputs into a single image.
 //!
 //! After derivation builds produce [`OutputManifest`]s, this module composes
-//! their file entries into a unified [`FileEntryRef`] list suitable for
+//! their file entries and symlinks into a unified set suitable for
 //! [`build_erofs_image`]. Path conflicts are resolved with last-writer-wins
 //! semantics (later manifests override earlier ones).
 
@@ -13,7 +13,7 @@ use std::path::Path;
 use sha2::{Digest, Sha256};
 
 use crate::derivation::output::OutputManifest;
-use crate::generation::builder::{BuildResult, FileEntryRef, build_erofs_image};
+use crate::generation::builder::{BuildResult, FileEntryRef, SymlinkEntryRef, build_erofs_image};
 
 /// Errors that can occur during EROFS composition.
 #[derive(Debug, thiserror::Error)]
@@ -66,10 +66,77 @@ pub fn compose_file_entries(manifests: &[&OutputManifest]) -> Vec<FileEntryRef> 
     merged.into_values().collect()
 }
 
+/// Composed file entries and symlinks from multiple package outputs.
+///
+/// Produced by [`compose_entries`], this struct holds both files and symlinks
+/// ready for [`build_erofs_image`].
+#[derive(Debug, Clone)]
+pub struct ComposedEntries {
+    /// Merged file entries (deduplicated by path, last-writer-wins).
+    pub files: Vec<FileEntryRef>,
+    /// Merged symlink entries (deduplicated by path, last-writer-wins).
+    pub symlinks: Vec<SymlinkEntryRef>,
+}
+
+/// Merge files AND symlinks from multiple [`OutputManifest`]s.
+///
+/// Both files and symlinks are keyed by absolute path in [`BTreeMap`]s for
+/// deterministic iteration order. When multiple manifests contain the same
+/// path, the entry from the *last* manifest wins (last-writer-wins).
+///
+/// Relative paths (those not starting with `/`) are converted to absolute by
+/// prefixing with `/`.
+#[must_use]
+pub fn compose_entries(manifests: &[&OutputManifest]) -> ComposedEntries {
+    let mut merged_files: BTreeMap<String, FileEntryRef> = BTreeMap::new();
+    let mut merged_symlinks: BTreeMap<String, SymlinkEntryRef> = BTreeMap::new();
+
+    for manifest in manifests {
+        for file in &manifest.files {
+            let abs_path = if file.path.starts_with('/') {
+                file.path.clone()
+            } else {
+                format!("/{}", file.path)
+            };
+
+            merged_files.insert(
+                abs_path.clone(),
+                FileEntryRef {
+                    path: abs_path,
+                    sha256_hash: file.hash.clone(),
+                    size: file.size,
+                    permissions: file.mode,
+                },
+            );
+        }
+
+        for symlink in &manifest.symlinks {
+            let abs_path = if symlink.path.starts_with('/') {
+                symlink.path.clone()
+            } else {
+                format!("/{}", symlink.path)
+            };
+
+            merged_symlinks.insert(
+                abs_path.clone(),
+                SymlinkEntryRef {
+                    path: abs_path,
+                    target: symlink.target.clone(),
+                },
+            );
+        }
+    }
+
+    ComposedEntries {
+        files: merged_files.into_values().collect(),
+        symlinks: merged_symlinks.into_values().collect(),
+    }
+}
+
 /// Compose multiple package outputs into a single EROFS image.
 ///
-/// Merges all file entries via [`compose_file_entries`], then delegates to
-/// [`build_erofs_image`] to produce the image at `output_dir/root.erofs`.
+/// Merges all file entries and symlinks via [`compose_entries`], then delegates
+/// to [`build_erofs_image`] to produce the image at `output_dir/root.erofs`.
 ///
 /// # Errors
 ///
@@ -83,9 +150,10 @@ pub fn compose_erofs(
         return Err(ComposeError::EmptyComposition);
     }
 
-    let entries = compose_file_entries(manifests);
+    let composed = compose_entries(manifests);
 
-    build_erofs_image(&entries, output_dir).map_err(|e| ComposeError::Erofs(e.to_string()))
+    build_erofs_image(&composed.files, &composed.symlinks, output_dir)
+        .map_err(|e| ComposeError::Erofs(e.to_string()))
 }
 
 /// Compute the SHA-256 hash of an EROFS image file.
@@ -106,9 +174,9 @@ pub fn erofs_image_hash(image_path: &Path) -> Result<String, ComposeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::derivation::output::{OutputFile, OutputManifest};
+    use crate::derivation::output::{OutputFile, OutputManifest, OutputSymlink};
 
-    /// Build a minimal `OutputManifest` with the given files.
+    /// Build a minimal `OutputManifest` with the given files and no symlinks.
     fn manifest_with_files(files: Vec<OutputFile>) -> OutputManifest {
         OutputManifest {
             derivation_id: "d".repeat(64),
@@ -270,5 +338,123 @@ mod tests {
             hash.chars().all(|c| c.is_ascii_hexdigit()),
             "hash should be valid hex"
         );
+    }
+
+    // ---------------------------------------------------------------
+    // Symlink composition tests
+    // ---------------------------------------------------------------
+
+    /// Build a minimal `OutputManifest` with the given files and symlinks.
+    fn manifest_with_files_and_symlinks(
+        files: Vec<OutputFile>,
+        symlinks: Vec<OutputSymlink>,
+    ) -> OutputManifest {
+        OutputManifest {
+            derivation_id: "d".repeat(64),
+            output_hash: "e".repeat(64),
+            files,
+            symlinks,
+            build_duration_secs: 1,
+            built_at: "2026-03-19T00:00:00Z".to_owned(),
+        }
+    }
+
+    #[test]
+    fn compose_includes_symlinks_from_manifests() {
+        let m1 = manifest_with_files_and_symlinks(
+            vec![OutputFile {
+                path: "/usr/lib/libfoo.so".to_owned(),
+                hash: "a".repeat(64),
+                size: 4096,
+                mode: 0o644,
+            }],
+            vec![OutputSymlink {
+                path: "/usr/lib/libfoo.so.1".to_owned(),
+                target: "libfoo.so".to_owned(),
+            }],
+        );
+
+        let m2 = manifest_with_files_and_symlinks(
+            vec![OutputFile {
+                path: "/usr/lib/libbar.so".to_owned(),
+                hash: "b".repeat(64),
+                size: 2048,
+                mode: 0o644,
+            }],
+            vec![OutputSymlink {
+                path: "/usr/lib/libbar.so.2".to_owned(),
+                target: "libbar.so".to_owned(),
+            }],
+        );
+
+        let composed = compose_entries(&[&m1, &m2]);
+
+        assert_eq!(composed.files.len(), 2, "should have 2 files");
+        assert_eq!(composed.symlinks.len(), 2, "should have 2 symlinks");
+
+        let symlink_paths: Vec<&str> = composed.symlinks.iter().map(|s| s.path.as_str()).collect();
+        assert!(symlink_paths.contains(&"/usr/lib/libfoo.so.1"));
+        assert!(symlink_paths.contains(&"/usr/lib/libbar.so.2"));
+
+        let foo_symlink = composed
+            .symlinks
+            .iter()
+            .find(|s| s.path == "/usr/lib/libfoo.so.1")
+            .unwrap();
+        assert_eq!(foo_symlink.target, "libfoo.so");
+    }
+
+    #[test]
+    fn symlink_last_writer_wins() {
+        let m1 = manifest_with_files_and_symlinks(
+            vec![],
+            vec![OutputSymlink {
+                path: "/usr/lib/libfoo.so.1".to_owned(),
+                target: "libfoo.so.1.0".to_owned(),
+            }],
+        );
+
+        let m2 = manifest_with_files_and_symlinks(
+            vec![],
+            vec![OutputSymlink {
+                path: "/usr/lib/libfoo.so.1".to_owned(),
+                target: "libfoo.so.1.1".to_owned(),
+            }],
+        );
+
+        let composed = compose_entries(&[&m1, &m2]);
+
+        assert_eq!(composed.symlinks.len(), 1, "should deduplicate by path");
+        assert_eq!(
+            composed.symlinks[0].target, "libfoo.so.1.1",
+            "last manifest should win"
+        );
+    }
+
+    #[test]
+    fn compose_entries_relative_symlink_paths_become_absolute() {
+        let m = manifest_with_files_and_symlinks(
+            vec![],
+            vec![OutputSymlink {
+                path: "usr/lib/libfoo.so.1".to_owned(),
+                target: "libfoo.so".to_owned(),
+            }],
+        );
+
+        let composed = compose_entries(&[&m]);
+
+        assert_eq!(composed.symlinks.len(), 1);
+        assert!(
+            composed.symlinks[0].path.starts_with('/'),
+            "symlink path '{}' should be absolute",
+            composed.symlinks[0].path
+        );
+    }
+
+    #[test]
+    fn compose_entries_with_no_manifests_returns_empty() {
+        let composed = compose_entries(&[]);
+        assert!(composed.files.is_empty());
+        assert!(composed.symlinks.is_empty());
     }
 }

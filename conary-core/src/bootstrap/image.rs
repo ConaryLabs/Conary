@@ -616,7 +616,7 @@ impl ImageBuilder {
             })
             .collect();
 
-        let build_result = build_erofs_image(&erofs_entries, &gen_dir)
+        let build_result = build_erofs_image(&erofs_entries, &[], &gen_dir)
             .map_err(|e| ImageError::CreationFailed(format!("Failed to build EROFS image: {e}")))?;
 
         // Step 5: Write generation metadata

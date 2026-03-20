@@ -215,8 +215,8 @@ mod tests {
             },
         ];
 
-        let r1 = build_erofs_image(&entries_v1, tmp1.path()).unwrap();
-        let r2 = build_erofs_image(&entries_v2, tmp2.path()).unwrap();
+        let r1 = build_erofs_image(&entries_v1, &[], tmp1.path()).unwrap();
+        let r2 = build_erofs_image(&entries_v2, &[], tmp2.path()).unwrap();
 
         let old_bytes = std::fs::read(&r1.image_path).unwrap();
         let new_bytes = std::fs::read(&r2.image_path).unwrap();
