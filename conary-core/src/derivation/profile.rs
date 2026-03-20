@@ -8,8 +8,9 @@
 //! all this information, making it trivial to detect when a plan has changed.
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
+
+use crate::hash;
 
 /// Version prefix for the canonical profile hash format.
 const PROFILE_HASH_PREFIX: &str = "CONARY-PROFILE-V1";
@@ -94,8 +95,7 @@ impl BuildProfile {
     #[must_use]
     pub fn compute_hash(&self) -> String {
         let canonical = self.canonical_string();
-        let hash = Sha256::digest(canonical.as_bytes());
-        hex::encode(hash)
+        hash::sha256(canonical.as_bytes())
     }
 
     /// Produce the canonical serialization used for hashing.

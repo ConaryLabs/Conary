@@ -11,9 +11,9 @@
 //! - [`source_hash`] — SHA-256 of the primary source checksum plus any
 //!   additional source checksums.
 
-use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
+use crate::hash;
 use crate::recipe::Recipe;
 
 /// Expand `%(name)s`-style variables in a template string.
@@ -25,6 +25,10 @@ use crate::recipe::Recipe;
 /// Unknown variables are left as-is (no error).
 #[must_use]
 pub fn expand_variables(template: &str, recipe: &Recipe) -> String {
+    if !template.contains("%(") {
+        return template.to_string();
+    }
+
     let mut result = template.to_string();
 
     // Built-in variables from the recipe metadata.
@@ -52,7 +56,7 @@ pub fn expand_variables(template: &str, recipe: &Recipe) -> String {
 /// Returns a 64-char lowercase hex string.
 #[must_use]
 pub fn build_script_hash(recipe: &Recipe) -> String {
-    let mut hasher = Sha256::new();
+    let mut hasher = hash::Hasher::new(hash::HashAlgorithm::Sha256);
 
     let sections: [(&str, &Option<String>); 4] = [
         ("configure", &recipe.build.configure),
@@ -68,7 +72,7 @@ pub fn build_script_hash(recipe: &Recipe) -> String {
         }
     }
 
-    hex::encode(hasher.finalize())
+    hasher.finalize().value
 }
 
 /// Compute a SHA-256 hash of all source checksums.
@@ -80,7 +84,7 @@ pub fn build_script_hash(recipe: &Recipe) -> String {
 /// Returns a 64-char lowercase hex string.
 #[must_use]
 pub fn source_hash(recipe: &Recipe) -> String {
-    let mut hasher = Sha256::new();
+    let mut hasher = hash::Hasher::new(hash::HashAlgorithm::Sha256);
 
     hasher.update(format!("primary:{}\n", recipe.source.checksum).as_bytes());
 
@@ -88,7 +92,7 @@ pub fn source_hash(recipe: &Recipe) -> String {
         hasher.update(format!("additional:{}\n", additional.checksum).as_bytes());
     }
 
-    hex::encode(hasher.finalize())
+    hasher.finalize().value
 }
 
 #[cfg(test)]

@@ -79,9 +79,12 @@ pub enum StageError {
 ///
 /// These are the essential build tools required to compile the rest of the
 /// system once the cross-compiled toolchain is available.
+///
+/// Note: `glibc` is intentionally absent here -- it appears in
+/// `TOOLCHAIN_NAMED` and the toolchain check runs before the foundation
+/// check in `assign_stages`, so it is always classified as toolchain.
 const FOUNDATION_PACKAGES: &[&str] = &[
     "gcc",
-    "glibc",
     "binutils",
     "make",
     "bash",
@@ -322,48 +325,7 @@ fn topological_sort(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recipe::{BuildSection, PackageSection, Recipe, SourceSection};
-
-    /// Create a minimal test recipe with the given name and dependencies.
-    fn make_recipe(name: &str, requires: &[&str], makedepends: &[&str]) -> Recipe {
-        Recipe {
-            package: PackageSection {
-                name: name.to_string(),
-                version: "1.0.0".to_string(),
-                release: "1".to_string(),
-                summary: None,
-                description: None,
-                license: None,
-                homepage: None,
-            },
-            source: SourceSection {
-                archive: format!("https://example.com/{name}-1.0.tar.gz"),
-                checksum: "sha256:abc".to_string(),
-                signature: None,
-                additional: Vec::new(),
-                extract_dir: None,
-            },
-            build: BuildSection {
-                requires: requires.iter().map(|s| s.to_string()).collect(),
-                makedepends: makedepends.iter().map(|s| s.to_string()).collect(),
-                configure: None,
-                make: None,
-                install: None,
-                check: None,
-                setup: None,
-                post_install: None,
-                environment: HashMap::new(),
-                workdir: None,
-                script_file: None,
-                jobs: None,
-                stage: None,
-            },
-            cross: None,
-            patches: None,
-            components: None,
-            variables: HashMap::new(),
-        }
-    }
+    use crate::derivation::test_helpers::helpers::make_recipe;
 
     /// Create a recipe with a manual stage hint.
     fn make_recipe_with_stage(
