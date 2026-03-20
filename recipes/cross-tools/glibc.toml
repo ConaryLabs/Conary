@@ -25,7 +25,7 @@ homepage = "https://www.gnu.org/software/libc/"
 archive = "https://ftpmirror.gnu.org/glibc/glibc-%(version)s.tar.xz"
 checksum = "sha256:d9c86c6b5dbddb43a3e08270c5844fc5177d19442cf5b8df4be7c07cd5fa3831"
 
-[[source.patches]]
+[[source.additional]]
 url = "https://www.linuxfromscratch.org/patches/lfs/development/glibc-fhs-1.patch"
 checksum = "sha256:643552db030e2f2d7ffde4f558e0f5f83d3fabf34a2e0e56ebdb49750ac27b0d"
 

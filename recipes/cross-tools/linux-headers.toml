@@ -43,7 +43,8 @@ find usr/include -type f ! -name '*.h' -delete
 """
 
 install = """
-cp -rv usr/include $LFS/usr
+mkdir -pv $LFS/usr/include
+cp -rv usr/include/* $LFS/usr/include
 """
 
 [variables]
