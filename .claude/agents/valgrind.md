@@ -90,9 +90,19 @@ If you catch yourself thinking:
 
 ## After Investigation
 
-Update your agent memory:
-- The bug pattern (for recognizing similar issues faster)
-- The debugging path that worked (what to try first next time)
-- Codebase knowledge gained during investigation
+Update your agent memory ONLY with durable knowledge that helps debug faster next time.
+
+**DO remember:**
+- Bug patterns (e.g., "TOCTOU in CAS operations" or "async race in SSE handlers")
+- Debugging paths that worked (e.g., "for server 500s, check spawn_blocking join errors first")
+- Codebase knowledge that's not obvious from reading code (e.g., "audit_log uses free functions, not methods")
+
+**DO NOT remember:**
+- The specific bug you just fixed (it's fixed, the memory is stale)
+- Stack traces or error messages (ephemeral)
+- Line numbers (they drift)
+
+**Test:** "Will knowing this help me debug a DIFFERENT bug in 3 months?" If not, don't write it.
 
 Write concise notes to `.claude/agent-memory/valgrind/MEMORY.md`.
+Keep MEMORY.md under 40 lines.
