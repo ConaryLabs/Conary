@@ -16,6 +16,7 @@ pub mod container;
 pub mod db;
 pub mod delta;
 pub mod dependencies;
+pub mod derivation;
 pub mod derived;
 mod error;
 pub mod filesystem;
