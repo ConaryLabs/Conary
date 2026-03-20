@@ -109,12 +109,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-
-    /// Helper: create a CAS store in a temp directory.
-    fn test_cas(dir: &Path) -> CasStore {
-        let cas_dir = dir.join("cas");
-        CasStore::new(&cas_dir).expect("CAS creation must succeed")
-    }
+    use crate::derivation::test_helpers::helpers::test_cas;
 
     #[test]
     fn captures_files_to_cas() {

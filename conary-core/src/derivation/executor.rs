@@ -235,6 +235,7 @@ impl DerivationExecutor {
 mod tests {
     use super::*;
     use crate::db::schema::migrate;
+    use crate::derivation::test_helpers::helpers::test_cas;
     use tempfile::TempDir;
 
     /// Create a minimal recipe for testing via TOML deserialization.
@@ -255,12 +256,6 @@ install = "make install"
 "#
         );
         toml::from_str(&toml_str).expect("test recipe must parse")
-    }
-
-    /// Create a CAS store in a temp directory.
-    fn test_cas(dir: &Path) -> CasStore {
-        let cas_dir = dir.join("cas");
-        CasStore::new(&cas_dir).expect("CAS creation must succeed")
     }
 
     /// Set up an in-memory database with migrations applied.

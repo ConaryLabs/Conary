@@ -34,7 +34,7 @@
 - Repository.id is Option<i64> -- None before insert, Some after
 - `ServerState` behind `Arc<RwLock<>>`, config.db_path used to open fresh connections per request
 - External admin API scopes: admin, ci:read, ci:trigger, repos:read, repos:write, federation:read, federation:write
-- Schema version is v54 (v53: canonical cache, v54: derivation_index)
+- Schema version is v53 (admin_audit_log added in v48, latest migration is v53; uses function dispatch pattern migrate_v{N})
 - `audit_log` model uses free functions (insert/query/purge) not struct methods -- differs from Trove/Repository pattern
 - MCP endpoint at /mcp on :8082 requires admin scope
 - SSE broadcast channel bounded at 1024 -- adequate for admin API volume
@@ -125,27 +125,11 @@
 - `ssh-keygen -A -f <prefix>` does NOT re-root key generation; `-f` is ignored by `-A`
 - systemd-boot EFI binary (`systemd-bootx64.efi`) requires systemd built with `-Dbootloader=true`
 
-## Derivation Module (bootstrap-v2, 2026-03-20 full review)
-- `conary-core/src/derivation/` -- 13 source files, 111 tests, 2 CLI commands
-- Schema v54 adds `derivation_index` table (migration in migrations.rs)
-- `BuildSection.stage` field added to recipe format (optional stage hint)
-- Recipe re-exports expanded: `PackageSection`, `ComponentSection`, `PatchSection` now pub
-- id.rs: `validate_inputs()` checks dep names and option keys for `:` and `\n` -- BUT misses source_hash, build_script_hash, build_env_hash, target_triple, dep values, option values (P0)
-- id.rs: `DerivationId::compute()` panics via assert! on invalid input -- should return Result (P0)
-- output.rs: `output_hash` still does NOT include file mode (P1, must fix before persistent storage)
-- output.rs: `PackageOutput::from_manifest()` now returns Result (prior expect() fixed)
-- compose.rs: `erofs_image_hash()` reads entire file into memory -- will OOM on real EROFS images (P1)
-- compose.rs: `compose_file_entries()` ignores symlinks from OutputManifest (P2, blocks Phase 2)
-- capture.rs: `capture_output()` reads entire files into memory for CAS ingestion (P1 at scale)
-- executor.rs: DESTDIR not cleaned up on build failure -- leaked directories (P1)
-- pipeline.rs: seed source uses `format!("{:?}", ...)` Debug repr -- fragile (P1)
-- pipeline.rs: `collect_dep_ids()` silently skips missing deps -- should warn (P1)
-- seed.rs: `SeedSource::SelfBuilt` serializes as "selfbuilt" not "self-built" per spec (P1)
-- stages.rs: topological sort uses expect() at line 303 -- borderline infallible (P2)
-- profile.rs: `diff()` uses expect() at lines 189/193 -- logically infallible but breaks convention (P2)
-- canonical_string still duplicated between DerivationId and SourceDerivationId (P1 maintainability)
-- CLI commands `conary derivation build/show` and `conary profile generate/show/diff` wired up
-- `profile generate` and `derivation build` are partial stubs (TODO messages, acceptable for Phase 1)
-
 ## Documentation Audit (2026-03-18)
 - [doc_audit_2026_03_18](doc_audit_2026_03_18.md) -- systemic doc staleness after composefs-native and LFS 13 alignment
+
+## Bootstrap v2 Spec Review (2026-03-19)
+- [bootstrap_v2_spec_review](bootstrap_v2_spec_review.md) -- Rev 2 APPROVED: 0 HIGH (all 5 fixed), 6 MEDIUM (recipe format examples, stage naming, diverse-verification hash contradiction), 5 LOW
+
+## Bootstrap v2 Implementation Plan Review (2026-03-19)
+- [bootstrap_v2_plan_review](bootstrap_v2_plan_review.md) -- 19 findings: 7 HIGH (API mismatches, type errors), 8 MEDIUM (missing mount integration, spec gaps), 4 LOW

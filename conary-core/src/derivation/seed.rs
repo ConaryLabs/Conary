@@ -121,30 +121,28 @@ impl Seed {
         let image_path = seed_dir.join("seed.erofs");
         let metadata_path = seed_dir.join("seed.toml");
 
-        // Verify required files exist.
-        if !image_path.exists() {
-            return Err(SeedError::MissingImage(format!(
-                "{}",
-                image_path.display()
-            )));
-        }
-        if !metadata_path.exists() {
-            return Err(SeedError::MissingMetadata(format!(
-                "{}",
-                metadata_path.display()
-            )));
-        }
+        // Hash the image first; map NotFound to MissingImage (checked before
+        // metadata so that a missing image is reported even if metadata is
+        // also absent).
+        let actual_hash = erofs_image_hash(&image_path).map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("No such file or directory") {
+                SeedError::MissingImage(format!("{}", image_path.display()))
+            } else {
+                SeedError::Io(format!("hashing {}: {e}", image_path.display()))
+            }
+        })?;
 
-        // Read and parse metadata.
+        // Read and parse metadata directly; map NotFound to MissingMetadata.
         let toml_content = std::fs::read_to_string(&metadata_path).map_err(|e| {
-            SeedError::Io(format!("reading {}: {e}", metadata_path.display()))
+            if e.kind() == std::io::ErrorKind::NotFound {
+                SeedError::MissingMetadata(format!("{}", metadata_path.display()))
+            } else {
+                SeedError::Io(format!("reading {}: {e}", metadata_path.display()))
+            }
         })?;
         let metadata: SeedMetadata =
             toml::from_str(&toml_content).map_err(|e| SeedError::Parse(e.to_string()))?;
-
-        // Verify the seed_id matches the actual image hash.
-        let actual_hash = erofs_image_hash(&image_path)
-            .map_err(|e| SeedError::Io(format!("hashing {}: {e}", image_path.display())))?;
 
         if metadata.seed_id != actual_hash {
             return Err(SeedError::HashMismatch {

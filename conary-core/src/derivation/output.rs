@@ -7,7 +7,8 @@
 //! content-addressed key for the build result.
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+
+use crate::hash;
 
 use super::id::DerivationId;
 
@@ -68,7 +69,7 @@ impl OutputManifest {
     /// all symlink targets (sorted by path), each on its own line.
     #[must_use]
     pub fn compute_output_hash(files: &[OutputFile], symlinks: &[OutputSymlink]) -> String {
-        let mut hasher = Sha256::new();
+        let mut hasher = hash::Hasher::new(hash::HashAlgorithm::Sha256);
 
         let mut sorted_files: Vec<&OutputFile> = files.iter().collect();
         sorted_files.sort_by(|a, b| a.path.cmp(&b.path));
@@ -84,7 +85,7 @@ impl OutputManifest {
             hasher.update(format!("symlink:{}:{}\n", symlink.path, symlink.target).as_bytes());
         }
 
-        hex::encode(hasher.finalize())
+        hasher.finalize().value
     }
 
     /// Build a new `OutputManifest`, computing the output hash automatically.
@@ -116,7 +117,7 @@ impl PackageOutput {
     /// Returns an error if the manifest cannot be serialized to TOML.
     pub fn from_manifest(manifest: OutputManifest) -> Result<Self, toml::ser::Error> {
         let manifest_bytes = toml::to_string_pretty(&manifest)?.into_bytes();
-        let manifest_hash = hex::encode(Sha256::digest(&manifest_bytes));
+        let manifest_hash = hash::sha256(&manifest_bytes);
         Ok(Self {
             manifest,
             manifest_bytes,

@@ -7,9 +7,10 @@
 //! same source+script+deps combination can be verified across different build
 //! environments.
 
-use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt;
+
+use crate::hash;
 
 /// Errors that can occur when validating derivation inputs.
 #[derive(Debug, thiserror::Error)]
@@ -66,8 +67,7 @@ impl DerivationId {
     pub fn compute(inputs: &DerivationInputs) -> Result<Self, DerivationError> {
         validate_inputs(inputs)?;
         let canonical = Self::canonical_string(inputs);
-        let hash = Sha256::digest(canonical.as_bytes());
-        Ok(Self(hex::encode(hash)))
+        Ok(Self(hash::sha256(canonical.as_bytes())))
     }
 
     /// Produce the canonical serialization of the derivation inputs.
@@ -84,31 +84,7 @@ impl DerivationId {
     /// ```
     #[must_use]
     pub fn canonical_string(inputs: &DerivationInputs) -> String {
-        let mut lines = Vec::new();
-
-        lines.push(CANONICAL_PREFIX.to_owned());
-        lines.push(format!("source:{}", inputs.source_hash));
-        lines.push(format!("script:{}", inputs.build_script_hash));
-
-        // BTreeMap iterates in sorted key order.
-        for (name, id) in &inputs.dependency_ids {
-            lines.push(format!("dep:{name}:{id}"));
-        }
-
-        lines.push(format!("env:{}", inputs.build_env_hash));
-        lines.push(format!("target:{}", inputs.target_triple));
-
-        for (key, value) in &inputs.build_options {
-            lines.push(format!("opt:{key}:{value}"));
-        }
-
-        // Each line is terminated by newline, including the last.
-        let mut out = String::new();
-        for line in lines {
-            out.push_str(&line);
-            out.push('\n');
-        }
-        out
+        build_canonical_string(inputs, true)
     }
 
     /// Return the raw 64-char hex string.
@@ -122,6 +98,39 @@ impl fmt::Display for DerivationId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
+}
+
+/// Build the canonical string representation of derivation inputs.
+///
+/// When `include_env` is true, the `env:<build_env_hash>` line is included
+/// (used by `DerivationId`). When false, it is omitted (used by
+/// `SourceDerivationId`). Uses `write!` directly to the `String` to avoid
+/// intermediate allocations.
+fn build_canonical_string(inputs: &DerivationInputs, include_env: bool) -> String {
+    use std::fmt::Write;
+
+    let mut out = String::with_capacity(256);
+    out.push_str(CANONICAL_PREFIX);
+    out.push('\n');
+    let _ = writeln!(out, "source:{}", inputs.source_hash);
+    let _ = writeln!(out, "script:{}", inputs.build_script_hash);
+
+    // BTreeMap iterates in sorted key order.
+    for (name, id) in &inputs.dependency_ids {
+        let _ = writeln!(out, "dep:{name}:{id}");
+    }
+
+    if include_env {
+        let _ = writeln!(out, "env:{}", inputs.build_env_hash);
+    }
+
+    let _ = writeln!(out, "target:{}", inputs.target_triple);
+
+    for (key, value) in &inputs.build_options {
+        let _ = writeln!(out, "opt:{key}:{value}");
+    }
+
+    out
 }
 
 /// Validate that no input field contains characters that would corrupt the
@@ -192,8 +201,7 @@ impl SourceDerivationId {
     pub fn compute(inputs: &DerivationInputs) -> Result<Self, DerivationError> {
         validate_inputs(inputs)?;
         let canonical = Self::canonical_string(inputs);
-        let hash = Sha256::digest(canonical.as_bytes());
-        Ok(Self(hex::encode(hash)))
+        Ok(Self(hash::sha256(canonical.as_bytes())))
     }
 
     /// Produce the canonical serialization excluding `build_env_hash`.
@@ -202,29 +210,7 @@ impl SourceDerivationId {
     /// `env:` line.
     #[must_use]
     pub fn canonical_string(inputs: &DerivationInputs) -> String {
-        let mut lines = Vec::new();
-
-        lines.push(CANONICAL_PREFIX.to_owned());
-        lines.push(format!("source:{}", inputs.source_hash));
-        lines.push(format!("script:{}", inputs.build_script_hash));
-
-        for (name, id) in &inputs.dependency_ids {
-            lines.push(format!("dep:{name}:{id}"));
-        }
-
-        // env line intentionally omitted.
-        lines.push(format!("target:{}", inputs.target_triple));
-
-        for (key, value) in &inputs.build_options {
-            lines.push(format!("opt:{key}:{value}"));
-        }
-
-        let mut out = String::new();
-        for line in lines {
-            out.push_str(&line);
-            out.push('\n');
-        }
-        out
+        build_canonical_string(inputs, false)
     }
 
     /// Return the raw 64-char hex string.

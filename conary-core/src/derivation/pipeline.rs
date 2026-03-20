@@ -479,7 +479,7 @@ mod tests {
     use crate::derivation::compose::erofs_image_hash;
     use crate::derivation::id::DerivationInputs;
     use crate::derivation::seed::{SeedMetadata, SeedSource};
-    use crate::recipe::{BuildSection, PackageSection, Recipe, SourceSection};
+    use crate::derivation::test_helpers::helpers::make_recipe;
     use std::collections::HashSet;
     use std::path::Path;
 
@@ -503,46 +503,6 @@ mod tests {
             },
             image_path,
             cas_dir: dir.join("cas"),
-        }
-    }
-
-    fn make_recipe(name: &str, requires: &[&str], makedepends: &[&str]) -> Recipe {
-        Recipe {
-            package: PackageSection {
-                name: name.to_string(),
-                version: "1.0.0".to_string(),
-                release: "1".to_string(),
-                summary: None,
-                description: None,
-                license: None,
-                homepage: None,
-            },
-            source: SourceSection {
-                archive: format!("https://example.com/{name}-1.0.tar.gz"),
-                checksum: "sha256:abc".to_string(),
-                signature: None,
-                additional: Vec::new(),
-                extract_dir: None,
-            },
-            build: BuildSection {
-                requires: requires.iter().map(|s| s.to_string()).collect(),
-                makedepends: makedepends.iter().map(|s| s.to_string()).collect(),
-                configure: None,
-                make: None,
-                install: None,
-                check: None,
-                setup: None,
-                post_install: None,
-                environment: HashMap::new(),
-                workdir: None,
-                script_file: None,
-                jobs: None,
-                stage: None,
-            },
-            cross: None,
-            patches: None,
-            components: None,
-            variables: HashMap::new(),
         }
     }
 

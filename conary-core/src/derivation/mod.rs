@@ -20,6 +20,8 @@ pub mod profile;
 pub mod recipe_hash;
 pub mod seed;
 pub mod stages;
+#[cfg(test)]
+pub(crate) mod test_helpers;
 
 pub use capture::{capture_output, CaptureError};
 pub use compose::{compose_erofs, compose_file_entries, erofs_image_hash, ComposeError};
