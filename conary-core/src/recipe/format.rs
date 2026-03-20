@@ -350,6 +350,14 @@ pub struct BuildSection {
     /// Number of parallel jobs (default: auto)
     #[serde(default)]
     pub jobs: Option<u32>,
+
+    /// Manual stage assignment hint for bootstrap ordering.
+    ///
+    /// When set, overrides the automatic stage classification in the
+    /// derivation stage assignment algorithm. Valid values: "toolchain",
+    /// "foundation", "system", "customization".
+    #[serde(default)]
+    pub stage: Option<String>,
 }
 
 /// Cross-compilation configuration

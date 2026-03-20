@@ -125,5 +125,18 @@
 - `ssh-keygen -A -f <prefix>` does NOT re-root key generation; `-f` is ignored by `-A`
 - systemd-boot EFI binary (`systemd-bootx64.efi`) requires systemd built with `-Dbootloader=true`
 
+## Derivation Module (bootstrap-v2, 2026-03-19)
+- `conary-core/src/derivation/` -- new module for CAS-layered bootstrap
+- id.rs: DerivationId, SourceDerivationId, DerivationInputs; canonical serialization with CONARY-DERIVATION-V1 prefix
+- output.rs: OutputFile, OutputSymlink, OutputManifest, PackageOutput
+- BTreeMap used for sorted deps and build_options (correct choice for deterministic iteration)
+- Canonical format uses `:` delimiter -- no validation that names/keys don't contain `:` or `\n` (P1 injection risk)
+- DerivationId is a newtype(String) but lacks Serialize/Deserialize -- OutputManifest stores derivation_id as bare String
+- No from_hex / TryFrom constructor on DerivationId -- will need one for persistence
+- PackageOutput::from_manifest has expect() in non-test code (borderline per convention)
+- output_hash does NOT include file mode -- two outputs differing only in permissions hash the same
+- canonical_string logic duplicated between DerivationId and SourceDerivationId (~90% identical)
+- 13 tests across 2 files; good coverage of determinism, sort order, env-exclusion, round-trip, hex validation
+
 ## Documentation Audit (2026-03-18)
 - [doc_audit_2026_03_18](doc_audit_2026_03_18.md) -- systemic doc staleness after composefs-native and LFS 13 alignment

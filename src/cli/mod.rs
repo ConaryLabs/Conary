@@ -35,6 +35,7 @@ mod capability;
 mod ccs;
 mod collection;
 mod config;
+mod derivation;
 mod derive;
 mod distro;
 mod federation;
@@ -42,6 +43,7 @@ mod generation;
 mod groups;
 mod label;
 mod model;
+mod profile;
 mod provenance;
 mod query;
 mod redirect;
@@ -61,6 +63,7 @@ pub use capability::CapabilityCommands;
 pub use ccs::CcsCommands;
 pub use collection::CollectionCommands;
 pub use config::ConfigCommands;
+pub use derivation::DerivationCommands;
 pub use derive::DeriveCommands;
 pub use distro::DistroCommands;
 pub use federation::FederationCommands;
@@ -68,6 +71,7 @@ pub use generation::GenerationCommands;
 pub use groups::GroupsCommands;
 pub use label::LabelCommands;
 pub use model::ModelCommands;
+pub use profile::ProfileCommands;
 pub use provenance::ProvenanceCommands;
 pub use query::QueryCommands;
 pub use redirect::RedirectCommands;
@@ -463,6 +467,17 @@ pub enum Commands {
     /// Bootstrap a complete Conary system from scratch
     #[command(subcommand)]
     Bootstrap(BootstrapCommands),
+
+    // =========================================================================
+    // Derivation Engine
+    // =========================================================================
+    /// Derivation engine operations
+    #[command(subcommand)]
+    Derivation(DerivationCommands),
+
+    /// Build profile operations
+    #[command(subcommand)]
+    Profile(ProfileCommands),
 
     // =========================================================================
     // Self-Update
