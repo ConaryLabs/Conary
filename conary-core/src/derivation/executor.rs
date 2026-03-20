@@ -64,6 +64,34 @@ pub enum ExecutionResult {
     },
 }
 
+/// RAII guard that removes a directory on drop unless disarmed.
+///
+/// Used to ensure build output directories (DESTDIR) are cleaned up even when
+/// the build fails partway through. Call [`disarm`](CleanupGuard::disarm) on
+/// the success path to preserve the directory.
+struct CleanupGuard {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl CleanupGuard {
+    fn new(path: PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for CleanupGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
 /// Single-package derivation executor.
 ///
 /// Orchestrates the full derivation lifecycle: compute the content-addressed
@@ -157,8 +185,10 @@ impl DerivationExecutor {
         let kitchen = Kitchen::new(config);
 
         // Create a Cook that installs to a temporary DESTDIR.
+        // The CleanupGuard ensures the directory is removed on any error path.
         let destdir = self.cas_dir.join(format!("build-{}", &derivation_id.as_str()[..16]));
         std::fs::create_dir_all(&destdir).map_err(|e| ExecutorError::Io(e.to_string()))?;
+        let mut destdir_guard = CleanupGuard::new(destdir.clone());
 
         let start = Instant::now();
 
@@ -184,6 +214,10 @@ impl DerivationExecutor {
             derivation_id.as_str(),
             build_duration,
         )?;
+
+        // Output is safely in CAS -- disarm the guard so it does not
+        // double-remove on the success path.
+        destdir_guard.disarm();
 
         // Step 5: Serialize manifest and store in CAS.
         let pkg_output = PackageOutput::from_manifest(manifest)
@@ -444,5 +478,54 @@ install = "make install"
                 );
             }
         }
+    }
+
+    #[test]
+    fn destdir_cleaned_up_on_build_failure() {
+        // Without real source archives the build will fail during prep.
+        // The CleanupGuard should remove the DESTDIR on any error path.
+        let tmp = TempDir::new().unwrap();
+        let cas = test_cas(tmp.path());
+        let conn = setup_db();
+
+        let recipe = test_recipe("sed", "4.9");
+        let dep_ids = BTreeMap::new();
+        let sysroot = tmp.path().join("sysroot");
+        std::fs::create_dir_all(&sysroot).unwrap();
+
+        let cas_dir = tmp.path().join("cas");
+        let executor = DerivationExecutor::new(cas, cas_dir.clone());
+
+        let result = executor.execute(
+            &recipe,
+            "env_hash",
+            &dep_ids,
+            "x86_64-unknown-linux-gnu",
+            &sysroot,
+            &conn,
+        );
+
+        // The build must fail (no real sources).
+        assert!(result.is_err(), "execute should fail without real sources");
+
+        // Compute the expected DESTDIR path to verify it was cleaned up.
+        let src_hash = recipe_hash::source_hash(&recipe);
+        let script_hash = recipe_hash::build_script_hash(&recipe);
+        let inputs = DerivationInputs {
+            source_hash: src_hash,
+            build_script_hash: script_hash,
+            dependency_ids: dep_ids,
+            build_env_hash: "env_hash".to_owned(),
+            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
+            build_options: BTreeMap::new(),
+        };
+        let derivation_id = DerivationId::compute(&inputs).unwrap();
+        let destdir = cas_dir.join(format!("build-{}", &derivation_id.as_str()[..16]));
+
+        assert!(
+            !destdir.exists(),
+            "DESTDIR should have been cleaned up on build failure: {}",
+            destdir.display(),
+        );
     }
 }
