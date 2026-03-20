@@ -106,6 +106,11 @@ impl<'a> Cook<'a> {
         })
     }
 
+    /// Access the accumulated build log.
+    pub(crate) fn build_log(&self) -> &str {
+        &self.log
+    }
+
     /// Phase 1: Prep - fetch all sources
     pub(crate) fn prep(&mut self) -> Result<()> {
         // Fetch main source archive
