@@ -56,7 +56,7 @@ cd build
 make DESTDIR=$LFS install
 
 # Remove libtool archive files — they are harmful for cross-compilation
-rm -v $LFS/usr/lib/lib{stdc++{,exp,fs},supc++}.la
+rm -fv $LFS/usr/lib/libstdc++.la $LFS/usr/lib/libstdc++exp.la $LFS/usr/lib/libstdc++fs.la $LFS/usr/lib/libsupc++.la
 """
 
 [variables]
