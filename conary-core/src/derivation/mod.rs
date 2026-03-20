@@ -25,7 +25,7 @@ pub use capture::{capture_output, CaptureError};
 pub use compose::{compose_erofs, compose_file_entries, erofs_image_hash, ComposeError};
 pub use environment::{BuildEnvironment, EnvironmentError};
 pub use executor::{DerivationExecutor, ExecutionResult, ExecutorError};
-pub use id::{DerivationId, DerivationInputs, SourceDerivationId};
+pub use id::{DerivationError, DerivationId, DerivationInputs, SourceDerivationId};
 pub use index::{DerivationIndex, DerivationRecord};
 pub use manifest::{ManifestError, SystemManifest};
 pub use output::{OutputFile, OutputManifest, OutputSymlink, PackageOutput};

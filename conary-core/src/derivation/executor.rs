@@ -17,7 +17,7 @@ use crate::filesystem::CasStore;
 use crate::recipe::{Kitchen, KitchenConfig, Recipe};
 
 use super::capture::{CaptureError, capture_output};
-use super::id::{DerivationId, DerivationInputs};
+use super::id::{DerivationError, DerivationId, DerivationInputs};
 use super::index::{DerivationIndex, DerivationRecord};
 use super::output::PackageOutput;
 use super::recipe_hash;
@@ -40,6 +40,9 @@ pub enum ExecutorError {
     /// A general I/O error.
     #[error("I/O error: {0}")]
     Io(String),
+    /// Derivation input validation failed.
+    #[error(transparent)]
+    Derivation(#[from] DerivationError),
 }
 
 /// The result of executing a derivation.
@@ -126,7 +129,7 @@ impl DerivationExecutor {
             build_options: BTreeMap::new(),
         };
 
-        let derivation_id = DerivationId::compute(&inputs);
+        let derivation_id = DerivationId::compute(&inputs)?;
         info!(
             "derivation {} for {}-{}",
             derivation_id, recipe.package.name, recipe.package.version,
@@ -289,7 +292,7 @@ install = "make install"
             target_triple: target_triple.to_owned(),
             build_options: BTreeMap::new(),
         };
-        let expected_id = DerivationId::compute(&inputs);
+        let expected_id = DerivationId::compute(&inputs).unwrap();
 
         // Pre-insert a record so execute() finds it.
         let record = DerivationRecord {
@@ -352,7 +355,7 @@ install = "make install"
                 target_triple: "x86_64-unknown-linux-gnu".to_owned(),
                 build_options: BTreeMap::new(),
             };
-            DerivationId::compute(&inputs)
+            DerivationId::compute(&inputs).unwrap()
         };
 
         let id1 = compute_id(&recipe);
@@ -372,7 +375,7 @@ install = "make install"
             build_env_hash: "env1".to_owned(),
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
             build_options: BTreeMap::new(),
-        }));
+        }).unwrap());
 
         let mut deps2 = BTreeMap::new();
         deps2.insert("glibc".to_owned(), DerivationId::compute(&DerivationInputs {
@@ -382,7 +385,7 @@ install = "make install"
             build_env_hash: "env1".to_owned(),
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
             build_options: BTreeMap::new(),
-        }));
+        }).unwrap());
 
         let make_id = |deps: &BTreeMap<String, DerivationId>| {
             let inputs = DerivationInputs {
@@ -393,7 +396,7 @@ install = "make install"
                 target_triple: "x86_64-unknown-linux-gnu".to_owned(),
                 build_options: BTreeMap::new(),
             };
-            DerivationId::compute(&inputs)
+            DerivationId::compute(&inputs).unwrap()
         };
 
         let id1 = make_id(&deps1);
