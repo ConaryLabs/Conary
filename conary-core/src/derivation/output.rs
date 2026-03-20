@@ -110,17 +110,18 @@ impl OutputManifest {
 
 impl PackageOutput {
     /// Build a `PackageOutput` from a manifest, serializing to TOML and hashing.
-    #[must_use]
-    pub fn from_manifest(manifest: OutputManifest) -> Self {
-        let manifest_bytes = toml::to_string_pretty(&manifest)
-            .expect("OutputManifest must serialize to TOML")
-            .into_bytes();
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the manifest cannot be serialized to TOML.
+    pub fn from_manifest(manifest: OutputManifest) -> Result<Self, toml::ser::Error> {
+        let manifest_bytes = toml::to_string_pretty(&manifest)?.into_bytes();
         let manifest_hash = hex::encode(Sha256::digest(&manifest_bytes));
-        Self {
+        Ok(Self {
             manifest,
             manifest_bytes,
             manifest_hash,
-        }
+        })
     }
 }
 
@@ -221,7 +222,7 @@ mod tests {
             built_at: "2026-03-19T00:00:00Z".to_owned(),
         };
 
-        let output = PackageOutput::from_manifest(manifest.clone());
+        let output = PackageOutput::from_manifest(manifest.clone()).expect("must serialize");
         assert_eq!(output.manifest, manifest);
         assert!(!output.manifest_bytes.is_empty());
         assert_eq!(output.manifest_hash.len(), 64);

@@ -45,8 +45,14 @@ pub struct DerivationInputs {
 
 impl DerivationId {
     /// Compute a `DerivationId` from the given inputs.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any dependency name or build-option key contains newlines or
+    /// colons, which would corrupt the canonical serialization format.
     #[must_use]
     pub fn compute(inputs: &DerivationInputs) -> Self {
+        validate_inputs(inputs);
         let canonical = Self::canonical_string(inputs);
         let hash = Sha256::digest(canonical.as_bytes());
         Self(hex::encode(hash))
@@ -106,11 +112,34 @@ impl fmt::Display for DerivationId {
     }
 }
 
+/// Validate that no input field contains characters that would corrupt the
+/// canonical serialization (newlines inject lines, colons shift field boundaries).
+fn validate_inputs(inputs: &DerivationInputs) {
+    fn check(label: &str, value: &str) {
+        assert!(
+            !value.contains('\n') && !value.contains('\r') && !value.contains(':'),
+            "derivation input {label} contains forbidden character (newline or colon): {value:?}",
+        );
+    }
+    for name in inputs.dependency_ids.keys() {
+        check("dependency name", name);
+    }
+    for key in inputs.build_options.keys() {
+        check("build option key", key);
+    }
+}
+
 impl SourceDerivationId {
     /// Compute a `SourceDerivationId` from the given inputs, excluding
     /// `build_env_hash`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any dependency name or build-option key contains newlines or
+    /// colons.
     #[must_use]
     pub fn compute(inputs: &DerivationInputs) -> Self {
+        validate_inputs(inputs);
         let canonical = Self::canonical_string(inputs);
         let hash = Sha256::digest(canonical.as_bytes());
         Self(hex::encode(hash))
@@ -281,5 +310,24 @@ mod tests {
         let inputs = sample_inputs();
         let canonical = SourceDerivationId::canonical_string(&inputs);
         assert!(!canonical.contains("env:"), "source canonical must not contain env line");
+    }
+
+    #[test]
+    #[should_panic(expected = "forbidden character")]
+    fn rejects_newline_in_dep_name() {
+        let mut inputs = sample_inputs();
+        inputs.dependency_ids.insert(
+            "evil\ndep:fake:injected".to_owned(),
+            DerivationId("c".repeat(64)),
+        );
+        let _ = DerivationId::compute(&inputs);
+    }
+
+    #[test]
+    #[should_panic(expected = "forbidden character")]
+    fn rejects_colon_in_option_key() {
+        let mut inputs = sample_inputs();
+        inputs.build_options.insert("bad:key".to_owned(), "value".to_owned());
+        let _ = DerivationId::compute(&inputs);
     }
 }
