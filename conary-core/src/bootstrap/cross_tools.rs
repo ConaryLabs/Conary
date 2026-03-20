@@ -224,7 +224,7 @@ impl CrossToolsBuilder {
         let kitchen = Kitchen::new(config);
         let mut cook =
             kitchen
-                .new_cook_with_dest(&recipe, &self.lfs_root)
+                .new_cook_with_dest(&recipe, std::path::Path::new("/"))
                 .map_err(|e| CrossToolsError::BuildFailed {
                     package: name.to_string(),
                     reason: format!("Cook setup failed: {e}"),
