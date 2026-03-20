@@ -2472,6 +2472,38 @@ pub fn migrate_v53(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 54: Derivation index for CAS-layered bootstrap build cache.
+///
+/// Maps content-addressed derivation IDs to their build outputs, enabling
+/// build caching: identical inputs produce the same derivation ID, so we
+/// can skip the build and reuse the stored output.
+pub fn migrate_v54(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS derivation_index (
+            derivation_id TEXT PRIMARY KEY,
+            output_hash TEXT NOT NULL,
+            package_name TEXT NOT NULL,
+            package_version TEXT NOT NULL,
+            manifest_cas_hash TEXT NOT NULL,
+            stage TEXT,
+            build_env_hash TEXT,
+            built_at TEXT NOT NULL,
+            build_duration_secs INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_derivation_index_package
+            ON derivation_index(package_name, package_version);
+
+        CREATE INDEX IF NOT EXISTS idx_derivation_index_output_hash
+            ON derivation_index(output_hash);
+        ",
+    )?;
+
+    info!("Schema version 54 applied successfully (derivation index)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
