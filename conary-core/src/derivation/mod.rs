@@ -9,6 +9,8 @@
 
 pub mod id;
 pub mod output;
+pub mod recipe_hash;
 
 pub use id::{DerivationId, DerivationInputs, SourceDerivationId};
 pub use output::{OutputFile, OutputManifest, OutputSymlink, PackageOutput};
+pub use recipe_hash::{build_script_hash, expand_variables, source_hash};
