@@ -88,9 +88,22 @@ A structured list that `emerge` can consume directly as tasks.
 
 ## After Review
 
-Update your agent memory with patterns you discovered:
-- New conventions or anti-patterns in this codebase
-- Recurring issues across modules
-- Architectural decisions you observed
+Update your agent memory ONLY with durable knowledge — things that help future
+reviews be better, not things that will be fixed tomorrow.
+
+**DO remember:**
+- Codebase patterns (how handlers work, how tests are structured)
+- Anti-patterns to flag in future reviews ("always check for X")
+- Architectural decisions and WHY they were made
+- Conventions that differ from standard Rust (audit_log uses free functions, not methods)
+
+**DO NOT remember:**
+- Specific findings from this review (they get fixed, then the memory is stale)
+- Line numbers (they drift on the next commit)
+- Open issues or bug lists (use code TODOs or GitHub issues for that)
+- Review results or verdicts (point-in-time, not reusable)
+
+**Test:** Before writing a memory entry, ask: "Will this still be true and useful in 3 months?" If not, don't write it.
 
 Write concise notes to `.claude/agent-memory/lintian/MEMORY.md`.
+Keep MEMORY.md under 60 lines. If adding pushes over the limit, remove the least valuable existing entry.
