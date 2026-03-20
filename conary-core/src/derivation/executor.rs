@@ -7,6 +7,7 @@
 //! single `execute()` method.
 
 use std::collections::BTreeMap;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -43,6 +44,26 @@ pub enum ExecutorError {
     /// Derivation input validation failed.
     #[error(transparent)]
     Derivation(#[from] DerivationError),
+}
+
+/// Parameters passed to `write_build_log` to stay under the argument limit.
+struct BuildLogParams<'a> {
+    build_env_hash: &'a str,
+    cook_log: &'a str,
+    status: &'a str,
+    duration_secs: u64,
+    output_hash: Option<&'a str>,
+}
+
+/// Configuration for the derivation executor.
+#[derive(Debug, Clone, Default)]
+pub struct ExecutorConfig {
+    /// Directory for build log files. None disables logging.
+    pub log_dir: Option<PathBuf>,
+    /// Preserve logs for successful builds (otherwise deleted on success).
+    pub keep_logs: bool,
+    /// Spawn an interactive shell when a build fails.
+    pub shell_on_failure: bool,
 }
 
 /// The result of executing a derivation.
@@ -102,13 +123,15 @@ pub struct DerivationExecutor {
     cas: CasStore,
     /// Root directory for CAS objects (needed for building Kitchen paths).
     cas_dir: PathBuf,
+    /// Executor configuration (logging, shell-on-failure, etc.).
+    config: ExecutorConfig,
 }
 
 impl DerivationExecutor {
     /// Create a new executor backed by the given CAS store.
     #[must_use]
-    pub fn new(cas: CasStore, cas_dir: PathBuf) -> Self {
-        Self { cas, cas_dir }
+    pub fn new(cas: CasStore, cas_dir: PathBuf, config: ExecutorConfig) -> Self {
+        Self { cas, cas_dir, config }
     }
 
     /// Access the underlying CAS store.
@@ -117,6 +140,75 @@ impl DerivationExecutor {
     #[must_use]
     pub fn cas(&self) -> &CasStore {
         &self.cas
+    }
+
+    /// Write a build log file to `config.log_dir` if configured.
+    ///
+    /// Returns the path of the written log, or `None` if logging is disabled
+    /// or the write fails (failure is logged as a warning, not propagated).
+    fn write_build_log(
+        &self,
+        recipe: &Recipe,
+        derivation_id: &DerivationId,
+        params: &BuildLogParams<'_>,
+    ) -> Option<PathBuf> {
+        let BuildLogParams { build_env_hash, cook_log, status, duration_secs, output_hash } =
+            params;
+        let log_dir = self.config.log_dir.as_ref()?;
+
+        if let Err(e) = std::fs::create_dir_all(log_dir) {
+            tracing::warn!("failed to create log_dir {}: {e}", log_dir.display());
+            return None;
+        }
+
+        let filename = format!(
+            "{}-{}.log",
+            recipe.package.name,
+            &derivation_id.as_str()[..16],
+        );
+        let log_path = log_dir.join(&filename);
+
+        let timestamp = chrono::Utc::now().to_rfc3339();
+
+        let mut content = format!(
+            "=== derivation build log ===\n\
+             package: {}\n\
+             version: {}\n\
+             derivation_id: {}\n\
+             build_env_hash: {}\n\
+             timestamp: {}\n\
+             ---\n\
+             {}\n\
+             ---\n\
+             status: {}\n\
+             duration_secs: {}\n",
+            recipe.package.name,
+            recipe.package.version,
+            derivation_id.as_str(),
+            build_env_hash,
+            timestamp,
+            cook_log,
+            status,
+            duration_secs,
+        );
+
+        if let Some(hash) = output_hash {
+            content.push_str(&format!("output_hash: {hash}\n"));
+        }
+
+        match std::fs::File::create(&log_path) {
+            Ok(mut f) => {
+                if let Err(e) = f.write_all(content.as_bytes()) {
+                    tracing::warn!("failed to write build log {}: {e}", log_path.display());
+                    return None;
+                }
+                Some(log_path)
+            }
+            Err(e) => {
+                tracing::warn!("failed to create build log {}: {e}", log_path.display());
+                None
+            }
+        }
     }
 
     /// Execute a derivation: check cache, build if needed, capture output.
@@ -196,16 +288,39 @@ impl DerivationExecutor {
             .new_cook_with_dest(recipe, &destdir)
             .map_err(|e| ExecutorError::Build(e.to_string()))?;
 
-        cook.prep()
-            .map_err(|e| ExecutorError::Build(format!("prep: {e}")))?;
-        cook.unpack()
-            .map_err(|e| ExecutorError::Build(format!("unpack: {e}")))?;
-        cook.patch()
-            .map_err(|e| ExecutorError::Build(format!("patch: {e}")))?;
-        cook.simmer()
-            .map_err(|e| ExecutorError::Build(format!("simmer: {e}")))?;
+        let build_result = (|| -> Result<(), ExecutorError> {
+            cook.prep()
+                .map_err(|e| ExecutorError::Build(format!("prep: {e}")))?;
+            cook.unpack()
+                .map_err(|e| ExecutorError::Build(format!("unpack: {e}")))?;
+            cook.patch()
+                .map_err(|e| ExecutorError::Build(format!("patch: {e}")))?;
+            cook.simmer()
+                .map_err(|e| ExecutorError::Build(format!("simmer: {e}")))?;
+            Ok(())
+        })();
 
         let build_duration = start.elapsed().as_secs();
+        let cook_log = cook.build_log().to_owned();
+
+        if let Err(build_err) = build_result {
+            // Write log on failure (always preserved).
+            let log_path = self.write_build_log(
+                recipe,
+                &derivation_id,
+                &BuildLogParams {
+                    build_env_hash,
+                    cook_log: &cook_log,
+                    status: "FAILED",
+                    duration_secs: build_duration,
+                    output_hash: None,
+                },
+            );
+            if let Some(path) = &log_path {
+                info!("build log: {}", path.display());
+            }
+            return Err(build_err);
+        }
 
         // Step 4: Capture output from DESTDIR into CAS.
         let manifest = capture_output(
@@ -256,6 +371,22 @@ impl DerivationExecutor {
             build_duration,
             &pkg_output.manifest.output_hash[..16.min(pkg_output.manifest.output_hash.len())],
         );
+
+        // Write log on success; delete it unless keep_logs is set.
+        let log_path = self.write_build_log(
+            recipe,
+            &derivation_id,
+            &BuildLogParams {
+                build_env_hash,
+                cook_log: &cook_log,
+                status: "success",
+                duration_secs: build_duration,
+                output_hash: Some(&pkg_output.manifest.output_hash),
+            },
+        );
+        if let Some(path) = &log_path && !self.config.keep_logs {
+            let _ = std::fs::remove_file(path);
+        }
 
         // Step 7: Return result.
         Ok(ExecutionResult::Built {
@@ -339,7 +470,7 @@ install = "make install"
         index.insert(&record).unwrap();
 
         // Execute -- should get a cache hit without building.
-        let executor = DerivationExecutor::new(cas, tmp.path().join("cas"));
+        let executor = DerivationExecutor::new(cas, tmp.path().join("cas"), ExecutorConfig::default());
         let sysroot = tmp.path().join("sysroot");
         std::fs::create_dir_all(&sysroot).unwrap();
 
@@ -437,7 +568,7 @@ install = "make install"
     fn cas_accessor_returns_store() {
         let tmp = TempDir::new().unwrap();
         let cas = test_cas(tmp.path());
-        let executor = DerivationExecutor::new(cas, tmp.path().join("cas"));
+        let executor = DerivationExecutor::new(cas, tmp.path().join("cas"), ExecutorConfig::default());
         // Just verify the accessor doesn't panic and returns a usable store.
         assert!(executor.cas().exists("nonexistent") == false);
     }
@@ -455,7 +586,7 @@ install = "make install"
         let sysroot = tmp.path().join("sysroot");
         std::fs::create_dir_all(&sysroot).unwrap();
 
-        let executor = DerivationExecutor::new(cas, tmp.path().join("cas"));
+        let executor = DerivationExecutor::new(cas, tmp.path().join("cas"), ExecutorConfig::default());
         let result = executor.execute(
             &recipe,
             "env_hash",
@@ -494,7 +625,7 @@ install = "make install"
         std::fs::create_dir_all(&sysroot).unwrap();
 
         let cas_dir = tmp.path().join("cas");
-        let executor = DerivationExecutor::new(cas, cas_dir.clone());
+        let executor = DerivationExecutor::new(cas, cas_dir.clone(), ExecutorConfig::default());
 
         let result = executor.execute(
             &recipe,
@@ -527,5 +658,46 @@ install = "make install"
             "DESTDIR should have been cleaned up on build failure: {}",
             destdir.display(),
         );
+    }
+
+    #[test]
+    fn build_log_written_on_failure() {
+        let tmp = TempDir::new().unwrap();
+        let log_dir = tmp.path().join("logs");
+        let cas = test_cas(tmp.path());
+        let conn = setup_db();
+
+        let config = ExecutorConfig {
+            log_dir: Some(log_dir.clone()),
+            keep_logs: false,
+            shell_on_failure: false,
+        };
+
+        let recipe = test_recipe("sed", "4.9");
+        let sysroot = tmp.path().join("sysroot");
+        std::fs::create_dir_all(&sysroot).unwrap();
+
+        let executor = DerivationExecutor::new(cas, tmp.path().join("cas"), config);
+        let result = executor.execute(
+            &recipe,
+            "env_hash",
+            &BTreeMap::new(),
+            "x86_64-unknown-linux-gnu",
+            &sysroot,
+            &conn,
+        );
+
+        assert!(result.is_err(), "execute should fail without real sources");
+
+        // Log file should exist in the logs directory.
+        let logs: Vec<_> = std::fs::read_dir(&log_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert_eq!(logs.len(), 1, "should have one log file");
+
+        let content = std::fs::read_to_string(logs[0].path()).unwrap();
+        assert!(content.contains("package: sed"), "log should contain package name");
+        assert!(content.contains("status: FAILED"), "log should show FAILED status");
     }
 }
