@@ -17,26 +17,23 @@ cook, kitchen). Bootstrap provides staged toolchain building from scratch.
 - `BuildCache` / `CacheConfig` -- cached build artifacts with `ToolchainInfo` hashing
 
 ## Bootstrap Key Types
-- `Stage0Builder` -- cross-compilation toolchain via crosstool-ng
-- `Stage1Builder` -- self-hosted native toolchain (built with Stage 0)
-- `Stage2Builder` -- optional pure rebuild for reproducibility
-- `ConaryStageBuilder` -- builds Conary itself in the bootstrap environment
-- `BaseBuilder` -- base system (kernel, systemd, coreutils)
+- `Bootstrap` -- top-level orchestrator for the full pipeline
+- `CrossToolsBuilder` -- cross-compilation toolchain
+- `TempToolsBuilder` -- temporary tools built with cross toolchain
+- `FinalSystemBuilder` -- self-hosted native toolchain
+- `Tier2Builder` -- optional pure rebuild for reproducibility
 - `ImageBuilder` -- bootable image generation (`ImageFormat`, `ImageSize`)
-
-## Constants
-- `DEFAULT_TOOLS_DIR` -- `/tools`, `DEFAULT_STAGE1_DIR` -- `/conary/stage1`, `DEFAULT_SYSROOT_DIR` -- `/conary/sysroot`
+- `BootstrapConfig` / `TargetArch` -- configuration and target architecture
 
 ## Invariants
 - Recipe format is TOML with `%(version)s` and `%(destdir)s` variable interpolation
 - All builds run in isolated containers (user namespace, private /tmp, resource limits)
 - Source archives require SHA-256 checksums
-- Bootstrap stages must run in order: 0 -> 1 -> (optional 2) -> base -> image
 
 ## Gotchas
 - `pkgbuild.rs` converts Arch PKGBUILD files to Conary recipe TOML
 - `kitchen/cook.rs` handles build execution; `kitchen/archive.rs` handles source fetching
-- `build_helpers.rs` and `conary_stage.rs` are bootstrap-specific helpers
+- `build_helpers.rs` provides shared bootstrap build utilities
 - `repart` submodule is `pub(crate)` only
 
 ## Files (recipe)
@@ -48,8 +45,13 @@ cook, kitchen). Bootstrap provides staged toolchain building from scratch.
 - `cache.rs` -- `BuildCache`, `CacheConfig`
 
 ## Files (bootstrap)
-- `stage0.rs`, `stage1.rs`, `stage2.rs` -- staged toolchain builders
-- `conary_stage.rs` -- Conary self-build
-- `base.rs` -- base system builder
+- `mod.rs` -- `Bootstrap` orchestrator
+- `cross_tools.rs` -- `CrossToolsBuilder`
+- `temp_tools.rs` -- `TempToolsBuilder`
+- `final_system.rs` -- `FinalSystemBuilder`
+- `tier2.rs` -- `Tier2Builder`
 - `image.rs` -- bootable image generation
 - `config.rs` -- `BootstrapConfig`, `TargetArch`
+- `stages.rs`, `build_runner.rs` -- stage definitions and build execution
+- `chroot_env.rs`, `system_config.rs` -- chroot and system setup
+- `toolchain.rs` -- toolchain management
