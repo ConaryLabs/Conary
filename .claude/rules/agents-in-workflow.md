@@ -4,8 +4,8 @@ This project has 6 custom agents. Use them at these workflow points instead of g
 
 ## During Implementation (subagent-driven-development, executing-plans)
 
-**After each task implementation → dispatch lintian**
-Instead of using the generic `superpowers:code-reviewer` subagent, dispatch `lintian` for code review. It knows this codebase's conventions, has project memory, and checks architectural fit. Use it as the code-quality review step.
+**After each task implementation → dispatch lintian for code review**
+Use `lintian` as the code-quality review step. It knows this codebase's conventions, has project memory, and checks architectural fit. When dispatching lintian, include the superpowers review structure in the prompt (Strengths / Critical / Important / Minor / Assessment / "Ready to merge?") — lintian adds codebase-specific checks on top of that methodology. For the spec-compliance step, use the superpowers spec-reviewer as-is — lintian doesn't replace spec checking.
 
 **When tests fail unexpectedly → dispatch valgrind**
 Instead of guessing at fixes, dispatch `valgrind` to trace root cause. It has project memory and uses competing hypotheses. Use it instead of `superpowers:systematic-debugging` when working in this codebase.
@@ -27,7 +27,7 @@ As part of `superpowers:finishing-a-development-branch`, dispatch `sbuild` to ru
 
 | Situation | Agent | Instead Of |
 |-----------|-------|------------|
-| Code review after task | **lintian** | generic code-reviewer |
+| Code quality review after task | **lintian** | generic code-reviewer (lintian adds codebase context) |
 | Test failure during work | **valgrind** | systematic-debugging |
 | Parallel implementation | **emerge** | multiple sequential subagents |
 | Chunk complete, check quality | **autopkgtest** | moving on without QA |

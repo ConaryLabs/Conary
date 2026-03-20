@@ -56,10 +56,23 @@ Severity:
 
 ## Output
 
-Organize findings by severity, then by file. End with:
-- Total count by severity
-- Top 3 recommendations
-- A structured list that `emerge` can consume directly as a work breakdown
+Use this structure (compatible with superpowers:code-reviewer format):
+
+### Strengths
+[What's well done? Be specific with file:line references.]
+
+### Issues
+Organize by severity (P0 → P3), then by file.
+
+### Recommendations
+Top 3 actionable items.
+
+### Assessment
+**Ready to merge?** [Yes / No / With fixes]
+**Reasoning:** [1-2 sentences]
+
+### Work Breakdown
+A structured list that `emerge` can consume directly as tasks.
 
 ## Conary-Specific Checks
 
