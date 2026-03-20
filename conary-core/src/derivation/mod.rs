@@ -15,6 +15,7 @@ pub mod id;
 pub mod index;
 pub mod manifest;
 pub mod output;
+pub mod pipeline;
 pub mod profile;
 pub mod recipe_hash;
 pub mod seed;
@@ -28,6 +29,7 @@ pub use id::{DerivationId, DerivationInputs, SourceDerivationId};
 pub use index::{DerivationIndex, DerivationRecord};
 pub use manifest::{ManifestError, SystemManifest};
 pub use output::{OutputFile, OutputManifest, OutputSymlink, PackageOutput};
+pub use pipeline::{Pipeline, PipelineConfig, PipelineError, PipelineEvent};
 pub use profile::{
     BuildProfile, ProfileDerivation, ProfileDiff, ProfileMetadata, ProfileSeedRef, ProfileStage,
 };

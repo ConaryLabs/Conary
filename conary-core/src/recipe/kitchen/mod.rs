@@ -576,6 +576,7 @@ mod tests {
                 environment: std::collections::HashMap::new(),
                 jobs: None,
                 script_file: None,
+                stage: None,
             },
             patches: None,
             cross: None,

@@ -1764,6 +1764,29 @@ fn run() -> Result<()> {
         ),
 
         // =====================================================================
+        // Derivation Engine
+        // =====================================================================
+        Some(Commands::Derivation(derivation_cmd)) => match derivation_cmd {
+            cli::DerivationCommands::Build {
+                recipe,
+                env,
+                cas_dir,
+                db_path,
+            } => commands::cmd_derivation_build(&recipe, &env, &cas_dir, db_path.as_deref()),
+            cli::DerivationCommands::Show { recipe, env_hash } => {
+                commands::cmd_derivation_show(&recipe, &env_hash)
+            }
+        },
+
+        Some(Commands::Profile(profile_cmd)) => match profile_cmd {
+            cli::ProfileCommands::Generate { manifest, output } => {
+                commands::cmd_profile_generate(&manifest, output.as_deref())
+            }
+            cli::ProfileCommands::Show { path } => commands::cmd_profile_show(&path),
+            cli::ProfileCommands::Diff { old, new } => commands::cmd_profile_diff(&old, &new),
+        },
+
+        // =====================================================================
         // Self-Update
         // =====================================================================
         Some(Commands::SelfUpdate {

@@ -12,6 +12,7 @@ pub(crate) mod composefs_ops;
 mod config;
 mod convert_pkgbuild;
 mod cook;
+mod derivation;
 mod derived;
 pub mod distro;
 pub mod export;
@@ -23,6 +24,7 @@ mod label;
 mod model;
 pub mod progress;
 mod package_parsing;
+mod profile;
 mod provenance;
 mod query;
 mod replatform_rendering;
@@ -70,6 +72,8 @@ pub use config::{
 };
 pub use convert_pkgbuild::cmd_convert_pkgbuild;
 pub use cook::cmd_cook;
+pub use derivation::{cmd_derivation_build, cmd_derivation_show};
+pub use profile::{cmd_profile_diff, cmd_profile_generate, cmd_profile_show};
 pub use derived::{
     cmd_derive_build, cmd_derive_create, cmd_derive_delete, cmd_derive_list, cmd_derive_override,
     cmd_derive_patch, cmd_derive_show, cmd_derive_stale,

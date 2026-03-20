@@ -707,6 +707,7 @@ mod tests {
                 workdir: None,
                 script_file: None,
                 jobs: None,
+                stage: None,
             },
             cross: None,
             patches: None,

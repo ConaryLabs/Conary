@@ -263,6 +263,7 @@ pub fn convert_pkgbuild(content: &str) -> Result<ConversionResult, PkgbuildError
             workdir: Some(format!("{}-{}", pkgname, pkgver)),
             script_file: None,
             jobs: None,
+            stage: None,
         },
         cross: None, // PKGBUILD doesn't support cross-compilation
         patches: patch_section,
