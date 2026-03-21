@@ -2554,6 +2554,30 @@ pub fn migrate_v55(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 56: Trust levels and provenance on derivations.
+///
+/// Extends derivation_index with:
+/// - trust_level: integer 0-4 representing trust tier (0=unverified, 4=fully-reproduced)
+/// - provenance_cas_hash: CAS hash of the provenance record for this derivation
+/// - reproducible: nullable boolean tracking whether the derivation has been
+///   confirmed reproducible by independent rebuild
+///
+/// Extends derivation_cache with:
+/// - provenance_cas_hash: CAS hash linking cached outputs to their provenance
+pub fn migrate_v56(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        ALTER TABLE derivation_index ADD COLUMN trust_level INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE derivation_index ADD COLUMN provenance_cas_hash TEXT;
+        ALTER TABLE derivation_index ADD COLUMN reproducible INTEGER;
+        ALTER TABLE derivation_cache ADD COLUMN provenance_cas_hash TEXT;
+        ",
+    )?;
+
+    info!("Schema version 56 applied successfully (trust levels and provenance on derivations)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
