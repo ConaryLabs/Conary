@@ -50,7 +50,7 @@ impl AppStreamComponent {
 /// Components missing `<id>` or `<pkgname>` are silently skipped.
 pub fn parse_appstream_xml(xml: &str) -> Result<Vec<AppStreamComponent>> {
     let mut reader = Reader::from_str(xml);
-    reader.trim_text(true);
+    reader.config_mut().trim_text_end = true;
 
     let mut components = Vec::new();
     let mut buf = Vec::new();

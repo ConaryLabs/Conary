@@ -329,10 +329,9 @@ impl SearchEngine {
 
             let distro_val = doc
                 .get_first(self.distro_field)
-                .and_then(|v: &tantivy::schema::OwnedValue| v.as_facet())
-                .map(|f: &Facet| {
-                    let path = f.to_path_string();
-                    path.strip_prefix('/').unwrap_or(&path).to_string()
+                .and_then(|v| v.as_facet())
+                .map(|path| {
+                    path.strip_prefix('/').unwrap_or(path).to_string()
                 })
                 .unwrap_or_default();
 

@@ -407,7 +407,11 @@ fn process_service_event(event: ServiceEvent) -> Option<MdnsEvent> {
                     .unwrap_or("unknown")
                     .to_string(),
                 hostname: info.get_hostname().to_string(),
-                addresses: info.get_addresses().iter().copied().collect(),
+                addresses: info
+                    .get_addresses()
+                    .iter()
+                    .map(mdns_sd::ScopedIp::to_ip_addr)
+                    .collect(),
                 port: info.get_port(),
                 tier,
                 version,

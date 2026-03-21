@@ -30,7 +30,7 @@ xxhash-rust = { version = "0.8", features = ["xxh3"] }
 tracing.workspace = true
 
 # Package format parsing
-rpm = "0.14"
+rpm = "0.19"
 
 # Temp files for RPM extraction
 tempfile.workspace = true
@@ -73,9 +73,9 @@ sequoia-openpgp = { version = "1.17", default-features = false, features = ["cry
 # Repository metadata parsing
 tar.workspace = true                     # Tarball extraction for Arch repos
 flate2.workspace = true                  # Gzip compression (for Arch, Debian, Fedora)
-xz2 = "0.1"                     # XZ compression (for Arch)
+liblzma = "0.4"                  # XZ/LZMA compression (for Arch)
 rfc822-like = "0.2"             # RFC 822 parser for Debian/Ubuntu Packages files
-quick-xml = "0.31"              # XML parser for Fedora/RPM repodata
+quick-xml = "0.37"              # XML parser for Fedora/RPM repodata
 ar = "0.9"                      # AR archive parsing for DEB packages
 wait-timeout = "0.2"            # Subprocess timeout for scriptlet execution
 glob.workspace = true
@@ -100,8 +100,8 @@ hex.workspace = true                      # Hex encoding for chunk hashes
 regex.workspace = true
 
 # Enum string conversion macros
-strum = "0.26"
-strum_macros = "0.26"
+strum = "0.28"
+strum_macros = "0.28"
 
 # Sigstore integration
 sigstore.workspace = true
@@ -131,7 +131,7 @@ dirs = "6.0.0"
 
 # Capability enforcement (landlock filesystem + seccomp syscall filtering)
 landlock = "0.4"
-seccompiler = "0.4"
+seccompiler = "0.5"
 
 # Server-gated deps (async chunk fetcher)
 async-trait = { workspace = true, optional = true }
