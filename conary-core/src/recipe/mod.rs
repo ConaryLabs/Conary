@@ -44,6 +44,7 @@
 //! - Private `/tmp` and network namespace
 //! - Resource limits (CPU, memory, time)
 
+pub mod audit;
 mod cache;
 mod format;
 mod graph;
