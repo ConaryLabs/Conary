@@ -5,6 +5,7 @@ pub mod admin;
 pub mod artifacts;
 pub mod canonical;
 pub mod chunks;
+pub mod derivations;
 pub mod detail;
 pub mod federation;
 pub mod index;

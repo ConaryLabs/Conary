@@ -17,8 +17,8 @@
 //! - Recipe build moved to admin API
 
 use crate::server::handlers::{
-    admin, artifacts, canonical, chunks, detail, federation, index, jobs, models, oci, openapi,
-    packages, recipes, search, self_update, sparse, tuf,
+    admin, artifacts, canonical, chunks, derivations, detail, federation, index, jobs, models, oci,
+    openapi, packages, recipes, search, self_update, sparse, tuf,
 };
 use crate::server::security::RateLimiter;
 use crate::server::{ServerConfig, ServerState};
@@ -461,6 +461,17 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
         .route(
             "/test-artifacts/*path",
             get(artifacts::get_test_artifact).head(artifacts::head_test_artifact),
+        )
+        // === Derivation Cache ===
+        .route(
+            "/v1/derivations/probe",
+            post(derivations::probe_derivations),
+        )
+        .route(
+            "/v1/derivations/:derivation_id",
+            get(derivations::get_derivation)
+                .head(derivations::head_derivation)
+                .put(derivations::put_derivation),
         )
         // === Statistics ===
         .route("/v1/stats/popular", get(detail::get_popular))
