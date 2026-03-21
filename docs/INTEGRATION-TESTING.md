@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-03-15
-revision: 4
-summary: Add CLI subcommands, QEMU tests, error taxonomy, WAL persistence
+last_updated: 2026-03-21
+revision: 5
+summary: Add Phase 4 feature validation tests (T160-T249, 5 groups)
 ---
 
 # Integration Testing
@@ -107,6 +107,18 @@ Adversarial and stress tests.
 | G-M | Container-based adversarial tests |
 | N (container) | Container-based adversarial tests |
 | N (QEMU) | QEMU boot tests |
+
+### Phase 4: Feature Validation (Groups A-E)
+
+Validates every documented CLI command works correctly.
+
+| Group | Tests | Category |
+|-------|-------|----------|
+| A | T160-T176 | Config, distro, canonical, groups, registry |
+| B | T177-T195 | Label, model, collection, derive |
+| C | T196-T213 | CCS, bootstrap, cache, automation |
+| D | T214-T229 | Trust, federation, provenance, capability |
+| E | T230-T249 | Cross-distro compatibility |
 
 ## QEMU Boot Tests
 
