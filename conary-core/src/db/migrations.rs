@@ -2504,6 +2504,56 @@ pub fn migrate_v54(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 55: Substituter peers, derivation cache, and seeds tables.
+///
+/// substituter_peers: client-side registry of known substituter endpoints with
+/// health tracking (success/failure counts, last_seen).
+///
+/// derivation_cache: server-side index mapping derivation IDs to their cached
+/// build outputs (manifest CAS hash) for build result reuse.
+///
+/// seeds: server-side registry of bootstrapped seed images, indexed by
+/// target triple, for fast access during bootstrap pipeline stages.
+pub fn migrate_v55(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS substituter_peers (
+            endpoint TEXT PRIMARY KEY,
+            priority INTEGER NOT NULL DEFAULT 0,
+            last_seen TEXT,
+            success_count INTEGER NOT NULL DEFAULT 0,
+            failure_count INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS derivation_cache (
+            derivation_id TEXT PRIMARY KEY,
+            manifest_cas_hash TEXT NOT NULL,
+            package_name TEXT NOT NULL,
+            package_version TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_derivation_cache_package
+            ON derivation_cache(package_name, package_version);
+
+        CREATE TABLE IF NOT EXISTS seeds (
+            seed_id TEXT PRIMARY KEY,
+            target_triple TEXT NOT NULL,
+            source TEXT NOT NULL,
+            builder TEXT,
+            packages_json TEXT NOT NULL DEFAULT '[]',
+            verified_by_json TEXT NOT NULL DEFAULT '[]',
+            image_cas_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_seeds_target
+            ON seeds(target_triple, created_at DESC);
+        ",
+    )?;
+
+    info!("Schema version 55 applied successfully (substituter peers, derivation cache, seeds)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2522,7 +2572,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(version, 53);
+        assert_eq!(version, crate::db::schema::SCHEMA_VERSION);
 
         // Insert into canonical_packages
         conn.execute(
