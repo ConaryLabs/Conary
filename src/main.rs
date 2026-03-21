@@ -223,6 +223,15 @@ fn run() -> Result<()> {
             commands::cmd_recipe_audit(recipe.as_deref(), all, trace)
         }
 
+        Some(Commands::Cache(cmd)) => match cmd {
+            cli::CacheCommands::Populate {
+                profile,
+                sources_only,
+                full,
+            } => commands::cmd_cache_populate(&profile, sources_only, full),
+            cli::CacheCommands::Status => commands::cmd_cache_status(),
+        },
+
         // =====================================================================
         // System Commands
         // =====================================================================

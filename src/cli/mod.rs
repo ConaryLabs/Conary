@@ -30,6 +30,7 @@ use conary_core::scriptlet::SandboxMode;
 
 mod automation;
 mod bootstrap;
+mod cache;
 mod canonical;
 mod capability;
 mod ccs;
@@ -58,6 +59,7 @@ mod trust;
 pub use automation::AiCommands;
 pub use automation::AutomationCommands;
 pub use bootstrap::BootstrapCommands;
+pub use cache::CacheCommands;
 pub use canonical::CanonicalCommands;
 pub use capability::CapabilityCommands;
 pub use ccs::CcsCommands;
@@ -482,6 +484,13 @@ pub enum Commands {
     /// Bootstrap a complete Conary system from scratch
     #[command(subcommand)]
     Bootstrap(BootstrapCommands),
+
+    // =========================================================================
+    // Cache
+    // =========================================================================
+    /// Cache management for derivation outputs
+    #[command(subcommand)]
+    Cache(CacheCommands),
 
     // =========================================================================
     // Derivation Engine
