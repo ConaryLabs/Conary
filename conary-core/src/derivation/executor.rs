@@ -432,7 +432,7 @@ impl DerivationExecutor {
             &BuildLogParams {
                 build_env_hash,
                 cook_log: &cook_log,
-                status: "success",
+                status: "SUCCESS",
                 duration_secs: build_duration,
                 output_hash: Some(&pkg_output.manifest.output_hash),
             },

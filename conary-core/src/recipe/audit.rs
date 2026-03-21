@@ -144,10 +144,21 @@ pub fn static_audit(recipe: &Recipe) -> Result<AuditReport, AuditError> {
 
     let mut findings = Vec::new();
     let mut seen_tools: HashSet<&str> = HashSet::new();
+    let mut seen_libs: HashSet<String> = HashSet::new();
 
-    // Scan for tool invocations
+    // Build a set of tokens from the scripts for word-boundary-safe matching.
+    // This avoids false positives like "go" matching inside "cargo".
+    let tokens: HashSet<&str> = scripts.split_whitespace().collect();
+
+    // Scan for tool invocations (word-boundary match via token set)
     for &(tool, package) in TOOL_PACKAGE_MAP {
-        if scripts.contains(tool) && seen_tools.insert(tool) {
+        let found = tokens.contains(tool)
+            || tokens.iter().any(|t| {
+                // Also match "path/to/tool" patterns (e.g., "/usr/bin/cmake")
+                t.ends_with(&format!("/{tool}"))
+            });
+
+        if found && seen_tools.insert(tool) {
             let kind = if BASE_TOOLS.contains(&tool) {
                 FindingKind::Ignored
             } else if declared.contains(package) {
@@ -166,14 +177,14 @@ pub fn static_audit(recipe: &Recipe) -> Result<AuditReport, AuditError> {
     }
 
     // Scan for -l<lib> linker flags
-    let mut seen_libs: HashSet<String> = HashSet::new();
-    for word in scripts.split_whitespace() {
+    for word in &tokens {
         if let Some(lib) = word.strip_prefix("-l")
             && !lib.is_empty()
             && lib.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-')
             && seen_libs.insert(lib.to_owned())
         {
-            let kind = if declared.iter().any(|d| d.contains(lib)) {
+            // Use exact match against declared deps, not substring
+            let kind = if declared.contains(lib) {
                 FindingKind::Verified
             } else {
                 FindingKind::Missing
