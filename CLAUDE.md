@@ -5,7 +5,7 @@
 ```bash
 cargo build                              # Client-only (default, use for dev)
 cargo build --features server            # With Remi server + conaryd daemon
-cargo test                               # ~269 unit tests + 76 integration tests
+cargo test                               # ~269 unit tests (278 integration tests via conary-test)
 cargo build -p conary-test               # Test infrastructure crate
 cargo test -p conary-test                # Test engine unit tests
 cargo clippy -- -D warnings              # Lint
