@@ -489,6 +489,9 @@ impl Pipeline {
                                 build_env_hash: Some(build_env_hash.clone()),
                                 built_at: manifest.built_at.clone(),
                                 build_duration_secs: manifest.build_duration_secs,
+                                trust_level: 1,
+                                provenance_cas_hash: None,
+                                reproducible: None,
                             };
                             index
                                 .insert(&record)
@@ -587,6 +590,12 @@ impl Pipeline {
                         {
                             warn!("Failed to publish {}: {e}", pkg_name);
                         }
+
+                        // Set trust level 2 (locally built).
+                        // The executor already sets this via provenance generation,
+                        // but set_trust_level is monotonic so this is a safe no-op.
+                        let idx = DerivationIndex::new(conn);
+                        let _ = idx.set_trust_level(derivation_id.as_str(), 2);
 
                         stage_manifests.push(manifest.clone());
                         completed.insert(pkg_name.clone(), (derivation_id, manifest));
