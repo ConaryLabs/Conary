@@ -3,6 +3,7 @@
 
 mod adopt;
 mod automation;
+mod cache;
 mod bootstrap;
 pub mod canonical;
 mod capability;
@@ -53,6 +54,7 @@ pub use automation::{
     cmd_automation_apply, cmd_automation_check, cmd_automation_configure, cmd_automation_daemon,
     cmd_automation_history, cmd_automation_status,
 };
+pub use cache::{cmd_cache_populate, cmd_cache_status};
 pub use bootstrap::{
     cmd_bootstrap_check, cmd_bootstrap_clean, cmd_bootstrap_config, cmd_bootstrap_cross_tools,
     cmd_bootstrap_dry_run, cmd_bootstrap_image, cmd_bootstrap_init, cmd_bootstrap_resume,
