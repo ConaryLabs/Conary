@@ -22,11 +22,11 @@ pub mod self_update;
 pub mod sparse;
 pub mod tuf;
 
+use crate::server::auth::{extract_bearer, hash_token};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use conary_core::db::models::Repository;
 use rusqlite::Connection;
-use crate::server::auth::{extract_bearer, hash_token};
 
 /// Compute the CAS object path for a given hex hash.
 ///
@@ -65,7 +65,10 @@ pub(crate) async fn require_admin_token(
         Some(t) => t,
         None => {
             return Some(
-                (StatusCode::UNAUTHORIZED, "Missing or invalid Authorization header")
+                (
+                    StatusCode::UNAUTHORIZED,
+                    "Missing or invalid Authorization header",
+                )
                     .into_response(),
             );
         }
@@ -94,9 +97,9 @@ pub(crate) async fn require_admin_token(
 
     match valid {
         Ok(Ok(true)) => None,
-        Ok(Ok(false)) => Some(
-            (StatusCode::FORBIDDEN, "Insufficient scope or invalid token").into_response(),
-        ),
+        Ok(Ok(false)) => {
+            Some((StatusCode::FORBIDDEN, "Insufficient scope or invalid token").into_response())
+        }
         Ok(Err(e)) => {
             tracing::error!("DB error during token validation: {e}");
             Some((StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response())

@@ -229,11 +229,13 @@ pub fn cmd_verify_diverse(profile_a_path: &str, profile_b_path: &str) -> Result<
     println!("Comparing builds from 2 seeds:");
     println!(
         "  Seed A: {}... ({})",
-        &profile_a.seed.id[..a_seed_display], profile_a.seed.source
+        &profile_a.seed.id[..a_seed_display],
+        profile_a.seed.source
     );
     println!(
         "  Seed B: {}... ({})",
-        &profile_b.seed.id[..b_seed_display], profile_b.seed.source
+        &profile_b.seed.id[..b_seed_display],
+        profile_b.seed.source
     );
     println!();
 

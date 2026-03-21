@@ -59,10 +59,7 @@ impl SystemState {
 
     /// Find a state by ID
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
-        let sql = format!(
-            "SELECT {} FROM system_states WHERE id = ?1",
-            Self::COLUMNS
-        );
+        let sql = format!("SELECT {} FROM system_states WHERE id = ?1", Self::COLUMNS);
         let mut stmt = conn.prepare(&sql)?;
         let state = stmt.query_row([id], Self::from_row).optional()?;
         Ok(state)

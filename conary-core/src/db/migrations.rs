@@ -2685,17 +2685,20 @@ mod tests {
         ).unwrap();
 
         // Verify server_metadata seeded
-        let version: String = conn.query_row(
-            "SELECT value FROM server_metadata WHERE key = 'canonical_map_version'",
-            [],
-            |row| row.get(0),
-        ).unwrap();
+        let version: String = conn
+            .query_row(
+                "SELECT value FROM server_metadata WHERE key = 'canonical_map_version'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
         assert_eq!(version, "0");
 
         // Verify client_metadata
         conn.execute(
             "INSERT INTO client_metadata (key, value) VALUES ('etag', 'test')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
     }
 }

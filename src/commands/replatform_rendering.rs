@@ -70,20 +70,14 @@ pub(crate) fn render_replatform_execution_plan(plan: &ReplatformExecutionPlan) -
     lines.join("\n")
 }
 
-pub(crate) fn render_replatform_blocked_reason(
-    reason: &ReplatformBlockedReason,
-) -> &'static str {
+pub(crate) fn render_replatform_blocked_reason(reason: &ReplatformBlockedReason) -> &'static str {
     match reason {
         ReplatformBlockedReason::MissingRepositoryMetadata => "missing repository metadata",
         ReplatformBlockedReason::MissingRepositoryPackageId => "missing repository package id",
         ReplatformBlockedReason::AnyVersionRouteOnly => "only any-version install route",
-        ReplatformBlockedReason::MissingVersionedInstallRoute => {
-            "missing versioned install route"
-        }
+        ReplatformBlockedReason::MissingVersionedInstallRoute => "missing versioned install route",
         ReplatformBlockedReason::MissingInstallRoute => "missing install route",
-        ReplatformBlockedReason::UnsatisfiedTargetDependencies => {
-            "unsatisfied target dependencies"
-        }
+        ReplatformBlockedReason::UnsatisfiedTargetDependencies => "unsatisfied target dependencies",
         ReplatformBlockedReason::ArchitectureMismatch => "architecture mismatch",
     }
 }
@@ -110,9 +104,7 @@ mod tests {
                     install_route: Some("default:legacy".to_string()),
                     unresolved_dependencies: Vec::new(),
                     executable: false,
-                    blocked_reason: Some(
-                        ReplatformBlockedReason::MissingVersionedInstallRoute,
-                    ),
+                    blocked_reason: Some(ReplatformBlockedReason::MissingVersionedInstallRoute),
                 },
                 conary_core::model::ReplatformExecutionTransaction {
                     package: "vim".to_string(),
@@ -127,9 +119,7 @@ mod tests {
                     install_route: Some("default:legacy".to_string()),
                     unresolved_dependencies: Vec::new(),
                     executable: false,
-                    blocked_reason: Some(
-                        ReplatformBlockedReason::MissingVersionedInstallRoute,
-                    ),
+                    blocked_reason: Some(ReplatformBlockedReason::MissingVersionedInstallRoute),
                 },
             ],
         };
@@ -151,17 +141,15 @@ mod tests {
 
     #[test]
     fn test_render_blocked_reason_missing_metadata() {
-        let rendered = render_replatform_blocked_reason(
-            &ReplatformBlockedReason::MissingRepositoryMetadata,
-        );
+        let rendered =
+            render_replatform_blocked_reason(&ReplatformBlockedReason::MissingRepositoryMetadata);
         assert_eq!(rendered, "missing repository metadata");
     }
 
     #[test]
     fn test_render_blocked_reason_any_version() {
-        let rendered = render_replatform_blocked_reason(
-            &ReplatformBlockedReason::AnyVersionRouteOnly,
-        );
+        let rendered =
+            render_replatform_blocked_reason(&ReplatformBlockedReason::AnyVersionRouteOnly);
         assert_eq!(rendered, "only any-version install route");
     }
 
@@ -210,9 +198,7 @@ mod tests {
                 install_route: Some("resolution:binary".to_string()),
                 unresolved_dependencies: vec!["libmagic (>= 1.0)".to_string()],
                 executable: false,
-                blocked_reason: Some(
-                    ReplatformBlockedReason::UnsatisfiedTargetDependencies,
-                ),
+                blocked_reason: Some(ReplatformBlockedReason::UnsatisfiedTargetDependencies),
             }],
         };
 

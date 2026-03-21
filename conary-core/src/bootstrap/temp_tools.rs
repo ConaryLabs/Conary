@@ -205,13 +205,12 @@ impl TempToolsBuilder {
                 ..Default::default()
             };
             let kitchen = Kitchen::new(config);
-            let mut cook =
-                kitchen
-                    .new_cook_with_dest(&recipe, std::path::Path::new("/"))
-                    .map_err(|e| TempToolsError::BuildFailed {
-                        package: pkg.to_string(),
-                        reason: format!("Cook setup failed: {e}"),
-                    })?;
+            let mut cook = kitchen
+                .new_cook_with_dest(&recipe, std::path::Path::new("/"))
+                .map_err(|e| TempToolsError::BuildFailed {
+                    package: pkg.to_string(),
+                    reason: format!("Cook setup failed: {e}"),
+                })?;
 
             info!("  Preparing {pkg}...");
             cook.prep().map_err(|e| TempToolsError::BuildFailed {

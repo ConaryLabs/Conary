@@ -561,9 +561,15 @@ pub async fn refresh_repositories(
         let canonical_cfg = state.read().await.canonical_config.clone();
         blocking(move || {
             let conn = conary_core::db::open(&db_path)?;
-            if crate::server::canonical_job::should_rebuild(&conn, canonical_cfg.rebuild_cooldown_minutes) {
-                match crate::server::canonical_job::rebuild_canonical_map(&db_path, &canonical_cfg) {
-                    Ok(count) => tracing::info!("Post-sync canonical rebuild: {count} new mappings"),
+            if crate::server::canonical_job::should_rebuild(
+                &conn,
+                canonical_cfg.rebuild_cooldown_minutes,
+            ) {
+                match crate::server::canonical_job::rebuild_canonical_map(&db_path, &canonical_cfg)
+                {
+                    Ok(count) => {
+                        tracing::info!("Post-sync canonical rebuild: {count} new mappings")
+                    }
                     Err(e) => tracing::warn!("Post-sync canonical rebuild failed: {e}"),
                 }
             }

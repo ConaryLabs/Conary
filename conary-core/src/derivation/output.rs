@@ -174,7 +174,10 @@ mod tests {
 
         let hash1 = OutputManifest::compute_output_hash(&files, &symlinks);
         let hash2 = OutputManifest::compute_output_hash(&files_reversed, &symlinks);
-        assert_eq!(hash1, hash2, "output hash must be independent of input order");
+        assert_eq!(
+            hash1, hash2,
+            "output hash must be independent of input order"
+        );
     }
 
     #[test]
@@ -207,8 +210,7 @@ mod tests {
         assert!(toml_str.contains("/usr/bin/hello"));
 
         // Round-trip.
-        let deserialized: OutputManifest =
-            toml::from_str(&toml_str).expect("must deserialize");
+        let deserialized: OutputManifest = toml::from_str(&toml_str).expect("must deserialize");
         assert_eq!(manifest, deserialized);
     }
 

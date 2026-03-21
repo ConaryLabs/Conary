@@ -52,14 +52,13 @@ pub fn cmd_profile_show(path: &Path) -> Result<()> {
     }
     println!();
 
-    println!("Seed: {} (source: {})", profile.seed.id, profile.seed.source);
+    println!(
+        "Seed: {} (source: {})",
+        profile.seed.id, profile.seed.source
+    );
     println!();
 
-    let total_derivations: usize = profile
-        .stages
-        .iter()
-        .map(|s| s.derivations.len())
-        .sum();
+    let total_derivations: usize = profile.stages.iter().map(|s| s.derivations.len()).sum();
 
     println!(
         "Stages: {}  Derivations: {}",
@@ -111,14 +110,8 @@ pub fn cmd_profile_diff(old_path: &Path, new_path: &Path) -> Result<()> {
         return Ok(());
     }
 
-    println!(
-        "Old: {} (hash: {})",
-        old_profile.profile.manifest, old_hash
-    );
-    println!(
-        "New: {} (hash: {})",
-        new_profile.profile.manifest, new_hash
-    );
+    println!("Old: {} (hash: {})", old_profile.profile.manifest, old_hash);
+    println!("New: {} (hash: {})", new_profile.profile.manifest, new_hash);
     println!();
 
     let diff = old_profile.diff(&new_profile);
@@ -152,19 +145,22 @@ pub fn cmd_profile_diff(old_path: &Path, new_path: &Path) -> Result<()> {
 }
 
 /// Publish a profile to a remote Remi endpoint.
-pub fn cmd_profile_publish(profile_path: &str, endpoint: Option<&str>, token: Option<&str>) -> Result<()> {
-    let content = std::fs::read(profile_path)
-        .map_err(|e| anyhow::anyhow!("failed to read profile: {e}"))?;
+pub fn cmd_profile_publish(
+    profile_path: &str,
+    endpoint: Option<&str>,
+    token: Option<&str>,
+) -> Result<()> {
+    let content =
+        std::fs::read(profile_path).map_err(|e| anyhow::anyhow!("failed to read profile: {e}"))?;
 
     let hash = {
         use sha2::{Digest, Sha256};
         hex::encode(Sha256::digest(&content))
     };
 
-    let endpoint = endpoint
-        .ok_or_else(|| anyhow::anyhow!("--endpoint is required for profile publish"))?;
-    let token = token
-        .ok_or_else(|| anyhow::anyhow!("--token is required for profile publish"))?;
+    let endpoint =
+        endpoint.ok_or_else(|| anyhow::anyhow!("--endpoint is required for profile publish"))?;
+    let token = token.ok_or_else(|| anyhow::anyhow!("--token is required for profile publish"))?;
 
     let client = reqwest::blocking::Client::new();
     let resp = client
@@ -178,7 +174,11 @@ pub fn cmd_profile_publish(profile_path: &str, endpoint: Option<&str>, token: Op
     if resp.status().is_success() {
         println!("Published profile to {endpoint}/v1/profiles/{hash}");
     } else {
-        anyhow::bail!("Server returned {}: {}", resp.status(), resp.text().unwrap_or_default());
+        anyhow::bail!(
+            "Server returned {}: {}",
+            resp.status(),
+            resp.text().unwrap_or_default()
+        );
     }
 
     Ok(())

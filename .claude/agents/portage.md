@@ -63,7 +63,6 @@ Before launching agents, identify the scope:
 The codebase has 5 crates:
 - `conary` (root) -- CLI binary, `src/commands/`
 - `conary-core` -- core library, 25+ modules
-- `conary-erofs` -- EROFS image builder
 - `conary-server` -- Remi server + conaryd daemon (feature-gated: `--features server`)
 - `conary-test` -- test infrastructure (TOML manifests, containers, HTTP/MCP server)
 

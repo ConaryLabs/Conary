@@ -124,7 +124,10 @@ impl<'a> Cook<'a> {
             .record_source_fetch(&archive_url, &self.recipe.source.checksum);
 
         // Copy to build directory
-        let local_archive = self.build_dir.as_path().join(self.recipe.archive_filename());
+        let local_archive = self
+            .build_dir
+            .as_path()
+            .join(self.recipe.archive_filename());
         fs::copy(&archive_path, &local_archive)?;
 
         self.log_line(&format!("Fetched source: {}", archive_url));
@@ -132,13 +135,8 @@ impl<'a> Cook<'a> {
         // Fetch additional sources (with variable substitution)
         for additional in &self.recipe.source.additional {
             let url = self.recipe.substitute(&additional.url, "");
-            let path = self
-                .kitchen
-                .fetch_source(&url, &additional.checksum)?;
-            let filename = url
-                .split('/')
-                .next_back()
-                .unwrap_or("additional.tar.gz");
+            let path = self.kitchen.fetch_source(&url, &additional.checksum)?;
+            let filename = url.split('/').next_back().unwrap_or("additional.tar.gz");
             let local_path = self.source_dir.join(filename);
             fs::copy(&path, &local_path)?;
             self.log_line(&format!("Fetched additional source: {}", url));
@@ -174,7 +172,10 @@ impl<'a> Cook<'a> {
 
     /// Phase 2a: Unpack sources
     pub(crate) fn unpack(&mut self) -> Result<()> {
-        let archive_path = self.build_dir.as_path().join(self.recipe.archive_filename());
+        let archive_path = self
+            .build_dir
+            .as_path()
+            .join(self.recipe.archive_filename());
 
         // Detect archive type and extract
         extract_archive(&archive_path, &self.source_dir)?;

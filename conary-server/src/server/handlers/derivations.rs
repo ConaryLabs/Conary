@@ -68,10 +68,7 @@ pub async fn get_derivation(
 
     let (db_path, chunk_dir) = {
         let guard = state.read().await;
-        (
-            guard.config.db_path.clone(),
-            guard.config.chunk_dir.clone(),
-        )
+        (guard.config.db_path.clone(), guard.config.chunk_dir.clone())
     };
 
     // Query the DB for the CAS hash
@@ -206,10 +203,7 @@ pub async fn put_derivation(
 
     let (db_path, chunk_dir) = {
         let guard = state.read().await;
-        (
-            guard.config.db_path.clone(),
-            guard.config.chunk_dir.clone(),
-        )
+        (guard.config.db_path.clone(), guard.config.chunk_dir.clone())
     };
 
     // Auth check (inline, so GET/HEAD on same path stay public)
@@ -241,7 +235,11 @@ pub async fn put_derivation(
         Ok(m) => m,
         Err(e) => {
             tracing::warn!("Invalid manifest TOML for {derivation_id}: {e}");
-            return (StatusCode::BAD_REQUEST, "Invalid manifest TOML: missing package_name or package_version").into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                "Invalid manifest TOML: missing package_name or package_version",
+            )
+                .into_response();
         }
     };
 
@@ -369,9 +367,8 @@ pub async fn probe_derivations(
         // SQLite doesn't support binding a dynamic list natively so we use a
         // temporary in-memory approach: query one-by-one for simplicity and
         // correctness. For the expected batch sizes (< 1000), this is fast enough.
-        let mut stmt = conn.prepare(
-            "SELECT derivation_id FROM derivation_cache WHERE derivation_id = ?1",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT derivation_id FROM derivation_cache WHERE derivation_id = ?1")?;
 
         for (id, exists) in result.iter_mut() {
             let found = stmt.query_row(rusqlite::params![id], |_| Ok(())).is_ok();
@@ -429,7 +426,9 @@ mod tests {
         let path = cas_object_path(&dir, hash);
         assert_eq!(
             path,
-            PathBuf::from("/chunks/objects/aa/bbcc1234567890aabbcc1234567890aabbcc1234567890aabbcc1234567890")
+            PathBuf::from(
+                "/chunks/objects/aa/bbcc1234567890aabbcc1234567890aabbcc1234567890aabbcc1234567890"
+            )
         );
     }
 

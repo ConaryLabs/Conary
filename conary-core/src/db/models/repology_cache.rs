@@ -14,7 +14,10 @@ pub struct RepologyCacheEntry {
 }
 
 impl RepologyCacheEntry {
-    pub fn insert_or_replace(conn: &Connection, entry: &RepologyCacheEntry) -> rusqlite::Result<()> {
+    pub fn insert_or_replace(
+        conn: &Connection,
+        entry: &RepologyCacheEntry,
+    ) -> rusqlite::Result<()> {
         conn.execute(
             "INSERT OR REPLACE INTO repology_cache
              (project_name, distro, distro_name, version, status, fetched_at)

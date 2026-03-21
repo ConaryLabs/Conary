@@ -1007,10 +1007,8 @@ mod tests {
         fs::write(prefix_dir.join(".tmp_in_progress"), b"temp").unwrap();
         fs::write(prefix_dir.join("something.tmp"), b"temp2").unwrap();
 
-        let mut results: Vec<(String, PathBuf)> = cas
-            .iter_objects()
-            .collect::<Result<Vec<_>>>()
-            .unwrap();
+        let mut results: Vec<(String, PathBuf)> =
+            cas.iter_objects().collect::<Result<Vec<_>>>().unwrap();
         results.sort_by(|a, b| a.0.cmp(&b.0));
 
         let hashes: Vec<&str> = results.iter().map(|(h, _)| h.as_str()).collect();

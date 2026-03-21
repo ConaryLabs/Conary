@@ -21,7 +21,7 @@ actual diff. You are the reason releases ship clean.
 ## Release Process
 
 ### 1. Version Validation
-- Check `Cargo.toml` version across all 5 crates (conary, conary-core, conary-erofs, conary-server, conary-test)
+- Check `Cargo.toml` version across all 4 crates (conary, conary-core, conary-server, conary-test)
 - Analyze all commits since last tag: `git log $(git describe --tags --abbrev=0)..HEAD --oneline`
 - Categorize: breaking changes (major), new features (minor), fixes (patch)
 - Verify version bump matches change severity

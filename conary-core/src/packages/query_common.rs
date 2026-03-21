@@ -49,7 +49,9 @@ pub fn run_query_command(cmd: &str, args: &[&str]) -> crate::Result<String> {
         .map_err(|e| crate::error::Error::IoError(format!("Failed to run {cmd}: {e}")))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(crate::error::Error::IoError(format!("{cmd} failed: {stderr}")));
+        return Err(crate::error::Error::IoError(format!(
+            "{cmd} failed: {stderr}"
+        )));
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }

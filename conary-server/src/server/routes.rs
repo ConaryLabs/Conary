@@ -476,22 +476,13 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
         // === Seed Registry ===
         // /latest and the bare list must come before /:seed_id to avoid Axum
         // matching the literal string "latest" as a seed_id path parameter.
-        .route(
-            "/v1/seeds/latest",
-            get(seeds::get_latest_seed),
-        )
-        .route(
-            "/v1/seeds",
-            get(seeds::list_seeds),
-        )
+        .route("/v1/seeds/latest", get(seeds::get_latest_seed))
+        .route("/v1/seeds", get(seeds::list_seeds))
         .route(
             "/v1/seeds/:seed_id",
             get(seeds::get_seed).put(seeds::put_seed),
         )
-        .route(
-            "/v1/seeds/:seed_id/image",
-            get(seeds::get_seed_image),
-        )
+        .route("/v1/seeds/:seed_id/image", get(seeds::get_seed_image))
         // === Profile Publishing ===
         .route(
             "/v1/profiles/:profile_hash",

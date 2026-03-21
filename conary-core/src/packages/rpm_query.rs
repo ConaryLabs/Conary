@@ -404,7 +404,11 @@ pub fn query_all_packages() -> Result<HashMap<String, InstalledRpmInfo>> {
     // Query format: NAME|VERSION|RELEASE|EPOCH|ARCH
     let stdout = run_query_command(
         "rpm",
-        &["-qa", "--queryformat", "%{NAME}|%{VERSION}|%{RELEASE}|%{EPOCH}|%{ARCH}\n"],
+        &[
+            "-qa",
+            "--queryformat",
+            "%{NAME}|%{VERSION}|%{RELEASE}|%{EPOCH}|%{ARCH}\n",
+        ],
     )?;
 
     let mut packages = HashMap::new();

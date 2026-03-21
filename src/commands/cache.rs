@@ -10,8 +10,8 @@ pub fn cmd_cache_populate(profile_path: &str, sources_only: bool, full: bool) ->
     let content = std::fs::read_to_string(profile_path)
         .map_err(|e| anyhow::anyhow!("failed to read profile: {e}"))?;
 
-    let profile: conary_core::derivation::BuildProfile = toml::from_str(&content)
-        .map_err(|e| anyhow::anyhow!("failed to parse profile: {e}"))?;
+    let profile: conary_core::derivation::BuildProfile =
+        toml::from_str(&content).map_err(|e| anyhow::anyhow!("failed to parse profile: {e}"))?;
 
     // Collect all derivation IDs from all stages
     let mut derivation_ids: Vec<String> = Vec::new();

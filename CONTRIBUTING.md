@@ -57,7 +57,7 @@ cargo build --features server
 cargo build --release
 ```
 
-The project is a Cargo workspace with 5 crates: `conary` (CLI), `conary-core` (library), `conary-erofs` (EROFS image builder), `conary-server` (Remi + conaryd), and `conary-test` (test infrastructure).
+The project is a Cargo workspace with 4 crates: `conary` (CLI), `conary-core` (library), `conary-server` (Remi + conaryd), and `conary-test` (test infrastructure). EROFS support uses `composefs-rs` directly in `conary-core`.
 
 ## Running Tests
 
@@ -152,8 +152,6 @@ The project is a Cargo workspace with 5 crates:
 | `src/automation/` | Automated maintenance (security updates, orphan cleanup) |
 | `src/bootstrap/` | Bootstrap a complete Conary system from scratch |
 | `src/hash.rs` | Multi-algorithm hashing (SHA-256, XXH128) |
-
-**`conary-erofs`** -- EROFS image builder for composefs integration
 
 **`conary-server`** -- Remi server + conaryd daemon (feature-gated: `--features server`)
 

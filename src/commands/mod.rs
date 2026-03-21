@@ -3,8 +3,8 @@
 
 mod adopt;
 mod automation;
-mod cache;
 mod bootstrap;
+mod cache;
 pub mod canonical;
 mod capability;
 pub mod ccs;
@@ -13,7 +13,6 @@ pub(crate) mod composefs_ops;
 mod config;
 mod convert_pkgbuild;
 mod cook;
-mod recipe_audit;
 mod derivation;
 mod derivation_sbom;
 mod derived;
@@ -25,15 +24,16 @@ pub mod groups;
 mod install;
 mod label;
 mod model;
-pub mod progress;
 mod package_parsing;
 mod profile;
+pub mod progress;
 mod provenance;
 mod query;
-mod replatform_rendering;
+mod recipe_audit;
 mod redirect;
 pub mod registry;
 mod remove;
+mod replatform_rendering;
 mod repo;
 mod restore;
 mod self_update;
@@ -42,8 +42,8 @@ mod system;
 mod triggers;
 pub mod trust;
 mod update;
-pub mod verify;
 mod update_channel;
+pub mod verify;
 
 // Re-export all command handlers
 pub use adopt::{
@@ -56,13 +56,13 @@ pub use automation::{
     cmd_automation_apply, cmd_automation_check, cmd_automation_configure, cmd_automation_daemon,
     cmd_automation_history, cmd_automation_status,
 };
-pub use cache::{cmd_cache_populate, cmd_cache_status};
 pub use bootstrap::{
-    cmd_bootstrap_check, cmd_bootstrap_clean, cmd_bootstrap_config, cmd_bootstrap_cross_tools,
-    cmd_bootstrap_dry_run, cmd_bootstrap_image, cmd_bootstrap_init, cmd_bootstrap_resume,
-    cmd_bootstrap_run, cmd_bootstrap_status, cmd_bootstrap_system, cmd_bootstrap_temp_tools,
-    cmd_bootstrap_tier2, BootstrapRunOptions,
+    BootstrapRunOptions, cmd_bootstrap_check, cmd_bootstrap_clean, cmd_bootstrap_config,
+    cmd_bootstrap_cross_tools, cmd_bootstrap_dry_run, cmd_bootstrap_image, cmd_bootstrap_init,
+    cmd_bootstrap_resume, cmd_bootstrap_run, cmd_bootstrap_status, cmd_bootstrap_system,
+    cmd_bootstrap_temp_tools, cmd_bootstrap_tier2,
 };
+pub use cache::{cmd_cache_populate, cmd_cache_status};
 pub use capability::{
     cmd_capability_audit, cmd_capability_generate, cmd_capability_list, cmd_capability_run,
     cmd_capability_show, cmd_capability_validate,
@@ -78,10 +78,8 @@ pub use config::{
 };
 pub use convert_pkgbuild::cmd_convert_pkgbuild;
 pub use cook::cmd_cook;
-pub use recipe_audit::cmd_recipe_audit;
 pub use derivation::{cmd_derivation_build, cmd_derivation_show};
 pub use derivation_sbom::cmd_derivation_sbom;
-pub use profile::{cmd_profile_diff, cmd_profile_generate, cmd_profile_publish, cmd_profile_show};
 pub use derived::{
     cmd_derive_build, cmd_derive_create, cmd_derive_delete, cmd_derive_list, cmd_derive_override,
     cmd_derive_patch, cmd_derive_show, cmd_derive_stale,
@@ -96,10 +94,12 @@ pub use model::{
     cmd_model_apply, cmd_model_check, cmd_model_diff, cmd_model_lock, cmd_model_publish,
     cmd_model_remote_diff, cmd_model_snapshot, cmd_model_update,
 };
+pub use profile::{cmd_profile_diff, cmd_profile_generate, cmd_profile_publish, cmd_profile_show};
 pub use provenance::{
     cmd_provenance_audit, cmd_provenance_diff, cmd_provenance_export, cmd_provenance_find_by_dep,
     cmd_provenance_register, cmd_provenance_show, cmd_provenance_verify,
 };
+pub use recipe_audit::cmd_recipe_audit;
 pub use remove::{cmd_autoremove, cmd_remove};
 // cmd_scripts is defined in this module, no need to re-export from submodule
 #[cfg(feature = "server")]

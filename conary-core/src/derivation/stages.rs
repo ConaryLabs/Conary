@@ -258,10 +258,7 @@ fn topological_sort(
                 let dep_name = dep.as_str();
                 if packages.contains(dep_name)
                     && dep_name != pkg.as_str()
-                    && adjacency
-                        .entry(dep_name)
-                        .or_default()
-                        .insert(pkg.as_str())
+                    && adjacency.entry(dep_name).or_default().insert(pkg.as_str())
                 {
                     *in_degree.entry(pkg.as_str()).or_insert(0) += 1;
                 }
@@ -270,10 +267,7 @@ fn topological_sort(
                 let dep_name = dep.as_str();
                 if packages.contains(dep_name)
                     && dep_name != pkg.as_str()
-                    && adjacency
-                        .entry(dep_name)
-                        .or_default()
-                        .insert(pkg.as_str())
+                    && adjacency.entry(dep_name).or_default().insert(pkg.as_str())
                 {
                     *in_degree.entry(pkg.as_str()).or_insert(0) += 1;
                 }
@@ -357,7 +351,10 @@ mod tests {
     #[test]
     fn test_stage_from_str_name() {
         assert_eq!(Stage::from_str_name("toolchain").unwrap(), Stage::Toolchain);
-        assert_eq!(Stage::from_str_name("FOUNDATION").unwrap(), Stage::Foundation);
+        assert_eq!(
+            Stage::from_str_name("FOUNDATION").unwrap(),
+            Stage::Foundation
+        );
         assert_eq!(Stage::from_str_name("System").unwrap(), Stage::System);
         assert_eq!(
             Stage::from_str_name("Customization").unwrap(),
@@ -370,7 +367,10 @@ mod tests {
     fn test_pass_recipes_go_to_toolchain() {
         let mut recipes = HashMap::new();
         recipes.insert("gcc-pass1".to_string(), make_recipe("gcc-pass1", &[], &[]));
-        recipes.insert("gcc-pass2".to_string(), make_recipe("gcc-pass2", &["gcc-pass1"], &[]));
+        recipes.insert(
+            "gcc-pass2".to_string(),
+            make_recipe("gcc-pass2", &["gcc-pass1"], &[]),
+        );
         recipes.insert(
             "binutils-pass1".to_string(),
             make_recipe("binutils-pass1", &[], &[]),
@@ -380,7 +380,12 @@ mod tests {
         let assignments = assign_stages(&recipes, &custom).unwrap();
 
         for a in &assignments {
-            assert_eq!(a.stage, Stage::Toolchain, "expected {} in Toolchain", a.package);
+            assert_eq!(
+                a.stage,
+                Stage::Toolchain,
+                "expected {} in Toolchain",
+                a.package
+            );
         }
     }
 
@@ -391,14 +396,22 @@ mod tests {
             "linux-headers".to_string(),
             make_recipe("linux-headers", &[], &[]),
         );
-        recipes.insert("glibc".to_string(), make_recipe("glibc", &["linux-headers"], &[]));
+        recipes.insert(
+            "glibc".to_string(),
+            make_recipe("glibc", &["linux-headers"], &[]),
+        );
         recipes.insert("libstdcxx".to_string(), make_recipe("libstdcxx", &[], &[]));
 
         let custom = HashSet::new();
         let assignments = assign_stages(&recipes, &custom).unwrap();
 
         for a in &assignments {
-            assert_eq!(a.stage, Stage::Toolchain, "expected {} in Toolchain", a.package);
+            assert_eq!(
+                a.stage,
+                Stage::Toolchain,
+                "expected {} in Toolchain",
+                a.package
+            );
         }
     }
 
@@ -411,7 +424,10 @@ mod tests {
         let custom = HashSet::new();
         let assignments = assign_stages(&recipes, &custom).unwrap();
 
-        let gcc_pass = assignments.iter().find(|a| a.package == "gcc-pass1").unwrap();
+        let gcc_pass = assignments
+            .iter()
+            .find(|a| a.package == "gcc-pass1")
+            .unwrap();
         assert_eq!(gcc_pass.stage, Stage::Toolchain);
 
         let gcc_full = assignments.iter().find(|a| a.package == "gcc").unwrap();
@@ -482,8 +498,7 @@ mod tests {
         recipes.insert("b".to_string(), make_recipe("b", &["a"], &[]));
         recipes.insert("c".to_string(), make_recipe("c", &["b"], &[]));
 
-        let packages: BTreeSet<String> =
-            ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
+        let packages: BTreeSet<String> = ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
 
         let sorted = topological_sort(&packages, &recipes).unwrap();
         assert_eq!(sorted, vec!["a", "b", "c"]);
@@ -496,8 +511,10 @@ mod tests {
         recipes.insert("gcc".to_string(), make_recipe("gcc", &[], &["libc"]));
         recipes.insert("make".to_string(), make_recipe("make", &[], &["gcc"]));
 
-        let packages: BTreeSet<String> =
-            ["libc", "gcc", "make"].iter().map(|s| s.to_string()).collect();
+        let packages: BTreeSet<String> = ["libc", "gcc", "make"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
 
         let sorted = topological_sort(&packages, &recipes).unwrap();
 
@@ -516,8 +533,7 @@ mod tests {
         recipes.insert("b".to_string(), make_recipe("b", &["a"], &[]));
         recipes.insert("c".to_string(), make_recipe("c", &["b"], &[]));
 
-        let packages: BTreeSet<String> =
-            ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
+        let packages: BTreeSet<String> = ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
 
         let result = topological_sort(&packages, &recipes);
         assert!(matches!(result, Err(StageError::CyclicDependency)));
@@ -539,8 +555,10 @@ mod tests {
         recipes.insert("curl".to_string(), make_recipe("curl", &[], &[]));
         recipes.insert("bzip2".to_string(), make_recipe("bzip2", &[], &[]));
 
-        let packages: BTreeSet<String> =
-            ["zlib", "curl", "bzip2"].iter().map(|s| s.to_string()).collect();
+        let packages: BTreeSet<String> = ["zlib", "curl", "bzip2"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
 
         let sorted = topological_sort(&packages, &recipes).unwrap();
         // Independent packages should come out in alphabetical order (BTreeSet/BTreeMap)
@@ -564,10 +582,7 @@ mod tests {
     fn test_build_order_is_global() {
         let mut recipes = HashMap::new();
         // Toolchain
-        recipes.insert(
-            "gcc-pass1".to_string(),
-            make_recipe("gcc-pass1", &[], &[]),
-        );
+        recipes.insert("gcc-pass1".to_string(), make_recipe("gcc-pass1", &[], &[]));
         // Foundation
         recipes.insert("make".to_string(), make_recipe("make", &[], &[]));
         // System
@@ -683,26 +698,14 @@ mod tests {
         recipes.insert("gcc".to_string(), make_recipe("gcc", &[], &[]));
         recipes.insert("binutils".to_string(), make_recipe("binutils", &[], &[]));
         recipes.insert("make".to_string(), make_recipe("make", &[], &[]));
-        recipes.insert(
-            "bash".to_string(),
-            make_recipe("bash", &[], &["make"]),
-        );
+        recipes.insert("bash".to_string(), make_recipe("bash", &[], &["make"]));
 
         // System
-        recipes.insert(
-            "nginx".to_string(),
-            make_recipe("nginx", &[], &[]),
-        );
-        recipes.insert(
-            "openssh".to_string(),
-            make_recipe("openssh", &[], &[]),
-        );
+        recipes.insert("nginx".to_string(), make_recipe("nginx", &[], &[]));
+        recipes.insert("openssh".to_string(), make_recipe("openssh", &[], &[]));
 
         // Customization
-        recipes.insert(
-            "my-app".to_string(),
-            make_recipe("my-app", &[], &[]),
-        );
+        recipes.insert("my-app".to_string(), make_recipe("my-app", &[], &[]));
 
         let mut custom = HashSet::new();
         custom.insert("my-app".to_string());
@@ -762,10 +765,7 @@ mod tests {
         );
 
         // Verify foundation ordering (make before bash since bash makedepends on make)
-        assert!(
-            order_of("make") < order_of("bash"),
-            "make before bash"
-        );
+        assert!(order_of("make") < order_of("bash"), "make before bash");
 
         // All assignments should have unique build_order
         let orders: Vec<usize> = assignments.iter().map(|a| a.build_order).collect();

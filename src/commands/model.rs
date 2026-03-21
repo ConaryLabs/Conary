@@ -23,10 +23,10 @@ use conary_core::model::parser::SystemModel;
 use conary_core::model::remote::fetch_remote_collection;
 use conary_core::model::{
     DiffAction, ModelDerivedPackage, ModelDiff, ModelDiffSummary, ReplatformEstimate,
-    ReplatformStatus, SystemState, VisibleRealignmentProposal,
-    capture_current_state, compute_diff, compute_diff_with_includes_offline, parse_model_file,
-    parse_trove_spec, planned_replatform_actions, replatform_estimate_from_affinities,
-    replatform_execution_plan, snapshot_to_model, source_policy_replatform_snapshot,
+    ReplatformStatus, SystemState, VisibleRealignmentProposal, capture_current_state, compute_diff,
+    compute_diff_with_includes_offline, parse_model_file, parse_trove_spec,
+    planned_replatform_actions, replatform_estimate_from_affinities, replatform_execution_plan,
+    snapshot_to_model, source_policy_replatform_snapshot,
 };
 use rusqlite::Connection;
 use tracing::{debug, info};
@@ -1384,8 +1384,7 @@ fn publish_local(
 
         for pkg_name in &model.optional.packages {
             if !model.config.install.contains(pkg_name) {
-                let mut member =
-                    CollectionMember::new(collection_id, pkg_name.clone()).optional();
+                let mut member = CollectionMember::new(collection_id, pkg_name.clone()).optional();
                 if let Some(v) = model.pin.get(pkg_name) {
                     member = member.with_version(v.clone());
                 }
@@ -1471,8 +1470,8 @@ mod tests {
         RepositoryPackage, ResolutionStrategy, Trove,
     };
     use conary_core::db::schema;
-    use conary_core::model::{ReplatformBlockedReason, ReplatformExecutionPlan};
     use conary_core::model::parser::SystemModel;
+    use conary_core::model::{ReplatformBlockedReason, ReplatformExecutionPlan};
     use tempfile::{NamedTempFile, tempdir};
 
     fn create_test_db() -> (NamedTempFile, String) {

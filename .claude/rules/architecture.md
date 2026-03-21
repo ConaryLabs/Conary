@@ -2,7 +2,7 @@
 
 ## Workspace Structure
 
-5-crate workspace: `conary` (CLI), `conary-core` (library), `conary-erofs` (EROFS), `conary-server` (Remi + conaryd), `conary-test` (test infrastructure). Feature gate: `--features server` enables `conary-server`.
+4-crate workspace: `conary` (CLI), `conary-core` (library), `conary-server` (Remi + conaryd), `conary-test` (test infrastructure). Feature gate: `--features server` enables `conary-server`. EROFS support uses `composefs-rs` directly in `conary-core`.
 
 ## Key Modules
 
@@ -52,8 +52,6 @@
 | `src/derivation/` | CAS-layered derivation engine for bootstrap (pipeline, compose, capture, index, provenance, trust levels) |
 | `src/mcp/` | MCP tool definitions for LLM integration |
 | `src/model/replatform.rs` | Source policy replatform and convergence planning |
-
-### conary-erofs -- EROFS image builder for composefs
 
 ### conary-server -- Remi + conaryd (feature-gated: `--features server`)
 

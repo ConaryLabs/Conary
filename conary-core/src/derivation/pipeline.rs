@@ -19,16 +19,16 @@ use tracing::{info, warn};
 
 use crate::recipe::Recipe;
 
-use super::compose::{compose_erofs, erofs_image_hash, ComposeError};
+use super::compose::{ComposeError, compose_erofs, erofs_image_hash};
 use super::environment::BuildEnvironment;
 use super::executor::{DerivationExecutor, ExecutionResult, ExecutorError};
 use super::id::{DerivationId, DerivationInputs};
 use super::index::DerivationIndex;
 use super::output::OutputManifest;
-use super::recipe_hash;
 use super::profile::{
     BuildProfile, ProfileDerivation, ProfileMetadata, ProfileSeedRef, ProfileStage,
 };
+use super::recipe_hash;
 use super::seed::Seed;
 use super::stages::{Stage, StageAssignment};
 
@@ -163,10 +163,10 @@ pub enum PipelineError {
     Io(String),
 
     /// A non-targeted package has no cached derivation (required by --only).
-    #[error("package '{package}' has no cached derivation -- run a full build first or add it to --only")]
-    UncachedDependency {
-        package: String,
-    },
+    #[error(
+        "package '{package}' has no cached derivation -- run a full build first or add it to --only"
+    )]
+    UncachedDependency { package: String },
 
     /// A --only target is in a stage beyond the --up-to cutoff.
     #[error("package '{package}' is in stage '{stage}' but --up-to stops at '{cutoff}'")]
@@ -293,7 +293,9 @@ impl Pipeline {
         let stages_ordered = ordered_stages(assignments);
 
         // Validate --only targets against --up-to cutoff
-        if let (Some(only_pkgs), Some(cutoff)) = (&self.config.only_packages, &self.config.up_to_stage) {
+        if let (Some(only_pkgs), Some(cutoff)) =
+            (&self.config.only_packages, &self.config.up_to_stage)
+        {
             for pkg in only_pkgs {
                 if let Some((stage, _)) = stages_ordered.iter().find(|(_, pkgs)| pkgs.contains(pkg))
                     && stage > cutoff
@@ -369,8 +371,7 @@ impl Pipeline {
 
             // Mount the current stage's EROFS image as the build sysroot.
             let sysroot = self.config.work_dir.join("sysroot");
-            std::fs::create_dir_all(&sysroot)
-                .map_err(|e| PipelineError::Io(e.to_string()))?;
+            std::fs::create_dir_all(&sysroot).map_err(|e| PipelineError::Io(e.to_string()))?;
 
             let mut build_env = BuildEnvironment::new(
                 current_image_path.clone(),
@@ -452,10 +453,8 @@ impl Pipeline {
                         let index = DerivationIndex::new(conn);
                         if index.lookup(drv_id.as_str()).ok().flatten().is_some() {
                             // Local cache hit -- executor.execute() will find it too, skip substituter
-                        } else if let super::substituter::CacheQueryResult::Hit {
-                            manifest,
-                            peer,
-                        } = sub.query(drv_id.as_str())
+                        } else if let super::substituter::CacheQueryResult::Hit { manifest, peer } =
+                            sub.query(drv_id.as_str())
                         {
                             // Remote hit! Fetch missing CAS objects
                             let fetch_report = sub
@@ -578,15 +577,12 @@ impl Pipeline {
                         let manifest = output.manifest;
 
                         // Auto-publish to configured endpoint
-                        if let (Some(endpoint), Some(token)) =
-                            (self.config.publish_endpoint.as_deref(), self.config.publish_token.as_deref())
-                            && let Some(sub) = substituter.as_ref()
-                            && let Err(e) = sub.publish(
-                                derivation_id.as_str(),
-                                &manifest,
-                                endpoint,
-                                token,
-                            )
+                        if let (Some(endpoint), Some(token)) = (
+                            self.config.publish_endpoint.as_deref(),
+                            self.config.publish_token.as_deref(),
+                        ) && let Some(sub) = substituter.as_ref()
+                            && let Err(e) =
+                                sub.publish(derivation_id.as_str(), &manifest, endpoint, token)
                         {
                             warn!("Failed to publish {}: {e}", pkg_name);
                         }
@@ -605,7 +601,9 @@ impl Pipeline {
             }
 
             // Unmount the build environment after all packages in this stage.
-            if build_env.is_mounted() && let Err(e) = build_env.unmount() {
+            if build_env.is_mounted()
+                && let Err(e) = build_env.unmount()
+            {
                 warn!("Failed to unmount build environment: {e}");
             }
 
@@ -618,8 +616,7 @@ impl Pipeline {
 
                 let build_result = compose_erofs(&manifest_refs, &stage_dir)?;
 
-                build_env_hash = erofs_image_hash(&build_result.image_path)?
-                    .to_string();
+                build_env_hash = erofs_image_hash(&build_result.image_path)?.to_string();
 
                 // Update the image path so the next stage mounts this
                 // stage's composed EROFS as its build sysroot.
@@ -638,9 +635,7 @@ impl Pipeline {
                 derivations: stage_derivations,
             });
 
-            on_event(&PipelineEvent::StageCompleted {
-                name: stage_name,
-            });
+            on_event(&PipelineEvent::StageCompleted { name: stage_name });
         }
 
         let total = total_cached + total_built;
@@ -840,11 +835,9 @@ mod tests {
         recipes.insert("nginx".to_owned(), make_recipe("nginx", &[], &[]));
 
         let custom = HashSet::new();
-        let assignments =
-            crate::derivation::stages::assign_stages(&recipes, &custom).unwrap();
+        let assignments = crate::derivation::stages::assign_stages(&recipes, &custom).unwrap();
 
-        let profile =
-            Pipeline::generate_profile(&seed, &recipes, &assignments, "test-manifest");
+        let profile = Pipeline::generate_profile(&seed, &recipes, &assignments, "test-manifest");
 
         // Verify metadata.
         assert_eq!(profile.profile.manifest, "test-manifest");
@@ -880,8 +873,7 @@ mod tests {
         recipes.insert("a".to_owned(), make_recipe("a", &[], &[]));
 
         let custom = HashSet::new();
-        let assignments =
-            crate::derivation::stages::assign_stages(&recipes, &custom).unwrap();
+        let assignments = crate::derivation::stages::assign_stages(&recipes, &custom).unwrap();
 
         let p1 = Pipeline::generate_profile(&seed, &recipes, &assignments, "m");
         let p2 = Pipeline::generate_profile(&seed, &recipes, &assignments, "m");
@@ -917,8 +909,7 @@ mod tests {
         recipes.insert("a".to_owned(), make_recipe("a", &[], &[]));
 
         let custom = HashSet::new();
-        let assignments =
-            crate::derivation::stages::assign_stages(&recipes, &custom).unwrap();
+        let assignments = crate::derivation::stages::assign_stages(&recipes, &custom).unwrap();
 
         let p1 = Pipeline::generate_profile(&seed1, &recipes, &assignments, "m");
         let p2 = Pipeline::generate_profile(&seed2, &recipes, &assignments, "m");
@@ -974,7 +965,8 @@ mod tests {
             build_env_hash: "env1".to_owned(),
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
             build_options: BTreeMap::new(),
-        }).unwrap();
+        })
+        .unwrap();
 
         let glibc_manifest = OutputManifest {
             derivation_id: glibc_id.as_str().to_owned(),

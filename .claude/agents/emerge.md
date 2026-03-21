@@ -73,4 +73,4 @@ Produce:
 - Tests: in-file `#[cfg(test)] mod tests`
 - No emojis, no unwrap in production code
 - Debug builds only (`cargo build`, never `--release`)
-- 5-crate workspace: conary, conary-core, conary-erofs, conary-server, conary-test
+- 4-crate workspace: conary, conary-core, conary-server, conary-test

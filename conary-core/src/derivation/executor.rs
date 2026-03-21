@@ -166,7 +166,11 @@ impl DerivationExecutor {
     /// Create a new executor backed by the given CAS store.
     #[must_use]
     pub fn new(cas: CasStore, cas_dir: PathBuf, config: ExecutorConfig) -> Self {
-        Self { cas, cas_dir, config }
+        Self {
+            cas,
+            cas_dir,
+            config,
+        }
     }
 
     /// Access the underlying CAS store.
@@ -187,8 +191,13 @@ impl DerivationExecutor {
         derivation_id: &DerivationId,
         params: &BuildLogParams<'_>,
     ) -> Option<PathBuf> {
-        let BuildLogParams { build_env_hash, cook_log, status, duration_secs, output_hash } =
-            params;
+        let BuildLogParams {
+            build_env_hash,
+            cook_log,
+            status,
+            duration_secs,
+            output_hash,
+        } = params;
         let log_dir = self.config.log_dir.as_ref()?;
 
         if let Err(e) = std::fs::create_dir_all(log_dir) {
@@ -313,7 +322,9 @@ impl DerivationExecutor {
 
         // Create a Cook that installs to a temporary DESTDIR.
         // The CleanupGuard ensures the directory is removed on any error path.
-        let destdir = self.cas_dir.join(format!("build-{}", &derivation_id.as_str()[..16]));
+        let destdir = self
+            .cas_dir
+            .join(format!("build-{}", &derivation_id.as_str()[..16]));
         std::fs::create_dir_all(&destdir).map_err(|e| ExecutorError::Io(e.to_string()))?;
         let mut destdir_guard = CleanupGuard::new(destdir.clone());
 
@@ -359,7 +370,10 @@ impl DerivationExecutor {
                 // Disarm guard to keep DESTDIR alive during shell session.
                 destdir_guard.disarm();
 
-                eprintln!("[FAILED] {}-{}", recipe.package.name, recipe.package.version);
+                eprintln!(
+                    "[FAILED] {}-{}",
+                    recipe.package.name, recipe.package.version
+                );
                 if let Some(path) = &log_path {
                     eprintln!("  Build log: {}", path.display());
                 }
@@ -376,12 +390,7 @@ impl DerivationExecutor {
         }
 
         // Step 4: Capture output from DESTDIR into CAS.
-        let manifest = capture_output(
-            &destdir,
-            &self.cas,
-            derivation_id.as_str(),
-            build_duration,
-        )?;
+        let manifest = capture_output(&destdir, &self.cas, derivation_id.as_str(), build_duration)?;
 
         // Output is safely in CAS -- disarm the guard so it does not
         // double-remove on the success path.
@@ -413,8 +422,7 @@ impl DerivationExecutor {
             "derivation_id".to_owned(),
             derivation_id.as_str().to_owned(),
         ));
-        build_prov
-            .set_host_attestation(crate::provenance::HostAttestation::from_current_system());
+        build_prov.set_host_attestation(crate::provenance::HostAttestation::from_current_system());
         build_prov.complete();
 
         let sig_prov = crate::provenance::SignatureProvenance::default();
@@ -487,7 +495,9 @@ impl DerivationExecutor {
                 output_hash: Some(&pkg_output.manifest.output_hash),
             },
         );
-        if let Some(path) = &log_path && !self.config.keep_logs {
+        if let Some(path) = &log_path
+            && !self.config.keep_logs
+        {
             let _ = std::fs::remove_file(path);
         }
 
@@ -576,7 +586,8 @@ install = "make install"
         index.insert(&record).unwrap();
 
         // Execute -- should get a cache hit without building.
-        let executor = DerivationExecutor::new(cas, tmp.path().join("cas"), ExecutorConfig::default());
+        let executor =
+            DerivationExecutor::new(cas, tmp.path().join("cas"), ExecutorConfig::default());
         let sysroot = tmp.path().join("sysroot");
         std::fs::create_dir_all(&sysroot).unwrap();
 
@@ -634,24 +645,32 @@ install = "make install"
         let recipe = test_recipe("bash", "5.2");
 
         let mut deps1 = BTreeMap::new();
-        deps1.insert("glibc".to_owned(), DerivationId::compute(&DerivationInputs {
-            source_hash: "src1".to_owned(),
-            build_script_hash: "script1".to_owned(),
-            dependency_ids: BTreeMap::new(),
-            build_env_hash: "env1".to_owned(),
-            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            build_options: BTreeMap::new(),
-        }).unwrap());
+        deps1.insert(
+            "glibc".to_owned(),
+            DerivationId::compute(&DerivationInputs {
+                source_hash: "src1".to_owned(),
+                build_script_hash: "script1".to_owned(),
+                dependency_ids: BTreeMap::new(),
+                build_env_hash: "env1".to_owned(),
+                target_triple: "x86_64-unknown-linux-gnu".to_owned(),
+                build_options: BTreeMap::new(),
+            })
+            .unwrap(),
+        );
 
         let mut deps2 = BTreeMap::new();
-        deps2.insert("glibc".to_owned(), DerivationId::compute(&DerivationInputs {
-            source_hash: "src2_different".to_owned(),
-            build_script_hash: "script1".to_owned(),
-            dependency_ids: BTreeMap::new(),
-            build_env_hash: "env1".to_owned(),
-            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            build_options: BTreeMap::new(),
-        }).unwrap());
+        deps2.insert(
+            "glibc".to_owned(),
+            DerivationId::compute(&DerivationInputs {
+                source_hash: "src2_different".to_owned(),
+                build_script_hash: "script1".to_owned(),
+                dependency_ids: BTreeMap::new(),
+                build_env_hash: "env1".to_owned(),
+                target_triple: "x86_64-unknown-linux-gnu".to_owned(),
+                build_options: BTreeMap::new(),
+            })
+            .unwrap(),
+        );
 
         let make_id = |deps: &BTreeMap<String, DerivationId>| {
             let inputs = DerivationInputs {
@@ -667,14 +686,18 @@ install = "make install"
 
         let id1 = make_id(&deps1);
         let id2 = make_id(&deps2);
-        assert_ne!(id1, id2, "different dependency IDs must produce different derivation IDs");
+        assert_ne!(
+            id1, id2,
+            "different dependency IDs must produce different derivation IDs"
+        );
     }
 
     #[test]
     fn cas_accessor_returns_store() {
         let tmp = TempDir::new().unwrap();
         let cas = test_cas(tmp.path());
-        let executor = DerivationExecutor::new(cas, tmp.path().join("cas"), ExecutorConfig::default());
+        let executor =
+            DerivationExecutor::new(cas, tmp.path().join("cas"), ExecutorConfig::default());
         // Just verify the accessor doesn't panic and returns a usable store.
         assert!(executor.cas().exists("nonexistent") == false);
     }
@@ -692,7 +715,8 @@ install = "make install"
         let sysroot = tmp.path().join("sysroot");
         std::fs::create_dir_all(&sysroot).unwrap();
 
-        let executor = DerivationExecutor::new(cas, tmp.path().join("cas"), ExecutorConfig::default());
+        let executor =
+            DerivationExecutor::new(cas, tmp.path().join("cas"), ExecutorConfig::default());
         let result = executor.execute(
             &recipe,
             "env_hash",
@@ -710,9 +734,7 @@ install = "make install"
                 );
             }
             other => {
-                panic!(
-                    "expected Build error from prep phase, got: {other:?}",
-                );
+                panic!("expected Build error from prep phase, got: {other:?}",);
             }
         }
     }
@@ -836,8 +858,14 @@ install = "make install"
         assert_eq!(logs.len(), 1, "should have one log file");
 
         let content = std::fs::read_to_string(logs[0].path()).unwrap();
-        assert!(content.contains("package: sed"), "log should contain package name");
-        assert!(content.contains("status: FAILED"), "log should show FAILED status");
+        assert!(
+            content.contains("package: sed"),
+            "log should contain package name"
+        );
+        assert!(
+            content.contains("status: FAILED"),
+            "log should show FAILED status"
+        );
     }
 
     #[test]

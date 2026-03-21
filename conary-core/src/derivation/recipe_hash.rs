@@ -182,7 +182,10 @@ jobs = "8"
 
         let hash_4 = build_script_hash(&with_4_jobs);
         let hash_8 = build_script_hash(&recipe_8);
-        assert_ne!(hash_4, hash_8, "different job counts must produce different hashes");
+        assert_ne!(
+            hash_4, hash_8,
+            "different job counts must produce different hashes"
+        );
     }
 
     #[test]

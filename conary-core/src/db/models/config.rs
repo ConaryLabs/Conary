@@ -171,10 +171,7 @@ impl ConfigFile {
 
     /// Find a config file by path
     pub fn find_by_path(conn: &Connection, path: &str) -> Result<Option<Self>> {
-        let sql = format!(
-            "SELECT {} FROM config_files WHERE path = ?1",
-            Self::COLUMNS
-        );
+        let sql = format!("SELECT {} FROM config_files WHERE path = ?1", Self::COLUMNS);
         let mut stmt = conn.prepare(&sql)?;
         let config = stmt.query_row([path], Self::from_row).optional()?;
         Ok(config)
@@ -182,10 +179,7 @@ impl ConfigFile {
 
     /// Find a config file by ID
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
-        let sql = format!(
-            "SELECT {} FROM config_files WHERE id = ?1",
-            Self::COLUMNS
-        );
+        let sql = format!("SELECT {} FROM config_files WHERE id = ?1", Self::COLUMNS);
         let mut stmt = conn.prepare(&sql)?;
         let config = stmt.query_row([id], Self::from_row).optional()?;
         Ok(config)
@@ -224,10 +218,7 @@ impl ConfigFile {
 
     /// List all config files
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
-        let sql = format!(
-            "SELECT {} FROM config_files ORDER BY path",
-            Self::COLUMNS
-        );
+        let sql = format!("SELECT {} FROM config_files ORDER BY path", Self::COLUMNS);
         let mut stmt = conn.prepare(&sql)?;
         let configs = stmt
             .query_map([], Self::from_row)?

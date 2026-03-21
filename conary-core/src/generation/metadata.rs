@@ -132,9 +132,9 @@ pub fn detect_kernel_version(gen_dir: &Path) -> Option<String> {
 #[must_use]
 pub fn is_excluded(path: &str) -> bool {
     let path = path.strip_prefix('/').unwrap_or(path);
-    EXCLUDED_DIRS
-        .iter()
-        .any(|dir| path == *dir || (path.starts_with(dir) && path.as_bytes().get(dir.len()) == Some(&b'/')))
+    EXCLUDED_DIRS.iter().any(|dir| {
+        path == *dir || (path.starts_with(dir) && path.as_bytes().get(dir.len()) == Some(&b'/'))
+    })
 }
 
 #[cfg(test)]

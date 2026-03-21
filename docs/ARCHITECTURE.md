@@ -199,10 +199,6 @@ conary-core/             Core library crate
     +-- version/         Version parsing and comparison
     +-- hash.rs          Multi-algorithm hashing (SHA-256, XXH128)
 
-conary-erofs/            EROFS image builder for composefs
-+-- src/
-    +-- lib.rs           EROFS filesystem image generation
-
 conary-test/             Declarative test infrastructure (TOML manifests, container management)
 +-- src/
     +-- config/          TOML manifest and distro config parsing
@@ -326,8 +322,8 @@ Current System State
   +----+----+
        |
   +----+----+
-  |  EROFS   |-- conary-erofs crate builds read-only filesystem image
-  | Builder  |-- LZ4/LZMA compression, inline data, chunk references
+  |  EROFS   |-- composefs-rs builds read-only filesystem image
+  | Builder  |-- chunk-based external CAS references
   +----+----+
        |
   +----+----+
@@ -354,14 +350,6 @@ builder.rs (EROFS image construction), mount.rs (composefs mount/unmount),
 metadata.rs (JSON metadata), gc.rs (old generation cleanup), etc_merge.rs
 (three-way /etc merge), delta.rs (EROFS image deltas), composefs.rs
 (runtime feature detection).
-
-### conary-erofs Crate
-
-Standalone crate for low-level EROFS image construction. Handles superblock
-layout, inode encoding, directory entries, data compression (LZ4, LZMA),
-extended attributes, and chunk-based external file references. The generation
-module now primarily uses composefs-rs instead of conary-erofs directly, but
-conary-erofs remains available for specialized use cases.
 
 ### composefs Integration
 
