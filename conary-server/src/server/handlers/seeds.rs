@@ -13,7 +13,7 @@
 //! - GET  /v1/seeds/latest?target=  -- fetch most-recent seed for a target (public)
 
 use crate::server::ServerState;
-use crate::server::auth::{extract_bearer, hash_token};
+use crate::server::handlers::{cas_object_path, is_valid_path_param, require_admin_token};
 use axum::{
     body::Body,
     extract::{Path, Query, Request, State},
@@ -21,7 +21,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
-use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -29,74 +28,9 @@ use tokio::sync::RwLock;
 // Helpers
 // ────────────────────────────────────────────────────────────
 
-/// Map a SHA-256 hex hash to its CAS file path inside `chunk_dir`.
-fn cas_path(chunk_dir: &FsPath, hash: &str) -> PathBuf {
-    let normalized = hash.to_ascii_lowercase();
-    let (prefix, rest) = normalized.split_at(2);
-    chunk_dir.join("objects").join(prefix).join(rest)
-}
-
 /// Validate that a seed ID contains only URL-safe characters.
 fn is_valid_seed_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 128
-        && id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-}
-
-/// Check whether the request carries a valid bearer token with admin scope.
-///
-/// Returns `None` on success, `Some(error_response)` on failure.
-async fn require_admin_token(headers: &HeaderMap, db_path: &std::path::Path) -> Option<Response> {
-    let raw_token = match extract_bearer(headers) {
-        Some(t) => t,
-        None => {
-            return Some(
-                (
-                    StatusCode::UNAUTHORIZED,
-                    "Missing or invalid Authorization header",
-                )
-                    .into_response(),
-            );
-        }
-    };
-
-    let token_hash = hash_token(raw_token);
-    let db_path = db_path.to_path_buf();
-
-    let valid = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
-        let conn = conary_core::db::open(&db_path)?;
-        let result = conn.query_row(
-            "SELECT scopes FROM admin_tokens WHERE token_hash = ?1",
-            rusqlite::params![token_hash],
-            |row| row.get::<_, String>(0),
-        );
-        match result {
-            Ok(scopes) => {
-                let has_admin = scopes.split(',').any(|s| s.trim() == "admin");
-                Ok(has_admin)
-            }
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
-            Err(e) => Err(e.into()),
-        }
-    })
-    .await;
-
-    match valid {
-        Ok(Ok(true)) => None,
-        Ok(Ok(false)) => Some(
-            (StatusCode::FORBIDDEN, "Insufficient scope or invalid token").into_response(),
-        ),
-        Ok(Err(e)) => {
-            tracing::error!("DB error during token validation: {e}");
-            Some((StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response())
-        }
-        Err(e) => {
-            tracing::error!("Task panicked during token validation: {e}");
-            Some((StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response())
-        }
-    }
+    is_valid_path_param(id)
 }
 
 // ────────────────────────────────────────────────────────────
@@ -443,7 +377,7 @@ pub async fn get_seed_image(
         }
     };
 
-    let object_path = cas_path(&chunk_dir, &cas_hash);
+    let object_path = cas_object_path(&chunk_dir, &cas_hash);
     match tokio::fs::read(&object_path).await {
         Ok(bytes) => Response::builder()
             .status(StatusCode::OK)
@@ -568,32 +502,45 @@ pub async fn get_latest_seed(
 /// Query the `seeds` table, optionally filtering by target triple and limiting rows.
 ///
 /// Results are ordered by `created_at DESC` so the newest seed comes first.
+/// The `limit` is applied in SQL when provided.
 fn query_seeds(
     conn: &rusqlite::Connection,
     target: Option<&str>,
     limit: Option<u32>,
 ) -> anyhow::Result<Vec<SeedListItem>> {
-    let sql = if target.is_some() {
-        "SELECT seed_id, target_triple, source, builder, packages_json, verified_by_json, created_at
-         FROM seeds
-         WHERE target_triple = ?1
-         ORDER BY created_at DESC"
-    } else {
-        "SELECT seed_id, target_triple, source, builder, packages_json, verified_by_json, created_at
-         FROM seeds
-         ORDER BY created_at DESC"
+    // Build the SQL with an optional LIMIT clause. The limit value comes from
+    // internal callers only (never user input), so formatting it into the SQL
+    // string is safe.
+    let sql = match (target.is_some(), limit) {
+        (true, Some(lim)) => format!(
+            "SELECT seed_id, target_triple, source, builder, packages_json, verified_by_json, created_at
+             FROM seeds WHERE target_triple = ?1 ORDER BY created_at DESC LIMIT {lim}"
+        ),
+        (true, None) => {
+            "SELECT seed_id, target_triple, source, builder, packages_json, verified_by_json, created_at
+             FROM seeds WHERE target_triple = ?1 ORDER BY created_at DESC"
+                .to_owned()
+        }
+        (false, Some(lim)) => format!(
+            "SELECT seed_id, target_triple, source, builder, packages_json, verified_by_json, created_at
+             FROM seeds ORDER BY created_at DESC LIMIT {lim}"
+        ),
+        (false, None) => {
+            "SELECT seed_id, target_triple, source, builder, packages_json, verified_by_json, created_at
+             FROM seeds ORDER BY created_at DESC"
+                .to_owned()
+        }
     };
 
-    let mut stmt = conn.prepare(sql)?;
+    let mut stmt = conn.prepare(&sql)?;
 
-    let rows_iter = if let Some(t) = target {
+    let mut rows = if let Some(t) = target {
         stmt.query(rusqlite::params![t])?
     } else {
         stmt.query([])?
     };
 
     let mut items = Vec::new();
-    let mut rows = rows_iter;
     while let Some(row) = rows.next()? {
         let packages_json: String = row.get(4)?;
         let verified_by_json: String = row.get(5)?;
@@ -610,12 +557,6 @@ fn query_seeds(
             verified_by_count: verified_by.len(),
             created_at: row.get(6)?,
         });
-
-        if let Some(lim) = limit
-            && items.len() >= lim as usize
-        {
-            break;
-        }
     }
 
     Ok(items)
@@ -704,7 +645,7 @@ mod tests {
     fn cas_path_layout() {
         let dir = std::path::PathBuf::from("/chunks");
         let hash = "aabbcc1234567890aabbcc1234567890aabbcc1234567890aabbcc1234567890";
-        let path = cas_path(&dir, hash);
+        let path = cas_object_path(&dir, hash);
         assert_eq!(
             path,
             std::path::PathBuf::from(
