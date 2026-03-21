@@ -41,6 +41,7 @@ mod system;
 mod triggers;
 pub mod trust;
 mod update;
+pub mod verify;
 mod update_channel;
 
 // Re-export all command handlers

@@ -1836,6 +1836,21 @@ fn run() -> Result<()> {
             version,
         }) => commands::cmd_self_update(&db.db_path, check, force, version),
 
+        // =====================================================================
+        // Derivation Verification
+        // =====================================================================
+        Some(Commands::VerifyDerivation(verify_cmd)) => match verify_cmd {
+            cli::VerifyCommands::Chain { profile, verbose, json } => {
+                commands::verify::cmd_verify_chain(&profile, verbose, json)
+            }
+            cli::VerifyCommands::Rebuild { derivation: _, work_dir: _ } => {
+                todo!("verify rebuild not yet implemented")
+            }
+            cli::VerifyCommands::Diverse { profile_a: _, profile_b: _ } => {
+                todo!("verify diverse not yet implemented")
+            }
+        },
+
         None => {
             println!("Conary Package Manager v{}", env!("CARGO_PKG_VERSION"));
             println!("Run 'conary --help' for usage information");

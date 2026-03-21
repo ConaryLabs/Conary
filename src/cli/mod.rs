@@ -54,6 +54,7 @@ mod state;
 mod system;
 mod trigger;
 mod trust;
+mod verify;
 
 #[cfg(feature = "experimental")]
 pub use automation::AiCommands;
@@ -83,6 +84,7 @@ pub use state::StateCommands;
 pub use system::{SystemCommands, UpdateChannelAction};
 pub use trigger::TriggerCommands;
 pub use trust::TrustCommands;
+pub use verify::VerifyCommands;
 
 /// CLI-side sandbox mode that maps to `conary_core::scriptlet::SandboxMode`.
 ///
@@ -546,6 +548,10 @@ pub enum Commands {
     /// Protects against rollback, freeze, replay, and mix-and-match attacks.
     #[command(subcommand)]
     Trust(TrustCommands),
+
+    /// Derivation verification (chain, rebuild, diverse)
+    #[command(subcommand, name = "verify-derivation")]
+    VerifyDerivation(VerifyCommands),
 
     /// Federation management
     ///
