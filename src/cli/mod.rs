@@ -400,6 +400,21 @@ pub enum Commands {
         output: Option<String>,
     },
 
+    /// Audit a recipe for missing build dependencies
+    #[command(name = "recipe-audit")]
+    RecipeAudit {
+        /// Path to recipe file
+        recipe: Option<String>,
+
+        /// Audit all recipes in the recipes/ directory
+        #[arg(long)]
+        all: bool,
+
+        /// Run build-time tracing (slower, more thorough)
+        #[arg(long)]
+        trace: bool,
+    },
+
     // =========================================================================
     // Management Contexts
     // =========================================================================
