@@ -27,4 +27,15 @@ pub enum ProfileCommands {
         /// Second profile
         new: PathBuf,
     },
+    /// Publish a profile to a remote endpoint
+    Publish {
+        /// Path to profile TOML file
+        profile: String,
+        /// Remi endpoint URL
+        #[arg(long)]
+        endpoint: Option<String>,
+        /// Auth token
+        #[arg(long)]
+        token: Option<String>,
+    },
 }

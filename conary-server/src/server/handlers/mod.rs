@@ -14,6 +14,7 @@ pub mod models;
 pub mod oci;
 pub mod openapi;
 pub mod packages;
+pub mod profiles;
 pub mod recipes;
 pub mod search;
 pub mod seeds;

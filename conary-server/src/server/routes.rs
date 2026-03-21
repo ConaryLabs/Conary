@@ -18,7 +18,7 @@
 
 use crate::server::handlers::{
     admin, artifacts, canonical, chunks, derivations, detail, federation, index, jobs, models, oci,
-    openapi, packages, recipes, search, seeds, self_update, sparse, tuf,
+    openapi, packages, profiles, recipes, search, seeds, self_update, sparse, tuf,
 };
 use crate::server::security::RateLimiter;
 use crate::server::{ServerConfig, ServerState};
@@ -491,6 +491,11 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
         .route(
             "/v1/seeds/:seed_id/image",
             get(seeds::get_seed_image),
+        )
+        // === Profile Publishing ===
+        .route(
+            "/v1/profiles/:profile_hash",
+            get(profiles::get_profile).put(profiles::put_profile),
         )
         // === Statistics ===
         .route("/v1/stats/popular", get(detail::get_popular))

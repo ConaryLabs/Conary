@@ -1808,6 +1808,9 @@ fn run() -> Result<()> {
             }
             cli::ProfileCommands::Show { path } => commands::cmd_profile_show(&path),
             cli::ProfileCommands::Diff { old, new } => commands::cmd_profile_diff(&old, &new),
+            cli::ProfileCommands::Publish { profile, endpoint, token } => {
+                commands::cmd_profile_publish(&profile, endpoint.as_deref(), token.as_deref())
+            }
         },
 
         // =====================================================================

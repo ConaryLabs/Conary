@@ -150,3 +150,36 @@ pub fn cmd_profile_diff(old_path: &Path, new_path: &Path) -> Result<()> {
 
     Ok(())
 }
+
+/// Publish a profile to a remote Remi endpoint.
+pub fn cmd_profile_publish(profile_path: &str, endpoint: Option<&str>, token: Option<&str>) -> Result<()> {
+    let content = std::fs::read(profile_path)
+        .map_err(|e| anyhow::anyhow!("failed to read profile: {e}"))?;
+
+    let hash = {
+        use sha2::{Digest, Sha256};
+        hex::encode(Sha256::digest(&content))
+    };
+
+    let endpoint = endpoint
+        .ok_or_else(|| anyhow::anyhow!("--endpoint is required for profile publish"))?;
+    let token = token
+        .ok_or_else(|| anyhow::anyhow!("--token is required for profile publish"))?;
+
+    let client = reqwest::blocking::Client::new();
+    let resp = client
+        .put(format!("{endpoint}/v1/profiles/{hash}"))
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Content-Type", "application/toml")
+        .body(content)
+        .send()
+        .map_err(|e| anyhow::anyhow!("HTTP error: {e}"))?;
+
+    if resp.status().is_success() {
+        println!("Published profile to {endpoint}/v1/profiles/{hash}");
+    } else {
+        anyhow::bail!("Server returned {}: {}", resp.status(), resp.text().unwrap_or_default());
+    }
+
+    Ok(())
+}
