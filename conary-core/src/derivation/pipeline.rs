@@ -147,11 +147,10 @@ pub enum PipelineError {
     #[error("I/O error: {0}")]
     Io(String),
 
-    /// A dependency required by --only target has no cached derivation.
-    #[error("package '{package}' depends on '{dependency}' which has no cached derivation -- run a full build first or add '{dependency}' to --only")]
+    /// A non-targeted package has no cached derivation (required by --only).
+    #[error("package '{package}' has no cached derivation -- run a full build first or add it to --only")]
     UncachedDependency {
         package: String,
-        dependency: String,
     },
 
     /// A --only target is in a stage beyond the --up-to cutoff.
@@ -382,7 +381,6 @@ impl Pipeline {
                         .map_err(|e| PipelineError::Io(format!("index lookup: {e}")))?
                         .ok_or_else(|| PipelineError::UncachedDependency {
                             package: pkg_name.clone(),
-                            dependency: pkg_name.clone(),
                         })?;
 
                     let manifest =
