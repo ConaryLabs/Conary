@@ -113,6 +113,41 @@ impl Drop for CleanupGuard {
     }
 }
 
+/// Spawn an interactive debug shell in the build environment.
+///
+/// Only spawns if stdin is a tty. Returns when the user exits the shell.
+fn spawn_debug_shell(destdir: &Path, sysroot: &Path, recipe: &Recipe) {
+    use std::io::IsTerminal;
+
+    if !std::io::stdin().is_terminal() {
+        tracing::warn!("--shell-on-failure: no tty detected, skipping shell");
+        return;
+    }
+
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| {
+        if std::path::Path::new("/bin/bash").exists() {
+            "/bin/bash".to_owned()
+        } else {
+            "/bin/sh".to_owned()
+        }
+    });
+
+    eprintln!("\n  Dropping into build environment. Exit shell to continue.\n");
+
+    let status = std::process::Command::new(&shell)
+        .current_dir(destdir)
+        .env("DESTDIR", destdir)
+        .env("SYSROOT", sysroot)
+        .env("PACKAGE", &recipe.package.name)
+        .env("VERSION", &recipe.package.version)
+        .status();
+
+    match status {
+        Ok(s) => info!("debug shell exited with {s}"),
+        Err(e) => tracing::warn!("failed to spawn debug shell: {e}"),
+    }
+}
+
 /// Single-package derivation executor.
 ///
 /// Orchestrates the full derivation lifecycle: compute the content-addressed
@@ -319,6 +354,24 @@ impl DerivationExecutor {
             if let Some(path) = &log_path {
                 info!("build log: {}", path.display());
             }
+
+            if self.config.shell_on_failure {
+                // Disarm guard to keep DESTDIR alive during shell session.
+                destdir_guard.disarm();
+
+                eprintln!("[FAILED] {}-{}", recipe.package.name, recipe.package.version);
+                if let Some(path) = &log_path {
+                    eprintln!("  Build log: {}", path.display());
+                }
+                eprintln!("  Sysroot: {}", sysroot.display());
+                eprintln!("  DESTDIR: {}", destdir.display());
+
+                spawn_debug_shell(&destdir, sysroot, recipe);
+
+                // Clean up DESTDIR after shell exits (guard was disarmed).
+                let _ = std::fs::remove_dir_all(&destdir);
+            }
+
             return Err(build_err);
         }
 
@@ -658,6 +711,39 @@ install = "make install"
             "DESTDIR should have been cleaned up on build failure: {}",
             destdir.display(),
         );
+    }
+
+    #[test]
+    fn shell_on_failure_does_not_hang_without_tty() {
+        // In CI/tests, stdin is not a tty.
+        // Verify that with shell_on_failure=true, execute() still returns
+        // the build error without blocking.
+        let tmp = TempDir::new().unwrap();
+        let cas = test_cas(tmp.path());
+        let conn = setup_db();
+
+        let config = ExecutorConfig {
+            log_dir: None,
+            keep_logs: false,
+            shell_on_failure: true, // enabled, but no tty in tests
+        };
+
+        let recipe = test_recipe("sed", "4.9");
+        let sysroot = tmp.path().join("sysroot");
+        std::fs::create_dir_all(&sysroot).unwrap();
+
+        let executor = DerivationExecutor::new(cas, tmp.path().join("cas"), config);
+        let result = executor.execute(
+            &recipe,
+            "env_hash",
+            &BTreeMap::new(),
+            "x86_64-unknown-linux-gnu",
+            &sysroot,
+            &conn,
+        );
+
+        // Should fail with Build error, not hang
+        assert!(matches!(result, Err(ExecutorError::Build(_))));
     }
 
     #[test]
