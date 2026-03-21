@@ -144,14 +144,12 @@ pub fn build_erofs_image(
                     Inode::Directory(Box::new(Directory::new(dir_stat(0o755)))),
                 );
             } else {
-                let parent = root
-                    .get_directory_mut(OsStr::new(&dir_path))
-                    .map_err(|e| {
-                        crate::error::Error::InternalError(format!(
-                            "Failed to navigate to '{}' for path {}: {e}",
-                            dir_path, abs_path
-                        ))
-                    })?;
+                let parent = root.get_directory_mut(OsStr::new(&dir_path)).map_err(|e| {
+                    crate::error::Error::InternalError(format!(
+                        "Failed to navigate to '{}' for path {}: {e}",
+                        dir_path, abs_path
+                    ))
+                })?;
                 parent.merge(
                     OsStr::new(comp),
                     Inode::Directory(Box::new(Directory::new(dir_stat(0o755)))),
@@ -177,13 +175,12 @@ pub fn build_erofs_image(
         if dir_path.is_empty() {
             Ok(root)
         } else {
-            root.get_directory_mut(OsStr::new(dir_path))
-                .map_err(|e| {
-                    crate::error::Error::InternalError(format!(
-                        "Failed to navigate to parent '{}' for path {}: {e}",
-                        dir_path, abs_path
-                    ))
-                })
+            root.get_directory_mut(OsStr::new(dir_path)).map_err(|e| {
+                crate::error::Error::InternalError(format!(
+                    "Failed to navigate to parent '{}' for path {}: {e}",
+                    dir_path, abs_path
+                ))
+            })
         }
     }
 

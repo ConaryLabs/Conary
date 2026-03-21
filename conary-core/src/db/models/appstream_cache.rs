@@ -14,7 +14,10 @@ pub struct AppstreamCacheEntry {
 }
 
 impl AppstreamCacheEntry {
-    pub fn insert_or_replace(conn: &Connection, entry: &AppstreamCacheEntry) -> rusqlite::Result<()> {
+    pub fn insert_or_replace(
+        conn: &Connection,
+        entry: &AppstreamCacheEntry,
+    ) -> rusqlite::Result<()> {
         conn.execute(
             "INSERT OR REPLACE INTO appstream_cache
              (appstream_id, pkgname, display_name, summary, distro, fetched_at)

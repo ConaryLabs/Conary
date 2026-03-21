@@ -199,11 +199,10 @@ impl CrossToolsBuilder {
             });
         }
 
-        let recipe =
-            parse_recipe_file(&recipe_path).map_err(|e| CrossToolsError::BuildFailed {
-                package: name.to_string(),
-                reason: format!("Failed to parse recipe: {e}"),
-            })?;
+        let recipe = parse_recipe_file(&recipe_path).map_err(|e| CrossToolsError::BuildFailed {
+            package: name.to_string(),
+            reason: format!("Failed to parse recipe: {e}"),
+        })?;
 
         // Fetch source to cache
         info!("  Fetching source for {name}...");
@@ -222,13 +221,12 @@ impl CrossToolsBuilder {
             ..Default::default()
         };
         let kitchen = Kitchen::new(config);
-        let mut cook =
-            kitchen
-                .new_cook_with_dest(&recipe, std::path::Path::new("/"))
-                .map_err(|e| CrossToolsError::BuildFailed {
-                    package: name.to_string(),
-                    reason: format!("Cook setup failed: {e}"),
-                })?;
+        let mut cook = kitchen
+            .new_cook_with_dest(&recipe, std::path::Path::new("/"))
+            .map_err(|e| CrossToolsError::BuildFailed {
+                package: name.to_string(),
+                reason: format!("Cook setup failed: {e}"),
+            })?;
 
         info!("  Preparing {name}...");
         cook.prep().map_err(|e| CrossToolsError::BuildFailed {

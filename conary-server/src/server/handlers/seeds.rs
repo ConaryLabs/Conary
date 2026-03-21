@@ -73,7 +73,15 @@ pub struct SeedListQuery {
 }
 
 /// Raw row returned by the `get_seed` DB query.
-type SeedRow = (String, String, Option<String>, String, String, String, String);
+type SeedRow = (
+    String,
+    String,
+    Option<String>,
+    String,
+    String,
+    String,
+    String,
+);
 
 // ────────────────────────────────────────────────────────────
 // PUT /v1/seeds/:seed_id
@@ -98,10 +106,7 @@ pub async fn put_seed(
 
     let (db_path, _chunk_dir) = {
         let guard = state.read().await;
-        (
-            guard.config.db_path.clone(),
-            guard.config.chunk_dir.clone(),
-        )
+        (guard.config.db_path.clone(), guard.config.chunk_dir.clone())
     };
 
     if let Some(err) = require_admin_token(&headers, &db_path).await {
@@ -288,21 +293,11 @@ pub async fn get_seed(
     }
     table.insert(
         "packages".to_owned(),
-        toml::Value::Array(
-            packages
-                .into_iter()
-                .map(toml::Value::String)
-                .collect(),
-        ),
+        toml::Value::Array(packages.into_iter().map(toml::Value::String).collect()),
     );
     table.insert(
         "verified_by".to_owned(),
-        toml::Value::Array(
-            verified_by
-                .into_iter()
-                .map(toml::Value::String)
-                .collect(),
-        ),
+        toml::Value::Array(verified_by.into_iter().map(toml::Value::String).collect()),
     );
 
     let toml_str = match toml::to_string_pretty(&table) {
@@ -340,10 +335,7 @@ pub async fn get_seed_image(
 
     let (db_path, chunk_dir) = {
         let guard = state.read().await;
-        (
-            guard.config.db_path.clone(),
-            guard.config.chunk_dir.clone(),
-        )
+        (guard.config.db_path.clone(), guard.config.chunk_dir.clone())
     };
 
     // Look up the image_cas_hash for this seed.
@@ -386,14 +378,16 @@ pub async fn get_seed_image(
             .body(Body::from(bytes))
             .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            tracing::warn!(
-                "seeds row exists for {seed_id} but CAS object {cas_hash} missing"
-            );
+            tracing::warn!("seeds row exists for {seed_id} but CAS object {cas_hash} missing");
             (StatusCode::NOT_FOUND, "Seed image not found in CAS").into_response()
         }
         Err(e) => {
             tracing::error!("Failed to read seed image CAS object {cas_hash}: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read seed image").into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to read seed image",
+            )
+                .into_response()
         }
     }
 }
@@ -545,8 +539,7 @@ fn query_seeds(
         let packages_json: String = row.get(4)?;
         let verified_by_json: String = row.get(5)?;
         let packages: Vec<String> = serde_json::from_str(&packages_json).unwrap_or_default();
-        let verified_by: Vec<String> =
-            serde_json::from_str(&verified_by_json).unwrap_or_default();
+        let verified_by: Vec<String> = serde_json::from_str(&verified_by_json).unwrap_or_default();
 
         items.push(SeedListItem {
             seed_id: row.get(0)?,

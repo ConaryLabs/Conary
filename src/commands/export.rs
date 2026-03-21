@@ -95,8 +95,13 @@ pub fn export_oci(
     })?;
 
     // Step 1: Build the layer tar.gz
-    let (layer_digest, layer_size, diff_id) =
-        build_layer_tar_gz(&erofs_path, objects_dir, &gen_dir, &blobs_dir, &scoped_hashes)?;
+    let (layer_digest, layer_size, diff_id) = build_layer_tar_gz(
+        &erofs_path,
+        objects_dir,
+        &gen_dir,
+        &blobs_dir,
+        &scoped_hashes,
+    )?;
     info!(
         "Layer: sha256:{} ({} bytes, diffID: sha256:{})",
         layer_digest, layer_size, diff_id
@@ -220,9 +225,9 @@ fn build_layer_tar(
         .with_context(|| format!("Failed to open CAS directory {}", objects_dir.display()))?;
 
     for hash in scoped_hashes {
-        let obj_path = cas.hash_to_path(hash).with_context(|| {
-            format!("Invalid CAS hash {hash}")
-        })?;
+        let obj_path = cas
+            .hash_to_path(hash)
+            .with_context(|| format!("Invalid CAS hash {hash}"))?;
 
         if !obj_path.exists() {
             continue;
@@ -252,7 +257,11 @@ fn build_layer_tar(
         meta_header.set_mode(0o644);
         meta_header.set_cksum();
         tar_builder
-            .append_data(&mut meta_header, GENERATION_METADATA_FILE, meta_data.as_slice())
+            .append_data(
+                &mut meta_header,
+                GENERATION_METADATA_FILE,
+                meta_data.as_slice(),
+            )
             .context("Failed to add generation metadata to tar")?;
     }
 
@@ -507,8 +516,7 @@ mod tests {
         fs::create_dir_all(&blobs_dir).unwrap();
 
         let (layer_digest, layer_size, diff_id) =
-            build_layer_tar_gz(&erofs_path, objects_dir, gen_dir, &blobs_dir, &all_hashes)
-                .unwrap();
+            build_layer_tar_gz(&erofs_path, objects_dir, gen_dir, &blobs_dir, &all_hashes).unwrap();
 
         let config_json = build_config_json(&metadata, 5, &diff_id);
         let (config_digest, config_size) = write_blob(&blobs_dir, config_json.as_bytes()).unwrap();
@@ -802,12 +810,8 @@ mod tests {
         .unwrap();
 
         // Non-existent DB path -- should fall back to full CAS walk
-        let hashes = scope_cas_hashes_for_generation(
-            "/nonexistent/conary.db",
-            1,
-            &objects_dir,
-        )
-        .unwrap();
+        let hashes =
+            scope_cas_hashes_for_generation("/nonexistent/conary.db", 1, &objects_dir).unwrap();
         assert_eq!(hashes.len(), 1);
     }
 

@@ -37,13 +37,10 @@ mount_generation()           -- composefs mount with CAS basedir
 /conary/current -> generations/{N}  -- symlink to active generation
 ```
 
-## composefs-rs vs conary-erofs
+## EROFS Builder
 
-Generation building uses **composefs-rs** (v0.3.0, feature-gated behind
-`composefs-rs`) as the primary EROFS builder. The **conary-erofs** crate still
-exists as a standalone low-level EROFS implementation but is not used for
-generation building. The `composefs_rs_eval.rs` submodule provides evaluation
-and benchmarking of the composefs-rs path.
+Generation building uses **composefs-rs** (v0.3.0) as the EROFS builder.
+The `composefs_rs_eval.rs` submodule provides evaluation and benchmarking.
 
 ## /etc Merge
 

@@ -201,8 +201,7 @@ mod tests {
 
         let cas = test_cas(tmp.path());
         let drv_id = "a]".repeat(0) + &"f".repeat(64);
-        let manifest =
-            capture_output(&destdir, &cas, &drv_id, 42).expect("capture must succeed");
+        let manifest = capture_output(&destdir, &cas, &drv_id, 42).expect("capture must succeed");
 
         assert_eq!(manifest.derivation_id, drv_id);
         assert_eq!(manifest.build_duration_secs, 42);

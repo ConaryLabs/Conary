@@ -166,9 +166,12 @@ impl BuildProfile {
         let self_pkgs = self.collect_packages();
         let other_pkgs = other.collect_packages();
 
-        let self_names: BTreeSet<&str> = self_pkgs.iter().map(|(name, _, _)| name.as_str()).collect();
-        let other_names: BTreeSet<&str> =
-            other_pkgs.iter().map(|(name, _, _)| name.as_str()).collect();
+        let self_names: BTreeSet<&str> =
+            self_pkgs.iter().map(|(name, _, _)| name.as_str()).collect();
+        let other_names: BTreeSet<&str> = other_pkgs
+            .iter()
+            .map(|(name, _, _)| name.as_str())
+            .collect();
 
         let added: Vec<String> = other_names
             .difference(&self_names)
@@ -304,10 +307,7 @@ mod tests {
         let h1 = p1.compute_hash();
         let h2 = p2.compute_hash();
 
-        assert_ne!(
-            h1, h2,
-            "changing a derivation version must change the hash"
-        );
+        assert_ne!(h1, h2, "changing a derivation version must change the hash");
     }
 
     #[test]
@@ -332,8 +332,7 @@ mod tests {
     fn toml_roundtrip() {
         let original = sample_profile();
         let toml_str = original.to_toml().expect("serialization should succeed");
-        let restored =
-            BuildProfile::from_toml(&toml_str).expect("deserialization should succeed");
+        let restored = BuildProfile::from_toml(&toml_str).expect("deserialization should succeed");
 
         assert_eq!(original, restored, "TOML roundtrip must be lossless");
     }
@@ -344,7 +343,10 @@ mod tests {
         let toml_str = profile.to_toml().expect("serialization should succeed");
 
         // Basic structure checks.
-        assert!(toml_str.contains("[profile]"), "must contain [profile] section");
+        assert!(
+            toml_str.contains("[profile]"),
+            "must contain [profile] section"
+        );
         assert!(toml_str.contains("[seed]"), "must contain [seed] section");
         assert!(
             toml_str.contains("[[stages]]"),

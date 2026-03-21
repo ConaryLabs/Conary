@@ -113,11 +113,10 @@ End-to-end flow: `release.sh` bumps versions and tags, GitHub Actions builds and
 
 ## Version Groups
 
-Four independent version tracks with tag prefixes:
+Three independent version tracks with tag prefixes:
 
 | Group | Tag prefix | Crates | Cargo.toml locations |
 |-------|-----------|--------|---------------------|
 | conary | `v` | conary + conary-core | `Cargo.toml`, `conary-core/Cargo.toml` |
-| erofs | `erofs-v` | conary-erofs | `conary-erofs/Cargo.toml` |
 | server | `server-v` | conary-server | `conary-server/Cargo.toml` |
 | test | `test-v` | conary-test | `conary-test/Cargo.toml` |

@@ -124,7 +124,6 @@ impl PackageMetadata {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

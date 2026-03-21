@@ -43,7 +43,10 @@ pub async fn get_profile(
     Path(profile_hash): Path<String>,
 ) -> Response {
     if !is_valid_profile_hash(&profile_hash) {
-        return (StatusCode::BAD_REQUEST, "Invalid profile hash format (expected 64 hex chars)")
+        return (
+            StatusCode::BAD_REQUEST,
+            "Invalid profile hash format (expected 64 hex chars)",
+        )
             .into_response();
     }
 
@@ -91,16 +94,16 @@ pub async fn put_profile(
     request: Request,
 ) -> Response {
     if !is_valid_profile_hash(&profile_hash) {
-        return (StatusCode::BAD_REQUEST, "Invalid profile hash format (expected 64 hex chars)")
+        return (
+            StatusCode::BAD_REQUEST,
+            "Invalid profile hash format (expected 64 hex chars)",
+        )
             .into_response();
     }
 
     let (db_path, chunk_dir) = {
         let guard = state.read().await;
-        (
-            guard.config.db_path.clone(),
-            guard.config.chunk_dir.clone(),
-        )
+        (guard.config.db_path.clone(), guard.config.chunk_dir.clone())
     };
 
     // Auth check (inline, so GET on the same path stays public)

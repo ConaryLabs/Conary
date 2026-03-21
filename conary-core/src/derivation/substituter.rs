@@ -12,8 +12,8 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use reqwest::blocking::Client;
 use reqwest::StatusCode;
+use reqwest::blocking::Client;
 use rusqlite::Connection;
 use tracing::{debug, warn};
 
@@ -60,7 +60,10 @@ pub struct SubstituterPeer {
 /// Result of querying the substituter cache for a single derivation.
 pub enum CacheQueryResult {
     /// A pre-built manifest was found on `peer`.
-    Hit { manifest: OutputManifest, peer: String },
+    Hit {
+        manifest: OutputManifest,
+        peer: String,
+    },
     /// No peer holds a pre-built output for this derivation.
     Miss,
 }
@@ -157,9 +160,7 @@ impl DerivationSubstituter {
     /// Returns `SubstituterError::Io` on a database error.
     pub fn from_db(conn: &Connection) -> Result<Self, SubstituterError> {
         let mut stmt = conn
-            .prepare(
-                "SELECT endpoint, priority FROM substituter_peers ORDER BY priority ASC",
-            )
+            .prepare("SELECT endpoint, priority FROM substituter_peers ORDER BY priority ASC")
             .map_err(|e| SubstituterError::Io(e.to_string()))?;
 
         let peers: Vec<SubstituterPeer> = stmt
@@ -218,36 +219,34 @@ impl DerivationSubstituter {
             let endpoint = peer.endpoint.clone();
 
             match self.client.get(&url).send() {
-                Ok(resp) if resp.status() == StatusCode::OK => {
-                    match resp.text() {
-                        Ok(body) => match toml::from_str::<OutputManifest>(&body) {
-                            Ok(manifest) => {
-                                self.peer_health
-                                    .entry(endpoint.clone())
-                                    .or_insert_with(PeerHealth::new)
-                                    .record_success();
-                                return CacheQueryResult::Hit {
-                                    manifest,
-                                    peer: endpoint,
-                                };
-                            }
-                            Err(e) => {
-                                warn!("Failed to parse manifest from {}: {}", endpoint, e);
-                                self.peer_health
-                                    .entry(endpoint)
-                                    .or_insert_with(PeerHealth::new)
-                                    .record_failure();
-                            }
-                        },
+                Ok(resp) if resp.status() == StatusCode::OK => match resp.text() {
+                    Ok(body) => match toml::from_str::<OutputManifest>(&body) {
+                        Ok(manifest) => {
+                            self.peer_health
+                                .entry(endpoint.clone())
+                                .or_insert_with(PeerHealth::new)
+                                .record_success();
+                            return CacheQueryResult::Hit {
+                                manifest,
+                                peer: endpoint,
+                            };
+                        }
                         Err(e) => {
-                            warn!("Failed to read response body from {}: {}", endpoint, e);
+                            warn!("Failed to parse manifest from {}: {}", endpoint, e);
                             self.peer_health
                                 .entry(endpoint)
                                 .or_insert_with(PeerHealth::new)
                                 .record_failure();
                         }
+                    },
+                    Err(e) => {
+                        warn!("Failed to read response body from {}: {}", endpoint, e);
+                        self.peer_health
+                            .entry(endpoint)
+                            .or_insert_with(PeerHealth::new)
+                            .record_failure();
                     }
-                }
+                },
                 Ok(resp) if resp.status() == StatusCode::NOT_FOUND => {
                     debug!(
                         "Derivation {} not found on peer {}",
@@ -359,8 +358,7 @@ impl DerivationSubstituter {
         endpoint: &str,
         token: &str,
     ) -> Result<(), SubstituterError> {
-        let body =
-            toml::to_string(manifest).map_err(|e| SubstituterError::Parse(e.to_string()))?;
+        let body = toml::to_string(manifest).map_err(|e| SubstituterError::Parse(e.to_string()))?;
 
         let url = format!("{}/v1/derivations/{}", endpoint, derivation_id);
         let resp = self
@@ -380,10 +378,7 @@ impl DerivationSubstituter {
             )));
         }
 
-        debug!(
-            "Published derivation {} to {}",
-            derivation_id, endpoint
-        );
+        debug!("Published derivation {} to {}", derivation_id, endpoint);
 
         Ok(())
     }
@@ -462,10 +457,7 @@ mod tests {
         DerivationSubstituter::seed_peers(&conn, &["https://a.com".to_owned()]).unwrap();
         DerivationSubstituter::seed_peers(
             &conn,
-            &[
-                "https://a.com".to_owned(),
-                "https://b.com".to_owned(),
-            ],
+            &["https://a.com".to_owned(), "https://b.com".to_owned()],
         )
         .unwrap();
 

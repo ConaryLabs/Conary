@@ -283,12 +283,12 @@ impl FinalSystemBuilder {
     /// Build a single package inside the chroot using its recipe.
     fn build_package(&self, name: &str) -> Result<(), FinalSystemError> {
         let filename = Self::recipe_filename(name);
-        let recipe_path =
-            std::path::Path::new("recipes/system").join(format!("{filename}.toml"));
-        let recipe = parse_recipe_file(&recipe_path).map_err(|e| FinalSystemError::BuildFailed {
-            package: name.to_string(),
-            reason: format!("Failed to parse recipe: {e}"),
-        })?;
+        let recipe_path = std::path::Path::new("recipes/system").join(format!("{filename}.toml"));
+        let recipe =
+            parse_recipe_file(&recipe_path).map_err(|e| FinalSystemError::BuildFailed {
+                package: name.to_string(),
+                reason: format!("Failed to parse recipe: {e}"),
+            })?;
 
         info!("  Fetching source for {name}...");
         self.runner

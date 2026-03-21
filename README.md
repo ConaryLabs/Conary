@@ -505,7 +505,7 @@ cargo run -p conary-test -- logs T42  # Retrieve test logs
 
 ## Building
 
-Requires Rust 1.94+ (edition 2024). The project is a Cargo workspace with 5 crates: `conary` (CLI), `conary-core` (library), `conary-erofs` (EROFS image builder), `conary-server` (Remi + conaryd), and `conary-test` (test infrastructure).
+Requires Rust 1.94+ (edition 2024). The project is a Cargo workspace with 4 crates: `conary` (CLI), `conary-core` (library), `conary-server` (Remi + conaryd), and `conary-test` (test infrastructure).
 
 ```bash
 cargo build                          # Client only (default)

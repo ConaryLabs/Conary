@@ -1857,13 +1857,15 @@ fn run() -> Result<()> {
             } => commands::verify::cmd_verify_diverse(&profile_a, &profile_b),
         },
 
-        Some(Commands::Sbom { profile, derivation, output }) => {
-            commands::cmd_derivation_sbom(
-                profile.as_deref(),
-                derivation.as_deref(),
-                output.as_deref(),
-            )
-        },
+        Some(Commands::Sbom {
+            profile,
+            derivation,
+            output,
+        }) => commands::cmd_derivation_sbom(
+            profile.as_deref(),
+            derivation.as_deref(),
+            output.as_deref(),
+        ),
 
         None => {
             println!("Conary Package Manager v{}", env!("CARGO_PKG_VERSION"));

@@ -85,16 +85,12 @@ const TOOL_PACKAGE_MAP: &[(&str, &str)] = &[
 ];
 
 const BASE_TOOLS: &[&str] = &[
-    "make", "gcc", "g++", "cc", "c++", "ld", "ar", "as", "nm", "ranlib",
-    "strip", "objdump", "objcopy", "readelf", "strings",
-    "bash", "sh", "env", "test", "true", "false",
-    "cat", "cp", "mv", "rm", "mkdir", "rmdir", "ln", "ls", "chmod",
-    "chown", "touch", "head", "tail", "sort", "uniq", "wc", "tr",
-    "cut", "paste", "comm", "diff", "find", "xargs",
-    "sed", "awk", "grep", "egrep", "fgrep",
-    "tar", "gzip", "gunzip", "bzip2", "xz", "zstd",
-    "install", "dirname", "basename", "realpath", "readlink",
-    "echo", "printf", "expr", "tee",
+    "make", "gcc", "g++", "cc", "c++", "ld", "ar", "as", "nm", "ranlib", "strip", "objdump",
+    "objcopy", "readelf", "strings", "bash", "sh", "env", "test", "true", "false", "cat", "cp",
+    "mv", "rm", "mkdir", "rmdir", "ln", "ls", "chmod", "chown", "touch", "head", "tail", "sort",
+    "uniq", "wc", "tr", "cut", "paste", "comm", "diff", "find", "xargs", "sed", "awk", "grep",
+    "egrep", "fgrep", "tar", "gzip", "gunzip", "bzip2", "xz", "zstd", "install", "dirname",
+    "basename", "realpath", "readlink", "echo", "printf", "expr", "tee",
 ];
 
 /// Statically audit a recipe's build scripts for undeclared tool and library dependencies.
@@ -180,7 +176,9 @@ pub fn static_audit(recipe: &Recipe) -> Result<AuditReport, AuditError> {
     for word in &tokens {
         if let Some(lib) = word.strip_prefix("-l")
             && !lib.is_empty()
-            && lib.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+            && lib
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
             && seen_libs.insert(lib.to_owned())
         {
             // Use exact match against declared deps, not substring
@@ -241,20 +239,24 @@ install = "make install"
         let recipe = recipe_with_scripts("pkg-config --cflags foo", vec![]);
         let report = static_audit(&recipe).unwrap();
         assert!(report.count(FindingKind::Missing) >= 1);
-        assert!(report
-            .findings
-            .iter()
-            .any(|f| f.tool == "pkg-config" && f.kind == FindingKind::Missing));
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.tool == "pkg-config" && f.kind == FindingKind::Missing)
+        );
     }
 
     #[test]
     fn verified_when_declared() {
         let recipe = recipe_with_scripts("pkg-config --cflags foo", vec!["pkg-config"]);
         let report = static_audit(&recipe).unwrap();
-        assert!(report
-            .findings
-            .iter()
-            .any(|f| f.tool == "pkg-config" && f.kind == FindingKind::Verified));
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.tool == "pkg-config" && f.kind == FindingKind::Verified)
+        );
         assert_eq!(report.count(FindingKind::Missing), 0);
     }
 
@@ -269,10 +271,12 @@ install = "make install"
     fn detects_linker_flags() {
         let recipe = recipe_with_scripts("./configure -lssl -lcrypto", vec![]);
         let report = static_audit(&recipe).unwrap();
-        assert!(report
-            .findings
-            .iter()
-            .any(|f| f.tool == "-lssl" && f.kind == FindingKind::Missing));
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.tool == "-lssl" && f.kind == FindingKind::Missing)
+        );
     }
 
     #[test]

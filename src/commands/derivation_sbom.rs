@@ -143,7 +143,10 @@ pub fn cmd_derivation_sbom(
 
     if let Some(path) = output_path {
         std::fs::write(path, &json)?;
-        println!("SBOM written to {path} ({} components)", bom.component_count());
+        println!(
+            "SBOM written to {path} ({} components)",
+            bom.component_count()
+        );
     } else {
         println!("{json}");
     }
@@ -162,7 +165,11 @@ fn build_component(
         },
         cyclonedx::Property {
             name: "conary:trust_level".to_owned(),
-            value: format!("{} ({})", record.trust_level, index::trust_level_name(record.trust_level)),
+            value: format!(
+                "{} ({})",
+                record.trust_level,
+                index::trust_level_name(record.trust_level)
+            ),
         },
     ];
 

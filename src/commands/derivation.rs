@@ -42,8 +42,7 @@ pub fn cmd_derivation_build(
         build_options: BTreeMap::new(),
     };
 
-    let drv_id = DerivationId::compute(&inputs)
-        .context("Derivation input validation failed")?;
+    let drv_id = DerivationId::compute(&inputs).context("Derivation input validation failed")?;
     println!("Derivation ID: {drv_id}");
     println!("CAS directory: {}", cas_dir.display());
     println!();
@@ -75,8 +74,7 @@ pub fn cmd_derivation_show(recipe: &Path, env_hash: &str) -> Result<()> {
         build_options: BTreeMap::new(),
     };
 
-    let drv_id = DerivationId::compute(&inputs)
-        .context("Derivation input validation failed")?;
+    let drv_id = DerivationId::compute(&inputs).context("Derivation input validation failed")?;
     println!("Derivation ID: {drv_id}");
 
     Ok(())
@@ -104,8 +102,5 @@ fn sha256_of_path(path: &Path) -> Result<String> {
 /// Return the current platform's target triple.
 fn current_target_triple() -> String {
     // Built-in cfg values give us the components; assemble the triple.
-    format!(
-        "{}-unknown-linux-gnu",
-        std::env::consts::ARCH
-    )
+    format!("{}-unknown-linux-gnu", std::env::consts::ARCH)
 }

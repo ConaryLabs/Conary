@@ -127,8 +127,7 @@ impl BuildEnvironment {
         }
 
         // Try nix::mount::umount2 first (lazy detach).
-        let nix_result =
-            nix::mount::umount2(&self.mount_point, nix::mount::MntFlags::MNT_DETACH);
+        let nix_result = nix::mount::umount2(&self.mount_point, nix::mount::MntFlags::MNT_DETACH);
 
         if let Err(nix_err) = nix_result {
             // Fallback to umount(8) command.
@@ -140,9 +139,7 @@ impl BuildEnvironment {
             let status = Command::new("umount")
                 .arg(&self.mount_point)
                 .status()
-                .map_err(|e| {
-                    EnvironmentError::Unmount(format!("failed to execute umount: {e}"))
-                })?;
+                .map_err(|e| EnvironmentError::Unmount(format!("failed to execute umount: {e}")))?;
 
             if !status.success() {
                 return Err(EnvironmentError::Unmount(format!(
@@ -219,9 +216,6 @@ mod tests {
             PathBuf::from("/conary/builds/env-abc123/root.erofs")
         );
         assert_eq!(env.cas_dir, PathBuf::from("/conary/objects"));
-        assert_eq!(
-            env.mount_point,
-            PathBuf::from("/tmp/conary-build-abc123")
-        );
+        assert_eq!(env.mount_point, PathBuf::from("/tmp/conary-build-abc123"));
     }
 }

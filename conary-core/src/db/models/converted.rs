@@ -232,7 +232,9 @@ impl ConvertedPackage {
             "SELECT {} FROM converted_packages WHERE original_checksum = ?1",
             Self::COLUMNS
         );
-        let result = conn.query_row(&sql, [checksum], Self::from_row).optional()?;
+        let result = conn
+            .query_row(&sql, [checksum], Self::from_row)
+            .optional()?;
         Ok(result)
     }
 

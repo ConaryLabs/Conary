@@ -156,10 +156,7 @@ fn phase_curated_rules(conn: &Connection, rules_dir: &Path) -> Result<u64> {
             continue;
         }
 
-        let kind = rule
-            .kind
-            .clone()
-            .unwrap_or_else(|| "package".to_string());
+        let kind = rule.kind.clone().unwrap_or_else(|| "package".to_string());
 
         let mut canonical = CanonicalPackage::new(rule.setname.clone(), kind);
         let already_exists = CanonicalPackage::find_by_name(&tx, &rule.setname)?.is_some();
@@ -184,7 +181,10 @@ fn phase_curated_rules(conn: &Connection, rules_dir: &Path) -> Result<u64> {
     }
 
     tx.commit()?;
-    info!("Phase 1: {} new canonical entries from curated rules", new_count);
+    info!(
+        "Phase 1: {} new canonical entries from curated rules",
+        new_count
+    );
     Ok(new_count)
 }
 
@@ -302,8 +302,7 @@ fn phase_appstream(conn: &Connection) -> Result<u64> {
             )?;
         } else {
             // No existing mapping -- create a new canonical entry.
-            let already_exists =
-                CanonicalPackage::find_by_name(&tx, &entry.pkgname)?.is_some();
+            let already_exists = CanonicalPackage::find_by_name(&tx, &entry.pkgname)?.is_some();
             let mut canonical = CanonicalPackage::new(entry.pkgname.clone(), "package".to_string());
             canonical.appstream_id = Some(entry.appstream_id.clone());
             let id = canonical.insert_or_ignore(&tx)?;
@@ -365,7 +364,10 @@ fn phase_auto_discovery(conn: &Connection, rules_dir: &Path) -> Result<u64> {
     }
 
     let new_count = ingest_canonical_mappings(conn, &packages, rules.as_ref())?;
-    info!("Phase 4: {} new canonical entries from auto-discovery", new_count);
+    info!(
+        "Phase 4: {} new canonical entries from auto-discovery",
+        new_count
+    );
 
     Ok(new_count as u64)
 }
@@ -458,11 +460,9 @@ mod tests {
         .unwrap();
 
         let repo2_id: i64 = conn
-            .query_row(
-                "SELECT id FROM repositories WHERE name = 'arch'",
-                [],
-                |r| r.get(0),
-            )
+            .query_row("SELECT id FROM repositories WHERE name = 'arch'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
 
         conn.execute(
@@ -687,10 +687,9 @@ mod tests {
         let count = phase_appstream(&conn).unwrap();
         assert_eq!(count, 0, "no new canonical entries, just enrichment");
 
-        let updated = CanonicalPackage::find_by_name(&conn, "firefox").unwrap().unwrap();
-        assert_eq!(
-            updated.appstream_id.as_deref(),
-            Some("org.mozilla.firefox")
-        );
+        let updated = CanonicalPackage::find_by_name(&conn, "firefox")
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.appstream_id.as_deref(), Some("org.mozilla.firefox"));
     }
 }

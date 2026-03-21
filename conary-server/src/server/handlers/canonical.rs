@@ -311,9 +311,11 @@ pub async fn canonical_map(
 
     let json = super::serialize_json(&map_response, "canonical map")?;
     let mut response = super::json_response(json, 300);
-    response
-        .headers_mut()
-        .insert("ETag", etag.parse().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?);
+    response.headers_mut().insert(
+        "ETag",
+        etag.parse()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?,
+    );
     Ok(response)
 }
 

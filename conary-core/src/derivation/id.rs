@@ -232,14 +232,8 @@ mod tests {
 
     fn sample_inputs() -> DerivationInputs {
         let mut deps = BTreeMap::new();
-        deps.insert(
-            "glibc".to_owned(),
-            DerivationId("a".repeat(64)),
-        );
-        deps.insert(
-            "zlib".to_owned(),
-            DerivationId("b".repeat(64)),
-        );
+        deps.insert("glibc".to_owned(), DerivationId("a".repeat(64)));
+        deps.insert("zlib".to_owned(), DerivationId("b".repeat(64)));
 
         DerivationInputs {
             source_hash: "abc123".to_owned(),
@@ -311,7 +305,10 @@ mod tests {
 
         let source_id1 = SourceDerivationId::compute(&inputs1).unwrap();
         let source_id2 = SourceDerivationId::compute(&inputs2).unwrap();
-        assert_eq!(source_id1, source_id2, "SourceDerivationId must ignore env hash");
+        assert_eq!(
+            source_id1, source_id2,
+            "SourceDerivationId must ignore env hash"
+        );
 
         // But the full DerivationId should differ.
         let full_id1 = DerivationId::compute(&inputs1).unwrap();
@@ -346,7 +343,10 @@ mod tests {
     fn source_canonical_string_omits_env_line() {
         let inputs = sample_inputs();
         let canonical = SourceDerivationId::canonical_string(&inputs);
-        assert!(!canonical.contains("env:"), "source canonical must not contain env line");
+        assert!(
+            !canonical.contains("env:"),
+            "source canonical must not contain env line"
+        );
     }
 
     #[test]
@@ -368,7 +368,9 @@ mod tests {
     #[test]
     fn rejects_colon_in_option_key() {
         let mut inputs = sample_inputs();
-        inputs.build_options.insert("bad:key".to_owned(), "value".to_owned());
+        inputs
+            .build_options
+            .insert("bad:key".to_owned(), "value".to_owned());
         let result = DerivationId::compute(&inputs);
         assert!(result.is_err(), "should reject colon in option key");
         let err = result.unwrap_err();
@@ -391,13 +393,18 @@ mod tests {
         let mut inputs = sample_inputs();
         inputs.build_env_hash = "bad\renv".to_owned();
         let result = DerivationId::compute(&inputs);
-        assert!(result.is_err(), "should reject carriage return in build_env_hash");
+        assert!(
+            result.is_err(),
+            "should reject carriage return in build_env_hash"
+        );
     }
 
     #[test]
     fn rejects_newline_in_option_value() {
         let mut inputs = sample_inputs();
-        inputs.build_options.insert("good_key".to_owned(), "bad\nvalue".to_owned());
+        inputs
+            .build_options
+            .insert("good_key".to_owned(), "bad\nvalue".to_owned());
         let result = DerivationId::compute(&inputs);
         assert!(result.is_err(), "should reject newline in option value");
     }
@@ -405,10 +412,9 @@ mod tests {
     #[test]
     fn rejects_newline_in_dep_id() {
         let mut inputs = sample_inputs();
-        inputs.dependency_ids.insert(
-            "valid_name".to_owned(),
-            DerivationId("bad\nid".to_owned()),
-        );
+        inputs
+            .dependency_ids
+            .insert("valid_name".to_owned(), DerivationId("bad\nid".to_owned()));
         let result = DerivationId::compute(&inputs);
         assert!(result.is_err(), "should reject newline in dep id value");
     }

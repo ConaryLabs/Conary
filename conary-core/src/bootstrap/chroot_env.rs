@@ -37,10 +37,21 @@ impl ChrootEnv {
 
         // Create directory hierarchy
         for dir in &[
-            "dev", "proc", "sys", "run",
-            "etc", "home", "mnt", "opt", "srv",
-            "usr/bin", "usr/lib", "usr/sbin",
-            "var/log", "var/mail", "var/spool",
+            "dev",
+            "proc",
+            "sys",
+            "run",
+            "etc",
+            "home",
+            "mnt",
+            "opt",
+            "srv",
+            "usr/bin",
+            "usr/lib",
+            "usr/sbin",
+            "var/log",
+            "var/mail",
+            "var/spool",
         ] {
             std::fs::create_dir_all(lfs.join(dir))?;
         }
@@ -82,13 +93,7 @@ impl ChrootEnv {
         }
     }
 
-    fn mount_fs(
-        &mut self,
-        dev: &str,
-        dest: &Path,
-        fstype: &str,
-        opts: &str,
-    ) -> anyhow::Result<()> {
+    fn mount_fs(&mut self, dev: &str, dest: &Path, fstype: &str, opts: &str) -> anyhow::Result<()> {
         std::fs::create_dir_all(dest)?;
         let mut cmd = Command::new("mount");
         cmd.arg("-t").arg(fstype);
@@ -117,18 +122,10 @@ impl ChrootEnv {
                     info!("Unmounted {}", mount_point.display());
                 }
                 Ok(status) => {
-                    warn!(
-                        "umount {} exited with {}",
-                        mount_point.display(),
-                        status
-                    );
+                    warn!("umount {} exited with {}", mount_point.display(), status);
                 }
                 Err(e) => {
-                    warn!(
-                        "Failed to run umount for {}: {}",
-                        mount_point.display(),
-                        e
-                    );
+                    warn!("Failed to run umount for {}: {}", mount_point.display(), e);
                 }
             }
         }

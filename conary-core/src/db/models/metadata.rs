@@ -5,12 +5,16 @@ use rusqlite::{Connection, OptionalExtension};
 /// Get a value from server_metadata (or client_metadata — same schema).
 pub fn get_metadata(conn: &Connection, table: &str, key: &str) -> rusqlite::Result<Option<String>> {
     let sql = format!("SELECT value FROM {table} WHERE key = ?1");
-    conn.query_row(&sql, [key], |row| row.get(0))
-        .optional()
+    conn.query_row(&sql, [key], |row| row.get(0)).optional()
 }
 
 /// Set a value in server_metadata or client_metadata (upsert).
-pub fn set_metadata(conn: &Connection, table: &str, key: &str, value: &str) -> rusqlite::Result<()> {
+pub fn set_metadata(
+    conn: &Connection,
+    table: &str,
+    key: &str,
+    value: &str,
+) -> rusqlite::Result<()> {
     let sql = format!("INSERT OR REPLACE INTO {table} (key, value) VALUES (?1, ?2)");
     conn.execute(&sql, rusqlite::params![key, value])?;
     Ok(())
@@ -26,7 +30,10 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
 
-        assert_eq!(get_metadata(&conn, "server_metadata", "missing").unwrap(), None);
+        assert_eq!(
+            get_metadata(&conn, "server_metadata", "missing").unwrap(),
+            None
+        );
 
         set_metadata(&conn, "server_metadata", "test_key", "test_value").unwrap();
         assert_eq!(

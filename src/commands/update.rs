@@ -12,8 +12,8 @@ use conary_core::db::models::{
 use conary_core::db::paths::objects_dir;
 use conary_core::delta::DeltaApplier;
 use conary_core::model::{
-    DiffAction, capture_current_state, planned_replatform_actions,
-    replatform_execution_plan, source_policy_replatform_snapshot,
+    DiffAction, capture_current_state, planned_replatform_actions, replatform_execution_plan,
+    source_policy_replatform_snapshot,
 };
 use conary_core::repository::{
     self, DownloadOptions, PackageSource, ResolutionOptions, resolve_package,

@@ -66,7 +66,11 @@ fn derivation_id_from_real_recipe() {
         src_hash.chars().all(|c| c.is_ascii_hexdigit()),
         "source_hash must be valid hex"
     );
-    assert_eq!(script_hash.len(), 64, "build_script_hash must be 64-char hex");
+    assert_eq!(
+        script_hash.len(),
+        64,
+        "build_script_hash must be 64-char hex"
+    );
     assert!(
         script_hash.chars().all(|c| c.is_ascii_hexdigit()),
         "build_script_hash must be valid hex"
@@ -132,8 +136,8 @@ fn capture_and_index_round_trip() {
 
     // Capture the DESTDIR into CAS.
     let derivation_id = "a".repeat(64);
-    let manifest = capture_output(&destdir, &cas, &derivation_id, 7)
-        .expect("capture_output must succeed");
+    let manifest =
+        capture_output(&destdir, &cas, &derivation_id, 7).expect("capture_output must succeed");
 
     assert_eq!(manifest.files.len(), 2, "should capture 2 regular files");
     assert_eq!(manifest.symlinks.len(), 1, "should capture 1 symlink");
@@ -234,8 +238,7 @@ fn compose_erofs_from_captured_output() {
 
     // Capture to CAS.
     let drv_id = "b".repeat(64);
-    let manifest =
-        capture_output(&destdir, &cas, &drv_id, 3).expect("capture_output must succeed");
+    let manifest = capture_output(&destdir, &cas, &drv_id, 3).expect("capture_output must succeed");
 
     assert!(!manifest.files.is_empty(), "must have captured files");
     assert!(!manifest.symlinks.is_empty(), "must have captured symlinks");
@@ -333,11 +336,7 @@ fn stage_assignment_with_real_recipes() {
     // Build orders should be unique.
     let orders: Vec<usize> = assignments.iter().map(|a| a.build_order).collect();
     let unique: HashSet<usize> = orders.iter().copied().collect();
-    assert_eq!(
-        orders.len(),
-        unique.len(),
-        "build orders must be unique"
-    );
+    assert_eq!(orders.len(), unique.len(), "build orders must be unique");
 
     // Foundation packages should have lower build_order than System packages.
     let foundation_max = assignments

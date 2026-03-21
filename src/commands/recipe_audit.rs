@@ -17,8 +17,7 @@ pub fn cmd_recipe_audit(recipe_path: Option<&str>, all: bool, trace: bool) -> Re
         return audit_all_recipes();
     }
 
-    let path =
-        recipe_path.ok_or_else(|| anyhow::anyhow!("provide a recipe path or use --all"))?;
+    let path = recipe_path.ok_or_else(|| anyhow::anyhow!("provide a recipe path or use --all"))?;
 
     let recipe = conary_core::recipe::parse_recipe_file(Path::new(path))
         .map_err(|e| anyhow::anyhow!("failed to parse recipe {path}: {e}"))?;
