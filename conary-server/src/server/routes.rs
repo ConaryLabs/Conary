@@ -18,7 +18,7 @@
 
 use crate::server::handlers::{
     admin, artifacts, canonical, chunks, derivations, detail, federation, index, jobs, models, oci,
-    openapi, packages, recipes, search, self_update, sparse, tuf,
+    openapi, packages, recipes, search, seeds, self_update, sparse, tuf,
 };
 use crate::server::security::RateLimiter;
 use crate::server::{ServerConfig, ServerState};
@@ -472,6 +472,25 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
             get(derivations::get_derivation)
                 .head(derivations::head_derivation)
                 .put(derivations::put_derivation),
+        )
+        // === Seed Registry ===
+        // /latest and the bare list must come before /:seed_id to avoid Axum
+        // matching the literal string "latest" as a seed_id path parameter.
+        .route(
+            "/v1/seeds/latest",
+            get(seeds::get_latest_seed),
+        )
+        .route(
+            "/v1/seeds",
+            get(seeds::list_seeds),
+        )
+        .route(
+            "/v1/seeds/:seed_id",
+            get(seeds::get_seed).put(seeds::put_seed),
+        )
+        .route(
+            "/v1/seeds/:seed_id/image",
+            get(seeds::get_seed_image),
         )
         // === Statistics ===
         .route("/v1/stats/popular", get(detail::get_popular))

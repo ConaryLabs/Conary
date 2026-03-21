@@ -16,6 +16,7 @@ pub mod openapi;
 pub mod packages;
 pub mod recipes;
 pub mod search;
+pub mod seeds;
 pub mod self_update;
 pub mod sparse;
 pub mod tuf;
