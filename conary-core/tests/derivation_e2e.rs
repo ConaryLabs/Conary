@@ -170,6 +170,9 @@ fn capture_and_index_round_trip() {
         build_env_hash: None,
         built_at: manifest.built_at.clone(),
         build_duration_secs: manifest.build_duration_secs,
+        trust_level: 0,
+        provenance_cas_hash: None,
+        reproducible: None,
     };
 
     index.insert(&record).expect("insert into index");
