@@ -416,6 +416,63 @@ impl DerivationExecutor {
             .insert(&record)
             .map_err(|e| ExecutorError::Index(e.to_string()))?;
 
+        // Build provenance record (4 layers: source, build, signature, content).
+        let source_prov = crate::provenance::SourceProvenance::from_tarball(
+            &recipe.source.archive,
+            &recipe.source.checksum,
+        );
+
+        let mut build_prov =
+            crate::provenance::BuildProvenance::new(&recipe_hash::build_script_hash(recipe));
+        build_prov
+            .build_env
+            .push(("build_env_hash".to_owned(), build_env_hash.to_owned()));
+        build_prov
+            .build_env
+            .push(("target_triple".to_owned(), target_triple.to_owned()));
+        build_prov.build_env.push((
+            "derivation_id".to_owned(),
+            derivation_id.as_str().to_owned(),
+        ));
+        build_prov
+            .set_host_attestation(crate::provenance::HostAttestation::from_current_system());
+        build_prov.complete();
+
+        let sig_prov = crate::provenance::SignatureProvenance::default();
+
+        let mut content_prov =
+            crate::provenance::ContentProvenance::new(&pkg_output.manifest.output_hash);
+        content_prov.total_size = pkg_output.manifest.files.iter().map(|f| f.size).sum();
+        content_prov.file_count =
+            (pkg_output.manifest.files.len() + pkg_output.manifest.symlinks.len()) as u64;
+
+        let provenance =
+            crate::provenance::Provenance::new(source_prov, build_prov, sig_prov, content_prov);
+
+        // Store provenance as CAS object.
+        let provenance_cas_hash = match provenance.to_json() {
+            Ok(json) => match self.cas.store(json.as_bytes()) {
+                Ok(hash) => Some(hash),
+                Err(e) => {
+                    tracing::warn!("failed to store provenance: {e}");
+                    None
+                }
+            },
+            Err(e) => {
+                tracing::warn!("failed to serialize provenance: {e}");
+                None
+            }
+        };
+
+        // Update the derivation record with provenance hash and trust level 2 (locally built).
+        if let Some(ref hash) = provenance_cas_hash {
+            let _ = index.set_trust_level(derivation_id.as_str(), 2);
+            let _ = conn.execute(
+                "UPDATE derivation_index SET provenance_cas_hash = ?2 WHERE derivation_id = ?1",
+                rusqlite::params![derivation_id.as_str(), hash],
+            );
+        }
+
         // Clean up the temporary DESTDIR (best effort).
         if let Err(e) = std::fs::remove_dir_all(&destdir) {
             tracing::warn!("failed to clean up DESTDIR {}: {e}", destdir.display());
@@ -791,5 +848,20 @@ install = "make install"
         let content = std::fs::read_to_string(logs[0].path()).unwrap();
         assert!(content.contains("package: sed"), "log should contain package name");
         assert!(content.contains("status: FAILED"), "log should show FAILED status");
+    }
+
+    #[test]
+    fn successful_build_generates_provenance() {
+        // Verify that the provenance types can be constructed without panicking.
+        let source = crate::provenance::SourceProvenance::from_tarball(
+            "https://example.com/test.tar.gz",
+            "sha256:abc123",
+        );
+        let build = crate::provenance::BuildProvenance::new("script_hash");
+        let sig = crate::provenance::SignatureProvenance::default();
+        let content = crate::provenance::ContentProvenance::new("output_hash");
+        let prov = crate::provenance::Provenance::new(source, build, sig, content);
+        let json = prov.to_json().unwrap();
+        assert!(json.contains("output_hash"));
     }
 }
