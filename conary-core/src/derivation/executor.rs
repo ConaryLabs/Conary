@@ -277,7 +277,7 @@ impl DerivationExecutor {
 
         let inputs = DerivationInputs {
             source_hash: src_hash,
-            build_script_hash: script_hash,
+            build_script_hash: script_hash.clone(),
             dependency_ids: dep_ids.clone(),
             build_env_hash: build_env_hash.to_owned(),
             target_triple: target_triple.to_owned(),
@@ -396,34 +396,13 @@ impl DerivationExecutor {
             .store(&pkg_output.manifest_bytes)
             .map_err(|e| ExecutorError::Cas(e.to_string()))?;
 
-        // Step 6: Record in derivation index.
-        let record = DerivationRecord {
-            derivation_id: derivation_id.as_str().to_owned(),
-            output_hash: pkg_output.manifest.output_hash.clone(),
-            package_name: recipe.package.name.clone(),
-            package_version: recipe.package.version.clone(),
-            manifest_cas_hash,
-            stage: None,
-            build_env_hash: Some(build_env_hash.to_owned()),
-            built_at: pkg_output.manifest.built_at.clone(),
-            build_duration_secs: build_duration,
-            trust_level: 0,
-            provenance_cas_hash: None,
-            reproducible: None,
-        };
-
-        index
-            .insert(&record)
-            .map_err(|e| ExecutorError::Index(e.to_string()))?;
-
-        // Build provenance record (4 layers: source, build, signature, content).
+        // Step 6: Build provenance record (4 layers) and store as CAS object.
         let source_prov = crate::provenance::SourceProvenance::from_tarball(
             &recipe.source.archive,
             &recipe.source.checksum,
         );
 
-        let mut build_prov =
-            crate::provenance::BuildProvenance::new(&recipe_hash::build_script_hash(recipe));
+        let mut build_prov = crate::provenance::BuildProvenance::new(&script_hash);
         build_prov
             .build_env
             .push(("build_env_hash".to_owned(), build_env_hash.to_owned()));
@@ -449,7 +428,6 @@ impl DerivationExecutor {
         let provenance =
             crate::provenance::Provenance::new(source_prov, build_prov, sig_prov, content_prov);
 
-        // Store provenance as CAS object.
         let provenance_cas_hash = match provenance.to_json() {
             Ok(json) => match self.cas.store(json.as_bytes()) {
                 Ok(hash) => Some(hash),
@@ -464,14 +442,26 @@ impl DerivationExecutor {
             }
         };
 
-        // Update the derivation record with provenance hash and trust level 2 (locally built).
-        if let Some(ref hash) = provenance_cas_hash {
-            let _ = index.set_trust_level(derivation_id.as_str(), 2);
-            let _ = conn.execute(
-                "UPDATE derivation_index SET provenance_cas_hash = ?2 WHERE derivation_id = ?1",
-                rusqlite::params![derivation_id.as_str(), hash],
-            );
-        }
+        // Step 7: Record in derivation index with provenance included.
+        let trust_level = if provenance_cas_hash.is_some() { 2 } else { 0 };
+        let record = DerivationRecord {
+            derivation_id: derivation_id.as_str().to_owned(),
+            output_hash: pkg_output.manifest.output_hash.clone(),
+            package_name: recipe.package.name.clone(),
+            package_version: recipe.package.version.clone(),
+            manifest_cas_hash,
+            stage: None,
+            build_env_hash: Some(build_env_hash.to_owned()),
+            built_at: pkg_output.manifest.built_at.clone(),
+            build_duration_secs: build_duration,
+            trust_level,
+            provenance_cas_hash,
+            reproducible: None,
+        };
+
+        index
+            .insert(&record)
+            .map_err(|e| ExecutorError::Index(e.to_string()))?;
 
         // Clean up the temporary DESTDIR (best effort).
         if let Err(e) = std::fs::remove_dir_all(&destdir) {

@@ -2,7 +2,7 @@
 //! Derivation-aware SBOM generation (CycloneDX).
 
 use anyhow::Result;
-use conary_core::derivation::index::DerivationIndex;
+use conary_core::derivation::index::{self, DerivationIndex};
 use conary_core::derivation::profile::BuildProfile;
 
 /// CycloneDX 1.5 SBOM types (mirrors query/sbom.rs structure).
@@ -155,15 +155,6 @@ pub fn cmd_derivation_sbom(
 fn build_component(
     record: &conary_core::derivation::index::DerivationRecord,
 ) -> cyclonedx::Component {
-    let trust_name = match record.trust_level {
-        0 => "unverified",
-        1 => "substituted",
-        2 => "locally-built",
-        3 => "independently-verified",
-        4 => "diverse-verified",
-        _ => "unknown",
-    };
-
     let mut properties = vec![
         cyclonedx::Property {
             name: "conary:derivation_id".to_owned(),
@@ -171,7 +162,7 @@ fn build_component(
         },
         cyclonedx::Property {
             name: "conary:trust_level".to_owned(),
-            value: format!("{} ({})", record.trust_level, trust_name),
+            value: format!("{} ({})", record.trust_level, index::trust_level_name(record.trust_level)),
         },
     ];
 
