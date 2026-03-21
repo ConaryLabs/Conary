@@ -30,6 +30,13 @@ pub struct DerivationRecord {
     pub built_at: String,
     /// Wall-clock build duration in seconds.
     pub build_duration_secs: u64,
+    /// Trust level (0=unverified, 1=substituted, 2=locally built,
+    /// 3=independently verified, 4=diverse-verified).
+    pub trust_level: u8,
+    /// CAS hash of the JSON provenance record.
+    pub provenance_cas_hash: Option<String>,
+    /// Reproducibility status: None=unknown, Some(true)=reproducible, Some(false)=not.
+    pub reproducible: Option<bool>,
 }
 
 /// Persistent `derivation_id -> output_hash` mapping stored in SQLite.
@@ -58,7 +65,8 @@ impl<'a> DerivationIndex<'a> {
         let mut stmt = self.conn.prepare_cached(
             "SELECT derivation_id, output_hash, package_name, package_version,
                     manifest_cas_hash, stage, build_env_hash, built_at,
-                    build_duration_secs
+                    build_duration_secs, trust_level, provenance_cas_hash,
+                    reproducible
              FROM derivation_index
              WHERE derivation_id = ?1",
         )?;
@@ -74,6 +82,9 @@ impl<'a> DerivationIndex<'a> {
                 build_env_hash: row.get(6)?,
                 built_at: row.get(7)?,
                 build_duration_secs: row.get(8)?,
+                trust_level: row.get(9)?,
+                provenance_cas_hash: row.get(10)?,
+                reproducible: row.get(11)?,
             })
         });
 
@@ -91,8 +102,9 @@ impl<'a> DerivationIndex<'a> {
             "INSERT OR REPLACE INTO derivation_index
                 (derivation_id, output_hash, package_name, package_version,
                  manifest_cas_hash, stage, build_env_hash, built_at,
-                 build_duration_secs)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                 build_duration_secs, trust_level, provenance_cas_hash,
+                 reproducible)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             rusqlite::params![
                 record.derivation_id,
                 record.output_hash,
@@ -103,6 +115,9 @@ impl<'a> DerivationIndex<'a> {
                 record.build_env_hash,
                 record.built_at,
                 record.build_duration_secs,
+                record.trust_level,
+                record.provenance_cas_hash,
+                record.reproducible,
             ],
         )?;
         Ok(())
@@ -113,7 +128,8 @@ impl<'a> DerivationIndex<'a> {
         let mut stmt = self.conn.prepare_cached(
             "SELECT derivation_id, output_hash, package_name, package_version,
                     manifest_cas_hash, stage, build_env_hash, built_at,
-                    build_duration_secs
+                    build_duration_secs, trust_level, provenance_cas_hash,
+                    reproducible
              FROM derivation_index
              WHERE package_name = ?1
              ORDER BY built_at DESC",
@@ -130,6 +146,9 @@ impl<'a> DerivationIndex<'a> {
                 build_env_hash: row.get(6)?,
                 built_at: row.get(7)?,
                 build_duration_secs: row.get(8)?,
+                trust_level: row.get(9)?,
+                provenance_cas_hash: row.get(10)?,
+                reproducible: row.get(11)?,
             })
         })?;
 
@@ -138,6 +157,27 @@ impl<'a> DerivationIndex<'a> {
             records.push(row?);
         }
         Ok(records)
+    }
+
+    /// Upgrade trust level (monotonic via SQL MAX).
+    ///
+    /// The trust level can only increase: if the current level is higher than
+    /// the requested level, the row is unchanged.
+    pub fn set_trust_level(&self, derivation_id: &str, level: u8) -> Result<()> {
+        self.conn.execute(
+            "UPDATE derivation_index SET trust_level = MAX(trust_level, ?2) WHERE derivation_id = ?1",
+            rusqlite::params![derivation_id, level],
+        )?;
+        Ok(())
+    }
+
+    /// Set reproducibility flag.
+    pub fn set_reproducible(&self, derivation_id: &str, reproducible: bool) -> Result<()> {
+        self.conn.execute(
+            "UPDATE derivation_index SET reproducible = ?2 WHERE derivation_id = ?1",
+            rusqlite::params![derivation_id, reproducible],
+        )?;
+        Ok(())
     }
 
     /// Remove a derivation record by ID.
@@ -174,6 +214,9 @@ mod tests {
             build_env_hash: Some("envhash_abc".to_owned()),
             built_at: "2026-03-19T12:00:00Z".to_owned(),
             build_duration_secs: 42,
+            trust_level: 0,
+            provenance_cas_hash: None,
+            reproducible: None,
         }
     }
 
@@ -272,11 +315,57 @@ mod tests {
             build_env_hash: None,
             built_at: "2026-03-19T13:00:00Z".to_owned(),
             build_duration_secs: 0,
+            trust_level: 0,
+            provenance_cas_hash: None,
+            reproducible: None,
         };
 
         idx.insert(&record).unwrap();
         let found = idx.lookup("drv_null").unwrap().expect("should exist");
         assert_eq!(found.stage, None);
         assert_eq!(found.build_env_hash, None);
+    }
+
+    #[test]
+    fn set_trust_level_is_monotonic() {
+        let conn = setup();
+        let idx = DerivationIndex::new(&conn);
+
+        let mut record = sample_record("drv_trust", "bash");
+        record.trust_level = 2;
+        idx.insert(&record).unwrap();
+
+        // Upgrade from 2 to 3
+        idx.set_trust_level("drv_trust", 3).unwrap();
+        let r = idx.lookup("drv_trust").unwrap().unwrap();
+        assert_eq!(r.trust_level, 3);
+
+        // Attempt downgrade from 3 to 1 -- should stay at 3
+        idx.set_trust_level("drv_trust", 1).unwrap();
+        let r = idx.lookup("drv_trust").unwrap().unwrap();
+        assert_eq!(r.trust_level, 3, "trust level should not decrease");
+    }
+
+    #[test]
+    fn set_reproducible_round_trip() {
+        let conn = setup();
+        let idx = DerivationIndex::new(&conn);
+
+        let record = sample_record("drv_repro", "gcc");
+        idx.insert(&record).unwrap();
+
+        // Initially None
+        let r = idx.lookup("drv_repro").unwrap().unwrap();
+        assert_eq!(r.reproducible, None);
+
+        // Set to true
+        idx.set_reproducible("drv_repro", true).unwrap();
+        let r = idx.lookup("drv_repro").unwrap().unwrap();
+        assert_eq!(r.reproducible, Some(true));
+
+        // Set to false
+        idx.set_reproducible("drv_repro", false).unwrap();
+        let r = idx.lookup("drv_repro").unwrap().unwrap();
+        assert_eq!(r.reproducible, Some(false));
     }
 }

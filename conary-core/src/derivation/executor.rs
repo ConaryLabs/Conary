@@ -407,6 +407,9 @@ impl DerivationExecutor {
             build_env_hash: Some(build_env_hash.to_owned()),
             built_at: pkg_output.manifest.built_at.clone(),
             build_duration_secs: build_duration,
+            trust_level: 0,
+            provenance_cas_hash: None,
+            reproducible: None,
         };
 
         index
@@ -518,6 +521,9 @@ install = "make install"
             build_env_hash: Some(build_env_hash.to_owned()),
             built_at: "2026-03-19T12:00:00Z".to_owned(),
             build_duration_secs: 30,
+            trust_level: 0,
+            provenance_cas_hash: None,
+            reproducible: None,
         };
         let index = DerivationIndex::new(&conn);
         index.insert(&record).unwrap();
