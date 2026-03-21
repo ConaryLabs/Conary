@@ -39,6 +39,19 @@ pub struct DerivationRecord {
     pub reproducible: Option<bool>,
 }
 
+/// Human-readable name for a trust level value.
+#[must_use]
+pub fn trust_level_name(level: u8) -> &'static str {
+    match level {
+        0 => "unverified",
+        1 => "substituted",
+        2 => "locally built",
+        3 => "independently verified",
+        4 => "diverse-verified",
+        _ => "unknown",
+    }
+}
+
 /// Persistent `derivation_id -> output_hash` mapping stored in SQLite.
 ///
 /// This is the build cache for the CAS-layered bootstrap: before starting a
@@ -176,6 +189,15 @@ impl<'a> DerivationIndex<'a> {
         self.conn.execute(
             "UPDATE derivation_index SET reproducible = ?2 WHERE derivation_id = ?1",
             rusqlite::params![derivation_id, reproducible],
+        )?;
+        Ok(())
+    }
+
+    /// Set provenance CAS hash on a derivation record.
+    pub fn set_provenance_hash(&self, derivation_id: &str, hash: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE derivation_index SET provenance_cas_hash = ?2 WHERE derivation_id = ?1",
+            rusqlite::params![derivation_id, hash],
         )?;
         Ok(())
     }

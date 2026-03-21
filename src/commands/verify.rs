@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use conary_core::derivation::executor::ExecutorConfig;
-use conary_core::derivation::index::DerivationIndex;
+use conary_core::derivation::index::{self, DerivationIndex};
 use conary_core::derivation::profile::BuildProfile;
 use conary_core::derivation::{DerivationExecutor, ExecutionResult};
 use conary_core::filesystem::CasStore;
@@ -51,18 +51,12 @@ pub fn cmd_verify_chain(profile_path: &str, verbose: bool, _json: bool) -> Resul
                     let level = record.trust_level.min(4) as usize;
                     trust_counts[level] += 1;
 
-                    let trust_name = match record.trust_level {
-                        0 => "unverified",
-                        1 => "substituted",
-                        2 => "locally built",
-                        3 => "independently verified",
-                        4 => "diverse-verified",
-                        _ => "unknown",
-                    };
-
                     println!(
                         "  {}-{}    [level {}: {}]",
-                        drv.package, drv.version, record.trust_level, trust_name
+                        drv.package,
+                        drv.version,
+                        record.trust_level,
+                        index::trust_level_name(record.trust_level)
                     );
 
                     if verbose {
