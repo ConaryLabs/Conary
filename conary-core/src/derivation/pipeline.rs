@@ -473,7 +473,15 @@ impl Pipeline {
                                 manifest_cas_hash: self
                                     .executor
                                     .cas()
-                                    .store(toml::to_string(&manifest).unwrap().as_bytes())
+                                    .store(
+                                        toml::to_string(&manifest)
+                                            .map_err(|e| {
+                                                PipelineError::Io(format!(
+                                                    "manifest serialization: {e}"
+                                                ))
+                                            })?
+                                            .as_bytes(),
+                                    )
                                     .map_err(|e| {
                                         PipelineError::Io(format!("CAS store manifest: {e}"))
                                     })?,

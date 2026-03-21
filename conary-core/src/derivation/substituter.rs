@@ -134,13 +134,18 @@ impl DerivationSubstituter {
     ///
     /// Returns a `SubstituterError::Io` if the database write fails.
     pub fn seed_peers(conn: &Connection, endpoints: &[String]) -> Result<(), SubstituterError> {
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| SubstituterError::Io(e.to_string()))?;
         for endpoint in endpoints {
-            conn.execute(
+            tx.execute(
                 "INSERT OR IGNORE INTO substituter_peers (endpoint, priority) VALUES (?1, 0)",
                 rusqlite::params![endpoint],
             )
             .map_err(|e| SubstituterError::Io(e.to_string()))?;
         }
+        tx.commit()
+            .map_err(|e| SubstituterError::Io(e.to_string()))?;
         Ok(())
     }
 
