@@ -9,7 +9,7 @@
 //! - PUT /v1/profiles/:profile_hash -- publish profile (requires bearer token)
 
 use crate::server::ServerState;
-use crate::server::auth::{extract_bearer, hash_token};
+use crate::server::handlers::{cas_object_path, is_valid_hex_hash, require_admin_token};
 use axum::{
     body::Body,
     extract::{Path, Request, State},
@@ -17,7 +17,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use sha2::{Digest, Sha256};
-use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -25,70 +24,9 @@ use tokio::sync::RwLock;
 // Helpers
 // ────────────────────────────────────────────────────────────
 
-/// Map a SHA-256 hex hash to its CAS file path inside `chunk_dir`.
-fn cas_path(chunk_dir: &FsPath, hash: &str) -> PathBuf {
-    let normalized = hash.to_ascii_lowercase();
-    let (prefix, rest) = normalized.split_at(2);
-    chunk_dir.join("objects").join(prefix).join(rest)
-}
-
-/// Validate that a profile hash contains only lowercase hex characters and is exactly 64 chars.
+/// Validate that a profile hash contains only hex characters and is exactly 64 chars.
 fn is_valid_profile_hash(hash: &str) -> bool {
-    hash.len() == 64 && hash.chars().all(|c| c.is_ascii_hexdigit())
-}
-
-/// Check whether the request carries a valid bearer token with admin scope.
-///
-/// Returns `None` on success, `Some(error_response)` on failure.
-async fn require_admin_token(
-    headers: &HeaderMap,
-    db_path: &std::path::Path,
-) -> Option<Response> {
-    let raw_token = match extract_bearer(headers) {
-        Some(t) => t,
-        None => {
-            return Some(
-                (StatusCode::UNAUTHORIZED, "Missing or invalid Authorization header")
-                    .into_response(),
-            );
-        }
-    };
-
-    let token_hash = hash_token(raw_token);
-    let db_path = db_path.to_path_buf();
-
-    let valid = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
-        let conn = conary_core::db::open(&db_path)?;
-        let result = conn.query_row(
-            "SELECT scopes FROM admin_tokens WHERE token_hash = ?1",
-            rusqlite::params![token_hash],
-            |row| row.get::<_, String>(0),
-        );
-        match result {
-            Ok(scopes) => {
-                let has_admin = scopes.split(',').any(|s| s.trim() == "admin");
-                Ok(has_admin)
-            }
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
-            Err(e) => Err(e.into()),
-        }
-    })
-    .await;
-
-    match valid {
-        Ok(Ok(true)) => None,
-        Ok(Ok(false)) => Some(
-            (StatusCode::FORBIDDEN, "Insufficient scope or invalid token").into_response(),
-        ),
-        Ok(Err(e)) => {
-            tracing::error!("DB error during token validation: {e}");
-            Some((StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response())
-        }
-        Err(e) => {
-            tracing::error!("Task panicked during token validation: {e}");
-            Some((StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response())
-        }
-    }
+    is_valid_hex_hash(hash)
 }
 
 // ────────────────────────────────────────────────────────────
@@ -114,7 +52,7 @@ pub async fn get_profile(
         guard.config.chunk_dir.clone()
     };
 
-    let object_path = cas_path(&chunk_dir, &profile_hash);
+    let object_path = cas_object_path(&chunk_dir, &profile_hash);
 
     match tokio::fs::read(&object_path).await {
         Ok(bytes) => Response::builder()
@@ -197,7 +135,7 @@ pub async fn put_profile(
     }
 
     // Write to CAS
-    let object_path = cas_path(&chunk_dir, &computed_hash);
+    let object_path = cas_object_path(&chunk_dir, &computed_hash);
     if let Some(parent) = object_path.parent()
         && let Err(e) = tokio::fs::create_dir_all(parent).await
     {
@@ -262,7 +200,7 @@ mod tests {
     fn cas_path_layout() {
         let dir = std::path::PathBuf::from("/chunks");
         let hash = "aabbcc1234567890aabbcc1234567890aabbcc1234567890aabbcc1234567890";
-        let path = cas_path(&dir, hash);
+        let path = cas_object_path(&dir, hash);
         assert_eq!(
             path,
             std::path::PathBuf::from(

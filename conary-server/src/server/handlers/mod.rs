@@ -22,10 +22,91 @@ pub mod self_update;
 pub mod sparse;
 pub mod tuf;
 
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use conary_core::db::models::Repository;
 use rusqlite::Connection;
+use crate::server::auth::{extract_bearer, hash_token};
+
+/// Compute the CAS object path for a given hex hash.
+///
+/// Layout mirrors the chunk store used throughout Remi:
+/// `<chunk_dir>/objects/<first-2-hex>/<remaining-62-hex>`
+pub(crate) fn cas_object_path(chunk_dir: &std::path::Path, hash: &str) -> std::path::PathBuf {
+    let normalized = hash.to_ascii_lowercase();
+    let (prefix, rest) = normalized.split_at(2.min(normalized.len()));
+    chunk_dir.join("objects").join(prefix).join(rest)
+}
+
+/// Validate a path parameter: non-empty, <= 128 chars, alphanumeric + `[._-]`.
+pub(crate) fn is_valid_path_param(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 128
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// Validate a 64-char hex hash.
+pub(crate) fn is_valid_hex_hash(s: &str) -> bool {
+    s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Check whether the request carries a valid bearer token with admin scope.
+///
+/// Replicates the core of `auth_middleware` inline so that GET/HEAD on the
+/// same path can remain unauthenticated while PUT requires a token.
+///
+/// Returns `None` on success, `Some(error_response)` on failure.
+pub(crate) async fn require_admin_token(
+    headers: &HeaderMap,
+    db_path: &std::path::Path,
+) -> Option<Response> {
+    let raw_token = match extract_bearer(headers) {
+        Some(t) => t,
+        None => {
+            return Some(
+                (StatusCode::UNAUTHORIZED, "Missing or invalid Authorization header")
+                    .into_response(),
+            );
+        }
+    };
+
+    let token_hash = hash_token(raw_token);
+    let db_path = db_path.to_path_buf();
+
+    let valid = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        let conn = conary_core::db::open(&db_path)?;
+        let result = conn.query_row(
+            "SELECT scopes FROM admin_tokens WHERE token_hash = ?1",
+            rusqlite::params![token_hash],
+            |row| row.get::<_, String>(0),
+        );
+        match result {
+            Ok(scopes) => {
+                let has_admin = scopes.split(',').any(|s| s.trim() == "admin");
+                Ok(has_admin)
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
+            Err(e) => Err(e.into()),
+        }
+    })
+    .await;
+
+    match valid {
+        Ok(Ok(true)) => None,
+        Ok(Ok(false)) => Some(
+            (StatusCode::FORBIDDEN, "Insufficient scope or invalid token").into_response(),
+        ),
+        Ok(Err(e)) => {
+            tracing::error!("DB error during token validation: {e}");
+            Some((StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response())
+        }
+        Err(e) => {
+            tracing::error!("Task panicked during token validation: {e}");
+            Some((StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response())
+        }
+    }
+}
 
 /// Format bytes as human-readable string (e.g., "1.50 KB", "700.00 GB")
 pub(crate) fn human_bytes(bytes: u64) -> String {

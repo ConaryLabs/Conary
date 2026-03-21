@@ -12,7 +12,7 @@
 //! - POST /v1/derivations/probe            -- batch existence check (public)
 
 use crate::server::ServerState;
-use crate::server::auth::{extract_bearer, hash_token};
+use crate::server::handlers::{cas_object_path, is_valid_path_param, require_admin_token};
 use axum::{
     Json,
     body::Body,
@@ -23,7 +23,6 @@ use axum::{
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -31,89 +30,12 @@ use tokio::sync::RwLock;
 // Helpers
 // ────────────────────────────────────────────────────────────
 
-/// Map a SHA-256 hex hash to its CAS file path inside `chunk_dir`.
-///
-/// Layout mirrors the chunk store used by the rest of Remi:
-/// `<chunk_dir>/objects/<first-2-hex>/<remaining-62-hex>`
-fn cas_path(chunk_dir: &FsPath, hash: &str) -> PathBuf {
-    let normalized = hash.to_ascii_lowercase();
-    let (prefix, rest) = normalized.split_at(2);
-    chunk_dir.join("objects").join(prefix).join(rest)
-}
-
 /// Validate that a derivation ID contains only URL-safe characters.
 ///
 /// Derivation IDs are typically SHA-256 hex strings, but we allow any
 /// alphanumeric + `[._-]` string up to 128 characters to be future-proof.
 fn is_valid_derivation_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 128
-        && id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-}
-
-/// Check whether the request carries a valid bearer token with admin scope.
-///
-/// Replicates the core of `auth_middleware` inline so that GET/HEAD on the
-/// same path can remain unauthenticated while PUT requires a token.
-///
-/// Returns `None` on success, `Some(error_response)` on failure.
-async fn require_admin_token(
-    headers: &HeaderMap,
-    db_path: &std::path::Path,
-) -> Option<Response> {
-    let raw_token = match extract_bearer(headers) {
-        Some(t) => t,
-        None => {
-            return Some(
-                (StatusCode::UNAUTHORIZED, "Missing or invalid Authorization header")
-                    .into_response(),
-            );
-        }
-    };
-
-    let token_hash = hash_token(raw_token);
-    let db_path = db_path.to_path_buf();
-
-    let valid = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
-        let conn = conary_core::db::open(&db_path)?;
-        let result = conn.query_row(
-            "SELECT scopes FROM admin_tokens WHERE token_hash = ?1",
-            rusqlite::params![token_hash],
-            |row| row.get::<_, String>(0),
-        );
-        match result {
-            Ok(scopes) => {
-                let has_admin = scopes
-                    .split(',')
-                    .any(|s| s.trim() == "admin");
-                Ok(has_admin)
-            }
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
-            Err(e) => Err(e.into()),
-        }
-    })
-    .await;
-
-    match valid {
-        Ok(Ok(true)) => None,
-        Ok(Ok(false)) => Some(
-            (StatusCode::FORBIDDEN, "Insufficient scope or invalid token").into_response(),
-        ),
-        Ok(Err(e)) => {
-            tracing::error!("DB error during token validation: {e}");
-            Some(
-                (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response(),
-            )
-        }
-        Err(e) => {
-            tracing::error!("Task panicked during token validation: {e}");
-            Some(
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response(),
-            )
-        }
-    }
+    is_valid_path_param(id)
 }
 
 // ────────────────────────────────────────────────────────────
@@ -184,7 +106,7 @@ pub async fn get_derivation(
     };
 
     // Read the manifest bytes from CAS
-    let object_path = cas_path(&chunk_dir, &cas_hash);
+    let object_path = cas_object_path(&chunk_dir, &cas_hash);
     match tokio::fs::read(&object_path).await {
         Ok(bytes) => Response::builder()
             .status(StatusCode::OK)
@@ -337,7 +259,7 @@ pub async fn put_derivation(
     let cas_hash = format!("{:x}", hasher.finalize());
 
     // Write to CAS
-    let object_path = cas_path(&chunk_dir, &cas_hash);
+    let object_path = cas_object_path(&chunk_dir, &cas_hash);
     if let Some(parent) = object_path.parent()
         && let Err(e) = tokio::fs::create_dir_all(parent).await
     {
@@ -504,7 +426,7 @@ mod tests {
         use std::path::PathBuf;
         let dir = PathBuf::from("/chunks");
         let hash = "aabbcc1234567890aabbcc1234567890aabbcc1234567890aabbcc1234567890";
-        let path = cas_path(&dir, hash);
+        let path = cas_object_path(&dir, hash);
         assert_eq!(
             path,
             PathBuf::from("/chunks/objects/aa/bbcc1234567890aabbcc1234567890aabbcc1234567890aabbcc1234567890")
