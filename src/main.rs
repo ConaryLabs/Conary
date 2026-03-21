@@ -1852,11 +1852,9 @@ fn run() -> Result<()> {
                 work_dir,
             } => commands::verify::cmd_verify_rebuild(&derivation, &work_dir),
             cli::VerifyCommands::Diverse {
-                profile_a: _,
-                profile_b: _,
-            } => {
-                todo!("verify diverse not yet implemented")
-            }
+                profile_a,
+                profile_b,
+            } => commands::verify::cmd_verify_diverse(&profile_a, &profile_b),
         },
 
         None => {

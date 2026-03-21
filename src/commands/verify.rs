@@ -214,6 +214,105 @@ pub fn cmd_verify_rebuild(derivation: &str, work_dir: &str) -> Result<()> {
     Ok(())
 }
 
+/// Compare builds from two different seeds for diverse verification.
+pub fn cmd_verify_diverse(profile_a_path: &str, profile_b_path: &str) -> Result<()> {
+    let a_content = std::fs::read_to_string(profile_a_path)?;
+    let b_content = std::fs::read_to_string(profile_b_path)?;
+    let profile_a: BuildProfile = toml::from_str(&a_content)?;
+    let profile_b: BuildProfile = toml::from_str(&b_content)?;
+
+    // Verify different seeds
+    if profile_a.seed.id == profile_b.seed.id {
+        let display_len = 16.min(profile_a.seed.id.len());
+        anyhow::bail!(
+            "both profiles use the same seed ({}...). Diverse verification requires different seeds.",
+            &profile_a.seed.id[..display_len]
+        );
+    }
+
+    let a_seed_display = 16.min(profile_a.seed.id.len());
+    let b_seed_display = 16.min(profile_b.seed.id.len());
+    println!("Comparing builds from 2 seeds:");
+    println!(
+        "  Seed A: {}... ({})",
+        &profile_a.seed.id[..a_seed_display], profile_a.seed.source
+    );
+    println!(
+        "  Seed B: {}... ({})",
+        &profile_b.seed.id[..b_seed_display], profile_b.seed.source
+    );
+    println!();
+
+    let db_path = "/var/lib/conary/conary.db";
+    let conn = super::open_db(db_path)?;
+    let index = DerivationIndex::new(&conn);
+
+    // Build lookup map: (package_name, version) -> derivation_id from profile A
+    let a_map: std::collections::HashMap<(String, String), String> = profile_a
+        .stages
+        .iter()
+        .flat_map(|s| s.derivations.iter())
+        .filter(|d| d.derivation_id != "pending")
+        .map(|d| {
+            (
+                (d.package.clone(), d.version.clone()),
+                d.derivation_id.clone(),
+            )
+        })
+        .collect();
+
+    let mut matches = 0usize;
+    let mut mismatches = 0usize;
+    let mut unmatched = 0usize;
+
+    for stage in &profile_b.stages {
+        for drv in &stage.derivations {
+            if drv.derivation_id == "pending" {
+                continue;
+            }
+
+            let key = (drv.package.clone(), drv.version.clone());
+            let Some(a_id) = a_map.get(&key) else {
+                unmatched += 1;
+                continue;
+            };
+
+            // Load both records
+            let a_record = index
+                .lookup(a_id)?
+                .ok_or_else(|| anyhow::anyhow!("missing record for {a_id}"))?;
+            let b_record = index
+                .lookup(&drv.derivation_id)?
+                .ok_or_else(|| anyhow::anyhow!("missing record for {}", drv.derivation_id))?;
+
+            if a_record.output_hash == b_record.output_hash {
+                matches += 1;
+                println!(
+                    "  {}-{}:  MATCH (diverse-verified)",
+                    drv.package, drv.version
+                );
+                index.set_trust_level(a_id, 4)?;
+                index.set_trust_level(&drv.derivation_id, 4)?;
+            } else {
+                mismatches += 1;
+                println!("  {}-{}:  MISMATCH", drv.package, drv.version);
+            }
+        }
+    }
+
+    println!();
+    let total = matches + mismatches;
+    println!("  {matches}/{total} packages diverse-verified");
+    if mismatches > 0 {
+        println!("  {mismatches} packages with environment-dependent differences");
+    }
+    if unmatched > 0 {
+        println!("  {unmatched} packages only in one profile (skipped)");
+    }
+
+    Ok(())
+}
+
 /// Find a recipe file by package name in the recipes/ directory.
 fn find_recipe(package_name: &str) -> Result<std::path::PathBuf> {
     for dir in &[
