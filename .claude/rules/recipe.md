@@ -40,7 +40,10 @@ cook, kitchen). Bootstrap provides staged toolchain building from scratch.
 - `parser.rs` -- `parse_recipe()`, `validate_recipe()`
 - `format.rs` -- `Recipe`, `SourceSection`, `BuildSection`
 - `graph.rs` -- `RecipeGraph`, `BootstrapPlan`
+- `audit.rs` -- recipe dependency auditing
 - `kitchen/` -- `Cook`, `Kitchen`, `KitchenConfig`
+- `kitchen/makedepends.rs` -- makedepends resolution
+- `kitchen/provenance_capture.rs` -- provenance capture during builds
 - `pkgbuild.rs` -- PKGBUILD conversion
 - `cache.rs` -- `BuildCache`, `CacheConfig`
 

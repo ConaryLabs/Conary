@@ -10,8 +10,8 @@
 
 | Module | Purpose |
 |--------|---------|
-| `src/cli/` | CLI definitions |
-| `src/commands/` | Command implementations |
+| `src/cli/` | CLI definitions (verify.rs for verify-derivation commands) |
+| `src/commands/` | Command implementations (verify.rs, derivation_sbom.rs for Phase 6) |
 
 ### conary-core -- Core library
 
@@ -49,7 +49,7 @@
 | `src/repository/dependency_model.rs` | Cross-distro normalized dependency/provide types |
 | `src/repository/versioning.rs` | Scheme-aware version comparison (RPM, Debian, ALPM) |
 | `src/repository/resolution_policy.rs` | Policy types for request scope, mixing, and candidate filtering |
-| `src/derivation/` | CAS-layered derivation engine for bootstrap (pipeline, compose, capture, index) |
+| `src/derivation/` | CAS-layered derivation engine for bootstrap (pipeline, compose, capture, index, provenance, trust levels) |
 | `src/mcp/` | MCP tool definitions for LLM integration |
 | `src/model/replatform.rs` | Source policy replatform and convergence planning |
 
