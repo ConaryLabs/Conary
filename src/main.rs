@@ -219,6 +219,10 @@ fn run() -> Result<()> {
             commands::cmd_convert_pkgbuild(&pkgbuild, output.as_deref())
         }
 
+        Some(Commands::RecipeAudit { recipe, all, trace }) => {
+            commands::cmd_recipe_audit(recipe.as_deref(), all, trace)
+        }
+
         // =====================================================================
         // System Commands
         // =====================================================================

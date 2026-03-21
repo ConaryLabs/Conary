@@ -12,6 +12,7 @@ pub(crate) mod composefs_ops;
 mod config;
 mod convert_pkgbuild;
 mod cook;
+mod recipe_audit;
 mod derivation;
 mod derived;
 pub mod distro;
@@ -73,6 +74,7 @@ pub use config::{
 };
 pub use convert_pkgbuild::cmd_convert_pkgbuild;
 pub use cook::cmd_cook;
+pub use recipe_audit::cmd_recipe_audit;
 pub use derivation::{cmd_derivation_build, cmd_derivation_show};
 pub use profile::{cmd_profile_diff, cmd_profile_generate, cmd_profile_show};
 pub use derived::{
