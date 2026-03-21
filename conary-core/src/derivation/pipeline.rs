@@ -568,8 +568,8 @@ impl Pipeline {
 
                         // Auto-publish to configured endpoint
                         if let (Some(endpoint), Some(token)) =
-                            (&self.config.publish_endpoint, &self.config.publish_token)
-                            && let Some(sub) = &substituter
+                            (self.config.publish_endpoint.as_deref(), self.config.publish_token.as_deref())
+                            && let Some(sub) = substituter.as_ref()
                             && let Err(e) = sub.publish(
                                 derivation_id.as_str(),
                                 &manifest,
