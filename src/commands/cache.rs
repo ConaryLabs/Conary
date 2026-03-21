@@ -37,8 +37,7 @@ pub fn cmd_cache_populate(profile_path: &str, sources_only: bool, full: bool) ->
 
     // Load substituter configuration from DB
     let db_path = "/var/lib/conary/conary.db";
-    let conn = conary_core::db::open(db_path)
-        .map_err(|e| anyhow::anyhow!("failed to open database: {e}"))?;
+    let conn = super::open_db(db_path)?;
 
     let mut substituter =
         match conary_core::derivation::substituter::DerivationSubstituter::from_db(&conn) {
@@ -138,7 +137,7 @@ pub fn cmd_cache_status() -> Result<()> {
     }
 
     // Derivation index count and substituter peers
-    if let Ok(conn) = conary_core::db::open(db_path) {
+    if let Ok(conn) = super::open_db(db_path) {
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM derivation_index", [], |r| r.get(0))
             .unwrap_or(0);
