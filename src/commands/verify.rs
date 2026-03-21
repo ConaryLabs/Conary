@@ -3,9 +3,10 @@
 //! Verification command handlers.
 
 use anyhow::Result;
-use conary_core::derivation::executor::{DerivationExecutor, ExecutionResult, ExecutorConfig};
+use conary_core::derivation::executor::ExecutorConfig;
 use conary_core::derivation::index::DerivationIndex;
 use conary_core::derivation::profile::BuildProfile;
+use conary_core::derivation::{DerivationExecutor, ExecutionResult};
 use conary_core::filesystem::CasStore;
 
 /// Trace all derivations in a profile back to the seed.
