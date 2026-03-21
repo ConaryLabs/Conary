@@ -90,7 +90,7 @@ pub fn notify(states: &[NotifyState<'_>]) -> bool {
         .collect();
 
     if !sd_states.is_empty() {
-        sd_notify::notify(true, &sd_states).is_ok()
+        sd_notify::notify(&sd_states).is_ok()
     } else {
         false
     }

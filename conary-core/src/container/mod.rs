@@ -462,7 +462,6 @@ impl Sandbox {
         write_executable_script(&script_path, script_content)?;
 
         // Set up pipes before fork to capture child stdout/stderr
-        use std::os::unix::io::AsRawFd;
         let (stdout_read_fd, stdout_write_fd) = nix::unistd::pipe()
             .map_err(|e| Error::ScriptletError(format!("Failed to create stdout pipe: {e}")))?;
         let (stderr_read_fd, stderr_write_fd) = nix::unistd::pipe()
@@ -498,8 +497,15 @@ impl Sandbox {
                 drop(stderr_read_fd);
 
                 // Redirect stdout and stderr to pipe write ends
-                let _ = nix::unistd::dup2(stdout_write_fd.as_raw_fd(), 1); // STDOUT_FILENO
-                let _ = nix::unistd::dup2(stderr_write_fd.as_raw_fd(), 2); // STDERR_FILENO
+                use std::os::fd::FromRawFd;
+                // SAFETY: fd 1 (stdout) and fd 2 (stderr) are valid in a forked child
+                let mut stdout_target = unsafe { std::os::fd::OwnedFd::from_raw_fd(1) };
+                let mut stderr_target = unsafe { std::os::fd::OwnedFd::from_raw_fd(2) };
+                let _ = nix::unistd::dup2(&stdout_write_fd, &mut stdout_target);
+                let _ = nix::unistd::dup2(&stderr_write_fd, &mut stderr_target);
+                // Prevent OwnedFd from closing stdout/stderr when dropped
+                std::mem::forget(stdout_target);
+                std::mem::forget(stderr_target);
                 drop(stdout_write_fd);
                 drop(stderr_write_fd);
 

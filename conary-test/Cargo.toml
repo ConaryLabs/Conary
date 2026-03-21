@@ -37,7 +37,7 @@ dashmap = "6"
 async-stream = "0.3"
 
 # Container management
-bollard = "0.18"
+bollard = "0.20"
 bytes = "1"
 
 # HTTP server + client

@@ -676,13 +676,13 @@ pub async fn cleanup_containers(_state: &AppState) -> Result<CleanupResult> {
     let docker = bollard::Docker::connect_with_local_defaults()?;
 
     let mut filters = std::collections::HashMap::new();
-    filters.insert("label", vec!["conary-test"]);
-    filters.insert("status", vec!["exited", "dead"]);
+    filters.insert("label".to_string(), vec!["conary-test".to_string()]);
+    filters.insert("status".to_string(), vec!["exited".to_string(), "dead".to_string()]);
 
     let containers = docker
-        .list_containers(Some(bollard::container::ListContainersOptions {
+        .list_containers(Some(bollard::query_parameters::ListContainersOptions {
             all: true,
-            filters,
+            filters: Some(filters),
             ..Default::default()
         }))
         .await?;
@@ -698,7 +698,7 @@ pub async fn cleanup_containers(_state: &AppState) -> Result<CleanupResult> {
         match docker
             .remove_container(
                 &id,
-                Some(bollard::container::RemoveContainerOptions {
+                Some(bollard::query_parameters::RemoveContainerOptions {
                     force: true,
                     ..Default::default()
                 }),

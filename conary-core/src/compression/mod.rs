@@ -135,7 +135,7 @@ pub fn create_decoder<'a, R: Read + 'a>(
     match format {
         CompressionFormat::None => Ok(Box::new(reader)),
         CompressionFormat::Gzip => Ok(Box::new(flate2::read::GzDecoder::new(reader))),
-        CompressionFormat::Xz => Ok(Box::new(xz2::read::XzDecoder::new(reader))),
+        CompressionFormat::Xz => Ok(Box::new(liblzma::read::XzDecoder::new(reader))),
         CompressionFormat::Zstd => {
             let decoder =
                 zstd::Decoder::new(reader).map_err(|e| CompressionError::DecoderCreation {

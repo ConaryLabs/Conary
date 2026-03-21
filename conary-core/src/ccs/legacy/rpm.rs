@@ -89,8 +89,7 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
     // Start building the RPM
     let mut builder = PackageBuilder::new(name, version, license, &arch, description);
 
-    // Set compression (use Gzip for compatibility)
-    builder = builder.compression(rpm::CompressionType::Gzip);
+    // rpm 0.19+ uses gzip compression by default
 
     // Add URL if present
     if let Some(url) = &manifest.package.homepage {

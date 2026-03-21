@@ -3,13 +3,13 @@
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use bollard::Docker;
-use bollard::container::{
-    Config, DownloadFromContainerOptions, KillContainerOptions, LogsOptions,
-    RemoveContainerOptions, StopContainerOptions, UploadToContainerOptions,
-};
+use bollard::container::LogOutput;
 use bollard::exec::{CreateExecOptions, StartExecOptions, StartExecResults};
-use bollard::image::BuildImageOptions;
-use bollard::models::HostConfig;
+use bollard::models::{ContainerCreateBody, HostConfig};
+use bollard::query_parameters::{
+    BuildImageOptions, DownloadFromContainerOptions, KillContainerOptions, ListImagesOptions,
+    LogsOptions, RemoveContainerOptions, StopContainerOptions, UploadToContainerOptions,
+};
 use bytes::Bytes;
 use futures::StreamExt;
 use std::collections::HashMap;
@@ -141,23 +141,22 @@ impl ContainerBackend for BollardBackend {
         };
 
         let options = BuildImageOptions {
-            dockerfile: dockerfile_name.as_str(),
-            t: tag,
+            dockerfile: dockerfile_name,
+            t: Some(tag.to_string()),
             rm: true,
             forcerm: true,
-            buildargs: build_args
-                .iter()
-                .map(|(k, v)| (k.as_str(), v.as_str()))
-                .collect(),
+            buildargs: Some(build_args),
             ..Default::default()
         };
 
         // Podman rejects an empty X-Registry-Config header on /build, while
         // bollard emits that header when credentials=None. Pass an explicit
         // empty config map so the header serializes to "{}" instead.
-        let mut stream =
-            self.docker
-                .build_image(options, Some(HashMap::new()), Some(Bytes::from(tar_bytes)));
+        let mut stream = self.docker.build_image(
+            options,
+            Some(HashMap::new()),
+            Some(bollard::body_full(Bytes::from(tar_bytes))),
+        );
 
         while let Some(result) = stream.next().await {
             match result {
@@ -165,8 +164,9 @@ impl ContainerBackend for BollardBackend {
                     if let Some(stream_msg) = &info.stream {
                         debug!(target: "build", "{}", stream_msg.trim_end());
                     }
-                    if let Some(error) = &info.error {
-                        bail!("image build failed: {error}");
+                    if let Some(detail) = &info.error_detail {
+                        let msg = detail.message.as_deref().unwrap_or("unknown error");
+                        bail!("image build failed: {msg}");
                     }
                 }
                 Err(e) => return Err(e).context("image build stream error"),
@@ -195,21 +195,17 @@ impl ContainerBackend for BollardBackend {
         }
         host_config.network_mode = Some(config.network_mode.clone());
 
-        let container_config = Config {
-            image: Some(config.image.as_str()),
-            cmd: Some(vec!["sleep", "86400"]),
-            env: if env.is_empty() {
-                None
-            } else {
-                Some(env.iter().map(String::as_str).collect())
-            },
+        let container_config = ContainerCreateBody {
+            image: Some(config.image.clone()),
+            cmd: Some(vec!["sleep".to_string(), "86400".to_string()]),
+            env: if env.is_empty() { None } else { Some(env) },
             host_config: Some(host_config),
             ..Default::default()
         };
 
         let response = self
             .docker
-            .create_container::<&str, &str>(None, container_config)
+            .create_container(None, container_config)
             .await
             .context("failed to create container")?;
 
@@ -219,7 +215,7 @@ impl ContainerBackend for BollardBackend {
 
     async fn start(&self, id: &ContainerId) -> Result<()> {
         self.docker
-            .start_container::<String>(id, None)
+            .start_container(id, None)
             .await
             .context("failed to start container")?;
         debug!(id = %id, "container started");
@@ -253,10 +249,10 @@ impl ContainerBackend for BollardBackend {
             let collect_future = async {
                 while let Some(Ok(msg)) = output.next().await {
                     match msg {
-                        bollard::container::LogOutput::StdOut { message } => {
+                        LogOutput::StdOut { message } => {
                             stdout.push_str(&String::from_utf8_lossy(&message));
                         }
-                        bollard::container::LogOutput::StdErr { message } => {
+                        LogOutput::StdErr { message } => {
                             stderr.push_str(&String::from_utf8_lossy(&message));
                         }
                         _ => {}
@@ -330,7 +326,7 @@ impl ContainerBackend for BollardBackend {
                 if let StartExecResults::Attached { mut output, .. } = start_result {
                     while let Some(msg) = output.next().await {
                         match msg.context("failed to read exec output")? {
-                            bollard::container::LogOutput::StdOut { message } => {
+                            LogOutput::StdOut { message } => {
                                 let text = String::from_utf8_lossy(&message).to_string();
                                 stdout.push_str(&text);
                                 for line in Self::collect_line_fragments(&mut stdout_buffer, &text)
@@ -348,7 +344,7 @@ impl ContainerBackend for BollardBackend {
                                     }
                                 }
                             }
-                            bollard::container::LogOutput::StdErr { message } => {
+                            LogOutput::StdErr { message } => {
                                 let text = String::from_utf8_lossy(&message).to_string();
                                 stderr.push_str(&text);
                                 for line in Self::collect_line_fragments(&mut stderr_buffer, &text)
@@ -459,7 +455,7 @@ impl ContainerBackend for BollardBackend {
             .kill_container(
                 id,
                 Some(KillContainerOptions {
-                    signal: signal.to_string(),
+                    signal: signal.to_owned(),
                 }),
             )
             .await
@@ -513,7 +509,7 @@ impl ContainerBackend for BollardBackend {
 
     async fn stop(&self, id: &ContainerId) -> Result<()> {
         self.docker
-            .stop_container(id, Some(StopContainerOptions { t: 10 }))
+            .stop_container(id, Some(StopContainerOptions { t: Some(10), ..Default::default() }))
             .await
             .context("failed to stop container")?;
         debug!(id = %id, "container stopped");
@@ -536,7 +532,7 @@ impl ContainerBackend for BollardBackend {
     }
 
     async fn copy_from(&self, id: &ContainerId, path: &str) -> Result<Vec<u8>> {
-        let options = Some(DownloadFromContainerOptions { path });
+        let options = Some(DownloadFromContainerOptions { path: path.to_string() });
 
         let mut stream = self.docker.download_from_container(id, options);
         let mut tar_bytes = Vec::new();
@@ -587,12 +583,12 @@ impl ContainerBackend for BollardBackend {
         };
 
         let options = Some(UploadToContainerOptions {
-            path: dir,
-            no_overwrite_dir_non_dir: "",
+            path: dir.to_string(),
+            ..Default::default()
         });
 
         self.docker
-            .upload_to_container(id, options, Bytes::from(tar_bytes))
+            .upload_to_container(id, options, bollard::body_full(Bytes::from(tar_bytes)))
             .await
             .context("failed to upload to container")?;
 
@@ -601,7 +597,7 @@ impl ContainerBackend for BollardBackend {
     }
 
     async fn logs(&self, id: &ContainerId) -> Result<String> {
-        let options = Some(LogsOptions::<String> {
+        let options = Some(LogsOptions {
             stdout: true,
             stderr: true,
             ..Default::default()
@@ -653,7 +649,7 @@ impl ContainerBackend for BollardBackend {
     async fn list_images(&self) -> Result<Vec<ImageInfo>> {
         let images = self
             .docker
-            .list_images(Some(bollard::image::ListImagesOptions::<String> {
+            .list_images(Some(ListImagesOptions {
                 all: false,
                 ..Default::default()
             }))
