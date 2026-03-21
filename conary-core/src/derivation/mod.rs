@@ -20,6 +20,7 @@ pub mod profile;
 pub mod recipe_hash;
 pub mod seed;
 pub mod stages;
+pub mod substituter;
 #[cfg(test)]
 pub(crate) mod test_helpers;
 
