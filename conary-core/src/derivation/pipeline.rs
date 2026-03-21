@@ -59,6 +59,12 @@ pub struct PipelineConfig {
     pub only_packages: Option<Vec<String>>,
     /// When combined with `only_packages`, also rebuild reverse dependents.
     pub cascade: bool,
+    /// Substituter endpoints to query for pre-built outputs.
+    pub substituter_sources: Vec<String>,
+    /// Endpoint to auto-publish successful builds to. None disables.
+    pub publish_endpoint: Option<String>,
+    /// Bearer token for publish endpoint.
+    pub publish_token: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -100,6 +106,15 @@ pub enum PipelineEvent {
         name: String,
         /// Error description.
         error: String,
+    },
+    /// A package was fetched from a remote substituter.
+    SubstituterHit {
+        /// Package name.
+        name: String,
+        /// Peer that had the cache hit.
+        peer: String,
+        /// Number of CAS objects fetched.
+        objects_fetched: u64,
     },
     /// A build log file was written (preserved on failure or keep_logs).
     BuildLogWritten {
@@ -300,6 +315,24 @@ impl Pipeline {
             &stages_ordered,
         );
 
+        // Set up substituter if configured
+        let mut substituter = if !self.config.substituter_sources.is_empty() {
+            super::substituter::DerivationSubstituter::seed_peers(
+                conn,
+                &self.config.substituter_sources,
+            )
+            .map_err(|e| PipelineError::Io(format!("seed substituter peers: {e}")))?;
+            match super::substituter::DerivationSubstituter::from_db(conn) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    warn!("Could not initialize substituter: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         // Current build environment hash; starts from the seed.
         let mut build_env_hash = seed.build_env_hash().to_owned();
 
@@ -402,6 +435,76 @@ impl Pipeline {
                     continue;
                 }
 
+                // Check remote substituter before building
+                if let Some(sub) = &mut substituter {
+                    let dep_ids = collect_dep_ids(recipe, &completed);
+                    let inputs = DerivationInputs {
+                        source_hash: recipe_hash::source_hash(recipe),
+                        build_script_hash: recipe_hash::build_script_hash(recipe),
+                        dependency_ids: dep_ids,
+                        build_env_hash: build_env_hash.clone(),
+                        target_triple: self.config.target_triple.clone(),
+                        build_options: BTreeMap::new(),
+                    };
+
+                    if let Ok(drv_id) = DerivationId::compute(&inputs) {
+                        // Check local index first (fast path)
+                        let index = DerivationIndex::new(conn);
+                        if index.lookup(drv_id.as_str()).ok().flatten().is_some() {
+                            // Local cache hit -- executor.execute() will find it too, skip substituter
+                        } else if let super::substituter::CacheQueryResult::Hit {
+                            manifest,
+                            peer,
+                        } = sub.query(drv_id.as_str())
+                        {
+                            // Remote hit! Fetch missing CAS objects
+                            let fetch_report = sub
+                                .fetch_missing_objects(&manifest, self.executor.cas(), &peer)
+                                .map_err(|e| {
+                                    PipelineError::Io(format!("substituter fetch: {e}"))
+                                })?;
+
+                            // Record in local index
+                            let record = super::index::DerivationRecord {
+                                derivation_id: drv_id.as_str().to_owned(),
+                                output_hash: manifest.output_hash.clone(),
+                                package_name: recipe.package.name.clone(),
+                                package_version: recipe.package.version.clone(),
+                                manifest_cas_hash: self
+                                    .executor
+                                    .cas()
+                                    .store(toml::to_string(&manifest).unwrap().as_bytes())
+                                    .map_err(|e| {
+                                        PipelineError::Io(format!("CAS store manifest: {e}"))
+                                    })?,
+                                stage: Some(stage_name.clone()),
+                                build_env_hash: Some(build_env_hash.clone()),
+                                built_at: manifest.built_at.clone(),
+                                build_duration_secs: manifest.build_duration_secs,
+                            };
+                            index
+                                .insert(&record)
+                                .map_err(|e| PipelineError::Io(format!("index insert: {e}")))?;
+
+                            on_event(&PipelineEvent::SubstituterHit {
+                                name: pkg_name.clone(),
+                                peer: peer.clone(),
+                                objects_fetched: fetch_report.objects_fetched,
+                            });
+
+                            stage_derivations.push(ProfileDerivation {
+                                package: recipe.package.name.clone(),
+                                version: recipe.package.version.clone(),
+                                derivation_id: drv_id.as_str().to_owned(),
+                            });
+                            stage_manifests.push(manifest.clone());
+                            completed.insert(pkg_name.clone(), (drv_id, manifest));
+                            total_cached += 1;
+                            continue;
+                        }
+                    }
+                }
+
                 on_event(&PipelineEvent::PackageBuilding {
                     name: pkg_name.clone(),
                     stage: stage_name.clone(),
@@ -462,6 +565,21 @@ impl Pipeline {
                         });
 
                         let manifest = output.manifest;
+
+                        // Auto-publish to configured endpoint
+                        if let (Some(endpoint), Some(token)) =
+                            (&self.config.publish_endpoint, &self.config.publish_token)
+                            && let Some(sub) = &substituter
+                            && let Err(e) = sub.publish(
+                                derivation_id.as_str(),
+                                &manifest,
+                                endpoint,
+                                token,
+                            )
+                        {
+                            warn!("Failed to publish {}: {e}", pkg_name);
+                        }
+
                         stage_manifests.push(manifest.clone());
                         completed.insert(pkg_name.clone(), (derivation_id, manifest));
                         total_built += 1;
