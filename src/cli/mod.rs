@@ -553,6 +553,22 @@ pub enum Commands {
     #[command(subcommand, name = "verify-derivation")]
     VerifyDerivation(VerifyCommands),
 
+    /// Generate SBOM from derivation data
+    #[command(name = "sbom")]
+    Sbom {
+        /// Generate from a profile
+        #[arg(long)]
+        profile: Option<String>,
+
+        /// Generate for a single derivation
+        #[arg(long)]
+        derivation: Option<String>,
+
+        /// Output file (default: stdout)
+        #[arg(long, short)]
+        output: Option<String>,
+    },
+
     /// Federation management
     ///
     /// Manage CAS federation for chunk sharing across machines.

@@ -15,6 +15,7 @@ mod convert_pkgbuild;
 mod cook;
 mod recipe_audit;
 mod derivation;
+mod derivation_sbom;
 mod derived;
 pub mod distro;
 pub mod export;
@@ -79,6 +80,7 @@ pub use convert_pkgbuild::cmd_convert_pkgbuild;
 pub use cook::cmd_cook;
 pub use recipe_audit::cmd_recipe_audit;
 pub use derivation::{cmd_derivation_build, cmd_derivation_show};
+pub use derivation_sbom::cmd_derivation_sbom;
 pub use profile::{cmd_profile_diff, cmd_profile_generate, cmd_profile_publish, cmd_profile_show};
 pub use derived::{
     cmd_derive_build, cmd_derive_create, cmd_derive_delete, cmd_derive_list, cmd_derive_override,
