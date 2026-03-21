@@ -54,7 +54,7 @@ fallback strategy:
   from the database directory
 
 ## Files
-- `mod.rs` -- `TransactionEngine` (~370 lines), `TransactionState`, `TransactionConfig`,
+- `mod.rs` -- `TransactionEngine` (~890 lines), `TransactionState`, `TransactionConfig`,
   recovery logic, EROFS validation, compatibility types
 - `planner.rs` -- `TransactionPlanner`, `PlannedOperation`, `ConflictInfo`, `BackupInfo`
   (VfsTree conflict detection retained from old system)

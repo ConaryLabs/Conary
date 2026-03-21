@@ -63,4 +63,6 @@ conary-core -- no business logic lives in the CLI layer.
 - `composefs_ops.rs` -- rebuild_and_mount helper for composefs operations
 - `replatform_rendering.rs` -- replatform plan rendering
 - `package_parsing.rs` -- shared package parsing helpers
+- `verify.rs` -- derivation verification (chain, rebuild, diverse)
+- `derivation_sbom.rs` -- CycloneDX SBOM generation from derivation profiles
 - Individual files: `remove.rs`, `update.rs`, `config.rs`, `system.rs`, `self_update.rs`, `update_channel.rs`, etc.

@@ -34,9 +34,9 @@ OCI container images. Components are auto-classified by file path.
 ## Gotchas
 - `builder.rs` uses `walkdir` for recursive scanning -- respects symlinks
 - `chunking.rs` has both `Chunk` (individual) and `ChunkedFile` (all chunks for a file)
-- `convert.rs` handles legacy format conversion with fidelity reporting
+- `convert/` handles legacy format conversion with fidelity reporting
 - `hooks/` provides declarative hook execution (directory, rpm, deb hooks)
-- `export.rs` handles OCI image export
+- `export/` handles OCI image export
 
 ## Files
 - `builder.rs` -- `CcsBuilder`, `BuildResult`, `FileEntry`, `ComponentData`
@@ -45,8 +45,8 @@ OCI container images. Components are auto-classified by file path.
 - `chunking.rs` -- CDC chunker, `ChunkStore`, delta stats
 - `policy.rs` -- `BuildPolicy`, `PolicyChain`, `PolicyAction`
 - `package.rs` -- `CcsPackage` installation
-- `convert.rs` -- `LegacyConverter`, `FidelityLevel`
+- `convert/` -- `LegacyConverter`, `FidelityLevel`, `analyzer.rs`, `fidelity.rs`
 - `hooks/` -- hook execution system
-- `export.rs` -- OCI export
+- `export/` -- OCI export (`oci.rs`)
 - `signing.rs` -- `SigningKeyPair`
 - `lockfile.rs` -- dependency lockfile

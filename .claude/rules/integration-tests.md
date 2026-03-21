@@ -38,6 +38,11 @@ tests/integration/remi/manifests/
   phase3-group-m.toml       # Adversarial tests
   phase3-group-n-container.toml  # Container-based adversarial
   phase3-group-n-qemu.toml       # QEMU boot tests
+  phase4-group-a.toml       # T160-T176 (Config/Distro/Canonical/Groups/Registry)
+  phase4-group-b.toml       # T177-T195 (Label/Model/Collection/Derive)
+  phase4-group-c.toml       # T196-T213 (CCS/Bootstrap/Cache/Automation)
+  phase4-group-d.toml       # T214-T229 (Trust/Federation/Provenance/Capability)
+  phase4-group-e.toml       # T230-T249 (Cross-distro compatibility)
 ```
 
 ## File Layout
@@ -89,6 +94,13 @@ test packages, distro mappings, or fixture checksums, edit this file.
 - Group F (T72-T76): Self-update (channel get/set/reset, check, mock server)
 
 **Phase 3:** Adversarial tests (groups G-N)
+
+**Phase 4 (T160-T249):** Feature validation (every CLI command)
+- Group A (T160-T176): Config, distro, canonical, groups, registry
+- Group B (T177-T195): Label, model, collection, derive
+- Group C (T196-T213): CCS, bootstrap, cache, automation
+- Group D (T214-T229): Trust, federation, provenance, capability
+- Group E (T230-T249): Cross-distro compatibility
 
 ## CI Workflows
 
