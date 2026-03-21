@@ -1377,6 +1377,8 @@ fn run() -> Result<()> {
                 keep_logs,
                 shell_on_failure,
                 verbose,
+                no_substituters,
+                publish,
             } => commands::cmd_bootstrap_run(commands::BootstrapRunOptions {
                 manifest: &manifest,
                 work_dir: &work_dir,
@@ -1386,6 +1388,8 @@ fn run() -> Result<()> {
                 keep_logs,
                 shell_on_failure,
                 verbose,
+                no_substituters,
+                publish,
             }),
         },
 

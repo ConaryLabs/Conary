@@ -184,6 +184,12 @@ impl DerivationSubstituter {
         })
     }
 
+    /// Return the list of configured substituter peers in priority order.
+    #[must_use]
+    pub fn peers(&self) -> &[SubstituterPeer] {
+        &self.peers
+    }
+
     /// Query peers in priority order for a pre-built output.
     ///
     /// Returns `CacheQueryResult::Hit` on the first peer that has the manifest,

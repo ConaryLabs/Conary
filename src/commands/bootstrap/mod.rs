@@ -534,6 +534,10 @@ pub struct BootstrapRunOptions<'a> {
     pub shell_on_failure: bool,
     /// Show verbose build output.
     pub verbose: bool,
+    /// Skip remote substituters.
+    pub no_substituters: bool,
+    /// Auto-publish successful builds.
+    pub publish: bool,
 }
 
 /// Run the derivation pipeline from a system manifest.
@@ -573,6 +577,12 @@ pub fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
     }
     if opts.shell_on_failure {
         println!("  shell_on_failure: true");
+    }
+    if opts.no_substituters {
+        println!("  no_substituters: true");
+    }
+    if opts.publish {
+        println!("  publish: true");
     }
 
     Ok(())

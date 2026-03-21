@@ -219,6 +219,14 @@ pub enum BootstrapCommands {
         /// Show verbose build output
         #[arg(short, long)]
         verbose: bool,
+
+        /// Skip remote substituters, build everything locally
+        #[arg(long)]
+        no_substituters: bool,
+
+        /// Auto-publish successful builds to configured endpoint
+        #[arg(long)]
+        publish: bool,
     },
 
     /// Build Phase 6: Tier-2 packages (BLFS + Conary self-hosting)
