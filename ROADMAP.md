@@ -41,7 +41,7 @@ Everything else depends on this.
 
 ## Phase 2: End-to-End Validation [COMPLETE]
 
-249 integration tests (248 passing, 1 environment skip) across Fedora 43, Ubuntu Noble, and Arch Linux.
+278 integration tests across Fedora 43, Ubuntu Noble, and Arch Linux.
 
 ### Install Flow (per distro: Fedora, Ubuntu, Arch)
 
@@ -79,7 +79,7 @@ Everything else depends on this.
 
 - [x] External admin API on :8082 with bearer token auth (P0)
 - [x] Token CRUD, CI proxy, SSE event stream (P0)
-- [x] OpenAPI 3.1 spec, MCP endpoint with 21 tools (P0)
+- [x] OpenAPI 3.1 spec, MCP endpoint with 24 tools (P0)
 - [x] Repository management endpoints (P1)
 - [x] Federation peer management endpoints (P1)
 - [x] Per-IP rate limiting via governor (P2)
@@ -89,9 +89,9 @@ Everything else depends on this.
 
 - [x] Python test runner retired, all tests use Rust engine (conary-test)
 - [x] Remi test data API for persistent result storage
-- [x] 24 conary-test MCP tools (test ops, deployment, image management)
-- [x] 21 remi-admin MCP tools (admin, CI, test data)
-- [x] Phase 4 feature validation tests (T160-T255, 98 tests covering all CLI commands)
+- [x] 23 conary-test MCP tools (test ops, deployment, image management)
+- [x] 24 remi-admin MCP tools (admin, CI, test data, canonical, chunk GC)
+- [x] Phase 4 feature validation tests (T160-T249, 118 tests covering all CLI commands)
 - [x] Capability policy engine (three-tier: allowed/prompt/denied)
 
 ### Recipe & Build

@@ -78,6 +78,20 @@ tests/integration/remi/manifests/
   phase2-group-d.toml       # T62-T66 (Recipe/build)
   phase2-group-e.toml       # T67-T71 (Remi client)
   phase2-group-f.toml       # T72-T76 (Self-update)
+  phase3-group-g.toml       # Adversarial tests
+  phase3-group-h.toml       # Adversarial tests
+  phase3-group-i.toml       # Adversarial tests
+  phase3-group-j.toml       # Adversarial tests
+  phase3-group-k.toml       # Adversarial tests
+  phase3-group-l.toml       # Adversarial tests
+  phase3-group-m.toml       # Adversarial tests
+  phase3-group-n-container.toml  # Container-based adversarial
+  phase3-group-n-qemu.toml       # QEMU boot tests
+  phase4-group-a.toml       # T160-T176 (Config/Distro/Canonical)
+  phase4-group-b.toml       # T177-T195 (Label/Model/Collection)
+  phase4-group-c.toml       # T196-T213 (CCS/Bootstrap/Cache)
+  phase4-group-d.toml       # T214-T229 (Trust/Federation/Provenance)
+  phase4-group-e.toml       # T230-T249 (Cross-distro)
 ```
 
 ## HTTP API

@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-03-18
-revision: 4
-summary: Update for composefs-native architecture -- generation module, transaction engine rewrite, remove deployer/journal references, schema v52
+last_updated: 2026-03-21
+revision: 5
+summary: Update schema version to v56, add derivation verification and provenance
 ---
 
 # Conary Architecture
@@ -42,7 +42,7 @@ Update   SBOM    Diff   Switch      Base/Image
      +------+------+        | (src/      |
      |  Database   |        |  repository|
      | (src/db/)   |        |  /)        |
-     |  SQLite v52 |        +------+-----+
+     |  SQLite v56 |        +------+-----+
      +------+------+               |
             |               +------+------+
      +------+------+        | Remi Server |
@@ -108,7 +108,7 @@ conary-core/             Core library crate
 +-- src/
     +-- lib.rs           Public API surface
     +-- db/              Database layer
-    |   +-- schema.rs    Schema v52, migration dispatcher
+    |   +-- schema.rs    Schema v56, migration dispatcher
     |   +-- migrations.rs All 52 migration functions
     |   +-- models/      ORM-style model structs
     +-- transaction/     Composefs-native transaction engine
@@ -408,7 +408,7 @@ sandboxed containers via `ContainerConfig::pristine_for_bootstrap()`.
 Supports x86_64, aarch64, and riscv64 targets. Dry-run mode
 (`--dry-run`) validates the full pipeline without building.
 
-## Database Schema (v52)
+## Database Schema (v56)
 
 All state lives in SQLite. No config files for runtime state. Key tables:
 

@@ -144,7 +144,7 @@
 			<h2>Contributing</h2>
 			<p>
 				Conary is open source and welcomes contributions. The codebase is well-structured
-				with 2,600+ tests (unit + integration across 3 distros), comprehensive CI (clippy, test,
+				with 2,800+ tests (unit + integration across 3 distros), comprehensive CI (clippy, test,
 				and release workflows), and good-first-issue labels for newcomers.
 			</p>
 			<div class="about-links">
