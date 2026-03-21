@@ -1821,9 +1821,11 @@ fn run() -> Result<()> {
             }
             cli::ProfileCommands::Show { path } => commands::cmd_profile_show(&path),
             cli::ProfileCommands::Diff { old, new } => commands::cmd_profile_diff(&old, &new),
-            cli::ProfileCommands::Publish { profile, endpoint, token } => {
-                commands::cmd_profile_publish(&profile, endpoint.as_deref(), token.as_deref())
-            }
+            cli::ProfileCommands::Publish {
+                profile,
+                endpoint,
+                token,
+            } => commands::cmd_profile_publish(&profile, endpoint.as_deref(), token.as_deref()),
         },
 
         // =====================================================================
@@ -1840,13 +1842,19 @@ fn run() -> Result<()> {
         // Derivation Verification
         // =====================================================================
         Some(Commands::VerifyDerivation(verify_cmd)) => match verify_cmd {
-            cli::VerifyCommands::Chain { profile, verbose, json } => {
-                commands::verify::cmd_verify_chain(&profile, verbose, json)
-            }
-            cli::VerifyCommands::Rebuild { derivation: _, work_dir: _ } => {
-                todo!("verify rebuild not yet implemented")
-            }
-            cli::VerifyCommands::Diverse { profile_a: _, profile_b: _ } => {
+            cli::VerifyCommands::Chain {
+                profile,
+                verbose,
+                json,
+            } => commands::verify::cmd_verify_chain(&profile, verbose, json),
+            cli::VerifyCommands::Rebuild {
+                derivation,
+                work_dir,
+            } => commands::verify::cmd_verify_rebuild(&derivation, &work_dir),
+            cli::VerifyCommands::Diverse {
+                profile_a: _,
+                profile_b: _,
+            } => {
                 todo!("verify diverse not yet implemented")
             }
         },
