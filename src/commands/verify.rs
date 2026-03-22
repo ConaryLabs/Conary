@@ -14,7 +14,7 @@ use conary_core::filesystem::CasStore;
 /// Walks every stage/derivation in the profile, looks each up in the local
 /// derivation index, and reports trust levels, provenance status, and an
 /// overall chain verdict (COMPLETE or BROKEN).
-pub fn cmd_verify_chain(profile_path: &str, verbose: bool, _json: bool) -> Result<()> {
+pub async fn cmd_verify_chain(profile_path: &str, verbose: bool, _json: bool) -> Result<()> {
     let content = std::fs::read_to_string(profile_path)?;
     let profile: BuildProfile = toml::from_str(&content)?;
 
@@ -111,7 +111,7 @@ pub fn cmd_verify_chain(profile_path: &str, verbose: bool, _json: bool) -> Resul
 }
 
 /// Rebuild a derivation and compare output hash against the original.
-pub fn cmd_verify_rebuild(derivation: &str, work_dir: &str) -> Result<()> {
+pub async fn cmd_verify_rebuild(derivation: &str, work_dir: &str) -> Result<()> {
     let db_path = "/var/lib/conary/conary.db";
     let conn = super::open_db(db_path)?;
     let index = DerivationIndex::new(&conn);
@@ -209,7 +209,7 @@ pub fn cmd_verify_rebuild(derivation: &str, work_dir: &str) -> Result<()> {
 }
 
 /// Compare builds from two different seeds for diverse verification.
-pub fn cmd_verify_diverse(profile_a_path: &str, profile_b_path: &str) -> Result<()> {
+pub async fn cmd_verify_diverse(profile_a_path: &str, profile_b_path: &str) -> Result<()> {
     let a_content = std::fs::read_to_string(profile_a_path)?;
     let b_content = std::fs::read_to_string(profile_b_path)?;
     let profile_a: BuildProfile = toml::from_str(&a_content)?;

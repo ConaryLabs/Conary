@@ -48,7 +48,7 @@ pub type FileInfoTuple = (
 /// - `pattern`: only adopt packages matching this glob (e.g., "lib*")
 /// - `exclude`: skip packages matching this glob (e.g., "kernel*")
 /// - `explicit_only`: only adopt explicitly installed packages (skip auto-deps)
-pub fn cmd_adopt_system(
+pub async fn cmd_adopt_system(
     db_path: &str,
     full: bool,
     dry_run: bool,

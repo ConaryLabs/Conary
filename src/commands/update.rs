@@ -167,7 +167,7 @@ fn find_installed_trove(conn: &rusqlite::Connection, package_name: &str) -> Resu
 }
 
 /// Pin a package to prevent updates and removal
-pub fn cmd_pin(package_name: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_pin(package_name: &str, db_path: &str) -> Result<()> {
     info!("Pinning package: {}", package_name);
     let conn = open_db(db_path)?;
     let (trove, trove_id) = find_installed_trove(&conn, package_name)?;
@@ -188,7 +188,7 @@ pub fn cmd_pin(package_name: &str, db_path: &str) -> Result<()> {
 }
 
 /// Unpin a package to allow updates and removal
-pub fn cmd_unpin(package_name: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_unpin(package_name: &str, db_path: &str) -> Result<()> {
     info!("Unpinning package: {}", package_name);
     let conn = open_db(db_path)?;
     let (trove, trove_id) = find_installed_trove(&conn, package_name)?;
@@ -209,7 +209,7 @@ pub fn cmd_unpin(package_name: &str, db_path: &str) -> Result<()> {
 }
 
 /// List all pinned packages
-pub fn cmd_list_pinned(db_path: &str) -> Result<()> {
+pub async fn cmd_list_pinned(db_path: &str) -> Result<()> {
     info!("Listing pinned packages");
 
     let conn = open_db(db_path)?;
@@ -236,7 +236,7 @@ pub fn cmd_list_pinned(db_path: &str) -> Result<()> {
 /// Check for and apply package updates
 ///
 /// If `security_only` is true, only applies security updates (critical/important severity).
-pub fn cmd_update(
+pub async fn cmd_update(
     package: Option<String>,
     db_path: &str,
     root: &str,
@@ -666,7 +666,9 @@ pub fn cmd_update(
                     yes,
                     ..Default::default()
                 },
-            ) {
+            )
+            .await
+            {
                 progress.fail_package(&trove.name, &e.to_string());
                 warn!("  Package installation failed: {}", e);
                 had_failures = true;
@@ -719,7 +721,7 @@ pub fn cmd_update(
 }
 
 /// Show delta update statistics
-pub fn cmd_delta_stats(db_path: &str) -> Result<()> {
+pub async fn cmd_delta_stats(db_path: &str) -> Result<()> {
     info!("Showing delta update statistics");
 
     let conn = open_db(db_path)?;
@@ -797,7 +799,7 @@ pub fn cmd_delta_stats(db_path: &str) -> Result<()> {
 ///
 /// This updates all installed packages that are members of the specified collection.
 /// If `security_only` is true, only applies security updates.
-pub fn cmd_update_group(
+pub async fn cmd_update_group(
     name: &str,
     db_path: &str,
     root: &str,
@@ -909,7 +911,9 @@ pub fn cmd_update_group(
             sandbox_mode,
             dep_mode,
             yes,
-        ) {
+        )
+        .await
+        {
             Ok(()) => updated_count += 1,
             Err(e) => {
                 eprintln!("  Failed to update {}: {}", pkg_name, e);

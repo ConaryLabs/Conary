@@ -5,7 +5,7 @@ use super::open_db;
 use anyhow::Result;
 use conary_core::db::models::{CanonicalPackage, PackageImplementation};
 
-pub fn cmd_groups_list(db_path: &str) -> Result<()> {
+pub async fn cmd_groups_list(db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     let groups = CanonicalPackage::list_by_kind(&conn, "group")?;
     if groups.is_empty() {
@@ -20,7 +20,7 @@ pub fn cmd_groups_list(db_path: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_groups_show(db_path: &str, name: &str, distro: Option<&str>) -> Result<()> {
+pub async fn cmd_groups_show(db_path: &str, name: &str, distro: Option<&str>) -> Result<()> {
     let conn = open_db(db_path)?;
     let pkg = CanonicalPackage::find_by_name(&conn, name)?;
     let Some(pkg) = pkg else {

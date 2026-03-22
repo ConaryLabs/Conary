@@ -16,7 +16,7 @@ use conary_core::db::models::{
 };
 
 /// List all derived packages
-pub fn cmd_derive_list(db_path: &str, verbose: bool) -> Result<()> {
+pub async fn cmd_derive_list(db_path: &str, verbose: bool) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let derived = DerivedPackage::list_all(&conn)?;
@@ -68,7 +68,7 @@ pub fn cmd_derive_list(db_path: &str, verbose: bool) -> Result<()> {
 }
 
 /// Show details of a derived package
-pub fn cmd_derive_show(name: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_derive_show(name: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let derived = DerivedPackage::find_by_name(&conn, name)?
@@ -138,7 +138,7 @@ pub fn cmd_derive_show(name: &str, db_path: &str) -> Result<()> {
 }
 
 /// Create a new derived package
-pub fn cmd_derive_create(
+pub async fn cmd_derive_create(
     name: &str,
     parent: &str,
     version_suffix: Option<&str>,
@@ -188,7 +188,7 @@ pub fn cmd_derive_create(
 }
 
 /// Add a patch to a derived package
-pub fn cmd_derive_patch(
+pub async fn cmd_derive_patch(
     name: &str,
     patch_file: &str,
     strip_level: Option<i32>,
@@ -237,7 +237,7 @@ pub fn cmd_derive_patch(
 }
 
 /// Add a file override to a derived package
-pub fn cmd_derive_override(
+pub async fn cmd_derive_override(
     name: &str,
     target_path: &str,
     source_file: Option<&str>,
@@ -293,7 +293,7 @@ pub fn cmd_derive_override(
 }
 
 /// Build a derived package
-pub fn cmd_derive_build(name: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_derive_build(name: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let mut derived = DerivedPackage::find_by_name(&conn, name)?
@@ -349,7 +349,7 @@ pub fn cmd_derive_build(name: &str, db_path: &str) -> Result<()> {
 }
 
 /// Delete a derived package
-pub fn cmd_derive_delete(name: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_derive_delete(name: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let derived = DerivedPackage::find_by_name(&conn, name)?
@@ -365,7 +365,7 @@ pub fn cmd_derive_delete(name: &str, db_path: &str) -> Result<()> {
 }
 
 /// List stale derived packages (parent was updated)
-pub fn cmd_derive_stale(db_path: &str) -> Result<()> {
+pub async fn cmd_derive_stale(db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let stale = DerivedPackage::find_by_status(&conn, DerivedStatus::Stale)?;
@@ -391,7 +391,7 @@ pub fn cmd_derive_stale(db_path: &str) -> Result<()> {
 /// Mark all derived packages from a parent as stale
 /// (Called internally when parent packages are updated)
 #[allow(dead_code)] // TODO: wire into the update pipeline
-pub fn cmd_derive_mark_stale(parent_name: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_derive_mark_stale(parent_name: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let count = DerivedPackage::mark_stale(&conn, parent_name)?;

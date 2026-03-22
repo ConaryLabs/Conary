@@ -10,7 +10,7 @@ use conary_core::ccs::{CcsBuilder, CcsManifest, builder, legacy};
 use std::path::Path;
 
 /// Build a CCS package from a manifest
-pub fn cmd_ccs_build(
+pub async fn cmd_ccs_build(
     path: &str,
     output: &str,
     target: &str,

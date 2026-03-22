@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 /// Run the `conary ccs enhance` command
 #[allow(clippy::too_many_arguments)]
-pub fn cmd_ccs_enhance(
+pub async fn cmd_ccs_enhance(
     db_path: &str,
     trove_id: Option<i64>,
     all_pending: bool,

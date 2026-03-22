@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use tracing::debug;
 
 /// Adopt specific packages
-pub fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
+pub async fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
     if packages.is_empty() {
         return Err(anyhow::anyhow!("No packages specified"));
     }

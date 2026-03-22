@@ -16,7 +16,7 @@ use std::time::Duration;
 use tracing::{info, warn};
 
 /// Remove an installed package
-pub fn cmd_remove(
+pub async fn cmd_remove(
     package_name: &str,
     db_path: &str,
     root: &str,
@@ -347,7 +347,7 @@ pub fn cmd_remove(
 ///
 /// Finds packages that were installed as dependencies of other packages,
 /// but are no longer required by any installed package.
-pub fn cmd_autoremove(
+pub async fn cmd_autoremove(
     db_path: &str,
     root: &str,
     dry_run: bool,
@@ -425,7 +425,9 @@ pub fn cmd_autoremove(
                 no_scripts,
                 sandbox_mode,
                 false,
-            ) {
+            )
+            .await
+            {
                 Ok(()) => {
                     round_removed += 1;
                 }

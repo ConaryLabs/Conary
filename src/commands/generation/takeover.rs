@@ -88,7 +88,7 @@ pub fn plan_takeover(conn: &rusqlite::Connection) -> Result<TakeoverPlan> {
 /// * `yes`             - Skip interactive confirmation
 /// * `dry_run`         - Show what would happen without making changes
 /// * `skip_conversion` - Reserved for future use (CCS conversion step)
-pub fn cmd_system_takeover(
+pub async fn cmd_system_takeover(
     db_path: &str,
     yes: bool,
     dry_run: bool,
@@ -179,7 +179,7 @@ pub fn cmd_system_takeover(
         info!("All system packages are already tracked");
     } else {
         println!("[1/4] Adopting {} packages ...", plan.to_adopt.len());
-        crate::commands::cmd_adopt(&plan.to_adopt, db_path, true)?;
+        crate::commands::cmd_adopt(&plan.to_adopt, db_path, true).await?;
         info!("Adoption complete");
     }
 

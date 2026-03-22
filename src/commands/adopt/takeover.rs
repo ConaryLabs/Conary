@@ -33,7 +33,7 @@ use tracing::{info, warn};
 /// If step 3 fails, Conary owns the files and the PM has a harmless ghost
 /// record. This is safer than the reverse (PM removed but DB not updated)
 /// which would lose tracking entirely.
-pub fn cmd_adopt_takeover(
+pub async fn cmd_adopt_takeover(
     packages: &[String],
     db_path: &str,
     system_wide: bool,

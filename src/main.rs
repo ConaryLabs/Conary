@@ -15,7 +15,8 @@ use cli::{Cli, Commands};
 // Main Entry Point
 // =============================================================================
 
-fn main() {
+#[tokio::main]
+async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -23,7 +24,7 @@ fn main() {
         )
         .init();
 
-    if let Err(err) = run() {
+    if let Err(err) = run().await {
         let msg = format!("{err:#}");
         if msg.contains("Database not found") {
             eprintln!("Error: Database not initialized.");
@@ -35,7 +36,7 @@ fn main() {
     }
 }
 
-fn run() -> Result<()> {
+async fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
@@ -73,6 +74,7 @@ fn run() -> Result<()> {
                     skip_optional,
                     sandbox_mode,
                 )
+                .await
             } else {
                 commands::cmd_install(
                     &package,
@@ -95,6 +97,7 @@ fn run() -> Result<()> {
                         from_distro: from,
                     },
                 )
+                .await
             }
         }
 
@@ -105,15 +108,18 @@ fn run() -> Result<()> {
             no_scripts,
             sandbox,
             purge_files,
-        }) => commands::cmd_remove(
-            &package_name,
-            &common.db.db_path,
-            &common.root,
-            version,
-            no_scripts,
-            sandbox.into(),
-            purge_files,
-        ),
+        }) => {
+            commands::cmd_remove(
+                &package_name,
+                &common.db.db_path,
+                &common.root,
+                version,
+                no_scripts,
+                sandbox.into(),
+                purge_files,
+            )
+            .await
+        }
 
         Some(Commands::Update {
             package,
@@ -137,7 +143,8 @@ fn run() -> Result<()> {
                     sandbox_mode,
                     dep_mode,
                     yes,
-                );
+                )
+                .await;
             }
             commands::cmd_update(
                 package,
@@ -148,9 +155,10 @@ fn run() -> Result<()> {
                 dep_mode,
                 yes,
             )
+            .await
         }
 
-        Some(Commands::Search { pattern, db }) => commands::cmd_search(&pattern, &db.db_path),
+        Some(Commands::Search { pattern, db }) => commands::cmd_search(&pattern, &db.db_path).await,
 
         Some(Commands::List {
             pattern,
@@ -162,7 +170,7 @@ fn run() -> Result<()> {
             pinned,
         }) => {
             if pinned {
-                commands::cmd_list_pinned(&db.db_path)
+                commands::cmd_list_pinned(&db.db_path).await
             } else {
                 let options = commands::QueryOptions {
                     info,
@@ -170,7 +178,7 @@ fn run() -> Result<()> {
                     path,
                     files,
                 };
-                commands::cmd_query(pattern.as_deref(), &db.db_path, options)
+                commands::cmd_query(pattern.as_deref(), &db.db_path, options).await
             }
         }
 
@@ -179,18 +187,23 @@ fn run() -> Result<()> {
             dry_run,
             no_scripts,
             sandbox,
-        }) => commands::cmd_autoremove(
-            &common.db.db_path,
-            &common.root,
-            dry_run,
-            no_scripts,
-            sandbox.into(),
-        ),
+        }) => {
+            commands::cmd_autoremove(
+                &common.db.db_path,
+                &common.root,
+                dry_run,
+                no_scripts,
+                sandbox.into(),
+            )
+            .await
+        }
 
-        Some(Commands::Pin { package_name, db }) => commands::cmd_pin(&package_name, &db.db_path),
+        Some(Commands::Pin { package_name, db }) => {
+            commands::cmd_pin(&package_name, &db.db_path).await
+        }
 
         Some(Commands::Unpin { package_name, db }) => {
-            commands::cmd_unpin(&package_name, &db.db_path)
+            commands::cmd_unpin(&package_name, &db.db_path).await
         }
 
         Some(Commands::Cook {
@@ -203,24 +216,27 @@ fn run() -> Result<()> {
             fetch_only,
             no_isolation,
             hermetic,
-        }) => commands::cmd_cook(
-            &recipe,
-            &output,
-            &source_cache,
-            jobs,
-            keep_builddir,
-            validate_only,
-            fetch_only,
-            no_isolation,
-            hermetic,
-        ),
+        }) => {
+            commands::cmd_cook(
+                &recipe,
+                &output,
+                &source_cache,
+                jobs,
+                keep_builddir,
+                validate_only,
+                fetch_only,
+                no_isolation,
+                hermetic,
+            )
+            .await
+        }
 
         Some(Commands::ConvertPkgbuild { pkgbuild, output }) => {
-            commands::cmd_convert_pkgbuild(&pkgbuild, output.as_deref())
+            commands::cmd_convert_pkgbuild(&pkgbuild, output.as_deref()).await
         }
 
         Some(Commands::RecipeAudit { recipe, all, trace }) => {
-            commands::cmd_recipe_audit(recipe.as_deref(), all, trace)
+            commands::cmd_recipe_audit(recipe.as_deref(), all, trace).await
         }
 
         Some(Commands::Cache(cmd)) => match cmd {
@@ -228,15 +244,15 @@ fn run() -> Result<()> {
                 profile,
                 sources_only,
                 full,
-            } => commands::cmd_cache_populate(&profile, sources_only, full),
-            cli::CacheCommands::Status => commands::cmd_cache_status(),
+            } => commands::cmd_cache_populate(&profile, sources_only, full).await,
+            cli::CacheCommands::Status => commands::cmd_cache_status().await,
         },
 
         // =====================================================================
         // System Commands
         // =====================================================================
         Some(Commands::System(sys_cmd)) => match sys_cmd {
-            cli::SystemCommands::Init { db } => commands::cmd_init(&db.db_path),
+            cli::SystemCommands::Init { db } => commands::cmd_init(&db.db_path).await,
 
             cli::SystemCommands::Completions { shell } => {
                 let mut cmd = Cli::command();
@@ -244,13 +260,13 @@ fn run() -> Result<()> {
                 Ok(())
             }
 
-            cli::SystemCommands::History { db } => commands::cmd_history(&db.db_path),
+            cli::SystemCommands::History { db } => commands::cmd_history(&db.db_path).await,
 
             cli::SystemCommands::Verify {
                 package,
                 common,
                 rpm,
-            } => commands::cmd_verify(package, &common.db.db_path, &common.root, rpm),
+            } => commands::cmd_verify(package, &common.db.db_path, &common.root, rpm).await,
 
             cli::SystemCommands::Restore {
                 package,
@@ -259,7 +275,7 @@ fn run() -> Result<()> {
                 dry_run,
             } => {
                 if package == "all" {
-                    commands::cmd_restore_all(&common.db.db_path, &common.root, dry_run)
+                    commands::cmd_restore_all(&common.db.db_path, &common.root, dry_run).await
                 } else {
                     commands::cmd_restore(
                         &package,
@@ -268,6 +284,7 @@ fn run() -> Result<()> {
                         force,
                         dry_run,
                     )
+                    .await
                 }
             }
 
@@ -292,15 +309,15 @@ fn run() -> Result<()> {
                 quiet,
             } => {
                 if sync_hook {
-                    commands::cmd_sync_hook_install(remove_hook)
+                    commands::cmd_sync_hook_install(remove_hook).await
                 } else if takeover {
-                    commands::cmd_adopt_takeover(&packages, &db.db_path, system, dry_run, yes)
+                    commands::cmd_adopt_takeover(&packages, &db.db_path, system, dry_run, yes).await
                 } else if convert {
-                    commands::cmd_adopt_convert(&db.db_path, jobs, no_chunking, dry_run)
+                    commands::cmd_adopt_convert(&db.db_path, jobs, no_chunking, dry_run).await
                 } else if status {
-                    commands::cmd_adopt_status(&db.db_path)
+                    commands::cmd_adopt_status(&db.db_path).await
                 } else if refresh {
-                    commands::cmd_adopt_refresh(&db.db_path, full, dry_run, quiet)
+                    commands::cmd_adopt_refresh(&db.db_path, full, dry_run, quiet).await
                 } else if system {
                     commands::cmd_adopt_system(
                         &db.db_path,
@@ -310,8 +327,9 @@ fn run() -> Result<()> {
                         exclude.as_deref(),
                         explicit_only,
                     )
+                    .await
                 } else {
-                    commands::cmd_adopt(&packages, &db.db_path, full)
+                    commands::cmd_adopt(&packages, &db.db_path, full).await
                 }
             }
 
@@ -321,14 +339,14 @@ fn run() -> Result<()> {
                 keep_days,
                 dry_run,
                 chunks,
-            } => commands::cmd_gc(&db.db_path, &objects_dir, keep_days, dry_run, chunks),
+            } => commands::cmd_gc(&db.db_path, &objects_dir, keep_days, dry_run, chunks).await,
 
             cli::SystemCommands::Sbom {
                 package_name,
                 db,
                 format,
                 output,
-            } => commands::cmd_sbom(&package_name, &db.db_path, &format, output.as_deref()),
+            } => commands::cmd_sbom(&package_name, &db.db_path, &format, output.as_deref()).await,
 
             #[cfg(feature = "server")]
             cli::SystemCommands::IndexGen {
@@ -442,53 +460,53 @@ fn run() -> Result<()> {
                 };
 
                 // Run the async server
-                tokio::runtime::Runtime::new()
-                    .map_err(|e| anyhow::anyhow!("Failed to create async runtime: {e}"))?
-                    .block_on(run_server(config))
+                run_server(config).await
             }
 
             // Nested: system state
             cli::SystemCommands::State(state_cmd) => match state_cmd {
                 cli::StateCommands::List { db, limit } => {
-                    commands::cmd_state_list(&db.db_path, limit)
+                    commands::cmd_state_list(&db.db_path, limit).await
                 }
 
                 cli::StateCommands::Show { state_number, db } => {
-                    commands::cmd_state_show(&db.db_path, state_number)
+                    commands::cmd_state_show(&db.db_path, state_number).await
                 }
 
                 cli::StateCommands::Diff {
                     from_state,
                     to_state,
                     db,
-                } => commands::cmd_state_diff(&db.db_path, from_state, to_state),
+                } => commands::cmd_state_diff(&db.db_path, from_state, to_state).await,
 
                 cli::StateCommands::Revert {
                     state_number,
                     db,
                     dry_run,
-                } => commands::cmd_state_restore(&db.db_path, state_number, dry_run),
+                } => commands::cmd_state_restore(&db.db_path, state_number, dry_run).await,
 
                 cli::StateCommands::Prune { keep, db, dry_run } => {
-                    commands::cmd_state_prune(&db.db_path, keep, dry_run)
+                    commands::cmd_state_prune(&db.db_path, keep, dry_run).await
                 }
 
                 cli::StateCommands::Create {
                     summary,
                     description,
                     db,
-                } => commands::cmd_state_create(&db.db_path, &summary, description.as_deref()),
+                } => {
+                    commands::cmd_state_create(&db.db_path, &summary, description.as_deref()).await
+                }
 
                 cli::StateCommands::Rollback {
                     changeset_id,
                     common,
-                } => commands::cmd_rollback(changeset_id, &common.db.db_path, &common.root),
+                } => commands::cmd_rollback(changeset_id, &common.db.db_path, &common.root).await,
             },
 
             // Nested: system generation
             cli::SystemCommands::Generation(gen_cmd) => match gen_cmd {
                 cli::GenerationCommands::List => {
-                    commands::generation::commands::cmd_generation_list()
+                    commands::generation::commands::cmd_generation_list().await
                 }
                 cli::GenerationCommands::Build { summary, db } => {
                     let conn = conary_core::db::open(&db.db_path)?;
@@ -545,10 +563,10 @@ fn run() -> Result<()> {
                     Ok(())
                 }
                 cli::GenerationCommands::Gc { keep, db } => {
-                    commands::generation::commands::cmd_generation_gc(keep, &db.db_path)
+                    commands::generation::commands::cmd_generation_gc(keep, &db.db_path).await
                 }
                 cli::GenerationCommands::Info { number } => {
-                    commands::generation::commands::cmd_generation_info(number)
+                    commands::generation::commands::cmd_generation_info(number).await
                 }
                 cli::GenerationCommands::Recover { db } => {
                     let conn = conary_core::db::open(&db.db_path)?;
@@ -569,29 +587,32 @@ fn run() -> Result<()> {
                 dry_run,
                 skip_conversion,
                 db,
-            } => commands::generation::takeover::cmd_system_takeover(
-                &db.db_path,
-                yes,
-                dry_run,
-                skip_conversion,
-            ),
+            } => {
+                commands::generation::takeover::cmd_system_takeover(
+                    &db.db_path,
+                    yes,
+                    dry_run,
+                    skip_conversion,
+                )
+                .await
+            }
 
             // Nested: system trigger
             cli::SystemCommands::Trigger(trigger_cmd) => match trigger_cmd {
                 cli::TriggerCommands::List { db, all, builtin } => {
-                    commands::cmd_trigger_list(&db.db_path, all, builtin)
+                    commands::cmd_trigger_list(&db.db_path, all, builtin).await
                 }
 
                 cli::TriggerCommands::Show { name, db } => {
-                    commands::cmd_trigger_show(&name, &db.db_path)
+                    commands::cmd_trigger_show(&name, &db.db_path).await
                 }
 
                 cli::TriggerCommands::Enable { name, db } => {
-                    commands::cmd_trigger_enable(&name, &db.db_path)
+                    commands::cmd_trigger_enable(&name, &db.db_path).await
                 }
 
                 cli::TriggerCommands::Disable { name, db } => {
-                    commands::cmd_trigger_disable(&name, &db.db_path)
+                    commands::cmd_trigger_disable(&name, &db.db_path).await
                 }
 
                 cli::TriggerCommands::Add {
@@ -601,24 +622,27 @@ fn run() -> Result<()> {
                     description,
                     priority,
                     db,
-                } => commands::cmd_trigger_add(
-                    &name,
-                    &pattern,
-                    &handler,
-                    description.as_deref(),
-                    priority,
-                    &db.db_path,
-                ),
+                } => {
+                    commands::cmd_trigger_add(
+                        &name,
+                        &pattern,
+                        &handler,
+                        description.as_deref(),
+                        priority,
+                        &db.db_path,
+                    )
+                    .await
+                }
 
                 cli::TriggerCommands::Remove { name, db } => {
-                    commands::cmd_trigger_remove(&name, &db.db_path)
+                    commands::cmd_trigger_remove(&name, &db.db_path).await
                 }
 
                 cli::TriggerCommands::Run {
                     changeset_id,
                     db,
                     root,
-                } => commands::cmd_trigger_run(changeset_id, &db.db_path, &root),
+                } => commands::cmd_trigger_run(changeset_id, &db.db_path, &root).await,
             },
 
             // Nested: system redirect
@@ -627,7 +651,7 @@ fn run() -> Result<()> {
                     db,
                     r#type,
                     verbose,
-                } => commands::cmd_redirect_list(&db.db_path, r#type.as_deref(), verbose),
+                } => commands::cmd_redirect_list(&db.db_path, r#type.as_deref(), verbose).await,
 
                 cli::RedirectCommands::Add {
                     source,
@@ -637,43 +661,48 @@ fn run() -> Result<()> {
                     source_version,
                     target_version,
                     message,
-                } => commands::cmd_redirect_add(
-                    &source,
-                    &target,
-                    &db.db_path,
-                    &r#type,
-                    source_version.as_deref(),
-                    target_version.as_deref(),
-                    message.as_deref(),
-                ),
+                } => {
+                    commands::cmd_redirect_add(
+                        &source,
+                        &target,
+                        &db.db_path,
+                        &r#type,
+                        source_version.as_deref(),
+                        target_version.as_deref(),
+                        message.as_deref(),
+                    )
+                    .await
+                }
 
                 cli::RedirectCommands::Show {
                     source,
                     db,
                     version,
-                } => commands::cmd_redirect_show(&source, &db.db_path, version.as_deref()),
+                } => commands::cmd_redirect_show(&source, &db.db_path, version.as_deref()).await,
 
                 cli::RedirectCommands::Remove { source, db } => {
-                    commands::cmd_redirect_remove(&source, &db.db_path)
+                    commands::cmd_redirect_remove(&source, &db.db_path).await
                 }
 
                 cli::RedirectCommands::Resolve {
                     package,
                     db,
                     version,
-                } => commands::cmd_redirect_resolve(&package, &db.db_path, version.as_deref()),
+                } => {
+                    commands::cmd_redirect_resolve(&package, &db.db_path, version.as_deref()).await
+                }
             },
 
             // Nested: system update-channel
             cli::SystemCommands::UpdateChannel { action } => match action {
                 cli::UpdateChannelAction::Get { db } => {
-                    commands::cmd_update_channel_get(&db.db_path)
+                    commands::cmd_update_channel_get(&db.db_path).await
                 }
                 cli::UpdateChannelAction::Set { url, db } => {
-                    commands::cmd_update_channel_set(&db.db_path, &url)
+                    commands::cmd_update_channel_set(&db.db_path, &url).await
                 }
                 cli::UpdateChannelAction::Reset { db } => {
-                    commands::cmd_update_channel_reset(&db.db_path)
+                    commands::cmd_update_channel_reset(&db.db_path).await
                 }
             },
         },
@@ -695,45 +724,52 @@ fn run() -> Result<()> {
                 default_strategy,
                 remi_endpoint,
                 remi_distro,
-            } => commands::cmd_repo_add(
-                &name,
-                &url,
-                &db.db_path,
-                content_url,
-                priority,
-                disabled,
-                gpg_key,
-                no_gpg_check,
-                gpg_strict,
-                default_strategy,
-                remi_endpoint,
-                remi_distro,
-            ),
+            } => {
+                commands::cmd_repo_add(
+                    &name,
+                    &url,
+                    &db.db_path,
+                    content_url,
+                    priority,
+                    disabled,
+                    gpg_key,
+                    no_gpg_check,
+                    gpg_strict,
+                    default_strategy,
+                    remi_endpoint,
+                    remi_distro,
+                )
+                .await
+            }
 
-            cli::RepoCommands::List { db, all } => commands::cmd_repo_list(&db.db_path, all),
+            cli::RepoCommands::List { db, all } => commands::cmd_repo_list(&db.db_path, all).await,
 
-            cli::RepoCommands::Remove { name, db } => commands::cmd_repo_remove(&name, &db.db_path),
+            cli::RepoCommands::Remove { name, db } => {
+                commands::cmd_repo_remove(&name, &db.db_path).await
+            }
 
-            cli::RepoCommands::Enable { name, db } => commands::cmd_repo_enable(&name, &db.db_path),
+            cli::RepoCommands::Enable { name, db } => {
+                commands::cmd_repo_enable(&name, &db.db_path).await
+            }
 
             cli::RepoCommands::Disable { name, db } => {
-                commands::cmd_repo_disable(&name, &db.db_path)
+                commands::cmd_repo_disable(&name, &db.db_path).await
             }
 
             cli::RepoCommands::Sync { name, db, force } => {
-                commands::cmd_repo_sync(name, &db.db_path, force)
+                commands::cmd_repo_sync(name, &db.db_path, force).await
             }
 
             cli::RepoCommands::KeyImport {
                 repository,
                 key,
                 db,
-            } => commands::cmd_key_import(&repository, &key, &db.db_path),
+            } => commands::cmd_key_import(&repository, &key, &db.db_path).await,
 
-            cli::RepoCommands::KeyList { db } => commands::cmd_key_list(&db.db_path),
+            cli::RepoCommands::KeyList { db } => commands::cmd_key_list(&db.db_path).await,
 
             cli::RepoCommands::KeyRemove { repository, db } => {
-                commands::cmd_key_remove(&repository, &db.db_path)
+                commands::cmd_key_remove(&repository, &db.db_path).await
             }
         },
 
@@ -742,29 +778,33 @@ fn run() -> Result<()> {
         // =====================================================================
         Some(Commands::Config(config_cmd)) => match config_cmd {
             cli::ConfigCommands::List { package, db, all } => {
-                commands::cmd_config_list(&db.db_path, package.as_deref(), all)
+                commands::cmd_config_list(&db.db_path, package.as_deref(), all).await
             }
 
             cli::ConfigCommands::Diff { path, common } => {
-                commands::cmd_config_diff(&common.db.db_path, &path, &common.root)
+                commands::cmd_config_diff(&common.db.db_path, &path, &common.root).await
             }
 
             cli::ConfigCommands::Backup { path, common } => {
-                commands::cmd_config_backup(&common.db.db_path, &path, &common.root)
+                commands::cmd_config_backup(&common.db.db_path, &path, &common.root).await
             }
 
             cli::ConfigCommands::Restore {
                 path,
                 common,
                 backup_id,
-            } => commands::cmd_config_restore(&common.db.db_path, &path, &common.root, backup_id),
+            } => {
+                commands::cmd_config_restore(&common.db.db_path, &path, &common.root, backup_id)
+                    .await
+            }
 
             cli::ConfigCommands::Check { package, common } => {
                 commands::cmd_config_check(&common.db.db_path, &common.root, package.as_deref())
+                    .await
             }
 
             cli::ConfigCommands::Backups { path, db } => {
-                commands::cmd_config_backups(&db.db_path, &path)
+                commands::cmd_config_backups(&db.db_path, &path).await
             }
         },
 
@@ -773,11 +813,11 @@ fn run() -> Result<()> {
         // =====================================================================
         Some(Commands::Query(query_cmd)) => match query_cmd {
             cli::QueryCommands::Depends { package_name, db } => {
-                commands::cmd_depends(&package_name, &db.db_path)
+                commands::cmd_depends(&package_name, &db.db_path).await
             }
 
             cli::QueryCommands::Rdepends { package_name, db } => {
-                commands::cmd_rdepends(&package_name, &db.db_path)
+                commands::cmd_rdepends(&package_name, &db.db_path).await
             }
 
             cli::QueryCommands::Deptree {
@@ -785,44 +825,46 @@ fn run() -> Result<()> {
                 db,
                 reverse,
                 depth,
-            } => commands::cmd_deptree(&package_name, &db.db_path, reverse, depth),
+            } => commands::cmd_deptree(&package_name, &db.db_path, reverse, depth).await,
 
             cli::QueryCommands::Whatprovides { capability, db } => {
-                commands::cmd_whatprovides(&capability, &db.db_path)
+                commands::cmd_whatprovides(&capability, &db.db_path).await
             }
 
             cli::QueryCommands::Whatbreaks { package_name, db } => {
-                commands::cmd_whatbreaks(&package_name, &db.db_path)
+                commands::cmd_whatbreaks(&package_name, &db.db_path).await
             }
 
             cli::QueryCommands::Reason { pattern, db } => {
-                commands::cmd_query_reason(pattern.as_deref(), &db.db_path)
+                commands::cmd_query_reason(pattern.as_deref(), &db.db_path).await
             }
 
             cli::QueryCommands::Repquery { pattern, db, info } => {
-                commands::cmd_repquery(pattern.as_deref(), &db.db_path, info)
+                commands::cmd_repquery(pattern.as_deref(), &db.db_path, info).await
             }
 
             cli::QueryCommands::Component { component_spec, db } => {
-                commands::cmd_query_component(&component_spec, &db.db_path)
+                commands::cmd_query_component(&component_spec, &db.db_path).await
             }
 
             cli::QueryCommands::Components { package_name, db } => {
-                commands::cmd_list_components(&package_name, &db.db_path)
+                commands::cmd_list_components(&package_name, &db.db_path).await
             }
 
-            cli::QueryCommands::Scripts { package_path } => commands::cmd_scripts(&package_path),
+            cli::QueryCommands::Scripts { package_path } => {
+                commands::cmd_scripts(&package_path).await
+            }
 
-            cli::QueryCommands::DeltaStats { db } => commands::cmd_delta_stats(&db.db_path),
+            cli::QueryCommands::DeltaStats { db } => commands::cmd_delta_stats(&db.db_path).await,
 
             cli::QueryCommands::Conflicts { db, verbose } => {
-                commands::cmd_conflicts(&db.db_path, verbose)
+                commands::cmd_conflicts(&db.db_path, verbose).await
             }
 
             // Nested: query label
             cli::QueryCommands::Label(label_cmd) => match label_cmd {
                 cli::LabelCommands::List { db, verbose } => {
-                    commands::cmd_label_list(&db.db_path, verbose)
+                    commands::cmd_label_list(&db.db_path, verbose).await
                 }
 
                 cli::LabelCommands::Add {
@@ -830,15 +872,18 @@ fn run() -> Result<()> {
                     description,
                     parent,
                     db,
-                } => commands::cmd_label_add(
-                    &label,
-                    description.as_deref(),
-                    parent.as_deref(),
-                    &db.db_path,
-                ),
+                } => {
+                    commands::cmd_label_add(
+                        &label,
+                        description.as_deref(),
+                        parent.as_deref(),
+                        &db.db_path,
+                    )
+                    .await
+                }
 
                 cli::LabelCommands::Remove { label, db, force } => {
-                    commands::cmd_label_remove(&label, &db.db_path, force)
+                    commands::cmd_label_remove(&label, &db.db_path, force).await
                 }
 
                 cli::LabelCommands::Path {
@@ -846,23 +891,26 @@ fn run() -> Result<()> {
                     add,
                     remove,
                     priority,
-                } => commands::cmd_label_path(
-                    &db.db_path,
-                    add.as_deref(),
-                    remove.as_deref(),
-                    priority,
-                ),
+                } => {
+                    commands::cmd_label_path(
+                        &db.db_path,
+                        add.as_deref(),
+                        remove.as_deref(),
+                        priority,
+                    )
+                    .await
+                }
 
                 cli::LabelCommands::Show { package, db } => {
-                    commands::cmd_label_show(&package, &db.db_path)
+                    commands::cmd_label_show(&package, &db.db_path).await
                 }
 
                 cli::LabelCommands::Set { package, label, db } => {
-                    commands::cmd_label_set(&package, &label, &db.db_path)
+                    commands::cmd_label_set(&package, &label, &db.db_path).await
                 }
 
                 cli::LabelCommands::Query { label, db } => {
-                    commands::cmd_label_query(&label, &db.db_path)
+                    commands::cmd_label_query(&label, &db.db_path).await
                 }
 
                 cli::LabelCommands::Link {
@@ -870,7 +918,10 @@ fn run() -> Result<()> {
                     repository,
                     unlink,
                     db,
-                } => commands::cmd_label_link(&label, repository.as_deref(), unlink, &db.db_path),
+                } => {
+                    commands::cmd_label_link(&label, repository.as_deref(), unlink, &db.db_path)
+                        .await
+                }
 
                 cli::LabelCommands::Delegate {
                     label,
@@ -879,6 +930,7 @@ fn run() -> Result<()> {
                     db,
                 } => {
                     commands::cmd_label_delegate(&label, target.as_deref(), undelegate, &db.db_path)
+                        .await
                 }
             },
         },
@@ -892,29 +944,34 @@ fn run() -> Result<()> {
                 description,
                 members,
                 db,
-            } => commands::cmd_collection_create(
-                &name,
-                description.as_deref(),
-                &members,
-                &db.db_path,
-            ),
+            } => {
+                commands::cmd_collection_create(
+                    &name,
+                    description.as_deref(),
+                    &members,
+                    &db.db_path,
+                )
+                .await
+            }
 
-            cli::CollectionCommands::List { db } => commands::cmd_collection_list(&db.db_path),
+            cli::CollectionCommands::List { db } => {
+                commands::cmd_collection_list(&db.db_path).await
+            }
 
             cli::CollectionCommands::Show { name, db } => {
-                commands::cmd_collection_show(&name, &db.db_path)
+                commands::cmd_collection_show(&name, &db.db_path).await
             }
 
             cli::CollectionCommands::Add { name, members, db } => {
-                commands::cmd_collection_add(&name, &members, &db.db_path)
+                commands::cmd_collection_add(&name, &members, &db.db_path).await
             }
 
             cli::CollectionCommands::Remove { name, members, db } => {
-                commands::cmd_collection_remove_member(&name, &members, &db.db_path)
+                commands::cmd_collection_remove_member(&name, &members, &db.db_path).await
             }
 
             cli::CollectionCommands::Delete { name, db } => {
-                commands::cmd_collection_delete(&name, &db.db_path)
+                commands::cmd_collection_delete(&name, &db.db_path).await
             }
         },
 
@@ -927,7 +984,7 @@ fn run() -> Result<()> {
                 name,
                 version,
                 force,
-            } => commands::ccs::cmd_ccs_init(&path, name, &version, force),
+            } => commands::ccs::cmd_ccs_init(&path, name, &version, force).await,
 
             cli::CcsCommands::Build {
                 path,
@@ -937,15 +994,18 @@ fn run() -> Result<()> {
                 no_classify,
                 no_chunked,
                 dry_run,
-            } => commands::ccs::cmd_ccs_build(
-                &path,
-                &output,
-                &target,
-                source,
-                no_classify,
-                !no_chunked,
-                dry_run,
-            ),
+            } => {
+                commands::ccs::cmd_ccs_build(
+                    &path,
+                    &output,
+                    &target,
+                    source,
+                    no_classify,
+                    !no_chunked,
+                    dry_run,
+                )
+                .await
+            }
 
             cli::CcsCommands::Inspect {
                 package,
@@ -953,25 +1013,25 @@ fn run() -> Result<()> {
                 hooks,
                 deps,
                 format,
-            } => commands::ccs::cmd_ccs_inspect(&package, files, hooks, deps, &format),
+            } => commands::ccs::cmd_ccs_inspect(&package, files, hooks, deps, &format).await,
 
             cli::CcsCommands::Verify {
                 package,
                 policy,
                 allow_unsigned,
-            } => commands::ccs::cmd_ccs_verify(&package, policy, allow_unsigned),
+            } => commands::ccs::cmd_ccs_verify(&package, policy, allow_unsigned).await,
 
             cli::CcsCommands::Sign {
                 package,
                 key,
                 output,
-            } => commands::ccs::cmd_ccs_sign(&package, &key, output),
+            } => commands::ccs::cmd_ccs_sign(&package, &key, output).await,
 
             cli::CcsCommands::Keygen {
                 output,
                 key_id,
                 force,
-            } => commands::ccs::cmd_ccs_keygen(&output, key_id, force),
+            } => commands::ccs::cmd_ccs_keygen(&output, key_id, force).await,
 
             cli::CcsCommands::Install {
                 package,
@@ -985,27 +1045,30 @@ fn run() -> Result<()> {
                 reinstall,
                 allow_capabilities,
                 capability_policy,
-            } => commands::ccs::cmd_ccs_install(
-                &package,
-                &common.db.db_path,
-                &common.root,
-                dry_run,
-                allow_unsigned,
-                policy,
-                components,
-                sandbox.into(),
-                no_deps,
-                reinstall,
-                allow_capabilities,
-                capability_policy,
-            ),
+            } => {
+                commands::ccs::cmd_ccs_install(
+                    &package,
+                    &common.db.db_path,
+                    &common.root,
+                    dry_run,
+                    allow_unsigned,
+                    policy,
+                    components,
+                    sandbox.into(),
+                    no_deps,
+                    reinstall,
+                    allow_capabilities,
+                    capability_policy,
+                )
+                .await
+            }
 
             cli::CcsCommands::Export {
                 packages,
                 output,
                 format,
                 db,
-            } => commands::ccs::cmd_ccs_export(&packages, &output, &format, &db.db_path),
+            } => commands::ccs::cmd_ccs_export(&packages, &output, &format, &db.db_path).await,
 
             cli::CcsCommands::Shell {
                 packages,
@@ -1013,14 +1076,17 @@ fn run() -> Result<()> {
                 shell,
                 env,
                 keep,
-            } => commands::ccs::cmd_ccs_shell(&packages, &db.db_path, shell.as_deref(), &env, keep),
+            } => {
+                commands::ccs::cmd_ccs_shell(&packages, &db.db_path, shell.as_deref(), &env, keep)
+                    .await
+            }
 
             cli::CcsCommands::Run {
                 package,
                 command,
                 db,
                 env,
-            } => commands::ccs::cmd_ccs_run(&package, &command, &db.db_path, &env),
+            } => commands::ccs::cmd_ccs_run(&package, &command, &db.db_path, &env).await,
 
             cli::CcsCommands::Enhance {
                 db,
@@ -1032,17 +1098,20 @@ fn run() -> Result<()> {
                 stats,
                 dry_run,
                 install_root,
-            } => commands::ccs::cmd_ccs_enhance(
-                &db.db_path,
-                trove_id,
-                all_pending,
-                update_outdated,
-                types,
-                force,
-                stats,
-                dry_run,
-                &install_root,
-            ),
+            } => {
+                commands::ccs::cmd_ccs_enhance(
+                    &db.db_path,
+                    trove_id,
+                    all_pending,
+                    update_outdated,
+                    types,
+                    force,
+                    stats,
+                    dry_run,
+                    &install_root,
+                )
+                .await
+            }
         },
 
         // =====================================================================
@@ -1050,10 +1119,12 @@ fn run() -> Result<()> {
         // =====================================================================
         Some(Commands::Derive(derive_cmd)) => match derive_cmd {
             cli::DeriveCommands::List { db, verbose } => {
-                commands::cmd_derive_list(&db.db_path, verbose)
+                commands::cmd_derive_list(&db.db_path, verbose).await
             }
 
-            cli::DeriveCommands::Show { name, db } => commands::cmd_derive_show(&name, &db.db_path),
+            cli::DeriveCommands::Show { name, db } => {
+                commands::cmd_derive_show(&name, &db.db_path).await
+            }
 
             cli::DeriveCommands::Create {
                 name,
@@ -1061,20 +1132,23 @@ fn run() -> Result<()> {
                 version_suffix,
                 description,
                 db,
-            } => commands::cmd_derive_create(
-                &name,
-                &from,
-                version_suffix.as_deref(),
-                description.as_deref(),
-                &db.db_path,
-            ),
+            } => {
+                commands::cmd_derive_create(
+                    &name,
+                    &from,
+                    version_suffix.as_deref(),
+                    description.as_deref(),
+                    &db.db_path,
+                )
+                .await
+            }
 
             cli::DeriveCommands::Patch {
                 name,
                 patch_file,
                 strip,
                 db,
-            } => commands::cmd_derive_patch(&name, &patch_file, strip, &db.db_path),
+            } => commands::cmd_derive_patch(&name, &patch_file, strip, &db.db_path).await,
 
             cli::DeriveCommands::Override {
                 name,
@@ -1084,17 +1158,18 @@ fn run() -> Result<()> {
                 db,
             } => {
                 commands::cmd_derive_override(&name, &target, source.as_deref(), mode, &db.db_path)
+                    .await
             }
 
             cli::DeriveCommands::Build { name, db } => {
-                commands::cmd_derive_build(&name, &db.db_path)
+                commands::cmd_derive_build(&name, &db.db_path).await
             }
 
             cli::DeriveCommands::Delete { name, db } => {
-                commands::cmd_derive_delete(&name, &db.db_path)
+                commands::cmd_derive_delete(&name, &db.db_path).await
             }
 
-            cli::DeriveCommands::Stale { db } => commands::cmd_derive_stale(&db.db_path),
+            cli::DeriveCommands::Stale { db } => commands::cmd_derive_stale(&db.db_path).await,
         },
 
         // =====================================================================
@@ -1102,7 +1177,7 @@ fn run() -> Result<()> {
         // =====================================================================
         Some(Commands::Model(model_cmd)) => match model_cmd {
             cli::ModelCommands::Diff { model, offline, db } => {
-                commands::cmd_model_diff(&model, &db.db_path, offline)
+                commands::cmd_model_diff(&model, &db.db_path, offline).await
             }
 
             cli::ModelCommands::Apply {
@@ -1113,40 +1188,43 @@ fn run() -> Result<()> {
                 strict,
                 no_autoremove,
                 offline,
-            } => commands::cmd_model_apply(
-                &model,
-                &common.db.db_path,
-                &common.root,
-                dry_run,
-                skip_optional,
-                strict,
-                !no_autoremove,
-                offline,
-            ),
+            } => {
+                commands::cmd_model_apply(
+                    &model,
+                    &common.db.db_path,
+                    &common.root,
+                    dry_run,
+                    skip_optional,
+                    strict,
+                    !no_autoremove,
+                    offline,
+                )
+                .await
+            }
 
             cli::ModelCommands::Check {
                 model,
                 db,
                 verbose,
                 offline,
-            } => commands::cmd_model_check(&model, &db.db_path, verbose, offline),
+            } => commands::cmd_model_check(&model, &db.db_path, verbose, offline).await,
 
             cli::ModelCommands::RemoteDiff { model, refresh, db } => {
-                commands::cmd_model_remote_diff(&model, &db.db_path, refresh)
+                commands::cmd_model_remote_diff(&model, &db.db_path, refresh).await
             }
 
             cli::ModelCommands::Snapshot {
                 output,
                 db,
                 description,
-            } => commands::cmd_model_snapshot(&output, &db.db_path, description.as_deref()),
+            } => commands::cmd_model_snapshot(&output, &db.db_path, description.as_deref()).await,
 
             cli::ModelCommands::Lock { model, output, db } => {
-                commands::cmd_model_lock(&model, output.as_deref(), &db.db_path)
+                commands::cmd_model_lock(&model, output.as_deref(), &db.db_path).await
             }
 
             cli::ModelCommands::Update { model, db } => {
-                commands::cmd_model_update(&model, &db.db_path)
+                commands::cmd_model_update(&model, &db.db_path).await
             }
 
             cli::ModelCommands::Publish {
@@ -1158,16 +1236,19 @@ fn run() -> Result<()> {
                 force,
                 sign_key,
                 db,
-            } => commands::cmd_model_publish(
-                &model,
-                &name,
-                &version,
-                &repo,
-                description.as_deref(),
-                &db.db_path,
-                force,
-                sign_key.as_deref(),
-            ),
+            } => {
+                commands::cmd_model_publish(
+                    &model,
+                    &name,
+                    &version,
+                    &repo,
+                    description.as_deref(),
+                    &db.db_path,
+                    force,
+                    sign_key.as_deref(),
+                )
+                .await
+            }
         },
 
         // =====================================================================
@@ -1178,7 +1259,7 @@ fn run() -> Result<()> {
                 db,
                 format,
                 verbose,
-            } => commands::cmd_automation_status(&db.db_path, &format, verbose),
+            } => commands::cmd_automation_status(&db.db_path, &format, verbose).await,
 
             cli::AutomationCommands::Check {
                 common,
@@ -1186,6 +1267,7 @@ fn run() -> Result<()> {
                 quiet,
             } => {
                 commands::cmd_automation_check(&common.db.db_path, &common.root, categories, quiet)
+                    .await
             }
 
             cli::AutomationCommands::Apply {
@@ -1194,14 +1276,17 @@ fn run() -> Result<()> {
                 categories,
                 dry_run,
                 no_scripts,
-            } => commands::cmd_automation_apply(
-                &common.db.db_path,
-                &common.root,
-                yes,
-                categories,
-                dry_run,
-                no_scripts,
-            ),
+            } => {
+                commands::cmd_automation_apply(
+                    &common.db.db_path,
+                    &common.root,
+                    yes,
+                    categories,
+                    dry_run,
+                    no_scripts,
+                )
+                .await
+            }
 
             cli::AutomationCommands::Configure {
                 db,
@@ -1212,27 +1297,33 @@ fn run() -> Result<()> {
                 interval,
                 enable_ai,
                 disable_ai,
-            } => commands::cmd_automation_configure(
-                &db.db_path,
-                show,
-                mode,
-                enable,
-                disable,
-                interval,
-                enable_ai,
-                disable_ai,
-            ),
+            } => {
+                commands::cmd_automation_configure(
+                    &db.db_path,
+                    show,
+                    mode,
+                    enable,
+                    disable,
+                    interval,
+                    enable_ai,
+                    disable_ai,
+                )
+                .await
+            }
 
             cli::AutomationCommands::Daemon {
                 common,
                 foreground,
                 pidfile,
-            } => commands::cmd_automation_daemon(
-                &common.db.db_path,
-                &common.root,
-                foreground,
-                &pidfile,
-            ),
+            } => {
+                commands::cmd_automation_daemon(
+                    &common.db.db_path,
+                    &common.root,
+                    foreground,
+                    &pidfile,
+                )
+                .await
+            }
 
             cli::AutomationCommands::History {
                 db,
@@ -1240,7 +1331,9 @@ fn run() -> Result<()> {
                 category,
                 status,
                 since,
-            } => commands::cmd_automation_history(&db.db_path, limit, category, status, since),
+            } => {
+                commands::cmd_automation_history(&db.db_path, limit, category, status, since).await
+            }
 
             #[cfg(feature = "experimental")]
             cli::AutomationCommands::Ai(ai_cmd) => match ai_cmd {
@@ -1249,20 +1342,20 @@ fn run() -> Result<()> {
                     db,
                     limit,
                     verbose,
-                } => commands::cmd_ai_find(&db.db_path, &intent, limit, verbose),
+                } => commands::cmd_ai_find(&db.db_path, &intent, limit, verbose).await,
 
                 cli::AiCommands::Translate {
                     source,
                     format,
                     confidence,
-                } => commands::cmd_ai_translate(&source, &format, confidence),
+                } => commands::cmd_ai_translate(&source, &format, confidence).await,
 
                 cli::AiCommands::Query { question, db } => {
-                    commands::cmd_ai_query(&db.db_path, &question)
+                    commands::cmd_ai_query(&db.db_path, &question).await
                 }
 
                 cli::AiCommands::Explain { command, db } => {
-                    commands::cmd_ai_explain(&db.db_path, &command)
+                    commands::cmd_ai_explain(&db.db_path, &command).await
                 }
             },
         },
@@ -1275,36 +1368,38 @@ fn run() -> Result<()> {
                 work_dir,
                 target,
                 jobs,
-            } => commands::cmd_bootstrap_init(&work_dir, &target, jobs),
+            } => commands::cmd_bootstrap_init(&work_dir, &target, jobs).await,
 
-            cli::BootstrapCommands::Check { verbose } => commands::cmd_bootstrap_check(verbose),
+            cli::BootstrapCommands::Check { verbose } => {
+                commands::cmd_bootstrap_check(verbose).await
+            }
 
             cli::BootstrapCommands::Image {
                 work_dir,
                 output,
                 format,
                 size,
-            } => commands::cmd_bootstrap_image(&work_dir, &output, &format, &size),
+            } => commands::cmd_bootstrap_image(&work_dir, &output, &format, &size).await,
 
             cli::BootstrapCommands::Status { work_dir, verbose } => {
-                commands::cmd_bootstrap_status(&work_dir, verbose)
+                commands::cmd_bootstrap_status(&work_dir, verbose).await
             }
 
             cli::BootstrapCommands::Resume { work_dir, verbose } => {
-                commands::cmd_bootstrap_resume(&work_dir, verbose)
+                commands::cmd_bootstrap_resume(&work_dir, verbose).await
             }
 
             cli::BootstrapCommands::DryRun {
                 work_dir,
                 recipe_dir,
                 verbose,
-            } => commands::cmd_bootstrap_dry_run(&work_dir, &recipe_dir, verbose),
+            } => commands::cmd_bootstrap_dry_run(&work_dir, &recipe_dir, verbose).await,
 
             cli::BootstrapCommands::Clean {
                 work_dir,
                 stage,
                 sources,
-            } => commands::cmd_bootstrap_clean(&work_dir, stage, sources),
+            } => commands::cmd_bootstrap_clean(&work_dir, stage, sources).await,
 
             cli::BootstrapCommands::CrossTools {
                 work_dir,
@@ -1312,13 +1407,16 @@ fn run() -> Result<()> {
                 jobs,
                 verbose,
                 skip_verify,
-            } => commands::cmd_bootstrap_cross_tools(
-                &work_dir,
-                jobs,
-                verbose,
-                skip_verify,
-                lfs_root.as_deref(),
-            ),
+            } => {
+                commands::cmd_bootstrap_cross_tools(
+                    &work_dir,
+                    jobs,
+                    verbose,
+                    skip_verify,
+                    lfs_root.as_deref(),
+                )
+                .await
+            }
 
             cli::BootstrapCommands::TempTools {
                 work_dir,
@@ -1326,13 +1424,16 @@ fn run() -> Result<()> {
                 jobs,
                 verbose,
                 skip_verify,
-            } => commands::cmd_bootstrap_temp_tools(
-                &work_dir,
-                jobs,
-                verbose,
-                skip_verify,
-                lfs_root.as_deref(),
-            ),
+            } => {
+                commands::cmd_bootstrap_temp_tools(
+                    &work_dir,
+                    jobs,
+                    verbose,
+                    skip_verify,
+                    lfs_root.as_deref(),
+                )
+                .await
+            }
 
             cli::BootstrapCommands::System {
                 work_dir,
@@ -1340,19 +1441,22 @@ fn run() -> Result<()> {
                 jobs,
                 verbose,
                 skip_verify,
-            } => commands::cmd_bootstrap_system(
-                &work_dir,
-                jobs,
-                verbose,
-                skip_verify,
-                lfs_root.as_deref(),
-            ),
+            } => {
+                commands::cmd_bootstrap_system(
+                    &work_dir,
+                    jobs,
+                    verbose,
+                    skip_verify,
+                    lfs_root.as_deref(),
+                )
+                .await
+            }
 
             cli::BootstrapCommands::Config {
                 work_dir,
                 lfs_root,
                 verbose,
-            } => commands::cmd_bootstrap_config(&work_dir, verbose, lfs_root.as_deref()),
+            } => commands::cmd_bootstrap_config(&work_dir, verbose, lfs_root.as_deref()).await,
 
             cli::BootstrapCommands::Tier2 {
                 work_dir,
@@ -1360,13 +1464,16 @@ fn run() -> Result<()> {
                 jobs,
                 verbose,
                 skip_verify,
-            } => commands::cmd_bootstrap_tier2(
-                &work_dir,
-                jobs,
-                verbose,
-                skip_verify,
-                lfs_root.as_deref(),
-            ),
+            } => {
+                commands::cmd_bootstrap_tier2(
+                    &work_dir,
+                    jobs,
+                    verbose,
+                    skip_verify,
+                    lfs_root.as_deref(),
+                )
+                .await
+            }
 
             cli::BootstrapCommands::Run {
                 manifest,
@@ -1379,18 +1486,21 @@ fn run() -> Result<()> {
                 verbose,
                 no_substituters,
                 publish,
-            } => commands::cmd_bootstrap_run(commands::BootstrapRunOptions {
-                manifest: &manifest,
-                work_dir: &work_dir,
-                up_to: up_to.as_deref(),
-                only: only.as_deref(),
-                cascade,
-                keep_logs,
-                shell_on_failure,
-                verbose,
-                no_substituters,
-                publish,
-            }),
+            } => {
+                commands::cmd_bootstrap_run(commands::BootstrapRunOptions {
+                    manifest: &manifest,
+                    work_dir: &work_dir,
+                    up_to: up_to.as_deref(),
+                    only: only.as_deref(),
+                    cascade,
+                    keep_logs,
+                    shell_on_failure,
+                    verbose,
+                    no_substituters,
+                    publish,
+                })
+                .await
+            }
         },
 
         Some(cli::Commands::Provenance(cmd)) => match cmd {
@@ -1400,60 +1510,75 @@ fn run() -> Result<()> {
                 section,
                 recursive,
                 format,
-            } => commands::cmd_provenance_show(&db.db_path, &package, &section, recursive, &format),
+            } => {
+                commands::cmd_provenance_show(&db.db_path, &package, &section, recursive, &format)
+                    .await
+            }
             cli::ProvenanceCommands::Verify {
                 package,
                 db,
                 all_signatures,
-            } => commands::cmd_provenance_verify(&db.db_path, &package, all_signatures),
+            } => commands::cmd_provenance_verify(&db.db_path, &package, all_signatures).await,
             cli::ProvenanceCommands::Diff {
                 package1,
                 package2,
                 db,
                 format,
-            } => commands::cmd_provenance_diff(&db.db_path, &package1, &package2, &format),
+            } => commands::cmd_provenance_diff(&db.db_path, &package1, &package2, &format).await,
             cli::ProvenanceCommands::FindByDep {
                 dep_name,
                 version,
                 dna,
                 db,
-            } => commands::cmd_provenance_find_by_dep(
-                &db.db_path,
-                &dep_name,
-                version.as_deref(),
-                dna.as_deref(),
-            ),
+            } => {
+                commands::cmd_provenance_find_by_dep(
+                    &db.db_path,
+                    &dep_name,
+                    version.as_deref(),
+                    dna.as_deref(),
+                )
+                .await
+            }
             cli::ProvenanceCommands::Export {
                 package,
                 db,
                 format,
                 output,
                 recursive,
-            } => commands::cmd_provenance_export(
-                &db.db_path,
-                &package,
-                &format,
-                output.as_deref(),
-                recursive,
-            ),
+            } => {
+                commands::cmd_provenance_export(
+                    &db.db_path,
+                    &package,
+                    &format,
+                    output.as_deref(),
+                    recursive,
+                )
+                .await
+            }
             cli::ProvenanceCommands::Register {
                 package,
                 db,
                 key,
                 keyless,
                 dry_run,
-            } => commands::cmd_provenance_register(
-                &db.db_path,
-                &package,
-                key.as_deref(),
-                keyless,
-                dry_run,
-            ),
+            } => {
+                commands::cmd_provenance_register(
+                    &db.db_path,
+                    &package,
+                    key.as_deref(),
+                    keyless,
+                    dry_run,
+                )
+                .await
+            }
             cli::ProvenanceCommands::Audit {
                 db,
                 missing,
                 include_converted,
-            } => commands::cmd_provenance_audit(&db.db_path, missing.as_deref(), include_converted),
+            } => {
+                commands::cmd_provenance_audit(&db.db_path, missing.as_deref(), include_converted)
+                    .await
+            }
         },
 
         // =====================================================================
@@ -1464,33 +1589,38 @@ fn run() -> Result<()> {
                 package,
                 db,
                 format,
-            } => commands::cmd_capability_show(&db.db_path, &package, &format),
+            } => commands::cmd_capability_show(&db.db_path, &package, &format).await,
             cli::CapabilityCommands::Validate { path, verbose } => {
-                commands::cmd_capability_validate(&path, verbose)
+                commands::cmd_capability_validate(&path, verbose).await
             }
             cli::CapabilityCommands::List {
                 db,
                 missing,
                 format,
-            } => commands::cmd_capability_list(&db.db_path, missing, &format),
+            } => commands::cmd_capability_list(&db.db_path, missing, &format).await,
             cli::CapabilityCommands::Generate {
                 binary,
                 args,
                 output,
                 timeout,
-            } => commands::cmd_capability_generate(&binary, &args, output.as_deref(), timeout),
+            } => {
+                commands::cmd_capability_generate(&binary, &args, output.as_deref(), timeout).await
+            }
             cli::CapabilityCommands::Audit {
                 package,
                 db,
                 command,
                 timeout,
-            } => commands::cmd_capability_audit(&db.db_path, &package, command.as_deref(), timeout),
+            } => {
+                commands::cmd_capability_audit(&db.db_path, &package, command.as_deref(), timeout)
+                    .await
+            }
             cli::CapabilityCommands::Run {
                 package,
                 command,
                 db,
                 permissive,
-            } => commands::cmd_capability_run(&db.db_path, &package, &command, permissive),
+            } => commands::cmd_capability_run(&db.db_path, &package, &command, permissive).await,
         },
 
         // =====================================================================
@@ -1501,26 +1631,26 @@ fn run() -> Result<()> {
         // =====================================================================
         Some(cli::Commands::Trust(cmd)) => match cmd {
             cli::TrustCommands::KeyGen { role, output } => {
-                commands::cmd_trust_key_gen(&role, &output)
+                commands::cmd_trust_key_gen(&role, &output).await
             }
             cli::TrustCommands::Init { repo, root, db } => {
-                commands::cmd_trust_init(&repo, &root, &db.db_path)
+                commands::cmd_trust_init(&repo, &root, &db.db_path).await
             }
             cli::TrustCommands::Enable { repo, tuf_url, db } => {
-                commands::cmd_trust_enable(&repo, tuf_url.as_deref(), &db.db_path)
+                commands::cmd_trust_enable(&repo, tuf_url.as_deref(), &db.db_path).await
             }
             cli::TrustCommands::Disable { repo, force, db } => {
-                commands::cmd_trust_disable(&repo, force, &db.db_path)
+                commands::cmd_trust_disable(&repo, force, &db.db_path).await
             }
             cli::TrustCommands::Status { repo, db } => {
-                commands::cmd_trust_status(&repo, &db.db_path)
+                commands::cmd_trust_status(&repo, &db.db_path).await
             }
             cli::TrustCommands::Verify { repo, db } => {
-                commands::cmd_trust_verify(&repo, &db.db_path)
+                commands::cmd_trust_verify(&repo, &db.db_path).await
             }
             #[cfg(feature = "server")]
             cli::TrustCommands::SignTargets { repo, key, db } => {
-                commands::cmd_trust_sign_targets(&repo, &key, &db.db_path)
+                commands::cmd_trust_sign_targets(&repo, &key, &db.db_path).await
             }
             #[cfg(feature = "server")]
             cli::TrustCommands::RotateKey {
@@ -1530,46 +1660,49 @@ fn run() -> Result<()> {
                 root_key,
                 repo,
                 db,
-            } => commands::cmd_trust_rotate_key(
-                &role,
-                &old_key,
-                &new_key,
-                &root_key,
-                &repo,
-                &db.db_path,
-            ),
+            } => {
+                commands::cmd_trust_rotate_key(
+                    &role,
+                    &old_key,
+                    &new_key,
+                    &root_key,
+                    &repo,
+                    &db.db_path,
+                )
+                .await
+            }
         },
 
         Some(cli::Commands::Federation(cmd)) => match cmd {
             cli::FederationCommands::Status { db, verbose } => {
-                commands::cmd_federation_status(&db.db_path, verbose)
+                commands::cmd_federation_status(&db.db_path, verbose).await
             }
             cli::FederationCommands::Peers {
                 db,
                 tier,
                 enabled_only,
-            } => commands::cmd_federation_peers(&db.db_path, tier.as_deref(), enabled_only),
+            } => commands::cmd_federation_peers(&db.db_path, tier.as_deref(), enabled_only).await,
             cli::FederationCommands::AddPeer {
                 url,
                 db,
                 tier,
                 name,
-            } => commands::cmd_federation_add_peer(&url, &db.db_path, &tier, name.as_deref()),
+            } => commands::cmd_federation_add_peer(&url, &db.db_path, &tier, name.as_deref()).await,
             cli::FederationCommands::RemovePeer { peer, db } => {
-                commands::cmd_federation_remove_peer(&peer, &db.db_path)
+                commands::cmd_federation_remove_peer(&peer, &db.db_path).await
             }
             cli::FederationCommands::Stats { db, days } => {
-                commands::cmd_federation_stats(&db.db_path, days)
+                commands::cmd_federation_stats(&db.db_path, days).await
             }
             cli::FederationCommands::EnablePeer { peer, db, enable } => {
-                commands::cmd_federation_enable_peer(&peer, &db.db_path, enable)
+                commands::cmd_federation_enable_peer(&peer, &db.db_path, enable).await
             }
             cli::FederationCommands::Test { db, peer, timeout } => {
-                commands::cmd_federation_test(&db.db_path, peer.as_deref(), timeout)
+                commands::cmd_federation_test(&db.db_path, peer.as_deref(), timeout).await
             }
             #[cfg(feature = "server")]
             cli::FederationCommands::Scan { db, duration, add } => {
-                commands::cmd_federation_scan(&db.db_path, duration, add)
+                commands::cmd_federation_scan(&db.db_path, duration, add).await
             }
         },
 
@@ -1595,13 +1728,9 @@ fn run() -> Result<()> {
             };
 
             // Run the async daemon
-            tokio::runtime::Runtime::new()
-                .map_err(|e| anyhow::anyhow!("Failed to create async runtime: {e}"))?
-                .block_on(async {
-                    run_daemon(config)
-                        .await
-                        .map_err(|e| anyhow::anyhow!("{}", e))
-                })
+            run_daemon(config)
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e))
         }
 
         // =====================================================================
@@ -1637,9 +1766,7 @@ fn run() -> Result<()> {
             }
             std::fs::create_dir_all(&config.cache_dir)?;
 
-            tokio::runtime::Runtime::new()
-                .map_err(|e| anyhow::anyhow!("Failed to create async runtime: {e}"))?
-                .block_on(run_proxy(config))
+            run_proxy(config).await
         }
 
         // =====================================================================
@@ -1727,9 +1854,7 @@ fn run() -> Result<()> {
             }
 
             // Run the async server
-            tokio::runtime::Runtime::new()
-                .map_err(|e| anyhow::anyhow!("Failed to create async runtime: {e}"))?
-                .block_on(run_server_from_config(&remi_config))
+            run_server_from_config(&remi_config).await
         }
 
         // =====================================================================
@@ -1737,13 +1862,17 @@ fn run() -> Result<()> {
         // =====================================================================
         Some(Commands::Distro(distro_cmd)) => match distro_cmd {
             cli::DistroCommands::Set { distro, mixing, db } => {
-                commands::distro::cmd_distro_set(&db.db_path, &distro, &mixing)
+                commands::distro::cmd_distro_set(&db.db_path, &distro, &mixing).await
             }
-            cli::DistroCommands::Remove { db } => commands::distro::cmd_distro_remove(&db.db_path),
-            cli::DistroCommands::List => commands::distro::cmd_distro_list(),
-            cli::DistroCommands::Info { db } => commands::distro::cmd_distro_info(&db.db_path),
+            cli::DistroCommands::Remove { db } => {
+                commands::distro::cmd_distro_remove(&db.db_path).await
+            }
+            cli::DistroCommands::List => commands::distro::cmd_distro_list().await,
+            cli::DistroCommands::Info { db } => {
+                commands::distro::cmd_distro_info(&db.db_path).await
+            }
             cli::DistroCommands::Mixing { policy, db } => {
-                commands::distro::cmd_distro_mixing(&db.db_path, &policy)
+                commands::distro::cmd_distro_mixing(&db.db_path, &policy).await
             }
         },
 
@@ -1752,13 +1881,13 @@ fn run() -> Result<()> {
         // =====================================================================
         Some(Commands::Canonical(can_cmd)) => match can_cmd {
             cli::CanonicalCommands::Show { name, db } => {
-                commands::canonical::cmd_canonical_show(&db.db_path, &name)
+                commands::canonical::cmd_canonical_show(&db.db_path, &name).await
             }
             cli::CanonicalCommands::Search { query, db } => {
-                commands::canonical::cmd_canonical_search(&db.db_path, &query)
+                commands::canonical::cmd_canonical_search(&db.db_path, &query).await
             }
             cli::CanonicalCommands::Unmapped { db } => {
-                commands::canonical::cmd_canonical_unmapped(&db.db_path)
+                commands::canonical::cmd_canonical_unmapped(&db.db_path).await
             }
         },
 
@@ -1766,9 +1895,11 @@ fn run() -> Result<()> {
         // Groups Commands
         // =====================================================================
         Some(Commands::Groups(grp_cmd)) => match grp_cmd {
-            cli::GroupsCommands::List { db } => commands::groups::cmd_groups_list(&db.db_path),
+            cli::GroupsCommands::List { db } => {
+                commands::groups::cmd_groups_list(&db.db_path).await
+            }
             cli::GroupsCommands::Show { name, distro, db } => {
-                commands::groups::cmd_groups_show(&db.db_path, &name, distro.as_deref())
+                commands::groups::cmd_groups_show(&db.db_path, &name, distro.as_deref()).await
             }
         },
 
@@ -1777,10 +1908,10 @@ fn run() -> Result<()> {
         // =====================================================================
         Some(Commands::Registry(reg_cmd)) => match reg_cmd {
             cli::RegistryCommands::Update { db } => {
-                commands::registry::cmd_registry_update(&db.db_path)
+                commands::registry::cmd_registry_update(&db.db_path).await
             }
             cli::RegistryCommands::Stats { db } => {
-                commands::registry::cmd_registry_stats(&db.db_path)
+                commands::registry::cmd_registry_stats(&db.db_path).await
             }
         },
 
@@ -1793,12 +1924,15 @@ fn run() -> Result<()> {
             objects_dir,
             db,
             oci: _,
-        }) => commands::export_oci(
-            generation,
-            std::path::Path::new(&objects_dir),
-            std::path::Path::new(&output),
-            &db,
-        ),
+        }) => {
+            commands::export_oci(
+                generation,
+                std::path::Path::new(&objects_dir),
+                std::path::Path::new(&output),
+                &db,
+            )
+            .await
+        }
 
         // =====================================================================
         // Derivation Engine
@@ -1809,23 +1943,25 @@ fn run() -> Result<()> {
                 env,
                 cas_dir,
                 db_path,
-            } => commands::cmd_derivation_build(&recipe, &env, &cas_dir, db_path.as_deref()),
+            } => commands::cmd_derivation_build(&recipe, &env, &cas_dir, db_path.as_deref()).await,
             cli::DerivationCommands::Show { recipe, env_hash } => {
-                commands::cmd_derivation_show(&recipe, &env_hash)
+                commands::cmd_derivation_show(&recipe, &env_hash).await
             }
         },
 
         Some(Commands::Profile(profile_cmd)) => match profile_cmd {
             cli::ProfileCommands::Generate { manifest, output } => {
-                commands::cmd_profile_generate(&manifest, output.as_deref())
+                commands::cmd_profile_generate(&manifest, output.as_deref()).await
             }
-            cli::ProfileCommands::Show { path } => commands::cmd_profile_show(&path),
-            cli::ProfileCommands::Diff { old, new } => commands::cmd_profile_diff(&old, &new),
+            cli::ProfileCommands::Show { path } => commands::cmd_profile_show(&path).await,
+            cli::ProfileCommands::Diff { old, new } => commands::cmd_profile_diff(&old, &new).await,
             cli::ProfileCommands::Publish {
                 profile,
                 endpoint,
                 token,
-            } => commands::cmd_profile_publish(&profile, endpoint.as_deref(), token.as_deref()),
+            } => {
+                commands::cmd_profile_publish(&profile, endpoint.as_deref(), token.as_deref()).await
+            }
         },
 
         // =====================================================================
@@ -1836,7 +1972,7 @@ fn run() -> Result<()> {
             check,
             force,
             version,
-        }) => commands::cmd_self_update(&db.db_path, check, force, version),
+        }) => commands::cmd_self_update(&db.db_path, check, force, version).await,
 
         // =====================================================================
         // Derivation Verification
@@ -1846,26 +1982,29 @@ fn run() -> Result<()> {
                 profile,
                 verbose,
                 json,
-            } => commands::verify::cmd_verify_chain(&profile, verbose, json),
+            } => commands::verify::cmd_verify_chain(&profile, verbose, json).await,
             cli::VerifyCommands::Rebuild {
                 derivation,
                 work_dir,
-            } => commands::verify::cmd_verify_rebuild(&derivation, &work_dir),
+            } => commands::verify::cmd_verify_rebuild(&derivation, &work_dir).await,
             cli::VerifyCommands::Diverse {
                 profile_a,
                 profile_b,
-            } => commands::verify::cmd_verify_diverse(&profile_a, &profile_b),
+            } => commands::verify::cmd_verify_diverse(&profile_a, &profile_b).await,
         },
 
         Some(Commands::Sbom {
             profile,
             derivation,
             output,
-        }) => commands::cmd_derivation_sbom(
-            profile.as_deref(),
-            derivation.as_deref(),
-            output.as_deref(),
-        ),
+        }) => {
+            commands::cmd_derivation_sbom(
+                profile.as_deref(),
+                derivation.as_deref(),
+                output.as_deref(),
+            )
+            .await
+        }
 
         None => {
             println!("Conary Package Manager v{}", env!("CARGO_PKG_VERSION"));

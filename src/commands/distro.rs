@@ -6,7 +6,7 @@ use anyhow::Result;
 use conary_core::db::models::{DistroPin, SystemAffinity};
 use conary_core::model::parser::SourcePinConfig;
 
-pub fn cmd_distro_set(db_path: &str, distro: &str, mixing: &str) -> Result<()> {
+pub async fn cmd_distro_set(db_path: &str, distro: &str, mixing: &str) -> Result<()> {
     if !["strict", "guarded", "permissive"].contains(&mixing) {
         anyhow::bail!("Invalid mixing policy: {mixing}. Use strict, guarded, or permissive.");
     }
@@ -22,14 +22,14 @@ pub fn cmd_distro_set(db_path: &str, distro: &str, mixing: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_distro_remove(db_path: &str) -> Result<()> {
+pub async fn cmd_distro_remove(db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     DistroPin::remove(&conn)?;
     println!("Distro pin removed. System is now distro-agnostic.");
     Ok(())
 }
 
-pub fn cmd_distro_info(db_path: &str) -> Result<()> {
+pub async fn cmd_distro_info(db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     match DistroPin::get_current(&conn)? {
         Some(pin) => {
@@ -57,7 +57,7 @@ pub fn cmd_distro_info(db_path: &str) -> Result<()> {
 }
 
 // TODO: Drive this list from the database or registry instead of hardcoding
-pub fn cmd_distro_list() -> Result<()> {
+pub async fn cmd_distro_list() -> Result<()> {
     println!("Available distros:");
     println!("  ubuntu-noble     Ubuntu 24.04 LTS (Noble Numbat)");
     println!("  ubuntu-oracular  Ubuntu 24.10 (Oracular Oriole)");
@@ -67,7 +67,7 @@ pub fn cmd_distro_list() -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_distro_mixing(db_path: &str, policy: &str) -> Result<()> {
+pub async fn cmd_distro_mixing(db_path: &str, policy: &str) -> Result<()> {
     if !["strict", "guarded", "permissive"].contains(&policy) {
         anyhow::bail!("Invalid mixing policy: {policy}. Use strict, guarded, or permissive.");
     }
@@ -98,11 +98,11 @@ mod tests {
         (temp_file, db_path, conn)
     }
 
-    #[test]
-    fn test_cmd_distro_set_persists_compatibility_pin() {
+    #[tokio::test]
+    async fn test_cmd_distro_set_persists_compatibility_pin() {
         let (_temp, db_path, conn) = create_test_db();
 
-        cmd_distro_set(&db_path, "arch", "strict").unwrap();
+        cmd_distro_set(&db_path, "arch", "strict").await.unwrap();
 
         let pin = DistroPin::get_current(&conn).unwrap().unwrap();
         let source_pin = pin.as_source_pin();
@@ -110,21 +110,21 @@ mod tests {
         assert_eq!(source_pin.strength.as_deref(), Some("strict"));
     }
 
-    #[test]
-    fn test_cmd_distro_remove_clears_pin() {
+    #[tokio::test]
+    async fn test_cmd_distro_remove_clears_pin() {
         let (_temp, db_path, conn) = create_test_db();
         DistroPin::set(&conn, "fedora-43", "guarded").unwrap();
 
-        cmd_distro_remove(&db_path).unwrap();
+        cmd_distro_remove(&db_path).await.unwrap();
 
         assert!(DistroPin::get_current(&conn).unwrap().is_none());
     }
 
-    #[test]
-    fn test_cmd_distro_mixing_requires_existing_pin() {
+    #[tokio::test]
+    async fn test_cmd_distro_mixing_requires_existing_pin() {
         let (_temp, db_path, _conn) = create_test_db();
 
-        let err = cmd_distro_mixing(&db_path, "strict").unwrap_err();
+        let err = cmd_distro_mixing(&db_path, "strict").await.unwrap_err();
 
         assert!(err.to_string().contains("No distro pin set"));
     }

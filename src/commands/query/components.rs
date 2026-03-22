@@ -8,7 +8,7 @@ use super::super::open_db;
 use anyhow::Result;
 
 /// List components of an installed package
-pub fn cmd_list_components(package_name: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_list_components(package_name: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     // Find the package
@@ -67,7 +67,7 @@ pub fn cmd_list_components(package_name: &str, db_path: &str) -> Result<()> {
 }
 
 /// Query files in a specific component
-pub fn cmd_query_component(component_spec: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_query_component(component_spec: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     // Parse the component spec (e.g., "nginx:lib")

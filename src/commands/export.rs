@@ -40,7 +40,7 @@ const INDEX_MEDIA_TYPE: &str = "application/vnd.oci.image.index.v1+json";
 /// store (typically `/conary/objects`).  The `db_path` is used to
 /// scope the exported CAS objects to only those referenced by the
 /// generation's system state.
-pub fn export_oci(
+pub async fn export_oci(
     generation: Option<i64>,
     objects_dir: &Path,
     output_dir: &Path,

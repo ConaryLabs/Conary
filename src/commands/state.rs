@@ -7,7 +7,7 @@ use conary_core::db::models::{StateDiff, StateEngine, SystemState};
 use tracing::info;
 
 /// List all system states
-pub fn cmd_state_list(db_path: &str, limit: Option<i64>) -> Result<()> {
+pub async fn cmd_state_list(db_path: &str, limit: Option<i64>) -> Result<()> {
     info!("Listing system states...");
 
     let conn = open_db(db_path)?;
@@ -55,7 +55,7 @@ pub fn cmd_state_list(db_path: &str, limit: Option<i64>) -> Result<()> {
 }
 
 /// Show details of a specific state
-pub fn cmd_state_show(db_path: &str, state_number: i64) -> Result<()> {
+pub async fn cmd_state_show(db_path: &str, state_number: i64) -> Result<()> {
     info!("Showing state {}...", state_number);
 
     let conn = open_db(db_path)?;
@@ -101,7 +101,7 @@ pub fn cmd_state_show(db_path: &str, state_number: i64) -> Result<()> {
 }
 
 /// Show diff between two states
-pub fn cmd_state_diff(db_path: &str, from_state: i64, to_state: i64) -> Result<()> {
+pub async fn cmd_state_diff(db_path: &str, from_state: i64, to_state: i64) -> Result<()> {
     info!("Comparing states {} -> {}...", from_state, to_state);
 
     let conn = open_db(db_path)?;
@@ -154,7 +154,7 @@ pub fn cmd_state_diff(db_path: &str, from_state: i64, to_state: i64) -> Result<(
 }
 
 /// Restore to a previous state
-pub fn cmd_state_restore(db_path: &str, state_number: i64, dry_run: bool) -> Result<()> {
+pub async fn cmd_state_restore(db_path: &str, state_number: i64, dry_run: bool) -> Result<()> {
     info!("Restoring to state {}...", state_number);
 
     let conn = open_db(db_path)?;
@@ -222,7 +222,7 @@ pub fn cmd_state_restore(db_path: &str, state_number: i64, dry_run: bool) -> Res
 }
 
 /// Prune old states, keeping only the most recent N
-pub fn cmd_state_prune(db_path: &str, keep_count: i64, dry_run: bool) -> Result<()> {
+pub async fn cmd_state_prune(db_path: &str, keep_count: i64, dry_run: bool) -> Result<()> {
     info!("Pruning states, keeping {} most recent...", keep_count);
 
     if keep_count < 1 {
@@ -281,7 +281,11 @@ pub fn cmd_state_prune(db_path: &str, keep_count: i64, dry_run: bool) -> Result<
 }
 
 /// Create a manual state snapshot
-pub fn cmd_state_create(db_path: &str, summary: &str, description: Option<&str>) -> Result<()> {
+pub async fn cmd_state_create(
+    db_path: &str,
+    summary: &str,
+    description: Option<&str>,
+) -> Result<()> {
     info!("Creating manual state snapshot...");
 
     let conn = open_db(db_path)?;

@@ -10,7 +10,7 @@ use conary_core::self_update::{
     download_update_with_progress, extract_binary, get_update_channel, verify_binary,
 };
 
-pub fn cmd_self_update(
+pub async fn cmd_self_update(
     db_path: &str,
     check: bool,
     force: bool,

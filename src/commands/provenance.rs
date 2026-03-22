@@ -73,7 +73,7 @@ struct RekorVerification {
 }
 
 /// Show provenance information for a package
-pub fn cmd_provenance_show(
+pub async fn cmd_provenance_show(
     db_path: &str,
     package: &str,
     section: &str,
@@ -108,7 +108,11 @@ pub fn cmd_provenance_show(
 }
 
 /// Verify provenance against transparency log
-pub fn cmd_provenance_verify(db_path: &str, package: &str, all_signatures: bool) -> Result<()> {
+pub async fn cmd_provenance_verify(
+    db_path: &str,
+    package: &str,
+    all_signatures: bool,
+) -> Result<()> {
     let conn = open_db(db_path)?;
     let (name, version) = parse_package_spec(package);
 
@@ -207,7 +211,7 @@ pub fn cmd_provenance_verify(db_path: &str, package: &str, all_signatures: bool)
 }
 
 /// Compare provenance between two package versions
-pub fn cmd_provenance_diff(
+pub async fn cmd_provenance_diff(
     db_path: &str,
     package1: &str,
     package2: &str,
@@ -275,7 +279,7 @@ pub fn cmd_provenance_diff(
 }
 
 /// Find packages built with a specific dependency
-pub fn cmd_provenance_find_by_dep(
+pub async fn cmd_provenance_find_by_dep(
     db_path: &str,
     dep_name: &str,
     version: Option<&str>,
@@ -327,7 +331,7 @@ pub fn cmd_provenance_find_by_dep(
 }
 
 /// Export provenance as SBOM
-pub fn cmd_provenance_export(
+pub async fn cmd_provenance_export(
     db_path: &str,
     package: &str,
     format: &str,
@@ -580,7 +584,7 @@ fn collect_dependencies(
 }
 
 /// Register provenance in transparency log
-pub fn cmd_provenance_register(
+pub async fn cmd_provenance_register(
     db_path: &str,
     package: &str,
     key: Option<&str>,
@@ -648,7 +652,7 @@ pub fn cmd_provenance_register(
 }
 
 /// Audit packages for missing provenance
-pub fn cmd_provenance_audit(
+pub async fn cmd_provenance_audit(
     db_path: &str,
     missing: Option<&str>,
     include_converted: bool,
@@ -1217,17 +1221,21 @@ mod tests {
         }
     }
 
-    #[test]
+    #[tokio::test]
     #[ignore]
-    fn rekor_sign_verify_roundtrip() {
+    async fn rekor_sign_verify_roundtrip() {
         let db_path = std::env::var("CONARY_TEST_DB").expect("CONARY_TEST_DB is required");
         let package =
             std::env::var("CONARY_TEST_PACKAGE").expect("CONARY_TEST_PACKAGE is required");
         let key = std::env::var("CONARY_TEST_KEY").ok();
         let keyless = std::env::var("CONARY_TEST_KEYLESS").is_ok();
 
-        cmd_provenance_register(&db_path, &package, key.as_deref(), keyless, false).unwrap();
+        cmd_provenance_register(&db_path, &package, key.as_deref(), keyless, false)
+            .await
+            .unwrap();
 
-        cmd_provenance_verify(&db_path, &package, true).unwrap();
+        cmd_provenance_verify(&db_path, &package, true)
+            .await
+            .unwrap();
     }
 }

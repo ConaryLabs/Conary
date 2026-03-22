@@ -677,7 +677,10 @@ pub async fn cleanup_containers(_state: &AppState) -> Result<CleanupResult> {
 
     let mut filters = std::collections::HashMap::new();
     filters.insert("label".to_string(), vec!["conary-test".to_string()]);
-    filters.insert("status".to_string(), vec!["exited".to_string(), "dead".to_string()]);
+    filters.insert(
+        "status".to_string(),
+        vec!["exited".to_string(), "dead".to_string()],
+    );
 
     let containers = docker
         .list_containers(Some(bollard::query_parameters::ListContainersOptions {

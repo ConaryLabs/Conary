@@ -10,7 +10,7 @@ use anyhow::Result;
 /// Query packages available in repositories (not installed)
 ///
 /// This is similar to `dnf repoquery` or `apt-cache search`.
-pub fn cmd_repquery(pattern: Option<&str>, db_path: &str, info: bool) -> Result<()> {
+pub async fn cmd_repquery(pattern: Option<&str>, db_path: &str, info: bool) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let packages = if let Some(pattern) = pattern {

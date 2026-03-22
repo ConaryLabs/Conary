@@ -245,7 +245,7 @@ pub fn detect_package_format(path: &str) -> Result<PackageFormatType> {
 }
 
 /// Display scriptlets from a package file
-pub fn cmd_scripts(package_path: &str) -> Result<()> {
+pub async fn cmd_scripts(package_path: &str) -> Result<()> {
     let format = detect_package_format(package_path)?;
 
     let package: Box<dyn PackageFormat> = match format {

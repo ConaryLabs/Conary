@@ -18,7 +18,7 @@ use conary_core::filesystem::CasStore;
 use tracing::info;
 
 /// Restore files for a package from CAS
-pub fn cmd_restore(
+pub async fn cmd_restore(
     package_name: &str,
     db_path: &str,
     _root: &str,
@@ -131,7 +131,7 @@ pub fn cmd_restore(
 }
 
 /// Restore all packages with missing files
-pub fn cmd_restore_all(db_path: &str, _root: &str, dry_run: bool) -> Result<()> {
+pub async fn cmd_restore_all(db_path: &str, _root: &str, dry_run: bool) -> Result<()> {
     info!(
         "Restoring all packages with missing files (dry_run={})",
         dry_run

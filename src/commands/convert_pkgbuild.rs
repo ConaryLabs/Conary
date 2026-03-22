@@ -13,7 +13,7 @@ use std::path::Path;
 /// # Arguments
 /// * `pkgbuild_path` - Path to the PKGBUILD file
 /// * `output` - Optional output file path (None = stdout)
-pub fn cmd_convert_pkgbuild(pkgbuild_path: &str, output: Option<&str>) -> Result<()> {
+pub async fn cmd_convert_pkgbuild(pkgbuild_path: &str, output: Option<&str>) -> Result<()> {
     let path = Path::new(pkgbuild_path);
 
     // Read the PKGBUILD

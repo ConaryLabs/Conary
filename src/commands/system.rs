@@ -12,7 +12,7 @@ use std::time::Duration;
 use tracing::info;
 
 /// Initialize the Conary database and add default repositories
-pub fn cmd_init(db_path: &str) -> Result<()> {
+pub async fn cmd_init(db_path: &str) -> Result<()> {
     info!("Initializing Conary database at: {}", db_path);
     conary_core::db::init(db_path)?;
     println!("Database initialized successfully at: {}", db_path);
@@ -84,7 +84,7 @@ pub fn cmd_init(db_path: &str) -> Result<()> {
 }
 
 /// Rollback a changeset
-pub fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Result<()> {
+pub async fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Result<()> {
     info!("Rolling back changeset: {}", changeset_id);
     println!("Rolling back changeset: {}", changeset_id);
     std::io::stdout().flush()?;
@@ -498,7 +498,7 @@ fn rollback_upgrade(
 }
 
 /// Verify installed files
-pub fn cmd_verify(
+pub async fn cmd_verify(
     package: Option<String>,
     db_path: &str,
     _root: &str,
@@ -689,7 +689,7 @@ fn verify_against_rpm(conn: &rusqlite::Connection, package: Option<String>) -> R
 ///
 /// This removes files from the content-addressable store that are no longer
 /// referenced by any installed package or recent file history (for rollback).
-pub fn cmd_gc(
+pub async fn cmd_gc(
     db_path: &str,
     objects_dir: &str,
     keep_days: u32,
@@ -920,13 +920,13 @@ use super::format_bytes;
 mod tests {
     use super::cmd_init;
 
-    #[test]
-    fn init_adds_remi_with_strategy_defaults() {
+    #[tokio::test]
+    async fn init_adds_remi_with_strategy_defaults() {
         let temp_dir = tempfile::tempdir().unwrap();
         let db_path = temp_dir.path().join("conary.db");
         let db_path_str = db_path.to_str().unwrap();
 
-        cmd_init(db_path_str).unwrap();
+        cmd_init(db_path_str).await.unwrap();
 
         let conn = conary_core::db::open(db_path_str).unwrap();
         let repo = conary_core::db::models::Repository::find_by_name(&conn, "remi")

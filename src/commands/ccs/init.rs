@@ -10,7 +10,12 @@ use conary_core::ccs::CcsManifest;
 use std::path::Path;
 
 /// Initialize a new CCS manifest in the given directory
-pub fn cmd_ccs_init(path: &str, name: Option<String>, version: &str, force: bool) -> Result<()> {
+pub async fn cmd_ccs_init(
+    path: &str,
+    name: Option<String>,
+    version: &str,
+    force: bool,
+) -> Result<()> {
     let dir = Path::new(path);
     let manifest_path = dir.join("ccs.toml");
 

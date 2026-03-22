@@ -7,7 +7,7 @@ use conary_core::scriptlet::SandboxMode;
 use tracing::info;
 
 /// Create a new collection
-pub fn cmd_collection_create(
+pub async fn cmd_collection_create(
     name: &str,
     description: Option<&str>,
     members: &[String],
@@ -57,7 +57,7 @@ pub fn cmd_collection_create(
 }
 
 /// List all collections
-pub fn cmd_collection_list(db_path: &str) -> Result<()> {
+pub async fn cmd_collection_list(db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     // Find all troves with type 'collection'
@@ -95,7 +95,7 @@ pub fn cmd_collection_list(db_path: &str) -> Result<()> {
 }
 
 /// Show details of a collection
-pub fn cmd_collection_show(name: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_collection_show(name: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let troves = conary_core::db::models::Trove::find_by_name(&conn, name)?;
@@ -139,7 +139,7 @@ pub fn cmd_collection_show(name: &str, db_path: &str) -> Result<()> {
 }
 
 /// Add members to a collection
-pub fn cmd_collection_add(name: &str, members: &[String], db_path: &str) -> Result<()> {
+pub async fn cmd_collection_add(name: &str, members: &[String], db_path: &str) -> Result<()> {
     info!("Adding members to collection: {}", name);
     let mut conn = open_db(db_path)?;
 
@@ -174,7 +174,11 @@ pub fn cmd_collection_add(name: &str, members: &[String], db_path: &str) -> Resu
 }
 
 /// Remove members from a collection
-pub fn cmd_collection_remove_member(name: &str, members: &[String], db_path: &str) -> Result<()> {
+pub async fn cmd_collection_remove_member(
+    name: &str,
+    members: &[String],
+    db_path: &str,
+) -> Result<()> {
     info!("Removing members from collection: {}", name);
     let mut conn = open_db(db_path)?;
 
@@ -211,7 +215,7 @@ pub fn cmd_collection_remove_member(name: &str, members: &[String], db_path: &st
 }
 
 /// Delete a collection
-pub fn cmd_collection_delete(name: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_collection_delete(name: &str, db_path: &str) -> Result<()> {
     info!("Deleting collection: {}", name);
     let mut conn = open_db(db_path)?;
 
@@ -236,7 +240,7 @@ pub fn cmd_collection_delete(name: &str, db_path: &str) -> Result<()> {
 }
 
 /// Install all packages in a collection
-pub fn cmd_collection_install(
+pub async fn cmd_collection_install(
     name: &str,
     db_path: &str,
     root: &str,
@@ -324,7 +328,9 @@ pub fn cmd_collection_install(
                 sandbox_mode,
                 ..Default::default()
             },
-        ) {
+        )
+        .await
+        {
             Ok(_) => {
                 installed_count += 1;
             }

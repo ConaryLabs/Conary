@@ -283,7 +283,7 @@ fn repo_constraint_satisfies(
 /// This is a minimal implementation that validates and extracts the package.
 /// Full transaction support will be added in a future iteration.
 #[allow(clippy::too_many_arguments)]
-pub fn cmd_ccs_install(
+pub async fn cmd_ccs_install(
     package: &str,
     db_path: &str,
     root: &str,

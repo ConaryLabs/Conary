@@ -15,7 +15,7 @@ use conary_core::recipe::parse_recipe_file;
 /// Loads the recipe, computes the derivation ID, and prints it. The actual
 /// CAS build pipeline is not yet wired up -- this prints a TODO message for
 /// the build step while still exercising derivation ID computation.
-pub fn cmd_derivation_build(
+pub async fn cmd_derivation_build(
     recipe: &Path,
     env: &Path,
     cas_dir: &Path,
@@ -56,7 +56,7 @@ pub fn cmd_derivation_build(
 ///
 /// Computes the content-addressed derivation ID from the recipe inputs and
 /// the provided build environment hash, then prints it.
-pub fn cmd_derivation_show(recipe: &Path, env_hash: &str) -> Result<()> {
+pub async fn cmd_derivation_show(recipe: &Path, env_hash: &str) -> Result<()> {
     let parsed = parse_recipe_file(recipe)
         .with_context(|| format!("Failed to parse recipe: {}", recipe.display()))?;
 

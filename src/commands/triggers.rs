@@ -8,7 +8,11 @@ use conary_core::db::models::{Trigger, TriggerDependency};
 use tracing::info;
 
 /// List all triggers
-pub fn cmd_trigger_list(db_path: &str, show_disabled: bool, show_builtin_only: bool) -> Result<()> {
+pub async fn cmd_trigger_list(
+    db_path: &str,
+    show_disabled: bool,
+    show_builtin_only: bool,
+) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let triggers = if show_builtin_only {
@@ -53,7 +57,7 @@ pub fn cmd_trigger_list(db_path: &str, show_disabled: bool, show_builtin_only: b
 }
 
 /// Show details of a specific trigger
-pub fn cmd_trigger_show(name: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_trigger_show(name: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let trigger = Trigger::find_by_name(&conn, name)?
@@ -87,7 +91,7 @@ pub fn cmd_trigger_show(name: &str, db_path: &str) -> Result<()> {
 }
 
 /// Enable a trigger
-pub fn cmd_trigger_enable(name: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_trigger_enable(name: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let trigger = Trigger::find_by_name(&conn, name)?
@@ -109,7 +113,7 @@ pub fn cmd_trigger_enable(name: &str, db_path: &str) -> Result<()> {
 }
 
 /// Disable a trigger
-pub fn cmd_trigger_disable(name: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_trigger_disable(name: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let trigger = Trigger::find_by_name(&conn, name)?
@@ -131,7 +135,7 @@ pub fn cmd_trigger_disable(name: &str, db_path: &str) -> Result<()> {
 }
 
 /// Add a new custom trigger
-pub fn cmd_trigger_add(
+pub async fn cmd_trigger_add(
     name: &str,
     pattern: &str,
     handler: &str,
@@ -169,7 +173,7 @@ pub fn cmd_trigger_add(
 }
 
 /// Remove a custom trigger (built-in triggers cannot be removed)
-pub fn cmd_trigger_remove(name: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_trigger_remove(name: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let trigger = Trigger::find_by_name(&conn, name)?
@@ -197,7 +201,7 @@ pub fn cmd_trigger_remove(name: &str, db_path: &str) -> Result<()> {
 }
 
 /// Run pending triggers for a changeset (useful for manual re-runs)
-pub fn cmd_trigger_run(changeset_id: Option<i64>, db_path: &str, root: &str) -> Result<()> {
+pub async fn cmd_trigger_run(changeset_id: Option<i64>, db_path: &str, root: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     // If no changeset specified, get the most recent one

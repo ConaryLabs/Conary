@@ -17,7 +17,7 @@ use conary_core::ccs::manifest::CcsManifest;
 use conary_core::container::{ContainerConfig, Sandbox};
 
 /// Show declared capabilities for a package
-pub fn cmd_capability_show(db_path: &str, package: &str, format: &str) -> Result<()> {
+pub async fn cmd_capability_show(db_path: &str, package: &str, format: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let capabilities = load_capabilities_by_name(&conn, package)?;
@@ -145,7 +145,7 @@ fn display_capabilities(caps: &CapabilityDeclaration, package: &str, format: &st
 }
 
 /// Validate capability syntax in a ccs.toml manifest
-pub fn cmd_capability_validate(path: &str, verbose: bool) -> Result<()> {
+pub async fn cmd_capability_validate(path: &str, verbose: bool) -> Result<()> {
     let manifest_path = Path::new(path);
 
     if !manifest_path.exists() {
@@ -220,7 +220,7 @@ pub fn cmd_capability_validate(path: &str, verbose: bool) -> Result<()> {
 }
 
 /// List packages by capability status
-pub fn cmd_capability_list(db_path: &str, missing_only: bool, format: &str) -> Result<()> {
+pub async fn cmd_capability_list(db_path: &str, missing_only: bool, format: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let packages = list_packages_with_capabilities(&conn, missing_only)?;
@@ -287,7 +287,7 @@ pub fn cmd_capability_list(db_path: &str, missing_only: bool, format: &str) -> R
 }
 
 /// Generate capability declarations by observing a binary (Phase 2 - Not yet implemented)
-pub fn cmd_capability_generate(
+pub async fn cmd_capability_generate(
     _binary: &str,
     _args: &[String],
     _output: Option<&str>,
@@ -303,7 +303,7 @@ pub fn cmd_capability_generate(
 ///
 /// In audit mode, the enforcement is logged but not blocking. This lets users
 /// see what restrictions would be applied before enabling enforce mode.
-pub fn cmd_capability_audit(
+pub async fn cmd_capability_audit(
     db_path: &str,
     package: &str,
     _command: Option<&str>,
@@ -428,7 +428,7 @@ pub fn cmd_capability_audit(
 /// creates a sandboxed environment, and executes the command with restrictions.
 ///
 /// `permissive` maps to audit mode (log but don't block), otherwise enforce mode.
-pub fn cmd_capability_run(
+pub async fn cmd_capability_run(
     db_path: &str,
     package: &str,
     command: &[String],

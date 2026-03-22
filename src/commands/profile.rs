@@ -13,7 +13,7 @@ use conary_core::derivation::profile::BuildProfile;
 /// computing derivation IDs, and assigning stages. This is a complex pipeline
 /// that is not yet fully wired up, so this command prints an informational
 /// message with the manifest path.
-pub fn cmd_profile_generate(manifest: &Path, output: Option<&Path>) -> Result<()> {
+pub async fn cmd_profile_generate(manifest: &Path, output: Option<&Path>) -> Result<()> {
     // Verify the manifest file exists and is readable.
     if !manifest.exists() {
         anyhow::bail!("Manifest not found: {}", manifest.display());
@@ -35,7 +35,7 @@ pub fn cmd_profile_generate(manifest: &Path, output: Option<&Path>) -> Result<()
 ///
 /// Loads the profile, recomputes its hash for verification, and prints a
 /// human-readable summary including seed, stages, and derivation counts.
-pub fn cmd_profile_show(path: &Path) -> Result<()> {
+pub async fn cmd_profile_show(path: &Path) -> Result<()> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read profile: {}", path.display()))?;
 
@@ -91,7 +91,7 @@ pub fn cmd_profile_show(path: &Path) -> Result<()> {
 ///
 /// Loads both profiles, computes their diff, and prints added, removed, and
 /// changed packages.
-pub fn cmd_profile_diff(old_path: &Path, new_path: &Path) -> Result<()> {
+pub async fn cmd_profile_diff(old_path: &Path, new_path: &Path) -> Result<()> {
     let old_content = std::fs::read_to_string(old_path)
         .with_context(|| format!("Failed to read old profile: {}", old_path.display()))?;
     let new_content = std::fs::read_to_string(new_path)
@@ -145,7 +145,7 @@ pub fn cmd_profile_diff(old_path: &Path, new_path: &Path) -> Result<()> {
 }
 
 /// Publish a profile to a remote Remi endpoint.
-pub fn cmd_profile_publish(
+pub async fn cmd_profile_publish(
     profile_path: &str,
     endpoint: Option<&str>,
     token: Option<&str>,

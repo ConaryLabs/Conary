@@ -16,7 +16,7 @@ use tracing::info;
 /// - "dependency" or "required" - packages installed as dependencies
 /// - "collection" or "@*" - packages installed via collections
 /// - Custom pattern with * wildcard - e.g., "Required by nginx"
-pub fn cmd_query_reason(pattern: Option<&str>, db_path: &str) -> Result<()> {
+pub async fn cmd_query_reason(pattern: Option<&str>, db_path: &str) -> Result<()> {
     info!("Querying packages by reason: {:?}", pattern);
     let conn = open_db(db_path)?;
 

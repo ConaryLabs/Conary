@@ -10,7 +10,7 @@ use anyhow::Result;
 use tracing::info;
 
 /// Show dependencies for a package
-pub fn cmd_depends(package_name: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_depends(package_name: &str, db_path: &str) -> Result<()> {
     info!("Showing dependencies for package: {}", package_name);
     let conn = open_db(db_path)?;
 
@@ -39,7 +39,7 @@ pub fn cmd_depends(package_name: &str, db_path: &str) -> Result<()> {
 }
 
 /// Show reverse dependencies
-pub fn cmd_rdepends(package_name: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_rdepends(package_name: &str, db_path: &str) -> Result<()> {
     info!("Showing reverse dependencies for package: {}", package_name);
     let conn = open_db(db_path)?;
 
@@ -75,7 +75,7 @@ pub fn cmd_rdepends(package_name: &str, db_path: &str) -> Result<()> {
 }
 
 /// Show what packages would break if a package is removed
-pub fn cmd_whatbreaks(package_name: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_whatbreaks(package_name: &str, db_path: &str) -> Result<()> {
     info!(
         "Checking what would break if '{}' is removed...",
         package_name
@@ -114,7 +114,7 @@ pub fn cmd_whatbreaks(package_name: &str, db_path: &str) -> Result<()> {
 /// - A virtual provide (e.g., perl(DBI))
 /// - A file path (e.g., /usr/bin/python3)
 /// - A shared library (e.g., libssl.so.3)
-pub fn cmd_whatprovides(capability: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_whatprovides(capability: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     // First try exact match

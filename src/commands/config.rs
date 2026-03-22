@@ -17,7 +17,7 @@ use conary_core::filesystem::CasStore;
 ///
 /// With no arguments, lists all modified config files.
 /// With a package name, lists all config files for that package.
-pub fn cmd_config_list(db_path: &str, package: Option<&str>, all: bool) -> Result<()> {
+pub async fn cmd_config_list(db_path: &str, package: Option<&str>, all: bool) -> Result<()> {
     let conn = open_db(db_path)?;
 
     if let Some(pkg_name) = package {
@@ -91,7 +91,7 @@ pub fn cmd_config_list(db_path: &str, package: Option<&str>, all: bool) -> Resul
 }
 
 /// Show diff between installed config file and package version
-pub fn cmd_config_diff(db_path: &str, path: &str, root: &str) -> Result<()> {
+pub async fn cmd_config_diff(db_path: &str, path: &str, root: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let config = ConfigFile::find_by_path(&conn, path)?
@@ -158,7 +158,7 @@ pub fn cmd_config_diff(db_path: &str, path: &str, root: &str) -> Result<()> {
 }
 
 /// Backup a config file to CAS
-pub fn cmd_config_backup(db_path: &str, path: &str, root: &str) -> Result<()> {
+pub async fn cmd_config_backup(db_path: &str, path: &str, root: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let config = ConfigFile::find_by_path(&conn, path)?
@@ -194,7 +194,7 @@ pub fn cmd_config_backup(db_path: &str, path: &str, root: &str) -> Result<()> {
 }
 
 /// Restore a config file from backup
-pub fn cmd_config_restore(
+pub async fn cmd_config_restore(
     db_path: &str,
     path: &str,
     root: &str,
@@ -256,7 +256,7 @@ pub fn cmd_config_restore(
 }
 
 /// Check and update status of config files
-pub fn cmd_config_check(db_path: &str, root: &str, package: Option<&str>) -> Result<()> {
+pub async fn cmd_config_check(db_path: &str, root: &str, package: Option<&str>) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let configs = if let Some(pkg_name) = package {
@@ -322,7 +322,7 @@ pub fn cmd_config_check(db_path: &str, root: &str, package: Option<&str>) -> Res
 }
 
 /// Show backups for a config file
-pub fn cmd_config_backups(db_path: &str, path: &str) -> Result<()> {
+pub async fn cmd_config_backups(db_path: &str, path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let config = ConfigFile::find_by_path(&conn, path)?
