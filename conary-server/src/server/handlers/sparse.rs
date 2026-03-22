@@ -296,7 +296,7 @@ fn build_package_list(
     let total: usize = conn.query_row(
         "SELECT COUNT(DISTINCT name) FROM repository_packages WHERE repository_id = ?1",
         [repo_id],
-        |row| row.get(0),
+        |row| row.get::<_, i64>(0).map(|v| v as usize),
     )?;
 
     // Get paginated distinct names
@@ -309,9 +309,10 @@ fn build_package_list(
     )?;
 
     let packages: Vec<String> = stmt
-        .query_map(rusqlite::params![repo_id, per_page, offset], |row| {
-            row.get(0)
-        })?
+        .query_map(
+            rusqlite::params![repo_id, per_page as i64, offset as i64],
+            |row| row.get(0),
+        )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
     Ok(PackageListResponse {
