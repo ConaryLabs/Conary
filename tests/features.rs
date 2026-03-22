@@ -5,7 +5,6 @@
 mod common;
 
 use conary_core::db;
-use tempfile::NamedTempFile;
 
 // =============================================================================
 // LANGUAGE DEPENDENCY TESTS
@@ -123,12 +122,7 @@ fn test_language_deps_in_database() {
     };
     use conary_core::dependencies::LanguageDepDetector;
 
-    let temp_file = NamedTempFile::new().unwrap();
-    let db_path = temp_file.path().to_str().unwrap().to_string();
-    drop(temp_file);
-
-    db::init(&db_path).unwrap();
-    let mut conn = db::open(&db_path).unwrap();
+    let (_dir, _path, mut conn) = common::create_test_db();
 
     // Simulate installing a Python package
     let package_files = vec![
@@ -228,12 +222,7 @@ fn test_language_deps_in_database() {
 fn test_install_reason_tracking() {
     use conary_core::db::models::{InstallReason, Trove, TroveType};
 
-    let temp_file = NamedTempFile::new().unwrap();
-    let db_path = temp_file.path().to_str().unwrap().to_string();
-    drop(temp_file);
-
-    db::init(&db_path).unwrap();
-    let mut conn = db::open(&db_path).unwrap();
+    let (_dir, _path, mut conn) = common::create_test_db();
 
     db::transaction(&mut conn, |tx| {
         // Install package explicitly
@@ -336,12 +325,7 @@ fn test_install_reason_queries() {
 fn test_collection_management() {
     use conary_core::db::models::{CollectionMember, Trove, TroveType};
 
-    let temp_file = NamedTempFile::new().unwrap();
-    let db_path = temp_file.path().to_str().unwrap().to_string();
-    drop(temp_file);
-
-    db::init(&db_path).unwrap();
-    let mut conn = db::open(&db_path).unwrap();
+    let (_dir, _path, mut conn) = common::create_test_db();
 
     db::transaction(&mut conn, |tx| {
         // Create a collection
@@ -1018,12 +1002,7 @@ fn test_system_model_snapshot() {
 fn test_reference_mirror_creation() {
     use conary_core::db::models::Repository;
 
-    let temp_file = NamedTempFile::new().unwrap();
-    let db_path = temp_file.path().to_str().unwrap().to_string();
-    drop(temp_file);
-
-    db::init(&db_path).unwrap();
-    let conn = db::open(&db_path).unwrap();
+    let (_dir, _path, conn) = common::create_test_db();
 
     // Create repository with separate metadata and content URLs
     let mut repo = Repository::with_content_mirror(
@@ -1056,12 +1035,7 @@ fn test_reference_mirror_creation() {
 fn test_repository_without_content_mirror() {
     use conary_core::db::models::Repository;
 
-    let temp_file = NamedTempFile::new().unwrap();
-    let db_path = temp_file.path().to_str().unwrap().to_string();
-    drop(temp_file);
-
-    db::init(&db_path).unwrap();
-    let conn = db::open(&db_path).unwrap();
+    let (_dir, _path, conn) = common::create_test_db();
 
     // Create standard repository (no content mirror)
     let mut repo = Repository::new(
@@ -1088,12 +1062,7 @@ fn test_repository_without_content_mirror() {
 fn test_mixed_mirror_configurations() {
     use conary_core::db::models::Repository;
 
-    let temp_file = NamedTempFile::new().unwrap();
-    let db_path = temp_file.path().to_str().unwrap().to_string();
-    drop(temp_file);
-
-    db::init(&db_path).unwrap();
-    let conn = db::open(&db_path).unwrap();
+    let (_dir, _path, conn) = common::create_test_db();
 
     // Standard repo
     let mut repo1 = Repository::new(
@@ -1134,12 +1103,7 @@ fn test_mixed_mirror_configurations() {
 fn test_repository_update_content_mirror() {
     use conary_core::db::models::Repository;
 
-    let temp_file = NamedTempFile::new().unwrap();
-    let db_path = temp_file.path().to_str().unwrap().to_string();
-    drop(temp_file);
-
-    db::init(&db_path).unwrap();
-    let conn = db::open(&db_path).unwrap();
+    let (_dir, _path, conn) = common::create_test_db();
 
     // Create repo with content mirror
     let mut repo = Repository::with_content_mirror(

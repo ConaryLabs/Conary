@@ -23,6 +23,11 @@ pub struct PackageDelta {
 }
 
 impl PackageDelta {
+    /// Column list for SELECT queries.
+    const COLUMNS: &'static str = "id, package_name, from_version, to_version, from_hash, \
+         to_hash, delta_url, delta_size, delta_checksum, full_size, compression_ratio, \
+         created_at";
+
     /// Create a new PackageDelta
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -90,12 +95,12 @@ impl PackageDelta {
         from_version: &str,
         to_version: &str,
     ) -> Result<Option<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, package_name, from_version, to_version, from_hash, to_hash,
-                    delta_url, delta_size, delta_checksum, full_size, compression_ratio, created_at
-             FROM package_deltas
+        let sql = format!(
+            "SELECT {} FROM package_deltas \
              WHERE package_name = ?1 AND from_version = ?2 AND to_version = ?3",
-        )?;
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
 
         let delta = stmt
             .query_row([package_name, from_version, to_version], Self::from_row)
@@ -106,13 +111,12 @@ impl PackageDelta {
 
     /// Find all available deltas for a package
     pub fn find_by_package(conn: &Connection, package_name: &str) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, package_name, from_version, to_version, from_hash, to_hash,
-                    delta_url, delta_size, delta_checksum, full_size, compression_ratio, created_at
-             FROM package_deltas
-             WHERE package_name = ?1
-             ORDER BY created_at DESC",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM package_deltas \
+             WHERE package_name = ?1 ORDER BY created_at DESC",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
 
         let deltas = stmt
             .query_map([package_name], Self::from_row)?
@@ -159,6 +163,10 @@ pub struct DeltaStats {
 }
 
 impl DeltaStats {
+    /// Column list for SELECT queries.
+    const COLUMNS: &'static str = "id, changeset_id, total_bytes_saved, deltas_applied, \
+         full_downloads, delta_failures, created_at";
+
     /// Create new DeltaStats
     pub fn new(changeset_id: i64) -> Self {
         Self {
@@ -194,14 +202,12 @@ impl DeltaStats {
 
     /// Find delta stats by changeset ID
     pub fn find_by_changeset(conn: &Connection, changeset_id: i64) -> Result<Option<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, changeset_id, total_bytes_saved, deltas_applied, full_downloads, delta_failures, created_at
-             FROM delta_stats
-             WHERE changeset_id = ?1",
-        )?;
-
+        let sql = format!(
+            "SELECT {} FROM delta_stats WHERE changeset_id = ?1",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let stats = stmt.query_row([changeset_id], Self::from_row).optional()?;
-
         Ok(stats)
     }
 

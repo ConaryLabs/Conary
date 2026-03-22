@@ -183,6 +183,31 @@ where
     Ok(result)
 }
 
+/// Shared test utilities for database tests across the crate.
+///
+/// Provides [`create_test_db`] to eliminate the duplicated
+/// `NamedTempFile` + `Connection::open` + `PRAGMA foreign_keys` +
+/// `schema::migrate` boilerplate that appears in 20+ test modules.
+#[cfg(test)]
+pub(crate) mod testing {
+    use rusqlite::Connection;
+    use tempfile::NamedTempFile;
+
+    use super::schema;
+
+    /// Create a temporary SQLite database with the full Conary schema applied.
+    ///
+    /// Returns the `NamedTempFile` (which must be kept alive to prevent
+    /// cleanup) and an open `Connection` with foreign keys enabled.
+    pub fn create_test_db() -> (NamedTempFile, Connection) {
+        let temp_file = NamedTempFile::new().unwrap();
+        let conn = Connection::open(temp_file.path()).unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        schema::migrate(&conn).unwrap();
+        (temp_file, conn)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

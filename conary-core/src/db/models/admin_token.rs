@@ -17,6 +17,20 @@ pub struct AdminToken {
     pub last_used_at: Option<String>,
 }
 
+impl AdminToken {
+    /// Convert a database row to an AdminToken
+    fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            token_hash: row.get(2)?,
+            scopes: row.get(3)?,
+            created_at: row.get(4)?,
+            last_used_at: row.get(5)?,
+        })
+    }
+}
+
 /// Create a new admin token, returning the row ID
 pub fn create(conn: &Connection, name: &str, token_hash: &str, scopes: &str) -> Result<i64> {
     conn.execute(
@@ -33,16 +47,7 @@ pub fn find_by_hash(conn: &Connection, token_hash: &str) -> Result<Option<AdminT
          FROM admin_tokens WHERE token_hash = ?1",
     )?;
     let result = stmt
-        .query_row(params![token_hash], |row| {
-            Ok(AdminToken {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                token_hash: row.get(2)?,
-                scopes: row.get(3)?,
-                created_at: row.get(4)?,
-                last_used_at: row.get(5)?,
-            })
-        })
+        .query_row(params![token_hash], AdminToken::from_row)
         .optional()?;
     Ok(result)
 }
@@ -52,20 +57,18 @@ pub fn list(conn: &Connection) -> Result<Vec<AdminToken>> {
     let mut stmt = conn.prepare(
         "SELECT id, name, scopes, created_at, last_used_at FROM admin_tokens ORDER BY id",
     )?;
-    let rows = stmt.query_map([], |row| {
-        Ok(AdminToken {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            token_hash: String::new(),
-            scopes: row.get(2)?,
-            created_at: row.get(3)?,
-            last_used_at: row.get(4)?,
-        })
-    })?;
-    let mut tokens = Vec::new();
-    for row in rows {
-        tokens.push(row?);
-    }
+    let tokens = stmt
+        .query_map([], |row| {
+            Ok(AdminToken {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                token_hash: String::new(),
+                scopes: row.get(2)?,
+                created_at: row.get(3)?,
+                last_used_at: row.get(4)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(tokens)
 }
 

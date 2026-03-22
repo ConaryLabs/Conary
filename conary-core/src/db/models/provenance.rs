@@ -19,6 +19,10 @@ pub struct Provenance {
 }
 
 impl Provenance {
+    /// Column list for SELECT queries.
+    const COLUMNS: &'static str = "id, trove_id, source_url, source_branch, source_commit, \
+         build_host, build_time, builder";
+
     /// Create a new Provenance
     pub fn new(trove_id: i64) -> Self {
         Self {
@@ -56,13 +60,12 @@ impl Provenance {
 
     /// Find provenance for a trove
     pub fn find_by_trove(conn: &Connection, trove_id: i64) -> Result<Option<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, trove_id, source_url, source_branch, source_commit, build_host, build_time, builder
-             FROM provenance WHERE trove_id = ?1",
-        )?;
-
+        let sql = format!(
+            "SELECT {} FROM provenance WHERE trove_id = ?1",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let provenance = stmt.query_row([trove_id], Self::from_row).optional()?;
-
         Ok(provenance)
     }
 

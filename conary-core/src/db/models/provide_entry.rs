@@ -23,6 +23,9 @@ pub struct ProvideEntry {
 }
 
 impl ProvideEntry {
+    /// Column list for SELECT queries.
+    const COLUMNS: &'static str = "id, trove_id, capability, version, kind";
+
     fn soname_base(capability: &str) -> Option<&str> {
         if capability.contains(".so") {
             capability
@@ -97,22 +100,22 @@ impl ProvideEntry {
     ///
     /// Returns the first trove that provides this capability
     pub fn find_by_capability(conn: &Connection, capability: &str) -> Result<Option<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, trove_id, capability, version, kind
-             FROM provides WHERE capability = ?1 LIMIT 1",
-        )?;
-
+        let sql = format!(
+            "SELECT {} FROM provides WHERE capability = ?1 LIMIT 1",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let provide = stmt.query_row([capability], Self::from_row).optional()?;
         Ok(provide)
     }
 
     /// Find a provide by kind and capability name
     pub fn find_typed(conn: &Connection, kind: &str, capability: &str) -> Result<Option<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, trove_id, capability, version, kind
-             FROM provides WHERE kind = ?1 AND capability = ?2 LIMIT 1",
-        )?;
-
+        let sql = format!(
+            "SELECT {} FROM provides WHERE kind = ?1 AND capability = ?2 LIMIT 1",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let provide = stmt
             .query_row([kind, capability], Self::from_row)
             .optional()?;
@@ -121,43 +124,40 @@ impl ProvideEntry {
 
     /// Find all troves that provide a capability
     pub fn find_all_by_capability(conn: &Connection, capability: &str) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, trove_id, capability, version, kind
-             FROM provides WHERE capability = ?1",
-        )?;
-
+        let sql = format!(
+            "SELECT {} FROM provides WHERE capability = ?1",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let provides = stmt
             .query_map([capability], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-
         Ok(provides)
     }
 
     /// Find all typed provides (by kind and capability)
     pub fn find_all_typed(conn: &Connection, kind: &str, capability: &str) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, trove_id, capability, version, kind
-             FROM provides WHERE kind = ?1 AND capability = ?2",
-        )?;
-
+        let sql = format!(
+            "SELECT {} FROM provides WHERE kind = ?1 AND capability = ?2",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let provides = stmt
             .query_map([kind, capability], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-
         Ok(provides)
     }
 
     /// Find all provides for a trove
     pub fn find_by_trove(conn: &Connection, trove_id: i64) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, trove_id, capability, version, kind
-             FROM provides WHERE trove_id = ?1",
-        )?;
-
+        let sql = format!(
+            "SELECT {} FROM provides WHERE trove_id = ?1",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let provides = stmt
             .query_map([trove_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-
         Ok(provides)
     }
 
@@ -167,15 +167,14 @@ impl ProvideEntry {
         trove_id: i64,
         kind: &str,
     ) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, trove_id, capability, version, kind
-             FROM provides WHERE trove_id = ?1 AND kind = ?2",
-        )?;
-
+        let sql = format!(
+            "SELECT {} FROM provides WHERE trove_id = ?1 AND kind = ?2",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let provides = stmt
             .query_map(params![trove_id, kind], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-
         Ok(provides)
     }
 
@@ -282,29 +281,27 @@ impl ProvideEntry {
 
     /// Search for capabilities matching a pattern (using SQL LIKE)
     pub fn search_capability(conn: &Connection, pattern: &str) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, trove_id, capability, version, kind
-             FROM provides WHERE capability LIKE ?1",
-        )?;
-
+        let sql = format!(
+            "SELECT {} FROM provides WHERE capability LIKE ?1",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let provides = stmt
             .query_map([pattern], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-
         Ok(provides)
     }
 
     /// Search for typed capabilities matching a kind and pattern
     pub fn search_typed(conn: &Connection, kind: &str, pattern: &str) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, trove_id, capability, version, kind
-             FROM provides WHERE kind = ?1 AND capability LIKE ?2",
-        )?;
-
+        let sql = format!(
+            "SELECT {} FROM provides WHERE kind = ?1 AND capability LIKE ?2",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let provides = stmt
             .query_map([kind, pattern], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-
         Ok(provides)
     }
 

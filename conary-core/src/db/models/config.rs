@@ -320,6 +320,10 @@ pub struct ConfigBackup {
 }
 
 impl ConfigBackup {
+    /// Column list for SELECT queries.
+    const COLUMNS: &'static str = "id, config_file_id, backup_hash, reason, changeset_id, \
+         created_at";
+
     /// Create a new backup entry
     pub fn new(config_file_id: i64, backup_hash: String, reason: String) -> Self {
         Self {
@@ -359,10 +363,11 @@ impl ConfigBackup {
 
     /// Find all backups for a config file
     pub fn find_by_config_file(conn: &Connection, config_file_id: i64) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, config_file_id, backup_hash, reason, changeset_id, created_at \
-             FROM config_backups WHERE config_file_id = ?1 ORDER BY created_at DESC",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM config_backups WHERE config_file_id = ?1 ORDER BY created_at DESC",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let backups = stmt
             .query_map([config_file_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -371,10 +376,12 @@ impl ConfigBackup {
 
     /// Find the most recent backup for a config file
     pub fn find_latest(conn: &Connection, config_file_id: i64) -> Result<Option<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, config_file_id, backup_hash, reason, changeset_id, created_at \
-             FROM config_backups WHERE config_file_id = ?1 ORDER BY created_at DESC LIMIT 1",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM config_backups WHERE config_file_id = ?1 \
+             ORDER BY created_at DESC LIMIT 1",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let backup = stmt
             .query_row([config_file_id], Self::from_row)
             .optional()?;
@@ -383,10 +390,11 @@ impl ConfigBackup {
 
     /// Find backups by changeset
     pub fn find_by_changeset(conn: &Connection, changeset_id: i64) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, config_file_id, backup_hash, reason, changeset_id, created_at \
-             FROM config_backups WHERE changeset_id = ?1 ORDER BY created_at DESC",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM config_backups WHERE changeset_id = ?1 ORDER BY created_at DESC",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let backups = stmt
             .query_map([changeset_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;

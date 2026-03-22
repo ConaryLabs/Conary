@@ -5,18 +5,12 @@
 mod common;
 
 use conary_core::db;
-use tempfile::NamedTempFile;
 
 #[test]
 fn test_query_packages() {
     use conary_core::db::models::{Changeset, ChangesetStatus, Trove, TroveType};
 
-    let temp_file = NamedTempFile::new().unwrap();
-    let db_path = temp_file.path().to_str().unwrap().to_string();
-    drop(temp_file);
-
-    db::init(&db_path).unwrap();
-    let mut conn = db::open(&db_path).unwrap();
+    let (_dir, _path, mut conn) = common::create_test_db();
 
     // Install multiple packages
     for (name, version) in [
@@ -52,12 +46,7 @@ fn test_query_packages() {
 fn test_history_shows_operations() {
     use conary_core::db::models::{Changeset, ChangesetStatus};
 
-    let temp_file = NamedTempFile::new().unwrap();
-    let db_path = temp_file.path().to_str().unwrap().to_string();
-    drop(temp_file);
-
-    db::init(&db_path).unwrap();
-    let mut conn = db::open(&db_path).unwrap();
+    let (_dir, _path, mut conn) = common::create_test_db();
 
     // Create some changesets
     for desc in ["Install nginx", "Install redis", "Remove nginx"] {
@@ -87,12 +76,7 @@ fn test_history_shows_operations() {
 fn test_whatprovides_query() {
     use conary_core::db::models::{ProvideEntry, Trove, TroveType};
 
-    let temp_file = NamedTempFile::new().unwrap();
-    let db_path = temp_file.path().to_str().unwrap().to_string();
-    drop(temp_file);
-
-    db::init(&db_path).unwrap();
-    let mut conn = db::open(&db_path).unwrap();
+    let (_dir, _path, mut conn) = common::create_test_db();
 
     db::transaction(&mut conn, |tx| {
         // Create a package with various provides

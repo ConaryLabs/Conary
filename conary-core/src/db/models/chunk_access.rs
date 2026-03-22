@@ -28,6 +28,10 @@ pub struct ChunkAccess {
 }
 
 impl ChunkAccess {
+    /// Column list for SELECT queries.
+    const COLUMNS: &'static str = "hash, size_bytes, access_count, created_at, last_accessed, \
+         referenced_by, protected";
+
     /// Create a new chunk access record
     pub fn new(hash: String, size_bytes: i64) -> Self {
         Self {
@@ -84,25 +88,22 @@ impl ChunkAccess {
 
     /// Find a chunk by hash
     pub fn find_by_hash(conn: &Connection, hash: &str) -> Result<Option<Self>> {
-        let result = conn
-            .query_row(
-                "SELECT hash, size_bytes, access_count, created_at, last_accessed, \
-                 referenced_by, protected \
-                 FROM chunk_access WHERE hash = ?1",
-                [hash],
-                Self::from_row,
-            )
-            .optional()?;
+        let sql = format!(
+            "SELECT {} FROM chunk_access WHERE hash = ?1",
+            Self::COLUMNS
+        );
+        let result = conn.query_row(&sql, [hash], Self::from_row).optional()?;
         Ok(result)
     }
 
     /// Get least recently used chunks (for eviction)
     pub fn get_lru_chunks(conn: &Connection, limit: usize) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT hash, size_bytes, access_count, created_at, last_accessed, \
-             referenced_by, protected \
-             FROM chunk_access WHERE protected = 0 ORDER BY last_accessed ASC LIMIT ?1",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM chunk_access \
+             WHERE protected = 0 ORDER BY last_accessed ASC LIMIT ?1",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let results = stmt
             .query_map([limit as i64], Self::from_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -111,12 +112,12 @@ impl ChunkAccess {
 
     /// Get chunks older than a given timestamp
     pub fn get_stale_chunks(conn: &Connection, before: &str) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT hash, size_bytes, access_count, created_at, last_accessed, \
-             referenced_by, protected \
-             FROM chunk_access WHERE protected = 0 AND last_accessed < ?1 \
-             ORDER BY last_accessed ASC",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM chunk_access \
+             WHERE protected = 0 AND last_accessed < ?1 ORDER BY last_accessed ASC",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let results = stmt
             .query_map([before], Self::from_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -186,11 +187,11 @@ impl ChunkAccess {
 
     /// Get most popular chunks
     pub fn get_popular_chunks(conn: &Connection, limit: usize) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT hash, size_bytes, access_count, created_at, last_accessed, \
-             referenced_by, protected \
-             FROM chunk_access ORDER BY access_count DESC LIMIT ?1",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM chunk_access ORDER BY access_count DESC LIMIT ?1",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let results = stmt
             .query_map([limit as i64], Self::from_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -199,11 +200,11 @@ impl ChunkAccess {
 
     /// Get largest chunks
     pub fn get_largest_chunks(conn: &Connection, limit: usize) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT hash, size_bytes, access_count, created_at, last_accessed, \
-             referenced_by, protected \
-             FROM chunk_access ORDER BY size_bytes DESC LIMIT ?1",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM chunk_access ORDER BY size_bytes DESC LIMIT ?1",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let results = stmt
             .query_map([limit as i64], Self::from_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -227,16 +228,7 @@ pub struct ChunkStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::schema;
-    use tempfile::NamedTempFile;
-
-    fn create_test_db() -> (NamedTempFile, Connection) {
-        let temp_file = NamedTempFile::new().unwrap();
-        let conn = Connection::open(temp_file.path()).unwrap();
-        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
-        (temp_file, conn)
-    }
+    use crate::db::testing::create_test_db;
 
     #[test]
     fn test_chunk_access_upsert() {

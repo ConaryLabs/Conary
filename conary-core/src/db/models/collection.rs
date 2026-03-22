@@ -23,6 +23,9 @@ pub struct CollectionMember {
 }
 
 impl CollectionMember {
+    /// Column list for SELECT queries.
+    const COLUMNS: &'static str = "id, collection_id, member_name, member_version, is_optional";
+
     /// Create a new collection member
     pub fn new(collection_id: i64, member_name: String) -> Self {
         Self {
@@ -66,16 +69,14 @@ impl CollectionMember {
 
     /// Find all members of a collection
     pub fn find_by_collection(conn: &Connection, collection_id: i64) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, collection_id, member_name, member_version, is_optional
-             FROM collection_members WHERE collection_id = ?1
-             ORDER BY member_name",
-        )?;
-
+        let sql = format!(
+            "SELECT {} FROM collection_members WHERE collection_id = ?1 ORDER BY member_name",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let members = stmt
             .query_map([collection_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-
         Ok(members)
     }
 
@@ -124,16 +125,14 @@ impl CollectionMember {
         collection_id: i64,
         member_name: &str,
     ) -> Result<Option<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, collection_id, member_name, member_version, is_optional
-             FROM collection_members
-             WHERE collection_id = ?1 AND member_name = ?2",
-        )?;
-
+        let sql = format!(
+            "SELECT {} FROM collection_members WHERE collection_id = ?1 AND member_name = ?2",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let member = stmt
             .query_row(params![collection_id, member_name], Self::from_row)
             .optional()?;
-
         Ok(member)
     }
 

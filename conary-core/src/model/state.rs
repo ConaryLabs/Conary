@@ -187,17 +187,7 @@ pub fn snapshot_to_model(state: &SystemState) -> super::SystemModel {
 mod tests {
     use super::*;
     use crate::db::models::DistroPin;
-    use crate::db::schema;
-    use rusqlite::Connection;
-    use tempfile::NamedTempFile;
-
-    fn create_test_db() -> (NamedTempFile, Connection) {
-        let temp_file = NamedTempFile::new().unwrap();
-        let conn = Connection::open(temp_file.path()).unwrap();
-        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
-        (temp_file, conn)
-    }
+    use crate::db::testing::create_test_db;
 
     #[test]
     fn test_empty_state() {

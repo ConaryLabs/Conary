@@ -5,7 +5,6 @@
 mod common;
 
 use conary_core::db;
-use tempfile::NamedTempFile;
 
 /// Test that the classifier correctly categorizes files into components
 #[test]
@@ -347,12 +346,7 @@ fn test_component_selective_install_database() {
         Changeset, ChangesetStatus, Component, FileEntry, Trove, TroveType,
     };
 
-    let temp_file = NamedTempFile::new().unwrap();
-    let db_path = temp_file.path().to_str().unwrap().to_string();
-    drop(temp_file);
-
-    db::init(&db_path).unwrap();
-    let mut conn = db::open(&db_path).unwrap();
+    let (_dir, _path, mut conn) = common::create_test_db();
 
     // Simulate installing only :devel component
     let package_files = vec![
