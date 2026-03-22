@@ -19,7 +19,7 @@ pub async fn cmd_registry_update(db_path: &str) -> Result<()> {
 
     for (name, url) in &repos {
         let endpoint = url.trim_end_matches('/');
-        match conary_core::canonical::client::fetch_canonical_map(&conn, endpoint) {
+        match conary_core::canonical::client::fetch_canonical_map(&conn, endpoint).await {
             Ok(Some(count)) => {
                 println!("Fetched {count} canonical mappings from {name} ({endpoint})");
                 println!("[COMPLETE] Registry updated");

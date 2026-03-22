@@ -35,12 +35,12 @@ impl ArchParser {
     /// Download and decompress the repository database
     ///
     /// Uses RepositoryClient for HTTP and the compression module for auto-decompression.
-    fn download_database(&self, repo_url: &str) -> Result<Vec<u8>> {
+    async fn download_database(&self, repo_url: &str) -> Result<Vec<u8>> {
         let db_url = format!("{}/{}.db", repo_url.trim_end_matches('/'), self.repo_name);
         debug!("Downloading Arch database from: {}", db_url);
 
         let client = RepositoryClient::new()?;
-        client.fetch_and_decompress(&db_url)
+        client.fetch_and_decompress(&db_url).await
     }
 
     /// Parse a desc file from the tarball
@@ -318,11 +318,11 @@ impl ArchParser {
 }
 
 impl RepositoryParser for ArchParser {
-    fn sync_metadata(&self, repo_url: &str) -> Result<Vec<PackageMetadata>> {
+    async fn sync_metadata(&self, repo_url: &str) -> Result<Vec<PackageMetadata>> {
         info!("Syncing Arch Linux repository: {}", self.repo_name);
 
         // Download and decompress database (handled by RepositoryClient)
-        let decompressed = self.download_database(repo_url)?;
+        let decompressed = self.download_database(repo_url).await?;
 
         // Single-pass: collect desc and depends data keyed by directory name.
         // Directory names in .db.tar.gz are "{name}-{version}-{pkgrel}/".

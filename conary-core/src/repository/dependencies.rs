@@ -8,7 +8,6 @@
 use crate::db::models::{RepositoryProvide, Trove, generate_capability_variations};
 use crate::error::{Error, Result};
 use crate::version::VersionConstraint;
-use rayon::prelude::*;
 use rusqlite::Connection;
 use std::cmp::Reverse;
 use std::collections::HashSet;
@@ -457,7 +456,7 @@ pub fn resolve_dependencies_transitive_requests(
 ///
 /// # Returns
 /// Vec<(dependency_name, downloaded_path)> on success
-pub fn download_dependencies(
+pub async fn download_dependencies(
     dependencies: &[(String, PackageWithRepo)],
     dest_dir: &Path,
     keyring_dir: Option<&Path>,
@@ -492,10 +491,8 @@ pub fn download_dependencies(
 
     // Use parallel iterator for concurrent downloads with progress
     // Collect as Vec<Result<_>> to track individual successes/failures
-    let individual_results: Vec<Result<(String, PathBuf, u64)>> = dependencies
-        .par_iter()
-        .zip(progress_bars.par_iter())
-        .map(|((dep_name, pkg_with_repo), pb)| {
+    let mut individual_results: Vec<Result<(String, PathBuf, u64)>> = Vec::new();
+    for ((dep_name, pkg_with_repo), pb) in dependencies.iter().zip(progress_bars.iter()) {
             info!("Downloading dependency: {}", dep_name);
 
             // Build GPG options if keyring_dir provided and repo has gpg_check enabled
@@ -514,12 +511,12 @@ pub fn download_dependencies(
                 None
             };
 
-            match download_package_verified_with_progress(
+            let result = match download_package_verified_with_progress(
                 &pkg_with_repo.package,
                 dest_dir,
                 gpg_options.as_ref(),
                 Some(pb),
-            ) {
+            ).await {
                 Ok(path) => {
                     DownloadProgress::finish_download(pb, dep_name);
                     Ok((dep_name.clone(), path, pkg_with_repo.package.size as u64))
@@ -528,9 +525,9 @@ pub fn download_dependencies(
                     DownloadProgress::fail_download(pb, dep_name, &e.to_string());
                     Err(e)
                 }
-            }
-        })
-        .collect();
+            };
+            individual_results.push(result);
+    }
 
     // Calculate statistics and show summary
     let mut succeeded_results = Vec::new();

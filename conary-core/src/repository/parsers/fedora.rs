@@ -45,12 +45,12 @@ impl FedoraParser {
     /// Download repomd.xml and find primary.xml location
     ///
     /// Uses RepositoryClient for HTTP.
-    fn get_primary_xml_location(&self, repo_url: &str) -> Result<String> {
+    async fn get_primary_xml_location(&self, repo_url: &str) -> Result<String> {
         let repomd_url = format!("{}/repodata/repomd.xml", repo_url.trim_end_matches('/'));
         debug!("Downloading repomd.xml from: {}", repomd_url);
 
         let client = RepositoryClient::new()?;
-        let xml_bytes = client.download_to_bytes(&repomd_url)?;
+        let xml_bytes = client.download_to_bytes(&repomd_url).await?;
         let xml_content = String::from_utf8(xml_bytes)
             .map_err(|e| Error::ParseError(format!("Invalid UTF-8 in repomd.xml: {}", e)))?;
 
@@ -112,12 +112,12 @@ impl FedoraParser {
     /// Download and decompress primary.xml
     ///
     /// Uses RepositoryClient for HTTP and the compression module for auto-decompression.
-    fn download_primary_xml(&self, repo_url: &str, location: &str) -> Result<String> {
+    async fn download_primary_xml(&self, repo_url: &str, location: &str) -> Result<String> {
         let primary_url = format!("{}/{}", repo_url.trim_end_matches('/'), location);
         debug!("Downloading primary.xml from: {}", primary_url);
 
         let client = RepositoryClient::new()?;
-        let content = client.fetch_and_decompress_string(&primary_url)?;
+        let content = client.fetch_and_decompress_string(&primary_url).await?;
 
         debug!("Decompressed primary.xml: {} bytes", content.len());
         Ok(content)
@@ -596,14 +596,14 @@ impl PackageBuilder {
 }
 
 impl RepositoryParser for FedoraParser {
-    fn sync_metadata(&self, repo_url: &str) -> Result<Vec<PackageMetadata>> {
+    async fn sync_metadata(&self, repo_url: &str) -> Result<Vec<PackageMetadata>> {
         info!("Syncing Fedora repository for {}", self.architecture);
 
         // Get primary.xml location from repomd.xml
-        let primary_location = self.get_primary_xml_location(repo_url)?;
+        let primary_location = self.get_primary_xml_location(repo_url).await?;
 
         // Download and decompress primary.xml
-        let primary_xml = self.download_primary_xml(repo_url, &primary_location)?;
+        let primary_xml = self.download_primary_xml(repo_url, &primary_location).await?;
 
         // Parse primary.xml
         let packages = self.parse_primary_xml(&primary_xml, repo_url)?;

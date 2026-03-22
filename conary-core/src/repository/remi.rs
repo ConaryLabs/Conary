@@ -17,7 +17,7 @@ use crate::error::{Error, Result};
 use crate::filesystem::path::sanitize_filename;
 use crate::repository::error_helpers::ResultExt;
 use indicatif::{ProgressBar, ProgressStyle};
-use reqwest::blocking::Client;
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Write;
@@ -205,7 +205,7 @@ impl RemiClient {
     ///
     /// Returns the manifest when the package is ready. If conversion is needed,
     /// this will poll automatically until complete or timeout.
-    pub fn get_package(
+    pub async fn get_package(
         &self,
         distro: &str,
         name: &str,
@@ -215,13 +215,13 @@ impl RemiClient {
 
         info!("Requesting package from Remi: {}", url);
 
-        let response = self.client.get(&url).send().download_context(&url)?;
+        let response = self.client.get(&url).send().await.download_context(&url)?;
 
         match response.status().as_u16() {
             200 => {
                 // Package ready - parse manifest
                 let manifest: PackageManifest =
-                    response.json().parse_context("package manifest")?;
+                    response.json().await.parse_context("package manifest")?;
                 info!(
                     "Package ready: {} chunks, {} bytes",
                     manifest.chunks.len(),
@@ -230,15 +230,15 @@ impl RemiClient {
                 Ok(manifest)
             }
             202 => {
-                let accepted: ConversionAccepted = response.json().parse_context("202 response")?;
+                let accepted: ConversionAccepted = response.json().await.parse_context("202 response")?;
                 info!(
                     "Package conversion queued (job {}), ETA: {:?}s",
                     accepted.job_id, accepted.eta_seconds
                 );
-                self.poll_for_completion(&accepted.job_id)
+                self.poll_for_completion(&accepted.job_id).await
             }
             status => {
-                let body = response.text().unwrap_or_default();
+                let body = response.text().await.unwrap_or_default();
                 Err(self.core.map_http_error(status, body, name, distro))
             }
         }
@@ -248,7 +248,7 @@ impl RemiClient {
     ///
     /// Retries up to 3 times on transient errors (5xx, timeout, connection
     /// refused) with exponential backoff. 4xx errors fail immediately.
-    fn poll_for_completion(&self, job_id: &str) -> Result<PackageManifest> {
+    async fn poll_for_completion(&self, job_id: &str) -> Result<PackageManifest> {
         let url = self.core.job_url(job_id);
         let start = std::time::Instant::now();
         let max_transient_retries: u32 = 3;
@@ -276,7 +276,7 @@ impl RemiClient {
             }
 
             // Poll job status
-            let response = match self.client.get(&url).send() {
+            let response = match self.client.get(&url).send().await {
                 Ok(resp) => resp,
                 Err(e) => {
                     // Connection error or timeout -- transient, retry
@@ -295,7 +295,7 @@ impl RemiClient {
                         "Transient error polling job {} (attempt {}/{}): {e}, retrying in {:?}",
                         job_id, consecutive_transient_failures, max_transient_retries, backoff
                     );
-                    std::thread::sleep(backoff);
+                    tokio::time::sleep(backoff).await;
                     continue;
                 }
             };
@@ -323,7 +323,7 @@ impl RemiClient {
                         max_transient_retries,
                         backoff
                     );
-                    std::thread::sleep(backoff);
+                    tokio::time::sleep(backoff).await;
                     continue;
                 }
                 // 4xx -- not transient, fail immediately
@@ -337,7 +337,7 @@ impl RemiClient {
             // Successful response -- reset transient failure counter
             consecutive_transient_failures = 0;
 
-            let status: JobStatus = response.json().parse_context("job status")?;
+            let status: JobStatus = response.json().await.parse_context("job status")?;
 
             match status.status.as_str() {
                 "ready" => {
@@ -356,14 +356,14 @@ impl RemiClient {
                         &status.package,
                         status.version.as_deref(),
                     );
-                    let response = self.client.get(&url).send().download_context(&url)?;
+                    let response = self.client.get(&url).send().await.download_context(&url)?;
                     if !response.status().is_success() {
                         return Err(Error::DownloadError(format!(
                             "Re-request for manifest failed: HTTP {}",
                             response.status()
                         )));
                     }
-                    let manifest = response.json().parse_context("manifest")?;
+                    let manifest = response.json().await.parse_context("manifest")?;
                     return Ok(manifest);
                 }
                 "failed" => {
@@ -382,11 +382,11 @@ impl RemiClient {
                             status.package, progress
                         ));
                     }
-                    std::thread::sleep(POLL_INTERVAL);
+                    tokio::time::sleep(POLL_INTERVAL).await;
                 }
                 other => {
                     warn!("Unknown job status: {}", other);
-                    std::thread::sleep(POLL_INTERVAL);
+                    tokio::time::sleep(POLL_INTERVAL).await;
                 }
             }
         }
@@ -396,7 +396,7 @@ impl RemiClient {
     ///
     /// Downloads chunks sequentially and returns a map of hash -> data
     /// for assembly.
-    pub fn download_chunks(
+    pub async fn download_chunks(
         &self,
         manifest: &PackageManifest,
         progress: Option<&ProgressBar>,
@@ -429,29 +429,34 @@ impl RemiClient {
             let url = self.core.chunk_url(&chunk.hash);
             debug!("Downloading chunk: {} ({} bytes)", chunk.hash, chunk.size);
 
-            let data = crate::repository::retry::with_retry(&retry_config, || {
-                let response = chunk_client.get(&url).send().download_context(&url)?;
+            let data = crate::repository::retry::with_retry_async(&retry_config, || {
+                let url = &url;
+                let chunk_client = &chunk_client;
+                let chunk_hash = &chunk.hash;
+                async move {
+                    let response = chunk_client.get(url.as_str()).send().await.download_context(url)?;
 
-                let status_code = response.status().as_u16();
-                if status_code >= 500 || status_code == 408 || status_code == 429 {
-                    return Err(Error::DownloadError(format!(
-                        "Chunk {} returned HTTP {}",
-                        chunk.hash, status_code
-                    )));
+                    let status_code = response.status().as_u16();
+                    if status_code >= 500 || status_code == 408 || status_code == 429 {
+                        return Err(Error::DownloadError(format!(
+                            "Chunk {} returned HTTP {}",
+                            chunk_hash, status_code
+                        )));
+                    }
+
+                    if !response.status().is_success() {
+                        // 4xx (other than 408/429) -- not transient, fail immediately
+                        return Err(Error::DownloadError(format!(
+                            "Chunk {} returned HTTP {}",
+                            chunk_hash,
+                            response.status()
+                        )));
+                    }
+
+                    let bytes = response.bytes().await.download_context(url)?;
+                    Ok(bytes)
                 }
-
-                if !response.status().is_success() {
-                    // 4xx (other than 408/429) -- not transient, fail immediately
-                    return Err(Error::DownloadError(format!(
-                        "Chunk {} returned HTTP {}",
-                        chunk.hash,
-                        response.status()
-                    )));
-                }
-
-                let bytes = response.bytes().download_context(&url)?;
-                Ok(bytes)
-            })?;
+            }).await?;
 
             // Verify chunk hash using shared hash module
             crate::hash::verify_sha256(&data, &chunk.hash).map_err(|e| {
@@ -541,7 +546,7 @@ impl RemiClient {
     ///
     /// If conversion is needed, the download endpoint triggers it and returns
     /// 202 Accepted with a job ID for polling.
-    pub fn fetch_package(
+    pub async fn fetch_package(
         &self,
         distro: &str,
         name: &str,
@@ -553,21 +558,21 @@ impl RemiClient {
 
         info!("Downloading CCS package from Remi: {}", url);
 
-        let response = self.client.get(&url).send().download_context(&url)?;
+        let response = self.client.get(&url).send().await.download_context(&url)?;
 
         match response.status().as_u16() {
             200 => {
                 // Package ready - download it
-                self.download_ccs_response(response, name, output_dir)
+                self.download_ccs_response(response, name, output_dir).await
             }
             202 => {
                 // Conversion in progress - poll then retry download
-                let accepted: ConversionAccepted = response.json().parse_context("202 response")?;
+                let accepted: ConversionAccepted = response.json().await.parse_context("202 response")?;
                 info!(
                     "Package conversion queued (job {}), ETA: {:?}s",
                     accepted.job_id, accepted.eta_seconds
                 );
-                let _manifest = self.poll_for_completion(&accepted.job_id)?;
+                let _manifest = self.poll_for_completion(&accepted.job_id).await?;
 
                 // Retry download after conversion completes
                 // Small delay + retry loop to handle server propagation timing
@@ -578,14 +583,14 @@ impl RemiClient {
 
                 for attempt in 1..=max_retries {
                     // Brief delay before retry (increases with each attempt)
-                    std::thread::sleep(Duration::from_millis(200 * attempt as u64));
+                    tokio::time::sleep(Duration::from_millis(200 * attempt as u64)).await;
 
-                    let retry_response = self.client.get(&url).send().download_context(&url)?;
+                    let retry_response = self.client.get(&url).send().await.download_context(&url)?;
 
                     last_status = retry_response.status().as_u16();
 
                     if last_status == 200 {
-                        return self.download_ccs_response(retry_response, name, output_dir);
+                        return self.download_ccs_response(retry_response, name, output_dir).await;
                     } else if last_status != 202 {
                         // Unexpected status - fail immediately
                         return Err(Error::DownloadError(format!(
@@ -606,16 +611,16 @@ impl RemiClient {
                 )))
             }
             status => {
-                let body = response.text().unwrap_or_default();
+                let body = response.text().await.unwrap_or_default();
                 Err(self.core.map_http_error(status, body, name, distro))
             }
         }
     }
 
     /// Download the CCS file from a successful response
-    fn download_ccs_response(
+    async fn download_ccs_response(
         &self,
-        response: reqwest::blocking::Response,
+        response: reqwest::Response,
         name: &str,
         output_dir: &Path,
     ) -> Result<PathBuf> {
@@ -654,21 +659,17 @@ impl RemiClient {
         let mut file = std::fs::File::create(&output_path).io_context("create output file")?;
 
         let mut downloaded: u64 = 0;
-        let mut reader = response;
-        let mut buffer = [0u8; 8192];
+        let mut response = response;
 
-        loop {
-            let bytes_read = std::io::Read::read(&mut reader, &mut buffer)
-                .download_context("response stream")?;
-
-            if bytes_read == 0 {
-                break;
-            }
-
-            file.write_all(&buffer[..bytes_read])
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|e| Error::DownloadError(format!("response stream: {e}")))?
+        {
+            file.write_all(&chunk)
                 .io_context("write to output file")?;
 
-            downloaded += bytes_read as u64;
+            downloaded += chunk.len() as u64;
             pb.set_position(downloaded);
         }
 
@@ -697,9 +698,9 @@ impl RemiClient {
     }
 
     /// Check if Remi is healthy
-    pub fn health_check(&self) -> Result<bool> {
+    pub async fn health_check(&self) -> Result<bool> {
         let url = self.core.health_url();
-        match self.client.get(&url).send() {
+        match self.client.get(&url).send().await {
             Ok(response) => Ok(response.status().is_success()),
             Err(_) => Ok(false),
         }

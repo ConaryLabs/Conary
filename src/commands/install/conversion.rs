@@ -464,7 +464,7 @@ pub async fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Resu
                             &to_download,
                             temp_dir.path(),
                             Some(&keyring_dir),
-                        )?;
+                        ).await?;
                         let parent_name = ccs_pkg.name().to_string();
                         let mut prepared_packages = Vec::with_capacity(downloaded.len());
 

@@ -48,7 +48,7 @@ pub struct DownloadOptions {
 ///
 /// All public download functions delegate to this implementation.
 /// Handles filename construction, download, checksum verification, and GPG verification.
-fn download_package_inner(
+async fn download_package_inner(
     repo_pkg: &RepositoryPackage,
     dest_dir: &Path,
     options: Option<&DownloadOptions>,
@@ -56,7 +56,7 @@ fn download_package_inner(
 ) -> Result<PathBuf> {
     if let Some((base_url, distro, name)) = parse_remi_download_url(&repo_pkg.download_url) {
         let client = RemiClient::new(&base_url)?;
-        return client.fetch_package(&distro, &name, Some(&repo_pkg.version), dest_dir);
+        return client.fetch_package(&distro, &name, Some(&repo_pkg.version), dest_dir).await;
     }
 
     let client = RepositoryClient::new()?;
@@ -71,9 +71,9 @@ fn download_package_inner(
             &dest_path,
             &repo_pkg.name,
             Some(pb),
-        )?;
+        ).await?;
     } else {
-        client.download_file(&repo_pkg.download_url, &dest_path)?;
+        client.download_file(&repo_pkg.download_url, &dest_path).await?;
     }
 
     // Verify checksum - clean up invalid file on failure
@@ -84,7 +84,7 @@ fn download_package_inner(
 
     // GPG verification if enabled
     if let Some(opts) = options {
-        verify_gpg_signature(repo_pkg, &dest_path, opts)?;
+        verify_gpg_signature(repo_pkg, &dest_path, opts).await?;
     }
 
     Ok(dest_path)
@@ -133,7 +133,7 @@ fn construct_dest_path(repo_pkg: &RepositoryPackage, dest_dir: &Path) -> PathBuf
 }
 
 /// Verify GPG signature with appropriate error handling
-fn verify_gpg_signature(
+async fn verify_gpg_signature(
     repo_pkg: &RepositoryPackage,
     dest_path: &Path,
     opts: &DownloadOptions,
@@ -142,7 +142,7 @@ fn verify_gpg_signature(
         return Ok(());
     }
 
-    match verify_package_signature(dest_path, &repo_pkg.download_url, opts) {
+    match verify_package_signature(dest_path, &repo_pkg.download_url, opts).await {
         Ok(()) => {
             info!("GPG signature verified for {}", repo_pkg.name);
             Ok(())
@@ -182,8 +182,8 @@ fn verify_gpg_signature(
 /// Downloads the package and verifies its checksum against the trusted metadata.
 /// If verification fails, the corrupted/invalid file is removed before returning
 /// the error to prevent cache pollution.
-pub fn download_package(repo_pkg: &RepositoryPackage, dest_dir: &Path) -> Result<PathBuf> {
-    download_package_inner(repo_pkg, dest_dir, None, None)
+pub async fn download_package(repo_pkg: &RepositoryPackage, dest_dir: &Path) -> Result<PathBuf> {
+    download_package_inner(repo_pkg, dest_dir, None, None).await
 }
 
 /// Download a package with optional GPG signature verification
@@ -201,19 +201,19 @@ pub fn download_package(repo_pkg: &RepositoryPackage, dest_dir: &Path) -> Result
 /// # Strict Mode
 /// When `gpg_strict` is true, missing signatures are treated as errors.
 /// This ensures all packages from the repository have valid signatures.
-pub fn download_package_verified(
+pub async fn download_package_verified(
     repo_pkg: &RepositoryPackage,
     dest_dir: &Path,
     options: Option<&DownloadOptions>,
 ) -> Result<PathBuf> {
-    download_package_inner(repo_pkg, dest_dir, options, None)
+    download_package_inner(repo_pkg, dest_dir, options, None).await
 }
 
 /// Verify GPG signature for a downloaded package
 ///
 /// Attempts to download detached signature files (.sig, .asc) and verify
 /// them against the imported GPG key for the repository.
-fn verify_package_signature(
+async fn verify_package_signature(
     package_path: &Path,
     download_url: &str,
     options: &DownloadOptions,
@@ -243,7 +243,7 @@ fn verify_package_signature(
         debug!("Trying to download signature from: {}", sig_url);
 
         // Try to download signature
-        match client.download_to_bytes(&sig_url) {
+        match client.download_to_bytes(&sig_url).await {
             Ok(sig_data) => {
                 // Save signature to temp file
                 let sig_path = package_path.with_extension(
@@ -290,7 +290,7 @@ fn verify_package_signature(
 ///
 /// # Returns
 /// Path to the downloaded and verified delta file
-pub fn download_delta(
+pub async fn download_delta(
     delta_info: &DeltaInfo,
     package_name: &str,
     to_version: &str,
@@ -312,7 +312,7 @@ pub fn download_delta(
     );
 
     // Download the delta file
-    client.download_file(&delta_info.delta_url, &dest_path)?;
+    client.download_file(&delta_info.delta_url, &dest_path).await?;
 
     // Verify checksum
     verify_checksum(&dest_path, &delta_info.delta_checksum)?;
@@ -370,25 +370,25 @@ fn create_progress_bar(size: u64, name: &str) -> ProgressBar {
 /// Shows download progress including bytes downloaded, speed, and package name.
 /// If checksum verification fails, the invalid file is removed before returning
 /// the error to prevent cache pollution.
-pub fn download_package_with_progress(
+pub async fn download_package_with_progress(
     repo_pkg: &RepositoryPackage,
     dest_dir: &Path,
     progress_bar: Option<&ProgressBar>,
 ) -> Result<PathBuf> {
-    download_package_inner(repo_pkg, dest_dir, None, progress_bar)
+    download_package_inner(repo_pkg, dest_dir, None, progress_bar).await
 }
 
 /// Download a package with progress and optional GPG verification
 ///
 /// Combines progress display with GPG signature verification.
 /// See [`download_package_verified`] for details on strict mode behavior.
-pub fn download_package_verified_with_progress(
+pub async fn download_package_verified_with_progress(
     repo_pkg: &RepositoryPackage,
     dest_dir: &Path,
     options: Option<&DownloadOptions>,
     progress_bar: Option<&ProgressBar>,
 ) -> Result<PathBuf> {
-    download_package_inner(repo_pkg, dest_dir, options, progress_bar)
+    download_package_inner(repo_pkg, dest_dir, options, progress_bar).await
 }
 
 /// Multi-progress manager for parallel downloads

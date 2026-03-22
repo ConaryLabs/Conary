@@ -10,10 +10,10 @@ use crate::error::{Error, Result};
 use crate::repository::error_helpers::ResultExt;
 use indicatif::ProgressBar;
 use rand::Rng;
-use reqwest::blocking::Client;
+use reqwest::Client;
 use reqwest::header;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -44,9 +44,6 @@ impl Default for TimeoutConfig {
         }
     }
 }
-
-/// Buffer size for streaming downloads (8 KB)
-const STREAM_BUFFER_SIZE: usize = 8192;
 
 /// Maximum response size for in-memory downloads (256 MB)
 ///
@@ -128,8 +125,8 @@ impl RetryPolicy {
 /// The `offset` parameter indicates how many bytes were already written (for resumed
 /// downloads). The progress bar position starts from `offset` so the user sees
 /// correct overall progress.
-fn stream_response_to_file(
-    mut response: reqwest::blocking::Response,
+async fn stream_response_to_file(
+    mut response: reqwest::Response,
     file: &mut File,
     total_size: u64,
     offset: u64,
@@ -149,21 +146,16 @@ fn stream_response_to_file(
     }
 
     let mut downloaded: u64 = offset;
-    let mut buffer = [0u8; STREAM_BUFFER_SIZE];
 
-    loop {
-        let bytes_read = response
-            .read(&mut buffer)
-            .io_context("read response stream")?;
-
-        if bytes_read == 0 {
-            break;
-        }
-
-        file.write_all(&buffer[..bytes_read])
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| Error::DownloadError(format!("read response stream: {e}")))?
+    {
+        file.write_all(&chunk)
             .io_context("write download data")?;
 
-        downloaded += bytes_read as u64;
+        downloaded += chunk.len() as u64;
 
         if let Some(pb) = progress_bar {
             pb.set_position(downloaded);
@@ -225,7 +217,7 @@ impl RepositoryClient {
     }
 
     /// Fetch repository metadata from URL with retry support
-    pub fn fetch_metadata(&self, url: &str) -> Result<RepositoryMetadata> {
+    pub async fn fetch_metadata(&self, url: &str) -> Result<RepositoryMetadata> {
         validate_url_scheme(url)?;
         let metadata_url = if url.ends_with('/') {
             format!("{url}metadata.json")
@@ -243,6 +235,7 @@ impl RepositoryClient {
                 .get(&metadata_url)
                 .timeout(self.timeouts.metadata)
                 .send()
+                .await
             {
                 Ok(response) => {
                     let status = response.status();
@@ -258,7 +251,7 @@ impl RepositoryClient {
                             "Metadata fetch attempt {} got HTTP {}, retrying...",
                             attempt, status
                         );
-                        std::thread::sleep(self.retry_policy.delay_for_attempt(attempt));
+                        tokio::time::sleep(self.retry_policy.delay_for_attempt(attempt)).await;
                         continue;
                     }
 
@@ -269,7 +262,7 @@ impl RepositoryClient {
                         )));
                     }
 
-                    let metadata: RepositoryMetadata = response.json().map_err(|e| {
+                    let metadata: RepositoryMetadata = response.json().await.map_err(|e| {
                         Error::DownloadError(format!("Failed to parse metadata JSON: {e}"))
                     })?;
 
@@ -289,7 +282,7 @@ impl RepositoryClient {
                         "Metadata fetch attempt {} failed: {}, retrying...",
                         attempt, e
                     );
-                    std::thread::sleep(self.retry_policy.delay_for_attempt(attempt));
+                    tokio::time::sleep(self.retry_policy.delay_for_attempt(attempt)).await;
                 }
             }
         }
@@ -299,7 +292,7 @@ impl RepositoryClient {
     ///
     /// Returns the response body as bytes, or an error if the download fails.
     /// This method does NOT retry - if the URL returns 404, it returns an error immediately.
-    pub fn download_to_bytes(&self, url: &str) -> Result<Vec<u8>> {
+    pub async fn download_to_bytes(&self, url: &str) -> Result<Vec<u8>> {
         validate_url_scheme(url)?;
 
         let response = self
@@ -307,6 +300,7 @@ impl RepositoryClient {
             .get(url)
             .timeout(self.timeouts.metadata)
             .send()
+            .await
             .download_context(url)?;
 
         if !response.status().is_success() {
@@ -327,7 +321,7 @@ impl RepositoryClient {
             )));
         }
 
-        let bytes = response.bytes().download_context(url)?;
+        let bytes = response.bytes().await.download_context(url)?;
 
         if bytes.len() as u64 > MAX_BYTES_RESPONSE_SIZE {
             return Err(Error::DownloadError(format!(
@@ -352,9 +346,9 @@ impl RepositoryClient {
     /// let data = client.fetch_and_decompress("https://repo.example.com/Packages.gz")?;
     /// let content = String::from_utf8(data)?;
     /// ```
-    pub fn fetch_and_decompress(&self, url: &str) -> Result<Vec<u8>> {
+    pub async fn fetch_and_decompress(&self, url: &str) -> Result<Vec<u8>> {
         debug!("Fetching and decompressing: {}", url);
-        let bytes = self.download_to_bytes(url)?;
+        let bytes = self.download_to_bytes(url).await?;
 
         // Auto-detect and decompress
         let decompressed =
@@ -371,8 +365,8 @@ impl RepositoryClient {
     /// Fetch and decompress data as a UTF-8 string
     ///
     /// Convenience method that decompresses and converts to String.
-    pub fn fetch_and_decompress_string(&self, url: &str) -> Result<String> {
-        let bytes = self.fetch_and_decompress(url)?;
+    pub async fn fetch_and_decompress_string(&self, url: &str) -> Result<String> {
+        let bytes = self.fetch_and_decompress(url).await?;
         String::from_utf8(bytes).parse_context(&format!("UTF-8 from {url}"))
     }
 
@@ -380,8 +374,8 @@ impl RepositoryClient {
     ///
     /// Uses the URL extension to determine if decompression is needed.
     /// Use this when the URL clearly indicates the compression format.
-    pub fn fetch_with_extension_hint(&self, url: &str) -> Result<Vec<u8>> {
-        let bytes = self.download_to_bytes(url)?;
+    pub async fn fetch_with_extension_hint(&self, url: &str) -> Result<Vec<u8>> {
+        let bytes = self.download_to_bytes(url).await?;
 
         let format = CompressionFormat::from_extension(url);
         if format == CompressionFormat::None {
@@ -403,8 +397,8 @@ impl RepositoryClient {
     }
 
     /// Download a file to the specified path with retry support
-    pub fn download_file(&self, url: &str, dest_path: &Path) -> Result<()> {
-        self.download_file_with_progress(url, dest_path, "", None)
+    pub async fn download_file(&self, url: &str, dest_path: &Path) -> Result<()> {
+        self.download_file_with_progress(url, dest_path, "", None).await
     }
 
     /// Download a file with optional progress bar display
@@ -414,7 +408,7 @@ impl RepositoryClient {
     ///
     /// Supports resumable downloads: if a `.tmp` file already exists from a previous
     /// interrupted download, sends a `Range` header to resume from where it left off.
-    pub fn download_file_with_progress(
+    pub async fn download_file_with_progress(
         &self,
         url: &str,
         dest_path: &Path,
@@ -452,7 +446,7 @@ impl RepositoryClient {
                 request = request.header(header::RANGE, format!("bytes={}-", existing_len));
             }
 
-            match request.send() {
+            match request.send().await {
                 Ok(response) => {
                     let status = response.status();
 
@@ -467,7 +461,7 @@ impl RepositoryClient {
                             "Download attempt {} got HTTP {}, retrying...",
                             attempt, status
                         );
-                        std::thread::sleep(self.retry_policy.delay_for_attempt(attempt));
+                        tokio::time::sleep(self.retry_policy.delay_for_attempt(attempt)).await;
                         continue;
                     }
 
@@ -551,7 +545,7 @@ impl RepositoryClient {
                         offset,
                         progress_bar,
                         display_name,
-                    )?;
+                    ).await?;
 
                     if let Some(pb) = progress_bar {
                         pb.finish_with_message(format!("{} [done]", display_name));
@@ -579,7 +573,7 @@ impl RepositoryClient {
                         )));
                     }
                     warn!("Download attempt {} failed: {}, retrying...", attempt, e);
-                    std::thread::sleep(self.retry_policy.delay_for_attempt(attempt));
+                    tokio::time::sleep(self.retry_policy.delay_for_attempt(attempt)).await;
                 }
             }
         }

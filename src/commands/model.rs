@@ -38,7 +38,7 @@ fn load_model(model_path: &Path) -> Result<SystemModel> {
     Ok(parse_model_file(model_path)?)
 }
 
-fn load_model_and_diff(
+async fn load_model_and_diff(
     model_path: &Path,
     db_path: &str,
     offline: bool,
@@ -47,11 +47,11 @@ fn load_model_and_diff(
     let model = load_model(model_path)?;
     let conn = open_db(db_path)?;
     let state = capture_current_state(&conn)?;
-    let diff = compute_model_diff(&model, &state, &conn, offline, announce_includes)?;
+    let diff = compute_model_diff(&model, &state, &conn, offline, announce_includes).await?;
     Ok((model, conn, diff))
 }
 
-fn compute_model_diff(
+async fn compute_model_diff(
     model: &SystemModel,
     state: &SystemState,
     conn: &Connection,
@@ -67,7 +67,7 @@ fn compute_model_diff(
                 mode
             );
         }
-        compute_diff_with_includes_offline(model, state, conn, offline)?
+        compute_diff_with_includes_offline(model, state, conn, offline).await?
     } else {
         compute_diff(model, state)
     };
@@ -434,7 +434,7 @@ fn build_derived_package(conn: &Connection, name: &str, cas: &CasStore) -> Resul
 /// Show what changes are needed to reach the model state
 pub async fn cmd_model_diff(model_path: &str, db_path: &str, offline: bool) -> Result<()> {
     let model_path = Path::new(model_path);
-    let (_model, conn, diff) = load_model_and_diff(model_path, db_path, offline, true)?;
+    let (_model, conn, diff) = load_model_and_diff(model_path, db_path, offline, true).await?;
     let summary = diff.summary();
 
     if diff.is_empty() {
@@ -566,7 +566,7 @@ pub async fn cmd_model_apply(
     offline: bool,
 ) -> Result<()> {
     let model_path = Path::new(model_path);
-    let (model, conn, diff) = load_model_and_diff(model_path, db_path, offline, true)?;
+    let (model, conn, diff) = load_model_and_diff(model_path, db_path, offline, true).await?;
     let diff_summary = diff.summary();
 
     if diff.is_empty() {
@@ -839,7 +839,7 @@ pub async fn cmd_model_check(
     offline: bool,
 ) -> Result<()> {
     let model_path = Path::new(model_path);
-    let (_model, _conn, diff) = load_model_and_diff(model_path, db_path, offline, false)?;
+    let (_model, _conn, diff) = load_model_and_diff(model_path, db_path, offline, false).await?;
 
     if diff.is_empty() {
         println!("OK: System matches model");
@@ -964,7 +964,7 @@ pub async fn cmd_model_remote_diff(model_path: &str, db_path: &str, refresh: boo
         }
 
         // Fetch the remote collection
-        let collection = match fetch_remote_collection(&conn, &name, label_str, false) {
+        let collection = match fetch_remote_collection(&conn, &name, label_str, false).await {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("  Failed to fetch '{}': {}", spec, e);
@@ -1093,7 +1093,7 @@ pub async fn cmd_model_lock(model_path: &str, output: Option<&str>, db_path: &st
         return Ok(());
     }
 
-    let _resolved = conary_core::model::resolve_includes(&model, &conn)?;
+    let _resolved = conary_core::model::resolve_includes(&model, &conn).await?;
 
     let lock_data = collect_lock_data(&model, &conn)?;
     let lock = build_lock_from_data(&lock_data, model_path)?;
@@ -1156,7 +1156,7 @@ pub async fn cmd_model_update(model_path: &str, db_path: &str) -> Result<()> {
         }
     }
 
-    let _resolved = conary_core::model::resolve_includes(&model, &conn)?;
+    let _resolved = conary_core::model::resolve_includes(&model, &conn).await?;
 
     let lock_data = collect_lock_data(&model, &conn)?;
     let current_hashes: Vec<(String, String, String)> = lock_data
@@ -1236,7 +1236,7 @@ fn validate_publish_inputs(
 ///
 /// The signing key path is loaded here (if provided) to avoid naming
 /// the `ed25519_dalek::SigningKey` type in shared structs.
-fn publish_remote(
+async fn publish_remote(
     inputs: &PublishInputs,
     version: &str,
     repo_name: &str,
@@ -1277,6 +1277,7 @@ fn publish_remote(
     }
 
     conary_core::model::remote::publish_remote_collection(&inputs.repo_url, &data, force)
+        .await
         .map_err(|e| anyhow!("{}", e))?;
 
     let member_count = data.members.len();
@@ -1446,7 +1447,7 @@ pub async fn cmd_model_publish(
         inputs.repo_url.starts_with("http://") || inputs.repo_url.starts_with("https://");
 
     if is_remote {
-        publish_remote(&inputs, version, repo_name, force, sign_key_path)?;
+        publish_remote(&inputs, version, repo_name, force, sign_key_path).await?;
     } else {
         publish_local(&mut inputs, version, repo_name, description, force)?;
     }
@@ -1733,8 +1734,8 @@ mod tests {
         assert!(headline.contains("1 planned package change(s)"));
     }
 
-    #[test]
-    fn test_compute_model_diff_surfaces_mixed_replatform_execution_states() {
+    #[tokio::test]
+    async fn test_compute_model_diff_surfaces_mixed_replatform_execution_states() {
         let (_temp, db_path) = create_test_db();
         let conn = rusqlite::Connection::open(&db_path).unwrap();
         seed_mixed_replatform_fixture(&conn);
@@ -1755,7 +1756,7 @@ strength = "strict"
         .unwrap();
 
         let state = capture_current_state(&conn).unwrap();
-        let diff = compute_model_diff(&model, &state, &conn, false, false).unwrap();
+        let diff = compute_model_diff(&model, &state, &conn, false, false).await.unwrap();
 
         assert_eq!(
             diff.actions
@@ -2158,8 +2159,8 @@ strength = "strict"
         assert!(!version_matches_constraint("1.25.0", "1.24"));
     }
 
-    #[test]
-    fn test_remote_diff_detects_missing() {
+    #[tokio::test]
+    async fn test_remote_diff_detects_missing() {
         use conary_core::db::models::RemoteCollection;
         use conary_core::model::SystemState;
         use std::collections::{HashMap, HashSet};
@@ -2218,6 +2219,7 @@ strength = "strict"
             "myrepo:stable",
             false,
         )
+        .await
         .unwrap();
 
         // Simulate the drift detection logic from cmd_model_remote_diff

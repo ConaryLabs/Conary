@@ -200,7 +200,7 @@ pub async fn cmd_trust_verify(repo_name: &str, db_path: &str) -> Result<()> {
     println!("Verifying TUF metadata for: {repo_name}");
 
     let client = TufClient::new(repo_id, &repo.url, repo.tuf_root_url.as_deref())?;
-    match client.update(&conn) {
+    match client.update(&conn).await {
         Ok(state) => {
             println!("[OK] Root:      v{}", state.root_version);
             println!(

@@ -12,8 +12,8 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+use reqwest::Client;
 use reqwest::StatusCode;
-use reqwest::blocking::Client;
 use rusqlite::Connection;
 use tracing::{debug, warn};
 
@@ -200,7 +200,7 @@ impl DerivationSubstituter {
     ///
     /// Returns `CacheQueryResult::Hit` on the first peer that has the manifest,
     /// or `CacheQueryResult::Miss` if no peer has it.
-    pub fn query(&mut self, derivation_id: &str) -> CacheQueryResult {
+    pub async fn query(&mut self, derivation_id: &str) -> CacheQueryResult {
         for peer in &self.peers {
             let health = self
                 .peer_health
@@ -218,8 +218,8 @@ impl DerivationSubstituter {
             let url = format!("{}/v1/derivations/{}", peer.endpoint, derivation_id);
             let endpoint = peer.endpoint.clone();
 
-            match self.client.get(&url).send() {
-                Ok(resp) if resp.status() == StatusCode::OK => match resp.text() {
+            match self.client.get(&url).send().await {
+                Ok(resp) if resp.status() == StatusCode::OK => match resp.text().await {
                     Ok(body) => match toml::from_str::<OutputManifest>(&body) {
                         Ok(manifest) => {
                             self.peer_health
@@ -289,7 +289,7 @@ impl DerivationSubstituter {
     ///
     /// Returns `SubstituterError::Http` on network failure and
     /// `SubstituterError::Io` if the CAS write fails.
-    pub fn fetch_missing_objects(
+    pub async fn fetch_missing_objects(
         &self,
         manifest: &OutputManifest,
         cas: &CasStore,
@@ -311,6 +311,7 @@ impl DerivationSubstituter {
                 .client
                 .get(&url)
                 .send()
+                .await
                 .map_err(|e| SubstituterError::Http(e.to_string()))?;
 
             if !resp.status().is_success() {
@@ -323,6 +324,7 @@ impl DerivationSubstituter {
 
             let bytes = resp
                 .bytes()
+                .await
                 .map_err(|e| SubstituterError::Http(e.to_string()))?;
 
             let byte_count = bytes.len() as u64;
@@ -351,7 +353,7 @@ impl DerivationSubstituter {
     ///
     /// Returns `SubstituterError::Parse` if the manifest cannot be serialized.
     /// Returns `SubstituterError::Http` on network or server errors.
-    pub fn publish(
+    pub async fn publish(
         &self,
         derivation_id: &str,
         manifest: &OutputManifest,
@@ -368,6 +370,7 @@ impl DerivationSubstituter {
             .header("Content-Type", "application/toml")
             .body(body)
             .send()
+            .await
             .map_err(|e| SubstituterError::Http(e.to_string()))?;
 
         if !resp.status().is_success() {
@@ -392,7 +395,7 @@ impl DerivationSubstituter {
     ///
     /// Returns `SubstituterError::Http` on network or server errors.
     /// Returns `SubstituterError::Parse` if the response body is not valid JSON.
-    pub fn batch_probe(
+    pub async fn batch_probe(
         &self,
         derivation_ids: &[String],
         endpoint: &str,
@@ -403,6 +406,7 @@ impl DerivationSubstituter {
             .post(&url)
             .json(derivation_ids)
             .send()
+            .await
             .map_err(|e| SubstituterError::Http(e.to_string()))?;
 
         if !resp.status().is_success() {
@@ -415,6 +419,7 @@ impl DerivationSubstituter {
 
         let result: HashMap<String, bool> = resp
             .json()
+            .await
             .map_err(|e| SubstituterError::Parse(e.to_string()))?;
 
         Ok(result)

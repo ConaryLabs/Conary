@@ -96,7 +96,7 @@ pub async fn cmd_repo_add(
     // If GPG key was provided, import it
     if let Some(key_source) = gpg_key {
         println!("  Importing GPG key...");
-        match import_gpg_key(name, &key_source, db_path) {
+        match import_gpg_key(name, &key_source, db_path).await {
             Ok(fingerprint) => println!("  GPG Key: {}", fingerprint),
             Err(e) => println!("  Warning: Failed to import GPG key: {}", e),
         }
@@ -203,10 +203,8 @@ pub async fn cmd_repo_sync(name: Option<String>, db_path: &str, force: bool) -> 
         .template("  {spinner:.cyan} {msg}")
         .expect("Invalid spinner template");
 
-    use rayon::prelude::*;
-    let results: Vec<(String, conary_core::Result<usize>, Option<String>)> = repos_needing_sync
-        .par_iter()
-        .map(|repo| {
+    let mut results: Vec<(String, conary_core::Result<usize>, Option<String>)> = Vec::new();
+    for repo in &repos_needing_sync {
             let spinner = ProgressBar::new_spinner();
             spinner.set_style(spinner_style.clone());
             spinner.enable_steady_tick(Duration::from_millis(100));
@@ -215,7 +213,7 @@ pub async fn cmd_repo_sync(name: Option<String>, db_path: &str, force: bool) -> 
             // Try to fetch GPG key if configured and gpg_check is enabled
             let gpg_result = if repo.gpg_check {
                 spinner.set_message(format!("Fetching GPG key for {}...", repo.name));
-                match conary_core::repository::maybe_fetch_gpg_key(repo, &keyring_dir) {
+                match conary_core::repository::maybe_fetch_gpg_key(repo, &keyring_dir).await {
                     Ok(Some(fingerprint)) => Some(fingerprint),
                     Ok(None) => None,
                     Err(e) => {
@@ -230,11 +228,11 @@ pub async fn cmd_repo_sync(name: Option<String>, db_path: &str, force: bool) -> 
             };
 
             spinner.set_message(format!("Syncing metadata for {}...", repo.name));
-            let sync_result = (|| -> conary_core::Result<usize> {
+            let sync_result = {
                 let conn = conary_core::db::open(db_path)?;
                 let mut repo_mut = repo.clone();
-                conary_core::repository::sync_repository(&conn, &mut repo_mut)
-            })();
+                conary_core::repository::sync_repository(&conn, &mut repo_mut).await
+            };
 
             match &sync_result {
                 Ok(count) => {
@@ -245,9 +243,8 @@ pub async fn cmd_repo_sync(name: Option<String>, db_path: &str, force: bool) -> 
                 }
             }
 
-            (repo.name.clone(), sync_result, gpg_result)
-        })
-        .collect();
+            results.push((repo.name.clone(), sync_result, gpg_result));
+    }
 
     let mut failures = Vec::new();
 
@@ -278,7 +275,7 @@ pub async fn cmd_repo_sync(name: Option<String>, db_path: &str, force: bool) -> 
 
         for url in &repos {
             let endpoint = url.trim_end_matches('/');
-            match conary_core::canonical::client::fetch_canonical_map(&conn, endpoint) {
+            match conary_core::canonical::client::fetch_canonical_map(&conn, endpoint).await {
                 Ok(Some(n)) => {
                     tracing::info!("Canonical map updated: {n} entries from {endpoint}");
                     break;
@@ -333,7 +330,7 @@ pub async fn cmd_search(pattern: &str, db_path: &str) -> Result<()> {
 // =============================================================================
 
 /// Internal helper to import a GPG key from file or URL
-fn import_gpg_key(repository: &str, key_source: &str, db_path: &str) -> Result<String> {
+async fn import_gpg_key(repository: &str, key_source: &str, db_path: &str) -> Result<String> {
     use conary_core::repository::GpgVerifier;
 
     let keyring_dir = keyring_dir(db_path);
@@ -342,7 +339,8 @@ fn import_gpg_key(repository: &str, key_source: &str, db_path: &str) -> Result<S
     // Check if it's a URL
     if key_source.starts_with("http://") || key_source.starts_with("https://") {
         info!("Fetching GPG key from URL: {}", key_source);
-        let response = reqwest::blocking::get(key_source)
+        let response = reqwest::get(key_source)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to fetch GPG key: {}", e))?;
 
         if !response.status().is_success() {
@@ -354,6 +352,7 @@ fn import_gpg_key(repository: &str, key_source: &str, db_path: &str) -> Result<S
 
         let key_data = response
             .bytes()
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to read GPG key data: {}", e))?;
 
         Ok(verifier.import_key(&key_data, repository)?)
@@ -377,7 +376,7 @@ pub async fn cmd_key_import(repository: &str, key_source: &str, db_path: &str) -
     let repo = conary_core::db::models::Repository::find_by_name(&conn, repository)?
         .ok_or_else(|| anyhow::anyhow!("Repository '{}' not found", repository))?;
 
-    let fingerprint = import_gpg_key(repository, key_source, db_path)?;
+    let fingerprint = import_gpg_key(repository, key_source, db_path).await?;
 
     println!("Imported GPG key for repository '{}'", repo.name);
     println!("  Fingerprint: {}", fingerprint);

@@ -181,7 +181,7 @@ async fn handle_downloadable_deps(
     let temp_dir = TempDir::new()?;
     let keyring_dir = keyring_dir(db_path);
 
-    match repository::download_dependencies(to_download, temp_dir.path(), Some(&keyring_dir)) {
+    match repository::download_dependencies(to_download, temp_dir.path(), Some(&keyring_dir)).await {
         Ok(downloaded) => {
             let parent_name = pkg.name().to_string();
             for (dep_name, dep_path) in downloaded {

@@ -51,7 +51,7 @@ impl TufClient {
     ///
     /// Fetches and verifies all TUF metadata in the correct order,
     /// checking freshness, version monotonicity, and signature thresholds.
-    pub fn update(&self, conn: &Connection) -> TrustResult<VerifiedTufState> {
+    pub async fn update(&self, conn: &Connection) -> TrustResult<VerifiedTufState> {
         // Load trusted root from database
         let trusted_root = self.load_trusted_root(conn)?;
 
@@ -59,10 +59,10 @@ impl TufClient {
         // (TUF spec 5.3). Probe for {version+1}.root.json and walk the chain
         // until no newer root is available. This ensures all subsequent metadata
         // is verified against the latest root keys.
-        let current_root = self.check_root_rotation(conn, &trusted_root)?;
+        let current_root = self.check_root_rotation(conn, &trusted_root).await?;
 
         // Step 2: Fetch and verify timestamp using (possibly updated) root keys
-        let timestamp_bytes = self.fetch_metadata("timestamp.json")?;
+        let timestamp_bytes = self.fetch_metadata("timestamp.json").await?;
         let signed_timestamp: Signed<TimestampMetadata> = serde_json::from_slice(&timestamp_bytes)?;
         verify_type_field(&signed_timestamp.signed.type_field, "timestamp")?;
 
@@ -91,7 +91,7 @@ impl TufClient {
         let snapshot_changed = stored_snapshot_version.is_none_or(|v| snapshot_ref.version > v);
 
         let signed_snapshot = if snapshot_changed {
-            let snapshot_bytes = self.fetch_metadata("snapshot.json")?;
+            let snapshot_bytes = self.fetch_metadata("snapshot.json").await?;
             verify_metadata_hash(snapshot_ref, &snapshot_bytes)?;
 
             let signed: Signed<SnapshotMetadata> = serde_json::from_slice(&snapshot_bytes)?;
@@ -119,7 +119,7 @@ impl TufClient {
             targets_ref.is_some_and(|tr| stored_targets_version.is_none_or(|v| tr.version > v));
 
         let signed_targets = if targets_changed {
-            let targets_bytes = self.fetch_metadata("targets.json")?;
+            let targets_bytes = self.fetch_metadata("targets.json").await?;
             if let Some(tr) = targets_ref {
                 verify_metadata_hash(tr, &targets_bytes)?;
             }
@@ -209,7 +209,7 @@ impl TufClient {
     /// Per TUF spec 5.3, root rotation must happen before any other metadata
     /// verification. Probes for `{version+1}.root.json` and walks the chain
     /// until no newer version is found (HTTP 404 or fetch error).
-    fn check_root_rotation(
+    async fn check_root_rotation(
         &self,
         conn: &Connection,
         trusted_root: &Signed<RootMetadata>,
@@ -221,7 +221,7 @@ impl TufClient {
             let filename = format!("{next_version}.root.json");
 
             // Probe for the next root version; if it doesn't exist, we're done
-            let Some(root_bytes) = self.try_fetch_metadata(&filename)? else {
+            let Some(root_bytes) = self.try_fetch_metadata(&filename).await? else {
                 break;
             };
 
@@ -257,13 +257,12 @@ impl TufClient {
     ///
     /// Unlike `fetch_metadata`, this does not treat a missing file as an error.
     /// Used for probing whether a newer root version exists.
-    fn try_fetch_metadata(&self, filename: &str) -> TrustResult<Option<Vec<u8>>> {
-        use std::io::Read;
-
+    async fn try_fetch_metadata(&self, filename: &str) -> TrustResult<Option<Vec<u8>>> {
         let url = format!("{}/{}", self.tuf_base_url, filename);
         debug!("Probing TUF metadata: {}", url);
 
-        let response = reqwest::blocking::get(&url)
+        let response = reqwest::get(&url)
+            .await
             .map_err(|e| TrustError::FetchError(format!("Failed to fetch {filename}: {e}")))?;
 
         if response.status() == reqwest::StatusCode::NOT_FOUND {
@@ -289,15 +288,9 @@ impl TufClient {
         }
 
         let max_size = Self::MAX_TUF_METADATA_SIZE as usize;
-        let mut body = Vec::with_capacity(
-            response
-                .content_length()
-                .unwrap_or(4096)
-                .min(Self::MAX_TUF_METADATA_SIZE) as usize,
-        );
-        response
-            .take(Self::MAX_TUF_METADATA_SIZE + 1)
-            .read_to_end(&mut body)
+        let body = response
+            .bytes()
+            .await
             .map_err(|e| TrustError::FetchError(format!("Failed to read {filename}: {e}")))?;
 
         if body.len() > max_size {
@@ -308,7 +301,7 @@ impl TufClient {
             )));
         }
 
-        Ok(Some(body))
+        Ok(Some(body.to_vec()))
     }
 
     /// Maximum size for TUF metadata files (10 MB)
@@ -322,13 +315,12 @@ impl TufClient {
     /// Reads the response body in chunks to enforce the size limit during
     /// download, preventing a malicious server from streaming unbounded data
     /// when Content-Length is absent.
-    fn fetch_metadata(&self, filename: &str) -> TrustResult<Vec<u8>> {
-        use std::io::Read;
-
+    async fn fetch_metadata(&self, filename: &str) -> TrustResult<Vec<u8>> {
         let url = format!("{}/{}", self.tuf_base_url, filename);
         debug!("Fetching TUF metadata: {}", url);
 
-        let response = reqwest::blocking::get(&url)
+        let response = reqwest::get(&url)
+            .await
             .map_err(|e| TrustError::FetchError(format!("Failed to fetch {filename}: {e}")))?;
 
         if !response.status().is_success() {
@@ -349,19 +341,11 @@ impl TufClient {
             )));
         }
 
-        // Read body in chunks, enforcing size limit during download.
-        // This prevents a malicious server from omitting Content-Length
-        // and streaming unlimited data.
+        // Read entire body and check size limit.
         let max_size = Self::MAX_TUF_METADATA_SIZE as usize;
-        let mut body = Vec::with_capacity(
-            response
-                .content_length()
-                .unwrap_or(4096)
-                .min(Self::MAX_TUF_METADATA_SIZE) as usize,
-        );
-        response
-            .take(Self::MAX_TUF_METADATA_SIZE + 1)
-            .read_to_end(&mut body)
+        let body = response
+            .bytes()
+            .await
             .map_err(|e| TrustError::FetchError(format!("Failed to read {filename}: {e}")))?;
 
         if body.len() > max_size {
@@ -372,7 +356,7 @@ impl TufClient {
             )));
         }
 
-        Ok(body)
+        Ok(body.to_vec())
     }
 
     /// Load the trusted root from the database

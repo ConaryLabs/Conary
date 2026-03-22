@@ -248,7 +248,7 @@ pub fn parse_trove_spec(spec: &str) -> ModelResult<(String, Option<String>)> {
 ///
 /// First checks if the collection exists locally (as a trove with type=collection).
 /// If not found locally, attempts to fetch from repositories matching the label spec.
-fn fetch_collection(
+async fn fetch_collection(
     conn: &Connection,
     name: &str,
     label: Option<&str>,
@@ -290,7 +290,7 @@ fn fetch_collection(
 
     // Remote fetch via label
     if let Some(label_str) = label {
-        return remote::fetch_remote_collection(conn, name, label_str, offline);
+        return remote::fetch_remote_collection(conn, name, label_str, offline).await;
     }
 
     // No label, no local match
@@ -310,14 +310,14 @@ const MAX_INCLUDE_DEPTH: usize = 10;
 /// 2. Fetch each collection, detect cycles, and merge members
 ///
 /// Returns a fully resolved model with all includes expanded.
-pub fn resolve_includes(model: &SystemModel, conn: &Connection) -> ModelResult<ResolvedModel> {
-    resolve_includes_with_options(model, conn, false)
+pub async fn resolve_includes(model: &SystemModel, conn: &Connection) -> ModelResult<ResolvedModel> {
+    resolve_includes_with_options(model, conn, false).await
 }
 
 /// Resolve includes with offline mode support
 ///
 /// When `offline` is true, only cached remote collections are used (no HTTP).
-pub fn resolve_includes_with_options(
+pub async fn resolve_includes_with_options(
     model: &SystemModel,
     conn: &Connection,
     offline: bool,
@@ -338,12 +338,12 @@ pub fn resolve_includes_with_options(
         &mut visited,
         offline,
         0,
-    )?;
+    ).await?;
 
     Ok(resolved)
 }
 
-fn resolve_includes_recursive(
+async fn resolve_includes_recursive(
     includes: &[String],
     on_conflict: &parser::ConflictStrategy,
     conn: &Connection,
@@ -375,11 +375,11 @@ fn resolve_includes_recursive(
         let (name, label) = parse_trove_spec(include_spec)?;
 
         // Fetch collection from local DB or repository
-        let collection = fetch_collection(conn, &name, label.as_deref(), offline)?;
+        let collection = fetch_collection(conn, &name, label.as_deref(), offline).await?;
 
         // Recursively resolve nested includes if the collection has them
         if !collection.includes.is_empty() {
-            resolve_includes_recursive(
+            Box::pin(resolve_includes_recursive(
                 &collection.includes,
                 on_conflict,
                 conn,
@@ -387,7 +387,7 @@ fn resolve_includes_recursive(
                 visited,
                 offline,
                 depth + 1,
-            )?;
+            )).await?;
         }
 
         // Remove from stack on backtrack so diamond includes work correctly

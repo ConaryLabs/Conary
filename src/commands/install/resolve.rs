@@ -16,7 +16,7 @@
 
 use super::super::open_db;
 use crate::commands::progress::{InstallPhase, InstallProgress};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use conary_core::db::models::{ProvideEntry, Redirect};
 use conary_core::db::paths::keyring_dir;
 use conary_core::repository::dependency_model::RepositoryDependencyFlavor;
@@ -100,7 +100,7 @@ pub struct PolicyOptions {
 /// Returns `ResolutionOutcome::AlreadyInstalled` if the package is already
 /// installed at the requested version, avoiding unnecessary downloads.
 #[allow(dead_code)] // Convenience wrapper kept for callers without policy
-pub fn resolve_package_path(
+pub async fn resolve_package_path(
     package: &str,
     db_path: &str,
     version: Option<&str>,
@@ -114,14 +114,14 @@ pub fn resolve_package_path(
         repo,
         progress,
         &PolicyOptions::default(),
-    )
+    ).await
 }
 
 /// Resolve package to a local path with explicit policy control.
 ///
 /// Like `resolve_package_path` but accepts a `PolicyOptions` to constrain
 /// candidate selection via `ResolutionPolicy`.
-pub fn resolve_package_path_with_policy(
+pub async fn resolve_package_path_with_policy(
     package: &str,
     db_path: &str,
     version: Option<&str>,
@@ -166,7 +166,8 @@ pub fn resolve_package_path_with_policy(
     // Use unified resolver
     progress.set_status("Resolving package source...");
     let source = resolve_package(&conn, &resolved_name, &options)
-        .with_context(|| format!("Failed to resolve package '{}'", package))?;
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to resolve package '{}': {}", package, e))?;
 
     // Convert PackageSource to ResolvedPackage
     convert_source_to_resolved(source, package, progress)

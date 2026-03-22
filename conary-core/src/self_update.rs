@@ -10,7 +10,6 @@ use crate::error::{Error, Result};
 use rusqlite::Connection;
 use serde::Deserialize;
 use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::warn;
@@ -148,11 +147,10 @@ fn compare_prerelease(a: &[String], b: &[String]) -> std::cmp::Ordering {
 }
 
 /// Check for available updates by querying the update channel
-pub fn check_for_update(channel_url: &str, current_version: &str) -> Result<VersionCheckResult> {
-    use reqwest::blocking::Client;
+pub async fn check_for_update(channel_url: &str, current_version: &str) -> Result<VersionCheckResult> {
     use std::time::Duration;
 
-    let client = Client::builder()
+    let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
         .map_err(|e| Error::IoError(format!("Failed to create HTTP client: {e}")))?;
@@ -162,6 +160,7 @@ pub fn check_for_update(channel_url: &str, current_version: &str) -> Result<Vers
         .get(&url)
         .header("User-Agent", format!("conary/{current_version}"))
         .send()
+        .await
         .map_err(|e| Error::IoError(format!("Failed to check for updates: {e}")))?;
 
     if !response.status().is_success() {
@@ -173,6 +172,7 @@ pub fn check_for_update(channel_url: &str, current_version: &str) -> Result<Vers
 
     let info: LatestVersionInfo = response
         .json()
+        .await
         .map_err(|e| Error::ParseError(format!("Invalid update response: {e}")))?;
 
     if is_newer(current_version, &info.version) {
@@ -194,7 +194,7 @@ pub fn check_for_update(channel_url: &str, current_version: &str) -> Result<Vers
 ///
 /// Streams the download through a SHA-256 hasher while writing to disk,
 /// avoiding a second full read of the file for verification.
-pub fn download_update(
+pub async fn download_update(
     download_url: &str,
     expected_sha256: &str,
     dest_dir: &Path,
@@ -204,7 +204,7 @@ pub fn download_update(
 
     let dest_path = dest_dir.join("conary-update.ccs");
 
-    let client = reqwest::blocking::Client::builder()
+    let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
         .build()
         .map_err(|e| Error::IoError(format!("Failed to create HTTP client: {e}")))?;
@@ -212,6 +212,7 @@ pub fn download_update(
     let mut response = client
         .get(download_url)
         .send()
+        .await
         .map_err(|e| Error::DownloadError(format!("Failed to download update: {e}")))?;
 
     if !response.status().is_success() {
@@ -224,17 +225,14 @@ pub fn download_update(
     let mut file = fs::File::create(&dest_path)
         .map_err(|e| Error::IoError(format!("Failed to create output file: {e}")))?;
     let mut hasher = Sha256::new();
-    let mut buf = [0u8; 8192];
 
-    loop {
-        let n = response
-            .read(&mut buf)
-            .map_err(|e| Error::DownloadError(format!("Failed to read download stream: {e}")))?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-        file.write_all(&buf[..n])
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| Error::DownloadError(format!("Failed to read download stream: {e}")))?
+    {
+        hasher.update(&chunk);
+        file.write_all(&chunk)
             .map_err(|e| Error::IoError(format!("Failed to write downloaded data: {e}")))?;
     }
     file.flush()
@@ -256,7 +254,7 @@ pub fn download_update(
 ///
 /// Like [`download_update`] but displays download progress via `indicatif`.
 /// If `content_length` is provided, shows a determinate bar; otherwise a spinner.
-pub fn download_update_with_progress(
+pub async fn download_update_with_progress(
     download_url: &str,
     expected_sha256: &str,
     dest_dir: &Path,
@@ -268,7 +266,7 @@ pub fn download_update_with_progress(
 
     let dest_path = dest_dir.join("conary-update.ccs");
 
-    let client = reqwest::blocking::Client::builder()
+    let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
         .build()
         .map_err(|e| Error::IoError(format!("Failed to create HTTP client: {e}")))?;
@@ -276,6 +274,7 @@ pub fn download_update_with_progress(
     let mut response = client
         .get(download_url)
         .send()
+        .await
         .map_err(|e| Error::DownloadError(format!("Failed to download update: {e}")))?;
 
     if !response.status().is_success() {
@@ -311,19 +310,16 @@ pub fn download_update_with_progress(
     let mut file = fs::File::create(&dest_path)
         .map_err(|e| Error::IoError(format!("Failed to create output file: {e}")))?;
     let mut hasher = Sha256::new();
-    let mut buf = [0u8; 8192];
 
-    loop {
-        let n = response
-            .read(&mut buf)
-            .map_err(|e| Error::DownloadError(format!("Failed to read download stream: {e}")))?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-        file.write_all(&buf[..n])
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| Error::DownloadError(format!("Failed to read download stream: {e}")))?
+    {
+        hasher.update(&chunk);
+        file.write_all(&chunk)
             .map_err(|e| Error::IoError(format!("Failed to write downloaded data: {e}")))?;
-        pb.inc(n as u64);
+        pb.inc(chunk.len() as u64);
     }
     file.flush()
         .map_err(|e| Error::IoError(format!("Failed to flush download file: {e}")))?;
@@ -348,6 +344,7 @@ pub fn download_update_with_progress(
 /// same filesystem as `target_dir` to enable atomic rename().
 pub fn extract_binary(ccs_path: &Path, target_dir: &Path) -> Result<PathBuf> {
     use flate2::read::GzDecoder;
+    use std::io::Read;
     use tar::Archive;
 
     let file = fs::File::open(ccs_path)

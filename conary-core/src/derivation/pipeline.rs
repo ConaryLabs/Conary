@@ -277,7 +277,7 @@ impl Pipeline {
     ///
     /// Returns [`PipelineError`] on missing recipes, executor failures,
     /// composition errors, or I/O errors.
-    pub fn execute<F>(
+    pub async fn execute<F>(
         &self,
         seed: &Seed,
         recipes: &HashMap<String, Recipe>,
@@ -454,11 +454,12 @@ impl Pipeline {
                         if index.lookup(drv_id.as_str()).ok().flatten().is_some() {
                             // Local cache hit -- executor.execute() will find it too, skip substituter
                         } else if let super::substituter::CacheQueryResult::Hit { manifest, peer } =
-                            sub.query(drv_id.as_str())
+                            sub.query(drv_id.as_str()).await
                         {
                             // Remote hit! Fetch missing CAS objects
                             let fetch_report = sub
                                 .fetch_missing_objects(&manifest, self.executor.cas(), &peer)
+                                .await
                                 .map_err(|e| {
                                     PipelineError::Io(format!("substituter fetch: {e}"))
                                 })?;
@@ -582,7 +583,7 @@ impl Pipeline {
                             self.config.publish_token.as_deref(),
                         ) && let Some(sub) = substituter.as_ref()
                             && let Err(e) =
-                                sub.publish(derivation_id.as_str(), &manifest, endpoint, token)
+                                sub.publish(derivation_id.as_str(), &manifest, endpoint, token).await
                         {
                             warn!("Failed to publish {}: {e}", pkg_name);
                         }

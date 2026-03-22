@@ -545,7 +545,7 @@ pub async fn cmd_update(
             &trove.name,
             &repo_pkg.version,
             &temp_dir,
-        ) {
+        ).await {
             Ok(_) => {
                 let applier = DeltaApplier::new(&objects_dir)?;
                 match applier.apply_delta(&delta_info.from_hash, &delta_path, &delta_info.to_hash) {
@@ -619,7 +619,7 @@ pub async fn cmd_update(
             };
 
             // Use unified resolver - respects remi/binary/recipe strategies
-            let source = match resolve_package(&conn, &trove.name, &options) {
+            let source = match resolve_package(&conn, &trove.name, &options).await {
                 Ok(source) => source,
                 Err(e) => {
                     progress.fail_package(&trove.name, &e.to_string());
