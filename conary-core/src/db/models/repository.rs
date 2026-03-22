@@ -73,26 +73,9 @@ impl Repository {
 
     /// Create a new Repository with a content mirror (reference mirror pattern)
     pub fn with_content_mirror(name: String, metadata_url: String, content_url: String) -> Self {
-        Self {
-            id: None,
-            name,
-            url: metadata_url,
-            content_url: Some(content_url),
-            enabled: true,
-            priority: 0,
-            gpg_check: true,
-            gpg_strict: false,
-            gpg_key_url: None,
-            metadata_expire: 3600,
-            last_sync: None,
-            created_at: None,
-            default_strategy: None,
-            default_strategy_endpoint: None,
-            default_strategy_distro: None,
-            tuf_enabled: false,
-            tuf_root_version: None,
-            tuf_root_url: None,
-        }
+        let mut repo = Self::new(name, metadata_url);
+        repo.content_url = Some(content_url);
+        repo
     }
 
     /// Get the effective URL for downloading content

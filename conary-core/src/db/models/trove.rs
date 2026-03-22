@@ -147,25 +147,9 @@ impl Trove {
         trove_type: TroveType,
         install_source: InstallSource,
     ) -> Self {
-        Self {
-            id: None,
-            name,
-            version,
-            trove_type,
-            architecture: None,
-            description: None,
-            installed_at: None,
-            installed_by_changeset_id: None,
-            install_source,
-            install_reason: InstallReason::Explicit,
-            flavor_spec: None,
-            pinned: false,
-            selection_reason: Some("Explicitly installed".to_string()),
-            label_id: None,
-            orphan_since: None,
-            source_distro: None,
-            version_scheme: None,
-        }
+        let mut trove = Self::new(name, version, trove_type);
+        trove.install_source = install_source;
+        trove
     }
 
     /// Create a Trove installed as a dependency of another package
@@ -175,25 +159,11 @@ impl Trove {
         trove_type: TroveType,
         required_by: &str,
     ) -> Self {
-        Self {
-            id: None,
-            name,
-            version,
-            trove_type,
-            architecture: None,
-            description: None,
-            installed_at: None,
-            installed_by_changeset_id: None,
-            install_source: InstallSource::Repository,
-            install_reason: InstallReason::Dependency,
-            flavor_spec: None,
-            pinned: false,
-            selection_reason: Some(format!("Required by {}", required_by)),
-            label_id: None,
-            orphan_since: None,
-            source_distro: None,
-            version_scheme: None,
-        }
+        let mut trove = Self::new(name, version, trove_type);
+        trove.install_source = InstallSource::Repository;
+        trove.install_reason = InstallReason::Dependency;
+        trove.selection_reason = Some(format!("Required by {}", required_by));
+        trove
     }
 
     /// Create a Trove installed via a collection
@@ -203,25 +173,10 @@ impl Trove {
         trove_type: TroveType,
         collection_name: &str,
     ) -> Self {
-        Self {
-            id: None,
-            name,
-            version,
-            trove_type,
-            architecture: None,
-            description: None,
-            installed_at: None,
-            installed_by_changeset_id: None,
-            install_source: InstallSource::Repository,
-            install_reason: InstallReason::Explicit,
-            flavor_spec: None,
-            pinned: false,
-            selection_reason: Some(format!("Installed via @{}", collection_name)),
-            label_id: None,
-            orphan_since: None,
-            source_distro: None,
-            version_scheme: None,
-        }
+        let mut trove = Self::new(name, version, trove_type);
+        trove.install_source = InstallSource::Repository;
+        trove.selection_reason = Some(format!("Installed via @{}", collection_name));
+        trove
     }
 
     /// Insert this trove into the database

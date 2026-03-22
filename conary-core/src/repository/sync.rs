@@ -102,13 +102,10 @@ async fn sync_repository_native(
         .id
         .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
 
-    // Check if we need to rebase download URLs (reference mirror pattern)
-    let needs_rebase = repo.content_url.is_some();
-    if needs_rebase {
+    if let Some(ref content_url) = repo.content_url {
         info!(
             "Repository {} uses reference mirror - rebasing download URLs to {}",
-            repo.name,
-            repo.content_url.as_deref().unwrap_or("")
+            repo.name, content_url
         );
     }
 
@@ -303,14 +300,15 @@ fn normalized_repository_capabilities(
         .dependencies
         .iter()
         .map(|dep| {
-            let raw = if let Some(constraint) = dep.constraint.as_deref() {
-                if constraint.is_empty() {
-                    dep.name.clone()
-                } else {
-                    format!("{} {}", dep.name, constraint)
-                }
-            } else {
-                dep.name.clone()
+            let version_constraint = dep
+                .constraint
+                .as_deref()
+                .filter(|c| !c.is_empty())
+                .map(String::from);
+
+            let raw = match &version_constraint {
+                Some(c) => format!("{} {c}", dep.name),
+                None => dep.name.clone(),
             };
 
             let dependency_type = match dep.dep_type {
@@ -318,11 +316,6 @@ fn normalized_repository_capabilities(
                 DependencyType::Optional => "optional",
                 DependencyType::Build => "build",
             };
-
-            let version_constraint = dep
-                .constraint
-                .as_ref()
-                .and_then(|constraint| (!constraint.is_empty()).then(|| constraint.clone()));
 
             RepositoryRequirement::new(
                 0,
@@ -357,7 +350,10 @@ fn extract_extra_metadata_provides(
     parsed
 }
 
-fn parse_metadata_provide_entry(entry: &str) -> (String, Option<String>) {
+/// Split a string like `"name OP version"` on the first version-constraint
+/// operator.  Returns `(name, operator, version)` or `None` if no operator
+/// is found.
+fn split_on_version_op(entry: &str) -> Option<(String, &'static str, String)> {
     const OPS: [&str; 5] = ["<=", ">=", "=", "<", ">"];
 
     for op in OPS {
@@ -367,11 +363,18 @@ fn parse_metadata_provide_entry(entry: &str) -> (String, Option<String>) {
             if name.is_empty() || version.is_empty() {
                 continue;
             }
-            return (name.to_string(), Some(version.to_string()));
+            return Some((name.to_string(), op, version.to_string()));
         }
     }
 
-    (entry.trim().to_string(), None)
+    None
+}
+
+fn parse_metadata_provide_entry(entry: &str) -> (String, Option<String>) {
+    match split_on_version_op(entry) {
+        Some((name, _, version)) => (name, Some(version)),
+        None => (entry.trim().to_string(), None),
+    }
 }
 
 /// Convert a `RepositoryDependencyFlavor` to its database string representation.
@@ -500,8 +503,8 @@ fn remi_sync_row(
     endpoint: String,
     distro: String,
     entry: RemiPackageEntry,
+    system_arch: &str,
 ) -> SyncedPackageRow {
-    let system_arch = registry::detect_system_arch();
     let download_url = format!("{endpoint}/v1/{distro}/packages/{}/download", entry.name);
 
     let mut pkg = RepositoryPackage::new(
@@ -512,7 +515,7 @@ fn remi_sync_row(
         0,
         download_url,
     );
-    pkg.architecture = Some(system_arch);
+    pkg.architecture = Some(system_arch.to_string());
     pkg.dependencies = entry
         .dependencies
         .as_ref()
@@ -560,20 +563,10 @@ fn remi_sync_row(
 }
 
 fn parse_raw_dependency_entry(entry: &str) -> (String, Option<String>) {
-    const OPS: [&str; 5] = ["<=", ">=", "=", "<", ">"];
-
-    for op in OPS {
-        if let Some((name, version)) = entry.split_once(op) {
-            let name = name.trim();
-            let version = version.trim();
-            if name.is_empty() || version.is_empty() {
-                continue;
-            }
-            return (name.to_string(), Some(format!("{op} {version}")));
-        }
+    match split_on_version_op(entry) {
+        Some((name, op, version)) => (name, Some(format!("{op} {version}"))),
+        None => (entry.trim().to_string(), None),
     }
-
-    (entry.trim().to_string(), None)
 }
 
 /// Synchronize repository directly from a Remi metadata API
@@ -616,12 +609,12 @@ async fn sync_repository_remi(conn: &Connection, repo: &mut Repository) -> Resul
         .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
 
     // Deduplicate by (name, version, arch) — Remi metadata may contain duplicates
+    let system_arch = registry::detect_system_arch();
     let mut seen = HashSet::new();
     let synced_packages: Vec<SyncedPackageRow> = response
         .packages
         .into_iter()
         .filter_map(|entry| {
-            let system_arch = registry::detect_system_arch();
             let key = (
                 entry.name.clone(),
                 entry.version.clone(),
@@ -635,6 +628,7 @@ async fn sync_repository_remi(conn: &Connection, repo: &mut Repository) -> Resul
                 endpoint.to_string(),
                 distro.to_string(),
                 entry,
+                &system_arch,
             ))
         })
         .collect();

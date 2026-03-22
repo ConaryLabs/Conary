@@ -156,30 +156,6 @@ impl RemiClientCore {
         }
     }
 
-    /// Check whether a job status indicates completion (ready or failed).
-    ///
-    /// Returns `Some(Ok(manifest))` for ready, `Some(Err(...))` for failed,
-    /// `None` for still in progress.
-    #[allow(dead_code)]
-    fn check_job_completion(&self, status: &JobStatus) -> Option<Result<PackageManifest>> {
-        match status.status.as_str() {
-            "ready" => {
-                info!("Conversion complete for job {}", status.job_id);
-                status.manifest.clone().map(|m| Some(Ok(m))).unwrap_or(None)
-            }
-            "failed" => {
-                let error_msg = status
-                    .error
-                    .clone()
-                    .unwrap_or_else(|| "Unknown error".to_string());
-                Some(Err(Error::DownloadError(format!(
-                    "Conversion failed: {}",
-                    error_msg
-                ))))
-            }
-            _ => None,
-        }
-    }
 }
 
 /// Client for interacting with a Remi server

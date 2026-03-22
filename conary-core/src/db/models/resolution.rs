@@ -174,6 +174,10 @@ pub struct PackageResolution {
 }
 
 impl PackageResolution {
+    /// Column list for SELECT queries.
+    const COLUMNS: &'static str = "id, repository_id, name, version, strategies, \
+         primary_strategy, cache_ttl, cache_priority";
+
     /// Create a new package resolution entry
     pub fn new(repository_id: i64, name: String, strategies: Vec<ResolutionStrategy>) -> Self {
         let primary_strategy = strategies
@@ -266,11 +270,12 @@ impl PackageResolution {
     ) -> Result<Option<Self>> {
         // Try exact version match first
         if let Some(v) = version {
-            let mut stmt = conn.prepare(
-                "SELECT id, repository_id, name, version, strategies, primary_strategy, cache_ttl, cache_priority
-                 FROM package_resolution
+            let sql = format!(
+                "SELECT {} FROM package_resolution \
                  WHERE repository_id = ?1 AND name = ?2 AND version = ?3",
-            )?;
+                Self::COLUMNS
+            );
+            let mut stmt = conn.prepare(&sql)?;
 
             if let Some(entry) = stmt
                 .query_row(
@@ -284,11 +289,12 @@ impl PackageResolution {
         }
 
         // Fall back to any-version entry
-        let mut stmt = conn.prepare(
-            "SELECT id, repository_id, name, version, strategies, primary_strategy, cache_ttl, cache_priority
-             FROM package_resolution
+        let sql = format!(
+            "SELECT {} FROM package_resolution \
              WHERE repository_id = ?1 AND name = ?2 AND version IS NULL",
-        )?;
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
 
         stmt.query_row(params![repository_id, name], Self::from_row)
             .optional()
@@ -297,17 +303,15 @@ impl PackageResolution {
 
     /// Find all resolution entries for a repository
     pub fn find_by_repository(conn: &Connection, repository_id: i64) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, repository_id, name, version, strategies, primary_strategy, cache_ttl, cache_priority
-             FROM package_resolution
-             WHERE repository_id = ?1
-             ORDER BY name, version",
-        )?;
-
+        let sql = format!(
+            "SELECT {} FROM package_resolution \
+             WHERE repository_id = ?1 ORDER BY name, version",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let entries = stmt
             .query_map([repository_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-
         Ok(entries)
     }
 
@@ -317,17 +321,16 @@ impl PackageResolution {
         repository_id: i64,
         strategy: PrimaryStrategy,
     ) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, repository_id, name, version, strategies, primary_strategy, cache_ttl, cache_priority
-             FROM package_resolution
-             WHERE repository_id = ?1 AND primary_strategy = ?2
+        let sql = format!(
+            "SELECT {} FROM package_resolution \
+             WHERE repository_id = ?1 AND primary_strategy = ?2 \
              ORDER BY name, version",
-        )?;
-
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let entries = stmt
             .query_map(params![repository_id, strategy.as_str()], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-
         Ok(entries)
     }
 
