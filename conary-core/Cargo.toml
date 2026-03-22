@@ -68,7 +68,7 @@ indicatif.workspace = true
 # GPG signature verification (pure Rust OpenPGP implementation)
 # Note: Using RustCrypto backend with experimental and variable-time flags
 # This is acceptable for a package manager use case
-sequoia-openpgp = { version = "1.17", default-features = false, features = ["crypto-rust", "allow-experimental-crypto", "allow-variable-time-crypto"] }
+sequoia-openpgp = { version = "2", default-features = false, features = ["crypto-rust", "allow-experimental-crypto", "allow-variable-time-crypto"] }
 
 # Repository metadata parsing
 tar.workspace = true                     # Tarball extraction for Arch repos
