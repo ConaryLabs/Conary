@@ -44,7 +44,7 @@ hex = "0.4"
 pem = "3.0"
 
 # HTTP
-reqwest = { version = "0.12", features = ["blocking", "rustls-tls", "json"] }  # 0.13 drops blocking
+reqwest = { version = "0.13", features = ["rustls", "webpki-roots", "json"] }
 url = "2.5"
 
 # File system

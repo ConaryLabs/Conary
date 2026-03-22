@@ -486,10 +486,14 @@ pub async fn sync_repo(
 ) -> Result<Option<RepoRefreshResult>, ServiceError> {
     let db = db_path(state).await;
     let name_owned = name.to_string();
-    blocking(move || {
-        let conn = conary_core::db::open_fast(&db)?;
+    blocking_anyhow(move || {
+        let handle = tokio::runtime::Handle::current();
+        let conn = conary_core::db::open_fast(&db)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
         let keyring_dir = conary_core::db::paths::keyring_dir(&db.display().to_string());
-        let mut repo = match Repository::find_by_name(&conn, &name_owned)? {
+        let mut repo = match Repository::find_by_name(&conn, &name_owned)
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+        {
             Some(repo) => repo,
             None => return Ok(None),
         };
@@ -503,10 +507,15 @@ pub async fn sync_repo(
         }
 
         if repo.gpg_check {
-            let _ = conary_core::repository::maybe_fetch_gpg_key(&repo, &keyring_dir);
+            let _ = handle.block_on(
+                conary_core::repository::maybe_fetch_gpg_key(&repo, &keyring_dir),
+            );
         }
 
-        let packages_synced = conary_core::repository::sync_repository(&conn, &mut repo)?;
+        let packages_synced = handle
+            .block_on(conary_core::repository::sync_repository(&conn, &mut repo))
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
         Ok(Some(RepoRefreshResult {
             name: repo.name,
             packages_synced,
@@ -522,10 +531,14 @@ pub async fn refresh_repositories(
     force: bool,
 ) -> Result<Vec<RepoRefreshResult>, ServiceError> {
     let db = db_path(state).await;
-    let results = blocking(move || {
-        let conn = conary_core::db::open_fast(&db)?;
+    let results = blocking_anyhow(move || {
+        let handle = tokio::runtime::Handle::current();
+        let conn = conary_core::db::open_fast(&db)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
         let keyring_dir = conary_core::db::paths::keyring_dir(&db.display().to_string());
-        let repos = Repository::list_enabled(&conn)?;
+        let repos = Repository::list_enabled(&conn)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
         let mut refreshed = Vec::new();
 
         for mut repo in repos {
@@ -539,10 +552,14 @@ pub async fn refresh_repositories(
             }
 
             if repo.gpg_check {
-                let _ = conary_core::repository::maybe_fetch_gpg_key(&repo, &keyring_dir);
+                let _ = handle.block_on(
+                    conary_core::repository::maybe_fetch_gpg_key(&repo, &keyring_dir),
+                );
             }
 
-            let packages_synced = conary_core::repository::sync_repository(&conn, &mut repo)?;
+            let packages_synced = handle
+                .block_on(conary_core::repository::sync_repository(&conn, &mut repo))
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
             refreshed.push(RepoRefreshResult {
                 name: repo.name,
                 packages_synced,
