@@ -61,7 +61,9 @@ impl Wal {
     pub fn pending_count(&self) -> Result<u64> {
         let count: u64 = self
             .conn
-            .query_row("SELECT COUNT(*) FROM pending_results", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM pending_results", [], |row| {
+                row.get::<_, i64>(0).map(|v| v as u64)
+            })
             .context("failed to count pending WAL items")?;
         Ok(count)
     }

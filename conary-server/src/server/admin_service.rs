@@ -895,7 +895,9 @@ pub async fn test_health(
         let conn = test_db::init(&db)?;
         let recent_runs = test_db::TestRun::list(&conn, None, 5)?;
         let total_runs: u64 = conn
-            .query_row("SELECT COUNT(*) FROM test_runs", [], |r| r.get(0))
+            .query_row("SELECT COUNT(*) FROM test_runs", [], |r| {
+                r.get::<_, i64>(0).map(|v| v as u64)
+            })
             .unwrap_or(0);
         let last_status = recent_runs.first().map(|r| r.status.clone());
 
