@@ -91,7 +91,7 @@ pub fn parse_appstream_xml(xml: &str) -> Result<Vec<AppStreamComponent>> {
             Ok(Event::Text(e)) => {
                 if in_component && let Some(ref tag) = current_tag {
                     let text = e
-                        .unescape()
+                        .decode()
                         .map_err(|err| {
                             Error::ParseError(format!("AppStream XML text decode error: {err}"))
                         })?

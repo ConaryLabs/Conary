@@ -276,7 +276,7 @@ impl FedoraParser {
                 }
                 Ok(Event::Text(e)) => {
                     if let Some(ref mut pkg) = current_package {
-                        let text = e.unescape().unwrap_or_default().to_string();
+                        let text = e.decode().unwrap_or_default().to_string();
                         match current_tag.as_str() {
                             "name" => pkg.name = Some(text),
                             "arch" => pkg.arch = Some(text),
