@@ -9,7 +9,6 @@ use crate::compression::{CompressionFormat, decompress_auto};
 use crate::error::{Error, Result};
 use crate::repository::error_helpers::ResultExt;
 use indicatif::ProgressBar;
-use rand::Rng;
 use reqwest::Client;
 use reqwest::header;
 use std::fs::{self, File, OpenOptions};
@@ -93,27 +92,17 @@ impl RetryPolicy {
     /// Calculate the delay for a given attempt number (1-based).
     ///
     /// Uses exponential backoff: `min(base * 2^(n-1), max_delay) + random_jitter`
+    ///
+    /// Delegates to [`super::retry::RetryConfig`] which has the canonical
+    /// implementation of this algorithm.
     pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
-        let exp = attempt.saturating_sub(1);
-        let base_ms = self.base_delay.as_millis() as u64;
-        // 2^exp, capped to avoid overflow
-        let multiplier = 1u64.checked_shl(exp).unwrap_or(u64::MAX);
-        let delay_ms = base_ms.saturating_mul(multiplier);
-        let max_ms = self.max_delay.as_millis() as u64;
-        let capped_ms = delay_ms.min(max_ms);
-
-        let jitter_ms = if self.jitter_factor > 0.0 {
-            let max_jitter = (capped_ms as f64 * self.jitter_factor) as u64;
-            if max_jitter > 0 {
-                rand::rng().random_range(0..=max_jitter)
-            } else {
-                0
-            }
-        } else {
-            0
+        let config = super::retry::RetryConfig {
+            max_attempts: self.max_retries,
+            base_delay: self.base_delay,
+            max_delay: self.max_delay,
+            jitter_factor: self.jitter_factor,
         };
-
-        Duration::from_millis(capped_ms + jitter_ms)
+        config.delay_for_attempt(attempt)
     }
 }
 
