@@ -117,6 +117,26 @@ impl PeerHealth {
 }
 
 // ---------------------------------------------------------------------------
+// Health helpers
+// ---------------------------------------------------------------------------
+
+/// Record a success or failure for a peer in the health map.
+///
+/// Avoids repeating `entry(...).or_insert_with(PeerHealth::new).record_*()` at
+/// every call site inside `query()`, where `&self.peers` is borrowed immutably
+/// and we can only pass `&mut self.peer_health`.
+fn record_health(health_map: &mut HashMap<String, PeerHealth>, endpoint: &str, success: bool) {
+    let health = health_map
+        .entry(endpoint.to_string())
+        .or_insert_with(PeerHealth::new);
+    if success {
+        health.record_success();
+    } else {
+        health.record_failure();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main type
 // ---------------------------------------------------------------------------
 
@@ -222,10 +242,7 @@ impl DerivationSubstituter {
                 Ok(resp) if resp.status() == StatusCode::OK => match resp.text().await {
                     Ok(body) => match toml::from_str::<OutputManifest>(&body) {
                         Ok(manifest) => {
-                            self.peer_health
-                                .entry(endpoint.clone())
-                                .or_insert_with(PeerHealth::new)
-                                .record_success();
+                            record_health(&mut self.peer_health, &endpoint, true);
                             return CacheQueryResult::Hit {
                                 manifest,
                                 peer: endpoint,
@@ -233,18 +250,12 @@ impl DerivationSubstituter {
                         }
                         Err(e) => {
                             warn!("Failed to parse manifest from {}: {}", endpoint, e);
-                            self.peer_health
-                                .entry(endpoint)
-                                .or_insert_with(PeerHealth::new)
-                                .record_failure();
+                            record_health(&mut self.peer_health, &endpoint, false);
                         }
                     },
                     Err(e) => {
                         warn!("Failed to read response body from {}: {}", endpoint, e);
-                        self.peer_health
-                            .entry(endpoint)
-                            .or_insert_with(PeerHealth::new)
-                            .record_failure();
+                        record_health(&mut self.peer_health, &endpoint, false);
                     }
                 },
                 Ok(resp) if resp.status() == StatusCode::NOT_FOUND => {
@@ -261,17 +272,11 @@ impl DerivationSubstituter {
                         endpoint,
                         derivation_id
                     );
-                    self.peer_health
-                        .entry(endpoint)
-                        .or_insert_with(PeerHealth::new)
-                        .record_failure();
+                    record_health(&mut self.peer_health, &endpoint, false);
                 }
                 Err(e) => {
                     warn!("HTTP request to {} failed: {}", endpoint, e);
-                    self.peer_health
-                        .entry(endpoint)
-                        .or_insert_with(PeerHealth::new)
-                        .record_failure();
+                    record_health(&mut self.peer_health, &endpoint, false);
                 }
             }
         }

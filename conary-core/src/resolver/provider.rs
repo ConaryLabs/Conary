@@ -312,28 +312,7 @@ impl<'db> ConaryProvider<'db> {
                 let dep_list: Vec<SolverDep> = deps
                     .iter()
                     .filter(|d| !ProvideEntry::is_virtual_provide(&d.depends_on_name))
-                    .map(|d| {
-                        let constraint = match (effective_scheme, d.version_constraint.as_deref()) {
-                            (VersionScheme::Rpm, Some(s)) => ConaryConstraint::Legacy(
-                                VersionConstraint::parse(s).unwrap_or(VersionConstraint::Any),
-                            ),
-                            (VersionScheme::Rpm, None) => {
-                                ConaryConstraint::Legacy(VersionConstraint::Any)
-                            }
-                            (native, Some(s)) => ConaryConstraint::Repository {
-                                scheme: native,
-                                constraint: parse_repo_constraint(native, s)
-                                    .unwrap_or(RepoVersionConstraint::Any),
-                                raw: Some(s.to_string()),
-                            },
-                            (native, None) => ConaryConstraint::Repository {
-                                scheme: native,
-                                constraint: RepoVersionConstraint::Any,
-                                raw: None,
-                            },
-                        };
-                        SolverDep::Single(d.depends_on_name.clone(), constraint)
-                    })
+                    .map(|d| dep_entry_to_solver_dep(d, effective_scheme))
                     .collect();
                 self.dependencies.insert(solvable_id.0, dep_list);
             }
@@ -696,28 +675,7 @@ impl<'db> ConaryProvider<'db> {
             let deps = all_removal_deps.get(&tid).unwrap_or(&empty);
             let dep_list: Vec<SolverDep> = deps
                 .iter()
-                .map(|d| {
-                    let constraint = match (effective_scheme, d.version_constraint.as_deref()) {
-                        (VersionScheme::Rpm, Some(s)) => ConaryConstraint::Legacy(
-                            VersionConstraint::parse(s).unwrap_or(VersionConstraint::Any),
-                        ),
-                        (VersionScheme::Rpm, None) => {
-                            ConaryConstraint::Legacy(VersionConstraint::Any)
-                        }
-                        (native, Some(s)) => ConaryConstraint::Repository {
-                            scheme: native,
-                            constraint: parse_repo_constraint(native, s)
-                                .unwrap_or(RepoVersionConstraint::Any),
-                            raw: Some(s.to_string()),
-                        },
-                        (native, None) => ConaryConstraint::Repository {
-                            scheme: native,
-                            constraint: RepoVersionConstraint::Any,
-                            raw: None,
-                        },
-                    };
-                    SolverDep::Single(d.depends_on_name.clone(), constraint)
-                })
+                .map(|d| dep_entry_to_solver_dep(d, effective_scheme))
                 .collect();
 
             let sid_index = u32::try_from(idx).expect("resolver solvable pool overflow");
@@ -849,6 +807,31 @@ fn load_repo_dependency_requests(
             SolverDep::Single(name, constraint)
         })
         .collect())
+}
+
+/// Map a dependency entry to a `SolverDep` using the given version scheme.
+///
+/// Shared by `load_installed_packages` and `load_removal_data` to avoid
+/// duplicating the scheme-aware constraint construction.
+fn dep_entry_to_solver_dep(dep: &DependencyEntry, scheme: VersionScheme) -> SolverDep {
+    let constraint = match (scheme, dep.version_constraint.as_deref()) {
+        (VersionScheme::Rpm, Some(s)) => ConaryConstraint::Legacy(
+            VersionConstraint::parse(s).unwrap_or(VersionConstraint::Any),
+        ),
+        (VersionScheme::Rpm, None) => ConaryConstraint::Legacy(VersionConstraint::Any),
+        (native, Some(s)) => ConaryConstraint::Repository {
+            scheme: native,
+            constraint: parse_repo_constraint(native, s)
+                .unwrap_or(RepoVersionConstraint::Any),
+            raw: Some(s.to_string()),
+        },
+        (native, None) => ConaryConstraint::Repository {
+            scheme: native,
+            constraint: RepoVersionConstraint::Any,
+            raw: None,
+        },
+    };
+    SolverDep::Single(dep.depends_on_name.clone(), constraint)
 }
 
 /// Convert a flat requirement row to (name, constraint).

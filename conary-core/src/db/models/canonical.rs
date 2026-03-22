@@ -20,6 +20,9 @@ pub struct CanonicalPackage {
 }
 
 impl CanonicalPackage {
+    /// Column list for SELECT queries.
+    const COLUMNS: &'static str = "id, name, appstream_id, description, kind, category";
+
     /// Create a new canonical package
     pub fn new(name: String, kind: String) -> Self {
         Self {
@@ -78,40 +81,33 @@ impl CanonicalPackage {
 
     /// Find by canonical name
     pub fn find_by_name(conn: &Connection, name: &str) -> Result<Option<Self>> {
-        let result = conn
-            .query_row(
-                "SELECT id, name, appstream_id, description, kind, category
-                 FROM canonical_packages WHERE name = ?1",
-                [name],
-                Self::from_row,
-            )
-            .optional()?;
+        let sql = format!(
+            "SELECT {} FROM canonical_packages WHERE name = ?1",
+            Self::COLUMNS
+        );
+        let result = conn.query_row(&sql, [name], Self::from_row).optional()?;
         Ok(result)
     }
 
     /// Find by AppStream ID
     pub fn find_by_appstream_id(conn: &Connection, appstream_id: &str) -> Result<Option<Self>> {
+        let sql = format!(
+            "SELECT {} FROM canonical_packages WHERE appstream_id = ?1",
+            Self::COLUMNS
+        );
         let result = conn
-            .query_row(
-                "SELECT id, name, appstream_id, description, kind, category
-                 FROM canonical_packages WHERE appstream_id = ?1",
-                [appstream_id],
-                Self::from_row,
-            )
+            .query_row(&sql, [appstream_id], Self::from_row)
             .optional()?;
         Ok(result)
     }
 
     /// Find by id
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
-        let result = conn
-            .query_row(
-                "SELECT id, name, appstream_id, description, kind, category
-                 FROM canonical_packages WHERE id = ?1",
-                [id],
-                Self::from_row,
-            )
-            .optional()?;
+        let sql = format!(
+            "SELECT {} FROM canonical_packages WHERE id = ?1",
+            Self::COLUMNS
+        );
+        let result = conn.query_row(&sql, [id], Self::from_row).optional()?;
         Ok(result)
     }
 
@@ -142,10 +138,11 @@ impl CanonicalPackage {
 
     /// List all canonical packages of a given kind
     pub fn list_by_kind(conn: &Connection, kind: &str) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, name, appstream_id, description, kind, category
-             FROM canonical_packages WHERE kind = ?1 ORDER BY name",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM canonical_packages WHERE kind = ?1 ORDER BY name",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let rows = stmt
             .query_map([kind], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -155,12 +152,12 @@ impl CanonicalPackage {
     /// Search canonical packages by name or description (LIKE)
     pub fn search(conn: &Connection, query: &str) -> Result<Vec<Self>> {
         let pattern = format!("%{query}%");
-        let mut stmt = conn.prepare(
-            "SELECT id, name, appstream_id, description, kind, category
-             FROM canonical_packages
-             WHERE name LIKE ?1 OR description LIKE ?1
-             ORDER BY name",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM canonical_packages \
+             WHERE name LIKE ?1 OR description LIKE ?1 ORDER BY name",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let rows = stmt
             .query_map([&pattern], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -192,6 +189,9 @@ pub struct PackageImplementation {
 }
 
 impl PackageImplementation {
+    /// Column list for SELECT queries.
+    const COLUMNS: &'static str = "id, canonical_id, distro, distro_name, repo_id, source";
+
     /// Create a new implementation entry
     pub fn new(canonical_id: i64, distro: String, distro_name: String, source: String) -> Self {
         Self {
@@ -240,11 +240,11 @@ impl PackageImplementation {
 
     /// Find all implementations for a canonical package
     pub fn find_by_canonical(conn: &Connection, canonical_id: i64) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, canonical_id, distro, distro_name, repo_id, source
-             FROM package_implementations WHERE canonical_id = ?1
-             ORDER BY distro",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM package_implementations WHERE canonical_id = ?1 ORDER BY distro",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let rows = stmt
             .query_map([canonical_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -257,26 +257,25 @@ impl PackageImplementation {
         distro: &str,
         name: &str,
     ) -> Result<Option<Self>> {
+        let sql = format!(
+            "SELECT {} FROM package_implementations \
+             WHERE distro = ?1 AND distro_name = ?2 LIMIT 1",
+            Self::COLUMNS
+        );
         let result = conn
-            .query_row(
-                "SELECT id, canonical_id, distro, distro_name, repo_id, source
-                 FROM package_implementations WHERE distro = ?1 AND distro_name = ?2 LIMIT 1",
-                params![distro, name],
-                Self::from_row,
-            )
+            .query_row(&sql, params![distro, name], Self::from_row)
             .optional()?;
         Ok(result)
     }
 
     /// Find by distro-specific name across all distros (first match)
     pub fn find_by_any_distro_name(conn: &Connection, name: &str) -> Result<Option<Self>> {
+        let sql = format!(
+            "SELECT {} FROM package_implementations WHERE distro_name = ?1 LIMIT 1",
+            Self::COLUMNS
+        );
         let result = conn
-            .query_row(
-                "SELECT id, canonical_id, distro, distro_name, repo_id, source
-                 FROM package_implementations WHERE distro_name = ?1 LIMIT 1",
-                [name],
-                Self::from_row,
-            )
+            .query_row(&sql, [name], Self::from_row)
             .optional()?;
         Ok(result)
     }
@@ -287,13 +286,13 @@ impl PackageImplementation {
         canonical_id: i64,
         distro: &str,
     ) -> Result<Option<Self>> {
+        let sql = format!(
+            "SELECT {} FROM package_implementations \
+             WHERE canonical_id = ?1 AND distro = ?2 LIMIT 1",
+            Self::COLUMNS
+        );
         let result = conn
-            .query_row(
-                "SELECT id, canonical_id, distro, distro_name, repo_id, source
-                 FROM package_implementations WHERE canonical_id = ?1 AND distro = ?2 LIMIT 1",
-                params![canonical_id, distro],
-                Self::from_row,
-            )
+            .query_row(&sql, params![canonical_id, distro], Self::from_row)
             .optional()?;
         Ok(result)
     }
@@ -314,17 +313,7 @@ impl PackageImplementation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::schema;
-    use rusqlite::Connection;
-    use tempfile::NamedTempFile;
-
-    fn create_test_db() -> (NamedTempFile, Connection) {
-        let temp_file = NamedTempFile::new().unwrap();
-        let conn = Connection::open(temp_file.path()).unwrap();
-        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
-        (temp_file, conn)
-    }
+    use crate::db::testing::create_test_db;
 
     #[test]
     fn test_insert_and_find_canonical() {

@@ -124,17 +124,7 @@ mod tests {
     use super::*;
     use crate::canonical::rules;
     use crate::db::models::{CanonicalPackage, PackageImplementation};
-    use crate::db::schema;
-    use rusqlite::Connection;
-    use tempfile::NamedTempFile;
-
-    fn create_test_db() -> (NamedTempFile, Connection) {
-        let temp_file = NamedTempFile::new().unwrap();
-        let conn = Connection::open(temp_file.path()).unwrap();
-        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
-        (temp_file, conn)
-    }
+    use crate::db::testing::create_test_db;
 
     #[test]
     fn test_ingest_repo_packages_creates_canonical_mappings() {

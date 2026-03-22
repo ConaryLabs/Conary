@@ -258,6 +258,34 @@ fn render_realignment_proposal_preview(proposals: &[VisibleRealignmentProposal])
 
 use super::replatform_rendering::render_replatform_execution_plan;
 
+/// Print source policy summary, replatform estimate note, and replatform
+/// plan (or realignment proposal preview).  Shared by `cmd_model_diff` and
+/// `cmd_model_apply`.
+fn print_source_policy_and_replatform(
+    conn: &Connection,
+    diff: &ModelDiff,
+) -> Result<()> {
+    if let Some(summary) = source_policy_summary(diff) {
+        println!("{}", summary);
+        println!();
+    }
+
+    if let Some(estimate) = source_policy_replatform_note(diff) {
+        println!("{}", estimate);
+        println!();
+    }
+
+    if let Some(plan) = replatform_execution_plan(conn, &diff.actions)? {
+        println!("{}", render_replatform_execution_plan(&plan));
+    } else if let Some(proposals) = diff.visible_realignment_proposals.as_ref()
+        && let Some(preview) = render_realignment_proposal_preview(proposals)
+    {
+        println!("{}", preview);
+    }
+
+    Ok(())
+}
+
 fn collect_lock_data(
     model: &SystemModel,
     conn: &Connection,
@@ -525,15 +553,7 @@ pub async fn cmd_model_diff(model_path: &str, db_path: &str, offline: bool) -> R
         println!();
     }
 
-    if let Some(summary) = source_policy_summary(&diff) {
-        println!("{}", summary);
-        println!();
-    }
-
-    if let Some(estimate) = source_policy_replatform_note(&diff) {
-        println!("{}", estimate);
-        println!();
-    }
+    print_source_policy_and_replatform(&conn, &diff)?;
 
     println!(
         "Summary: {} install(s), {} remove(s), {} source policy change(s), {} other change(s)",
@@ -541,13 +561,6 @@ pub async fn cmd_model_diff(model_path: &str, db_path: &str, offline: bool) -> R
     );
     if let Some(replatform) = render_replatform_summary(&summary) {
         println!("{}", replatform);
-    }
-    if let Some(plan) = replatform_execution_plan(&conn, &diff.actions)? {
-        println!("{}", render_replatform_execution_plan(&plan));
-    } else if let Some(proposals) = diff.visible_realignment_proposals.as_ref()
-        && let Some(preview) = render_realignment_proposal_preview(proposals)
-    {
-        println!("{}", preview);
     }
 
     Ok(())
@@ -806,13 +819,7 @@ pub async fn cmd_model_apply(
     if let Some(replatform) = render_replatform_summary(&diff_summary) {
         println!("{}", replatform);
     }
-    if let Some(plan) = replatform_execution_plan(&conn, &diff.actions)? {
-        println!("{}", render_replatform_execution_plan(&plan));
-    } else if let Some(proposals) = diff.visible_realignment_proposals.as_ref()
-        && let Some(preview) = render_realignment_proposal_preview(proposals)
-    {
-        println!("{}", preview);
-    }
+    print_source_policy_and_replatform(&conn, &diff)?;
 
     if !errors.is_empty() {
         println!();

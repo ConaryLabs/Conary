@@ -253,19 +253,33 @@ impl TufClient {
         Ok(current)
     }
 
-    /// Try to fetch metadata, returning `None` for HTTP 404 / not found
+    /// Maximum size for TUF metadata files (10 MB)
     ///
-    /// Unlike `fetch_metadata`, this does not treat a missing file as an error.
-    /// Used for probing whether a newer root version exists.
-    async fn try_fetch_metadata(&self, filename: &str) -> TrustResult<Option<Vec<u8>>> {
+    /// Prevents DoS attacks where a malicious server returns arbitrarily large
+    /// metadata files to exhaust memory.
+    const MAX_TUF_METADATA_SIZE: u64 = 10 * 1024 * 1024;
+
+    /// Fetch metadata from the TUF base URL, optionally treating 404 as `None`.
+    ///
+    /// When `allow_not_found` is true, returns `Ok(None)` for HTTP 404 responses
+    /// (used for probing whether a newer root version exists). When false, 404 is
+    /// treated as a fetch error like any other non-success status.
+    ///
+    /// Enforces `MAX_TUF_METADATA_SIZE` via both Content-Length header checks
+    /// and post-download body size validation.
+    async fn fetch_metadata_inner(
+        &self,
+        filename: &str,
+        allow_not_found: bool,
+    ) -> TrustResult<Option<Vec<u8>>> {
         let url = format!("{}/{}", self.tuf_base_url, filename);
-        debug!("Probing TUF metadata: {}", url);
+        debug!("Fetching TUF metadata: {}", url);
 
         let response = reqwest::get(&url)
             .await
             .map_err(|e| TrustError::FetchError(format!("Failed to fetch {filename}: {e}")))?;
 
-        if response.status() == reqwest::StatusCode::NOT_FOUND {
+        if allow_not_found && response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
 
@@ -304,59 +318,21 @@ impl TufClient {
         Ok(Some(body.to_vec()))
     }
 
-    /// Maximum size for TUF metadata files (10 MB)
+    /// Try to fetch metadata, returning `None` for HTTP 404 / not found.
     ///
-    /// Prevents DoS attacks where a malicious server returns arbitrarily large
-    /// metadata files to exhaust memory.
-    const MAX_TUF_METADATA_SIZE: u64 = 10 * 1024 * 1024;
+    /// Unlike `fetch_metadata`, this does not treat a missing file as an error.
+    /// Used for probing whether a newer root version exists.
+    async fn try_fetch_metadata(&self, filename: &str) -> TrustResult<Option<Vec<u8>>> {
+        self.fetch_metadata_inner(filename, true).await
+    }
 
-    /// Fetch metadata from the TUF base URL
+    /// Fetch metadata from the TUF base URL.
     ///
-    /// Reads the response body in chunks to enforce the size limit during
-    /// download, preventing a malicious server from streaming unbounded data
-    /// when Content-Length is absent.
+    /// Returns an error for any non-success HTTP status, including 404.
     async fn fetch_metadata(&self, filename: &str) -> TrustResult<Vec<u8>> {
-        let url = format!("{}/{}", self.tuf_base_url, filename);
-        debug!("Fetching TUF metadata: {}", url);
-
-        let response = reqwest::get(&url)
+        self.fetch_metadata_inner(filename, false)
             .await
-            .map_err(|e| TrustError::FetchError(format!("Failed to fetch {filename}: {e}")))?;
-
-        if !response.status().is_success() {
-            return Err(TrustError::FetchError(format!(
-                "HTTP {} fetching {filename}",
-                response.status()
-            )));
-        }
-
-        // Check Content-Length before downloading body
-        if let Some(content_length) = response.content_length()
-            && content_length > Self::MAX_TUF_METADATA_SIZE
-        {
-            return Err(TrustError::FetchError(format!(
-                "TUF metadata {filename} exceeds size limit: {content_length} bytes \
-                 (max {} bytes)",
-                Self::MAX_TUF_METADATA_SIZE
-            )));
-        }
-
-        // Read entire body and check size limit.
-        let max_size = Self::MAX_TUF_METADATA_SIZE as usize;
-        let body = response
-            .bytes()
-            .await
-            .map_err(|e| TrustError::FetchError(format!("Failed to read {filename}: {e}")))?;
-
-        if body.len() > max_size {
-            return Err(TrustError::FetchError(format!(
-                "TUF metadata {filename} exceeds size limit: {} bytes (max {} bytes)",
-                body.len(),
-                Self::MAX_TUF_METADATA_SIZE
-            )));
-        }
-
-        Ok(body.to_vec())
+            .map(|opt| opt.expect("fetch_metadata_inner with allow_not_found=false always returns Some on success"))
     }
 
     /// Load the trusted root from the database

@@ -538,14 +538,7 @@ pub fn remove_from_path(conn: &Connection, label_id: i64) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
-
-    fn create_test_db() -> (NamedTempFile, Connection) {
-        let temp_file = NamedTempFile::new().unwrap();
-        let conn = Connection::open(temp_file.path()).unwrap();
-        crate::db::schema::migrate(&conn).unwrap();
-        (temp_file, conn)
-    }
+    use crate::db::testing::create_test_db;
 
     #[test]
     fn test_label_crud() {

@@ -295,19 +295,9 @@ fn distro_matches_flavor(
 mod tests {
     use super::*;
     use crate::db::models::{CanonicalPackage, DistroPin, PackageImplementation, PackageOverride};
-    use crate::db::schema;
     use crate::repository::dependency_model::RepositoryDependencyFlavor;
     use crate::repository::resolution_policy::{RequestScope, ResolutionPolicy};
-    use rusqlite::Connection;
-    use tempfile::NamedTempFile;
-
-    fn create_test_db() -> (NamedTempFile, Connection) {
-        let temp_file = NamedTempFile::new().unwrap();
-        let conn = Connection::open(temp_file.path()).unwrap();
-        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
-        (temp_file, conn)
-    }
+    use crate::db::testing::create_test_db;
 
     #[test]
     fn test_expand_canonical_name() {

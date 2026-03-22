@@ -23,6 +23,10 @@ pub struct ScriptletEntry {
 }
 
 impl ScriptletEntry {
+    /// Column list for SELECT queries.
+    const COLUMNS: &'static str = "id, trove_id, phase, interpreter, content, flags, \
+         package_format";
+
     /// Create a new ScriptletEntry
     pub fn new(
         trove_id: i64,
@@ -84,25 +88,24 @@ impl ScriptletEntry {
 
     /// Find all scriptlets for a trove
     pub fn find_by_trove(conn: &Connection, trove_id: i64) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, trove_id, phase, interpreter, content, flags, package_format
-             FROM scriptlets WHERE trove_id = ?1 ORDER BY phase",
-        )?;
-
+        let sql = format!(
+            "SELECT {} FROM scriptlets WHERE trove_id = ?1 ORDER BY phase",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let scriptlets = stmt
             .query_map([trove_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-
         Ok(scriptlets)
     }
 
     /// Find a specific scriptlet by trove and phase
     pub fn find_by_phase(conn: &Connection, trove_id: i64, phase: &str) -> Result<Option<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, trove_id, phase, interpreter, content, flags, package_format
-             FROM scriptlets WHERE trove_id = ?1 AND phase = ?2",
-        )?;
-
+        let sql = format!(
+            "SELECT {} FROM scriptlets WHERE trove_id = ?1 AND phase = ?2",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let scriptlet = stmt
             .query_row(params![trove_id, phase], Self::from_row)
             .optional()?;

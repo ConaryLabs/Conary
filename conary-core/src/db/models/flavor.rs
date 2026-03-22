@@ -15,6 +15,9 @@ pub struct Flavor {
 }
 
 impl Flavor {
+    /// Column list for SELECT queries.
+    const COLUMNS: &'static str = "id, trove_id, key, value";
+
     /// Create a new Flavor
     pub fn new(trove_id: i64, key: String, value: String) -> Self {
         Self {
@@ -39,26 +42,24 @@ impl Flavor {
 
     /// Find all flavors for a trove
     pub fn find_by_trove(conn: &Connection, trove_id: i64) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, trove_id, key, value FROM flavors WHERE trove_id = ?1 ORDER BY key",
-        )?;
-
+        let sql = format!(
+            "SELECT {} FROM flavors WHERE trove_id = ?1 ORDER BY key",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let flavors = stmt
             .query_map([trove_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-
         Ok(flavors)
     }
 
     /// Find flavors by key name across all troves
     pub fn find_by_key(conn: &Connection, key: &str) -> Result<Vec<Self>> {
-        let mut stmt =
-            conn.prepare("SELECT id, trove_id, key, value FROM flavors WHERE key = ?1")?;
-
+        let sql = format!("SELECT {} FROM flavors WHERE key = ?1", Self::COLUMNS);
+        let mut stmt = conn.prepare(&sql)?;
         let flavors = stmt
             .query_map([key], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-
         Ok(flavors)
     }
 

@@ -267,6 +267,14 @@ impl RepositoryPackage {
          rp.severity, rp.cve_ids, rp.advisory_id, rp.advisory_url, rp.distro, \
          rp.version_scheme";
 
+    /// INSERT SQL shared by `batch_insert` and `batch_insert_with_ids`.
+    const BATCH_INSERT_SQL: &'static str = "\
+         INSERT INTO repository_packages \
+         (repository_id, name, version, architecture, description, checksum, size, \
+          download_url, dependencies, metadata, is_security_update, severity, cve_ids, \
+          advisory_id, advisory_url, distro, version_scheme) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)";
+
     /// Create a new RepositoryPackage
     pub fn new(
         repository_id: i64,
@@ -527,33 +535,10 @@ impl RepositoryPackage {
             return Ok(0);
         }
 
-        let mut stmt = conn.prepare_cached(
-            "INSERT INTO repository_packages
-             (repository_id, name, version, architecture, description, checksum, size, download_url, dependencies, metadata,
-              is_security_update, severity, cve_ids, advisory_id, advisory_url, distro, version_scheme)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
-        )?;
+        let mut stmt = conn.prepare_cached(Self::BATCH_INSERT_SQL)?;
 
         for pkg in packages {
-            stmt.execute(params![
-                &pkg.repository_id,
-                &pkg.name,
-                &pkg.version,
-                &pkg.architecture,
-                &pkg.description,
-                &pkg.checksum,
-                &pkg.size,
-                &pkg.download_url,
-                &pkg.dependencies,
-                &pkg.metadata,
-                pkg.is_security_update as i32,
-                &pkg.severity,
-                &pkg.cve_ids,
-                &pkg.advisory_id,
-                &pkg.advisory_url,
-                &pkg.distro,
-                &pkg.version_scheme,
-            ])?;
+            Self::execute_batch_row(&mut stmt, pkg)?;
         }
 
         Ok(packages.len())
@@ -565,37 +550,41 @@ impl RepositoryPackage {
             return Ok(0);
         }
 
-        let mut stmt = conn.prepare_cached(
-            "INSERT INTO repository_packages
-             (repository_id, name, version, architecture, description, checksum, size, download_url, dependencies, metadata,
-              is_security_update, severity, cve_ids, advisory_id, advisory_url, distro, version_scheme)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
-        )?;
+        let mut stmt = conn.prepare_cached(Self::BATCH_INSERT_SQL)?;
 
         for pkg in packages.iter_mut() {
-            stmt.execute(params![
-                &pkg.repository_id,
-                &pkg.name,
-                &pkg.version,
-                &pkg.architecture,
-                &pkg.description,
-                &pkg.checksum,
-                &pkg.size,
-                &pkg.download_url,
-                &pkg.dependencies,
-                &pkg.metadata,
-                pkg.is_security_update as i32,
-                &pkg.severity,
-                &pkg.cve_ids,
-                &pkg.advisory_id,
-                &pkg.advisory_url,
-                &pkg.distro,
-                &pkg.version_scheme,
-            ])?;
+            Self::execute_batch_row(&mut stmt, pkg)?;
             pkg.id = Some(conn.last_insert_rowid());
         }
 
         Ok(packages.len())
+    }
+
+    /// Execute a single batch INSERT row with the shared parameter list.
+    fn execute_batch_row(
+        stmt: &mut rusqlite::CachedStatement<'_>,
+        pkg: &Self,
+    ) -> Result<()> {
+        stmt.execute(params![
+            &pkg.repository_id,
+            &pkg.name,
+            &pkg.version,
+            &pkg.architecture,
+            &pkg.description,
+            &pkg.checksum,
+            &pkg.size,
+            &pkg.download_url,
+            &pkg.dependencies,
+            &pkg.metadata,
+            pkg.is_security_update as i32,
+            &pkg.severity,
+            &pkg.cve_ids,
+            &pkg.advisory_id,
+            &pkg.advisory_url,
+            &pkg.distro,
+            &pkg.version_scheme,
+        ])?;
+        Ok(())
     }
 }
 

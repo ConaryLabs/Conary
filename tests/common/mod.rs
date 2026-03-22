@@ -9,6 +9,23 @@ use conary_core::db::models::{
 };
 use tempfile::TempDir;
 
+/// Create an empty test database with schema initialized.
+///
+/// Returns (TempDir, db_path, Connection) - keep the TempDir alive to prevent cleanup.
+pub fn create_test_db() -> (TempDir, String, rusqlite::Connection) {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let db_path = temp_dir
+        .path()
+        .join("test.db")
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    db::init(&db_path).unwrap();
+    let conn = db::open(&db_path).unwrap();
+    (temp_dir, db_path, conn)
+}
+
 /// Create a test database with nginx and openssl packages.
 ///
 /// Returns (TempDir, db_path) - keep the TempDir alive to prevent cleanup.

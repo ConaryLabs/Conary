@@ -797,16 +797,7 @@ pub fn build_gpg_options(repo: &Repository, keyring_dir: &Path) -> Option<Downlo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::schema;
-    use tempfile::NamedTempFile;
-
-    fn create_test_db() -> (NamedTempFile, Connection) {
-        let temp_file = NamedTempFile::new().unwrap();
-        let conn = Connection::open(temp_file.path()).unwrap();
-        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
-        (temp_file, conn)
-    }
+    use crate::db::testing::create_test_db;
 
     fn create_test_repo(conn: &Connection) -> i64 {
         conn.execute(
