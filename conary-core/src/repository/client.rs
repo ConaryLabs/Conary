@@ -152,8 +152,7 @@ async fn stream_response_to_file(
         .await
         .map_err(|e| Error::DownloadError(format!("read response stream: {e}")))?
     {
-        file.write_all(&chunk)
-            .io_context("write download data")?;
+        file.write_all(&chunk).io_context("write download data")?;
 
         downloaded += chunk.len() as u64;
 
@@ -398,7 +397,8 @@ impl RepositoryClient {
 
     /// Download a file to the specified path with retry support
     pub async fn download_file(&self, url: &str, dest_path: &Path) -> Result<()> {
-        self.download_file_with_progress(url, dest_path, "", None).await
+        self.download_file_with_progress(url, dest_path, "", None)
+            .await
     }
 
     /// Download a file with optional progress bar display
@@ -545,7 +545,8 @@ impl RepositoryClient {
                         offset,
                         progress_bar,
                         display_name,
-                    ).await?;
+                    )
+                    .await?;
 
                     if let Some(pb) = progress_bar {
                         pb.finish_with_message(format!("{} [done]", display_name));

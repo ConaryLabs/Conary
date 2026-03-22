@@ -488,8 +488,7 @@ pub async fn sync_repo(
     let name_owned = name.to_string();
     blocking_anyhow(move || {
         let handle = tokio::runtime::Handle::current();
-        let conn = conary_core::db::open_fast(&db)
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let conn = conary_core::db::open_fast(&db).map_err(|e| anyhow::anyhow!("{e}"))?;
         let keyring_dir = conary_core::db::paths::keyring_dir(&db.display().to_string());
         let mut repo = match Repository::find_by_name(&conn, &name_owned)
             .map_err(|e| anyhow::anyhow!("{e}"))?
@@ -507,9 +506,10 @@ pub async fn sync_repo(
         }
 
         if repo.gpg_check {
-            let _ = handle.block_on(
-                conary_core::repository::maybe_fetch_gpg_key(&repo, &keyring_dir),
-            );
+            let _ = handle.block_on(conary_core::repository::maybe_fetch_gpg_key(
+                &repo,
+                &keyring_dir,
+            ));
         }
 
         let packages_synced = handle
@@ -533,11 +533,9 @@ pub async fn refresh_repositories(
     let db = db_path(state).await;
     let results = blocking_anyhow(move || {
         let handle = tokio::runtime::Handle::current();
-        let conn = conary_core::db::open_fast(&db)
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let conn = conary_core::db::open_fast(&db).map_err(|e| anyhow::anyhow!("{e}"))?;
         let keyring_dir = conary_core::db::paths::keyring_dir(&db.display().to_string());
-        let repos = Repository::list_enabled(&conn)
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let repos = Repository::list_enabled(&conn).map_err(|e| anyhow::anyhow!("{e}"))?;
 
         let mut refreshed = Vec::new();
 
@@ -552,9 +550,10 @@ pub async fn refresh_repositories(
             }
 
             if repo.gpg_check {
-                let _ = handle.block_on(
-                    conary_core::repository::maybe_fetch_gpg_key(&repo, &keyring_dir),
-                );
+                let _ = handle.block_on(conary_core::repository::maybe_fetch_gpg_key(
+                    &repo,
+                    &keyring_dir,
+                ));
             }
 
             let packages_synced = handle

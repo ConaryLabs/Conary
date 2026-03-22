@@ -56,7 +56,9 @@ async fn download_package_inner(
 ) -> Result<PathBuf> {
     if let Some((base_url, distro, name)) = parse_remi_download_url(&repo_pkg.download_url) {
         let client = RemiClient::new(&base_url)?;
-        return client.fetch_package(&distro, &name, Some(&repo_pkg.version), dest_dir).await;
+        return client
+            .fetch_package(&distro, &name, Some(&repo_pkg.version), dest_dir)
+            .await;
     }
 
     let client = RepositoryClient::new()?;
@@ -66,14 +68,18 @@ async fn download_package_inner(
 
     // Download the file (with or without progress)
     if let Some(pb) = progress {
-        client.download_file_with_progress(
-            &repo_pkg.download_url,
-            &dest_path,
-            &repo_pkg.name,
-            Some(pb),
-        ).await?;
+        client
+            .download_file_with_progress(
+                &repo_pkg.download_url,
+                &dest_path,
+                &repo_pkg.name,
+                Some(pb),
+            )
+            .await?;
     } else {
-        client.download_file(&repo_pkg.download_url, &dest_path).await?;
+        client
+            .download_file(&repo_pkg.download_url, &dest_path)
+            .await?;
     }
 
     // Verify checksum - clean up invalid file on failure
@@ -312,7 +318,9 @@ pub async fn download_delta(
     );
 
     // Download the delta file
-    client.download_file(&delta_info.delta_url, &dest_path).await?;
+    client
+        .download_file(&delta_info.delta_url, &dest_path)
+        .await?;
 
     // Verify checksum
     verify_checksum(&dest_path, &delta_info.delta_checksum)?;

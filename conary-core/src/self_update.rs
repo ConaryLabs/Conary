@@ -147,7 +147,10 @@ fn compare_prerelease(a: &[String], b: &[String]) -> std::cmp::Ordering {
 }
 
 /// Check for available updates by querying the update channel
-pub async fn check_for_update(channel_url: &str, current_version: &str) -> Result<VersionCheckResult> {
+pub async fn check_for_update(
+    channel_url: &str,
+    current_version: &str,
+) -> Result<VersionCheckResult> {
     use std::time::Duration;
 
     let client = reqwest::Client::builder()

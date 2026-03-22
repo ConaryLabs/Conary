@@ -205,45 +205,45 @@ pub async fn cmd_repo_sync(name: Option<String>, db_path: &str, force: bool) -> 
 
     let mut results: Vec<(String, conary_core::Result<usize>, Option<String>)> = Vec::new();
     for repo in &repos_needing_sync {
-            let spinner = ProgressBar::new_spinner();
-            spinner.set_style(spinner_style.clone());
-            spinner.enable_steady_tick(Duration::from_millis(100));
-            spinner.set_message(format!("Syncing {}...", repo.name));
+        let spinner = ProgressBar::new_spinner();
+        spinner.set_style(spinner_style.clone());
+        spinner.enable_steady_tick(Duration::from_millis(100));
+        spinner.set_message(format!("Syncing {}...", repo.name));
 
-            // Try to fetch GPG key if configured and gpg_check is enabled
-            let gpg_result = if repo.gpg_check {
-                spinner.set_message(format!("Fetching GPG key for {}...", repo.name));
-                match conary_core::repository::maybe_fetch_gpg_key(repo, &keyring_dir).await {
-                    Ok(Some(fingerprint)) => Some(fingerprint),
-                    Ok(None) => None,
-                    Err(e) => {
-                        spinner.suspend(|| {
-                            println!("  Warning: GPG key fetch failed for {}: {}", repo.name, e);
-                        });
-                        None
-                    }
-                }
-            } else {
-                None
-            };
-
-            spinner.set_message(format!("Syncing metadata for {}...", repo.name));
-            let sync_result = {
-                let conn = conary_core::db::open(db_path)?;
-                let mut repo_mut = repo.clone();
-                conary_core::repository::sync_repository(&conn, &mut repo_mut).await
-            };
-
-            match &sync_result {
-                Ok(count) => {
-                    spinner.finish_with_message(format!("{}: {} packages", repo.name, count));
-                }
+        // Try to fetch GPG key if configured and gpg_check is enabled
+        let gpg_result = if repo.gpg_check {
+            spinner.set_message(format!("Fetching GPG key for {}...", repo.name));
+            match conary_core::repository::maybe_fetch_gpg_key(repo, &keyring_dir).await {
+                Ok(Some(fingerprint)) => Some(fingerprint),
+                Ok(None) => None,
                 Err(e) => {
-                    spinner.finish_with_message(format!("{}: FAILED ({})", repo.name, e));
+                    spinner.suspend(|| {
+                        println!("  Warning: GPG key fetch failed for {}: {}", repo.name, e);
+                    });
+                    None
                 }
             }
+        } else {
+            None
+        };
 
-            results.push((repo.name.clone(), sync_result, gpg_result));
+        spinner.set_message(format!("Syncing metadata for {}...", repo.name));
+        let sync_result = {
+            let conn = conary_core::db::open(db_path)?;
+            let mut repo_mut = repo.clone();
+            conary_core::repository::sync_repository(&conn, &mut repo_mut).await
+        };
+
+        match &sync_result {
+            Ok(count) => {
+                spinner.finish_with_message(format!("{}: {} packages", repo.name, count));
+            }
+            Err(e) => {
+                spinner.finish_with_message(format!("{}: FAILED ({})", repo.name, e));
+            }
+        }
+
+        results.push((repo.name.clone(), sync_result, gpg_result));
     }
 
     let mut failures = Vec::new();

@@ -230,7 +230,8 @@ impl RemiClient {
                 Ok(manifest)
             }
             202 => {
-                let accepted: ConversionAccepted = response.json().await.parse_context("202 response")?;
+                let accepted: ConversionAccepted =
+                    response.json().await.parse_context("202 response")?;
                 info!(
                     "Package conversion queued (job {}), ETA: {:?}s",
                     accepted.job_id, accepted.eta_seconds
@@ -434,7 +435,11 @@ impl RemiClient {
                 let chunk_client = &chunk_client;
                 let chunk_hash = &chunk.hash;
                 async move {
-                    let response = chunk_client.get(url.as_str()).send().await.download_context(url)?;
+                    let response = chunk_client
+                        .get(url.as_str())
+                        .send()
+                        .await
+                        .download_context(url)?;
 
                     let status_code = response.status().as_u16();
                     if status_code >= 500 || status_code == 408 || status_code == 429 {
@@ -456,7 +461,8 @@ impl RemiClient {
                     let bytes = response.bytes().await.download_context(url)?;
                     Ok(bytes)
                 }
-            }).await?;
+            })
+            .await?;
 
             // Verify chunk hash using shared hash module
             crate::hash::verify_sha256(&data, &chunk.hash).map_err(|e| {
@@ -567,7 +573,8 @@ impl RemiClient {
             }
             202 => {
                 // Conversion in progress - poll then retry download
-                let accepted: ConversionAccepted = response.json().await.parse_context("202 response")?;
+                let accepted: ConversionAccepted =
+                    response.json().await.parse_context("202 response")?;
                 info!(
                     "Package conversion queued (job {}), ETA: {:?}s",
                     accepted.job_id, accepted.eta_seconds
@@ -585,12 +592,15 @@ impl RemiClient {
                     // Brief delay before retry (increases with each attempt)
                     tokio::time::sleep(Duration::from_millis(200 * attempt as u64)).await;
 
-                    let retry_response = self.client.get(&url).send().await.download_context(&url)?;
+                    let retry_response =
+                        self.client.get(&url).send().await.download_context(&url)?;
 
                     last_status = retry_response.status().as_u16();
 
                     if last_status == 200 {
-                        return self.download_ccs_response(retry_response, name, output_dir).await;
+                        return self
+                            .download_ccs_response(retry_response, name, output_dir)
+                            .await;
                     } else if last_status != 202 {
                         // Unexpected status - fail immediately
                         return Err(Error::DownloadError(format!(
@@ -666,8 +676,7 @@ impl RemiClient {
             .await
             .map_err(|e| Error::DownloadError(format!("response stream: {e}")))?
         {
-            file.write_all(&chunk)
-                .io_context("write to output file")?;
+            file.write_all(&chunk).io_context("write to output file")?;
 
             downloaded += chunk.len() as u64;
             pb.set_position(downloaded);

@@ -258,7 +258,8 @@ impl<'a> PackageResolver<'a> {
 
         // Step 3: Try each strategy in order
         let mut delegate_ctx = DelegateContext::new();
-        self.try_strategies(&strategies, &pkg_with_repo, options, &mut delegate_ctx).await
+        self.try_strategies(&strategies, &pkg_with_repo, options, &mut delegate_ctx)
+            .await
     }
 
     /// Get resolution strategies from routing table, repo default, or legacy fallback
@@ -362,7 +363,8 @@ impl<'a> PackageResolver<'a> {
                 PrimaryStrategy::from(strategy)
             );
 
-            match Box::pin(self.try_strategy(strategy, pkg_with_repo, options, delegate_ctx)).await {
+            match Box::pin(self.try_strategy(strategy, pkg_with_repo, options, delegate_ctx)).await
+            {
                 Ok(source) => {
                     info!(
                         "Strategy {:?} succeeded for {}",
@@ -406,7 +408,10 @@ impl<'a> PackageResolver<'a> {
                 url,
                 checksum,
                 delta_base,
-            } => self.try_binary(url, checksum, delta_base.as_deref(), pkg_with_repo, options).await,
+            } => {
+                self.try_binary(url, checksum, delta_base.as_deref(), pkg_with_repo, options)
+                    .await
+            }
 
             ResolutionStrategy::Remi {
                 endpoint,
@@ -422,23 +427,31 @@ impl<'a> PackageResolver<'a> {
                     pkg_name,
                     effective_remi_version(pkg_with_repo, options),
                     options,
-                ).await
+                )
+                .await
             }
 
             ResolutionStrategy::Recipe {
                 recipe_url,
                 source_urls,
                 patches,
-            } => self.try_recipe(recipe_url, source_urls, patches, options).await,
+            } => {
+                self.try_recipe(recipe_url, source_urls, patches, options)
+                    .await
+            }
 
             ResolutionStrategy::Delegate { label } => {
                 delegate_ctx.enter(label)?;
-                self.try_delegate(label, &pkg_with_repo.package.name, options, delegate_ctx).await
+                self.try_delegate(label, &pkg_with_repo.package.name, options, delegate_ctx)
+                    .await
             }
 
             ResolutionStrategy::Legacy {
                 repository_package_id,
-            } => self.try_legacy(*repository_package_id, pkg_with_repo, options).await,
+            } => {
+                self.try_legacy(*repository_package_id, pkg_with_repo, options)
+                    .await
+            }
         }
     }
 
@@ -519,7 +532,8 @@ impl<'a> PackageResolver<'a> {
             ..pkg_with_repo.package.clone()
         };
 
-        let path = download_package_verified(&temp_pkg, &output_dir, options.gpg_options.as_ref()).await?;
+        let path =
+            download_package_verified(&temp_pkg, &output_dir, options.gpg_options.as_ref()).await?;
 
         Ok(PackageSource::Binary {
             path,
@@ -539,7 +553,9 @@ impl<'a> PackageResolver<'a> {
         let (temp_dir, output_dir) = create_output_dir(options)?;
 
         let client = RemiClient::new(endpoint)?;
-        let path = client.fetch_package(distro, name, version, &output_dir).await?;
+        let path = client
+            .fetch_package(distro, name, version, &output_dir)
+            .await?;
 
         Ok(PackageSource::Ccs {
             path,
@@ -646,7 +662,13 @@ impl<'a> PackageResolver<'a> {
 
             // Recursively resolve through the target label
             // DelegateContext tracks depth and visited labels for cycle detection
-            return Box::pin(self.try_delegate(&target_label_str, package_name, options, delegate_ctx)).await;
+            return Box::pin(self.try_delegate(
+                &target_label_str,
+                package_name,
+                options,
+                delegate_ctx,
+            ))
+            .await;
         }
 
         // Check for repository link
@@ -690,7 +712,14 @@ impl<'a> PackageResolver<'a> {
                     continue;
                 }
 
-                match Box::pin(self.try_strategy(strategy, &pkg_with_repo, &repo_options, delegate_ctx)).await {
+                match Box::pin(self.try_strategy(
+                    strategy,
+                    &pkg_with_repo,
+                    &repo_options,
+                    delegate_ctx,
+                ))
+                .await
+                {
                     Ok(source) => return Ok(source),
                     Err(e) => {
                         debug!("Strategy failed in delegated repository: {}", e);
@@ -731,7 +760,8 @@ impl<'a> PackageResolver<'a> {
             &pkg_with_repo.package,
             &output_dir,
             options.gpg_options.as_ref(),
-        ).await?;
+        )
+        .await?;
 
         Ok(PackageSource::Binary {
             path,

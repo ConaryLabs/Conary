@@ -700,7 +700,9 @@ async fn resolve_and_parse_package(
         repo,
         &progress,
         &policy_opts,
-    ).await {
+    )
+    .await
+    {
         Err(e) => {
             print_package_suggestions(conn, package_name);
             return Err(e);
@@ -1033,7 +1035,8 @@ async fn handle_dep_installs(
                     &to_download,
                     temp_dir.path(),
                     Some(&keyring_dir),
-                ).await?;
+                )
+                .await?;
 
                 let parent_name = ctx.pkg.name().to_string();
                 let mut prepared_packages = Vec::with_capacity(downloaded.len());
