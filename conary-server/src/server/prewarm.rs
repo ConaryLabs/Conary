@@ -118,14 +118,12 @@ pub fn run_prewarm(config: &PrewarmConfig) -> Result<PrewarmResult> {
 
         info!("Converting {} {}...", pkg.name, pkg.version);
 
-        // Run conversion synchronously (blocking)
-        match tokio::runtime::Runtime::new()
-            .context("Failed to create runtime")?
-            .block_on(conversion_service.convert_package(
-                &config.distro,
-                &pkg.name,
-                Some(&pkg.version),
-            )) {
+        // Run conversion (blocking -- convert_package uses Handle::block_on internally)
+        match conversion_service.convert_package(
+            &config.distro,
+            &pkg.name,
+            Some(&pkg.version),
+        ) {
             Ok(conv_result) => {
                 info!(
                     "Converted {} {}: {} chunks, {} bytes",

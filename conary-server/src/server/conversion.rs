@@ -145,7 +145,13 @@ impl ConversionService {
     /// 4. Convert to CCS
     /// 5. Store chunks in CAS
     /// 6. Record in database
-    pub async fn convert_package(
+    /// Convert a package from a repository.
+    ///
+    /// This is a blocking function that internally uses `Handle::block_on` for
+    /// async operations (HTTP downloads, tokio::fs). Callers in async contexts
+    /// should wrap in `spawn_blocking`. This design avoids holding
+    /// `rusqlite::Connection` (which is !Send) across `.await` points.
+    pub fn convert_package(
         &self,
         distro: &str,
         package_name: &str,
@@ -242,7 +248,8 @@ impl ConversionService {
         );
 
         // Step 5: Store chunks in CAS
-        let chunk_hashes = self.store_chunks(&conversion_result).await?;
+        let handle = tokio::runtime::Handle::current();
+        let chunk_hashes = handle.block_on(self.store_chunks(&conversion_result))?;
         info!("Stored {} chunks/blobs", chunk_hashes.len());
 
         // Step 6: Record in database
@@ -377,7 +384,8 @@ impl ConversionService {
         repo_pkg: RepositoryPackage,
         dest_dir: &Path,
     ) -> Result<(RepositoryPackage, PathBuf)> {
-        match download_package(&repo_pkg, dest_dir) {
+        let handle = tokio::runtime::Handle::current();
+        match handle.block_on(download_package(&repo_pkg, dest_dir)) {
             Ok(path) => return Ok((repo_pkg, path)),
             Err(err) if !Self::is_upstream_not_found(&err) => return Err(err.into()),
             Err(err) => {
@@ -396,11 +404,13 @@ impl ConversionService {
                         repo_pkg.repository_id
                     )
                 })?;
-        conary_core::repository::sync_repository(conn, &mut repo)
+        handle
+            .block_on(conary_core::repository::sync_repository(conn, &mut repo))
             .map_err(|e| anyhow!("Repository refresh failed for {}: {}", repo.name, e))?;
 
         let refreshed_pkg = self.find_package(conn, distro, package_name, version)?;
-        let path = download_package(&refreshed_pkg, dest_dir)
+        let path = handle
+            .block_on(download_package(&refreshed_pkg, dest_dir))
             .map_err(|e| anyhow!("Retry after refresh failed: {}", e))?;
         Ok((refreshed_pkg, path))
     }
