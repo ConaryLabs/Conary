@@ -700,7 +700,7 @@ async fn resolve_and_parse_package(
         repo,
         &progress,
         &policy_opts,
-    ) {
+    ).await {
         Err(e) => {
             print_package_suggestions(conn, package_name);
             return Err(e);
@@ -923,7 +923,7 @@ async fn handle_dependencies(ctx: &DepAnalysisContext<'_>) -> Result<()> {
 
     handle_dep_adoptions(&dep_plan, ctx.dry_run, ctx.db_path).await;
 
-    handle_dep_installs(ctx, &dep_plan, &progress)?;
+    handle_dep_installs(ctx, &dep_plan, &progress).await?;
 
     // Check for unresolvable dependencies
     check_unresolvable_deps(ctx, &dep_plan, &convergence_intent)?;
@@ -967,7 +967,7 @@ async fn handle_dep_adoptions(
 }
 
 /// Handle packages that need to be installed from repos.
-fn handle_dep_installs(
+async fn handle_dep_installs(
     ctx: &DepAnalysisContext<'_>,
     dep_plan: &dep_resolution::DepResolutionPlan,
     progress: &InstallProgress,
@@ -1033,7 +1033,7 @@ fn handle_dep_installs(
                     &to_download,
                     temp_dir.path(),
                     Some(&keyring_dir),
-                )?;
+                ).await?;
 
                 let parent_name = ctx.pkg.name().to_string();
                 let mut prepared_packages = Vec::with_capacity(downloaded.len());

@@ -138,7 +138,7 @@ pub async fn cmd_provenance_verify(
                     .dna_hash
                     .as_deref()
                     .ok_or(SigstoreCommandError::MissingDnaHash)?;
-                let entry = rekor_get_entry_by_index(rekor_index)?;
+                let entry = rekor_get_entry_by_index(rekor_index).await?;
                 let report = verify_rekor_entry(&entry, dna_hash)?;
 
                 if report.hash_match {
@@ -631,7 +631,7 @@ pub async fn cmd_provenance_register(
                     sign_dna_with_key(dna_hash, key)?
                 };
 
-                let entry = rekor_create_entry(build_rekor_entry(dna_hash, &signed)?)?;
+                let entry = rekor_create_entry(build_rekor_entry(dna_hash, &signed)?).await?;
                 println!(
                     "[OK] Rekor entry created: uuid={}, log_index={}",
                     entry.uuid, entry.log_index
@@ -750,20 +750,20 @@ fn rekor_base_url() -> &'static str {
     "https://rekor.sigstore.dev"
 }
 
-fn rekor_get_entry_by_index(index: i64) -> Result<RekorLogEntry, SigstoreCommandError> {
-    let client = reqwest::blocking::Client::new();
+async fn rekor_get_entry_by_index(index: i64) -> Result<RekorLogEntry, SigstoreCommandError> {
+    let client = reqwest::Client::new();
     let url = format!("{}/api/v1/log/entries?logIndex={}", rekor_base_url(), index);
-    let response = client.get(url).send()?.error_for_status()?;
-    let body = response.text()?;
+    let response = client.get(url).send().await?.error_for_status()?;
+    let body = response.text().await?;
     let parsed = entries_api::parse_response(body);
     Ok(RekorLogEntry::from_str(&parsed)?)
 }
 
-fn rekor_create_entry(entry: ProposedEntry) -> Result<RekorLogEntry, SigstoreCommandError> {
-    let client = reqwest::blocking::Client::new();
+async fn rekor_create_entry(entry: ProposedEntry) -> Result<RekorLogEntry, SigstoreCommandError> {
+    let client = reqwest::Client::new();
     let url = format!("{}/api/v1/log/entries", rekor_base_url());
-    let response = client.post(url).json(&entry).send()?.error_for_status()?;
-    let body = response.text()?;
+    let response = client.post(url).json(&entry).send().await?.error_for_status()?;
+    let body = response.text().await?;
     let parsed = entries_api::parse_response(body);
     Ok(RekorLogEntry::from_str(&parsed)?)
 }

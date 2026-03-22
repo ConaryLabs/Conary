@@ -40,7 +40,7 @@ impl DebianParser {
     /// Download and decompress the Packages file
     ///
     /// Uses RepositoryClient for HTTP and the compression module for auto-decompression.
-    fn download_packages_file(&self, repo_url: &str) -> Result<String> {
+    async fn download_packages_file(&self, repo_url: &str) -> Result<String> {
         let packages_url = format!(
             "{}/dists/{}/{}/binary-{}/Packages.gz",
             repo_url.trim_end_matches('/'),
@@ -52,7 +52,7 @@ impl DebianParser {
         debug!("Downloading Debian Packages file from: {}", packages_url);
 
         let client = RepositoryClient::new()?;
-        let content = client.fetch_and_decompress_string(&packages_url)?;
+        let content = client.fetch_and_decompress_string(&packages_url).await?;
 
         debug!("Decompressed Packages file: {} bytes", content.len());
         Ok(content)
@@ -320,14 +320,14 @@ struct DebianPackageEntry {
 }
 
 impl RepositoryParser for DebianParser {
-    fn sync_metadata(&self, repo_url: &str) -> Result<Vec<PackageMetadata>> {
+    async fn sync_metadata(&self, repo_url: &str) -> Result<Vec<PackageMetadata>> {
         info!(
             "Syncing Debian repository: {}/{}/{}",
             self.distribution, self.component, self.architecture
         );
 
         // Download and decompress Packages file
-        let packages_content = self.download_packages_file(repo_url)?;
+        let packages_content = self.download_packages_file(repo_url).await?;
 
         // Parse RFC 822-like format
         let entries: Vec<DebianPackageEntry> = rfc822_like::from_str(&packages_content)

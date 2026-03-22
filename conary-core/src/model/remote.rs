@@ -193,13 +193,13 @@ fn follow_delegation(
 /// When `offline` is true, only returns cached data (no HTTP requests).
 /// This delegates to `fetch_and_verify_remote_collection` with signature
 /// verification disabled.
-pub fn fetch_remote_collection(
+pub async fn fetch_remote_collection(
     conn: &Connection,
     name: &str,
     label: &str,
     offline: bool,
 ) -> ModelResult<FetchedCollection> {
-    fetch_and_verify_remote_collection(conn, name, label, offline, false, &[])
+    fetch_and_verify_remote_collection(conn, name, label, offline, false, &[]).await
 }
 
 /// Fetch a remote collection with optional Ed25519 signature verification
@@ -207,7 +207,7 @@ pub fn fetch_remote_collection(
 /// When `require_signatures` is true, the collection must have a valid signature
 /// from one of the `trusted_keys`. When false, signatures are verified
 /// opportunistically (warn on failure but don't block).
-pub fn fetch_and_verify_remote_collection(
+pub async fn fetch_and_verify_remote_collection(
     conn: &Connection,
     name: &str,
     label: &str,
@@ -257,6 +257,7 @@ pub fn fetch_and_verify_remote_collection(
 
     let bytes = client
         .download_to_bytes(&url)
+        .await
         .map_err(|e| ModelError::RemoteNotFound(format!("{name}: {e}")))?;
 
     // Enforce size limit
@@ -294,7 +295,7 @@ pub fn fetch_and_verify_remote_collection(
 
     // Attempt to fetch signature
     let sig_url = format!("{}/signature", url.trim_end_matches('/'));
-    let signature_result = client.download_to_bytes(&sig_url);
+    let signature_result = client.download_to_bytes(&sig_url).await;
 
     let mut cached_signature: Option<Vec<u8>> = None;
     let mut cached_key_id: Option<String> = None;
@@ -431,7 +432,7 @@ fn verify_against_trusted_keys(
 ///
 /// Sends the serialized `CollectionData` to `PUT {base_url}/v1/admin/models/{name}`.
 /// Returns Ok(()) on success (201), or an error on failure.
-pub fn publish_remote_collection(
+pub async fn publish_remote_collection(
     base_url: &str,
     data: &CollectionData,
     force: bool,
@@ -448,7 +449,7 @@ pub fn publish_remote_collection(
 
     info!(name = %data.name, url = %url, "Publishing collection to remote");
 
-    let client = reqwest::blocking::Client::builder()
+    let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| ModelError::RemoteFetchError(format!("HTTP client error: {}", e)))?;
@@ -458,6 +459,7 @@ pub fn publish_remote_collection(
         .header("Content-Type", "application/json")
         .body(json)
         .send()
+        .await
         .map_err(|e| ModelError::RemoteFetchError(format!("Failed to PUT {}: {}", url, e)))?;
 
     match response.status().as_u16() {
@@ -470,7 +472,7 @@ pub fn publish_remote_collection(
             data.name
         ))),
         status => {
-            let body = response.text().unwrap_or_default();
+            let body = response.text().await.unwrap_or_default();
             Err(ModelError::RemoteFetchError(format!(
                 "Remote publish failed (HTTP {}): {}",
                 status, body

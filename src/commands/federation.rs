@@ -425,7 +425,7 @@ pub async fn cmd_federation_test(db_path: &str, peer: Option<&str>, timeout: u64
     println!("Testing {} peer(s)...", endpoints.len());
     println!();
 
-    let client = reqwest::blocking::Client::builder()
+    let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_millis(timeout))
         .build()?;
 
@@ -436,7 +436,7 @@ pub async fn cmd_federation_test(db_path: &str, peer: Option<&str>, timeout: u64
         let health_url = format!("{}/health", endpoint.trim_end_matches('/'));
         let start = std::time::Instant::now();
 
-        match client.get(&health_url).send() {
+        match client.get(&health_url).send().await {
             Ok(response) if response.status().is_success() => {
                 let elapsed = start.elapsed().as_millis();
                 println!("[OK] {} - {}ms", endpoint, elapsed);

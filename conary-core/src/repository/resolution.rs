@@ -76,11 +76,11 @@ const MAX_DELEGATE_DEPTH: usize = 10;
 ///
 /// Uses reqwest via `RepositoryClient` to download the content. Supports HTTP(S) URLs
 /// with automatic redirect following and retry support.
-fn fetch_url_content(url: &str) -> Result<String> {
+async fn fetch_url_content(url: &str) -> Result<String> {
     debug!("Fetching content from: {}", url);
 
     let client = RepositoryClient::new()?;
-    let bytes = client.download_to_bytes(url)?;
+    let bytes = client.download_to_bytes(url).await?;
 
     String::from_utf8(bytes)
         .map_err(|e| Error::ParseError(format!("Invalid UTF-8 content from {}: {}", url, e)))
@@ -233,7 +233,7 @@ impl<'a> PackageResolver<'a> {
     /// 2. Repository selection (using existing priority logic)
     /// 3. Strategy lookup from routing table (with implicit legacy fallback)
     /// 4. Strategy execution in priority order
-    pub fn resolve(&self, name: &str, options: &ResolutionOptions) -> Result<PackageSource> {
+    pub async fn resolve(&self, name: &str, options: &ResolutionOptions) -> Result<PackageSource> {
         // Step 0: Check if already installed locally
         if !options.skip_cas
             && let Some(installed) = self.check_installed(name, options)?
@@ -258,7 +258,7 @@ impl<'a> PackageResolver<'a> {
 
         // Step 3: Try each strategy in order
         let mut delegate_ctx = DelegateContext::new();
-        self.try_strategies(&strategies, &pkg_with_repo, options, &mut delegate_ctx)
+        self.try_strategies(&strategies, &pkg_with_repo, options, &mut delegate_ctx).await
     }
 
     /// Get resolution strategies from routing table, repo default, or legacy fallback
@@ -344,7 +344,7 @@ impl<'a> PackageResolver<'a> {
     }
 
     /// Try strategies in order until one succeeds
-    fn try_strategies(
+    async fn try_strategies(
         &self,
         strategies: &[ResolutionStrategy],
         pkg_with_repo: &PackageWithRepo,
@@ -362,7 +362,7 @@ impl<'a> PackageResolver<'a> {
                 PrimaryStrategy::from(strategy)
             );
 
-            match self.try_strategy(strategy, pkg_with_repo, options, delegate_ctx) {
+            match Box::pin(self.try_strategy(strategy, pkg_with_repo, options, delegate_ctx)).await {
                 Ok(source) => {
                     info!(
                         "Strategy {:?} succeeded for {}",
@@ -394,7 +394,7 @@ impl<'a> PackageResolver<'a> {
     }
 
     /// Try a single resolution strategy
-    fn try_strategy(
+    async fn try_strategy(
         &self,
         strategy: &ResolutionStrategy,
         pkg_with_repo: &PackageWithRepo,
@@ -406,7 +406,7 @@ impl<'a> PackageResolver<'a> {
                 url,
                 checksum,
                 delta_base,
-            } => self.try_binary(url, checksum, delta_base.as_deref(), pkg_with_repo, options),
+            } => self.try_binary(url, checksum, delta_base.as_deref(), pkg_with_repo, options).await,
 
             ResolutionStrategy::Remi {
                 endpoint,
@@ -422,23 +422,23 @@ impl<'a> PackageResolver<'a> {
                     pkg_name,
                     effective_remi_version(pkg_with_repo, options),
                     options,
-                )
+                ).await
             }
 
             ResolutionStrategy::Recipe {
                 recipe_url,
                 source_urls,
                 patches,
-            } => self.try_recipe(recipe_url, source_urls, patches, options),
+            } => self.try_recipe(recipe_url, source_urls, patches, options).await,
 
             ResolutionStrategy::Delegate { label } => {
                 delegate_ctx.enter(label)?;
-                self.try_delegate(label, &pkg_with_repo.package.name, options, delegate_ctx)
+                self.try_delegate(label, &pkg_with_repo.package.name, options, delegate_ctx).await
             }
 
             ResolutionStrategy::Legacy {
                 repository_package_id,
-            } => self.try_legacy(*repository_package_id, pkg_with_repo, options),
+            } => self.try_legacy(*repository_package_id, pkg_with_repo, options).await,
         }
     }
 
@@ -494,7 +494,7 @@ impl<'a> PackageResolver<'a> {
     }
 
     /// Try binary download strategy
-    fn try_binary(
+    async fn try_binary(
         &self,
         url: &str,
         checksum: &str,
@@ -519,7 +519,7 @@ impl<'a> PackageResolver<'a> {
             ..pkg_with_repo.package.clone()
         };
 
-        let path = download_package_verified(&temp_pkg, &output_dir, options.gpg_options.as_ref())?;
+        let path = download_package_verified(&temp_pkg, &output_dir, options.gpg_options.as_ref()).await?;
 
         Ok(PackageSource::Binary {
             path,
@@ -528,7 +528,7 @@ impl<'a> PackageResolver<'a> {
     }
 
     /// Try Remi conversion strategy
-    fn try_remi(
+    async fn try_remi(
         &self,
         endpoint: &str,
         distro: &str,
@@ -539,7 +539,7 @@ impl<'a> PackageResolver<'a> {
         let (temp_dir, output_dir) = create_output_dir(options)?;
 
         let client = RemiClient::new(endpoint)?;
-        let path = client.fetch_package(distro, name, version, &output_dir)?;
+        let path = client.fetch_package(distro, name, version, &output_dir).await?;
 
         Ok(PackageSource::Ccs {
             path,
@@ -548,7 +548,7 @@ impl<'a> PackageResolver<'a> {
     }
 
     /// Try recipe build strategy
-    fn try_recipe(
+    async fn try_recipe(
         &self,
         recipe_url: &str,
         source_urls: &[String],
@@ -575,7 +575,7 @@ impl<'a> PackageResolver<'a> {
 
         // Fetch the recipe file
         info!("Fetching recipe from: {}", recipe_url);
-        let recipe_content = fetch_url_content(recipe_url)?;
+        let recipe_content = fetch_url_content(recipe_url).await?;
 
         // Parse the recipe
         let recipe = parse_recipe(&recipe_content)
@@ -602,7 +602,7 @@ impl<'a> PackageResolver<'a> {
     /// Resolves a package through a label chain. The label can either:
     /// 1. Delegate to another label (chain continues)
     /// 2. Link to a repository (resolution happens through that repo)
-    fn try_delegate(
+    async fn try_delegate(
         &self,
         label_str: &str,
         package_name: &str,
@@ -646,7 +646,7 @@ impl<'a> PackageResolver<'a> {
 
             // Recursively resolve through the target label
             // DelegateContext tracks depth and visited labels for cycle detection
-            return self.try_delegate(&target_label_str, package_name, options, delegate_ctx);
+            return Box::pin(self.try_delegate(&target_label_str, package_name, options, delegate_ctx)).await;
         }
 
         // Check for repository link
@@ -690,7 +690,7 @@ impl<'a> PackageResolver<'a> {
                     continue;
                 }
 
-                match self.try_strategy(strategy, &pkg_with_repo, &repo_options, delegate_ctx) {
+                match Box::pin(self.try_strategy(strategy, &pkg_with_repo, &repo_options, delegate_ctx)).await {
                     Ok(source) => return Ok(source),
                     Err(e) => {
                         debug!("Strategy failed in delegated repository: {}", e);
@@ -718,7 +718,7 @@ impl<'a> PackageResolver<'a> {
     /// The `repository_package_id` is part of the `ResolutionStrategy::Legacy` variant
     /// for schema completeness, but the actual package data is already available in
     /// `pkg_with_repo` from the earlier repository selection step.
-    fn try_legacy(
+    async fn try_legacy(
         &self,
         _repository_package_id: i64,
         pkg_with_repo: &PackageWithRepo,
@@ -731,7 +731,7 @@ impl<'a> PackageResolver<'a> {
             &pkg_with_repo.package,
             &output_dir,
             options.gpg_options.as_ref(),
-        )?;
+        ).await?;
 
         Ok(PackageSource::Binary {
             path,
@@ -741,13 +741,13 @@ impl<'a> PackageResolver<'a> {
 }
 
 /// Convenience function for resolving a package
-pub fn resolve_package(
+pub async fn resolve_package(
     conn: &Connection,
     name: &str,
     options: &ResolutionOptions,
 ) -> Result<PackageSource> {
     let resolver = PackageResolver::new(conn);
-    resolver.resolve(name, options)
+    resolver.resolve(name, options).await
 }
 
 /// Build GPG verification options for a repository

@@ -1,9 +1,6 @@
 // conary-core/src/canonical/client.rs
 
 //! Client-side canonical map fetching from Remi.
-//!
-//! Uses `reqwest::blocking` for CLI commands. Server-side callers must wrap
-//! in `tokio::task::spawn_blocking` if called from async context.
 
 use crate::db::models::{CanonicalPackage, PackageImplementation, get_metadata, set_metadata};
 use crate::error::{Error, Result};
@@ -28,11 +25,11 @@ struct CanonicalMapEntry {
 
 /// Fetch the canonical map from a Remi endpoint.
 /// Returns Ok(Some(count)) if new data was fetched, Ok(None) if 304, Err on failure.
-pub fn fetch_canonical_map(conn: &Connection, endpoint: &str) -> Result<Option<usize>> {
+pub async fn fetch_canonical_map(conn: &Connection, endpoint: &str) -> Result<Option<usize>> {
     let url = format!("{}/v1/canonical/map", endpoint.trim_end_matches('/'));
     let etag = get_metadata(conn, "client_metadata", "canonical_etag").unwrap_or(None);
 
-    let client = reqwest::blocking::Client::builder()
+    let client = reqwest::Client::builder()
         .user_agent("conary/0.6.0 (https://conary.io)")
         .timeout(std::time::Duration::from_secs(30))
         .build()
@@ -45,6 +42,7 @@ pub fn fetch_canonical_map(conn: &Connection, endpoint: &str) -> Result<Option<u
 
     let response = request
         .send()
+        .await
         .map_err(|e| Error::DownloadError(e.to_string()))?;
 
     if response.status() == reqwest::StatusCode::NOT_MODIFIED {
@@ -66,6 +64,7 @@ pub fn fetch_canonical_map(conn: &Connection, endpoint: &str) -> Result<Option<u
 
     let body = response
         .text()
+        .await
         .map_err(|e| Error::DownloadError(e.to_string()))?;
     let count = ingest_canonical_map_json(conn, &body)?;
 

@@ -162,13 +162,14 @@ pub async fn cmd_profile_publish(
         endpoint.ok_or_else(|| anyhow::anyhow!("--endpoint is required for profile publish"))?;
     let token = token.ok_or_else(|| anyhow::anyhow!("--token is required for profile publish"))?;
 
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     let resp = client
         .put(format!("{endpoint}/v1/profiles/{hash}"))
         .header("Authorization", format!("Bearer {token}"))
         .header("Content-Type", "application/toml")
         .body(content)
         .send()
+        .await
         .map_err(|e| anyhow::anyhow!("HTTP error: {e}"))?;
 
     if resp.status().is_success() {
@@ -177,7 +178,7 @@ pub async fn cmd_profile_publish(
         anyhow::bail!(
             "Server returned {}: {}",
             resp.status(),
-            resp.text().unwrap_or_default()
+            resp.text().await.unwrap_or_default()
         );
     }
 

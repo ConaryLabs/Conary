@@ -123,7 +123,6 @@ where
 /// Async version of [`with_retry`] for use in async contexts.
 ///
 /// Uses `tokio::time::sleep` instead of `std::thread::sleep`.
-#[cfg(feature = "server")]
 pub async fn with_retry_async<T, F, Fut>(config: &RetryConfig, mut op: F) -> Result<T>
 where
     F: FnMut() -> Fut,

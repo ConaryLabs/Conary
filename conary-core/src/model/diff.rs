@@ -434,26 +434,26 @@ impl Default for ModelDiff {
 ///
 /// This is the preferred entry point when the model may contain `[include]` directives.
 /// It resolves all includes and then computes the diff against the resolved model.
-pub fn compute_diff_with_includes(
+pub async fn compute_diff_with_includes(
     model: &SystemModel,
     state: &SystemState,
     conn: &Connection,
 ) -> super::ModelResult<ModelDiff> {
     // Resolve includes if present
-    let resolved = resolve_includes(model, conn)?;
+    let resolved = resolve_includes(model, conn).await?;
     Ok(compute_diff_from_resolved(&resolved, model, state))
 }
 
 /// Compute diff resolving includes with offline mode
 ///
 /// When `offline` is true, only cached remote collections are used.
-pub fn compute_diff_with_includes_offline(
+pub async fn compute_diff_with_includes_offline(
     model: &SystemModel,
     state: &SystemState,
     conn: &Connection,
     offline: bool,
 ) -> super::ModelResult<ModelDiff> {
-    let resolved = resolve_includes_with_options(model, conn, offline)?;
+    let resolved = resolve_includes_with_options(model, conn, offline).await?;
     Ok(compute_diff_from_resolved(&resolved, model, state))
 }
 

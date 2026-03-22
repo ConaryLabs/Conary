@@ -5,7 +5,24 @@
 //! Provides centralized detection and creation of repository parsers.
 
 use crate::error::{Error, Result};
-use crate::repository::parsers::{self, RepositoryParser};
+use crate::repository::parsers::{self, PackageMetadata, RepositoryParser};
+
+/// Enum wrapper for concrete parser types to avoid dyn dispatch (async-incompatible).
+pub enum AnyParser {
+    Arch(parsers::arch::ArchParser),
+    Debian(parsers::debian::DebianParser),
+    Fedora(parsers::fedora::FedoraParser),
+}
+
+impl AnyParser {
+    pub async fn sync_metadata(&self, repo_url: &str) -> Result<Vec<PackageMetadata>> {
+        match self {
+            Self::Arch(p) => p.sync_metadata(repo_url).await,
+            Self::Debian(p) => p.sync_metadata(repo_url).await,
+            Self::Fedora(p) => p.sync_metadata(repo_url).await,
+        }
+    }
+}
 
 /// Detect the system architecture
 ///
@@ -80,7 +97,7 @@ pub fn create_parser(
     format: RepositoryFormat,
     repo_name: &str,
     _repo_url: &str,
-) -> Result<Box<dyn RepositoryParser>> {
+) -> Result<AnyParser> {
     match format {
         RepositoryFormat::Arch => {
             let name = if let Some(suffix) = repo_name.strip_prefix("arch-") {
@@ -88,7 +105,7 @@ pub fn create_parser(
             } else {
                 "core".to_string()
             };
-            Ok(Box::new(parsers::arch::ArchParser::new(name)))
+            Ok(AnyParser::Arch(parsers::arch::ArchParser::new(name)))
         }
         RepositoryFormat::Debian => {
             let distribution = if let Some(suffix) = repo_name.strip_prefix("ubuntu-") {
@@ -100,7 +117,7 @@ pub fn create_parser(
             };
 
             let arch = arch_to_debian(&detect_system_arch());
-            Ok(Box::new(parsers::debian::DebianParser::new(
+            Ok(AnyParser::Debian(parsers::debian::DebianParser::new(
                 distribution,
                 "main".to_string(),
                 arch,
@@ -108,7 +125,7 @@ pub fn create_parser(
         }
         RepositoryFormat::Fedora => {
             let arch = detect_system_arch();
-            Ok(Box::new(parsers::fedora::FedoraParser::new(arch)))
+            Ok(AnyParser::Fedora(parsers::fedora::FedoraParser::new(arch)))
         }
         RepositoryFormat::Json => Err(Error::ParseError(
             "JSON format has no native parser".to_string(),

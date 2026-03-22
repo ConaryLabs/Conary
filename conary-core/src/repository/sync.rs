@@ -84,7 +84,7 @@ fn rebase_download_url(
 }
 
 /// Synchronize repository using native metadata format parsers
-fn sync_repository_native(
+async fn sync_repository_native(
     conn: &Connection,
     repo: &mut Repository,
     format: RepositoryFormat,
@@ -96,7 +96,7 @@ fn sync_repository_native(
 
     // Create and use parser from registry
     let parser = registry::create_parser(format, &repo.name, &repo.url)?;
-    let packages = parser.sync_metadata(&repo.url)?;
+    let packages = parser.sync_metadata(&repo.url).await?;
 
     let repo_id = repo
         .id
@@ -581,7 +581,7 @@ fn parse_raw_dependency_entry(entry: &str) -> (String, Option<String>) {
 /// For repos with `default_strategy = "remi"`, fetches the package index from
 /// the Remi server's `/v1/{distro}/metadata` endpoint instead of parsing
 /// traditional repo formats (repomd.xml, Packages, etc.).
-fn sync_repository_remi(conn: &Connection, repo: &mut Repository) -> Result<usize> {
+async fn sync_repository_remi(conn: &Connection, repo: &mut Repository) -> Result<usize> {
     let distro = repo.default_strategy_distro.as_deref().ok_or_else(|| {
         Error::ConfigError(format!(
             "Repository '{}' has strategy 'remi' but no distro configured (use --remi-distro)",
@@ -603,7 +603,7 @@ fn sync_repository_remi(conn: &Connection, repo: &mut Repository) -> Result<usiz
     );
 
     let client = RepositoryClient::new()?;
-    let bytes = client.download_to_bytes(&metadata_url)?;
+    let bytes = client.download_to_bytes(&metadata_url).await?;
     let response: RemiMetadataResponse = serde_json::from_slice(&bytes).map_err(|e| {
         Error::ParseError(format!(
             "Failed to parse Remi metadata from {}: {}",
@@ -657,12 +657,12 @@ fn sync_repository_remi(conn: &Connection, repo: &mut Repository) -> Result<usiz
 /// Downloads the full canonical map from `{endpoint}/v1/canonical/map` and upserts
 /// each entry into `canonical_packages` and `package_implementations`. This is
 /// non-fatal: callers should log failures at debug level and continue.
-fn fetch_and_persist_canonical_map(conn: &Connection, endpoint: &str) -> Result<u64> {
+async fn fetch_and_persist_canonical_map(conn: &Connection, endpoint: &str) -> Result<u64> {
     let url = format!("{}/v1/canonical/map", endpoint.trim_end_matches('/'));
     debug!("Fetching canonical map from {}", url);
 
     let client = RepositoryClient::new()?;
-    let bytes = client.download_to_bytes(&url)?;
+    let bytes = client.download_to_bytes(&url).await?;
 
     let map: CanonicalMapResponse = serde_json::from_slice(&bytes)
         .map_err(|e| Error::ParseError(format!("Failed to parse canonical map from {url}: {e}")))?;
@@ -693,7 +693,7 @@ fn fetch_and_persist_canonical_map(conn: &Connection, endpoint: &str) -> Result<
 }
 
 /// Synchronize repository metadata with the database
-pub fn sync_repository(conn: &Connection, repo: &mut Repository) -> Result<usize> {
+pub async fn sync_repository(conn: &Connection, repo: &mut Repository) -> Result<usize> {
     info!("Synchronizing repository: {}", repo.name);
 
     // TUF verification phase (before any metadata processing)
@@ -708,6 +708,7 @@ pub fn sync_repository(conn: &Connection, repo: &mut Repository) -> Result<usize
 
         let verified = tuf_client
             .update(conn)
+            .await
             .map_err(|e| Error::TrustError(e.to_string()))?;
 
         info!(
@@ -720,14 +721,14 @@ pub fn sync_repository(conn: &Connection, repo: &mut Repository) -> Result<usize
 
     // Route to Remi-native sync if strategy is "remi"
     let count = if repo.default_strategy.as_deref() == Some("remi") {
-        sync_repository_remi(conn, repo)?
+        sync_repository_remi(conn, repo).await?
     } else {
         // Detect repository format using registry
         let format = registry::detect_repository_format(&repo.name, &repo.url);
 
         // Try native format first if detected
         let native_result = if format != RepositoryFormat::Json {
-            match sync_repository_native(conn, repo, format) {
+            match sync_repository_native(conn, repo, format).await {
                 Ok(count) => Some(count),
                 Err(e) => {
                     warn!("Native format sync failed: {}, falling back to JSON", e);
@@ -742,13 +743,13 @@ pub fn sync_repository(conn: &Connection, repo: &mut Repository) -> Result<usize
             count
         } else {
             // Fall back to JSON metadata format
-            sync_repository_json_fallback(conn, repo)?
+            sync_repository_json_fallback(conn, repo).await?
         }
     };
 
     // After package sync completes, fetch the canonical map from Remi (non-fatal)
     if let Some(ref remi_endpoint) = repo.default_strategy_endpoint {
-        match fetch_and_persist_canonical_map(conn, remi_endpoint) {
+        match fetch_and_persist_canonical_map(conn, remi_endpoint).await {
             Ok(mapping_count) => {
                 info!("Synced {} canonical mappings from Remi", mapping_count);
             }
@@ -762,9 +763,9 @@ pub fn sync_repository(conn: &Connection, repo: &mut Repository) -> Result<usize
 }
 
 /// JSON metadata fallback sync path (used when native format sync is unavailable)
-fn sync_repository_json_fallback(conn: &Connection, repo: &mut Repository) -> Result<usize> {
+async fn sync_repository_json_fallback(conn: &Connection, repo: &mut Repository) -> Result<usize> {
     let client = RepositoryClient::new()?;
-    let metadata = client.fetch_metadata(&repo.url)?;
+    let metadata = client.fetch_metadata(&repo.url).await?;
 
     let repo_id = repo
         .id
@@ -877,7 +878,7 @@ pub fn needs_sync(repo: &Repository) -> bool {
 /// * `Ok(Some(fingerprint))` - Key was fetched and imported
 /// * `Ok(None)` - No key URL configured, or key already exists
 /// * `Err(_)` - Failed to fetch or import key
-pub fn maybe_fetch_gpg_key(repo: &Repository, keyring_dir: &Path) -> Result<Option<String>> {
+pub async fn maybe_fetch_gpg_key(repo: &Repository, keyring_dir: &Path) -> Result<Option<String>> {
     let Some(key_url) = &repo.gpg_key_url else {
         debug!("No gpg_key_url configured for repository '{}'", repo.name);
         return Ok(None);
@@ -911,7 +912,7 @@ pub fn maybe_fetch_gpg_key(repo: &Repository, keyring_dir: &Path) -> Result<Opti
 
     // Download the key
     let client = RepositoryClient::new()?;
-    let key_data = client.download_to_bytes(key_url).map_err(|e| {
+    let key_data = client.download_to_bytes(key_url).await.map_err(|e| {
         Error::DownloadError(format!(
             "Failed to fetch GPG key for '{}': {}",
             repo.name, e
