@@ -74,9 +74,9 @@ impl TestEvent {
         }
     }
 
-    /// Format as SSE text.
-    pub fn to_sse(&self) -> String {
-        let event_name = match self {
+    /// SSE event type name for this event variant.
+    pub fn event_name(&self) -> &'static str {
+        match self {
             Self::SuiteStarted { .. } => "suite_started",
             Self::TestStarted { .. } => "test_started",
             Self::TestPassed { .. } => "test_passed",
@@ -84,10 +84,14 @@ impl TestEvent {
             Self::TestSkipped { .. } => "test_skipped",
             Self::StepOutput { .. } => "step_output",
             Self::RunComplete { .. } => "run_complete",
-        };
+        }
+    }
+
+    /// Format as SSE text.
+    pub fn to_sse(&self) -> String {
         let data = serde_json::to_string(self)
             .unwrap_or_else(|e| format!("{{\"error\":\"serialization failed: {e}\"}}"));
-        format!("event: {event_name}\ndata: {data}\n\n")
+        format!("event: {}\ndata: {data}\n\n", self.event_name())
     }
 }
 

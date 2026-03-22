@@ -609,17 +609,14 @@ fn tracked_provider_satisfies(
 }
 
 fn current_package_distro(conn: &Connection, trove: &Trove) -> Result<Option<String>> {
-    let label_id = match trove.label_id {
-        Some(label_id) => label_id,
-        None => return Ok(None),
+    let Some(label_id) = trove.label_id else {
+        return Ok(None);
     };
-    let label = match LabelEntry::find_by_id(conn, label_id)? {
-        Some(label) => label,
-        None => return Ok(None),
+    let Some(label) = LabelEntry::find_by_id(conn, label_id)? else {
+        return Ok(None);
     };
-    let repo_id = match label.repository_id {
-        Some(repo_id) => repo_id,
-        None => return Ok(None),
+    let Some(repo_id) = label.repository_id else {
+        return Ok(None);
     };
     Ok(Repository::find_by_id(conn, repo_id)?.and_then(|repo| repo.default_strategy_distro))
 }

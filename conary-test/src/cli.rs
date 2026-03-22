@@ -324,6 +324,23 @@ async fn run_command(cmd: &str, args: &[&str], cwd: Option<&str>) -> Result<(i32
     Ok((code, stdout, stderr))
 }
 
+/// Print command output as JSON or human-readable text.
+fn print_step(label: &str, code: i32, stdout: &str, stderr: &str, json: bool) {
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "step": label,
+                "exit_code": code,
+                "stdout": stdout.trim(),
+                "stderr": stderr.trim(),
+            })
+        );
+    } else {
+        print_command_result(label, code, stdout, stderr);
+    }
+}
+
 /// Print command output in a human-friendly format.
 fn print_command_result(label: &str, code: i32, stdout: &str, stderr: &str) {
     let status = if code == 0 {
@@ -621,40 +638,19 @@ async fn cmd_deploy_source(git_ref: Option<&str>, json: bool) -> Result<()> {
 
     if let Some(git_ref) = git_ref {
         let (code, stdout, stderr) = run_command("git", &["fetch", "--all"], Some(&dir)).await?;
-        if json {
-            println!(
-                "{}",
-                serde_json::json!({"step": "git fetch", "exit_code": code, "stdout": stdout.trim(), "stderr": stderr.trim()})
-            );
-        } else {
-            print_command_result("git fetch", code, &stdout, &stderr);
-        }
+        print_step("git fetch", code, &stdout, &stderr, json);
         if code != 0 {
             bail!("git fetch failed (exit {})", code);
         }
 
         let (code, stdout, stderr) = run_command("git", &["checkout", git_ref], Some(&dir)).await?;
-        if json {
-            println!(
-                "{}",
-                serde_json::json!({"step": "git checkout", "exit_code": code, "stdout": stdout.trim(), "stderr": stderr.trim()})
-            );
-        } else {
-            print_command_result("git checkout", code, &stdout, &stderr);
-        }
+        print_step("git checkout", code, &stdout, &stderr, json);
         if code != 0 {
             bail!("git checkout failed (exit {})", code);
         }
     } else {
         let (code, stdout, stderr) = run_command("git", &["pull"], Some(&dir)).await?;
-        if json {
-            println!(
-                "{}",
-                serde_json::json!({"step": "git pull", "exit_code": code, "stdout": stdout.trim(), "stderr": stderr.trim()})
-            );
-        } else {
-            print_command_result("git pull", code, &stdout, &stderr);
-        }
+        print_step("git pull", code, &stdout, &stderr, json);
         if code != 0 {
             bail!("git pull failed (exit {})", code);
         }
@@ -663,24 +659,10 @@ async fn cmd_deploy_source(git_ref: Option<&str>, json: bool) -> Result<()> {
     // Build both crates after pulling source.
     let (code, stdout, stderr) =
         run_command("cargo", &["build", "-p", "conary-test"], Some(&dir)).await?;
-    if json {
-        println!(
-            "{}",
-            serde_json::json!({"step": "cargo build conary-test", "exit_code": code, "stdout": stdout.trim(), "stderr": stderr.trim()})
-        );
-    } else {
-        print_command_result("cargo build conary-test", code, &stdout, &stderr);
-    }
+    print_step("cargo build conary-test", code, &stdout, &stderr, json);
 
     let (code, stdout, stderr) = run_command("cargo", &["build"], Some(&dir)).await?;
-    if json {
-        println!(
-            "{}",
-            serde_json::json!({"step": "cargo build conary", "exit_code": code, "stdout": stdout.trim(), "stderr": stderr.trim()})
-        );
-    } else {
-        print_command_result("cargo build conary", code, &stdout, &stderr);
-    }
+    print_step("cargo build conary", code, &stdout, &stderr, json);
 
     Ok(())
 }
@@ -701,14 +683,7 @@ async fn cmd_deploy_rebuild(crate_name: Option<&str>, json: bool) -> Result<()> 
     for (label, args) in crates {
         let (code, stdout, stderr) = run_command("cargo", args, Some(&dir)).await?;
         let full_label = format!("cargo build {label}");
-        if json {
-            println!(
-                "{}",
-                serde_json::json!({"step": full_label, "exit_code": code, "stdout": stdout.trim(), "stderr": stderr.trim()})
-            );
-        } else {
-            print_command_result(&full_label, code, &stdout, &stderr);
-        }
+        print_step(&full_label, code, &stdout, &stderr, json);
         if code != 0 {
             bail!("{full_label} failed (exit {code})");
         }
@@ -720,25 +695,7 @@ async fn cmd_deploy_rebuild(crate_name: Option<&str>, json: bool) -> Result<()> 
 async fn cmd_deploy_restart(json: bool) -> Result<()> {
     let (code, stdout, stderr) =
         run_command("systemctl", &["--user", "restart", "conary-test"], None).await?;
-
-    if json {
-        println!(
-            "{}",
-            serde_json::json!({
-                "step": "systemctl restart",
-                "exit_code": code,
-                "stdout": stdout.trim(),
-                "stderr": stderr.trim(),
-            })
-        );
-    } else {
-        print_command_result(
-            "systemctl --user restart conary-test",
-            code,
-            &stdout,
-            &stderr,
-        );
-    }
+    print_step("systemctl --user restart conary-test", code, &stdout, &stderr, json);
 
     if code != 0 {
         bail!("service restart failed (exit {code})");
@@ -834,25 +791,7 @@ async fn cmd_fixtures_build(groups: &str, json: bool) -> Result<()> {
 
     let script_path = format!("{fixture_dir}/{script}");
     let (code, stdout, stderr) = run_command("bash", &[&script_path], Some(&dir)).await?;
-
-    if json {
-        println!(
-            "{}",
-            serde_json::json!({
-                "step": format!("build-fixtures ({groups})"),
-                "exit_code": code,
-                "stdout": stdout.trim(),
-                "stderr": stderr.trim(),
-            })
-        );
-    } else {
-        print_command_result(
-            &format!("build-fixtures ({groups})"),
-            code,
-            &stdout,
-            &stderr,
-        );
-    }
+    print_step(&format!("build-fixtures ({groups})"), code, &stdout, &stderr, json);
 
     if code != 0 {
         bail!("fixture build failed (exit {code})");
@@ -865,20 +804,7 @@ async fn cmd_fixtures_publish(json: bool) -> Result<()> {
     let script_path = format!("{dir}/scripts/publish-test-fixtures.sh");
 
     let (code, stdout, stderr) = run_command("bash", &[&script_path], Some(&dir)).await?;
-
-    if json {
-        println!(
-            "{}",
-            serde_json::json!({
-                "step": "publish-fixtures",
-                "exit_code": code,
-                "stdout": stdout.trim(),
-                "stderr": stderr.trim(),
-            })
-        );
-    } else {
-        print_command_result("publish-fixtures", code, &stdout, &stderr);
-    }
+    print_step("publish-fixtures", code, &stdout, &stderr, json);
 
     if code != 0 {
         bail!("fixture publish failed (exit {code})");

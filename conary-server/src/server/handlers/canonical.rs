@@ -16,6 +16,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use super::run_blocking;
+
 /// Canonical package lookup response
 #[derive(Debug, Serialize)]
 pub struct CanonicalLookupResponse {
@@ -46,66 +48,47 @@ pub struct CanonicalSearchQuery {
 pub async fn canonical_lookup(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(name): Path<String>,
-) -> Response {
-    if let Err(e) = super::validate_name(&name) {
-        return e;
-    }
+) -> Result<Response, Response> {
+    super::validate_name(&name)?;
 
     let db_path = state.read().await.config.db_path.clone();
 
-    let result =
-        tokio::task::spawn_blocking(move || -> anyhow::Result<Option<CanonicalLookupResponse>> {
-            let conn = conary_core::db::open(&db_path)?;
+    let result = run_blocking("canonical lookup", move || {
+        let conn = conary_core::db::open(&db_path)?;
 
-            use conary_core::db::models::{CanonicalPackage, PackageImplementation};
+        use conary_core::db::models::{CanonicalPackage, PackageImplementation};
 
-            let pkg = match CanonicalPackage::resolve_name(&conn, &name)? {
-                Some(pkg) => pkg,
-                None => return Ok(None),
-            };
+        let pkg = match CanonicalPackage::resolve_name(&conn, &name)? {
+            Some(pkg) => pkg,
+            None => return Ok(None),
+        };
 
-            let impls = PackageImplementation::find_by_canonical(&conn, pkg.id.unwrap())?;
+        let impls = PackageImplementation::find_by_canonical(&conn, pkg.id.unwrap())?;
 
-            Ok(Some(CanonicalLookupResponse {
-                canonical_name: pkg.name,
-                appstream_id: pkg.appstream_id,
-                kind: pkg.kind,
-                description: pkg.description,
-                implementations: impls
-                    .into_iter()
-                    .map(|i| ImplementationInfo {
-                        distro: i.distro,
-                        distro_name: i.distro_name,
-                        source: i.source,
-                    })
-                    .collect(),
-            }))
-        })
-        .await;
+        Ok(Some(CanonicalLookupResponse {
+            canonical_name: pkg.name,
+            appstream_id: pkg.appstream_id,
+            kind: pkg.kind,
+            description: pkg.description,
+            implementations: impls
+                .into_iter()
+                .map(|i| ImplementationInfo {
+                    distro: i.distro,
+                    distro_name: i.distro_name,
+                    source: i.source,
+                })
+                .collect(),
+        }))
+    })
+    .await?;
 
     match result {
-        Ok(Ok(Some(response))) => Json(response).into_response(),
-        Ok(Ok(None)) => (
+        Some(response) => Ok(Json(response).into_response()),
+        None => Ok((
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "not found"})),
         )
-            .into_response(),
-        Ok(Err(e)) => {
-            tracing::error!("Canonical lookup error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-                .into_response()
-        }
-        Err(e) => {
-            tracing::error!("Canonical lookup task panicked: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "internal error"})),
-            )
-                .into_response()
-        }
+            .into_response()),
     }
 }
 
@@ -114,19 +97,19 @@ pub async fn canonical_lookup(
 pub async fn canonical_search(
     State(state): State<Arc<RwLock<ServerState>>>,
     Query(params): Query<CanonicalSearchQuery>,
-) -> Response {
+) -> Result<Response, Response> {
     let query = params.q.unwrap_or_default();
     if query.is_empty() {
-        return (
+        return Ok((
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "missing q parameter"})),
         )
-            .into_response();
+            .into_response());
     }
 
     let db_path = state.read().await.config.db_path.clone();
 
-    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<serde_json::Value>> {
+    let items = run_blocking("canonical search", move || {
         let conn = conary_core::db::open(&db_path)?;
 
         use conary_core::db::models::CanonicalPackage;
@@ -142,36 +125,20 @@ pub async fn canonical_search(
                     "description": p.description,
                 })
             })
-            .collect())
+            .collect::<Vec<_>>())
     })
-    .await;
+    .await?;
 
-    match result {
-        Ok(Ok(items)) => Json(items).into_response(),
-        Ok(Err(e)) => {
-            tracing::error!("Canonical search error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-                .into_response()
-        }
-        Err(e) => {
-            tracing::error!("Canonical search task panicked: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "internal error"})),
-            )
-                .into_response()
-        }
-    }
+    Ok(Json(items).into_response())
 }
 
 /// GET /v1/groups -- list all canonical groups (kind = "group").
-pub async fn groups_list(State(state): State<Arc<RwLock<ServerState>>>) -> Response {
+pub async fn groups_list(
+    State(state): State<Arc<RwLock<ServerState>>>,
+) -> Result<Response, Response> {
     let db_path = state.read().await.config.db_path.clone();
 
-    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<serde_json::Value>> {
+    let items = run_blocking("groups list", move || {
         let conn = conary_core::db::open(&db_path)?;
 
         use conary_core::db::models::CanonicalPackage;
@@ -185,29 +152,11 @@ pub async fn groups_list(State(state): State<Arc<RwLock<ServerState>>>) -> Respo
                     "description": g.description,
                 })
             })
-            .collect())
+            .collect::<Vec<_>>())
     })
-    .await;
+    .await?;
 
-    match result {
-        Ok(Ok(items)) => Json(items).into_response(),
-        Ok(Err(e)) => {
-            tracing::error!("Groups list error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-                .into_response()
-        }
-        Err(e) => {
-            tracing::error!("Groups list task panicked: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "internal error"})),
-            )
-                .into_response()
-        }
-    }
+    Ok(Json(items).into_response())
 }
 
 /// A single entry in the canonical map response.
@@ -237,7 +186,7 @@ pub async fn canonical_map(
 ) -> Result<Response, Response> {
     let db_path = state.read().await.config.db_path.clone();
 
-    let response = super::run_blocking("canonical_map", move || {
+    let response = run_blocking("canonical_map", move || {
         let conn = conary_core::db::open(&db_path)?;
 
         let version: u32 = conary_core::db::models::get_metadata(

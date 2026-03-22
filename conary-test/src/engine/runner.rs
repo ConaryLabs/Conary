@@ -43,6 +43,73 @@ pub struct TestRunner {
     vars: HashMap<String, String>,
 }
 
+/// Run a test with majority-vote retry logic for flaky tests.
+///
+/// Takes a closure that executes a single attempt and returns the result.
+/// For non-flaky tests, the closure is called exactly once. For flaky tests,
+/// it is called up to `retries` times, requiring a majority of passes.
+async fn majority_vote<F, Fut>(
+    test_def: &TestDef,
+    mut attempt_fn: F,
+) -> Result<(TestStatus, Option<String>, u64, Option<ExecResult>)>
+where
+    F: FnMut() -> Fut,
+    Fut:
+        std::future::Future<Output = Result<(TestStatus, Option<String>, u64, Option<ExecResult>)>>,
+{
+    let attempts = if test_def.flaky.unwrap_or(false) {
+        test_def.retries.unwrap_or(3).max(1)
+    } else {
+        1
+    };
+    let majority = attempts / 2 + 1;
+
+    let mut pass_count = 0_u32;
+    let mut fail_count = 0_u32;
+    let mut last_failure: Option<String> = None;
+    let mut last_exec: Option<ExecResult> = None;
+    let mut total_elapsed = 0_u64;
+
+    for _ in 0..attempts {
+        let (status, message, elapsed, exec) = attempt_fn().await?;
+        total_elapsed += elapsed;
+        last_exec = exec;
+
+        if status == TestStatus::Passed {
+            pass_count += 1;
+        } else {
+            fail_count += 1;
+            last_failure = message;
+        }
+
+        let remaining = attempts.saturating_sub(pass_count + fail_count);
+        if pass_count >= majority {
+            let message = if attempts > 1 {
+                Some(format!(
+                    "flaky test passed majority: {pass_count}/{attempts} successful attempts"
+                ))
+            } else {
+                None
+            };
+            return Ok((TestStatus::Passed, message, total_elapsed, last_exec));
+        }
+        if pass_count + remaining < majority {
+            break;
+        }
+    }
+
+    let message = if attempts > 1 {
+        Some(format!(
+            "flaky test failed majority: {pass_count}/{attempts} successful attempts; last failure: {}",
+            last_failure.unwrap_or_else(|| "unknown failure".to_string())
+        ))
+    } else {
+        last_failure
+    };
+
+    Ok((TestStatus::Failed, message, total_elapsed, last_exec))
+}
+
 impl TestRunner {
     pub fn new(config: GlobalConfig, distro: String) -> Self {
         let vars = variables::build_variables(&config, &distro);
@@ -338,59 +405,10 @@ impl TestRunner {
         backend: &dyn ContainerBackend,
         base_container_config: &ContainerConfig,
     ) -> Result<(TestStatus, Option<String>, u64, Option<ExecResult>)> {
-        let attempts = if test_def.flaky.unwrap_or(false) {
-            test_def.retries.unwrap_or(3).max(1)
-        } else {
-            1
-        };
-        let majority = attempts / 2 + 1;
-
-        let mut pass_count = 0_u32;
-        let mut fail_count = 0_u32;
-        let mut last_failure: Option<String> = None;
-        let mut last_exec: Option<ExecResult> = None;
-        let mut total_elapsed = 0_u64;
-
-        for _ in 0..attempts {
-            let (status, message, elapsed, exec) = self
-                .run_resource_scoped_test_once(manifest, test_def, backend, base_container_config)
-                .await?;
-            total_elapsed += elapsed;
-            last_exec = exec;
-
-            if status == TestStatus::Passed {
-                pass_count += 1;
-            } else {
-                fail_count += 1;
-                last_failure = message;
-            }
-
-            let remaining = attempts.saturating_sub(pass_count + fail_count);
-            if pass_count >= majority {
-                let message = if attempts > 1 {
-                    Some(format!(
-                        "flaky test passed majority: {pass_count}/{attempts} successful attempts"
-                    ))
-                } else {
-                    None
-                };
-                return Ok((TestStatus::Passed, message, total_elapsed, last_exec));
-            }
-            if pass_count + remaining < majority {
-                break;
-            }
-        }
-
-        let message = if attempts > 1 {
-            Some(format!(
-                "flaky test failed majority: {pass_count}/{attempts} successful attempts; last failure: {}",
-                last_failure.unwrap_or_else(|| "unknown failure".to_string())
-            ))
-        } else {
-            last_failure
-        };
-
-        Ok((TestStatus::Failed, message, total_elapsed, last_exec))
+        majority_vote(test_def, || {
+            self.run_resource_scoped_test_once(manifest, test_def, backend, base_container_config)
+        })
+        .await
     }
 
     async fn run_resource_scoped_test_once(
@@ -500,58 +518,10 @@ impl TestRunner {
         backend: &dyn ContainerBackend,
         container_id: &ContainerId,
     ) -> Result<(TestStatus, Option<String>, u64, Option<ExecResult>)> {
-        let attempts = if test_def.flaky.unwrap_or(false) {
-            test_def.retries.unwrap_or(3).max(1)
-        } else {
-            1
-        };
-        let majority = attempts / 2 + 1;
-
-        let mut pass_count = 0_u32;
-        let mut fail_count = 0_u32;
-        let mut last_failure: Option<String> = None;
-        let mut last_exec: Option<ExecResult> = None;
-        let mut total_elapsed = 0_u64;
-
-        for _ in 0..attempts {
-            let (status, message, elapsed, exec) =
-                self.run_test_once(test_def, backend, container_id).await?;
-            total_elapsed += elapsed;
-            last_exec = exec;
-
-            if status == TestStatus::Passed {
-                pass_count += 1;
-            } else {
-                fail_count += 1;
-                last_failure = message;
-            }
-
-            let remaining = attempts.saturating_sub(pass_count + fail_count);
-            if pass_count >= majority {
-                let message = if attempts > 1 {
-                    Some(format!(
-                        "flaky test passed majority: {pass_count}/{attempts} successful attempts"
-                    ))
-                } else {
-                    None
-                };
-                return Ok((TestStatus::Passed, message, total_elapsed, last_exec));
-            }
-            if pass_count + remaining < majority {
-                break;
-            }
-        }
-
-        let message = if attempts > 1 {
-            Some(format!(
-                "flaky test failed majority: {pass_count}/{attempts} successful attempts; last failure: {}",
-                last_failure.unwrap_or_else(|| "unknown failure".to_string())
-            ))
-        } else {
-            last_failure
-        };
-
-        Ok((TestStatus::Failed, message, total_elapsed, last_exec))
+        majority_vote(test_def, || {
+            self.run_test_once(test_def, backend, container_id)
+        })
+        .await
     }
 
     async fn run_test_once(

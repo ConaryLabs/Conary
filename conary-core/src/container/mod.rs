@@ -381,7 +381,7 @@ fn default_bind_mounts() -> Vec<BindMount> {
 }
 
 /// Write script content to a file and set it executable (mode 0o700).
-fn write_executable_script(path: &Path, content: &str) -> Result<()> {
+pub fn write_executable_script(path: &Path, content: &str) -> Result<()> {
     let mut f = File::create(path)?;
     f.write_all(content.as_bytes())?;
     let mut perms = fs::metadata(path)?.permissions();

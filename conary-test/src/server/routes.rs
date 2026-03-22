@@ -29,15 +29,15 @@ pub fn create_router(state: AppState, token: Option<String>) -> Router {
         .route("/v1/suites", get(handlers::list_suites))
         .route("/v1/runs", post(handlers::start_run))
         .route("/v1/runs", get(handlers::list_runs))
-        .route("/v1/runs/:id/stream", get(handlers::stream_run))
-        .route("/v1/runs/:id/cancel", post(handlers::cancel_run))
-        .route("/v1/runs/:id/artifacts", get(handlers::get_run_artifacts))
+        .route("/v1/runs/{id}/stream", get(handlers::stream_run))
+        .route("/v1/runs/{id}/cancel", post(handlers::cancel_run))
+        .route("/v1/runs/{id}/artifacts", get(handlers::get_run_artifacts))
         .route(
-            "/v1/runs/:id/tests/:test_id/rerun",
+            "/v1/runs/{id}/tests/{test_id}/rerun",
             post(handlers::rerun_test),
         )
         .route(
-            "/v1/runs/:id/tests/:test_id/logs",
+            "/v1/runs/{id}/tests/{test_id}/logs",
             get(handlers::get_test_logs),
         )
         .route("/v1/runs/{id}", get(handlers::get_run))

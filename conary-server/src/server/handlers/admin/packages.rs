@@ -44,9 +44,7 @@ fn safe_ccs_filename(name: &str, version: &str) -> String {
 }
 
 fn chunk_path(chunk_dir: &FsPath, hash: &str) -> PathBuf {
-    let normalized = hash.to_ascii_lowercase();
-    let (prefix, rest) = normalized.split_at(2);
-    chunk_dir.join("objects").join(prefix).join(rest)
+    crate::server::handlers::cas_object_path(chunk_dir, hash)
 }
 
 async fn remove_existing_record(

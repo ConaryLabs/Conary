@@ -88,13 +88,7 @@ pub fn is_newer(current: &str, remote: &str) -> bool {
             (patch, Some(pre_parts))
         } else {
             let patch = patch_str.parse().unwrap_or(0);
-            // Check if there are parts beyond patch that contain a pre-release marker
-            if parts.len() > 3 {
-                // No dash in patch, but extra components exist; treat as normal version
-                (patch, None)
-            } else {
-                (patch, None)
-            }
+            (patch, None)
         };
 
         ((major, minor, patch_num), prerelease)

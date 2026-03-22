@@ -39,7 +39,6 @@ pub async fn cmd_trigger_list(
         let enabled = if trigger.enabled { "yes" } else { "no" };
         let builtin = if trigger.builtin { "yes" } else { "no" };
 
-        // Truncate pattern for display
         let pattern_display = if trigger.pattern.len() > 38 {
             format!("{}...", &trigger.pattern[..35])
         } else {
@@ -73,7 +72,6 @@ pub async fn cmd_trigger_show(name: &str, db_path: &str) -> Result<()> {
     println!("  Enabled: {}", if trigger.enabled { "yes" } else { "no" });
     println!("  Built-in: {}", if trigger.builtin { "yes" } else { "no" });
 
-    // Show dependencies
     if let Some(id) = trigger.id {
         let deps = TriggerDependency::get_dependencies(&conn, id)?;
         if !deps.is_empty() {
@@ -81,7 +79,6 @@ pub async fn cmd_trigger_show(name: &str, db_path: &str) -> Result<()> {
         }
     }
 
-    // Show matched patterns
     println!("\n  Pattern breakdown:");
     for pattern in trigger.patterns() {
         println!("    - {}", pattern);
@@ -92,45 +89,39 @@ pub async fn cmd_trigger_show(name: &str, db_path: &str) -> Result<()> {
 
 /// Enable a trigger
 pub async fn cmd_trigger_enable(name: &str, db_path: &str) -> Result<()> {
-    let conn = open_db(db_path)?;
-
-    let trigger = Trigger::find_by_name(&conn, name)?
-        .ok_or_else(|| anyhow::anyhow!("Trigger '{}' not found", name))?;
-
-    if trigger.enabled {
-        println!("Trigger '{}' is already enabled.", name);
-        return Ok(());
-    }
-
-    let id = trigger
-        .id
-        .ok_or_else(|| anyhow::anyhow!("Trigger has no ID"))?;
-    Trigger::enable(&conn, id)?;
-
-    info!("Enabled trigger: {}", name);
-    println!("Enabled trigger: {}", name);
-    Ok(())
+    set_trigger_enabled(name, db_path, true)
 }
 
 /// Disable a trigger
 pub async fn cmd_trigger_disable(name: &str, db_path: &str) -> Result<()> {
+    set_trigger_enabled(name, db_path, false)
+}
+
+fn set_trigger_enabled(name: &str, db_path: &str, enable: bool) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let trigger = Trigger::find_by_name(&conn, name)?
         .ok_or_else(|| anyhow::anyhow!("Trigger '{}' not found", name))?;
 
-    if !trigger.enabled {
-        println!("Trigger '{}' is already disabled.", name);
+    if trigger.enabled == enable {
+        let state = if enable { "enabled" } else { "disabled" };
+        println!("Trigger '{}' is already {}.", name, state);
         return Ok(());
     }
 
     let id = trigger
         .id
         .ok_or_else(|| anyhow::anyhow!("Trigger has no ID"))?;
-    Trigger::disable(&conn, id)?;
 
-    info!("Disabled trigger: {}", name);
-    println!("Disabled trigger: {}", name);
+    if enable {
+        Trigger::enable(&conn, id)?;
+    } else {
+        Trigger::disable(&conn, id)?;
+    }
+
+    let action = if enable { "Enabled" } else { "Disabled" };
+    info!("{} trigger: {}", action, name);
+    println!("{} trigger: {}", action, name);
     Ok(())
 }
 
@@ -145,7 +136,6 @@ pub async fn cmd_trigger_add(
 ) -> Result<()> {
     let conn = open_db(db_path)?;
 
-    // Check if already exists
     if Trigger::find_by_name(&conn, name)?.is_some() {
         return Err(anyhow::anyhow!("Trigger '{}' already exists", name));
     }
@@ -204,7 +194,6 @@ pub async fn cmd_trigger_remove(name: &str, db_path: &str) -> Result<()> {
 pub async fn cmd_trigger_run(changeset_id: Option<i64>, db_path: &str, root: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
-    // If no changeset specified, get the most recent one
     let cs_id = if let Some(id) = changeset_id {
         id
     } else {

@@ -6,6 +6,15 @@ use super::open_db;
 use anyhow::{Context, Result};
 use conary_core::db::models::{Redirect, RedirectType};
 
+/// Format a package name with an optional version constraint (e.g. "foo=1.0" or "foo")
+fn format_name_version(name: &str, version: Option<&str>) -> String {
+    if let Some(ver) = version {
+        format!("{}={}", name, ver)
+    } else {
+        name.to_string()
+    }
+}
+
 /// List all redirects
 pub async fn cmd_redirect_list(
     db_path: &str,
@@ -35,17 +44,8 @@ pub async fn cmd_redirect_list(
     println!("{}", "-".repeat(70));
 
     for redirect in &redirects {
-        let source = if let Some(ref ver) = redirect.source_version {
-            format!("{}={}", redirect.source_name, ver)
-        } else {
-            redirect.source_name.clone()
-        };
-
-        let target = if let Some(ref ver) = redirect.target_version {
-            format!("{}={}", redirect.target_name, ver)
-        } else {
-            redirect.target_name.clone()
-        };
+        let source = format_name_version(&redirect.source_name, redirect.source_version.as_deref());
+        let target = format_name_version(&redirect.target_name, redirect.target_version.as_deref());
 
         println!("{} -> {} ({})", source, target, redirect.redirect_type);
 
@@ -89,19 +89,13 @@ pub async fn cmd_redirect_add(
 
     // Check if redirect already exists
     if Redirect::find_by_source(&conn, source, source_version)?.is_some() {
-        let source_desc = if let Some(ver) = source_version {
-            format!("{}={}", source, ver)
-        } else {
-            source.to_string()
-        };
         return Err(anyhow::anyhow!(
             "Redirect for '{}' already exists",
-            source_desc
+            format_name_version(source, source_version)
         ));
     }
 
     // Check for circular redirects before adding
-    // If target already redirects somewhere, check the chain
     let resolve_result = Redirect::resolve(&conn, target, target_version)?;
     if resolve_result.chain.contains(&source.to_string()) {
         return Err(anyhow::anyhow!(
@@ -113,38 +107,19 @@ pub async fn cmd_redirect_add(
     }
 
     let mut redirect = Redirect::new(source.to_string(), target.to_string(), rtype);
-
-    if let Some(ver) = source_version {
-        redirect.source_version = Some(ver.to_string());
-    }
-
-    if let Some(ver) = target_version {
-        redirect.target_version = Some(ver.to_string());
-    }
-
-    if let Some(msg) = message {
-        redirect.message = Some(msg.to_string());
-    }
+    redirect.source_version = source_version.map(String::from);
+    redirect.target_version = target_version.map(String::from);
+    redirect.message = message.map(String::from);
 
     redirect
         .insert(&conn)
         .context("Failed to insert redirect")?;
 
-    let source_desc = if let Some(ver) = source_version {
-        format!("{}={}", source, ver)
-    } else {
-        source.to_string()
-    };
-
-    let target_desc = if let Some(ver) = target_version {
-        format!("{}={}", target, ver)
-    } else {
-        target.to_string()
-    };
-
     println!(
         "Created redirect: {} -> {} ({})",
-        source_desc, target_desc, redirect_type
+        format_name_version(source, source_version),
+        format_name_version(target, target_version),
+        redirect_type
     );
 
     if let Some(msg) = message {
@@ -189,12 +164,10 @@ pub async fn cmd_redirect_show(source: &str, db_path: &str, version: Option<&str
             }
         }
         None => {
-            let source_desc = if let Some(ver) = version {
-                format!("{}={}", source, ver)
-            } else {
-                source.to_string()
-            };
-            println!("No redirect found for '{}'", source_desc);
+            println!(
+                "No redirect found for '{}'",
+                format_name_version(source, version)
+            );
         }
     }
 

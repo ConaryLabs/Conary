@@ -386,12 +386,12 @@ impl ModelDiff {
     pub fn other_change_count(&self) -> usize {
         self.actions
             .iter()
-            .filter(|action| !action.is_structural())
             .filter(|action| {
-                !matches!(
-                    action,
-                    DiffAction::SetSourcePin { .. } | DiffAction::ClearSourcePin
-                )
+                !action.is_structural()
+                    && !matches!(
+                        action,
+                        DiffAction::SetSourcePin { .. } | DiffAction::ClearSourcePin
+                    )
             })
             .count()
     }
@@ -530,8 +530,7 @@ fn compute_diff_inner(
         (Some(_), None) => {
             diff.add_action(DiffAction::ClearSourcePin);
         }
-        (Some(_), Some(_)) => {}
-        (None, None) => {}
+        _ => {}
     }
 
     // Check what needs to be installed
@@ -644,13 +643,7 @@ fn compute_diff_inner(
         }
     }
 
-    let has_source_policy_change = diff.actions.iter().any(|action| {
-        matches!(
-            action,
-            DiffAction::SetSourcePin { .. } | DiffAction::ClearSourcePin
-        )
-    });
-    if has_source_policy_change && diff.structural_change_count() == 0 {
+    if diff.has_source_policy_changes() && diff.structural_change_count() == 0 {
         diff.add_warning(
             "Source policy changed, but automatic package convergence planning is still pending. Applying this model will update preferred sources without replacing packages yet.",
         );
