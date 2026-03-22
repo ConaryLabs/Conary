@@ -432,7 +432,7 @@ fn build_derived_package(conn: &Connection, name: &str, cas: &CasStore) -> Resul
 }
 
 /// Show what changes are needed to reach the model state
-pub fn cmd_model_diff(model_path: &str, db_path: &str, offline: bool) -> Result<()> {
+pub async fn cmd_model_diff(model_path: &str, db_path: &str, offline: bool) -> Result<()> {
     let model_path = Path::new(model_path);
     let (_model, conn, diff) = load_model_and_diff(model_path, db_path, offline, true)?;
     let summary = diff.summary();
@@ -555,7 +555,7 @@ pub fn cmd_model_diff(model_path: &str, db_path: &str, offline: bool) -> Result<
 
 /// Apply the system model to reach the desired state
 #[allow(clippy::too_many_arguments)]
-pub fn cmd_model_apply(
+pub async fn cmd_model_apply(
     model_path: &str,
     db_path: &str,
     _root: &str,
@@ -832,7 +832,7 @@ pub fn cmd_model_apply(
 }
 
 /// Check if system state matches the model
-pub fn cmd_model_check(
+pub async fn cmd_model_check(
     model_path: &str,
     db_path: &str,
     verbose: bool,
@@ -871,7 +871,7 @@ pub fn cmd_model_check(
 }
 
 /// Create a model file from current system state
-pub fn cmd_model_snapshot(
+pub async fn cmd_model_snapshot(
     output_path: &str,
     db_path: &str,
     description: Option<&str>,
@@ -925,7 +925,7 @@ pub fn cmd_model_snapshot(
 /// Fetches each remote include from the model (with optional forced refresh),
 /// then compares remote collection members against installed packages to
 /// detect drift.
-pub fn cmd_model_remote_diff(model_path: &str, db_path: &str, refresh: bool) -> Result<()> {
+pub async fn cmd_model_remote_diff(model_path: &str, db_path: &str, refresh: bool) -> Result<()> {
     let model_path = Path::new(model_path);
     let model = load_model(model_path)?;
     let conn = open_db(db_path)?;
@@ -1083,7 +1083,7 @@ fn format_version_info(conn: &Connection, name: &str, label: &str) -> String {
 ///
 /// Resolves all remote includes and records their content hashes
 /// in a model.lock file, preventing silent upstream changes.
-pub fn cmd_model_lock(model_path: &str, output: Option<&str>, db_path: &str) -> Result<()> {
+pub async fn cmd_model_lock(model_path: &str, output: Option<&str>, db_path: &str) -> Result<()> {
     let model_path = Path::new(model_path);
     let model = load_model(model_path)?;
     let conn = open_db(db_path)?;
@@ -1126,7 +1126,7 @@ pub fn cmd_model_lock(model_path: &str, output: Option<&str>, db_path: &str) -> 
 ///
 /// Force-refreshes all remote includes, compares against the existing lock
 /// file, and updates the lock with new hashes. Reports what changed.
-pub fn cmd_model_update(model_path: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_model_update(model_path: &str, db_path: &str) -> Result<()> {
     let model_path = Path::new(model_path);
     let model = load_model(model_path)?;
     let conn = open_db(db_path)?;
@@ -1430,7 +1430,7 @@ fn publish_local(
 /// For remote repos, the collection is sent via HTTP PUT to the Remi
 /// server's admin API.
 #[allow(clippy::too_many_arguments)]
-pub fn cmd_model_publish(
+pub async fn cmd_model_publish(
     model_path: &str,
     name: &str,
     version: &str,
@@ -2245,8 +2245,8 @@ strength = "strict"
         assert!(version_drift.is_empty());
     }
 
-    #[test]
-    fn test_model_snapshot_writes_effective_source_policy() {
+    #[tokio::test]
+    async fn test_model_snapshot_writes_effective_source_policy() {
         let (_temp_file, db_path) = create_test_db();
         let conn = rusqlite::Connection::open(&db_path).unwrap();
         DistroPin::set(&conn, "arch", "strict").unwrap();
@@ -2260,6 +2260,7 @@ strength = "strict"
             &db_path,
             Some("snapshot test"),
         )
+        .await
         .unwrap();
 
         let content = std::fs::read_to_string(&output_path).unwrap();
@@ -2270,8 +2271,8 @@ strength = "strict"
         assert!(content.contains("strength = \"strict\""));
     }
 
-    #[test]
-    fn test_model_apply_updates_source_policy_without_package_changes() {
+    #[tokio::test]
+    async fn test_model_apply_updates_source_policy_without_package_changes() {
         let (_temp_file, db_path) = create_test_db();
         let model_dir = tempdir().unwrap();
         let model_path = model_dir.path().join("system.toml");
@@ -2298,6 +2299,7 @@ strength = "strict"
             false,
             true,
         )
+        .await
         .unwrap();
 
         let conn = rusqlite::Connection::open(&db_path).unwrap();

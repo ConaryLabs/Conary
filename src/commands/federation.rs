@@ -7,7 +7,7 @@ use anyhow::Result;
 use tracing::info;
 
 /// Show federation status
-pub fn cmd_federation_status(db_path: &str, verbose: bool) -> Result<()> {
+pub async fn cmd_federation_status(db_path: &str, verbose: bool) -> Result<()> {
     let conn = open_db(db_path)?;
 
     // Get peer count by tier
@@ -135,7 +135,11 @@ pub fn cmd_federation_status(db_path: &str, verbose: bool) -> Result<()> {
 }
 
 /// List federation peers
-pub fn cmd_federation_peers(db_path: &str, tier: Option<&str>, enabled_only: bool) -> Result<()> {
+pub async fn cmd_federation_peers(
+    db_path: &str,
+    tier: Option<&str>,
+    enabled_only: bool,
+) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let base_query = "SELECT id, endpoint, node_name, tier, latency_ms, success_count,
@@ -235,7 +239,7 @@ pub fn cmd_federation_peers(db_path: &str, tier: Option<&str>, enabled_only: boo
 }
 
 /// Add a peer
-pub fn cmd_federation_add_peer(
+pub async fn cmd_federation_add_peer(
     url: &str,
     db_path: &str,
     tier: &str,
@@ -277,7 +281,7 @@ pub fn cmd_federation_add_peer(
 }
 
 /// Remove a peer
-pub fn cmd_federation_remove_peer(peer: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_federation_remove_peer(peer: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     // Try to match by URL or ID
@@ -297,7 +301,7 @@ pub fn cmd_federation_remove_peer(peer: &str, db_path: &str) -> Result<()> {
 }
 
 /// Show federation statistics
-pub fn cmd_federation_stats(db_path: &str, days: u32) -> Result<()> {
+pub async fn cmd_federation_stats(db_path: &str, days: u32) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let mut stmt = conn.prepare(
@@ -380,7 +384,7 @@ pub fn cmd_federation_stats(db_path: &str, days: u32) -> Result<()> {
 }
 
 /// Enable or disable a peer
-pub fn cmd_federation_enable_peer(peer: &str, db_path: &str, enable: bool) -> Result<()> {
+pub async fn cmd_federation_enable_peer(peer: &str, db_path: &str, enable: bool) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let enabled_val: i32 = if enable { 1 } else { 0 };
@@ -401,7 +405,7 @@ pub fn cmd_federation_enable_peer(peer: &str, db_path: &str, enable: bool) -> Re
 }
 
 /// Test connectivity to peers
-pub fn cmd_federation_test(db_path: &str, peer: Option<&str>, timeout: u64) -> Result<()> {
+pub async fn cmd_federation_test(db_path: &str, peer: Option<&str>, timeout: u64) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let endpoints: Vec<String> = if let Some(p) = peer {
@@ -464,7 +468,7 @@ pub fn cmd_federation_test(db_path: &str, peer: Option<&str>, timeout: u64) -> R
 
 /// Scan for peers on the local network using mDNS
 #[cfg(feature = "server")]
-pub fn cmd_federation_scan(db_path: &str, duration_secs: u64, add_peers: bool) -> Result<()> {
+pub async fn cmd_federation_scan(db_path: &str, duration_secs: u64, add_peers: bool) -> Result<()> {
     use conary_server::federation::{MdnsDiscovery, PeerTier};
     use std::time::Duration;
 

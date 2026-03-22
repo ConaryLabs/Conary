@@ -6,7 +6,7 @@ use anyhow::Result;
 use conary_core::db::models::settings;
 use conary_core::self_update::{DEFAULT_UPDATE_CHANNEL, get_update_channel, set_update_channel};
 
-pub fn cmd_update_channel_get(db_path: &str) -> Result<()> {
+pub async fn cmd_update_channel_get(db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     let channel = get_update_channel(&conn)?;
     let is_default = channel == DEFAULT_UPDATE_CHANNEL;
@@ -14,7 +14,7 @@ pub fn cmd_update_channel_get(db_path: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_update_channel_set(db_path: &str, url: &str) -> Result<()> {
+pub async fn cmd_update_channel_set(db_path: &str, url: &str) -> Result<()> {
     if !url.starts_with("https://") && !url.starts_with("http://") {
         return Err(anyhow::anyhow!("URL must use http:// or https:// scheme"));
     }
@@ -24,7 +24,7 @@ pub fn cmd_update_channel_set(db_path: &str, url: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_update_channel_reset(db_path: &str) -> Result<()> {
+pub async fn cmd_update_channel_reset(db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     settings::delete(&conn, "update-channel")?;
     println!("Update channel reset to default: {DEFAULT_UPDATE_CHANNEL}");

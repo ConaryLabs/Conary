@@ -8,7 +8,7 @@ use super::super::open_db;
 use anyhow::Result;
 
 /// Show changeset history
-pub fn cmd_history(db_path: &str) -> Result<()> {
+pub async fn cmd_history(db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     let changesets = conary_core::db::models::Changeset::list_all(&conn)?;
 

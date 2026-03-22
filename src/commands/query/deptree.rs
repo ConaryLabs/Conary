@@ -14,7 +14,7 @@ use tracing::info;
 ///
 /// Displays a tree visualization of all transitive dependencies (forward)
 /// or all transitive reverse dependencies (what depends on this package).
-pub fn cmd_deptree(
+pub async fn cmd_deptree(
     package_name: &str,
     db_path: &str,
     reverse: bool,

@@ -14,7 +14,7 @@ use std::str::FromStr;
 use tracing::info;
 
 /// Initialize bootstrap environment
-pub fn cmd_bootstrap_init(work_dir: &str, target: &str, jobs: Option<usize>) -> Result<()> {
+pub async fn cmd_bootstrap_init(work_dir: &str, target: &str, jobs: Option<usize>) -> Result<()> {
     println!("Initializing bootstrap environment...");
     println!("  Work directory: {}", work_dir);
 
@@ -44,7 +44,7 @@ pub fn cmd_bootstrap_init(work_dir: &str, target: &str, jobs: Option<usize>) -> 
 }
 
 /// Check prerequisites for bootstrap
-pub fn cmd_bootstrap_check(verbose: bool) -> Result<()> {
+pub async fn cmd_bootstrap_check(verbose: bool) -> Result<()> {
     println!("Checking bootstrap prerequisites...\n");
 
     let prereqs = Prerequisites::check()?;
@@ -91,7 +91,12 @@ pub fn cmd_bootstrap_check(verbose: bool) -> Result<()> {
 }
 
 /// Generate bootable image
-pub fn cmd_bootstrap_image(work_dir: &str, output: &str, format: &str, size: &str) -> Result<()> {
+pub async fn cmd_bootstrap_image(
+    work_dir: &str,
+    output: &str,
+    format: &str,
+    size: &str,
+) -> Result<()> {
     println!("Generating bootable image...");
     println!("  Work directory: {}", work_dir);
     println!("  Output: {}", output);
@@ -234,7 +239,7 @@ pub fn cmd_bootstrap_image(work_dir: &str, output: &str, format: &str, size: &st
 }
 
 /// Show bootstrap status
-pub fn cmd_bootstrap_status(work_dir: &str, verbose: bool) -> Result<()> {
+pub async fn cmd_bootstrap_status(work_dir: &str, verbose: bool) -> Result<()> {
     let work_path = PathBuf::from(work_dir);
 
     if !work_path.exists() {
@@ -267,7 +272,7 @@ pub fn cmd_bootstrap_status(work_dir: &str, verbose: bool) -> Result<()> {
 }
 
 /// Resume bootstrap from last checkpoint
-pub fn cmd_bootstrap_resume(work_dir: &str, verbose: bool) -> Result<()> {
+pub async fn cmd_bootstrap_resume(work_dir: &str, verbose: bool) -> Result<()> {
     println!("Resuming bootstrap...");
 
     let mut bootstrap = Bootstrap::new(work_dir)?;
@@ -281,20 +286,24 @@ pub fn cmd_bootstrap_resume(work_dir: &str, verbose: bool) -> Result<()> {
 
     match current {
         BootstrapStage::CrossTools => {
-            cmd_bootstrap_cross_tools(work_dir, None, verbose, false, None)
+            cmd_bootstrap_cross_tools(work_dir, None, verbose, false, None).await
         }
-        BootstrapStage::TempTools => cmd_bootstrap_temp_tools(work_dir, None, verbose, false, None),
-        BootstrapStage::FinalSystem => cmd_bootstrap_system(work_dir, None, verbose, false, None),
-        BootstrapStage::SystemConfig => cmd_bootstrap_config(work_dir, verbose, None),
+        BootstrapStage::TempTools => {
+            cmd_bootstrap_temp_tools(work_dir, None, verbose, false, None).await
+        }
+        BootstrapStage::FinalSystem => {
+            cmd_bootstrap_system(work_dir, None, verbose, false, None).await
+        }
+        BootstrapStage::SystemConfig => cmd_bootstrap_config(work_dir, verbose, None).await,
         BootstrapStage::BootableImage => {
-            cmd_bootstrap_image(work_dir, "conaryos-base.qcow2", "qcow2", "4G")
+            cmd_bootstrap_image(work_dir, "conaryos-base.qcow2", "qcow2", "4G").await
         }
-        BootstrapStage::Tier2 => cmd_bootstrap_tier2(work_dir, None, verbose, false, None),
+        BootstrapStage::Tier2 => cmd_bootstrap_tier2(work_dir, None, verbose, false, None).await,
     }
 }
 
 /// Validate the full pipeline without building
-pub fn cmd_bootstrap_dry_run(work_dir: &str, recipe_dir: &str, verbose: bool) -> Result<()> {
+pub async fn cmd_bootstrap_dry_run(work_dir: &str, recipe_dir: &str, verbose: bool) -> Result<()> {
     let work_path = PathBuf::from(work_dir);
     let recipe_path = PathBuf::from(recipe_dir);
     let config = BootstrapConfig::new().with_verbose(verbose);
@@ -341,7 +350,7 @@ pub fn cmd_bootstrap_dry_run(work_dir: &str, recipe_dir: &str, verbose: bool) ->
 }
 
 /// Build Phase 1: Cross-toolchain (LFS Chapter 5)
-pub fn cmd_bootstrap_cross_tools(
+pub async fn cmd_bootstrap_cross_tools(
     work_dir: &str,
     jobs: Option<usize>,
     verbose: bool,
@@ -381,7 +390,7 @@ pub fn cmd_bootstrap_cross_tools(
 }
 
 /// Build Phase 2: Temporary tools (LFS Chapters 6-7)
-pub fn cmd_bootstrap_temp_tools(
+pub async fn cmd_bootstrap_temp_tools(
     work_dir: &str,
     jobs: Option<usize>,
     verbose: bool,
@@ -418,7 +427,7 @@ pub fn cmd_bootstrap_temp_tools(
 }
 
 /// Build Phase 3: Final system (LFS Chapter 8)
-pub fn cmd_bootstrap_system(
+pub async fn cmd_bootstrap_system(
     work_dir: &str,
     jobs: Option<usize>,
     verbose: bool,
@@ -455,7 +464,11 @@ pub fn cmd_bootstrap_system(
 }
 
 /// Run Phase 4: System configuration (LFS Chapter 9)
-pub fn cmd_bootstrap_config(work_dir: &str, verbose: bool, lfs_root: Option<&str>) -> Result<()> {
+pub async fn cmd_bootstrap_config(
+    work_dir: &str,
+    verbose: bool,
+    lfs_root: Option<&str>,
+) -> Result<()> {
     println!("Running Phase 4: System Configuration (LFS Ch9)...");
     println!("  Work directory: {}", work_dir);
 
@@ -481,7 +494,7 @@ pub fn cmd_bootstrap_config(work_dir: &str, verbose: bool, lfs_root: Option<&str
 }
 
 /// Build Phase 6: Tier-2 packages (BLFS + Conary self-hosting)
-pub fn cmd_bootstrap_tier2(
+pub async fn cmd_bootstrap_tier2(
     work_dir: &str,
     jobs: Option<usize>,
     verbose: bool,
@@ -544,7 +557,7 @@ pub struct BootstrapRunOptions<'a> {
 ///
 /// Parses the manifest, validates the --up-to stage if given, and runs the
 /// staged build pipeline. Currently a stub pending full pipeline integration.
-pub fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
+pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
     use conary_core::derivation::stages::Stage;
 
     info!(
@@ -589,7 +602,11 @@ pub fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
 }
 
 /// Clean bootstrap work directory
-pub fn cmd_bootstrap_clean(work_dir: &str, stage: Option<String>, sources: bool) -> Result<()> {
+pub async fn cmd_bootstrap_clean(
+    work_dir: &str,
+    stage: Option<String>,
+    sources: bool,
+) -> Result<()> {
     println!("Cleaning bootstrap work directory...");
     println!("  Work directory: {}", work_dir);
 

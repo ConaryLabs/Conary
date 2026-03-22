@@ -44,7 +44,12 @@ enum DriftOutcome {
 ///
 /// A single changeset covers all updates, and a state snapshot is created
 /// for rollback safety.
-pub fn cmd_adopt_refresh(db_path: &str, _full: bool, dry_run: bool, quiet: bool) -> Result<()> {
+pub async fn cmd_adopt_refresh(
+    db_path: &str,
+    _full: bool,
+    dry_run: bool,
+    quiet: bool,
+) -> Result<()> {
     let pkg_mgr = SystemPackageManager::detect();
     if !pkg_mgr.is_available() {
         return Err(anyhow::anyhow!(

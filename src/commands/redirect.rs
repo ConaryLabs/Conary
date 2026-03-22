@@ -7,7 +7,11 @@ use anyhow::{Context, Result};
 use conary_core::db::models::{Redirect, RedirectType};
 
 /// List all redirects
-pub fn cmd_redirect_list(db_path: &str, type_filter: Option<&str>, verbose: bool) -> Result<()> {
+pub async fn cmd_redirect_list(
+    db_path: &str,
+    type_filter: Option<&str>,
+    verbose: bool,
+) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let redirects = if let Some(type_str) = type_filter {
@@ -65,7 +69,7 @@ pub fn cmd_redirect_list(db_path: &str, type_filter: Option<&str>, verbose: bool
 }
 
 /// Add a new redirect
-pub fn cmd_redirect_add(
+pub async fn cmd_redirect_add(
     source: &str,
     target: &str,
     db_path: &str,
@@ -151,7 +155,7 @@ pub fn cmd_redirect_add(
 }
 
 /// Show details of a redirect
-pub fn cmd_redirect_show(source: &str, db_path: &str, version: Option<&str>) -> Result<()> {
+pub async fn cmd_redirect_show(source: &str, db_path: &str, version: Option<&str>) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let redirect = Redirect::find_by_source(&conn, source, version)?;
@@ -198,7 +202,7 @@ pub fn cmd_redirect_show(source: &str, db_path: &str, version: Option<&str>) -> 
 }
 
 /// Remove a redirect
-pub fn cmd_redirect_remove(source: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_redirect_remove(source: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let count = Redirect::delete_by_source(&conn, source)?;
@@ -213,7 +217,11 @@ pub fn cmd_redirect_remove(source: &str, db_path: &str) -> Result<()> {
 }
 
 /// Resolve a package name through redirect chain
-pub fn cmd_redirect_resolve(package: &str, db_path: &str, version: Option<&str>) -> Result<()> {
+pub async fn cmd_redirect_resolve(
+    package: &str,
+    db_path: &str,
+    version: Option<&str>,
+) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let result = Redirect::resolve(&conn, package, version)?;

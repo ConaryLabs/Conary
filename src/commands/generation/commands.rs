@@ -12,7 +12,7 @@ use tracing::info;
 ///
 /// Prints each generation's number, creation date, package count, kernel version,
 /// and whether it is the currently active generation.
-pub fn cmd_generation_list() -> Result<()> {
+pub async fn cmd_generation_list() -> Result<()> {
     let dir = generations_dir();
 
     if !dir.exists() {
@@ -65,7 +65,7 @@ pub fn cmd_generation_list() -> Result<()> {
 }
 
 /// Print detailed information about a specific generation.
-pub fn cmd_generation_info(gen_number: i64) -> Result<()> {
+pub async fn cmd_generation_info(gen_number: i64) -> Result<()> {
     let gen_dir = generation_path(gen_number);
 
     if !gen_dir.exists() {
@@ -120,7 +120,7 @@ pub fn cmd_generation_info(gen_number: i64) -> Result<()> {
 /// After removing old generation directories and their BLS entries, performs
 /// CAS garbage collection: queries the database for hashes referenced by
 /// surviving generations and removes unreferenced objects from the CAS store.
-pub fn cmd_generation_gc(keep: usize, db_path: &str) -> Result<()> {
+pub async fn cmd_generation_gc(keep: usize, db_path: &str) -> Result<()> {
     let current = current_generation(Path::new("/conary"))?;
     let gc_roots = load_gc_roots();
     let dir = generations_dir();

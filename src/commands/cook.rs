@@ -20,7 +20,7 @@ use tracing::info;
 /// * `no_isolation` - Disable container isolation (unsafe)
 /// * `hermetic` - Enable hermetic mode (maximum isolation)
 #[allow(clippy::too_many_arguments)]
-pub fn cmd_cook(
+pub async fn cmd_cook(
     recipe_path: &str,
     output_dir: &str,
     source_cache: &str,

@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use crate::commands::format_bytes;
 
 /// Show adoption status
-pub fn cmd_adopt_status(db_path: &str) -> Result<()> {
+pub async fn cmd_adopt_status(db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let troves = Trove::list_all(&conn)?;

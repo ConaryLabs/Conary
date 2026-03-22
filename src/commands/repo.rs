@@ -11,7 +11,7 @@ use tracing::info;
 
 /// Add a new repository
 #[allow(clippy::too_many_arguments)]
-pub fn cmd_repo_add(
+pub async fn cmd_repo_add(
     name: &str,
     url: &str,
     db_path: &str,
@@ -106,7 +106,7 @@ pub fn cmd_repo_add(
 }
 
 /// List repositories
-pub fn cmd_repo_list(db_path: &str, all: bool) -> Result<()> {
+pub async fn cmd_repo_list(db_path: &str, all: bool) -> Result<()> {
     info!("Listing repositories");
     let conn = open_db(db_path)?;
     let repos = if all {
@@ -140,7 +140,7 @@ pub fn cmd_repo_list(db_path: &str, all: bool) -> Result<()> {
 }
 
 /// Remove a repository
-pub fn cmd_repo_remove(name: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_repo_remove(name: &str, db_path: &str) -> Result<()> {
     info!("Removing repository: {}", name);
     let conn = open_db(db_path)?;
     conary_core::repository::remove_repository(&conn, name)?;
@@ -149,12 +149,12 @@ pub fn cmd_repo_remove(name: &str, db_path: &str) -> Result<()> {
 }
 
 /// Enable a repository
-pub fn cmd_repo_enable(name: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_repo_enable(name: &str, db_path: &str) -> Result<()> {
     set_repo_enabled(name, db_path, true)
 }
 
 /// Disable a repository
-pub fn cmd_repo_disable(name: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_repo_disable(name: &str, db_path: &str) -> Result<()> {
     set_repo_enabled(name, db_path, false)
 }
 
@@ -169,7 +169,7 @@ fn set_repo_enabled(name: &str, db_path: &str, enabled: bool) -> Result<()> {
 }
 
 /// Sync repository metadata
-pub fn cmd_repo_sync(name: Option<String>, db_path: &str, force: bool) -> Result<()> {
+pub async fn cmd_repo_sync(name: Option<String>, db_path: &str, force: bool) -> Result<()> {
     info!("Synchronizing repository metadata");
 
     let conn = open_db(db_path)?;
@@ -308,7 +308,7 @@ pub fn cmd_repo_sync(name: Option<String>, db_path: &str, force: bool) -> Result
 }
 
 /// Search for packages
-pub fn cmd_search(pattern: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_search(pattern: &str, db_path: &str) -> Result<()> {
     info!("Searching for packages matching: {}", pattern);
     let conn = open_db(db_path)?;
     let packages = conary_core::repository::search_packages(&conn, pattern)?;
@@ -369,7 +369,7 @@ fn import_gpg_key(repository: &str, key_source: &str, db_path: &str) -> Result<S
 }
 
 /// Import a GPG key for a repository
-pub fn cmd_key_import(repository: &str, key_source: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_key_import(repository: &str, key_source: &str, db_path: &str) -> Result<()> {
     info!("Importing GPG key for repository: {}", repository);
 
     // Verify repository exists
@@ -394,7 +394,7 @@ pub fn cmd_key_import(repository: &str, key_source: &str, db_path: &str) -> Resu
 }
 
 /// List all imported GPG keys
-pub fn cmd_key_list(db_path: &str) -> Result<()> {
+pub async fn cmd_key_list(db_path: &str) -> Result<()> {
     use conary_core::repository::GpgVerifier;
 
     info!("Listing GPG keys");
@@ -415,7 +415,7 @@ pub fn cmd_key_list(db_path: &str) -> Result<()> {
 }
 
 /// Remove a GPG key for a repository
-pub fn cmd_key_remove(repository: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_key_remove(repository: &str, db_path: &str) -> Result<()> {
     use conary_core::repository::GpgVerifier;
 
     info!("Removing GPG key for repository: {}", repository);

@@ -191,7 +191,7 @@ pub struct ConvertedCcsInstallOptions<'a> {
 /// Returns `ConversionResult::Converted` if conversion succeeded and installation
 /// should proceed via the CCS installer, or `ConversionResult::Skipped` if
 /// conversion was skipped (e.g., already converted).
-pub fn try_convert_to_ccs(
+pub async fn try_convert_to_ccs(
     pkg: &dyn PackageFormat,
     package_path: &Path,
     format: PackageFormatType,
@@ -350,7 +350,7 @@ pub fn try_convert_to_ccs(
 /// Install a converted CCS package
 ///
 /// This is a wrapper that calls the CCS installer with appropriate options.
-pub fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Result<()> {
+pub async fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Result<()> {
     let ConvertedCcsInstallOptions {
         ccs_path,
         db_path,
@@ -420,7 +420,7 @@ pub fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Result<()>
             }
 
             if !dep_plan.to_adopt.is_empty() && !dry_run {
-                crate::commands::adopt::cmd_adopt(&dep_plan.to_adopt, db_path, false)?;
+                crate::commands::adopt::cmd_adopt(&dep_plan.to_adopt, db_path, false).await?;
             }
 
             if !dep_plan.to_install.is_empty() {
@@ -482,7 +482,7 @@ pub fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Result<()>
                                 // already resolved at the parent level.  Allowing
                                 // unbounded recursive Remi downloads would create
                                 // an exponential chain of server-side conversions.
-                                install_converted_ccs(ConvertedCcsInstallOptions {
+                                Box::pin(install_converted_ccs(ConvertedCcsInstallOptions {
                                     ccs_path: dep_ccs_path,
                                     db_path,
                                     root,
@@ -493,7 +493,8 @@ pub fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Result<()>
                                     allow_downgrade,
                                     dep_mode,
                                     yes,
-                                })
+                                }))
+                                .await
                                 .with_context(|| {
                                     format!("Failed to install CCS dependency {}", dep_name)
                                 })?;
@@ -571,6 +572,7 @@ pub fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Result<()>
         false, // allow_capabilities - not applicable for conversions
         None,  // capability_policy - use default
     )
+    .await
 }
 
 #[cfg(test)]

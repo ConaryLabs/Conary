@@ -509,7 +509,13 @@ impl ContainerBackend for BollardBackend {
 
     async fn stop(&self, id: &ContainerId) -> Result<()> {
         self.docker
-            .stop_container(id, Some(StopContainerOptions { t: Some(10), ..Default::default() }))
+            .stop_container(
+                id,
+                Some(StopContainerOptions {
+                    t: Some(10),
+                    ..Default::default()
+                }),
+            )
             .await
             .context("failed to stop container")?;
         debug!(id = %id, "container stopped");
@@ -532,7 +538,9 @@ impl ContainerBackend for BollardBackend {
     }
 
     async fn copy_from(&self, id: &ContainerId, path: &str) -> Result<Vec<u8>> {
-        let options = Some(DownloadFromContainerOptions { path: path.to_string() });
+        let options = Some(DownloadFromContainerOptions {
+            path: path.to_string(),
+        });
 
         let mut stream = self.docker.download_from_container(id, options);
         let mut tar_bytes = Vec::new();

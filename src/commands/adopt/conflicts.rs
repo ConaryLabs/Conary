@@ -11,7 +11,7 @@ use conary_core::packages::rpm_query;
 use tracing::info;
 
 /// Check for conflicts between tracked packages and files
-pub fn cmd_conflicts(db_path: &str, verbose: bool) -> Result<()> {
+pub async fn cmd_conflicts(db_path: &str, verbose: bool) -> Result<()> {
     let conn = open_db(db_path)?;
 
     println!("Checking for conflicts...\n");

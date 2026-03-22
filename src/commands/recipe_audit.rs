@@ -8,7 +8,7 @@ use anyhow::Result;
 use conary_core::recipe::audit::{FindingKind, static_audit};
 
 /// Run recipe audit on a single recipe or all recipes.
-pub fn cmd_recipe_audit(recipe_path: Option<&str>, all: bool, trace: bool) -> Result<()> {
+pub async fn cmd_recipe_audit(recipe_path: Option<&str>, all: bool, trace: bool) -> Result<()> {
     if trace {
         println!("--trace mode is not yet implemented. Running static analysis only.");
     }

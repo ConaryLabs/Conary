@@ -13,7 +13,7 @@ use std::process::Command;
 use tempfile::TempDir;
 
 /// Export CCS packages to container image format
-pub fn cmd_ccs_export(
+pub async fn cmd_ccs_export(
     packages: &[String],
     output: &str,
     format: &str,
@@ -35,7 +35,7 @@ pub fn cmd_ccs_export(
 }
 
 /// Spawn a shell with packages available in a temporary environment
-pub fn cmd_ccs_shell(
+pub async fn cmd_ccs_shell(
     packages: &[String],
     db_path: &str,
     shell: Option<&str>,
@@ -179,7 +179,7 @@ pub fn cmd_ccs_shell(
 }
 
 /// Run a command with a package available temporarily
-pub fn cmd_ccs_run(
+pub async fn cmd_ccs_run(
     package: &str,
     command: &[String],
     db_path: &str,

@@ -24,7 +24,7 @@ fn get_repo_with_id(conn: &Connection, repo_name: &str) -> Result<(Repository, i
 }
 
 /// Generate a new Ed25519 key pair for a TUF role
-pub fn cmd_trust_key_gen(role: &str, output: &str) -> Result<()> {
+pub async fn cmd_trust_key_gen(role: &str, output: &str) -> Result<()> {
     // Validate role name
     let _: Role = role.parse().map_err(|e| anyhow::anyhow!("{}", e))?;
 
@@ -47,7 +47,7 @@ pub fn cmd_trust_key_gen(role: &str, output: &str) -> Result<()> {
 }
 
 /// Bootstrap TUF for a repository with initial root metadata
-pub fn cmd_trust_init(repo_name: &str, root_path: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_trust_init(repo_name: &str, root_path: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     let (repo, repo_id) = get_repo_with_id(&conn, repo_name)?;
 
@@ -72,7 +72,7 @@ pub fn cmd_trust_init(repo_name: &str, root_path: &str, db_path: &str) -> Result
 }
 
 /// Enable TUF verification for a repository
-pub fn cmd_trust_enable(repo_name: &str, tuf_url: Option<&str>, db_path: &str) -> Result<()> {
+pub async fn cmd_trust_enable(repo_name: &str, tuf_url: Option<&str>, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     let (_repo, repo_id) = get_repo_with_id(&conn, repo_name)?;
 
@@ -103,7 +103,7 @@ pub fn cmd_trust_enable(repo_name: &str, tuf_url: Option<&str>, db_path: &str) -
 }
 
 /// Disable TUF verification for a repository (unsafe operation)
-pub fn cmd_trust_disable(repo_name: &str, force: bool, db_path: &str) -> Result<()> {
+pub async fn cmd_trust_disable(repo_name: &str, force: bool, db_path: &str) -> Result<()> {
     if !force {
         anyhow::bail!("Disabling TUF removes supply chain protection. Use --force to confirm.");
     }
@@ -123,7 +123,7 @@ pub fn cmd_trust_disable(repo_name: &str, force: bool, db_path: &str) -> Result<
 }
 
 /// Show TUF metadata status for a repository
-pub fn cmd_trust_status(repo_name: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_trust_status(repo_name: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     let (repo, repo_id) = get_repo_with_id(&conn, repo_name)?;
 
@@ -188,7 +188,7 @@ pub fn cmd_trust_status(repo_name: &str, db_path: &str) -> Result<()> {
 }
 
 /// Verify all TUF metadata for a repository
-pub fn cmd_trust_verify(repo_name: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_trust_verify(repo_name: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     let (repo, repo_id) = get_repo_with_id(&conn, repo_name)?;
 
@@ -224,7 +224,7 @@ pub fn cmd_trust_verify(repo_name: &str, db_path: &str) -> Result<()> {
 
 /// Sign targets metadata (server-side operation)
 #[cfg(feature = "server")]
-pub fn cmd_trust_sign_targets(repo_name: &str, key_path: &str, db_path: &str) -> Result<()> {
+pub async fn cmd_trust_sign_targets(repo_name: &str, key_path: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     let (_repo, _repo_id) = get_repo_with_id(&conn, repo_name)?;
 
@@ -241,7 +241,7 @@ pub fn cmd_trust_sign_targets(repo_name: &str, key_path: &str, db_path: &str) ->
 
 /// Rotate a TUF role key (server-side operation)
 #[cfg(feature = "server")]
-pub fn cmd_trust_rotate_key(
+pub async fn cmd_trust_rotate_key(
     role: &str,
     old_key_path: &str,
     new_key_path: &str,

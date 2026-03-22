@@ -103,7 +103,7 @@ fn backfill_adopted_source_identity(
 /// 3. Converts each package to CCS in parallel via rayon
 /// 4. Inserts conversion records in a single DB transaction
 /// 5. Creates a state snapshot for rollback safety
-pub fn cmd_adopt_convert(
+pub async fn cmd_adopt_convert(
     db_path: &str,
     jobs: Option<usize>,
     no_chunking: bool,

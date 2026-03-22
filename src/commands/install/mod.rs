@@ -224,7 +224,7 @@ fn report_provides_check(
 /// Uses the unified resolution flow with per-package routing strategies.
 /// Packages can be resolved from binary repos, on-demand converters, or recipes
 /// based on their routing table entries.
-pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
+pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
     let InstallOptions {
         db_path,
         root,
@@ -290,7 +290,8 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         no_capture,
         &policy,
         &ccs_install_opts,
-    )?;
+    )
+    .await?;
 
     // Promote the pre-install connection to mutable for the main install transaction
     let mut conn = conn;
@@ -310,7 +311,7 @@ pub fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
         sandbox_mode,
         no_scripts,
     };
-    handle_dependencies(&dep_ctx)?;
+    handle_dependencies(&dep_ctx).await?;
 
     // --- Phase 6: Dry run summary ---
     if dry_run {
@@ -663,7 +664,7 @@ fn try_promote_existing_dep(
 /// Handles early returns for CCS packages (from Remi, by extension, or via
 /// conversion).  Returns the parsed legacy package and its format type.
 #[allow(clippy::too_many_arguments)]
-fn resolve_and_parse_package(
+async fn resolve_and_parse_package(
     conn: &rusqlite::Connection,
     package_name: &str,
     package: &str,
@@ -733,7 +734,8 @@ fn resolve_and_parse_package(
             allow_downgrade: ccs_opts.allow_downgrade,
             dep_mode: ccs_opts.dep_mode,
             yes: ccs_opts.yes,
-        })?;
+        })
+        .await?;
         return Err(anyhow::anyhow!("CCS_INSTALLED"));
     }
 
@@ -756,7 +758,8 @@ fn resolve_and_parse_package(
             allow_downgrade: ccs_opts.allow_downgrade,
             dep_mode: ccs_opts.dep_mode,
             yes: ccs_opts.yes,
-        })?;
+        })
+        .await?;
         return Err(anyhow::anyhow!("CCS_INSTALLED"));
     }
 
@@ -772,7 +775,8 @@ fn resolve_and_parse_package(
     if convert_to_ccs {
         progress.set_status(&format!("Converting {} to CCS format...", pkg.name()));
 
-        match try_convert_to_ccs(pkg.as_ref(), &resolved.path, format, db_path, !no_capture)? {
+        match try_convert_to_ccs(pkg.as_ref(), &resolved.path, format, db_path, !no_capture).await?
+        {
             ConversionResult::Converted {
                 ccs_path,
                 temp_dir: _temp_dir,
@@ -789,7 +793,8 @@ fn resolve_and_parse_package(
                     allow_downgrade: ccs_opts.allow_downgrade,
                     dep_mode: ccs_opts.dep_mode,
                     yes: ccs_opts.yes,
-                })?;
+                })
+                .await?;
                 return Err(anyhow::anyhow!("CCS_INSTALLED"));
             }
             ConversionResult::Skipped => {
@@ -802,7 +807,7 @@ fn resolve_and_parse_package(
 }
 
 /// Handle dependency analysis: resolve, prompt, adopt, install deps.
-fn handle_dependencies(ctx: &DepAnalysisContext<'_>) -> Result<()> {
+async fn handle_dependencies(ctx: &DepAnalysisContext<'_>) -> Result<()> {
     // Build dependency edges from the package
     let dependency_edges = build_dependency_edges(ctx.pkg);
 
@@ -916,7 +921,7 @@ fn handle_dependencies(ctx: &DepAnalysisContext<'_>) -> Result<()> {
         }
     }
 
-    handle_dep_adoptions(&dep_plan, ctx.dry_run, ctx.db_path);
+    handle_dep_adoptions(&dep_plan, ctx.dry_run, ctx.db_path).await;
 
     handle_dep_installs(ctx, &dep_plan, &progress)?;
 
@@ -927,7 +932,7 @@ fn handle_dependencies(ctx: &DepAnalysisContext<'_>) -> Result<()> {
 }
 
 /// Handle auto-adoption of dependencies (adopt mode).
-fn handle_dep_adoptions(
+async fn handle_dep_adoptions(
     dep_plan: &dep_resolution::DepResolutionPlan,
     dry_run: bool,
     db_path: &str,
@@ -953,7 +958,8 @@ fn handle_dep_adoptions(
             println!("    {}", name);
         }
         // Use the adopt subsystem
-        if let Err(e) = crate::commands::adopt::cmd_adopt(&dep_plan.to_adopt, db_path, false) {
+        if let Err(e) = crate::commands::adopt::cmd_adopt(&dep_plan.to_adopt, db_path, false).await
+        {
             warn!("Failed to auto-adopt dependencies: {}", e);
             // Non-fatal -- deps are still on the system
         }

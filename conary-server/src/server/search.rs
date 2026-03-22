@@ -330,9 +330,7 @@ impl SearchEngine {
             let distro_val = doc
                 .get_first(self.distro_field)
                 .and_then(|v| v.as_facet())
-                .map(|path| {
-                    path.strip_prefix('/').unwrap_or(path).to_string()
-                })
+                .map(|path| path.strip_prefix('/').unwrap_or(path).to_string())
                 .unwrap_or_default();
 
             let description = doc

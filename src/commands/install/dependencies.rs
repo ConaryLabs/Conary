@@ -83,7 +83,7 @@ fn version_scheme_for_format(format: PackageFormatType) -> VersionScheme {
 ///
 /// Returns Ok(()) if all dependencies can be satisfied, or an error with details.
 #[allow(clippy::too_many_arguments)]
-pub fn handle_missing_dependencies(
+pub async fn handle_missing_dependencies(
     conn: &mut Connection,
     pkg: &dyn PackageFormat,
     plan: &ResolutionPlan,
@@ -135,7 +135,8 @@ pub fn handle_missing_dependencies(
                     db_path,
                     progress,
                     sandbox_mode,
-                )?;
+                )
+                .await?;
             } else {
                 // Dependencies not found in Conary repos - check provides table
                 check_provides_fallback(conn, pkg, &plan.missing)?;
@@ -153,7 +154,7 @@ pub fn handle_missing_dependencies(
 
 /// Handle dependencies that can be downloaded from repositories
 #[allow(clippy::too_many_arguments)]
-fn handle_downloadable_deps(
+async fn handle_downloadable_deps(
     _conn: &mut Connection,
     pkg: &dyn PackageFormat,
     to_download: &[(String, repository::PackageWithRepo)],
@@ -199,7 +200,9 @@ fn handle_downloadable_deps(
                         sandbox_mode,
                         ..Default::default()
                     },
-                ) {
+                )
+                .await
+                {
                     return Err(anyhow::anyhow!(
                         "Failed to install dependency {}: {}",
                         dep_name,

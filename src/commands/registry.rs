@@ -4,7 +4,7 @@
 use super::open_db;
 use anyhow::Result;
 
-pub fn cmd_registry_update(db_path: &str) -> Result<()> {
+pub async fn cmd_registry_update(db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     println!("Syncing canonical registry...");
 
@@ -109,7 +109,7 @@ pub fn cmd_registry_update(db_path: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_registry_stats(db_path: &str) -> Result<()> {
+pub async fn cmd_registry_stats(db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     let canonical_count: i64 =
         conn.query_row("SELECT COUNT(*) FROM canonical_packages", [], |row| {
@@ -152,8 +152,8 @@ pub fn cmd_registry_stats(db_path: &str) -> Result<()> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_registry_stats_empty_db() {
+    #[tokio::test]
+    async fn test_registry_stats_empty_db() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
         let db_str = db_path.to_str().unwrap();
@@ -162,12 +162,12 @@ mod tests {
         conary_core::db::init(db_str).unwrap();
 
         // Stats should succeed on an empty database
-        let result = cmd_registry_stats(db_str);
+        let result = cmd_registry_stats(db_str).await;
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_registry_update_with_local_rules() {
+    #[tokio::test]
+    async fn test_registry_update_with_local_rules() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
         let db_str = db_path.to_str().unwrap();
@@ -176,7 +176,7 @@ mod tests {
         conary_core::db::init(db_str).unwrap();
 
         // Update should succeed (may not find rules dir, but should not error)
-        let result = cmd_registry_update(db_str);
+        let result = cmd_registry_update(db_str).await;
         assert!(result.is_ok());
     }
 }

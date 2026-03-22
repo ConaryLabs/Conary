@@ -5,7 +5,7 @@ use super::open_db;
 use anyhow::Result;
 use conary_core::db::models::{CanonicalPackage, PackageImplementation};
 
-pub fn cmd_canonical_show(db_path: &str, name: &str) -> Result<()> {
+pub async fn cmd_canonical_show(db_path: &str, name: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     let pkg = CanonicalPackage::resolve_name(&conn, name)?;
     let Some(pkg) = pkg else {
@@ -41,7 +41,7 @@ pub fn cmd_canonical_show(db_path: &str, name: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_canonical_search(db_path: &str, query: &str) -> Result<()> {
+pub async fn cmd_canonical_search(db_path: &str, query: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     let results = CanonicalPackage::search(&conn, query)?;
     if results.is_empty() {
@@ -56,7 +56,7 @@ pub fn cmd_canonical_search(db_path: &str, query: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_canonical_unmapped(db_path: &str) -> Result<()> {
+pub async fn cmd_canonical_unmapped(db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     let mut stmt = conn.prepare(
         "SELECT t.name FROM troves t

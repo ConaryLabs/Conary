@@ -15,7 +15,7 @@ use conary_core::model::{
 };
 
 /// Show automation status
-pub fn cmd_automation_status(db_path: &str, format: &str, verbose: bool) -> Result<()> {
+pub async fn cmd_automation_status(db_path: &str, format: &str, verbose: bool) -> Result<()> {
     let conn = open_db(db_path)?;
 
     // Load model to get automation config
@@ -99,7 +99,7 @@ pub fn cmd_automation_status(db_path: &str, format: &str, verbose: bool) -> Resu
 }
 
 /// Check for automation actions
-pub fn cmd_automation_check(
+pub async fn cmd_automation_check(
     db_path: &str,
     _root: &str,
     categories: Option<Vec<String>>,
@@ -187,7 +187,7 @@ pub fn cmd_automation_check(
 }
 
 /// Apply pending automation actions
-pub fn cmd_automation_apply(
+pub async fn cmd_automation_apply(
     db_path: &str,
     _root: &str,
     yes: bool,
@@ -339,7 +339,7 @@ pub fn cmd_automation_apply(
 
 /// Configure automation settings
 #[allow(clippy::too_many_arguments)]
-pub fn cmd_automation_configure(
+pub async fn cmd_automation_configure(
     _db_path: &str,
     show: bool,
     mode: Option<String>,
@@ -406,7 +406,7 @@ pub fn cmd_automation_configure(
 }
 
 /// Run automation daemon
-pub fn cmd_automation_daemon(
+pub async fn cmd_automation_daemon(
     db_path: &str,
     _root: &str,
     foreground: bool,
@@ -489,7 +489,7 @@ pub fn cmd_automation_daemon(
 /// Show automation history
 // TODO: Query the database for actual automation history records using db_path,
 // limit, category, status, and since parameters instead of stub output.
-pub fn cmd_automation_history(
+pub async fn cmd_automation_history(
     _db_path: &str,
     limit: usize,
     category: Option<String>,
@@ -519,7 +519,12 @@ pub fn cmd_automation_history(
 
 /// AI-assisted package finding by intent
 #[cfg(feature = "experimental")]
-pub fn cmd_ai_find(_db_path: &str, intent: &str, _limit: usize, _verbose: bool) -> Result<()> {
+pub async fn cmd_ai_find(
+    _db_path: &str,
+    intent: &str,
+    _limit: usize,
+    _verbose: bool,
+) -> Result<()> {
     println!("=== AI-Assisted Package Search ===\n");
     println!("Intent: \"{}\"\n", intent);
 
@@ -537,7 +542,7 @@ pub fn cmd_ai_find(_db_path: &str, intent: &str, _limit: usize, _verbose: bool) 
 
 /// AI-assisted scriptlet translation
 #[cfg(feature = "experimental")]
-pub fn cmd_ai_translate(source: &str, format: &str, confidence: f64) -> Result<()> {
+pub async fn cmd_ai_translate(source: &str, format: &str, confidence: f64) -> Result<()> {
     println!("=== AI-Assisted Scriptlet Translation ===\n");
     println!("Source: {}", source);
     println!("Output format: {}", format);
@@ -553,7 +558,7 @@ pub fn cmd_ai_translate(source: &str, format: &str, confidence: f64) -> Result<(
 
 /// AI-assisted natural language query
 #[cfg(feature = "experimental")]
-pub fn cmd_ai_query(_db_path: &str, question: &str) -> Result<()> {
+pub async fn cmd_ai_query(_db_path: &str, question: &str) -> Result<()> {
     println!("=== AI-Assisted System Query ===\n");
     println!("Question: \"{}\"\n", question);
 
@@ -566,7 +571,7 @@ pub fn cmd_ai_query(_db_path: &str, question: &str) -> Result<()> {
 
 /// AI-assisted action explanation
 #[cfg(feature = "experimental")]
-pub fn cmd_ai_explain(_db_path: &str, command: &str) -> Result<()> {
+pub async fn cmd_ai_explain(_db_path: &str, command: &str) -> Result<()> {
     println!("=== AI-Assisted Command Explanation ===\n");
     println!("Command: \"{}\"\n", command);
 
