@@ -9,7 +9,7 @@
 
 use crate::error::{Error, Result};
 use crate::repository::mirror_health::MirrorHealthTracker;
-use rand::distributions::WeightedIndex;
+use rand::distr::weighted::WeightedIndex;
 use rand::prelude::*;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -84,7 +84,7 @@ impl MirrorSelector {
             .map(|m| (m.mirror_url.clone(), m.health_score.max(0.01)))
             .collect();
 
-        let mut rng = thread_rng();
+        let mut rng = rand::rng();
         let mut result = Vec::with_capacity(remaining.len());
 
         // Weighted shuffle: repeatedly sample without replacement

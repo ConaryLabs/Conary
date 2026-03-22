@@ -105,7 +105,7 @@ impl RetryPolicy {
         let jitter_ms = if self.jitter_factor > 0.0 {
             let max_jitter = (capped_ms as f64 * self.jitter_factor) as u64;
             if max_jitter > 0 {
-                rand::thread_rng().gen_range(0..=max_jitter)
+                rand::rng().random_range(0..=max_jitter)
             } else {
                 0
             }
