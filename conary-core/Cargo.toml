@@ -93,6 +93,7 @@ libc.workspace = true                    # Low-level syscalls for resource limit
 # Ed25519 signatures for CCS package signing
 ed25519-dalek.workspace = true
 rand.workspace = true                     # Random number generation for key generation
+rand_core_06 = { package = "rand_core", version = "0.6", features = ["getrandom"] }  # For ed25519-dalek compat
 base64.workspace = true                  # Base64 encoding for signatures
 hex.workspace = true                      # Hex encoding for chunk hashes
 

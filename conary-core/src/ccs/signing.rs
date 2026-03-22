@@ -8,7 +8,7 @@ use crate::ccs::verify::PackageSignature;
 use anyhow::{Context, Result};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
-use rand::rngs::OsRng;
+use rand_core_06::OsRng;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;

@@ -74,7 +74,7 @@ futures = "0.3"
 
 # Crypto
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
-rand = "0.8"
+rand = "0.9"
 
 # Web framework (shared between conary-server and conary-test)
 axum = "0.8"
