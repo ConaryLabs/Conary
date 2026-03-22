@@ -93,10 +93,9 @@ impl<'a> ContainerCoordinator<'a> {
         self.tracked.drain(..).collect()
     }
 
-    /// Run an async closure with guaranteed cleanup. `teardown_all` is
-    /// called regardless of whether `f` returns `Ok`, `Err`, or panics
-    /// (in the panic case, containers are drained and cleaned up by the
-    /// caller).
+    /// Run an async closure with guaranteed cleanup on `Ok` or `Err`.
+    /// `teardown_all` is called after `f` completes, regardless of
+    /// whether it returns `Ok` or `Err`.
     pub async fn with_cleanup<F, Fut, T>(&mut self, f: F) -> Result<T>
     where
         F: FnOnce() -> Fut,

@@ -14,6 +14,7 @@ use rusqlite::OptionalExtension;
 use crate::server::ServerState;
 use crate::server::admin_service::{self, AddPeerInput, ServiceError};
 use crate::server::auth::{Scope, TokenScopes, json_error};
+use crate::server::handlers::run_blocking;
 
 use super::{check_scope, validate_path_param};
 
@@ -229,7 +230,7 @@ pub async fn get_federation_config(
         guard.config.db_path.clone()
     };
 
-    let result = tokio::task::spawn_blocking(move || {
+    let config = match run_blocking("federation config", move || {
         let conn = conary_core::db::open_fast(&db_path)?;
         let json_str: Option<String> = conn
             .query_row(
@@ -244,21 +245,15 @@ pub async fn get_federation_config(
             Some(s) => serde_json::from_str(&s).unwrap_or_default(),
             None => crate::federation::FederationConfig::default(),
         };
-        Ok::<_, conary_core::Error>(config)
+        Ok(config)
     })
-    .await;
+    .await
+    {
+        Ok(config) => config,
+        Err(e) => return e,
+    };
 
-    match result {
-        Ok(Ok(config)) => Json(config).into_response(),
-        Ok(Err(e)) => {
-            tracing::error!("Failed to get federation config: {}", e);
-            json_error(500, "Failed to get federation config", "DB_ERROR")
-        }
-        Err(e) => {
-            tracing::error!("Task join error getting federation config: {}", e);
-            json_error(500, "Internal error", "INTERNAL_ERROR")
-        }
-    }
+    Json(config).into_response()
 }
 
 /// PUT /v1/admin/federation/config
@@ -293,35 +288,26 @@ pub async fn update_federation_config(
         guard.config.db_path.clone()
     };
 
-    let result = tokio::task::spawn_blocking(move || {
+    if let Err(e) = run_blocking("update federation config", move || {
         let conn = conary_core::db::open_fast(&db_path)?;
         conn.execute(
             "INSERT OR REPLACE INTO metadata (key, value) VALUES ('federation_config', ?1)",
             rusqlite::params![json_str],
         )?;
-        Ok::<_, conary_core::Error>(())
+        Ok(())
     })
-    .await;
-
-    match result {
-        Ok(Ok(())) => {
-            let guard = state.read().await;
-            guard.publish_event(
-                "federation.config_updated",
-                serde_json::json!({"enabled": config.enabled}),
-            );
-            drop(guard);
-            Json(config).into_response()
-        }
-        Ok(Err(e)) => {
-            tracing::error!("Failed to update federation config: {}", e);
-            json_error(500, "Failed to update federation config", "DB_ERROR")
-        }
-        Err(e) => {
-            tracing::error!("Task join error updating federation config: {}", e);
-            json_error(500, "Internal error", "INTERNAL_ERROR")
-        }
+    .await
+    {
+        return e;
     }
+
+    let guard = state.read().await;
+    guard.publish_event(
+        "federation.config_updated",
+        serde_json::json!({"enabled": config.enabled}),
+    );
+    drop(guard);
+    Json(config).into_response()
 }
 
 #[cfg(test)]

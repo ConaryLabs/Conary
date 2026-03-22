@@ -156,7 +156,7 @@ pub struct FixtureConfig {
     pub v2_added_sha256: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct FixtureVersionRaw {
     #[serde(default)]
     version: Option<String>,
@@ -190,18 +190,8 @@ struct FixtureConfigRaw {
 
 impl From<FixtureConfigRaw> for FixtureConfig {
     fn from(raw: FixtureConfigRaw) -> Self {
-        let v1 = raw.v1.unwrap_or(FixtureVersionRaw {
-            version: None,
-            ccs_file: None,
-            hello_sha256: None,
-            added_sha256: None,
-        });
-        let v2 = raw.v2.unwrap_or(FixtureVersionRaw {
-            version: None,
-            ccs_file: None,
-            hello_sha256: None,
-            added_sha256: None,
-        });
+        let v1 = raw.v1.unwrap_or_default();
+        let v2 = raw.v2.unwrap_or_default();
 
         Self {
             package: raw.package,

@@ -142,61 +142,49 @@ pub async fn cmd_federation_peers(
 ) -> Result<()> {
     let conn = open_db(db_path)?;
 
-    let base_query = "SELECT id, endpoint, node_name, tier, latency_ms, success_count,
-                             failure_count, consecutive_failures, is_enabled, last_seen
-                      FROM federation_peers";
-
-    // Build different queries based on filters
-    let peers: Vec<PeerRow> = if let Some(t) = tier {
-        let query = if enabled_only {
-            format!(
-                "{} WHERE tier = ?1 AND is_enabled = 1 ORDER BY tier, latency_ms",
-                base_query
-            )
-        } else {
-            format!("{} WHERE tier = ?1 ORDER BY tier, latency_ms", base_query)
-        };
-        let mut stmt = conn.prepare(&query)?;
-        stmt.query_map([t], |row| {
-            Ok(PeerRow {
-                id: row.get(0)?,
-                endpoint: row.get(1)?,
-                name: row.get(2)?,
-                tier: row.get(3)?,
-                latency: row.get(4)?,
-                successes: row.get(5)?,
-                failures: row.get(6)?,
-                consecutive_failures: row.get(7)?,
-                enabled: row.get::<_, i64>(8)? == 1,
-                last_seen: row.get(9)?,
-            })
-        })?
-        .collect::<Result<Vec<_>, _>>()?
+    // Build WHERE clause from filters
+    let mut conditions = Vec::new();
+    if tier.is_some() {
+        conditions.push("tier = ?1");
+    }
+    if enabled_only {
+        conditions.push("is_enabled = 1");
+    }
+    let where_clause = if conditions.is_empty() {
+        String::new()
     } else {
-        let query = if enabled_only {
-            format!(
-                "{} WHERE is_enabled = 1 ORDER BY tier, latency_ms",
-                base_query
-            )
-        } else {
-            format!("{} ORDER BY tier, latency_ms", base_query)
-        };
-        let mut stmt = conn.prepare(&query)?;
-        stmt.query_map([], |row| {
-            Ok(PeerRow {
-                id: row.get(0)?,
-                endpoint: row.get(1)?,
-                name: row.get(2)?,
-                tier: row.get(3)?,
-                latency: row.get(4)?,
-                successes: row.get(5)?,
-                failures: row.get(6)?,
-                consecutive_failures: row.get(7)?,
-                enabled: row.get::<_, i64>(8)? == 1,
-                last_seen: row.get(9)?,
-            })
-        })?
-        .collect::<Result<Vec<_>, _>>()?
+        format!(" WHERE {}", conditions.join(" AND "))
+    };
+
+    let query = format!(
+        "SELECT id, endpoint, node_name, tier, latency_ms, success_count,
+                failure_count, consecutive_failures, is_enabled, last_seen
+         FROM federation_peers{} ORDER BY tier, latency_ms",
+        where_clause
+    );
+
+    let row_to_peer = |row: &rusqlite::Row| -> rusqlite::Result<PeerRow> {
+        Ok(PeerRow {
+            id: row.get(0)?,
+            endpoint: row.get(1)?,
+            name: row.get(2)?,
+            tier: row.get(3)?,
+            latency: row.get(4)?,
+            successes: row.get(5)?,
+            failures: row.get(6)?,
+            consecutive_failures: row.get(7)?,
+            enabled: row.get::<_, i64>(8)? == 1,
+            last_seen: row.get(9)?,
+        })
+    };
+
+    let mut stmt = conn.prepare(&query)?;
+    let peers: Vec<PeerRow> = if let Some(t) = tier {
+        stmt.query_map([t], row_to_peer)?
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        stmt.query_map([], row_to_peer)?
+            .collect::<Result<Vec<_>, _>>()?
     };
 
     println!(

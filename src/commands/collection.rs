@@ -4,7 +4,20 @@
 use super::open_db;
 use anyhow::{Context, Result};
 use conary_core::scriptlet::SandboxMode;
+use rusqlite::Connection;
 use tracing::info;
+
+/// Find a collection trove by name and return its database ID.
+fn find_collection_id(conn: &Connection, name: &str) -> Result<i64> {
+    let troves = conary_core::db::models::Trove::find_by_name(conn, name)?;
+    let trove = troves
+        .iter()
+        .find(|t| t.trove_type == conary_core::db::models::TroveType::Collection)
+        .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", name))?;
+    trove
+        .id
+        .ok_or_else(|| anyhow::anyhow!("Collection has no ID"))
+}
 
 /// Create a new collection
 pub async fn cmd_collection_create(
@@ -142,16 +155,7 @@ pub async fn cmd_collection_show(name: &str, db_path: &str) -> Result<()> {
 pub async fn cmd_collection_add(name: &str, members: &[String], db_path: &str) -> Result<()> {
     info!("Adding members to collection: {}", name);
     let mut conn = open_db(db_path)?;
-
-    let troves = conary_core::db::models::Trove::find_by_name(&conn, name)?;
-    let trove = troves
-        .iter()
-        .find(|t| t.trove_type == conary_core::db::models::TroveType::Collection)
-        .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", name))?;
-
-    let collection_id = trove
-        .id
-        .ok_or_else(|| anyhow::anyhow!("Collection has no ID"))?;
+    let collection_id = find_collection_id(&conn, name)?;
 
     conary_core::db::transaction(&mut conn, |tx| {
         for member_name in members {
@@ -181,16 +185,7 @@ pub async fn cmd_collection_remove_member(
 ) -> Result<()> {
     info!("Removing members from collection: {}", name);
     let mut conn = open_db(db_path)?;
-
-    let troves = conary_core::db::models::Trove::find_by_name(&conn, name)?;
-    let trove = troves
-        .iter()
-        .find(|t| t.trove_type == conary_core::db::models::TroveType::Collection)
-        .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", name))?;
-
-    let collection_id = trove
-        .id
-        .ok_or_else(|| anyhow::anyhow!("Collection has no ID"))?;
+    let collection_id = find_collection_id(&conn, name)?;
 
     conary_core::db::transaction(&mut conn, |tx| {
         for member_name in members {
@@ -218,20 +213,10 @@ pub async fn cmd_collection_remove_member(
 pub async fn cmd_collection_delete(name: &str, db_path: &str) -> Result<()> {
     info!("Deleting collection: {}", name);
     let mut conn = open_db(db_path)?;
-
-    let troves = conary_core::db::models::Trove::find_by_name(&conn, name)?;
-    let trove = troves
-        .iter()
-        .find(|t| t.trove_type == conary_core::db::models::TroveType::Collection)
-        .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", name))?;
-
-    let trove_id = trove
-        .id
-        .ok_or_else(|| anyhow::anyhow!("Collection has no ID"))?;
+    let collection_id = find_collection_id(&conn, name)?;
 
     conary_core::db::transaction(&mut conn, |tx| {
-        // Members will be cascade deleted due to FK constraint
-        conary_core::db::models::Trove::delete(tx, trove_id)?;
+        conary_core::db::models::Trove::delete(tx, collection_id)?;
         Ok(())
     })?;
 
@@ -250,16 +235,7 @@ pub async fn cmd_collection_install(
 ) -> Result<()> {
     info!("Installing collection: {}", name);
     let conn = open_db(db_path)?;
-
-    let troves = conary_core::db::models::Trove::find_by_name(&conn, name)?;
-    let trove = troves
-        .iter()
-        .find(|t| t.trove_type == conary_core::db::models::TroveType::Collection)
-        .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", name))?;
-
-    let collection_id = trove
-        .id
-        .ok_or_else(|| anyhow::anyhow!("Collection has no ID"))?;
+    let collection_id = find_collection_id(&conn, name)?;
     let members =
         conary_core::db::models::CollectionMember::find_by_collection(&conn, collection_id)?;
 

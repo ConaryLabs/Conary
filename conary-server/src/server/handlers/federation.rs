@@ -2,10 +2,16 @@
 //! Federation-related server endpoints
 
 use crate::server::ServerState;
-use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
+use axum::{
+    Json,
+    extract::State,
+    response::{IntoResponse, Response},
+};
 use serde::Serialize;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+use super::run_blocking;
 
 #[derive(Serialize)]
 struct DirectoryPeer {
@@ -17,10 +23,12 @@ struct DirectoryPeer {
 /// GET /v1/federation/directory
 ///
 /// Returns a JSON list of known peers (enabled only).
-pub async fn directory(State(state): State<Arc<RwLock<ServerState>>>) -> impl IntoResponse {
-    let db_path = { state.read().await.config.db_path.clone() };
+pub async fn directory(
+    State(state): State<Arc<RwLock<ServerState>>>,
+) -> Result<Response, Response> {
+    let db_path = state.read().await.config.db_path.clone();
 
-    let result = tokio::task::spawn_blocking(move || -> conary_core::Result<Vec<DirectoryPeer>> {
+    let peers = run_blocking("federation directory", move || {
         let conn = conary_core::db::open(&db_path)?;
         let mut stmt = conn.prepare(
             "SELECT id, endpoint, tier FROM federation_peers
@@ -38,25 +46,7 @@ pub async fn directory(State(state): State<Arc<RwLock<ServerState>>>) -> impl In
 
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     })
-    .await;
+    .await?;
 
-    match result {
-        Ok(Ok(peers)) => Json(peers).into_response(),
-        Ok(Err(err)) => {
-            tracing::error!("Failed to query federation directory: {}", err);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to load federation directory",
-            )
-                .into_response()
-        }
-        Err(err) => {
-            tracing::error!("Federation directory task failed: {}", err);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to load federation directory",
-            )
-                .into_response()
-        }
-    }
+    Ok(Json(peers).into_response())
 }

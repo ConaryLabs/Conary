@@ -371,7 +371,8 @@ async fn execute_run(
 
 /// Initialize conary database and repos inside a test container.
 ///
-/// Mirrors the logic from `cli.rs::initialize_container_state`.
+/// Similar to `TestRunner::initialize_container_state` but always adds the
+/// distro repo (the runner version gates on `phase > 1`).
 async fn initialize_container(
     state: &AppState,
     distro: &str,

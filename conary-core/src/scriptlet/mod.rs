@@ -30,9 +30,7 @@ use crate::container::{BindMount, ContainerConfig, Sandbox, ScriptRisk, analyze_
 use crate::db::models::ScriptletEntry;
 use crate::error::{Error, Result};
 use crate::packages::traits::{Scriptlet, ScriptletPhase};
-use std::fs::{self, File};
-use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
+use std::fs;
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
@@ -42,13 +40,10 @@ use tracing::{debug, info, warn};
 use wait_timeout::ChildExt;
 
 /// Write script content to a file and set it executable (mode 0o700).
+///
+/// Delegates to [`crate::container::write_executable_script`].
 fn write_executable_script(path: &Path, content: &str) -> Result<()> {
-    let mut file = File::create(path)?;
-    file.write_all(content.as_bytes())?;
-    let mut perms = fs::metadata(path)?.permissions();
-    perms.set_mode(0o700);
-    fs::set_permissions(path, perms)?;
-    Ok(())
+    crate::container::write_executable_script(path, content)
 }
 
 /// Log captured stdout/stderr lines with a phase prefix.

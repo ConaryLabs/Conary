@@ -6,10 +6,17 @@ use anyhow::Result;
 use conary_core::db::models::{DistroPin, SystemAffinity};
 use conary_core::model::parser::SourcePinConfig;
 
-pub async fn cmd_distro_set(db_path: &str, distro: &str, mixing: &str) -> Result<()> {
-    if !["strict", "guarded", "permissive"].contains(&mixing) {
-        anyhow::bail!("Invalid mixing policy: {mixing}. Use strict, guarded, or permissive.");
+const VALID_MIXING_POLICIES: [&str; 3] = ["strict", "guarded", "permissive"];
+
+fn validate_mixing_policy(policy: &str) -> Result<()> {
+    if !VALID_MIXING_POLICIES.contains(&policy) {
+        anyhow::bail!("Invalid mixing policy: {policy}. Use strict, guarded, or permissive.");
     }
+    Ok(())
+}
+
+pub async fn cmd_distro_set(db_path: &str, distro: &str, mixing: &str) -> Result<()> {
+    validate_mixing_policy(mixing)?;
     let conn = open_db(db_path)?;
     DistroPin::set_from_source_pin(
         &conn,
@@ -68,9 +75,7 @@ pub async fn cmd_distro_list() -> Result<()> {
 }
 
 pub async fn cmd_distro_mixing(db_path: &str, policy: &str) -> Result<()> {
-    if !["strict", "guarded", "permissive"].contains(&policy) {
-        anyhow::bail!("Invalid mixing policy: {policy}. Use strict, guarded, or permissive.");
-    }
+    validate_mixing_policy(policy)?;
     let conn = open_db(db_path)?;
     if DistroPin::get_current(&conn)?.is_none() {
         anyhow::bail!(

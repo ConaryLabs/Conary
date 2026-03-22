@@ -155,7 +155,6 @@ impl RemiClientCore {
             _ => Error::DownloadError(format!("Remi returned HTTP {}: {}", status, body)),
         }
     }
-
 }
 
 /// Client for interacting with a Remi server

@@ -33,7 +33,7 @@ const MAX_RANGE_SIZE: u64 = 64 * 1024 * 1024;
 
 /// Validate chunk hash format (64 hex chars for SHA-256)
 pub(crate) fn is_valid_hash(hash: &str) -> bool {
-    hash.len() == 64 && hash.chars().all(|c| c.is_ascii_hexdigit())
+    super::is_valid_hex_hash(hash)
 }
 
 /// Normalize a hash to lowercase for consistent CAS path lookup.

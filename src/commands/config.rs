@@ -13,6 +13,17 @@ use tracing::info;
 use conary_core::db::models::{ConfigBackup, ConfigFile, ConfigStatus, Trove};
 use conary_core::filesystem::CasStore;
 
+/// Print a config file entry with status and noreplace markers.
+fn print_config_entry(config: &ConfigFile) {
+    let status_marker = match config.status {
+        ConfigStatus::Pristine => " ",
+        ConfigStatus::Modified => "M",
+        ConfigStatus::Missing => "!",
+    };
+    let noreplace = if config.noreplace { "N" } else { " " };
+    println!("  {} {} {}", status_marker, noreplace, config.path);
+}
+
 /// List configuration files
 ///
 /// With no arguments, lists all modified config files.
@@ -40,13 +51,7 @@ pub async fn cmd_config_list(db_path: &str, package: Option<&str>, all: bool) ->
                         configs.len()
                     );
                     for config in &configs {
-                        let status_marker = match config.status {
-                            ConfigStatus::Pristine => " ",
-                            ConfigStatus::Modified => "M",
-                            ConfigStatus::Missing => "!",
-                        };
-                        let noreplace = if config.noreplace { "N" } else { " " };
-                        println!("  {} {} {}", status_marker, noreplace, config.path);
+                        print_config_entry(config);
                     }
                 }
             }
@@ -61,13 +66,7 @@ pub async fn cmd_config_list(db_path: &str, package: Option<&str>, all: bool) ->
 
         println!("All config files ({}):", configs.len());
         for config in &configs {
-            let status_marker = match config.status {
-                ConfigStatus::Pristine => " ",
-                ConfigStatus::Modified => "M",
-                ConfigStatus::Missing => "!",
-            };
-            let noreplace = if config.noreplace { "N" } else { " " };
-            println!("  {} {} {}", status_marker, noreplace, config.path);
+            print_config_entry(config);
         }
     } else {
         // List only modified config files

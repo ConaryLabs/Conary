@@ -303,15 +303,7 @@ pub async fn stream_run(
                         continue;
                     }
                     let is_complete = matches!(event, crate::report::stream::TestEvent::RunComplete { .. });
-                    let event_name = match &event {
-                        crate::report::stream::TestEvent::SuiteStarted { .. } => "suite_started",
-                        crate::report::stream::TestEvent::TestStarted { .. } => "test_started",
-                        crate::report::stream::TestEvent::TestPassed { .. } => "test_passed",
-                        crate::report::stream::TestEvent::TestFailed { .. } => "test_failed",
-                        crate::report::stream::TestEvent::TestSkipped { .. } => "test_skipped",
-                        crate::report::stream::TestEvent::StepOutput { .. } => "step_output",
-                        crate::report::stream::TestEvent::RunComplete { .. } => "run_complete",
-                    };
+                    let event_name = event.event_name();
                     let data = serde_json::to_string(&event).unwrap_or_default();
                     yield Ok::<_, std::convert::Infallible>(
                         axum::response::sse::Event::default()
