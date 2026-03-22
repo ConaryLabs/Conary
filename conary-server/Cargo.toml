@@ -39,7 +39,7 @@ tantivy = "0.25"
 
 # Daemon dependencies
 sd-notify = "0.5"
-axum-extra = { version = "0.10", features = ["typed-header"] }
+axum-extra = { version = "0.12", features = ["typed-header"] }
 hyper = { version = "1.4", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "server-auto", "service"] }
 http-body-util = "0.1"
