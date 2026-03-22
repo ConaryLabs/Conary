@@ -1756,7 +1756,9 @@ strength = "strict"
         .unwrap();
 
         let state = capture_current_state(&conn).unwrap();
-        let diff = compute_model_diff(&model, &state, &conn, false, false).await.unwrap();
+        let diff = compute_model_diff(&model, &state, &conn, false, false)
+            .await
+            .unwrap();
 
         assert_eq!(
             diff.actions

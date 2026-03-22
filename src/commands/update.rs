@@ -545,7 +545,9 @@ pub async fn cmd_update(
             &trove.name,
             &repo_pkg.version,
             &temp_dir,
-        ).await {
+        )
+        .await
+        {
             Ok(_) => {
                 let applier = DeltaApplier::new(&objects_dir)?;
                 match applier.apply_delta(&delta_info.from_hash, &delta_path, &delta_info.to_hash) {

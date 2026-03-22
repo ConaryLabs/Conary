@@ -65,8 +65,10 @@ pub async fn cmd_self_update(
         } => (download_url.clone(), sha256.clone(), latest.clone()),
         VersionCheckResult::UpToDate { .. } => {
             // --force path: re-fetch latest info
-            let info: LatestVersionInfo =
-                reqwest::get(format!("{channel_url}/latest")).await?.json().await?;
+            let info: LatestVersionInfo = reqwest::get(format!("{channel_url}/latest"))
+                .await?
+                .json()
+                .await?;
             (info.download_url, info.sha256, info.version)
         }
     };
@@ -87,7 +89,8 @@ pub async fn cmd_self_update(
         VersionCheckResult::UpToDate { .. } => None,
     };
     let ccs_path =
-        download_update_with_progress(&download_url, &sha256, temp_dir.path(), download_size).await?;
+        download_update_with_progress(&download_url, &sha256, temp_dir.path(), download_size)
+            .await?;
 
     println!("Extracting binary...");
     let new_binary = extract_binary(&ccs_path, target_dir)?;

@@ -603,7 +603,9 @@ impl RepositoryParser for FedoraParser {
         let primary_location = self.get_primary_xml_location(repo_url).await?;
 
         // Download and decompress primary.xml
-        let primary_xml = self.download_primary_xml(repo_url, &primary_location).await?;
+        let primary_xml = self
+            .download_primary_xml(repo_url, &primary_location)
+            .await?;
 
         // Parse primary.xml
         let packages = self.parse_primary_xml(&primary_xml, repo_url)?;

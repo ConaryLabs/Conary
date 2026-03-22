@@ -310,7 +310,10 @@ const MAX_INCLUDE_DEPTH: usize = 10;
 /// 2. Fetch each collection, detect cycles, and merge members
 ///
 /// Returns a fully resolved model with all includes expanded.
-pub async fn resolve_includes(model: &SystemModel, conn: &Connection) -> ModelResult<ResolvedModel> {
+pub async fn resolve_includes(
+    model: &SystemModel,
+    conn: &Connection,
+) -> ModelResult<ResolvedModel> {
     resolve_includes_with_options(model, conn, false).await
 }
 
@@ -338,7 +341,8 @@ pub async fn resolve_includes_with_options(
         &mut visited,
         offline,
         0,
-    ).await?;
+    )
+    .await?;
 
     Ok(resolved)
 }
@@ -387,7 +391,8 @@ async fn resolve_includes_recursive(
                 visited,
                 offline,
                 depth + 1,
-            )).await?;
+            ))
+            .await?;
         }
 
         // Remove from stack on backtrack so diamond includes work correctly

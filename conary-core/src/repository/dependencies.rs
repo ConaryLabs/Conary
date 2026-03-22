@@ -493,40 +493,42 @@ pub async fn download_dependencies(
     // Collect as Vec<Result<_>> to track individual successes/failures
     let mut individual_results: Vec<Result<(String, PathBuf, u64)>> = Vec::new();
     for ((dep_name, pkg_with_repo), pb) in dependencies.iter().zip(progress_bars.iter()) {
-            info!("Downloading dependency: {}", dep_name);
+        info!("Downloading dependency: {}", dep_name);
 
-            // Build GPG options if keyring_dir provided and repo has gpg_check enabled
-            let gpg_options = if let Some(keyring) = keyring_dir {
-                if pkg_with_repo.repository.gpg_check {
-                    Some(DownloadOptions {
-                        gpg_check: true,
-                        gpg_strict: pkg_with_repo.repository.gpg_strict,
-                        keyring_dir: keyring.to_path_buf(),
-                        repository_name: pkg_with_repo.repository.name.clone(),
-                    })
-                } else {
-                    None
-                }
+        // Build GPG options if keyring_dir provided and repo has gpg_check enabled
+        let gpg_options = if let Some(keyring) = keyring_dir {
+            if pkg_with_repo.repository.gpg_check {
+                Some(DownloadOptions {
+                    gpg_check: true,
+                    gpg_strict: pkg_with_repo.repository.gpg_strict,
+                    keyring_dir: keyring.to_path_buf(),
+                    repository_name: pkg_with_repo.repository.name.clone(),
+                })
             } else {
                 None
-            };
+            }
+        } else {
+            None
+        };
 
-            let result = match download_package_verified_with_progress(
-                &pkg_with_repo.package,
-                dest_dir,
-                gpg_options.as_ref(),
-                Some(pb),
-            ).await {
-                Ok(path) => {
-                    DownloadProgress::finish_download(pb, dep_name);
-                    Ok((dep_name.clone(), path, pkg_with_repo.package.size as u64))
-                }
-                Err(e) => {
-                    DownloadProgress::fail_download(pb, dep_name, &e.to_string());
-                    Err(e)
-                }
-            };
-            individual_results.push(result);
+        let result = match download_package_verified_with_progress(
+            &pkg_with_repo.package,
+            dest_dir,
+            gpg_options.as_ref(),
+            Some(pb),
+        )
+        .await
+        {
+            Ok(path) => {
+                DownloadProgress::finish_download(pb, dep_name);
+                Ok((dep_name.clone(), path, pkg_with_repo.package.size as u64))
+            }
+            Err(e) => {
+                DownloadProgress::fail_download(pb, dep_name, &e.to_string());
+                Err(e)
+            }
+        };
+        individual_results.push(result);
     }
 
     // Calculate statistics and show summary

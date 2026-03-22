@@ -59,7 +59,8 @@ pub async fn cmd_cache_populate(profile_path: &str, sources_only: bool, full: bo
     println!("Probing {probe_endpoint} for {total} derivations...");
 
     let availability = substituter
-        .batch_probe(&derivation_ids, &probe_endpoint).await
+        .batch_probe(&derivation_ids, &probe_endpoint)
+        .await
         .map_err(|e| anyhow::anyhow!("probe failed: {e}"))?;
 
     let available: Vec<&String> = derivation_ids
@@ -87,7 +88,10 @@ pub async fn cmd_cache_populate(profile_path: &str, sources_only: bool, full: bo
         print!("\r  Fetching {}/{}: {short_id}...", i + 1, available.len());
         match substituter.query(id).await {
             conary_core::derivation::substituter::CacheQueryResult::Hit { manifest, peer } => {
-                match substituter.fetch_missing_objects(&manifest, &cas, &peer).await {
+                match substituter
+                    .fetch_missing_objects(&manifest, &cas, &peer)
+                    .await
+                {
                     Ok(report) => {
                         fetched += 1;
                         total_bytes += report.bytes_transferred;

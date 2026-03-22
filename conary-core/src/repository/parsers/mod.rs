@@ -25,7 +25,10 @@ pub trait RepositoryParser {
     ///
     /// Downloads and parses the repository's metadata files, returning
     /// a list of all packages available in the repository.
-    fn sync_metadata(&self, repo_url: &str) -> impl std::future::Future<Output = Result<Vec<PackageMetadata>>> + Send;
+    fn sync_metadata(
+        &self,
+        repo_url: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<PackageMetadata>>> + Send;
 }
 
 /// Package metadata extracted from repository

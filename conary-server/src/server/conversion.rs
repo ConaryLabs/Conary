@@ -145,6 +145,7 @@ impl ConversionService {
     /// 4. Convert to CCS
     /// 5. Store chunks in CAS
     /// 6. Record in database
+    ///
     /// Convert a package from a repository.
     ///
     /// This is a blocking function that internally uses `Handle::block_on` for

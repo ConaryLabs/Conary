@@ -114,7 +114,8 @@ pub async fn resolve_package_path(
         repo,
         progress,
         &PolicyOptions::default(),
-    ).await
+    )
+    .await
 }
 
 /// Resolve package to a local path with explicit policy control.

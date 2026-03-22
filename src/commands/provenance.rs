@@ -762,7 +762,12 @@ async fn rekor_get_entry_by_index(index: i64) -> Result<RekorLogEntry, SigstoreC
 async fn rekor_create_entry(entry: ProposedEntry) -> Result<RekorLogEntry, SigstoreCommandError> {
     let client = reqwest::Client::new();
     let url = format!("{}/api/v1/log/entries", rekor_base_url());
-    let response = client.post(url).json(&entry).send().await?.error_for_status()?;
+    let response = client
+        .post(url)
+        .json(&entry)
+        .send()
+        .await?
+        .error_for_status()?;
     let body = response.text().await?;
     let parsed = entries_api::parse_response(body);
     Ok(RekorLogEntry::from_str(&parsed)?)
