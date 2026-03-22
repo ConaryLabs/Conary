@@ -95,7 +95,7 @@ pub fn parse_metalink_xml(xml: &str) -> Result<Vec<MetalinkFile>, String> {
                             // Read the URL text content
                             let mut url_text = String::new();
                             if let Ok(Event::Text(t)) = reader.read_event_into(&mut buf) {
-                                url_text = t.unescape().unwrap_or_default().trim().to_string();
+                                url_text = t.decode().unwrap_or_default().trim().to_string();
                             }
 
                             if !url_text.is_empty() {
@@ -150,7 +150,7 @@ pub fn parse_metalink_xml(xml: &str) -> Result<Vec<MetalinkFile>, String> {
                 }
             }
             Ok(Event::Text(t)) => {
-                if let Ok(text) = t.unescape() {
+                if let Ok(text) = t.decode() {
                     current_text.push_str(&text);
                 }
             }
