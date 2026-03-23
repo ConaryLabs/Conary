@@ -84,7 +84,12 @@ pub enum StageError {
 /// `TOOLCHAIN_NAMED` and the toolchain check runs before the foundation
 /// check in `assign_stages`, so it is always classified as toolchain.
 const FOUNDATION_PACKAGES: &[&str] = &[
-    "gcc",
+    // Core unix tools -- enough to build everything else.
+    // GCC and its deps (gmp, mpfr, mpc) are intentionally NOT here:
+    // within a stage, packages can't see each other's outputs (only the
+    // previous stage's EROFS). GCC needs gmp/mpfr/mpc headers, so they
+    // must be in an earlier stage. Foundation provides the basic tools;
+    // System rebuilds the compiler on top of the Foundation EROFS.
     "binutils",
     "make",
     "bash",
@@ -111,11 +116,6 @@ const FOUNDATION_PACKAGES: &[&str] = &[
     "ncurses",
     "readline",
     "zlib",
-    // GCC build deps -- must be in Foundation before GCC
-    "gmp",
-    "mpfr",
-    "mpc",
-    "zstd",
 ];
 
 /// Toolchain packages identified by name (not by pass suffix).
