@@ -671,7 +671,9 @@ mod tests {
         cache_entry.upsert(&conn).unwrap();
 
         // fetch_remote_collection should return from cache without HTTP
-        let result = fetch_remote_collection(&conn, "group-cached", "repo:tag", false).await.unwrap();
+        let result = fetch_remote_collection(&conn, "group-cached", "repo:tag", false)
+            .await
+            .unwrap();
         assert_eq!(result.name, "group-cached");
         assert_eq!(result.members.len(), 1);
         assert_eq!(result.members[0].name, "cached-pkg");
