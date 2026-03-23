@@ -297,4 +297,25 @@ include = ["glibc"]
         assert!(!integrity.fsverity);
         assert!(!integrity.erofs_digest);
     }
+
+    #[test]
+    fn parse_conaryos_manifest() {
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let path = manifest_dir.parent().unwrap().join("conaryos.toml");
+        let content =
+            std::fs::read_to_string(&path).expect("conaryos.toml not found at workspace root");
+        let manifest = SystemManifest::parse(&content).expect("conaryos.toml should parse");
+        assert_eq!(manifest.system.name, "conaryos-base");
+        assert_eq!(manifest.system.target, "x86_64-conary-linux-gnu");
+        assert!(
+            manifest.packages.include.len() >= 85,
+            "expected 85+ packages"
+        );
+        assert!(manifest.packages.include.contains(&"glibc".to_string()));
+        assert!(manifest
+            .packages
+            .include
+            .contains(&"linux-pam".to_string()));
+        assert!(manifest.kernel.is_some());
+    }
 }

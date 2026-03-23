@@ -1,0 +1,35 @@
+# conaryos.toml
+#
+# System manifest for the conaryOS base image.
+# Input to: conary bootstrap run conaryos.toml
+
+[system]
+name = "conaryos-base"
+target = "x86_64-conary-linux-gnu"
+
+[seed]
+source = "local:seed"
+
+[packages]
+include = [
+    # Core system (LFS Ch8 aligned, 80 packages)
+    "man-pages", "iana-etc", "glibc", "zlib", "bzip2", "xz", "zstd",
+    "lz4", "file", "readline", "m4", "bc", "flex", "pkgconf", "binutils",
+    "gmp", "mpfr", "mpc", "attr", "acl", "libcap", "libxcrypt", "shadow",
+    "gcc", "ncurses", "sed", "psmisc", "gettext", "bison", "grep", "bash",
+    "libtool", "gdbm", "gperf", "expat", "inetutils", "less", "perl",
+    "xml-parser", "intltool", "autoconf", "automake", "openssl", "kmod",
+    "elfutils", "libffi", "python", "flit-core", "wheel", "setuptools",
+    "ninja", "meson", "coreutils", "diffutils", "gawk", "findutils",
+    "groff", "gzip", "iproute2", "kbd", "libpipeline", "make", "patch",
+    "tar", "texinfo", "vim", "markupsafe", "jinja2", "systemd", "dbus",
+    "man-db", "procps-ng", "util-linux", "e2fsprogs", "pcre2", "sqlite",
+    "linux",
+    # Tier 2: Self-hosting (8 packages)
+    "linux-pam", "openssh", "make-ca", "curl", "sudo", "nano", "rust",
+    "conary",
+]
+exclude = []
+
+[kernel]
+config = "defconfig"
