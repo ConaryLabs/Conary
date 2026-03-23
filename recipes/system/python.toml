@@ -39,7 +39,9 @@ configure = """
 """
 
 make = """
-make -j%(jobs)s
+# GCC 15 produces new warnings that Python's PGO build treats as errors.
+# Suppress -Werror for the profile generation step.
+make -j%(jobs)s CFLAGS="-Wno-error"
 """
 
 install = """
