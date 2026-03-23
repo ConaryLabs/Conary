@@ -31,17 +31,17 @@ makedepends = []
 chroot = true
 
 configure = """
+# Note: --enable-optimizations (PGO) is disabled because GCC 15 produces
+# new warnings in binascii.c that Python's PGO build treats as -Werror.
+# Re-enable once Python 3.14+ fixes the compatibility.
 ./configure --prefix=/usr               \
             --enable-shared             \
             --with-system-expat         \
-            --enable-optimizations      \
             --without-static-libpython
 """
 
 make = """
-# GCC 15 produces new warnings that Python's PGO build treats as errors.
-# Suppress -Werror for the profile generation step.
-make -j%(jobs)s CFLAGS="-Wno-error"
+make -j%(jobs)s
 """
 
 install = """
