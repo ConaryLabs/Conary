@@ -31,18 +31,11 @@ makedepends = []
 chroot = true
 
 configure = """
-# Python 3.14's configure adds -Werror=implicit-function-declaration.
-# Ubuntu/Fedora GCC 15 triggers this on binascii.c and _zstd due to
-# missing includes. Override by appending -Wno-error after configure
-# so the generated Makefile CFLAGS don't have -Werror.
 ./configure --prefix=/usr               \
             --enable-shared             \
             --with-system-expat         \
+            --enable-optimizations      \
             --without-static-libpython
-
-# Patch out -Werror flags from the generated Makefile
-sed -i 's/-Werror=implicit-function-declaration//g' Makefile
-sed -i 's/-Werror=[a-z-]*//g' Makefile
 """
 
 make = """

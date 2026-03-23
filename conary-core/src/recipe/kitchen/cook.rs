@@ -277,26 +277,6 @@ impl<'a> Cook<'a> {
             ),
         ];
 
-        // When a sysroot is configured (bootstrap builds), set pkg-config and
-        // compiler flags so builds discover libraries from the sysroot rather
-        // than the host. This is critical for the derivation pipeline where
-        // each stage builds against the previous stage's EROFS mount.
-        if let Some(sysroot) = &self.kitchen.config.sysroot {
-            let sysroot_str = sysroot.to_string_lossy().to_string();
-            env.push((
-                "PKG_CONFIG_PATH",
-                format!(
-                    "{sysroot_str}/usr/lib/pkgconfig:{sysroot_str}/usr/share/pkgconfig:{sysroot_str}/usr/lib64/pkgconfig",
-                ),
-            ));
-            env.push(("PKG_CONFIG_SYSROOT_DIR", sysroot_str.clone()));
-            // Do NOT set global CFLAGS/CPPFLAGS/LDFLAGS -- the sysroot's
-            // headers (cross-compiled glibc) are incompatible with the host
-            // compiler. pkg-config handles per-library discovery correctly.
-            // Do NOT set LD_LIBRARY_PATH -- it would cause the host shell
-            // to load sysroot libc.so which is incompatible.
-        }
-
         for (key, value) in &build.environment {
             env.push((key, value.clone()));
         }
@@ -494,13 +474,65 @@ impl<'a> Cook<'a> {
         workdir: &Path,
         env: &[(&str, String)],
     ) -> Result<()> {
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg(command)
-            .current_dir(workdir)
-            .envs(env.iter().map(|(k, v)| (*k, v.as_str())))
-            .output()
-            .map_err(|e| Error::IoError(format!("Failed to run {} phase: {}", phase, e)))?;
+        // When a sysroot is configured (bootstrap builds), run inside the
+        // sysroot as a chroot. This matches LFS's build model: all packages
+        // build inside the chroot where only self-built tools are visible.
+        // Without chroot, the host gcc/glibc/headers are used, causing
+        // compatibility issues (e.g., Python 3.14 + host GCC 15 -Werror).
+        let output = if let Some(sysroot) = &self.kitchen.config.sysroot {
+            // Convert workdir to be relative to the sysroot
+            let chroot_workdir = workdir
+                .strip_prefix(sysroot)
+                .unwrap_or(workdir);
+
+            // Build env string for chroot (env -i clears host env)
+            let mut env_args = vec!["env".to_string(), "-i".to_string()];
+            for (k, v) in env {
+                env_args.push(format!("{k}={v}"));
+            }
+            // Standard PATH inside the chroot
+            env_args.push("PATH=/usr/bin:/usr/sbin:/bin:/sbin:/tools/bin".to_string());
+            env_args.push("HOME=/root".to_string());
+            env_args.push("TERM=xterm".to_string());
+            env_args.push("LC_ALL=C".to_string());
+            env_args.push(format!(
+                "MAKEFLAGS=-j{}",
+                self.recipe.build.jobs.unwrap_or(self.kitchen.config.jobs)
+            ));
+
+            let script = format!(
+                "cd {} && {}",
+                chroot_workdir.display(),
+                command
+            );
+
+            info!(
+                "Running {} phase in chroot {}",
+                phase,
+                sysroot.display()
+            );
+
+            Command::new("chroot")
+                .arg(sysroot)
+                .args(&env_args)
+                .arg("/bin/sh")
+                .arg("-c")
+                .arg(&script)
+                .output()
+                .map_err(|e| Error::IoError(format!(
+                    "Failed to chroot {} phase: {}", phase, e
+                )))?
+        } else {
+            Command::new("sh")
+                .arg("-c")
+                .arg(command)
+                .current_dir(workdir)
+                .envs(env.iter().map(|(k, v)| (*k, v.as_str())))
+                .output()
+                .map_err(|e| Error::IoError(format!(
+                    "Failed to run {} phase: {}", phase, e
+                )))?
+        };
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
