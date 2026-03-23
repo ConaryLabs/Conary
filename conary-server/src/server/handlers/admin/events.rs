@@ -4,11 +4,17 @@
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::sync::{Arc, LazyLock};
+use tokio::sync::{RwLock, Semaphore};
 
 use crate::server::ServerState;
 use crate::server::auth::{TokenScopes, json_error};
+
+/// Maximum number of concurrent SSE connections.
+///
+/// Prevents resource exhaustion from too many long-lived connections.
+/// Each SSE connection holds a broadcast receiver and a keep-alive timer.
+static SSE_SEMAPHORE: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(100));
 
 #[derive(Deserialize)]
 pub struct EventsQuery {
@@ -25,6 +31,18 @@ pub async fn sse_events(
         return json_error(401, "Not authenticated", "UNAUTHORIZED");
     }
 
+    // Limit concurrent SSE connections to prevent resource exhaustion
+    let _permit = match SSE_SEMAPHORE.try_acquire() {
+        Ok(permit) => permit,
+        Err(_) => {
+            return json_error(
+                503,
+                "Too many concurrent SSE connections",
+                "SSE_LIMIT_REACHED",
+            );
+        }
+    };
+
     let filters: Option<Vec<String>> = query
         .filter
         .map(|f| f.split(',').map(|s| s.trim().to_string()).collect());
@@ -35,6 +53,9 @@ pub async fn sse_events(
     };
 
     let stream = async_stream::stream! {
+        // Hold the semaphore permit for the lifetime of the stream.
+        // When the client disconnects, the permit is dropped automatically.
+        let _permit = _permit;
         let mut rx = rx;
         loop {
             match rx.recv().await {

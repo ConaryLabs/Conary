@@ -675,8 +675,8 @@ mod tests {
         InstallSource, LabelEntry, PackageResolution, PrimaryStrategy, Repository,
         RepositoryPackage, ResolutionStrategy, SystemAffinity, Trove, TroveType,
     };
-    use crate::model::state::{InstalledPackage, SystemState};
     use crate::db::testing::create_test_db;
+    use crate::model::state::{InstalledPackage, SystemState};
 
     #[test]
     fn test_visible_realignment_candidates_counts_same_name_target_impls() {

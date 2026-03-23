@@ -20,8 +20,8 @@ use conary_core::canonical::repology::repo_to_distro;
 use conary_core::canonical::rules::RulesEngine;
 use conary_core::canonical::sync::{RepoPackageInfo, ingest_canonical_mappings};
 use conary_core::db::models::{
-    AppstreamCacheEntry, CanonicalPackage, PackageImplementation, RepologyCacheEntry, get_metadata,
-    set_metadata,
+    AppstreamCacheEntry, CanonicalPackage, MetadataTable, PackageImplementation,
+    RepologyCacheEntry, get_metadata, set_metadata,
 };
 use rusqlite::Connection;
 use tracing::{debug, info, warn};
@@ -37,7 +37,7 @@ use crate::server::config::CanonicalSection;
 /// Reads `last_canonical_rebuild` from `server_metadata`. Returns `true`
 /// if the timestamp is missing or older than `cooldown_minutes`.
 pub fn should_rebuild(conn: &Connection, cooldown_minutes: u64) -> bool {
-    let value = match get_metadata(conn, "server_metadata", "last_canonical_rebuild") {
+    let value = match get_metadata(conn, MetadataTable::Server, "last_canonical_rebuild") {
         Ok(Some(v)) => v,
         _ => return true,
     };
@@ -54,20 +54,20 @@ pub fn should_rebuild(conn: &Connection, cooldown_minutes: u64) -> bool {
 /// Record the current UTC time as the last rebuild timestamp.
 pub fn record_rebuild_timestamp(conn: &Connection) -> Result<()> {
     let now = Utc::now().to_rfc3339();
-    set_metadata(conn, "server_metadata", "last_canonical_rebuild", &now)?;
+    set_metadata(conn, MetadataTable::Server, "last_canonical_rebuild", &now)?;
     Ok(())
 }
 
 /// Atomically increment and return the canonical map version counter.
 pub fn bump_map_version(conn: &Connection) -> Result<u64> {
-    let current: u64 = get_metadata(conn, "server_metadata", "canonical_map_version")?
+    let current: u64 = get_metadata(conn, MetadataTable::Server, "canonical_map_version")?
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
 
     let next = current + 1;
     set_metadata(
         conn,
-        "server_metadata",
+        MetadataTable::Server,
         "canonical_map_version",
         &next.to_string(),
     )?;

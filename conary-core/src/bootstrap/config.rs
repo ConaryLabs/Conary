@@ -37,6 +37,18 @@ impl TargetArch {
         }
     }
 
+    /// Strings the `file` command uses to describe binaries for this arch.
+    ///
+    /// Returns a slice of patterns; if *any* appears in the `file` output the
+    /// binary targets the expected architecture.
+    pub fn file_arch_patterns(&self) -> &'static [&'static str] {
+        match self {
+            Self::X86_64 => &["x86-64", "x86_64"],
+            Self::Aarch64 => &["aarch64", "ARM aarch64"],
+            Self::Riscv64 => &["RISC-V", "riscv64"],
+        }
+    }
+
     /// Parse from string
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {

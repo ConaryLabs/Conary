@@ -214,15 +214,12 @@ pub fn ingest_appstream(
     components: &[AppStreamComponent],
     distro: &str,
 ) -> Result<usize> {
-    // Wrap in a transaction for atomicity and performance (avoids per-statement autocommit)
+    // Wrap in a transaction for atomicity and performance (avoids per-statement autocommit).
+    // On error, the transaction auto-rolls-back when dropped.
     let tx = conn.unchecked_transaction()?;
-    let result = ingest_appstream_inner(&tx, components, distro);
-    if result.is_ok() {
-        tx.commit()?;
-    } else {
-        drop(tx);
-    }
-    result
+    let count = ingest_appstream_inner(&tx, components, distro)?;
+    tx.commit()?;
+    Ok(count)
 }
 
 fn ingest_appstream_inner(

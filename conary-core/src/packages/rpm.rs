@@ -296,6 +296,18 @@ impl PackageFormat for RpmPackage {
             self.meta.package_path()
         );
 
+        // Check file size before reading (4 GB limit to prevent OOM on malicious files)
+        const MAX_RPM_FILE_SIZE: u64 = 4 * 1024 * 1024 * 1024;
+        let file_meta = std::fs::metadata(self.meta.package_path())
+            .map_err(|e| Error::InitError(format!("Failed to stat RPM file: {}", e)))?;
+        if file_meta.len() > MAX_RPM_FILE_SIZE {
+            return Err(Error::InitError(format!(
+                "RPM file too large ({} bytes, max {} bytes)",
+                file_meta.len(),
+                MAX_RPM_FILE_SIZE
+            )));
+        }
+
         // Read entire file into memory to avoid TOCTOU (file could change between
         // metadata parse and content extraction)
         let data = std::fs::read(self.meta.package_path())

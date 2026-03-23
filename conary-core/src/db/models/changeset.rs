@@ -88,7 +88,10 @@ impl Changeset {
 
     /// Find a changeset by transaction UUID
     pub fn find_by_tx_uuid(conn: &Connection, tx_uuid: &str) -> Result<Option<Self>> {
-        let sql = format!("SELECT {} FROM changesets WHERE tx_uuid = ?1", Self::COLUMNS);
+        let sql = format!(
+            "SELECT {} FROM changesets WHERE tx_uuid = ?1",
+            Self::COLUMNS
+        );
         let mut stmt = conn.prepare(&sql)?;
         let changeset = stmt.query_row([tx_uuid], Self::from_row).optional()?;
         Ok(changeset)

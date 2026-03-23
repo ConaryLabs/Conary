@@ -274,16 +274,63 @@ impl TestRun {
     /// If `cursor` is `Some(id)`, only runs with `id < cursor` are returned.
     /// Returns at most `limit` rows.
     pub fn list(conn: &Connection, cursor: Option<i64>, limit: u32) -> Result<Vec<Self>> {
-        let rows = if let Some(cursor_id) = cursor {
-            let mut stmt =
-                conn.prepare("SELECT * FROM test_runs WHERE id < ?1 ORDER BY id DESC LIMIT ?2")?;
-            stmt.query_map(params![cursor_id, limit], row_to_run)?
-                .collect::<rusqlite::Result<Vec<_>>>()?
+        Self::list_filtered(conn, cursor, limit, None, None, None)
+    }
+
+    /// List test runs with cursor-based pagination and optional SQL-level filters.
+    ///
+    /// Pushes suite/distro/status filtering into the WHERE clause so the
+    /// database does the work instead of fetching all rows and filtering
+    /// in Rust (which would silently truncate results when `limit` is small).
+    pub fn list_filtered(
+        conn: &Connection,
+        cursor: Option<i64>,
+        limit: u32,
+        suite: Option<&str>,
+        distro: Option<&str>,
+        status: Option<&str>,
+    ) -> Result<Vec<Self>> {
+        let mut conditions = Vec::new();
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        let mut param_idx = 1u32;
+
+        if let Some(cursor_id) = cursor {
+            conditions.push(format!("id < ?{param_idx}"));
+            param_values.push(Box::new(cursor_id));
+            param_idx += 1;
+        }
+        if let Some(s) = suite {
+            conditions.push(format!("suite = ?{param_idx}"));
+            param_values.push(Box::new(s.to_string()));
+            param_idx += 1;
+        }
+        if let Some(d) = distro {
+            conditions.push(format!("distro = ?{param_idx}"));
+            param_values.push(Box::new(d.to_string()));
+            param_idx += 1;
+        }
+        if let Some(st) = status {
+            conditions.push(format!("status = ?{param_idx}"));
+            param_values.push(Box::new(st.to_string()));
+            param_idx += 1;
+        }
+
+        let where_clause = if conditions.is_empty() {
+            String::new()
         } else {
-            let mut stmt = conn.prepare("SELECT * FROM test_runs ORDER BY id DESC LIMIT ?1")?;
-            stmt.query_map(params![limit], row_to_run)?
-                .collect::<rusqlite::Result<Vec<_>>>()?
+            format!("WHERE {}", conditions.join(" AND "))
         };
+
+        let sql =
+            format!("SELECT * FROM test_runs {where_clause} ORDER BY id DESC LIMIT ?{param_idx}");
+        param_values.push(Box::new(limit));
+
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(params_ref.as_slice(), row_to_run)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
 

@@ -96,9 +96,22 @@ impl<'db> Resolver<'db> {
             }
         }
 
-        // Get installation order via topological sort (uses full graph, which is fine —
-        // the order just needs to be valid, and including existing packages is harmless)
-        let install_order = self.graph.topological_sort()?;
+        // Check for cycles involving only the newly added package.
+        // Pre-existing cycles (e.g. glibc <-> glibc-common) are tolerated;
+        // only cycles introduced by this install are errors.
+        if let Some(cycle) = self.graph.detect_cycle_involving(&package_name) {
+            conflicts.push(Conflict::CircularDependency { cycle });
+        }
+
+        // Build installation order.  If the full graph has pre-existing
+        // cycles the topological sort will fail, so fall back to a simple
+        // alphabetical ordering -- the cycle has already been checked above,
+        // so a pre-existing one is harmless for ordering purposes.
+        let install_order = self.graph.topological_sort().unwrap_or_else(|_| {
+            let mut names: Vec<String> = self.graph.nodes.keys().cloned().collect();
+            names.sort();
+            names
+        });
 
         Ok(ResolutionPlan {
             install_order,
@@ -417,10 +430,10 @@ mod tests {
         }
     }
 
-    // --- resolve_install: cycle propagates error ---
+    // --- resolve_install: pre-existing cycles are tolerated ---
 
     #[test]
-    fn test_resolve_install_cycle_propagates_error() {
+    fn test_resolve_install_tolerates_preexisting_cycle() {
         let (_dir, conn) = test_db();
         let mut graph = DependencyGraph::new();
         // Pre-existing cycle in the graph: X -> Y -> X
@@ -431,18 +444,46 @@ mod tests {
 
         let mut resolver = Resolver::with_graph(graph, &conn);
 
-        // Installing a new package on top of a cyclic graph should error
-        let result = resolver.resolve_install("new-pkg".to_string(), v("1.0.0"), vec![]);
+        // Installing an unrelated package should succeed -- the pre-existing
+        // cycle (X <-> Y) does not involve new-pkg.
+        let plan = resolver
+            .resolve_install("new-pkg".to_string(), v("1.0.0"), vec![])
+            .unwrap();
 
         assert!(
-            result.is_err(),
-            "resolve_install should propagate cycle error, not silently succeed"
+            plan.conflicts.is_empty(),
+            "Pre-existing cycle should not block unrelated install"
         );
-        let err_msg = result.unwrap_err().to_string();
+        assert!(plan.install_order.contains(&"new-pkg".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_install_detects_cycle_involving_new_package() {
+        let (_dir, conn) = test_db();
+        let mut graph = DependencyGraph::new();
+        // Existing package that depends on the package we're about to install
+        graph.add_node(node("existing"));
+        graph.add_edge(edge("existing", "new-pkg"));
+
+        let mut resolver = Resolver::with_graph(graph, &conn);
+
+        // new-pkg depends on existing, creating: new-pkg -> existing -> new-pkg
+        let deps = vec![edge("new-pkg", "existing")];
+        let plan = resolver
+            .resolve_install("new-pkg".to_string(), v("1.0.0"), deps)
+            .unwrap();
+
         assert!(
-            err_msg.contains("Circular dependency"),
-            "Error should mention circular dependency, got: {err_msg}"
+            !plan.conflicts.is_empty(),
+            "Cycle involving the new package should be reported"
         );
+        match &plan.conflicts[0] {
+            Conflict::CircularDependency { cycle } => {
+                assert!(cycle.contains(&"new-pkg".to_string()));
+                assert!(cycle.contains(&"existing".to_string()));
+            }
+            other => panic!("Expected CircularDependency, got: {other:?}"),
+        }
     }
 
     // --- resolve_install: phantom dep does not cause false cycle ---

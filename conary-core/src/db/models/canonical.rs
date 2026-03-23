@@ -274,9 +274,7 @@ impl PackageImplementation {
             "SELECT {} FROM package_implementations WHERE distro_name = ?1 LIMIT 1",
             Self::COLUMNS
         );
-        let result = conn
-            .query_row(&sql, [name], Self::from_row)
-            .optional()?;
+        let result = conn.query_row(&sql, [name], Self::from_row).optional()?;
         Ok(result)
     }
 

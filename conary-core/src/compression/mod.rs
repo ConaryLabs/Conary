@@ -22,6 +22,11 @@ pub enum CompressionError {
         source: io::Error,
     },
 
+    #[error(
+        "Decompressed {format} output exceeds {limit} byte limit (possible decompression bomb)"
+    )]
+    DecompressionBomb { format: &'static str, limit: u64 },
+
     #[error("Unsupported compression format: {0}")]
     UnsupportedFormat(String),
 }
@@ -161,9 +166,12 @@ pub const MAX_DECOMPRESS_SIZE: u64 = 2 * 1024 * 1024 * 1024;
 /// Decompress a byte slice using the specified format.
 ///
 /// Output is capped at `MAX_DECOMPRESS_SIZE` bytes to prevent decompression bombs.
+/// Returns an error if the decompressed output exceeds the limit rather than
+/// silently truncating.
 pub fn decompress(data: &[u8], format: CompressionFormat) -> Result<Vec<u8>, CompressionError> {
     let decoder = create_decoder(data, format)?;
-    let mut limited = decoder.take(MAX_DECOMPRESS_SIZE);
+    // Read one extra byte beyond the limit to detect truncation
+    let mut limited = decoder.take(MAX_DECOMPRESS_SIZE + 1);
     let mut output = Vec::new();
     limited
         .read_to_end(&mut output)
@@ -171,6 +179,12 @@ pub fn decompress(data: &[u8], format: CompressionFormat) -> Result<Vec<u8>, Com
             format: format.name(),
             source: e,
         })?;
+    if output.len() as u64 > MAX_DECOMPRESS_SIZE {
+        return Err(CompressionError::DecompressionBomb {
+            format: format.name(),
+            limit: MAX_DECOMPRESS_SIZE,
+        });
+    }
     Ok(output)
 }
 

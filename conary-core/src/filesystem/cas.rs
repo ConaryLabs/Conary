@@ -307,24 +307,25 @@ impl CasStore {
     /// - `CcsPackage` parser for matching symlink hashes
     /// - `TransactionPlanner` for symlink operations
     ///
-    /// The hash is computed from the target path prefixed with "symlink:"
-    /// to distinguish from regular file content.
+    /// The hash is computed from the raw target path bytes, matching the
+    /// convention used by `CcsBuilder` which hashes symlink targets as
+    /// plain byte content.
     ///
     /// # Example
     ///
     /// ```ignore
     /// let hash = CasStore::compute_symlink_hash("/usr/lib/libfoo.so.1");
-    /// // hash is SHA-256 of "symlink:/usr/lib/libfoo.so.1"
+    /// // hash is SHA-256 of "/usr/lib/libfoo.so.1"
     /// ```
     pub fn compute_symlink_hash(target: &str) -> String {
-        let content = format!("symlink:{}", target);
-        hash::sha256(content.as_bytes())
+        hash::sha256(target.as_bytes())
     }
 
     /// Iterate over all objects in the CAS store.
     ///
     /// Yields `(hash, path)` pairs by walking the two-level `objects/{prefix}/{suffix}`
-    /// directory. Skips temp files (`.` prefix or `.tmp` suffix) and non-file entries.
+    /// directory. Skips temp files (`.` prefix, `.tmp` suffix, or `.tmp.` interior)
+    /// and non-file entries.
     pub fn iter_objects(&self) -> impl Iterator<Item = crate::Result<(String, PathBuf)>> + '_ {
         CasIterator::new(&self.objects_dir)
     }
@@ -336,17 +337,17 @@ impl CasStore {
 
     /// Store a symlink target in CAS
     ///
-    /// Symlinks are stored as their target path (the content is the target string).
-    /// The hash is computed using SHA-256 to match `compute_symlink_hash()`,
-    /// regardless of the CAS's configured algorithm. This ensures symlink identity
-    /// is consistent across systems.
+    /// Symlinks are stored as the raw target path bytes, matching the convention
+    /// used by `CcsBuilder`. The hash is computed using SHA-256 to match
+    /// `compute_symlink_hash()`, regardless of the CAS's configured algorithm.
+    /// This ensures symlink identity is consistent across systems.
     pub fn store_symlink(&self, target: &str) -> Result<String> {
-        let content = format!("symlink:{}", target);
+        let content = target.as_bytes();
         // Always use SHA-256 for symlinks to match compute_symlink_hash()
         // This is critical: symlink hashes are used as identities across systems
-        let hash = hash::sha256(content.as_bytes());
+        let hash = hash::sha256(content);
 
-        if self.atomic_store(&hash, content.as_bytes())? {
+        if self.atomic_store(&hash, content)? {
             debug!("Stored symlink in CAS: {} -> {}", target, hash);
         } else {
             debug!("Symlink already in CAS: {}", hash);
@@ -357,32 +358,14 @@ impl CasStore {
 
     /// Retrieve a symlink target from CAS
     ///
-    /// Returns the symlink target path if the hash represents a symlink.
+    /// Returns the symlink target path stored at the given hash.
     /// Uses SHA-256 for verification since symlinks are always stored with SHA-256.
-    pub fn retrieve_symlink(&self, hash: &str) -> Result<Option<String>> {
+    /// The caller is responsible for knowing which hashes represent symlinks
+    /// (e.g., via file type metadata from the package manifest).
+    pub fn retrieve_symlink(&self, hash: &str) -> Result<String> {
         // Symlinks are always stored with SHA-256, so use that for verification
         let content = self.retrieve_with_algorithm(hash, HashAlgorithm::Sha256)?;
-        let content_str = String::from_utf8_lossy(&content);
-
-        if let Some(target) = content_str.strip_prefix("symlink:") {
-            Ok(Some(target.to_string()))
-        } else {
-            Ok(None) // Not a symlink
-        }
-    }
-
-    /// Check if a hash represents a symlink
-    ///
-    /// Only reads the first 8 bytes ("symlink:") instead of the entire file.
-    pub fn is_symlink_hash(&self, hash: &str) -> bool {
-        let Ok(path) = self.hash_to_path(hash) else {
-            return false;
-        };
-        let Ok(mut file) = fs::File::open(&path) else {
-            return false;
-        };
-        let mut prefix = [0u8; 8];
-        file.read_exact(&mut prefix).is_ok() && prefix == *b"symlink:"
+        Ok(String::from_utf8_lossy(&content).into_owned())
     }
 
     /// Hardlink an existing file into CAS (zero-copy adoption)
@@ -538,8 +521,9 @@ impl CasStore {
 /// Iterator over all objects in a CAS directory.
 ///
 /// Walks the two-level layout: `objects/{2-char-prefix}/{suffix}`. Reconstructs
-/// the full hash as `prefix + suffix`. Skips entries starting with `.` or ending
-/// with `.tmp` to avoid temp files left by `atomic_store()`.
+/// the full hash as `prefix + suffix`. Skips entries starting with `.`, ending
+/// with `.tmp`, or containing `.tmp.` to avoid temp files left by `atomic_store()`
+/// (which uses the naming pattern `{hash}.tmp.{pid}.{counter}`).
 struct CasIterator {
     /// Outer iterator over prefix directories.
     prefix_iter: Option<std::fs::ReadDir>,
@@ -616,8 +600,13 @@ impl Iterator for CasIterator {
                     let name = entry.file_name();
                     let name_str = name.to_string_lossy();
 
-                    // Skip temp files
-                    if name_str.starts_with('.') || name_str.ends_with(".tmp") {
+                    // Skip temp files: atomic_store() creates temps as
+                    // `{hash}.tmp.{pid}.{counter}` which end with a digit,
+                    // so we also match on the `.tmp.` interior marker.
+                    if name_str.starts_with('.')
+                        || name_str.contains(".tmp.")
+                        || name_str.ends_with(".tmp")
+                    {
                         continue;
                     }
 
@@ -656,8 +645,8 @@ mod tests {
         let target = "/usr/lib/libfoo.so.1";
         let hash = CasStore::compute_symlink_hash(target);
 
-        // Should be SHA-256 of "symlink:/usr/lib/libfoo.so.1"
-        let expected = CasStore::compute_sha256(b"symlink:/usr/lib/libfoo.so.1");
+        // Should be SHA-256 of raw target bytes (matching CcsBuilder convention)
+        let expected = CasStore::compute_sha256(b"/usr/lib/libfoo.so.1");
         assert_eq!(hash, expected);
 
         // Hash should be 64 chars (256 bits hex)
@@ -710,7 +699,7 @@ mod tests {
 
         // Verify the symlink can be retrieved
         let retrieved = cas.retrieve_symlink(&stored_hash).unwrap();
-        assert_eq!(retrieved, Some(target.to_string()));
+        assert_eq!(retrieved, target);
     }
 
     #[test]
@@ -1002,10 +991,12 @@ mod tests {
         let hash1 = cas.store(b"alpha").unwrap();
         let hash2 = cas.store(b"bravo").unwrap();
 
-        // Also create a temp file that should be skipped
+        // Also create temp files that should be skipped
         let prefix_dir = temp_dir.path().join(&hash1[..2]);
         fs::write(prefix_dir.join(".tmp_in_progress"), b"temp").unwrap();
         fs::write(prefix_dir.join("something.tmp"), b"temp2").unwrap();
+        // Temp file matching atomic_store() naming: {hash}.tmp.{pid}.{counter}
+        fs::write(prefix_dir.join("abcdef1234.tmp.12345.0"), b"temp3").unwrap();
 
         let mut results: Vec<(String, PathBuf)> =
             cas.iter_objects().collect::<Result<Vec<_>>>().unwrap();

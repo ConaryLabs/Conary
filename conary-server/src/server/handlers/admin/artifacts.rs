@@ -3,6 +3,7 @@
 
 use super::check_scope;
 use crate::server::ServerState;
+use crate::server::artifact_paths::{ArtifactRoot, artifact_root, sanitize_relative_path};
 use crate::server::auth::{Scope, TokenScopes, json_error};
 use axum::{
     extract::{Path, Request, State},
@@ -11,58 +12,17 @@ use axum::{
 };
 use futures::StreamExt;
 use serde::Serialize;
-use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 
-enum ArtifactRoot {
-    Fixtures,
-    Artifacts,
-}
+/// Maximum allowed upload size (512 MB).
+const MAX_UPLOAD_SIZE: u64 = 512 * 1024 * 1024;
 
 #[derive(Serialize)]
 struct UploadResponse {
     path: String,
     size: u64,
-}
-
-fn storage_root(state: &ServerState) -> &FsPath {
-    state
-        .config
-        .chunk_dir
-        .parent()
-        .unwrap_or(&state.config.chunk_dir)
-}
-
-fn artifact_root(state: &ServerState, root: ArtifactRoot) -> PathBuf {
-    match root {
-        ArtifactRoot::Fixtures => storage_root(state).join("test-fixtures"),
-        ArtifactRoot::Artifacts => storage_root(state).join("test-artifacts"),
-    }
-}
-
-fn sanitize_relative_path(path: &str) -> Result<PathBuf, &'static str> {
-    let mut relative = PathBuf::new();
-    for segment in path.split('/') {
-        if segment.is_empty()
-            || segment == "."
-            || segment == ".."
-            || segment.contains('\0')
-            || !segment
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-        {
-            return Err("Invalid artifact path");
-        }
-        relative.push(segment);
-    }
-
-    if relative.as_os_str().is_empty() {
-        return Err("Artifact path must not be empty");
-    }
-
-    Ok(relative)
 }
 
 async fn upload_artifact(
@@ -126,6 +86,14 @@ async fn upload_artifact(
         match chunk {
             Ok(bytes) => {
                 size += bytes.len() as u64;
+                if size > MAX_UPLOAD_SIZE {
+                    let _ = tokio::fs::remove_file(&temp_path).await;
+                    return json_error(
+                        413,
+                        "Upload exceeds maximum size (512 MB)",
+                        "PAYLOAD_TOO_LARGE",
+                    );
+                }
                 if let Err(err) = file.write_all(&bytes).await {
                     tracing::error!(
                         "Failed writing artifact chunk for {}: {}",

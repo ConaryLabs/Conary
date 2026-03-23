@@ -47,22 +47,26 @@ pub fn expand_variables(template: &str, recipe: &Recipe) -> String {
 /// Compute a SHA-256 hash of all recipe build sections that affect the build
 /// output.
 ///
-/// Sections are concatenated in a fixed order: `configure`, `make`, `install`,
-/// `check`. Each present section is preceded by a label line so that, e.g., a
-/// configure-only recipe and a make-only recipe with the same command text
-/// produce different hashes. Variables (`%(name)s` syntax) are expanded before
-/// hashing so different variable values produce different hashes.
+/// Sections are concatenated in a fixed order: `setup`, `configure`, `make`,
+/// `install`, `check`, `post_install`. Each present section is preceded by a
+/// label line so that, e.g., a configure-only recipe and a make-only recipe
+/// with the same command text produce different hashes. Variables (`%(name)s`
+/// syntax) are expanded before hashing so different variable values produce
+/// different hashes. Environment variables (sorted by key) and workdir are
+/// also included after the script sections.
 ///
 /// Returns a 64-char lowercase hex string.
 #[must_use]
 pub fn build_script_hash(recipe: &Recipe) -> String {
     let mut hasher = hash::Hasher::new(hash::HashAlgorithm::Sha256);
 
-    let sections: [(&str, &Option<String>); 4] = [
+    let sections: [(&str, &Option<String>); 6] = [
+        ("setup", &recipe.build.setup),
         ("configure", &recipe.build.configure),
         ("make", &recipe.build.make),
         ("install", &recipe.build.install),
         ("check", &recipe.build.check),
+        ("post_install", &recipe.build.post_install),
     ];
 
     for (label, section) in &sections {
@@ -70,6 +74,19 @@ pub fn build_script_hash(recipe: &Recipe) -> String {
             let expanded = expand_variables(script, recipe);
             hasher.update(format!("{label}:{expanded}\n").as_bytes());
         }
+    }
+
+    // Hash environment variables in sorted order for determinism
+    let mut env_keys: Vec<&String> = recipe.build.environment.keys().collect();
+    env_keys.sort();
+    for key in env_keys {
+        let value = &recipe.build.environment[key];
+        hasher.update(format!("env:{key}={value}\n").as_bytes());
+    }
+
+    // Hash workdir if set
+    if let Some(ref workdir) = recipe.build.workdir {
+        hasher.update(format!("workdir:{workdir}\n").as_bytes());
     }
 
     hasher.finalize().value
@@ -415,5 +432,151 @@ baz = "Z"
         let r2 = expand_variables("%(foo)s-%(bar)s-%(baz)s", &recipe);
         assert_eq!(r1, r2);
         assert_eq!(r1, "F-B-Z");
+    }
+
+    #[test]
+    fn build_script_hash_includes_setup_section() {
+        let without_setup = r#"
+[package]
+name = "test"
+version = "1.0"
+
+[source]
+archive = "https://example.com/test.tar.gz"
+checksum = "sha256:abc"
+
+[build]
+make = "make"
+"#;
+
+        let with_setup = r#"
+[package]
+name = "test"
+version = "1.0"
+
+[source]
+archive = "https://example.com/test.tar.gz"
+checksum = "sha256:abc"
+
+[build]
+setup = "autoreconf -fi"
+make = "make"
+"#;
+
+        assert_ne!(
+            build_script_hash(&parse_recipe(without_setup)),
+            build_script_hash(&parse_recipe(with_setup)),
+            "setup section must affect build_script_hash"
+        );
+    }
+
+    #[test]
+    fn build_script_hash_includes_post_install_section() {
+        let without = r#"
+[package]
+name = "test"
+version = "1.0"
+
+[source]
+archive = "https://example.com/test.tar.gz"
+checksum = "sha256:abc"
+
+[build]
+make = "make"
+"#;
+
+        let with = r#"
+[package]
+name = "test"
+version = "1.0"
+
+[source]
+archive = "https://example.com/test.tar.gz"
+checksum = "sha256:abc"
+
+[build]
+make = "make"
+post_install = "ldconfig"
+"#;
+
+        assert_ne!(
+            build_script_hash(&parse_recipe(without)),
+            build_script_hash(&parse_recipe(with)),
+            "post_install section must affect build_script_hash"
+        );
+    }
+
+    #[test]
+    fn build_script_hash_includes_environment() {
+        let without_env = r#"
+[package]
+name = "test"
+version = "1.0"
+
+[source]
+archive = "https://example.com/test.tar.gz"
+checksum = "sha256:abc"
+
+[build]
+make = "make"
+"#;
+
+        let with_env = r#"
+[package]
+name = "test"
+version = "1.0"
+
+[source]
+archive = "https://example.com/test.tar.gz"
+checksum = "sha256:abc"
+
+[build]
+make = "make"
+
+[build.environment]
+CFLAGS = "-O2"
+"#;
+
+        assert_ne!(
+            build_script_hash(&parse_recipe(without_env)),
+            build_script_hash(&parse_recipe(with_env)),
+            "environment variables must affect build_script_hash"
+        );
+    }
+
+    #[test]
+    fn build_script_hash_includes_workdir() {
+        let without_workdir = r#"
+[package]
+name = "test"
+version = "1.0"
+
+[source]
+archive = "https://example.com/test.tar.gz"
+checksum = "sha256:abc"
+
+[build]
+make = "make"
+"#;
+
+        let with_workdir = r#"
+[package]
+name = "test"
+version = "1.0"
+
+[source]
+archive = "https://example.com/test.tar.gz"
+checksum = "sha256:abc"
+
+[build]
+make = "make"
+workdir = "src/build"
+"#;
+
+        assert_ne!(
+            build_script_hash(&parse_recipe(without_workdir)),
+            build_script_hash(&parse_recipe(with_workdir)),
+            "workdir must affect build_script_hash"
+        );
     }
 }

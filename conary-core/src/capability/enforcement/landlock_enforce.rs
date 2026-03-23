@@ -8,8 +8,9 @@
 //! ## Limitations
 //!
 //! - Landlock cannot deny a specific path under an allowed parent (e.g., deny
-//!   `/etc/shadow` when `/etc` is readable). Deny paths that conflict with
-//!   allowed parents generate a warning.
+//!   `/etc/shadow` when `/etc` is readable). In Enforce mode, deny paths that
+//!   conflict with allowed parents return an error. In Warn/Audit mode, they
+//!   generate a warning.
 //! - Non-existent paths are silently skipped (the package may not be fully
 //!   installed yet when capabilities are checked).
 //! - Requires Linux 5.13+ (kernel landlock support).
@@ -49,8 +50,16 @@ pub fn apply_landlock_rules(
     let write_paths = filter_existing_paths(&caps.write, "write");
     let execute_paths = filter_existing_paths(&caps.execute, "execute");
 
-    // Warn about deny paths that overlap with allowed parents
-    check_deny_conflicts(caps);
+    // Check for deny paths that overlap with allowed parents.
+    // In Enforce mode, deny conflicts are fatal since landlock cannot enforce them.
+    let deny_conflicts = count_deny_conflicts(caps);
+    if deny_conflicts > 0 && mode == EnforcementMode::Enforce {
+        return Err(EnforcementError::DenyConflict {
+            count: deny_conflicts,
+        });
+    } else if deny_conflicts > 0 {
+        check_deny_conflicts(caps);
+    }
 
     // Build and apply the ruleset in a fluent chain
     let status = Ruleset::default()
@@ -291,5 +300,43 @@ mod tests {
 
         let conflicts = count_deny_conflicts(&caps);
         assert_eq!(conflicts, 0);
+    }
+
+    #[test]
+    fn test_enforce_mode_fails_on_deny_conflicts() {
+        let caps = FilesystemCapabilities {
+            read: vec!["/etc".to_string()],
+            write: Vec::new(),
+            execute: Vec::new(),
+            deny: vec!["/etc/shadow".to_string()],
+        };
+
+        let result = apply_landlock_rules(&caps, EnforcementMode::Enforce);
+        // On systems without landlock, we get Unsupported; with landlock, DenyConflict
+        assert!(
+            result.is_err(),
+            "Enforce mode must fail when deny paths conflict with allowed parents"
+        );
+    }
+
+    #[test]
+    fn test_warn_mode_allows_deny_conflicts() {
+        // In Warn mode, deny conflicts should not cause an error
+        // (they just log warnings). On systems without landlock support
+        // the function returns Ok early, so this test verifies both paths.
+        let caps = FilesystemCapabilities {
+            read: vec!["/etc".to_string()],
+            write: Vec::new(),
+            execute: Vec::new(),
+            deny: vec!["/etc/shadow".to_string()],
+        };
+
+        let result = apply_landlock_rules(&caps, EnforcementMode::Warn);
+        // Warn mode should succeed (or fail only due to lack of landlock support,
+        // which also returns Ok in non-Enforce mode)
+        assert!(
+            result.is_ok(),
+            "Warn mode should not fail on deny conflicts"
+        );
     }
 }

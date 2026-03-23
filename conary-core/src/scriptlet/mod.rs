@@ -26,6 +26,7 @@
 //! The target root must have a working shell and interpreter for scriptlets
 //! to execute successfully.
 
+use crate::capability::enforcement::EnforcementMode;
 use crate::container::{BindMount, ContainerConfig, Sandbox, ScriptRisk, analyze_script};
 use crate::db::models::ScriptletEntry;
 use crate::error::{Error, Result};
@@ -413,7 +414,8 @@ impl ScriptletExecutor {
         let root = self.root.clone();
 
         // Build seccomp BPF filter in parent process (avoids allocation after fork)
-        let bpf_filter = build_scriptlet_seccomp();
+        let seccomp_mode = EnforcementMode::Warn;
+        let bpf_filter = build_scriptlet_seccomp(seccomp_mode);
         let seccomp_enabled = bpf_filter.is_some();
 
         debug!(
@@ -461,15 +463,21 @@ impl ScriptletExecutor {
                     return Err(std::io::Error::last_os_error());
                 }
 
-                // 3. Apply seccomp filter (warn mode — log violations, don't kill)
+                // 3. Apply seccomp filter
                 if let Some(ref filter) = bpf_filter
                     && seccompiler::apply_filter(filter).is_err()
                 {
-                    // Log failure but don't prevent execution (warn mode).
                     // Use raw write of a static string — no heap allocation,
                     // safe after fork in a multi-threaded process.
                     const MSG: &[u8] = b"[conary] seccomp filter application failed\n";
                     let _ = libc::write(2, MSG.as_ptr().cast(), MSG.len());
+
+                    if seccomp_mode == EnforcementMode::Enforce {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::PermissionDenied,
+                            "seccomp filter application failed in enforce mode",
+                        ));
+                    }
                 }
 
                 Ok(())
@@ -712,11 +720,10 @@ pub fn phase_from_string(s: &str) -> Option<ScriptletPhase> {
 
 /// Build a seccomp BPF filter for scriptlet execution
 ///
-/// Uses the Scriptlet profile in Warn mode (log violations, don't kill).
+/// Uses the Scriptlet profile with the given enforcement mode.
 /// Returns `None` if seccomp is not supported on this kernel.
-fn build_scriptlet_seccomp() -> Option<seccompiler::BpfProgram> {
+fn build_scriptlet_seccomp(mode: EnforcementMode) -> Option<seccompiler::BpfProgram> {
     use crate::capability::SyscallCapabilities;
-    use crate::capability::enforcement::EnforcementMode;
     use crate::capability::enforcement::seccomp_enforce;
 
     if !seccomp_enforce::check_seccomp_support() {
@@ -729,9 +736,9 @@ fn build_scriptlet_seccomp() -> Option<seccompiler::BpfProgram> {
         deny: Vec::new(),
     };
 
-    match seccomp_enforce::build_seccomp_filter(&caps, EnforcementMode::Warn) {
+    match seccomp_enforce::build_seccomp_filter(&caps, mode) {
         Ok(bpf) => {
-            info!("Built seccomp filter for scriptlet execution (warn mode)");
+            info!("Built seccomp filter for scriptlet execution ({mode} mode)");
             Some(bpf)
         }
         Err(e) => {
@@ -1068,7 +1075,7 @@ mod tests {
     fn test_build_scriptlet_seccomp_returns_filter() {
         // On Linux with seccomp support, this should return Some(bpf).
         // On other platforms or kernels without seccomp, it returns None.
-        let result = build_scriptlet_seccomp();
+        let result = build_scriptlet_seccomp(EnforcementMode::Warn);
         // We cannot assert Some unconditionally (CI may lack seccomp),
         // but we verify the function does not panic and returns a valid option.
         if crate::capability::enforcement::seccomp_enforce::check_seccomp_support() {

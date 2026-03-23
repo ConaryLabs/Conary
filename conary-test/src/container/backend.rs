@@ -22,7 +22,7 @@ pub struct ExecResult {
 /// Inspection details for a running container.
 #[derive(Debug, Clone, Default)]
 pub struct ContainerInspection {
-    pub memory_limit: Option<u64>,
+    pub memory_limit: Option<i64>,
     pub tmpfs: HashMap<String, String>,
     pub network_mode: Option<String>,
 }

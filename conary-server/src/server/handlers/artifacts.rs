@@ -2,59 +2,17 @@
 //! Public handlers for static test fixtures and test artifacts.
 
 use crate::server::ServerState;
+use crate::server::artifact_paths::{ArtifactRoot, artifact_root, sanitize_relative_path};
 use axum::{
     body::Body,
     extract::{Path, State},
     http::{Method, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use std::path::{Path as FsPath, PathBuf};
+use std::path::Path as FsPath;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio_util::io::ReaderStream;
-
-enum ArtifactRoot {
-    Fixtures,
-    Artifacts,
-}
-
-fn storage_root(state: &ServerState) -> &FsPath {
-    state
-        .config
-        .chunk_dir
-        .parent()
-        .unwrap_or(&state.config.chunk_dir)
-}
-
-fn artifact_root(state: &ServerState, root: ArtifactRoot) -> PathBuf {
-    match root {
-        ArtifactRoot::Fixtures => storage_root(state).join("test-fixtures"),
-        ArtifactRoot::Artifacts => storage_root(state).join("test-artifacts"),
-    }
-}
-
-fn sanitize_relative_path(path: &str) -> Result<PathBuf, &'static str> {
-    let mut relative = PathBuf::new();
-    for segment in path.split('/') {
-        if segment.is_empty()
-            || segment == "."
-            || segment == ".."
-            || segment.contains('\0')
-            || !segment
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-        {
-            return Err("Invalid artifact path");
-        }
-        relative.push(segment);
-    }
-
-    if relative.as_os_str().is_empty() {
-        return Err("Artifact path must not be empty");
-    }
-
-    Ok(relative)
-}
 
 fn content_type(path: &FsPath) -> &'static str {
     match path.extension().and_then(|ext| ext.to_str()) {

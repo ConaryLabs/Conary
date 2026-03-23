@@ -2,7 +2,9 @@
 
 //! Client-side canonical map fetching from Remi.
 
-use crate::db::models::{CanonicalPackage, PackageImplementation, get_metadata, set_metadata};
+use crate::db::models::{
+    CanonicalPackage, MetadataTable, PackageImplementation, get_metadata, set_metadata,
+};
 use crate::error::{Error, Result};
 use rusqlite::Connection;
 use serde::Deserialize;
@@ -27,10 +29,14 @@ struct CanonicalMapEntry {
 /// Returns Ok(Some(count)) if new data was fetched, Ok(None) if 304, Err on failure.
 pub async fn fetch_canonical_map(conn: &Connection, endpoint: &str) -> Result<Option<usize>> {
     let url = format!("{}/v1/canonical/map", endpoint.trim_end_matches('/'));
-    let etag = get_metadata(conn, "client_metadata", "canonical_etag").unwrap_or(None);
+    let etag = get_metadata(conn, MetadataTable::Client, "canonical_etag").unwrap_or(None);
 
     let client = reqwest::Client::builder()
-        .user_agent("conary/0.6.0 (https://conary.io)")
+        .user_agent(concat!(
+            "conary/",
+            env!("CARGO_PKG_VERSION"),
+            " (https://conary.io)"
+        ))
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| Error::DownloadError(e.to_string()))?;
@@ -69,7 +75,7 @@ pub async fn fetch_canonical_map(conn: &Connection, endpoint: &str) -> Result<Op
     let count = ingest_canonical_map_json(conn, &body)?;
 
     if let Some(etag_val) = new_etag {
-        let _ = set_metadata(conn, "client_metadata", "canonical_etag", &etag_val);
+        let _ = set_metadata(conn, MetadataTable::Client, "canonical_etag", &etag_val);
     }
 
     Ok(Some(count))

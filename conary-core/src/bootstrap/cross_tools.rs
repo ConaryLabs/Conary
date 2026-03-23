@@ -24,8 +24,13 @@ use super::toolchain::{Toolchain, ToolchainKind};
 use crate::recipe::parser::parse_recipe_file;
 use crate::recipe::{Kitchen, KitchenConfig};
 
-/// Target triplet for the LFS cross-toolchain.
-pub const LFS_TGT: &str = "x86_64-conary-linux-gnu";
+/// Derive the LFS target triplet from the bootstrap configuration.
+///
+/// Replaces the former hardcoded `x86_64-conary-linux-gnu` constant so that
+/// aarch64 and riscv64 bootstraps produce the correct triplet.
+fn lfs_tgt(config: &BootstrapConfig) -> &'static str {
+    config.target_arch.triple()
+}
 
 /// Package build order for Phase 1 (LFS Chapter 5).
 #[allow(dead_code)]
@@ -67,7 +72,8 @@ pub enum CrossToolsError {
 
 /// Builder for Phase 1 cross-compilation tools.
 ///
-/// Constructs a cross-toolchain under `$LFS/tools/` that targets `LFS_TGT`.
+/// Constructs a cross-toolchain under `$LFS/tools/` that targets the
+/// architecture specified in [`BootstrapConfig`].
 /// The host system's native compiler is used to build the cross tools.
 pub struct CrossToolsBuilder {
     /// Working directory for build artifacts.
@@ -125,30 +131,43 @@ impl CrossToolsBuilder {
     /// Build all cross-tools in order, returning the resulting toolchain.
     ///
     /// Iterates through `CROSS_TOOLS_ORDER`, building each package in
-    /// sequence. On success, returns a `Toolchain` with `kind: Stage1`
+    /// sequence. On success, returns a `Toolchain` with `kind: CrossTools`
     /// rooted at `$LFS/tools/`.
     pub fn build_all(&self, completed: &[String]) -> Result<Toolchain, CrossToolsError> {
+        let target = lfs_tgt(&self.config);
+
         info!(
             "Phase 1: Building cross-tools ({} packages)",
             CROSS_TOOLS_ORDER.len()
         );
-        info!("  LFS_TGT = {}", LFS_TGT);
+        info!("  LFS_TGT = {}", target);
         info!("  LFS root: {}", self.lfs_root.display());
         info!("  Host compiler: {}", self.host_toolchain.gcc().display());
 
-        // Set bootstrap environment variables once for all packages
-        // SAFETY: bootstrap is single-threaded at this stage
+        // Build a hermetic environment map instead of mutating the process-wide
+        // environment (which is UB if any other thread exists).
+        let tools_bin = self.lfs_root.join("tools/bin");
+        let host_path = std::env::var("PATH").unwrap_or_default();
+        let bootstrap_env: Vec<(String, String)> = vec![
+            ("LFS".into(), self.lfs_root.display().to_string()),
+            ("LFS_TGT".into(), target.to_string()),
+            ("LC_ALL".into(), "C".into()),
+            ("TZ".into(), "UTC".into()),
+            ("SOURCE_DATE_EPOCH".into(), "0".into()),
+            (
+                "PATH".into(),
+                format!("{}:{host_path}", tools_bin.display()),
+            ),
+        ];
+
+        // Propagate to child processes.  The Kitchen/Cook pipeline inherits
+        // the process environment, so we set the vars once here.
+        // SAFETY: bootstrap is single-threaded -- no other threads exist.
         #[allow(unsafe_code)]
-        unsafe {
-            std::env::set_var("LFS", &self.lfs_root);
-            std::env::set_var("LFS_TGT", LFS_TGT);
-            std::env::set_var("LC_ALL", "C");
-            std::env::set_var("TZ", "UTC");
-            std::env::set_var("SOURCE_DATE_EPOCH", "0");
-            // Add cross-tools to PATH so GCC can find the cross-assembler/linker
-            let tools_bin = self.lfs_root.join("tools/bin");
-            let host_path = std::env::var("PATH").unwrap_or_default();
-            std::env::set_var("PATH", format!("{}:{}", tools_bin.display(), host_path));
+        for (k, v) in &bootstrap_env {
+            unsafe {
+                std::env::set_var(k, v);
+            }
         }
 
         for (i, pkg) in CROSS_TOOLS_ORDER.iter().enumerate() {
@@ -174,7 +193,7 @@ impl CrossToolsBuilder {
         Ok(Toolchain {
             kind: ToolchainKind::CrossTools,
             path: tools_path,
-            target: LFS_TGT.to_string(),
+            target: target.to_string(),
             gcc_version: None,
             glibc_version: None,
             binutils_version: None,
@@ -259,8 +278,9 @@ impl CrossToolsBuilder {
     pub fn verify(&self) -> Result<(), CrossToolsError> {
         info!("Verifying cross-toolchain...");
 
+        let target = lfs_tgt(&self.config);
         let tools_bin = self.lfs_root.join("tools").join("bin");
-        let cross_gcc = tools_bin.join(format!("{LFS_TGT}-gcc"));
+        let cross_gcc = tools_bin.join(format!("{target}-gcc"));
 
         if !cross_gcc.exists() {
             return Err(CrossToolsError::Verification(format!(
@@ -301,7 +321,7 @@ impl CrossToolsBuilder {
             )));
         }
 
-        // Check architecture with `file`
+        // Check architecture with `file` -- derive expected patterns from config
         let file_output = std::process::Command::new("file")
             .arg(&hello_bin)
             .output()?;
@@ -309,9 +329,11 @@ impl CrossToolsBuilder {
         let file_str = String::from_utf8_lossy(&file_output.stdout);
         debug!("  file output: {}", file_str.trim());
 
-        if !file_str.contains("x86-64") && !file_str.contains("x86_64") {
+        let arch_patterns = self.config.target_arch.file_arch_patterns();
+        if !arch_patterns.iter().any(|pat| file_str.contains(pat)) {
             return Err(CrossToolsError::Verification(format!(
-                "Binary is not x86_64: {file_str}"
+                "Binary does not match target arch {}: {file_str}",
+                self.config.target_arch
             )));
         }
 
@@ -328,8 +350,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_lfs_tgt_triple() {
-        assert_eq!(LFS_TGT, "x86_64-conary-linux-gnu");
+    fn test_lfs_tgt_derives_from_config() {
+        let default_config = BootstrapConfig::new();
+        assert_eq!(lfs_tgt(&default_config), "x86_64-conary-linux-gnu");
+
+        let aarch64_config =
+            BootstrapConfig::new().with_target(super::super::config::TargetArch::Aarch64);
+        assert_eq!(lfs_tgt(&aarch64_config), "aarch64-conary-linux-gnu");
+
+        let riscv_config =
+            BootstrapConfig::new().with_target(super::super::config::TargetArch::Riscv64);
+        assert_eq!(lfs_tgt(&riscv_config), "riscv64-conary-linux-gnu");
     }
 
     #[test]
@@ -398,7 +429,28 @@ mod tests {
         let toolchain = builder.build_all(&[]).unwrap();
 
         assert_eq!(toolchain.kind, ToolchainKind::CrossTools);
-        assert_eq!(toolchain.target, LFS_TGT);
+        assert_eq!(toolchain.target, "x86_64-conary-linux-gnu");
         assert!(toolchain.path.ends_with("tools"));
+    }
+
+    #[test]
+    fn test_build_all_aarch64_toolchain() {
+        let work = tempfile::tempdir().unwrap();
+        let lfs = tempfile::tempdir().unwrap();
+        let config = BootstrapConfig::new().with_target(super::super::config::TargetArch::Aarch64);
+        let host = Toolchain {
+            kind: ToolchainKind::Host,
+            path: PathBuf::from("/usr"),
+            target: "x86_64-linux-gnu".to_string(),
+            gcc_version: None,
+            glibc_version: None,
+            binutils_version: None,
+            is_static: false,
+        };
+
+        let builder = CrossToolsBuilder::new(work.path(), lfs.path(), config, host).unwrap();
+        let toolchain = builder.build_all(&[]).unwrap();
+
+        assert_eq!(toolchain.target, "aarch64-conary-linux-gnu");
     }
 }

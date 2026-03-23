@@ -27,7 +27,7 @@ use nix::mount::{MsFlags, mount};
 use nix::sched::{CloneFlags, unshare};
 use nix::sys::signal::{Signal, kill};
 use nix::sys::wait::{WaitStatus, waitpid};
-use nix::unistd::{ForkResult, Pid, fork};
+use nix::unistd::{ForkResult, Pid, Uid, fork};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -433,6 +433,16 @@ impl Sandbox {
                 return Err(Error::ScriptletError(
                     "Hermetic build requires namespace isolation, but it is not available on this system. \
                      (Root privileges or unprivileged user namespaces required)".to_string()
+                ));
+            }
+
+            // Refuse to fall back when running as root -- execute_limited provides no
+            // isolation, so untrusted scriptlets would get full root access.
+            if Uid::effective().is_root() {
+                return Err(Error::ScriptletError(
+                    "Namespace isolation unavailable while running as root \
+                     — refusing to execute scriptlet without sandboxing"
+                        .to_string(),
                 ));
             }
 

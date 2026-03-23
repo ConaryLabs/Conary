@@ -332,7 +332,9 @@ impl AutomationSummary {
 pub fn parse_duration(s: &str) -> Result<Duration> {
     let s = s.trim();
     if s.is_empty() {
-        return Ok(Duration::from_secs(0));
+        return Err(crate::error::Error::ConfigError(
+            "Empty duration string".to_string(),
+        ));
     }
 
     // Handle word-form durations used by UpdateAutomation.frequency
@@ -391,6 +393,12 @@ mod tests {
         assert_eq!(parse_duration("2h").unwrap(), Duration::from_secs(7200));
         assert_eq!(parse_duration("1d").unwrap(), Duration::from_secs(86400));
         assert_eq!(parse_duration("1w").unwrap(), Duration::from_secs(604800));
+    }
+
+    #[test]
+    fn test_parse_duration_empty_string() {
+        assert!(parse_duration("").is_err());
+        assert!(parse_duration("   ").is_err());
     }
 
     #[test]

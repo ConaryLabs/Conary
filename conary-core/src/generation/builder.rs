@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use tracing::{debug, info};
 
-use crate::db::models::{FileEntry, StateEngine, Trove};
+use crate::db::models::{FileEntry, StateEngine, SystemState, Trove};
 use crate::generation::metadata::{EROFS_IMAGE_NAME, GENERATION_FORMAT, GenerationMetadata};
 #[cfg(feature = "composefs-rs")]
 use crate::generation::metadata::{ROOT_SYMLINKS, is_excluded};
@@ -256,14 +256,41 @@ pub fn build_erofs_image(
     let image_bytes = mkfs_erofs(&fs);
     let image_size = image_bytes.len() as u64;
 
-    // Write EROFS image to generation directory
+    // Write EROFS image atomically: temp file -> fsync -> rename -> fsync parent.
+    // This prevents partial writes from surviving a crash during recovery.
     let image_path = generation_dir.join(EROFS_IMAGE_NAME);
-    std::fs::write(&image_path, &*image_bytes).map_err(|e| {
+    let tmp_path = generation_dir.join(format!(".{EROFS_IMAGE_NAME}.tmp"));
+    {
+        use std::io::Write;
+        let mut tmp_file = std::fs::File::create(&tmp_path).map_err(|e| {
+            crate::error::Error::IoError(format!(
+                "Failed to create temp EROFS image at {}: {e}",
+                tmp_path.display()
+            ))
+        })?;
+        tmp_file.write_all(&image_bytes).map_err(|e| {
+            crate::error::Error::IoError(format!(
+                "Failed to write EROFS image to {}: {e}",
+                tmp_path.display()
+            ))
+        })?;
+        tmp_file.sync_all().map_err(|e| {
+            crate::error::Error::IoError(format!(
+                "Failed to fsync EROFS image {}: {e}",
+                tmp_path.display()
+            ))
+        })?;
+    }
+    std::fs::rename(&tmp_path, &image_path).map_err(|e| {
         crate::error::Error::IoError(format!(
-            "Failed to write EROFS image to {}: {e}",
+            "Failed to rename temp EROFS image to {}: {e}",
             image_path.display()
         ))
     })?;
+    // fsync the parent directory so the rename is durable
+    if let Ok(parent) = std::fs::File::open(generation_dir) {
+        let _ = parent.sync_all();
+    }
 
     info!(
         "EROFS image built: {} bytes, {} CAS objects",
@@ -293,9 +320,13 @@ pub fn build_erofs_image(
 ///
 /// This is the high-level entry point that:
 /// 1. Queries all installed troves and their file entries
-/// 2. Creates a system state snapshot
-/// 3. Builds the EROFS image via [`build_erofs_image`]
+/// 2. Builds the EROFS image via [`build_erofs_image`]
+/// 3. Creates a system state snapshot (only after successful image build)
 /// 4. Writes generation metadata JSON
+///
+/// The state snapshot is deliberately created *after* the EROFS image build
+/// succeeds. Creating it before would leave an orphaned DB state record if
+/// the image build fails.
 ///
 /// Returns `(generation_number, BuildResult)`.
 pub fn build_generation_from_db(
@@ -311,14 +342,10 @@ pub fn build_generation_from_db(
         ))
     })?;
 
-    // Step 2: Create system state snapshot
-    let engine = StateEngine::new(conn);
-    let state = engine.create_snapshot(summary, None, None).map_err(|e| {
-        crate::error::Error::InternalError(format!("Failed to create system state snapshot: {e}"))
+    // Step 2: Reserve the generation number and create the directory
+    let gen_number = SystemState::next_state_number(conn).map_err(|e| {
+        crate::error::Error::InternalError(format!("Failed to determine next state number: {e}"))
     })?;
-    let gen_number = state.state_number;
-
-    // Step 3: Create generation directory
     let gen_dir = generations_root.join(gen_number.to_string());
     if gen_dir.exists() {
         return Err(crate::error::Error::AlreadyExists(format!(
@@ -333,7 +360,7 @@ pub fn build_generation_from_db(
         ))
     })?;
 
-    // Step 4: Collect file entries from all installed troves (single bulk query)
+    // Step 3: Collect file entries from all installed troves (single bulk query)
     let troves = Trove::list_all(conn)?;
     let all_files = FileEntry::find_all_ordered(conn)?;
 
@@ -354,8 +381,20 @@ pub fn build_generation_from_db(
         })
         .collect();
 
-    // Step 5: Build EROFS image (no package symlinks from DB yet)
+    // Step 4: Build EROFS image (no package symlinks from DB yet).
+    // This must succeed before we commit state to the database.
     let result = build_erofs_image(&file_refs, &[], &gen_dir)?;
+
+    // Step 5: Create system state snapshot -- only after successful image build
+    // so we never leave orphaned state records on build failure.
+    let engine = StateEngine::new(conn);
+    let state = engine.create_snapshot(summary, None, None).map_err(|e| {
+        crate::error::Error::InternalError(format!("Failed to create system state snapshot: {e}"))
+    })?;
+    debug_assert_eq!(
+        state.state_number, gen_number,
+        "State number should match reserved generation number"
+    );
 
     // Step 6: Write generation metadata
     #[allow(clippy::cast_possible_wrap)]

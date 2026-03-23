@@ -44,5 +44,8 @@ pub fn get_file_metadata(path: &str) -> Result<(i64, i32)> {
 
     let meta = std::fs::metadata(path)
         .map_err(|e| crate::error::Error::InitError(format!("Failed to stat {}: {}", path, e)))?;
-    Ok((meta.len() as i64, meta.mode() as i32))
+    Ok((
+        i64::try_from(meta.len()).unwrap_or(i64::MAX),
+        meta.mode() as i32,
+    ))
 }

@@ -338,6 +338,17 @@ impl RepositoryPackage {
         Ok(id)
     }
 
+    /// Find a repository package by ID
+    pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
+        let sql = format!(
+            "SELECT {} FROM repository_packages WHERE id = ?1",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let pkg = stmt.query_row([id], Self::from_row).optional()?;
+        Ok(pkg)
+    }
+
     /// Find repository packages by name
     pub fn find_by_name(conn: &Connection, name: &str) -> Result<Vec<Self>> {
         let sql = format!(
@@ -561,10 +572,7 @@ impl RepositoryPackage {
     }
 
     /// Execute a single batch INSERT row with the shared parameter list.
-    fn execute_batch_row(
-        stmt: &mut rusqlite::CachedStatement<'_>,
-        pkg: &Self,
-    ) -> Result<()> {
+    fn execute_batch_row(stmt: &mut rusqlite::CachedStatement<'_>, pkg: &Self) -> Result<()> {
         stmt.execute(params![
             &pkg.repository_id,
             &pkg.name,

@@ -119,10 +119,13 @@ impl CapabilityPolicy {
 
         for candidate in candidates {
             let candidate_path = Path::new(candidate);
-            if candidate_path.exists() {
-                let contents = std::fs::read_to_string(candidate_path)?;
-                let policy: Self = toml::from_str(&contents)?;
-                return Ok(policy);
+            match std::fs::read_to_string(candidate_path) {
+                Ok(contents) => {
+                    let policy: Self = toml::from_str(&contents)?;
+                    return Ok(policy);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e.into()),
             }
         }
 

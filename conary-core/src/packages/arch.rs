@@ -173,11 +173,24 @@ impl ArchPackage {
         let open_brace = rest.find('{')?;
         let func_start = start + open_brace + 1;
 
-        // Find matching closing brace by counting braces
+        // Find matching closing brace by counting braces, skipping comments.
+        // After a '#', skip to end of line before counting braces.
         let mut brace_count = 1;
         let mut end_idx = func_start;
+        let mut in_comment = false;
 
         for (i, ch) in content[func_start..].char_indices() {
+            if ch == '\n' {
+                in_comment = false;
+                continue;
+            }
+            if in_comment {
+                continue;
+            }
+            if ch == '#' {
+                in_comment = true;
+                continue;
+            }
             match ch {
                 '{' => brace_count += 1,
                 '}' => {
@@ -646,6 +659,24 @@ post_upgrade() {
         // Test non-existent function
         let body = ArchPackage::extract_function(content, "pre_install");
         assert!(body.is_none());
+    }
+
+    #[test]
+    fn test_extract_function_skips_comment_braces() {
+        let content = r#"
+post_install() {
+    echo "Installing..."
+    # This comment has braces { } that should be ignored
+    echo "Done"
+}
+"#;
+        let body = ArchPackage::extract_function(content, "post_install");
+        assert!(body.is_some());
+        let body = body.unwrap();
+        assert!(body.contains("Installing"));
+        assert!(body.contains("Done"));
+        // Ensure the comment line is included in the body
+        assert!(body.contains("# This comment has braces"));
     }
 
     #[test]

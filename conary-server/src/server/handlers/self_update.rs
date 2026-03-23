@@ -26,9 +26,16 @@ use tokio_util::io::ReaderStream;
 /// TTL for the cached scan_versions result (60 seconds).
 const VERSIONS_CACHE_TTL_SECS: u64 = 60;
 
-/// Cached scan_versions result with expiry timestamp.
-type VersionsCache = Option<(Instant, Vec<String>)>;
-static VERSIONS_CACHE: std::sync::LazyLock<Mutex<VersionsCache>> =
+/// Cached scan_versions result with expiry timestamp, plus precomputed
+/// latest-version hash and size so `get_latest` avoids re-reading the file.
+struct VersionsCacheEntry {
+    fetched_at: Instant,
+    versions: Vec<String>,
+    /// SHA-256 and size of the latest CCS package, computed once during scan.
+    latest_hash: LatestHash,
+}
+
+static VERSIONS_CACHE: std::sync::LazyLock<Mutex<Option<VersionsCacheEntry>>> =
     std::sync::LazyLock::new(|| Mutex::new(None));
 
 /// Response for GET /v1/ccs/conary/latest
@@ -69,9 +76,13 @@ fn self_update_dir(state: &ServerState) -> PathBuf {
         .join("self-update")
 }
 
-/// Scan the self-update directory and return sorted (ascending) version strings.
+/// Precomputed hash and size for the latest CCS package.
+type LatestHash = Option<(String, u64)>;
+
+/// Scan the self-update directory and return sorted (ascending) version strings,
+/// plus the SHA-256 hash and size of the latest CCS package.
 #[allow(clippy::result_large_err)]
-fn scan_versions(dir: &PathBuf) -> Result<Vec<String>, Response> {
+fn scan_versions_and_hash(dir: &std::path::Path) -> Result<(Vec<String>, LatestHash), Response> {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -114,61 +125,107 @@ fn scan_versions(dir: &PathBuf) -> Result<Vec<String>, Response> {
     }
 
     versions.sort_by_key(|v| parse_semver(v));
-    Ok(versions)
+
+    // Compute SHA-256 and size for the latest version during the scan
+    let latest_hash = if let Some(latest) = versions.last() {
+        let ccs_path = dir.join(format!("conary-{latest}.ccs"));
+        match std::fs::read(&ccs_path) {
+            Ok(data) => {
+                let sha256 = conary_core::hash::sha256(&data);
+                let size = data.len() as u64;
+                Some((sha256, size))
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to hash latest CCS package {}: {}",
+                    ccs_path.display(),
+                    e
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    Ok((versions, latest_hash))
 }
 
-/// Return cached versions or re-scan if the cache has expired.
+/// Return cached versions (with latest hash) or re-scan if the cache has expired.
 #[allow(clippy::result_large_err)]
-async fn scan_versions_cached(dir: &PathBuf) -> Result<Vec<String>, Response> {
+async fn scan_versions_cached(
+    dir: &std::path::Path,
+) -> Result<(Vec<String>, LatestHash), Response> {
     let ttl = std::time::Duration::from_secs(VERSIONS_CACHE_TTL_SECS);
 
     {
         let cache = VERSIONS_CACHE.lock().await;
-        if let Some((instant, ref versions)) = *cache
-            && instant.elapsed() < ttl
+        if let Some(ref entry) = *cache
+            && entry.fetched_at.elapsed() < ttl
         {
-            return Ok(versions.clone());
+            return Ok((entry.versions.clone(), entry.latest_hash.clone()));
         }
     }
 
-    // Cache miss or expired -- rescan
-    let versions = scan_versions(dir)?;
+    // Cache miss or expired -- rescan (sync I/O, use spawn_blocking)
+    let dir_owned = dir.to_path_buf();
+    let (versions, latest_hash) =
+        tokio::task::spawn_blocking(move || scan_versions_and_hash(&dir_owned))
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("spawn_blocking failed: {e}"),
+                )
+                    .into_response()
+            })??;
 
     {
         let mut cache = VERSIONS_CACHE.lock().await;
-        *cache = Some((Instant::now(), versions.clone()));
+        *cache = Some(VersionsCacheEntry {
+            fetched_at: Instant::now(),
+            versions: versions.clone(),
+            latest_hash: latest_hash.clone(),
+        });
     }
 
-    Ok(versions)
+    Ok((versions, latest_hash))
 }
 
 /// GET /v1/ccs/conary/latest
 ///
 /// Returns metadata about the latest available Conary self-update package.
+/// The SHA-256 hash and size are computed once during the version scan and
+/// cached, avoiding a full file read on every request.
 pub async fn get_latest(State(state): State<Arc<RwLock<ServerState>>>) -> Response {
     let state_guard = state.read().await;
     let dir = self_update_dir(&state_guard);
     drop(state_guard);
 
-    let versions = match scan_versions_cached(&dir).await {
+    let (versions, latest_hash) = match scan_versions_cached(&dir).await {
         Ok(v) => v,
         Err(e) => return e,
     };
 
     let latest = versions.last().expect("scan_versions guarantees non-empty");
-    let ccs_path = dir.join(format!("conary-{latest}.ccs"));
 
-    // Read file to compute sha256 and size (use tokio::fs to avoid blocking async runtime)
-    let data = match tokio::fs::read(&ccs_path).await {
-        Ok(d) => d,
-        Err(e) => {
-            tracing::error!("Failed to read CCS package {}: {}", ccs_path.display(), e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read package").into_response();
+    let (sha256, size) = match latest_hash {
+        Some(cached) => cached,
+        None => {
+            // Fallback: hash not cached (e.g., file read failed during scan).
+            // Read the file directly as a last resort.
+            let ccs_path = dir.join(format!("conary-{latest}.ccs"));
+            let data = match tokio::fs::read(&ccs_path).await {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::error!("Failed to read CCS package {}: {}", ccs_path.display(), e);
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read package")
+                        .into_response();
+                }
+            };
+            (conary_core::hash::sha256(&data), data.len() as u64)
         }
     };
-
-    let sha256 = conary_core::hash::sha256(&data);
-    let size = data.len() as u64;
 
     let response = LatestResponse {
         version: latest.clone(),
@@ -194,7 +251,7 @@ pub async fn get_versions(State(state): State<Arc<RwLock<ServerState>>>) -> Resp
     let dir = self_update_dir(&state_guard);
     drop(state_guard);
 
-    let versions = match scan_versions_cached(&dir).await {
+    let (versions, _) = match scan_versions_cached(&dir).await {
         Ok(v) => v,
         Err(e) => return e,
     };
@@ -299,14 +356,14 @@ mod tests {
     #[test]
     fn test_scan_versions_missing_dir() {
         let dir = PathBuf::from("/tmp/conary-test-nonexistent-self-update-dir");
-        let result = scan_versions(&dir);
+        let result = scan_versions_and_hash(&dir);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_scan_versions_empty_dir() {
         let dir = tempfile::tempdir().unwrap();
-        let result = scan_versions(&dir.path().to_path_buf());
+        let result = scan_versions_and_hash(dir.path());
         assert!(result.is_err());
     }
 
@@ -315,13 +372,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // Create some fake CCS packages
         fs::write(dir.path().join("conary-0.1.0.ccs"), b"fake").unwrap();
-        fs::write(dir.path().join("conary-0.2.0.ccs"), b"fake").unwrap();
+        fs::write(dir.path().join("conary-0.2.0.ccs"), b"latest-pkg").unwrap();
         fs::write(dir.path().join("conary-0.1.5.ccs"), b"fake").unwrap();
         // Non-matching files should be ignored
         fs::write(dir.path().join("readme.txt"), b"ignored").unwrap();
         fs::write(dir.path().join("conary-beta.ccs"), b"ignored").unwrap();
 
-        let versions = scan_versions(&dir.path().to_path_buf()).unwrap();
+        let (versions, latest_hash) = scan_versions_and_hash(dir.path()).unwrap();
         assert_eq!(versions, vec!["0.1.0", "0.1.5", "0.2.0"]);
+
+        // Hash should be computed for the latest version (0.2.0)
+        let (sha256, size) = latest_hash.expect("latest hash should be present");
+        assert_eq!(size, b"latest-pkg".len() as u64);
+        assert_eq!(sha256, conary_core::hash::sha256(b"latest-pkg"));
     }
 }

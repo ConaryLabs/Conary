@@ -152,6 +152,11 @@ impl ConversionService {
     /// async operations (HTTP downloads, tokio::fs). Callers in async contexts
     /// should wrap in `spawn_blocking`. This design avoids holding
     /// `rusqlite::Connection` (which is !Send) across `.await` points.
+    ///
+    /// **Deadlock risk:** If the blocking thread pool is saturated, `block_on`
+    /// can deadlock waiting for async work that needs a blocking thread. This
+    /// is mitigated by the server's `max_concurrent_conversions` semaphore,
+    /// which keeps blocking thread usage well below the pool limit (512).
     pub fn convert_package(
         &self,
         distro: &str,

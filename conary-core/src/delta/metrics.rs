@@ -44,10 +44,10 @@ impl DeltaMetrics {
         self.compression_ratio < MAX_DELTA_RATIO
     }
 
-    /// Get percentage of bandwidth saved
+    /// Get percentage of bandwidth saved (clamped to 0.0 minimum)
     pub fn savings_percentage(&self) -> f64 {
         if self.new_size > 0 {
-            (self.bandwidth_saved as f64 / self.new_size as f64) * 100.0
+            ((self.bandwidth_saved as f64 / self.new_size as f64) * 100.0).max(0.0)
         } else {
             0.0
         }

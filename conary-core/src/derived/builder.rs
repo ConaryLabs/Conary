@@ -533,23 +533,20 @@ pub fn store_in_cas(result: &DerivedResult, cas: &mut CasStore) -> Result<()> {
 /// Validate that an override target path is safe
 ///
 /// Rejects paths that:
-/// - Start with `/` (must be relative)
+/// - Contain null bytes
 /// - Contain `..` components (path traversal)
 fn validate_override_target(path: &str) -> Result<()> {
-    if path.starts_with('/') {
-        return Err(Error::InitError(format!(
-            "Override target path must be relative, got absolute path: {}",
-            path
-        )));
+    if path.contains('\0') {
+        return Err(Error::InitError(
+            "Override target contains null byte".to_string(),
+        ));
     }
 
-    for component in std::path::Path::new(path).components() {
-        if matches!(component, std::path::Component::ParentDir) {
-            return Err(Error::InitError(format!(
-                "Override target path contains '..' component (path traversal): {}",
-                path
-            )));
-        }
+    if path.split('/').any(|c| c == "..") {
+        return Err(Error::InitError(format!(
+            "Override target contains path traversal: {}",
+            path
+        )));
     }
 
     Ok(())
@@ -738,9 +735,9 @@ index 111222..333444 100644
     }
 
     #[test]
-    fn test_validate_override_target_rejects_absolute() {
-        assert!(validate_override_target("/etc/passwd").is_err());
-        assert!(validate_override_target("/usr/bin/foo").is_err());
+    fn test_validate_override_target_accepts_absolute() {
+        assert!(validate_override_target("/etc/passwd").is_ok());
+        assert!(validate_override_target("/usr/bin/foo").is_ok());
     }
 
     #[test]
@@ -751,7 +748,13 @@ index 111222..333444 100644
     }
 
     #[test]
-    fn test_validate_override_target_accepts_relative() {
+    fn test_validate_override_target_rejects_null_bytes() {
+        assert!(validate_override_target("foo\0bar").is_err());
+        assert!(validate_override_target("/usr/bin/\0test").is_err());
+    }
+
+    #[test]
+    fn test_validate_override_target_accepts_valid_paths() {
         assert!(validate_override_target("etc/nginx/nginx.conf").is_ok());
         assert!(validate_override_target("usr/bin/foo").is_ok());
         assert!(validate_override_target("config.toml").is_ok());

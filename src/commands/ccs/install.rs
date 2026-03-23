@@ -57,7 +57,7 @@ fn test_hold_ms(var_name: &str) -> Option<Duration> {
         .map(Duration::from_millis)
 }
 
-fn sanitize_package_relative_path(path: &str) -> Result<PathBuf> {
+pub(super) fn sanitize_package_relative_path(path: &str) -> Result<PathBuf> {
     let candidate = path.strip_prefix('/').unwrap_or(path);
     let mut normalized = PathBuf::new();
 
@@ -1055,5 +1055,44 @@ mod tests {
         let error =
             validate_package_dependency(&conn, "dep-base", Some(">=2.0"), false).unwrap_err();
         assert!(error.to_string().contains("dependency version mismatch"));
+    }
+
+    #[test]
+    fn sanitize_rejects_path_traversal() {
+        use super::sanitize_package_relative_path;
+
+        let err = sanitize_package_relative_path("../../etc/shadow").unwrap_err();
+        assert!(err.to_string().contains("path traversal"));
+
+        let err = sanitize_package_relative_path("/usr/../../../etc/passwd").unwrap_err();
+        assert!(err.to_string().contains("path traversal"));
+    }
+
+    #[test]
+    fn sanitize_accepts_normal_paths() {
+        use super::sanitize_package_relative_path;
+        use std::path::PathBuf;
+
+        assert_eq!(
+            sanitize_package_relative_path("/usr/bin/hello").unwrap(),
+            PathBuf::from("usr/bin/hello")
+        );
+        assert_eq!(
+            sanitize_package_relative_path("usr/lib/libfoo.so").unwrap(),
+            PathBuf::from("usr/lib/libfoo.so")
+        );
+        // Current-dir components are silently stripped
+        assert_eq!(
+            sanitize_package_relative_path("/usr/./bin/./hello").unwrap(),
+            PathBuf::from("usr/bin/hello")
+        );
+    }
+
+    #[test]
+    fn sanitize_rejects_empty_path() {
+        use super::sanitize_package_relative_path;
+
+        let err = sanitize_package_relative_path("").unwrap_err();
+        assert!(err.to_string().contains("empty package path"));
     }
 }

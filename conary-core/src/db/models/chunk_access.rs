@@ -88,10 +88,7 @@ impl ChunkAccess {
 
     /// Find a chunk by hash
     pub fn find_by_hash(conn: &Connection, hash: &str) -> Result<Option<Self>> {
-        let sql = format!(
-            "SELECT {} FROM chunk_access WHERE hash = ?1",
-            Self::COLUMNS
-        );
+        let sql = format!("SELECT {} FROM chunk_access WHERE hash = ?1", Self::COLUMNS);
         let result = conn.query_row(&sql, [hash], Self::from_row).optional()?;
         Ok(result)
     }

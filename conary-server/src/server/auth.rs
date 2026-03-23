@@ -13,8 +13,9 @@ use axum::response::{IntoResponse, Response};
 use rand::Rng;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Instant;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 
 use crate::server::ServerState;
 use crate::server::rate_limit::AdminRateLimiters;
@@ -244,7 +245,7 @@ pub async fn auth_middleware(
     let bg_db_path = db_path;
     let bg_id = token_record.id;
     let should_touch = {
-        let mut cache = TOUCH_CACHE.lock().await;
+        let mut cache = TOUCH_CACHE.lock().expect("TOUCH_CACHE poisoned");
         let now = Instant::now();
         let debounce = std::time::Duration::from_secs(TOUCH_DEBOUNCE_SECS);
         match cache.get(&bg_id) {

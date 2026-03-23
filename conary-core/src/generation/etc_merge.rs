@@ -266,13 +266,22 @@ fn scan_dir_recursive(base: &Path, current: &Path, map: &mut HashMap<String, Pat
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() {
+        // Use symlink_metadata to avoid following symlinks outside the overlay.
+        // path.is_dir() / path.is_file() follow symlinks, which could escape
+        // the overlay boundary via a crafted symlink.
+        let meta = match path.symlink_metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if meta.is_dir() {
             scan_dir_recursive(base, &path, map);
-        } else if path.is_file()
+        } else if meta.is_file()
             && let Ok(rel) = path.strip_prefix(base)
         {
             map.insert(rel.to_string_lossy().into_owned(), path.clone());
         }
+        // Symlinks are intentionally skipped -- they should not be followed
+        // into locations outside the overlay upper directory.
     }
 }
 

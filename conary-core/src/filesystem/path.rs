@@ -44,6 +44,11 @@ pub fn sanitize_path(path: impl AsRef<Path>) -> Result<PathBuf> {
     let path = path.as_ref();
     let path_str = path.to_string_lossy();
 
+    // Reject null bytes -- these truncate paths at C API boundaries (open(), stat(), etc.)
+    if path_str.contains('\0') {
+        return Err(Error::PathTraversal("path contains null byte".to_string()));
+    }
+
     // Strip leading slashes to make relative
     let relative = path_str.trim_start_matches('/');
 
@@ -215,6 +220,13 @@ mod tests {
         assert!(sanitize_path("usr/../../../etc/passwd").is_err());
         assert!(sanitize_path("usr/bin/../../..").is_err());
         assert!(sanitize_path("/usr/../etc/passwd").is_err());
+    }
+
+    #[test]
+    fn test_sanitize_path_null_byte_rejected() {
+        assert!(sanitize_path("usr/bin/foo\0bar").is_err());
+        assert!(sanitize_path("\0").is_err());
+        assert!(sanitize_path("etc/passwd\0.bak").is_err());
     }
 
     #[test]

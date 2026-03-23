@@ -352,17 +352,19 @@ impl Pipeline {
         for (stage, pkgs) in &stages_ordered {
             let stage_name = stage.to_string();
 
-            on_event(&PipelineEvent::StageStarted {
-                name: stage_name.clone(),
-                package_count: pkgs.len(),
-            });
-
-            // Check --up-to: skip stages beyond the cutoff
+            // Check --up-to: skip stages beyond the cutoff BEFORE emitting
+            // StageStarted, so observers don't see a started event for a
+            // stage that will never run.
             if let Some(cutoff) = self.config.up_to_stage
                 && *stage > cutoff
             {
                 break;
             }
+
+            on_event(&PipelineEvent::StageStarted {
+                name: stage_name.clone(),
+                package_count: pkgs.len(),
+            });
 
             info!("stage {stage_name}: {} packages", pkgs.len());
 

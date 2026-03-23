@@ -636,10 +636,7 @@ impl ContainerBackend for BollardBackend {
 
         let host_config = info.host_config.as_ref();
 
-        let memory_limit = host_config
-            .and_then(|hc| hc.memory)
-            .and_then(|m| u64::try_from(m).ok())
-            .filter(|&m| m > 0);
+        let memory_limit = host_config.and_then(|hc| hc.memory).filter(|&m| m > 0);
 
         let tmpfs = host_config
             .and_then(|hc| hc.tmpfs.clone())

@@ -7,15 +7,13 @@ use crate::flavor::FlavorSpec;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use strum_macros::{AsRefStr, Display, EnumString};
 
-/// Type of trove (package, component, collection, or redirect)
+/// Type of trove (package, component, or collection)
 #[derive(Debug, Clone, PartialEq, Eq, AsRefStr, Display, EnumString)]
 #[strum(serialize_all = "lowercase")]
 pub enum TroveType {
     Package,
     Component,
     Collection,
-    /// A redirect points to another package (for renames, obsoletes, etc.)
-    Redirect,
 }
 
 impl TroveType {
