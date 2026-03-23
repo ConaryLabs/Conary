@@ -31,15 +31,14 @@ makedepends = []
 chroot = true
 
 configure = """
-# Python 3.14 has implicit declaration issues in binascii.c and _zstd
-# with GCC 15 from Ubuntu/Fedora host compilers. LFS builds its own GCC
-# first which doesn't exhibit this. Suppress -Werror for these specific
-# warnings so the build succeeds with the host compiler.
-CFLAGS="-O2 -g -Wno-error=implicit-function-declaration -Wno-error=builtin-declaration-mismatch -Wno-error=int-to-pointer-cast" \
+# PGO (--enable-optimizations) disabled: it adds -Werror during profile
+# generation which breaks with host GCC 15 on Python 3.14's binascii.c
+# and _zstd modules (implicit declaration warnings). LFS avoids this by
+# building its own GCC first. PGO can be re-enabled once the bootstrap
+# uses its own GCC for Foundation+ builds.
 ./configure --prefix=/usr               \
             --enable-shared             \
             --with-system-expat         \
-            --enable-optimizations      \
             --without-static-libpython
 """
 
