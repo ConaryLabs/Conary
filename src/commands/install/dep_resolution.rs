@@ -205,7 +205,8 @@ mod tests {
     use conary_core::db::schema;
     use conary_core::version::VersionConstraint;
 
-    /// Set up an in-memory database with the full Conary schema
+    /// Set up an in-memory database with the full Conary schema and
+    /// blocked system packages pre-inserted so tests don't depend on host PM.
     fn test_db() -> rusqlite::Connection {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(
@@ -214,6 +215,18 @@ mod tests {
         )
         .unwrap();
         schema::migrate(&conn).unwrap();
+
+        // Insert blocked packages as tracked troves so the blocklist logic
+        // treats them as "present on system" regardless of host distro.
+        for pkg in ["glibc", "systemd", "openssl"] {
+            conn.execute(
+                "INSERT INTO troves (name, version, type, architecture)
+                 VALUES (?1, '1.0', 'package', 'x86_64')",
+                [pkg],
+            )
+            .unwrap();
+        }
+
         conn
     }
 
