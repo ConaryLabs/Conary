@@ -12,6 +12,7 @@ use tempfile::TempDir;
 /// Create an empty test database with schema initialized.
 ///
 /// Returns (TempDir, db_path, Connection) - keep the TempDir alive to prevent cleanup.
+#[allow(dead_code)]
 pub fn create_test_db() -> (TempDir, String, rusqlite::Connection) {
     let temp_dir = tempfile::tempdir().unwrap();
     let db_path = temp_dir
