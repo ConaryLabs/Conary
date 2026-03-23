@@ -5,9 +5,9 @@
 //! Checks Remi for newer versions and handles downloading, verifying,
 //! and atomically replacing the running binary.
 
-use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use crate::db::models::settings;
 use crate::error::{Error, Result};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use rusqlite::Connection;
 use serde::Deserialize;
@@ -741,8 +741,7 @@ mod tests {
         let sig_b64 = BASE64.encode(signature.to_bytes());
         let key_hex = hex::encode(verifying_key.as_bytes());
 
-        let result =
-            verify_update_signature_with_keys(sha256_hex, &sig_b64, &[key_hex.as_str()]);
+        let result = verify_update_signature_with_keys(sha256_hex, &sig_b64, &[key_hex.as_str()]);
         assert!(result.is_ok());
     }
 

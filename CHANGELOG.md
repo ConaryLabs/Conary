@@ -4,6 +4,140 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.7.0] - 2026-03-22
+
+### Added
+- add sign_hash example binary for CI release signing
+- verify self-update signature before downloading
+- add signature field to LatestVersionInfo and VersionCheckResult
+- add Ed25519 signature verification for self-update
+- migrate reqwest blocking to async
+- make CLI fully async
+- add conary sbom command for derivation profiles
+- add conary verify-derivation diverse command
+- add conary verify-derivation rebuild command
+- add conary verify-derivation chain command
+- add conary cache populate and status commands
+- add profile publishing to Remi
+- add conary recipe-audit command
+- add OCI container export for Conary generations
+- improve boot recovery with 4-step fallback and Dracut module
+- wire up EROFS rebuild/mount after every package operation
+
+### Fixed
+- resolve three bugs found during integration testing
+- full codebase review remediation (51 findings)
+- correct verify.rs imports for rebuild command
+- adapt registry command for StringOrVec repo constraint type
+
+### Other
+- feat(derivation): assign trust levels in pipeline execution
+- feat(derivation): generate provenance record on successful build
+- feat(derivation): add trust level, provenance, reproducible to DerivationRecord
+- feat(db): add v56 migration for trust levels and provenance
+- feat(cli): add --no-substituters and --publish flags to bootstrap run
+- fix(derivation): fix binding mode and mut issues in pipeline substituter
+- feat(derivation): integrate substituter into pipeline execution
+- feat(derivation): add derivation substituter client
+- feat(db): add v55 migration for substituters, derivation cache, seeds
+- feat(recipe): add static dependency audit for recipes
+- feat(derivation): add --shell-on-failure debug support
+- feat(derivation): add partial build support to pipeline
+- feat(derivation): wire build log capture through pipeline and CLI
+- feat(derivation): add build log capture to executor
+- fix(erofs): update benchmark for build_erofs_image symlinks parameter
+- feat(recipe): expose Cook build log accessor
+- feat(derivation): wire pipeline mount + end-to-end integration tests
+- fix(derivation): symlink handling in EROFS composition + DESTDIR cleanup
+- refactor(derivation): simplify code per /simplify review
+- fix(derivation): address P0/P1 code review findings
+- feat(derivation): add pipeline executor and CLI commands
+- feat(derivation): add executor, seed, manifest, stages, and profile modules
+- feat(derivation): add index, capture, compose, and environment modules
+- feat(derivation): add recipe hashing for content-addressed build identification
+- fix(derivation): address quality review findings
+- feat(derivation): add derivation data model for CAS-layered bootstrap
+- fix(bootstrap): use DESTDIR=/ for Phase 1-2a builds to avoid double prefix
+- fix(bootstrap): add cross-tools to PATH during Phase 1 build
+- fix(recipe): skip files when detecting single-directory source extraction
+- fix(recipe): substitute variables in additional source URLs during prep
+- fix(bootstrap): handle additional source archives (GCC companion libs)
+- feat(bootstrap): wire per-package checkpointing for resume support
+- feat(bootstrap): wire final_system build to chroot execution
+- feat(bootstrap): wire temp_tools cross-compile, chroot setup, and chroot builds
+- feat(bootstrap): wire cross_tools build_package to Kitchen/Cook execution
+- feat(bootstrap): add assemble_build_script helper, fix clippy in chroot_env
+- feat(bootstrap): add ChrootEnv mount lifecycle manager with Drop safety
+- feat(recipe): add Cook::new_with_dest for bootstrap builds with external dest_dir
+- feat(cli): auto-fetch canonical map from Remi after repo sync
+- feat(cli): registry update fetches from Remi, falls back to local YAML
+- feat(canonical): add client module for fetching canonical map from Remi
+- feat(canonical): add Repology and AppStream cache persistence methods
+- feat(db): add models for repology_cache, appstream_cache, and metadata tables
+- fix(core): fix pre-existing compilation errors in transaction and composefs_rs_eval tests
+- feat(db): add schema v53 with canonical cache tables and metadata
+- refactor(cli): split cmd_model_publish into phase functions
+- refactor(cli): centralize parse_package_spec into dedicated module
+- refactor(cli): extract shared replatform rendering to dedicated module
+- refactor(packages): remove unused PackageMetadataBuilder
+- refactor(packages): extract shared InstalledFileInfo and DependencyInfo to query_common
+- chore(repository): fix formatting in refactored files
+- refactor(repository): unify remi.rs async/sync with shared RemiClientCore
+- refactor(repository): consolidate retry logic into retry.rs
+- refactor(repository): add error context extension trait
+- refactor(repository): extract shared parser helpers to common.rs
+- feat(db): add batch_insert to FileEntry, Trove, and Dependency models
+- refactor(db): remove dead schema compat fallbacks in from_row
+- refactor(db): extract SELECT column constants across model files
+- refactor(export): scope OCI export CAS objects to generation via DB
+- refactor(generation): trim composefs_rs_eval.rs to bloom filter test only
+- refactor(bootstrap): remove duplicate detect_kernel_in_sysroot()
+- refactor(composefs): remove duplicate FsverityEnableArg, reuse enable_fsverity()
+- refactor(cas): add CasStore::iter_objects() and replace duplicate CAS walks
+- feat(bootstrap): add EROFS + CAS + DB output format
+- feat(core): add binary delta support between EROFS generation images
+- feat(core): implement CAS GC via DB queries
+- fix(core): fix critical recovery bugs found in code review
+- test(core): add EROFS build performance benchmark
+- test(core): add full transaction round-trip integration test
+- feat(core)!: rewrite transaction engine for composefs-native architecture
+- feat(core): extract mount logic to conary-core
+- feat(core): extract generation builder to conary-core with composefs-rs
+- refactor(core): extract metadata and composefs detection to conary-core
+- feat(core): scaffold generation submodules (builder, composefs, metadata, mount)
+- feat(core): evaluate composefs-rs for EROFS image building
+- refactor(bootstrap): complete LFS 13 alignment -- delete old stage/base modules
+- feat(bootstrap): implement tier2.rs (Phase 6, BLFS + Conary)
+- feat(bootstrap): update image.rs for Phase 5 (kernel build, systemd-boot, no initramfs)
+- feat(bootstrap): implement system_config.rs (Phase 4, LFS Ch9)
+- feat(bootstrap): add LFS phase CLI commands (cross-tools, temp-tools, system, config, tier2)
+- feat(bootstrap): wire up 6-phase pipeline in Bootstrap orchestrator
+- fix(bootstrap): remove host fallbacks, dracut, and initrd from image pipeline
+- feat(bootstrap): add cross-compilation context to build_runner
+- refactor(bootstrap): update config and toolchain for LFS paths
+- refactor(bootstrap): update BootstrapStage enum to 6-phase LFS pipeline
+- feat(bootstrap): create LFS-aligned module skeletons (cross_tools, temp_tools, final_system, system_config, tier2)
+- refactor(bootstrap): delete stage0 (crosstool-ng) and stage2 (purity rebuild)
+- fix(bootstrap): add target sysroot to PATH, fix openssh configure flags
+- feat(bootstrap): wire populate_sysroot + finalize_sysroot into bootstrap base command
+- refactor(bootstrap): replace GRUB EFI setup with systemd-boot (via finalize_sysroot)
+- feat(bootstrap): add finalize_sysroot() for kernel, initramfs, bootloader, and SSH keys
+- feat(bootstrap): conaryOS branding, SSH, networking, and systemd targets
+- fix(bootstrap): partition labels, dracut package, and fstab mount point
+- refactor(install): extract sub-functions from 1,179-line cmd_install
+- perf(resolver): reduce cloning in constraint interning and dep loading
+- feat(repo): make RepositoryClient timeouts configurable
+- perf(db): use const SQL strings instead of format!() allocation
+- perf(resolver): batch load dependencies to eliminate N+1 queries
+- refactor(cli): use Trove::find_one_by_name() instead of manual lookup patterns
+- perf(db): add composite indexes for resolver and sync hot paths
+- refactor(cli): unify db::open calls with open_db() helper
+- feat(cli): add --chunks flag to system gc for local chunk cleanup
+- feat(resolver): canonical fallback for cross-distro dependency resolution
+- feat(sync): fetch canonical map from Remi during repo sync
+- feat(cli): show 'did you mean?' suggestions when package not found
+- feat(canonical): ship curated rules for 50+ critical cross-distro packages
+
 ## [erofs-v0.1.3] - 2026-03-16
 
 ### Fixed
