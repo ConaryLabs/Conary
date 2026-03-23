@@ -9,7 +9,7 @@
 
 [package]
 name = "python"
-version = "3.14.3"
+version = "3.13.3"
 release = "1"
 summary = "Python 3 programming language"
 description = """
@@ -23,7 +23,7 @@ homepage = "https://www.python.org/"
 
 [source]
 archive = "https://www.python.org/ftp/python/%(version)s/Python-%(version)s.tar.xz"
-checksum = "md5:ef513dcb836d219ae0e2b16ac9c87d0f"
+checksum = "md5:8bb5f0b8c9d9d7b87d7d98510e8d58e5"
 
 [build]
 requires = ["glibc", "expat", "libffi", "openssl", "zlib", "bzip2", "ncurses", "readline", "sqlite", "xz", "gdbm"]
@@ -31,12 +31,10 @@ makedepends = []
 chroot = true
 
 configure = """
-# GCC 15 is stricter about implicit declarations in binascii.c.
-# Disable -Werror flags that Python's configure adds.
-CFLAGS="-O2 -g -fno-strict-overflow -Wno-error" \
 ./configure --prefix=/usr               \
             --enable-shared             \
             --with-system-expat         \
+            --enable-optimizations      \
             --without-static-libpython
 """
 
