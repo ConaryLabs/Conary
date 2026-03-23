@@ -228,16 +228,6 @@ pub fn detect_package_format(path: &str) -> Result<PackageFormatType> {
         return Ok(PackageFormatType::Deb);
     }
 
-    // Arch: zstd magic
-    if magic[0..4] == [0x28, 0xB5, 0x2F, 0xFD] {
-        return Ok(PackageFormatType::Arch);
-    }
-
-    // Arch: xz magic
-    if magic[0..6] == [0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00] {
-        return Ok(PackageFormatType::Arch);
-    }
-
     Err(anyhow::anyhow!(
         "Unable to detect package format for: {}",
         path
@@ -364,6 +354,8 @@ pub(crate) fn create_state_snapshot(
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
     use super::*;
 
     #[test]
@@ -395,5 +387,45 @@ mod tests {
         let result = detect_package_format("/path/to/package.pkg.tar.zst");
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), PackageFormatType::Arch);
+    }
+
+    #[test]
+    fn test_plain_zstd_file_not_detected_as_arch() {
+        // A bare .tar.zst file with zstd magic bytes must NOT be identified
+        // as an Arch package -- only .pkg.tar.zst gets that treatment.
+        let mut tmp = tempfile::Builder::new()
+            .suffix(".tar.zst")
+            .tempfile()
+            .unwrap();
+        // Write zstd magic bytes (0x28 0xB5 0x2F 0xFD) plus padding
+        tmp.write_all(&[0x28, 0xB5, 0x2F, 0xFD, 0x00, 0x00, 0x00, 0x00])
+            .unwrap();
+        tmp.flush().unwrap();
+
+        let result = detect_package_format(tmp.path().to_str().unwrap());
+        assert!(
+            result.is_err(),
+            "Plain .tar.zst should not be detected as any package format"
+        );
+    }
+
+    #[test]
+    fn test_plain_xz_file_not_detected_as_arch() {
+        // A bare .tar.xz file with xz magic bytes must NOT be identified
+        // as an Arch package -- only .pkg.tar.xz gets that treatment.
+        let mut tmp = tempfile::Builder::new()
+            .suffix(".tar.xz")
+            .tempfile()
+            .unwrap();
+        // Write xz magic bytes (0xFD 0x37 0x7A 0x58 0x5A 0x00) plus padding
+        tmp.write_all(&[0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00, 0x00, 0x00])
+            .unwrap();
+        tmp.flush().unwrap();
+
+        let result = detect_package_format(tmp.path().to_str().unwrap());
+        assert!(
+            result.is_err(),
+            "Plain .tar.xz should not be detected as any package format"
+        );
     }
 }

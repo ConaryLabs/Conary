@@ -33,6 +33,16 @@ const CONFIG_MEDIA_TYPE: &str = "application/vnd.oci.image.config.v1+json";
 const LAYER_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar+gzip";
 const INDEX_MEDIA_TYPE: &str = "application/vnd.oci.image.index.v1+json";
 
+/// Map the host architecture to the OCI platform architecture string.
+fn oci_arch() -> &'static str {
+    match std::env::consts::ARCH {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        "riscv64" => "riscv64",
+        other => other,
+    }
+}
+
 /// Export a generation as an OCI image directory layout.
 ///
 /// The generation is identified by number.  Pass `None` to use the
@@ -369,7 +379,7 @@ fn build_config_json(metadata: &GenerationMetadata, gen_number: i64, diff_id: &s
     // system image, not an application container.
     serde_json::json!({
         "created": created,
-        "architecture": "amd64",
+        "architecture": oci_arch(),
         "os": "linux",
         "config": {
             "Labels": {
@@ -433,7 +443,7 @@ fn build_index_json(manifest_digest: &str, manifest_size: u64) -> String {
                 "digest": format!("sha256:{manifest_digest}"),
                 "size": manifest_size,
                 "platform": {
-                    "architecture": "amd64",
+                    "architecture": oci_arch(),
                     "os": "linux"
                 }
             }
@@ -706,7 +716,7 @@ mod tests {
             fs::read_to_string(output_dir.join("blobs/sha256").join(config_digest)).unwrap();
         let config: serde_json::Value = serde_json::from_str(&config_str).unwrap();
 
-        assert_eq!(config["architecture"], "amd64");
+        assert_eq!(config["architecture"], oci_arch());
         assert_eq!(config["os"], "linux");
 
         let labels = &config["config"]["Labels"];
@@ -834,7 +844,7 @@ mod tests {
         let config: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
         assert_eq!(config["os"], "linux");
-        assert_eq!(config["architecture"], "amd64");
+        assert_eq!(config["architecture"], oci_arch());
         assert_eq!(config["rootfs"]["diff_ids"][0], "sha256:abcdef1234567890");
         assert_eq!(config["rootfs"]["type"], "layers");
     }
@@ -859,7 +869,10 @@ mod tests {
         assert_eq!(index["schemaVersion"], 2);
         assert_eq!(index["manifests"][0]["digest"], "sha256:manifestdigest");
         assert_eq!(index["manifests"][0]["size"], 200);
-        assert_eq!(index["manifests"][0]["platform"]["architecture"], "amd64");
+        assert_eq!(
+            index["manifests"][0]["platform"]["architecture"],
+            oci_arch()
+        );
         assert_eq!(index["manifests"][0]["platform"]["os"], "linux");
     }
 }

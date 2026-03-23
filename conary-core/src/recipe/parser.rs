@@ -46,6 +46,15 @@ pub fn validate_recipe(recipe: &Recipe) -> Result<Vec<String>> {
         )));
     }
 
+    // Reject placeholder checksums that should be replaced before building
+    let checksum_upper = recipe.source.checksum.to_uppercase();
+    if checksum_upper.contains("VERIFY_BEFORE_BUILD") || checksum_upper.contains("FIXME") {
+        return Err(Error::ParseError(format!(
+            "Recipe contains placeholder checksum: {}. Replace with actual checksum before building.",
+            recipe.source.checksum
+        )));
+    }
+
     // Warn about missing fields
     if recipe.package.summary.is_none() {
         warnings.push("Missing package summary".to_string());
@@ -134,6 +143,54 @@ checksum = "md5:abc123"
 
         let recipe = parse_recipe(content).unwrap();
         assert!(validate_recipe(&recipe).is_err());
+    }
+
+    #[test]
+    fn test_validate_placeholder_checksum_verify_before_build() {
+        let content = r#"
+[package]
+name = "test"
+version = "1.0"
+
+[source]
+archive = "https://example.com/test.tar.gz"
+checksum = "sha256:VERIFY_BEFORE_BUILD"
+
+[build]
+"#;
+
+        let recipe = parse_recipe(content).unwrap();
+        let result = validate_recipe(&recipe);
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(
+            err.contains("placeholder"),
+            "Error should mention placeholder: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_placeholder_checksum_fixme() {
+        let content = r#"
+[package]
+name = "test"
+version = "1.0"
+
+[source]
+archive = "https://example.com/test.tar.gz"
+checksum = "sha256:FIXME_replace_with_real_hash"
+
+[build]
+"#;
+
+        let recipe = parse_recipe(content).unwrap();
+        let result = validate_recipe(&recipe);
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(
+            err.contains("placeholder"),
+            "Error should mention placeholder: {err}"
+        );
     }
 
     #[test]

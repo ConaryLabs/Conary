@@ -120,7 +120,8 @@ impl<'a> ContainerCoordinator<'a> {
             .context("coordinator: failed to inspect container for resource verification")?;
 
         if let Some(expected_mb) = constraints.memory_limit_mb {
-            let expected_bytes = expected_mb.saturating_mul(1024 * 1024);
+            let expected_bytes =
+                i64::try_from(expected_mb.saturating_mul(1024 * 1024)).unwrap_or(i64::MAX);
             if inspection
                 .memory_limit
                 .is_some_and(|actual| actual != expected_bytes)

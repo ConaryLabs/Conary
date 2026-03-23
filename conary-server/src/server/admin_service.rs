@@ -479,6 +479,22 @@ pub async fn repo_exists(
 /// Synchronize a single repository by name.
 ///
 /// Returns `Ok(None)` if the repository does not exist.
+///
+/// # Deadlock risk (documented)
+///
+/// This function uses `Handle::block_on()` inside `spawn_blocking` to call
+/// async operations (`sync_repository`, `maybe_fetch_gpg_key`) while holding
+/// a `rusqlite::Connection` (which is `!Send` and cannot cross `.await`).
+///
+/// If the Tokio blocking thread pool is saturated, `block_on` will wait for
+/// an async task that itself may need a blocking thread, creating a potential
+/// deadlock. In practice this is safe because:
+/// 1. `sync_repo` is called infrequently (admin API, background refresh)
+/// 2. The default blocking pool (512 threads) is never near saturation
+/// 3. Restructuring would require `sync_repository` to not take `&Connection`
+///
+/// If this becomes a problem, increase `max_blocking_threads` in the Tokio
+/// runtime builder or restructure `sync_repository` to separate DB and HTTP.
 pub async fn sync_repo(
     state: &Arc<RwLock<ServerState>>,
     name: &str,
@@ -526,6 +542,8 @@ pub async fn sync_repo(
 }
 
 /// Synchronize all enabled repositories.
+///
+/// See [`sync_repo`] for the `Handle::block_on` deadlock risk documentation.
 pub async fn refresh_repositories(
     state: &Arc<RwLock<ServerState>>,
     force: bool,
@@ -763,6 +781,11 @@ pub async fn push_test_result(
 }
 
 /// List test runs with optional filters and cursor-based pagination.
+///
+/// Filters are pushed into the SQL WHERE clause so that `limit` applies
+/// after filtering, not before.  The previous post-query `.retain()`
+/// approach could return fewer rows than `limit` even when matching rows
+/// existed beyond the first page.
 pub async fn list_test_runs(
     state: &Arc<RwLock<ServerState>>,
     limit: u32,
@@ -774,18 +797,14 @@ pub async fn list_test_runs(
     let db = test_db_path(state).await?;
     blocking_anyhow(move || {
         let conn = test_db::init(&db)?;
-        let mut runs = test_db::TestRun::list(&conn, cursor, limit)?;
-
-        // Apply optional filters (post-query for simplicity; the dataset is small)
-        if let Some(ref s) = suite {
-            runs.retain(|r| r.suite == *s);
-        }
-        if let Some(ref d) = distro {
-            runs.retain(|r| r.distro == *d);
-        }
-        if let Some(ref st) = status {
-            runs.retain(|r| r.status == *st);
-        }
+        let runs = test_db::TestRun::list_filtered(
+            &conn,
+            cursor,
+            limit,
+            suite.as_deref(),
+            distro.as_deref(),
+            status.as_deref(),
+        )?;
 
         Ok(runs)
     })

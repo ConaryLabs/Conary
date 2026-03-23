@@ -70,20 +70,13 @@ pub async fn cmd_restore(
         println!("  Missing from CAS:  {} (cannot restore)", not_in_cas.len());
     }
 
-    // Determine what to restore
-    let files_to_restore: Vec<&FileEntry> = if force {
-        files
-            .iter()
-            .filter(|f| cas.exists(&f.sha256_hash))
-            .collect()
-    } else {
-        // In composefs-native, all files come from the EROFS image.
-        // "Restore" means rebuild the image from DB state.
-        files
-            .iter()
-            .filter(|f| cas.exists(&f.sha256_hash))
-            .collect()
-    };
+    // Determine what to restore.
+    // In composefs-native, all files come from the EROFS image.
+    // "Restore" means rebuild the image from DB state.
+    let files_to_restore: Vec<&FileEntry> = files
+        .iter()
+        .filter(|f| cas.exists(&f.sha256_hash))
+        .collect();
 
     if files_to_restore.is_empty() {
         println!("\nNo files available in CAS to restore.");

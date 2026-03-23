@@ -295,9 +295,9 @@ fn distro_matches_flavor(
 mod tests {
     use super::*;
     use crate::db::models::{CanonicalPackage, DistroPin, PackageImplementation, PackageOverride};
+    use crate::db::testing::create_test_db;
     use crate::repository::dependency_model::RepositoryDependencyFlavor;
     use crate::repository::resolution_policy::{RequestScope, ResolutionPolicy};
-    use crate::db::testing::create_test_db;
 
     #[test]
     fn test_expand_canonical_name() {

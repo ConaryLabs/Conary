@@ -11,7 +11,7 @@ use conary_core::scriptlet::{
     ExecutionMode, PackageFormat as ScriptletPackageFormat, SandboxMode, ScriptletExecutor,
 };
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 use tracing::{info, warn};
 
@@ -212,8 +212,6 @@ pub async fn cmd_remove(
     // In composefs-native model, we don't remove files from disk directly.
     // Files are served via EROFS images mounted through composefs.
     // Removing a package means: update DB -> rebuild EROFS -> remount.
-    let install_root = PathBuf::from(root);
-    let _ = &install_root; // suppress unused warning until EROFS rebuild is wired
 
     // Separate files and directories for logging/summary purposes
     let (directories, regular_files): (Vec<_>, Vec<_>) = files
@@ -286,7 +284,6 @@ pub async fn cmd_remove(
     // Composefs-native: rebuild EROFS image and remount to reflect removal
     progress.set_phase(RemovePhase::RemovingFiles);
     let removed_count = regular_files.len();
-    let failed_count = 0;
     let dirs_removed = directories.len();
 
     let _gen_num = crate::commands::composefs_ops::rebuild_and_mount(
@@ -329,9 +326,8 @@ pub async fn cmd_remove(
     if dirs_removed > 0 {
         println!("  Directories removed: {}", dirs_removed);
     }
-    if failed_count > 0 {
-        println!("  Files failed to remove: {}", failed_count);
-    }
+    // Note: composefs-native removal rebuilds the entire EROFS image,
+    // so individual file failure tracking is not applicable.
 
     // Create state snapshot after successful remove
     create_state_snapshot(

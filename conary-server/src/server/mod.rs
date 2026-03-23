@@ -16,6 +16,7 @@
 
 pub mod admin_service;
 pub mod analytics;
+pub mod artifact_paths;
 pub mod audit;
 pub mod auth;
 mod bloom;

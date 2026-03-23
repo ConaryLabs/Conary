@@ -524,28 +524,51 @@ impl<'a> TriggerEngine<'a> {
             }
         }
 
-        // Topological sort using Kahn's algorithm
+        // Topological sort using Kahn's algorithm with priority-aware level ordering.
+        // Within each topological level (triggers whose dependencies are all satisfied
+        // at the same point), we sort by (priority, name) so lower priority runs first.
         let mut sorted = Vec::new();
-        let mut queue: VecDeque<String> = in_degree
+        let mut ready: Vec<String> = in_degree
             .iter()
             .filter(|&(_, &degree)| degree == 0)
             .map(|(name, _)| name.clone())
             .collect();
+        ready.sort_by(|a, b| {
+            let pa = triggers.get(a).map_or(i32::MAX, |t| t.priority);
+            let pb = triggers.get(b).map_or(i32::MAX, |t| t.priority);
+            pa.cmp(&pb).then(a.cmp(b))
+        });
+        let mut queue: VecDeque<String> = ready.into_iter().collect();
 
         while let Some(name) = queue.pop_front() {
-            if let Some(trigger) = triggers.remove(&name) {
-                sorted.push(trigger);
-            }
+            // Collect newly-ready triggers from this node's dependents
+            let mut newly_ready = Vec::new();
 
             if let Some(deps) = dependents.get(&name) {
                 for dependent in deps {
                     if let Some(degree) = in_degree.get_mut(dependent) {
                         *degree -= 1;
                         if *degree == 0 {
-                            queue.push_back(dependent.clone());
+                            newly_ready.push(dependent.clone());
                         }
                     }
                 }
+            }
+
+            if let Some(trigger) = triggers.remove(&name) {
+                sorted.push(trigger);
+            }
+
+            // Sort newly-ready triggers by priority, then name, and insert them
+            // at the back of the queue in that order. This preserves topological
+            // correctness while giving priority a voice within the same level.
+            newly_ready.sort_by(|a, b| {
+                let pa = triggers.get(a).map_or(i32::MAX, |t| t.priority);
+                let pb = triggers.get(b).map_or(i32::MAX, |t| t.priority);
+                pa.cmp(&pb).then(a.cmp(b))
+            });
+            for r in newly_ready {
+                queue.push_back(r);
             }
         }
 
@@ -557,9 +580,6 @@ impl<'a> TriggerEngine<'a> {
             remaining.sort_by(|a, b| a.priority.cmp(&b.priority));
             sorted.extend(remaining);
         }
-
-        // Secondary sort by priority for triggers at the same level
-        sorted.sort_by(|a, b| a.priority.cmp(&b.priority).then(a.name.cmp(&b.name)));
 
         Ok(sorted)
     }
@@ -771,5 +791,95 @@ mod tests {
                 _ => panic!("Unexpected trigger"),
             }
         }
+    }
+
+    #[test]
+    fn test_execution_order_preserves_topological_sort() {
+        // Regression test: a high-priority trigger that depends on a low-priority
+        // trigger must still execute after its dependency. The topological order
+        // must not be destroyed by a secondary priority sort.
+        let (_temp, conn) = create_test_db();
+
+        // Create trigger B (low priority = runs first if no deps, priority 90)
+        let mut trigger_b = Trigger::new(
+            "trigger_b".to_string(),
+            "/usr/lib/*".to_string(),
+            "/bin/true".to_string(),
+        );
+        trigger_b.priority = 90;
+        let id_b = trigger_b.insert(&conn).unwrap();
+
+        // Create trigger A (high priority = would run first by priority alone, priority 10)
+        // but A depends on B, so B must run first
+        let mut trigger_a = Trigger::new(
+            "trigger_a".to_string(),
+            "/usr/lib/*".to_string(),
+            "/bin/true".to_string(),
+        );
+        trigger_a.priority = 10;
+        let id_a = trigger_a.insert(&conn).unwrap();
+
+        // A depends on B
+        TriggerDependency::add(&conn, id_a, "trigger_b").unwrap();
+
+        // Create a changeset with both triggers pending
+        conn.execute("INSERT INTO changesets (description) VALUES ('test')", [])
+            .unwrap();
+        let changeset_id = conn.last_insert_rowid();
+
+        let mut ct_b = ChangesetTrigger::new(changeset_id, id_b);
+        ct_b.upsert(&conn).unwrap();
+        let mut ct_a = ChangesetTrigger::new(changeset_id, id_a);
+        ct_a.upsert(&conn).unwrap();
+
+        let engine = TriggerEngine::new(&conn);
+        let order = engine.get_execution_order(changeset_id).unwrap();
+
+        assert_eq!(order.len(), 2);
+        // B must come before A despite A having higher (lower number) priority
+        assert_eq!(order[0].name, "trigger_b", "dependency must execute first");
+        assert_eq!(order[1].name, "trigger_a", "dependent must execute second");
+    }
+
+    #[test]
+    fn test_execution_order_respects_priority_within_level() {
+        // Triggers with no dependency relationship should be ordered by priority
+        let (_temp, conn) = create_test_db();
+
+        let mut t_low = Trigger::new(
+            "zz_low_priority".to_string(),
+            "/usr/lib/*".to_string(),
+            "/bin/true".to_string(),
+        );
+        t_low.priority = 90;
+        let id_low = t_low.insert(&conn).unwrap();
+
+        let mut t_high = Trigger::new(
+            "aa_high_priority".to_string(),
+            "/usr/lib/*".to_string(),
+            "/bin/true".to_string(),
+        );
+        t_high.priority = 10;
+        let id_high = t_high.insert(&conn).unwrap();
+
+        conn.execute("INSERT INTO changesets (description) VALUES ('test')", [])
+            .unwrap();
+        let changeset_id = conn.last_insert_rowid();
+
+        let mut ct_low = ChangesetTrigger::new(changeset_id, id_low);
+        ct_low.upsert(&conn).unwrap();
+        let mut ct_high = ChangesetTrigger::new(changeset_id, id_high);
+        ct_high.upsert(&conn).unwrap();
+
+        let engine = TriggerEngine::new(&conn);
+        let order = engine.get_execution_order(changeset_id).unwrap();
+
+        assert_eq!(order.len(), 2);
+        // Both at the same topological level, so priority wins (lower number first)
+        assert_eq!(
+            order[0].name, "aa_high_priority",
+            "higher priority (lower number) should run first within same level"
+        );
+        assert_eq!(order[1].name, "zz_low_priority");
     }
 }

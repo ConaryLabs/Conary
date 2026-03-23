@@ -49,6 +49,18 @@ pub fn derive_action(method: &str, path: &str) -> String {
         "audit"
     } else if rest.starts_with("events") {
         "events"
+    } else if rest.starts_with("test-health") {
+        "test.health"
+    } else if rest.starts_with("test-runs") {
+        "test.run"
+    } else if rest.starts_with("test-fixtures") {
+        "test.fixture"
+    } else if rest.starts_with("test-artifacts") {
+        "test.artifact"
+    } else if rest.starts_with("packages") || rest.starts_with("convert") {
+        "package"
+    } else if rest.starts_with("openapi") {
+        "openapi"
     } else {
         "unknown"
     };
@@ -267,5 +279,51 @@ mod tests {
     fn test_derive_action_audit() {
         assert_eq!(derive_action("GET", "/v1/admin/audit"), "audit.read");
         assert_eq!(derive_action("DELETE", "/v1/admin/audit"), "audit.delete");
+    }
+
+    #[test]
+    fn test_derive_action_test_data() {
+        assert_eq!(derive_action("GET", "/v1/admin/test-runs"), "test.run.read");
+        assert_eq!(
+            derive_action("POST", "/v1/admin/test-runs"),
+            "test.run.create"
+        );
+        assert_eq!(
+            derive_action("DELETE", "/v1/admin/test-runs/gc"),
+            "test.run.delete"
+        );
+        assert_eq!(
+            derive_action("GET", "/v1/admin/test-health"),
+            "test.health.read"
+        );
+    }
+
+    #[test]
+    fn test_derive_action_artifacts() {
+        assert_eq!(
+            derive_action("PUT", "/v1/admin/test-fixtures/demo/sample.ccs"),
+            "test.fixture.update"
+        );
+        assert_eq!(
+            derive_action("PUT", "/v1/admin/test-artifacts/run-1/output.json"),
+            "test.artifact.update"
+        );
+    }
+
+    #[test]
+    fn test_derive_action_packages() {
+        assert_eq!(
+            derive_action("POST", "/v1/admin/packages/fedora"),
+            "package.create"
+        );
+        assert_eq!(derive_action("POST", "/v1/admin/convert"), "package.create");
+    }
+
+    #[test]
+    fn test_derive_action_openapi() {
+        assert_eq!(
+            derive_action("GET", "/v1/admin/openapi.json"),
+            "openapi.read"
+        );
     }
 }

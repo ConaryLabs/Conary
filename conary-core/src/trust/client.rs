@@ -92,7 +92,7 @@ impl TufClient {
 
         let signed_snapshot = if snapshot_changed {
             let snapshot_bytes = self.fetch_metadata("snapshot.json").await?;
-            verify_metadata_hash(snapshot_ref, &snapshot_bytes)?;
+            verify_metadata_hash(snapshot_ref, &snapshot_bytes, true)?;
 
             let signed: Signed<SnapshotMetadata> = serde_json::from_slice(&snapshot_bytes)?;
             verify_type_field(&signed.signed.type_field, "snapshot")?;
@@ -121,7 +121,7 @@ impl TufClient {
         let signed_targets = if targets_changed {
             let targets_bytes = self.fetch_metadata("targets.json").await?;
             if let Some(tr) = targets_ref {
-                verify_metadata_hash(tr, &targets_bytes)?;
+                verify_metadata_hash(tr, &targets_bytes, true)?;
             }
 
             let signed: Signed<TargetsMetadata> = serde_json::from_slice(&targets_bytes)?;
@@ -330,9 +330,11 @@ impl TufClient {
     ///
     /// Returns an error for any non-success HTTP status, including 404.
     async fn fetch_metadata(&self, filename: &str) -> TrustResult<Vec<u8>> {
-        self.fetch_metadata_inner(filename, false)
-            .await
-            .map(|opt| opt.expect("fetch_metadata_inner with allow_not_found=false always returns Some on success"))
+        self.fetch_metadata_inner(filename, false).await.map(|opt| {
+            opt.expect(
+                "fetch_metadata_inner with allow_not_found=false always returns Some on success",
+            )
+        })
     }
 
     /// Load the trusted root from the database

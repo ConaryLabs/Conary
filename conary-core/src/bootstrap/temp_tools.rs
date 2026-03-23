@@ -147,7 +147,7 @@ impl TempToolsBuilder {
     /// Cross-compile all Chapter 6 packages.
     ///
     /// Uses the Phase 1 cross-toolchain to build each package and installs
-    /// the results into `$LFS/`. Accepts `completed` for resume support —
+    /// the results into `$LFS/`. Accepts `completed` for resume support --
     /// packages whose names appear in the slice are skipped.
     pub fn build_cross_packages(&self, completed: &[String]) -> Result<(), TempToolsError> {
         info!(
@@ -155,19 +155,30 @@ impl TempToolsBuilder {
             CH6_PACKAGES.len()
         );
 
-        // Set bootstrap environment
-        // SAFETY: bootstrap is single-threaded at this stage
+        // Build a hermetic environment map instead of mutating the process-wide
+        // environment (which is UB if any other thread exists).
+        let tools_bin = self.lfs_root.join("tools/bin");
+        let host_path = std::env::var("PATH").unwrap_or_default();
+        let bootstrap_env: Vec<(String, String)> = vec![
+            ("LFS".into(), self.lfs_root.display().to_string()),
+            ("LFS_TGT".into(), self.cross_toolchain.target.clone()),
+            ("LC_ALL".into(), "C".into()),
+            ("TZ".into(), "UTC".into()),
+            ("SOURCE_DATE_EPOCH".into(), "0".into()),
+            (
+                "PATH".into(),
+                format!("{}:{host_path}", tools_bin.display()),
+            ),
+        ];
+
+        // Propagate to child processes.  The Kitchen/Cook pipeline inherits
+        // the process environment, so we set the vars once here.
+        // SAFETY: bootstrap is single-threaded -- no other threads exist.
         #[allow(unsafe_code)]
-        unsafe {
-            std::env::set_var("LFS", &self.lfs_root);
-            std::env::set_var("LFS_TGT", &self.cross_toolchain.target);
-            std::env::set_var("LC_ALL", "C");
-            std::env::set_var("TZ", "UTC");
-            std::env::set_var("SOURCE_DATE_EPOCH", "0");
-            // Add cross-tools to PATH
-            let tools_bin = self.lfs_root.join("tools/bin");
-            let host_path = std::env::var("PATH").unwrap_or_default();
-            std::env::set_var("PATH", format!("{}:{}", tools_bin.display(), host_path));
+        for (k, v) in &bootstrap_env {
+            unsafe {
+                std::env::set_var(k, v);
+            }
         }
 
         for (i, pkg) in CH6_PACKAGES.iter().enumerate() {
@@ -259,7 +270,7 @@ impl TempToolsBuilder {
     ///
     /// These are built natively (not cross-compiled) using the tools
     /// that are now available inside the chroot. Accepts `completed` for
-    /// resume support — packages whose names appear in the slice are skipped.
+    /// resume support -- packages whose names appear in the slice are skipped.
     pub fn build_chroot_packages(&self, completed: &[String]) -> Result<(), TempToolsError> {
         info!(
             "Phase 2b: Building chroot packages ({} packages)",
@@ -327,7 +338,7 @@ impl TempToolsBuilder {
         Ok(())
     }
 
-    /// Environment variables for chroot builds (hermetic — `env_clear()` first).
+    /// Environment variables for chroot builds (hermetic -- `env_clear()` first).
     fn chroot_env_vars(&self) -> Vec<(String, String)> {
         vec![
             ("PATH".into(), "/usr/bin:/usr/sbin".into()),

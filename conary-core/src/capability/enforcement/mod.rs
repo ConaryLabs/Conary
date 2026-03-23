@@ -67,6 +67,8 @@ pub struct EnforcementReport {
     pub seccomp_applied: bool,
     /// Whether network isolation was applied
     pub network_isolated: bool,
+    /// Number of deny paths that conflict with allowed parents
+    pub deny_conflicts_count: usize,
     /// Issues encountered during enforcement setup
     pub warnings: Vec<EnforcementWarning>,
 }
@@ -97,6 +99,7 @@ pub fn apply_enforcement(
         landlock_applied: false,
         seccomp_applied: false,
         network_isolated: policy.network_isolation,
+        deny_conflicts_count: 0,
         warnings: Vec::new(),
     };
 
@@ -166,6 +169,11 @@ pub enum EnforcementError {
 
     #[error("Kernel does not support {feature}")]
     Unsupported { feature: String },
+
+    #[error(
+        "{count} deny path(s) conflict with allowed parents and cannot be enforced by landlock"
+    )]
+    DenyConflict { count: usize },
 
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),

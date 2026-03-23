@@ -433,10 +433,10 @@ impl<'db> ConaryProvider<'db> {
             return Ok(providers);
         }
 
-        let pattern = format!("%{capability}%");
+        let pattern = format!("%{}%", escape_like(capability));
         let mut stmt = self.conn.prepare(
             "SELECT DISTINCT name FROM repository_packages
-             WHERE metadata LIKE ?1
+             WHERE metadata LIKE ?1 ESCAPE '\\'
              ORDER BY LENGTH(name), name",
         )?;
         let rows = stmt.query_map([pattern], |row| row.get::<_, String>(0))?;
@@ -815,14 +815,13 @@ fn load_repo_dependency_requests(
 /// duplicating the scheme-aware constraint construction.
 fn dep_entry_to_solver_dep(dep: &DependencyEntry, scheme: VersionScheme) -> SolverDep {
     let constraint = match (scheme, dep.version_constraint.as_deref()) {
-        (VersionScheme::Rpm, Some(s)) => ConaryConstraint::Legacy(
-            VersionConstraint::parse(s).unwrap_or(VersionConstraint::Any),
-        ),
+        (VersionScheme::Rpm, Some(s)) => {
+            ConaryConstraint::Legacy(VersionConstraint::parse(s).unwrap_or(VersionConstraint::Any))
+        }
         (VersionScheme::Rpm, None) => ConaryConstraint::Legacy(VersionConstraint::Any),
         (native, Some(s)) => ConaryConstraint::Repository {
             scheme: native,
-            constraint: parse_repo_constraint(native, s)
-                .unwrap_or(RepoVersionConstraint::Any),
+            constraint: parse_repo_constraint(native, s).unwrap_or(RepoVersionConstraint::Any),
             raw: Some(s.to_string()),
         },
         (native, None) => ConaryConstraint::Repository {
@@ -949,9 +948,25 @@ fn find_repo_package_by_id(
     conn: &rusqlite::Connection,
     repository_package_id: i64,
 ) -> Result<Option<RepositoryPackage>> {
-    Ok(RepositoryPackage::list_all(conn)?
-        .into_iter()
-        .find(|pkg| pkg.id == Some(repository_package_id)))
+    RepositoryPackage::find_by_id(conn, repository_package_id)
+}
+
+/// Escape special characters for SQL LIKE patterns.
+///
+/// SQLite LIKE treats `%` and `_` as wildcards. When searching for literal
+/// text we must escape them (along with the escape character itself).
+fn escape_like(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '\\' | '%' | '_' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 // --- Display helpers ---

@@ -191,7 +191,7 @@ pub async fn canonical_map(
 
         let version: u32 = conary_core::db::models::get_metadata(
             &conn,
-            "server_metadata",
+            conary_core::db::models::MetadataTable::Server,
             "canonical_map_version",
         )
         .map_err(anyhow::Error::from)?

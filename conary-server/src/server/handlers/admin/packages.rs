@@ -17,6 +17,9 @@ use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 
+/// Maximum allowed upload size (512 MB).
+const MAX_UPLOAD_SIZE: u64 = 512 * 1024 * 1024;
+
 #[derive(Serialize)]
 struct PublishPackageResponse {
     distro: String,
@@ -80,9 +83,7 @@ pub async fn upload_package(
     scopes: Option<axum::Extension<TokenScopes>>,
     request: Request,
 ) -> Response {
-    if scopes.is_some()
-        && let Some(err) = check_scope(&scopes, Scope::Admin)
-    {
+    if let Some(err) = check_scope(&scopes, Scope::Admin) {
         return err;
     }
     if let Some(err) = validate_path_param(&distro, "distro") {
@@ -128,6 +129,14 @@ pub async fn upload_package(
         match chunk {
             Ok(bytes) => {
                 size += bytes.len() as u64;
+                if size > MAX_UPLOAD_SIZE {
+                    let _ = tokio::fs::remove_file(&temp_path).await;
+                    return json_error(
+                        413,
+                        "Upload exceeds maximum size (512 MB)",
+                        "PAYLOAD_TOO_LARGE",
+                    );
+                }
                 hasher.update(&bytes);
                 if let Err(err) = file.write_all(&bytes).await {
                     tracing::error!(
@@ -430,5 +439,22 @@ mod tests {
             .unwrap()
             .is_some()
         );
+    }
+
+    #[tokio::test]
+    async fn test_upload_package_rejects_unauthenticated() {
+        let (app, _db_path) = test_app().await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/v1/admin/packages/fedora")
+                    .body(Body::from(minimal_ccs("fixture-demo", "1.0.0")))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 }

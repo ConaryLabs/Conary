@@ -278,14 +278,7 @@ impl VersionConstraint {
     pub fn satisfies(&self, version: &RpmVersion) -> bool {
         match self {
             VersionConstraint::Any => true,
-            VersionConstraint::Exact(v) => {
-                // Normalize epoch (default 0) and release (default None)
-                // so that "1.2.3" matches "0:1.2.3" and "1.2.3-" matches "1.2.3"
-                version.epoch == v.epoch
-                    && version.version == v.version
-                    && version.release.as_deref().unwrap_or("")
-                        == v.release.as_deref().unwrap_or("")
-            }
+            VersionConstraint::Exact(v) => version.compare(v).is_eq(),
             VersionConstraint::GreaterThan(v) => version > v,
             VersionConstraint::GreaterOrEqual(v) => version >= v,
             VersionConstraint::LessThan(v) => version < v,
@@ -508,5 +501,25 @@ mod tests {
         let v3 = RpmVersion::parse("1.2.3").unwrap();
         let v4 = RpmVersion::parse("1.2.3.4").unwrap();
         assert_eq!(v3.compare(&v4), Ordering::Less);
+    }
+
+    #[test]
+    fn test_exact_constraint_uses_rpmvercmp_semantics() {
+        // "1.001-1" should match "1.1-1" under Exact because rpmvercmp
+        // treats leading zeros as insignificant in numeric segments.
+        let c = VersionConstraint::parse("= 1.001-1").unwrap();
+        let v = RpmVersion::parse("1.1-1").unwrap();
+        assert!(
+            c.satisfies(&v),
+            "Exact constraint should use rpmvercmp: 1.001-1 == 1.1-1"
+        );
+
+        // And the reverse direction
+        let c2 = VersionConstraint::parse("= 1.1-1").unwrap();
+        let v2 = RpmVersion::parse("1.001-1").unwrap();
+        assert!(
+            c2.satisfies(&v2),
+            "Exact constraint should use rpmvercmp: 1.1-1 == 1.001-1"
+        );
     }
 }

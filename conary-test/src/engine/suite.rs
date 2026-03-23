@@ -73,7 +73,7 @@ pub struct TestSuite {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<DateTime<Utc>>,
     #[serde(skip)]
-    failed_ids: HashSet<String>,
+    unsuccessful_ids: HashSet<String>,
 }
 
 impl TestSuite {
@@ -85,19 +85,19 @@ impl TestSuite {
             results: Vec::new(),
             started_at: Utc::now(),
             finished_at: None,
-            failed_ids: HashSet::new(),
+            unsuccessful_ids: HashSet::new(),
         }
     }
 
     pub fn record(&mut self, result: TestResult) {
         if matches!(result.status, TestStatus::Failed | TestStatus::Skipped) {
-            self.failed_ids.insert(result.id.clone());
+            self.unsuccessful_ids.insert(result.id.clone());
         }
         self.results.push(result);
     }
 
     pub fn has_failed(&self, id: &str) -> bool {
-        self.failed_ids.contains(id)
+        self.unsuccessful_ids.contains(id)
     }
 
     pub fn should_skip(&self, depends_on: &Option<Vec<String>>) -> bool {

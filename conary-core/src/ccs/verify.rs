@@ -340,8 +340,10 @@ fn verify_signature(
             VerifyError::SignatureInvalid(format!("Signature verification failed: {}", e))
         })?;
 
-    // Check if key is trusted
-    if !policy.trusted_keys.is_empty() && !policy.trusted_keys.contains(&sig.public_key) {
+    // Check if key is trusted -- a valid signature is only meaningful if the
+    // signing key is in the trusted set.  When trusted_keys is empty there are
+    // no trust anchors, so a self-signed package must NOT be accepted as Valid.
+    if !policy.trusted_keys.contains(&sig.public_key) {
         if policy.allow_unsigned {
             warnings.push(format!(
                 "Signature valid but key not in trusted list: {:?}",
@@ -645,5 +647,96 @@ mod tests {
 
         let status = verify_content_hashes(&files, &blobs).unwrap();
         assert!(matches!(status, ContentStatus::Invalid { .. }));
+    }
+
+    /// Helper: create a self-signed PackageSignature for test manifest data.
+    /// Uses deterministic key bytes to avoid OsRng/rand_core version conflicts
+    /// in the test compilation environment.
+    fn make_self_signed_signature(manifest: &[u8]) -> (PackageSignature, String) {
+        use ed25519_dalek::{Signer, SigningKey};
+
+        // Deterministic 32-byte seed (any fixed bytes work for testing)
+        let seed: [u8; 32] = [
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+            25, 26, 27, 28, 29, 30, 31, 32,
+        ];
+        let signing_key = SigningKey::from_bytes(&seed);
+        let verifying_key = signing_key.verifying_key();
+        let public_key_b64 = BASE64.encode(verifying_key.as_bytes());
+
+        let sig = signing_key.sign(manifest);
+        let sig_b64 = BASE64.encode(sig.to_bytes());
+
+        let pkg_sig = PackageSignature {
+            algorithm: "ed25519".to_string(),
+            signature: sig_b64,
+            public_key: public_key_b64.clone(),
+            key_id: Some("attacker-key".to_string()),
+            timestamp: Some("2026-01-01T00:00:00Z".to_string()),
+        };
+
+        (pkg_sig, public_key_b64)
+    }
+
+    #[test]
+    fn test_self_signed_package_returns_untrusted_with_empty_trusted_keys() {
+        // An attacker embeds their own keypair and self-signs the manifest.
+        // With no trusted keys configured (the default), this must NOT return Valid.
+        let manifest = b"fake manifest content";
+        let (sig, _pub_key) = make_self_signed_signature(manifest);
+
+        let policy = TrustPolicy::default(); // trusted_keys is empty
+        let mut warnings = Vec::new();
+
+        let status = verify_signature(manifest, Some(&sig), &policy, &mut warnings).unwrap();
+
+        assert!(
+            matches!(status, SignatureStatus::Untrusted { .. }),
+            "Expected Untrusted when trusted_keys is empty, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_self_signed_package_returns_valid_when_key_trusted() {
+        // When the key IS in trusted_keys, the signature should be Valid.
+        let manifest = b"trusted manifest content";
+        let (sig, pub_key) = make_self_signed_signature(manifest);
+
+        let policy = TrustPolicy {
+            trusted_keys: vec![pub_key],
+            ..Default::default()
+        };
+        let mut warnings = Vec::new();
+
+        let status = verify_signature(manifest, Some(&sig), &policy, &mut warnings).unwrap();
+
+        assert!(
+            matches!(status, SignatureStatus::Valid { .. }),
+            "Expected Valid when key is in trusted_keys, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_self_signed_package_returns_untrusted_when_key_not_in_list() {
+        // Signature is valid but the key is not in the trusted list.
+        let manifest = b"some manifest content";
+        let (sig, _pub_key) = make_self_signed_signature(manifest);
+
+        let policy = TrustPolicy {
+            trusted_keys: vec!["some-other-key-base64".to_string()],
+            allow_unsigned: true, // permissive but with a trust list
+            ..Default::default()
+        };
+        let mut warnings = Vec::new();
+
+        let status = verify_signature(manifest, Some(&sig), &policy, &mut warnings).unwrap();
+
+        assert!(
+            matches!(status, SignatureStatus::Untrusted { .. }),
+            "Expected Untrusted when key is not in trusted_keys, got {:?}",
+            status
+        );
     }
 }

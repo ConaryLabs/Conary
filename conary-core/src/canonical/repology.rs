@@ -112,6 +112,10 @@ pub fn distro_to_repo(distro: &str) -> Option<String> {
         "arch" => return Some("arch".to_string()),
         "ubuntu-noble" => return Some("ubuntu_24_04".to_string()),
         "ubuntu-jammy" => return Some("ubuntu_22_04".to_string()),
+        "debian-bookworm" => return Some("debian_12".to_string()),
+        "debian-bullseye" => return Some("debian_11".to_string()),
+        "debian-trixie" => return Some("debian_13".to_string()),
+        "debian-sid" => return Some("debian_unstable".to_string()),
         "opensuse-tumbleweed" => return Some("opensuse_tumbleweed".to_string()),
         _ => {}
     }
@@ -121,6 +125,13 @@ pub fn distro_to_repo(distro: &str) -> Option<String> {
         && version.chars().all(|c| c.is_ascii_digit())
     {
         return Some(format!("fedora_{version}"));
+    }
+
+    // Pattern: debian-NN -> debian_NN
+    if let Some(version) = distro.strip_prefix("debian-")
+        && version.chars().all(|c| c.is_ascii_digit())
+    {
+        return Some(format!("debian_{version}"));
     }
 
     // Pattern: opensuse-* -> opensuse_*
@@ -134,12 +145,23 @@ pub fn distro_to_repo(distro: &str) -> Option<String> {
 /// Map a Repology repository ID to a Conary distro identifier.
 ///
 /// Returns `None` for repositories we do not recognise.
+///
+/// NOTE: A mapping here does NOT imply Remi hosts packages for that distro.
+/// These mappings support canonical name resolution (e.g. "what is httpd called
+/// on Debian?" -> "apache2") even for distros without a Remi repository endpoint.
+/// To actually serve packages for a new distro, you also need: a Remi mirror
+/// sync config, a Containerfile for integration tests, and a config.toml entry
+/// in conary-test. See `.claude/rules/integration-tests.md` "Adding a New Distro".
 pub fn repo_to_distro(repo: &str) -> Option<String> {
     // Exact matches first
     match repo {
         "arch" => return Some("arch".to_string()),
         "ubuntu_24_04" => return Some("ubuntu-noble".to_string()),
         "ubuntu_22_04" => return Some("ubuntu-jammy".to_string()),
+        "debian_12" => return Some("debian-bookworm".to_string()),
+        "debian_11" => return Some("debian-bullseye".to_string()),
+        "debian_13" => return Some("debian-trixie".to_string()),
+        "debian_unstable" => return Some("debian-sid".to_string()),
         "opensuse_tumbleweed" => return Some("opensuse-tumbleweed".to_string()),
         _ => {}
     }
@@ -149,6 +171,13 @@ pub fn repo_to_distro(repo: &str) -> Option<String> {
         && version.chars().all(|c| c.is_ascii_digit())
     {
         return Some(format!("fedora-{version}"));
+    }
+
+    // Pattern: debian_NN -> debian-NN
+    if let Some(version) = repo.strip_prefix("debian_")
+        && version.chars().all(|c| c.is_ascii_digit())
+    {
+        return Some(format!("debian-{version}"));
     }
 
     // Pattern: opensuse_* -> opensuse-*
@@ -172,7 +201,11 @@ pub struct RepologyClient {
     base_url: String,
 }
 
-const USER_AGENT: &str = "conary/0.6.0 (https://conary.io; canonical-registry-sync)";
+const USER_AGENT: &str = concat!(
+    "conary/",
+    env!("CARGO_PKG_VERSION"),
+    " (https://conary.io; canonical-registry-sync)"
+);
 
 fn build_client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
@@ -378,6 +411,50 @@ mod tests {
             repo_to_distro("opensuse_leap_15_5"),
             Some("opensuse-leap_15_5".to_string())
         );
+    }
+
+    #[test]
+    fn test_repo_to_distro_debian() {
+        assert_eq!(
+            repo_to_distro("debian_12"),
+            Some("debian-bookworm".to_string())
+        );
+        assert_eq!(
+            repo_to_distro("debian_11"),
+            Some("debian-bullseye".to_string())
+        );
+        assert_eq!(
+            repo_to_distro("debian_13"),
+            Some("debian-trixie".to_string())
+        );
+        assert_eq!(
+            repo_to_distro("debian_unstable"),
+            Some("debian-sid".to_string())
+        );
+        // Numeric fallback pattern
+        assert_eq!(repo_to_distro("debian_10"), Some("debian-10".to_string()));
+    }
+
+    #[test]
+    fn test_distro_to_repo_debian() {
+        assert_eq!(
+            distro_to_repo("debian-bookworm"),
+            Some("debian_12".to_string())
+        );
+        assert_eq!(
+            distro_to_repo("debian-bullseye"),
+            Some("debian_11".to_string())
+        );
+        assert_eq!(
+            distro_to_repo("debian-trixie"),
+            Some("debian_13".to_string())
+        );
+        assert_eq!(
+            distro_to_repo("debian-sid"),
+            Some("debian_unstable".to_string())
+        );
+        // Numeric fallback pattern
+        assert_eq!(distro_to_repo("debian-10"), Some("debian_10".to_string()));
     }
 
     #[test]

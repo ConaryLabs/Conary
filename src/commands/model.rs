@@ -261,10 +261,7 @@ use super::replatform_rendering::render_replatform_execution_plan;
 /// Print source policy summary, replatform estimate note, and replatform
 /// plan (or realignment proposal preview).  Shared by `cmd_model_diff` and
 /// `cmd_model_apply`.
-fn print_source_policy_and_replatform(
-    conn: &Connection,
-    diff: &ModelDiff,
-) -> Result<()> {
+fn print_source_policy_and_replatform(conn: &Connection, diff: &ModelDiff) -> Result<()> {
     if let Some(summary) = source_policy_summary(diff) {
         println!("{}", summary);
         println!();

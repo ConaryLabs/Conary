@@ -28,6 +28,10 @@ pub struct GcStats {
 ///
 /// Queries the database for all distinct `sha256_hash` values from files
 /// belonging to troves that are members of the given state snapshots.
+///
+/// Uses `json_each()` to bind the state ID list as a single JSON array
+/// parameter, avoiding the `SQLITE_MAX_VARIABLE_NUMBER` limit that a
+/// per-ID placeholder approach would hit with large state lists.
 pub fn live_cas_hashes(
     conn: &Connection,
     surviving_state_ids: &[i64],
@@ -36,32 +40,15 @@ pub fn live_cas_hashes(
         return Ok(HashSet::new());
     }
 
-    // Build a parameterized IN clause. rusqlite doesn't natively support
-    // binding a slice, so we construct placeholders manually.
-    let placeholders: Vec<String> = surviving_state_ids
-        .iter()
-        .enumerate()
-        .map(|(i, _)| format!("?{}", i + 1))
-        .collect();
-    let in_clause = placeholders.join(", ");
+    let json_array = serde_json::to_string(surviving_state_ids)?;
 
-    let sql = format!(
-        "SELECT DISTINCT f.sha256_hash FROM files f \
-         JOIN troves t ON f.trove_id = t.id \
-         JOIN state_members sm ON sm.trove_name = t.name AND sm.trove_version = t.version \
-         WHERE sm.state_id IN ({in_clause})"
-    );
+    let sql = "SELECT DISTINCT f.sha256_hash FROM files f \
+               JOIN troves t ON f.trove_id = t.id \
+               JOIN state_members sm ON sm.trove_name = t.name AND sm.trove_version = t.version \
+               WHERE sm.state_id IN (SELECT value FROM json_each(?1))";
 
-    let mut stmt = conn.prepare(&sql)?;
-
-    // Bind each state_id parameter
-    let params: Vec<Box<dyn rusqlite::types::ToSql>> = surviving_state_ids
-        .iter()
-        .map(|id| Box::new(*id) as Box<dyn rusqlite::types::ToSql>)
-        .collect();
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-
-    let rows = stmt.query_map(param_refs.as_slice(), |row| row.get::<_, String>(0))?;
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map([&json_array], |row| row.get::<_, String>(0))?;
 
     let mut hashes = HashSet::new();
     for row in rows {

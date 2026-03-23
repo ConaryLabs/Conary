@@ -695,7 +695,13 @@ async fn cmd_deploy_rebuild(crate_name: Option<&str>, json: bool) -> Result<()> 
 async fn cmd_deploy_restart(json: bool) -> Result<()> {
     let (code, stdout, stderr) =
         run_command("systemctl", &["--user", "restart", "conary-test"], None).await?;
-    print_step("systemctl --user restart conary-test", code, &stdout, &stderr, json);
+    print_step(
+        "systemctl --user restart conary-test",
+        code,
+        &stdout,
+        &stderr,
+        json,
+    );
 
     if code != 0 {
         bail!("service restart failed (exit {code})");
@@ -791,7 +797,13 @@ async fn cmd_fixtures_build(groups: &str, json: bool) -> Result<()> {
 
     let script_path = format!("{fixture_dir}/{script}");
     let (code, stdout, stderr) = run_command("bash", &[&script_path], Some(&dir)).await?;
-    print_step(&format!("build-fixtures ({groups})"), code, &stdout, &stderr, json);
+    print_step(
+        &format!("build-fixtures ({groups})"),
+        code,
+        &stdout,
+        &stderr,
+        json,
+    );
 
     if code != 0 {
         bail!("fixture build failed (exit {code})");

@@ -11,8 +11,8 @@ use crate::error::Result;
 use crate::model::AutomationConfig;
 #[allow(unused_imports)]
 use chrono::{DateTime, Local, NaiveTime, Timelike, Utc};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 /// State of the automation scheduler
@@ -200,6 +200,7 @@ fn format_duration(duration: chrono::Duration) -> String {
 pub struct AutomationDaemon {
     scheduler: AutomationScheduler,
     running: Arc<AtomicBool>,
+    notify: Arc<(Mutex<()>, Condvar)>,
 }
 
 impl AutomationDaemon {
@@ -208,12 +209,18 @@ impl AutomationDaemon {
         Self {
             scheduler: AutomationScheduler::new(config),
             running: Arc::new(AtomicBool::new(false)),
+            notify: Arc::new((Mutex::new(()), Condvar::new())),
         }
     }
 
     /// Get a clone of the running flag for use in signal handlers
     pub fn running_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.running)
+    }
+
+    /// Get a clone of the notify pair for use in signal handlers
+    pub fn notify_pair(&self) -> Arc<(Mutex<()>, Condvar)> {
+        Arc::clone(&self.notify)
     }
 
     /// Start the daemon (blocking)
@@ -228,14 +235,17 @@ impl AutomationDaemon {
                 self.scheduler.record_check();
             }
 
-            // Sleep until next check or 1 minute, whichever is shorter
+            // Wait until next check or 1 minute, whichever is shorter.
+            // Condvar::wait_timeout allows stop() to wake us immediately.
             let sleep_duration = self
                 .scheduler
                 .time_until_next()
                 .map(|d| d.min(Duration::from_secs(60)))
                 .unwrap_or(Duration::from_secs(60));
 
-            std::thread::sleep(sleep_duration);
+            let (lock, cvar) = &*self.notify;
+            let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+            let _ = cvar.wait_timeout(guard, sleep_duration);
         }
 
         Ok(())
@@ -244,9 +254,12 @@ impl AutomationDaemon {
     /// Signal the daemon to stop.
     ///
     /// Takes `&self` so it can be called from signal handlers or other threads
-    /// holding an `Arc<Self>` or `&Self` reference.
+    /// holding an `Arc<Self>` or `&Self` reference. Wakes the sleep loop
+    /// immediately via the condvar.
     pub fn stop(&self) {
         self.running.store(false, AtomicOrdering::SeqCst);
+        let (_lock, cvar) = &*self.notify;
+        cvar.notify_one();
         tracing::info!("Automation daemon stopping");
     }
 

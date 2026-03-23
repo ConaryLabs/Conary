@@ -159,7 +159,16 @@ pub fn verify_snapshot_consistency(
 }
 
 /// Verify that a hash matches the expected value from a MetaFile reference
-pub fn verify_metadata_hash(meta_ref: &MetaFile, actual_bytes: &[u8]) -> TrustResult<()> {
+///
+/// When `require_hash` is true, returns an error if the metadata reference
+/// does not contain a sha256 hash. Use `require_hash: true` for critical
+/// cross-references (snapshot->targets, timestamp->snapshot) to prevent
+/// downgrade attacks where an attacker strips hashes from metadata.
+pub fn verify_metadata_hash(
+    meta_ref: &MetaFile,
+    actual_bytes: &[u8],
+    require_hash: bool,
+) -> TrustResult<()> {
     if let Some(ref hashes) = meta_ref.hashes
         && let Some(expected_sha256) = hashes.get("sha256")
     {
@@ -169,6 +178,10 @@ pub fn verify_metadata_hash(meta_ref: &MetaFile, actual_bytes: &[u8]) -> TrustRe
                 "Hash mismatch: expected {expected_sha256}, got {actual_hash}"
             )));
         }
+    } else if require_hash {
+        return Err(TrustError::ConsistencyError(
+            "Metadata reference is missing required sha256 hash".to_string(),
+        ));
     }
     Ok(())
 }
@@ -213,7 +226,7 @@ pub fn verify_file(meta_ref: &MetaFile, path: &Path) -> TrustResult<()> {
             e
         ))
     })?;
-    verify_metadata_hash(meta_ref, &content)
+    verify_metadata_hash(meta_ref, &content, false)
 }
 
 /// Verify root metadata self-signatures using its own keys
@@ -425,7 +438,7 @@ mod tests {
             hashes: Some(hashes),
         };
 
-        assert!(verify_metadata_hash(&meta_ref, data).is_ok());
+        assert!(verify_metadata_hash(&meta_ref, data, false).is_ok());
     }
 
     #[test]
@@ -439,7 +452,7 @@ mod tests {
             hashes: Some(hashes),
         };
 
-        let result = verify_metadata_hash(&meta_ref, b"test");
+        let result = verify_metadata_hash(&meta_ref, b"test", false);
         assert!(matches!(result, Err(TrustError::ConsistencyError(_))));
     }
 
@@ -451,8 +464,21 @@ mod tests {
             hashes: None,
         };
 
-        // No hash to check = passes
-        assert!(verify_metadata_hash(&meta_ref, b"anything").is_ok());
+        // No hash to check = passes (require_hash = false)
+        assert!(verify_metadata_hash(&meta_ref, b"anything", false).is_ok());
+    }
+
+    #[test]
+    fn test_verify_metadata_hash_require_hash_rejects_missing() {
+        let meta_ref = MetaFile {
+            version: 1,
+            length: None,
+            hashes: None,
+        };
+
+        // require_hash = true should fail when no hash is present
+        let result = verify_metadata_hash(&meta_ref, b"anything", true);
+        assert!(matches!(result, Err(TrustError::ConsistencyError(_))));
     }
 
     #[test]

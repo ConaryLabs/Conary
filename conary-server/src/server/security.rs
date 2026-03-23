@@ -10,7 +10,14 @@ use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tracing::warn;
 
-/// Rate limiter state for per-IP tracking
+/// Rate limiter state for per-IP tracking.
+///
+/// TODO: Consider replacing this hand-rolled token bucket with governor's
+/// `DefaultKeyedRateLimiter`, which is already used for the admin API
+/// (see `rate_limit.rs`). That would unify rate limiting across both the
+/// public and admin APIs, reduce code, and gain governor's built-in GC.
+/// The main blocker is plumbing governor into the public router's middleware
+/// layer in `routes.rs`, which currently passes this type via `Extension`.
 pub struct RateLimiter {
     /// Request counts per IP
     buckets: RwLock<HashMap<String, RateBucket>>,

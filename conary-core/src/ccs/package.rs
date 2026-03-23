@@ -30,6 +30,12 @@ const MAX_ENTRY_SIZE: u64 = 512 * 1024 * 1024;
 /// Maximum cumulative extraction size (4 GB)
 const MAX_TOTAL_EXTRACTION_SIZE: u64 = 4 * 1024 * 1024 * 1024;
 
+/// Maximum size for manifest entries (MANIFEST or MANIFEST.toml) (16 MiB)
+const MAX_MANIFEST_SIZE: u64 = 16 * 1024 * 1024;
+
+/// Maximum size for component JSON entries (64 MiB)
+const MAX_COMPONENT_SIZE: u64 = 64 * 1024 * 1024;
+
 /// A parsed CCS package ready for installation
 #[derive(Debug)]
 pub struct CcsPackage {
@@ -409,6 +415,12 @@ impl PackageFormat for CcsPackage {
 
             // Read MANIFEST (CBOR binary manifest) - preferred
             if entry_path_str == "MANIFEST" || entry_path_str == "./MANIFEST" {
+                let entry_size = entry.header().size()?;
+                if entry_size > MAX_MANIFEST_SIZE {
+                    return Err(Error::ParseError(format!(
+                        "MANIFEST entry too large: {entry_size} bytes (limit {MAX_MANIFEST_SIZE})"
+                    )));
+                }
                 let mut content = Vec::new();
                 entry.read_to_end(&mut content)?;
                 binary_manifest = Some(
@@ -418,6 +430,12 @@ impl PackageFormat for CcsPackage {
             }
             // Read MANIFEST.toml - fallback for legacy packages
             else if entry_path_str == "MANIFEST.toml" || entry_path_str == "./MANIFEST.toml" {
+                let entry_size = entry.header().size()?;
+                if entry_size > MAX_MANIFEST_SIZE {
+                    return Err(Error::ParseError(format!(
+                        "MANIFEST.toml entry too large: {entry_size} bytes (limit {MAX_MANIFEST_SIZE})"
+                    )));
+                }
                 let mut content = String::new();
                 entry.read_to_string(&mut content)?;
                 toml_manifest = Some(
@@ -430,6 +448,12 @@ impl PackageFormat for CcsPackage {
                 || entry_path_str.starts_with("./components/"))
                 && entry_path_str.ends_with(".json")
             {
+                let entry_size = entry.header().size()?;
+                if entry_size > MAX_COMPONENT_SIZE {
+                    return Err(Error::ParseError(format!(
+                        "Component JSON entry too large: {entry_size} bytes (limit {MAX_COMPONENT_SIZE})"
+                    )));
+                }
                 let mut content = String::new();
                 entry.read_to_string(&mut content)?;
                 let comp: ComponentData = serde_json::from_str(&content)

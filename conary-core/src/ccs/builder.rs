@@ -349,8 +349,11 @@ impl CcsBuilder {
         let (file_type, content, target) = if is_symlink {
             let target = fs::read_link(source_path)?;
             let target_str = target.to_string_lossy().to_string();
-            let content = format!("symlink:{}", target_str);
-            (FileType::Symlink, content.into_bytes(), Some(target_str))
+            (
+                FileType::Symlink,
+                target_str.as_bytes().to_vec(),
+                Some(target_str),
+            )
         } else {
             let content = fs::read(source_path)?;
             (FileType::Regular, content, None)
@@ -698,7 +701,7 @@ fn build_binary_manifest(
         )
         .collect();
 
-    let binary_hooks = convert_hooks_to_binary(&manifest.hooks);
+    let binary_hooks = convert_hooks_to_binary(&manifest.hooks)?;
 
     let build = manifest.build.as_ref().map(|b| BinaryBuildInfo {
         source: b.source.clone(),
@@ -728,7 +731,7 @@ use crate::ccs::manifest::parse_octal_mode;
 
 fn convert_hooks_to_binary(
     hooks: &crate::ccs::manifest::Hooks,
-) -> Option<super::binary_manifest::BinaryHooks> {
+) -> crate::Result<Option<super::binary_manifest::BinaryHooks>> {
     use crate::ccs::binary_manifest::{
         BinaryAlternativeHook, BinaryDirectoryHook, BinaryGroupHook, BinaryHooks, BinarySysctlHook,
         BinarySystemdHook, BinaryTmpfilesHook, BinaryUserHook,
@@ -757,13 +760,15 @@ fn convert_hooks_to_binary(
         directories: hooks
             .directories
             .iter()
-            .map(|d| BinaryDirectoryHook {
-                path: d.path.clone(),
-                mode: parse_octal_mode(&d.mode),
-                owner: d.owner.clone(),
-                group: d.group.clone(),
+            .map(|d| {
+                Ok(BinaryDirectoryHook {
+                    path: d.path.clone(),
+                    mode: parse_octal_mode(&d.mode)?,
+                    owner: d.owner.clone(),
+                    group: d.group.clone(),
+                })
             })
-            .collect(),
+            .collect::<crate::Result<Vec<_>>>()?,
         systemd: hooks
             .systemd
             .iter()
@@ -775,14 +780,16 @@ fn convert_hooks_to_binary(
         tmpfiles: hooks
             .tmpfiles
             .iter()
-            .map(|t| BinaryTmpfilesHook {
-                entry_type: t.entry_type.clone(),
-                path: t.path.clone(),
-                mode: parse_octal_mode(&t.mode),
-                owner: t.owner.clone(),
-                group: t.group.clone(),
+            .map(|t| {
+                Ok(BinaryTmpfilesHook {
+                    entry_type: t.entry_type.clone(),
+                    path: t.path.clone(),
+                    mode: parse_octal_mode(&t.mode)?,
+                    owner: t.owner.clone(),
+                    group: t.group.clone(),
+                })
             })
-            .collect(),
+            .collect::<crate::Result<Vec<_>>>()?,
         sysctl: hooks
             .sysctl
             .iter()
@@ -806,9 +813,9 @@ fn convert_hooks_to_binary(
     };
 
     if binary.is_empty() {
-        None
+        Ok(None)
     } else {
-        Some(binary)
+        Ok(Some(binary))
     }
 }
 

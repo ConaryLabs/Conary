@@ -6,6 +6,7 @@
 //! and exporting to container formats.
 
 use super::super::open_db;
+use super::install::sanitize_package_relative_path;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::Path;
@@ -80,9 +81,9 @@ pub async fn cmd_ccs_shell(
                 let files = conary_core::db::models::FileEntry::find_by_trove(&conn, trove_id)?;
 
                 for file in &files {
-                    // Determine where to put the file in our temp environment
-                    let rel_path = file.path.trim_start_matches('/');
-                    let dest_path = temp_path.join(rel_path);
+                    // Sanitize to prevent path traversal (e.g. ../../etc/shadow)
+                    let rel_path = sanitize_package_relative_path(&file.path)?;
+                    let dest_path = temp_path.join(&rel_path);
 
                     // Create parent directory
                     if let Some(parent) = dest_path.parent() {
@@ -222,8 +223,9 @@ pub async fn cmd_ccs_run(
             let files = conary_core::db::models::FileEntry::find_by_trove(&conn, trove_id)?;
 
             for file in &files {
-                let rel_path = file.path.trim_start_matches('/');
-                let dest_path = temp_path.join(rel_path);
+                // Sanitize to prevent path traversal (e.g. ../../etc/shadow)
+                let rel_path = sanitize_package_relative_path(&file.path)?;
+                let dest_path = temp_path.join(&rel_path);
 
                 if let Some(parent) = dest_path.parent() {
                     std::fs::create_dir_all(parent)?;

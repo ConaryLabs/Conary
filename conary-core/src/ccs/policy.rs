@@ -134,6 +134,7 @@ impl PolicyChain {
         config: &BuildPolicyConfig,
     ) -> Result<(PolicyAction, Vec<u8>)> {
         let mut current_content = content;
+        let mut was_replaced = false;
 
         for policy in &self.policies {
             let ctx = PolicyContext {
@@ -149,6 +150,7 @@ impl PolicyChain {
                 }
                 PolicyAction::Replace(new_content) => {
                     current_content = new_content;
+                    was_replaced = true;
                     // Continue to next policy with new content
                 }
                 PolicyAction::Skip => {
@@ -164,8 +166,13 @@ impl PolicyChain {
             }
         }
 
-        // If content was modified, signal that
-        Ok((PolicyAction::Keep, current_content))
+        // Signal Replace so the builder knows to rehash the modified content
+        let action = if was_replaced {
+            PolicyAction::Replace(Vec::new())
+        } else {
+            PolicyAction::Keep
+        };
+        Ok((action, current_content))
     }
 }
 
@@ -824,6 +831,75 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_policy_chain_returns_replace_when_content_modified() {
+        // A policy chain should return Replace (not Keep) when a policy modifies content.
+        // This is critical because the builder uses the action to decide whether to rehash.
+        let mut chain = PolicyChain::new();
+
+        // Add a shebang-fixing policy that will modify the content
+        let mut replacements = HashMap::new();
+        replacements.insert(
+            "/usr/bin/env python".to_string(),
+            "/usr/bin/python3".to_string(),
+        );
+        chain.add(Box::new(FixShebangsPolicy::new(replacements)));
+
+        let mut entry = make_entry("/usr/bin/script.py", 0o755);
+        let content = b"#!/usr/bin/env python\nprint('hello')".to_vec();
+        let config = BuildPolicyConfig::default();
+
+        let (action, new_content) = chain
+            .apply(
+                &mut entry,
+                content,
+                Path::new("/src/usr/bin/script.py"),
+                &config,
+            )
+            .unwrap();
+
+        // Content should have been modified
+        assert!(new_content.starts_with(b"#!/usr/bin/python3"));
+
+        // Action MUST be Replace so the builder knows to rehash
+        assert!(
+            matches!(action, PolicyAction::Replace(_)),
+            "Expected Replace action when content was modified, got Keep"
+        );
+    }
+
+    #[test]
+    fn test_policy_chain_returns_keep_when_content_unmodified() {
+        // When no policy modifies content, the chain should return Keep
+        let mut chain = PolicyChain::new();
+
+        // Add a shebang-fixing policy, but content won't match
+        let mut replacements = HashMap::new();
+        replacements.insert(
+            "/usr/bin/env python".to_string(),
+            "/usr/bin/python3".to_string(),
+        );
+        chain.add(Box::new(FixShebangsPolicy::new(replacements)));
+
+        let mut entry = make_entry("/usr/bin/script.sh", 0o755);
+        let content = b"#!/bin/bash\necho hello".to_vec();
+        let config = BuildPolicyConfig::default();
+
+        let (action, _) = chain
+            .apply(
+                &mut entry,
+                content,
+                Path::new("/src/usr/bin/script.sh"),
+                &config,
+            )
+            .unwrap();
+
+        assert!(
+            matches!(action, PolicyAction::Keep),
+            "Expected Keep action when content was not modified"
+        );
     }
 
     #[test]
