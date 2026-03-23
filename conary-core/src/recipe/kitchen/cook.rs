@@ -290,18 +290,9 @@ impl<'a> Cook<'a> {
                 ),
             ));
             env.push(("PKG_CONFIG_SYSROOT_DIR", sysroot_str.clone()));
-            env.push((
-                "CFLAGS",
-                format!("-I{sysroot_str}/usr/include"),
-            ));
-            env.push((
-                "CPPFLAGS",
-                format!("-I{sysroot_str}/usr/include"),
-            ));
-            env.push((
-                "LDFLAGS",
-                format!("-L{sysroot_str}/usr/lib -L{sysroot_str}/usr/lib64 -Wl,-rpath-link,{sysroot_str}/usr/lib"),
-            ));
+            // Do NOT set global CFLAGS/CPPFLAGS/LDFLAGS -- the sysroot's
+            // headers (cross-compiled glibc) are incompatible with the host
+            // compiler. pkg-config handles per-library discovery correctly.
             // Do NOT set LD_LIBRARY_PATH -- it would cause the host shell
             // to load sysroot libc.so which is incompatible.
         }
