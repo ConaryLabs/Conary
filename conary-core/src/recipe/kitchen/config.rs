@@ -238,7 +238,11 @@ impl KitchenConfig {
     /// builds don't depend on host system libraries/tools.
     pub fn for_bootstrap(sysroot: &Path) -> Self {
         Self {
-            use_isolation: true,
+            // Disable container isolation for bootstrap builds. The derivation
+            // pipeline provides hermeticity via CAS-layered EROFS mounts;
+            // namespace isolation adds complexity without benefit when running
+            // as root on a dedicated build machine.
+            use_isolation: false,
             pristine_mode: true,
             sysroot: Some(sysroot.to_path_buf()),
             // In bootstrap mode, we typically don't auto-install makedepends
@@ -300,7 +304,7 @@ mod tests {
     #[test]
     fn test_kitchen_config_for_bootstrap() {
         let config = KitchenConfig::for_bootstrap(Path::new("/opt/stage0"));
-        assert!(config.use_isolation);
+        assert!(!config.use_isolation, "bootstrap disables isolation");
         assert!(config.pristine_mode);
         assert_eq!(config.sysroot, Some(PathBuf::from("/opt/stage0")));
         assert!(!config.auto_makedepends);
