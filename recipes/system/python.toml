@@ -31,9 +31,9 @@ makedepends = []
 chroot = true
 
 configure = """
-# Note: --enable-optimizations (PGO) is disabled because GCC 15 produces
-# new warnings in binascii.c that Python's PGO build treats as -Werror.
-# Re-enable once Python 3.14+ fixes the compatibility.
+# GCC 15 is stricter about implicit declarations in binascii.c.
+# Disable -Werror flags that Python's configure adds.
+CFLAGS="-O2 -g -fno-strict-overflow -Wno-error" \
 ./configure --prefix=/usr               \
             --enable-shared             \
             --with-system-expat         \
