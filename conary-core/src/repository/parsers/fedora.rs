@@ -277,6 +277,12 @@ impl FedoraParser {
                 Ok(Event::Text(e)) => {
                     if let Some(ref mut pkg) = current_package {
                         let text = e.decode().unwrap_or_default().to_string();
+                        // Skip inter-element whitespace that quick_xml emits as
+                        // text events -- without this guard, trailing whitespace
+                        // between tags overwrites fields like pkg.name with "".
+                        if text.is_empty() {
+                            continue;
+                        }
                         match current_tag.as_str() {
                             "name" => pkg.name = Some(text),
                             "arch" => pkg.arch = Some(text),

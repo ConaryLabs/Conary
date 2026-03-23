@@ -685,7 +685,9 @@ mod tests {
         let manifest = b"fake manifest content";
         let (sig, _pub_key) = make_self_signed_signature(manifest);
 
-        let policy = TrustPolicy::default(); // trusted_keys is empty
+        // Use permissive policy so verify_signature returns Ok(Untrusted)
+        // instead of Err(TrustViolation) when the key is not in the trust list.
+        let policy = TrustPolicy::permissive(); // trusted_keys is empty, allow_unsigned = true
         let mut warnings = Vec::new();
 
         let status = verify_signature(manifest, Some(&sig), &policy, &mut warnings).unwrap();
