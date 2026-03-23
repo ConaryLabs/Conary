@@ -328,13 +328,13 @@ fn create_proxy_router(state: Arc<RwLock<ProxyState>>) -> Router {
         // Health check
         .route("/health", get(health))
         // Chunk serving (pull-through cache)
-        .route("/v1/chunks/:hash", get(proxy_chunk))
+        .route("/v1/chunks/{hash}", get(proxy_chunk))
         // Sparse index proxy
-        .route("/v1/index/:distro/:name", get(proxy_index_entry))
-        .route("/v1/index/:distro", get(proxy_index_list))
+        .route("/v1/index/{distro}/{name}", get(proxy_index_entry))
+        .route("/v1/index/{distro}", get(proxy_index_list))
         // Package list proxy
-        .route("/v1/:distro/packages/", get(proxy_package_list))
-        .route("/v1/:distro/packages/:name", get(proxy_package_detail))
+        .route("/v1/{distro}/packages/", get(proxy_package_list))
+        .route("/v1/{distro}/packages/{name}", get(proxy_package_detail))
         .with_state(state)
 }
 

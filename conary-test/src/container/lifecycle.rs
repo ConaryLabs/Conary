@@ -57,6 +57,7 @@ impl BollardBackend {
             if candidate.join("Cargo.toml").is_file()
                 || candidate.join(".git").exists()
                 || (candidate.join("config.toml").is_file() && candidate.join("runner").is_dir())
+                || (candidate.join("config.toml").is_file() && candidate.join("conary").is_file())
             {
                 let dockerfile_name = dockerfile
                     .strip_prefix(candidate)

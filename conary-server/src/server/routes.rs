@@ -370,9 +370,9 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
     // These get restricted CORS
     let chunk_routes = Router::new()
         // HEAD for existence checks (with Bloom filter protection)
-        .route("/v1/chunks/:hash", head(chunks::head_chunk))
+        .route("/v1/chunks/{hash}", head(chunks::head_chunk))
         // GET for chunk data
-        .route("/v1/chunks/:hash", get(chunks::get_chunk))
+        .route("/v1/chunks/{hash}", get(chunks::get_chunk))
         // Batch operations
         .route("/v1/chunks/find-missing", post(chunks::find_missing))
         .route("/v1/chunks/batch", post(chunks::batch_fetch))
@@ -387,79 +387,79 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
         // Federation discovery
         .route("/v1/federation/directory", get(federation::directory))
         // Repository index endpoints (Cloudflare-cached)
-        .route("/v1/:distro/metadata", get(index::get_metadata))
-        .route("/v1/:distro/metadata.sig", get(index::get_metadata_sig))
+        .route("/v1/{distro}/metadata", get(index::get_metadata))
+        .route("/v1/{distro}/metadata.sig", get(index::get_metadata_sig))
         // Package metadata endpoints (Cloudflare-cached, triggers conversion)
-        .route("/v1/:distro/packages/:name", get(packages::get_package))
+        .route("/v1/{distro}/packages/{name}", get(packages::get_package))
         // CCS package download (after conversion complete)
         .route(
-            "/v1/:distro/packages/:name/download",
+            "/v1/{distro}/packages/{name}/download",
             get(packages::download_package),
         )
         // Delta manifest between two versions
-        .route("/v1/:distro/packages/:name/delta", get(packages::get_delta))
+        .route("/v1/{distro}/packages/{name}/delta", get(packages::get_delta))
         // Conversion job status (for 202 Accepted polling)
-        .route("/v1/jobs/:job_id", get(jobs::get_job_status))
+        .route("/v1/jobs/{job_id}", get(jobs::get_job_status))
         // Recipe package download (read-only, after build complete)
         .route(
-            "/v1/recipes/:name/:version/download",
+            "/v1/recipes/{name}/{version}/download",
             get(recipes::download_recipe_package),
         )
         // === Sparse Index (CDN-cacheable, crates.io-style) ===
-        .route("/v1/index/:distro/:name", get(sparse::get_sparse_entry))
-        .route("/v1/index/:distro", get(sparse::list_packages))
+        .route("/v1/index/{distro}/{name}", get(sparse::get_sparse_entry))
+        .route("/v1/index/{distro}", get(sparse::list_packages))
         // === Search ===
         .route("/v1/search", get(search::search_packages))
         .route("/v1/suggest", get(search::suggest_packages))
         // === Canonical Package Identity ===
         .route("/v1/canonical/map", get(canonical::canonical_map))
         .route("/v1/canonical/search", get(canonical::canonical_search))
-        .route("/v1/canonical/:name", get(canonical::canonical_lookup))
+        .route("/v1/canonical/{name}", get(canonical::canonical_lookup))
         .route("/v1/groups", get(canonical::groups_list))
         // === Model Collections (for remote include resolution) ===
-        .route("/v1/models/:name", get(models::get_model))
+        .route("/v1/models/{name}", get(models::get_model))
         .route(
-            "/v1/models/:name/signature",
+            "/v1/models/{name}/signature",
             get(models::get_model_signature),
         )
         .route("/v1/models", get(models::list_models))
         // === Package Detail API ===
         .route(
-            "/v1/packages/:distro/:name",
+            "/v1/packages/{distro}/{name}",
             get(detail::get_package_detail),
         )
         .route(
-            "/v1/packages/:distro/:name/versions",
+            "/v1/packages/{distro}/{name}/versions",
             get(detail::get_versions),
         )
         .route(
-            "/v1/packages/:distro/:name/dependencies",
+            "/v1/packages/{distro}/{name}/dependencies",
             get(detail::get_dependencies),
         )
         .route(
-            "/v1/packages/:distro/:name/rdepends",
+            "/v1/packages/{distro}/{name}/rdepends",
             get(detail::get_reverse_dependencies),
         )
         // === TUF Trust Metadata ===
-        .route("/v1/:distro/tuf/timestamp.json", get(tuf::get_timestamp))
-        .route("/v1/:distro/tuf/snapshot.json", get(tuf::get_snapshot))
-        .route("/v1/:distro/tuf/targets.json", get(tuf::get_targets))
-        .route("/v1/:distro/tuf/root.json", get(tuf::get_root))
-        .route("/v1/:distro/tuf/:version", get(tuf::get_versioned_root))
+        .route("/v1/{distro}/tuf/timestamp.json", get(tuf::get_timestamp))
+        .route("/v1/{distro}/tuf/snapshot.json", get(tuf::get_snapshot))
+        .route("/v1/{distro}/tuf/targets.json", get(tuf::get_targets))
+        .route("/v1/{distro}/tuf/root.json", get(tuf::get_root))
+        .route("/v1/{distro}/tuf/{version}", get(tuf::get_versioned_root))
         // === Self-Update (CCS binary distribution) ===
         .route("/v1/ccs/conary/latest", get(self_update::get_latest))
         .route("/v1/ccs/conary/versions", get(self_update::get_versions))
         .route(
-            "/v1/ccs/conary/:version/download",
+            "/v1/ccs/conary/{version}/download",
             get(self_update::download),
         )
         // === Public test fixture / artifact hosting ===
         .route(
-            "/test-fixtures/*path",
+            "/test-fixtures/{*path}",
             get(artifacts::get_fixture).head(artifacts::head_fixture),
         )
         .route(
-            "/test-artifacts/*path",
+            "/test-artifacts/{*path}",
             get(artifacts::get_test_artifact).head(artifacts::head_test_artifact),
         )
         // === Derivation Cache ===
@@ -468,7 +468,7 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
             post(derivations::probe_derivations),
         )
         .route(
-            "/v1/derivations/:derivation_id",
+            "/v1/derivations/{derivation_id}",
             get(derivations::get_derivation)
                 .head(derivations::head_derivation)
                 .put(derivations::put_derivation),
@@ -479,13 +479,13 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
         .route("/v1/seeds/latest", get(seeds::get_latest_seed))
         .route("/v1/seeds", get(seeds::list_seeds))
         .route(
-            "/v1/seeds/:seed_id",
+            "/v1/seeds/{seed_id}",
             get(seeds::get_seed).put(seeds::put_seed),
         )
-        .route("/v1/seeds/:seed_id/image", get(seeds::get_seed_image))
+        .route("/v1/seeds/{seed_id}/image", get(seeds::get_seed_image))
         // === Profile Publishing ===
         .route(
-            "/v1/profiles/:profile_hash",
+            "/v1/profiles/{profile_hash}",
             get(profiles::get_profile).put(profiles::put_profile),
         )
         // === Statistics ===
@@ -500,7 +500,7 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
         // Catch-all for /v2/{name}/manifests/{ref}, /v2/{name}/blobs/{digest},
         // /v2/{name}/tags/list. Name can contain slashes so we use a wildcard.
         .route(
-            "/v2/*path",
+            "/v2/{*path}",
             get(oci::oci_catchall).head(oci::oci_catchall_head),
         )
         .layer(compression)
@@ -609,13 +609,13 @@ pub fn create_admin_router(state: Arc<RwLock<ServerState>>) -> Router {
         // Upstream metadata refresh
         .route("/v1/admin/refresh", post(refresh_upstream))
         // Model collection publishing
-        .route("/v1/admin/models/:name", put(models::put_model))
+        .route("/v1/admin/models/{name}", put(models::put_model))
         // TUF timestamp refresh
         .route(
             "/v1/admin/tuf/refresh-timestamp",
             post(tuf::refresh_timestamp),
         )
-        .route("/v1/admin/packages/:distro", post(admin::upload_package))
+        .route("/v1/admin/packages/{distro}", post(admin::upload_package))
         .route_layer(middleware::from_fn(require_localhost))
         .with_state(state)
 }
@@ -675,41 +675,41 @@ pub fn create_external_admin_router(
         // Token management
         .route("/v1/admin/tokens", post(admin::create_token))
         .route("/v1/admin/tokens", get(admin::list_tokens))
-        .route("/v1/admin/tokens/:id", delete(admin::delete_token))
+        .route("/v1/admin/tokens/{id}", delete(admin::delete_token))
         // Test fixture / artifact publishing
-        .route("/v1/admin/test-fixtures/*path", put(admin::upload_fixture))
+        .route("/v1/admin/test-fixtures/{*path}", put(admin::upload_fixture))
         .route(
-            "/v1/admin/test-artifacts/*path",
+            "/v1/admin/test-artifacts/{*path}",
             put(admin::upload_test_artifact),
         )
-        .route("/v1/admin/packages/:distro", post(admin::upload_package))
+        .route("/v1/admin/packages/{distro}", post(admin::upload_package))
         // CI proxy endpoints
         .route("/v1/admin/ci/workflows", get(admin::ci_list_workflows))
         .route(
-            "/v1/admin/ci/workflows/:name/runs",
+            "/v1/admin/ci/workflows/{name}/runs",
             get(admin::ci_list_runs),
         )
-        .route("/v1/admin/ci/runs/:id", get(admin::ci_get_run))
-        .route("/v1/admin/ci/runs/:id/logs", get(admin::ci_get_logs))
+        .route("/v1/admin/ci/runs/{id}", get(admin::ci_get_run))
+        .route("/v1/admin/ci/runs/{id}/logs", get(admin::ci_get_logs))
         .route(
-            "/v1/admin/ci/workflows/:name/dispatch",
+            "/v1/admin/ci/workflows/{name}/dispatch",
             post(admin::ci_dispatch),
         )
         .route("/v1/admin/ci/mirror-sync", post(admin::ci_mirror_sync))
         // Repository management
         .route("/v1/admin/repos", get(admin::list_repos))
         .route("/v1/admin/repos", post(admin::create_repo))
-        .route("/v1/admin/repos/:name", get(admin::get_repo))
-        .route("/v1/admin/repos/:name", put(admin::update_repo))
-        .route("/v1/admin/repos/:name", delete(admin::delete_repo))
-        .route("/v1/admin/repos/:name/sync", post(admin::sync_repo))
+        .route("/v1/admin/repos/{name}", get(admin::get_repo))
+        .route("/v1/admin/repos/{name}", put(admin::update_repo))
+        .route("/v1/admin/repos/{name}", delete(admin::delete_repo))
+        .route("/v1/admin/repos/{name}/sync", post(admin::sync_repo))
         .route("/v1/admin/refresh", post(admin::refresh_repos))
         // Federation management
         .route("/v1/admin/federation/peers", get(admin::list_peers))
         .route("/v1/admin/federation/peers", post(admin::add_peer))
-        .route("/v1/admin/federation/peers/:id", delete(admin::delete_peer))
+        .route("/v1/admin/federation/peers/{id}", delete(admin::delete_peer))
         .route(
-            "/v1/admin/federation/peers/:id/health",
+            "/v1/admin/federation/peers/{id}/health",
             get(admin::peer_health),
         )
         .route(
@@ -728,19 +728,19 @@ pub fn create_external_admin_router(
             post(admin::test_data::create_test_run).get(admin::test_data::list_test_runs),
         )
         .route(
-            "/v1/admin/test-runs/:id",
+            "/v1/admin/test-runs/{id}",
             get(admin::test_data::get_test_run).put(admin::test_data::update_test_run),
         )
         .route(
-            "/v1/admin/test-runs/:id/results",
+            "/v1/admin/test-runs/{id}/results",
             post(admin::test_data::push_test_result),
         )
         .route(
-            "/v1/admin/test-runs/:id/tests/:test_id",
+            "/v1/admin/test-runs/{id}/tests/{test_id}",
             get(admin::test_data::get_test_detail),
         )
         .route(
-            "/v1/admin/test-runs/:id/tests/:test_id/logs",
+            "/v1/admin/test-runs/{id}/tests/{test_id}/logs",
             get(admin::test_data::get_test_logs),
         )
         // Audit log

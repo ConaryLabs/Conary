@@ -527,21 +527,21 @@ fn build_v1_router(state: SharedState) -> Router<SharedState> {
         .route("/transactions", post(create_transaction_handler))
         // dry-run must come before :id to avoid the wildcard capturing "dry-run"
         .route("/transactions/dry-run", post(dry_run_handler))
-        .route("/transactions/:id", get(get_transaction_handler))
-        .route("/transactions/:id", delete(cancel_transaction_handler))
-        .route("/transactions/:id/stream", get(transaction_stream_handler))
+        .route("/transactions/{id}", get(get_transaction_handler))
+        .route("/transactions/{id}", delete(cancel_transaction_handler))
+        .route("/transactions/{id}/stream", get(transaction_stream_handler))
         // Package convenience endpoints
         .route("/packages", get(list_packages_handler))
-        .route("/packages/:name", get(get_package_handler))
-        .route("/packages/:name/files", get(get_package_files_handler))
+        .route("/packages/{name}", get(get_package_handler))
+        .route("/packages/{name}/files", get(get_package_files_handler))
         .route("/packages/install", post(install_packages_handler))
         .route("/packages/remove", post(remove_packages_handler))
         .route("/packages/update", post(update_packages_handler))
         // Search
         .route("/search", get(search_handler))
         // Dependencies
-        .route("/depends/:name", get(depends_handler))
-        .route("/rdepends/:name", get(rdepends_handler))
+        .route("/depends/{name}", get(depends_handler))
+        .route("/rdepends/{name}", get(rdepends_handler))
         // History
         .route("/history", get(history_handler))
         // System operations
