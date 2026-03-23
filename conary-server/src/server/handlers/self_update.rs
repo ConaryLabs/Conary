@@ -45,6 +45,8 @@ pub struct LatestResponse {
     pub download_url: String,
     pub sha256: String,
     pub size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 /// Response for GET /v1/ccs/conary/versions
@@ -76,8 +78,8 @@ fn self_update_dir(state: &ServerState) -> PathBuf {
         .join("self-update")
 }
 
-/// Precomputed hash and size for the latest CCS package.
-type LatestHash = Option<(String, u64)>;
+/// Precomputed hash, size, and optional signature for the latest CCS package.
+type LatestHash = Option<(String, u64, Option<String>)>;
 
 /// Scan the self-update directory and return sorted (ascending) version strings,
 /// plus the SHA-256 hash and size of the latest CCS package.
@@ -126,14 +128,19 @@ fn scan_versions_and_hash(dir: &std::path::Path) -> Result<(Vec<String>, LatestH
 
     versions.sort_by_key(|v| parse_semver(v));
 
-    // Compute SHA-256 and size for the latest version during the scan
+    // Compute SHA-256, size, and optional signature for the latest version during the scan
     let latest_hash = if let Some(latest) = versions.last() {
         let ccs_path = dir.join(format!("conary-{latest}.ccs"));
         match std::fs::read(&ccs_path) {
             Ok(data) => {
                 let sha256 = conary_core::hash::sha256(&data);
                 let size = data.len() as u64;
-                Some((sha256, size))
+                let sig_path = dir.join(format!("conary-{latest}.ccs.sig"));
+                let signature = std::fs::read_to_string(&sig_path)
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                Some((sha256, size, signature))
             }
             Err(e) => {
                 tracing::warn!(
@@ -209,7 +216,7 @@ pub async fn get_latest(State(state): State<Arc<RwLock<ServerState>>>) -> Respon
 
     let latest = versions.last().expect("scan_versions guarantees non-empty");
 
-    let (sha256, size) = match latest_hash {
+    let (sha256, size, signature) = match latest_hash {
         Some(cached) => cached,
         None => {
             // Fallback: hash not cached (e.g., file read failed during scan).
@@ -223,7 +230,13 @@ pub async fn get_latest(State(state): State<Arc<RwLock<ServerState>>>) -> Respon
                         .into_response();
                 }
             };
-            (conary_core::hash::sha256(&data), data.len() as u64)
+            let sig_path = dir.join(format!("conary-{latest}.ccs.sig"));
+            let sig = tokio::fs::read_to_string(&sig_path)
+                .await
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            (conary_core::hash::sha256(&data), data.len() as u64, sig)
         }
     };
 
@@ -232,6 +245,7 @@ pub async fn get_latest(State(state): State<Arc<RwLock<ServerState>>>) -> Respon
         download_url: format!("/v1/ccs/conary/{latest}/download"),
         sha256,
         size,
+        signature,
     };
 
     let json = match super::serialize_json(&response, "self-update latest") {
@@ -382,8 +396,9 @@ mod tests {
         assert_eq!(versions, vec!["0.1.0", "0.1.5", "0.2.0"]);
 
         // Hash should be computed for the latest version (0.2.0)
-        let (sha256, size) = latest_hash.expect("latest hash should be present");
+        let (sha256, size, signature) = latest_hash.expect("latest hash should be present");
         assert_eq!(size, b"latest-pkg".len() as u64);
         assert_eq!(sha256, conary_core::hash::sha256(b"latest-pkg"));
+        assert!(signature.is_none(), "no .sig file was created");
     }
 }
