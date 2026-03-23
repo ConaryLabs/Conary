@@ -55,9 +55,10 @@ pub fn verify_file_checksum(path: &Path, expected: &str) -> Result<bool> {
     let algo = match algorithm {
         "sha256" => HashAlgorithm::Sha256,
         "xxh128" => HashAlgorithm::Xxh128,
+        "md5" => HashAlgorithm::Md5,
         _ => {
             return Err(Error::ParseError(format!(
-                "Unsupported checksum algorithm: {} (supported: sha256, xxh128)",
+                "Unsupported checksum algorithm: {} (supported: sha256, xxh128, md5)",
                 algorithm
             )));
         }

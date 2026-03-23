@@ -15,6 +15,7 @@
 //! | Delta file identification | XXH128 | Fast comparison |
 //! | Repository metadata checksums | SHA-256 | Match upstream repos |
 
+use md5::Md5;
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::io::{self, Read};
@@ -42,6 +43,12 @@ pub enum HashAlgorithm {
     /// - Delta update identification
     /// - Any case where speed matters more than cryptographic security
     Xxh128,
+
+    /// MD5 (128-bit cryptographic hash, legacy)
+    ///
+    /// Cryptographically broken -- do NOT use for security. Supported only
+    /// for verifying upstream source tarballs that ship MD5 checksums (LFS).
+    Md5,
 }
 
 impl HashAlgorithm {
@@ -51,6 +58,7 @@ impl HashAlgorithm {
         match self {
             Self::Sha256 => 32, // 256 bits
             Self::Xxh128 => 16, // 128 bits
+            Self::Md5 => 16,    // 128 bits
         }
     }
 
@@ -66,6 +74,7 @@ impl HashAlgorithm {
         match self {
             Self::Sha256 => "sha256",
             Self::Xxh128 => "xxh128",
+            Self::Md5 => "md5",
         }
     }
 
@@ -75,6 +84,7 @@ impl HashAlgorithm {
         match self {
             Self::Sha256 => true,
             Self::Xxh128 => false,
+            Self::Md5 => false, // cryptographically broken
         }
     }
 }
@@ -92,6 +102,7 @@ impl FromStr for HashAlgorithm {
         match s.to_lowercase().as_str() {
             "sha256" | "sha-256" => Ok(Self::Sha256),
             "xxh128" | "xxhash" | "xxh3" => Ok(Self::Xxh128),
+            "md5" => Ok(Self::Md5),
             _ => Err(HashError::UnknownAlgorithm(s.to_string())),
         }
     }
@@ -187,6 +198,7 @@ pub struct Hasher {
 enum HasherState {
     Sha256(Box<Sha256>),
     Xxh128(Box<Xxh3Default>),
+    Md5(Box<Md5>),
 }
 
 impl Hasher {
@@ -195,6 +207,7 @@ impl Hasher {
         let state = match algorithm {
             HashAlgorithm::Sha256 => HasherState::Sha256(Box::new(Sha256::new())),
             HashAlgorithm::Xxh128 => HasherState::Xxh128(Box::new(Xxh3Default::new())),
+            HashAlgorithm::Md5 => HasherState::Md5(Box::new(Md5::new())),
         };
         Self { algorithm, state }
     }
@@ -204,6 +217,7 @@ impl Hasher {
         match &mut self.state {
             HasherState::Sha256(hasher) => hasher.update(data),
             HasherState::Xxh128(hasher) => hasher.update(data),
+            HasherState::Md5(hasher) => hasher.update(data),
         }
     }
 
@@ -212,6 +226,7 @@ impl Hasher {
         let value = match self.state {
             HasherState::Sha256(hasher) => format!("{:x}", hasher.finalize()),
             HasherState::Xxh128(hasher) => format!("{:032x}", hasher.digest128()),
+            HasherState::Md5(hasher) => format!("{:x}", hasher.finalize()),
         };
         Hash::new_unchecked(self.algorithm, value)
     }
@@ -233,6 +248,11 @@ pub fn hash_bytes(algorithm: HashAlgorithm, data: &[u8]) -> Hash {
         }
         HashAlgorithm::Xxh128 => {
             format!("{:032x}", xxh3_128(data))
+        }
+        HashAlgorithm::Md5 => {
+            let mut hasher = Md5::new();
+            hasher.update(data);
+            format!("{:x}", hasher.finalize())
         }
     };
     Hash::new_unchecked(algorithm, value)
