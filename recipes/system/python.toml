@@ -31,15 +31,18 @@ makedepends = []
 chroot = true
 
 configure = """
-# PGO (--enable-optimizations) disabled: it adds -Werror during profile
-# generation which breaks with host GCC 15 on Python 3.14's binascii.c
-# and _zstd modules (implicit declaration warnings). LFS avoids this by
-# building its own GCC first. PGO can be re-enabled once the bootstrap
-# uses its own GCC for Foundation+ builds.
+# Python 3.14's configure adds -Werror=implicit-function-declaration.
+# Ubuntu/Fedora GCC 15 triggers this on binascii.c and _zstd due to
+# missing includes. Override by appending -Wno-error after configure
+# so the generated Makefile CFLAGS don't have -Werror.
 ./configure --prefix=/usr               \
             --enable-shared             \
             --with-system-expat         \
             --without-static-libpython
+
+# Patch out -Werror flags from the generated Makefile
+sed -i 's/-Werror=implicit-function-declaration//g' Makefile
+sed -i 's/-Werror=[a-z-]*//g' Makefile
 """
 
 make = """
