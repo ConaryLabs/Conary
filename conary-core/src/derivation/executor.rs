@@ -699,7 +699,7 @@ install = "make install"
         let executor =
             DerivationExecutor::new(cas, tmp.path().join("cas"), ExecutorConfig::default());
         // Just verify the accessor doesn't panic and returns a usable store.
-        assert!(executor.cas().exists("nonexistent") == false);
+        assert!(!executor.cas().exists("nonexistent"));
     }
 
     #[test]
