@@ -10,6 +10,20 @@ use conary_core::self_update::{
     download_update_with_progress, extract_binary, get_update_channel, verify_binary,
 };
 
+fn check_update_signature(sha256: &str, signature: &Option<String>) -> Result<()> {
+    match signature {
+        Some(sig) => {
+            conary_core::self_update::verify_update_signature(sha256, sig)
+                .map_err(|e| anyhow::anyhow!("Update signature verification failed: {e}"))?;
+            println!("Signature verified");
+        }
+        None => {
+            eprintln!("Warning: update has no signature (pre-signing release)");
+        }
+    }
+    Ok(())
+}
+
 pub async fn cmd_self_update(
     db_path: &str,
     check: bool,
@@ -55,6 +69,16 @@ pub async fn cmd_self_update(
         }
     }
 
+    // Verify signature before downloading (normal path)
+    if let VersionCheckResult::UpdateAvailable {
+        ref sha256,
+        ref signature,
+        ..
+    } = result
+    {
+        check_update_signature(sha256, signature)?;
+    }
+
     // Determine download URL and expected version
     let (download_url, sha256, expected_version) = match &result {
         VersionCheckResult::UpdateAvailable {
@@ -69,6 +93,7 @@ pub async fn cmd_self_update(
                 .await?
                 .json()
                 .await?;
+            check_update_signature(&info.sha256, &info.signature)?;
             (info.download_url, info.sha256, info.version)
         }
     };
