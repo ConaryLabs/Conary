@@ -97,10 +97,26 @@ impl BuildEnvironment {
             .map_err(|e| EnvironmentError::Mount(format!("failed to execute mount: {e}")))?;
 
         if !status.success() {
-            return Err(EnvironmentError::Mount(format!(
-                "mount exited with status {status} for image {}",
+            // Composefs not available -- fall back to direct EROFS loopback mount.
+            info!(
+                "composefs mount failed, falling back to EROFS loopback mount for {}",
                 self.image_path.display()
-            )));
+            );
+            let erofs_status = Command::new("mount")
+                .args(["-t", "erofs", "-o", "loop,ro"])
+                .arg(&self.image_path)
+                .arg(&self.mount_point)
+                .status()
+                .map_err(|e| {
+                    EnvironmentError::Mount(format!("failed to execute EROFS mount: {e}"))
+                })?;
+
+            if !erofs_status.success() {
+                return Err(EnvironmentError::Mount(format!(
+                    "mount exited with status {status} for image {}",
+                    self.image_path.display()
+                )));
+            }
         }
 
         info!(
