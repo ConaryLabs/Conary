@@ -277,6 +277,38 @@ impl<'a> Cook<'a> {
             ),
         ];
 
+        // When a sysroot is configured (bootstrap builds), set pkg-config and
+        // compiler flags so builds discover libraries from the sysroot rather
+        // than the host. This is critical for the derivation pipeline where
+        // each stage builds against the previous stage's EROFS mount.
+        if let Some(sysroot) = &self.kitchen.config.sysroot {
+            let sysroot_str = sysroot.to_string_lossy().to_string();
+            env.push((
+                "PKG_CONFIG_PATH",
+                format!(
+                    "{sysroot_str}/usr/lib/pkgconfig:{sysroot_str}/usr/share/pkgconfig:{sysroot_str}/usr/lib64/pkgconfig",
+                ),
+            ));
+            env.push(("PKG_CONFIG_SYSROOT_DIR", sysroot_str.clone()));
+            env.push((
+                "CFLAGS",
+                format!("-I{sysroot_str}/usr/include"),
+            ));
+            env.push((
+                "CPPFLAGS",
+                format!("-I{sysroot_str}/usr/include"),
+            ));
+            env.push((
+                "LDFLAGS",
+                format!("-L{sysroot_str}/usr/lib -L{sysroot_str}/usr/lib64"),
+            ));
+            // Make sure the sysroot's libraries are found at link time
+            env.push((
+                "LD_LIBRARY_PATH",
+                format!("{sysroot_str}/usr/lib:{sysroot_str}/usr/lib64"),
+            ));
+        }
+
         for (key, value) in &build.environment {
             env.push((key, value.clone()));
         }
