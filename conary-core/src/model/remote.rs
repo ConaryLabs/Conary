@@ -640,8 +640,8 @@ mod tests {
         assert!(err.contains("nonexistent"));
     }
 
-    #[test]
-    fn test_fetch_uses_cache_when_fresh() {
+    #[tokio::test]
+    async fn test_fetch_uses_cache_when_fresh() {
         let (_temp, conn) = create_test_db();
 
         // Pre-populate cache
@@ -671,18 +671,18 @@ mod tests {
         cache_entry.upsert(&conn).unwrap();
 
         // fetch_remote_collection should return from cache without HTTP
-        let result = fetch_remote_collection(&conn, "group-cached", "repo:tag", false).unwrap();
+        let result = fetch_remote_collection(&conn, "group-cached", "repo:tag", false).await.unwrap();
         assert_eq!(result.name, "group-cached");
         assert_eq!(result.members.len(), 1);
         assert_eq!(result.members[0].name, "cached-pkg");
     }
 
-    #[test]
-    fn test_fetch_offline_no_cache() {
+    #[tokio::test]
+    async fn test_fetch_offline_no_cache() {
         let (_temp, conn) = create_test_db();
 
         // No cache entry exists, offline mode should fail
-        let result = fetch_remote_collection(&conn, "group-missing", "repo:tag", true);
+        let result = fetch_remote_collection(&conn, "group-missing", "repo:tag", true).await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("offline"));

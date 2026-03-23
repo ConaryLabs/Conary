@@ -246,10 +246,10 @@ mod tests {
 
         let mut hashes = Vec::new();
         for key in keys {
-            if let Some(hash) = key.strip_prefix(prefix) {
-                if !hash.is_empty() {
-                    hashes.push(hash.to_string());
-                }
+            if let Some(hash) = key.strip_prefix(prefix)
+                && !hash.is_empty()
+            {
+                hashes.push(hash.to_string());
             }
         }
 
