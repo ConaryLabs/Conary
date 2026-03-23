@@ -397,7 +397,10 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
             get(packages::download_package),
         )
         // Delta manifest between two versions
-        .route("/v1/{distro}/packages/{name}/delta", get(packages::get_delta))
+        .route(
+            "/v1/{distro}/packages/{name}/delta",
+            get(packages::get_delta),
+        )
         // Conversion job status (for 202 Accepted polling)
         .route("/v1/jobs/{job_id}", get(jobs::get_job_status))
         // Recipe package download (read-only, after build complete)
@@ -677,7 +680,10 @@ pub fn create_external_admin_router(
         .route("/v1/admin/tokens", get(admin::list_tokens))
         .route("/v1/admin/tokens/{id}", delete(admin::delete_token))
         // Test fixture / artifact publishing
-        .route("/v1/admin/test-fixtures/{*path}", put(admin::upload_fixture))
+        .route(
+            "/v1/admin/test-fixtures/{*path}",
+            put(admin::upload_fixture),
+        )
         .route(
             "/v1/admin/test-artifacts/{*path}",
             put(admin::upload_test_artifact),
@@ -707,7 +713,10 @@ pub fn create_external_admin_router(
         // Federation management
         .route("/v1/admin/federation/peers", get(admin::list_peers))
         .route("/v1/admin/federation/peers", post(admin::add_peer))
-        .route("/v1/admin/federation/peers/{id}", delete(admin::delete_peer))
+        .route(
+            "/v1/admin/federation/peers/{id}",
+            delete(admin::delete_peer),
+        )
         .route(
             "/v1/admin/federation/peers/{id}/health",
             get(admin::peer_health),

@@ -681,10 +681,12 @@ async fn resolve_and_parse_package(
     no_capture: bool,
     policy: &conary_core::repository::resolution_policy::ResolutionPolicy,
     ccs_opts: &CcsInstallParams<'_>,
-) -> Result<Option<(
-    Box<dyn conary_core::packages::PackageFormat>,
-    PackageFormatType,
-)>> {
+) -> Result<
+    Option<(
+        Box<dyn conary_core::packages::PackageFormat>,
+        PackageFormatType,
+    )>,
+> {
     // Create progress tracker for single package installation
     let progress = InstallProgress::single("Installing");
     progress.set_phase(package_name, InstallPhase::Downloading);
