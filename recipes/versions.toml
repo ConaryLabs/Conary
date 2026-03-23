@@ -78,7 +78,7 @@ gperf = "3.3"
 
 # Languages
 perl = "5.42.1"
-python = "3.14.3"
+python = "3.13.3"
 
 # Python packaging
 flit-core = "3.12.0"
