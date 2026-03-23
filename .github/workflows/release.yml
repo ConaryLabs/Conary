@@ -48,6 +48,16 @@ jobs:
           path: packaging/ccs/output/*.ccs
           retention-days: 5
 
+      - name: Build signing helper
+        run: cargo build --example sign_hash -p conary-core --release
+
+      - name: Upload signing helper
+        uses: actions/upload-artifact@v4
+        with:
+          name: sign-hash
+          path: target/release/examples/sign_hash
+          retention-days: 5
+
   # --- Build RPM ---
   build-rpm:
     name: Build RPM
@@ -187,6 +197,19 @@ jobs:
           echo "=== Release artifacts ==="
           ls -lh
 
+      - name: Sign CCS package
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          chmod +x release-artifacts/sign-hash/sign_hash
+          CCS_FILE=$(ls release-packages/conary-*.ccs 2>/dev/null | head -1)
+          if [ -n "$CCS_FILE" ] && [ -n "${RELEASE_SIGNING_KEY:-}" ]; then
+            release-artifacts/sign-hash/sign_hash "$CCS_FILE" > "${CCS_FILE}.sig"
+            echo "[OK] Signed: $CCS_FILE -> ${CCS_FILE}.sig"
+          else
+            echo "[SKIP] Signing skipped (no CCS file or RELEASE_SIGNING_KEY not configured)"
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -214,11 +237,15 @@ jobs:
           # Create release directory on Remi
           ssh $SSH_OPTS "$REMI" "mkdir -p /conary/releases/${VERSION} /conary/self-update"
 
-          # Upload CCS to self-update directory
-          CCS_FILE=$(find release-packages -name '*.ccs' | head -1)
+          # Upload CCS and signature to self-update directory
+          CCS_FILE=$(find release-packages -name '*.ccs' ! -name '*.sig' | head -1)
           if [ -n "$CCS_FILE" ]; then
             scp $SSH_OPTS "$CCS_FILE" "${REMI}:/conary/self-update/conary-${VERSION}.ccs"
             echo "[OK] CCS -> /conary/self-update/conary-${VERSION}.ccs"
+            if [ -f "${CCS_FILE}.sig" ]; then
+              scp $SSH_OPTS "${CCS_FILE}.sig" "${REMI}:/conary/self-update/conary-${VERSION}.ccs.sig"
+              echo "[OK] Signature -> /conary/self-update/conary-${VERSION}.ccs.sig"
+            fi
           fi
 
           # Upload all packages to release directory
