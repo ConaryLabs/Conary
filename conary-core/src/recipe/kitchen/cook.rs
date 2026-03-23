@@ -300,13 +300,10 @@ impl<'a> Cook<'a> {
             ));
             env.push((
                 "LDFLAGS",
-                format!("-L{sysroot_str}/usr/lib -L{sysroot_str}/usr/lib64"),
+                format!("-L{sysroot_str}/usr/lib -L{sysroot_str}/usr/lib64 -Wl,-rpath-link,{sysroot_str}/usr/lib"),
             ));
-            // Make sure the sysroot's libraries are found at link time
-            env.push((
-                "LD_LIBRARY_PATH",
-                format!("{sysroot_str}/usr/lib:{sysroot_str}/usr/lib64"),
-            ));
+            // Do NOT set LD_LIBRARY_PATH -- it would cause the host shell
+            // to load sysroot libc.so which is incompatible.
         }
 
         for (key, value) in &build.environment {
