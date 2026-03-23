@@ -109,7 +109,7 @@ mod tests {
     use super::*;
     use crate::model::remote::{CollectionData, CollectionMemberData};
     use ed25519_dalek::SigningKey;
-    use rand::rngs::OsRng;
+    use rand_core_06::OsRng;
     use std::collections::HashMap;
     use std::io::Write;
     use tempfile::NamedTempFile;

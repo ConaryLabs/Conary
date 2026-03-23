@@ -1117,6 +1117,7 @@ mod tests {
             "https://packages.conary.io".to_string(),
             "fedora".to_string(),
             entry,
+            "x86_64",
         );
 
         assert!(row.provides.iter().any(|provide| {
