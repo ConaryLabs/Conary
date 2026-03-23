@@ -43,9 +43,9 @@ sed '/mktemp/s/-t //' -i make-ca
 make = ""
 
 install = """
-make install
+make install DESTDIR=$DESTDIR
 
-install -vdm755 /etc/ssl/local
+install -vdm755 $DESTDIR/etc/ssl/local
 
 # Download Mozilla root certificates and generate trust store
 /usr/sbin/make-ca -g 2>/dev/null || true

@@ -38,10 +38,10 @@ make html
 """
 
 install = """
-make install
+make install DESTDIR=$DESTDIR
 
-install -d -m755           /usr/share/doc/sed-%(version)s
-install -m644 doc/sed.html /usr/share/doc/sed-%(version)s
+install -d -m755           $DESTDIR/usr/share/doc/sed-%(version)s
+install -m644 doc/sed.html $DESTDIR/usr/share/doc/sed-%(version)s
 """
 
 [variables]

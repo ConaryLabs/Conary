@@ -36,7 +36,7 @@ make BUILD_STATIC=no PREFIX=/usr -j%(jobs)s
 """
 
 install = """
-make BUILD_STATIC=no PREFIX=/usr install
+make BUILD_STATIC=no PREFIX=/usr DESTDIR=$DESTDIR install
 """
 
 [variables]

@@ -42,21 +42,22 @@ make -j%(jobs)s
 """
 
 install = """
-make install
+make install DESTDIR=$DESTDIR
 
 # Create vi symlink
-ln -sv vim /usr/bin/vi
+ln -sv vim $DESTDIR/usr/bin/vi
 
 # Create vi.1 man page symlinks
-for L in /usr/share/man/{,*/}man1/vim.1; do
+for L in $DESTDIR/usr/share/man/{,*/}man1/vim.1; do
     ln -sv vim.1 $(dirname $L)/vi.1
 done
 
 # Create documentation symlink
-ln -sv ../vim/vim92/doc /usr/share/doc/vim-%(version)s
+ln -sv ../vim/vim92/doc $DESTDIR/usr/share/doc/vim-%(version)s
 
 # Create basic /etc/vimrc
-cat > /etc/vimrc << "EOF"
+mkdir -pv $DESTDIR/etc
+cat > $DESTDIR/etc/vimrc << "EOF"
 " Begin /etc/vimrc
 
 " Ensure defaults are set before customizing

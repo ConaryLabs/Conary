@@ -42,11 +42,11 @@ make -C libelf
 """
 
 install = """
-make -C libelf install
-install -vm644 config/libelf.pc /usr/lib/pkgconfig
+make -C libelf install DESTDIR=$DESTDIR
+install -vm644 config/libelf.pc $DESTDIR/usr/lib/pkgconfig
 
 # Remove static library
-rm -fv /usr/lib/libelf.a
+rm -fv $DESTDIR/usr/lib/libelf.a
 """
 
 [variables]

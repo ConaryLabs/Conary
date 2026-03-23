@@ -49,7 +49,7 @@ make -j%(jobs)s
 """
 
 install = """
-make install
+make install DESTDIR=$DESTDIR
 """
 
 [variables]

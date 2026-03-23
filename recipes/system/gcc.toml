@@ -65,25 +65,25 @@ make -j%(jobs)s
 
 install = """
 cd build
-make install
+make install DESTDIR=$DESTDIR
 
 # Fix ownership of installed headers
 chown -v -R root:root \
-    /usr/lib/gcc/$(gcc -dumpmachine)/%(version)s/include{,-fixed}
+    $DESTDIR/usr/lib/gcc/$(gcc -dumpmachine)/%(version)s/include{,-fixed}
 
 # Create the cpp symlink required by the FHS
-ln -svr /usr/bin/cpp /usr/lib
+ln -svr $DESTDIR/usr/bin/cpp $DESTDIR/usr/lib
 
 # Create cc.1 man page link
-ln -sv gcc.1 /usr/share/man/man1/cc.1
+ln -sv gcc.1 $DESTDIR/usr/share/man/man1/cc.1
 
 # Create the LTO plugin symlink for binutils
 ln -sfv ../../libexec/gcc/$(gcc -dumpmachine)/%(version)s/liblto_plugin.so \
-        /usr/lib/bfd-plugins/
+        $DESTDIR/usr/lib/bfd-plugins/
 
 # Move GDB auto-load support files to the proper location
-mkdir -pv /usr/share/gdb/auto-load/usr/lib
-mv -v /usr/lib/*gdb.py /usr/share/gdb/auto-load/usr/lib
+mkdir -pv $DESTDIR/usr/share/gdb/auto-load/usr/lib
+mv -v $DESTDIR/usr/lib/*gdb.py $DESTDIR/usr/share/gdb/auto-load/usr/lib
 """
 
 [build.sanity_check]

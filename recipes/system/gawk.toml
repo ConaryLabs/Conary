@@ -42,11 +42,11 @@ make -j%(jobs)s
 """
 
 install = """
-rm -f /usr/bin/gawk-%(version)s
-make install
+rm -f $DESTDIR/usr/bin/gawk-%(version)s
+make install DESTDIR=$DESTDIR
 
 # Create awk.1 man page symlink
-ln -sv gawk.1 /usr/share/man/man1/awk.1
+ln -sv gawk.1 $DESTDIR/usr/share/man/man1/awk.1
 """
 
 [variables]

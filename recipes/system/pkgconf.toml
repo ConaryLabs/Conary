@@ -41,11 +41,11 @@ make -j%(jobs)s
 """
 
 install = """
-make install
+make install DESTDIR=$DESTDIR
 
 # Create pkg-config compatibility symlinks
-ln -sv pkgconf   /usr/bin/pkg-config
-ln -sv pkgconf.1 /usr/share/man/man1/pkg-config.1
+ln -sv pkgconf   $DESTDIR/usr/bin/pkg-config
+ln -sv pkgconf.1 $DESTDIR/usr/share/man/man1/pkg-config.1
 """
 
 [variables]

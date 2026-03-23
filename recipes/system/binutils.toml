@@ -53,11 +53,11 @@ make tooldir=/usr -j%(jobs)s
 
 install = """
 cd build
-make tooldir=/usr install
+make tooldir=/usr install DESTDIR=$DESTDIR
 
 # Remove static libraries and unnecessary documentation
-rm -rfv /usr/lib/lib{bfd,ctf,ctf-nobfd,gprofng,opcodes,sframe}.a \
-        /usr/share/doc/gprofng/
+rm -rfv $DESTDIR/usr/lib/lib{bfd,ctf,ctf-nobfd,gprofng,opcodes,sframe}.a \
+        $DESTDIR/usr/share/doc/gprofng/
 """
 
 [variables]

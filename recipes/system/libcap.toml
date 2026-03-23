@@ -40,7 +40,7 @@ make prefix=/usr lib=lib -j%(jobs)s
 """
 
 install = """
-make prefix=/usr lib=lib install
+make prefix=/usr lib=lib DESTDIR=$DESTDIR install
 """
 
 [variables]

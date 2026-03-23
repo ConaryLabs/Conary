@@ -43,7 +43,7 @@ make -j%(jobs)s
 """
 
 install = """
-make install
+make install DESTDIR=$DESTDIR
 
 # Install documentation
 rm -rf docs/examples/.deps
@@ -51,7 +51,7 @@ find docs \\( -name Makefile\\* -o          \
               -name \\*.1 -o               \
               -name \\*.3 -o               \
               -name CMakeLists.txt \\) -delete
-cp -v -R docs -T /usr/share/doc/curl-%(version)s
+cp -v -R docs -T $DESTDIR/usr/share/doc/curl-%(version)s
 """
 
 [variables]

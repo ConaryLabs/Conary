@@ -71,12 +71,12 @@ ninja
 
 install = """
 cd build
-ninja install
+DESTDIR=$DESTDIR ninja install
 
 # Install pre-built man pages
 tar -xf ../../systemd-man-pages-%(version)s.tar.xz \
     --no-same-owner --strip-components=1            \
-    -C /usr/share/man
+    -C $DESTDIR/usr/share/man
 
 # Generate machine ID
 systemd-machine-id-setup

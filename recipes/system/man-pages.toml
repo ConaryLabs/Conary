@@ -39,7 +39,7 @@ rm -v man3/crypt*
 
 # Install man pages; -R prevents make from setting built-in variables
 # GIT=false suppresses "git: command not found" warnings
-make -R GIT=false prefix=/usr install
+make -R GIT=false prefix=/usr DESTDIR=$DESTDIR install
 """
 
 [variables]

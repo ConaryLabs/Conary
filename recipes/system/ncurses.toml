@@ -46,7 +46,7 @@ make -j%(jobs)s
 """
 
 install = """
-# Install to a temporary DESTDIR, fix curses.h, then copy to /
+# Install to a temporary DESTDIR, fix curses.h, then copy to $DESTDIR
 make DESTDIR=$PWD/dest install
 
 # Fix curses.h to always enable wide-character support
@@ -54,16 +54,16 @@ sed -e 's/^#if.*XOPEN.*$/#if 1/' \
     -i dest/usr/include/curses.h
 
 # Copy to final location, overwriting any existing files
-cp --remove-destination -av dest/* /
+cp --remove-destination -av dest/* $DESTDIR/
 
 # Create non-wide-character compatibility symlinks
 for lib in ncurses form panel menu ; do
-    ln -sfv lib${lib}w.so /usr/lib/lib${lib}.so
-    ln -sfv ${lib}w.pc    /usr/lib/pkgconfig/${lib}.pc
+    ln -sfv lib${lib}w.so $DESTDIR/usr/lib/lib${lib}.so
+    ln -sfv ${lib}w.pc    $DESTDIR/usr/lib/pkgconfig/${lib}.pc
 done
 
 # Create libcurses compatibility symlink
-ln -sfv libncursesw.so /usr/lib/libcurses.so
+ln -sfv libncursesw.so $DESTDIR/usr/lib/libcurses.so
 """
 
 [variables]

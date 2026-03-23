@@ -48,15 +48,15 @@ make -j%(jobs)s
 """
 
 install = """
-make install
+make install DESTDIR=$DESTDIR
 
-install -v -m755 contrib/ssh-copy-id /usr/bin
-install -v -m644 contrib/ssh-copy-id.1 /usr/share/man/man1
-install -v -m755 -d /usr/share/doc/openssh-%(version)s
-install -v -m644 INSTALL LICENCE OVERVIEW README* /usr/share/doc/openssh-%(version)s
+install -v -m755 contrib/ssh-copy-id $DESTDIR/usr/bin
+install -v -m644 contrib/ssh-copy-id.1 $DESTDIR/usr/share/man/man1
+install -v -m755 -d $DESTDIR/usr/share/doc/openssh-%(version)s
+install -v -m644 INSTALL LICENCE OVERVIEW README* $DESTDIR/usr/share/doc/openssh-%(version)s
 
 # Create privilege separation directory
-install -v -dm700 /var/lib/sshd
+install -v -dm700 $DESTDIR/var/lib/sshd
 
 # Create sshd user if it does not exist
 if ! getent passwd sshd >/dev/null 2>&1; then
@@ -66,11 +66,13 @@ if ! getent passwd sshd >/dev/null 2>&1; then
 fi
 
 # PAM configuration for sshd
-sed 's@d/login@d/sshd@g' /etc/pam.d/login > /etc/pam.d/sshd
-chmod 644 /etc/pam.d/sshd
+mkdir -pv $DESTDIR/etc/pam.d
+sed 's@d/login@d/sshd@g' /etc/pam.d/login > $DESTDIR/etc/pam.d/sshd
+chmod 644 $DESTDIR/etc/pam.d/sshd
 
 # Write sshd_config with bootstrap-friendly settings
-cat > /etc/ssh/sshd_config << "SSHEOF"
+mkdir -pv $DESTDIR/etc/ssh
+cat > $DESTDIR/etc/ssh/sshd_config << "SSHEOF"
 # conaryOS sshd_config -- bootstrap defaults
 # Regenerate with stricter settings for production use.
 
@@ -89,7 +91,8 @@ Subsystem sftp /usr/libexec/sftp-server
 SSHEOF
 
 # Install systemd unit
-cat > /usr/lib/systemd/system/sshd.service << "UNITEOF"
+mkdir -pv $DESTDIR/usr/lib/systemd/system
+cat > $DESTDIR/usr/lib/systemd/system/sshd.service << "UNITEOF"
 [Unit]
 Description=OpenSSH Daemon
 After=network.target
@@ -107,9 +110,9 @@ UNITEOF
 
 # Enable sshd.service
 systemctl enable sshd.service 2>/dev/null || \
-    mkdir -p /etc/systemd/system/multi-user.target.wants && \
+    mkdir -p $DESTDIR/etc/systemd/system/multi-user.target.wants && \
     ln -sf /usr/lib/systemd/system/sshd.service \
-           /etc/systemd/system/multi-user.target.wants/sshd.service
+           $DESTDIR/etc/systemd/system/multi-user.target.wants/sshd.service
 """
 
 [variables]

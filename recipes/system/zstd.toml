@@ -36,10 +36,10 @@ make prefix=/usr -j%(jobs)s
 """
 
 install = """
-make prefix=/usr install
+make prefix=/usr DESTDIR=$DESTDIR install
 
 # Remove static library
-rm -v /usr/lib/libzstd.a
+rm -v $DESTDIR/usr/lib/libzstd.a
 """
 
 [variables]

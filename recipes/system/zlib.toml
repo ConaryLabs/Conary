@@ -36,10 +36,10 @@ make -j%(jobs)s
 """
 
 install = """
-make install
+make install DESTDIR=$DESTDIR
 
 # Remove static library
-rm -fv /usr/lib/libz.a
+rm -fv $DESTDIR/usr/lib/libz.a
 """
 
 [variables]

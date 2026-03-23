@@ -49,8 +49,8 @@ make html
 """
 
 install = """
-make install
-make install-html
+make install DESTDIR=$DESTDIR
+make install-html DESTDIR=$DESTDIR
 """
 
 [variables]

@@ -56,7 +56,7 @@ make -j%(jobs)s
 """
 
 install = """
-make install
+make install DESTDIR=$DESTDIR
 
 # Unset build variables
 unset BUILD_ZLIB BUILD_BZIP2

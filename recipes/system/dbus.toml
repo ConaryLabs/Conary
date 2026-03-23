@@ -46,10 +46,10 @@ ninja
 
 install = """
 cd build
-ninja install
+DESTDIR=$DESTDIR ninja install
 
 # Link machine-id for D-Bus compatibility
-ln -sfv /etc/machine-id /var/lib/dbus
+ln -sfv /etc/machine-id $DESTDIR/var/lib/dbus
 """
 
 [variables]

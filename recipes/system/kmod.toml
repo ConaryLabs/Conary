@@ -47,14 +47,14 @@ ninja
 
 install = """
 cd build
-ninja install
+DESTDIR=$DESTDIR ninja install
 
 # Create symlinks for traditional module utility names
 for target in depmod insmod modinfo modprobe rmmod; do
-    ln -sfv ../bin/kmod /usr/sbin/$target
+    ln -sfv ../bin/kmod $DESTDIR/usr/sbin/$target
 done
 
-ln -sfv kmod /usr/bin/lsmod
+ln -sfv kmod $DESTDIR/usr/bin/lsmod
 """
 
 [variables]
