@@ -279,7 +279,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         yes,
     };
 
-    let (pkg, format) = resolve_and_parse_package(
+    let Some((pkg, format)) = resolve_and_parse_package(
         &conn,
         &package_name,
         package,
@@ -291,7 +291,11 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         &policy,
         &ccs_install_opts,
     )
-    .await?;
+    .await?
+    else {
+        // Already installed as CCS — no further processing needed.
+        return Ok(());
+    };
 
     // Promote the pre-install connection to mutable for the main install transaction
     let mut conn = conn;
@@ -662,7 +666,9 @@ fn try_promote_existing_dep(
 /// Resolve a package path, detect its format, and parse it.
 ///
 /// Handles early returns for CCS packages (from Remi, by extension, or via
-/// conversion).  Returns the parsed legacy package and its format type.
+/// conversion).  Returns `None` if the package was already installed as CCS
+/// (no further processing needed), or `Some(...)` with the parsed legacy
+/// package and its format type.
 #[allow(clippy::too_many_arguments)]
 async fn resolve_and_parse_package(
     conn: &rusqlite::Connection,
@@ -675,10 +681,10 @@ async fn resolve_and_parse_package(
     no_capture: bool,
     policy: &conary_core::repository::resolution_policy::ResolutionPolicy,
     ccs_opts: &CcsInstallParams<'_>,
-) -> Result<(
+) -> Result<Option<(
     Box<dyn conary_core::packages::PackageFormat>,
     PackageFormatType,
-)> {
+)>> {
     // Create progress tracker for single package installation
     let progress = InstallProgress::single("Installing");
     progress.set_phase(package_name, InstallPhase::Downloading);
@@ -738,7 +744,7 @@ async fn resolve_and_parse_package(
             yes: ccs_opts.yes,
         })
         .await?;
-        return Err(anyhow::anyhow!("CCS_INSTALLED"));
+        return Ok(None);
     }
 
     let path_str = resolved
@@ -762,7 +768,7 @@ async fn resolve_and_parse_package(
             yes: ccs_opts.yes,
         })
         .await?;
-        return Err(anyhow::anyhow!("CCS_INSTALLED"));
+        return Ok(None);
     }
 
     // Detect format and parse legacy packages
@@ -797,7 +803,7 @@ async fn resolve_and_parse_package(
                     yes: ccs_opts.yes,
                 })
                 .await?;
-                return Err(anyhow::anyhow!("CCS_INSTALLED"));
+                return Ok(None);
             }
             ConversionResult::Skipped => {
                 // Already converted - fall through to regular install path
@@ -805,7 +811,7 @@ async fn resolve_and_parse_package(
         }
     }
 
-    Ok((pkg, format))
+    Ok(Some((pkg, format)))
 }
 
 /// Handle dependency analysis: resolve, prompt, adopt, install deps.
