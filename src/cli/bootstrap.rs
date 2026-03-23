@@ -45,6 +45,10 @@ pub enum BootstrapCommands {
         /// Image size (e.g., "4G", "8G")
         #[arg(short, long, default_value = "4G")]
         size: String,
+
+        /// Use EROFS generation output instead of sysroot (from bootstrap run)
+        #[arg(long)]
+        from_generation: Option<String>,
     },
 
     /// Show bootstrap status and progress
@@ -97,6 +101,21 @@ pub enum BootstrapCommands {
         /// Also remove downloaded source tarballs
         #[arg(long)]
         sources: bool,
+    },
+
+    /// Package cross-tools output as a derivation seed
+    Seed {
+        /// Cross-tools directory to package (e.g., /conary/bootstrap/lfs/tools)
+        #[arg(long)]
+        from: String,
+
+        /// Output seed directory
+        #[arg(short, long)]
+        output: String,
+
+        /// Target triple
+        #[arg(long, default_value = "x86_64-conary-linux-gnu")]
+        target: String,
     },
 
     /// Build Phase 1: Cross-toolchain (LFS Chapter 5)
@@ -195,6 +214,14 @@ pub enum BootstrapCommands {
         /// Working directory for build artifacts
         #[arg(short, long, default_value = ".conary/bootstrap")]
         work_dir: String,
+
+        /// Path to seed directory (from bootstrap seed)
+        #[arg(long)]
+        seed: String,
+
+        /// Recipe directory
+        #[arg(long, default_value = "recipes")]
+        recipe_dir: String,
 
         /// Stop after completing this stage (toolchain, foundation, system, customization)
         #[arg(long)]

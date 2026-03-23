@@ -96,7 +96,9 @@ pub async fn cmd_bootstrap_image(
     output: &str,
     format: &str,
     size: &str,
+    from_generation: Option<&str>,
 ) -> Result<()> {
+    let _ = from_generation;
     println!("Generating bootable image...");
     println!("  Work directory: {}", work_dir);
     println!("  Output: {}", output);
@@ -296,7 +298,7 @@ pub async fn cmd_bootstrap_resume(work_dir: &str, verbose: bool) -> Result<()> {
         }
         BootstrapStage::SystemConfig => cmd_bootstrap_config(work_dir, verbose, None).await,
         BootstrapStage::BootableImage => {
-            cmd_bootstrap_image(work_dir, "conaryos-base.qcow2", "qcow2", "4G").await
+            cmd_bootstrap_image(work_dir, "conaryos-base.qcow2", "qcow2", "4G", None).await
         }
         BootstrapStage::Tier2 => cmd_bootstrap_tier2(work_dir, None, verbose, false, None).await,
     }
@@ -529,12 +531,23 @@ pub async fn cmd_bootstrap_tier2(
     Ok(())
 }
 
+/// Package cross-tools output as a derivation seed
+pub async fn cmd_bootstrap_seed(from: &str, output: &str, target: &str) -> Result<()> {
+    println!("Creating seed from {} -> {}", from, output);
+    println!("  Target: {}", target);
+    todo!("seed implementation in next task")
+}
+
 /// Options for the `bootstrap run` command.
 pub struct BootstrapRunOptions<'a> {
     /// Path to system manifest TOML.
     pub manifest: &'a str,
     /// Working directory for build artifacts.
     pub work_dir: &'a str,
+    /// Path to seed directory.
+    pub seed: &'a str,
+    /// Recipe directory.
+    pub recipe_dir: &'a str,
     /// Stop after completing this stage.
     pub up_to: Option<&'a str>,
     /// Only build these packages.
@@ -576,6 +589,8 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
     println!("bootstrap run: pipeline integration pending");
     println!("  manifest: {}", opts.manifest);
     println!("  work_dir: {}", opts.work_dir);
+    println!("  seed: {}", opts.seed);
+    println!("  recipe_dir: {}", opts.recipe_dir);
     if let Some(s) = opts.up_to {
         println!("  up_to: {s}");
     }
