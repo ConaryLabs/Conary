@@ -111,6 +111,11 @@ const FOUNDATION_PACKAGES: &[&str] = &[
     "ncurses",
     "readline",
     "zlib",
+    // GCC build deps -- must be in Foundation before GCC
+    "gmp",
+    "mpfr",
+    "mpc",
+    "zstd",
 ];
 
 /// Toolchain packages identified by name (not by pass suffix).
