@@ -9,7 +9,7 @@ use conary_core::bootstrap::{
     Bootstrap, BootstrapConfig, BootstrapStage, ImageBuilder, ImageFormat, ImageSize, ImageTools,
     Prerequisites, TargetArch,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use tracing::info;
 
@@ -98,12 +98,45 @@ pub async fn cmd_bootstrap_image(
     size: &str,
     from_generation: Option<&str>,
 ) -> Result<()> {
-    let _ = from_generation;
     println!("Generating bootable image...");
     println!("  Work directory: {}", work_dir);
     println!("  Output: {}", output);
     println!("  Format: {}", format);
     println!("  Size: {}", size);
+
+    // If --from-generation is provided, use the EROFS generation path
+    if let Some(gen_dir) = from_generation {
+        println!("Generating image from EROFS generation...");
+        println!("  Generation: {}", gen_dir);
+        println!("  Output: {}", output);
+        println!("  Format: {}", format);
+
+        let image_format = ImageFormat::from_str(format)
+            .context("Invalid image format. Use: raw, qcow2, iso, erofs")?;
+        let image_size = ImageSize::from_str(size)
+            .context("Invalid size. Use: 4G, 8G, 512M, etc.")?;
+
+        let result = ImageBuilder::build_from_generation(
+            Path::new(gen_dir),
+            Path::new(output),
+            image_format,
+            image_size,
+        )?;
+
+        println!("\n[OK] Image generated successfully!");
+        println!("  Path: {}", result.path.display());
+        println!("  Format: {}", result.format);
+        println!("  Size: {} bytes ({:.1} GB)", result.size, result.size as f64 / 1_073_741_824.0);
+        println!("  Method: {}", result.method);
+        println!("\nUsage:");
+        println!(
+            "  qemu-system-x86_64 -drive file={},format={} -m 2G -enable-kvm -nographic",
+            output,
+            if image_format == ImageFormat::Qcow2 { "qcow2" } else { "raw" }
+        );
+
+        return Ok(());
+    }
 
     // Parse format
     let image_format = ImageFormat::from_str(format)
