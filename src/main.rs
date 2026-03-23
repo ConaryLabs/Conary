@@ -1379,7 +1379,11 @@ async fn run() -> Result<()> {
                 output,
                 format,
                 size,
-            } => commands::cmd_bootstrap_image(&work_dir, &output, &format, &size).await,
+                from_generation,
+            } => {
+                commands::cmd_bootstrap_image(&work_dir, &output, &format, &size, from_generation.as_deref())
+                    .await
+            }
 
             cli::BootstrapCommands::Status { work_dir, verbose } => {
                 commands::cmd_bootstrap_status(&work_dir, verbose).await
@@ -1475,9 +1479,17 @@ async fn run() -> Result<()> {
                 .await
             }
 
+            cli::BootstrapCommands::Seed {
+                from,
+                output,
+                target,
+            } => commands::cmd_bootstrap_seed(&from, &output, &target).await,
+
             cli::BootstrapCommands::Run {
                 manifest,
                 work_dir,
+                seed,
+                recipe_dir,
                 up_to,
                 only,
                 cascade,
@@ -1490,6 +1502,8 @@ async fn run() -> Result<()> {
                 commands::cmd_bootstrap_run(commands::BootstrapRunOptions {
                     manifest: &manifest,
                     work_dir: &work_dir,
+                    seed: &seed,
+                    recipe_dir: &recipe_dir,
                     up_to: up_to.as_deref(),
                     only: only.as_deref(),
                     cascade,
