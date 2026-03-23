@@ -139,7 +139,10 @@ mod tests {
             ..Default::default()
         })));
         let app = Router::new()
-            .route("/test-fixtures/*path", get(get_fixture).head(head_fixture))
+            .route(
+                "/test-fixtures/{*path}",
+                get(get_fixture).head(head_fixture),
+            )
             .with_state(state);
 
         let get_response = app
@@ -194,7 +197,7 @@ mod tests {
         })));
         let app = Router::new()
             .route(
-                "/test-artifacts/*path",
+                "/test-artifacts/{*path}",
                 get(get_test_artifact).head(head_test_artifact),
             )
             .with_state(state);
