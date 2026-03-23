@@ -95,6 +95,8 @@ pub struct LatestVersionInfo {
     pub download_url: String,
     pub sha256: String,
     pub size: u64,
+    #[serde(default)]
+    pub signature: Option<String>,
 }
 
 /// Result of a version check
@@ -107,6 +109,7 @@ pub enum VersionCheckResult {
         download_url: String,
         sha256: String,
         size: u64,
+        signature: Option<String>,
     },
     /// Already at the latest version
     UpToDate { version: String },
@@ -247,6 +250,7 @@ pub async fn check_for_update(
             download_url: info.download_url,
             sha256: info.sha256,
             size: info.size,
+            signature: info.signature,
         })
     } else {
         Ok(VersionCheckResult::UpToDate {
@@ -576,6 +580,7 @@ mod tests {
             download_url: "https://example.com/conary-0.2.0.ccs".to_string(),
             sha256: "abc123".to_string(),
             size: 12_000_000,
+            signature: None,
         };
         match &update {
             VersionCheckResult::UpdateAvailable {
