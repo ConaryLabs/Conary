@@ -108,17 +108,18 @@ make -j%(jobs)s
 
 install = """
 # Install kernel modules
-make modules_install
+make modules_install INSTALL_MOD_PATH=$DESTDIR
 
 # Install the kernel image
-cp -iv arch/x86/boot/bzImage /boot/vmlinuz-%(version)s-conary
+mkdir -pv $DESTDIR/boot
+cp -iv arch/x86/boot/bzImage $DESTDIR/boot/vmlinuz-%(version)s-conary
 
 # Install System.map and config for debugging
-cp -iv System.map /boot/System.map-%(version)s
-cp -iv .config /boot/config-%(version)s
+cp -iv System.map $DESTDIR/boot/System.map-%(version)s
+cp -iv .config $DESTDIR/boot/config-%(version)s
 
 # Install kernel documentation
-cp -r Documentation -T /usr/share/doc/linux-%(version)s
+cp -r Documentation -T $DESTDIR/usr/share/doc/linux-%(version)s
 """
 
 [variables]

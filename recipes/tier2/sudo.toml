@@ -45,14 +45,15 @@ make -j%(jobs)s
 """
 
 install = """
-make install
+make install DESTDIR=$DESTDIR
 
 # Create basic sudoers entry allowing wheel group
-cat > /etc/sudoers.d/wheel << "SUDOEOF"
+mkdir -pv $DESTDIR/etc/sudoers.d
+cat > $DESTDIR/etc/sudoers.d/wheel << "SUDOEOF"
 ## Allow members of group wheel to execute any command
 %wheel ALL=(ALL:ALL) ALL
 SUDOEOF
-chmod 440 /etc/sudoers.d/wheel
+chmod 440 $DESTDIR/etc/sudoers.d/wheel
 """
 
 [variables]

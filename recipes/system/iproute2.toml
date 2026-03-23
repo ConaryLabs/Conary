@@ -41,7 +41,7 @@ make NETNS_RUN_DIR=/run/netns -j%(jobs)s
 """
 
 install = """
-make SBINDIR=/usr/sbin install
+make SBINDIR=/usr/sbin install DESTDIR=$DESTDIR
 """
 
 [variables]

@@ -51,10 +51,10 @@ make -j%(jobs)s
 """
 
 install = """
-make install
+make install DESTDIR=$DESTDIR
 
 # Move ifconfig to /usr/sbin where it is traditionally expected
-mv -v /usr/{,s}bin/ifconfig
+mv -v $DESTDIR/usr/{,s}bin/ifconfig
 """
 
 [variables]

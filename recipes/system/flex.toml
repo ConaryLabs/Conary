@@ -40,11 +40,11 @@ make -j%(jobs)s
 """
 
 install = """
-make install
+make install DESTDIR=$DESTDIR
 
 # Create lex compatibility symlinks
-ln -sv flex /usr/bin/lex
-ln -sv flex.1 /usr/share/man/man1/lex.1
+ln -sv flex $DESTDIR/usr/bin/lex
+ln -sv flex.1 $DESTDIR/usr/share/man/man1/lex.1
 """
 
 [variables]

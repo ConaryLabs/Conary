@@ -58,7 +58,7 @@ make SHLIB_LIBS="-lncursesw" -j%(jobs)s
 """
 
 install = """
-make install
+make install DESTDIR=$DESTDIR
 """
 
 [variables]

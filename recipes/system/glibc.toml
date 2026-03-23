@@ -62,23 +62,24 @@ install = """
 cd build
 
 # Prevent warnings about missing /etc/ld.so.conf
-touch /etc/ld.so.conf
+mkdir -pv $DESTDIR/etc
+touch $DESTDIR/etc/ld.so.conf
 
 # Skip the test-installation sanity check (requires full Perl)
 sed '/test-installation/s@$(PERL)@echo not running@' -i ../Makefile
 
-make install
+make install DESTDIR=$DESTDIR
 
 # Fix the hardcoded path to the executable loader in the ldd script
-sed '/RTLDLIST=/s@/usr@@g' -i /usr/bin/ldd
+sed '/RTLDLIST=/s@/usr@@g' -i $DESTDIR/usr/bin/ldd
 
 # Install all locales (needed for test suites of other packages)
-make localedata/install-locales
+make localedata/install-locales DESTDIR=$DESTDIR
 
 # Install timezone data
 tar -xf ../../tzdata%(tzdata_version)s.tar.gz
 
-ZONEINFO=/usr/share/zoneinfo
+ZONEINFO=$DESTDIR/usr/share/zoneinfo
 mkdir -pv $ZONEINFO/{posix,right}
 
 for tz in etcetera southamerica northamerica europe africa \
@@ -92,10 +93,10 @@ cp -v zone.tab zone1970.tab iso3166.tab $ZONEINFO
 zic -d $ZONEINFO -p America/New_York
 
 # Default to UTC timezone (can be changed later)
-ln -sfv /usr/share/zoneinfo/UTC /etc/localtime
+ln -sfv /usr/share/zoneinfo/UTC $DESTDIR/etc/localtime
 
 # Create /etc/nsswitch.conf for systemd
-cat > /etc/nsswitch.conf << "NSSWITCH"
+cat > $DESTDIR/etc/nsswitch.conf << "NSSWITCH"
 passwd: files systemd
 group: files systemd
 shadow: files systemd
@@ -110,12 +111,12 @@ rpc: files
 NSSWITCH
 
 # Create /etc/ld.so.conf
-cat > /etc/ld.so.conf << "LDCONF"
+cat > $DESTDIR/etc/ld.so.conf << "LDCONF"
 /usr/local/lib
 /opt/lib
 include /etc/ld.so.conf.d/*.conf
 LDCONF
-mkdir -pv /etc/ld.so.conf.d
+mkdir -pv $DESTDIR/etc/ld.so.conf.d
 """
 
 [variables]

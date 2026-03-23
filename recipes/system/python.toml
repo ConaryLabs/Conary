@@ -43,10 +43,11 @@ make -j%(jobs)s
 """
 
 install = """
-make install
+make install DESTDIR=$DESTDIR
 
 # Configure pip for root-user operation
-cat > /etc/pip.conf << "EOF"
+mkdir -pv $DESTDIR/etc
+cat > $DESTDIR/etc/pip.conf << "EOF"
 [global]
 root-user-action = ignore
 disable-pip-version-check = true

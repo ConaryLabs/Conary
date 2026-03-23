@@ -50,12 +50,12 @@ make -j%(jobs)s
 """
 
 install = """
-make install
+make install DESTDIR=$DESTDIR
 
 # Move chroot to /usr/sbin per FHS
-mv -v /usr/bin/chroot /usr/sbin
-mv -v /usr/share/man/man1/chroot.1 /usr/share/man/man8/chroot.8
-sed -i 's/"1"/"8"/' /usr/share/man/man8/chroot.8
+mv -v $DESTDIR/usr/bin/chroot $DESTDIR/usr/sbin
+mv -v $DESTDIR/usr/share/man/man1/chroot.1 $DESTDIR/usr/share/man/man8/chroot.8
+sed -i 's/"1"/"8"/' $DESTDIR/usr/share/man/man8/chroot.8
 """
 
 [variables]

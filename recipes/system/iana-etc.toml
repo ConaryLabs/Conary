@@ -33,7 +33,8 @@ configure = ""
 make = ""
 
 install = """
-cp -v services protocols /etc
+mkdir -pv $DESTDIR/etc
+cp -v services protocols $DESTDIR/etc
 """
 
 [variables]

@@ -41,8 +41,8 @@ make -j%(jobs)s
 """
 
 install = """
-make install
-install -v -Dm644 doc/I18N-HOWTO /usr/share/doc/intltool-%(version)s/I18N-HOWTO
+make install DESTDIR=$DESTDIR
+install -v -Dm644 doc/I18N-HOWTO $DESTDIR/usr/share/doc/intltool-%(version)s/I18N-HOWTO
 """
 
 [variables]

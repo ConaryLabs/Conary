@@ -62,15 +62,15 @@ make -j%(jobs)s
 """
 
 install = """
-make exec_prefix=/usr install
-make -C man install-man
+make exec_prefix=/usr install DESTDIR=$DESTDIR
+make -C man install-man DESTDIR=$DESTDIR
 
 # Enable shadowed passwords
 pwconv
 grpconv
 
 # Create /etc/default directory and set default useradd group
-mkdir -p /etc/default
+mkdir -p $DESTDIR/etc/default
 useradd -D --gid 999
 """
 

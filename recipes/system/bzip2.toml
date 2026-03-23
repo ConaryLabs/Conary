@@ -56,23 +56,23 @@ make -j%(jobs)s
 """
 
 install = """
-make PREFIX=/usr install
+make PREFIX=$DESTDIR/usr install
 
 # Install the shared library
-cp -av libbz2.so.* /usr/lib
-ln -sfv libbz2.so.%(version)s /usr/lib/libbz2.so
-ln -sfv libbz2.so.%(version)s /usr/lib/libbz2.so.1
+cp -av libbz2.so.* $DESTDIR/usr/lib
+ln -sfv libbz2.so.%(version)s $DESTDIR/usr/lib/libbz2.so
+ln -sfv libbz2.so.%(version)s $DESTDIR/usr/lib/libbz2.so.1
 
 # Replace the statically linked bzip2 with the shared version
-cp -v bzip2-shared /usr/bin/bzip2
+cp -v bzip2-shared $DESTDIR/usr/bin/bzip2
 
 # Create compatibility symlinks
-for i in /usr/bin/{bzcat,bunzip2}; do
+for i in $DESTDIR/usr/bin/{bzcat,bunzip2}; do
     ln -sfv bzip2 $i
 done
 
 # Remove static library
-rm -fv /usr/lib/libbz2.a
+rm -fv $DESTDIR/usr/lib/libbz2.a
 """
 
 [variables]

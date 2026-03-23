@@ -46,11 +46,11 @@ install = """
 # Remove static library installation
 sed -i '/INSTALL_LIBS/s/libcrypto.a libssl.a//' Makefile
 
-make MANSUFFIX=ssl install
+make MANSUFFIX=ssl install DESTDIR=$DESTDIR
 
 # Move documentation to versioned directory
-mv -v /usr/share/doc/openssl /usr/share/doc/openssl-%(version)s
-cp -vfr doc/* /usr/share/doc/openssl-%(version)s
+mv -v $DESTDIR/usr/share/doc/openssl $DESTDIR/usr/share/doc/openssl-%(version)s
+cp -vfr doc/* $DESTDIR/usr/share/doc/openssl-%(version)s
 """
 
 [variables]

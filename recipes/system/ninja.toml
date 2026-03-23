@@ -37,11 +37,11 @@ python3 configure.py --bootstrap --verbose
 """
 
 install = """
-install -vm755 ninja /usr/bin/
+install -vm755 ninja $DESTDIR/usr/bin/
 install -vDm644 misc/bash-completion \
-    /usr/share/bash-completion/completions/ninja
+    $DESTDIR/usr/share/bash-completion/completions/ninja
 install -vDm644 misc/zsh-completion \
-    /usr/share/zsh/site-functions/_ninja
+    $DESTDIR/usr/share/zsh/site-functions/_ninja
 """
 
 [variables]

@@ -48,30 +48,30 @@ ninja
 
 install = """
 cd build
-ninja install
+DESTDIR=$DESTDIR ninja install
 
-chmod -v 4755 /usr/sbin/unix_chkpwd
+chmod -v 4755 $DESTDIR/usr/sbin/unix_chkpwd
 
 # Create /etc/pam.d with basic configuration
-install -vdm755 /etc/pam.d
+install -vdm755 $DESTDIR/etc/pam.d
 
-cat > /etc/pam.d/system-account << "PAMEOF"
+cat > $DESTDIR/etc/pam.d/system-account << "PAMEOF"
 account   required    pam_unix.so
 PAMEOF
 
-cat > /etc/pam.d/system-auth << "PAMEOF"
+cat > $DESTDIR/etc/pam.d/system-auth << "PAMEOF"
 auth      required    pam_unix.so
 PAMEOF
 
-cat > /etc/pam.d/system-session << "PAMEOF"
+cat > $DESTDIR/etc/pam.d/system-session << "PAMEOF"
 session   required    pam_unix.so
 PAMEOF
 
-cat > /etc/pam.d/system-password << "PAMEOF"
+cat > $DESTDIR/etc/pam.d/system-password << "PAMEOF"
 password  required    pam_unix.so       sha512 shadow try_first_pass
 PAMEOF
 
-cat > /etc/pam.d/other << "PAMEOF"
+cat > $DESTDIR/etc/pam.d/other << "PAMEOF"
 auth        required        pam_warn.so
 auth        required        pam_deny.so
 account     required        pam_warn.so

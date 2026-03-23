@@ -38,8 +38,8 @@ make -j%(jobs)s
 """
 
 install = """
-make install
-make -C doc install-html docdir=/usr/share/doc/tar-%(version)s
+make install DESTDIR=$DESTDIR
+make -C doc install-html docdir=/usr/share/doc/tar-%(version)s DESTDIR=$DESTDIR
 """
 
 [variables]

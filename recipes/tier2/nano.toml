@@ -41,9 +41,9 @@ make -j%(jobs)s
 """
 
 install = """
-make install
+make install DESTDIR=$DESTDIR
 
-install -v -m644 doc/{nano.html,sample.nanorc} /usr/share/doc/nano-%(version)s
+install -v -m644 doc/{nano.html,sample.nanorc} $DESTDIR/usr/share/doc/nano-%(version)s
 """
 
 [variables]
