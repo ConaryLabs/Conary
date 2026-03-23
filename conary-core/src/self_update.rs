@@ -5,14 +5,82 @@
 //! Checks Remi for newer versions and handles downloading, verifying,
 //! and atomically replacing the running binary.
 
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use crate::db::models::settings;
 use crate::error::{Error, Result};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use rusqlite::Connection;
 use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::warn;
+
+/// Trusted Ed25519 public keys for verifying self-update signatures (hex-encoded).
+/// Real key will be added when release signing is enabled.
+pub const TRUSTED_UPDATE_KEYS: &[&str] = &[];
+
+/// Errors from self-update signature verification
+#[derive(Debug, thiserror::Error)]
+pub enum UpdateSignatureError {
+    #[error("invalid signature: no trusted key verified the signature")]
+    Untrusted,
+    #[error("malformed signature data: {0}")]
+    Malformed(String),
+}
+
+/// Verify an Ed25519 signature over the SHA-256 hash of a CCS package using the
+/// provided list of trusted public keys.
+///
+/// Returns `Ok(())` if any trusted key successfully verifies the signature.
+fn verify_update_signature_with_keys(
+    sha256_hex: &str,
+    signature_base64: &str,
+    trusted_keys: &[&str],
+) -> std::result::Result<(), UpdateSignatureError> {
+    let sig_bytes = BASE64
+        .decode(signature_base64)
+        .map_err(|e| UpdateSignatureError::Malformed(format!("base64 decode: {e}")))?;
+
+    let signature = Signature::from_slice(&sig_bytes)
+        .map_err(|e| UpdateSignatureError::Malformed(format!("signature bytes: {e}")))?;
+
+    let message = sha256_hex.as_bytes();
+
+    for key_hex in trusted_keys {
+        let key_bytes = match hex::decode(key_hex) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        let key_array: [u8; 32] = match key_bytes.try_into() {
+            Ok(a) => a,
+            Err(_) => continue,
+        };
+        let verifying_key = match VerifyingKey::from_bytes(&key_array) {
+            Ok(k) => k,
+            Err(_) => continue,
+        };
+        if verifying_key.verify(message, &signature).is_ok() {
+            return Ok(());
+        }
+    }
+
+    Err(UpdateSignatureError::Untrusted)
+}
+
+/// Verify an Ed25519 signature over the SHA-256 hash of a CCS update package.
+///
+/// In test mode, always returns `Ok(())` to avoid needing real keys in unit tests.
+/// In production, checks against [`TRUSTED_UPDATE_KEYS`].
+pub fn verify_update_signature(
+    sha256_hex: &str,
+    signature_base64: &str,
+) -> std::result::Result<(), UpdateSignatureError> {
+    if cfg!(test) {
+        return Ok(());
+    }
+    verify_update_signature_with_keys(sha256_hex, signature_base64, TRUSTED_UPDATE_KEYS)
+}
 
 /// Default update channel URL
 pub const DEFAULT_UPDATE_CHANNEL: &str = "https://packages.conary.io/v1/ccs/conary";
@@ -649,5 +717,81 @@ mod tests {
         assert!(result.is_err());
         // Original target should be unchanged
         assert_eq!(std::fs::read(&target).unwrap(), b"old");
+    }
+
+    /// Helper: create a deterministic Ed25519 keypair from a fixed seed for tests.
+    fn test_keypair() -> (ed25519_dalek::SigningKey, ed25519_dalek::VerifyingKey) {
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]);
+        let verifying_key = signing_key.verifying_key();
+        (signing_key, verifying_key)
+    }
+
+    #[test]
+    fn test_verify_update_signature_valid() {
+        use ed25519_dalek::Signer;
+
+        let (signing_key, verifying_key) = test_keypair();
+        let sha256_hex = "abc123def456";
+        let signature = signing_key.sign(sha256_hex.as_bytes());
+        let sig_b64 = BASE64.encode(signature.to_bytes());
+        let key_hex = hex::encode(verifying_key.as_bytes());
+
+        let result =
+            verify_update_signature_with_keys(sha256_hex, &sig_b64, &[key_hex.as_str()]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_verify_update_signature_tampered_hash() {
+        use ed25519_dalek::Signer;
+
+        let (signing_key, verifying_key) = test_keypair();
+        let sha256_hex = "abc123def456";
+        let signature = signing_key.sign(sha256_hex.as_bytes());
+        let sig_b64 = BASE64.encode(signature.to_bytes());
+        let key_hex = hex::encode(verifying_key.as_bytes());
+
+        // Verify against a different hash -> should fail
+        let result =
+            verify_update_signature_with_keys("tampered_hash", &sig_b64, &[key_hex.as_str()]);
+        assert!(matches!(result, Err(UpdateSignatureError::Untrusted)));
+    }
+
+    #[test]
+    fn test_verify_update_signature_wrong_key() {
+        use ed25519_dalek::Signer;
+
+        let (signing_key, _) = test_keypair();
+        let sha256_hex = "abc123def456";
+        let signature = signing_key.sign(sha256_hex.as_bytes());
+        let sig_b64 = BASE64.encode(signature.to_bytes());
+
+        // Use a different key
+        let wrong_key = ed25519_dalek::SigningKey::from_bytes(&[99u8; 32]);
+        let wrong_key_hex = hex::encode(wrong_key.verifying_key().as_bytes());
+
+        let result =
+            verify_update_signature_with_keys(sha256_hex, &sig_b64, &[wrong_key_hex.as_str()]);
+        assert!(matches!(result, Err(UpdateSignatureError::Untrusted)));
+    }
+
+    #[test]
+    fn test_verify_update_signature_malformed_base64() {
+        let result =
+            verify_update_signature_with_keys("somehash", "not-valid-base64!!!", &["aabbccdd"]);
+        assert!(matches!(result, Err(UpdateSignatureError::Malformed(_))));
+    }
+
+    #[test]
+    fn test_verify_update_signature_empty_key_list() {
+        use ed25519_dalek::Signer;
+
+        let (signing_key, _) = test_keypair();
+        let sha256_hex = "abc123def456";
+        let signature = signing_key.sign(sha256_hex.as_bytes());
+        let sig_b64 = BASE64.encode(signature.to_bytes());
+
+        let result = verify_update_signature_with_keys(sha256_hex, &sig_b64, &[]);
+        assert!(matches!(result, Err(UpdateSignatureError::Untrusted)));
     }
 }
