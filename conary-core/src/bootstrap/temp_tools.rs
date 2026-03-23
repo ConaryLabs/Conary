@@ -438,6 +438,11 @@ mod tests {
 
     #[test]
     fn test_cross_packages_placeholder() {
+        if !std::path::Path::new("recipes/cross-tools").exists() {
+            eprintln!("Skipping: recipes/cross-tools not found in cwd");
+            return;
+        }
+
         let work = tempfile::tempdir().unwrap();
         let lfs = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(lfs.path().join("tools/bin")).unwrap();
