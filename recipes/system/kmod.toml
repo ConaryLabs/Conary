@@ -50,6 +50,7 @@ cd build
 DESTDIR=$DESTDIR ninja install
 
 # Create symlinks for traditional module utility names
+mkdir -p $DESTDIR/usr/sbin
 for target in depmod insmod modinfo modprobe rmmod; do
     ln -sfv ../bin/kmod $DESTDIR/usr/sbin/$target
 done
