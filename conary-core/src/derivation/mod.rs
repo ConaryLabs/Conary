@@ -19,6 +19,7 @@ pub mod pipeline;
 pub mod profile;
 pub mod recipe_hash;
 pub mod seed;
+pub mod build_order;
 pub mod stages;
 pub mod substituter;
 #[cfg(test)]
@@ -38,4 +39,5 @@ pub use profile::{
 };
 pub use recipe_hash::{build_script_hash, expand_variables, source_hash};
 pub use seed::{Seed, SeedError, SeedMetadata, SeedSource};
+pub use build_order::{BuildOrderError, BuildPhase, BuildStep, compute_build_order};
 pub use stages::{Stage, StageAssignment, StageError, assign_stages};
