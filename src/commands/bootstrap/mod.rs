@@ -1037,25 +1037,16 @@ pub async fn cmd_bootstrap_seed_adopted(
 
 /// Verify convergence between builds from two different seeds
 pub async fn cmd_bootstrap_verify_convergence(
-    seed_a: &str,
-    seed_b: &str,
-    diff: bool,
+    _seed_a: &str,
+    _seed_b: &str,
+    _diff: bool,
 ) -> Result<()> {
-    println!("Convergence verification not yet fully wired.");
-    println!("  Seed A: {seed_a}");
-    println!("  Seed B: {seed_b}");
-    println!("  Diff: {diff}");
-
-    // TODO: Open DB, load seed metadata, call compare_seed_builds
-    Ok(())
+    anyhow::bail!("verify-convergence is not yet fully implemented")
 }
 
 /// Diff two seed EROFS images
-pub async fn cmd_bootstrap_diff_seeds(path_a: &str, path_b: &str) -> Result<()> {
-    println!("Seed diff not yet implemented.");
-    println!("  Seed A: {path_a}");
-    println!("  Seed B: {path_b}");
-    Ok(())
+pub async fn cmd_bootstrap_diff_seeds(_path_a: &str, _path_b: &str) -> Result<()> {
+    anyhow::bail!("diff-seeds is not yet fully implemented")
 }
 
 /// Clean bootstrap work directory

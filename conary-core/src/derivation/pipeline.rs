@@ -270,7 +270,7 @@ impl Pipeline {
             },
             seed: ProfileSeedRef {
                 id: seed.metadata.seed_id.clone(),
-                source: format!("{:?}", seed.metadata.source).to_lowercase(),
+                source: seed.metadata.source.to_string(),
             },
             stages: profile_stages,
         };
@@ -679,7 +679,7 @@ impl Pipeline {
             },
             seed: ProfileSeedRef {
                 id: seed.metadata.seed_id.clone(),
-                source: format!("{:?}", seed.metadata.source).to_lowercase(),
+                source: seed.metadata.source.to_string(),
             },
             stages: profile_stages,
         };
@@ -955,7 +955,7 @@ impl Pipeline {
             },
             seed: ProfileSeedRef {
                 id: seed.metadata.seed_id.clone(),
-                source: format!("{:?}", seed.metadata.source).to_lowercase(),
+                source: seed.metadata.source.to_string(),
             },
             stages: profile_stages,
         };

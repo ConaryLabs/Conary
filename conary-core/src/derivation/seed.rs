@@ -12,6 +12,7 @@
 //! SHA-256 hash of the EROFS image file, providing content-addressable
 //! integrity verification.
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -67,6 +68,17 @@ pub enum SeedSource {
     SelfBuilt,
     /// Adopted from an existing distro installation (e.g., a live Arch system).
     Adopted,
+}
+
+impl fmt::Display for SeedSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Community => write!(f, "community"),
+            Self::Imported => write!(f, "imported"),
+            Self::SelfBuilt => write!(f, "selfbuilt"),
+            Self::Adopted => write!(f, "adopted"),
+        }
+    }
 }
 
 /// Metadata describing a bootstrap seed, serialized as `seed.toml`.
