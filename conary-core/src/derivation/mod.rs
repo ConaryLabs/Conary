@@ -23,6 +23,7 @@ pub mod build_order;
 pub mod install;
 pub mod stages;
 pub mod substituter;
+pub mod convergence;
 #[cfg(test)]
 pub(crate) mod test_helpers;
 
@@ -43,3 +44,4 @@ pub use seed::{Seed, SeedError, SeedMetadata, SeedSource, SeedValidation};
 pub use build_order::{BuildOrderError, BuildPhase, BuildStep, compute_build_order};
 pub use install::{InstallError, install_to_sysroot};
 pub use stages::{Stage, StageAssignment, StageError, assign_stages};
+pub use convergence::{ConvergenceReport, PackageComparison, compare_seed_builds};
