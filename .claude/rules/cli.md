@@ -19,7 +19,7 @@ conary-core -- no business logic lives in the CLI layer.
 - `install/` -- `cmd_install`, `InstallOptions`, `DepMode`, batch operations
 - `remove.rs` -- package removal
 - `update.rs` -- package updates
-- `adopt/` -- system adoption (convert, conflicts, refresh, status, takeover)
+- `adopt/` -- system adoption (convert, conflicts, refresh, status)
 - `config.rs` -- config file management (backup, check, diff, list, restore)
 - `system.rs` -- system-level operations
 - `canonical.rs` -- canonical package name management
