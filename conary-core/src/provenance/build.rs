@@ -305,11 +305,10 @@ impl ReproducibilityInfo {
     pub fn add_verifier(&mut self, builder_id: &str, matches: bool) {
         self.verified_by.push(builder_id.to_string());
         if !matches {
-            self.consensus = false;
-        } else if self.verified_by.len() >= 2 {
-            // Consensus requires at least 2 matching builders
-            self.consensus = true;
+            self.differences.push(builder_id.to_string());
         }
+        let match_count = self.verified_by.len() - self.differences.len();
+        self.consensus = match_count >= 2 && self.differences.is_empty();
     }
 }
 
@@ -358,6 +357,17 @@ mod tests {
 
         repro.add_verifier("builder2", true);
         assert!(repro.consensus);
+    }
+
+    #[test]
+    fn test_consensus_not_restored_after_failure() {
+        let mut info = ReproducibilityInfo::new("abc123");
+        info.add_verifier("builder1", true);
+        assert!(!info.consensus);
+        info.add_verifier("builder2", false);
+        assert!(!info.consensus);
+        info.add_verifier("builder3", true);
+        assert!(!info.consensus); // must NOT be re-enabled after a mismatch
     }
 
     #[test]
