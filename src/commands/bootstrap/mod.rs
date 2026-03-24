@@ -766,7 +766,7 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
     use conary_core::db::schema::migrate;
     use conary_core::derivation::executor::{DerivationExecutor, ExecutorConfig};
     use conary_core::derivation::manifest::SystemManifest;
-    use conary_core::derivation::pipeline::{Pipeline, PipelineConfig, PipelineEvent};
+    use conary_core::derivation::pipeline::{BuildMode, Pipeline, PipelineConfig, PipelineEvent};
     use conary_core::derivation::seed::Seed;
     use conary_core::derivation::stages::{Stage, assign_stages};
     use conary_core::filesystem::CasStore;
@@ -904,6 +904,7 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
             None
         },
         publish_token: None,
+        build_mode: BuildMode::Staged,
     };
 
     std::fs::create_dir_all(&pipeline_config.work_dir)?;

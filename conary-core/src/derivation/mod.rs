@@ -35,7 +35,7 @@ pub use id::{DerivationError, DerivationId, DerivationInputs, SourceDerivationId
 pub use index::{DerivationIndex, DerivationRecord};
 pub use manifest::{ManifestError, SystemManifest};
 pub use output::{OutputFile, OutputManifest, OutputSymlink, PackageOutput};
-pub use pipeline::{Pipeline, PipelineConfig, PipelineError, PipelineEvent};
+pub use pipeline::{BuildMode, Pipeline, PipelineConfig, PipelineError, PipelineEvent};
 pub use profile::{
     BuildProfile, ProfileDerivation, ProfileDiff, ProfileMetadata, ProfileSeedRef, ProfileStage,
 };
