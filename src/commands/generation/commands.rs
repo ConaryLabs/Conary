@@ -1,5 +1,6 @@
 // src/commands/generation/commands.rs
-//! CLI implementations for generation list, info, and gc commands
+//! CLI implementations for generation list, info, gc, build, switch, rollback,
+//! and recover commands
 
 use super::metadata::{GenerationMetadata, gc_roots_dir, generation_path, generations_dir};
 use crate::commands::format_bytes;
@@ -321,4 +322,71 @@ fn dir_size_bytes(path: &std::path::Path) -> u64 {
         .filter(|meta| meta.is_file())
         .map(|meta| meta.len())
         .sum()
+}
+
+/// Build a new generation from the current system state and print its number.
+pub fn cmd_generation_build(db_path: &str, summary: &str) -> Result<()> {
+    let conn = crate::commands::open_db(db_path)?;
+    let gen_number = super::builder::build_generation(&conn, db_path, summary)?;
+    println!("Generation {} built.", gen_number);
+    Ok(())
+}
+
+/// Switch the live system to `number`, update the boot entry, and optionally reboot.
+pub fn cmd_generation_switch(number: i64, reboot: bool) -> Result<()> {
+    super::switch::switch_live(number)?;
+    if let Err(e) = super::boot::write_boot_entry(number) {
+        eprintln!("Boot entry skipped: {}", e);
+    }
+    if reboot {
+        println!("Rebooting...");
+        std::process::Command::new("systemctl")
+            .arg("reboot")
+            .spawn()?;
+    }
+    Ok(())
+}
+
+/// Roll back to the highest-numbered generation below the currently active one.
+pub fn cmd_generation_rollback() -> Result<()> {
+    let current =
+        current_generation(Path::new("/conary"))?.ok_or_else(|| anyhow!("No active generation"))?;
+
+    // Find the highest generation below current that actually exists on disk.
+    let gen_dir = generations_dir();
+    let mut candidates: Vec<i64> = Vec::new();
+    if gen_dir.exists() {
+        for entry in std::fs::read_dir(&gen_dir)? {
+            let entry = entry?;
+            if let Ok(n) = entry.file_name().to_string_lossy().parse::<i64>()
+                && n < current
+            {
+                candidates.push(n);
+            }
+        }
+    }
+    candidates.sort();
+    let previous = candidates
+        .last()
+        .ok_or_else(|| anyhow!("No previous generation to roll back to"))?;
+
+    super::switch::switch_live(*previous)?;
+    if let Err(e) = super::boot::write_boot_entry(*previous) {
+        eprintln!("Boot entry skipped: {}", e);
+    }
+    println!("Rolled back to generation {previous}");
+    Ok(())
+}
+
+/// Recover any interrupted transaction using the database at `db_path`.
+pub fn cmd_generation_recover(db_path: &str) -> Result<()> {
+    let conn = crate::commands::open_db(db_path)?;
+    let config = conary_core::transaction::TransactionConfig::from_paths(
+        std::path::PathBuf::from("/"),
+        std::path::PathBuf::from(db_path),
+    );
+    let engine = conary_core::transaction::TransactionEngine::new(config)?;
+    engine.recover(&conn)?;
+    println!("Recovery complete.");
+    Ok(())
 }
