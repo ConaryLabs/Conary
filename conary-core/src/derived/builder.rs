@@ -203,7 +203,7 @@ impl<'a> DerivedBuilder<'a> {
         let mut patches_applied = Vec::new();
         for (idx, (patch_name, patch_content)) in self.spec.patches.iter().enumerate() {
             debug!("Applying patch {}: {}", idx + 1, patch_name);
-            self.apply_patch(work_dir.path(), patch_content, 1)?;
+            self.apply_patch(work_dir.path(), patch_content, 1u32)?;
             patches_applied.push(patch_name.clone());
         }
 
@@ -306,11 +306,16 @@ impl<'a> DerivedBuilder<'a> {
         }
 
         // Return first (most recent) version
-        Ok(troves.into_iter().next().unwrap())
+        troves.into_iter().next().ok_or_else(|| {
+            Error::InitError(format!(
+                "Parent package '{}' unexpectedly empty after check",
+                self.spec.parent_name
+            ))
+        })
     }
 
     /// Apply a patch using native Rust (diffy crate)
-    fn apply_patch(&self, work_dir: &Path, patch_content: &[u8], strip_level: i32) -> Result<()> {
+    fn apply_patch(&self, work_dir: &Path, patch_content: &[u8], strip_level: u32) -> Result<()> {
         let patch_str = std::str::from_utf8(patch_content)
             .map_err(|e| Error::InitError(format!("Patch is not valid UTF-8: {}", e)))?;
 
@@ -327,7 +332,7 @@ impl<'a> DerivedBuilder<'a> {
         &self,
         work_dir: &Path,
         patch_str: &str,
-        strip_level: i32,
+        strip_level: u32,
     ) -> Result<()> {
         // Parse the patch
         let patch = diffy::Patch::from_str(patch_str)
@@ -437,7 +442,9 @@ impl<'a> DerivedBuilder<'a> {
         derived.description = self.spec.description.clone();
         derived.insert(self.conn)?;
 
-        let derived_id = derived.id.unwrap();
+        let derived_id = derived.id.ok_or_else(|| {
+            Error::InitError("Database insert did not return an ID for derived package".into())
+        })?;
 
         // Save patches
         for (idx, (patch_name, patch_content)) in self.spec.patches.iter().enumerate() {
@@ -605,7 +612,7 @@ fn split_unified_patch(patch: &str) -> Vec<String> {
 /// Strip path prefix components (like `patch -p`)
 ///
 /// E.g., with strip_level=1: "a/src/main.rs" -> "src/main.rs"
-fn strip_path_prefix(path: &str, strip_level: i32) -> String {
+fn strip_path_prefix(path: &str, strip_level: u32) -> String {
     let mut components: Vec<&str> = path.split('/').collect();
 
     // Remove leading empty component from absolute paths
