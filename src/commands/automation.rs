@@ -399,7 +399,7 @@ pub async fn cmd_automation_configure(
         println!("Would disable AI assistance");
     }
 
-    println!("\nNote: Configuration changes are not yet implemented.");
+    println!("\n[NOT YET IMPLEMENTED] automation configure: persisting configuration changes is not yet available.");
     println!("Please edit {} directly.", DEFAULT_MODEL_PATH);
 
     Ok(())
@@ -422,8 +422,7 @@ pub async fn cmd_automation_daemon(
     };
 
     if !foreground {
-        // TODO: Implement actual daemonization with fork/setsid
-        println!("Background daemon mode not yet implemented. Use --foreground.");
+        println!("[NOT YET IMPLEMENTED] automation daemon: background daemon mode is not yet available. Use --foreground.");
         return Ok(());
     }
 

@@ -25,8 +25,8 @@ pub async fn cmd_profile_generate(manifest: &Path, output: Option<&Path>) -> Res
     }
 
     println!();
-    println!("[TODO] Profile generation requires the full recipe loading pipeline.");
-    println!("       Use 'conary profile show' to inspect an existing profile.");
+    println!("[NOT YET IMPLEMENTED] profile generate: full recipe loading pipeline is not yet available.");
+    println!("Use 'conary profile show' to inspect an existing profile.");
 
     Ok(())
 }

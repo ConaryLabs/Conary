@@ -39,7 +39,7 @@ pub async fn cmd_self_update(
 
     if let Some(ref v) = version {
         println!("Requested version: {v}");
-        // TODO: support downloading a specific version instead of latest
+        println!("[NOT YET IMPLEMENTED] --version: downloading a specific version is not yet available; installing latest instead.");
     }
 
     // Check for updates
