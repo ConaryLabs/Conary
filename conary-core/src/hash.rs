@@ -286,6 +286,26 @@ pub fn sha256_prefixed(data: &[u8]) -> String {
     format!("sha256:{}", sha256(data))
 }
 
+/// Compute SHA-256 hash returning raw bytes
+///
+/// Use for binary hash storage (CCS chunks, Merkle trees) where hex string
+/// overhead is unnecessary.
+#[inline]
+pub fn sha256_bytes(data: &[u8]) -> [u8; 32] {
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(data);
+    hasher.finalize().into()
+}
+
+/// Compute SHA-256 of a reader, returning hex string
+///
+/// Use for streaming verification where you feed chunks incrementally.
+pub fn sha256_reader_hex<R: Read>(reader: &mut R) -> io::Result<String> {
+    let hash = hash_reader(HashAlgorithm::Sha256, reader)?;
+    Ok(hash.value)
+}
+
 /// Compute XXH128 hash (convenience function)
 #[inline]
 pub fn xxh128(data: &[u8]) -> String {
@@ -588,5 +608,23 @@ mod tests {
         assert_eq!(err.expected, wrong_hash);
         assert_eq!(err.actual, sha256(data));
         assert_eq!(err.algorithm, HashAlgorithm::Sha256);
+    }
+
+    #[test]
+    fn test_sha256_bytes() {
+        let data = b"hello world";
+        let bytes = sha256_bytes(data);
+        assert_eq!(bytes.len(), 32);
+        // Verify it matches the hex version
+        let hex = sha256(data);
+        assert_eq!(hex::encode(bytes), hex);
+    }
+
+    #[test]
+    fn test_sha256_reader_hex() {
+        let data = b"hello world";
+        let mut cursor = std::io::Cursor::new(data);
+        let hex = sha256_reader_hex(&mut cursor).unwrap();
+        assert_eq!(hex, sha256(data));
     }
 }
