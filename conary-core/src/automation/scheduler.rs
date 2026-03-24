@@ -9,8 +9,7 @@
 
 use crate::error::Result;
 use crate::model::AutomationConfig;
-#[allow(unused_imports)]
-use chrono::{DateTime, Local, NaiveTime, Timelike, Utc};
+use chrono::{DateTime, Local, NaiveTime, Utc};
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
@@ -277,6 +276,7 @@ impl AutomationDaemon {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Timelike;
 
     #[test]
     fn test_parse_time_window() {
