@@ -979,6 +979,7 @@ mod tests {
         let glibc_manifest = OutputManifest {
             derivation_id: glibc_id.as_str().to_owned(),
             output_hash: "out1".to_owned(),
+            hash_version: 1,
             files: vec![],
             symlinks: vec![],
             build_duration_secs: 1,
