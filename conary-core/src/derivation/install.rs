@@ -242,6 +242,7 @@ mod tests {
         OutputManifest {
             derivation_id: "test-derivation".to_owned(),
             output_hash: OutputManifest::compute_output_hash(&files, &symlinks),
+            hash_version: 1,
             files,
             symlinks,
             build_duration_secs: 0,
