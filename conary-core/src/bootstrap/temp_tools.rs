@@ -24,7 +24,6 @@ use crate::recipe::{Kitchen, KitchenConfig};
 ///
 /// Built on the host using the Phase 1 cross-toolchain, installed into
 /// `$LFS/` so they are available once we enter the chroot.
-#[allow(dead_code)]
 const CH6_PACKAGES: [&str; 17] = [
     "m4",
     "ncurses",
@@ -49,7 +48,6 @@ const CH6_PACKAGES: [&str; 17] = [
 ///
 /// Built natively inside the chroot after `setup_chroot()` prepares the
 /// virtual kernel filesystems and directory structure.
-#[allow(dead_code)]
 const CH7_PACKAGES: [&str; 6] = [
     "gettext",
     "bison",

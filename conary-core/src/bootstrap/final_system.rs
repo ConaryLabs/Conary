@@ -22,7 +22,6 @@ use crate::recipe::parser::parse_recipe_file;
 /// Complete build order for the final system (LFS Chapter 8).
 ///
 /// All 77 packages in the order specified by LFS 13.
-#[allow(dead_code)]
 pub const SYSTEM_BUILD_ORDER: [&str; 77] = [
     "man-pages",
     "iana-etc",
@@ -137,6 +136,8 @@ pub enum FinalSystemError {
 /// progress so builds can be resumed after failure.
 pub struct FinalSystemBuilder {
     /// Working directory for build artifacts.
+    // TODO(bootstrap): used when build artifacts are written to a staging area
+    // separate from the chroot root (e.g. for incremental/resumable builds).
     #[allow(dead_code)]
     work_dir: PathBuf,
     /// Root of the LFS filesystem (chroot root).
@@ -144,6 +145,8 @@ pub struct FinalSystemBuilder {
     /// Bootstrap configuration.
     config: BootstrapConfig,
     /// Toolchain available inside the chroot.
+    // TODO(bootstrap): used when chroot builds switch to toolchain-aware
+    // environment setup via build_helpers::setup_build_env.
     #[allow(dead_code)]
     toolchain: Toolchain,
     /// Shared build runner for source fetching and verification.

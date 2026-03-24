@@ -33,7 +33,6 @@ fn lfs_tgt(config: &BootstrapConfig) -> &'static str {
 }
 
 /// Package build order for Phase 1 (LFS Chapter 5).
-#[allow(dead_code)]
 const CROSS_TOOLS_ORDER: [&str; 5] = [
     "binutils-pass1",
     "gcc-pass1",
