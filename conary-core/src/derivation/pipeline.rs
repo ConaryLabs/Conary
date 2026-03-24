@@ -1,11 +1,11 @@
 // conary-core/src/derivation/pipeline.rs
 
-//! Full staged build pipeline orchestrator.
+//! Build pipeline orchestrator.
 //!
-//! [`Pipeline`] drives the complete CAS-layered bootstrap: for each stage
-//! (Toolchain -> Foundation -> System -> Customization) it executes every
-//! derivation in topological order, composes an EROFS image of the stage
-//! outputs, and feeds the resulting `build_env_hash` into the next stage.
+//! [`Pipeline`] drives the complete CAS-layered bootstrap: packages are built
+//! sequentially in topological order inside a mutable overlayfs chroot, with
+//! each package installed into the live sysroot before the next build starts.
+//! A single EROFS image is composed from all outputs at the end.
 //!
 //! [`Pipeline::generate_profile`] produces a dry-run [`BuildProfile`] without
 //! executing any builds, marking all derivation IDs as "pending".
@@ -19,8 +19,8 @@ use tracing::{info, warn};
 
 use crate::recipe::Recipe;
 
-use super::compose::{ComposeError, compose_erofs, erofs_image_hash};
-use super::environment::{BuildEnvironment, MutableEnvironment};
+use super::compose::{ComposeError, compose_erofs};
+use super::environment::MutableEnvironment;
 use super::executor::{DerivationExecutor, ExecutionResult, ExecutorError};
 use super::id::{DerivationId, DerivationInputs};
 use super::index::DerivationIndex;
@@ -32,20 +32,6 @@ use super::profile::{
 use super::recipe_hash;
 use super::seed::Seed;
 use super::stages::{Stage, StageAssignment};
-
-// ---------------------------------------------------------------------------
-// Build mode
-// ---------------------------------------------------------------------------
-
-/// How the pipeline executes builds.
-#[derive(Debug, Clone, Default)]
-pub enum BuildMode {
-    /// Original staged mode: EROFS between stages, read-only sysroot.
-    #[default]
-    Staged,
-    /// Chroot mode: mutable overlayfs sysroot, install-as-you-go.
-    Chroot,
-}
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -68,8 +54,6 @@ pub struct PipelineConfig {
     pub keep_logs: bool,
     /// Spawn interactive shell on build failure.
     pub shell_on_failure: bool,
-    /// Stop after completing this stage (inclusive).
-    pub up_to_stage: Option<Stage>,
     /// Only build these packages. All other packages use cache lookups.
     pub only_packages: Option<Vec<String>>,
     /// When combined with `only_packages`, also rebuild reverse dependents.
@@ -80,8 +64,6 @@ pub struct PipelineConfig {
     pub publish_endpoint: Option<String>,
     /// Bearer token for publish endpoint.
     pub publish_token: Option<String>,
-    /// Build execution mode.
-    pub build_mode: BuildMode,
 }
 
 // ---------------------------------------------------------------------------
@@ -188,14 +170,6 @@ pub enum PipelineError {
     /// Installing a derivation into the sysroot failed.
     #[error("install error: {0}")]
     Install(String),
-
-    /// A --only target is in a stage beyond the --up-to cutoff.
-    #[error("package '{package}' is in stage '{stage}' but --up-to stops at '{cutoff}'")]
-    PackageBeyondCutoff {
-        package: String,
-        stage: String,
-        cutoff: String,
-    },
 }
 
 impl From<ComposeError> for PipelineError {
@@ -279,428 +253,21 @@ impl Pipeline {
         profile
     }
 
-    /// Execute the full staged pipeline.
+    /// Execute the build pipeline.
     ///
-    /// For each stage (Toolchain, Foundation, System, Customization):
-    /// 1. Emit `StageStarted`.
-    /// 2. For each package in build order:
-    ///    - Collect dependency derivation IDs from previously completed packages.
-    ///    - Call `executor.execute()`.
-    ///    - On `CacheHit`: load manifest from CAS, record in completed outputs.
-    ///    - On `Built`: record in completed outputs.
-    ///    - Emit the appropriate event.
-    /// 3. Compose an EROFS image from stage outputs; compute new `build_env_hash`.
-    /// 4. Emit `StageCompleted`.
+    /// Builds all packages sequentially in topological order inside a mutable
+    /// overlayfs chroot. Each package is installed into the live sysroot after
+    /// building so subsequent packages can link against it. A single EROFS image
+    /// is composed from all outputs at the end.
     ///
-    /// Returns a [`BuildProfile`] with all derivation IDs filled in.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PipelineError`] on missing recipes, executor failures,
-    /// composition errors, or I/O errors.
-    pub async fn execute<F>(
-        &self,
-        seed: &Seed,
-        recipes: &HashMap<String, Recipe>,
-        assignments: &[StageAssignment],
-        conn: &Connection,
-        mut on_event: F,
-    ) -> Result<BuildProfile, PipelineError>
-    where
-        F: FnMut(&PipelineEvent),
-    {
-        let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-
-        let stages_ordered = ordered_stages(assignments);
-
-        // Validate --only targets against --up-to cutoff
-        if let (Some(only_pkgs), Some(cutoff)) =
-            (&self.config.only_packages, &self.config.up_to_stage)
-        {
-            for pkg in only_pkgs {
-                if let Some((stage, _)) = stages_ordered.iter().find(|(_, pkgs)| pkgs.contains(pkg))
-                    && stage > cutoff
-                {
-                    return Err(PipelineError::PackageBeyondCutoff {
-                        package: pkg.clone(),
-                        stage: stage.to_string(),
-                        cutoff: cutoff.to_string(),
-                    });
-                }
-            }
-        }
-
-        let build_set = compute_build_set(
-            self.config.only_packages.as_deref(),
-            self.config.cascade,
-            self.config.up_to_stage,
-            recipes,
-            &stages_ordered,
-        );
-
-        // Set up substituter if configured
-        let mut substituter = if !self.config.substituter_sources.is_empty() {
-            super::substituter::DerivationSubstituter::seed_peers(
-                conn,
-                &self.config.substituter_sources,
-            )
-            .map_err(|e| PipelineError::Io(format!("seed substituter peers: {e}")))?;
-            match super::substituter::DerivationSubstituter::from_db(conn) {
-                Ok(s) => Some(s),
-                Err(e) => {
-                    warn!("Could not initialize substituter: {e}");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
-        // Current build environment hash; starts from the seed.
-        let mut build_env_hash = seed.build_env_hash().to_owned();
-
-        // Track the current EROFS image path for mounting as build sysroot.
-        // Starts as the seed image; updated after each stage's compose_erofs().
-        let mut current_image_path = seed.image_path.clone();
-
-        // Map package name -> (DerivationId, OutputManifest) for dependency resolution.
-        let mut completed: BTreeMap<String, (DerivationId, OutputManifest)> = BTreeMap::new();
-
-        let mut profile_stages = Vec::new();
-        let mut total_cached: usize = 0;
-        let mut total_built: usize = 0;
-
-        for (stage, pkgs) in &stages_ordered {
-            let stage_name = stage.to_string();
-
-            // Check --up-to: skip stages beyond the cutoff BEFORE emitting
-            // StageStarted, so observers don't see a started event for a
-            // stage that will never run.
-            if let Some(cutoff) = self.config.up_to_stage
-                && *stage > cutoff
-            {
-                break;
-            }
-
-            on_event(&PipelineEvent::StageStarted {
-                name: stage_name.clone(),
-                package_count: pkgs.len(),
-            });
-
-            info!("stage {stage_name}: {} packages", pkgs.len());
-
-            let mut stage_derivations = Vec::new();
-            let mut stage_manifests: Vec<OutputManifest> = Vec::new();
-
-            // Mount the current stage's EROFS image as the build sysroot.
-            let sysroot = self.config.work_dir.join("sysroot");
-            std::fs::create_dir_all(&sysroot).map_err(|e| PipelineError::Io(e.to_string()))?;
-
-            let mut build_env = BuildEnvironment::new(
-                current_image_path.clone(),
-                self.config.cas_dir.clone(),
-                sysroot.clone(),
-                build_env_hash.clone(),
-            );
-            // Mount will fail without root -- that's expected. Log and continue
-            // with unmounted sysroot for non-root builds.
-            if let Err(e) = build_env.mount() {
-                warn!("Could not mount build environment (requires root): {e}");
-            }
-
-            for pkg_name in pkgs {
-                let recipe = recipes
-                    .get(pkg_name.as_str())
-                    .ok_or_else(|| PipelineError::MissingRecipe(pkg_name.clone()))?;
-
-                // --only filter: non-targeted packages require a cached derivation.
-                if let Some(ref set) = build_set
-                    && !set.contains(pkg_name.as_str())
-                {
-                    // Compute derivation ID and do cache-only lookup.
-                    let dep_ids = collect_dep_ids(recipe, &completed);
-                    let src_hash = recipe_hash::source_hash(recipe);
-                    let script_hash = recipe_hash::build_script_hash(recipe);
-                    let inputs = DerivationInputs {
-                        source_hash: src_hash,
-                        build_script_hash: script_hash,
-                        dependency_ids: dep_ids,
-                        build_env_hash: build_env_hash.clone(),
-                        target_triple: self.config.target_triple.clone(),
-                        build_options: BTreeMap::new(),
-                    };
-                    let derivation_id = DerivationId::compute(&inputs)
-                        .map_err(|e| PipelineError::Io(format!("derivation ID: {e}")))?;
-
-                    let index = DerivationIndex::new(conn);
-                    let record = index
-                        .lookup(derivation_id.as_str())
-                        .map_err(|e| PipelineError::Io(format!("index lookup: {e}")))?
-                        .ok_or_else(|| PipelineError::UncachedDependency {
-                            package: pkg_name.clone(),
-                        })?;
-
-                    let manifest =
-                        load_manifest_from_cas(&self.executor, &record.manifest_cas_hash)?;
-
-                    on_event(&PipelineEvent::PackageCached {
-                        name: pkg_name.clone(),
-                    });
-
-                    stage_derivations.push(ProfileDerivation {
-                        package: recipe.package.name.clone(),
-                        version: recipe.package.version.clone(),
-                        derivation_id: derivation_id.as_str().to_owned(),
-                    });
-
-                    stage_manifests.push(manifest.clone());
-                    completed.insert(pkg_name.clone(), (derivation_id, manifest));
-                    total_cached += 1;
-                    continue;
-                }
-
-                // Check remote substituter before building
-                if let Some(sub) = &mut substituter {
-                    let dep_ids = collect_dep_ids(recipe, &completed);
-                    let inputs = DerivationInputs {
-                        source_hash: recipe_hash::source_hash(recipe),
-                        build_script_hash: recipe_hash::build_script_hash(recipe),
-                        dependency_ids: dep_ids,
-                        build_env_hash: build_env_hash.clone(),
-                        target_triple: self.config.target_triple.clone(),
-                        build_options: BTreeMap::new(),
-                    };
-
-                    if let Ok(drv_id) = DerivationId::compute(&inputs) {
-                        // Check local index first (fast path)
-                        let index = DerivationIndex::new(conn);
-                        if index.lookup(drv_id.as_str()).ok().flatten().is_some() {
-                            // Local cache hit -- executor.execute() will find it too, skip substituter
-                        } else if let super::substituter::CacheQueryResult::Hit { manifest, peer } =
-                            sub.query(drv_id.as_str()).await
-                        {
-                            // Remote hit! Fetch missing CAS objects
-                            let fetch_report = sub
-                                .fetch_missing_objects(&manifest, self.executor.cas(), &peer)
-                                .await
-                                .map_err(|e| {
-                                    PipelineError::Io(format!("substituter fetch: {e}"))
-                                })?;
-
-                            // Record in local index
-                            let record = super::index::DerivationRecord {
-                                derivation_id: drv_id.as_str().to_owned(),
-                                output_hash: manifest.output_hash.clone(),
-                                package_name: recipe.package.name.clone(),
-                                package_version: recipe.package.version.clone(),
-                                manifest_cas_hash: self
-                                    .executor
-                                    .cas()
-                                    .store(
-                                        toml::to_string(&manifest)
-                                            .map_err(|e| {
-                                                PipelineError::Io(format!(
-                                                    "manifest serialization: {e}"
-                                                ))
-                                            })?
-                                            .as_bytes(),
-                                    )
-                                    .map_err(|e| {
-                                        PipelineError::Io(format!("CAS store manifest: {e}"))
-                                    })?,
-                                stage: Some(stage_name.clone()),
-                                build_env_hash: Some(build_env_hash.clone()),
-                                built_at: manifest.built_at.clone(),
-                                build_duration_secs: manifest.build_duration_secs,
-                                trust_level: 1,
-                                provenance_cas_hash: None,
-                                reproducible: None,
-                            };
-                            index
-                                .insert(&record)
-                                .map_err(|e| PipelineError::Io(format!("index insert: {e}")))?;
-
-                            on_event(&PipelineEvent::SubstituterHit {
-                                name: pkg_name.clone(),
-                                peer: peer.clone(),
-                                objects_fetched: fetch_report.objects_fetched,
-                            });
-
-                            stage_derivations.push(ProfileDerivation {
-                                package: recipe.package.name.clone(),
-                                version: recipe.package.version.clone(),
-                                derivation_id: drv_id.as_str().to_owned(),
-                            });
-                            stage_manifests.push(manifest.clone());
-                            completed.insert(pkg_name.clone(), (drv_id, manifest));
-                            total_cached += 1;
-                            continue;
-                        }
-                    }
-                }
-
-                on_event(&PipelineEvent::PackageBuilding {
-                    name: pkg_name.clone(),
-                    stage: stage_name.clone(),
-                });
-
-                // Collect dependency derivation IDs from previously completed packages.
-                let dep_ids = collect_dep_ids(recipe, &completed);
-
-                let start = Instant::now();
-
-                let result = self.executor.execute(
-                    recipe,
-                    &build_env_hash,
-                    &dep_ids,
-                    &self.config.target_triple,
-                    &sysroot,
-                    conn,
-                )?;
-
-                match result {
-                    ExecutionResult::CacheHit {
-                        derivation_id,
-                        record,
-                    } => {
-                        // Load manifest from CAS via the stored manifest_cas_hash.
-                        let manifest =
-                            load_manifest_from_cas(&self.executor, &record.manifest_cas_hash)?;
-
-                        on_event(&PipelineEvent::PackageCached {
-                            name: pkg_name.clone(),
-                        });
-
-                        stage_derivations.push(ProfileDerivation {
-                            package: recipe.package.name.clone(),
-                            version: recipe.package.version.clone(),
-                            derivation_id: derivation_id.as_str().to_owned(),
-                        });
-
-                        stage_manifests.push(manifest.clone());
-                        completed.insert(pkg_name.clone(), (derivation_id, manifest));
-                        total_cached += 1;
-                    }
-                    ExecutionResult::Built {
-                        derivation_id,
-                        output,
-                    } => {
-                        let duration = start.elapsed().as_secs();
-
-                        on_event(&PipelineEvent::PackageBuilt {
-                            name: pkg_name.clone(),
-                            duration_secs: duration,
-                        });
-
-                        stage_derivations.push(ProfileDerivation {
-                            package: recipe.package.name.clone(),
-                            version: recipe.package.version.clone(),
-                            derivation_id: derivation_id.as_str().to_owned(),
-                        });
-
-                        let manifest = output.manifest;
-
-                        // Auto-publish to configured endpoint
-                        if let (Some(endpoint), Some(token)) = (
-                            self.config.publish_endpoint.as_deref(),
-                            self.config.publish_token.as_deref(),
-                        ) && let Some(sub) = substituter.as_ref()
-                            && let Err(e) = sub
-                                .publish(derivation_id.as_str(), &manifest, endpoint, token)
-                                .await
-                        {
-                            warn!("Failed to publish {}: {e}", pkg_name);
-                        }
-
-                        // Set trust level 2 (locally built).
-                        // The executor already sets this via provenance generation,
-                        // but set_trust_level is monotonic so this is a safe no-op.
-                        let idx = DerivationIndex::new(conn);
-                        let _ = idx.set_trust_level(derivation_id.as_str(), 2);
-
-                        stage_manifests.push(manifest.clone());
-                        completed.insert(pkg_name.clone(), (derivation_id, manifest));
-                        total_built += 1;
-                    }
-                }
-            }
-
-            // Unmount the build environment after all packages in this stage.
-            if build_env.is_mounted()
-                && let Err(e) = build_env.unmount()
-            {
-                warn!("Failed to unmount build environment: {e}");
-            }
-
-            // Compose EROFS from stage outputs and compute new build_env_hash.
-            if !stage_manifests.is_empty() {
-                let manifest_refs: Vec<&OutputManifest> = stage_manifests.iter().collect();
-                let stage_dir = self.config.work_dir.join(format!("stage-{stage_name}"));
-                std::fs::create_dir_all(&stage_dir)
-                    .map_err(|e| PipelineError::Io(e.to_string()))?;
-
-                let build_result = compose_erofs(&manifest_refs, &stage_dir)?;
-
-                build_env_hash = erofs_image_hash(&build_result.image_path)?.to_string();
-
-                // Update the image path so the next stage mounts this
-                // stage's composed EROFS as its build sysroot.
-                current_image_path = build_result.image_path;
-
-                info!(
-                    "stage {stage_name} composed: {} objects, env_hash={}",
-                    build_result.cas_objects_referenced,
-                    &build_env_hash[..16.min(build_env_hash.len())],
-                );
-            }
-
-            profile_stages.push(ProfileStage {
-                name: stage_name.clone(),
-                build_env: build_env_hash.clone(),
-                derivations: stage_derivations,
-            });
-
-            on_event(&PipelineEvent::StageCompleted { name: stage_name });
-        }
-
-        let total = total_cached + total_built;
-        on_event(&PipelineEvent::PipelineCompleted {
-            total_packages: total,
-            cached: total_cached,
-            built: total_built,
-        });
-
-        let mut profile = BuildProfile {
-            profile: ProfileMetadata {
-                manifest: "pipeline".to_owned(),
-                profile_hash: String::new(),
-                generated_at: now,
-                target: self.config.target_triple.clone(),
-            },
-            seed: ProfileSeedRef {
-                id: seed.metadata.seed_id.clone(),
-                source: seed.metadata.source.to_string(),
-            },
-            stages: profile_stages,
-        };
-
-        profile.profile.profile_hash = profile.compute_hash();
-        Ok(profile)
-    }
-
-    /// Execute the build in chroot mode: single mutable sysroot, sequential builds.
-    ///
-    /// Unlike [`execute()`](Self::execute), this mode:
-    /// - Uses a single mutable overlayfs sysroot (not per-stage EROFS)
-    /// - Installs each package into the live chroot after building
-    /// - Composes the final EROFS only once at the end
-    /// - Uses a constant `build_env_hash` (the seed hash) for all packages
+    /// The `build_env_hash` stays constant throughout (the seed hash) -- there
+    /// are no per-stage EROFS boundaries.
     ///
     /// # Errors
     ///
     /// Returns [`PipelineError`] on missing recipes, executor failures,
     /// install failures, composition errors, or I/O errors.
-    pub async fn execute_chroot<F>(
+    pub async fn execute<F>(
         &self,
         seed: &Seed,
         recipes: &HashMap<String, Recipe>,
@@ -746,10 +313,11 @@ impl Pipeline {
 
         let sysroot = env.sysroot();
 
-        // Map package name -> (DerivationId, OutputManifest) for dependency resolution.
-        let mut completed: BTreeMap<String, (DerivationId, OutputManifest)> = BTreeMap::new();
-        let mut all_derivations: Vec<ProfileDerivation> = Vec::new();
-        let mut all_manifests: Vec<OutputManifest> = Vec::new();
+        let mut acc = BuildAccumulator {
+            completed: BTreeMap::new(),
+            derivations: Vec::new(),
+            manifests: Vec::new(),
+        };
         let mut total_cached: usize = 0;
         let mut total_built: usize = 0;
 
@@ -783,7 +351,7 @@ impl Pipeline {
             if let Some(ref set) = build_set
                 && !set.contains(pkg_name.as_str())
             {
-                let dep_ids = collect_dep_ids(recipe, &completed);
+                let dep_ids = collect_dep_ids(recipe, &acc.completed);
                 let inputs = DerivationInputs {
                     source_hash: recipe_hash::source_hash(recipe),
                     build_script_hash: recipe_hash::build_script_hash(recipe),
@@ -806,22 +374,14 @@ impl Pipeline {
                 let manifest =
                     load_manifest_from_cas(&self.executor, &record.manifest_cas_hash)?;
 
-                // Install cached output into the live sysroot.
-                install_to_sysroot(&manifest, &sysroot, &self.config.cas_dir)
-                    .map_err(|e| PipelineError::Install(e.to_string()))?;
-                run_ldconfig_if_needed(&manifest, &sysroot);
+                record_package(
+                    &manifest, &sysroot, &self.config.cas_dir,
+                    recipe, &derivation_id, pkg_name, &mut acc,
+                )?;
 
                 on_event(&PipelineEvent::PackageCached {
                     name: pkg_name.clone(),
                 });
-
-                all_derivations.push(ProfileDerivation {
-                    package: recipe.package.name.clone(),
-                    version: recipe.package.version.clone(),
-                    derivation_id: derivation_id.as_str().to_owned(),
-                });
-                all_manifests.push(manifest.clone());
-                completed.insert(pkg_name.clone(), (derivation_id, manifest));
                 total_cached += 1;
                 continue;
             }
@@ -831,7 +391,7 @@ impl Pipeline {
                 stage: step.stage.to_string(),
             });
 
-            let dep_ids = collect_dep_ids(recipe, &completed);
+            let dep_ids = collect_dep_ids(recipe, &acc.completed);
             let start = Instant::now();
 
             let result = self.executor.execute(
@@ -851,22 +411,14 @@ impl Pipeline {
                     let manifest =
                         load_manifest_from_cas(&self.executor, &record.manifest_cas_hash)?;
 
-                    // Install cached output into the live sysroot.
-                    install_to_sysroot(&manifest, &sysroot, &self.config.cas_dir)
-                        .map_err(|e| PipelineError::Install(e.to_string()))?;
-                    run_ldconfig_if_needed(&manifest, &sysroot);
+                    record_package(
+                        &manifest, &sysroot, &self.config.cas_dir,
+                        recipe, &derivation_id, pkg_name, &mut acc,
+                    )?;
 
                     on_event(&PipelineEvent::PackageCached {
                         name: pkg_name.clone(),
                     });
-
-                    all_derivations.push(ProfileDerivation {
-                        package: recipe.package.name.clone(),
-                        version: recipe.package.version.clone(),
-                        derivation_id: derivation_id.as_str().to_owned(),
-                    });
-                    all_manifests.push(manifest.clone());
-                    completed.insert(pkg_name.clone(), (derivation_id, manifest));
                     total_cached += 1;
                 }
                 ExecutionResult::Built {
@@ -876,10 +428,10 @@ impl Pipeline {
                     let duration = start.elapsed().as_secs();
                     let manifest = output.manifest;
 
-                    // Install freshly-built output into the live sysroot.
-                    install_to_sysroot(&manifest, &sysroot, &self.config.cas_dir)
-                        .map_err(|e| PipelineError::Install(e.to_string()))?;
-                    run_ldconfig_if_needed(&manifest, &sysroot);
+                    record_package(
+                        &manifest, &sysroot, &self.config.cas_dir,
+                        recipe, &derivation_id, pkg_name, &mut acc,
+                    )?;
 
                     on_event(&PipelineEvent::PackageBuilt {
                         name: pkg_name.clone(),
@@ -890,13 +442,6 @@ impl Pipeline {
                     let idx = DerivationIndex::new(conn);
                     let _ = idx.set_trust_level(derivation_id.as_str(), 2);
 
-                    all_derivations.push(ProfileDerivation {
-                        package: recipe.package.name.clone(),
-                        version: recipe.package.version.clone(),
-                        derivation_id: derivation_id.as_str().to_owned(),
-                    });
-                    all_manifests.push(manifest.clone());
-                    completed.insert(pkg_name.clone(), (derivation_id, manifest));
                     total_built += 1;
                 }
             }
@@ -917,16 +462,16 @@ impl Pipeline {
         }
 
         // Compose a single EROFS image from all outputs at the end.
-        if !all_manifests.is_empty() {
-            let manifest_refs: Vec<&OutputManifest> = all_manifests.iter().collect();
-            let compose_dir = self.config.work_dir.join("chroot-compose");
+        if !acc.manifests.is_empty() {
+            let manifest_refs: Vec<&OutputManifest> = acc.manifests.iter().collect();
+            let compose_dir = self.config.work_dir.join("compose");
             std::fs::create_dir_all(&compose_dir)
                 .map_err(|e| PipelineError::Io(e.to_string()))?;
 
             let build_result = compose_erofs(&manifest_refs, &compose_dir)?;
 
             info!(
-                "chroot composed: {} objects, image={}",
+                "composed: {} objects, image={}",
                 build_result.cas_objects_referenced,
                 build_result.image_path.display(),
             );
@@ -939,11 +484,10 @@ impl Pipeline {
             built: total_built,
         });
 
-        // Build a single profile stage named "chroot" containing all derivations.
         let profile_stages = vec![ProfileStage {
-            name: "chroot".to_owned(),
+            name: "pipeline".to_owned(),
             build_env: build_env_hash,
-            derivations: all_derivations,
+            derivations: acc.derivations,
         }];
 
         let mut profile = BuildProfile {
@@ -970,7 +514,7 @@ impl Pipeline {
 // ---------------------------------------------------------------------------
 
 /// Group assignments by stage in stage order, preserving build_order within
-/// each group.
+/// each group. Used by [`Pipeline::generate_profile`] for dry-run planning.
 fn ordered_stages(assignments: &[StageAssignment]) -> Vec<(Stage, Vec<String>)> {
     let mut by_stage: BTreeMap<Stage, Vec<(usize, String)>> = BTreeMap::new();
 
@@ -994,21 +538,15 @@ fn ordered_stages(assignments: &[StageAssignment]) -> Vec<(Stage, Vec<String>)> 
 ///
 /// Only includes dependencies that have already been built (are in `completed`).
 /// Cross-stage or external dependencies that are not in the map are silently
-/// skipped — the executor's derivation ID computation handles them being absent.
+/// skipped -- the executor's derivation ID computation handles them being absent.
 fn collect_dep_ids(
     recipe: &Recipe,
-    completed: &BTreeMap<String, (DerivationId, OutputManifest)>,
+    completed: &BTreeMap<String, DerivationId>,
 ) -> BTreeMap<String, DerivationId> {
     let mut dep_ids = BTreeMap::new();
 
-    for dep_name in &recipe.build.requires {
-        if let Some((id, _)) = completed.get(dep_name.as_str()) {
-            dep_ids.insert(dep_name.clone(), id.clone());
-        }
-    }
-
-    for dep_name in &recipe.build.makedepends {
-        if let Some((id, _)) = completed.get(dep_name.as_str()) {
+    for dep_name in recipe.build.requires.iter().chain(&recipe.build.makedepends) {
+        if let Some(id) = completed.get(dep_name.as_str()) {
             dep_ids.insert(dep_name.clone(), id.clone());
         }
     }
@@ -1016,53 +554,42 @@ fn collect_dep_ids(
     dep_ids
 }
 
-/// Compute the set of packages to build based on --only and --cascade flags.
+/// Mutable accumulator state threaded through the build loop.
+struct BuildAccumulator {
+    /// Package name -> derivation ID for dependency resolution.
+    completed: BTreeMap<String, DerivationId>,
+    /// Profile entries for all processed packages.
+    derivations: Vec<ProfileDerivation>,
+    /// Output manifests for final EROFS composition.
+    manifests: Vec<OutputManifest>,
+}
+
+/// Install a package into the live sysroot, record its derivation ID, and
+/// push its manifest and profile entry into the accumulator.
 ///
-/// Returns `None` if `only_packages` is `None` (build everything).
-/// When `cascade` is true, expands the set with reverse dependents via `RecipeGraph`.
-/// When `up_to_stage` is set, filters out packages beyond the cutoff.
-fn compute_build_set(
-    only_packages: Option<&[String]>,
-    cascade: bool,
-    up_to_stage: Option<Stage>,
-    recipes: &HashMap<String, Recipe>,
-    assignments: &[(Stage, Vec<String>)],
-) -> Option<HashSet<String>> {
-    let targets = only_packages?;
-    let mut build_set: HashSet<String> = targets.iter().cloned().collect();
+/// This consolidates the repeated install-record-push pattern that appears
+/// in the --only cache path, CacheHit arm, and Built arm of `Pipeline::execute`.
+fn record_package(
+    manifest: &OutputManifest,
+    sysroot: &std::path::Path,
+    cas_dir: &std::path::Path,
+    recipe: &Recipe,
+    derivation_id: &DerivationId,
+    pkg_name: &str,
+    acc: &mut BuildAccumulator,
+) -> Result<(), PipelineError> {
+    install_to_sysroot(manifest, sysroot, cas_dir)
+        .map_err(|e| PipelineError::Install(e.to_string()))?;
+    run_ldconfig_if_needed(manifest, sysroot);
 
-    if cascade {
-        use crate::recipe::RecipeGraph;
-        let mut graph = RecipeGraph::new();
-        for recipe in recipes.values() {
-            graph.add_from_recipe(recipe);
-        }
-
-        let mut expanded = HashSet::new();
-        for target in &build_set {
-            for dep in graph.transitive_dependents(target) {
-                expanded.insert(dep);
-            }
-        }
-        build_set.extend(expanded);
-    }
-
-    // Filter by up_to_stage if set
-    if let Some(cutoff) = up_to_stage {
-        let allowed_packages: HashSet<String> = assignments
-            .iter()
-            .filter(|(stage, _)| *stage <= cutoff)
-            .flat_map(|(_, pkgs)| pkgs.iter().cloned())
-            .collect();
-
-        let excluded: Vec<String> = build_set.difference(&allowed_packages).cloned().collect();
-        for pkg in &excluded {
-            warn!("skipping reverse dependent '{pkg}' due to --up-to {cutoff}");
-        }
-        build_set.retain(|p| allowed_packages.contains(p));
-    }
-
-    Some(build_set)
+    acc.derivations.push(ProfileDerivation {
+        package: recipe.package.name.clone(),
+        version: recipe.package.version.clone(),
+        derivation_id: derivation_id.as_str().to_owned(),
+    });
+    acc.manifests.push(manifest.clone());
+    acc.completed.insert(pkg_name.to_owned(), derivation_id.clone());
+    Ok(())
 }
 
 /// Load an `OutputManifest` from CAS using the stored manifest hash.
@@ -1273,18 +800,8 @@ mod tests {
         })
         .unwrap();
 
-        let glibc_manifest = OutputManifest {
-            derivation_id: glibc_id.as_str().to_owned(),
-            output_hash: "out1".to_owned(),
-            hash_version: 1,
-            files: vec![],
-            symlinks: vec![],
-            build_duration_secs: 1,
-            built_at: "2026-03-19T00:00:00Z".to_owned(),
-        };
-
         let mut completed = BTreeMap::new();
-        completed.insert("glibc".to_owned(), (glibc_id.clone(), glibc_manifest));
+        completed.insert("glibc".to_owned(), glibc_id.clone());
         // "make" is NOT in completed -- should be skipped.
 
         let dep_ids = collect_dep_ids(&recipe, &completed);
@@ -1321,19 +838,7 @@ mod tests {
     }
 
     #[test]
-    fn build_mode_defaults_to_staged() {
-        let mode = BuildMode::default();
-        assert!(matches!(mode, BuildMode::Staged));
-    }
-
-    #[test]
-    fn build_mode_debug_formatting() {
-        assert_eq!(format!("{:?}", BuildMode::Staged), "Staged");
-        assert_eq!(format!("{:?}", BuildMode::Chroot), "Chroot");
-    }
-
-    #[test]
-    fn pipeline_config_with_chroot_mode() {
+    fn pipeline_config_fields() {
         let config = PipelineConfig {
             cas_dir: PathBuf::from("/tmp/cas"),
             work_dir: PathBuf::from("/tmp/work"),
@@ -1342,14 +847,13 @@ mod tests {
             log_dir: None,
             keep_logs: false,
             shell_on_failure: false,
-            up_to_stage: None,
             only_packages: None,
             cascade: false,
             substituter_sources: vec![],
             publish_endpoint: None,
             publish_token: None,
-            build_mode: BuildMode::Chroot,
         };
-        assert!(matches!(config.build_mode, BuildMode::Chroot));
+        assert_eq!(config.jobs, 4);
+        assert!(config.only_packages.is_none());
     }
 }
