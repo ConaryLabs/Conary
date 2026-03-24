@@ -385,12 +385,6 @@ impl RemiClient {
             manifest.name
         );
 
-        // Create a client with longer timeout for chunk downloads
-        let chunk_client = Client::builder()
-            .timeout(CHUNK_TIMEOUT)
-            .build()
-            .map_err(|e| Error::InitError(format!("Failed to create chunk client: {e}")))?;
-
         let total_size: u64 = manifest.chunks.iter().map(|c| c.size).sum();
         let mut downloaded: u64 = 0;
 
@@ -407,11 +401,12 @@ impl RemiClient {
 
             let data = crate::repository::retry::with_retry_async(&retry_config, || {
                 let url = &url;
-                let chunk_client = &chunk_client;
                 let chunk_hash = &chunk.hash;
                 async move {
-                    let response = chunk_client
+                    let response = self
+                        .client
                         .get(url.as_str())
+                        .timeout(CHUNK_TIMEOUT)
                         .send()
                         .await
                         .download_context(url)?;
