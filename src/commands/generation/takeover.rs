@@ -222,6 +222,8 @@ pub async fn cmd_system_takeover(
     // -- Dry-run output -------------------------------------------------------
     if dry_run {
         print_dry_run(&plan, &pm, level);
+        println!();
+        println!("[DRY RUN] No changes made.");
         return Ok(());
     }
 
