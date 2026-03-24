@@ -764,11 +764,12 @@ pub struct BootstrapRunOptions<'a> {
 /// profile) and creates a `current` symlink.
 pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
     use conary_core::db::schema::migrate;
+    use conary_core::derivation::build_order::compute_build_order;
     use conary_core::derivation::executor::{DerivationExecutor, ExecutorConfig};
     use conary_core::derivation::manifest::SystemManifest;
-    use conary_core::derivation::pipeline::{BuildMode, Pipeline, PipelineConfig, PipelineEvent};
+    use conary_core::derivation::pipeline::{Pipeline, PipelineConfig, PipelineEvent};
     use conary_core::derivation::seed::Seed;
-    use conary_core::derivation::stages::{Stage, assign_stages};
+    use conary_core::derivation::stages::Stage;
     use conary_core::filesystem::CasStore;
     use rusqlite::Connection;
     use std::collections::HashSet;
@@ -843,11 +844,19 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
         .collect();
     println!("Recipes after dep resolution: {}", recipes.len());
 
-    // 4. Assign stages
+    // 4. Compute build order
     let custom_packages: HashSet<String> = HashSet::new();
-    let assignments = assign_stages(&recipes, &custom_packages)
-        .map_err(|e| anyhow::anyhow!("Stage assignment failed: {e}"))?;
-    println!("Stage assignments: {} packages", assignments.len());
+    let mut build_steps = compute_build_order(&recipes, &custom_packages)
+        .map_err(|e| anyhow::anyhow!("Build order computation failed: {e}"))?;
+    println!("Build order: {} packages", build_steps.len());
+
+    // Apply --up-to filter: drop packages in stages beyond the cutoff.
+    if let Some(ref up_to) = opts.up_to {
+        let cutoff = Stage::from_str_name(up_to)
+            .map_err(|e| anyhow::anyhow!("invalid --up-to stage: {e}"))?;
+        build_steps.retain(|step| step.stage <= cutoff);
+        println!("After --up-to {up_to}: {} packages", build_steps.len());
+    }
 
     // 5. Open DB
     let work_dir = PathBuf::from(opts.work_dir);
@@ -870,12 +879,6 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
     let executor = DerivationExecutor::new(cas, cas_dir.clone(), executor_config);
 
     // 7. Create pipeline
-    let up_to_stage = opts
-        .up_to
-        .map(Stage::from_str_name)
-        .transpose()
-        .map_err(|e| anyhow::anyhow!("invalid --up-to stage: {e}"))?;
-
     let pipeline_config = PipelineConfig {
         cas_dir: cas_dir.clone(),
         work_dir: work_dir.join("pipeline"),
@@ -886,7 +889,6 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
         log_dir: Some(work_dir.join("logs")),
         keep_logs: opts.keep_logs,
         shell_on_failure: opts.shell_on_failure,
-        up_to_stage,
         only_packages: opts.only.map(|s| s.to_vec()),
         cascade: opts.cascade,
         substituter_sources: if opts.no_substituters {
@@ -904,7 +906,6 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
             None
         },
         publish_token: None,
-        build_mode: BuildMode::Staged,
     };
 
     std::fs::create_dir_all(&pipeline_config.work_dir)?;
@@ -913,7 +914,7 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
     // 8. Execute pipeline
     println!("\nStarting derivation pipeline...\n");
     let profile = pipeline
-        .execute(&seed, &recipes, &assignments, &conn, |event| match event {
+        .execute(&seed, &recipes, &build_steps, &conn, |event| match event {
             PipelineEvent::StageStarted {
                 name,
                 package_count,
