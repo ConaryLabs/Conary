@@ -267,6 +267,11 @@ impl ActionExecutor {
             "Executing automation action"
         );
 
+        tracing::warn!(
+            "ActionExecutor::execute is a placeholder -- no action taken for {:?}",
+            action.category
+        );
+
         // TODO: Implement actual execution logic based on category
         // For now, this is a placeholder that would dispatch to:
         // - Security: security update installation
