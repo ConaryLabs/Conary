@@ -268,28 +268,28 @@ impl MutableEnvironment {
             return Ok(());
         }
 
+        let upper = self.upper_dir();
+        let work = self.work_dir();
+        let sysroot = self.sysroot();
+        let seed_ro = self.seed_ro_dir();
+
         // Create all required subdirectories.
-        for dir in [
-            self.upper_dir(),
-            self.work_dir(),
-            self.sysroot(),
-            self.seed_ro_dir(),
-        ] {
-            std::fs::create_dir_all(&dir).map_err(|e| {
+        for dir in [&upper, &work, &sysroot, &seed_ro] {
+            std::fs::create_dir_all(dir).map_err(|e| {
                 EnvironmentError::Mount(format!("failed to create {}: {e}", dir.display()))
             })?;
         }
 
         // Wipe upper and work dirs if the seed changed.
         if self.needs_reset() {
-            for dir in [self.upper_dir(), self.work_dir()] {
-                std::fs::remove_dir_all(&dir).map_err(|e| {
+            for dir in [&upper, &work] {
+                std::fs::remove_dir_all(dir).map_err(|e| {
                     EnvironmentError::Mount(format!(
                         "failed to wipe stale dir {}: {e}",
                         dir.display()
                     ))
                 })?;
-                std::fs::create_dir_all(&dir).map_err(|e| {
+                std::fs::create_dir_all(dir).map_err(|e| {
                     EnvironmentError::Mount(format!(
                         "failed to recreate dir {}: {e}",
                         dir.display()
@@ -302,7 +302,7 @@ impl MutableEnvironment {
         let mut seed_env = BuildEnvironment::new(
             self.image_path.clone(),
             self.cas_dir.clone(),
-            self.seed_ro_dir(),
+            seed_ro.clone(),
             self.seed_id.clone(),
         );
         seed_env.mount()?;
@@ -310,9 +310,9 @@ impl MutableEnvironment {
         // Mount overlayfs: lowerdir=seed_ro, upperdir=upper, workdir=work -> sysroot.
         let overlay_opts = format!(
             "lowerdir={},upperdir={},workdir={}",
-            self.seed_ro_dir().display(),
-            self.upper_dir().display(),
-            self.work_dir().display(),
+            seed_ro.display(),
+            upper.display(),
+            work.display(),
         );
         let status = Command::new("mount")
             .args([
@@ -321,7 +321,7 @@ impl MutableEnvironment {
                 "overlay",
                 "-o",
                 &overlay_opts,
-                &self.sysroot().to_string_lossy(),
+                &sysroot.to_string_lossy(),
             ])
             .status()
             .map_err(|e| EnvironmentError::Mount(format!("failed to execute mount: {e}")))?;
@@ -329,7 +329,7 @@ impl MutableEnvironment {
         if !status.success() {
             return Err(EnvironmentError::Mount(format!(
                 "overlayfs mount exited with status {status} for {}",
-                self.sysroot().display()
+                sysroot.display()
             )));
         }
 
@@ -347,7 +347,7 @@ impl MutableEnvironment {
 
         info!(
             "Mounted mutable environment at {} (seed: {})",
-            self.sysroot().display(),
+            sysroot.display(),
             self.seed_id,
         );
         Ok(())

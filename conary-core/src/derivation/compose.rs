@@ -8,12 +8,13 @@
 //! semantics (later manifests override earlier ones).
 
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::BufReader;
 use std::path::Path;
-
-use sha2::{Digest, Sha256};
 
 use crate::derivation::output::OutputManifest;
 use crate::generation::builder::{BuildResult, FileEntryRef, SymlinkEntryRef, build_erofs_image};
+use crate::hash::{HashAlgorithm, hash_reader};
 
 /// Errors that can occur during EROFS composition.
 #[derive(Debug, thiserror::Error)]
@@ -165,10 +166,14 @@ pub fn compose_erofs(
 ///
 /// - [`ComposeError::Io`] if the file cannot be read.
 pub fn erofs_image_hash(image_path: &Path) -> Result<String, ComposeError> {
-    let bytes = std::fs::read(image_path)
+    let file = File::open(image_path)
+        .map_err(|e| ComposeError::Io(format!("{}: {e}", image_path.display())))?;
+    let mut reader = BufReader::new(file);
+
+    let hash = hash_reader(HashAlgorithm::Sha256, &mut reader)
         .map_err(|e| ComposeError::Io(format!("{}: {e}", image_path.display())))?;
 
-    Ok(hex::encode(Sha256::digest(&bytes)))
+    Ok(hash.value)
 }
 
 #[cfg(test)]

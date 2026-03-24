@@ -44,22 +44,18 @@ pub fn build_adopted_seed(
     distro_name: &str,
     distro_version: &str,
 ) -> Result<SeedMetadata, AdoptSeedError> {
-    // Step 1: validate the current system.
     let validation = SeedValidation::probe(Path::new("/"));
     if !validation.is_valid() {
         return Err(AdoptSeedError::ValidationFailed(validation.missing_tools()));
     }
 
-    // Step 2: ensure output directory exists.
     std::fs::create_dir_all(output_dir)
         .map_err(|e| AdoptSeedError::Io(format!("create {}: {e}", output_dir.display())))?;
 
-    // Step 3: build the EROFS image from key directories.
     let image_path = output_dir.join("seed.erofs");
 
     let status = Command::new("mkfs.erofs")
         .arg(&image_path)
-        // Source directories to pack into the image.
         .args(["/usr", "/bin", "/lib", "/sbin", "/etc"])
         .status()
         .map_err(|e| AdoptSeedError::ErofsBuild(format!("failed to spawn mkfs.erofs: {e}")))?;
@@ -73,11 +69,9 @@ pub fn build_adopted_seed(
         )));
     }
 
-    // Step 4: hash the produced image.
     let seed_id = erofs_image_hash(&image_path)
         .map_err(|e| AdoptSeedError::ErofsBuild(format!("hashing image: {e}")))?;
 
-    // Step 5: assemble metadata.
     let metadata = SeedMetadata {
         seed_id,
         source: SeedSource::Adopted,
@@ -90,7 +84,6 @@ pub fn build_adopted_seed(
         origin_version: Some(distro_version.to_owned()),
     };
 
-    // Step 6: write seed.toml.
     let toml_content = toml::to_string_pretty(&metadata)
         .map_err(|e| AdoptSeedError::Io(format!("serializing seed.toml: {e}")))?;
     let toml_path = output_dir.join("seed.toml");

@@ -9,6 +9,7 @@
 //! recreated verbatim. The function uses a last-writer-wins strategy: any
 //! existing file or symlink at the destination is removed before writing.
 
+use std::collections::HashSet;
 use std::fs;
 use std::os::unix::fs as unix_fs;
 use std::path::{Path, PathBuf};
@@ -73,12 +74,15 @@ pub fn install_to_sysroot(
     cas_dir: &Path,
 ) -> Result<u64, InstallError> {
     let mut installed: u64 = 0;
+    let mut created_dirs: HashSet<PathBuf> = HashSet::new();
 
     for file in &manifest.files {
         let dest = sysroot_path(sysroot, &file.path);
 
-        // Ensure parent directory exists.
-        if let Some(parent) = dest.parent() {
+        // Ensure parent directory exists (skip if already created).
+        if let Some(parent) = dest.parent()
+            && created_dirs.insert(parent.to_path_buf())
+        {
             fs::create_dir_all(parent).map_err(|e| InstallError::Io {
                 path: parent.display().to_string(),
                 source: e,
@@ -88,18 +92,25 @@ pub fn install_to_sysroot(
         // Remove any existing entry (last-writer-wins).
         remove_if_exists(&dest)?;
 
-        // Locate the CAS object.
+        // Locate the CAS object and link/copy it into the sysroot.
         let cas_path = cas_object_path(cas_dir, &file.hash);
-        if !cas_path.exists() {
-            return Err(InstallError::MissingCasObject(file.hash.clone()));
-        }
 
-        // Prefer hard link; fall back to copy on cross-device error.
-        if fs::hard_link(&cas_path, &dest).is_err() {
-            fs::copy(&cas_path, &dest).map_err(|e| InstallError::Io {
-                path: dest.display().to_string(),
-                source: e,
-            })?;
+        match fs::hard_link(&cas_path, &dest) {
+            Ok(()) => {}
+            Err(link_err) => {
+                fs::copy(&cas_path, &dest).map_err(|copy_err| {
+                    if copy_err.kind() == std::io::ErrorKind::NotFound
+                        && link_err.kind() == std::io::ErrorKind::NotFound
+                    {
+                        InstallError::MissingCasObject(file.hash.clone())
+                    } else {
+                        InstallError::Io {
+                            path: dest.display().to_string(),
+                            source: copy_err,
+                        }
+                    }
+                })?;
+            }
         }
 
         // Apply mode bits.
@@ -116,8 +127,10 @@ pub fn install_to_sysroot(
     for symlink in &manifest.symlinks {
         let dest = sysroot_path(sysroot, &symlink.path);
 
-        // Ensure parent directory exists.
-        if let Some(parent) = dest.parent() {
+        // Ensure parent directory exists (skip if already created).
+        if let Some(parent) = dest.parent()
+            && created_dirs.insert(parent.to_path_buf())
+        {
             fs::create_dir_all(parent).map_err(|e| InstallError::Io {
                 path: parent.display().to_string(),
                 source: e,
