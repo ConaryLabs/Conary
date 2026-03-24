@@ -676,6 +676,8 @@ pub async fn cmd_bootstrap_seed(from: &str, output: &str, target: &str) -> Resul
         ],
         target_triple: target.to_string(),
         verified_by: vec![],
+        origin_distro: None,
+        origin_version: None,
     };
 
     let toml_str =
@@ -764,7 +766,7 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
     use conary_core::db::schema::migrate;
     use conary_core::derivation::executor::{DerivationExecutor, ExecutorConfig};
     use conary_core::derivation::manifest::SystemManifest;
-    use conary_core::derivation::pipeline::{Pipeline, PipelineConfig, PipelineEvent};
+    use conary_core::derivation::pipeline::{BuildMode, Pipeline, PipelineConfig, PipelineEvent};
     use conary_core::derivation::seed::Seed;
     use conary_core::derivation::stages::{Stage, assign_stages};
     use conary_core::filesystem::CasStore;
@@ -902,6 +904,7 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
             None
         },
         publish_token: None,
+        build_mode: BuildMode::Staged,
     };
 
     std::fs::create_dir_all(&pipeline_config.work_dir)?;
@@ -1004,6 +1007,54 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
     println!("\nOutput: {}", output_dir.display());
     println!("Profile hash: {}", profile.profile.profile_hash);
 
+    Ok(())
+}
+
+/// Create a seed from the currently adopted system filesystem
+pub async fn cmd_bootstrap_seed_adopted(
+    output: &str,
+    distro: Option<&str>,
+    distro_version: Option<&str>,
+) -> Result<()> {
+    use conary_core::bootstrap::adopt_seed;
+
+    let distro_name = distro.unwrap_or("unknown");
+    let version = distro_version.unwrap_or("unknown");
+
+    println!("Building adopted seed from system filesystem...");
+    println!("  Distro: {distro_name} {version}");
+    println!("  Output: {output}");
+
+    let meta = adopt_seed::build_adopted_seed(
+        std::path::Path::new(output),
+        distro_name,
+        version,
+    )?;
+
+    println!("[COMPLETE] Seed built: {}", meta.seed_id);
+    Ok(())
+}
+
+/// Verify convergence between builds from two different seeds
+pub async fn cmd_bootstrap_verify_convergence(
+    seed_a: &str,
+    seed_b: &str,
+    diff: bool,
+) -> Result<()> {
+    println!("Convergence verification not yet fully wired.");
+    println!("  Seed A: {seed_a}");
+    println!("  Seed B: {seed_b}");
+    println!("  Diff: {diff}");
+
+    // TODO: Open DB, load seed metadata, call compare_seed_builds
+    Ok(())
+}
+
+/// Diff two seed EROFS images
+pub async fn cmd_bootstrap_diff_seeds(path_a: &str, path_b: &str) -> Result<()> {
+    println!("Seed diff not yet implemented.");
+    println!("  Seed A: {path_a}");
+    println!("  Seed B: {path_b}");
     Ok(())
 }
 

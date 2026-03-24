@@ -181,6 +181,7 @@ mod tests {
         OutputManifest {
             derivation_id: "d".repeat(64),
             output_hash: "e".repeat(64),
+            hash_version: 1,
             files,
             symlinks: vec![],
             build_duration_secs: 1,
@@ -352,6 +353,7 @@ mod tests {
         OutputManifest {
             derivation_id: "d".repeat(64),
             output_hash: "e".repeat(64),
+            hash_version: 1,
             files,
             symlinks,
             build_duration_secs: 1,

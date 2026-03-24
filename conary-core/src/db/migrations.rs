@@ -2578,6 +2578,31 @@ pub fn migrate_v56(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Migration v57: Output equivalence table
+///
+/// Creates output_equivalence to store cross-seed output hash equivalences for
+/// convergence verification. A row records that a given package, when built
+/// under a specific seed, produced a specific output_hash -- enabling comparison
+/// across seeds without rebuilding.
+pub fn migrate_v57(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS output_equivalence (
+            package_name TEXT NOT NULL,
+            output_hash TEXT NOT NULL,
+            derivation_id TEXT NOT NULL,
+            seed_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (package_name, output_hash, seed_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_output_equivalence_hash
+            ON output_equivalence(output_hash);",
+    )?;
+
+    info!("Schema version 57 applied successfully (output_equivalence table)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
