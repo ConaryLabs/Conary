@@ -731,10 +731,10 @@ pub async fn cmd_model_apply(opts: ApplyOptions<'_>) -> Result<()> {
         .actions
         .iter()
         .filter(|a| {
-            if skip_optional {
-                if let DiffAction::Install { optional, .. } = a {
-                    return !optional;
-                }
+            if skip_optional
+                && let DiffAction::Install { optional, .. } = a
+            {
+                return !optional;
             }
             if !strict && matches!(a, DiffAction::MarkDependency { .. }) {
                 return false;
