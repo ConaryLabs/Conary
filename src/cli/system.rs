@@ -10,6 +10,18 @@ use super::state::StateCommands;
 use super::trigger::TriggerCommands;
 use super::{CommonArgs, DbArgs};
 
+/// How far the takeover pipeline should go
+#[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
+pub enum TakeoverLevel {
+    /// Adopt + CAS-back all packages (PM untouched)
+    Cas,
+    /// CAS + remove from system PM
+    Owned,
+    /// CAS + PM removal + build generation + boot + live switch
+    #[default]
+    Generation,
+}
+
 #[derive(Subcommand)]
 pub enum SystemCommands {
     /// Initialize a new Conary database
@@ -298,6 +310,10 @@ pub enum SystemCommands {
 
     /// Convert entire system to Conary-managed generations
     Takeover {
+        /// How far to go: cas, owned, or generation (default: generation)
+        #[arg(long, default_value = "generation")]
+        up_to: TakeoverLevel,
+
         /// Auto-confirm
         #[arg(long, short)]
         yes: bool,
@@ -305,10 +321,6 @@ pub enum SystemCommands {
         /// Show what would be done without making changes
         #[arg(long)]
         dry_run: bool,
-
-        /// Skip Remi conversion, adopt all packages directly
-        #[arg(long)]
-        skip_conversion: bool,
 
         #[command(flatten)]
         db: DbArgs,
