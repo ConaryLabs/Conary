@@ -12,6 +12,7 @@ use serde::Serialize;
 use crate::config::load_manifest;
 use crate::container::{ContainerBackend, ImageInfo};
 use crate::engine::suite::{RunStatus, TestSuite};
+use crate::error::ConaryTestError;
 use crate::report::json::to_json_value;
 use crate::server::state::AppState;
 
@@ -94,9 +95,9 @@ pub fn start_run(
     suite_name: &str,
     distro: &str,
     phase: u32,
-) -> Result<StartRunResult> {
+) -> crate::error::Result<StartRunResult> {
     if !state.config.distros.contains_key(distro) {
-        bail!("unknown distro: {distro}");
+        return Err(ConaryTestError::Config(format!("unknown distro: {distro}")));
     }
 
     let run_id = AppState::next_run_id();
@@ -212,7 +213,9 @@ async fn execute_run(
                 expected_tag
             } else {
                 tracing::info!(run_id, distro, "building image (first run for this distro)");
-                let tag = build_image(state, distro).await?;
+                let tag = build_image(state, distro)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
                 *cached = Some(tag.clone());
                 tag
             }
@@ -448,10 +451,10 @@ async fn initialize_container(
 }
 
 /// Retrieve a run's full report as a JSON value.
-pub fn get_run(state: &AppState, run_id: u64) -> Result<serde_json::Value> {
+pub fn get_run(state: &AppState, run_id: u64) -> crate::error::Result<serde_json::Value> {
     match state.runs.get(&run_id) {
-        Some(entry) => to_json_value(&entry),
-        None => bail!("run {run_id} not found"),
+        Some(entry) => to_json_value(&entry).map_err(ConaryTestError::Internal),
+        None => Err(ConaryTestError::RunNotFound(run_id.to_string())),
     }
 }
 
@@ -535,7 +538,7 @@ pub fn list_distros(state: &AppState) -> Vec<DistroInfo> {
 
 /// Cancel a running test run. Sets the cancellation flag and marks the
 /// suite as cancelled.
-pub fn cancel_run(state: &AppState, run_id: u64) -> Result<()> {
+pub fn cancel_run(state: &AppState, run_id: u64) -> crate::error::Result<()> {
     if !state.cancel_run(run_id) {
         // No cancellation flag found -- check if the run exists at all.
         if state.runs.contains_key(&run_id) {
@@ -545,7 +548,7 @@ pub fn cancel_run(state: &AppState, run_id: u64) -> Result<()> {
             }
             return Ok(());
         }
-        bail!("run {run_id} not found");
+        return Err(ConaryTestError::RunNotFound(run_id.to_string()));
     }
 
     // Also mark the suite status.
@@ -558,17 +561,24 @@ pub fn cancel_run(state: &AppState, run_id: u64) -> Result<()> {
 /// Re-run a single test from an existing run. Creates a new single-test
 /// pending run and returns its ID along with the original suite/distro
 /// for the caller to spawn execution.
-pub fn rerun_test(state: &AppState, run_id: u64, test_id: &str) -> Result<RerunResult> {
+pub fn rerun_test(
+    state: &AppState,
+    run_id: u64,
+    test_id: &str,
+) -> crate::error::Result<RerunResult> {
     let entry = state
         .runs
         .get(&run_id)
-        .ok_or_else(|| anyhow::anyhow!("run {run_id} not found"))?;
+        .ok_or_else(|| ConaryTestError::RunNotFound(run_id.to_string()))?;
 
     let _test = entry
         .results
         .iter()
         .find(|r| r.id == test_id)
-        .ok_or_else(|| anyhow::anyhow!("test '{test_id}' not found in run {run_id}"))?;
+        .ok_or_else(|| ConaryTestError::TestNotFound {
+            run_id: run_id.to_string(),
+            test_id: test_id.to_string(),
+        })?;
 
     let phase = entry.phase;
     drop(entry);
@@ -577,7 +587,7 @@ pub fn rerun_test(state: &AppState, run_id: u64, test_id: &str) -> Result<RerunR
     let meta = state
         .run_meta
         .get(&run_id)
-        .ok_or_else(|| anyhow::anyhow!("metadata for run {run_id} not found"))?;
+        .ok_or_else(|| ConaryTestError::RunNotFound(run_id.to_string()))?;
     let distro = meta.distro.clone();
     let original_suite = meta.suite_name.clone();
     drop(meta);
@@ -608,17 +618,24 @@ pub fn rerun_test(state: &AppState, run_id: u64, test_id: &str) -> Result<RerunR
 // ---------------------------------------------------------------------------
 
 /// Extract stdout/stderr from all attempts of a test within a run.
-pub fn get_test_logs(state: &AppState, run_id: u64, test_id: &str) -> Result<TestLogs> {
+pub fn get_test_logs(
+    state: &AppState,
+    run_id: u64,
+    test_id: &str,
+) -> crate::error::Result<TestLogs> {
     let entry = state
         .runs
         .get(&run_id)
-        .ok_or_else(|| anyhow::anyhow!("run {run_id} not found"))?;
+        .ok_or_else(|| ConaryTestError::RunNotFound(run_id.to_string()))?;
 
     let test = entry
         .results
         .iter()
         .find(|r| r.id == test_id)
-        .ok_or_else(|| anyhow::anyhow!("test '{test_id}' not found in run {run_id}"))?;
+        .ok_or_else(|| ConaryTestError::TestNotFound {
+            run_id: run_id.to_string(),
+            test_id: test_id.to_string(),
+        })?;
 
     let mut attempts: Vec<AttemptLogs> = test
         .attempts
@@ -650,24 +667,27 @@ pub fn get_test_logs(state: &AppState, run_id: u64, test_id: &str) -> Result<Tes
 // ---------------------------------------------------------------------------
 
 /// Build a container image for a distro. Returns the image tag.
-pub async fn build_image(state: &AppState, distro: &str) -> Result<String> {
+pub async fn build_image(state: &AppState, distro: &str) -> crate::error::Result<String> {
     if !state.config.distros.contains_key(distro) {
-        bail!("unknown distro: {distro}");
+        return Err(ConaryTestError::Config(format!("unknown distro: {distro}")));
     }
 
-    let backend = crate::container::BollardBackend::new()?;
+    let backend = crate::container::BollardBackend::new()
+        .map_err(|e| ConaryTestError::Container { message: e.to_string(), source: None })?;
 
     let default_name = format!("Containerfile.{distro}");
     let dc = state
         .config
         .distros
         .get(distro)
-        .ok_or_else(|| anyhow::anyhow!("unknown distro: {distro}"))?;
+        .ok_or_else(|| ConaryTestError::Config(format!("unknown distro: {distro}")))?;
     let filename = dc.containerfile.as_deref().unwrap_or(&default_name);
     let containerfile =
         std::path::PathBuf::from("tests/integration/remi/containers").join(filename);
 
-    crate::container::build_distro_image(&backend, &containerfile, distro).await
+    crate::container::build_distro_image(&backend, &containerfile, distro)
+        .await
+        .map_err(|e| ConaryTestError::Container { message: e.to_string(), source: None })
 }
 
 /// List all available container images.
@@ -722,11 +742,11 @@ pub async fn cleanup_containers(_state: &AppState) -> Result<CleanupResult> {
 }
 
 /// Return artifact information for a completed run.
-pub fn get_run_artifacts(state: &AppState, run_id: u64) -> Result<RunArtifacts> {
+pub fn get_run_artifacts(state: &AppState, run_id: u64) -> crate::error::Result<RunArtifacts> {
     let entry = state
         .runs
         .get(&run_id)
-        .ok_or_else(|| anyhow::anyhow!("run {run_id} not found"))?;
+        .ok_or_else(|| ConaryTestError::RunNotFound(run_id.to_string()))?;
 
     let summary = RunSummary {
         run_id,
