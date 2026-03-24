@@ -35,6 +35,8 @@ pub mod registry;
 mod remove;
 mod replatform_rendering;
 mod repo;
+#[cfg(test)]
+pub(crate) mod test_helpers;
 mod restore;
 mod self_update;
 mod state;
