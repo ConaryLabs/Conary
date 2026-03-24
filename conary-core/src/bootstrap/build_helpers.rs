@@ -263,6 +263,9 @@ pub fn run_sandboxed_command(
 }
 
 /// The standard sysroot directories created for bootstrap stages
+///
+/// TODO(bootstrap): used by `create_sysroot_dirs`; both consumed when phase
+/// orchestration calls sysroot setup before beginning a build.
 #[allow(dead_code)]
 pub const SYSROOT_DIRS: &[&str] = &[
     "usr",
@@ -275,6 +278,8 @@ pub const SYSROOT_DIRS: &[&str] = &[
 ];
 
 /// Create the standard sysroot directory structure
+///
+/// TODO(bootstrap): called by phase orchestration before each build stage begins.
 #[allow(dead_code)]
 pub fn create_sysroot_dirs(sysroot: &Path) -> Result<(), std::io::Error> {
     for dir in SYSROOT_DIRS {
@@ -284,6 +289,9 @@ pub fn create_sysroot_dirs(sysroot: &Path) -> Result<(), std::io::Error> {
 }
 
 /// Set up the standard build environment for a bootstrap stage
+///
+/// TODO(bootstrap): called by phase builders (cross_tools, temp_tools,
+/// final_system) once they switch to the shared env-setup path.
 #[allow(dead_code)]
 pub fn setup_build_env(
     toolchain: &super::toolchain::Toolchain,
