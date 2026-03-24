@@ -498,39 +498,7 @@ impl ScriptletExecutor {
             }
         );
 
-        // Take stdout/stderr handles before waiting. After wait_timeout reaps
-        // the child, the pipes get EOF so read_to_end returns immediately.
-        // This avoids calling wait_with_output() which would double-wait (ECHILD).
-        let mut stdout_handle = child.stdout.take();
-        let mut stderr_handle = child.stderr.take();
-
-        match child.wait_timeout(self.timeout)? {
-            Some(status) => {
-                let mut stdout_bytes = Vec::new();
-                let mut stderr_bytes = Vec::new();
-                if let Some(ref mut out) = stdout_handle {
-                    let _ = std::io::Read::read_to_end(out, &mut stdout_bytes);
-                }
-                if let Some(ref mut err) = stderr_handle {
-                    let _ = std::io::Read::read_to_end(err, &mut stderr_bytes);
-                }
-                log_script_output(
-                    phase,
-                    &String::from_utf8_lossy(&stdout_bytes),
-                    &String::from_utf8_lossy(&stderr_bytes),
-                );
-                check_scriptlet_status(phase, status, &context)
-            }
-            None => {
-                let _ = child.kill();
-                Err(Error::ScriptletError(format!(
-                    "{} scriptlet timed out after {} seconds{}",
-                    phase,
-                    self.timeout.as_secs(),
-                    context
-                )))
-            }
-        }
+        wait_and_capture(&mut child, self.timeout, phase, &context)
     }
 
     /// Execute scriptlet directly without sandbox
@@ -568,36 +536,7 @@ impl ScriptletExecutor {
             .spawn()
             .map_err(|e| Error::ScriptletError(format!("Failed to spawn scriptlet: {}", e)))?;
 
-        // Take handles before waiting — drain AFTER child exits to avoid double-wait.
-        let mut stdout_handle = child.stdout.take();
-        let mut stderr_handle = child.stderr.take();
-
-        match child.wait_timeout(self.timeout)? {
-            Some(status) => {
-                let mut stdout_bytes = Vec::new();
-                let mut stderr_bytes = Vec::new();
-                if let Some(ref mut out) = stdout_handle {
-                    let _ = std::io::Read::read_to_end(out, &mut stdout_bytes);
-                }
-                if let Some(ref mut err) = stderr_handle {
-                    let _ = std::io::Read::read_to_end(err, &mut stderr_bytes);
-                }
-                log_script_output(
-                    phase,
-                    &String::from_utf8_lossy(&stdout_bytes),
-                    &String::from_utf8_lossy(&stderr_bytes),
-                );
-                check_scriptlet_status(phase, status, "")
-            }
-            None => {
-                let _ = child.kill();
-                Err(Error::ScriptletError(format!(
-                    "{} scriptlet timed out after {} seconds",
-                    phase,
-                    self.timeout.as_secs()
-                )))
-            }
-        }
+        wait_and_capture(&mut child, self.timeout, phase, "")
     }
 
     /// Get arguments based on distro and execution mode
@@ -694,6 +633,59 @@ impl ScriptletExecutor {
             "#!/bin/bash\nset -e\n\n# Arch .INSTALL content:\n{}\n\n# Call the function if it exists\nif declare -f {} > /dev/null; then\n    {} \"$@\"\nfi\n",
             content, function_name, function_name
         )
+    }
+}
+
+/// Wait for a child process to exit (with timeout), capture its stdout/stderr,
+/// log the output, and check the exit status.
+///
+/// Takes the stdout/stderr pipe handles before waiting so that draining them
+/// after the child exits is safe and cannot race with a double-wait (ECHILD).
+///
+/// # Arguments
+/// * `child`   – spawned process with `Stdio::piped()` stdout and stderr
+/// * `timeout` – maximum time to wait before killing the child
+/// * `phase`   – scriptlet phase name used in log/error messages
+/// * `context` – optional context suffix appended to log/error messages
+///   (e.g. `" (chroot: /target, seccomp: enabled)"`); pass `""` for none
+fn wait_and_capture(
+    child: &mut std::process::Child,
+    timeout: Duration,
+    phase: &str,
+    context: &str,
+) -> Result<()> {
+    // Take handles before waiting — after wait_timeout reaps the child the
+    // pipes reach EOF, so read_to_end returns immediately.  Avoids the
+    // double-wait (ECHILD) that wait_with_output would cause.
+    let mut stdout_handle = child.stdout.take();
+    let mut stderr_handle = child.stderr.take();
+
+    match child.wait_timeout(timeout)? {
+        Some(status) => {
+            let mut stdout_bytes = Vec::new();
+            let mut stderr_bytes = Vec::new();
+            if let Some(ref mut out) = stdout_handle {
+                let _ = std::io::Read::read_to_end(out, &mut stdout_bytes);
+            }
+            if let Some(ref mut err) = stderr_handle {
+                let _ = std::io::Read::read_to_end(err, &mut stderr_bytes);
+            }
+            log_script_output(
+                phase,
+                &String::from_utf8_lossy(&stdout_bytes),
+                &String::from_utf8_lossy(&stderr_bytes),
+            );
+            check_scriptlet_status(phase, status, context)
+        }
+        None => {
+            let _ = child.kill();
+            Err(Error::ScriptletError(format!(
+                "{} scriptlet timed out after {} seconds{}",
+                phase,
+                timeout.as_secs(),
+                context
+            )))
+        }
     }
 }
 
