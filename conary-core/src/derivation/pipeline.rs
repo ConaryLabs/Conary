@@ -31,7 +31,7 @@ use super::profile::{
 };
 use super::recipe_hash;
 use super::seed::Seed;
-use super::stages::{Stage, StageAssignment};
+use crate::derivation::build_order::Stage;
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -208,12 +208,12 @@ impl Pipeline {
     pub fn generate_profile(
         seed: &Seed,
         recipes: &HashMap<String, Recipe>,
-        assignments: &[StageAssignment],
+        build_steps: &[crate::derivation::build_order::BuildStep],
         manifest_path: &str,
     ) -> BuildProfile {
         let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
-        let stages_ordered = ordered_stages(assignments);
+        let stages_ordered = ordered_stages(build_steps);
         let mut profile_stages = Vec::new();
 
         for (stage, pkgs) in &stages_ordered {
@@ -271,7 +271,7 @@ impl Pipeline {
         &self,
         seed: &Seed,
         recipes: &HashMap<String, Recipe>,
-        build_steps: &[super::build_order::BuildStep],
+        build_steps: &[crate::derivation::build_order::BuildStep],
         conn: &Connection,
         mut on_event: F,
     ) -> Result<BuildProfile, PipelineError>
@@ -513,16 +513,16 @@ impl Pipeline {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Group assignments by stage in stage order, preserving build_order within
+/// Group build steps by stage in stage order, preserving build order within
 /// each group. Used by [`Pipeline::generate_profile`] for dry-run planning.
-fn ordered_stages(assignments: &[StageAssignment]) -> Vec<(Stage, Vec<String>)> {
+fn ordered_stages(build_steps: &[crate::derivation::build_order::BuildStep]) -> Vec<(Stage, Vec<String>)> {
     let mut by_stage: BTreeMap<Stage, Vec<(usize, String)>> = BTreeMap::new();
 
-    for a in assignments {
+    for step in build_steps {
         by_stage
-            .entry(a.stage)
+            .entry(step.stage)
             .or_default()
-            .push((a.build_order, a.package.clone()));
+            .push((step.order, step.package.clone()));
     }
 
     let mut result = Vec::new();
@@ -665,9 +665,9 @@ mod tests {
         recipes.insert("nginx".to_owned(), make_recipe("nginx", &[], &[]));
 
         let custom = HashSet::new();
-        let assignments = crate::derivation::stages::assign_stages(&recipes, &custom).unwrap();
+        let build_steps = crate::derivation::build_order::compute_build_order(&recipes, &custom).unwrap();
 
-        let profile = Pipeline::generate_profile(&seed, &recipes, &assignments, "test-manifest");
+        let profile = Pipeline::generate_profile(&seed, &recipes, &build_steps, "test-manifest");
 
         // Verify metadata.
         assert_eq!(profile.profile.manifest, "test-manifest");
@@ -703,10 +703,10 @@ mod tests {
         recipes.insert("a".to_owned(), make_recipe("a", &[], &[]));
 
         let custom = HashSet::new();
-        let assignments = crate::derivation::stages::assign_stages(&recipes, &custom).unwrap();
+        let build_steps = crate::derivation::build_order::compute_build_order(&recipes, &custom).unwrap();
 
-        let p1 = Pipeline::generate_profile(&seed, &recipes, &assignments, "m");
-        let p2 = Pipeline::generate_profile(&seed, &recipes, &assignments, "m");
+        let p1 = Pipeline::generate_profile(&seed, &recipes, &build_steps, "m");
+        let p2 = Pipeline::generate_profile(&seed, &recipes, &build_steps, "m");
 
         // The hash should be the same even though generated_at differs.
         assert_eq!(p1.profile.profile_hash, p2.profile.profile_hash);
@@ -741,40 +741,26 @@ mod tests {
         recipes.insert("a".to_owned(), make_recipe("a", &[], &[]));
 
         let custom = HashSet::new();
-        let assignments = crate::derivation::stages::assign_stages(&recipes, &custom).unwrap();
+        let build_steps = crate::derivation::build_order::compute_build_order(&recipes, &custom).unwrap();
 
-        let p1 = Pipeline::generate_profile(&seed1, &recipes, &assignments, "m");
-        let p2 = Pipeline::generate_profile(&seed2, &recipes, &assignments, "m");
+        let p1 = Pipeline::generate_profile(&seed1, &recipes, &build_steps, "m");
+        let p2 = Pipeline::generate_profile(&seed2, &recipes, &build_steps, "m");
 
         assert_ne!(p1.profile.profile_hash, p2.profile.profile_hash);
     }
 
     #[test]
     fn ordered_stages_groups_and_sorts_correctly() {
-        let assignments = vec![
-            StageAssignment {
-                package: "nginx".to_owned(),
-                stage: Stage::System,
-                build_order: 3,
-            },
-            StageAssignment {
-                package: "gcc-pass1".to_owned(),
-                stage: Stage::Toolchain,
-                build_order: 0,
-            },
-            StageAssignment {
-                package: "make".to_owned(),
-                stage: Stage::Foundation,
-                build_order: 2,
-            },
-            StageAssignment {
-                package: "gcc-pass2".to_owned(),
-                stage: Stage::Toolchain,
-                build_order: 1,
-            },
+        use crate::derivation::build_order::BuildStep;
+
+        let steps = vec![
+            BuildStep { package: "nginx".to_owned(), stage: Stage::System, order: 3 },
+            BuildStep { package: "gcc-pass1".to_owned(), stage: Stage::Toolchain, order: 0 },
+            BuildStep { package: "make".to_owned(), stage: Stage::Foundation, order: 2 },
+            BuildStep { package: "gcc-pass2".to_owned(), stage: Stage::Toolchain, order: 1 },
         ];
 
-        let stages = ordered_stages(&assignments);
+        let stages = ordered_stages(&steps);
 
         // Should be ordered: Toolchain, Foundation, System.
         assert_eq!(stages.len(), 3);
@@ -812,13 +798,13 @@ mod tests {
     }
 
     #[test]
-    fn empty_assignments_produce_empty_profile() {
+    fn empty_build_steps_produce_empty_profile() {
         let dir = tempfile::tempdir().unwrap();
         let seed = test_seed(dir.path());
         let recipes = HashMap::new();
-        let assignments: Vec<StageAssignment> = vec![];
+        let build_steps: Vec<crate::derivation::build_order::BuildStep> = vec![];
 
-        let profile = Pipeline::generate_profile(&seed, &recipes, &assignments, "empty");
+        let profile = Pipeline::generate_profile(&seed, &recipes, &build_steps, "empty");
 
         assert!(profile.stages.is_empty());
     }

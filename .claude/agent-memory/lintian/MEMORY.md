@@ -15,7 +15,7 @@
 - Tests in same file as code, `tempfile` for FS, `:memory:` SQLite for DB
 
 ### Architecture
-- Schema v54, function-dispatch migrations (`migrate_v{N}`)
+- Schema v57, function-dispatch migrations (`migrate_v{N}`)
 - `db::open_fast()` skips migrations for server hot paths
 - `audit_log` uses free functions (insert/query/purge), not struct methods — differs from Trove/Repository pattern
 
@@ -24,12 +24,18 @@
 - `canonical_string` pattern: deterministic hash inputs via sorted BTreeMap + newline-delimited format
 - `expand_variables()` in recipe_hash.rs intentionally diverges from Recipe::substitute() for hash determinism
 - Topological sort in stages.rs intentionally different from recipe::graph (BTreeMap determinism + stage scoping)
+- build_order.rs has a copied topological_sort from stages.rs — candidate for extraction to shared graph.rs
+- build_order.rs TOOLCHAIN_NAMED adds "binutils" vs stages.rs which has it in FOUNDATION — intentional divergence for chroot mode, needs documenting
+- DerivationIndex encapsulates all derivation_index queries; new queries should be methods there, not raw SQL elsewhere
+- MutableEnvironment wraps BuildEnvironment for overlayfs-on-seed pattern; unmount logic duplicated (extract helper)
 
 ## Anti-Patterns to Flag
 
 - **Direct sha2 imports**: crate::hash::sha256() and hash::Hasher should be the standard path. Flag `use sha2::` in reviews.
 - **Whole-file reads for hashing**: use streaming I/O (hash::hash_reader or BufReader + 8KB chunks) for files that could be large
 - **CAS two-level walk duplication**: gc.rs, fsverity.rs, export.rs, system.rs all walk CAS dirs with inconsistent filtering — should share iterator
+- **CAS path computation duplication**: hash[..2]/hash[2..] pattern in install.rs, gc.rs, substituter.rs, builder.rs, chunking.rs — should all use CasStore::hash_to_path() or a free function
+- **Sysroot path joining without safe_join()**: new code joining manifest paths to sysroot must use filesystem::path::safe_join(), not bare Path::join with trim_start_matches
 - **Debug format for serialization**: `format!("{:?}", enum_value)` is fragile for anything stored or hashed. Use Display or serde.
 
 ## Security (confirmed good)

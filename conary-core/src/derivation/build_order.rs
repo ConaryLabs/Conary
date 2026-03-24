@@ -1,17 +1,61 @@
 // conary-core/src/derivation/build_order.rs
 
-//! Flat topological build ordering across all packages.
+//! Build ordering and stage classification for bootstrap packages.
 //!
-//! Unlike [`super::stages`], which assigns packages to discrete build stages,
-//! this module produces a single, deterministically ordered [`Vec<BuildStep>`]
-//! across ALL packages. [`Stage`](super::stages::Stage) labels are informational
-//! (for progress reporting) and do not act as build boundaries.
+//! Produces a single, deterministically ordered [`Vec<BuildStep>`] across ALL
+//! packages. [`Stage`] labels are informational (for progress reporting) and
+//! do not act as build boundaries.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::fmt;
 
 use crate::recipe::Recipe;
 
-use super::stages::Stage;
+// ---------------------------------------------------------------------------
+// Stage enum
+// ---------------------------------------------------------------------------
+
+/// Bootstrap stage classification.
+///
+/// Stages are ordered from earliest (Toolchain) to latest (Customization),
+/// reflecting the dependency chain of a from-scratch OS bootstrap. These are
+/// informational labels for progress reporting -- the chroot pipeline builds
+/// all packages in a single flat sequence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Stage {
+    /// Core toolchain: compiler, linker, libc, kernel headers.
+    Toolchain,
+    /// Essential build tools: make, bash, coreutils, etc.
+    Foundation,
+    /// All remaining system packages.
+    System,
+    /// User-specified custom packages.
+    Customization,
+}
+
+impl fmt::Display for Stage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Toolchain => write!(f, "toolchain"),
+            Self::Foundation => write!(f, "foundation"),
+            Self::System => write!(f, "system"),
+            Self::Customization => write!(f, "customization"),
+        }
+    }
+}
+
+impl Stage {
+    /// Parse a stage name from a string (case-insensitive).
+    pub fn from_str_name(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "toolchain" => Some(Self::Toolchain),
+            "foundation" => Some(Self::Foundation),
+            "system" => Some(Self::System),
+            "customization" => Some(Self::Customization),
+            _ => None,
+        }
+    }
+}
 
 /// A single step in the flat build plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,11 +77,7 @@ pub enum BuildOrderError {
 }
 
 // ---------------------------------------------------------------------------
-// Stage classification tables (chroot mode)
-//
-// These differ slightly from the staged-mode lists in `stages.rs`:
-// - `binutils` is classified as Toolchain here (flat ordering) but as
-//   Foundation in staged mode (where it is the full rebuild of binutils-pass1).
+// Stage classification tables
 // ---------------------------------------------------------------------------
 
 const TOOLCHAIN_NAMED: &[&str] = &["linux-headers", "glibc", "binutils", "libstdcxx"];

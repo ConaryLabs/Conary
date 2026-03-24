@@ -10,8 +10,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use conary_core::derivation::{
-    DerivationId, DerivationIndex, DerivationInputs, DerivationRecord, Stage, assign_stages,
-    build_script_hash, capture_output, source_hash,
+    DerivationId, DerivationIndex, DerivationInputs, DerivationRecord, Stage,
+    build_script_hash, capture_output, compute_build_order, source_hash,
 };
 use conary_core::filesystem::CasStore;
 use conary_core::recipe::parse_recipe_file;
@@ -298,62 +298,41 @@ fn stage_assignment_with_real_recipes() {
 
     assert_eq!(recipes.len(), 3, "should have loaded 3 recipes");
 
-    // Run stage assignment with no custom packages.
+    // Run build ordering with no custom packages.
     let custom = HashSet::new();
-    let assignments = assign_stages(&recipes, &custom).expect("assign_stages must succeed");
+    let steps = compute_build_order(&recipes, &custom).expect("compute_build_order must succeed");
 
     assert_eq!(
-        assignments.len(),
+        steps.len(),
         3,
-        "should have 3 stage assignments, got {}",
-        assignments.len()
+        "should have 3 build steps, got {}",
+        steps.len()
     );
 
-    // All three should be in the Foundation stage (they are in FOUNDATION_PACKAGES)
-    // or System stage depending on whether they match. zlib and xz are in
-    // FOUNDATION_PACKAGES. zstd is not, so it goes to System.
-    for assignment in &assignments {
-        match assignment.package.as_str() {
+    // zlib and xz are in FOUNDATION_NAMED. zstd is not, so it goes to System.
+    for step in &steps {
+        match step.package.as_str() {
             "zlib" | "xz" => {
                 assert_eq!(
-                    assignment.stage,
+                    step.stage,
                     Stage::Foundation,
-                    "{} should be in Foundation (it is in FOUNDATION_PACKAGES)",
-                    assignment.package
+                    "{} should be in Foundation",
+                    step.package
                 );
             }
             "zstd" => {
                 assert_eq!(
-                    assignment.stage,
+                    step.stage,
                     Stage::System,
-                    "zstd should be in System (not in FOUNDATION_PACKAGES or TOOLCHAIN_NAMED)"
+                    "zstd should be in System"
                 );
             }
-            other => panic!("unexpected package in assignments: {other}"),
+            other => panic!("unexpected package in build steps: {other}"),
         }
     }
 
     // Build orders should be unique.
-    let orders: Vec<usize> = assignments.iter().map(|a| a.build_order).collect();
+    let orders: Vec<usize> = steps.iter().map(|s| s.order).collect();
     let unique: HashSet<usize> = orders.iter().copied().collect();
     assert_eq!(orders.len(), unique.len(), "build orders must be unique");
-
-    // Foundation packages should have lower build_order than System packages.
-    let foundation_max = assignments
-        .iter()
-        .filter(|a| a.stage == Stage::Foundation)
-        .map(|a| a.build_order)
-        .max()
-        .unwrap_or(0);
-    let system_min = assignments
-        .iter()
-        .filter(|a| a.stage == Stage::System)
-        .map(|a| a.build_order)
-        .min()
-        .unwrap_or(usize::MAX);
-
-    assert!(
-        foundation_max < system_min,
-        "all Foundation packages (max order={foundation_max}) must come before System packages (min order={system_min})"
-    );
 }
