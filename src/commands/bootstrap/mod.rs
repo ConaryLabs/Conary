@@ -676,6 +676,8 @@ pub async fn cmd_bootstrap_seed(from: &str, output: &str, target: &str) -> Resul
         ],
         target_triple: target.to_string(),
         verified_by: vec![],
+        origin_distro: None,
+        origin_version: None,
     };
 
     let toml_str =

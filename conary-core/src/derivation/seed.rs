@@ -65,6 +65,8 @@ pub enum SeedSource {
     Imported,
     /// Built locally by the user's own bootstrap pipeline.
     SelfBuilt,
+    /// Adopted from an existing distro installation (e.g., a live Arch system).
+    Adopted,
 }
 
 /// Metadata describing a bootstrap seed, serialized as `seed.toml`.
@@ -84,6 +86,12 @@ pub struct SeedMetadata {
     pub target_triple: String,
     /// Identifiers of entities that verified this seed's integrity.
     pub verified_by: Vec<String>,
+    /// Distro name for adopted seeds (e.g., `"archlinux"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_distro: Option<String>,
+    /// Distro version for adopted seeds (e.g., `"2026.03.01"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_version: Option<String>,
 }
 
 /// A loaded and verified bootstrap seed.
@@ -173,6 +181,87 @@ impl Seed {
 }
 
 // ---------------------------------------------------------------------------
+// Probe-based validation
+// ---------------------------------------------------------------------------
+
+/// Result of probing a seed's build environment capabilities.
+#[derive(Debug)]
+pub struct SeedValidation {
+    /// True if `gcc --version` succeeds inside the sysroot.
+    pub has_c_compiler: bool,
+    /// True if `usr/include/stdio.h` exists inside the sysroot.
+    pub has_libc_headers: bool,
+    /// True if `make --version` succeeds inside the sysroot.
+    pub has_make: bool,
+    /// True if `/bin/sh -c echo ok` succeeds inside the sysroot.
+    pub has_shell: bool,
+    /// True if `ls --version` succeeds inside the sysroot.
+    pub has_coreutils: bool,
+    /// True if `ld --version` succeeds inside the sysroot.
+    pub has_binutils: bool,
+}
+
+impl SeedValidation {
+    /// Probe a mounted sysroot for required build tools.
+    pub fn probe(sysroot: &Path) -> Self {
+        Self {
+            has_c_compiler: probe_cmd(sysroot, &["gcc", "--version"]),
+            has_libc_headers: sysroot.join("usr/include/stdio.h").exists(),
+            has_make: probe_cmd(sysroot, &["make", "--version"]),
+            has_shell: probe_cmd(sysroot, &["/bin/sh", "-c", "echo ok"]),
+            has_coreutils: probe_cmd(sysroot, &["ls", "--version"]),
+            has_binutils: probe_cmd(sysroot, &["ld", "--version"]),
+        }
+    }
+
+    /// Returns `true` if all required build tools are present.
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        self.has_c_compiler
+            && self.has_libc_headers
+            && self.has_make
+            && self.has_shell
+            && self.has_coreutils
+            && self.has_binutils
+    }
+
+    /// Returns the names of any missing tools.
+    #[must_use]
+    pub fn missing_tools(&self) -> Vec<&'static str> {
+        let mut missing = Vec::new();
+        if !self.has_c_compiler {
+            missing.push("gcc");
+        }
+        if !self.has_libc_headers {
+            missing.push("libc headers");
+        }
+        if !self.has_make {
+            missing.push("make");
+        }
+        if !self.has_shell {
+            missing.push("/bin/sh");
+        }
+        if !self.has_coreutils {
+            missing.push("coreutils");
+        }
+        if !self.has_binutils {
+            missing.push("binutils (ld)");
+        }
+        missing
+    }
+}
+
+fn probe_cmd(sysroot: &Path, args: &[&str]) -> bool {
+    std::process::Command::new("chroot")
+        .arg(sysroot)
+        .args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -190,6 +279,8 @@ mod tests {
             packages: vec!["gcc".to_owned(), "glibc".to_owned(), "coreutils".to_owned()],
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
             verified_by: vec!["sig:abc123".to_owned()],
+            origin_distro: None,
+            origin_version: None,
         };
 
         let toml_str = toml::to_string_pretty(&meta).expect("serialize to TOML");
@@ -282,6 +373,8 @@ mod tests {
             packages: vec![],
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
             verified_by: vec![],
+            origin_distro: None,
+            origin_version: None,
         };
         let toml_str = toml::to_string_pretty(&meta).unwrap();
         std::fs::write(dir.path().join("seed.toml"), toml_str).unwrap();
@@ -314,6 +407,8 @@ mod tests {
             packages: vec!["gcc".to_owned()],
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
             verified_by: vec![],
+            origin_distro: None,
+            origin_version: None,
         };
         let toml_str = toml::to_string_pretty(&meta).unwrap();
         std::fs::write(dir.path().join("seed.toml"), toml_str).unwrap();
@@ -344,11 +439,80 @@ mod tests {
             packages: vec![],
             target_triple: "aarch64-unknown-linux-gnu".to_owned(),
             verified_by: vec![],
+            origin_distro: None,
+            origin_version: None,
         };
         let toml_str = toml::to_string_pretty(&meta).unwrap();
         std::fs::write(dir.path().join("seed.toml"), toml_str).unwrap();
 
         let seed = Seed::load_local(dir.path()).unwrap();
         assert_eq!(seed.build_env_hash(), &actual_hash);
+    }
+
+    #[test]
+    fn adopted_source_serde_roundtrip() {
+        let meta = SeedMetadata {
+            seed_id: "abc".into(),
+            source: SeedSource::Adopted,
+            origin_url: None,
+            builder: None,
+            packages: vec!["gcc".into()],
+            target_triple: "x86_64-unknown-linux-gnu".into(),
+            verified_by: vec![],
+            origin_distro: Some("archlinux".into()),
+            origin_version: Some("2026.03.01".into()),
+        };
+        let toml_str = toml::to_string(&meta).unwrap();
+        assert!(toml_str.contains(r#"source = "adopted""#));
+        assert!(toml_str.contains(r#"origin_distro = "archlinux""#));
+
+        let parsed: SeedMetadata = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.source, SeedSource::Adopted);
+        assert_eq!(parsed.origin_distro.as_deref(), Some("archlinux"));
+    }
+
+    #[test]
+    fn seed_validation_missing_tools() {
+        let v = SeedValidation {
+            has_c_compiler: true,
+            has_libc_headers: false,
+            has_make: true,
+            has_shell: true,
+            has_coreutils: false,
+            has_binutils: true,
+        };
+        assert!(!v.is_valid());
+        let missing = v.missing_tools();
+        assert_eq!(missing, vec!["libc headers", "coreutils"]);
+    }
+
+    #[test]
+    fn seed_validation_all_present() {
+        let v = SeedValidation {
+            has_c_compiler: true,
+            has_libc_headers: true,
+            has_make: true,
+            has_shell: true,
+            has_coreutils: true,
+            has_binutils: true,
+        };
+        assert!(v.is_valid());
+        assert!(v.missing_tools().is_empty());
+    }
+
+    #[test]
+    fn backward_compat_no_origin_fields() {
+        // Old seed.toml without origin_distro/origin_version should still parse.
+        let toml_str = r#"
+seed_id = "abc"
+source = "community"
+packages = ["gcc"]
+target_triple = "x86_64-unknown-linux-gnu"
+verified_by = []
+"#;
+        let parsed: SeedMetadata = toml::from_str(toml_str).unwrap();
+        assert_eq!(parsed.source, SeedSource::Community);
+        assert!(parsed.origin_distro.is_none());
+        assert!(parsed.origin_version.is_none());
     }
 }
