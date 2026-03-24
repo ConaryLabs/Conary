@@ -28,7 +28,7 @@ pub(crate) mod test_helpers;
 
 pub use capture::{CaptureError, capture_output};
 pub use compose::{ComposeError, compose_erofs, compose_file_entries, erofs_image_hash};
-pub use environment::{BuildEnvironment, EnvironmentError};
+pub use environment::{BuildEnvironment, EnvironmentError, MutableEnvironment};
 pub use executor::{DerivationExecutor, ExecutionResult, ExecutorError};
 pub use id::{DerivationError, DerivationId, DerivationInputs, SourceDerivationId};
 pub use index::{DerivationIndex, DerivationRecord};
