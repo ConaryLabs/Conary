@@ -93,6 +93,9 @@ pub fn find_source_dir(dir: &Path) -> Result<PathBuf, std::io::Error> {
 /// Variables use `${VAR}` and `$VAR` syntax. Looks up values in `build_env` only.
 /// Variables not found in `build_env` expand to empty string (host
 /// environment is intentionally not consulted for build hermiticity).
+///
+/// TODO(bootstrap): called by `merge_build_env`; both wired in once recipe-driven
+/// execution is connected end-to-end across cross/temp/final-system phases.
 #[allow(dead_code)]
 pub fn expand_env_vars(value: &str, build_env: &HashMap<String, String>) -> String {
     let mut result = value.to_string();
@@ -145,6 +148,9 @@ pub fn expand_env_vars(value: &str, build_env: &HashMap<String, String>) -> Stri
 ///
 /// Flag variables (CFLAGS, CXXFLAGS, LDFLAGS) are merged by prepending base
 /// flags. All other variables are replaced.
+///
+/// TODO(bootstrap): used by cross_tools/temp_tools/final_system builders once
+/// per-phase env assembly is wired into the recipe-driven execution path.
 #[allow(dead_code)]
 pub fn merge_build_env(
     base_env: &HashMap<String, String>,
@@ -186,6 +192,9 @@ pub fn merge_build_env(
 ///
 /// Replaces `%(target)s`, `%(jobs)s`, `%(stage1_sysroot)s`, and
 /// cross-compilation section variables from the recipe.
+///
+/// TODO(bootstrap): used when recipe command strings are substituted during
+/// cross/temp/final-system phase builds.
 #[allow(dead_code)]
 pub fn substitute_build_vars(
     cmd: &str,
@@ -218,6 +227,9 @@ pub fn substitute_build_vars(
 /// network isolation, and the provided environment variables.
 ///
 /// Returns `(exit_code, stdout, stderr)`.
+///
+/// TODO(bootstrap): used by phase builders once sandbox execution replaces
+/// the current chroot-based approach for hermetic sub-builds.
 #[allow(dead_code)]
 pub fn run_sandboxed_command(
     cmd: &str,
