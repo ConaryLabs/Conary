@@ -871,6 +871,7 @@ pub async fn cmd_model_check(
     // Exit with code 2 to distinguish drift (expected check failure) from
     // runtime errors (code 1). This avoids an anyhow error message on stderr
     // that duplicates the structured output already printed above.
+    drop(_conn);
     process::exit(2)
 }
 

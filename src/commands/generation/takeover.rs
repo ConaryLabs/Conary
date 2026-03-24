@@ -353,14 +353,14 @@ fn upgrade_to_cas_backed(
     conary_core::db::transaction(&mut conn, |tx| {
         let mut cs = Changeset::new("Takeover: CAS-upgrade track-only packages".into());
         cs.insert(tx)?;
-        let cs_id = cs.id.expect("changeset just inserted");
+        let cs_id = cs.id.ok_or_else(|| conary_core::Error::MissingId("changeset insert did not return an ID".into()))?;
 
         for name in packages {
             let Some(trove) = Trove::find_one_by_name(tx, name)? else {
                 warn!("Trove '{name}' not found during CAS upgrade, skipping");
                 continue;
             };
-            let trove_id = trove.id.expect("trove from DB has id");
+            let trove_id = trove.id.ok_or_else(|| conary_core::Error::MissingId(format!("trove '{name}' from DB has no ID")))?;
 
             // Query files from the system PM
             let files = query_package_files(*pm, name);
@@ -424,14 +424,14 @@ fn take_ownership(db_path: &str, packages: &[String], pm: SystemPackageManager) 
         conary_core::db::transaction(&mut conn, |tx| {
             let mut cs = Changeset::new("Takeover: take ownership from system PM".into());
             cs.insert(tx)?;
-            let cs_id = cs.id.expect("changeset just inserted");
+            let cs_id = cs.id.ok_or_else(|| conary_core::Error::MissingId("changeset".into()))?;
 
             for (name, files) in &file_lists {
                 let Some(trove) = Trove::find_one_by_name(tx, name)? else {
                     warn!("Trove '{name}' not found during ownership transfer, skipping");
                     continue;
                 };
-                let trove_id = trove.id.expect("trove from DB has id");
+                let trove_id = trove.id.ok_or_else(|| conary_core::Error::MissingId(format!("trove '{name}'")))?;
 
                 // If still AdoptedTrack, CAS-back files first
                 if trove.install_source == InstallSource::AdoptedTrack {
