@@ -20,39 +20,13 @@ pub fn compute_key_id(key: &TufKey) -> TrustResult<String> {
     Ok(hash::sha256(&canonical))
 }
 
-/// Produce deterministic (canonical) JSON for a serializable value
+/// Produce deterministic (canonical) JSON for a serializable value.
 ///
-/// Canonical JSON as defined by OLPC:
-/// - Object keys sorted lexicographically
-/// - No unnecessary whitespace
-/// - No trailing commas
-///
-/// This is used for computing key IDs and for signing metadata.
+/// Delegates to [] for the shared implementation.
+/// Canonical JSON: object keys sorted lexicographically, no whitespace.
 pub fn canonical_json<T: serde::Serialize>(value: &T) -> TrustResult<Vec<u8>> {
-    let json_value = serde_json::to_value(value).map_err(|e| {
-        TrustError::SerializationError(format!("Failed to serialize to Value: {e}"))
-    })?;
-    let sorted = sort_json_value(&json_value);
-    serde_json::to_vec(&sorted)
-        .map_err(|e| TrustError::SerializationError(format!("Failed to serialize to Vec: {e}")))
-}
-
-/// Recursively sort JSON object keys for canonical representation
-fn sort_json_value(value: &serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::Object(map) => {
-            // BTreeMap sorts keys lexicographically
-            let sorted: serde_json::Map<String, serde_json::Value> = map
-                .iter()
-                .map(|(k, v)| (k.clone(), sort_json_value(v)))
-                .collect();
-            serde_json::Value::Object(sorted)
-        }
-        serde_json::Value::Array(arr) => {
-            serde_json::Value::Array(arr.iter().map(sort_json_value).collect())
-        }
-        other => other.clone(),
-    }
+    crate::json::canonical_json(value)
+        .map_err(TrustError::SerializationError)
 }
 
 /// Convert a `SigningKeyPair` to a TUF key with its computed key ID
