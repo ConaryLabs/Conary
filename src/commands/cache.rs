@@ -149,13 +149,11 @@ pub async fn cmd_cache_status(db_path: &str) -> Result<()> {
             .prepare(
                 "SELECT endpoint, success_count, failure_count, last_seen \
                  FROM substituter_peers ORDER BY priority",
-            )
-            .unwrap();
+            )?;
         let peers: Vec<(String, i64, i64, Option<String>)> = stmt
             .query_map([], |row| {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-            })
-            .unwrap()
+            })?
             .filter_map(|r| r.ok())
             .collect();
 

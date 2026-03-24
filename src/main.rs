@@ -1498,7 +1498,9 @@ async fn run() -> Result<()> {
                     )
                     .await?;
                 } else {
-                    let from_path = from.expect("--from required when not using --from-adopted");
+                    let from_path = from.ok_or_else(|| {
+                        anyhow::anyhow!("--from is required when not using --from-adopted")
+                    })?;
                     commands::cmd_bootstrap_seed(&from_path, &output, &target).await?;
                 }
                 Ok(())
