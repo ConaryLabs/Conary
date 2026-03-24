@@ -37,6 +37,9 @@ pub enum InstallError {
     /// A required CAS object was not present on disk.
     #[error("CAS object not found: {0}")]
     MissingCasObject(String),
+    /// A manifest path attempted to escape the sysroot.
+    #[error("Path traversal attempt rejected: {0}")]
+    PathTraversal(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -77,7 +80,7 @@ pub fn install_to_sysroot(
     let mut created_dirs: HashSet<PathBuf> = HashSet::new();
 
     for file in &manifest.files {
-        let dest = sysroot_path(sysroot, &file.path);
+        let dest = sysroot_path(sysroot, &file.path)?;
 
         // Ensure parent directory exists (skip if already created).
         if let Some(parent) = dest.parent()
@@ -114,18 +117,21 @@ pub fn install_to_sysroot(
         }
 
         // Apply mode bits.
-        fs::set_permissions(&dest, std::os::unix::fs::PermissionsExt::from_mode(file.mode))
-            .map_err(|e| InstallError::Io {
-                path: dest.display().to_string(),
-                source: e,
-            })?;
+        fs::set_permissions(
+            &dest,
+            std::os::unix::fs::PermissionsExt::from_mode(file.mode),
+        )
+        .map_err(|e| InstallError::Io {
+            path: dest.display().to_string(),
+            source: e,
+        })?;
 
         debug!(path = %dest.display(), hash = %file.hash, "installed file");
         installed += 1;
     }
 
     for symlink in &manifest.symlinks {
-        let dest = sysroot_path(sysroot, &symlink.path);
+        let dest = sysroot_path(sysroot, &symlink.path)?;
 
         // Ensure parent directory exists (skip if already created).
         if let Some(parent) = dest.parent()
@@ -171,10 +177,7 @@ pub fn run_ldconfig_if_needed(manifest: &OutputManifest, sysroot: &Path) {
 
     // Try /sbin/ldconfig first, then /usr/sbin/ldconfig.
     for ldconfig in &["/sbin/ldconfig", "/usr/sbin/ldconfig"] {
-        let status = Command::new("chroot")
-            .arg(sysroot)
-            .arg(ldconfig)
-            .status();
+        let status = Command::new("chroot").arg(sysroot).arg(ldconfig).status();
 
         match status {
             Ok(s) if s.success() => {
@@ -207,11 +210,12 @@ pub fn run_ldconfig_if_needed(manifest: &OutputManifest, sysroot: &Path) {
 
 /// Resolve a manifest-absolute path into a real filesystem path under `sysroot`.
 ///
-/// Leading `/` is stripped so that `Path::join` does not discard the sysroot
-/// prefix.
-fn sysroot_path(sysroot: &Path, manifest_path: &str) -> PathBuf {
-    let stripped = manifest_path.trim_start_matches('/');
-    sysroot.join(stripped)
+/// Uses `safe_join` to strip leading `/` and reject `..` components, preventing
+/// path traversal attacks from malicious manifests.
+fn sysroot_path(sysroot: &Path, manifest_path: &str) -> Result<PathBuf, InstallError> {
+    crate::filesystem::path::safe_join(sysroot, manifest_path).map_err(|e| {
+        InstallError::PathTraversal(e.to_string())
+    })
 }
 
 /// Return the CAS object path for `hash` under `cas_dir`.
@@ -243,15 +247,12 @@ fn remove_if_exists(path: &Path) -> Result<(), InstallError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hash;
     use crate::derivation::output::{OutputFile, OutputManifest, OutputSymlink};
+    use crate::hash;
     use tempfile::TempDir;
 
     /// Build a minimal [`OutputManifest`] with the supplied files and symlinks.
-    fn make_manifest(
-        files: Vec<OutputFile>,
-        symlinks: Vec<OutputSymlink>,
-    ) -> OutputManifest {
+    fn make_manifest(files: Vec<OutputFile>, symlinks: Vec<OutputSymlink>) -> OutputManifest {
         OutputManifest {
             derivation_id: "test-derivation".to_owned(),
             output_hash: OutputManifest::compute_output_hash(&files, &symlinks),
