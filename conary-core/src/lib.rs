@@ -23,6 +23,7 @@ pub mod filesystem;
 pub mod flavor;
 pub mod generation;
 pub mod hash;
+pub mod json;
 pub mod label;
 #[cfg(feature = "mcp")]
 pub mod mcp;

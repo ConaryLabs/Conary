@@ -69,34 +69,12 @@ pub fn load_signing_key(path: &Path) -> Result<SigningKey, ModelError> {
 
 /// Generate a canonical JSON representation for signing.
 ///
-/// Recursively sorts all JSON object keys to ensure deterministic output
-/// regardless of HashMap iteration order.
+/// Delegates to [`crate::json::canonical_json`] for the shared implementation.
 fn canonical_json(data: &CollectionData) -> Result<String, ModelError> {
-    let value = serde_json::to_value(data).map_err(|e| {
-        ModelError::RemoteFetchError(format!("Failed to serialize collection: {e}"))
-    })?;
-    let sorted = sort_json_keys(value);
-    serde_json::to_string(&sorted)
-        .map_err(|e| ModelError::RemoteFetchError(format!("Failed to serialize sorted JSON: {e}")))
-}
-
-/// Recursively sort all object keys in a JSON value for deterministic serialization.
-fn sort_json_keys(value: serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::Object(map) => {
-            let sorted: serde_json::Map<String, serde_json::Value> = map
-                .into_iter()
-                .map(|(k, v)| (k, sort_json_keys(v)))
-                .collect::<std::collections::BTreeMap<_, _>>()
-                .into_iter()
-                .collect();
-            serde_json::Value::Object(sorted)
-        }
-        serde_json::Value::Array(arr) => {
-            serde_json::Value::Array(arr.into_iter().map(sort_json_keys).collect())
-        }
-        other => other,
-    }
+    let bytes = crate::json::canonical_json(data)
+        .map_err(|e| ModelError::RemoteFetchError(format!("Failed to serialize collection: {e}")))?;
+    String::from_utf8(bytes)
+        .map_err(|e| ModelError::RemoteFetchError(format!("Canonical JSON is not valid UTF-8: {e}")))
 }
 
 /// Get the public key ID (hex-encoded first 8 bytes of public key)
