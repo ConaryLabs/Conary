@@ -456,6 +456,147 @@ fn build_derived_package(conn: &Connection, name: &str, cas: &CasStore) -> Resul
     }
 }
 
+/// Options for `cmd_model_apply`, replacing the former 8-argument signature.
+pub struct ApplyOptions<'a> {
+    pub model_path: &'a str,
+    pub db_path: &'a str,
+    #[allow(dead_code)] // reserved for future chroot support
+    pub root: &'a str,
+    pub dry_run: bool,
+    pub skip_optional: bool,
+    pub strict: bool,
+    pub autoremove: bool,
+    pub offline: bool,
+}
+
+/// Apply source-policy actions (`SetSourcePin` / `ClearSourcePin`) from the
+/// filtered action list.  Returns the number of changes applied.
+fn apply_source_policy_changes(conn: &Connection, actions: &[&DiffAction]) -> Result<usize> {
+    let mut count = 0;
+    for action in actions {
+        match action {
+            DiffAction::SetSourcePin { distro, strength } => {
+                let strength = strength.as_deref().unwrap_or("guarded");
+                DistroPin::set(conn, distro, strength)?;
+                println!("Updated source policy pin: {} ({})", distro, strength);
+                count += 1;
+            }
+            DiffAction::ClearSourcePin => {
+                DistroPin::remove(conn)?;
+                println!("Cleared source policy pin");
+                count += 1;
+            }
+            _ => {}
+        }
+    }
+    Ok(count)
+}
+
+/// Apply package install/remove actions.  Currently stubs that print a
+/// manual-action notice and return the pending name lists `(installs, removes)`.
+fn apply_package_changes(actions: &[&DiffAction]) -> (Vec<String>, Vec<String>) {
+    let removes: Vec<String> = actions
+        .iter()
+        .filter_map(|a| match a {
+            DiffAction::Remove { package, .. } => Some(package.clone()),
+            _ => None,
+        })
+        .collect();
+
+    let installs: Vec<String> = actions
+        .iter()
+        .filter_map(|a| match a {
+            DiffAction::Install { package, .. } => Some(package.clone()),
+            _ => None,
+        })
+        .collect();
+
+    // Process removes first (before derived packages that might depend on them)
+    if !removes.is_empty() {
+        println!("Packages to remove: {}", removes.join(", "));
+        println!("  [NOTE: Package removal not yet implemented - run manually]");
+        println!();
+    }
+
+    // Process regular installs (needed before derived packages)
+    if !installs.is_empty() {
+        println!("Packages to install: {}", installs.join(", "));
+        println!("  [NOTE: Package installation not yet implemented - run manually]");
+        println!();
+    }
+
+    (installs, removes)
+}
+
+/// Apply derived-package build/rebuild actions.
+///
+/// Returns `(built, rebuilt, errors)`.
+fn apply_derived_packages(
+    conn: &Connection,
+    actions: &[&DiffAction],
+    model: &conary_core::model::parser::SystemModel,
+    model_dir: &Path,
+    cas: &CasStore,
+) -> (usize, usize, Vec<String>) {
+    let mut derived_built = 0usize;
+    let mut derived_rebuilt = 0usize;
+    let mut errors: Vec<String> = Vec::new();
+
+    for action in actions {
+        match action {
+            DiffAction::BuildDerived {
+                name,
+                parent,
+                needs_parent,
+            } => {
+                println!("Building derived package '{}'...", name);
+
+                if *needs_parent {
+                    println!(
+                        "  [WARNING: Parent '{}' needs to be installed first]",
+                        parent
+                    );
+                    errors.push(format!(
+                        "Cannot build '{}': parent '{}' not installed",
+                        name, parent
+                    ));
+                    continue;
+                }
+
+                let model_def = model.derive.iter().find(|d| d.name == *name);
+
+                if let Some(def) = model_def {
+                    match create_derived_from_model(conn, def, model_dir, cas) {
+                        Ok(_id) => match build_derived_package(conn, name, cas) {
+                            Ok(()) => derived_built += 1,
+                            Err(e) => errors.push(format!("Build '{}': {}", name, e)),
+                        },
+                        Err(e) => errors.push(format!("Create definition '{}': {}", name, e)),
+                    }
+                } else {
+                    errors.push(format!(
+                        "Derived package '{}' not found in model file",
+                        name
+                    ));
+                }
+            }
+
+            DiffAction::RebuildDerived { name, parent: _ } => {
+                println!("Rebuilding derived package '{}'...", name);
+
+                match build_derived_package(conn, name, cas) {
+                    Ok(()) => derived_rebuilt += 1,
+                    Err(e) => errors.push(format!("Rebuild '{}': {}", name, e)),
+                }
+            }
+
+            _ => {}
+        }
+    }
+
+    (derived_built, derived_rebuilt, errors)
+}
+
 /// Show what changes are needed to reach the model state
 pub async fn cmd_model_diff(model_path: &str, db_path: &str, offline: bool) -> Result<()> {
     let model_path = Path::new(model_path);
@@ -563,18 +704,19 @@ pub async fn cmd_model_diff(model_path: &str, db_path: &str, offline: bool) -> R
     Ok(())
 }
 
-/// Apply the system model to reach the desired state
-#[allow(clippy::too_many_arguments)]
-pub async fn cmd_model_apply(
-    model_path: &str,
-    db_path: &str,
-    _root: &str,
-    dry_run: bool,
-    skip_optional: bool,
-    strict: bool,
-    autoremove: bool,
-    offline: bool,
-) -> Result<()> {
+/// Apply the system model to reach the desired state.
+pub async fn cmd_model_apply(opts: ApplyOptions<'_>) -> Result<()> {
+    let ApplyOptions {
+        model_path,
+        db_path,
+        root: _,
+        dry_run,
+        skip_optional,
+        strict,
+        autoremove,
+        offline,
+    } = opts;
+
     let model_path = Path::new(model_path);
     let (model, conn, diff) = load_model_and_diff(model_path, db_path, offline, true).await?;
     let diff_summary = diff.summary();
@@ -585,18 +727,17 @@ pub async fn cmd_model_apply(
     }
 
     // Filter actions based on options
-    let actions: Vec<_> = diff
+    let actions: Vec<&DiffAction> = diff
         .actions
         .iter()
         .filter(|a| {
-            if skip_optional && let DiffAction::Install { optional, .. } = a {
-                return !optional;
-            }
-            if !strict {
-                // In non-strict mode, skip MarkDependency actions
-                if matches!(a, DiffAction::MarkDependency { .. }) {
-                    return false;
+            if skip_optional {
+                if let DiffAction::Install { optional, .. } = a {
+                    return !optional;
                 }
+            }
+            if !strict && matches!(a, DiffAction::MarkDependency { .. }) {
+                return false;
             }
             true
         })
@@ -634,10 +775,7 @@ pub async fn cmd_model_apply(
 
     if let Some(plan) = replatform_execution_plan(
         &conn,
-        &actions
-            .iter()
-            .map(|action| (*action).clone())
-            .collect::<Vec<_>>(),
+        &actions.iter().map(|a| (*a).clone()).collect::<Vec<_>>(),
     )? {
         println!("{}", render_replatform_execution_plan(&plan));
         println!();
@@ -666,125 +804,15 @@ pub async fn cmd_model_apply(
     // Get model directory for resolving relative paths
     let model_dir = model_path.parent().unwrap_or(Path::new("."));
 
-    // Track results
-    let mut errors: Vec<String> = Vec::new();
-    let mut derived_built = 0;
-    let mut derived_rebuilt = 0;
+    // Phase 1: source policy changes
+    apply_source_policy_changes(&conn, &actions)?;
 
-    // Collect different action types
-    let installs: Vec<_> = actions
-        .iter()
-        .filter_map(|a| match a {
-            DiffAction::Install { package, .. } => Some(package.as_str()),
-            _ => None,
-        })
-        .collect();
+    // Phase 2: package changes (install/remove stubs)
+    let (installs, removes) = apply_package_changes(&actions);
 
-    let removes: Vec<_> = actions
-        .iter()
-        .filter_map(|a| match a {
-            DiffAction::Remove { package, .. } => Some(package.as_str()),
-            _ => None,
-        })
-        .collect();
-    // Process removes first (before derived packages that might depend on them)
-    if !removes.is_empty() {
-        println!("Packages to remove: {}", removes.join(", "));
-        println!("  [NOTE: Package removal not yet implemented - run manually]");
-        println!();
-    }
-
-    for action in &actions {
-        match action {
-            DiffAction::SetSourcePin { distro, strength } => {
-                let strength = strength.as_deref().unwrap_or("guarded");
-                DistroPin::set(&conn, distro, strength)?;
-                println!("Updated source policy pin: {} ({})", distro, strength);
-            }
-            DiffAction::ClearSourcePin => {
-                DistroPin::remove(&conn)?;
-                println!("Cleared source policy pin");
-            }
-            _ => {}
-        }
-    }
-
-    // Process regular installs (needed before derived packages)
-    if !installs.is_empty() {
-        println!("Packages to install: {}", installs.join(", "));
-        println!("  [NOTE: Package installation not yet implemented - run manually]");
-        println!();
-    }
-
-    // Process derived package actions
-    for action in &actions {
-        match action {
-            DiffAction::BuildDerived {
-                name,
-                parent,
-                needs_parent,
-            } => {
-                println!("Building derived package '{}'...", name);
-
-                if *needs_parent {
-                    println!(
-                        "  [WARNING: Parent '{}' needs to be installed first]",
-                        parent
-                    );
-                    errors.push(format!(
-                        "Cannot build '{}': parent '{}' not installed",
-                        name, parent
-                    ));
-                    continue;
-                }
-
-                // Find the derived package definition in the model
-                let model_def = model.derive.iter().find(|d| d.name == *name);
-
-                if let Some(def) = model_def {
-                    // Create the derived package definition in DB
-                    match create_derived_from_model(&conn, def, model_dir, &cas) {
-                        Ok(_id) => {
-                            // Now build it
-                            match build_derived_package(&conn, name, &cas) {
-                                Ok(()) => {
-                                    derived_built += 1;
-                                }
-                                Err(e) => {
-                                    errors.push(format!("Build '{}': {}", name, e));
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            errors.push(format!("Create definition '{}': {}", name, e));
-                        }
-                    }
-                } else {
-                    errors.push(format!(
-                        "Derived package '{}' not found in model file",
-                        name
-                    ));
-                }
-            }
-
-            DiffAction::RebuildDerived { name, parent: _ } => {
-                println!("Rebuilding derived package '{}'...", name);
-
-                match build_derived_package(&conn, name, &cas) {
-                    Ok(()) => {
-                        derived_rebuilt += 1;
-                    }
-                    Err(e) => {
-                        errors.push(format!("Rebuild '{}': {}", name, e));
-                    }
-                }
-            }
-
-            _ => {
-                // Other actions (Install, Remove, Pin, etc.) handled above or not yet implemented
-            }
-        }
-    }
+    // Phase 3: derived packages
+    let (derived_built, derived_rebuilt, errors) =
+        apply_derived_packages(&conn, &actions, &model, model_dir, &cas);
 
     if autoremove {
         println!();
@@ -2039,16 +2067,16 @@ strength = "strict"
         )
         .unwrap();
 
-        cmd_model_apply(
-            model_path.to_str().unwrap(),
-            &db_path,
-            "/",
-            false,
-            false,
-            false,
-            false,
-            true,
-        )
+        cmd_model_apply(ApplyOptions {
+            model_path: model_path.to_str().unwrap(),
+            db_path: &db_path,
+            root: "/",
+            dry_run: false,
+            skip_optional: false,
+            strict: false,
+            autoremove: false,
+            offline: true,
+        })
         .await
         .unwrap();
 
