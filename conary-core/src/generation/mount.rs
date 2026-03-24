@@ -40,20 +40,32 @@ pub struct MountOptions {
 }
 
 impl MountOptions {
-    /// Build the argument list for `mount -t composefs <image> <mountpoint> -o <opts>`.
+    /// Build the argument list for mounting a composefs generation.
+    ///
+    /// composefs is NOT a kernel filesystem type. It uses overlayfs with
+    /// an EROFS metadata image as a data-only lower layer and the CAS
+    /// directory as the data source. This requires kernel 6.5+ (overlayfs
+    /// data-only lower layers) and 6.6+ for fs-verity.
+    ///
+    /// The mount is: `mount -t overlay overlay -o lowerdir=<erofs>::<cas>,metacopy=on,redirect_dir=on <mountpoint>`
     ///
     /// The returned `Vec<String>` can be passed directly to `Command::args`.
-    /// Only options that are set are included in the `-o` string.
     #[must_use]
     pub fn to_mount_args(&self) -> Vec<String> {
-        let mut opts = vec![format!("basedir={}", self.basedir.display())];
+        // The EROFS image is the metadata layer, CAS objects directory is
+        // the data layer. The `::` separator creates a data-only lower layer.
+        let mut opts = vec![
+            format!(
+                "lowerdir={}::{}",
+                self.image_path.display(),
+                self.basedir.display()
+            ),
+            "metacopy=on".to_string(),
+            "redirect_dir=on".to_string(),
+        ];
 
         if self.verity {
-            opts.push("verity=on".to_string());
-        }
-
-        if let Some(digest) = &self.digest {
-            opts.push(format!("digest={digest}"));
+            opts.push("verity=require".to_string());
         }
 
         if let Some(upperdir) = &self.upperdir {
@@ -66,10 +78,27 @@ impl MountOptions {
 
         vec![
             "-t".to_string(),
-            "composefs".to_string(),
-            self.image_path.to_string_lossy().into_owned(),
+            "overlay".to_string(),
+            "overlay".to_string(),
             "-o".to_string(),
             opts.join(","),
+            self.mount_point.to_string_lossy().into_owned(),
+        ]
+    }
+
+    /// Build argument list for a plain EROFS loopback mount (fallback).
+    ///
+    /// Used when overlayfs data-only layers aren't available (kernel < 6.5)
+    /// or when the CAS directory isn't relevant (bootstrap seed mounts).
+    /// The EROFS image must contain file data inline, not just metadata.
+    #[must_use]
+    pub fn to_erofs_mount_args(&self) -> Vec<String> {
+        vec![
+            "-t".to_string(),
+            "erofs".to_string(),
+            "-o".to_string(),
+            "loop,ro".to_string(),
+            self.image_path.to_string_lossy().into_owned(),
             self.mount_point.to_string_lossy().into_owned(),
         ]
     }
@@ -77,24 +106,46 @@ impl MountOptions {
 
 /// Mount a composefs generation image.
 ///
-/// Runs `mount -t composefs` with the options encoded in `opts`.
-/// Returns an error if the mount command fails to execute or exits non-zero.
+/// Tries the full composefs experience first (overlayfs with EROFS metadata +
+/// CAS data-only layer, kernel 6.5+). Falls back to plain EROFS loopback
+/// mount if overlayfs data-only layers aren't supported.
 pub fn mount_generation(opts: &MountOptions) -> crate::Result<()> {
+    // Try overlayfs composefs mount first (kernel 6.5+)
     let args = opts.to_mount_args();
     let status = Command::new("mount")
         .args(&args)
+        .stderr(std::process::Stdio::piped())
         .status()
         .map_err(|e| Error::IoError(format!("Failed to execute mount: {e}")))?;
 
     if status.success() {
         info!(
-            "Mounted composefs generation at {}",
+            "Mounted composefs generation (overlayfs+EROFS) at {}",
+            opts.mount_point.display()
+        );
+        return Ok(());
+    }
+
+    // Fallback: plain EROFS loopback mount (kernel 5.15+)
+    info!(
+        "Overlayfs composefs mount failed, falling back to EROFS loopback for {}",
+        opts.image_path.display()
+    );
+    let erofs_args = opts.to_erofs_mount_args();
+    let erofs_status = Command::new("mount")
+        .args(&erofs_args)
+        .status()
+        .map_err(|e| Error::IoError(format!("Failed to execute EROFS mount: {e}")))?;
+
+    if erofs_status.success() {
+        info!(
+            "Mounted generation (EROFS loopback) at {}",
             opts.mount_point.display()
         );
         Ok(())
     } else {
         Err(Error::IoError(format!(
-            "mount exited with status {status} for image {}",
+            "Both overlayfs and EROFS mount failed for image {}",
             opts.image_path.display()
         )))
     }
@@ -241,60 +292,53 @@ mod tests {
     }
 
     #[test]
-    fn mount_command_is_well_formed() {
-        let opts = MountOptions {
-            image_path: PathBuf::from("/conary/generations/3/root.erofs"),
-            basedir: PathBuf::from("/conary/objects"),
-            mount_point: PathBuf::from("/conary/mnt"),
-            verity: true,
-            digest: Some("abc123def456".to_string()),
-            upperdir: Some(PathBuf::from("/conary/overlay/upper")),
-            workdir: Some(PathBuf::from("/conary/overlay/work")),
-        };
-
+    fn mount_command_uses_overlayfs() {
+        let opts = base_opts();
         let args = opts.to_mount_args();
 
-        // Must start with -t composefs <image>
+        // Must use overlay filesystem type
         assert_eq!(args[0], "-t");
-        assert_eq!(args[1], "composefs");
-        assert_eq!(args[2], "/conary/generations/3/root.erofs");
-        // -o <opts> <mountpoint>
+        assert_eq!(args[1], "overlay");
+        assert_eq!(args[2], "overlay");
         assert_eq!(args[3], "-o");
 
         let opts_str = &args[4];
+        // lowerdir uses :: separator for data-only layer
         assert!(
-            opts_str.contains("basedir=/conary/objects"),
-            "basedir missing"
+            opts_str.contains("lowerdir=/conary/generations/5/root.erofs::/conary/objects"),
+            "lowerdir with data-only layer missing: {opts_str}"
         );
-        assert!(opts_str.contains("verity=on"), "verity=on missing");
-        assert!(opts_str.contains("digest=abc123def456"), "digest missing");
+        assert!(opts_str.contains("metacopy=on"), "metacopy=on missing");
         assert!(
-            opts_str.contains("upperdir=/conary/overlay/upper"),
-            "upperdir missing"
-        );
-        assert!(
-            opts_str.contains("workdir=/conary/overlay/work"),
-            "workdir missing"
+            opts_str.contains("redirect_dir=on"),
+            "redirect_dir=on missing"
         );
 
         assert_eq!(args[5], "/conary/mnt");
-        assert_eq!(args.len(), 6);
+    }
+
+    #[test]
+    fn mount_command_with_verity() {
+        let opts = MountOptions {
+            verity: true,
+            ..base_opts()
+        };
+        let args = opts.to_mount_args();
+        let opts_str = &args[4];
+        assert!(
+            opts_str.contains("verity=require"),
+            "verity=require missing"
+        );
     }
 
     #[test]
     fn mount_command_without_verity() {
         let opts = base_opts();
         let args = opts.to_mount_args();
-
         let opts_str = &args[4];
-        assert!(opts_str.contains("basedir="), "basedir must be present");
         assert!(
             !opts_str.contains("verity"),
             "verity must be absent when not requested"
-        );
-        assert!(
-            !opts_str.contains("digest"),
-            "digest must be absent when not provided"
         );
     }
 
@@ -310,6 +354,19 @@ mod tests {
         let opts_str = &args[4];
         assert!(opts_str.contains("upperdir=/overlay/upper"));
         assert!(opts_str.contains("workdir=/overlay/work"));
+    }
+
+    #[test]
+    fn erofs_fallback_args() {
+        let opts = base_opts();
+        let args = opts.to_erofs_mount_args();
+
+        assert_eq!(args[0], "-t");
+        assert_eq!(args[1], "erofs");
+        assert_eq!(args[2], "-o");
+        assert_eq!(args[3], "loop,ro");
+        assert_eq!(args[4], "/conary/generations/5/root.erofs");
+        assert_eq!(args[5], "/conary/mnt");
     }
 
     #[test]
