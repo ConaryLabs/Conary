@@ -723,10 +723,10 @@ impl Pipeline {
                 pkgs.iter().cloned().collect()
             });
 
-        // Count packages per phase for progress reporting.
-        let mut phase_counts: BTreeMap<super::build_order::BuildPhase, usize> = BTreeMap::new();
+        // Count packages per stage for progress reporting.
+        let mut stage_counts: BTreeMap<Stage, usize> = BTreeMap::new();
         for step in build_steps {
-            *phase_counts.entry(step.phase).or_insert(0) += 1;
+            *stage_counts.entry(step.stage).or_insert(0) += 1;
         }
 
         // Mount the mutable overlayfs environment once.
@@ -753,24 +753,24 @@ impl Pipeline {
         let mut total_cached: usize = 0;
         let mut total_built: usize = 0;
 
-        // Track current phase for progress events.
-        let mut current_phase: Option<super::build_order::BuildPhase> = None;
+        // Track current stage for progress events.
+        let mut current_stage: Option<Stage> = None;
 
         for step in build_steps {
-            // Emit StageStarted/StageCompleted on phase transitions.
-            if current_phase != Some(step.phase) {
-                if let Some(prev) = current_phase {
+            // Emit StageStarted/StageCompleted on stage transitions.
+            if current_stage != Some(step.stage) {
+                if let Some(prev) = current_stage {
                     on_event(&PipelineEvent::StageCompleted {
                         name: prev.to_string(),
                     });
                 }
-                let count = phase_counts.get(&step.phase).copied().unwrap_or(0);
+                let count = stage_counts.get(&step.stage).copied().unwrap_or(0);
                 on_event(&PipelineEvent::StageStarted {
-                    name: step.phase.to_string(),
+                    name: step.stage.to_string(),
                     package_count: count,
                 });
-                info!("phase {}: {count} packages", step.phase);
-                current_phase = Some(step.phase);
+                info!("stage {}: {count} packages", step.stage);
+                current_stage = Some(step.stage);
             }
 
             let pkg_name = &step.package;
@@ -828,7 +828,7 @@ impl Pipeline {
 
             on_event(&PipelineEvent::PackageBuilding {
                 name: pkg_name.clone(),
-                stage: step.phase.to_string(),
+                stage: step.stage.to_string(),
             });
 
             let dep_ids = collect_dep_ids(recipe, &completed);
@@ -903,7 +903,7 @@ impl Pipeline {
         }
 
         // Close the last phase.
-        if let Some(last_phase) = current_phase {
+        if let Some(last_phase) = current_stage {
             on_event(&PipelineEvent::StageCompleted {
                 name: last_phase.to_string(),
             });
