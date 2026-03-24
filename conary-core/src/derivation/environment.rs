@@ -90,34 +90,11 @@ impl BuildEnvironment {
             workdir: None,
         };
 
-        let args = opts.to_mount_args();
-        let status = Command::new("mount")
-            .args(&args)
-            .status()
-            .map_err(|e| EnvironmentError::Mount(format!("failed to execute mount: {e}")))?;
-
-        if !status.success() {
-            // Composefs not available -- fall back to direct EROFS loopback mount.
-            info!(
-                "composefs mount failed, falling back to EROFS loopback mount for {}",
-                self.image_path.display()
-            );
-            let erofs_status = Command::new("mount")
-                .args(["-t", "erofs", "-o", "loop,ro"])
-                .arg(&self.image_path)
-                .arg(&self.mount_point)
-                .status()
-                .map_err(|e| {
-                    EnvironmentError::Mount(format!("failed to execute EROFS mount: {e}"))
-                })?;
-
-            if !erofs_status.success() {
-                return Err(EnvironmentError::Mount(format!(
-                    "mount exited with status {status} for image {}",
-                    self.image_path.display()
-                )));
-            }
-        }
+        // mount_generation tries overlayfs composefs first, falls back to
+        // plain EROFS loopback automatically.
+        crate::generation::mount::mount_generation(&opts).map_err(|e| {
+            EnvironmentError::Mount(format!("mount failed: {e}"))
+        })?;
 
         info!(
             "Mounted build environment at {} (hash: {})",
