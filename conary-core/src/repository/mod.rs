@@ -37,7 +37,7 @@ pub mod versioning;
 pub mod chunk_fetcher;
 
 // Re-export main types and functions
-pub use client::{RepositoryClient, RetryPolicy};
+pub use client::RepositoryClient;
 pub use dependencies::{
     download_dependencies, resolve_dependencies, resolve_dependencies_transitive,
     resolve_dependencies_transitive_requests, resolve_dependency_requests,
