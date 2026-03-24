@@ -155,8 +155,10 @@ impl TempToolsBuilder {
             CH6_PACKAGES.len()
         );
 
-        // Build a hermetic environment map instead of mutating the process-wide
-        // environment (which is UB if any other thread exists).
+        // Build the hermetic environment map that every child process needs.
+        // Passed explicitly to each Command via KitchenConfig::extra_env so we
+        // never touch the process-wide environment (which would be UB in a
+        // multi-threaded context per Rust 1.83+).
         let tools_bin = self.lfs_root.join("tools/bin");
         let host_path = std::env::var("PATH").unwrap_or_default();
         let bootstrap_env: Vec<(String, String)> = vec![
@@ -170,16 +172,6 @@ impl TempToolsBuilder {
                 format!("{}:{host_path}", tools_bin.display()),
             ),
         ];
-
-        // Propagate to child processes.  The Kitchen/Cook pipeline inherits
-        // the process environment, so we set the vars once here.
-        // SAFETY: bootstrap is single-threaded -- no other threads exist.
-        #[allow(unsafe_code)]
-        for (k, v) in &bootstrap_env {
-            unsafe {
-                std::env::set_var(k, v);
-            }
-        }
 
         for (i, pkg) in CH6_PACKAGES.iter().enumerate() {
             if completed.contains(&(*pkg).to_string()) {
@@ -213,6 +205,7 @@ impl TempToolsBuilder {
                 source_cache: self.work_dir.join("sources"),
                 jobs: self.config.jobs as u32,
                 use_isolation: false,
+                extra_env: bootstrap_env.clone(),
                 ..Default::default()
             };
             let kitchen = Kitchen::new(config);

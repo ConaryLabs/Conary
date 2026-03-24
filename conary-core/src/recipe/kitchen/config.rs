@@ -206,6 +206,14 @@ pub struct KitchenConfig {
     ///
     /// Only meaningful if auto_makedepends is true.
     pub cleanup_makedepends: bool,
+    /// Extra environment variables to inject into every build step.
+    ///
+    /// These are merged into the environment passed to each `Command` spawn
+    /// (after `DESTDIR`/`MAKEFLAGS` but before recipe-level `environment`
+    /// entries, which take precedence).  Use this instead of
+    /// `std::env::set_var` to avoid the UB associated with mutating the
+    /// process-wide environment from a multi-threaded context.
+    pub extra_env: Vec<(String, String)>,
 }
 
 impl Default for KitchenConfig {
@@ -227,6 +235,7 @@ impl Default for KitchenConfig {
             sysroot: None,
             auto_makedepends: false,   // Off by default, requires resolver
             cleanup_makedepends: true, // Clean up by default when auto is enabled
+            extra_env: Vec::new(),
         }
     }
 }

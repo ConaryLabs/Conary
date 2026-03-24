@@ -13,7 +13,6 @@
 
 use anyhow::{Context, Result};
 use fastcdc::v2020::FastCDC;
-use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -130,10 +129,10 @@ impl Chunker {
 
         for entry in chunker {
             let chunk_data = &data[entry.offset..entry.offset + entry.length];
-            let hash = Sha256::digest(chunk_data);
+            let hash = crate::hash::sha256_bytes(chunk_data);
 
             chunks.push(Chunk {
-                hash: hash.into(),
+                hash,
                 offset: entry.offset as u64,
                 length: entry.length as u32,
                 data: chunk_data.to_vec(),
@@ -157,7 +156,7 @@ impl Chunker {
         file.read_to_end(&mut data)?;
 
         // Calculate file hash
-        let file_hash: [u8; 32] = Sha256::digest(&data).into();
+        let file_hash: [u8; 32] = crate::hash::sha256_bytes(&data);
 
         // Chunk the data
         let chunks = self.chunk_bytes(&data);
@@ -540,7 +539,7 @@ mod tests {
         assert!(!chunked.chunks.is_empty());
 
         // Verify file hash
-        let expected_hash: [u8; 32] = sha2::Sha256::digest(&data).into();
+        let expected_hash: [u8; 32] = crate::hash::sha256_bytes(&data);
         assert_eq!(chunked.file_hash, expected_hash);
     }
 
