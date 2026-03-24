@@ -248,9 +248,25 @@ impl ProvideEntry {
         }
 
         // Versioned soname requirements like "libm.so.6(GLIBC_2.0)" should
-        // still match a tracked base soname provider such as "libm.so.6".
+        // still match a tracked base soname provider such as "libm.so.6" or
+        // "libm.so.6()(64bit)".  We strip to the base soname once and do a
+        // single non-recursive query (exact + paren-prefix) so there is no
+        // risk of unbounded recursion if soname_base ever returns a value
+        // that itself contains a soname suffix.
         if let Some(base) = Self::soname_base(capability) {
-            let result = Self::find_satisfying_provider(conn, base)?;
+            let paren_base_pattern = format!("{}(%", base);
+            let result = conn
+                .query_row(
+                    "SELECT t.name, t.version
+                     FROM provides p
+                     JOIN troves t ON p.trove_id = t.id
+                     WHERE p.capability = ?1
+                        OR p.capability LIKE ?2
+                     LIMIT 1",
+                    rusqlite::params![base, &paren_base_pattern],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .optional()?;
             if result.is_some() {
                 return Ok(result);
             }
