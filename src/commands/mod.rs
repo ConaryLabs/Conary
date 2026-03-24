@@ -131,6 +131,8 @@ pub use state::{
     cmd_state_show,
 };
 pub use system::{cmd_gc, cmd_init, cmd_rollback, cmd_verify};
+#[cfg(feature = "server")]
+pub use system::{cmd_index_gen, cmd_prewarm};
 pub use triggers::{
     cmd_trigger_add, cmd_trigger_disable, cmd_trigger_enable, cmd_trigger_list, cmd_trigger_remove,
     cmd_trigger_run, cmd_trigger_show,
@@ -292,21 +294,11 @@ pub async fn cmd_scripts(package_path: &str) -> Result<()> {
     Ok(())
 }
 
-/// Format a byte count as a human-readable string (e.g. "1.23 MB")
+/// Format a byte count as a human-readable string (e.g. "1.23 MB").
+///
+/// Delegates to [`conary_core::util::format_bytes`].
 pub(crate) fn format_bytes(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
-
-    if bytes >= GB {
-        format!("{:.2} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.2} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.2} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{} bytes", bytes)
-    }
+    conary_core::util::format_bytes(bytes)
 }
 
 /// Emit a one-time hint when source policy is not explicitly configured.
@@ -363,8 +355,8 @@ mod tests {
 
     #[test]
     fn test_format_bytes() {
-        assert_eq!(format_bytes(0), "0 bytes");
-        assert_eq!(format_bytes(512), "512 bytes");
+        assert_eq!(format_bytes(0), "0 B");
+        assert_eq!(format_bytes(512), "512 B");
         assert_eq!(format_bytes(1024), "1.00 KB");
         assert_eq!(format_bytes(1_048_576), "1.00 MB");
         assert_eq!(format_bytes(1_073_741_824), "1.00 GB");

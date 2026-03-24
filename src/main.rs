@@ -352,34 +352,7 @@ async fn run() -> Result<()> {
                 output_dir,
                 distro,
                 sign_key,
-            } => {
-                use conary_server::server::{IndexGenConfig, generate_indices};
-
-                let config = IndexGenConfig {
-                    db_path: db.db_path,
-                    chunk_dir,
-                    output_dir,
-                    distro,
-                    sign_key,
-                };
-
-                let results = generate_indices(&config)?;
-                if results.is_empty() {
-                    println!("No indices generated.");
-                } else {
-                    for result in results {
-                        println!(
-                            "{}: {} packages ({} versions) -> {}{}",
-                            result.distro,
-                            result.package_count,
-                            result.version_count,
-                            result.index_path,
-                            if result.signed { " [signed]" } else { "" }
-                        );
-                    }
-                }
-                Ok(())
-            }
+            } => commands::cmd_index_gen(db.db_path, chunk_dir, output_dir, distro, sign_key),
 
             #[cfg(feature = "server")]
             cli::SystemCommands::Prewarm {
@@ -391,44 +364,16 @@ async fn run() -> Result<()> {
                 popularity_file,
                 pattern,
                 dry_run,
-            } => {
-                use conary_server::server::{PrewarmConfig, run_prewarm};
-
-                let config = PrewarmConfig {
-                    db_path: db.db_path,
-                    chunk_dir,
-                    cache_dir,
-                    distro,
-                    max_packages,
-                    popularity_file,
-                    pattern,
-                    dry_run,
-                };
-
-                let result = run_prewarm(&config)?;
-                println!("Pre-warm complete:");
-                println!("  Processed:  {}", result.packages_processed);
-                println!("  Converted:  {}", result.packages_converted);
-                println!("  Skipped:    {}", result.packages_skipped);
-                println!("  Failed:     {}", result.packages_failed);
-                println!("  Total size: {} bytes", result.total_bytes);
-
-                if !result.converted.is_empty() {
-                    println!("\nConverted packages:");
-                    for pkg in &result.converted {
-                        println!("  {}", pkg);
-                    }
-                }
-
-                if !result.failed.is_empty() {
-                    println!("\nFailed packages:");
-                    for (pkg, err) in &result.failed {
-                        println!("  {}: {}", pkg, err);
-                    }
-                }
-
-                Ok(())
-            }
+            } => commands::cmd_prewarm(
+                db.db_path,
+                chunk_dir,
+                cache_dir,
+                distro,
+                max_packages,
+                popularity_file,
+                pattern,
+                dry_run,
+            ),
 
             #[cfg(feature = "server")]
             cli::SystemCommands::Server {
@@ -506,58 +451,13 @@ async fn run() -> Result<()> {
                     commands::generation::commands::cmd_generation_list().await
                 }
                 cli::GenerationCommands::Build { summary, db } => {
-                    let conn = conary_core::db::open(&db.db_path)?;
-                    let gen_number = commands::generation::builder::build_generation(
-                        &conn,
-                        &db.db_path,
-                        &summary,
-                    )?;
-                    println!("Generation {} built.", gen_number);
-                    Ok(())
+                    commands::generation::commands::cmd_generation_build(&db.db_path, &summary)
                 }
                 cli::GenerationCommands::Switch { number, reboot } => {
-                    commands::generation::switch::switch_live(number)?;
-                    if let Err(e) = commands::generation::boot::write_boot_entry(number) {
-                        eprintln!("Boot entry skipped: {}", e);
-                    }
-                    if reboot {
-                        println!("Rebooting...");
-                        std::process::Command::new("systemctl")
-                            .arg("reboot")
-                            .spawn()?;
-                    }
-                    Ok(())
+                    commands::generation::commands::cmd_generation_switch(number, reboot)
                 }
                 cli::GenerationCommands::Rollback => {
-                    let current = conary_core::generation::mount::current_generation(
-                        std::path::Path::new("/conary"),
-                    )?
-                    .ok_or_else(|| anyhow::anyhow!("No active generation"))?;
-
-                    // Find the highest generation below current that actually exists
-                    let gen_dir = commands::generation::metadata::generations_dir();
-                    let mut candidates: Vec<i64> = Vec::new();
-                    if gen_dir.exists() {
-                        for entry in std::fs::read_dir(&gen_dir)? {
-                            let entry = entry?;
-                            if let Ok(n) = entry.file_name().to_string_lossy().parse::<i64>()
-                                && n < current
-                            {
-                                candidates.push(n);
-                            }
-                        }
-                    }
-                    candidates.sort();
-                    let previous = candidates
-                        .last()
-                        .ok_or_else(|| anyhow::anyhow!("No previous generation to roll back to"))?;
-
-                    commands::generation::switch::switch_live(*previous)?;
-                    if let Err(e) = commands::generation::boot::write_boot_entry(*previous) {
-                        eprintln!("Boot entry skipped: {}", e);
-                    }
-                    println!("Rolled back to generation {previous}");
-                    Ok(())
+                    commands::generation::commands::cmd_generation_rollback()
                 }
                 cli::GenerationCommands::Gc { keep, db } => {
                     commands::generation::commands::cmd_generation_gc(keep, &db.db_path).await
@@ -566,15 +466,7 @@ async fn run() -> Result<()> {
                     commands::generation::commands::cmd_generation_info(number).await
                 }
                 cli::GenerationCommands::Recover { db } => {
-                    let conn = conary_core::db::open(&db.db_path)?;
-                    let config = conary_core::transaction::TransactionConfig::from_paths(
-                        std::path::PathBuf::from("/"),
-                        std::path::PathBuf::from(&db.db_path),
-                    );
-                    let engine = conary_core::transaction::TransactionEngine::new(config)?;
-                    engine.recover(&conn)?;
-                    println!("Recovery complete.");
-                    Ok(())
+                    commands::generation::commands::cmd_generation_recover(&db.db_path)
                 }
             },
 
