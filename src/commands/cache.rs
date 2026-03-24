@@ -30,8 +30,7 @@ pub async fn cmd_cache_populate(profile_path: &str, sources_only: bool, full: bo
     );
 
     if sources_only {
-        println!("--sources-only: source tarball download requires local recipe files.");
-        println!("Source download not yet implemented.");
+        println!("[NOT YET IMPLEMENTED] cache populate --sources-only: source tarball download is not yet available.");
         return Ok(());
     }
 
@@ -114,7 +113,7 @@ pub async fn cmd_cache_populate(profile_path: &str, sources_only: bool, full: bo
     }
 
     if full {
-        println!("\n--full: source tarball download not yet implemented.");
+        println!("\n[NOT YET IMPLEMENTED] cache populate --full: source tarball download is not yet available.");
     }
 
     Ok(())
