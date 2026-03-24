@@ -373,7 +373,10 @@ pub fn handler_exists_in_root(cmd: &str, root: &Path) -> bool {
 
     // If it's an absolute path, check under target root
     if cmd.starts_with('/') {
-        let target_path = root.join(cmd.trim_start_matches('/'));
+        let target_path = match crate::filesystem::path::safe_join(root, cmd) {
+            Ok(p) => p,
+            Err(_) => return false, // Path traversal attempt -- handler doesn't exist
+        };
         return target_path.exists();
     }
 
