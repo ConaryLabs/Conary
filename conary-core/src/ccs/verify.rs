@@ -20,6 +20,12 @@ use std::path::Path;
 use tar::Archive;
 use thiserror::Error;
 
+/// Maximum size for a single archive entry (512 MB)
+const MAX_ENTRY_SIZE: u64 = 512 * 1024 * 1024;
+
+/// Maximum cumulative extraction size (4 GB)
+const MAX_TOTAL_EXTRACTION_SIZE: u64 = 4 * 1024 * 1024 * 1024;
+
 /// Verification errors
 #[derive(Error, Debug)]
 pub enum VerifyError {
@@ -192,8 +198,23 @@ pub fn verify_package(path: &Path, policy: &TrustPolicy) -> Result<VerificationR
     let mut components: HashMap<String, ComponentData> = HashMap::new();
 
     // First pass: extract metadata and signature
+    let mut total_bytes: u64 = 0;
     for entry in archive.entries()? {
         let mut entry = entry?;
+        let entry_size = entry.header().size()?;
+        if entry_size > MAX_ENTRY_SIZE {
+            return Err(VerifyError::PackageError(format!(
+                "CCS archive entry exceeds maximum size limit: {entry_size} bytes"
+            ))
+            .into());
+        }
+        total_bytes += entry_size;
+        if total_bytes > MAX_TOTAL_EXTRACTION_SIZE {
+            return Err(VerifyError::PackageError(
+                "CCS archive total extraction size exceeds limit".to_string(),
+            )
+            .into());
+        }
         let entry_path = entry.path()?;
         let entry_path_str = entry_path.to_string_lossy().to_string();
 
