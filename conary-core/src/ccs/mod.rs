@@ -9,6 +9,7 @@
 //! - Package installation (via PackageFormat trait)
 //! - Declarative hook execution
 
+pub mod archive_reader;
 pub mod binary_manifest;
 pub mod builder;
 pub mod chunking;

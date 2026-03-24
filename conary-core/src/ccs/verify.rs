@@ -4,27 +4,18 @@
 //! Provides signature verification and content integrity checking for CCS packages.
 //! Uses Ed25519 signatures for manifest authentication.
 
-use crate::ccs::binary_manifest::{BinaryManifest, MerkleTree};
-use crate::ccs::builder::{ComponentData, FileEntry};
-use crate::ccs::manifest::CcsManifest;
+use crate::ccs::archive_reader::read_ccs_archive;
+use crate::ccs::binary_manifest::MerkleTree;
+use crate::ccs::builder::FileEntry;
 use crate::hash;
 use anyhow::{Context, Result};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
-use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::Read;
 use std::path::Path;
-use tar::Archive;
 use thiserror::Error;
-
-/// Maximum size for a single archive entry (512 MB)
-const MAX_ENTRY_SIZE: u64 = 512 * 1024 * 1024;
-
-/// Maximum cumulative extraction size (4 GB)
-const MAX_TOTAL_EXTRACTION_SIZE: u64 = 4 * 1024 * 1024 * 1024;
 
 /// Verification errors
 #[derive(Error, Debug)]
@@ -187,101 +178,36 @@ pub fn verify_package(path: &Path, policy: &TrustPolicy) -> Result<VerificationR
     let file =
         File::open(path).with_context(|| format!("Failed to open package: {}", path.display()))?;
 
-    let decoder = GzDecoder::new(file);
-    let mut archive = Archive::new(decoder);
+    let contents = read_ccs_archive(file)?;
 
-    let mut manifest: Option<CcsManifest> = None;
-    let mut manifest_raw: Option<Vec<u8>> = None;
-    let mut binary_manifest: Option<BinaryManifest> = None;
-    let mut signature: Option<PackageSignature> = None;
-    let mut blobs: HashMap<String, Vec<u8>> = HashMap::new();
-    let mut components: HashMap<String, ComponentData> = HashMap::new();
-
-    // First pass: extract metadata and signature
-    let mut total_bytes: u64 = 0;
-    for entry in archive.entries()? {
-        let mut entry = entry?;
-        let entry_size = entry.header().size()?;
-        if entry_size > MAX_ENTRY_SIZE {
-            return Err(VerifyError::PackageError(format!(
-                "CCS archive entry exceeds maximum size limit: {entry_size} bytes"
-            ))
-            .into());
-        }
-        total_bytes += entry_size;
-        if total_bytes > MAX_TOTAL_EXTRACTION_SIZE {
-            return Err(VerifyError::PackageError(
-                "CCS archive total extraction size exceeds limit".to_string(),
-            )
-            .into());
-        }
-        let entry_path = entry.path()?;
-        let entry_path_str = entry_path.to_string_lossy().to_string();
-
-        // Prefer CBOR MANIFEST over TOML
-        if entry_path_str == "MANIFEST" || entry_path_str == "./MANIFEST" {
-            let mut content = Vec::new();
-            entry.read_to_end(&mut content)?;
-            manifest_raw = Some(content.clone());
-            // Convert CBOR to CcsManifest for compatibility
-            if let Ok(bin_manifest) = BinaryManifest::from_cbor(&content) {
-                manifest = Some(crate::ccs::package::convert_binary_to_ccs_manifest(
-                    &bin_manifest,
-                ));
-                binary_manifest = Some(bin_manifest);
-            }
-        } else if manifest.is_none()
-            && (entry_path_str == "MANIFEST.toml" || entry_path_str == "./MANIFEST.toml")
-        {
-            let mut content = String::new();
-            entry.read_to_string(&mut content)?;
-            manifest_raw = Some(content.as_bytes().to_vec());
-            manifest = Some(CcsManifest::parse(&content)?);
-        } else if entry_path_str == "MANIFEST.sig" || entry_path_str == "./MANIFEST.sig" {
-            let mut content = String::new();
-            entry.read_to_string(&mut content)?;
-            signature = Some(serde_json::from_str(&content)?);
-        } else if (entry_path_str.starts_with("components/")
-            || entry_path_str.starts_with("./components/"))
-            && entry_path_str.ends_with(".json")
-        {
-            let mut content = String::new();
-            entry.read_to_string(&mut content)?;
-            if let Ok(comp) = serde_json::from_str::<ComponentData>(&content) {
-                components.insert(comp.name.clone(), comp);
-            }
-        } else if entry_path_str.starts_with("objects/") || entry_path_str.starts_with("./objects/")
-        {
-            // Extract blob hash from path: objects/{prefix}/{suffix} -> {prefix}{suffix}
-            let mut segments = entry_path_str.rsplit('/');
-            if let (Some(suffix), Some(prefix)) = (segments.next(), segments.next()) {
-                let hash_str = format!("{}{}", prefix, suffix);
-                let mut content = Vec::new();
-                entry.read_to_end(&mut content)?;
-                blobs.insert(hash_str, content);
-            }
-        }
-    }
-
-    let manifest = manifest.ok_or_else(|| VerifyError::PackageError("Missing MANIFEST".into()))?;
-    let manifest_raw =
-        manifest_raw.ok_or_else(|| VerifyError::PackageError("Missing MANIFEST".into()))?;
+    let manifest = &contents.manifest;
 
     // Collect files from components
-    let files: Vec<FileEntry> = components.values().flat_map(|c| c.files.clone()).collect();
+    let files: Vec<FileEntry> = contents
+        .components
+        .values()
+        .flat_map(|c| c.files.clone())
+        .collect();
+
+    // Parse signature JSON if present
+    let signature: Option<PackageSignature> = contents
+        .signature_raw
+        .as_deref()
+        .map(serde_json::from_str)
+        .transpose()?;
 
     let mut warnings = Vec::new();
 
     // Verify signature (over raw manifest bytes - CBOR or TOML)
     let signature_status =
-        verify_signature(&manifest_raw, signature.as_ref(), policy, &mut warnings)?;
+        verify_signature(&contents.manifest_raw, signature.as_ref(), policy, &mut warnings)?;
 
     // Verify content hashes
-    let content_status = verify_content_hashes(&files, &blobs)?;
+    let content_status = verify_content_hashes(&files, &contents.blobs)?;
 
     // Verify Merkle root against binary manifest's content_root
     let mut merkle_valid = true;
-    if let Some(ref bin_manifest) = binary_manifest
+    if let Some(ref bin_manifest) = contents.binary_manifest
         && !MerkleTree::verify_root(&bin_manifest.components, &bin_manifest.content_root)
     {
         let calculated = MerkleTree::calculate_root(&bin_manifest.components);
