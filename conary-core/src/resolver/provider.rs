@@ -6,7 +6,7 @@
 //! `ConaryProvider`, which maps Conary packages (troves + repo packages)
 //! to resolvo's abstract solvable/name/version-set model.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use resolvo::{
@@ -116,6 +116,18 @@ pub struct ConaryProvider<'db> {
     /// Each version set union is a list of `VersionSetId`s (OR alternatives).
     version_set_unions: Vec<Vec<VersionSetId>>,
 
+    /// Reverse index: package name -> indices into `solvables` vec.
+    /// Enables O(1) lookup instead of linear scan when finding solvables by name.
+    name_to_solvable_indices: HashMap<String, Vec<usize>>,
+
+    /// Set of repo_package_ids already loaded as solvables.
+    /// Enables O(1) duplicate check instead of linear scan.
+    loaded_repo_package_ids: HashSet<i64>,
+
+    /// Reverse index: version set ID list -> union ID.
+    /// Enables O(1) lookup instead of linear scan in `find_union_id`.
+    union_id_index: HashMap<Vec<VersionSetId>, VersionSetUnionId>,
+
     strings: Vec<String>,
 
     /// Pre-loaded dependencies for each solvable, keyed by `SolvableId` index.
@@ -151,6 +163,9 @@ impl<'db> ConaryProvider<'db> {
             version_sets: Vec::new(),
             version_set_cache: HashMap::new(),
             version_set_unions: Vec::new(),
+            name_to_solvable_indices: HashMap::new(),
+            loaded_repo_package_ids: HashSet::new(),
+            union_id_index: HashMap::new(),
             strings: Vec::new(),
             dependencies: HashMap::new(),
             provides_index: HashMap::new(),
@@ -222,6 +237,7 @@ impl<'db> ConaryProvider<'db> {
             u32::try_from(self.version_set_unions.len())
                 .expect("resolver version set union pool overflow"),
         );
+        self.union_id_index.insert(sets.clone(), id);
         self.version_set_unions.push(sets);
         id
     }
@@ -236,9 +252,17 @@ impl<'db> ConaryProvider<'db> {
 
     /// Register a solvable (package candidate) and return its `SolvableId`.
     pub fn add_solvable(&mut self, pkg: ConaryPackage) -> SolvableId {
-        let id = SolvableId(
-            u32::try_from(self.solvables.len()).expect("resolver solvable pool overflow"),
-        );
+        let idx = self.solvables.len();
+        let id = SolvableId(u32::try_from(idx).expect("resolver solvable pool overflow"));
+        // Update name-to-solvable index for O(1) lookup by name.
+        self.name_to_solvable_indices
+            .entry(pkg.name.clone())
+            .or_default()
+            .push(idx);
+        // Track repo_package_id for O(1) duplicate detection.
+        if let Some(repo_id) = pkg.repo_package_id {
+            self.loaded_repo_package_ids.insert(repo_id);
+        }
         self.solvables.push(pkg);
         id
     }
@@ -329,11 +353,15 @@ impl<'db> ConaryProvider<'db> {
 
         let options = SelectionOptions::default();
         for name in names {
-            // Skip if we already have a repo package for this name
+            // Skip if we already have a repo package for this name (O(1) index lookup).
             let already_has_repo = self
-                .solvables
-                .iter()
-                .any(|s| s.name == *name && s.repo_package_id.is_some());
+                .name_to_solvable_indices
+                .get(name.as_str())
+                .is_some_and(|indices| {
+                    indices
+                        .iter()
+                        .any(|&i| self.solvables[i].repo_package_id.is_some())
+                });
             if already_has_repo {
                 continue;
             }
@@ -349,10 +377,11 @@ impl<'db> ConaryProvider<'db> {
             }
 
             for pkg_with_repo in candidates {
-                if self
-                    .solvables
-                    .iter()
-                    .any(|s| s.repo_package_id == pkg_with_repo.package.id)
+                // O(1) duplicate check via loaded_repo_package_ids set.
+                if pkg_with_repo
+                    .package
+                    .id
+                    .is_some_and(|id| self.loaded_repo_package_ids.contains(&id))
                 {
                     continue;
                 }
@@ -568,21 +597,23 @@ impl<'db> ConaryProvider<'db> {
 
     /// Find a previously-interned union ID matching the given version set IDs.
     fn find_union_id(&self, vs_ids: &[VersionSetId]) -> Option<VersionSetUnionId> {
-        self.version_set_unions
-            .iter()
-            .position(|sets| sets == vs_ids)
-            .map(|i| VersionSetUnionId(u32::try_from(i).expect("union pool overflow")))
+        self.union_id_index.get(vs_ids).copied()
     }
 
     /// Find all solvables that match a given package name.
     fn solvables_for_name(&self, name_id: NameId) -> Vec<SolvableId> {
         let name = &self.names[name_id.0 as usize];
-        self.solvables
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| s.name == *name)
-            .map(|(i, _)| SolvableId(u32::try_from(i).expect("resolver solvable pool overflow")))
-            .collect()
+        self.name_to_solvable_indices
+            .get(name)
+            .map(|indices| {
+                indices
+                    .iter()
+                    .map(|&i| {
+                        SolvableId(u32::try_from(i).expect("resolver solvable pool overflow"))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     fn solvables_for_provide(&self, capability: &str) -> Vec<SolvableId> {
@@ -602,11 +633,16 @@ impl<'db> ConaryProvider<'db> {
     /// Find the installed solvable for a name, if any.
     fn installed_solvable_for_name(&self, name_id: NameId) -> Option<SolvableId> {
         let name = &self.names[name_id.0 as usize];
-        self.solvables
-            .iter()
-            .enumerate()
-            .find(|(_, s)| s.name == *name && s.trove_id.is_some())
-            .map(|(i, _)| SolvableId(u32::try_from(i).expect("resolver solvable pool overflow")))
+        self.name_to_solvable_indices
+            .get(name)
+            .and_then(|indices| {
+                indices
+                    .iter()
+                    .find(|&&i| self.solvables[i].trove_id.is_some())
+                    .map(|&i| {
+                        SolvableId(u32::try_from(i).expect("resolver solvable pool overflow"))
+                    })
+            })
     }
 
     /// Build the provides index, trove-id-to-name map, and unfiltered dependency
