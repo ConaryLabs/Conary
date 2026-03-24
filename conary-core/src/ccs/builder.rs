@@ -443,16 +443,9 @@ impl CcsBuilder {
 
         match Pattern::new(pattern) {
             Ok(compiled) => compiled.matches(path),
-            Err(_) => {
-                // Fallback to simple matching if pattern is invalid
-                // or just log warning (but we don't have logger here easily accessible without importing)
-                // For now, simple fallback for basic cases
-                if pattern.contains('*') {
-                    // Very basic fallback
-                    path.starts_with(pattern.split('*').next().unwrap_or(""))
-                } else {
-                    path == pattern
-                }
+            Err(e) => {
+                tracing::warn!("Invalid glob pattern '{}': {}", pattern, e);
+                false
             }
         }
     }
