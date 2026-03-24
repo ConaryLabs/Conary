@@ -312,8 +312,8 @@ impl RepositoryPackage {
         conn.execute(
             "INSERT INTO repository_packages
              (repository_id, name, version, architecture, description, checksum, size, download_url, dependencies, metadata,
-              is_security_update, severity, cve_ids, advisory_id, advisory_url)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+              is_security_update, severity, cve_ids, advisory_id, advisory_url, distro, version_scheme)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             params![
                 &self.repository_id,
                 &self.name,
@@ -330,6 +330,8 @@ impl RepositoryPackage {
                 &self.cve_ids,
                 &self.advisory_id,
                 &self.advisory_url,
+                &self.distro,
+                &self.version_scheme,
             ],
         )?;
 
