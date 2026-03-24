@@ -144,8 +144,10 @@ impl CrossToolsBuilder {
         info!("  LFS root: {}", self.lfs_root.display());
         info!("  Host compiler: {}", self.host_toolchain.gcc().display());
 
-        // Build a hermetic environment map instead of mutating the process-wide
-        // environment (which is UB if any other thread exists).
+        // Build the hermetic environment map that every child process needs.
+        // Passed explicitly to each Command via KitchenConfig::extra_env so we
+        // never touch the process-wide environment (which would be UB in a
+        // multi-threaded context per Rust 1.83+).
         let tools_bin = self.lfs_root.join("tools/bin");
         let host_path = std::env::var("PATH").unwrap_or_default();
         let bootstrap_env: Vec<(String, String)> = vec![
@@ -160,16 +162,6 @@ impl CrossToolsBuilder {
             ),
         ];
 
-        // Propagate to child processes.  The Kitchen/Cook pipeline inherits
-        // the process environment, so we set the vars once here.
-        // SAFETY: bootstrap is single-threaded -- no other threads exist.
-        #[allow(unsafe_code)]
-        for (k, v) in &bootstrap_env {
-            unsafe {
-                std::env::set_var(k, v);
-            }
-        }
-
         for (i, pkg) in CROSS_TOOLS_ORDER.iter().enumerate() {
             if completed.contains(&pkg.to_string()) {
                 info!("Skipping already-completed: {}", pkg);
@@ -181,7 +173,7 @@ impl CrossToolsBuilder {
                 CROSS_TOOLS_ORDER.len(),
                 pkg
             );
-            self.build_package(pkg)?;
+            self.build_package(pkg, &bootstrap_env)?;
         }
 
         let tools_path = self.lfs_root.join("tools");
@@ -206,7 +198,7 @@ impl CrossToolsBuilder {
     /// Locates the TOML recipe under `recipes/cross-tools/`, fetches the source
     /// archive, then runs the Kitchen/Cook pipeline (prep, unpack, patch, simmer)
     /// with `$LFS` as the destination directory.
-    fn build_package(&self, name: &str) -> Result<(), CrossToolsError> {
+    fn build_package(&self, name: &str, extra_env: &[(String, String)]) -> Result<(), CrossToolsError> {
         // Map package name to recipe filename (e.g. "libstdc++" -> "libstdcxx.toml")
         let recipe_filename = name.replace("++", "xx");
         let recipe_path =
@@ -237,6 +229,7 @@ impl CrossToolsBuilder {
             source_cache: self.work_dir.join("sources"),
             jobs: self.config.jobs as u32,
             use_isolation: false,
+            extra_env: extra_env.to_vec(),
             ..Default::default()
         };
         let kitchen = Kitchen::new(config);
