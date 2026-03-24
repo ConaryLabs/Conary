@@ -18,6 +18,7 @@ use std::time::Duration;
 use tracing::{debug, info, warn};
 
 use super::metadata::RepositoryMetadata;
+use super::retry::RetryConfig;
 
 /// Timeout configuration for different operation types.
 ///
@@ -61,48 +62,6 @@ pub fn validate_url_scheme(url: &str) -> Result<()> {
             "URL must use http:// or https:// scheme: {}",
             url
         )))
-    }
-}
-
-/// Retry policy with exponential backoff and jitter
-#[derive(Debug, Clone)]
-pub struct RetryPolicy {
-    /// Maximum number of retry attempts
-    pub max_retries: u32,
-    /// Base delay between retries
-    pub base_delay: Duration,
-    /// Maximum delay cap
-    pub max_delay: Duration,
-    /// Jitter factor (0.0 to 1.0) - adds random delay up to this fraction of computed delay
-    pub jitter_factor: f64,
-}
-
-impl Default for RetryPolicy {
-    fn default() -> Self {
-        Self {
-            max_retries: 3,
-            base_delay: Duration::from_secs(1),
-            max_delay: Duration::from_secs(30),
-            jitter_factor: 0.25,
-        }
-    }
-}
-
-impl RetryPolicy {
-    /// Calculate the delay for a given attempt number (1-based).
-    ///
-    /// Uses exponential backoff: `min(base * 2^(n-1), max_delay) + random_jitter`
-    ///
-    /// Delegates to [`super::retry::RetryConfig`] which has the canonical
-    /// implementation of this algorithm.
-    pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
-        let config = super::retry::RetryConfig {
-            max_attempts: self.max_retries,
-            base_delay: self.base_delay,
-            max_delay: self.max_delay,
-            jitter_factor: self.jitter_factor,
-        };
-        config.delay_for_attempt(attempt)
     }
 }
 
@@ -168,7 +127,7 @@ fn is_transient_error(status: reqwest::StatusCode) -> bool {
 /// HTTP client wrapper with retry support
 pub struct RepositoryClient {
     client: Client,
-    retry_policy: RetryPolicy,
+    retry_policy: RetryConfig,
     timeouts: TimeoutConfig,
 }
 
@@ -187,14 +146,14 @@ impl RepositoryClient {
 
         Ok(Self {
             client,
-            retry_policy: RetryPolicy::default(),
+            retry_policy: RetryConfig::default(),
             timeouts,
         })
     }
 
-    /// Set a custom retry policy (builder pattern)
+    /// Set a custom retry config (builder pattern)
     #[must_use]
-    pub fn with_retry_policy(mut self, policy: RetryPolicy) -> Self {
+    pub fn with_retry_policy(mut self, policy: RetryConfig) -> Self {
         self.retry_policy = policy;
         self
     }
@@ -229,7 +188,7 @@ impl RepositoryClient {
                     let status = response.status();
 
                     if is_transient_error(status) {
-                        if attempt >= self.retry_policy.max_retries {
+                        if attempt >= self.retry_policy.max_attempts {
                             return Err(Error::DownloadError(format!(
                                 "HTTP {} from {} after {attempt} attempts",
                                 status, metadata_url
@@ -261,7 +220,7 @@ impl RepositoryClient {
                     return Ok(metadata);
                 }
                 Err(e) => {
-                    if attempt >= self.retry_policy.max_retries {
+                    if attempt >= self.retry_policy.max_attempts {
                         return Err(Error::DownloadError(format!(
                             "Failed to fetch metadata after {attempt} attempts: {e}"
                         )));
@@ -440,7 +399,7 @@ impl RepositoryClient {
                     let status = response.status();
 
                     if is_transient_error(status) {
-                        if attempt >= self.retry_policy.max_retries {
+                        if attempt >= self.retry_policy.max_attempts {
                             return Err(Error::DownloadError(format!(
                                 "HTTP {} from {} after {attempt} attempts",
                                 status, url
@@ -557,7 +516,7 @@ impl RepositoryClient {
                     return Ok(());
                 }
                 Err(e) => {
-                    if attempt >= self.retry_policy.max_retries {
+                    if attempt >= self.retry_policy.max_attempts {
                         return Err(Error::DownloadError(format!(
                             "Failed to download after {attempt} attempts: {e}"
                         )));
@@ -576,8 +535,8 @@ mod tests {
 
     #[test]
     fn test_retry_policy_default() {
-        let policy = RetryPolicy::default();
-        assert_eq!(policy.max_retries, 3);
+        let policy = RetryConfig::default();
+        assert_eq!(policy.max_attempts, 3);
         assert_eq!(policy.base_delay, Duration::from_secs(1));
         assert_eq!(policy.max_delay, Duration::from_secs(30));
         assert!((policy.jitter_factor - 0.25).abs() < f64::EPSILON);
@@ -585,8 +544,8 @@ mod tests {
 
     #[test]
     fn test_retry_policy_exponential_backoff_no_jitter() {
-        let policy = RetryPolicy {
-            max_retries: 5,
+        let policy = RetryConfig {
+            max_attempts: 5,
             base_delay: Duration::from_millis(100),
             max_delay: Duration::from_secs(10),
             jitter_factor: 0.0,
@@ -606,8 +565,8 @@ mod tests {
 
     #[test]
     fn test_retry_policy_max_delay_cap() {
-        let policy = RetryPolicy {
-            max_retries: 10,
+        let policy = RetryConfig {
+            max_attempts: 10,
             base_delay: Duration::from_secs(1),
             max_delay: Duration::from_secs(5),
             jitter_factor: 0.0,
@@ -627,8 +586,8 @@ mod tests {
 
     #[test]
     fn test_retry_policy_jitter_within_bounds() {
-        let policy = RetryPolicy {
-            max_retries: 5,
+        let policy = RetryConfig {
+            max_attempts: 5,
             base_delay: Duration::from_millis(1000),
             max_delay: Duration::from_secs(60),
             jitter_factor: 0.5,
@@ -652,8 +611,8 @@ mod tests {
 
     #[test]
     fn test_retry_policy_attempt_zero_saturates() {
-        let policy = RetryPolicy {
-            max_retries: 3,
+        let policy = RetryConfig {
+            max_attempts: 3,
             base_delay: Duration::from_millis(100),
             max_delay: Duration::from_secs(10),
             jitter_factor: 0.0,
@@ -666,8 +625,8 @@ mod tests {
 
     #[test]
     fn test_retry_policy_large_attempt_no_overflow() {
-        let policy = RetryPolicy {
-            max_retries: 100,
+        let policy = RetryConfig {
+            max_attempts: 100,
             base_delay: Duration::from_secs(1),
             max_delay: Duration::from_secs(60),
             jitter_factor: 0.0,
@@ -683,8 +642,8 @@ mod tests {
 
     #[test]
     fn test_repository_client_with_retry_policy() {
-        let policy = RetryPolicy {
-            max_retries: 5,
+        let policy = RetryConfig {
+            max_attempts: 5,
             base_delay: Duration::from_millis(500),
             max_delay: Duration::from_secs(15),
             jitter_factor: 0.1,
@@ -694,7 +653,7 @@ mod tests {
             .unwrap()
             .with_retry_policy(policy.clone());
 
-        assert_eq!(client.retry_policy.max_retries, 5);
+        assert_eq!(client.retry_policy.max_attempts, 5);
         assert_eq!(client.retry_policy.base_delay, Duration::from_millis(500));
     }
 }
