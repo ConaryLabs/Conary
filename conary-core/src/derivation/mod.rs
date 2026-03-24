@@ -43,6 +43,6 @@ pub use profile::{
 pub use recipe_hash::{build_script_hash, expand_variables, source_hash};
 pub use seed::{Seed, SeedError, SeedMetadata, SeedSource, SeedValidation};
 pub use build_order::{BuildOrderError, BuildStep, compute_build_order};
-pub use install::{InstallError, install_to_sysroot};
+pub use install::{InstallError, install_to_sysroot, run_ldconfig_if_needed};
 pub use stages::{Stage, StageAssignment, StageError, assign_stages};
 pub use convergence::{ConvergenceReport, PackageComparison, compare_seed_builds};
