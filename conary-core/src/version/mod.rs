@@ -292,14 +292,58 @@ impl VersionConstraint {
 
     /// Check if two constraints are compatible (can be satisfied simultaneously)
     pub fn is_compatible_with(&self, other: &VersionConstraint) -> bool {
-        // This is a simplified check - could be more sophisticated
         match (self, other) {
+            // Any is always compatible with everything
             (VersionConstraint::Any, _) | (_, VersionConstraint::Any) => true,
-            (VersionConstraint::Exact(v1), VersionConstraint::Exact(v2)) => v1 == v2,
-            _ => {
-                // For complex cases, we'd need to check if there exists any version
-                // that satisfies both constraints. For now, assume compatible.
-                true
+
+            // Two exact constraints: only compatible if they name the same version
+            (VersionConstraint::Exact(v1), VersionConstraint::Exact(v2)) => {
+                v1.compare(v2).is_eq()
+            }
+
+            // Exact vs range: compatible if the exact version satisfies the range
+            (VersionConstraint::Exact(v), range) | (range, VersionConstraint::Exact(v)) => {
+                range.satisfies(v)
+            }
+
+            // NotEqual is compatible with everything except Exact of same version
+            // (handled above); always compatible with ranges and other NotEquals.
+            (VersionConstraint::NotEqual(_), _) | (_, VersionConstraint::NotEqual(_)) => true,
+
+            // Two same-direction ranges are always compatible (their intersection is
+            // non-empty: e.g. "> 1.0" and "> 2.0" share the region (2.0, ∞)).
+            (VersionConstraint::GreaterThan(_), VersionConstraint::GreaterThan(_))
+            | (VersionConstraint::GreaterThan(_), VersionConstraint::GreaterOrEqual(_))
+            | (VersionConstraint::GreaterOrEqual(_), VersionConstraint::GreaterThan(_))
+            | (VersionConstraint::GreaterOrEqual(_), VersionConstraint::GreaterOrEqual(_))
+            | (VersionConstraint::LessThan(_), VersionConstraint::LessThan(_))
+            | (VersionConstraint::LessThan(_), VersionConstraint::LessOrEqual(_))
+            | (VersionConstraint::LessOrEqual(_), VersionConstraint::LessThan(_))
+            | (VersionConstraint::LessOrEqual(_), VersionConstraint::LessOrEqual(_)) => true,
+
+            // Opposite-direction ranges: check that the intervals overlap.
+            //
+            // (> lo) and (< hi): need hi > lo (strict gap between bounds)
+            (VersionConstraint::GreaterThan(lo), VersionConstraint::LessThan(hi))
+            | (VersionConstraint::LessThan(hi), VersionConstraint::GreaterThan(lo)) => hi > lo,
+
+            // (>= lo) and (< hi): need hi > lo
+            (VersionConstraint::GreaterOrEqual(lo), VersionConstraint::LessThan(hi))
+            | (VersionConstraint::LessThan(hi), VersionConstraint::GreaterOrEqual(lo)) => hi > lo,
+
+            // (> lo) and (<= hi): need hi > lo
+            (VersionConstraint::GreaterThan(lo), VersionConstraint::LessOrEqual(hi))
+            | (VersionConstraint::LessOrEqual(hi), VersionConstraint::GreaterThan(lo)) => hi > lo,
+
+            // (>= lo) and (<= hi): need hi >= lo (single-point overlap is OK)
+            (VersionConstraint::GreaterOrEqual(lo), VersionConstraint::LessOrEqual(hi))
+            | (VersionConstraint::LessOrEqual(hi), VersionConstraint::GreaterOrEqual(lo)) => {
+                hi >= lo
+            }
+
+            // And(l, r) + other: both sub-constraints must be compatible with other
+            (VersionConstraint::And(l, r), other) | (other, VersionConstraint::And(l, r)) => {
+                l.is_compatible_with(other) && r.is_compatible_with(other)
             }
         }
     }
@@ -490,6 +534,134 @@ mod tests {
         let v1 = RpmVersion::parse("2.0.1a").unwrap();
         let v2 = RpmVersion::parse("2.0.1b").unwrap();
         assert!(v1 < v2);
+    }
+
+    // --- is_compatible_with tests ---
+
+    #[test]
+    fn test_compatible_any_with_anything() {
+        let any = VersionConstraint::Any;
+        let exact = VersionConstraint::parse("= 1.0").unwrap();
+        let range = VersionConstraint::parse("> 1.0").unwrap();
+        assert!(any.is_compatible_with(&exact));
+        assert!(any.is_compatible_with(&range));
+        assert!(any.is_compatible_with(&VersionConstraint::Any));
+    }
+
+    #[test]
+    fn test_compatible_exact_vs_exact_same() {
+        let c1 = VersionConstraint::parse("= 1.0").unwrap();
+        let c2 = VersionConstraint::parse("= 1.0").unwrap();
+        assert!(c1.is_compatible_with(&c2));
+    }
+
+    #[test]
+    fn test_compatible_exact_vs_exact_different() {
+        let c1 = VersionConstraint::parse("= 1.0").unwrap();
+        let c2 = VersionConstraint::parse("= 2.0").unwrap();
+        assert!(!c1.is_compatible_with(&c2));
+    }
+
+    #[test]
+    fn test_compatible_exact_vs_range_satisfies() {
+        // 1.5 satisfies >= 1.0 and < 2.0
+        let exact = VersionConstraint::parse("= 1.5").unwrap();
+        let ge = VersionConstraint::parse(">= 1.0").unwrap();
+        let lt = VersionConstraint::parse("< 2.0").unwrap();
+        assert!(exact.is_compatible_with(&ge));
+        assert!(exact.is_compatible_with(&lt));
+        assert!(ge.is_compatible_with(&exact));
+    }
+
+    #[test]
+    fn test_compatible_exact_vs_range_does_not_satisfy() {
+        // 0.5 does not satisfy >= 1.0
+        let exact = VersionConstraint::parse("= 0.5").unwrap();
+        let ge = VersionConstraint::parse(">= 1.0").unwrap();
+        assert!(!exact.is_compatible_with(&ge));
+        assert!(!ge.is_compatible_with(&exact));
+    }
+
+    #[test]
+    fn test_compatible_same_direction_ranges() {
+        // Both GT — always overlap
+        let c1 = VersionConstraint::parse("> 1.0").unwrap();
+        let c2 = VersionConstraint::parse("> 3.0").unwrap();
+        assert!(c1.is_compatible_with(&c2));
+
+        // Both LT — always overlap
+        let c3 = VersionConstraint::parse("< 2.0").unwrap();
+        let c4 = VersionConstraint::parse("< 5.0").unwrap();
+        assert!(c3.is_compatible_with(&c4));
+
+        // GE + GE
+        let c5 = VersionConstraint::parse(">= 1.0").unwrap();
+        let c6 = VersionConstraint::parse(">= 2.0").unwrap();
+        assert!(c5.is_compatible_with(&c6));
+    }
+
+    #[test]
+    fn test_compatible_opposite_ranges_overlapping() {
+        // > 1.0 and < 3.0 — overlap in (1.0, 3.0)
+        let c1 = VersionConstraint::parse("> 1.0").unwrap();
+        let c2 = VersionConstraint::parse("< 3.0").unwrap();
+        assert!(c1.is_compatible_with(&c2));
+
+        // >= 1.0 and <= 2.0 — overlap at [1.0, 2.0]
+        let c3 = VersionConstraint::parse(">= 1.0").unwrap();
+        let c4 = VersionConstraint::parse("<= 2.0").unwrap();
+        assert!(c3.is_compatible_with(&c4));
+
+        // >= 2.0 and <= 2.0 — single-point overlap at 2.0
+        let c5 = VersionConstraint::parse(">= 2.0").unwrap();
+        let c6 = VersionConstraint::parse("<= 2.0").unwrap();
+        assert!(c5.is_compatible_with(&c6));
+    }
+
+    #[test]
+    fn test_compatible_opposite_ranges_non_overlapping() {
+        // > 3.0 and < 1.0 — no overlap
+        let c1 = VersionConstraint::parse("> 3.0").unwrap();
+        let c2 = VersionConstraint::parse("< 1.0").unwrap();
+        assert!(!c1.is_compatible_with(&c2));
+
+        // >= 3.0 and <= 2.0 — no overlap
+        let c3 = VersionConstraint::parse(">= 3.0").unwrap();
+        let c4 = VersionConstraint::parse("<= 2.0").unwrap();
+        assert!(!c3.is_compatible_with(&c4));
+
+        // > 2.0 and < 2.0 — touching but not overlapping (strict)
+        let c5 = VersionConstraint::parse("> 2.0").unwrap();
+        let c6 = VersionConstraint::parse("< 2.0").unwrap();
+        assert!(!c5.is_compatible_with(&c6));
+    }
+
+    #[test]
+    fn test_compatible_not_equal() {
+        let ne = VersionConstraint::parse("!= 1.0").unwrap();
+        let exact_same = VersionConstraint::parse("= 1.0").unwrap();
+        let exact_diff = VersionConstraint::parse("= 2.0").unwrap();
+        let range = VersionConstraint::parse("> 1.0").unwrap();
+
+        // NotEqual vs different Exact — compatible (2.0 satisfies != 1.0)
+        assert!(ne.is_compatible_with(&exact_diff));
+        // NotEqual vs range — compatible
+        assert!(ne.is_compatible_with(&range));
+        // NotEqual vs Exact(same): the Exact arm fires first (range.satisfies(v)),
+        // and != 1.0 does NOT satisfy version 1.0, so false.
+        assert!(!ne.is_compatible_with(&exact_same));
+    }
+
+    #[test]
+    fn test_compatible_and_constraint() {
+        // And(>= 1.0, < 2.0) is compatible with > 1.5
+        let and_c = VersionConstraint::parse(">= 1.0, < 2.0").unwrap();
+        let gt = VersionConstraint::parse("> 1.5").unwrap();
+        assert!(and_c.is_compatible_with(&gt));
+
+        // And(>= 1.0, < 2.0) is NOT compatible with > 3.0
+        let gt_high = VersionConstraint::parse("> 3.0").unwrap();
+        assert!(!and_c.is_compatible_with(&gt_high));
     }
 
     #[test]
