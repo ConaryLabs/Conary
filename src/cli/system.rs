@@ -81,7 +81,7 @@ pub enum SystemCommands {
     /// Use --convert to batch convert adopted packages to CCS format.
     Adopt {
         /// Package name(s) to adopt (ignored if --system, --status, --refresh, etc.)
-        #[arg(required_unless_present_any = ["system", "status", "refresh", "convert", "takeover", "sync_hook"])]
+        #[arg(required_unless_present_any = ["system", "status", "refresh", "convert", "sync_hook"])]
         packages: Vec<String>,
 
         #[command(flatten)]
@@ -130,14 +130,6 @@ pub enum SystemCommands {
         /// Disable CDC chunking during conversion, requires --convert
         #[arg(long, requires = "convert")]
         no_chunking: bool,
-
-        /// Take over adopted packages from the system PM (Conary fully owns files)
-        #[arg(long)]
-        takeover: bool,
-
-        /// Skip interactive confirmation (requires --takeover)
-        #[arg(long, requires = "takeover")]
-        yes: bool,
 
         /// Install/remove system PM sync hooks
         #[arg(long)]
