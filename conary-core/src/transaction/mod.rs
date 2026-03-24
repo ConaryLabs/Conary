@@ -471,37 +471,8 @@ pub fn is_valid_erofs_image(path: &Path) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Compatibility types for CLI consumers (Task 6 will replace these usages)
+// Types shared between the transaction planner and CLI install consumers
 // ---------------------------------------------------------------------------
-
-/// Information about the package being transacted.
-///
-/// Preserved for CLI install/batch compatibility. Task 6 will adapt these
-/// call sites to the new composefs-native flow.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PackageInfo {
-    pub name: String,
-    pub version: String,
-    pub release: Option<String>,
-    pub arch: Option<String>,
-}
-
-/// Operations to perform in a transaction.
-///
-/// Preserved for CLI install/batch compatibility.
-#[derive(Debug, Clone)]
-pub struct TransactionOperations {
-    /// Package being installed/upgraded
-    pub package: PackageInfo,
-    /// Files to add (from extracted package)
-    pub files_to_add: Vec<ExtractedFile>,
-    /// Files to remove (from old version during upgrade)
-    pub files_to_remove: Vec<FileToRemove>,
-    /// Whether this is an upgrade of an existing package
-    pub is_upgrade: bool,
-    /// Old package info (for upgrades)
-    pub old_package: Option<PackageInfo>,
-}
 
 /// A file extracted from a package.
 ///
@@ -543,29 +514,6 @@ pub enum OperationType {
     ReplaceSymlink,
     RemoveSymlink,
     Rmdir,
-}
-
-/// Result of applying filesystem changes.
-///
-/// Preserved for CLI compatibility. In the composefs-native model, the
-/// equivalent information comes from the EROFS build result.
-#[derive(Debug, Clone)]
-pub struct FsApplyResult {
-    pub files_added: usize,
-    pub files_replaced: usize,
-    pub files_removed: usize,
-    pub dirs_created: usize,
-    pub dirs_removed: usize,
-}
-
-impl FsApplyResult {
-    pub fn total_operations(&self) -> usize {
-        self.files_added
-            + self.files_replaced
-            + self.files_removed
-            + self.dirs_created
-            + self.dirs_removed
-    }
 }
 
 /// Result of a completed transaction.
@@ -768,18 +716,6 @@ mod tests {
 
         engine.release_lock();
         assert!(engine.lock_file.is_none());
-    }
-
-    #[test]
-    fn fs_apply_result_total() {
-        let result = FsApplyResult {
-            files_added: 5,
-            files_replaced: 3,
-            files_removed: 2,
-            dirs_created: 1,
-            dirs_removed: 0,
-        };
-        assert_eq!(result.total_operations(), 11);
     }
 
     /// Write a minimal valid EROFS image stub: at least EROFS_MIN_SIZE bytes
