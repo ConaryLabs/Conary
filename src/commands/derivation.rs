@@ -46,8 +46,8 @@ pub async fn cmd_derivation_build(
     println!("Derivation ID: {drv_id}");
     println!("CAS directory: {}", cas_dir.display());
     println!();
-    println!("[TODO] Full CAS build pipeline not yet connected.");
-    println!("       Derivation ID has been computed successfully.");
+    println!("[NOT YET IMPLEMENTED] derivation build: full CAS build pipeline is not yet available.");
+    println!("Derivation ID has been computed successfully.");
 
     Ok(())
 }
