@@ -7,7 +7,6 @@
 //! the same package.
 
 use super::InferredCapabilities;
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -61,7 +60,7 @@ impl InferenceCache {
     /// - Package version
     /// - All file content hashes (sorted for consistency)
     pub fn compute_key(package_name: &str, package_version: &str, file_hashes: &[&str]) -> String {
-        let mut hasher = Sha256::new();
+        let mut hasher = crate::hash::Hasher::new(crate::hash::HashAlgorithm::Sha256);
         hasher.update(package_name.as_bytes());
         hasher.update(b"|");
         hasher.update(package_version.as_bytes());
@@ -75,7 +74,7 @@ impl InferenceCache {
             hasher.update(b",");
         }
 
-        format!("{:x}", hasher.finalize())
+        hasher.finalize().value
     }
 
     /// Get cached inference result
