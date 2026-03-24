@@ -99,6 +99,29 @@ impl Trigger {
         Ok(trigger)
     }
 
+    /// Find multiple triggers by ID in a single batch query
+    pub fn find_by_ids(conn: &Connection, ids: &[i64]) -> Result<Vec<Self>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = ids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT {} FROM triggers WHERE id IN ({})",
+            Self::COLUMNS,
+            placeholders
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let triggers = stmt
+            .query_map(rusqlite::params_from_iter(ids.iter()), Self::from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(triggers)
+    }
+
     /// Find a trigger by name
     pub fn find_by_name(conn: &Connection, name: &str) -> Result<Option<Self>> {
         let sql = format!("SELECT {} FROM triggers WHERE name = ?1", Self::COLUMNS);
@@ -232,6 +255,38 @@ impl TriggerDependency {
             .collect::<std::result::Result<Vec<String>, _>>()?;
 
         Ok(deps)
+    }
+
+    /// Get dependencies for multiple triggers in a single batch query.
+    /// Returns a map of trigger_id -> Vec<depends_on name>.
+    pub fn get_dependencies_batch(
+        conn: &Connection,
+        trigger_ids: &[i64],
+    ) -> Result<HashMap<i64, Vec<String>>> {
+        if trigger_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let placeholders = trigger_ids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT trigger_id, depends_on FROM trigger_dependencies WHERE trigger_id IN ({})",
+            placeholders
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let mut map: HashMap<i64, Vec<String>> = HashMap::new();
+        let rows = stmt.query_map(
+            rusqlite::params_from_iter(trigger_ids.iter()),
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        )?;
+        for row in rows {
+            let (tid, dep) = row?;
+            map.entry(tid).or_default().push(dep);
+        }
+        Ok(map)
     }
 
     /// Add a dependency
@@ -493,13 +548,19 @@ impl<'a> TriggerEngine<'a> {
             return Ok(Vec::new());
         }
 
-        // Load trigger details
-        let mut triggers: HashMap<String, Trigger> = HashMap::new();
-        for ct in &changeset_triggers {
-            if let Some(trigger) = Trigger::find_by_id(self.conn, ct.trigger_id)? {
-                triggers.insert(trigger.name.clone(), trigger);
-            }
-        }
+        // Batch-load all trigger details in a single query
+        let trigger_ids: Vec<i64> = changeset_triggers.iter().map(|ct| ct.trigger_id).collect();
+        let mut triggers: HashMap<String, Trigger> = Trigger::find_by_ids(self.conn, &trigger_ids)?
+            .into_iter()
+            .map(|t| (t.name.clone(), t))
+            .collect();
+
+        // Batch-load all dependencies in a single query
+        let loaded_ids: Vec<i64> = triggers
+            .values()
+            .filter_map(|t| t.id)
+            .collect();
+        let all_deps = TriggerDependency::get_dependencies_batch(self.conn, &loaded_ids)?;
 
         // Build dependency graph
         let mut in_degree: HashMap<String, usize> = HashMap::new();
@@ -511,13 +572,20 @@ impl<'a> TriggerEngine<'a> {
         }
 
         for trigger in triggers.values() {
-            let deps = trigger.get_dependencies(self.conn)?;
+            let trigger_id = match trigger.id {
+                Some(id) => id,
+                None => continue,
+            };
+            let deps = all_deps
+                .get(&trigger_id)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
             for dep in deps {
                 // Only count edges to triggers we're actually running
-                if triggers.contains_key(&dep) {
+                if triggers.contains_key(dep.as_str()) {
                     *in_degree.entry(trigger.name.clone()).or_insert(0) += 1;
                     dependents
-                        .entry(dep)
+                        .entry(dep.clone())
                         .or_default()
                         .push(trigger.name.clone());
                 }
