@@ -7,7 +7,7 @@
 //! each stage, packages are topologically sorted by their build dependencies
 //! to produce a deterministic build order.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 
 use crate::recipe::Recipe;
@@ -236,11 +236,8 @@ fn strip_pass_suffix(name: &str) -> Option<&str> {
         .or_else(|| name.strip_suffix("-pass2"))
 }
 
-/// Topologically sort packages within a stage using Kahn's algorithm.
-///
-/// Only considers dependency edges where both endpoints are in the `packages` set
-/// (cross-stage dependencies are ignored for ordering purposes). Uses `BTreeMap`
-/// and `BTreeSet` throughout for deterministic output.
+/// Topologically sort packages within a stage, delegating to the shared
+/// Kahn's algorithm in [`super::graph`].
 ///
 /// # Errors
 ///
@@ -249,83 +246,7 @@ fn topological_sort(
     packages: &BTreeSet<String>,
     recipes: &HashMap<String, Recipe>,
 ) -> Result<Vec<String>, StageError> {
-    if packages.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // Build adjacency list and in-degree map (only for edges within this stage)
-    let mut adjacency: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
-    let mut in_degree: BTreeMap<&str, usize> = BTreeMap::new();
-
-    // Initialize all packages with zero in-degree
-    for pkg in packages {
-        adjacency.entry(pkg.as_str()).or_default();
-        in_degree.entry(pkg.as_str()).or_insert(0);
-    }
-
-    // Add edges: if package B depends on package A, then A -> B (A must be built first)
-    for pkg in packages {
-        if let Some(recipe) = recipes.get(pkg) {
-            for dep in &recipe.build.requires {
-                let dep_name = dep.as_str();
-                if packages.contains(dep_name)
-                    && dep_name != pkg.as_str()
-                    && adjacency.entry(dep_name).or_default().insert(pkg.as_str())
-                {
-                    *in_degree.entry(pkg.as_str()).or_insert(0) += 1;
-                }
-            }
-            for dep in &recipe.build.makedepends {
-                let dep_name = dep.as_str();
-                if packages.contains(dep_name)
-                    && dep_name != pkg.as_str()
-                    && adjacency.entry(dep_name).or_default().insert(pkg.as_str())
-                {
-                    *in_degree.entry(pkg.as_str()).or_insert(0) += 1;
-                }
-            }
-        }
-    }
-
-    // Kahn's algorithm with BTreeSet-based queue for deterministic ordering
-    let mut queue: VecDeque<&str> = VecDeque::new();
-    // Collect zero-degree nodes in sorted order
-    let mut zero_degree: BTreeSet<&str> = BTreeSet::new();
-    for (pkg, &deg) in &in_degree {
-        if deg == 0 {
-            zero_degree.insert(pkg);
-        }
-    }
-    for pkg in &zero_degree {
-        queue.push_back(pkg);
-    }
-
-    let mut result = Vec::with_capacity(packages.len());
-
-    while let Some(node) = queue.pop_front() {
-        result.push(node.to_string());
-
-        // Collect newly freed nodes in sorted order for determinism
-        let mut newly_free: BTreeSet<&str> = BTreeSet::new();
-        if let Some(neighbors) = adjacency.get(node) {
-            for &neighbor in neighbors {
-                let deg = in_degree.get_mut(neighbor).expect("node must exist");
-                *deg -= 1;
-                if *deg == 0 {
-                    newly_free.insert(neighbor);
-                }
-            }
-        }
-        for pkg in &newly_free {
-            queue.push_back(pkg);
-        }
-    }
-
-    if result.len() != packages.len() {
-        return Err(StageError::CyclicDependency);
-    }
-
-    Ok(result)
+    super::graph::topological_sort(packages, recipes).map_err(|()| StageError::CyclicDependency)
 }
 
 #[cfg(test)]
