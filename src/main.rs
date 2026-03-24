@@ -1078,16 +1078,16 @@ async fn run() -> Result<()> {
                 no_autoremove,
                 offline,
             } => {
-                commands::cmd_model_apply(
-                    &model,
-                    &common.db.db_path,
-                    &common.root,
+                commands::cmd_model_apply(commands::ApplyOptions {
+                    model_path: &model,
+                    db_path: &common.db.db_path,
+                    root: &common.root,
                     dry_run,
                     skip_optional,
                     strict,
-                    !no_autoremove,
+                    autoremove: !no_autoremove,
                     offline,
-                )
+                })
                 .await
             }
 
