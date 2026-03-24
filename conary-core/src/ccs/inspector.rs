@@ -3,17 +3,14 @@
 //!
 //! Tools for reading and examining .ccs packages.
 
-use crate::ccs::binary_manifest::BinaryManifest;
+use crate::ccs::archive_reader::read_ccs_archive;
 use crate::ccs::builder::{ComponentData, FileEntry};
 use crate::ccs::manifest::CcsManifest;
 use anyhow::{Context, Result};
-use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::Read;
 use std::path::Path;
-use tar::Archive;
 
 /// Inspected package data
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,88 +23,25 @@ pub struct InspectedPackage {
     pub components: HashMap<String, ComponentData>,
 }
 
-/// Maximum size for manifest entries during inspection (16 MiB)
-const MAX_MANIFEST_SIZE: u64 = 16 * 1024 * 1024;
-
-/// Maximum size for component JSON entries during inspection (64 MiB)
-const MAX_COMPONENT_SIZE: u64 = 64 * 1024 * 1024;
-
 impl InspectedPackage {
     /// Load a package from a .ccs file
     pub fn from_file(path: &Path) -> Result<Self> {
         let file = File::open(path)
             .with_context(|| format!("Failed to open package: {}", path.display()))?;
 
-        let decoder = GzDecoder::new(file);
-        let mut archive = Archive::new(decoder);
-
-        let mut manifest: Option<CcsManifest> = None;
-        let mut components: HashMap<String, ComponentData> = HashMap::new();
-
-        for entry in archive.entries()? {
-            let mut entry = entry?;
-            let entry_path = entry.path()?;
-            let entry_path_str = entry_path.to_string_lossy().to_string();
-
-            // Prefer CBOR MANIFEST over TOML
-            if entry_path_str == "MANIFEST" || entry_path_str == "./MANIFEST" {
-                let entry_size = entry.header().size()?;
-                if entry_size > MAX_MANIFEST_SIZE {
-                    anyhow::bail!(
-                        "MANIFEST entry too large: {entry_size} bytes (limit {MAX_MANIFEST_SIZE})"
-                    );
-                }
-                let mut content = Vec::new();
-                entry.read_to_end(&mut content)?;
-                if let Ok(bin_manifest) = BinaryManifest::from_cbor(&content) {
-                    manifest = Some(crate::ccs::package::convert_binary_to_ccs_manifest(
-                        &bin_manifest,
-                    ));
-                }
-            }
-            // Fall back to MANIFEST.toml
-            else if manifest.is_none()
-                && (entry_path_str == "MANIFEST.toml" || entry_path_str == "./MANIFEST.toml")
-            {
-                let entry_size = entry.header().size()?;
-                if entry_size > MAX_MANIFEST_SIZE {
-                    anyhow::bail!(
-                        "MANIFEST.toml entry too large: {entry_size} bytes (limit {MAX_MANIFEST_SIZE})"
-                    );
-                }
-                let mut content = String::new();
-                entry.read_to_string(&mut content)?;
-                manifest = Some(CcsManifest::parse(&content)?);
-            }
-            // Read component files (files are stored in components/*.json per spec)
-            else if (entry_path_str.starts_with("components/")
-                || entry_path_str.starts_with("./components/"))
-                && entry_path_str.ends_with(".json")
-            {
-                let entry_size = entry.header().size()?;
-                if entry_size > MAX_COMPONENT_SIZE {
-                    anyhow::bail!(
-                        "Component JSON entry too large: {entry_size} bytes (limit {MAX_COMPONENT_SIZE})"
-                    );
-                }
-                let mut content = String::new();
-                entry.read_to_string(&mut content)?;
-                let comp: ComponentData = serde_json::from_str(&content)?;
-                components.insert(comp.name.clone(), comp);
-            }
-        }
-
-        let manifest = manifest.ok_or_else(|| {
-            anyhow::anyhow!("Package missing both MANIFEST (CBOR) and MANIFEST.toml")
-        })?;
+        let contents = read_ccs_archive(file)?;
 
         // Collect files from components (spec says files live in components/*.json)
-        let files: Vec<FileEntry> = components.values().flat_map(|c| c.files.clone()).collect();
+        let files: Vec<FileEntry> = contents
+            .components
+            .values()
+            .flat_map(|c| c.files.clone())
+            .collect();
 
         Ok(InspectedPackage {
-            manifest,
+            manifest: contents.manifest,
             files,
-            components,
+            components: contents.components,
         })
     }
 
