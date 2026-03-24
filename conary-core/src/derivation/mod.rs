@@ -39,7 +39,7 @@ pub use profile::{
     BuildProfile, ProfileDerivation, ProfileDiff, ProfileMetadata, ProfileSeedRef, ProfileStage,
 };
 pub use recipe_hash::{build_script_hash, expand_variables, source_hash};
-pub use seed::{Seed, SeedError, SeedMetadata, SeedSource};
+pub use seed::{Seed, SeedError, SeedMetadata, SeedSource, SeedValidation};
 pub use build_order::{BuildOrderError, BuildPhase, BuildStep, compute_build_order};
 pub use install::{InstallError, install_to_sysroot};
 pub use stages::{Stage, StageAssignment, StageError, assign_stages};
