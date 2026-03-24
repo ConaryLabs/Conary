@@ -225,6 +225,20 @@ impl CasStore {
         self.retrieve_with_algorithm(hash, self.algorithm)
     }
 
+    /// Retrieve a CAS object by hash WITHOUT integrity verification.
+    ///
+    /// Use when fs-verity is enabled or when the caller will verify separately.
+    /// Avoids the overhead of reading the file twice (once for hash, once for content).
+    pub fn retrieve_unchecked(&self, hash: &str) -> Result<Vec<u8>> {
+        let path = self.hash_to_path(hash)?;
+        std::fs::read(&path).map_err(|e| {
+            crate::Error::Io(std::io::Error::new(
+                e.kind(),
+                format!("Failed to read CAS object {}: {}", hash, e),
+            ))
+        })
+    }
+
     /// Retrieve file content from CAS with explicit hash algorithm
     ///
     /// This is useful when the stored content uses a different algorithm
