@@ -533,7 +533,6 @@ mod tests {
     use flate2::read::GzDecoder;
     use flate2::write::GzEncoder;
     use std::fs;
-    use std::io::Read;
     use tar::{Archive, Builder};
     use tempfile::TempDir;
 
