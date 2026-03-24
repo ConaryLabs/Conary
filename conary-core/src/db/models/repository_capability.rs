@@ -117,6 +117,42 @@ impl RepositoryProvide {
         Ok(rows)
     }
 
+    /// Find provides matching a capability and return each paired with its package name.
+    ///
+    /// This single JOIN avoids the N+1 pattern of calling `find_by_capability` and then
+    /// issuing a separate `SELECT name FROM repository_packages WHERE id = ?` for each
+    /// result row. The `pkg.name` column is appended at position 7 in each row so the
+    /// existing `from_row` mapper is not disturbed.
+    pub fn find_by_capability_with_name(
+        conn: &Connection,
+        capability: &str,
+    ) -> Result<Vec<(Self, String)>> {
+        let mut stmt = conn.prepare(
+            "SELECT rp.id, rp.repository_package_id, rp.capability, rp.version, rp.kind, rp.raw, rp.version_scheme, pkg.name
+             FROM repository_provides rp
+             JOIN repository_packages pkg ON pkg.id = rp.repository_package_id
+             JOIN repositories repo ON repo.id = pkg.repository_id
+             WHERE repo.enabled = 1 AND rp.capability = ?1
+             ORDER BY rp.capability, rp.version",
+        )?;
+        let rows = stmt
+            .query_map([capability], |row| {
+                let provide = Self {
+                    id: row.get(0)?,
+                    repository_package_id: row.get(1)?,
+                    capability: row.get(2)?,
+                    version: row.get(3)?,
+                    kind: row.get(4)?,
+                    raw: row.get(5)?,
+                    version_scheme: row.get(6)?,
+                };
+                let pkg_name: String = row.get(7)?;
+                Ok((provide, pkg_name))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// Find provides matching both capability name and kind in enabled repositories.
     pub fn find_by_capability_and_kind(
         conn: &Connection,

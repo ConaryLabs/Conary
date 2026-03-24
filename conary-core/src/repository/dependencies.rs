@@ -28,8 +28,10 @@ fn resolve_repo_dependency_by_capability(
     dep_name: &str,
     options: &SelectionOptions,
 ) -> Result<Option<(String, Option<String>)>> {
-    let provides = RepositoryProvide::find_by_capability(conn, dep_name)?;
-    if provides.is_empty() {
+    // Single JOIN returns each provide alongside its package name, eliminating
+    // the per-row `SELECT name FROM repository_packages WHERE id = ?` (N+1).
+    let provides_with_name = RepositoryProvide::find_by_capability_with_name(conn, dep_name)?;
+    if provides_with_name.is_empty() {
         return Ok(None);
     }
 
@@ -39,20 +41,12 @@ fn resolve_repo_dependency_by_capability(
     let mut seen_ids = HashSet::new();
     let mut candidates = Vec::new();
 
-    for provide in &provides {
+    for (provide, name) in &provides_with_name {
         if !seen_ids.insert(provide.repository_package_id) {
             continue;
         }
 
-        // Direct ID-based lookup: fetch name from the provide's package row.
-        let pkg_name: Option<String> = conn
-            .prepare_cached("SELECT name FROM repository_packages WHERE id = ?1")?
-            .query_row([provide.repository_package_id], |row| row.get(0))
-            .ok();
-
-        let Some(name) = pkg_name else { continue };
-
-        for candidate in PackageSelector::search_packages(conn, &name, options)? {
+        for candidate in PackageSelector::search_packages(conn, name, options)? {
             if candidate.package.id == Some(provide.repository_package_id) {
                 candidates.push(candidate);
                 break;
