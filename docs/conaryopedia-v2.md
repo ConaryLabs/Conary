@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-03-18
-revision: 6
-summary: Ch 8 -- rewrite transaction engine section for composefs-native architecture (no journal/backup/staging)
+last_updated: 2026-03-24
+revision: 8
+summary: Update takeover section to reflect system takeover progressive pipeline
 ---
 
 # Conaryopedia v2
@@ -663,14 +663,17 @@ conary system adopt --convert --no-chunking  # Skip CDC chunking
 
 #### Takeover
 
-For full Conary management, you can **take over** packages from the system package manager:
+For full Conary management, you can **take over** packages from the system package manager using the progressive pipeline:
 
 ```bash
-conary system adopt --takeover   # Conary fully owns the files
-conary system adopt --takeover --yes  # Skip confirmation
+conary system takeover --up-to cas        # Adopt + CAS-back all packages (PM untouched)
+conary system takeover --up-to owned      # CAS + remove from system PM database
+conary system takeover                    # Full takeover: CAS + PM removal + generation + boot
+conary system takeover --dry-run          # Preview what would happen
+conary system takeover --yes              # Skip confirmation
 ```
 
-After takeover, the system package manager will no longer track those packages. This is an advanced operation.
+The pipeline is progressive: each level includes all previous levels. After the `owned` level, the system package manager will no longer track those packages. The `generation` level (default) also builds an EROFS generation and live-switches to it.
 
 #### Sync Hooks
 
@@ -4452,55 +4455,56 @@ Source tarballs are cached locally so repeated bootstrap attempts don't re-downl
 
 #### The Pipeline
 
-The bootstrap proceeds through a staged pipeline. Stage 2 and Conary are optional but recommended for production images:
+The bootstrap has two paths. The **LFS phase builds** follow Linux From Scratch through 6 sequential phases. The **derivation pipeline** provides CAS-layered, content-addressed, reproducible builds using a seed EROFS image.
+
+##### LFS Phase Builds
 
 ```
-Stage 0 --> Stage 1 --> Stage 2 (optional) --> BaseSystem --> Conary (optional) --> Image
+Phase 1 --> Phase 2 --> Phase 3 --> Phase 4 --> Phase 5 --> Phase 6 (optional)
 ```
 
 ```
-Stage 0: Cross-Compiler
-  Build a GCC cross-compiler targeting x86_64-conary-linux-gnu.
-  Uses crosstool-ng methodology: binutils -> kernel headers -> glibc headers ->
-  GCC (C only, no shared libs) -> full glibc -> full GCC (C/C++).
-  Result: /stage0/bin/x86_64-conary-linux-gnu-gcc
+Phase 1: Cross-Toolchain (LFS Ch5)
+  5 packages: binutils-pass1, gcc-pass1, linux-headers, glibc, libstdc++.
+  Cross-compiler targeting LFS_TGT triple.
+  Result: $LFS/tools/
 
-Stage 1: Self-Hosted Toolchain
-  Using the Stage 0 cross-compiler, build a native toolchain that runs on the
-  target. This is the "Canadian cross" -- the compiler now runs on and targets
-  x86_64-conary-linux-gnu.
-  Result: /stage1/ with native gcc, binutils, glibc
+Phase 2: Temporary Tools (LFS Ch6-7)
+  Part A: 17 packages cross-compiled with Phase 1 toolchain.
+  Part B: 6 packages built inside chroot using Part A tools.
+  Result: Complete temporary build environment (Phase 1 + Phase 2 = self-hosting seed)
 
-Stage 2: Pure Rebuild (optional)
-  Rebuild the entire toolchain using Stage 1's native compiler. This eliminates
-  any contamination from the host system. After Stage 2, every binary was built
-  by a Conary-native compiler. Optional for development iteration, recommended
-  for production images.
-  Result: /stage2/ -- bit-for-bit independent of host
+Phase 3: Final System (LFS Ch8)
+  77 core system packages built inside chroot against immutable LFS root.
+  Order defined by SYSTEM_BUILD_ORDER constant.
+  Per-package checkpointing enables resume at package granularity.
+  Result: A complete Linux system
 
-BaseSystem:
-  Build essential userspace: coreutils, bash, util-linux, findutils, grep, sed,
-  gawk, make, diffutils, file, gzip, xz, tar, pkg-config, ncurses, readline,
-  systemd, iproute2, openssh, kernel, boot chain, and networking stack.
-  Uses the RecipeGraph for dependency ordering with automatic cycle breaking.
-  Per-package checkpointing enables resume after interruption at package
-  granularity (not just stage granularity). Build sandboxing uses
-  ContainerConfig::pristine_for_bootstrap() for namespace isolation.
-  Result: A minimal but complete bootable system
+Phase 4: System Configuration (LFS Ch9)
+  Network, fstab, kernel, bootloader configuration inside chroot.
+  Result: A configured system ready for imaging
 
-Conary (optional):
-  Build Conary itself using the Rust toolchain compiled in earlier stages. This
-  is the "self-hosting" step -- the system can now manage its own packages.
-  Result: A self-managing system
-
-Image:
-  Produce a bootable disk image from the assembled filesystem using
-  systemd-repart for rootless image generation (fallback to sfdisk/mkfs on
-  systems without systemd-repart). Supports Raw (dd-able), Qcow2 (KVM/QEMU),
-  and ISO (optical/USB) formats. UKI (Unified Kernel Image) support is
-  available via ukify for direct-boot configurations.
+Phase 5: Bootable Image (LFS Ch10)
+  systemd-repart for rootless image generation (fallback to sfdisk/mkfs).
+  Formats: raw (dd-able), qcow2 (KVM/QEMU), ISO (USB/optical), EROFS.
   Result: A deployable OS image
+
+Phase 6: Tier-2 (BLFS + Conary self-hosting, optional)
+  PAM, OpenSSH, make-ca, curl, sudo, nano, Rust, Conary.
+  Result: A self-managing system
 ```
+
+##### Derivation Pipeline (`conary bootstrap run`)
+
+```
+System manifest (conaryos.toml, 88 packages)
+  --> compute_build_order() (topological sort)
+  --> Pipeline::execute() (mutable overlayfs chroot on seed EROFS)
+  --> Per-package: check cache -> build via Kitchen -> capture to CAS -> install to sysroot
+  --> Compose final EROFS image
+```
+
+Seeds can come from Phase 1+2 output, an adopted system (`--from-adopted`), or a community source. Convergence verification confirms that builds from different seeds produce identical outputs.
 
 #### Stage Management
 
@@ -4568,19 +4572,22 @@ Partition 2: Root filesystem
 #### CLI
 
 ```bash
-conary bootstrap                      # Full bootstrap (all stages)
-conary bootstrap --target aarch64     # Cross-bootstrap for ARM64
-conary bootstrap --resume             # Resume from last checkpoint
-conary bootstrap stage0               # Run only Stage 0
-conary bootstrap stage1               # Run only Stage 1
-conary bootstrap stage2               # Run optional Stage 2 (pure rebuild)
-conary bootstrap base                 # Run BaseSystem stage
-conary bootstrap conary               # Build Conary itself (self-hosting)
-conary bootstrap image --format qcow2 # Produce a VM image
-conary bootstrap dry-run              # Validate pipeline without writing
-conary bootstrap --reset-from stage1  # Rebuild from Stage 1 onward
-conary bootstrap --jobs 8             # Override parallelism
-conary bootstrap status               # Show current progress
+conary bootstrap init --target x86_64    # Initialize bootstrap environment
+conary bootstrap check                   # Verify prerequisites (gcc, make, git)
+conary bootstrap cross-tools             # Phase 1: cross-compiler (LFS Ch5)
+conary bootstrap temp-tools              # Phase 2: temporary tools (LFS Ch6-7)
+conary bootstrap system                  # Phase 3: final system (LFS Ch8)
+conary bootstrap config                  # Phase 4: system configuration (LFS Ch9)
+conary bootstrap image --format qcow2    # Phase 5: bootable image
+conary bootstrap tier2                   # Phase 6: BLFS + self-hosting
+conary bootstrap seed --from /path       # Package phase output as seed
+conary bootstrap seed --from-adopted     # Adopt current system as seed
+conary bootstrap run conaryos.toml --seed /path  # Derivation pipeline
+conary bootstrap verify-convergence      # Compare builds from two seeds
+conary bootstrap dry-run                 # Validate pipeline without building
+conary bootstrap status                  # Show current progress
+conary bootstrap resume                  # Resume from last checkpoint
+conary bootstrap clean                   # Clean work directory
 ```
 
 ### 8.2 CAS Federation: Distributed Content Sharing

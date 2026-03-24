@@ -635,7 +635,7 @@ Feature-focused code reviews were run in parallel batches of 4, each scoped to a
 
 ##### P2-15. Full system adoption as single transaction
 
-- **Location**: `src/commands/adopt/takeover.rs`
+- **Location**: `src/commands/generation/takeover.rs` (consolidated from former `adopt/takeover.rs`)
 - **Description**: The full system adoption (takeover) process runs as a single database transaction that adopts all packages. For a typical system with 500-2000 packages, this transaction can take several minutes and holds the database write lock the entire time.
 - **Impact**: The database is write-locked for the entire adoption duration. Any concurrent operation that needs to write to the database (e.g., another terminal session) will block or timeout. A crash during adoption requires re-doing the entire process.
 - **Fix**: Split adoption into batches of 50-100 packages per transaction. Track progress so that a crash only requires re-adopting the current batch, not the entire system. Display progress to the user.
@@ -670,7 +670,7 @@ Feature-focused code reviews were run in parallel batches of 4, each scoped to a
 
 ##### P2-20. Full system adoption single transaction (design)
 
-- **Location**: `src/commands/adopt/takeover.rs`
+- **Location**: `src/commands/generation/takeover.rs` (consolidated from former `adopt/takeover.rs`)
 - **Description**: Beyond the P2-15 implementation concern, the single-transaction adoption design means that any failure during adoption (even for one package) rolls back the entire adoption, losing all progress.
 - **Impact**: A single problematic package (e.g., one with corrupt metadata) prevents adoption of the entire system. The user must fix the problematic package before any adoption can succeed.
 - **Fix**: Implement a skip-on-failure mode that records failed packages and continues with the rest. Provide a summary of skipped packages at the end so the user can address them individually.
