@@ -6,7 +6,7 @@ use rusqlite::Connection;
 
 use crate::db::models::{
     LabelEntry, PackageResolution, ProvideEntry, Repository, RepositoryPackage, RepositoryProvide,
-    RepositoryRequirement, SystemAffinity, Trove, TroveType,
+    RepositoryRequirement, SystemAffinity, Trove,
 };
 use crate::error::Result;
 use crate::repository::selector::{PackageSelector, SelectionOptions};
@@ -496,10 +496,7 @@ fn repository_package_by_id(
     conn: &Connection,
     repository_package_id: i64,
 ) -> Result<Option<RepositoryPackage>> {
-    let packages = RepositoryPackage::list_all(conn)?;
-    Ok(packages
-        .into_iter()
-        .find(|pkg| pkg.id == Some(repository_package_id)))
+    RepositoryPackage::find_by_id(conn, repository_package_id)
 }
 
 fn repo_metadata_provider_satisfies(
@@ -509,7 +506,8 @@ fn repo_metadata_provider_satisfies(
     target_arch: &str,
     requirement_scheme: VersionScheme,
 ) -> Result<bool> {
-    let packages = RepositoryPackage::list_all(conn)?;
+    let packages =
+        RepositoryPackage::find_in_enabled_repos_with_metadata_like(conn, dependency_name)?;
 
     for pkg in packages {
         if !PackageSelector::is_architecture_compatible(pkg.architecture.as_deref(), target_arch) {
@@ -636,12 +634,10 @@ pub fn visible_realignment_proposals(
     conn: &Connection,
     target_distro: &str,
 ) -> Result<Vec<VisibleRealignmentProposal>> {
-    let troves = Trove::list_all(conn)?;
+    let troves = Trove::list_packages(conn)?;
     let mut proposals = Vec::new();
 
-    for trove in troves
-        .into_iter()
-        .filter(|t| t.trove_type == TroveType::Package)
+    for trove in troves.into_iter()
     {
         let current_distro = current_package_distro(conn, &trove)?;
         if current_distro.as_deref() == Some(target_distro) {
