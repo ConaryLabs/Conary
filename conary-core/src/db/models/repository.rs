@@ -458,6 +458,27 @@ impl RepositoryPackage {
         Ok(packages)
     }
 
+    /// Find packages in enabled repositories whose metadata JSON contains `dependency_name`
+    /// as a literal substring.  This is a coarse pre-filter; callers must re-check the
+    /// parsed provides list for an exact match.
+    pub fn find_in_enabled_repos_with_metadata_like(
+        conn: &Connection,
+        dependency_name: &str,
+    ) -> Result<Vec<Self>> {
+        let pattern = format!("%{dependency_name}%");
+        let sql = format!(
+            "SELECT {} FROM repository_packages rp \
+             JOIN repositories r ON rp.repository_id = r.id \
+             WHERE r.enabled = 1 AND rp.metadata LIKE ?1",
+            Self::COLUMNS_PREFIXED
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let packages = stmt
+            .query_map([&pattern], Self::from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(packages)
+    }
+
     /// Find a specific package by name and version in enabled repositories
     pub fn find_by_name_version(
         conn: &Connection,

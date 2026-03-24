@@ -277,6 +277,19 @@ impl Trove {
         Ok(troves)
     }
 
+    /// List only troves of type `package` (excludes components and collections).
+    pub fn list_packages(conn: &Connection) -> Result<Vec<Self>> {
+        let sql = format!(
+            "SELECT {} FROM troves WHERE type = 'package' ORDER BY name, version",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let troves = stmt
+            .query_map([], Self::from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(troves)
+    }
+
     /// Find orphaned packages (installed as dependency, no longer needed)
     pub fn find_orphans(conn: &Connection) -> Result<Vec<Self>> {
         // Find packages that:
