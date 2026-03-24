@@ -1042,12 +1042,14 @@ pub async fn cmd_bootstrap_verify_convergence(
     _seed_b: &str,
     _diff: bool,
 ) -> Result<()> {
-    anyhow::bail!("verify-convergence is not yet fully implemented")
+    println!("[NOT YET IMPLEMENTED] bootstrap verify-convergence is planned but not yet available.");
+    Ok(())
 }
 
 /// Diff two seed EROFS images
 pub async fn cmd_bootstrap_diff_seeds(_path_a: &str, _path_b: &str) -> Result<()> {
-    anyhow::bail!("diff-seeds is not yet fully implemented")
+    println!("[NOT YET IMPLEMENTED] bootstrap diff-seeds is planned but not yet available.");
+    Ok(())
 }
 
 /// Clean bootstrap work directory

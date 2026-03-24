@@ -293,10 +293,8 @@ pub async fn cmd_capability_generate(
     _output: Option<&str>,
     _timeout: u32,
 ) -> Result<()> {
-    anyhow::bail!(
-        "The 'capability generate' command is not yet implemented.\n\
-         This feature is planned for Phase 2 of the capability system."
-    )
+    println!("[NOT YET IMPLEMENTED] capability generate is planned but not yet available.");
+    Ok(())
 }
 
 /// Audit a package's capabilities by showing what enforcement would be applied
