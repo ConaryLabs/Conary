@@ -291,7 +291,7 @@ impl Pipeline {
             });
 
         // Count packages per stage for progress reporting.
-        let mut stage_counts: BTreeMap<Stage, usize> = BTreeMap::new();
+        let mut stage_counts: HashMap<Stage, usize> = HashMap::new();
         for step in build_steps {
             *stage_counts.entry(step.stage).or_insert(0) += 1;
         }
@@ -314,7 +314,7 @@ impl Pipeline {
         let sysroot = env.sysroot();
 
         let mut acc = BuildAccumulator {
-            completed: BTreeMap::new(),
+            completed: HashMap::new(),
             derivations: Vec::new(),
             manifests: Vec::new(),
         };
@@ -541,7 +541,7 @@ fn ordered_stages(assignments: &[StageAssignment]) -> Vec<(Stage, Vec<String>)> 
 /// skipped -- the executor's derivation ID computation handles them being absent.
 fn collect_dep_ids(
     recipe: &Recipe,
-    completed: &BTreeMap<String, DerivationId>,
+    completed: &HashMap<String, DerivationId>,
 ) -> BTreeMap<String, DerivationId> {
     let mut dep_ids = BTreeMap::new();
 
@@ -557,7 +557,7 @@ fn collect_dep_ids(
 /// Mutable accumulator state threaded through the build loop.
 struct BuildAccumulator {
     /// Package name -> derivation ID for dependency resolution.
-    completed: BTreeMap<String, DerivationId>,
+    completed: HashMap<String, DerivationId>,
     /// Profile entries for all processed packages.
     derivations: Vec<ProfileDerivation>,
     /// Output manifests for final EROFS composition.
@@ -800,7 +800,7 @@ mod tests {
         })
         .unwrap();
 
-        let mut completed = BTreeMap::new();
+        let mut completed = HashMap::new();
         completed.insert("glibc".to_owned(), glibc_id.clone());
         // "make" is NOT in completed -- should be skipped.
 
