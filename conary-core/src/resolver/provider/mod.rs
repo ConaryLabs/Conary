@@ -1,4 +1,4 @@
-// conary-core/src/resolver/provider.rs
+// conary-core/src/resolver/provider/mod.rs
 
 //! Bridge between Conary's data model and resolvo's SAT solver.
 //!
@@ -6,95 +6,33 @@
 //! `ConaryProvider`, which maps Conary packages (troves + repo packages)
 //! to resolvo's abstract solvable/name/version-set model.
 
+mod loading;
+pub(crate) mod matching;
+mod traits;
+pub mod types;
+
 use std::collections::{HashMap, HashSet};
-use std::fmt;
 
 use resolvo::{
-    Candidates, Condition, ConditionId, ConditionalRequirement, Dependencies, DependencyProvider,
-    HintDependenciesAvailable, Interner, KnownDependencies, NameId, SolvableId, SolverCache,
-    StringId, VersionSetId, VersionSetUnionId,
+    ConditionalRequirement, NameId, SolvableId, StringId, VersionSetId, VersionSetUnionId,
 };
 
 use crate::db::models::{
-    DependencyEntry, ProvideEntry, RepositoryPackage, RepositoryProvide, RepositoryRequirement,
-    RepositoryRequirementGroup, Trove, generate_capability_variations,
+    DependencyEntry, ProvideEntry, RepositoryProvide, Trove, generate_capability_variations,
 };
 use crate::error::Result;
-use crate::repository::versioning::{
-    RepoVersionConstraint, VersionScheme, compare_repo_versions, infer_version_scheme,
-    parse_repo_constraint, repo_version_satisfies,
-};
+use crate::repository::versioning::{VersionScheme, infer_version_scheme};
 use crate::version::{RpmVersion, VersionConstraint};
 
-/// A solvable package — either an installed trove or a repository candidate.
-#[derive(Debug, Clone)]
-pub struct ConaryPackage {
-    pub name: String,
-    pub version: ConaryPackageVersion,
-    /// `Some` when this package is currently installed.
-    pub trove_id: Option<i64>,
-    /// `Some` when this package is from a repository.
-    pub repo_package_id: Option<i64>,
-    /// Capabilities this package provides, along with optional capability versions.
-    pub provided_capabilities: Vec<(String, Option<ConaryProvidedVersion>)>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConaryPackageVersion {
-    /// Installed package with RPM version (legacy or actual RPM).
-    Installed(RpmVersion),
-    /// Installed package with a native (non-RPM) version scheme.
-    InstalledNative { raw: String, scheme: VersionScheme },
-    Repository {
-        raw: String,
-        scheme: Option<VersionScheme>,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConaryProvidedVersion {
-    Installed(RpmVersion),
-    Repository { raw: String, scheme: VersionScheme },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ConaryConstraint {
-    Legacy(VersionConstraint),
-    Repository {
-        scheme: VersionScheme,
-        constraint: RepoVersionConstraint,
-        raw: Option<String>,
-    },
-}
-
-/// A single dependency entry for the solver, which may be a simple requirement
-/// or an OR-group of alternatives.
-#[derive(Debug, Clone)]
-pub enum SolverDep {
-    /// A single dependency: (name, constraint).
-    Single(String, ConaryConstraint),
-    /// An OR-group: any one of the alternatives satisfies the dependency.
-    /// Each alternative is (name, constraint).
-    OrGroup(Vec<(String, ConaryConstraint)>),
-}
-
-impl SolverDep {
-    /// Returns the name if this is a `Single` dep; `None` for `OrGroup`.
-    pub fn single_name(&self) -> Option<&str> {
-        match self {
-            Self::Single(name, _) => Some(name),
-            Self::OrGroup(_) => None,
-        }
-    }
-
-    /// Returns (name, constraint) if this is a `Single` dep.
-    pub fn as_single(&self) -> Option<(&str, &ConaryConstraint)> {
-        match self {
-            Self::Single(name, constraint) => Some((name, constraint)),
-            Self::OrGroup(_) => None,
-        }
-    }
-}
+use loading::{
+    dep_entry_to_solver_dep, escape_like, find_repo_package_by_id,
+    load_repo_dependency_requests, load_repo_provided_capabilities, parse_stored_version_scheme,
+    repo_package_provides_capability,
+};
+pub(crate) use matching::constraint_matches_package;
+pub use types::{
+    ConaryConstraint, ConaryPackage, ConaryPackageVersion, ConaryProvidedVersion, SolverDep,
+};
 
 /// Bridge between Conary's data model and resolvo's abstract solver interface.
 ///
@@ -102,19 +40,19 @@ impl SolverDep {
 /// and queries Conary's DB on demand to feed the solver.
 pub struct ConaryProvider<'db> {
     // --- Interning pools ---
-    names: Vec<String>,
-    name_to_id: HashMap<String, NameId>,
+    pub(super) names: Vec<String>,
+    pub(super) name_to_id: HashMap<String, NameId>,
 
-    solvables: Vec<ConaryPackage>,
+    pub(super) solvables: Vec<ConaryPackage>,
 
     /// Each version set is (name_id, constraint).
-    version_sets: Vec<(NameId, ConaryConstraint)>,
+    pub(super) version_sets: Vec<(NameId, ConaryConstraint)>,
 
     /// Cache for deduplicating version sets by (name_id, constraint).
-    version_set_cache: HashMap<(u32, ConaryConstraint), VersionSetId>,
+    pub(super) version_set_cache: HashMap<(u32, ConaryConstraint), VersionSetId>,
 
     /// Each version set union is a list of `VersionSetId`s (OR alternatives).
-    version_set_unions: Vec<Vec<VersionSetId>>,
+    pub(super) version_set_unions: Vec<Vec<VersionSetId>>,
 
     /// Reverse index: package name -> indices into `solvables` vec.
     /// Enables O(1) lookup instead of linear scan when finding solvables by name.
@@ -126,12 +64,12 @@ pub struct ConaryProvider<'db> {
 
     /// Reverse index: version set ID list -> union ID.
     /// Enables O(1) lookup instead of linear scan in `find_union_id`.
-    union_id_index: HashMap<Vec<VersionSetId>, VersionSetUnionId>,
+    pub(super) union_id_index: HashMap<Vec<VersionSetId>, VersionSetUnionId>,
 
-    strings: Vec<String>,
+    pub(super) strings: Vec<String>,
 
     /// Pre-loaded dependencies for each solvable, keyed by `SolvableId` index.
-    dependencies: HashMap<u32, Vec<SolverDep>>,
+    pub(super) dependencies: HashMap<u32, Vec<SolverDep>>,
 
     /// Index of capability name -> list of (trove_id, optional version) providers.
     /// Built by `load_removal_data()` from already-loaded solvable provides.
@@ -150,7 +88,7 @@ pub struct ConaryProvider<'db> {
     canonical_equivalents: HashMap<String, Vec<String>>,
 
     // --- Data source ---
-    conn: &'db rusqlite::Connection,
+    pub(super) conn: &'db rusqlite::Connection,
 }
 
 impl<'db> ConaryProvider<'db> {
@@ -211,7 +149,7 @@ impl<'db> ConaryProvider<'db> {
         &mut self,
         name_id: NameId,
         scheme: VersionScheme,
-        constraint: RepoVersionConstraint,
+        constraint: crate::repository::versioning::RepoVersionConstraint,
         raw: Option<String>,
     ) -> VersionSetId {
         let constraint = ConaryConstraint::Repository {
@@ -498,12 +436,12 @@ impl<'db> ConaryProvider<'db> {
 
     /// Collect all unique dependency names from loaded packages.
     pub fn dependency_names(&self) -> Vec<String> {
-        self.new_dependency_names(&std::collections::HashSet::new())
+        self.new_dependency_names(&HashSet::new())
     }
 
     /// Collect dependency names not already in `known`, avoiding redundant allocations.
-    pub fn new_dependency_names(&self, known: &std::collections::HashSet<String>) -> Vec<String> {
-        let mut seen = std::collections::HashSet::new();
+    pub fn new_dependency_names(&self, known: &HashSet<String>) -> Vec<String> {
+        let mut seen = HashSet::new();
         for dep_list in self.dependencies.values() {
             for dep in dep_list {
                 match dep {
@@ -578,7 +516,7 @@ impl<'db> ConaryProvider<'db> {
     }
 
     /// Look up a single (name, constraint) pair as a `ConditionalRequirement`.
-    fn lookup_requirement(
+    pub(super) fn lookup_requirement(
         &self,
         dep_name: &str,
         constraint: &ConaryConstraint,
@@ -596,12 +534,12 @@ impl<'db> ConaryProvider<'db> {
     }
 
     /// Find a previously-interned union ID matching the given version set IDs.
-    fn find_union_id(&self, vs_ids: &[VersionSetId]) -> Option<VersionSetUnionId> {
+    pub(super) fn find_union_id(&self, vs_ids: &[VersionSetId]) -> Option<VersionSetUnionId> {
         self.union_id_index.get(vs_ids).copied()
     }
 
     /// Find all solvables that match a given package name.
-    fn solvables_for_name(&self, name_id: NameId) -> Vec<SolvableId> {
+    pub(super) fn solvables_for_name(&self, name_id: NameId) -> Vec<SolvableId> {
         let name = &self.names[name_id.0 as usize];
         self.name_to_solvable_indices
             .get(name)
@@ -616,7 +554,7 @@ impl<'db> ConaryProvider<'db> {
             .unwrap_or_default()
     }
 
-    fn solvables_for_provide(&self, capability: &str) -> Vec<SolvableId> {
+    pub(super) fn solvables_for_provide(&self, capability: &str) -> Vec<SolvableId> {
         self.solvables
             .iter()
             .enumerate()
@@ -631,7 +569,7 @@ impl<'db> ConaryProvider<'db> {
     }
 
     /// Find the installed solvable for a name, if any.
-    fn installed_solvable_for_name(&self, name_id: NameId) -> Option<SolvableId> {
+    pub(super) fn installed_solvable_for_name(&self, name_id: NameId) -> Option<SolvableId> {
         let name = &self.names[name_id.0 as usize];
         self.name_to_solvable_indices
             .get(name)
@@ -728,7 +666,7 @@ impl<'db> ConaryProvider<'db> {
     /// deduplicates by trove id.
     pub fn find_providers(&self, capability: &str) -> Vec<(i64, Option<String>)> {
         let mut results: Vec<(i64, Option<String>)> = Vec::new();
-        let mut seen_ids = std::collections::HashSet::new();
+        let mut seen_ids = HashSet::new();
 
         // Exact match.
         if let Some(providers) = self.provides_index.get(capability) {
@@ -805,705 +743,6 @@ impl<'db> ConaryProvider<'db> {
     }
 }
 
-fn load_repo_dependency_requests(
-    conn: &rusqlite::Connection,
-    pkg: &RepositoryPackage,
-    repo: &crate::db::models::Repository,
-) -> Result<Vec<SolverDep>> {
-    let repo_scheme = infer_version_scheme(repo);
-    let Some(repository_package_id) = pkg.id else {
-        return Ok(pkg
-            .parse_dependency_requests()?
-            .into_iter()
-            .map(|(name, constraint)| SolverDep::Single(name, ConaryConstraint::Legacy(constraint)))
-            .collect());
-    };
-
-    // Try group-based loading first for OR and conditional support
-    let groups =
-        RepositoryRequirementGroup::find_by_repository_package(conn, repository_package_id)?;
-    if !groups.is_empty() {
-        return load_grouped_dependency_requests(conn, &groups, repo_scheme);
-    }
-
-    // Fall back to flat requirement rows (legacy data or non-grouped deps)
-    let rows = RepositoryRequirement::find_by_repository_package(conn, repository_package_id)?;
-    if rows.is_empty() {
-        return Ok(pkg
-            .parse_dependency_requests()?
-            .into_iter()
-            .map(|(name, constraint)| SolverDep::Single(name, ConaryConstraint::Legacy(constraint)))
-            .collect());
-    }
-
-    Ok(rows
-        .into_iter()
-        .map(|row| {
-            let (name, constraint) = row_to_constraint(row, repo_scheme);
-            SolverDep::Single(name, constraint)
-        })
-        .collect())
-}
-
-/// Map a dependency entry to a `SolverDep` using the given version scheme.
-///
-/// Shared by `load_installed_packages` and `load_removal_data` to avoid
-/// duplicating the scheme-aware constraint construction.
-fn dep_entry_to_solver_dep(dep: &DependencyEntry, scheme: VersionScheme) -> SolverDep {
-    let constraint = match (scheme, dep.version_constraint.as_deref()) {
-        (VersionScheme::Rpm, Some(s)) => {
-            ConaryConstraint::Legacy(VersionConstraint::parse(s).unwrap_or(VersionConstraint::Any))
-        }
-        (VersionScheme::Rpm, None) => ConaryConstraint::Legacy(VersionConstraint::Any),
-        (native, Some(s)) => ConaryConstraint::Repository {
-            scheme: native,
-            constraint: parse_repo_constraint(native, s).unwrap_or(RepoVersionConstraint::Any),
-            raw: Some(s.to_string()),
-        },
-        (native, None) => ConaryConstraint::Repository {
-            scheme: native,
-            constraint: RepoVersionConstraint::Any,
-            raw: None,
-        },
-    };
-    SolverDep::Single(dep.depends_on_name.clone(), constraint)
-}
-
-/// Convert a flat requirement row to (name, constraint).
-fn row_to_constraint(
-    row: RepositoryRequirement,
-    repo_scheme: Option<VersionScheme>,
-) -> (String, ConaryConstraint) {
-    let raw = row.version_constraint.clone();
-    let constraint = match (repo_scheme, raw.as_deref()) {
-        (Some(scheme), Some(value)) => ConaryConstraint::Repository {
-            scheme,
-            constraint: parse_repo_constraint(scheme, value).unwrap_or(RepoVersionConstraint::Any),
-            raw,
-        },
-        (Some(scheme), None) => ConaryConstraint::Repository {
-            scheme,
-            constraint: RepoVersionConstraint::Any,
-            raw: None,
-        },
-        (None, Some(value)) => ConaryConstraint::Legacy(
-            VersionConstraint::parse(value).unwrap_or(VersionConstraint::Any),
-        ),
-        (None, None) => ConaryConstraint::Legacy(VersionConstraint::Any),
-    };
-    (row.capability, constraint)
-}
-
-/// Load dependency requests using the group-based model.
-///
-/// Groups with `behavior = "hard"` become solver requirements.
-/// Multi-clause groups produce `SolverDep::OrGroup` (Debian OR dependencies).
-/// Conditional and unsupported-rich behaviors are logged and skipped.
-fn load_grouped_dependency_requests(
-    conn: &rusqlite::Connection,
-    groups: &[RepositoryRequirementGroup],
-    repo_scheme: Option<VersionScheme>,
-) -> Result<Vec<SolverDep>> {
-    let mut deps = Vec::new();
-
-    for group in groups {
-        // Skip non-hard dependencies (optional, build, etc. for runtime resolution)
-        if group.kind != "depends" && group.kind != "pre_depends" {
-            continue;
-        }
-
-        match group.behavior.as_str() {
-            "conditional" | "unsupported_rich" => {
-                tracing::debug!(
-                    "Skipping {} dependency (behavior={}): {:?}",
-                    group.kind,
-                    group.behavior,
-                    group.native_text,
-                );
-                continue;
-            }
-            _ => {} // "hard" -- process normally
-        }
-
-        let Some(group_id) = group.id else {
-            continue;
-        };
-        let clauses = RepositoryRequirement::find_by_group(conn, group_id)?;
-
-        if clauses.is_empty() {
-            continue;
-        }
-
-        if clauses.len() == 1 {
-            let (name, constraint) =
-                row_to_constraint(clauses.into_iter().next().unwrap(), repo_scheme);
-            deps.push(SolverDep::Single(name, constraint));
-        } else {
-            // Multi-clause: OR-group
-            let alternatives: Vec<(String, ConaryConstraint)> = clauses
-                .into_iter()
-                .map(|clause| row_to_constraint(clause, repo_scheme))
-                .collect();
-            deps.push(SolverDep::OrGroup(alternatives));
-        }
-    }
-
-    Ok(deps)
-}
-
-fn load_repo_provided_capabilities(
-    conn: &rusqlite::Connection,
-    pkg: &RepositoryPackage,
-    repo: &crate::db::models::Repository,
-) -> Result<Vec<(String, Option<ConaryProvidedVersion>)>> {
-    let repo_scheme = infer_version_scheme(repo);
-    let Some(repository_package_id) = pkg.id else {
-        return Ok(parse_repo_provides(pkg, repo_scheme));
-    };
-
-    let rows = RepositoryProvide::find_by_repository_package(conn, repository_package_id)?;
-    if rows.is_empty() {
-        return Ok(parse_repo_provides(pkg, repo_scheme));
-    }
-
-    Ok(rows
-        .into_iter()
-        .map(|row| {
-            let version = match (repo_scheme, row.version) {
-                (Some(scheme), Some(raw)) => {
-                    Some(ConaryProvidedVersion::Repository { raw, scheme })
-                }
-                _ => None,
-            };
-            (row.capability, version)
-        })
-        .collect())
-}
-
-fn find_repo_package_by_id(
-    conn: &rusqlite::Connection,
-    repository_package_id: i64,
-) -> Result<Option<RepositoryPackage>> {
-    RepositoryPackage::find_by_id(conn, repository_package_id)
-}
-
-/// Escape special characters for SQL LIKE patterns.
-///
-/// SQLite LIKE treats `%` and `_` as wildcards. When searching for literal
-/// text we must escape them (along with the escape character itself).
-fn escape_like(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        match ch {
-            '\\' | '%' | '_' => {
-                out.push('\\');
-                out.push(ch);
-            }
-            _ => out.push(ch),
-        }
-    }
-    out
-}
-
-// --- Display helpers ---
-
-struct DisplayName<'a>(&'a str);
-impl fmt::Display for DisplayName<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-struct DisplaySolvable<'a> {
-    name: &'a str,
-    version: &'a ConaryPackageVersion,
-}
-impl fmt::Display for DisplaySolvable<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}={}", self.name, self.version)
-    }
-}
-
-struct DisplayVersionSet<'a>(&'a ConaryConstraint);
-impl fmt::Display for DisplayVersionSet<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-struct DisplayString<'a>(&'a str);
-impl fmt::Display for DisplayString<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-// --- Interner implementation ---
-
-impl Interner for ConaryProvider<'_> {
-    fn display_solvable(&self, solvable: SolvableId) -> impl fmt::Display + '_ {
-        let pkg = &self.solvables[solvable.0 as usize];
-        DisplaySolvable {
-            name: &pkg.name,
-            version: &pkg.version,
-        }
-    }
-
-    fn display_name(&self, name: NameId) -> impl fmt::Display + '_ {
-        DisplayName(&self.names[name.0 as usize])
-    }
-
-    fn display_version_set(&self, version_set: VersionSetId) -> impl fmt::Display + '_ {
-        DisplayVersionSet(&self.version_sets[version_set.0 as usize].1)
-    }
-
-    fn display_string(&self, string_id: StringId) -> impl fmt::Display + '_ {
-        DisplayString(&self.strings[string_id.0 as usize])
-    }
-
-    fn version_set_name(&self, version_set: VersionSetId) -> NameId {
-        self.version_sets[version_set.0 as usize].0
-    }
-
-    fn solvable_name(&self, solvable: SolvableId) -> NameId {
-        let pkg = &self.solvables[solvable.0 as usize];
-        self.name_to_id[&pkg.name]
-    }
-
-    fn version_sets_in_union(
-        &self,
-        version_set_union: VersionSetUnionId,
-    ) -> impl Iterator<Item = VersionSetId> {
-        self.version_set_unions
-            .get(version_set_union.0 as usize)
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-    }
-
-    fn resolve_condition(&self, _condition: ConditionId) -> Condition {
-        // ConaryProvider does not use conditions; return a permissive default
-        // rather than panicking if resolvo ever calls this unexpectedly.
-        Condition::Requirement(VersionSetId::default())
-    }
-}
-
-// --- DependencyProvider implementation ---
-
-impl DependencyProvider for ConaryProvider<'_> {
-    async fn filter_candidates(
-        &self,
-        candidates: &[SolvableId],
-        version_set: VersionSetId,
-        inverse: bool,
-    ) -> Vec<SolvableId> {
-        let (name_id, ref constraint) = self.version_sets[version_set.0 as usize];
-        let requested_name = &self.names[name_id.0 as usize];
-        candidates
-            .iter()
-            .copied()
-            .filter(|&sid| {
-                let pkg = &self.solvables[sid.0 as usize];
-                let matches = if pkg.name == *requested_name {
-                    constraint_matches_package(constraint, &pkg.version)
-                } else if let Some(provided_version) = pkg
-                    .provided_capabilities
-                    .iter()
-                    .find(|(capability, _version)| capability == requested_name)
-                    .and_then(|(_capability, version)| version.as_ref())
-                {
-                    constraint_matches_provide(constraint, Some(provided_version), &pkg.version)
-                } else {
-                    constraint_matches_provide(constraint, None, &pkg.version)
-                };
-                if inverse { !matches } else { matches }
-            })
-            .collect()
-    }
-
-    async fn get_candidates(&self, name: NameId) -> Option<Candidates> {
-        let mut candidates = self.solvables_for_name(name);
-
-        if candidates.is_empty() {
-            let name_str = &self.names[name.0 as usize];
-            let providers = self.resolve_virtual_provide(name_str);
-            for provider_name in &providers {
-                if let Some(&provider_name_id) = self.name_to_id.get(provider_name) {
-                    candidates.extend(self.solvables_for_name(provider_name_id));
-                }
-            }
-            candidates.extend(self.solvables_for_provide(name_str));
-
-            // Canonical fallback: check cross-distro equivalents when all
-            // other lookup strategies fail. E.g. 'libssl3' -> 'openssl'.
-            if candidates.is_empty() {
-                for equiv in self.canonical_equivalents(name_str) {
-                    if let Some(&equiv_name_id) = self.name_to_id.get(equiv) {
-                        let equiv_candidates = self.solvables_for_name(equiv_name_id);
-                        if !equiv_candidates.is_empty() {
-                            tracing::debug!("Canonical fallback: {} -> {}", name_str, equiv);
-                            candidates.extend(equiv_candidates);
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if candidates.is_empty() {
-                return None;
-            }
-        }
-
-        let favored = self.installed_solvable_for_name(name);
-
-        Some(Candidates {
-            candidates,
-            favored,
-            locked: None,
-            hint_dependencies_available: HintDependenciesAvailable::All,
-            excluded: Vec::new(),
-        })
-    }
-
-    async fn sort_candidates(&self, _solver: &SolverCache<Self>, solvables: &mut [SolvableId]) {
-        solvables.sort_by(|a, b| {
-            let pkg_a = &self.solvables[a.0 as usize];
-            let pkg_b = &self.solvables[b.0 as usize];
-
-            if let Some(version_cmp) = compare_package_versions_desc(&pkg_a.version, &pkg_b.version)
-                && version_cmp != std::cmp::Ordering::Equal
-            {
-                return version_cmp;
-            }
-
-            let a_installed = pkg_a.trove_id.is_some();
-            let b_installed = pkg_b.trove_id.is_some();
-            b_installed
-                .cmp(&a_installed)
-                .then_with(|| pkg_a.name.cmp(&pkg_b.name))
-        });
-    }
-
-    async fn get_dependencies(&self, solvable: SolvableId) -> Dependencies {
-        let mut requirements = Vec::new();
-
-        if let Some(dep_list) = self.dependencies.get(&solvable.0) {
-            for dep in dep_list {
-                match dep {
-                    SolverDep::Single(dep_name, constraint) => {
-                        if let Some(req) = self.lookup_requirement(dep_name, constraint) {
-                            requirements.push(req);
-                        }
-                    }
-                    SolverDep::OrGroup(alternatives) => {
-                        let mut vs_ids = Vec::new();
-                        for (dep_name, constraint) in alternatives {
-                            if let Some(&dep_name_id) = self.name_to_id.get(dep_name) {
-                                let cache_key = (dep_name_id.0, constraint.clone());
-                                if let Some(&vs_id) = self.version_set_cache.get(&cache_key) {
-                                    vs_ids.push(vs_id);
-                                }
-                            }
-                        }
-                        if vs_ids.len() == 1 {
-                            // Single-alternative OR group: emit as a simple requirement
-                            requirements.push(ConditionalRequirement::from(vs_ids[0]));
-                        } else if vs_ids.len() > 1 {
-                            // Look up the union ID from our pool
-                            if let Some(union_id) = self.find_union_id(&vs_ids) {
-                                requirements.push(ConditionalRequirement::from(union_id));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Dependencies::Known(KnownDependencies {
-            requirements,
-            constrains: Vec::new(),
-        })
-    }
-}
-
-impl fmt::Display for ConaryPackageVersion {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Installed(version) => write!(f, "{}", version),
-            Self::InstalledNative { raw, .. } => write!(f, "{}", raw),
-            Self::Repository { raw, .. } => write!(f, "{}", raw),
-        }
-    }
-}
-
-impl fmt::Display for ConaryConstraint {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Legacy(constraint) => write!(f, "{}", constraint),
-            Self::Repository {
-                raw, constraint, ..
-            } => {
-                if let Some(raw) = raw {
-                    write!(f, "{}", raw)
-                } else {
-                    write!(f, "{:?}", constraint)
-                }
-            }
-        }
-    }
-}
-
-fn compare_package_versions_desc(
-    a: &ConaryPackageVersion,
-    b: &ConaryPackageVersion,
-) -> Option<std::cmp::Ordering> {
-    let ord = match (a, b) {
-        (ConaryPackageVersion::Installed(a), ConaryPackageVersion::Installed(b)) => Some(b.cmp(a)),
-        (
-            ConaryPackageVersion::InstalledNative {
-                raw: a_raw,
-                scheme: a_scheme,
-            },
-            ConaryPackageVersion::InstalledNative {
-                raw: b_raw,
-                scheme: b_scheme,
-            },
-        ) if a_scheme == b_scheme => compare_repo_versions(*a_scheme, b_raw, a_raw),
-        (
-            ConaryPackageVersion::Repository {
-                raw: a_raw,
-                scheme: Some(a_scheme),
-            },
-            ConaryPackageVersion::Repository {
-                raw: b_raw,
-                scheme: Some(b_scheme),
-            },
-        ) if a_scheme == b_scheme => compare_repo_versions(*a_scheme, b_raw, a_raw),
-        _ => None,
-    }?;
-    Some(ord)
-}
-
-pub(crate) fn constraint_matches_package(
-    constraint: &ConaryConstraint,
-    version: &ConaryPackageVersion,
-) -> bool {
-    match (constraint, version) {
-        // Legacy constraint vs RPM installed
-        (ConaryConstraint::Legacy(constraint), ConaryPackageVersion::Installed(version)) => {
-            constraint.satisfies(version)
-        }
-        // Legacy `Any` matches anything
-        (
-            ConaryConstraint::Legacy(VersionConstraint::Any),
-            ConaryPackageVersion::Repository { .. } | ConaryPackageVersion::InstalledNative { .. },
-        ) => true,
-        // Legacy constraint vs RPM repo package
-        (
-            ConaryConstraint::Legacy(constraint),
-            ConaryPackageVersion::Repository {
-                raw,
-                scheme: Some(VersionScheme::Rpm),
-            },
-        ) => RpmVersion::parse(raw)
-            .map(|version| constraint.satisfies(&version))
-            .unwrap_or(false),
-        // Native RPM constraint vs legacy RPM installed
-        (
-            ConaryConstraint::Repository {
-                scheme: VersionScheme::Rpm,
-                constraint,
-                ..
-            },
-            ConaryPackageVersion::Installed(version),
-        ) => {
-            let legacy = repo_constraint_to_legacy(constraint);
-            legacy.satisfies(version)
-        }
-        // Native constraint vs installed native (same scheme)
-        (
-            ConaryConstraint::Repository {
-                scheme, constraint, ..
-            },
-            ConaryPackageVersion::InstalledNative {
-                raw,
-                scheme: installed_scheme,
-            },
-        ) if scheme == installed_scheme => repo_version_satisfies(*scheme, raw, constraint),
-        // Native constraint vs repo package (same scheme)
-        (
-            ConaryConstraint::Repository {
-                scheme, constraint, ..
-            },
-            ConaryPackageVersion::Repository {
-                raw,
-                scheme: Some(version_scheme),
-            },
-        ) if scheme == version_scheme => repo_version_satisfies(*scheme, raw, constraint),
-        // Native `Any` constraint matches any repo version
-        (
-            ConaryConstraint::Repository {
-                constraint: RepoVersionConstraint::Any,
-                ..
-            },
-            ConaryPackageVersion::Repository { .. } | ConaryPackageVersion::InstalledNative { .. },
-        ) => true,
-        _ => false,
-    }
-}
-
-fn constraint_matches_provide(
-    constraint: &ConaryConstraint,
-    provided_version: Option<&ConaryProvidedVersion>,
-    package_version: &ConaryPackageVersion,
-) -> bool {
-    if let Some(version) = provided_version {
-        match (constraint, version) {
-            (ConaryConstraint::Legacy(constraint), ConaryProvidedVersion::Installed(version)) => {
-                return constraint.satisfies(version);
-            }
-            (
-                ConaryConstraint::Legacy(VersionConstraint::Any),
-                ConaryProvidedVersion::Repository { .. },
-            ) => return true,
-            (
-                ConaryConstraint::Legacy(constraint),
-                ConaryProvidedVersion::Repository {
-                    raw,
-                    scheme: VersionScheme::Rpm,
-                },
-            ) => {
-                return RpmVersion::parse(raw)
-                    .map(|version| constraint.satisfies(&version))
-                    .unwrap_or(false);
-            }
-            (
-                ConaryConstraint::Repository {
-                    scheme, constraint, ..
-                },
-                ConaryProvidedVersion::Repository {
-                    raw,
-                    scheme: provided_scheme,
-                },
-            ) if scheme == provided_scheme => {
-                return repo_version_satisfies(*scheme, raw, constraint);
-            }
-            (
-                ConaryConstraint::Repository {
-                    constraint: RepoVersionConstraint::Any,
-                    ..
-                },
-                ConaryProvidedVersion::Repository { .. },
-            ) => return true,
-            _ => {}
-        }
-    }
-
-    constraint_matches_package(constraint, package_version)
-}
-
-/// Convert a `RepoVersionConstraint` to a legacy `VersionConstraint` for RPM
-/// cross-format matching (repo RPM constraint vs installed RPM `RpmVersion`).
-fn repo_constraint_to_legacy(constraint: &RepoVersionConstraint) -> VersionConstraint {
-    match constraint {
-        RepoVersionConstraint::Any => VersionConstraint::Any,
-        RepoVersionConstraint::Exact(v) => {
-            VersionConstraint::parse(&format!("= {v}")).unwrap_or(VersionConstraint::Any)
-        }
-        RepoVersionConstraint::GreaterThan(v) => {
-            VersionConstraint::parse(&format!("> {v}")).unwrap_or(VersionConstraint::Any)
-        }
-        RepoVersionConstraint::GreaterOrEqual(v) => {
-            VersionConstraint::parse(&format!(">= {v}")).unwrap_or(VersionConstraint::Any)
-        }
-        RepoVersionConstraint::LessThan(v) => {
-            VersionConstraint::parse(&format!("< {v}")).unwrap_or(VersionConstraint::Any)
-        }
-        RepoVersionConstraint::LessOrEqual(v) => {
-            VersionConstraint::parse(&format!("<= {v}")).unwrap_or(VersionConstraint::Any)
-        }
-        RepoVersionConstraint::NotEqual(v) => {
-            VersionConstraint::parse(&format!("!= {v}")).unwrap_or(VersionConstraint::Any)
-        }
-    }
-}
-
-fn parse_stored_version_scheme(raw: Option<&str>) -> Option<VersionScheme> {
-    match raw? {
-        "rpm" => Some(VersionScheme::Rpm),
-        "debian" => Some(VersionScheme::Debian),
-        "arch" => Some(VersionScheme::Arch),
-        _ => None,
-    }
-}
-
-fn parse_repo_provides(
-    pkg: &RepositoryPackage,
-    scheme: Option<VersionScheme>,
-) -> Vec<(String, Option<ConaryProvidedVersion>)> {
-    let Some(metadata_json) = pkg.metadata.as_deref() else {
-        return Vec::new();
-    };
-    let Ok(metadata) = serde_json::from_str::<serde_json::Value>(metadata_json) else {
-        return Vec::new();
-    };
-    let Some(provides) = metadata
-        .get("rpm_provides")
-        .and_then(|value| value.as_array())
-    else {
-        return Vec::new();
-    };
-
-    provides
-        .iter()
-        .filter_map(|value| value.as_str())
-        .map(|entry| parse_provide_entry(entry, scheme))
-        .collect()
-}
-
-fn parse_provide_entry(
-    entry: &str,
-    scheme: Option<VersionScheme>,
-) -> (String, Option<ConaryProvidedVersion>) {
-    const OPS: [&str; 5] = ["<=", ">=", "=", "<", ">"];
-
-    for op in OPS {
-        if let Some((name, version)) = entry.split_once(op) {
-            let name = name.trim();
-            let version = version.trim();
-            if name.is_empty() || version.is_empty() {
-                continue;
-            }
-            let parsed = match scheme {
-                Some(VersionScheme::Rpm) => RpmVersion::parse(version)
-                    .ok()
-                    .map(ConaryProvidedVersion::Installed),
-                Some(scheme) => Some(ConaryProvidedVersion::Repository {
-                    raw: version.to_string(),
-                    scheme,
-                }),
-                None => None,
-            };
-            return (name.to_string(), parsed);
-        }
-    }
-
-    (entry.trim().to_string(), None)
-}
-
-fn repo_package_provides_capability(
-    conn: &rusqlite::Connection,
-    pkg: &RepositoryPackage,
-    capability: &str,
-) -> Result<bool> {
-    let Some(repo) = crate::db::models::Repository::find_by_id(conn, pkg.repository_id)? else {
-        return Ok(false);
-    };
-    Ok(load_repo_provided_capabilities(conn, pkg, &repo)?
-        .iter()
-        .any(|(provided, _version)| provided == capability))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1511,6 +750,7 @@ mod tests {
     use crate::db::models::{
         Repository, RepositoryPackage, RepositoryProvide, RepositoryRequirement,
     };
+    use crate::repository::versioning::RepoVersionConstraint;
 
     fn setup_test_db() -> (tempfile::TempDir, rusqlite::Connection) {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -1808,7 +1048,8 @@ mod tests {
         solvables.sort_by(|a, b| {
             let pkg_a = &provider.solvables[a.0 as usize];
             let pkg_b = &provider.solvables[b.0 as usize];
-            if let Some(version_cmp) = compare_package_versions_desc(&pkg_a.version, &pkg_b.version)
+            if let Some(version_cmp) =
+                matching::compare_package_versions_desc(&pkg_a.version, &pkg_b.version)
                 && version_cmp != std::cmp::Ordering::Equal
             {
                 return version_cmp;
@@ -1826,6 +1067,8 @@ mod tests {
 
     #[test]
     fn test_display_methods() {
+        use resolvo::Interner;
+
         let (_dir, conn) = setup_test_db();
         let mut provider = ConaryProvider::new(&conn);
 
@@ -1886,7 +1129,11 @@ mod tests {
                 else {
                     return false;
                 };
-                constraint_matches_provide(constraint, Some(provided_version), &pkg.version)
+                matching::constraint_matches_provide(
+                    constraint,
+                    Some(provided_version),
+                    &pkg.version,
+                )
             })
             .collect();
         assert_eq!(matching, vec![candidate]);
@@ -1894,6 +1141,8 @@ mod tests {
 
     #[test]
     fn or_group_loading_from_requirement_groups() {
+        use crate::db::models::RepositoryRequirementGroup;
+
         // Debian OR dependency: default-mta | mail-transport-agent
         let (_dir, conn) = setup_test_db();
 
@@ -1962,6 +1211,8 @@ mod tests {
 
     #[test]
     fn conditional_deps_skipped_with_diagnostic() {
+        use crate::db::models::RepositoryRequirementGroup;
+
         let (_dir, conn) = setup_test_db();
 
         let mut repo = Repository::new("fedora-main".to_string(), "https://example.invalid".into());
