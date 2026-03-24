@@ -277,6 +277,12 @@ impl<'a> Cook<'a> {
             ),
         ];
 
+        // Inject caller-supplied env vars (e.g. LFS, LFS_TGT, PATH for bootstrap
+        // builds) without touching the process-wide environment.
+        for (key, value) in &self.kitchen.config.extra_env {
+            env.push((key, value.clone()));
+        }
+
         for (key, value) in &build.environment {
             env.push((key, value.clone()));
         }
