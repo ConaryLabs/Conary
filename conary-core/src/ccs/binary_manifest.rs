@@ -6,8 +6,8 @@
 //! A human-readable MANIFEST.toml is also included in packages for debugging.
 
 use crate::capability::CapabilityDeclaration;
+use crate::hash;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 /// Current format version
@@ -152,12 +152,9 @@ pub struct Hash {
 impl Hash {
     /// Create a new SHA-256 hash from data
     pub fn sha256(data: &[u8]) -> Self {
-        let mut hasher = Sha256::new();
-        hasher.update(data);
-        let result = hasher.finalize();
         Hash {
             algorithm: "sha256".to_string(),
-            value: hex::encode(result),
+            value: hash::sha256(data),
         }
     }
 
@@ -319,24 +316,24 @@ impl MerkleTree {
         let mut leaf_hashes: Vec<Vec<u8>> = Vec::new();
 
         for (name, comp_ref) in components {
-            let mut hasher = Sha256::new();
+            let mut hasher = hash::Hasher::new(hash::HashAlgorithm::Sha256);
             hasher.update(name.as_bytes());
             hasher.update(comp_ref.hash.value.as_bytes());
-            leaf_hashes.push(hasher.finalize().to_vec());
+            leaf_hashes.push(hex::decode(hasher.finalize().value).unwrap_or_default());
         }
 
         // Sort the leaf hashes (BTreeMap already sorted by key, but we sort hashes for consistency)
         leaf_hashes.sort();
 
         // Calculate root: SHA256(concatenated sorted leaf hashes)
-        let mut root_hasher = Sha256::new();
+        let mut root_hasher = hash::Hasher::new(hash::HashAlgorithm::Sha256);
         for leaf in &leaf_hashes {
             root_hasher.update(leaf);
         }
 
         Hash {
             algorithm: "sha256".to_string(),
-            value: hex::encode(root_hasher.finalize()),
+            value: root_hasher.finalize().value,
         }
     }
 

@@ -8,8 +8,8 @@
 use crate::ccs::signing::SigningKeyPair;
 use crate::trust::metadata::{KeyVal, TufKey, TufSignature};
 use crate::trust::{TrustError, TrustResult};
+use crate::hash;
 use ed25519_dalek::Signer;
-use sha2::{Digest, Sha256};
 
 /// Compute the TUF key ID for a key
 ///
@@ -17,8 +17,7 @@ use sha2::{Digest, Sha256};
 /// OLPC canonical JSON representation of the key.
 pub fn compute_key_id(key: &TufKey) -> TrustResult<String> {
     let canonical = canonical_json(key)?;
-    let hash = Sha256::digest(&canonical);
-    Ok(hex::encode(hash))
+    Ok(hash::sha256(&canonical))
 }
 
 /// Produce deterministic (canonical) JSON for a serializable value

@@ -8,12 +8,12 @@
 //! - Expiration checking (freeze protection)
 //! - Snapshot consistency (mix-and-match protection)
 
+use crate::hash;
 use crate::trust::keys::canonical_json;
 use crate::trust::metadata::{MetaFile, Role, RootMetadata, Signed, SnapshotMetadata, TufKey};
 use crate::trust::{TrustError, TrustResult};
 use chrono::Utc;
 use ed25519_dalek::{Signature, VerifyingKey};
-use sha2::Digest;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -172,7 +172,7 @@ pub fn verify_metadata_hash(
     if let Some(ref hashes) = meta_ref.hashes
         && let Some(expected_sha256) = hashes.get("sha256")
     {
-        let actual_hash = hex::encode(sha2::Sha256::digest(actual_bytes));
+        let actual_hash = hash::sha256(actual_bytes);
         if actual_hash != *expected_sha256 {
             return Err(TrustError::ConsistencyError(format!(
                 "Hash mismatch: expected {expected_sha256}, got {actual_hash}"
@@ -428,7 +428,7 @@ mod tests {
     #[test]
     fn test_verify_metadata_hash_ok() {
         let data = b"test metadata content";
-        let hash = hex::encode(sha2::Sha256::digest(data));
+        let hash = hash::sha256(data);
         let mut hashes = BTreeMap::new();
         hashes.insert("sha256".to_string(), hash);
 

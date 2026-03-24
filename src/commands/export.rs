@@ -18,7 +18,6 @@ use anyhow::{Context, Result, anyhow, bail};
 use conary_core::filesystem::CasStore;
 use flate2::Compression;
 use flate2::write::GzEncoder;
-use sha2::{Digest, Sha256};
 use tracing::info;
 
 use super::generation::metadata::{GenerationMetadata, generation_path};
@@ -359,9 +358,7 @@ fn write_blob(blobs_dir: &Path, data: &[u8]) -> Result<(String, u64)> {
 
 /// Compute the hex-encoded SHA-256 digest of the given data.
 fn hex_digest(data: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    format!("{:x}", hasher.finalize())
+    conary_core::hash::sha256(data)
 }
 
 /// Build the OCI image config JSON.

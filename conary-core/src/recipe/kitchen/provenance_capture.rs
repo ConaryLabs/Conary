@@ -7,8 +7,8 @@
 //! `ManifestProvenance` for inclusion in the CCS package.
 
 use crate::ccs::manifest::{ManifestProvenance, ProvenanceDep, ProvenancePatch};
+use crate::hash;
 use chrono::{DateTime, Utc};
-use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
@@ -87,16 +87,9 @@ impl ProvenanceCapture {
     pub fn with_recipe_hash(mut self, recipe_path: &Path) -> Self {
         if let Ok(file) = fs::File::open(recipe_path) {
             let mut reader = std::io::BufReader::new(file);
-            let mut hasher = Sha256::new();
-            let mut buf = [0u8; 8192];
-            loop {
-                match std::io::Read::read(&mut reader, &mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => hasher.update(&buf[..n]),
-                    Err(_) => return self,
-                }
+            if let Ok(h) = hash::hash_reader(hash::HashAlgorithm::Sha256, &mut reader) {
+                self.recipe_hash = Some(format!("sha256:{}", h.value));
             }
-            self.recipe_hash = Some(format!("sha256:{}", hex::encode(hasher.finalize())));
         }
         self
     }
@@ -144,10 +137,10 @@ impl ProvenanceCapture {
         author: Option<&str>,
         reason: Option<&str>,
     ) {
-        let hash = Sha256::digest(content);
+        let h = hash::sha256(content);
         self.patches.push(CapturedPatch {
             source: source.to_string(),
-            hash: format!("sha256:{}", hex::encode(hash)),
+            hash: format!("sha256:{h}"),
             strip_level,
             author: author.map(|s| s.to_string()),
             reason: reason.map(|s| s.to_string()),
@@ -186,22 +179,22 @@ impl ProvenanceCapture {
         }
 
         // Sort by path for deterministic ordering (BTreeMap already sorted)
-        let mut hasher = Sha256::new();
+        let mut hasher = hash::Hasher::new(hash::HashAlgorithm::Sha256);
 
-        for (path, hash) in &self.file_hashes {
+        for (path, file_hash) in &self.file_hashes {
             hasher.update(path.as_bytes());
             hasher.update(b":");
-            hasher.update(hash.as_bytes());
+            hasher.update(file_hash.as_bytes());
             hasher.update(b"\n");
         }
 
         let root = hasher.finalize();
-        self.merkle_root = Some(format!("sha256:{}", hex::encode(root)));
+        self.merkle_root = Some(format!("sha256:{}", root.value));
     }
 
     /// Compute the DNA hash from all provenance data
     pub fn compute_dna_hash(&self) -> String {
-        let mut hasher = Sha256::new();
+        let mut hasher = hash::Hasher::new(hash::HashAlgorithm::Sha256);
 
         // Source layer
         if let Some(url) = &self.upstream_url {
@@ -256,8 +249,8 @@ impl ProvenanceCapture {
             hasher.update(b"\n");
         }
 
-        let hash = hasher.finalize();
-        format!("sha256:{}", hex::encode(hash))
+        let dna = hasher.finalize();
+        format!("sha256:{}", dna.value)
     }
 
     /// Convert to ManifestProvenance for inclusion in CCS manifest

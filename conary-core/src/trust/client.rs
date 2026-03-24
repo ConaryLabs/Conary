@@ -23,8 +23,8 @@ use crate::trust::verify::{
     verify_snapshot_consistency, verify_version_increase,
 };
 use crate::trust::{TrustError, TrustResult};
+use crate::hash;
 use rusqlite::{Connection, OptionalExtension, params};
-use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use tracing::{debug, info};
 
@@ -420,7 +420,7 @@ impl TufClient {
         signed: &Signed<T>,
     ) -> TrustResult<()> {
         let json = serde_json::to_string(signed)?;
-        let hash = hex::encode(Sha256::digest(json.as_bytes()));
+        let hash = hash::sha256(json.as_bytes());
 
         conn.execute(
             "INSERT OR REPLACE INTO tuf_metadata

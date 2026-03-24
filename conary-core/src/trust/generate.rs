@@ -12,8 +12,8 @@ use crate::trust::metadata::{
     MetaFile, Signed, SnapshotMetadata, TUF_SPEC_VERSION, TargetDescription, TargetsMetadata,
     TimestampMetadata,
 };
+use crate::hash;
 use chrono::{Duration, Utc};
-use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 /// Generate signed targets metadata from a list of packages
@@ -65,7 +65,7 @@ pub fn generate_snapshot(
 
     // Hash the targets metadata
     let targets_json = serde_json::to_vec(targets)?;
-    let targets_hash = hex::encode(Sha256::digest(&targets_json));
+    let targets_hash = hash::sha256(&targets_json);
 
     let mut meta = BTreeMap::new();
     meta.insert(
@@ -115,7 +115,7 @@ pub fn generate_timestamp(
 
     // Hash the snapshot metadata
     let snapshot_json = serde_json::to_vec(snapshot)?;
-    let snapshot_hash = hex::encode(Sha256::digest(&snapshot_json));
+    let snapshot_hash = hash::sha256(&snapshot_json);
 
     let mut meta = BTreeMap::new();
     meta.insert(
