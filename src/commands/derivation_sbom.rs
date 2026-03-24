@@ -73,12 +73,12 @@ pub async fn cmd_derivation_sbom(
     profile_path: Option<&str>,
     derivation_id: Option<&str>,
     output_path: Option<&str>,
+    db_path: &str,
 ) -> Result<()> {
     if profile_path.is_none() && derivation_id.is_none() {
         anyhow::bail!("specify --profile or --derivation");
     }
 
-    let db_path = "/var/lib/conary/conary.db";
     let conn = super::open_db(db_path)?;
     let index = DerivationIndex::new(&conn);
 

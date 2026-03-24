@@ -5,7 +5,7 @@
 use anyhow::Result;
 
 /// Pre-fetch derivation outputs from configured substituters.
-pub async fn cmd_cache_populate(profile_path: &str, sources_only: bool, full: bool) -> Result<()> {
+pub async fn cmd_cache_populate(profile_path: &str, sources_only: bool, full: bool, db_path: &str) -> Result<()> {
     // Read profile TOML
     let content = std::fs::read_to_string(profile_path)
         .map_err(|e| anyhow::anyhow!("failed to read profile: {e}"))?;
@@ -36,7 +36,6 @@ pub async fn cmd_cache_populate(profile_path: &str, sources_only: bool, full: bo
     }
 
     // Load substituter configuration from DB
-    let db_path = "/var/lib/conary/conary.db";
     let conn = super::open_db(db_path)?;
 
     let mut substituter =
@@ -122,8 +121,7 @@ pub async fn cmd_cache_populate(profile_path: &str, sources_only: bool, full: bo
 }
 
 /// Show cache statistics and substituter peer health.
-pub async fn cmd_cache_status() -> Result<()> {
-    let db_path = "/var/lib/conary/conary.db";
+pub async fn cmd_cache_status(db_path: &str) -> Result<()> {
 
     // CAS directory info
     let cas_dir = conary_core::db::paths::objects_dir(db_path);

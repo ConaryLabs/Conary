@@ -567,6 +567,9 @@ pub enum Commands {
         /// Output file (default: stdout)
         #[arg(long, short)]
         output: Option<String>,
+
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Federation management
