@@ -769,7 +769,7 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
     use conary_core::derivation::manifest::SystemManifest;
     use conary_core::derivation::pipeline::{Pipeline, PipelineConfig, PipelineEvent};
     use conary_core::derivation::seed::Seed;
-    use conary_core::derivation::stages::Stage;
+    use conary_core::derivation::build_order::Stage;
     use conary_core::filesystem::CasStore;
     use rusqlite::Connection;
     use std::collections::HashSet;
@@ -853,7 +853,7 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
     // Apply --up-to filter: drop packages in stages beyond the cutoff.
     if let Some(ref up_to) = opts.up_to {
         let cutoff = Stage::from_str_name(up_to)
-            .map_err(|e| anyhow::anyhow!("invalid --up-to stage: {e}"))?;
+            .ok_or_else(|| anyhow::anyhow!("invalid --up-to stage: {up_to}"))?;
         build_steps.retain(|step| step.stage <= cutoff);
         println!("After --up-to {up_to}: {} packages", build_steps.len());
     }
