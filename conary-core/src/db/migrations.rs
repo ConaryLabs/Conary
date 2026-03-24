@@ -2262,6 +2262,11 @@ pub fn migrate_v45(conn: &Connection) -> Result<()> {
 }
 
 /// Migration 46: Key-value settings table
+/// Version 46 - User runtime settings
+///
+/// Creates the settings table for user-facing runtime configuration.
+/// This is a general-purpose key-value store for CLI settings, distinct from
+/// server_metadata and client_metadata to avoid namespace conflicts.
 pub fn migrate_v46(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS settings (
@@ -2430,6 +2435,15 @@ pub fn migrate_v52(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 53 - Canonical cache tables and metadata stores
+///
+/// Creates three tables:
+/// - repology_cache: Package version data from Repology (cross-distro indexing)
+/// - appstream_cache: AppStream package metadata (descriptions, summaries)
+/// - server_metadata: Server-side sync state (canonical map version, sync timestamps).
+///   Separate from settings to avoid namespace conflicts.
+/// - client_metadata: Client-side cache state (metadata versions, last-sync timestamps).
+///   Separate from settings to avoid namespace conflicts.
 pub fn migrate_v53(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "
