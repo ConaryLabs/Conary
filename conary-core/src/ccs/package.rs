@@ -5,6 +5,7 @@
 //! This module provides a PackageFormat implementation for CCS packages,
 //! enabling them to be installed using the same infrastructure as RPM/DEB/Arch.
 
+use crate::ccs::archive_reader::read_ccs_archive;
 use crate::ccs::builder::{ComponentData, FileEntry, FileType as CcsFileType};
 use crate::ccs::manifest::{CcsManifest, Redirects};
 use crate::ccs::policy::BuildPolicyConfig;
@@ -16,25 +17,10 @@ use crate::packages::traits::{
     ConfigFileInfo, Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat,
     Scriptlet,
 };
-use flate2::read::GzDecoder;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use tar::Archive;
-use tracing::{debug, warn};
-
-/// Maximum size for a single archive entry (512 MB)
-const MAX_ENTRY_SIZE: u64 = 512 * 1024 * 1024;
-
-/// Maximum cumulative extraction size (4 GB)
-const MAX_TOTAL_EXTRACTION_SIZE: u64 = 4 * 1024 * 1024 * 1024;
-
-/// Maximum size for manifest entries (MANIFEST or MANIFEST.toml) (16 MiB)
-const MAX_MANIFEST_SIZE: u64 = 16 * 1024 * 1024;
-
-/// Maximum size for component JSON entries (64 MiB)
-const MAX_COMPONENT_SIZE: u64 = 64 * 1024 * 1024;
+use tracing::debug;
 
 /// A parsed CCS package ready for installation
 #[derive(Debug)]
@@ -329,66 +315,19 @@ impl CcsPackage {
 
     /// Extract file contents from the package
     ///
-    /// This extracts the objects/ directory and maps content by hash.
+    /// This re-reads the archive and returns the content blobs by hash.
     pub fn extract_all_content(&self) -> Result<HashMap<String, Vec<u8>>> {
         let file = File::open(&self.package_path)?;
-        let decoder = GzDecoder::new(file);
-        let mut archive = Archive::new(decoder);
-
-        let mut blobs: HashMap<String, Vec<u8>> = HashMap::new();
-        let mut total_bytes: u64 = 0;
-
-        for entry in archive.entries()? {
-            let mut entry = entry?;
-            let entry_path = entry.path()?;
-            let entry_path_str = entry_path.to_string_lossy();
-
-            // Extract objects (format: objects/ab/cdef123...)
-            if entry_path_str.starts_with("objects/") || entry_path_str.starts_with("./objects/") {
-                let path_str = entry_path_str
-                    .strip_prefix("./")
-                    .unwrap_or(&entry_path_str)
-                    .strip_prefix("objects/")
-                    .unwrap_or("");
-
-                // Reconstruct hash from path: ab/cdef123 -> abcdef123
-                if let Some((prefix, suffix)) = path_str.split_once('/') {
-                    if !prefix.chars().all(|c| c.is_ascii_hexdigit())
-                        || !suffix.chars().all(|c| c.is_ascii_hexdigit())
-                    {
-                        warn!("Skipping non-hex object path: {}", path_str);
-                        continue;
-                    }
-
-                    let entry_size = entry.header().size()?;
-                    if entry_size > MAX_ENTRY_SIZE {
-                        return Err(Error::IoError(format!(
-                            "CCS archive entry exceeds maximum size limit: {entry_size} bytes"
-                        )));
-                    }
-                    total_bytes += entry_size;
-                    if total_bytes > MAX_TOTAL_EXTRACTION_SIZE {
-                        return Err(Error::IoError(
-                            "CCS archive total extraction size exceeds extraction limit"
-                                .to_string(),
-                        ));
-                    }
-
-                    let hash = format!("{}{}", prefix, suffix);
-                    let mut content = Vec::new();
-                    entry.read_to_end(&mut content)?;
-                    blobs.insert(hash, content);
-                }
-            }
-        }
+        let contents =
+            read_ccs_archive(file).map_err(|e| Error::IoError(e.to_string()))?;
 
         debug!(
             "Extracted {} content blobs from {}",
-            blobs.len(),
+            contents.blobs.len(),
             self.package_path.display()
         );
 
-        Ok(blobs)
+        Ok(contents.blobs)
     }
 }
 
@@ -397,104 +336,42 @@ impl PackageFormat for CcsPackage {
     where
         Self: Sized,
     {
-        use crate::ccs::binary_manifest::BinaryManifest;
-
         let package_path = PathBuf::from(path);
         let file = File::open(&package_path)?;
-        let decoder = GzDecoder::new(file);
-        let mut archive = Archive::new(decoder);
+        let contents =
+            read_ccs_archive(file).map_err(|e| Error::ParseError(e.to_string()))?;
 
-        let mut binary_manifest: Option<BinaryManifest> = None;
-        let mut toml_manifest: Option<CcsManifest> = None;
-        let mut components: HashMap<String, ComponentData> = HashMap::new();
+        let manifest = &contents.manifest;
 
-        for entry in archive.entries()? {
-            let mut entry = entry?;
-            let entry_path = entry.path()?;
-            let entry_path_str = entry_path.to_string_lossy();
-
-            // Read MANIFEST (CBOR binary manifest) - preferred
-            if entry_path_str == "MANIFEST" || entry_path_str == "./MANIFEST" {
-                let entry_size = entry.header().size()?;
-                if entry_size > MAX_MANIFEST_SIZE {
-                    return Err(Error::ParseError(format!(
-                        "MANIFEST entry too large: {entry_size} bytes (limit {MAX_MANIFEST_SIZE})"
-                    )));
-                }
-                let mut content = Vec::new();
-                entry.read_to_end(&mut content)?;
-                binary_manifest = Some(
-                    BinaryManifest::from_cbor(&content)
-                        .map_err(|e| Error::ParseError(format!("Invalid CBOR MANIFEST: {}", e)))?,
-                );
-            }
-            // Read MANIFEST.toml - fallback for legacy packages
-            else if entry_path_str == "MANIFEST.toml" || entry_path_str == "./MANIFEST.toml" {
-                let entry_size = entry.header().size()?;
-                if entry_size > MAX_MANIFEST_SIZE {
-                    return Err(Error::ParseError(format!(
-                        "MANIFEST.toml entry too large: {entry_size} bytes (limit {MAX_MANIFEST_SIZE})"
-                    )));
-                }
-                let mut content = String::new();
-                entry.read_to_string(&mut content)?;
-                toml_manifest = Some(
-                    CcsManifest::parse(&content)
-                        .map_err(|e| Error::ParseError(format!("Invalid MANIFEST.toml: {}", e)))?,
-                );
-            }
-            // Read component files (files are stored here per spec)
-            else if (entry_path_str.starts_with("components/")
-                || entry_path_str.starts_with("./components/"))
-                && entry_path_str.ends_with(".json")
-            {
-                let entry_size = entry.header().size()?;
-                if entry_size > MAX_COMPONENT_SIZE {
-                    return Err(Error::ParseError(format!(
-                        "Component JSON entry too large: {entry_size} bytes (limit {MAX_COMPONENT_SIZE})"
-                    )));
-                }
-                let mut content = String::new();
-                entry.read_to_string(&mut content)?;
-                let comp: ComponentData = serde_json::from_str(&content)
-                    .map_err(|e| Error::ParseError(format!("Invalid component JSON: {}", e)))?;
-                components.insert(comp.name.clone(), comp);
-            }
-        }
-
-        // Prefer CBOR binary manifest, fall back to TOML
-        let manifest = if let Some(bin_manifest) = &binary_manifest {
-            // Convert BinaryManifest to CcsManifest for compatibility
+        // Log which manifest format was used
+        if let Some(ref bin_manifest) = contents.binary_manifest {
             debug!(
                 "Using CBOR manifest v{} for {} v{}",
                 bin_manifest.format_version, bin_manifest.name, bin_manifest.version
             );
-            convert_binary_to_ccs_manifest(bin_manifest)
-        } else if let Some(toml) = toml_manifest {
+        } else {
             debug!(
                 "Using TOML manifest (legacy) for {} v{}",
-                toml.package.name, toml.package.version
+                manifest.package.name, manifest.package.version
             );
-            toml
-        } else {
-            return Err(crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "CCS package missing both MANIFEST and MANIFEST.toml",
-            )));
-        };
+        }
 
         // Collect files from components (spec says files live in components/*.json)
-        let files: Vec<FileEntry> = components.values().flat_map(|c| c.files.clone()).collect();
+        let files: Vec<FileEntry> = contents
+            .components
+            .values()
+            .flat_map(|c| c.files.clone())
+            .collect();
 
         // Pre-compute trait data
         let package_files = Self::convert_files(&files);
-        let dependencies = Self::convert_dependencies(&manifest);
+        let dependencies = Self::convert_dependencies(manifest);
         let config_files_cache: Vec<ConfigFileInfo> = manifest
             .config
             .files
             .iter()
-            .map(|path| ConfigFileInfo {
-                path: path.clone(),
+            .map(|p| ConfigFileInfo {
+                path: p.clone(),
                 noreplace: manifest.config.noreplace,
                 ghost: false,
             })
@@ -506,14 +383,14 @@ impl PackageFormat for CcsPackage {
             manifest.package.version,
             files.len(),
             dependencies.len(),
-            components.len()
+            contents.components.len()
         );
 
         Ok(Self {
             package_path,
-            manifest,
+            manifest: contents.manifest,
             files,
-            components,
+            components: contents.components,
             package_files,
             dependencies,
             config_files_cache,
@@ -653,8 +530,10 @@ mod tests {
     use super::*;
     use crate::ccs::builder::{CcsBuilder, write_ccs_package};
     use flate2::Compression;
+    use flate2::read::GzDecoder;
     use flate2::write::GzEncoder;
     use std::fs;
+    use std::io::Read;
     use tar::{Archive, Builder};
     use tempfile::TempDir;
 
