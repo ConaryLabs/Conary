@@ -740,23 +740,18 @@ pub struct VfsStats {
 
 /// Normalize a path to ensure it starts with / and has no trailing slashes
 fn normalize_path(path: &Path) -> PathBuf {
-    let path_str = path.to_string_lossy();
-
-    // Ensure it starts with /
-    let normalized = if !path_str.starts_with('/') {
-        format!("/{}", path_str)
+    let s = path.to_string_lossy();
+    let trimmed = s.trim_end_matches('/');
+    if trimmed.starts_with('/') {
+        PathBuf::from(trimmed)
+    } else if trimmed.is_empty() {
+        PathBuf::from("/")
     } else {
-        path_str.to_string()
-    };
-
-    // Remove trailing slashes (except for root)
-    let normalized = if normalized.len() > 1 && normalized.ends_with('/') {
-        normalized.trim_end_matches('/').to_string()
-    } else {
-        normalized
-    };
-
-    PathBuf::from(normalized)
+        let mut result = String::with_capacity(trimmed.len() + 1);
+        result.push('/');
+        result.push_str(trimmed);
+        PathBuf::from(result)
+    }
 }
 
 #[cfg(test)]
