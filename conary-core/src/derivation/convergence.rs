@@ -30,33 +30,42 @@ impl PackageComparison {
 }
 
 /// Summary of convergence across all packages.
+///
+/// Fields are computed on demand from the underlying comparisons vector.
 #[derive(Debug)]
 pub struct ConvergenceReport {
-    pub total: usize,
-    pub matched: usize,
-    pub mismatched: usize,
-    pub comparisons: Vec<PackageComparison>,
+    comparisons: Vec<PackageComparison>,
 }
 
 impl ConvergenceReport {
     /// Build a report from a pre-computed list of per-package comparisons.
     #[must_use]
     pub fn from_comparisons(comparisons: Vec<PackageComparison>) -> Self {
-        let matched = comparisons.iter().filter(|c| c.matches()).count();
-        let mismatched = comparisons.len() - matched;
-        let total = comparisons.len();
-        Self {
-            total,
-            matched,
-            mismatched,
-            comparisons,
-        }
+        Self { comparisons }
+    }
+
+    /// Total number of compared packages.
+    #[must_use]
+    pub fn total(&self) -> usize {
+        self.comparisons.len()
+    }
+
+    /// Number of packages with matching output hashes.
+    #[must_use]
+    pub fn matched(&self) -> usize {
+        self.comparisons.iter().filter(|c| c.matches()).count()
+    }
+
+    /// Number of packages with divergent output hashes.
+    #[must_use]
+    pub fn mismatched(&self) -> usize {
+        self.total() - self.matched()
     }
 
     /// Returns `true` when every compared package converged (no mismatches).
     #[must_use]
     pub fn is_fully_converged(&self) -> bool {
-        self.mismatched == 0
+        self.comparisons.iter().all(PackageComparison::matches)
     }
 
     /// Percentage of packages that converged, in the range `[0.0, 100.0]`.
@@ -64,16 +73,22 @@ impl ConvergenceReport {
     /// Returns `100.0` for an empty comparison set (vacuous convergence).
     #[must_use]
     pub fn convergence_pct(&self) -> f64 {
-        if self.total == 0 {
+        if self.comparisons.is_empty() {
             return 100.0;
         }
-        (self.matched as f64 / self.total as f64) * 100.0
+        (self.matched() as f64 / self.comparisons.len() as f64) * 100.0
     }
 
     /// Returns references to all comparisons where the two seeds disagreed.
     #[must_use]
     pub fn mismatches(&self) -> Vec<&PackageComparison> {
         self.comparisons.iter().filter(|c| !c.matches()).collect()
+    }
+
+    /// Access the underlying comparisons.
+    #[must_use]
+    pub fn comparisons(&self) -> &[PackageComparison] {
+        &self.comparisons
     }
 }
 
@@ -186,7 +201,7 @@ mod tests {
         let report = ConvergenceReport::from_comparisons(comparisons);
         assert!(report.is_fully_converged());
         assert_eq!(report.convergence_pct(), 100.0);
-        assert_eq!(report.matched, 2);
+        assert_eq!(report.matched(), 2);
         assert!(report.mismatches().is_empty());
     }
 
@@ -206,8 +221,8 @@ mod tests {
         ];
         let report = ConvergenceReport::from_comparisons(comparisons);
         assert!(!report.is_fully_converged());
-        assert_eq!(report.matched, 1);
-        assert_eq!(report.mismatched, 1);
+        assert_eq!(report.matched(), 1);
+        assert_eq!(report.mismatched(), 1);
         assert_eq!(report.mismatches().len(), 1);
         assert_eq!(report.mismatches()[0].package, "python");
     }
@@ -247,8 +262,8 @@ mod tests {
 
         let report = compare_seed_builds(&conn, "seed_a", "seed_b").unwrap();
         assert!(report.is_fully_converged());
-        assert_eq!(report.total, 2);
-        assert_eq!(report.matched, 2);
+        assert_eq!(report.total(), 2);
+        assert_eq!(report.matched(), 2);
     }
 
     #[test]
@@ -261,9 +276,9 @@ mod tests {
 
         let report = compare_seed_builds(&conn, "seed_a", "seed_b").unwrap();
         assert!(!report.is_fully_converged());
-        assert_eq!(report.total, 2);
-        assert_eq!(report.matched, 1);
-        assert_eq!(report.mismatched, 1);
+        assert_eq!(report.total(), 2);
+        assert_eq!(report.matched(), 1);
+        assert_eq!(report.mismatched(), 1);
         assert_eq!(report.mismatches()[0].package, "python");
     }
 
@@ -277,16 +292,16 @@ mod tests {
 
         let report = compare_seed_builds(&conn, "seed_a", "seed_b").unwrap();
         // Only "shared" should be compared
-        assert_eq!(report.total, 1);
+        assert_eq!(report.total(), 1);
         assert!(report.is_fully_converged());
-        assert_eq!(report.comparisons[0].package, "shared");
+        assert_eq!(report.comparisons()[0].package, "shared");
     }
 
     #[test]
     fn compare_seeds_empty_when_no_builds() {
         let conn = setup();
         let report = compare_seed_builds(&conn, "nonexistent_a", "nonexistent_b").unwrap();
-        assert_eq!(report.total, 0);
+        assert_eq!(report.total(), 0);
         assert!(report.is_fully_converged());
         assert_eq!(report.convergence_pct(), 100.0);
     }
