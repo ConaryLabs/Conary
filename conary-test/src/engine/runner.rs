@@ -427,8 +427,14 @@ impl TestRunner {
             .await?;
 
         let result = async {
-            self.initialize_container_state(backend, &container_id, manifest.suite.phase)
-                .await?;
+            crate::engine::container_setup::initialize_container_state(
+                &self.config,
+                &self.distro,
+                manifest.suite.phase > 1,
+                backend,
+                &container_id,
+            )
+            .await?;
             if let Some(mock_server) = &manifest.suite.mock_server {
                 start_mock_server(backend, &container_id, mock_server).await?;
             }
@@ -439,77 +445,6 @@ impl TestRunner {
         coordinator.teardown_container(&container_id).await?;
 
         result
-    }
-
-    async fn initialize_container_state(
-        &self,
-        backend: &dyn ContainerBackend,
-        container_id: &ContainerId,
-        phase: u32,
-    ) -> Result<()> {
-        let db_parent = std::path::Path::new(&self.config.paths.db)
-            .parent()
-            .context("db path has no parent directory")?
-            .display()
-            .to_string();
-        let init_cmd = format!(
-            "mkdir -p {db_parent} && {} system init --db-path {}",
-            self.config.paths.conary_bin, self.config.paths.db
-        );
-        let init_result = backend
-            .exec(
-                container_id,
-                &["sh", "-c", &init_cmd],
-                Duration::from_secs(120),
-            )
-            .await?;
-        if init_result.exit_code != 0 {
-            bail!(
-                "failed to initialize conary database: {}{}",
-                init_result.stdout,
-                init_result.stderr
-            );
-        }
-
-        for repo in &self.config.setup.remove_default_repos {
-            let remove_cmd = format!(
-                "{} repo remove {} --db-path {} >/dev/null 2>&1 || true",
-                self.config.paths.conary_bin, repo, self.config.paths.db
-            );
-            backend
-                .exec(
-                    container_id,
-                    &["sh", "-c", &remove_cmd],
-                    Duration::from_secs(30),
-                )
-                .await?;
-        }
-
-        if phase > 1 {
-            let distro_config = self
-                .config
-                .distros
-                .get(&self.distro)
-                .with_context(|| format!("unknown distro: {}", self.distro))?;
-            let add_repo_cmd = format!(
-                "{} repo add {} {} --default-strategy remi --remi-endpoint {} --remi-distro {} --no-gpg-check --db-path {} >/dev/null 2>&1 || true",
-                self.config.paths.conary_bin,
-                distro_config.repo_name,
-                self.config.remi.endpoint,
-                self.config.remi.endpoint,
-                distro_config.remi_distro,
-                self.config.paths.db
-            );
-            backend
-                .exec(
-                    container_id,
-                    &["sh", "-c", &add_repo_cmd],
-                    Duration::from_secs(60),
-                )
-                .await?;
-        }
-
-        Ok(())
     }
 
     async fn run_test_attempt(
@@ -725,172 +660,8 @@ mod tests {
         Assertion, FileChecksum, KillAfterLog, QemuBoot, ResourceConstraints, SuiteDef, TestDef,
         TestManifest, TestStep,
     };
-    use crate::container::backend::{ContainerConfig, ContainerInspection, ExecResult, ImageInfo};
-    use async_trait::async_trait;
-    use std::path::Path;
-    use std::sync::Mutex;
-    use tokio::sync::mpsc;
-
-    // -- Mock backend --
-
-    struct MockBackend {
-        exec_calls: Mutex<Vec<Vec<String>>>,
-        exec_results: Mutex<Vec<ExecResult>>,
-        created_containers: Mutex<Vec<ContainerConfig>>,
-        detached_calls: Mutex<Vec<Vec<String>>>,
-        log_sequences: Mutex<HashMap<String, Vec<String>>>,
-        detached_results: Mutex<HashMap<String, ExecResult>>,
-        killed_execs: Mutex<Vec<(String, String)>>,
-    }
-
-    impl MockBackend {
-        fn new(results: Vec<ExecResult>) -> Self {
-            Self {
-                exec_calls: Mutex::new(Vec::new()),
-                exec_results: Mutex::new(results),
-                created_containers: Mutex::new(Vec::new()),
-                detached_calls: Mutex::new(Vec::new()),
-                log_sequences: Mutex::new(HashMap::new()),
-                detached_results: Mutex::new(HashMap::new()),
-                killed_execs: Mutex::new(Vec::new()),
-            }
-        }
-
-        fn with_detached_exec(self, exec_id: &str, logs: Vec<&str>, result: ExecResult) -> Self {
-            self.log_sequences.lock().unwrap().insert(
-                exec_id.to_string(),
-                logs.into_iter().map(String::from).collect(),
-            );
-            self.detached_results
-                .lock()
-                .unwrap()
-                .insert(exec_id.to_string(), result);
-            self
-        }
-
-        #[allow(dead_code)] // Intended for future exec-call assertions in container tests
-        fn calls(&self) -> Vec<Vec<String>> {
-            self.exec_calls.lock().unwrap().clone()
-        }
-    }
-
-    #[async_trait]
-    impl ContainerBackend for MockBackend {
-        async fn build_image(
-            &self,
-            _dockerfile: &Path,
-            _tag: &str,
-            _build_args: HashMap<String, String>,
-        ) -> Result<String> {
-            Ok("mock-image".to_string())
-        }
-
-        async fn create(&self, _config: ContainerConfig) -> Result<ContainerId> {
-            let mut created = self.created_containers.lock().unwrap();
-            created.push(_config);
-            Ok(format!("mock-container-{}", created.len()))
-        }
-
-        async fn start(&self, _id: &ContainerId) -> Result<()> {
-            Ok(())
-        }
-
-        async fn exec(
-            &self,
-            _id: &ContainerId,
-            cmd: &[&str],
-            _timeout: Duration,
-        ) -> Result<ExecResult> {
-            self.exec_calls
-                .lock()
-                .unwrap()
-                .push(cmd.iter().map(|s| (*s).to_string()).collect());
-            let mut results = self.exec_results.lock().unwrap();
-            if results.is_empty() {
-                Ok(ExecResult {
-                    exit_code: 0,
-                    stdout: String::new(),
-                    stderr: String::new(),
-                })
-            } else {
-                Ok(results.remove(0))
-            }
-        }
-
-        async fn exec_detached(&self, _id: &ContainerId, cmd: &[&str]) -> Result<String> {
-            self.detached_calls
-                .lock()
-                .unwrap()
-                .push(cmd.iter().map(|s| (*s).to_string()).collect());
-            Ok("exec-1".to_string())
-        }
-
-        async fn exec_logs(&self, exec_id: &str) -> Result<mpsc::Receiver<String>> {
-            let mut rx_logs = self
-                .log_sequences
-                .lock()
-                .unwrap()
-                .remove(exec_id)
-                .unwrap_or_default();
-            let (tx, rx) = mpsc::channel(16);
-            tokio::spawn(async move {
-                for line in rx_logs.drain(..) {
-                    if tx.send(line).await.is_err() {
-                        break;
-                    }
-                }
-            });
-            Ok(rx)
-        }
-
-        async fn exec_result(&self, exec_id: &str) -> Result<ExecResult> {
-            self.detached_results
-                .lock()
-                .unwrap()
-                .remove(exec_id)
-                .ok_or_else(|| anyhow::anyhow!("missing detached result for {exec_id}"))
-        }
-
-        async fn kill(&self, _id: &ContainerId, _signal: &str) -> Result<()> {
-            Ok(())
-        }
-
-        async fn kill_exec(&self, exec_id: &str, signal: &str) -> Result<()> {
-            self.killed_execs
-                .lock()
-                .unwrap()
-                .push((exec_id.to_string(), signal.to_string()));
-            Ok(())
-        }
-
-        async fn stop(&self, _id: &ContainerId) -> Result<()> {
-            Ok(())
-        }
-
-        async fn remove(&self, _id: &ContainerId) -> Result<()> {
-            Ok(())
-        }
-
-        async fn copy_from(&self, _id: &ContainerId, _path: &str) -> Result<Vec<u8>> {
-            Ok(Vec::new())
-        }
-
-        async fn copy_to(&self, _id: &ContainerId, _path: &str, _data: &[u8]) -> Result<()> {
-            Ok(())
-        }
-
-        async fn logs(&self, _id: &ContainerId) -> Result<String> {
-            Ok(String::new())
-        }
-
-        async fn inspect_container(&self, _id: &ContainerId) -> Result<ContainerInspection> {
-            Ok(ContainerInspection::default())
-        }
-
-        async fn list_images(&self) -> Result<Vec<ImageInfo>> {
-            Ok(Vec::new())
-        }
-    }
+    use crate::container::backend::ExecResult;
+    use crate::container::mock::MockBackend;
 
     // -- Helpers --
 
