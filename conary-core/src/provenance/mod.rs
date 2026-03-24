@@ -26,7 +26,6 @@ pub use source::{PatchInfo, SourceProvenance};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 /// Complete provenance record for a package
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,15 +65,19 @@ impl Provenance {
 
     /// Compute the DNA hash - a unique identifier for this provenance
     pub fn dna_hash(&self) -> DnaHash {
-        let mut hasher = Sha256::new();
+        use crate::hash::{HashAlgorithm, Hasher};
+
+        let mut hasher = Hasher::new(HashAlgorithm::Sha256);
 
         // Hash all layers
-        hasher.update(self.source.canonical_bytes());
-        hasher.update(self.build.canonical_bytes());
-        hasher.update(self.signatures.canonical_bytes());
-        hasher.update(self.content.canonical_bytes());
+        hasher.update(&self.source.canonical_bytes());
+        hasher.update(&self.build.canonical_bytes());
+        hasher.update(&self.signatures.canonical_bytes());
+        hasher.update(&self.content.canonical_bytes());
 
-        DnaHash::from_bytes(&hasher.finalize()).expect("SHA-256 always produces 32 bytes")
+        let hex = hasher.finalize().value;
+        let bytes = hex::decode(&hex).expect("SHA-256 hex is always valid");
+        DnaHash::from_bytes(&bytes).expect("SHA-256 always produces 32 bytes")
     }
 
     /// Serialize to JSON for storage

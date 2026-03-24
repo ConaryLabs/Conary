@@ -272,12 +272,12 @@ async fn stream_update_to_disk(
     expected_sha256: &str,
     progress: Option<&indicatif::ProgressBar>,
 ) -> Result<()> {
-    use sha2::{Digest, Sha256};
+    use crate::hash::{HashAlgorithm, Hasher};
     use std::io::Write;
 
     let mut file = fs::File::create(dest_path)
         .map_err(|e| Error::IoError(format!("Failed to create output file: {e}")))?;
-    let mut hasher = Sha256::new();
+    let mut hasher = Hasher::new(HashAlgorithm::Sha256);
 
     while let Some(chunk) = response
         .chunk()
@@ -298,7 +298,7 @@ async fn stream_update_to_disk(
         pb.finish_and_clear();
     }
 
-    let actual_hash = hex::encode(hasher.finalize());
+    let actual_hash = hasher.finalize().value;
     if actual_hash != expected_sha256 {
         fs::remove_file(dest_path).ok();
         return Err(Error::ChecksumMismatch {
