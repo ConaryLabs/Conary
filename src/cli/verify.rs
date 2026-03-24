@@ -4,6 +4,8 @@
 
 use clap::Subcommand;
 
+use super::DbArgs;
+
 /// Verification commands for derivation integrity.
 #[derive(Subcommand)]
 pub enum VerifyCommands {
@@ -20,6 +22,9 @@ pub enum VerifyCommands {
         /// Output as JSON
         #[arg(long)]
         json: bool,
+
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Rebuild a derivation and compare output hash
@@ -30,6 +35,9 @@ pub enum VerifyCommands {
         /// Working directory for rebuild
         #[arg(long, default_value = ".conary/verify")]
         work_dir: String,
+
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Compare builds from two different seeds
@@ -41,5 +49,8 @@ pub enum VerifyCommands {
         /// Profile from second seed build
         #[arg(long)]
         profile_b: String,
+
+        #[command(flatten)]
+        db: DbArgs,
     },
 }

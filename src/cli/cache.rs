@@ -4,6 +4,8 @@
 
 use clap::Subcommand;
 
+use super::DbArgs;
+
 /// Cache management commands for derivation outputs.
 #[derive(Subcommand)]
 pub enum CacheCommands {
@@ -20,8 +22,14 @@ pub enum CacheCommands {
         /// Download both pre-built outputs and source tarballs
         #[arg(long, conflicts_with = "sources_only")]
         full: bool,
+
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Show cache statistics and substituter peer health
-    Status,
+    Status {
+        #[command(flatten)]
+        db: DbArgs,
+    },
 }

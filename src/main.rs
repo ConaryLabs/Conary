@@ -244,8 +244,9 @@ async fn run() -> Result<()> {
                 profile,
                 sources_only,
                 full,
-            } => commands::cmd_cache_populate(&profile, sources_only, full).await,
-            cli::CacheCommands::Status => commands::cmd_cache_status().await,
+                db,
+            } => commands::cmd_cache_populate(&profile, sources_only, full, &db.db_path).await,
+            cli::CacheCommands::Status { db } => commands::cmd_cache_status(&db.db_path).await,
         },
 
         // =====================================================================
@@ -2024,26 +2025,31 @@ async fn run() -> Result<()> {
                 profile,
                 verbose,
                 json,
-            } => commands::verify::cmd_verify_chain(&profile, verbose, json).await,
+                db,
+            } => commands::verify::cmd_verify_chain(&profile, verbose, json, &db.db_path).await,
             cli::VerifyCommands::Rebuild {
                 derivation,
                 work_dir,
-            } => commands::verify::cmd_verify_rebuild(&derivation, &work_dir).await,
+                db,
+            } => commands::verify::cmd_verify_rebuild(&derivation, &work_dir, &db.db_path).await,
             cli::VerifyCommands::Diverse {
                 profile_a,
                 profile_b,
-            } => commands::verify::cmd_verify_diverse(&profile_a, &profile_b).await,
+                db,
+            } => commands::verify::cmd_verify_diverse(&profile_a, &profile_b, &db.db_path).await,
         },
 
         Some(Commands::Sbom {
             profile,
             derivation,
             output,
+            db,
         }) => {
             commands::cmd_derivation_sbom(
                 profile.as_deref(),
                 derivation.as_deref(),
                 output.as_deref(),
+                &db.db_path,
             )
             .await
         }
