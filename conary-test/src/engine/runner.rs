@@ -570,7 +570,13 @@ impl TestRunner {
             }
 
             if let Some(ref assertion) = step.assert {
-                let exec = last_exec.as_ref().expect("assertion without exec result");
+                let exec = match last_exec.as_ref() {
+                    Some(e) => e,
+                    None => {
+                        failure = Some("assertion step has no preceding exec result".to_string());
+                        break;
+                    }
+                };
                 let assertion = self.expand_assertion(assertion);
                 if let Err(e) =
                     evaluate_assertion(&assertion, exec.exit_code, &exec.stdout, &exec.stderr)

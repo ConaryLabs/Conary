@@ -658,7 +658,11 @@ pub async fn build_image(state: &AppState, distro: &str) -> Result<String> {
     let backend = crate::container::BollardBackend::new()?;
 
     let default_name = format!("Containerfile.{distro}");
-    let dc = state.config.distros.get(distro).unwrap();
+    let dc = state
+        .config
+        .distros
+        .get(distro)
+        .ok_or_else(|| anyhow::anyhow!("unknown distro: {distro}"))?;
     let filename = dc.containerfile.as_deref().unwrap_or(&default_name);
     let containerfile =
         std::path::PathBuf::from("tests/integration/remi/containers").join(filename);
