@@ -685,3 +685,62 @@ fn query_all_system_packages(pm: &SystemPackageManager) -> Result<Vec<String>> {
 
     Ok(packages)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_takeover_plan_empty() {
+        let plan = TakeoverPlan {
+            already_cas_backed: vec![],
+            needs_cas_upgrade: vec![],
+            not_tracked: vec!["vim".into(), "git".into()],
+            already_owned: vec![],
+            needs_pm_removal: vec!["vim".into(), "git".into()],
+            blocked: vec![],
+            total_system_packages: 2,
+        };
+        assert_eq!(plan.total_system_packages, 2);
+        assert_eq!(plan.not_tracked.len(), 2);
+        assert!(plan.already_cas_backed.is_empty());
+    }
+
+    #[test]
+    fn test_takeover_plan_blocked_excluded_from_pm_removal() {
+        let plan = TakeoverPlan {
+            already_cas_backed: vec![],
+            needs_cas_upgrade: vec![],
+            not_tracked: vec!["vim".into(), "glibc".into()],
+            already_owned: vec![],
+            needs_pm_removal: vec!["vim".into()],
+            blocked: vec!["glibc".into()],
+            total_system_packages: 2,
+        };
+        assert_eq!(plan.needs_pm_removal.len(), 1);
+        assert_eq!(plan.blocked.len(), 1);
+        assert!(!plan.needs_pm_removal.contains(&"glibc".into()));
+    }
+
+    #[test]
+    fn test_takeover_plan_partially_adopted() {
+        let plan = TakeoverPlan {
+            already_cas_backed: vec!["bash".into()],
+            needs_cas_upgrade: vec!["vim".into()],
+            not_tracked: vec!["git".into()],
+            already_owned: vec![],
+            needs_pm_removal: vec!["bash".into(), "vim".into(), "git".into()],
+            blocked: vec![],
+            total_system_packages: 3,
+        };
+        assert_eq!(plan.already_cas_backed.len(), 1);
+        assert_eq!(plan.needs_cas_upgrade.len(), 1);
+        assert_eq!(plan.not_tracked.len(), 1);
+    }
+
+    #[test]
+    fn test_takeover_level_default_is_generation() {
+        let level = TakeoverLevel::default();
+        assert!(matches!(level, TakeoverLevel::Generation));
+    }
+}
