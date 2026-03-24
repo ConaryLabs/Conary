@@ -1,6 +1,7 @@
 // conary-test/src/server/handlers.rs
 
-use crate::error_taxonomy;
+use crate::error::ConaryTestError;
+use crate::error_taxonomy::{self, StructuredError};
 use crate::server::service;
 use crate::server::state::AppState;
 use axum::Json;
@@ -47,14 +48,13 @@ pub async fn start_run(
             )
                 .into_response()
         }
-        Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("unknown distro") {
-                error_taxonomy::unknown_distro(&req.distro).into_response()
-            } else {
-                error_taxonomy::unknown_suite(&req.suite).into_response()
-            }
+        Err(ConaryTestError::Config(ref msg)) if msg.contains("unknown distro") => {
+            error_taxonomy::unknown_distro(&req.distro).into_response()
         }
+        Err(ConaryTestError::Config(_)) => {
+            error_taxonomy::unknown_suite(&req.suite).into_response()
+        }
+        Err(e) => StructuredError::from(e).into_response(),
     }
 }
 
@@ -90,22 +90,12 @@ pub async fn get_run(State(state): State<AppState>, Path(id): Path<u64>) -> Resp
     // Fall back to in-memory DashMap.
     match service::get_run(&state, id) {
         Ok(value) => (StatusCode::OK, Json(value)).into_response(),
-        Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("not found") {
-                (
-                    StatusCode::NOT_FOUND,
-                    Json(error_taxonomy::run_not_found(id)),
-                )
-                    .into_response()
-            } else {
-                error_taxonomy::StructuredError::infrastructure(
-                    "report_error",
-                    format!("report error: {msg}"),
-                )
-                .into_response()
-            }
-        }
+        Err(ConaryTestError::RunNotFound(_)) => (
+            StatusCode::NOT_FOUND,
+            Json(error_taxonomy::run_not_found(id)),
+        )
+            .into_response(),
+        Err(e) => StructuredError::from(e).into_response(),
     }
 }
 
@@ -120,20 +110,14 @@ pub async fn cancel_run(State(state): State<AppState>, Path(id): Path<u64>) -> i
             StatusCode::OK,
             Json(serde_json::json!({"run_id": id, "status": "cancelled"})),
         ),
-        Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("not found") {
-                (
-                    StatusCode::NOT_FOUND,
-                    Json(serde_json::json!({"error": "run not found"})),
-                )
-            } else {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": msg})),
-                )
-            }
-        }
+        Err(ConaryTestError::RunNotFound(_)) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "run not found"})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
     }
 }
 
@@ -161,20 +145,14 @@ pub async fn rerun_test(
                 })),
             )
         }
-        Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("not found") {
-                (
-                    StatusCode::NOT_FOUND,
-                    Json(serde_json::json!({"error": msg})),
-                )
-            } else {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": msg})),
-                )
-            }
-        }
+        Err(ConaryTestError::RunNotFound(_) | ConaryTestError::TestNotFound { .. }) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "not found"})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
     }
 }
 
@@ -197,19 +175,12 @@ pub async fn get_test_logs(
     // Fall back to in-memory DashMap.
     match service::get_test_logs(&state, id, &test_id) {
         Ok(logs) => (StatusCode::OK, Json(serde_json::json!(logs))).into_response(),
-        Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("not found") {
-                (
-                    StatusCode::NOT_FOUND,
-                    Json(error_taxonomy::test_not_found(id, &test_id)),
-                )
-                    .into_response()
-            } else {
-                error_taxonomy::StructuredError::infrastructure("log_retrieval_error", msg)
-                    .into_response()
-            }
-        }
+        Err(ConaryTestError::RunNotFound(_) | ConaryTestError::TestNotFound { .. }) => (
+            StatusCode::NOT_FOUND,
+            Json(error_taxonomy::test_not_found(id, &test_id)),
+        )
+            .into_response(),
+        Err(e) => StructuredError::from(e).into_response(),
     }
 }
 
@@ -219,20 +190,14 @@ pub async fn get_run_artifacts(
 ) -> impl IntoResponse {
     match service::get_run_artifacts(&state, id) {
         Ok(artifacts) => (StatusCode::OK, Json(serde_json::json!(artifacts))),
-        Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("not found") {
-                (
-                    StatusCode::NOT_FOUND,
-                    Json(serde_json::json!({"error": msg})),
-                )
-            } else {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": msg})),
-                )
-            }
-        }
+        Err(ConaryTestError::RunNotFound(_)) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "run not found"})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
     }
 }
 
@@ -251,14 +216,10 @@ pub async fn build_image(
             Json(serde_json::json!({"distro": req.distro, "image": tag, "status": "built"})),
         )
             .into_response(),
-        Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("unknown distro") || msg.contains("not configured") {
-                error_taxonomy::unknown_distro(&req.distro).into_response()
-            } else {
-                error_taxonomy::container_failed(msg).into_response()
-            }
+        Err(ConaryTestError::Config(_)) => {
+            error_taxonomy::unknown_distro(&req.distro).into_response()
         }
+        Err(e) => StructuredError::from(e).into_response(),
     }
 }
 
