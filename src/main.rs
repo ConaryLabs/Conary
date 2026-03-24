@@ -302,16 +302,12 @@ async fn run() -> Result<()> {
                 convert,
                 jobs,
                 no_chunking,
-                takeover,
-                yes,
                 sync_hook,
                 remove_hook,
                 quiet,
             } => {
                 if sync_hook {
                     commands::cmd_sync_hook_install(remove_hook).await
-                } else if takeover {
-                    commands::cmd_adopt_takeover(&packages, &db.db_path, system, dry_run, yes).await
                 } else if convert {
                     commands::cmd_adopt_convert(&db.db_path, jobs, no_chunking, dry_run).await
                 } else if status {
@@ -583,16 +579,16 @@ async fn run() -> Result<()> {
 
             // System takeover
             cli::SystemCommands::Takeover {
+                up_to,
                 yes,
                 dry_run,
-                skip_conversion,
                 db,
             } => {
                 commands::generation::takeover::cmd_system_takeover(
                     &db.db_path,
+                    up_to,
                     yes,
                     dry_run,
-                    skip_conversion,
                 )
                 .await
             }
@@ -1381,8 +1377,14 @@ async fn run() -> Result<()> {
                 size,
                 from_generation,
             } => {
-                commands::cmd_bootstrap_image(&work_dir, &output, &format, &size, from_generation.as_deref())
-                    .await
+                commands::cmd_bootstrap_image(
+                    &work_dir,
+                    &output,
+                    &format,
+                    &size,
+                    from_generation.as_deref(),
+                )
+                .await
             }
 
             cli::BootstrapCommands::Status { work_dir, verbose } => {
@@ -1495,16 +1497,17 @@ async fn run() -> Result<()> {
                     )
                     .await?;
                 } else {
-                    let from_path =
-                        from.expect("--from required when not using --from-adopted");
+                    let from_path = from.expect("--from required when not using --from-adopted");
                     commands::cmd_bootstrap_seed(&from_path, &output, &target).await?;
                 }
                 Ok(())
             }
 
-            cli::BootstrapCommands::VerifyConvergence { seed_a, seed_b, diff } => {
-                commands::cmd_bootstrap_verify_convergence(&seed_a, &seed_b, diff).await
-            }
+            cli::BootstrapCommands::VerifyConvergence {
+                seed_a,
+                seed_b,
+                diff,
+            } => commands::cmd_bootstrap_verify_convergence(&seed_a, &seed_b, diff).await,
 
             cli::BootstrapCommands::DiffSeeds { path_a, path_b } => {
                 commands::cmd_bootstrap_diff_seeds(&path_a, &path_b).await
