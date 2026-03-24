@@ -1481,9 +1481,34 @@ async fn run() -> Result<()> {
 
             cli::BootstrapCommands::Seed {
                 from,
+                from_adopted,
+                distro,
+                distro_version,
                 output,
                 target,
-            } => commands::cmd_bootstrap_seed(&from, &output, &target).await,
+            } => {
+                if from_adopted {
+                    commands::cmd_bootstrap_seed_adopted(
+                        &output,
+                        distro.as_deref(),
+                        distro_version.as_deref(),
+                    )
+                    .await?;
+                } else {
+                    let from_path =
+                        from.expect("--from required when not using --from-adopted");
+                    commands::cmd_bootstrap_seed(&from_path, &output, &target).await?;
+                }
+                Ok(())
+            }
+
+            cli::BootstrapCommands::VerifyConvergence { seed_a, seed_b, diff } => {
+                commands::cmd_bootstrap_verify_convergence(&seed_a, &seed_b, diff).await
+            }
+
+            cli::BootstrapCommands::DiffSeeds { path_a, path_b } => {
+                commands::cmd_bootstrap_diff_seeds(&path_a, &path_b).await
+            }
 
             cli::BootstrapCommands::Run {
                 manifest,

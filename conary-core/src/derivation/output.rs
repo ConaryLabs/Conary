@@ -41,6 +41,9 @@ pub struct OutputManifest {
     pub derivation_id: String,
     /// Content hash of all outputs (files + symlinks).
     pub output_hash: String,
+    /// Hash format version (1 = original, 2 = with permissions).
+    #[serde(default = "default_hash_version")]
+    pub hash_version: u8,
     /// Files produced by the build.
     pub files: Vec<OutputFile>,
     /// Symlinks produced by the build.
@@ -49,6 +52,10 @@ pub struct OutputManifest {
     pub build_duration_secs: u64,
     /// ISO 8601 timestamp of when the build completed.
     pub built_at: String,
+}
+
+fn default_hash_version() -> u8 {
+    1
 }
 
 /// A complete package output: the manifest plus its serialized bytes and hash.
@@ -88,6 +95,31 @@ impl OutputManifest {
         hasher.finalize().value
     }
 
+    /// Compute output hash v2 (includes file permissions).
+    ///
+    /// Format: `file:<path>:<mode_octal>:<content_hash>` sorted by path,
+    /// followed by `symlink:<path>:<target>` sorted by path.
+    #[must_use]
+    pub fn compute_output_hash_v2(files: &[OutputFile], symlinks: &[OutputSymlink]) -> String {
+        let mut hasher = hash::Hasher::new(hash::HashAlgorithm::Sha256);
+
+        let mut sorted_files: Vec<&OutputFile> = files.iter().collect();
+        sorted_files.sort_by(|a, b| a.path.cmp(&b.path));
+
+        let mut sorted_symlinks: Vec<&OutputSymlink> = symlinks.iter().collect();
+        sorted_symlinks.sort_by(|a, b| a.path.cmp(&b.path));
+
+        for file in sorted_files {
+            hasher.update(format!("file:{}:{:o}:{}\n", file.path, file.mode, file.hash).as_bytes());
+        }
+
+        for symlink in sorted_symlinks {
+            hasher.update(format!("symlink:{}:{}\n", symlink.path, symlink.target).as_bytes());
+        }
+
+        hasher.finalize().value
+    }
+
     /// Build a new `OutputManifest`, computing the output hash automatically.
     #[must_use]
     pub fn new(
@@ -101,6 +133,7 @@ impl OutputManifest {
         Self {
             derivation_id: derivation_id.to_string(),
             output_hash,
+            hash_version: 1,
             files,
             symlinks,
             build_duration_secs,
@@ -198,6 +231,7 @@ mod tests {
         let manifest = OutputManifest {
             derivation_id: "d".repeat(64),
             output_hash: "e".repeat(64),
+            hash_version: 1,
             files: sample_files(),
             symlinks: sample_symlinks(),
             build_duration_secs: 42,
@@ -219,6 +253,7 @@ mod tests {
         let manifest = OutputManifest {
             derivation_id: "d".repeat(64),
             output_hash: "e".repeat(64),
+            hash_version: 1,
             files: sample_files(),
             symlinks: sample_symlinks(),
             build_duration_secs: 10,
@@ -230,5 +265,53 @@ mod tests {
         assert!(!output.manifest_bytes.is_empty());
         assert_eq!(output.manifest_hash.len(), 64);
         assert!(output.manifest_hash.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn output_hash_v2_includes_permissions() {
+        let files = vec![OutputFile {
+            path: "/usr/bin/hello".into(),
+            hash: "abc123".into(),
+            size: 100,
+            mode: 0o755,
+        }];
+
+        let v1 = OutputManifest::compute_output_hash(&files, &[]);
+        let v2 = OutputManifest::compute_output_hash_v2(&files, &[]);
+        assert_ne!(v1, v2, "v2 should differ from v1 due to permissions");
+    }
+
+    #[test]
+    fn output_hash_v2_changes_with_mode() {
+        let files_755 = vec![OutputFile {
+            path: "/usr/bin/hello".into(),
+            hash: "abc123".into(),
+            size: 100,
+            mode: 0o755,
+        }];
+        let files_644 = vec![OutputFile {
+            path: "/usr/bin/hello".into(),
+            hash: "abc123".into(),
+            size: 100,
+            mode: 0o644,
+        }];
+
+        let h755 = OutputManifest::compute_output_hash_v2(&files_755, &[]);
+        let h644 = OutputManifest::compute_output_hash_v2(&files_644, &[]);
+        assert_ne!(h755, h644, "different modes should produce different hashes");
+    }
+
+    #[test]
+    fn hash_version_defaults_to_1() {
+        let toml_str = r#"
+derivation_id = "test"
+output_hash = "test"
+files = []
+symlinks = []
+build_duration_secs = 0
+built_at = ""
+"#;
+        let parsed: OutputManifest = toml::from_str(toml_str).unwrap();
+        assert_eq!(parsed.hash_version, 1);
     }
 }

@@ -19,23 +19,29 @@ pub mod pipeline;
 pub mod profile;
 pub mod recipe_hash;
 pub mod seed;
+pub mod build_order;
+pub mod install;
 pub mod stages;
 pub mod substituter;
+pub mod convergence;
 #[cfg(test)]
 pub(crate) mod test_helpers;
 
 pub use capture::{CaptureError, capture_output};
 pub use compose::{ComposeError, compose_erofs, compose_file_entries, erofs_image_hash};
-pub use environment::{BuildEnvironment, EnvironmentError};
+pub use environment::{BuildEnvironment, EnvironmentError, MutableEnvironment};
 pub use executor::{DerivationExecutor, ExecutionResult, ExecutorError};
 pub use id::{DerivationError, DerivationId, DerivationInputs, SourceDerivationId};
 pub use index::{DerivationIndex, DerivationRecord};
 pub use manifest::{ManifestError, SystemManifest};
 pub use output::{OutputFile, OutputManifest, OutputSymlink, PackageOutput};
-pub use pipeline::{Pipeline, PipelineConfig, PipelineError, PipelineEvent};
+pub use pipeline::{BuildMode, Pipeline, PipelineConfig, PipelineError, PipelineEvent};
 pub use profile::{
     BuildProfile, ProfileDerivation, ProfileDiff, ProfileMetadata, ProfileSeedRef, ProfileStage,
 };
 pub use recipe_hash::{build_script_hash, expand_variables, source_hash};
-pub use seed::{Seed, SeedError, SeedMetadata, SeedSource};
+pub use seed::{Seed, SeedError, SeedMetadata, SeedSource, SeedValidation};
+pub use build_order::{BuildOrderError, BuildPhase, BuildStep, compute_build_order};
+pub use install::{InstallError, install_to_sysroot};
 pub use stages::{Stage, StageAssignment, StageError, assign_stages};
+pub use convergence::{ConvergenceReport, PackageComparison, compare_seed_builds};

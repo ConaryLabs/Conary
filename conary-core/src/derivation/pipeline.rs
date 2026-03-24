@@ -20,10 +20,11 @@ use tracing::{info, warn};
 use crate::recipe::Recipe;
 
 use super::compose::{ComposeError, compose_erofs, erofs_image_hash};
-use super::environment::BuildEnvironment;
+use super::environment::{BuildEnvironment, MutableEnvironment};
 use super::executor::{DerivationExecutor, ExecutionResult, ExecutorError};
 use super::id::{DerivationId, DerivationInputs};
 use super::index::DerivationIndex;
+use super::install::{install_to_sysroot, run_ldconfig_if_needed};
 use super::output::OutputManifest;
 use super::profile::{
     BuildProfile, ProfileDerivation, ProfileMetadata, ProfileSeedRef, ProfileStage,
@@ -31,6 +32,20 @@ use super::profile::{
 use super::recipe_hash;
 use super::seed::Seed;
 use super::stages::{Stage, StageAssignment};
+
+// ---------------------------------------------------------------------------
+// Build mode
+// ---------------------------------------------------------------------------
+
+/// How the pipeline executes builds.
+#[derive(Debug, Clone, Default)]
+pub enum BuildMode {
+    /// Original staged mode: EROFS between stages, read-only sysroot.
+    #[default]
+    Staged,
+    /// Chroot mode: mutable overlayfs sysroot, install-as-you-go.
+    Chroot,
+}
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -65,6 +80,8 @@ pub struct PipelineConfig {
     pub publish_endpoint: Option<String>,
     /// Bearer token for publish endpoint.
     pub publish_token: Option<String>,
+    /// Build execution mode.
+    pub build_mode: BuildMode,
 }
 
 // ---------------------------------------------------------------------------
@@ -167,6 +184,10 @@ pub enum PipelineError {
         "package '{package}' has no cached derivation -- run a full build first or add it to --only"
     )]
     UncachedDependency { package: String },
+
+    /// Installing a derivation into the sysroot failed.
+    #[error("install error: {0}")]
+    Install(String),
 
     /// A --only target is in a stage beyond the --up-to cutoff.
     #[error("package '{package}' is in stage '{stage}' but --up-to stops at '{cutoff}'")]
@@ -666,6 +687,282 @@ impl Pipeline {
         profile.profile.profile_hash = profile.compute_hash();
         Ok(profile)
     }
+
+    /// Execute the build in chroot mode: single mutable sysroot, sequential builds.
+    ///
+    /// Unlike [`execute()`](Self::execute), this mode:
+    /// - Uses a single mutable overlayfs sysroot (not per-stage EROFS)
+    /// - Installs each package into the live chroot after building
+    /// - Composes the final EROFS only once at the end
+    /// - Uses a constant `build_env_hash` (the seed hash) for all packages
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PipelineError`] on missing recipes, executor failures,
+    /// install failures, composition errors, or I/O errors.
+    pub async fn execute_chroot<F>(
+        &self,
+        seed: &Seed,
+        recipes: &HashMap<String, Recipe>,
+        build_steps: &[super::build_order::BuildStep],
+        conn: &Connection,
+        mut on_event: F,
+    ) -> Result<BuildProfile, PipelineError>
+    where
+        F: FnMut(&PipelineEvent),
+    {
+        let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+
+        // In chroot mode the build environment hash stays constant -- all
+        // packages see the seed's hash, not one that evolves per stage.
+        let build_env_hash = seed.build_env_hash().to_owned();
+
+        // Determine which packages to actually build (--only filter).
+        let build_set: Option<HashSet<String>> =
+            self.config.only_packages.as_ref().map(|pkgs| {
+                pkgs.iter().cloned().collect()
+            });
+
+        // Count packages per phase for progress reporting.
+        let mut phase_counts: BTreeMap<super::build_order::BuildPhase, usize> = BTreeMap::new();
+        for step in build_steps {
+            *phase_counts.entry(step.phase).or_insert(0) += 1;
+        }
+
+        // Mount the mutable overlayfs environment once.
+        let chroot_dir = self.config.work_dir.join("chroot");
+        std::fs::create_dir_all(&chroot_dir)
+            .map_err(|e| PipelineError::Io(e.to_string()))?;
+
+        let mut env = MutableEnvironment::new(
+            seed.image_path.clone(),
+            self.config.cas_dir.clone(),
+            chroot_dir,
+            build_env_hash.clone(),
+        );
+        if let Err(e) = env.mount() {
+            warn!("Could not mount mutable environment (requires root): {e}");
+        }
+
+        let sysroot = env.sysroot();
+
+        // Map package name -> (DerivationId, OutputManifest) for dependency resolution.
+        let mut completed: BTreeMap<String, (DerivationId, OutputManifest)> = BTreeMap::new();
+        let mut all_derivations: Vec<ProfileDerivation> = Vec::new();
+        let mut all_manifests: Vec<OutputManifest> = Vec::new();
+        let mut total_cached: usize = 0;
+        let mut total_built: usize = 0;
+
+        // Track current phase for progress events.
+        let mut current_phase: Option<super::build_order::BuildPhase> = None;
+
+        for step in build_steps {
+            // Emit StageStarted/StageCompleted on phase transitions.
+            if current_phase != Some(step.phase) {
+                if let Some(prev) = current_phase {
+                    on_event(&PipelineEvent::StageCompleted {
+                        name: prev.to_string(),
+                    });
+                }
+                let count = phase_counts.get(&step.phase).copied().unwrap_or(0);
+                on_event(&PipelineEvent::StageStarted {
+                    name: step.phase.to_string(),
+                    package_count: count,
+                });
+                info!("phase {}: {count} packages", step.phase);
+                current_phase = Some(step.phase);
+            }
+
+            let pkg_name = &step.package;
+
+            let recipe = recipes
+                .get(pkg_name.as_str())
+                .ok_or_else(|| PipelineError::MissingRecipe(pkg_name.clone()))?;
+
+            // --only filter: non-targeted packages require a cached derivation.
+            if let Some(ref set) = build_set
+                && !set.contains(pkg_name.as_str())
+            {
+                let dep_ids = collect_dep_ids(recipe, &completed);
+                let inputs = DerivationInputs {
+                    source_hash: recipe_hash::source_hash(recipe),
+                    build_script_hash: recipe_hash::build_script_hash(recipe),
+                    dependency_ids: dep_ids,
+                    build_env_hash: build_env_hash.clone(),
+                    target_triple: self.config.target_triple.clone(),
+                    build_options: BTreeMap::new(),
+                };
+                let derivation_id = DerivationId::compute(&inputs)
+                    .map_err(|e| PipelineError::Io(format!("derivation ID: {e}")))?;
+
+                let index = DerivationIndex::new(conn);
+                let record = index
+                    .lookup(derivation_id.as_str())
+                    .map_err(|e| PipelineError::Io(format!("index lookup: {e}")))?
+                    .ok_or_else(|| PipelineError::UncachedDependency {
+                        package: pkg_name.clone(),
+                    })?;
+
+                let manifest =
+                    load_manifest_from_cas(&self.executor, &record.manifest_cas_hash)?;
+
+                // Install cached output into the live sysroot.
+                install_to_sysroot(&manifest, &sysroot, &self.config.cas_dir)
+                    .map_err(|e| PipelineError::Install(e.to_string()))?;
+                run_ldconfig_if_needed(&manifest, &sysroot);
+
+                on_event(&PipelineEvent::PackageCached {
+                    name: pkg_name.clone(),
+                });
+
+                all_derivations.push(ProfileDerivation {
+                    package: recipe.package.name.clone(),
+                    version: recipe.package.version.clone(),
+                    derivation_id: derivation_id.as_str().to_owned(),
+                });
+                all_manifests.push(manifest.clone());
+                completed.insert(pkg_name.clone(), (derivation_id, manifest));
+                total_cached += 1;
+                continue;
+            }
+
+            on_event(&PipelineEvent::PackageBuilding {
+                name: pkg_name.clone(),
+                stage: step.phase.to_string(),
+            });
+
+            let dep_ids = collect_dep_ids(recipe, &completed);
+            let start = Instant::now();
+
+            let result = self.executor.execute(
+                recipe,
+                &build_env_hash,
+                &dep_ids,
+                &self.config.target_triple,
+                &sysroot,
+                conn,
+            )?;
+
+            match result {
+                ExecutionResult::CacheHit {
+                    derivation_id,
+                    record,
+                } => {
+                    let manifest =
+                        load_manifest_from_cas(&self.executor, &record.manifest_cas_hash)?;
+
+                    // Install cached output into the live sysroot.
+                    install_to_sysroot(&manifest, &sysroot, &self.config.cas_dir)
+                        .map_err(|e| PipelineError::Install(e.to_string()))?;
+                    run_ldconfig_if_needed(&manifest, &sysroot);
+
+                    on_event(&PipelineEvent::PackageCached {
+                        name: pkg_name.clone(),
+                    });
+
+                    all_derivations.push(ProfileDerivation {
+                        package: recipe.package.name.clone(),
+                        version: recipe.package.version.clone(),
+                        derivation_id: derivation_id.as_str().to_owned(),
+                    });
+                    all_manifests.push(manifest.clone());
+                    completed.insert(pkg_name.clone(), (derivation_id, manifest));
+                    total_cached += 1;
+                }
+                ExecutionResult::Built {
+                    derivation_id,
+                    output,
+                } => {
+                    let duration = start.elapsed().as_secs();
+                    let manifest = output.manifest;
+
+                    // Install freshly-built output into the live sysroot.
+                    install_to_sysroot(&manifest, &sysroot, &self.config.cas_dir)
+                        .map_err(|e| PipelineError::Install(e.to_string()))?;
+                    run_ldconfig_if_needed(&manifest, &sysroot);
+
+                    on_event(&PipelineEvent::PackageBuilt {
+                        name: pkg_name.clone(),
+                        duration_secs: duration,
+                    });
+
+                    // Set trust level 2 (locally built).
+                    let idx = DerivationIndex::new(conn);
+                    let _ = idx.set_trust_level(derivation_id.as_str(), 2);
+
+                    all_derivations.push(ProfileDerivation {
+                        package: recipe.package.name.clone(),
+                        version: recipe.package.version.clone(),
+                        derivation_id: derivation_id.as_str().to_owned(),
+                    });
+                    all_manifests.push(manifest.clone());
+                    completed.insert(pkg_name.clone(), (derivation_id, manifest));
+                    total_built += 1;
+                }
+            }
+        }
+
+        // Close the last phase.
+        if let Some(last_phase) = current_phase {
+            on_event(&PipelineEvent::StageCompleted {
+                name: last_phase.to_string(),
+            });
+        }
+
+        // Unmount the mutable environment before composing.
+        if env.is_mounted()
+            && let Err(e) = env.unmount()
+        {
+            warn!("Failed to unmount mutable environment: {e}");
+        }
+
+        // Compose a single EROFS image from all outputs at the end.
+        if !all_manifests.is_empty() {
+            let manifest_refs: Vec<&OutputManifest> = all_manifests.iter().collect();
+            let compose_dir = self.config.work_dir.join("chroot-compose");
+            std::fs::create_dir_all(&compose_dir)
+                .map_err(|e| PipelineError::Io(e.to_string()))?;
+
+            let build_result = compose_erofs(&manifest_refs, &compose_dir)?;
+
+            info!(
+                "chroot composed: {} objects, image={}",
+                build_result.cas_objects_referenced,
+                build_result.image_path.display(),
+            );
+        }
+
+        let total = total_cached + total_built;
+        on_event(&PipelineEvent::PipelineCompleted {
+            total_packages: total,
+            cached: total_cached,
+            built: total_built,
+        });
+
+        // Build a single profile stage named "chroot" containing all derivations.
+        let profile_stages = vec![ProfileStage {
+            name: "chroot".to_owned(),
+            build_env: build_env_hash,
+            derivations: all_derivations,
+        }];
+
+        let mut profile = BuildProfile {
+            profile: ProfileMetadata {
+                manifest: "pipeline-chroot".to_owned(),
+                profile_hash: String::new(),
+                generated_at: now,
+                target: self.config.target_triple.clone(),
+            },
+            seed: ProfileSeedRef {
+                id: seed.metadata.seed_id.clone(),
+                source: format!("{:?}", seed.metadata.source).to_lowercase(),
+            },
+            stages: profile_stages,
+        };
+
+        profile.profile.profile_hash = profile.compute_hash();
+        Ok(profile)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -818,6 +1115,8 @@ mod tests {
                 packages: vec!["gcc".to_owned()],
                 target_triple: "x86_64-unknown-linux-gnu".to_owned(),
                 verified_by: vec![],
+                origin_distro: None,
+                origin_version: None,
             },
             image_path,
             cas_dir: dir.join("cas"),
@@ -904,6 +1203,8 @@ mod tests {
                 packages: vec![],
                 target_triple: "x86_64-unknown-linux-gnu".to_owned(),
                 verified_by: vec![],
+                origin_distro: None,
+                origin_version: None,
             },
             image_path: dir2.path().join("seed.erofs"),
             cas_dir: dir2.path().join("cas"),
@@ -975,6 +1276,7 @@ mod tests {
         let glibc_manifest = OutputManifest {
             derivation_id: glibc_id.as_str().to_owned(),
             output_hash: "out1".to_owned(),
+            hash_version: 1,
             files: vec![],
             symlinks: vec![],
             build_duration_secs: 1,
@@ -1016,5 +1318,38 @@ mod tests {
         let ee = ExecutorError::Build("test".to_owned());
         let pe: PipelineError = ee.into();
         assert!(matches!(pe, PipelineError::Executor(_)));
+    }
+
+    #[test]
+    fn build_mode_defaults_to_staged() {
+        let mode = BuildMode::default();
+        assert!(matches!(mode, BuildMode::Staged));
+    }
+
+    #[test]
+    fn build_mode_debug_formatting() {
+        assert_eq!(format!("{:?}", BuildMode::Staged), "Staged");
+        assert_eq!(format!("{:?}", BuildMode::Chroot), "Chroot");
+    }
+
+    #[test]
+    fn pipeline_config_with_chroot_mode() {
+        let config = PipelineConfig {
+            cas_dir: PathBuf::from("/tmp/cas"),
+            work_dir: PathBuf::from("/tmp/work"),
+            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
+            jobs: 4,
+            log_dir: None,
+            keep_logs: false,
+            shell_on_failure: false,
+            up_to_stage: None,
+            only_packages: None,
+            cascade: false,
+            substituter_sources: vec![],
+            publish_endpoint: None,
+            publish_token: None,
+            build_mode: BuildMode::Chroot,
+        };
+        assert!(matches!(config.build_mode, BuildMode::Chroot));
     }
 }

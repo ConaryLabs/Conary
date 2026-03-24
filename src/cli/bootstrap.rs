@@ -106,8 +106,20 @@ pub enum BootstrapCommands {
     /// Package cross-tools output as a derivation seed
     Seed {
         /// Cross-tools directory to package (e.g., /conary/bootstrap/lfs/tools)
+        #[arg(long, required_unless_present = "from_adopted")]
+        from: Option<String>,
+
+        /// Create seed from current adopted system filesystem
         #[arg(long)]
-        from: String,
+        from_adopted: bool,
+
+        /// Distro name (required with --from-adopted)
+        #[arg(long, requires = "from_adopted")]
+        distro: Option<String>,
+
+        /// Distro version (required with --from-adopted)
+        #[arg(long, requires = "from_adopted")]
+        distro_version: Option<String>,
 
         /// Output seed directory
         #[arg(short, long)]
@@ -254,6 +266,29 @@ pub enum BootstrapCommands {
         /// Auto-publish successful builds to configured endpoint
         #[arg(long)]
         publish: bool,
+    },
+
+    /// Verify convergence between builds from two different seeds
+    #[command(name = "verify-convergence")]
+    VerifyConvergence {
+        /// Path to first seed directory
+        #[arg(long)]
+        seed_a: String,
+        /// Path to second seed directory
+        #[arg(long)]
+        seed_b: String,
+        /// Show per-file diff for mismatches
+        #[arg(long)]
+        diff: bool,
+    },
+
+    /// Diff two seed EROFS images
+    #[command(name = "diff-seeds")]
+    DiffSeeds {
+        /// Path to first seed directory
+        path_a: String,
+        /// Path to second seed directory
+        path_b: String,
     },
 
     /// Build Phase 6: Tier-2 packages (BLFS + Conary self-hosting)

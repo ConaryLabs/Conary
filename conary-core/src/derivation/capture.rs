@@ -95,6 +95,7 @@ pub fn capture_output(
     Ok(OutputManifest {
         derivation_id: derivation_id.to_owned(),
         output_hash,
+        hash_version: 1,
         files,
         symlinks,
         build_duration_secs,

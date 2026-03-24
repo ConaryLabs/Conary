@@ -56,6 +56,7 @@
 //! └─────────────────────────────────────────────┘
 //! ```
 
+pub mod adopt_seed;
 mod build_helpers;
 mod build_runner;
 pub mod chroot_env;

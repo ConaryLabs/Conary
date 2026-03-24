@@ -123,6 +123,13 @@ const TOOLCHAIN_NAMED: &[&str] = &["linux-headers", "glibc", "libstdcxx"];
 
 /// Assign bootstrap stages to all recipes and produce a globally ordered build plan.
 ///
+/// # Deprecated
+///
+/// Use [`super::build_order::compute_build_order`] for chroot-mode bootstrap builds.
+/// This function is retained for backward compatibility with the staged pipeline mode
+/// (`Pipeline::execute`). The chroot mode (`Pipeline::execute_chroot`) uses a flat
+/// topological sort without stage boundaries.
+///
 /// # Algorithm
 ///
 /// 1. **Toolchain**: recipes ending in `-pass1` or `-pass2`, plus `linux-headers`,
