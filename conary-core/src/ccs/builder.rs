@@ -459,16 +459,14 @@ impl CcsBuilder {
 
     /// Compute a combined hash for a component
     fn compute_component_hash(&self, files: &[FileEntry]) -> String {
-        use sha2::{Digest, Sha256};
-
-        let mut hasher = Sha256::new();
+        let mut hasher = crate::hash::Hasher::new(crate::hash::HashAlgorithm::Sha256);
         for file in files {
             hasher.update(file.path.as_bytes());
             hasher.update(b":");
             hasher.update(file.hash.as_bytes());
             hasher.update(b"\n");
         }
-        format!("{:x}", hasher.finalize())
+        hasher.finalize().value
     }
 }
 

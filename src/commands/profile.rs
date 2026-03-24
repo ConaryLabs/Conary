@@ -153,10 +153,7 @@ pub async fn cmd_profile_publish(
     let content =
         std::fs::read(profile_path).map_err(|e| anyhow::anyhow!("failed to read profile: {e}"))?;
 
-    let hash = {
-        use sha2::{Digest, Sha256};
-        hex::encode(Sha256::digest(&content))
-    };
+    let hash = conary_core::hash::sha256(&content);
 
     let endpoint =
         endpoint.ok_or_else(|| anyhow::anyhow!("--endpoint is required for profile publish"))?;

@@ -25,7 +25,6 @@ use conary_core::repository::selector::{PackageSelector, SelectionOptions};
 use conary_core::resolver::MissingDependency;
 use conary_core::scriptlet::SandboxMode;
 use conary_core::version::VersionConstraint;
-use sha2::{Digest, Sha256};
 use std::path::Path;
 use tempfile::TempDir;
 use tracing::{info, warn};
@@ -207,10 +206,7 @@ pub async fn try_convert_to_ccs(
             package_path.display()
         )
     })?;
-    let mut hasher = Sha256::new();
-    hasher.update(&package_bytes);
-    let hash_result = hasher.finalize();
-    let original_checksum = format!("sha256:{:x}", hash_result);
+    let original_checksum = conary_core::hash::sha256_prefixed(&package_bytes);
 
     // Determine format string
     let format_str = match format {

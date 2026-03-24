@@ -82,21 +82,10 @@ pub async fn cmd_derivation_show(recipe: &Path, env_hash: &str) -> Result<()> {
 
 /// SHA-256 hash of a file's contents, returned as a 64-char hex string.
 fn sha256_of_path(path: &Path) -> Result<String> {
-    use sha2::{Digest, Sha256};
-    use std::io::Read;
-
     let mut file =
         std::fs::File::open(path).with_context(|| format!("Cannot open {}", path.display()))?;
-    let mut hasher = Sha256::new();
-    let mut buf = [0u8; 8192];
-    loop {
-        let n = file.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(hex::encode(hasher.finalize()))
+    conary_core::hash::sha256_reader_hex(&mut file)
+        .with_context(|| format!("Failed to hash {}", path.display()))
 }
 
 /// Return the current platform's target triple.
