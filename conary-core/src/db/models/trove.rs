@@ -569,4 +569,27 @@ mod tests {
         assert_eq!(loaded.source_distro.as_deref(), Some("fedora-43"));
         assert_eq!(loaded.version_scheme.as_deref(), Some("rpm"));
     }
+
+    #[test]
+    fn test_taken_variant_roundtrip() {
+        let taken = InstallSource::Taken;
+        let s = taken.as_str();
+        assert_eq!(s, "taken");
+        let parsed: InstallSource = s.parse().unwrap();
+        assert_eq!(parsed, InstallSource::Taken);
+    }
+
+    #[test]
+    fn test_taken_is_conary_owned() {
+        assert!(InstallSource::Taken.is_conary_owned());
+        assert!(InstallSource::File.is_conary_owned());
+        assert!(InstallSource::Repository.is_conary_owned());
+        assert!(!InstallSource::AdoptedTrack.is_conary_owned());
+        assert!(!InstallSource::AdoptedFull.is_conary_owned());
+    }
+
+    #[test]
+    fn test_taken_is_not_adopted() {
+        assert!(!InstallSource::Taken.is_adopted());
+    }
 }

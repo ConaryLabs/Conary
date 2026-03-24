@@ -48,7 +48,7 @@ pub mod verify;
 // Re-export all command handlers
 pub use adopt::{
     cmd_adopt, cmd_adopt_convert, cmd_adopt_refresh, cmd_adopt_status, cmd_adopt_system,
-    cmd_adopt_takeover, cmd_conflicts, cmd_sync_hook_install,
+    cmd_conflicts, cmd_sync_hook_install,
 };
 #[cfg(feature = "experimental")]
 pub use automation::{cmd_ai_explain, cmd_ai_find, cmd_ai_query, cmd_ai_translate};

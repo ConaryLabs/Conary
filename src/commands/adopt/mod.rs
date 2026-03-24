@@ -12,7 +12,6 @@ mod packages;
 mod refresh;
 mod status;
 mod system;
-mod takeover;
 
 // Re-export all public commands
 pub use conflicts::cmd_conflicts;
@@ -22,4 +21,4 @@ pub use packages::cmd_adopt;
 pub use refresh::cmd_adopt_refresh;
 pub use status::cmd_adopt_status;
 pub use system::cmd_adopt_system;
-pub use takeover::cmd_adopt_takeover;
+pub use system::{FileInfoTuple, compute_file_hash};
