@@ -4,6 +4,7 @@
 //!
 //! Implements the `Interner` and `DependencyProvider` traits that bridge
 //! Conary's data model to resolvo's SAT solver interface.
+//! Solvables are now `PackageIdentity` instances.
 
 use std::fmt;
 
@@ -15,7 +16,7 @@ use resolvo::{
 
 use super::ConaryProvider;
 use super::matching::{constraint_matches_package, constraint_matches_provide};
-use super::types::{ConaryConstraint, ConaryPackageVersion, SolverDep};
+use super::types::{ConaryConstraint, SolverDep};
 
 // --- Display helpers ---
 
@@ -28,7 +29,7 @@ impl fmt::Display for DisplayName<'_> {
 
 struct DisplaySolvable<'a> {
     name: &'a str,
-    version: &'a ConaryPackageVersion,
+    version: &'a str,
 }
 impl fmt::Display for DisplaySolvable<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -117,16 +118,32 @@ impl DependencyProvider for ConaryProvider<'_> {
             .filter(|&sid| {
                 let pkg = &self.solvables[sid.0 as usize];
                 let matches = if pkg.name == *requested_name {
-                    constraint_matches_package(constraint, &pkg.version)
+                    constraint_matches_package(
+                        constraint,
+                        &pkg.version,
+                        pkg.version_scheme,
+                    )
                 } else if let Some(provided_version) = pkg
                     .provided_capabilities
                     .iter()
                     .find(|(capability, _version)| capability == requested_name)
-                    .and_then(|(_capability, version)| version.as_ref())
+                    .and_then(|(_capability, version)| version.as_deref())
                 {
-                    constraint_matches_provide(constraint, Some(provided_version), &pkg.version)
+                    constraint_matches_provide(
+                        constraint,
+                        Some(provided_version),
+                        pkg.version_scheme,
+                        &pkg.version,
+                        pkg.version_scheme,
+                    )
                 } else {
-                    constraint_matches_provide(constraint, None, &pkg.version)
+                    constraint_matches_provide(
+                        constraint,
+                        None,
+                        pkg.version_scheme,
+                        &pkg.version,
+                        pkg.version_scheme,
+                    )
                 };
                 if inverse { !matches } else { matches }
             })
@@ -202,14 +219,19 @@ impl DependencyProvider for ConaryProvider<'_> {
             }
 
             if let Some(version_cmp) =
-                super::matching::compare_package_versions_desc(&pkg_a.version, &pkg_b.version)
+                super::matching::compare_package_versions_desc(
+                    &pkg_a.version,
+                    pkg_a.version_scheme,
+                    &pkg_b.version,
+                    pkg_b.version_scheme,
+                )
                 && version_cmp != std::cmp::Ordering::Equal
             {
                 return version_cmp;
             }
 
-            let a_installed = pkg_a.trove_id.is_some();
-            let b_installed = pkg_b.trove_id.is_some();
+            let a_installed = pkg_a.installed_trove_id.is_some();
+            let b_installed = pkg_b.installed_trove_id.is_some();
             b_installed
                 .cmp(&a_installed)
                 .then_with(|| pkg_a.name.cmp(&pkg_b.name))

@@ -12,8 +12,8 @@ use crate::error::{Error, Result};
 use crate::repository::versioning::repo_version_satisfies;
 use crate::version::{RpmVersion, VersionConstraint};
 
-use super::provider::types::ConaryConstraint;
 use super::provider::ConaryProvider;
+use super::provider::types::ConaryConstraint;
 
 /// Source of a resolved package.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,8 +117,8 @@ pub fn solve_install(
                 let pkg = provider.get_solvable(*sid);
                 install_order.push(SatPackage {
                     name: pkg.name.clone(),
-                    version: pkg.version.to_string(),
-                    source: if pkg.trove_id.is_some() {
+                    version: pkg.version.clone(),
+                    source: if pkg.installed_trove_id.is_some() {
                         SatSource::Installed
                     } else {
                         SatSource::Repository
@@ -207,7 +207,7 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
     for i in 0..solvable_count {
         let sid = resolvo::SolvableId(i as u32);
         let pkg = provider.get_solvable(sid);
-        if remove_set.contains(pkg.name.as_str()) && pkg.trove_id.is_some() {
+        if remove_set.contains(pkg.name.as_str()) && pkg.installed_trove_id.is_some() {
             removed_capabilities.insert(pkg.name.clone());
             for (cap, _) in &pkg.provided_capabilities {
                 removed_capabilities.insert(cap.clone());
@@ -224,7 +224,7 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
     for i in 0..solvable_count {
         let sid = resolvo::SolvableId(i as u32);
         let pkg = provider.get_solvable(sid);
-        if pkg.trove_id.is_none() || remove_set.contains(pkg.name.as_str()) {
+        if pkg.installed_trove_id.is_none() || remove_set.contains(pkg.name.as_str()) {
             continue;
         }
 
@@ -281,12 +281,13 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
                         (0..solvable_count).any(|j| {
                             let alt_sid = resolvo::SolvableId(j as u32);
                             let alt = provider.get_solvable(alt_sid);
-                            alt.trove_id.is_some()
+                            alt.installed_trove_id.is_some()
                                 && alt.name == dep_name
                                 && !remove_set.contains(alt.name.as_str())
                                 && super::provider::constraint_matches_package(
                                     constraint,
                                     &alt.version,
+                                    alt.version_scheme,
                                 )
                         })
                     });

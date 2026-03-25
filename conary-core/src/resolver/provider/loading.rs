@@ -13,9 +13,9 @@ use crate::error::Result;
 use crate::repository::versioning::{
     RepoVersionConstraint, VersionScheme, infer_version_scheme, parse_repo_constraint,
 };
-use crate::version::{RpmVersion, VersionConstraint};
+use crate::version::VersionConstraint;
 
-use super::types::{ConaryConstraint, ConaryProvidedVersion, SolverDep};
+use super::types::{ConaryConstraint, SolverDep};
 
 /// Map a dependency entry to a `SolverDep` using the given version scheme.
 ///
@@ -206,33 +206,25 @@ fn load_grouped_dependency_requests(
     Ok(deps)
 }
 
-/// Load provided capabilities for a repository package.
+/// Load provided capabilities for a repository package as simple (name, version) pairs.
 pub(super) fn load_repo_provided_capabilities(
     conn: &rusqlite::Connection,
     pkg: &RepositoryPackage,
     repo: &crate::db::models::Repository,
-) -> Result<Vec<(String, Option<ConaryProvidedVersion>)>> {
-    let repo_scheme = infer_version_scheme(repo);
+) -> Result<Vec<(String, Option<String>)>> {
+    let _repo_scheme = infer_version_scheme(repo);
     let Some(repository_package_id) = pkg.id else {
-        return Ok(parse_repo_provides(pkg, repo_scheme));
+        return Ok(parse_repo_provides(pkg));
     };
 
     let rows = RepositoryProvide::find_by_repository_package(conn, repository_package_id)?;
     if rows.is_empty() {
-        return Ok(parse_repo_provides(pkg, repo_scheme));
+        return Ok(parse_repo_provides(pkg));
     }
 
     Ok(rows
         .into_iter()
-        .map(|row| {
-            let version = match (repo_scheme, row.version) {
-                (Some(scheme), Some(raw)) => {
-                    Some(ConaryProvidedVersion::Repository { raw, scheme })
-                }
-                _ => None,
-            };
-            (row.capability, version)
-        })
+        .map(|row| (row.capability, row.version))
         .collect())
 }
 
@@ -272,10 +264,7 @@ pub(super) fn parse_stored_version_scheme(raw: Option<&str>) -> Option<VersionSc
     }
 }
 
-fn parse_repo_provides(
-    pkg: &RepositoryPackage,
-    scheme: Option<VersionScheme>,
-) -> Vec<(String, Option<ConaryProvidedVersion>)> {
+fn parse_repo_provides(pkg: &RepositoryPackage) -> Vec<(String, Option<String>)> {
     let Some(metadata_json) = pkg.metadata.as_deref() else {
         return Vec::new();
     };
@@ -292,14 +281,11 @@ fn parse_repo_provides(
     provides
         .iter()
         .filter_map(|value| value.as_str())
-        .map(|entry| parse_provide_entry(entry, scheme))
+        .map(parse_provide_entry)
         .collect()
 }
 
-fn parse_provide_entry(
-    entry: &str,
-    scheme: Option<VersionScheme>,
-) -> (String, Option<ConaryProvidedVersion>) {
+fn parse_provide_entry(entry: &str) -> (String, Option<String>) {
     const OPS: [&str; 5] = ["<=", ">=", "=", "<", ">"];
 
     for op in OPS {
@@ -309,17 +295,7 @@ fn parse_provide_entry(
             if name.is_empty() || version.is_empty() {
                 continue;
             }
-            let parsed = match scheme {
-                Some(VersionScheme::Rpm) => RpmVersion::parse(version)
-                    .ok()
-                    .map(ConaryProvidedVersion::Installed),
-                Some(scheme) => Some(ConaryProvidedVersion::Repository {
-                    raw: version.to_string(),
-                    scheme,
-                }),
-                None => None,
-            };
-            return (name.to_string(), parsed);
+            return (name.to_string(), Some(version.to_string()));
         }
     }
 

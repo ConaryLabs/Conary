@@ -2,44 +2,14 @@
 
 //! Data types for the resolver provider bridge.
 //!
-//! Contains the core types that represent packages, versions, constraints,
-//! and dependencies in the solver's domain.
+//! Contains the solver-facing constraint and dependency types.
+//! Package identity is now represented by `PackageIdentity` from
+//! `resolver::identity`.
 
 use std::fmt;
 
 use crate::repository::versioning::{RepoVersionConstraint, VersionScheme};
-use crate::version::{RpmVersion, VersionConstraint};
-
-/// A solvable package — either an installed trove or a repository candidate.
-#[derive(Debug, Clone)]
-pub struct ConaryPackage {
-    pub name: String,
-    pub version: ConaryPackageVersion,
-    /// `Some` when this package is currently installed.
-    pub trove_id: Option<i64>,
-    /// `Some` when this package is from a repository.
-    pub repo_package_id: Option<i64>,
-    /// Capabilities this package provides, along with optional capability versions.
-    pub provided_capabilities: Vec<(String, Option<ConaryProvidedVersion>)>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConaryPackageVersion {
-    /// Installed package with RPM version (legacy or actual RPM).
-    Installed(RpmVersion),
-    /// Installed package with a native (non-RPM) version scheme.
-    InstalledNative { raw: String, scheme: VersionScheme },
-    Repository {
-        raw: String,
-        scheme: Option<VersionScheme>,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConaryProvidedVersion {
-    Installed(RpmVersion),
-    Repository { raw: String, scheme: VersionScheme },
-}
+use crate::version::VersionConstraint;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ConaryConstraint {
@@ -76,16 +46,6 @@ impl SolverDep {
         match self {
             Self::Single(name, constraint) => Some((name, constraint)),
             Self::OrGroup(_) => None,
-        }
-    }
-}
-
-impl fmt::Display for ConaryPackageVersion {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Installed(version) => write!(f, "{}", version),
-            Self::InstalledNative { raw, .. } => write!(f, "{}", raw),
-            Self::Repository { raw, .. } => write!(f, "{}", raw),
         }
     }
 }

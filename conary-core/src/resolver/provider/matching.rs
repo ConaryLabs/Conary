@@ -5,161 +5,97 @@
 //! Determines whether a constraint matches a package version or a provided
 //! capability version, handling cross-format comparisons between legacy RPM
 //! constraints and native (Debian, Arch) version schemes.
+//!
+//! All functions now work with `(version: &str, scheme: VersionScheme)` pairs
+//! from `PackageIdentity` instead of the former `ConaryPackageVersion` enum.
 
 use crate::repository::versioning::{
     RepoVersionConstraint, VersionScheme, compare_repo_versions, repo_version_satisfies,
 };
 use crate::version::{RpmVersion, VersionConstraint};
 
-use super::types::{ConaryConstraint, ConaryPackageVersion, ConaryProvidedVersion};
+use super::types::ConaryConstraint;
 
+/// Check whether a constraint matches a package's version.
+///
+/// `version` is the raw version string, `scheme` is how to interpret it.
 pub fn constraint_matches_package(
     constraint: &ConaryConstraint,
-    version: &ConaryPackageVersion,
+    version: &str,
+    scheme: VersionScheme,
 ) -> bool {
-    match (constraint, version) {
-        // Legacy constraint vs RPM installed
-        (ConaryConstraint::Legacy(constraint), ConaryPackageVersion::Installed(version)) => {
-            constraint.satisfies(version)
-        }
-        // Legacy `Any` matches anything
-        (
-            ConaryConstraint::Legacy(VersionConstraint::Any),
-            ConaryPackageVersion::Repository { .. } | ConaryPackageVersion::InstalledNative { .. },
-        ) => true,
-        // Legacy constraint vs RPM repo package
-        (
-            ConaryConstraint::Legacy(constraint),
-            ConaryPackageVersion::Repository {
-                raw,
-                scheme: Some(VersionScheme::Rpm),
+    match constraint {
+        // Legacy constraint (RPM-style)
+        ConaryConstraint::Legacy(vc) => match vc {
+            VersionConstraint::Any => true,
+            _ => match scheme {
+                VersionScheme::Rpm => RpmVersion::parse(version)
+                    .map(|v| vc.satisfies(&v))
+                    .unwrap_or(false),
+                // Legacy constraint against non-RPM version: only `Any` matches
+                // (handled above), all others fail.
+                _ => false,
             },
-        ) => RpmVersion::parse(raw)
-            .map(|version| constraint.satisfies(&version))
-            .unwrap_or(false),
-        // Native RPM constraint vs legacy RPM installed
-        (
-            ConaryConstraint::Repository {
-                scheme: VersionScheme::Rpm,
-                constraint,
-                ..
-            },
-            ConaryPackageVersion::Installed(version),
-        ) => {
-            let legacy = repo_constraint_to_legacy(constraint);
-            legacy.satisfies(version)
-        }
-        // Native constraint vs installed native (same scheme)
-        (
-            ConaryConstraint::Repository {
-                scheme, constraint, ..
-            },
-            ConaryPackageVersion::InstalledNative {
-                raw,
-                scheme: installed_scheme,
-            },
-        ) if scheme == installed_scheme => repo_version_satisfies(*scheme, raw, constraint),
-        // Native constraint vs repo package (same scheme)
-        (
-            ConaryConstraint::Repository {
-                scheme, constraint, ..
-            },
-            ConaryPackageVersion::Repository {
-                raw,
-                scheme: Some(version_scheme),
-            },
-        ) if scheme == version_scheme => repo_version_satisfies(*scheme, raw, constraint),
-        // Native `Any` constraint matches any repo version
-        (
-            ConaryConstraint::Repository {
-                constraint: RepoVersionConstraint::Any,
-                ..
-            },
-            ConaryPackageVersion::Repository { .. } | ConaryPackageVersion::InstalledNative { .. },
-        ) => true,
-        _ => false,
-    }
-}
-
-pub(super) fn constraint_matches_provide(
-    constraint: &ConaryConstraint,
-    provided_version: Option<&ConaryProvidedVersion>,
-    package_version: &ConaryPackageVersion,
-) -> bool {
-    if let Some(version) = provided_version {
-        match (constraint, version) {
-            (ConaryConstraint::Legacy(constraint), ConaryProvidedVersion::Installed(version)) => {
-                return constraint.satisfies(version);
+        },
+        // Native (scheme-aware) constraint
+        ConaryConstraint::Repository {
+            scheme: constraint_scheme,
+            constraint: repo_constraint,
+            ..
+        } => {
+            // `Any` matches everything regardless of scheme
+            if matches!(repo_constraint, RepoVersionConstraint::Any) {
+                return true;
             }
-            (
-                ConaryConstraint::Legacy(VersionConstraint::Any),
-                ConaryProvidedVersion::Repository { .. },
-            ) => return true,
-            (
-                ConaryConstraint::Legacy(constraint),
-                ConaryProvidedVersion::Repository {
-                    raw,
-                    scheme: VersionScheme::Rpm,
-                },
-            ) => {
-                return RpmVersion::parse(raw)
-                    .map(|version| constraint.satisfies(&version))
+            if constraint_scheme == &scheme {
+                return repo_version_satisfies(scheme, version, repo_constraint);
+            }
+            // Cross-scheme RPM: native RPM constraint vs RPM version string
+            if *constraint_scheme == VersionScheme::Rpm && scheme == VersionScheme::Rpm {
+                let legacy = repo_constraint_to_legacy(repo_constraint);
+                return RpmVersion::parse(version)
+                    .map(|v| legacy.satisfies(&v))
                     .unwrap_or(false);
             }
-            (
-                ConaryConstraint::Repository {
-                    scheme, constraint, ..
-                },
-                ConaryProvidedVersion::Repository {
-                    raw,
-                    scheme: provided_scheme,
-                },
-            ) if scheme == provided_scheme => {
-                return repo_version_satisfies(*scheme, raw, constraint);
-            }
-            (
-                ConaryConstraint::Repository {
-                    constraint: RepoVersionConstraint::Any,
-                    ..
-                },
-                ConaryProvidedVersion::Repository { .. },
-            ) => return true,
-            _ => {}
+            false
         }
     }
-
-    constraint_matches_package(constraint, package_version)
 }
 
+/// Check whether a constraint matches a provide's version.
+///
+/// If `provide_version` is `Some`, checks the provide version first.
+/// Falls back to checking the owning package's version if the provide
+/// version does not match or is absent.
+pub(super) fn constraint_matches_provide(
+    constraint: &ConaryConstraint,
+    provide_version: Option<&str>,
+    provide_scheme: VersionScheme,
+    package_version: &str,
+    package_scheme: VersionScheme,
+) -> bool {
+    if let Some(pv) = provide_version
+        && constraint_matches_package(constraint, pv, provide_scheme)
+    {
+        return true;
+    }
+    constraint_matches_package(constraint, package_version, package_scheme)
+}
+
+/// Compare two package versions in descending order (highest first).
+///
+/// Returns `None` when the schemes differ and comparison is not meaningful.
 pub(super) fn compare_package_versions_desc(
-    a: &ConaryPackageVersion,
-    b: &ConaryPackageVersion,
+    a_version: &str,
+    a_scheme: VersionScheme,
+    b_version: &str,
+    b_scheme: VersionScheme,
 ) -> Option<std::cmp::Ordering> {
-    let ord = match (a, b) {
-        (ConaryPackageVersion::Installed(a), ConaryPackageVersion::Installed(b)) => Some(b.cmp(a)),
-        (
-            ConaryPackageVersion::InstalledNative {
-                raw: a_raw,
-                scheme: a_scheme,
-            },
-            ConaryPackageVersion::InstalledNative {
-                raw: b_raw,
-                scheme: b_scheme,
-            },
-        ) if a_scheme == b_scheme => compare_repo_versions(*a_scheme, b_raw, a_raw),
-        (
-            ConaryPackageVersion::Repository {
-                raw: a_raw,
-                scheme: Some(a_scheme),
-            },
-            ConaryPackageVersion::Repository {
-                raw: b_raw,
-                scheme: Some(b_scheme),
-            },
-        ) if a_scheme == b_scheme => compare_repo_versions(*a_scheme, b_raw, a_raw),
-        _ => None,
-    }?;
-    Some(ord)
+    if a_scheme != b_scheme {
+        return None;
+    }
+    // compare_repo_versions returns descending when args are (scheme, b, a)
+    compare_repo_versions(a_scheme, b_version, a_version)
 }
 
 /// Convert a `RepoVersionConstraint` to a legacy `VersionConstraint` for RPM

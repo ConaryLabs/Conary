@@ -100,9 +100,8 @@ impl ProvidesIndex {
 
         // 3. AppStream cross-distro provides
         {
-            let mut stmt = conn.prepare(
-                "SELECT ap.capability, ap.canonical_id FROM appstream_provides ap",
-            )?;
+            let mut stmt =
+                conn.prepare("SELECT ap.capability, ap.canonical_id FROM appstream_provides ap")?;
             let rows = stmt.query_map([], |row| {
                 let cap: String = row.get(0)?;
                 let canonical_id: i64 = row.get(1)?;
