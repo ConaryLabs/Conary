@@ -306,6 +306,7 @@ fn test_install_reason_queries() {
                 orphan_since: None,
                 source_distro: None,
                 version_scheme: None,
+                installed_from_repository_id: None,
             })
         })
         .unwrap()

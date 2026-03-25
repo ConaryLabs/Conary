@@ -187,6 +187,9 @@ pub(crate) struct TroveSnapshot {
     pub architecture: Option<String>,
     pub description: Option<String>,
     pub install_source: String,
+    /// Repository this package was installed from (for provenance/affinity).
+    #[serde(default)]
+    pub installed_from_repository_id: Option<i64>,
     pub files: Vec<FileSnapshot>,
 }
 

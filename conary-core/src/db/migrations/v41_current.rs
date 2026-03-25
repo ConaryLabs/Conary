@@ -624,6 +624,64 @@ pub fn migrate_v57(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 58: Fix state_members multi-arch + remote_collections NULL label
+///
+/// - state_members: widen unique constraint from (state_id, trove_name) to
+///   (state_id, trove_name, architecture) so multilib installs don't conflict.
+/// - remote_collections: convert NULL labels to '' sentinel so the
+///   UNIQUE(name, label) constraint correctly prevents duplicate inserts.
+pub fn migrate_v58(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 58");
+
+    conn.execute_batch(
+        "
+        -- Recreate state_members with (state_id, trove_name, architecture) unique
+        CREATE TABLE state_members_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            state_id INTEGER NOT NULL REFERENCES system_states(id) ON DELETE CASCADE,
+            trove_name TEXT NOT NULL,
+            trove_version TEXT NOT NULL,
+            architecture TEXT,
+            install_reason TEXT NOT NULL DEFAULT 'explicit',
+            selection_reason TEXT,
+            UNIQUE(state_id, trove_name, architecture)
+        );
+        INSERT OR IGNORE INTO state_members_new
+            (id, state_id, trove_name, trove_version, architecture, install_reason, selection_reason)
+            SELECT id, state_id, trove_name, trove_version, architecture, install_reason, selection_reason
+            FROM state_members;
+        DROP TABLE state_members;
+        ALTER TABLE state_members_new RENAME TO state_members;
+        CREATE INDEX idx_state_members_state ON state_members(state_id);
+        CREATE INDEX idx_state_members_name ON state_members(trove_name);
+
+        -- Add installed_from_repository_id to troves for install provenance
+        ALTER TABLE troves ADD COLUMN installed_from_repository_id INTEGER
+            REFERENCES repositories(id) ON DELETE SET NULL;
+
+        -- Convert NULL labels to '' sentinel in remote_collections.
+        -- The old schema allowed duplicate (name, NULL) rows because SQLite
+        -- treats NULL != NULL under UNIQUE. Additionally, the code fix may
+        -- have already written '' labels before this migration runs, so we
+        -- can have both (name, NULL) and (name, '') rows for the same name.
+        --
+        -- Strategy: for each name with any unlabeled rows (NULL or ''),
+        -- keep only the one with the highest id and delete the rest.
+        DELETE FROM remote_collections
+        WHERE (label IS NULL OR label = '')
+          AND id NOT IN (
+              SELECT MAX(id) FROM remote_collections
+              WHERE label IS NULL OR label = ''
+              GROUP BY name
+          );
+        UPDATE remote_collections SET label = '' WHERE label IS NULL;
+        ",
+    )?;
+
+    info!("Schema version 58 applied successfully (multi-arch state_members + label sentinel)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

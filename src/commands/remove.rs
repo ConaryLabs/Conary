@@ -197,6 +197,7 @@ pub async fn cmd_remove(
         architecture: trove.architecture.clone(),
         description: trove.description.clone(),
         install_source: trove.install_source.as_str().to_string(),
+        installed_from_repository_id: trove.installed_from_repository_id,
         files: files
             .iter()
             .map(|f| FileSnapshot {

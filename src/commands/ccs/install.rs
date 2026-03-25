@@ -637,6 +637,7 @@ pub async fn cmd_ccs_install(
                     architecture: old.architecture.clone(),
                     description: old.description.clone(),
                     install_source: old.install_source.as_str().to_string(),
+                    installed_from_repository_id: old.installed_from_repository_id,
                     files: old_files
                         .iter()
                         .map(|f| crate::commands::FileSnapshot {
