@@ -119,6 +119,42 @@ pub fn ingest_canonical_mappings(
     Ok(new_count)
 }
 
+/// Ingest Repology rename rules from a rules directory.
+///
+/// Looks for YAML files in the `800.renames-and-merges/` subdirectory,
+/// which contains cross-distro package name equivalences.
+pub fn ingest_repology_rules(conn: &Connection, rules_dir: &std::path::Path) -> Result<usize> {
+    let merges_dir = rules_dir.join("800.renames-and-merges");
+    if !merges_dir.exists() {
+        tracing::info!("No Repology rules directory at {}", merges_dir.display());
+        return Ok(0);
+    }
+    let mut total = 0;
+    for entry in std::fs::read_dir(&merges_dir)
+        .map_err(|e| crate::error::Error::IoError(format!("read Repology rules dir: {e}")))?
+    {
+        let entry =
+            entry.map_err(|e| crate::error::Error::IoError(format!("read dir entry: {e}")))?;
+        let path = entry.path();
+        if path.extension().is_some_and(|e| e == "yaml" || e == "yml") {
+            let yaml = std::fs::read_to_string(&path).map_err(|e| {
+                crate::error::Error::IoError(format!("read {}: {e}", path.display()))
+            })?;
+            match super::repology::parse_repology_rules(&yaml) {
+                Ok(rules) => {
+                    let applied = super::repology::apply_repology_rules(conn, &rules)?;
+                    total += applied;
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to parse {}: {e}", path.display());
+                }
+            }
+        }
+    }
+    tracing::info!("Applied {total} Repology rename rules");
+    Ok(total)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,5 +256,33 @@ mod tests {
         );
         // count2 can be anything -- the key invariant is no duplicates
         let _ = count2;
+    }
+
+    #[test]
+    fn test_ingest_repology_rules_from_directory() {
+        use std::io::Write;
+
+        let (_temp, conn) = create_test_db();
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let merges_dir = temp_dir.path().join("800.renames-and-merges");
+        std::fs::create_dir_all(&merges_dir).unwrap();
+
+        let mut file = std::fs::File::create(merges_dir.join("test.yaml")).unwrap();
+        writeln!(file, "- {{ name: httpd, setname: apache }}").unwrap();
+        writeln!(file, "- {{ name: apache2, setname: apache }}").unwrap();
+
+        let count = ingest_repology_rules(&conn, temp_dir.path()).unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_ingest_repology_rules_missing_directory() {
+        let (_temp, conn) = create_test_db();
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        // No 800.renames-and-merges subdir exists
+        let count = ingest_repology_rules(&conn, temp_dir.path()).unwrap();
+        assert_eq!(count, 0);
     }
 }
