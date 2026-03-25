@@ -318,6 +318,85 @@ impl RepologyClient {
 }
 
 // ---------------------------------------------------------------------------
+// Repology rules YAML ingestion
+// ---------------------------------------------------------------------------
+
+/// A rename rule extracted from Repology's YAML ruleset.
+///
+/// We only consume `setname` rules -- other actions (setver, devel, ignore)
+/// are for version tracking (future Repology dump ingestion work).
+#[derive(Debug, Clone)]
+pub struct RepologyRenameRule {
+    pub from_name: String,
+    pub canonical_name: String,
+    pub distro: Option<String>,
+}
+
+/// Raw Repology rule from YAML deserialization.
+#[derive(serde::Deserialize)]
+struct RawRepologyRule {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    setname: Option<String>,
+    // Other fields (namepat, setver, devel, ignore, etc.) are intentionally
+    // ignored -- we only extract exact name renames.
+}
+
+/// Parse Repology rename rules from YAML text.
+///
+/// Only extracts rules with both `name` and `setname` (exact renames).
+/// Pattern-based rules (`namepat`) are skipped for now.
+pub fn parse_repology_rules(yaml: &str) -> Result<Vec<RepologyRenameRule>> {
+    let raw_rules: Vec<RawRepologyRule> = serde_yaml::from_str(yaml)
+        .map_err(|e| Error::ParseError(format!("Repology rules YAML: {e}")))?;
+
+    Ok(raw_rules
+        .into_iter()
+        .filter_map(|r| match (r.name, r.setname) {
+            (Some(name), Some(setname)) if name != setname => Some(RepologyRenameRule {
+                from_name: name,
+                canonical_name: setname,
+                distro: None,
+            }),
+            _ => None,
+        })
+        .collect())
+}
+
+/// Apply rename rules to create/update canonical_packages + package_implementations.
+pub fn apply_repology_rules(
+    conn: &rusqlite::Connection,
+    rules: &[RepologyRenameRule],
+) -> Result<usize> {
+    let mut count = 0;
+    for rule in rules {
+        // Upsert canonical package
+        conn.execute(
+            "INSERT INTO canonical_packages (name, kind) VALUES (?1, 'package')
+             ON CONFLICT(name) DO NOTHING",
+            [&rule.canonical_name],
+        )?;
+        let canonical_id: i64 = conn.query_row(
+            "SELECT id FROM canonical_packages WHERE name = ?1",
+            [&rule.canonical_name],
+            |row| row.get(0),
+        )?;
+
+        // Upsert implementation mapping
+        let distro = rule.distro.as_deref().unwrap_or("unknown");
+        conn.execute(
+            "INSERT INTO package_implementations (canonical_id, distro, distro_name, source)
+             VALUES (?1, ?2, ?3, 'repology')
+             ON CONFLICT(canonical_id, distro, distro_name) DO UPDATE SET source = 'repology'",
+            rusqlite::params![canonical_id, distro, &rule.from_name],
+        )?;
+        count += 1;
+    }
+    Ok(count)
+}
+
+// ---------------------------------------------------------------------------
 // Cache persistence
 // ---------------------------------------------------------------------------
 
@@ -499,5 +578,91 @@ mod tests {
 
         let entries = crate::db::models::RepologyCacheEntry::find_all(&conn).unwrap();
         assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_repology_rename_rules() {
+        let yaml = r#"
+- { name: httpd, setname: apache }
+- { name: apache2, setname: apache }
+- { name: python3-requests, setname: "python:requests" }
+"#;
+        let rules = parse_repology_rules(yaml).unwrap();
+        assert_eq!(rules.len(), 3);
+        assert_eq!(rules[0].from_name, "httpd");
+        assert_eq!(rules[0].canonical_name, "apache");
+        assert_eq!(rules[2].from_name, "python3-requests");
+        assert_eq!(rules[2].canonical_name, "python:requests");
+    }
+
+    #[test]
+    fn test_parse_repology_rules_skips_identity_renames() {
+        let yaml = r#"
+- { name: firefox, setname: firefox }
+- { name: httpd, setname: apache }
+"#;
+        let rules = parse_repology_rules(yaml).unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].from_name, "httpd");
+    }
+
+    #[test]
+    fn test_parse_repology_rules_skips_non_rename() {
+        let yaml = r#"
+- { name: firefox, setver: "125.0" }
+- { namepat: "lib(.+)-dev", setname: "$1" }
+- { name: httpd, setname: apache }
+"#;
+        let rules = parse_repology_rules(yaml).unwrap();
+        assert_eq!(rules.len(), 1);
+    }
+
+    #[test]
+    fn test_apply_repology_rules_creates_canonical_mappings() {
+        use crate::db::testing::create_test_db;
+
+        let (_temp, conn) = create_test_db();
+
+        let rules = vec![
+            RepologyRenameRule {
+                from_name: "httpd".to_string(),
+                canonical_name: "apache".to_string(),
+                distro: Some("fedora".to_string()),
+            },
+            RepologyRenameRule {
+                from_name: "apache2".to_string(),
+                canonical_name: "apache".to_string(),
+                distro: Some("debian".to_string()),
+            },
+        ];
+
+        let count = apply_repology_rules(&conn, &rules).unwrap();
+        assert_eq!(count, 2);
+
+        let canonical = CanonicalPackage::find_by_name(&conn, "apache").unwrap();
+        assert!(canonical.is_some());
+
+        let impls = PackageImplementation::find_by_canonical(&conn, canonical.unwrap().id.unwrap())
+            .unwrap();
+        assert_eq!(impls.len(), 2);
+    }
+
+    #[test]
+    fn test_apply_repology_rules_idempotent() {
+        use crate::db::testing::create_test_db;
+
+        let (_temp, conn) = create_test_db();
+
+        let rules = vec![RepologyRenameRule {
+            from_name: "httpd".to_string(),
+            canonical_name: "apache".to_string(),
+            distro: Some("fedora".to_string()),
+        }];
+
+        apply_repology_rules(&conn, &rules).unwrap();
+        apply_repology_rules(&conn, &rules).unwrap(); // should not fail
+
+        let canonical = CanonicalPackage::find_by_name(&conn, "apache").unwrap();
+        assert!(canonical.is_some());
     }
 }
