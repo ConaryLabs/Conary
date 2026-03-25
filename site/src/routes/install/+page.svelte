@@ -67,7 +67,7 @@
 						<span class="t-prompt">$</span>
 						<span class="t-cmd">conary --version</span>
 					</div>
-					<div class="terminal-line t-output">conary 0.6.0</div>
+					<div class="terminal-line t-output">conary 0.7.0</div>
 					<div class="terminal-line t-blank"></div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
@@ -77,7 +77,7 @@
 					<div class="terminal-line t-blank"></div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
-						<span class="t-cmd">conary sync</span>
+						<span class="t-cmd">conary repo sync</span>
 					</div>
 					<div class="terminal-line t-output">Syncing metadata from 1 repository...</div>
 					<div class="terminal-line t-output t-success">Sync complete. 68,421 packages available.</div>

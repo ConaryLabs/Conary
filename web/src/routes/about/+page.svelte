@@ -9,7 +9,7 @@
 
 		<p class="lead animate-in" style="--stagger: 1">
 			Conary is a cross-distribution Linux package manager that unifies package management
-			across Fedora, Arch Linux, Ubuntu, and more.
+			across Fedora, Arch Linux, and Ubuntu.
 		</p>
 
 		<p class="animate-in" style="--stagger: 2">
