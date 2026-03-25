@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-03-21
-revision: 5
-summary: Update schema version to v56, add derivation verification and provenance
+last_updated: 2026-03-24
+revision: 6
+summary: Fix schema v57, 4 crates, 57 migrations, update bootstrap stage names
 ---
 
 # Conary Architecture
@@ -42,7 +42,7 @@ Update   SBOM    Diff   Switch      Base/Image
      +------+------+        | (src/      |
      |  Database   |        |  repository|
      | (src/db/)   |        |  /)        |
-     |  SQLite v56 |        +------+-----+
+     |  SQLite v57 |        +------+-----+
      +------+------+               |
             |               +------+------+
      +------+------+        | Remi Server |
@@ -89,7 +89,7 @@ can be flagged as stale when the parent updates.
 
 ## Module Map
 
-The project is a Cargo workspace with 5 crates:
+The project is a Cargo workspace with 4 crates:
 
 ```
 conary/                  Root crate -- CLI binary
@@ -108,8 +108,8 @@ conary-core/             Core library crate
 +-- src/
     +-- lib.rs           Public API surface
     +-- db/              Database layer
-    |   +-- schema.rs    Schema v56, migration dispatcher
-    |   +-- migrations.rs All 52 migration functions
+    |   +-- schema.rs    Schema v57, migration dispatcher
+    |   +-- migrations/  57 migration functions (v1_v20.rs, v21_v40.rs, v41_current.rs)
     |   +-- models/      ORM-style model structs
     +-- transaction/     Composefs-native transaction engine
     |   +-- mod.rs       TransactionEngine, state machine (resolve/fetch/commit/build/mount)
@@ -361,34 +361,32 @@ The composefs driver (Linux 6.2+, `CONFIG_EROFS_FS`) provides:
 ## Bootstrap Pipeline
 
 Build a complete Conary-managed system from scratch. The pipeline has
-up to 6 stages, with Stage 2 and Conary being optional:
+6 phases aligned with Linux From Scratch 13:
 
 ```
-Stage 0: Cross-Compiler (crosstool-ng 1.28.0)
-  Build minimal cross-compiler for target arch
+Phase 1: CrossTools (LFS Ch5)
+  Cross-toolchain for target arch
+  Produces: $LFS/tools/
        |
-Stage 1: Self-Hosted Toolchain (recipes/stage1/*.toml)
-  5 packages: linux-headers, binutils, gcc-pass1, glibc, gcc-pass2
-  Built with Stage 0 cross-compiler, sandboxed via ContainerConfig
+Phase 2: TempTools (LFS Ch6-7)
+  Temporary tools (17 cross-compiled + 6 chroot packages)
        |
-Stage 2: Reproducibility Rebuild (optional, --skip-stage2 to skip)
-  Rebuilds Stage 1 packages using the Stage 1 compiler (not cross)
-  Ensures bit-reproducible toolchain independent of host
+Phase 3: FinalSystem (LFS Ch8)
+  Complete Linux system (77 packages)
+  Built inside chroot
        |
-Base System (recipes/base/*.toml)
-  ~80 packages resolved via RecipeGraph (topological sort)
-  Boot/networking packages are tagged recipes, not hardcoded order
-  Per-package checkpointing for resume after interruption
+Phase 4: SystemConfig (LFS Ch9)
+  Network, fstab, kernel, bootloader configuration
        |
-Conary (optional, --skip-conary to skip) (recipes/conary/*.toml)
-  Rust bootstrap + Conary self-hosting in the new sysroot
-       |
-Image Generation
+Phase 5: BootableImage (LFS Ch10)
   systemd-repart for rootless image generation (fallback: sfdisk/mkfs)
-  UKI support via ukify. Output formats: raw, qcow2, ISO
+  Output formats: raw, qcow2, ISO, EROFS
+       |
+Phase 6: Tier2 (BLFS + Conary)
+  PAM, OpenSSH, curl, Rust, Conary self-hosting
 ```
 
-Aligned with LFS 12.4 (binutils 2.45, gcc 15.2.0, glibc 2.42,
+Aligned with LFS 13 (binutils 2.45, gcc 15.2.0, glibc 2.42,
 kernel 6.16.1). All recipes carry SHA-256 checksums enforced at
 build time (`--skip-verify` to override). All stages run in
 sandboxed containers via `ContainerConfig::pristine_for_bootstrap()`.
@@ -396,7 +394,7 @@ sandboxed containers via `ContainerConfig::pristine_for_bootstrap()`.
 Supports x86_64, aarch64, and riscv64 targets. Dry-run mode
 (`--dry-run`) validates the full pipeline without building.
 
-## Database Schema (v56)
+## Database Schema (v57)
 
 All state lives in SQLite. No config files for runtime state. Key tables:
 

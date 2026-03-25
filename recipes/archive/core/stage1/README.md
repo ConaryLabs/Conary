@@ -1,5 +1,8 @@
 # Stage 1: Self-Hosted Toolchain Recipes
 
+> **Note:** These recipes are archived reference material. Paths, versions, and CLI commands may be outdated.
+> For current bootstrap commands, run `conary bootstrap --help`. For current package versions, see `recipes/archive/core/versions.toml`.
+
 Stage 1 builds a self-hosted toolchain using the Stage 0 cross-compiler.
 After Stage 1 is complete, we have a native toolchain that can build
 all remaining packages without relying on the host system.

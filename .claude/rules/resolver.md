@@ -32,14 +32,15 @@ for install/removal with backtracking support.
 - `Resolver::resolve_install()` uses graph-based local check; `sat::solve_install()` uses full SAT
 - `ConaryProvider` interns names, solvables, version sets, and strings -- IDs are indices into Vecs
 - `SatSource::Installed` vs `SatSource::Repository` distinguishes existing vs new packages
-- `provider.rs` queries DB on demand -- not all packages are loaded upfront
-- `canonical/` submodule handles canonical name resolution (separate concern)
+- `provider/` queries DB on demand -- not all packages are loaded upfront
+- `canonical.rs` handles canonical name resolution (separate concern, single file)
 - OR groups from normalized requirement groups are modeled via `VersionSetUnionId` in resolvo
 
 ## Files
 - `engine.rs` -- `Resolver` struct, `resolve_install()`, `resolve()`
 - `sat.rs` -- `solve_install()`, `solve_removal()`, `SatResolution`, `SatPackage`
-- `provider.rs` -- `ConaryProvider`, resolvo trait implementations
+- `provider/` -- `ConaryProvider`, resolvo trait implementations (5 files: loading.rs, matching.rs, mod.rs, traits.rs, types.rs)
+- `canonical.rs` -- canonical name resolution
 - `graph.rs` -- `DependencyGraph`, `PackageNode`, `DependencyEdge`, topological sort
 - `plan.rs` -- `ResolutionPlan`, `MissingDependency`
 - `conflict.rs` -- `Conflict` enum variants

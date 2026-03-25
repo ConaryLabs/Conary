@@ -1,5 +1,8 @@
 # Base System Recipes
 
+> **Note:** These recipes are archived reference material. Paths, versions, and CLI commands may be outdated.
+> For current bootstrap commands, run `conary bootstrap --help`. For current package versions, see `recipes/archive/core/versions.toml`.
+
 The base system contains the minimum packages needed for a bootable,
 functional Conary system. These recipes are built after Stage 1
 (self-hosted toolchain) is complete.

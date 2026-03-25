@@ -1,5 +1,8 @@
 # Conary Core Bootstrap Recipes
 
+> **Note:** These recipes are archived reference material. Paths, versions, and CLI commands may be outdated.
+> For current bootstrap commands, run `conary bootstrap --help`. For current package versions, see `recipes/archive/core/versions.toml`.
+
 This directory contains the complete recipe set for bootstrapping a
 self-hosting Conary Linux system from scratch.
 

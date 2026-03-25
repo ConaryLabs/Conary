@@ -34,6 +34,8 @@ See `deploy/setup-forge.sh` for detailed steps.
 |----------|---------|----------|-------------|
 | `ci.yaml` | Push to main | ~5 min | cargo build, test, clippy, Remi smoke |
 | `integration.yaml` | Push to main | ~15 min | 38-test Phase 1 suite on Fedora/Ubuntu/Arch via Podman |
+| `e2e.yaml` | Daily 06:00 UTC, manual | ~20-30 min | 3-distro Phase 1+2+3 deep E2E |
+| `release.yaml` | Push `v*` tag | ~3 min | Verify release landed on Remi (waits for GH Actions) |
 | `remi-health.yaml` | Every 6 hours | ~60s | Full Remi endpoint verification |
 
 ## Runner

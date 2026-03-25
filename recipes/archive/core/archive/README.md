@@ -1,5 +1,8 @@
 # Compression and Archiving Tools Recipes
 
+> **Note:** These recipes are archived reference material. Paths, versions, and CLI commands may be outdated.
+> For current bootstrap commands, run `conary bootstrap --help`. For current package versions, see `recipes/archive/core/versions.toml`.
+
 These recipes build essential compression and archiving utilities.
 
 ## Package List

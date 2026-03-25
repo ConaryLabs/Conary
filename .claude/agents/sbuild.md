@@ -25,7 +25,7 @@ actual diff. You are the reason releases ship clean.
 - Analyze all commits since last tag: `git log $(git describe --tags --abbrev=0)..HEAD --oneline`
 - Categorize: breaking changes (major), new features (minor), fixes (patch)
 - Verify version bump matches change severity
-- Check database schema version if migrations were added (currently v54)
+- Check database schema version if migrations were added (currently v57)
 - Check wire format changes (CCS format, federation protocol, daemon REST API)
 
 ### 2. Build Matrix

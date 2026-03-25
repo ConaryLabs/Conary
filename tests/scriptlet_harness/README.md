@@ -20,10 +20,13 @@ them with the correct arguments for each scenario.
 
 ```bash
 # Build conary first
-cargo build --release
+cargo build
 
-# Run all tests (requires root for scriptlet execution on /)
+# Run all tests (without --real-root, scriptlets are SKIPPED since install path is not /)
 sudo python3 tests/scriptlet_harness/test_scriptlets.py
+
+# Run with real root mode - scriptlets actually execute (DANGEROUS, modifies /)
+sudo python3 tests/scriptlet_harness/test_scriptlets.py --real-root
 
 # Run specific test
 sudo python3 tests/scriptlet_harness/test_scriptlets.py --test "rpm_upgrade"
@@ -34,6 +37,21 @@ sudo python3 tests/scriptlet_harness/test_scriptlets.py --keep-artifacts
 # Specify conary binary path
 sudo python3 tests/scriptlet_harness/test_scriptlets.py --conary ./target/debug/conary
 ```
+
+### The `--real-root` flag
+
+By default, the harness installs packages to a temporary directory, which means
+Conary skips scriptlet execution (scriptlets only run when installing to `/`).
+This is safe but means you are only testing install/remove logic, not actual
+scriptlet execution.
+
+Pass `--real-root` to install packages to the real root filesystem (`/`). In this
+mode, scriptlets will actually execute on your system. The harness tracks all
+installed packages and removes them in a cleanup step after each test run.
+
+Use `--real-root` when you need to verify that scriptlet arguments (`$1` for RPM,
+`install`/`configure`/`remove` for DEB, function calls for Arch) are passed
+correctly during real execution. Requires `sudo`.
 
 ## Test Matrix
 
