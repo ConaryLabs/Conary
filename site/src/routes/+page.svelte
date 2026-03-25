@@ -44,7 +44,7 @@
 		</div>
 		<div class="stat-divider" aria-hidden="true"></div>
 		<div class="stat">
-			<span class="stat-value">174K+</span>
+			<span class="stat-value">219K+</span>
 			<span class="stat-label">Lines of Rust</span>
 		</div>
 	</div>

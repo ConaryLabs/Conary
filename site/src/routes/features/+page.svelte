@@ -134,9 +134,9 @@
 					perl, pkgconfig, cmake, binary, and more.
 				</p>
 				<div class="feature-code">
-					<code>conary deptree nginx</code>
-					<code>conary depends nginx</code>
-					<code>conary rdepends openssl</code>
+					<code>conary query deptree nginx</code>
+					<code>conary query depends nginx</code>
+					<code>conary query rdepends openssl</code>
 				</div>
 			</div>
 
@@ -232,7 +232,7 @@
 					with podman and docker. Ship your exact verified system state as a container.
 				</p>
 				<div class="feature-code">
-					<code>conary export --oci</code>
+					<code>conary export --output ./my-image</code>
 					<code>conary ccs export nginx --format oci</code>
 				</div>
 			</div>
@@ -300,7 +300,7 @@
 					Sigstore integration for signing and verification.
 				</p>
 				<div class="feature-code">
-					<code>conary query sbom nginx</code>
+					<code>conary provenance sbom nginx</code>
 				</div>
 			</div>
 

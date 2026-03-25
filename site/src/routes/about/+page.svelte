@@ -111,7 +111,7 @@
 			<div class="tech-list">
 				<div class="tech-item">
 					<span class="tech-label">Language</span>
-					<span class="tech-value">Rust (Edition 2024), 5-crate workspace</span>
+					<span class="tech-value">Rust (Edition 2024), 4-crate workspace</span>
 				</div>
 				<div class="tech-item">
 					<span class="tech-label">Filesystem</span>
@@ -119,7 +119,7 @@
 				</div>
 				<div class="tech-item">
 					<span class="tech-label">Database</span>
-					<span class="tech-value">SQLite (50+ migrations)</span>
+					<span class="tech-value">SQLite (57 migrations, 69 tables)</span>
 				</div>
 				<div class="tech-item">
 					<span class="tech-label">Hashing</span>
