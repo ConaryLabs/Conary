@@ -10,8 +10,8 @@ toolchain).
 |-----------|---------|---------|
 | GCC | 15.2.0 | C/C++ compiler |
 | glibc | 2.43 | C library |
-| binutils | 2.46 | Assembler, linker, etc. |
-| Linux headers | 6.19.5 | Kernel API headers |
+| binutils | 2.46.0 | Assembler, linker, etc. |
+| Linux headers | 6.18.3 | Kernel API headers |
 
 ## Prerequisites
 

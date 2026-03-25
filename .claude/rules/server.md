@@ -75,7 +75,7 @@ conaryd (local daemon with REST API).
 - `server/admin_service.rs` -- shared service layer (tokens, repos, federation, audit) used by handlers + MCP
 - `server/forgejo.rs` -- shared Forgejo/CI client module (get, post, get_text)
 - `server/routes.rs` -- axum router construction (internal :8081 + external :8082)
-- `server/handlers/admin/` -- admin API handlers split into: tokens.rs, ci.rs, repos.rs, federation.rs, audit.rs, events.rs
+- `server/handlers/admin/` -- admin API handlers split into: tokens.rs, ci.rs, repos.rs, federation.rs, audit.rs, events.rs, artifacts.rs, packages.rs, test_data.rs
 - `server/handlers/openapi.rs` -- hand-written OpenAPI 3.1 spec for admin API
 - `federation/` -- CAS federation (router, circuit breaker, coalescer, mDNS, peer)
-- `daemon/` -- conaryd (routes, handlers, auth, jobs, lock, socket, systemd)
+- `daemon/` -- conaryd (routes, auth, client, enhance, jobs, lock, socket, systemd)

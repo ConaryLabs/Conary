@@ -112,11 +112,28 @@ cargo test
 
 ### Commit Messages
 
-Write clear, descriptive commit messages. Use the imperative mood in the subject line (e.g., "Add sparse index support" not "Added sparse index support"). Keep the subject under 72 characters.
+This project uses [Conventional Commits](https://www.conventionalcommits.org/). Every commit message must start with a type prefix:
+
+| Prefix | When to use | Version bump |
+|--------|-------------|-------------|
+| `feat:` | New feature or capability | Minor |
+| `fix:` | Bug fix | Patch |
+| `docs:` | Documentation only | None |
+| `refactor:` | Code restructure, no behavior change | None |
+| `test:` | Test additions or changes | None |
+| `chore:` | Build, tooling, dependencies | None |
+| `security:` | Security fix | Patch |
+| `perf:` | Performance improvement | Patch |
+
+Add `!` after the type for breaking changes: `feat!: remove legacy API`.
+
+Scopes are optional but encouraged: `feat(resolver): add SAT backtracking`.
+
+Use the imperative mood in the subject line (e.g., "add sparse index support" not "added sparse index support"). Keep the subject under 72 characters. The release pipeline (`scripts/release.sh`) uses these prefixes to determine version bumps and generate changelogs.
 
 ## Module Overview
 
-The project is a Cargo workspace with 5 crates:
+The project is a Cargo workspace with 4 crates:
 
 **`conary`** (root) -- CLI binary
 
@@ -140,7 +157,7 @@ The project is a Cargo workspace with 5 crates:
 | `src/container/` | Scriptlet sandboxing via Linux namespace isolation |
 | `src/trigger/` | Post-install trigger system |
 | `src/scriptlet/` | Scriptlet execution with cross-distro support |
-| `src/label/` | Package provenance labels |
+| `src/label.rs` | Package provenance labels |
 | `src/flavor/` | Build variation specifications |
 | `src/components/` | Component classification |
 | `src/transaction/` | Crash-safe atomic operations with journal-based recovery |
@@ -151,6 +168,12 @@ The project is a Cargo workspace with 5 crates:
 | `src/provenance/` | Package DNA and full provenance tracking |
 | `src/automation/` | Automated maintenance (security updates, orphan cleanup) |
 | `src/bootstrap/` | Bootstrap a complete Conary system from scratch |
+| `src/generation/` | EROFS generation building, composefs mounting, CAS GC |
+| `src/derivation/` | CAS-layered derivation engine for bootstrap |
+| `src/trust/` | TUF supply chain trust |
+| `src/canonical/` | Cross-distro canonical name mapping (AppStream, Repology) |
+| `src/self_update.rs` | Self-update version checking, download, atomic replacement |
+| `src/mcp/` | MCP tool definitions for LLM integration |
 | `src/hash.rs` | Multi-algorithm hashing (SHA-256, XXH128) |
 
 **`conary-server`** -- Remi server + conaryd daemon (feature-gated: `--features server`)

@@ -87,11 +87,11 @@ tests/integration/remi/manifests/
   phase3-group-m.toml       # Adversarial tests
   phase3-group-n-container.toml  # Container-based adversarial
   phase3-group-n-qemu.toml       # QEMU boot tests
-  phase4-group-a.toml       # T160-T176 (Config/Distro/Canonical)
-  phase4-group-b.toml       # T177-T195 (Label/Model/Collection)
-  phase4-group-c.toml       # T196-T213 (CCS/Bootstrap/Cache)
-  phase4-group-d.toml       # T214-T229 (Trust/Federation/Provenance)
-  phase4-group-e.toml       # T230-T249 (Cross-distro)
+  phase4-group-a.toml       # T160-T176 (Config/Distro/Canonical/Groups/Registry)
+  phase4-group-b.toml       # T177-T195 (Label/Model/Collection/Derive)
+  phase4-group-c.toml       # T196-T213 (CCS/Bootstrap/Cache/Automation)
+  phase4-group-d.toml       # T214-T229 (Trust/Federation/Provenance/Capability)
+  phase4-group-e.toml       # T230-T249 (Cross-distro compatibility)
 ```
 
 ## HTTP API
@@ -132,6 +132,16 @@ The MCP endpoint is mounted at `/mcp` (Streamable HTTP transport).
 | `build_image` | Build a container image for a distro |
 | `list_images` | List available container images |
 | `cleanup_containers` | Remove stopped conary-test containers |
+| `reload_manifests` | Reload TOML manifests from disk without restart |
+| `prune_images` | Remove old container images, keeping N most recent per distro |
+| `image_info` | Get details about a container image (tag, size, labels) |
+| `deploy_source` | Deploy source from git ref and rebuild on Forge |
+| `rebuild_binary` | Rebuild conary and conary-test binaries from source |
+| `restart_service` | Restart the conary-test systemd user service |
+| `build_fixtures` | Build test fixture CCS packages |
+| `publish_fixtures` | Publish test fixtures to Remi repository |
+| `deploy_status` | Get deployment status (version, uptime, WAL pending) |
+| `flush_pending` | Flush pending WAL items to Remi |
 
 ## Configuration
 

@@ -178,8 +178,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - feat(resolver): add provides index and unfiltered deps to ConaryProvider
 - refactor(core): extract shared MCP helpers into conary-core
 
-## [Unreleased] - 2026-03-15
-
 ### Added
 - Three-tier capability policy engine (allowed/prompt/denied) for CCS install
 - `--reinstall` flag for `conary ccs install`

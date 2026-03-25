@@ -1,3 +1,9 @@
+---
+last_updated: 2026-03-24
+revision: 1
+summary: Fix SandboxMode default (Auto not None), correct scriptlet_entry.rs file path
+---
+
 # Scriptlet Security Model
 
 This document describes Conary's security model for executing package scriptlets (install/remove hooks).
@@ -34,16 +40,17 @@ Scriptlet execution supports three sandbox modes:
 
 ```rust
 pub enum SandboxMode {
-    None,    // Direct execution (default, for compatibility)
-    Auto,    // Sandbox if risk >= Medium
+    None,    // Direct execution, no sandboxing
+    #[default]
+    Auto,    // Sandbox based on script risk analysis (default)
     Always,  // Always sandbox all scripts
 }
 ```
 
 Configure via CLI or environment:
-- `--sandbox=auto` - Recommended for untrusted packages
-- `--sandbox=always` - Maximum security
-- `--sandbox=never` - Legacy behavior (default)
+- `--sandbox=auto` - Risk-based sandboxing (default)
+- `--sandbox=always` - Maximum security, sandbox all scripts
+- `--sandbox=never` - Legacy behavior, no sandboxing
 
 ### 3. Container Isolation
 
@@ -181,7 +188,7 @@ Full namespace isolation requires root privileges. When running as non-root:
 | `conary-core/src/scriptlet/mod.rs` | Scriptlet executor, cross-distro handling |
 | `conary-core/src/container/mod.rs` | Container isolation, risk analysis |
 | `conary-core/src/trigger/mod.rs` | Post-install triggers (preferred over scriptlets) |
-| `conary-core/src/db/models/scriptlet.rs` | Scriptlet database storage |
+| `conary-core/src/db/models/scriptlet_entry.rs` | Scriptlet database storage |
 
 ## Implemented Since Initial Design
 

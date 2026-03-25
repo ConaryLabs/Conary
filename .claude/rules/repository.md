@@ -60,7 +60,15 @@ for CCS chunk operations.
 - `error_helpers.rs` -- error context extension trait (`.download_context()`, `.sync_context()`)
 - `selector.rs` -- package candidate selection logic
 - `mirror_health.rs` -- per-mirror tracking
+- `mirror_selector.rs` -- ranked mirror selection (`MirrorSelector`, `MirrorStrategy`)
 - `remi.rs` -- Remi CCS server client
 - `download.rs` -- `download_package()`, checksum verification
 - `resolution.rs` -- package resolution logic
 - `gpg.rs` -- GPG signature verification
+- `management.rs` -- repository management operations
+- `metadata.rs` -- repository metadata types
+- `dependencies.rs` -- dependency fetching
+- `substituter.rs` -- binary substituter implementation (`SubstituterChain`)
+- `chunk_fetcher.rs` -- chunk fetching (feature-gated behind `--features server`)
+- `registry.rs` -- format detection and parser creation
+- `metalink.rs` -- metalink XML and HTTP header parsing

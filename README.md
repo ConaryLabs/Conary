@@ -6,7 +6,7 @@
 
 **Website:** [conary.io](https://conary.io) | **Packages:** [packages.conary.io](https://packages.conary.io) | **Discussions:** [GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions)
 
-A cross-distribution Linux system manager with immutable generations, atomic transactions, content-addressable storage, and a declarative system model. 176K+ lines of Rust, 2,500+ unit tests and 278 integration tests, one tool for every distro.
+A cross-distribution Linux system manager with immutable generations, atomic transactions, content-addressable storage, and a declarative system model. 219K+ lines of Rust, 2,100+ unit tests and 278 integration tests, one tool for every distro.
 
 Inspired by the [original Conary](https://en.wikipedia.org/wiki/Conary_(package_manager)) from rPath, which pioneered concepts like troves, changesets, flavors, and components that were ahead of their time. This project carries those ideas forward with a modern implementation.
 
@@ -55,7 +55,7 @@ conary repo sync
 conary install nginx
 ```
 
-**176K+ lines of Rust, 2,500+ unit tests, 278 integration tests, database schema v57.** This is not a prototype.
+**219K+ lines of Rust, 2,100+ unit tests, 278 integration tests, database schema v57.** This is not a prototype.
 
 ---
 
@@ -227,7 +227,7 @@ conary install openssl:devel      # Headers and libs for building
 
 ### Bootstrap System
 
-Build a complete Conary-managed Linux system from scratch. The pipeline runs Stage 0 (cross-compilation toolchain), Stage 1 (self-hosted toolchain), optional Stage 2 (extended toolchain), BaseSystem (core packages with per-package checkpointing), optional Conary stage (self-hosting), and Image (bootable disk via systemd-repart). RecipeGraph handles dependency ordering across all stages. Targets x86_64, aarch64, and riscv64. Aligned with LFS 12.4 (binutils 2.45, gcc 15.2.0, glibc 2.42, kernel 6.16.1).
+Build a complete Conary-managed Linux system from scratch. The pipeline runs Stage 0 (cross-compilation toolchain), Stage 1 (self-hosted toolchain), optional Stage 2 (extended toolchain), BaseSystem (core packages with per-package checkpointing), optional Conary stage (self-hosting), and Image (bootable disk via systemd-repart). RecipeGraph handles dependency ordering across all stages. Targets x86_64, aarch64, and riscv64. Aligned with LFS 13 (binutils 2.46.0, gcc 15.2.0, glibc 2.43, kernel 6.19.8).
 
 ```bash
 conary bootstrap init --target x86_64
@@ -452,7 +452,7 @@ Features: Bloom filter acceleration, batch endpoints, pull-through caching, full
 cargo build --features server
 
 # Run the server
-conary server --bind 0.0.0.0:8080 --data-dir /var/lib/remi
+conary remi --bind 0.0.0.0:8080
 ```
 
 ---
@@ -510,7 +510,7 @@ Requires Rust 1.94+ (edition 2024). The project is a Cargo workspace with 4 crat
 ```bash
 cargo build                          # Client only (default)
 cargo build --features server        # With Remi server + conaryd daemon
-cargo test                           # Run all tests (~264 unit tests)
+cargo test                           # Run all tests
 cargo clippy -- -D warnings          # Lint check
 ```
 
@@ -525,7 +525,7 @@ cargo build --profile fast-release   # Faster compile, still optimized
 
 ## Project Status
 
-**Version 0.7.0** -- Core architecture is complete and tested. The codebase has 176,000+ lines of Rust with 2,500+ unit tests and 278 integration tests across 3 distros (schema v57). System generations (EROFS + composefs) are functional with limited production testing. System takeover, the bootstrap pipeline (31 packages from source, qcow2 image generation), and cross-distro repository capability resolution are implemented. Capability enforcement includes `conary capability audit` and `conary capability enforce` with a three-tier policy engine (allowed/prompt/denied). The CAS-layered derivation engine (bootstrap v2) supports provenance tracking, trust levels (0-4), and verification commands. A production Remi server is running at packages.conary.io with an external admin API (bearer token auth, rate limiting, audit logging, 47 MCP tools for LLM agent integration).
+**Version 0.7.0** -- Core architecture is complete and tested. The codebase has 219,000+ lines of Rust with 2,100+ unit tests and 278 integration tests across 3 distros (schema v57). System generations (EROFS + composefs) are functional with limited production testing. System takeover, the bootstrap pipeline (31 packages from source, qcow2 image generation), and cross-distro repository capability resolution are implemented. Capability enforcement includes `conary capability audit` and `conary capability enforce` with a three-tier policy engine (allowed/prompt/denied). The CAS-layered derivation engine (bootstrap v2) supports provenance tracking, trust levels (0-4), and verification commands. A production Remi server is running at packages.conary.io with an external admin API (bearer token auth, rate limiting, audit logging, 47 MCP tools for LLM agent integration).
 
 See [ROADMAP.md](ROADMAP.md) for what we're building next.
 

@@ -49,7 +49,7 @@
 | `src/repository/dependency_model.rs` | Cross-distro normalized dependency/provide types |
 | `src/repository/versioning.rs` | Scheme-aware version comparison (RPM, Debian, ALPM) |
 | `src/repository/resolution_policy.rs` | Policy types for request scope, mixing, and candidate filtering |
-| `src/derivation/` | CAS-layered derivation engine for bootstrap (pipeline, compose, capture, index, provenance, trust levels) |
+| `src/derivation/` | CAS-layered derivation engine for bootstrap (19 files: pipeline, compose, capture, build_order, executor, environment, convergence, graph, index, etc.) |
 | `src/mcp/` | MCP tool definitions for LLM integration |
 | `src/model/replatform.rs` | Source policy replatform and convergence planning |
 
@@ -65,7 +65,7 @@
 | `src/server/rate_limit.rs` | Per-IP rate limiting middleware (governor, token buckets) |
 | `src/server/audit.rs` | Audit logging middleware with action derivation |
 | `src/server/routes.rs` | Axum router construction (internal :8081 + external :8082) |
-| `src/server/handlers/admin/` | Admin API handlers -- tokens, ci, repos, federation, audit, events |
+| `src/server/handlers/admin/` | Admin API handlers -- tokens, ci, repos, federation, audit, events, artifacts, packages, test_data |
 | `src/server/handlers/openapi.rs` | OpenAPI 3.1 spec endpoint for admin API |
 | `src/server/handlers/self_update.rs` | Self-update endpoints (`/v1/ccs/conary/latest`, `/versions`, `/download`) |
 | `src/federation/` | CAS federation - peer discovery, chunk routing, mTLS |
@@ -83,6 +83,8 @@
 | `src/engine/suite.rs` | TestSuite, TestResult, RunStatus types |
 | `src/engine/assertions.rs` | Assertion evaluation (exit code, stdout, file checks) |
 | `src/engine/qemu.rs` | QEMU boot step support |
+| `src/engine/container_setup.rs` | Shared container initialization logic |
+| `src/engine/mock_server.rs` | Mock HTTP server for test steps |
 | `src/container/` | ContainerBackend trait, bollard implementation |
 | `src/error.rs` | Typed ConaryTestError enum (Container, Timeout, Cancelled, etc.) |
 | `src/error_taxonomy.rs` | Structured error types with categories |
@@ -90,5 +92,7 @@
 | `src/server/state.rs` | AppState with DashMap, broadcast channel, cancellation flags |
 | `src/server/remi_client.rs` | HTTP client for pushing results to Remi |
 | `src/server/wal.rs` | Local write-ahead log for Remi unreachability |
+| `src/server/service.rs` | Shared business logic layer |
+| `src/server/auth.rs` | Authentication module |
 | `src/server/` | Axum HTTP API (14 endpoints), MCP server (23 tools via rmcp) |
 | `src/cli.rs` | Binary entrypoint |

@@ -45,7 +45,12 @@ OCI container images. Components are auto-classified by file path.
 - `chunking.rs` -- CDC chunker, `ChunkStore`, delta stats
 - `policy.rs` -- `BuildPolicy`, `PolicyChain`, `PolicyAction`
 - `package.rs` -- `CcsPackage` installation
-- `convert/` -- `LegacyConverter`, `FidelityLevel`, `analyzer.rs`, `fidelity.rs`
+- `archive_reader.rs` -- single-pass tar archive reading
+- `inspector.rs` -- CCS package inspection
+- `verify.rs` -- CCS verification
+- `convert/` -- `LegacyConverter`, `FidelityLevel` (7 files: analyzer.rs, capture.rs, converter.rs, fidelity.rs, legacy_provenance.rs, mock.rs, mod.rs)
+- `enhancement/` -- enhancement system (5 files: context.rs, error.rs, mod.rs, registry.rs, runner.rs)
+- `legacy/` -- legacy format submodule (4 files: arch.rs, deb.rs, mod.rs, rpm.rs)
 - `hooks/` -- hook execution system
 - `export/` -- OCI export (`oci.rs`)
 - `signing.rs` -- `SigningKeyPair`

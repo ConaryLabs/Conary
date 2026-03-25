@@ -1,5 +1,8 @@
 # Core Library Recipes
 
+> **Note:** These recipes are archived reference material. Paths, versions, and CLI commands may be outdated.
+> For current bootstrap commands, run `conary bootstrap --help`. For current package versions, see `recipes/archive/core/versions.toml`.
+
 These recipes build the core libraries required by the base system packages.
 They must be built before the packages in `recipes/core/base/`.
 

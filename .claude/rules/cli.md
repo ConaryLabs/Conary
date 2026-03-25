@@ -56,8 +56,11 @@ conary-core -- no business logic lives in the CLI layer.
 
 ## Files
 - `mod.rs` -- re-exports all `cmd_*` functions, defines `open_db()` helper
-- `install/` -- install command with `batch.rs` for multi-package
-- `adopt/` -- system adoption with `conflicts.rs`, `convert.rs`
+- `install/` -- install pipeline (12 files: batch.rs, blocklist.rs, conversion.rs, dependencies.rs, dep_mode.rs, dep_resolution.rs, execute.rs, mod.rs, prepare.rs, resolve.rs, scriptlets.rs, system_pm.rs)
+- `adopt/` -- system adoption (8 files: conflicts.rs, convert.rs, hooks.rs, mod.rs, packages.rs, refresh.rs, status.rs, system.rs)
+- `query/` -- package queries (9 files: components.rs, dependency.rs, deptree.rs, history.rs, mod.rs, package.rs, reason.rs, repo.rs, sbom.rs)
+- `ccs/` -- CCS operations (8 files: build.rs, enhance.rs, init.rs, inspect.rs, install.rs, mod.rs, runtime.rs, signing.rs)
+- `bootstrap/` -- bootstrap commands (mod.rs)
 - `generation/` -- generation management with `switch.rs`, `builder.rs`, `boot.rs`, `composefs.rs`, `metadata.rs`, `takeover.rs`, `commands.rs`
 - `export.rs` -- OCI image export
 - `composefs_ops.rs` -- rebuild_and_mount helper for composefs operations
@@ -65,4 +68,4 @@ conary-core -- no business logic lives in the CLI layer.
 - `package_parsing.rs` -- shared package parsing helpers
 - `verify.rs` -- derivation verification (chain, rebuild, diverse)
 - `derivation_sbom.rs` -- CycloneDX SBOM generation from derivation profiles
-- Individual files: `remove.rs`, `update.rs`, `config.rs`, `system.rs`, `self_update.rs`, `update_channel.rs`, etc.
+- Individual files: `remove.rs`, `update.rs`, `config.rs`, `system.rs`, `self_update.rs`, `update_channel.rs`, `recipe_audit.rs`, `restore.rs`, `test_helpers.rs`, `progress.rs`, etc.
