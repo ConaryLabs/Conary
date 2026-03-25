@@ -7,6 +7,7 @@
 
 use crate::db::models::{RepositoryProvide, Trove, generate_capability_variations};
 use crate::error::{Error, Result};
+use crate::repository::versioning::{RepoVersionConstraint, VersionScheme, repo_version_satisfies};
 use crate::version::VersionConstraint;
 use rusqlite::Connection;
 use std::cmp::Reverse;
@@ -17,15 +18,84 @@ use tracing::{debug, info};
 use super::download::{DownloadOptions, DownloadProgress, download_package_verified_with_progress};
 use super::selector::{PackageSelector, PackageWithRepo, SelectionOptions};
 
+/// Convert a `VersionConstraint` to a `RepoVersionConstraint` for native
+/// repository version comparison.
+///
+/// The provide's version is a native string (e.g. RPM or Debian format) so we
+/// need to compare using the repository's native scheme rather than Conary's
+/// internal `RpmVersion` comparator.
+fn to_repo_constraint(constraint: &VersionConstraint) -> RepoVersionConstraint {
+    match constraint {
+        VersionConstraint::Any => RepoVersionConstraint::Any,
+        VersionConstraint::Exact(v) => RepoVersionConstraint::Exact(v.to_string()),
+        VersionConstraint::GreaterThan(v) => RepoVersionConstraint::GreaterThan(v.to_string()),
+        VersionConstraint::GreaterOrEqual(v) => {
+            RepoVersionConstraint::GreaterOrEqual(v.to_string())
+        }
+        VersionConstraint::LessThan(v) => RepoVersionConstraint::LessThan(v.to_string()),
+        VersionConstraint::LessOrEqual(v) => RepoVersionConstraint::LessOrEqual(v.to_string()),
+        VersionConstraint::NotEqual(v) => RepoVersionConstraint::NotEqual(v.to_string()),
+        VersionConstraint::And(_, _) => {
+            // Compound constraints cannot be represented as a single
+            // RepoVersionConstraint. Return None and let the caller
+            // check both halves separately.
+            RepoVersionConstraint::Any
+        }
+    }
+}
+
+/// Infer the `VersionScheme` from a provide's `version_scheme` field.
+fn provide_version_scheme(provide: &RepositoryProvide) -> VersionScheme {
+    match provide.version_scheme.as_deref() {
+        Some("debian") => VersionScheme::Debian,
+        Some("arch") => VersionScheme::Arch,
+        // Default to RPM -- the most common ecosystem and safe fallback for
+        // segment-based comparison.
+        _ => VersionScheme::Rpm,
+    }
+}
+
+/// Check if a provide's version satisfies the dependency constraint.
+///
+/// Returns `true` when the constraint is `Any`, the provide has no version, or
+/// the provide's version passes the native version comparison.
+fn provide_satisfies_constraint(
+    provide: &RepositoryProvide,
+    constraint: &VersionConstraint,
+) -> bool {
+    if matches!(constraint, VersionConstraint::Any) {
+        return true;
+    }
+
+    // Handle And constraints by checking both halves.
+    if let VersionConstraint::And(a, b) = constraint {
+        return provide_satisfies_constraint(provide, a)
+            && provide_satisfies_constraint(provide, b);
+    }
+
+    let Some(ref provide_version) = provide.version else {
+        // Unversioned provide cannot satisfy a versioned constraint.
+        return false;
+    };
+
+    let scheme = provide_version_scheme(provide);
+    let repo_constraint = to_repo_constraint(constraint);
+    repo_version_satisfies(scheme, provide_version, &repo_constraint)
+}
+
 /// Resolve a dependency by querying normalized `repository_provides` data.
 ///
 /// This is the preferred path: it queries the indexed `repository_provides`
 /// table directly instead of scanning JSON metadata blobs.  The join fetches
 /// only the package names that actually declare the capability, avoiding the
 /// expensive `list_all()` call.
+///
+/// When a versioned `constraint` is supplied, providers whose declared version
+/// does not satisfy the constraint are filtered out before candidate selection.
 fn resolve_repo_dependency_by_capability(
     conn: &Connection,
     dep_name: &str,
+    constraint: &VersionConstraint,
     options: &SelectionOptions,
 ) -> Result<Option<(String, Option<String>)>> {
     // Single JOIN returns each provide alongside its package name, eliminating
@@ -37,11 +107,21 @@ fn resolve_repo_dependency_by_capability(
 
     // Collect distinct package IDs from the provides, then look up each one
     // by name through the selector (which handles arch filtering, version
-    // pinning, etc.).
+    // pinning, etc.).  Only consider provides whose version satisfies the
+    // dependency constraint.
     let mut seen_ids = HashSet::new();
     let mut candidates = Vec::new();
 
     for (provide, name) in &provides_with_name {
+        // Filter by provide version vs dependency constraint.
+        if !provide_satisfies_constraint(provide, constraint) {
+            debug!(
+                "Provide {} version {:?} does not satisfy constraint {:?}, skipping",
+                provide.capability, provide.version, constraint
+            );
+            continue;
+        }
+
         if !seen_ids.insert(provide.repository_package_id) {
             continue;
         }
@@ -138,7 +218,7 @@ fn resolve_repo_dependency_request(
     //    Queries the indexed `repository_provides` table before falling back
     //    to cross-distro heuristics or JSON blob scans.
     if let Some((package_name, package_version)) =
-        resolve_repo_dependency_by_capability(conn, dep_name, options)?
+        resolve_repo_dependency_by_capability(conn, dep_name, constraint, options)?
     {
         let resolved_constraint = if let Some(version) = package_version {
             VersionConstraint::parse(&format!("= {version}")).unwrap_or(VersionConstraint::Any)

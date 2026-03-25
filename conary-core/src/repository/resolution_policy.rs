@@ -223,7 +223,7 @@ impl ResolutionPolicy {
             match self.mixing {
                 DependencyMixingPolicy::Strict => {
                     // Check for an exception rule.
-                    if !self.has_exception(package_name, candidate.flavor) {
+                    if !self.has_exception(package_name, candidate.flavor, &candidate.repository) {
                         return false;
                     }
                 }
@@ -241,14 +241,30 @@ impl ResolutionPolicy {
     }
 
     /// Check if any exception rule authorizes the given package from the
-    /// given flavor.
-    fn has_exception(&self, package_name: &str, flavor: RepositoryDependencyFlavor) -> bool {
+    /// given flavor and repository.
+    ///
+    /// When a profile's `allowed_repositories` list is non-empty, the
+    /// candidate's repository must also appear in that list.
+    fn has_exception(
+        &self,
+        package_name: &str,
+        flavor: RepositoryDependencyFlavor,
+        repository: &str,
+    ) -> bool {
         // Evaluate in priority order (highest first).
         let mut sorted: Vec<&SourceSelectionProfile> = self.profiles.iter().collect();
         sorted.sort_by(|a, b| b.priority.cmp(&a.priority));
 
         for profile in sorted {
             if !profile.allowed_flavors.contains(&flavor) && !profile.allowed_flavors.is_empty() {
+                continue;
+            }
+
+            // When allowed_repositories is non-empty, the candidate's
+            // repository must be in the list.
+            if !profile.allowed_repositories.is_empty()
+                && !profile.allowed_repositories.iter().any(|r| r == repository)
+            {
                 continue;
             }
 

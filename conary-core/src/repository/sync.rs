@@ -284,19 +284,32 @@ fn persist_native_sync_rows(
 fn normalized_repository_capabilities(
     pkg_meta: &PackageMetadata,
 ) -> (Vec<RepositoryProvide>, Vec<RepositoryRequirement>) {
-    let mut provides = vec![RepositoryProvide::new(
+    // Propagate version_scheme to all provides so capability resolution
+    // uses the correct distro-native comparator (RPM/Debian/Arch).
+    let scheme_str = pkg_meta.version_scheme.map(version_scheme_to_db);
+
+    let mut self_provide = RepositoryProvide::new(
         0,
         pkg_meta.name.clone(),
         Some(pkg_meta.version.clone()),
         "package".to_string(),
         Some(pkg_meta.name.clone()),
-    )];
+    );
+    if let Some(ref s) = scheme_str {
+        self_provide = self_provide.with_version_scheme(s.clone());
+    }
+    let mut provides = vec![self_provide];
 
     provides.extend(
         extract_extra_metadata_provides(&pkg_meta.extra_metadata)
             .into_iter()
             .map(|(capability, version, raw)| {
-                RepositoryProvide::new(0, capability, version, "package".to_string(), Some(raw))
+                let mut p =
+                    RepositoryProvide::new(0, capability, version, "package".to_string(), Some(raw));
+                if let Some(ref s) = scheme_str {
+                    p = p.with_version_scheme(s.clone());
+                }
+                p
             }),
     );
 
@@ -527,16 +540,33 @@ fn remi_sync_row(
     pkg.metadata = entry.metadata.as_ref().map(|value| value.to_string());
 
     let metadata = entry.metadata.unwrap_or(serde_json::Value::Null);
-    let mut provides = vec![RepositoryProvide::new(
+
+    // Infer version_scheme from distro name for Remi-synced provides
+    let scheme_str = match distro.as_str() {
+        d if d.starts_with("ubuntu") || d.starts_with("debian") => Some("debian".to_string()),
+        d if d.starts_with("arch") => Some("arch".to_string()),
+        _ => Some("rpm".to_string()),
+    };
+
+    let mut self_provide = RepositoryProvide::new(
         0,
         entry.name.clone(),
         Some(entry.version.clone()),
         "package".to_string(),
         Some(entry.name.clone()),
-    )];
+    );
+    if let Some(ref s) = scheme_str {
+        self_provide = self_provide.with_version_scheme(s.clone());
+    }
+    let mut provides = vec![self_provide];
     provides.extend(extract_extra_metadata_provides(&metadata).into_iter().map(
         |(capability, version, raw)| {
-            RepositoryProvide::new(0, capability, version, "package".to_string(), Some(raw))
+            let mut p =
+                RepositoryProvide::new(0, capability, version, "package".to_string(), Some(raw));
+            if let Some(ref s) = scheme_str {
+                p = p.with_version_scheme(s.clone());
+            }
+            p
         },
     ));
 

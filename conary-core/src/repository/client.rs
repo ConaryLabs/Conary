@@ -209,9 +209,35 @@ impl RepositoryClient {
                         )));
                     }
 
-                    let metadata: RepositoryMetadata = response.json().await.map_err(|e| {
-                        Error::DownloadError(format!("Failed to parse metadata JSON: {e}"))
+                    // Route through bounded download to enforce the 256 MB
+                    // size cap, then deserialize from the bounded bytes.
+                    // Using response.json() directly would buffer unbounded.
+                    if let Some(content_length) = response.content_length()
+                        && content_length > MAX_BYTES_RESPONSE_SIZE
+                    {
+                        return Err(Error::DownloadError(format!(
+                            "Metadata response too large ({} bytes, max {}): {}",
+                            content_length, MAX_BYTES_RESPONSE_SIZE, metadata_url
+                        )));
+                    }
+
+                    let bytes = response.bytes().await.map_err(|e| {
+                        Error::DownloadError(format!("Failed to read metadata response: {e}"))
                     })?;
+
+                    if bytes.len() as u64 > MAX_BYTES_RESPONSE_SIZE {
+                        return Err(Error::DownloadError(format!(
+                            "Metadata response body too large ({} bytes, max {}): {}",
+                            bytes.len(),
+                            MAX_BYTES_RESPONSE_SIZE,
+                            metadata_url
+                        )));
+                    }
+
+                    let metadata: RepositoryMetadata =
+                        serde_json::from_slice(&bytes).map_err(|e| {
+                            Error::DownloadError(format!("Failed to parse metadata JSON: {e}"))
+                        })?;
 
                     info!(
                         "Successfully fetched metadata for {} packages",

@@ -173,6 +173,106 @@ pub fn compare_repo_package_versions(
     )
 }
 
+/// Split a version part (version or release) into tilde/caret components.
+///
+/// RPM and ALPM define two special separators:
+/// - `~` (tilde): sorts *before* the base version.  Used for pre-releases:
+///   `1.0~rc1 < 1.0`.
+/// - `^` (caret): sorts *after* the base version but before the next higher
+///   version.  Used for post-release snapshots: `1.0^git1 > 1.0` but
+///   `1.0^git1 < 1.1`.
+///
+/// The returned vector contains `(separator, text)` pairs.  The first element
+/// always has separator `None` (the base).  Subsequent elements carry the
+/// separator that preceded them.
+fn split_tilde_caret(version: &str) -> Vec<(Option<char>, &str)> {
+    let mut parts: Vec<(Option<char>, &str)> = Vec::new();
+    let mut start = 0;
+    let mut pending_sep: Option<char> = None;
+
+    for (i, ch) in version.char_indices() {
+        if ch == '~' || ch == '^' {
+            parts.push((pending_sep, &version[start..i]));
+            pending_sep = Some(ch);
+            start = i + 1;
+        }
+    }
+
+    // Add the final segment (or the whole string if no separators found)
+    parts.push((pending_sep, &version[start..]));
+
+    parts
+}
+
+/// Compare two tilde/caret-aware version part sequences segment by segment.
+///
+/// Ordering rules for special separators:
+/// - Tilde (`~`) sorts before everything, including end-of-string.
+/// - Caret (`^`) sorts after end-of-string but before any regular segment.
+fn compare_tilde_caret_parts(a_parts: &[(Option<char>, &str)], b_parts: &[(Option<char>, &str)], flavor: SegmentFlavor) -> Ordering {
+    let max_len = a_parts.len().max(b_parts.len());
+
+    for i in 0..max_len {
+        match (a_parts.get(i), b_parts.get(i)) {
+            (None, None) => return Ordering::Equal,
+            (None, Some((Some('~'), _))) => {
+                // b has a tilde part, a has nothing.  Tilde sorts before
+                // everything, so "nothing" (end) is greater than tilde.
+                return Ordering::Greater;
+            }
+            (None, Some((Some('^'), _))) => {
+                // b has a caret part, a has nothing.  Caret sorts after
+                // end-of-string? No: end-of-string means "this IS the
+                // version", caret means "version + snapshot".  So a (bare)
+                // is less than b (with caret).
+                // Wait -- RPM semantics: 1.0 < 1.0^git1.
+                // If a ran out and b has ^, a is Less.
+                return Ordering::Less;
+            }
+            (None, Some(_)) => {
+                // b has more regular segments, a ran out
+                return Ordering::Less;
+            }
+            (Some((Some('~'), _)), None) => {
+                // a has a tilde part, b has nothing.  Tilde sorts before everything.
+                return Ordering::Less;
+            }
+            (Some((Some('^'), _)), None) => {
+                // a has a caret part, b has nothing.  1.0^git1 > 1.0.
+                return Ordering::Greater;
+            }
+            (Some(_), None) => {
+                return Ordering::Greater;
+            }
+            (Some((a_sep, a_text)), Some((b_sep, b_text))) => {
+                // Compare separators first (for i > 0)
+                if i > 0 {
+                    let ord = match (a_sep, b_sep) {
+                        (Some('~'), Some('~')) => Ordering::Equal,
+                        (Some('~'), _) => Ordering::Less,
+                        (_, Some('~')) => Ordering::Greater,
+                        (Some('^'), Some('^')) => Ordering::Equal,
+                        (Some('^'), _) => Ordering::Less,
+                        (_, Some('^')) => Ordering::Greater,
+                        _ => Ordering::Equal,
+                    };
+                    if ord != Ordering::Equal {
+                        return ord;
+                    }
+                }
+
+                // Compare the text within this segment
+                let ord = compare_segmented(a_text, b_text, flavor);
+                if ord != Ordering::Equal {
+                    return ord;
+                }
+            }
+        }
+    }
+
+    Ordering::Equal
+}
+
 fn compare_rpm_like_versions(a: &str, b: &str) -> Ordering {
     let (a_epoch, a_rest) = split_epoch(a);
     let (b_epoch, b_rest) = split_epoch(b);
@@ -183,8 +283,24 @@ fn compare_rpm_like_versions(a: &str, b: &str) -> Ordering {
 
     let (a_version, a_release) = split_release(a_rest);
     let (b_version, b_release) = split_release(b_rest);
-    match compare_segmented(a_version, b_version, SegmentFlavor::RpmLike) {
-        Ordering::Equal => compare_optional_segment(a_release, b_release, SegmentFlavor::RpmLike),
+
+    // Handle tilde/caret in the version part
+    let a_tc = split_tilde_caret(a_version);
+    let b_tc = split_tilde_caret(b_version);
+    match compare_tilde_caret_parts(&a_tc, &b_tc, SegmentFlavor::RpmLike) {
+        Ordering::Equal => {
+            // Also handle tilde/caret in the release part (e.g. 1.0-1~rc1)
+            match (a_release, b_release) {
+                (Some(a_rel), Some(b_rel)) => {
+                    let a_rel_tc = split_tilde_caret(a_rel);
+                    let b_rel_tc = split_tilde_caret(b_rel);
+                    compare_tilde_caret_parts(&a_rel_tc, &b_rel_tc, SegmentFlavor::RpmLike)
+                }
+                (Some(_), None) => Ordering::Greater,
+                (None, Some(_)) => Ordering::Less,
+                (None, None) => Ordering::Equal,
+            }
+        }
         ord => ord,
     }
 }
@@ -199,8 +315,24 @@ fn compare_arch_versions(a: &str, b: &str) -> Ordering {
 
     let (a_version, a_release) = split_release(a_rest);
     let (b_version, b_release) = split_release(b_rest);
-    match compare_segmented(a_version, b_version, SegmentFlavor::Arch) {
-        Ordering::Equal => compare_optional_segment(a_release, b_release, SegmentFlavor::Arch),
+
+    // Handle tilde/caret in the version part
+    let a_tc = split_tilde_caret(a_version);
+    let b_tc = split_tilde_caret(b_version);
+    match compare_tilde_caret_parts(&a_tc, &b_tc, SegmentFlavor::Arch) {
+        Ordering::Equal => {
+            // Also handle tilde/caret in the release/pkgrel part
+            match (a_release, b_release) {
+                (Some(a_rel), Some(b_rel)) => {
+                    let a_rel_tc = split_tilde_caret(a_rel);
+                    let b_rel_tc = split_tilde_caret(b_rel);
+                    compare_tilde_caret_parts(&a_rel_tc, &b_rel_tc, SegmentFlavor::Arch)
+                }
+                (Some(_), None) => Ordering::Greater,
+                (None, Some(_)) => Ordering::Less,
+                (None, None) => Ordering::Equal,
+            }
+        }
         ord => ord,
     }
 }
@@ -248,15 +380,6 @@ fn split_debian_revision(version: &str) -> (&str, &str) {
 enum SegmentFlavor {
     RpmLike,
     Arch,
-}
-
-fn compare_optional_segment(a: Option<&str>, b: Option<&str>, flavor: SegmentFlavor) -> Ordering {
-    match (a, b) {
-        (Some(a), Some(b)) => compare_segmented(a, b, flavor),
-        (None, None) => Ordering::Equal,
-        (Some(_), None) => Ordering::Greater,
-        (None, Some(_)) => Ordering::Less,
-    }
 }
 
 fn compare_segmented(a: &str, b: &str, flavor: SegmentFlavor) -> Ordering {
@@ -498,5 +621,88 @@ mod tests {
         let constraint =
             parse_repo_constraint(VersionScheme::Debian, ">= 0.9").expect("constraint");
         assert!(v.satisfies(&constraint));
+    }
+
+    // -- RPM tilde/caret tests --
+
+    #[test]
+    fn rpm_tilde_sorts_before_release() {
+        // 1.0~rc1 < 1.0
+        assert_eq!(
+            compare_repo_versions(VersionScheme::Rpm, "1.0~rc1", "1.0"),
+            Some(Ordering::Less)
+        );
+    }
+
+    #[test]
+    fn rpm_caret_sorts_after_release() {
+        // 1.0^git1 > 1.0
+        assert_eq!(
+            compare_repo_versions(VersionScheme::Rpm, "1.0^git1", "1.0"),
+            Some(Ordering::Greater)
+        );
+    }
+
+    #[test]
+    fn rpm_caret_sorts_before_next_version() {
+        // 1.0^git1 < 1.1
+        assert_eq!(
+            compare_repo_versions(VersionScheme::Rpm, "1.0^git1", "1.1"),
+            Some(Ordering::Less)
+        );
+    }
+
+    #[test]
+    fn rpm_epoch_overrides_version() {
+        // 2:1.0 > 1:2.0
+        assert_eq!(
+            compare_repo_versions(VersionScheme::Rpm, "2:1.0", "1:2.0"),
+            Some(Ordering::Greater)
+        );
+    }
+
+    #[test]
+    fn rpm_tilde_earlier_than_tilde() {
+        // 1.0~alpha < 1.0~beta (alpha < beta lexically)
+        assert_eq!(
+            compare_repo_versions(VersionScheme::Rpm, "1.0~alpha", "1.0~beta"),
+            Some(Ordering::Less)
+        );
+    }
+
+    #[test]
+    fn rpm_caret_vs_caret() {
+        // 1.0^git1 < 1.0^git2
+        assert_eq!(
+            compare_repo_versions(VersionScheme::Rpm, "1.0^git1", "1.0^git2"),
+            Some(Ordering::Less)
+        );
+    }
+
+    #[test]
+    fn rpm_tilde_before_caret() {
+        // 1.0~rc1 < 1.0^git1 (tilde sorts before everything)
+        assert_eq!(
+            compare_repo_versions(VersionScheme::Rpm, "1.0~rc1", "1.0^git1"),
+            Some(Ordering::Less)
+        );
+    }
+
+    // -- ALPM tilde/caret tests (same semantics) --
+
+    #[test]
+    fn arch_tilde_sorts_before_release() {
+        assert_eq!(
+            compare_repo_versions(VersionScheme::Arch, "1.0~rc1", "1.0"),
+            Some(Ordering::Less)
+        );
+    }
+
+    #[test]
+    fn arch_caret_sorts_after_release() {
+        assert_eq!(
+            compare_repo_versions(VersionScheme::Arch, "1.0^git1", "1.0"),
+            Some(Ordering::Greater)
+        );
     }
 }
