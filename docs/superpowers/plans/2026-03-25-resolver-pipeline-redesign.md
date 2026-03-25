@@ -404,33 +404,226 @@ git commit -m "feat(resolver): add PackageIdentity type with enriched loading qu
 - [ ] **Step 1: Write failing test**
 
 ```rust
-#[test]
-fn test_provides_index_finds_providers() {
-    let (_temp, conn) = create_test_db();
-    // Insert repo + package + provides
-    // ... (setup a repo package that provides "libssl.so.3")
-    let index = ProvidesIndex::build(&conn).unwrap();
-    let providers = index.find_providers("libssl.so.3");
-    assert_eq!(providers.len(), 1);
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::testing::create_test_db;
+
+    #[test]
+    fn test_provides_index_finds_repo_providers() {
+        let (_temp, conn) = create_test_db();
+
+        // Insert repo + package
+        conn.execute(
+            "INSERT INTO repositories (name, url, enabled, priority)
+             VALUES ('fedora-41', 'https://example.com', 1, 10)",
+            [],
+        ).unwrap();
+        let repo_id = conn.last_insert_rowid();
+
+        conn.execute(
+            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, version_scheme)
+             VALUES (?1, 'openssl-libs', '3.2.0', 'sha256:abc', 1024, 'https://example.com/pkg.rpm', 'rpm')",
+            [repo_id],
+        ).unwrap();
+        let pkg_id = conn.last_insert_rowid();
+
+        // Insert a repository provide
+        conn.execute(
+            "INSERT INTO repository_provides (repository_package_id, capability, version, kind, version_scheme)
+             VALUES (?1, 'libssl.so.3', '3.2.0', 'library', 'rpm')",
+            [pkg_id],
+        ).unwrap();
+
+        let index = ProvidesIndex::build(&conn).unwrap();
+        let providers = index.find_providers("libssl.so.3");
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].repo_package_id, Some(pkg_id));
+    }
+
+    #[test]
+    fn test_provides_index_finds_appstream_providers() {
+        let (_temp, conn) = create_test_db();
+
+        conn.execute(
+            "INSERT INTO canonical_packages (name, kind) VALUES ('openssl', 'package')",
+            [],
+        ).unwrap();
+        let canonical_id = conn.last_insert_rowid();
+
+        conn.execute(
+            "INSERT INTO appstream_provides (canonical_id, provide_type, capability)
+             VALUES (?1, 'library', 'libssl.so.3')",
+            [canonical_id],
+        ).unwrap();
+
+        let index = ProvidesIndex::build(&conn).unwrap();
+        let providers = index.find_providers("libssl.so.3");
+        assert_eq!(providers.len(), 1);
+        assert!(providers[0].canonical_id.is_some());
+    }
+
+    #[test]
+    fn test_provides_index_empty_for_unknown() {
+        let (_temp, conn) = create_test_db();
+        let index = ProvidesIndex::build(&conn).unwrap();
+        assert!(index.find_providers("nonexistent.so.1").is_empty());
+    }
 }
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cargo test -p conary-core test_provides_index -- --nocapture`
+Expected: FAIL (module not found)
 
 - [ ] **Step 3: Write ProvidesIndex**
 
-Create `conary-core/src/resolver/provides_index.rs` with:
-- `ProvidesIndex` struct with `HashMap<String, Vec<ProviderEntry>>`
-- `ProviderEntry` with `repo_package_id`, `provide_version`, `version_scheme`, `installed_trove_id`
-- `build(conn)` loads from `repository_provides` + `provides` (installed) + `appstream_provides`
-- `find_providers(capability)` returns `&[ProviderEntry]`
-- `find_providers_constrained(capability, constraint, scheme)` filters by version
+Create `conary-core/src/resolver/provides_index.rs`:
 
-- [ ] **Step 4: Register in mod.rs, run tests**
+```rust
+// conary-core/src/resolver/provides_index.rs
 
-- [ ] **Step 5: Commit**
+//! Pre-built index mapping capability names to provider packages.
+//!
+//! Modeled after libsolv's `pool_createwhatprovides()`. Built once at
+//! resolution start from three data sources:
+//! 1. `repository_provides` (per-distro provides from repo sync)
+//! 2. `provides` (installed package provides)
+//! 3. `appstream_provides` (cross-distro provides from AppStream)
+
+use crate::error::Result;
+use crate::repository::versioning::{RepoVersionConstraint, VersionScheme, repo_version_satisfies};
+use rusqlite::Connection;
+use std::collections::HashMap;
+
+#[derive(Debug, Clone)]
+pub struct ProviderEntry {
+    pub repo_package_id: Option<i64>,
+    pub installed_trove_id: Option<i64>,
+    pub canonical_id: Option<i64>,
+    pub provide_version: Option<String>,
+    pub version_scheme: VersionScheme,
+}
+
+pub struct ProvidesIndex {
+    providers: HashMap<String, Vec<ProviderEntry>>,
+}
+
+impl ProvidesIndex {
+    pub fn build(conn: &Connection) -> Result<Self> {
+        let mut providers: HashMap<String, Vec<ProviderEntry>> = HashMap::new();
+
+        // 1. Repository provides (from sync)
+        let mut stmt = conn.prepare(
+            "SELECT rp.capability, rp.version, rp.version_scheme, rp.repository_package_id
+             FROM repository_provides rp
+             JOIN repository_packages pkg ON rp.repository_package_id = pkg.id
+             JOIN repositories r ON pkg.repository_id = r.id
+             WHERE r.enabled = 1"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let cap: String = row.get(0)?;
+            let version: Option<String> = row.get(1)?;
+            let scheme_str: Option<String> = row.get(2)?;
+            let pkg_id: i64 = row.get(3)?;
+            Ok((cap, ProviderEntry {
+                repo_package_id: Some(pkg_id),
+                installed_trove_id: None,
+                canonical_id: None,
+                provide_version: version,
+                version_scheme: parse_scheme(scheme_str.as_deref()),
+            }))
+        })?;
+        for row in rows.flatten() {
+            providers.entry(row.0).or_default().push(row.1);
+        }
+
+        // 2. Installed provides
+        let mut stmt = conn.prepare(
+            "SELECT p.capability, p.version, t.version_scheme, p.trove_id
+             FROM provides p
+             JOIN troves t ON p.trove_id = t.id"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let cap: String = row.get(0)?;
+            let version: Option<String> = row.get(1)?;
+            let scheme_str: Option<String> = row.get(2)?;
+            let trove_id: i64 = row.get(3)?;
+            Ok((cap, ProviderEntry {
+                repo_package_id: None,
+                installed_trove_id: Some(trove_id),
+                canonical_id: None,
+                provide_version: version,
+                version_scheme: parse_scheme(scheme_str.as_deref()),
+            }))
+        })?;
+        for row in rows.flatten() {
+            providers.entry(row.0).or_default().push(row.1);
+        }
+
+        // 3. AppStream cross-distro provides
+        let mut stmt = conn.prepare(
+            "SELECT ap.capability, ap.canonical_id
+             FROM appstream_provides ap"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let cap: String = row.get(0)?;
+            let canonical_id: i64 = row.get(1)?;
+            Ok((cap, ProviderEntry {
+                repo_package_id: None,
+                installed_trove_id: None,
+                canonical_id: Some(canonical_id),
+                provide_version: None,
+                version_scheme: VersionScheme::Rpm, // default for cross-distro
+            }))
+        })?;
+        for row in rows.flatten() {
+            providers.entry(row.0).or_default().push(row.1);
+        }
+
+        Ok(Self { providers })
+    }
+
+    pub fn find_providers(&self, capability: &str) -> &[ProviderEntry] {
+        self.providers.get(capability).map(|v| v.as_slice()).unwrap_or(&[])
+    }
+
+    pub fn find_providers_constrained(
+        &self,
+        capability: &str,
+        constraint: &RepoVersionConstraint,
+        scheme: VersionScheme,
+    ) -> Vec<&ProviderEntry> {
+        self.find_providers(capability)
+            .iter()
+            .filter(|p| match &p.provide_version {
+                Some(v) => repo_version_satisfies(scheme, v, constraint),
+                None => matches!(constraint, RepoVersionConstraint::Any),
+            })
+            .collect()
+    }
+}
+
+fn parse_scheme(s: Option<&str>) -> VersionScheme {
+    match s {
+        Some("debian") => VersionScheme::Debian,
+        Some("arch") => VersionScheme::Arch,
+        _ => VersionScheme::Rpm,
+    }
+}
+```
+
+- [ ] **Step 4: Register in mod.rs**
+
+Add `pub mod provides_index;` to `conary-core/src/resolver/mod.rs`.
+
+- [ ] **Step 5: Run tests**
+
+Run: `cargo test -p conary-core test_provides_index -- --nocapture`
+Expected: PASS
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git commit -m "feat(resolver): add ProvidesIndex for O(1) capability lookup"
@@ -443,21 +636,120 @@ git commit -m "feat(resolver): add ProvidesIndex for O(1) capability lookup"
 **Files:**
 - Modify: `conary-core/src/repository/sync.rs`
 
+The key insertion point is after `RepositoryPackage::batch_insert_with_ids()` at line ~221 in `sync_repository_native()`. At that point we have all the repo package IDs and know the repo's distro identity.
+
 - [ ] **Step 1: Write failing test**
 
-Test that after sync, `repository_packages.canonical_id` is populated when a matching `package_implementations` entry exists.
+In `conary-core/src/repository/sync.rs` tests:
+
+```rust
+#[test]
+fn test_sync_populates_canonical_id() {
+    let (_temp, conn) = create_test_db();
+
+    // Insert canonical mapping: "firefox" on fedora = canonical "firefox-web"
+    conn.execute(
+        "INSERT INTO canonical_packages (name, kind) VALUES ('firefox-web', 'package')",
+        [],
+    ).unwrap();
+    let canonical_id = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO package_implementations (canonical_id, distro, distro_name, source)
+         VALUES (?1, 'fedora-41', 'firefox', 'curated')",
+        [canonical_id],
+    ).unwrap();
+
+    // Insert repo with distro
+    conn.execute(
+        "INSERT INTO repositories (name, url, enabled, priority, default_strategy_distro)
+         VALUES ('fedora-41', 'https://example.com', 1, 10, 'fedora-41')",
+        [],
+    ).unwrap();
+    let repo_id = conn.last_insert_rowid();
+
+    // Insert repo package (simulating post-sync state)
+    conn.execute(
+        "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url)
+         VALUES (?1, 'firefox', '125.0', 'sha256:abc', 1024, 'https://example.com/firefox.rpm')",
+        [repo_id],
+    ).unwrap();
+    let pkg_id = conn.last_insert_rowid();
+
+    // Run the canonical link function
+    link_canonical_ids(&conn, repo_id).unwrap();
+
+    // Verify canonical_id was set
+    let cid: Option<i64> = conn.query_row(
+        "SELECT canonical_id FROM repository_packages WHERE id = ?1",
+        [pkg_id],
+        |row| row.get(0),
+    ).unwrap();
+    assert_eq!(cid, Some(canonical_id));
+}
+```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-- [ ] **Step 3: Add canonical_id lookup to sync path**
+Run: `cargo test -p conary-core test_sync_populates_canonical -- --nocapture`
+Expected: FAIL (function `link_canonical_ids` not found)
 
-In `normalized_repository_capabilities()` and the Remi sync path, after inserting/updating the repo package row, look up canonical_id from `package_implementations` and set it.
+- [ ] **Step 3: Write link_canonical_ids function**
 
-- [ ] **Step 4: Run tests**
+In `conary-core/src/repository/sync.rs`:
+
+```rust
+/// Link repository_packages to their canonical identity.
+///
+/// For each package in the given repo, looks up a matching entry in
+/// package_implementations by (distro_name, distro) and sets canonical_id.
+/// Called after batch_insert during sync, and by `conary canonical rebuild`.
+pub fn link_canonical_ids(conn: &Connection, repo_id: i64) -> Result<usize> {
+    let repo_distro: Option<String> = conn.query_row(
+        "SELECT COALESCE(default_strategy_distro, name) FROM repositories WHERE id = ?1",
+        [repo_id],
+        |row| row.get(0),
+    ).optional()?.flatten();
+
+    let Some(distro) = repo_distro else {
+        return Ok(0);
+    };
+
+    let updated = conn.execute(
+        "UPDATE repository_packages SET canonical_id = (
+            SELECT pi.canonical_id FROM package_implementations pi
+            WHERE pi.distro_name = repository_packages.name
+              AND pi.distro = ?1
+            LIMIT 1
+        ) WHERE repository_id = ?2 AND canonical_id IS NULL",
+        params![distro, repo_id],
+    )?;
+
+    Ok(updated)
+}
+```
+
+- [ ] **Step 4: Call link_canonical_ids after batch_insert in sync_repository_native()**
+
+At line ~221 in `sync_repository_native()`, after `RepositoryPackage::batch_insert_with_ids()`:
+
+```rust
+RepositoryPackage::batch_insert_with_ids(&tx, repo_packages)?;
+
+// Link packages to canonical identity
+let linked = link_canonical_ids(&tx, repo_id)?;
+if linked > 0 {
+    info!("Linked {linked} packages to canonical identity");
+}
+```
+
+Also add the same call in `sync_repository_remi()` (~line 611) and `sync_repository_json_fallback()` (~line 794) after their respective inserts.
+
+- [ ] **Step 5: Run tests**
 
 Run: `cargo test -p conary-core sync -- --nocapture`
+Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git commit -m "feat(sync): populate canonical_id on repository_packages during sync"
@@ -469,21 +761,117 @@ git commit -m "feat(sync): populate canonical_id on repository_packages during s
 
 **Files:**
 - Modify: `conary-core/src/canonical/appstream.rs`
-- Modify: `conary-core/src/db/models/appstream_cache.rs` (or new model file)
+
+The current `AppStreamComponent` struct (line 17) has `id`, `pkgname`, `name`, `summary`. The `parse_appstream_xml()` function (line 51) uses `quick_xml::Reader` and parses `<id>`, `<pkgname>`, `<name>`, `<summary>` but ignores `<provides>` and the `origin` attribute on `<components>`.
 
 - [ ] **Step 1: Write failing test**
 
-Test that AppStream XML with `<provides><library>libfoo.so.1</library></provides>` populates `appstream_provides`.
+```rust
+#[test]
+fn test_parse_appstream_xml_captures_provides() {
+    let xml = r#"
+    <components version="1.0" origin="fedora-41-main">
+      <component type="generic">
+        <id>org.openssl.openssl</id>
+        <pkgname>openssl-libs</pkgname>
+        <name>OpenSSL</name>
+        <provides>
+          <library>libssl.so.3</library>
+          <library>libcrypto.so.3</library>
+          <binary>openssl</binary>
+          <python3>ssl</python3>
+        </provides>
+      </component>
+    </components>"#;
+
+    let (origin, components) = parse_appstream_xml_enriched(xml).unwrap();
+    assert_eq!(origin.as_deref(), Some("fedora-41-main"));
+    assert_eq!(components.len(), 1);
+
+    let comp = &components[0];
+    assert_eq!(comp.pkgname, "openssl-libs");
+    assert_eq!(comp.provides.libraries, vec!["libssl.so.3", "libcrypto.so.3"]);
+    assert_eq!(comp.provides.binaries, vec!["openssl"]);
+    assert_eq!(comp.provides.python3, vec!["ssl"]);
+}
+```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-- [ ] **Step 3: Enhance AppStream parser**
+Run: `cargo test -p conary-core test_parse_appstream_xml_captures_provides -- --nocapture`
+Expected: FAIL
 
-Parse `<provides>` children (`library`, `binary`, `python3`, `dbus`) and insert into `appstream_provides` table. Parse `origin` attribute and match to repository.
+- [ ] **Step 3: Add provides fields to AppStreamComponent**
 
-- [ ] **Step 4: Run tests**
+```rust
+/// Capabilities this component provides (cross-distro).
+#[derive(Debug, Clone, Default)]
+pub struct AppStreamProvides {
+    pub libraries: Vec<String>,   // <library> sonames
+    pub binaries: Vec<String>,    // <binary> executables
+    pub python3: Vec<String>,     // <python3> modules
+    pub dbus: Vec<String>,        // <dbus> services
+}
 
-- [ ] **Step 5: Commit**
+pub struct AppStreamComponent {
+    pub id: String,
+    pub pkgname: String,
+    pub name: String,
+    pub summary: Option<String>,
+    pub provides: AppStreamProvides,  // NEW
+}
+```
+
+- [ ] **Step 4: Write parse_appstream_xml_enriched()**
+
+New function that returns `(Option<String>, Vec<AppStreamComponent>)` -- origin + components. Enhance the XML reader loop to:
+1. Capture `origin` attribute from `<components>` start tag
+2. When inside `<provides>`, parse `<library>`, `<binary>`, `<python3>`, `<dbus>` children
+
+Keep the existing `parse_appstream_xml()` as a thin wrapper that discards origin (backwards compat for existing callers).
+
+- [ ] **Step 5: Write persist_appstream_provides()**
+
+```rust
+/// Persist cross-distro provides from AppStream into appstream_provides table.
+pub fn persist_appstream_provides(
+    conn: &Connection,
+    canonical_id: i64,
+    provides: &AppStreamProvides,
+) -> Result<usize> {
+    let mut count = 0;
+    let mut stmt = conn.prepare(
+        "INSERT OR IGNORE INTO appstream_provides (canonical_id, provide_type, capability)
+         VALUES (?1, ?2, ?3)"
+    )?;
+    for lib in &provides.libraries {
+        stmt.execute(params![canonical_id, "library", lib])?;
+        count += 1;
+    }
+    for bin in &provides.binaries {
+        stmt.execute(params![canonical_id, "binary", bin])?;
+        count += 1;
+    }
+    for py in &provides.python3 {
+        stmt.execute(params![canonical_id, "python3", py])?;
+        count += 1;
+    }
+    for dbus in &provides.dbus {
+        stmt.execute(params![canonical_id, "dbus", dbus])?;
+        count += 1;
+    }
+    Ok(count)
+}
+```
+
+Wire this into the existing `ingest_appstream()` function in `canonical/sync.rs` -- after creating/finding the canonical_packages entry, also persist its provides.
+
+- [ ] **Step 6: Run tests**
+
+Run: `cargo test -p conary-core appstream -- --nocapture`
+Expected: PASS (existing tests still work, new tests pass)
+
+- [ ] **Step 7: Commit**
 
 ```bash
 git commit -m "feat(canonical): ingest AppStream origin and provides (library, binary, python3, dbus)"
@@ -497,19 +885,186 @@ git commit -m "feat(canonical): ingest AppStream origin and provides (library, b
 - Modify: `conary-core/src/canonical/repology.rs`
 - Modify: `conary-core/src/canonical/sync.rs`
 
+The existing `canonical/rules.rs` already has a `RulesEngine` that parses YAML rules with `name`/`setname` patterns. We can extend this or build a Repology-specific parser that produces the same output format. The existing `canonical/rules.rs` uses a different YAML schema (`rename`, `group`, `wildcard` rule types). The Repology rules format is simpler: `{name: X, setname: Y}` with optional conditions.
+
+Repology rules are organized in directories like `800.renames-and-merges/`. Each YAML file contains a list of rules. We only need the `setname` action -- the other actions (`setver`, `devel`, `ignore`) are for version tracking (future Repology dump work).
+
 - [ ] **Step 1: Write failing test**
 
-Test that a YAML rule `{name: httpd, setname: apache}` creates/updates canonical mappings.
+```rust
+#[test]
+fn test_parse_repology_rename_rules() {
+    let yaml = r#"
+- { name: httpd, setname: apache }
+- { name: apache2, setname: apache }
+- { name: python3-requests, setname: "python:requests" }
+"#;
+    let rules = parse_repology_rules(yaml).unwrap();
+    assert_eq!(rules.len(), 3);
+    assert_eq!(rules[0].from_name, "httpd");
+    assert_eq!(rules[0].canonical_name, "apache");
+    assert_eq!(rules[2].from_name, "python3-requests");
+    assert_eq!(rules[2].canonical_name, "python:requests");
+}
+
+#[test]
+fn test_apply_repology_rules_creates_canonical_mappings() {
+    let (_temp, conn) = create_test_db();
+
+    let rules = vec![
+        RepologyRenameRule {
+            from_name: "httpd".to_string(),
+            canonical_name: "apache".to_string(),
+            distro: Some("fedora".to_string()),
+        },
+        RepologyRenameRule {
+            from_name: "apache2".to_string(),
+            canonical_name: "apache".to_string(),
+            distro: Some("debian".to_string()),
+        },
+    ];
+
+    let count = apply_repology_rules(&conn, &rules).unwrap();
+    assert_eq!(count, 2);
+
+    // Both should map to the same canonical package
+    let canonical = CanonicalPackage::find_by_name(&conn, "apache").unwrap();
+    assert!(canonical.is_some());
+
+    let impls = PackageImplementation::find_by_canonical(
+        &conn, canonical.unwrap().id.unwrap()
+    ).unwrap();
+    assert_eq!(impls.len(), 2);
+}
+```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-- [ ] **Step 3: Add rules parser**
+Run: `cargo test -p conary-core test_parse_repology_rename -- --nocapture`
+Expected: FAIL
 
-Parse Repology rules YAML (specifically `800.renames-and-merges/` rules). Apply `setname` rules to create `canonical_packages` + `package_implementations` entries. Wire into `conary canonical rebuild`.
+- [ ] **Step 3: Write Repology rules types and parser**
 
-- [ ] **Step 4: Run tests**
+In `conary-core/src/canonical/repology.rs`, add:
 
-- [ ] **Step 5: Commit**
+```rust
+/// A rename rule extracted from Repology's YAML ruleset.
+/// We only consume `setname` rules -- other actions (setver, devel, ignore)
+/// are for version tracking which is future work (Repology dump ingestion).
+#[derive(Debug, Clone)]
+pub struct RepologyRenameRule {
+    pub from_name: String,
+    pub canonical_name: String,
+    pub distro: Option<String>,  // from ruleset context (which distro file)
+}
+
+/// Raw Repology rule from YAML. We only extract name + setname.
+#[derive(Deserialize)]
+struct RawRepologyRule {
+    name: Option<String>,
+    namepat: Option<String>,
+    setname: Option<String>,
+    // Other fields ignored (setver, devel, ignore, etc.)
+}
+
+/// Parse Repology rename rules from YAML.
+/// Only extracts rules with both `name` and `setname` (exact renames).
+/// Pattern-based rules (`namepat`) are skipped for now.
+pub fn parse_repology_rules(yaml: &str) -> Result<Vec<RepologyRenameRule>> {
+    let raw_rules: Vec<RawRepologyRule> = serde_yaml::from_str(yaml)
+        .map_err(|e| Error::ParseError(format!("Repology rules YAML: {e}")))?;
+
+    Ok(raw_rules
+        .into_iter()
+        .filter_map(|r| {
+            match (r.name, r.setname) {
+                (Some(name), Some(setname)) if name != setname => {
+                    Some(RepologyRenameRule {
+                        from_name: name,
+                        canonical_name: setname,
+                        distro: None,
+                    })
+                }
+                _ => None,
+            }
+        })
+        .collect())
+}
+```
+
+- [ ] **Step 4: Write apply_repology_rules()**
+
+```rust
+/// Apply rename rules to create/update canonical_packages + package_implementations.
+pub fn apply_repology_rules(conn: &Connection, rules: &[RepologyRenameRule]) -> Result<usize> {
+    let mut count = 0;
+    for rule in rules {
+        // Upsert canonical package
+        conn.execute(
+            "INSERT INTO canonical_packages (name, kind) VALUES (?1, 'package')
+             ON CONFLICT(name) DO NOTHING",
+            [&rule.canonical_name],
+        )?;
+        let canonical_id: i64 = conn.query_row(
+            "SELECT id FROM canonical_packages WHERE name = ?1",
+            [&rule.canonical_name],
+            |row| row.get(0),
+        )?;
+
+        // Upsert implementation mapping
+        let distro = rule.distro.as_deref().unwrap_or("unknown");
+        conn.execute(
+            "INSERT INTO package_implementations (canonical_id, distro, distro_name, source)
+             VALUES (?1, ?2, ?3, 'repology')
+             ON CONFLICT(canonical_id, distro, distro_name) DO UPDATE SET source = 'repology'",
+            params![canonical_id, distro, &rule.from_name],
+        )?;
+        count += 1;
+    }
+    Ok(count)
+}
+```
+
+- [ ] **Step 5: Wire into canonical rebuild**
+
+In `conary-core/src/canonical/sync.rs`, add a function that loads Repology rules from a directory (vendored or cloned) and applies them:
+
+```rust
+/// Ingest Repology rename rules from a rules directory.
+/// Looks for YAML files in the `800.renames-and-merges/` subdirectory.
+pub fn ingest_repology_rules(conn: &Connection, rules_dir: &Path) -> Result<usize> {
+    let merges_dir = rules_dir.join("800.renames-and-merges");
+    if !merges_dir.exists() {
+        info!("No Repology rules directory at {}", merges_dir.display());
+        return Ok(0);
+    }
+    let mut total = 0;
+    for entry in std::fs::read_dir(&merges_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().is_some_and(|e| e == "yaml" || e == "yml") {
+            let yaml = std::fs::read_to_string(&path)?;
+            let rules = repology::parse_repology_rules(&yaml)?;
+            total += repology::apply_repology_rules(conn, &rules)?;
+        }
+    }
+    info!("Applied {total} Repology rename rules");
+    Ok(total)
+}
+```
+
+Wire this into the `conary canonical rebuild` command path.
+
+- [ ] **Step 6: Add serde_yaml dependency**
+
+Check if `serde_yaml` is already in `conary-core/Cargo.toml`. If not: `cargo add serde_yaml -p conary-core`.
+
+- [ ] **Step 7: Run tests**
+
+Run: `cargo test -p conary-core repology -- --nocapture`
+Expected: PASS
+
+- [ ] **Step 8: Commit**
 
 ```bash
 git commit -m "feat(canonical): ingest Repology rules YAML for cross-distro name mapping"
