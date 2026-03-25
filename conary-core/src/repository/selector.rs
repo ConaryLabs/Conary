@@ -14,7 +14,7 @@
 use crate::db::models::{Repository, RepositoryPackage};
 use crate::error::{Error, Result};
 use crate::repository::dependency_model::RepositoryDependencyFlavor;
-use crate::repository::resolution_policy::{CandidateOrigin, ResolutionPolicy};
+use crate::repository::resolution_policy::ResolutionPolicy;
 use crate::repository::versioning::compare_repo_package_versions;
 use rusqlite::Connection;
 use tracing::{debug, info};
@@ -140,19 +140,18 @@ impl PackageSelector {
 
             // Apply resolution policy filter
             if let Some(ref policy) = options.policy {
-                let origin = CandidateOrigin {
-                    repository: repo.name.clone(),
-                    flavor: infer_repo_flavor(&repo),
-                };
+                let flavor = infer_repo_flavor(&repo);
+                let scheme = flavor_to_scheme(flavor);
                 if !policy.accepts_candidate(
-                    &origin,
+                    &repo.name,
+                    scheme,
                     package_name,
                     options.is_root,
                     options.primary_flavor,
                 ) {
                     debug!(
                         "Policy rejected package {} {} from repository {} (flavor {:?})",
-                        pkg.name, pkg.version, repo.name, origin.flavor
+                        pkg.name, pkg.version, repo.name, flavor
                     );
                     continue;
                 }
@@ -268,6 +267,19 @@ pub fn normalize_arch(arch: &str) -> &str {
         // ppc64le aliases
         "ppc64el" => "ppc64le",
         other => other,
+    }
+}
+
+/// Convert a `RepositoryDependencyFlavor` to the corresponding `VersionScheme`.
+///
+/// This bridges `infer_repo_flavor` output to the `VersionScheme` that
+/// `ResolutionPolicy::accepts_candidate` now expects.
+fn flavor_to_scheme(flavor: RepositoryDependencyFlavor) -> crate::repository::versioning::VersionScheme {
+    use crate::repository::versioning::VersionScheme;
+    match flavor {
+        RepositoryDependencyFlavor::Rpm => VersionScheme::Rpm,
+        RepositoryDependencyFlavor::Deb => VersionScheme::Debian,
+        RepositoryDependencyFlavor::Arch => VersionScheme::Arch,
     }
 }
 
