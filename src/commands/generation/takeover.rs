@@ -177,7 +177,7 @@ pub async fn cmd_system_takeover(
 
     // -- Plan -----------------------------------------------------------------
     let pm = SystemPackageManager::detect();
-    let plan = {
+    let mut plan = {
         let conn = open_db(db_path)?;
         plan_takeover(&conn)?
     };
@@ -255,6 +255,32 @@ pub async fn cmd_system_takeover(
         );
         crate::commands::cmd_adopt_system(db_path, true, false, None, None, false).await?;
         info!("Bulk adoption complete");
+
+        // Only add packages to Phase 2 removal if they were actually adopted.
+        // cmd_adopt_system is best-effort -- individual packages can fail silently.
+        // Re-query the DB to see what's actually tracked now.
+        let conn = open_db(db_path)?;
+        let now_tracked: std::collections::HashSet<String> = Trove::list_all(&conn)?
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        // Count only the untracked packages that were eligible (not blocked).
+        let eligible: Vec<&String> = plan
+            .not_tracked
+            .iter()
+            .filter(|p| !plan.blocked.contains(p))
+            .collect();
+        let newly_adopted: Vec<String> = eligible
+            .iter()
+            .filter(|p| now_tracked.contains(p.as_str()))
+            .cloned()
+            .cloned()
+            .collect();
+        let failed = eligible.len() - newly_adopted.len();
+        if failed > 0 {
+            println!("  [WARN] {failed} packages failed adoption and will not be removed from system PM");
+        }
+        plan.needs_pm_removal.extend(newly_adopted);
     }
 
     // 1b. Upgrade AdoptedTrack -> AdoptedFull (CAS-back)

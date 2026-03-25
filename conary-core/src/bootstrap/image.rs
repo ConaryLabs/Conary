@@ -1532,6 +1532,13 @@ menuentry "Conary Linux (Live, Text Mode)" {
             )));
         }
 
+        // build_from_generation only supports Raw and Qcow2 currently.
+        if !matches!(format, ImageFormat::Raw | ImageFormat::Qcow2) {
+            return Err(ImageError::CreationFailed(format!(
+                "build_from_generation does not yet support {format:?} -- use raw or qcow2"
+            )));
+        }
+
         let raw_path = if format == ImageFormat::Raw {
             output.to_path_buf()
         } else {
@@ -1597,10 +1604,12 @@ menuentry "Conary Linux (Live, Text Mode)" {
             ])
             .status();
 
-        // Note: kernel population from CAS is a TODO for the first iteration
+        // Note: kernel population from CAS is a TODO for the first iteration.
+        // Image is not EFI-bootable until kernel/bootloader are populated.
         tracing::warn!(
-            "ESP kernel population not yet implemented -- image may need manual kernel install"
+            "ESP kernel population not yet implemented -- image will need manual kernel install"
         );
+        let efi_bootable = false;
 
         // Write ESP into raw image
         {
@@ -1664,7 +1673,7 @@ menuentry "Conary Linux (Live, Text Mode)" {
             format,
             size: final_size,
             method: "erofs-generation".to_string(),
-            efi_bootable: true,
+            efi_bootable,
             bios_bootable: false,
             partitions: vec![
                 "ESP (512MB FAT32)".to_string(),
