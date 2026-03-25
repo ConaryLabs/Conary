@@ -320,7 +320,7 @@ Exact field comparisons replace all string inference, substring matching, and fl
 
 **Caller migration:** All callers of `Resolver::resolve_install()` / `resolve()` switch to `solve_install()`. The SAT path already provides install ordering, missing dependency detection, and cycle detection.
 
-`plan.rs` types (`ResolutionPlan`, `MissingDependency`) kept if used by CLI output formatting; populated from SAT results.
+`plan.rs` types (`ResolutionPlan`, `MissingDependency`) are used extensively in the install CLI pipeline (~15 references across `dependencies.rs`, `dep_resolution.rs`, `conversion.rs`). They must be kept and populated from `SatResolution` results. `plan.rs` is NOT deleted.
 
 ### 9. Migration and backwards compatibility
 
@@ -332,12 +332,14 @@ ALTER TABLE repository_packages ADD COLUMN canonical_id INTEGER
     REFERENCES canonical_packages(id) ON DELETE SET NULL;
 CREATE INDEX idx_repo_packages_canonical ON repository_packages(canonical_id);
 
--- Backfill from existing data
+-- Backfill from existing data.
+-- Use COALESCE to handle repos where default_strategy_distro is NULL
+-- (common for repos added before v38 or unconfigured repos).
 UPDATE repository_packages SET canonical_id = (
     SELECT pi.canonical_id FROM package_implementations pi
     JOIN repositories r ON repository_packages.repository_id = r.id
     WHERE pi.distro_name = repository_packages.name
-      AND pi.distro = r.default_strategy_distro
+      AND pi.distro = COALESCE(r.default_strategy_distro, r.name)
     LIMIT 1
 ) WHERE canonical_id IS NULL;
 
@@ -363,8 +365,7 @@ CREATE INDEX idx_appstream_provides_cap ON appstream_provides(capability);
 - Missing canonical data degrades gracefully to name matching
 - Provides index returns same results as direct queries
 - AppStream provides feed into capability resolution
-- Repology rules produce correct name mappings
-- Existing 266 unit tests continue to pass
+- Existing unit tests continue to pass (graph resolver tests deleted, others updated)
 
 ## Files touched
 
@@ -388,22 +389,25 @@ CREATE INDEX idx_appstream_provides_cap ON appstream_provides(capability);
 - `conary-core/src/resolver/canonical.rs` -- remove ResolverCandidate, simplify
 - `conary-core/src/repository/resolution_policy.rs` -- delete CandidateOrigin, accept PackageIdentity
 - `conary-core/src/repository/selector.rs` -- remove infer_repo_flavor
-- `src/commands/install/resolve.rs` -- switch to SAT
-- `src/commands/install/dep_resolution.rs` -- switch to SAT
+- `conary-core/src/repository/dependencies.rs` -- update resolver type usage
+- `src/commands/install/mod.rs` -- switch from Resolver to solve_install()
+- `src/commands/install/dependencies.rs` -- switch to SatResolution
+- `src/commands/install/dep_resolution.rs` -- switch to SatResolution
+- `src/commands/install/conversion.rs` -- switch to SatResolution
 - `src/commands/remove.rs` -- use solve_removal
-- `src/commands/update.rs` -- switch to SAT
+- `src/commands/query/dependency.rs` -- use solve_removal instead of Resolver::check_removal
+- `conary-core/tests/canonical.rs` -- update for CanonicalResolver changes
 
 ### Deleted files
 - `conary-core/src/resolver/graph.rs`
 - `conary-core/src/resolver/engine.rs`
-- `conary-core/src/resolver/plan.rs` (if graph-only)
 
 ## Non-goals
 
 - Changing the resolvo SAT solver itself
 - Changing CLI flags or user-facing behavior
 - RPM rich dependency parsing (separate effort)
-- Full Repology database dump ingestion (rules YAML is sufficient for name mapping; dump ingestion for version tracking is a follow-up)
+- Full Repology database dump ingestion (dump ingestion for version tracking is a follow-up; rules YAML for name mapping IS in scope)
 
 ## References
 
