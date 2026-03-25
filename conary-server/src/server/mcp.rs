@@ -763,12 +763,8 @@ impl RemiMcpServer {
     async fn canonical_rebuild(&self) -> Result<CallToolResult, McpError> {
         let state = self.state.read().await;
         let db_path = state.config.db_path.clone();
+        let config = state.canonical_config.clone();
         drop(state);
-
-        let config = crate::server::config::CanonicalSection {
-            rules_dir: "data/canonical-rules".to_string(),
-            ..Default::default()
-        };
 
         let count = tokio::task::spawn_blocking(move || {
             crate::server::canonical_job::rebuild_canonical_map(&db_path, &config)
@@ -794,12 +790,13 @@ impl RemiMcpServer {
     async fn canonical_fetch(&self) -> Result<CallToolResult, McpError> {
         let state = self.state.read().await;
         let db_path = std::path::PathBuf::from(&state.config.db_path);
+        let batch_size = state.canonical_config.repology_batch_size;
         drop(state);
 
         let mut repology_count = 0usize;
         let mut appstream_count = 0usize;
 
-        match crate::server::canonical_fetch::fetch_repology_data(&db_path, 5000).await {
+        match crate::server::canonical_fetch::fetch_repology_data(&db_path, batch_size).await {
             Ok(n) => repology_count = n,
             Err(e) => tracing::warn!("Repology fetch failed: {e}"),
         }

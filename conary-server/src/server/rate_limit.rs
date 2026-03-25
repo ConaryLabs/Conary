@@ -25,15 +25,28 @@ pub struct AdminRateLimiters {
     pub write: Arc<DefaultKeyedRateLimiter<IpAddr>>,
     /// Rate limiter for auth failures (applied separately)
     pub auth_fail: Arc<DefaultKeyedRateLimiter<IpAddr>>,
+    /// Trusted proxy header name (snapshot from config at startup).
+    /// Used by the rate-limit middleware to extract the real client IP
+    /// via the same trusted-proxy policy as the public router.
+    pub trusted_proxy_header: Option<String>,
 }
 
 impl AdminRateLimiters {
     /// Create a new set of rate limiters with the given per-minute limits.
-    pub fn new(read_rpm: u32, write_rpm: u32, auth_fail_rpm: u32) -> Self {
+    ///
+    /// `trusted_proxy_header` is a snapshot of the server config at startup,
+    /// used for proxy-aware client IP extraction in the rate-limit middleware.
+    pub fn new(
+        read_rpm: u32,
+        write_rpm: u32,
+        auth_fail_rpm: u32,
+        trusted_proxy_header: Option<String>,
+    ) -> Self {
         Self {
             read: Arc::new(Self::make_limiter(read_rpm)),
             write: Arc::new(Self::make_limiter(write_rpm)),
             auth_fail: Arc::new(Self::make_limiter(auth_fail_rpm)),
+            trusted_proxy_header,
         }
     }
 
@@ -43,15 +56,22 @@ impl AdminRateLimiters {
     }
 }
 
-/// Extract client IP from the request.
+/// Extract client IP from the request with trusted-proxy awareness.
 ///
-/// Tries `ConnectInfo` first, falls back to 127.0.0.1.
-pub(crate) fn extract_ip(request: &Request<Body>) -> IpAddr {
-    request
+/// Reads `ConnectInfo` for the raw connection IP, then delegates to
+/// [`crate::server::routes::extract_client_ip`] to apply Cloudflare and
+/// trusted-proxy header extraction. The `trusted_proxy_header` should
+/// come from `ServerState`; pass `None` if unavailable.
+pub(crate) fn extract_ip_with_proxy(
+    request: &Request<Body>,
+    trusted_proxy_header: Option<&str>,
+) -> IpAddr {
+    let conn_ip = request
         .extensions()
         .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
         .map(|ci| ci.0.ip())
-        .unwrap_or_else(|| IpAddr::from([127, 0, 0, 1]))
+        .unwrap_or_else(|| IpAddr::from([127, 0, 0, 1]));
+    crate::server::routes::extract_client_ip(request.headers(), &conn_ip, trusted_proxy_header)
 }
 
 /// Rate limiting middleware for the external admin API.
@@ -70,7 +90,7 @@ pub async fn rate_limit_middleware(
         return next.run(request).await;
     };
 
-    let ip = extract_ip(&request);
+    let ip = extract_ip_with_proxy(&request, limiters.trusted_proxy_header.as_deref());
     let method = request.method().clone();
 
     let limiter = if method == Method::GET || method == Method::HEAD {
@@ -139,7 +159,7 @@ mod tests {
 
     #[test]
     fn test_limiter_creation() {
-        let limiters = AdminRateLimiters::new(60, 10, 5);
+        let limiters = AdminRateLimiters::new(60, 10, 5, None);
         let ip = IpAddr::from([1, 2, 3, 4]);
 
         // First request should pass
@@ -150,7 +170,7 @@ mod tests {
     #[test]
     fn test_write_limiter_exhaustion() {
         // 2 per minute -- should exhaust quickly
-        let limiters = AdminRateLimiters::new(60, 2, 5);
+        let limiters = AdminRateLimiters::new(60, 2, 5, None);
         let ip = IpAddr::from([10, 0, 0, 1]);
 
         // First 2 should pass
@@ -163,7 +183,7 @@ mod tests {
 
     #[test]
     fn test_different_ips_independent() {
-        let limiters = AdminRateLimiters::new(60, 1, 5);
+        let limiters = AdminRateLimiters::new(60, 1, 5, None);
         let ip1 = IpAddr::from([10, 0, 0, 1]);
         let ip2 = IpAddr::from([10, 0, 0, 2]);
 
@@ -177,7 +197,7 @@ mod tests {
 
     #[test]
     fn test_auth_failure_check() {
-        let limiters = AdminRateLimiters::new(60, 10, 2);
+        let limiters = AdminRateLimiters::new(60, 10, 2, None);
         let ip = IpAddr::from([192, 168, 1, 1]);
 
         // First 2 auth failures OK

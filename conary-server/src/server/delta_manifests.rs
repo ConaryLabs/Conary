@@ -216,23 +216,41 @@ pub fn compute_delta(
 
 /// Compute deltas for all adjacent version pairs of a package.
 ///
-/// Finds all converted versions ordered by version string, then computes
-/// deltas between each adjacent pair (v1->v2, v2->v3, ...).
+/// Finds all converted versions, sorts them with scheme-aware comparison
+/// (RPM/Debian/Arch), then computes deltas between each adjacent pair
+/// (v1->v2, v2->v3, ...).
 pub fn compute_deltas_for_package(
     conn: &Connection,
     distro: &str,
     package_name: &str,
 ) -> Result<Vec<DeltaManifest>> {
-    // Get all converted versions for this package, ordered by version
+    use conary_core::repository::versioning::{VersionScheme, compare_repo_versions};
+
+    // Determine the version comparison scheme from the distro.
+    let scheme = match distro {
+        "arch" => VersionScheme::Arch,
+        "fedora" | "centos" | "rhel" => VersionScheme::Rpm,
+        "ubuntu" | "debian" => VersionScheme::Debian,
+        _ => {
+            warn!("Unknown distro '{}' for delta computation, using RPM ordering", distro);
+            VersionScheme::Rpm
+        }
+    };
+
+    // Get all converted versions for this package (unordered from DB).
     let mut stmt = conn.prepare(
         "SELECT DISTINCT package_version FROM converted_packages
-         WHERE distro = ?1 AND package_name = ?2 AND package_version IS NOT NULL
-         ORDER BY package_version ASC",
+         WHERE distro = ?1 AND package_name = ?2 AND package_version IS NOT NULL",
     )?;
 
-    let versions: Vec<String> = stmt
+    let mut versions: Vec<String> = stmt
         .query_map(params![distro, package_name], |row| row.get(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    // Sort with scheme-aware comparison instead of lexicographic ordering.
+    versions.sort_by(|a, b| {
+        compare_repo_versions(scheme, a, b).unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     if versions.len() < 2 {
         debug!(

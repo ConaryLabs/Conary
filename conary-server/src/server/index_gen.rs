@@ -188,7 +188,7 @@ fn get_packages_for_distro(
 ) -> Result<HashMap<String, PackageIndexEntry>> {
     // Query repository_packages for this distribution
     let mut stmt = conn.prepare(
-        "SELECT rp.name, rp.version, r.name as repo_name
+        "SELECT rp.name, rp.version, r.name as repo_name, rp.checksum
          FROM repository_packages rp
          JOIN repositories r ON rp.repository_id = r.id
          WHERE r.name LIKE ?1 OR r.url LIKE ?2
@@ -201,11 +201,13 @@ fn get_packages_for_distro(
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
             row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
         ))
     })?;
 
-    // Build checksum lookup for converted packages (for future use)
-    let _checksum_map: HashMap<&str, &ConvertedPackage> = converted
+    // Build checksum lookup for legacy converted packages that lack
+    // structured identity fields (package_name/package_version/distro).
+    let checksum_map: HashMap<&str, &ConvertedPackage> = converted
         .iter()
         .map(|c| (c.original_checksum.as_str(), c))
         .collect();
@@ -213,7 +215,7 @@ fn get_packages_for_distro(
     let mut packages: HashMap<String, PackageIndexEntry> = HashMap::new();
 
     for row_result in rows {
-        let (name, version, _repo_name) = row_result?;
+        let (name, version, _repo_name, checksum) = row_result?;
 
         // For now, include all packages from the distro
         // In a full implementation, we'd match by checksum
@@ -224,14 +226,17 @@ fn get_packages_for_distro(
                 versions: Vec::new(),
             });
 
-        // Check if this version is converted (simplified matching by name/version)
-        let converted_info = converted.iter().find(|c| {
-            // Try to match by looking at the detected_hooks JSON for package info
-            // This is a simplified approach - in production you'd have proper linking
-            c.detected_hooks
-                .as_ref()
-                .is_some_and(|h| h.contains(&name) && h.contains(&version))
-        });
+        // Check if this version is converted. Try structured identity fields
+        // first (set for server-side conversions), then fall back to checksum
+        // matching for legacy converted rows that lack structured fields.
+        let converted_info = converted
+            .iter()
+            .find(|c| {
+                c.package_name.as_deref() == Some(name.as_str())
+                    && c.package_version.as_deref() == Some(version.as_str())
+                    && c.distro.as_deref() == Some(distro)
+            })
+            .or_else(|| checksum_map.get(checksum.as_str()).copied());
 
         let version_entry = if let Some(conv) = converted_info {
             VersionEntry {
@@ -255,37 +260,41 @@ fn get_packages_for_distro(
         entry.versions.push(version_entry);
     }
 
-    // Also add packages from converted_packages that match this distro format
+    // Also add packages from converted_packages that match this distro,
+    // using the structured identity fields (package_name, package_version,
+    // distro) instead of parsing detected_hooks JSON.
     for conv in converted {
-        let format = &conv.original_format;
-        if format_matches_distro(format, distro) {
-            // Try to extract name from detected_hooks or use checksum as identifier
-            if let Some(hooks) = &conv.detected_hooks
-                && let Ok(info) = serde_json::from_str::<serde_json::Value>(hooks)
-                && let Some(name) = info.get("name").and_then(|n| n.as_str())
-            {
-                let version = info
-                    .get("version")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
+        // Match on the structured distro field first; fall back to format
+        // matching for legacy records that predate the identity fields.
+        let matches_distro = conv
+            .distro
+            .as_deref()
+            .map_or_else(|| format_matches_distro(&conv.original_format, distro), |d| d == distro);
 
-                let entry = packages
-                    .entry(name.to_string())
-                    .or_insert_with(|| PackageIndexEntry {
-                        name: name.to_string(),
-                        versions: Vec::new(),
-                    });
+        if matches_distro
+            && let Some(ref name) = conv.package_name
+        {
+            let version = conv
+                .package_version
+                .as_deref()
+                .unwrap_or("unknown");
 
-                // Only add if not already present
-                if !entry.versions.iter().any(|v| v.version == version) {
-                    entry.versions.push(VersionEntry {
-                        version: version.to_string(),
-                        original_format: conv.original_format.clone(),
-                        fidelity: conv.conversion_fidelity.clone(),
-                        converted_at: conv.converted_at.clone(),
-                        original_checksum: conv.original_checksum.clone(),
-                    });
-                }
+            let entry = packages
+                .entry(name.to_string())
+                .or_insert_with(|| PackageIndexEntry {
+                    name: name.to_string(),
+                    versions: Vec::new(),
+                });
+
+            // Only add if not already present
+            if !entry.versions.iter().any(|v| v.version == version) {
+                entry.versions.push(VersionEntry {
+                    version: version.to_string(),
+                    original_format: conv.original_format.clone(),
+                    fidelity: conv.conversion_fidelity.clone(),
+                    converted_at: conv.converted_at.clone(),
+                    original_checksum: conv.original_checksum.clone(),
+                });
             }
         }
     }

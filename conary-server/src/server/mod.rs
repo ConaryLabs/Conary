@@ -597,11 +597,14 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
             state_w.forgejo_token = remi_config.admin.forgejo_token.clone();
         }
 
-        // Initialize admin rate limiters
+        // Initialize admin rate limiters. Read the trusted proxy header back
+        // from state (the original was moved into ServerState earlier).
+        let proxy_header_for_limiters = state.read().await.trusted_proxy_header.clone();
         let limiters = Arc::new(crate::server::rate_limit::AdminRateLimiters::new(
             remi_config.admin.rate_limit_read_rpm,
             remi_config.admin.rate_limit_write_rpm,
             remi_config.admin.rate_limit_auth_fail_rpm,
+            proxy_header_for_limiters,
         ));
 
         // Spawn periodic cleanup for governor DashMap entries

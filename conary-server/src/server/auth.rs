@@ -182,13 +182,18 @@ pub async fn auth_middleware(
     next: Next,
 ) -> Response {
     // Rate limiters come from an Extension layer (set once at startup),
-    // so we only need the RwLock for db_path.
+    // so we only need the RwLock for db_path and trusted_proxy_header.
     let limiters = limiters.map(|Extension(l)| l);
-    let client_ip = crate::server::rate_limit::extract_ip(&request);
-    let db_path = {
+    let (db_path, trusted_proxy_header) = {
         let s = state.read().await;
-        s.config.db_path.clone()
+        (s.config.db_path.clone(), s.trusted_proxy_header.clone())
     };
+    // Use the proxy-aware IP extraction so that rate limiting and auth
+    // failure tracking use the real client IP, not the proxy's IP.
+    let client_ip = crate::server::rate_limit::extract_ip_with_proxy(
+        &request,
+        trusted_proxy_header.as_deref(),
+    );
 
     let token = match extract_bearer(request.headers()) {
         Some(t) => t.to_owned(),
