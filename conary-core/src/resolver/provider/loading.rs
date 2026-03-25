@@ -24,12 +24,34 @@ use super::types::{ConaryConstraint, ConaryProvidedVersion, SolverDep};
 pub(super) fn dep_entry_to_solver_dep(dep: &DependencyEntry, scheme: VersionScheme) -> SolverDep {
     let constraint = match (scheme, dep.version_constraint.as_deref()) {
         (VersionScheme::Rpm, Some(s)) => {
-            ConaryConstraint::Legacy(VersionConstraint::parse(s).unwrap_or(VersionConstraint::Any))
+            ConaryConstraint::Legacy(match VersionConstraint::parse(s) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(
+                        constraint = %s,
+                        dep = %dep.depends_on_name,
+                        error = %e,
+                        "Failed to parse RPM version constraint; treating as unconstrained (may over-satisfy)"
+                    );
+                    VersionConstraint::Any
+                }
+            })
         }
         (VersionScheme::Rpm, None) => ConaryConstraint::Legacy(VersionConstraint::Any),
         (native, Some(s)) => ConaryConstraint::Repository {
             scheme: native,
-            constraint: parse_repo_constraint(native, s).unwrap_or(RepoVersionConstraint::Any),
+            constraint: match parse_repo_constraint(native, s) {
+                Some(c) => c,
+                None => {
+                    tracing::warn!(
+                        constraint = %s,
+                        dep = %dep.depends_on_name,
+                        scheme = ?native,
+                        "Failed to parse repo version constraint; treating as unconstrained (may over-satisfy)"
+                    );
+                    RepoVersionConstraint::Any
+                }
+            },
             raw: Some(s.to_string()),
         },
         (native, None) => ConaryConstraint::Repository {
@@ -50,7 +72,18 @@ fn row_to_constraint(
     let constraint = match (repo_scheme, raw.as_deref()) {
         (Some(scheme), Some(value)) => ConaryConstraint::Repository {
             scheme,
-            constraint: parse_repo_constraint(scheme, value).unwrap_or(RepoVersionConstraint::Any),
+            constraint: match parse_repo_constraint(scheme, value) {
+                Some(c) => c,
+                None => {
+                    tracing::warn!(
+                        constraint = %value,
+                        capability = %row.capability,
+                        scheme = ?scheme,
+                        "Failed to parse repo version constraint in requirement row; treating as unconstrained (may over-satisfy)"
+                    );
+                    RepoVersionConstraint::Any
+                }
+            },
             raw,
         },
         (Some(scheme), None) => ConaryConstraint::Repository {
@@ -58,9 +91,18 @@ fn row_to_constraint(
             constraint: RepoVersionConstraint::Any,
             raw: None,
         },
-        (None, Some(value)) => ConaryConstraint::Legacy(
-            VersionConstraint::parse(value).unwrap_or(VersionConstraint::Any),
-        ),
+        (None, Some(value)) => ConaryConstraint::Legacy(match VersionConstraint::parse(value) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(
+                    constraint = %value,
+                    capability = %row.capability,
+                    error = %e,
+                    "Failed to parse legacy version constraint in requirement row; treating as unconstrained (may over-satisfy)"
+                );
+                VersionConstraint::Any
+            }
+        }),
         (None, None) => ConaryConstraint::Legacy(VersionConstraint::Any),
     };
     (row.capability, constraint)

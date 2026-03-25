@@ -185,9 +185,9 @@ impl<'db> CanonicalResolver<'db> {
             // 0. Explicit request scope first (root requests only)
             match &policy.request_scope {
                 RequestScope::Repository(repo) => {
-                    // Prefer candidates whose distro matches the repo name pattern
-                    let a_match = a.distro.contains(repo.as_str());
-                    let b_match = b.distro.contains(repo.as_str());
+                    // Prefer candidates whose distro identity matches the repo scope
+                    let a_match = a.distro == repo.as_str();
+                    let b_match = b.distro == repo.as_str();
                     if a_match != b_match {
                         return b_match.cmp(&a_match);
                     }

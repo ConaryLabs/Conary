@@ -9,8 +9,10 @@ use resolvo::{ConditionalRequirement, Problem, Solver, UnsolvableOrCancelled};
 use rusqlite::Connection;
 
 use crate::error::{Error, Result};
-use crate::version::VersionConstraint;
+use crate::repository::versioning::repo_version_satisfies;
+use crate::version::{RpmVersion, VersionConstraint};
 
+use super::provider::types::ConaryConstraint;
 use super::provider::ConaryProvider;
 
 /// Source of a resolved package.
@@ -141,6 +143,42 @@ pub fn solve_install(
     }
 }
 
+/// Check whether a provider's version satisfies a dependency constraint.
+///
+/// When the provider has no version, only `Any` constraints are satisfied.
+/// Otherwise, the version is parsed according to the constraint's scheme and
+/// checked against the constraint.
+fn provider_version_satisfies_constraint(
+    constraint: &ConaryConstraint,
+    provider_version: Option<&str>,
+) -> bool {
+    match constraint {
+        ConaryConstraint::Legacy(VersionConstraint::Any) => true,
+        ConaryConstraint::Legacy(vc) => {
+            let Some(ver_str) = provider_version else {
+                return false;
+            };
+            RpmVersion::parse(ver_str)
+                .map(|v| vc.satisfies(&v))
+                .unwrap_or(false)
+        }
+        ConaryConstraint::Repository {
+            constraint: crate::repository::versioning::RepoVersionConstraint::Any,
+            ..
+        } => true,
+        ConaryConstraint::Repository {
+            scheme,
+            constraint: repo_constraint,
+            ..
+        } => {
+            let Some(ver_str) = provider_version else {
+                return false;
+            };
+            repo_version_satisfies(*scheme, ver_str, repo_constraint)
+        }
+    }
+}
+
 /// Check what packages would break if the given packages are removed.
 ///
 /// Returns the names of packages whose dependencies would be unsatisfied.
@@ -220,13 +258,23 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
 
                 if !breaking_set.contains(&pkg.name) {
                     let any_satisfied = singles.iter().any(|&(dep_name, constraint)| {
-                        // 1. Check provides index
+                        // 1. Check provides index -- verify the remaining
+                        //    provider's version satisfies the constraint, not
+                        //    just that a provider exists with that capability name.
                         let providers = provider.find_providers(dep_name);
                         if !providers.is_empty() {
-                            return providers.iter().any(|(trove_id, _)| {
-                                provider
+                            return providers.iter().any(|(trove_id, prov_version)| {
+                                let not_removed = provider
                                     .trove_name(*trove_id)
-                                    .is_some_and(|name| !remove_set.contains(name))
+                                    .is_some_and(|name| !remove_set.contains(name));
+                                if !not_removed {
+                                    return false;
+                                }
+                                // Check version constraint against the provide's version
+                                provider_version_satisfies_constraint(
+                                    constraint,
+                                    prov_version.as_deref(),
+                                )
                             });
                         }
                         // 2. Fallback: check by package name

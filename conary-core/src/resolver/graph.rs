@@ -19,14 +19,28 @@ use tracing::warn;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PackageNode {
     pub name: String,
+    pub architecture: Option<String>,
     pub version: InstalledPackageVersion,
     pub trove_id: Option<i64>,
+}
+
+impl PackageNode {
+    /// Graph key: `"name"` for single-arch, `"name:arch"` for multi-arch.
+    /// This ensures multi-arch installs don't overwrite each other in the
+    /// graph while keeping the key as a plain String.
+    pub fn graph_key(&self) -> String {
+        match &self.architecture {
+            Some(arch) if !arch.is_empty() => format!("{}:{}", self.name, arch),
+            _ => self.name.clone(),
+        }
+    }
 }
 
 impl PackageNode {
     pub fn new(name: String, version: RpmVersion) -> Self {
         Self {
             name,
+            architecture: None,
             version: InstalledPackageVersion::from_rpm(version),
             trove_id: None,
         }
@@ -35,6 +49,7 @@ impl PackageNode {
     pub fn new_installed(name: String, version: InstalledPackageVersion) -> Self {
         Self {
             name,
+            architecture: None,
             version,
             trove_id: None,
         }
@@ -197,15 +212,16 @@ impl DependencyGraph {
 
             // Parse the version
             let version = InstalledPackageVersion::from_trove(&trove);
-            let node =
+            let mut node =
                 PackageNode::new_installed(trove.name.clone(), version).with_trove_id(trove_id);
+            node.architecture = trove.architecture.clone();
+            let from_key = node.graph_key();
 
             graph.add_node(node);
 
             // Use pre-loaded dependencies
             let empty = Vec::new();
             let deps = all_deps.get(&trove_id).unwrap_or(&empty);
-
             for dep in deps {
                 let constraint = if let Some(ref constraint_str) = dep.version_constraint {
                     VersionConstraint::parse(constraint_str).unwrap_or(VersionConstraint::Any)
@@ -214,7 +230,7 @@ impl DependencyGraph {
                 };
 
                 let edge = DependencyEdge {
-                    from: trove.name.clone(),
+                    from: from_key.clone(),
                     to: dep.depends_on_name.clone(),
                     constraint,
                     raw_constraint: dep.version_constraint.clone(),
@@ -229,9 +245,12 @@ impl DependencyGraph {
         Ok(graph)
     }
 
-    /// Add a package node to the graph
+    /// Add a package node to the graph.
+    ///
+    /// Uses `graph_key()` (name:arch) so multi-arch installs get separate
+    /// entries instead of overwriting each other.
     pub fn add_node(&mut self, node: PackageNode) {
-        self.nodes.insert(node.name.clone(), node);
+        self.nodes.insert(node.graph_key(), node);
     }
 
     /// Add a dependency edge to the graph
@@ -249,17 +268,45 @@ impl DependencyGraph {
             .push(edge.from.clone());
     }
 
-    /// Get a node by package name
+    /// Get a node by package name.
+    ///
+    /// Tries exact key first (for plain names and "name:arch" keys),
+    /// then scans for a node whose name field matches (for multi-arch).
     pub fn get_node(&self, name: &str) -> Option<&PackageNode> {
-        self.nodes.get(name)
+        self.nodes
+            .get(name)
+            .or_else(|| self.nodes.values().find(|n| n.name == name))
     }
 
-    /// Get all dependencies of a package
+    /// Find a node's graph key by package name.
+    /// Returns the key for exact match first, then scans by node name.
+    fn find_key_by_name(&self, name: &str) -> Option<&String> {
+        if self.nodes.contains_key(name) {
+            // Key is the plain name -- return it directly
+            self.nodes.keys().find(|k| k.as_str() == name)
+        } else {
+            // Scan for a key whose node name matches (multi-arch "name:arch" key)
+            self.nodes
+                .iter()
+                .find(|(_, n)| n.name == name)
+                .map(|(k, _)| k)
+        }
+    }
+
+    /// Get all dependencies of a package (tries exact key, then name scan).
     pub fn get_dependencies(&self, name: &str) -> Vec<&DependencyEdge> {
-        self.edges
-            .get(name)
-            .map(|v| v.iter().collect())
-            .unwrap_or_default()
+        if let Some(edges) = self.edges.get(name) {
+            return edges.iter().collect();
+        }
+        // Scan for a key whose node name matches
+        for (key, node) in &self.nodes {
+            if node.name == name
+                && let Some(edges) = self.edges.get(key)
+            {
+                return edges.iter().collect();
+            }
+        }
+        Vec::new()
     }
 
     /// Get all packages that depend on this package (reverse dependencies)
@@ -288,8 +335,9 @@ impl DependencyGraph {
         // dependencies and should not influence the topological sort.
         for edges in self.edges.values() {
             for edge in edges {
-                if self.nodes.contains_key(&edge.to)
-                    && let Some(degree) = in_degree.get_mut(&edge.to)
+                // Find the target's graph key by name (handles "name:arch" keys)
+                if let Some(target_key) = self.find_key_by_name(&edge.to)
+                    && let Some(degree) = in_degree.get_mut(target_key)
                 {
                     *degree += 1;
                 }
@@ -304,16 +352,27 @@ impl DependencyGraph {
         }
 
         // Process nodes in topological order
-        while let Some(name) = queue.pop_front() {
-            result.push(name.clone());
+        while let Some(key) = queue.pop_front() {
+            // Output the package name (strip the ":arch" suffix if present)
+            let name = self
+                .nodes
+                .get(&key)
+                .map(|n| n.name.clone())
+                .unwrap_or_else(|| key.split(':').next().unwrap_or(&key).to_string());
+            result.push(name);
 
-            // Reduce in-degree of neighbors (only for known nodes)
-            if let Some(edges) = self.edges.get(&name) {
+            // Reduce in-degree of neighbors (only for known nodes).
+            // Resolve target by name to find the arch-tagged graph key.
+            if let Some(edges) = self.edges.get(&key) {
                 for edge in edges {
-                    if let Some(degree) = in_degree.get_mut(&edge.to) {
+                    let target_key = self
+                        .find_key_by_name(&edge.to)
+                        .cloned()
+                        .unwrap_or_else(|| edge.to.clone());
+                    if let Some(degree) = in_degree.get_mut(&target_key) {
                         *degree -= 1;
                         if *degree == 0 {
-                            queue.push_back(edge.to.clone());
+                            queue.push_back(target_key);
                         }
                     }
                 }
