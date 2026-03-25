@@ -39,9 +39,14 @@ pub async fn query_audit(
         return err;
     }
 
+    // Clamp limit to a safe range: default 50, minimum 1, maximum 500.
+    // Without this, a negative limit (LIMIT -1 in SQLite means unlimited)
+    // could bypass the audit log cap.
+    let clamped_limit = Some(query.limit.unwrap_or(50).clamp(1, 500));
+
     match admin_service::query_audit(
         &state,
-        query.limit,
+        clamped_limit,
         query.action,
         query.since,
         query.token_name,
