@@ -104,32 +104,43 @@ impl CapabilityPolicy {
 
     /// Load a capability policy from a TOML file
     ///
-    /// If `path` is `Some`, loads from that path. Otherwise, tries the system
-    /// default at `/etc/conary/capability-policy.toml`. If neither exists,
-    /// returns the built-in default policy.
+    /// If `path` is `Some`, loads from that path and returns an error if it
+    /// does not exist (an explicitly configured policy path must be valid).
+    /// If `path` is `None`, tries the system default at
+    /// `/etc/conary/capability-policy.toml`. If the default path does not
+    /// exist, returns the built-in default policy.
     ///
     /// # Errors
     ///
-    /// Returns an error if the file exists but cannot be read or parsed.
+    /// Returns an error if an explicit path does not exist, or if any file
+    /// exists but cannot be read or parsed.
     pub fn load(path: Option<&str>) -> anyhow::Result<Self> {
-        let candidates: Vec<&str> = match path {
-            Some(p) => vec![p],
-            None => vec!["/etc/conary/capability-policy.toml"],
-        };
-
-        for candidate in candidates {
-            let candidate_path = Path::new(candidate);
-            match std::fs::read_to_string(candidate_path) {
-                Ok(contents) => {
-                    let policy: Self = toml::from_str(&contents)?;
-                    return Ok(policy);
+        if let Some(p) = path {
+            // Explicit path: must exist -- a typo must not silently weaken policy
+            let contents = std::fs::read_to_string(Path::new(p)).map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    anyhow::anyhow!(
+                        "capability policy file not found: {p} \
+                         (explicitly configured paths must exist)"
+                    )
+                } else {
+                    anyhow::anyhow!(e)
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(e) => return Err(e.into()),
-            }
+            })?;
+            let policy: Self = toml::from_str(&contents)?;
+            return Ok(policy);
         }
 
-        Ok(Self::default())
+        // Implicit default path: fall back to defaults if not found
+        let default_path = Path::new("/etc/conary/capability-policy.toml");
+        match std::fs::read_to_string(default_path) {
+            Ok(contents) => {
+                let policy: Self = toml::from_str(&contents)?;
+                Ok(policy)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) => Err(e.into()),
+        }
     }
 }
 
@@ -231,9 +242,19 @@ mod tests {
     }
 
     #[test]
-    fn test_load_falls_back_to_default() {
-        // No file at a nonexistent path, should return default
-        let policy = CapabilityPolicy::load(Some("/nonexistent/path/policy.toml")).unwrap();
+    fn test_load_explicit_path_not_found_is_error() {
+        // An explicitly provided path that doesn't exist must be an error
+        let result = CapabilityPolicy::load(Some("/nonexistent/path/policy.toml"));
+        assert!(
+            result.is_err(),
+            "Explicit missing policy path must return an error, not fall back to defaults"
+        );
+    }
+
+    #[test]
+    fn test_load_implicit_falls_back_to_default() {
+        // No path provided, system default doesn't exist -- should return defaults
+        let policy = CapabilityPolicy::load(None).unwrap();
         assert_eq!(policy.allowed, CapabilityPolicy::default().allowed);
     }
 

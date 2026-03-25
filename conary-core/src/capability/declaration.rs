@@ -271,17 +271,39 @@ fn is_valid_syscall_profile(profile: &str) -> bool {
     SyscallProfile::parse(profile).is_some()
 }
 
-/// Validate that all paths in a list are absolute
+/// Validate that all paths in a list are absolute and do not contain traversal
 fn validate_absolute_paths(
     paths: &[String],
     context: &str,
 ) -> Result<(), CapabilityValidationError> {
+    use std::path::Component;
+
     for path in paths {
         if !path.starts_with('/') {
             return Err(CapabilityValidationError::RelativePath {
                 path: path.clone(),
                 context: context.to_string(),
             });
+        }
+
+        // Reject path traversal components (. and ..)
+        let p = std::path::Path::new(path);
+        for component in p.components() {
+            match component {
+                Component::ParentDir => {
+                    return Err(CapabilityValidationError::PathTraversal {
+                        path: path.clone(),
+                        context: context.to_string(),
+                    });
+                }
+                Component::CurDir => {
+                    return Err(CapabilityValidationError::PathTraversal {
+                        path: path.clone(),
+                        context: context.to_string(),
+                    });
+                }
+                _ => {}
+            }
         }
     }
     Ok(())
@@ -330,6 +352,9 @@ pub enum CapabilityValidationError {
 
     #[error("relative path not allowed in {context}: {path}")]
     RelativePath { path: String, context: String },
+
+    #[error("path traversal not allowed in {context}: {path}")]
+    PathTraversal { path: String, context: String },
 
     #[error("invalid syscall profile: {profile}")]
     InvalidProfile { profile: String },

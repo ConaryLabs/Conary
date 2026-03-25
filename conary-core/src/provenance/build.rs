@@ -100,8 +100,12 @@ impl CanonicalBytes for BuildProvenance {
             bytes.push(b':');
             bytes.extend_from_slice(dep.version.as_bytes());
             if let Some(ref dna) = dep.dna_hash {
-                bytes.push(b':');
+                bytes.extend_from_slice(b":dna:");
                 bytes.extend_from_slice(dna.as_bytes());
+            }
+            if let Some(ref ch) = dep.content_hash {
+                bytes.extend_from_slice(b":ch:");
+                bytes.extend_from_slice(ch.as_bytes());
             }
             bytes.push(0);
         }
@@ -111,8 +115,84 @@ impl CanonicalBytes for BuildProvenance {
             bytes.extend_from_slice(attestation.arch.as_bytes());
             bytes.push(b':');
             bytes.extend_from_slice(attestation.kernel.as_bytes());
+            if let Some(ref distro) = attestation.distro {
+                bytes.extend_from_slice(b":distro:");
+                bytes.extend_from_slice(distro.as_bytes());
+            }
+            if let Some(sb) = attestation.secure_boot {
+                bytes.extend_from_slice(if sb { b":sb:true" } else { b":sb:false" });
+            }
+            if let Some(ref tpm) = attestation.tpm_quote {
+                bytes.extend_from_slice(b":tpm:");
+                bytes.extend_from_slice(tpm.as_bytes());
+            }
             bytes.push(0);
         }
+
+        if let Some(ref ts) = self.build_start {
+            bytes.extend_from_slice(b"start:");
+            bytes.extend_from_slice(ts.to_rfc3339().as_bytes());
+            bytes.push(0);
+        }
+        if let Some(ref ts) = self.build_end {
+            bytes.extend_from_slice(b"end:");
+            bytes.extend_from_slice(ts.to_rfc3339().as_bytes());
+            bytes.push(0);
+        }
+        if let Some(ref h) = self.build_log_hash {
+            bytes.extend_from_slice(b"log:");
+            bytes.extend_from_slice(h.as_bytes());
+            bytes.push(0);
+        }
+
+        // Environment variables (sorted for determinism)
+        let mut env: Vec<_> = self.build_env.iter().collect();
+        env.sort();
+        for (key, value) in env {
+            bytes.extend_from_slice(b"env:");
+            bytes.extend_from_slice(key.as_bytes());
+            bytes.push(b'=');
+            bytes.extend_from_slice(value.as_bytes());
+            bytes.push(0);
+        }
+
+        // Reproducibility info
+        if let Some(ref repro) = self.reproducibility {
+            bytes.extend_from_slice(b"repro-consensus:");
+            bytes.extend_from_slice(if repro.consensus { b"true" } else { b"false" });
+            bytes.push(0);
+            if let Some(ref hash) = repro.content_hash {
+                bytes.extend_from_slice(b"repro-hash:");
+                bytes.extend_from_slice(hash.as_bytes());
+                bytes.push(0);
+            }
+            let mut verifiers: Vec<_> = repro.verified_by.iter().collect();
+            verifiers.sort();
+            for v in verifiers {
+                bytes.extend_from_slice(b"repro-verifier:");
+                bytes.extend_from_slice(v.as_bytes());
+                bytes.push(0);
+            }
+            if !repro.differences.is_empty() {
+                let mut diffs = repro.differences.clone();
+                diffs.sort();
+                for d in &diffs {
+                    bytes.extend_from_slice(b"repro-diff:");
+                    bytes.extend_from_slice(d.as_bytes());
+                    bytes.push(0);
+                }
+            }
+        }
+
+        // Isolation level
+        let isolation_str = match self.isolation_level {
+            IsolationLevel::None => "none",
+            IsolationLevel::Container => "container",
+            IsolationLevel::Hermetic => "hermetic",
+        };
+        bytes.extend_from_slice(b"isolation:");
+        bytes.extend_from_slice(isolation_str.as_bytes());
+        bytes.push(0);
 
         bytes
     }
@@ -372,8 +452,13 @@ mod tests {
 
     #[test]
     fn test_canonical_bytes() {
-        let build1 = BuildProvenance::new("sha256:abc");
-        let build2 = BuildProvenance::new("sha256:abc");
+        use chrono::TimeZone;
+        let fixed_ts = chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+
+        let mut build1 = BuildProvenance::new("sha256:abc");
+        build1.build_start = Some(fixed_ts);
+        let mut build2 = BuildProvenance::new("sha256:abc");
+        build2.build_start = Some(fixed_ts);
 
         assert_eq!(build1.canonical_bytes(), build2.canonical_bytes());
     }

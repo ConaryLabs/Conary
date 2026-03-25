@@ -77,15 +77,31 @@ impl CanonicalBytes for ContentProvenance {
             bytes.extend_from_slice(name.as_bytes());
             bytes.push(b':');
             bytes.extend_from_slice(hash.hash.as_bytes());
+            bytes.push(b':');
+            bytes.extend_from_slice(hash.size.to_string().as_bytes());
+            bytes.push(b':');
+            bytes.extend_from_slice(hash.file_count.to_string().as_bytes());
             bytes.push(0);
         }
 
-        // Chunks are ordered in the manifest
+        // Chunks are ordered in the manifest -- include size and offset
         for chunk in &self.chunk_manifest {
             bytes.extend_from_slice(b"chunk:");
             bytes.extend_from_slice(chunk.hash.as_bytes());
+            bytes.push(b':');
+            bytes.extend_from_slice(chunk.size.to_string().as_bytes());
+            bytes.push(b':');
+            bytes.extend_from_slice(chunk.offset.to_string().as_bytes());
             bytes.push(0);
         }
+
+        // Total size and file count
+        bytes.extend_from_slice(b"total-size:");
+        bytes.extend_from_slice(self.total_size.to_string().as_bytes());
+        bytes.push(0);
+        bytes.extend_from_slice(b"file-count:");
+        bytes.extend_from_slice(self.file_count.to_string().as_bytes());
+        bytes.push(0);
 
         bytes
     }

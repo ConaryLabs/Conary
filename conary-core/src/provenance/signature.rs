@@ -68,6 +68,26 @@ impl SignatureProvenance {
         }
         signers
     }
+
+    /// Append all material fields of a Signature to canonical bytes.
+    fn append_sig_bytes(bytes: &mut Vec<u8>, sig: &Signature) {
+        bytes.extend_from_slice(sig.key_id.as_bytes());
+        bytes.push(b':');
+        bytes.extend_from_slice(sig.signature.as_bytes());
+        bytes.push(b':');
+        bytes.extend_from_slice(sig.scope.to_string().as_bytes());
+        bytes.push(b':');
+        bytes.extend_from_slice(sig.timestamp.to_rfc3339().as_bytes());
+        if let Some(ref alg) = sig.algorithm {
+            bytes.extend_from_slice(b":alg:");
+            bytes.extend_from_slice(alg.as_bytes());
+        }
+        if let Some(ref meta) = sig.metadata {
+            bytes.extend_from_slice(b":meta:");
+            bytes.extend_from_slice(meta.as_bytes());
+        }
+        bytes.push(0);
+    }
 }
 
 impl CanonicalBytes for SignatureProvenance {
@@ -76,10 +96,7 @@ impl CanonicalBytes for SignatureProvenance {
 
         if let Some(ref sig) = self.builder_sig {
             bytes.extend_from_slice(b"builder:");
-            bytes.extend_from_slice(sig.key_id.as_bytes());
-            bytes.push(b':');
-            bytes.extend_from_slice(sig.signature.as_bytes());
-            bytes.push(0);
+            Self::append_sig_bytes(&mut bytes, sig);
         }
 
         // Sort reviewer sigs by key_id for determinism
@@ -88,16 +105,44 @@ impl CanonicalBytes for SignatureProvenance {
 
         for sig in reviewers {
             bytes.extend_from_slice(b"reviewer:");
-            bytes.extend_from_slice(sig.key_id.as_bytes());
-            bytes.push(b':');
-            bytes.extend_from_slice(sig.signature.as_bytes());
-            bytes.push(0);
+            Self::append_sig_bytes(&mut bytes, sig);
         }
 
         if let Some(ref log) = self.transparency_log {
             bytes.extend_from_slice(b"rekor:");
             bytes.extend_from_slice(log.log_index.to_string().as_bytes());
+            bytes.push(b':');
+            bytes.extend_from_slice(log.provider.as_bytes());
+            bytes.push(b':');
+            bytes.extend_from_slice(log.integrated_time.to_rfc3339().as_bytes());
+            if let Some(ref url) = log.entry_url {
+                bytes.extend_from_slice(b":url:");
+                bytes.extend_from_slice(url.as_bytes());
+            }
+            if let Some(ref proof) = log.inclusion_proof {
+                bytes.extend_from_slice(b":proof:");
+                bytes.extend_from_slice(proof.as_bytes());
+            }
             bytes.push(0);
+        }
+
+        // SBOM reference
+        if let Some(ref sbom) = self.sbom {
+            if let Some(ref spdx) = sbom.spdx_hash {
+                bytes.extend_from_slice(b"sbom-spdx:");
+                bytes.extend_from_slice(spdx.as_bytes());
+                bytes.push(0);
+            }
+            if let Some(ref cdx) = sbom.cyclonedx_hash {
+                bytes.extend_from_slice(b"sbom-cdx:");
+                bytes.extend_from_slice(cdx.as_bytes());
+                bytes.push(0);
+            }
+            if let Some(ref url) = sbom.url {
+                bytes.extend_from_slice(b"sbom-url:");
+                bytes.extend_from_slice(url.as_bytes());
+                bytes.push(0);
+            }
         }
 
         bytes
@@ -316,10 +361,16 @@ mod tests {
 
     #[test]
     fn test_canonical_bytes() {
-        let prov1 =
-            SignatureProvenance::with_builder(Signature::builder("builder@example.com", "sig=="));
-        let prov2 =
-            SignatureProvenance::with_builder(Signature::builder("builder@example.com", "sig=="));
+        use chrono::TimeZone;
+        let fixed_ts = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+
+        let mut sig1 = Signature::builder("builder@example.com", "sig==");
+        sig1.timestamp = fixed_ts;
+        let mut sig2 = Signature::builder("builder@example.com", "sig==");
+        sig2.timestamp = fixed_ts;
+
+        let prov1 = SignatureProvenance::with_builder(sig1);
+        let prov2 = SignatureProvenance::with_builder(sig2);
 
         assert_eq!(prov1.canonical_bytes(), prov2.canonical_bytes());
     }
