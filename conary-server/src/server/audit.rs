@@ -105,43 +105,73 @@ pub async fn audit_middleware(
         .get::<TokenName>()
         .map(|tn| tn.0.clone());
 
-    // Extract client IP using the shared helper
-    let source_ip = Some(crate::server::rate_limit::extract_ip(&request).to_string());
-
-    // Extract db_path before running the handler so we don't need to
-    // acquire the RwLock after the response is already built.
-    let db_path = {
+    // Extract db_path and trusted proxy header before running the handler
+    // so we don't need to acquire the RwLock after the response is built.
+    let (db_path, trusted_proxy_header) = {
         let s = state.read().await;
-        s.config.db_path.clone()
+        (s.config.db_path.clone(), s.trusted_proxy_header.clone())
     };
+
+    // Extract client IP using the proxy-aware shared helper so that
+    // audit logs record the real client IP, not the proxy's IP.
+    let source_ip = Some(
+        crate::server::rate_limit::extract_ip_with_proxy(
+            &request,
+            trusted_proxy_header.as_deref(),
+        )
+        .to_string(),
+    );
 
     // Maximum number of bytes to log from request/response bodies.
     // Larger payloads (e.g. package uploads) are truncated to avoid
     // excessive DB storage and memory usage in audit logs.
     const AUDIT_BODY_MAX: usize = 4096;
 
-    // For write operations, capture the request body
+    // For write operations, capture the request body for audit logging.
+    //
+    // Only buffer the body if Content-Length indicates it fits in AUDIT_BODY_MAX.
+    // Large uploads (package/artifact uploads up to 512 MB) pass through
+    // without buffering -- we log the size but not the content.
     let (request, request_body) = if is_write {
-        let (parts, body) = request.into_parts();
-        match axum::body::to_bytes(body, 64 * 1024).await {
-            Ok(bytes) => {
-                let body_str = String::from_utf8_lossy(&bytes);
-                let logged = if body_str.len() > AUDIT_BODY_MAX {
-                    format!(
-                        "{}... [truncated, {} bytes total]",
-                        &body_str[..AUDIT_BODY_MAX],
-                        bytes.len()
+        let content_len = request
+            .headers()
+            .get(axum::http::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<usize>().ok());
+
+        // Only buffer when we know the body is small. If Content-Length is
+        // absent (chunked uploads), skip buffering to avoid consuming and
+        // losing a large streamed body.
+        let should_buffer = content_len.is_some_and(|len| len <= AUDIT_BODY_MAX);
+
+        if should_buffer {
+            let (parts, body) = request.into_parts();
+            // Safe: body is at most AUDIT_BODY_MAX bytes (or unknown/small)
+            match axum::body::to_bytes(body, AUDIT_BODY_MAX).await {
+                Ok(bytes) => {
+                    let logged = String::from_utf8_lossy(&bytes).into_owned();
+                    let new_body = Body::from(bytes);
+                    (Request::from_parts(parts, new_body), Some(logged))
+                }
+                Err(_) => {
+                    // Content-Length was absent but body exceeded AUDIT_BODY_MAX.
+                    // Body is consumed; reconstruct as empty. This only affects
+                    // chunked-encoded small writes with no Content-Length, which
+                    // is rare for admin API calls.
+                    let new_body = Body::empty();
+                    (
+                        Request::from_parts(parts, new_body),
+                        Some("[body exceeded audit limit, stream consumed]".to_string()),
                     )
-                } else {
-                    body_str.into_owned()
-                };
-                let new_body = Body::from(bytes);
-                (Request::from_parts(parts, new_body), Some(logged))
+                }
             }
-            Err(_) => {
-                let new_body = Body::empty();
-                (Request::from_parts(parts, new_body), None)
-            }
+        } else {
+            // Large or unknown-size upload -- don't buffer, just log what we know
+            let logged = match content_len {
+                Some(len) => format!("[body too large for audit: {len} bytes]"),
+                None => "[chunked body, size unknown -- not buffered for audit]".to_string(),
+            };
+            (request, Some(logged))
         }
     } else {
         (request, None)
@@ -154,10 +184,13 @@ pub async fn audit_middleware(
     let duration_ms = start.elapsed().as_millis() as i64;
     let status_code = response.status().as_u16() as i32;
 
-    // For write operations, capture the response body
+    // For write operations, capture the response body for audit logging.
+    // Response bodies from admin handlers are JSON and typically small.
+    // Use a generous limit (1 MB) to avoid losing the response on overflow.
+    const RESPONSE_READ_LIMIT: usize = 1024 * 1024;
     let (response, response_body) = if is_write {
         let (parts, body) = response.into_parts();
-        match axum::body::to_bytes(body, 64 * 1024).await {
+        match axum::body::to_bytes(body, RESPONSE_READ_LIMIT).await {
             Ok(bytes) => {
                 let body_str = String::from_utf8_lossy(&bytes);
                 let logged = if body_str.len() > AUDIT_BODY_MAX {
@@ -173,6 +206,8 @@ pub async fn audit_middleware(
                 (Response::from_parts(parts, new_body), Some(logged))
             }
             Err(_) => {
+                // Response exceeded 1 MB -- very unusual for admin API.
+                // Body is consumed; skip logging.
                 let new_body = Body::empty();
                 (Response::from_parts(parts, new_body), None)
             }

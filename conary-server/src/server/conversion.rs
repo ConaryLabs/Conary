@@ -307,7 +307,11 @@ impl ConversionService {
         })
     }
 
-    /// Find a package in the repository metadata
+    /// Find a package in the repository metadata.
+    ///
+    /// When `version` is `Some`, returns the exact match. When `None`, fetches
+    /// all candidates and picks the latest using scheme-aware version comparison
+    /// (RPM/Debian/Arch) instead of lexicographic ordering.
     fn find_package(
         &self,
         conn: &rusqlite::Connection,
@@ -315,16 +319,71 @@ impl ConversionService {
         package_name: &str,
         version: Option<&str>,
     ) -> Result<RepositoryPackage> {
+        use conary_core::repository::versioning::{VersionScheme, compare_repo_versions};
+
         // Map distro to repository name pattern.
         // Match both bare name (e.g. "fedora") and suffixed (e.g. "fedora-43").
-        let repo_pattern = match distro {
-            "arch" => "arch%",
-            "fedora" => "fedora%",
-            "ubuntu" | "debian" => "ubuntu%",
+        let (repo_pattern, scheme) = match distro {
+            "arch" => ("arch%", VersionScheme::Arch),
+            "fedora" => ("fedora%", VersionScheme::Rpm),
+            "ubuntu" | "debian" => ("ubuntu%", VersionScheme::Debian),
             _ => return Err(anyhow!("Unknown distribution: {}", distro)),
         };
 
-        // Query for the package
+        let row_mapper = |row: &rusqlite::Row| {
+            Ok(RepositoryPackage {
+                id: row.get(0)?,
+                repository_id: row.get(1)?,
+                name: row.get(2)?,
+                version: row.get(3)?,
+                architecture: row.get(4)?,
+                description: row.get(5)?,
+                checksum: row.get(6)?,
+                size: row.get(7)?,
+                download_url: row.get(8)?,
+                dependencies: row.get(9)?,
+                metadata: row.get(10)?,
+                synced_at: row.get(11)?,
+                is_security_update: row.get(12)?,
+                severity: row.get(13)?,
+                cve_ids: row.get(14)?,
+                advisory_id: row.get(15)?,
+                advisory_url: row.get(16)?,
+                distro: None,
+                version_scheme: None,
+            })
+        };
+
+        // When a specific version is requested, use a simple exact-match query.
+        if let Some(ver) = version {
+            let mut stmt = conn.prepare(
+                "SELECT rp.id, rp.repository_id, rp.name, rp.version, rp.architecture,
+                        rp.description, rp.checksum, rp.size, rp.download_url, rp.dependencies,
+                        rp.metadata, rp.synced_at, rp.is_security_update, rp.severity,
+                        rp.cve_ids, rp.advisory_id, rp.advisory_url
+                 FROM repository_packages rp
+                 JOIN repositories r ON rp.repository_id = r.id
+                 WHERE rp.name = ?1
+                 AND r.name LIKE ?2
+                 AND rp.version = ?3
+                 LIMIT 1",
+            )?;
+
+            return stmt
+                .query_row(rusqlite::params![package_name, repo_pattern, ver], row_mapper)
+                .map_err(|e| match e {
+                    rusqlite::Error::QueryReturnedNoRows => {
+                        anyhow!(
+                            "Package '{}' version '{}' not found in {} repositories. Run 'conary repo-sync' first.",
+                            package_name, ver, distro
+                        )
+                    }
+                    _ => anyhow!("Database error: {}", e),
+                });
+        }
+
+        // No version specified: fetch all candidates and pick the latest using
+        // scheme-aware comparison instead of lexicographic ORDER BY.
         let mut stmt = conn.prepare(
             "SELECT rp.id, rp.repository_id, rp.name, rp.version, rp.architecture,
                     rp.description, rp.checksum, rp.size, rp.download_url, rp.dependencies,
@@ -333,51 +392,33 @@ impl ConversionService {
              FROM repository_packages rp
              JOIN repositories r ON rp.repository_id = r.id
              WHERE rp.name = ?1
-             AND r.name LIKE ?2
-             AND (?3 IS NULL OR rp.version = ?3)
-             ORDER BY rp.version DESC
-             LIMIT 1",
+             AND r.name LIKE ?2",
         )?;
 
-        let pkg = stmt
-            .query_row(
-                rusqlite::params![package_name, repo_pattern, version],
-                |row| {
-                    Ok(RepositoryPackage {
-                        id: row.get(0)?,
-                        repository_id: row.get(1)?,
-                        name: row.get(2)?,
-                        version: row.get(3)?,
-                        architecture: row.get(4)?,
-                        description: row.get(5)?,
-                        checksum: row.get(6)?,
-                        size: row.get(7)?,
-                        download_url: row.get(8)?,
-                        dependencies: row.get(9)?,
-                        metadata: row.get(10)?,
-                        synced_at: row.get(11)?,
-                        is_security_update: row.get(12)?,
-                        severity: row.get(13)?,
-                        cve_ids: row.get(14)?,
-                        advisory_id: row.get(15)?,
-                        advisory_url: row.get(16)?,
-                        distro: None,
-                        version_scheme: None,
-                    })
-                },
-            )
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => {
-                    anyhow!(
-                        "Package '{}' not found in {} repositories. Run 'conary repo-sync' first.",
-                        package_name,
-                        distro
-                    )
-                }
-                _ => anyhow!("Database error: {}", e),
-            })?;
+        let candidates: Vec<RepositoryPackage> = stmt
+            .query_map(rusqlite::params![package_name, repo_pattern], row_mapper)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| anyhow!("Database error: {}", e))?;
 
-        Ok(pkg)
+        if candidates.is_empty() {
+            return Err(anyhow!(
+                "Package '{}' not found in {} repositories. Run 'conary repo-sync' first.",
+                package_name,
+                distro
+            ));
+        }
+
+        // Pick the latest version using scheme-aware comparison.
+        // unwrap is safe because we checked candidates is non-empty above.
+        let latest = candidates
+            .into_iter()
+            .max_by(|a, b| {
+                compare_repo_versions(scheme, &a.version, &b.version)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap();
+
+        Ok(latest)
     }
 
     fn download_package_with_refresh(
@@ -717,26 +758,36 @@ impl ConversionService {
         // Check for prohibited hosts
         Self::validate_host(host)?;
 
-        // Resolve DNS and validate the resolved IP
-        let resolved_ips = tokio::net::lookup_host(format!(
-            "{}:{}",
-            host,
-            parsed_url
-                .port()
-                .unwrap_or(if scheme == "https" { 443 } else { 80 })
-        ))
-        .await
-        .map_err(|e| anyhow!("Failed to resolve '{}': {}", host, e))?;
+        // Resolve DNS and validate the resolved IP. We pin the validated IP
+        // using reqwest's `resolve()` so that reqwest connects to the exact
+        // address we checked, closing the DNS rebinding TOCTOU gap.
+        let port = parsed_url
+            .port()
+            .unwrap_or(if scheme == "https" { 443 } else { 80 });
+        let resolved_ips: Vec<std::net::SocketAddr> =
+            tokio::net::lookup_host(format!("{host}:{port}"))
+                .await
+                .map_err(|e| anyhow!("Failed to resolve '{}': {}", host, e))?
+                .collect();
 
         // Check all resolved IPs - if ANY is private, reject
-        for addr in resolved_ips {
+        for addr in &resolved_ips {
             Self::validate_ip(&addr.ip())?;
         }
 
-        // Now safe to fetch - use a controlled HTTP client
+        // Pin the first validated IP so reqwest uses it instead of
+        // re-resolving (which could return a different, malicious IP).
+        let pinned_ip = resolved_ips
+            .first()
+            .ok_or_else(|| anyhow!("DNS resolution for '{}' returned no addresses", host))?;
+
+        // SECURITY: Disable automatic redirects entirely AND pin the
+        // resolved IP. This closes both the redirect-based and
+        // DNS-rebinding SSRF vectors.
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
-            .redirect(reqwest::redirect::Policy::limited(5))
+            .redirect(reqwest::redirect::Policy::none())
+            .resolve(host, *pinned_ip)
             .user_agent("conary-remi/0.1")
             .build()
             .map_err(|e| anyhow!("Failed to create HTTP client: {}", e))?;
@@ -747,13 +798,21 @@ impl ConversionService {
             .await
             .map_err(|e| anyhow!("Failed to fetch '{}': {}", url, e))?;
 
-        // Check for redirect to private IP (double-check final URL)
-        let final_url = response.url();
-        if let Some(final_host) = final_url.host_str()
-            && final_host != host
-        {
-            // URL was redirected - validate the new host
-            Self::validate_host(final_host)?;
+        // Reject redirects -- the response status will be 3xx if the server
+        // tried to redirect. Return a clear error instead of following.
+        if response.status().is_redirection() {
+            let location = response
+                .headers()
+                .get("location")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("<unknown>");
+            return Err(anyhow!(
+                "URL '{}' returned redirect ({}) to '{}'. \
+                 Redirects are rejected to prevent SSRF.",
+                url,
+                response.status().as_u16(),
+                location
+            ));
         }
 
         if !response.status().is_success() {

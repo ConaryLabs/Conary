@@ -110,7 +110,7 @@ pub fn run_prewarm(config: &PrewarmConfig) -> Result<PrewarmResult> {
         result.packages_processed += 1;
 
         // Check if already converted
-        if is_already_converted(&conn, &pkg.name, &pkg.version)? {
+        if is_already_converted(&conn, &pkg.name, &pkg.version, &config.distro)? {
             debug!("Skipping {} {} - already converted", pkg.name, pkg.version);
             result.packages_skipped += 1;
             continue;
@@ -283,20 +283,45 @@ fn load_popularity_data(path: &str) -> Result<Vec<PackagePopularity>> {
     Ok(data)
 }
 
-/// Check if a package is already converted
-fn is_already_converted(conn: &rusqlite::Connection, name: &str, version: &str) -> Result<bool> {
-    // Check converted_packages table
+/// Check if a package is already converted.
+///
+/// Checks the structured identity fields (distro, package_name, package_version)
+/// which are set by server-side conversions (trove_id may be None for those).
+/// Falls back to the trove join for client-side conversions that only have
+/// trove_id.
+fn is_already_converted(
+    conn: &rusqlite::Connection,
+    name: &str,
+    version: &str,
+    distro: &str,
+) -> Result<bool> {
+    // First check by structured identity (covers server-side conversions
+    // where trove_id is NULL).
     let count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM converted_packages cp
-         JOIN troves t ON cp.trove_id = t.id
-         WHERE t.name = ?1 AND t.version = ?2",
-            [name, version],
+            "SELECT COUNT(*) FROM converted_packages
+             WHERE package_name = ?1 AND package_version = ?2 AND distro = ?3",
+            rusqlite::params![name, version, distro],
             |row| row.get(0),
         )
         .unwrap_or(0);
 
-    Ok(count > 0)
+    if count > 0 {
+        return Ok(true);
+    }
+
+    // Fall back to trove join for client-side conversions.
+    let trove_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM converted_packages cp
+             JOIN troves t ON cp.trove_id = t.id
+             WHERE t.name = ?1 AND t.version = ?2",
+            rusqlite::params![name, version],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    Ok(trove_count > 0)
 }
 
 /// Background pre-warming task

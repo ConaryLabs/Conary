@@ -137,7 +137,12 @@ fn parse_cidr(cidr: &str) -> Option<(u32, u32)> {
 /// 1. CF-Connecting-IP header (if request is from Cloudflare IP)
 /// 2. X-Forwarded-For first IP (if trusted proxy header is set)
 /// 3. Direct connection IP
-fn extract_client_ip(
+///
+/// This is the single source of truth for client IP extraction. All
+/// middleware (rate limiting, audit, auth) should use this function
+/// or its async wrapper [`resolve_client_ip`] instead of reading
+/// `ConnectInfo` directly.
+pub fn extract_client_ip(
     headers: &HeaderMap,
     conn_ip: &IpAddr,
     trusted_proxy_header: Option<&str>,
@@ -212,8 +217,12 @@ fn create_cors_layer(config: &ServerConfig, restricted: bool) -> CorsLayer {
     }
 }
 
-/// Extract client IP by reading the trusted_proxy_header from state once
-async fn resolve_client_ip(
+/// Extract client IP by reading the trusted_proxy_header from state once.
+///
+/// Convenience wrapper around [`extract_client_ip`] for middleware that
+/// already holds an `Arc<RwLock<ServerState>>`. Acquires a brief read
+/// lock to fetch the trusted proxy header configuration.
+pub async fn resolve_client_ip(
     state: &Arc<RwLock<ServerState>>,
     headers: &HeaderMap,
     conn_ip: &IpAddr,
