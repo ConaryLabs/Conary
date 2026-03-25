@@ -211,9 +211,9 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
             continue;
         }
 
-        // Create parent directories
-        let rel_path = file.path.trim_start_matches('/');
-        let dest_path = pkg_root.join(rel_path);
+        // Use safe_join to prevent path traversal from untrusted package paths
+        let dest_path = crate::filesystem::safe_join(&pkg_root, &file.path)
+            .with_context(|| format!("Unsafe file path: {}", file.path))?;
         if let Some(parent) = dest_path.parent() {
             fs::create_dir_all(parent)?;
         }

@@ -311,21 +311,46 @@ fn verify_signature(
 
     // Check timestamp if required
     if policy.require_timestamp && sig.timestamp.is_none() {
-        warnings.push("Signature has no timestamp".to_string());
+        return Err(VerifyError::TrustViolation(
+            "Signature has no timestamp but policy requires one".to_string(),
+        )
+        .into());
+    }
+
+    // Validate timestamp format when policy requires timestamps
+    if policy.require_timestamp
+        && let Some(ts) = &sig.timestamp
+        && chrono::DateTime::parse_from_rfc3339(ts).is_err()
+    {
+        return Err(VerifyError::TrustViolation(format!(
+            "Signature timestamp is malformed: '{ts}'"
+        ))
+        .into());
     }
 
     // Check signature age if configured
     if policy.max_signature_age > 0
         && let Some(ts) = &sig.timestamp
-        && let Ok(signed_time) = chrono::DateTime::parse_from_rfc3339(ts)
     {
-        let age = chrono::Utc::now().signed_duration_since(signed_time);
-        if age.num_seconds() > policy.max_signature_age as i64 {
-            warnings.push(format!(
-                "Signature is {} seconds old (max: {})",
-                age.num_seconds(),
-                policy.max_signature_age
-            ));
+        match chrono::DateTime::parse_from_rfc3339(ts) {
+            Ok(signed_time) => {
+                let age = chrono::Utc::now().signed_duration_since(signed_time);
+                if age.num_seconds() > policy.max_signature_age as i64 {
+                    return Err(VerifyError::TrustViolation(format!(
+                        "Signature expired: {} seconds old (max: {})",
+                        age.num_seconds(),
+                        policy.max_signature_age
+                    ))
+                    .into());
+                }
+            }
+            Err(_) => {
+                // Malformed timestamp with age policy -- cannot verify age
+                return Err(VerifyError::TrustViolation(format!(
+                    "Cannot verify signature age: malformed timestamp '{ts}'"
+                ))
+                .into());
+            }
         }
     }
 

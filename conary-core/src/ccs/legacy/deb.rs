@@ -225,9 +225,13 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
             continue;
         }
 
-        // Compute rel_path once; reuse it for both dest_path and the md5sums entry.
-        let rel_path = file.path.trim_start_matches('/');
-        let dest_path = data_dir.join(rel_path);
+        // Use safe_join to prevent path traversal from untrusted package paths
+        let dest_path = crate::filesystem::safe_join(&data_dir, &file.path)
+            .with_context(|| format!("Unsafe file path: {}", file.path))?;
+        let rel_path = dest_path
+            .strip_prefix(&data_dir)
+            .unwrap_or(&dest_path)
+            .to_string_lossy();
         if let Some(parent) = dest_path.parent() {
             fs::create_dir_all(parent)?;
         }
