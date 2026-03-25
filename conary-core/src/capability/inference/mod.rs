@@ -308,6 +308,11 @@ impl InferredCapabilities {
                 self.filesystem.write_paths.push(path.clone());
             }
         }
+        for path in &other.filesystem.execute_paths {
+            if !self.filesystem.execute_paths.contains(path) {
+                self.filesystem.execute_paths.push(path.clone());
+            }
+        }
 
         // Use higher confidence syscall profile
         if other.syscall_profile.is_some()
@@ -400,7 +405,14 @@ pub fn infer_capabilities(
             .iter()
             .filter_map(|f| f.content_hash.as_deref())
             .collect();
-        let key = InferenceCache::compute_key(&metadata.name, &metadata.version, &file_hashes);
+        let key = InferenceCache::compute_key_full(
+            &metadata.name,
+            &metadata.version,
+            &file_hashes,
+            files,
+            options,
+            &metadata.dependencies,
+        );
 
         if let Some(cached) = global_cache().get(&key) {
             tracing::debug!("Cache hit for inference of {}", metadata.name);

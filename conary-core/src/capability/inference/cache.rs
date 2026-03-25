@@ -77,6 +77,103 @@ impl InferenceCache {
         hasher.finalize().value
     }
 
+    /// Compute a cache key that includes file paths and inference options
+    ///
+    /// Unlike `compute_key`, this also factors in:
+    /// - Total file count (catches files without content hashes)
+    /// - All file paths (sorted, so layout changes invalidate the cache)
+    /// - Inference options (max_tier, binary analysis, min_confidence)
+    pub fn compute_key_full(
+        package_name: &str,
+        package_version: &str,
+        file_hashes: &[&str],
+        files: &[super::PackageFile],
+        options: &super::InferenceOptions,
+        dependencies: &[String],
+    ) -> String {
+        let mut hasher = crate::hash::Hasher::new(crate::hash::HashAlgorithm::Sha256);
+        hasher.update(package_name.as_bytes());
+        hasher.update(b"|");
+        hasher.update(package_version.as_bytes());
+        hasher.update(b"|");
+
+        // Sort hashes for consistent key generation
+        let mut sorted_hashes: Vec<_> = file_hashes.to_vec();
+        sorted_hashes.sort();
+        for hash in sorted_hashes {
+            hasher.update(hash.as_bytes());
+            hasher.update(b",");
+        }
+
+        // Include file count and sorted paths so files without hashes
+        // still contribute to the key
+        hasher.update(b"|files:");
+        hasher.update(files.len().to_string().as_bytes());
+        hasher.update(b"|");
+        let mut paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+        paths.sort();
+        for path in paths {
+            hasher.update(path.as_bytes());
+            hasher.update(b",");
+        }
+
+        // Include inference options that affect results
+        hasher.update(b"|opts:");
+        hasher.update(options.max_tier.to_string().as_bytes());
+        hasher.update(b",");
+        hasher.update(if options.enable_binary_analysis { b"1" } else { b"0" });
+        hasher.update(b",");
+        hasher.update(format!("{:?}", options.min_confidence).as_bytes());
+        hasher.update(b",max_bin:");
+        hasher.update(options.max_binaries_to_analyze.to_string().as_bytes());
+        hasher.update(b",timeout:");
+        hasher.update(options.binary_analysis_timeout_ms.to_string().as_bytes());
+
+        // Include file identity: size + content hash or content bytes hash.
+        // This ensures two packages with the same layout but different
+        // unhashed content produce different cache keys.
+        hasher.update(b"|fileident:");
+        let mut file_idents: Vec<_> = files
+            .iter()
+            .map(|f| {
+                let content_id = f
+                    .content_hash
+                    .as_deref()
+                    .map(|h| h.to_string())
+                    .or_else(|| {
+                        f.content.as_ref().map(|c| {
+                            let mut h =
+                                crate::hash::Hasher::new(crate::hash::HashAlgorithm::Sha256);
+                            h.update(c);
+                            h.finalize().value
+                        })
+                    })
+                    .unwrap_or_default();
+                (f.path.as_str(), f.size, content_id)
+            })
+            .collect();
+        file_idents.sort_by_key(|(p, _, _)| *p);
+        for (path, size, id) in &file_idents {
+            hasher.update(path.as_bytes());
+            hasher.update(b":");
+            hasher.update(size.to_string().as_bytes());
+            hasher.update(b":");
+            hasher.update(id.as_bytes());
+            hasher.update(b",");
+        }
+
+        // Include sorted dependencies -- heuristic inference uses them
+        hasher.update(b"|deps:");
+        let mut sorted_deps = dependencies.to_vec();
+        sorted_deps.sort();
+        for dep in &sorted_deps {
+            hasher.update(dep.as_bytes());
+            hasher.update(b",");
+        }
+
+        hasher.finalize().value
+    }
+
     /// Get cached inference result
     pub fn get(&self, key: &str) -> Option<InferredCapabilities> {
         let mut entries = self.entries.write().ok()?;

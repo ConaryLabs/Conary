@@ -98,14 +98,62 @@ impl CanonicalBytes for SourceProvenance {
             bytes.push(0);
         }
 
-        // Sort patches by hash for determinism
+        // Git repository URL
+        if let Some(ref repo) = self.git_repo {
+            bytes.extend_from_slice(b"repo:");
+            bytes.extend_from_slice(repo.as_bytes());
+            bytes.push(0);
+        }
+
+        // Git tag
+        if let Some(ref tag) = self.git_tag {
+            bytes.extend_from_slice(b"tag:");
+            bytes.extend_from_slice(tag.as_bytes());
+            bytes.push(0);
+        }
+
+        // Sort patches by hash for determinism, include full patch info
         let mut patches: Vec<_> = self.patches.iter().collect();
         patches.sort_by(|a, b| a.hash.cmp(&b.hash));
 
         for patch in patches {
             bytes.extend_from_slice(b"patch:");
             bytes.extend_from_slice(patch.hash.as_bytes());
+            if let Some(ref url) = patch.url {
+                bytes.push(b':');
+                bytes.extend_from_slice(url.as_bytes());
+            }
+            if let Some(ref cve) = patch.cve {
+                bytes.extend_from_slice(b":cve:");
+                bytes.extend_from_slice(cve.as_bytes());
+            }
+            if let Some(ref author) = patch.author {
+                bytes.extend_from_slice(b":author:");
+                bytes.extend_from_slice(author.as_bytes());
+            }
+            if let Some(ref reason) = patch.reason {
+                bytes.extend_from_slice(b":reason:");
+                bytes.extend_from_slice(reason.as_bytes());
+            }
+            bytes.extend_from_slice(b":level:");
+            bytes.extend_from_slice(patch.level.to_string().as_bytes());
             bytes.push(0);
+        }
+
+        if let Some(ref ts) = self.fetch_timestamp {
+            bytes.extend_from_slice(b"fetch_ts:");
+            bytes.extend_from_slice(ts.to_rfc3339().as_bytes());
+            bytes.push(0);
+        }
+
+        if !self.verified_mirrors.is_empty() {
+            let mut mirrors = self.verified_mirrors.clone();
+            mirrors.sort();
+            for m in &mirrors {
+                bytes.extend_from_slice(b"mirror:");
+                bytes.extend_from_slice(m.as_bytes());
+                bytes.push(0);
+            }
         }
 
         bytes
@@ -217,8 +265,15 @@ mod tests {
 
     #[test]
     fn test_canonical_bytes_deterministic() {
-        let source1 = SourceProvenance::from_tarball("https://example.com/a.tar.gz", "sha256:abc");
-        let source2 = SourceProvenance::from_tarball("https://example.com/a.tar.gz", "sha256:abc");
+        use chrono::TimeZone;
+        let fixed_ts = chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+
+        let mut source1 =
+            SourceProvenance::from_tarball("https://example.com/a.tar.gz", "sha256:abc");
+        source1.fetch_timestamp = Some(fixed_ts);
+        let mut source2 =
+            SourceProvenance::from_tarball("https://example.com/a.tar.gz", "sha256:abc");
+        source2.fetch_timestamp = Some(fixed_ts);
 
         assert_eq!(source1.canonical_bytes(), source2.canonical_bytes());
     }

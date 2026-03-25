@@ -129,8 +129,7 @@ pub fn rotate_key(
     new_root.version += 1;
     new_root.expires = expires;
 
-    // Remove old key, add new key
-    new_root.keys.remove(&old_key_id);
+    // Add new key material
     new_root.keys.insert(new_key_id.clone(), new_tuf_key);
 
     // Update role definition
@@ -143,6 +142,15 @@ pub fn rotate_key(
     role_def.keyids.retain(|id| *id != old_key_id);
     if !role_def.keyids.contains(&new_key_id) {
         role_def.keyids.push(new_key_id);
+    }
+
+    // Only remove old key material if no role still references it
+    let old_key_still_referenced = new_root
+        .roles
+        .values()
+        .any(|role| role.keyids.contains(&old_key_id));
+    if !old_key_still_referenced {
+        new_root.keys.remove(&old_key_id);
     }
 
     // Sign with both old root key and new root key (if rotating root)
@@ -223,7 +231,37 @@ mod tests {
 
         // Root role should still have the original key
         let (root_id, _) = signing_keypair_to_tuf_key(&key).unwrap();
-        assert_eq!(rotated.signed.roles["root"].keyids, vec![root_id]);
+        assert_eq!(rotated.signed.roles["root"].keyids, vec![root_id.clone()]);
+
+        // Shared key must still be in keys map since root/snapshot/timestamp reference it
+        assert!(
+            rotated.signed.keys.contains_key(&root_id),
+            "Shared key must remain in keys when other roles still reference it"
+        );
+    }
+
+    #[test]
+    fn test_rotate_key_separate_keys_removes_old() {
+        let root_key = SigningKeyPair::generate();
+        let targets_key = SigningKeyPair::generate();
+        let snapshot_key = SigningKeyPair::generate();
+        let timestamp_key = SigningKeyPair::generate();
+
+        let initial =
+            create_initial_root(&root_key, &targets_key, &snapshot_key, &timestamp_key, 365)
+                .unwrap();
+
+        let new_targets_key = SigningKeyPair::generate();
+        let rotated =
+            rotate_key(&initial, "targets", &targets_key, &new_targets_key, &root_key, 365)
+                .unwrap();
+
+        // Old targets key should be removed since no other role uses it
+        let (old_id, _) = signing_keypair_to_tuf_key(&targets_key).unwrap();
+        assert!(
+            !rotated.signed.keys.contains_key(&old_id),
+            "Unreferenced old key must be removed from keys map"
+        );
     }
 
     #[test]

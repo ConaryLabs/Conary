@@ -70,7 +70,7 @@ pub fn apply_landlock_rules(
         .set_compatibility(CompatLevel::BestEffort)
         .add_rules(path_beneath_rules(&read_paths, AccessFs::from_read(abi)))
         .map_err(|e| EnforcementError::Landlock(format!("Failed to add read rules: {e}")))?
-        .add_rules(path_beneath_rules(&write_paths, AccessFs::from_all(abi)))
+        .add_rules(path_beneath_rules(&write_paths, AccessFs::from_write(abi)))
         .map_err(|e| EnforcementError::Landlock(format!("Failed to add write rules: {e}")))?
         .add_rules(path_beneath_rules(
             &execute_paths,
