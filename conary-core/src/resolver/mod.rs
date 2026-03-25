@@ -13,6 +13,7 @@ mod component_resolver;
 mod conflict;
 mod engine;
 mod graph;
+pub mod identity;
 mod plan;
 pub mod provider;
 pub mod sat;
