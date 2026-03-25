@@ -414,9 +414,14 @@ impl LegacyConverter {
         temp_dir: &Path,
     ) -> Result<(), ConversionError> {
         for file in files {
-            // Create relative path from absolute path
-            let rel_path = file.path.strip_prefix('/').unwrap_or(&file.path);
-            let full_path = temp_dir.join(rel_path);
+            // Use safe_join to prevent path traversal from untrusted package paths
+            let full_path =
+                crate::filesystem::safe_join(temp_dir, &file.path).map_err(|e| {
+                    ConversionError::IoError(format!(
+                        "Unsafe path '{}': {}",
+                        file.path, e
+                    ))
+                })?;
 
             // Create parent directories
             if let Some(parent) = full_path.parent() {

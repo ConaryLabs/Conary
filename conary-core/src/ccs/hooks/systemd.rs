@@ -136,6 +136,13 @@ impl HookExecutor {
 
         // Create symlinks for WantedBy
         for target in &wants {
+            // Sanitize unit name: reject path separators and traversal
+            if !is_safe_unit_name(target) {
+                return Err(anyhow::anyhow!(
+                    "Unsafe WantedBy target '{}': contains path separators or traversal",
+                    target
+                ));
+            }
             let wants_dir = self
                 .root
                 .join("etc/systemd/system")
@@ -161,6 +168,13 @@ impl HookExecutor {
 
         // Create symlinks for RequiredBy
         for target in &requires {
+            // Sanitize unit name: reject path separators and traversal
+            if !is_safe_unit_name(target) {
+                return Err(anyhow::anyhow!(
+                    "Unsafe RequiredBy target '{}': contains path separators or traversal",
+                    target
+                ));
+            }
             let requires_dir = self
                 .root
                 .join("etc/systemd/system")
@@ -190,6 +204,18 @@ impl HookExecutor {
         );
         Ok(())
     }
+}
+
+/// Check whether a systemd unit name is safe (no path separators or traversal).
+///
+/// Rejects names containing `/`, `\`, or `..` which could be used to escape
+/// the intended `/etc/systemd/system/<target>.wants/` directory.
+fn is_safe_unit_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains("..")
+        && !name.contains('\0')
 }
 
 /// Parse systemd unit file [Install] section for WantedBy/RequiredBy

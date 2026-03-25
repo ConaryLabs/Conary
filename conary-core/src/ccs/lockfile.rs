@@ -291,7 +291,12 @@ impl Lockfile {
         let mut errors = Vec::new();
 
         for locked in &self.dependencies {
-            if let Some(current) = resolved.iter().find(|r| r.name == locked.name) {
+            // Match on both name and kind to avoid cross-kind comparison
+            // (e.g., a build dep named "openssl" is distinct from a runtime dep "openssl")
+            if let Some(current) = resolved
+                .iter()
+                .find(|r| r.name == locked.name && r.kind == locked.kind)
+            {
                 // Check version match
                 if current.version != locked.version {
                     errors.push(LockfileError::DependencyMismatch {
@@ -309,7 +314,10 @@ impl Lockfile {
                     });
                 }
             } else {
-                errors.push(LockfileError::MissingDependency(locked.name.clone()));
+                errors.push(LockfileError::MissingDependency(format!(
+                    "{} ({})",
+                    locked.name, locked.kind
+                )));
             }
         }
 

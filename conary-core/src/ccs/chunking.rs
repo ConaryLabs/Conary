@@ -219,11 +219,23 @@ impl ChunkStore {
         temp_file.write_all(&chunk.data)?;
         temp_file.as_file().sync_all()?;
 
-        temp_file
-            .persist(&path)
-            .map_err(|e| anyhow::anyhow!("Failed to persist chunk to {}: {}", path.display(), e))?;
-
-        Ok(true) // Newly stored
+        match temp_file.persist(&path) {
+            Ok(_) => Ok(true), // Newly stored
+            Err(e) => {
+                // If the destination already exists (another process stored it
+                // concurrently), treat as successful deduplication rather than
+                // a hard error -- the chunk content is identical by hash.
+                if e.error.kind() == std::io::ErrorKind::AlreadyExists || path.exists() {
+                    Ok(false) // Already exists (concurrent write)
+                } else {
+                    Err(anyhow::anyhow!(
+                        "Failed to persist chunk to {}: {}",
+                        path.display(),
+                        e.error
+                    ))
+                }
+            }
+        }
     }
 
     /// Retrieve a chunk by hash

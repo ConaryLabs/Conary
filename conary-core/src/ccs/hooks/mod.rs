@@ -225,7 +225,10 @@ impl HookExecutor {
 
         // Then directories
         for dir in &hooks.directories {
-            let path = self.root.join(dir.path.trim_start_matches('/'));
+            // Use safe_join to prevent path traversal from untrusted hook paths
+            let path = crate::filesystem::safe_join(&self.root, &dir.path).map_err(|e| {
+                anyhow::anyhow!("Unsafe directory hook path '{}': {}", dir.path, e)
+            })?;
             let created = self.create_directory(&path, &dir.mode, &dir.owner, &dir.group)?;
             self.applied_hooks
                 .push(AppliedHook::Directory(path, created));
@@ -339,7 +342,19 @@ impl HookExecutor {
 
         // Then directories
         for dir in &hooks.directories {
-            let path = self.root.join(dir.path.trim_start_matches('/'));
+            // Use safe_join to prevent path traversal from untrusted hook paths
+            let path = match crate::filesystem::safe_join(&self.root, &dir.path) {
+                Ok(p) => p,
+                Err(e) => {
+                    results.add(HookResult::from_outcome(
+                        HookType::Directory,
+                        dir.path.clone(),
+                        Err(anyhow::anyhow!("Unsafe directory hook path '{}': {}", dir.path, e)),
+                        std::time::Duration::ZERO,
+                    ));
+                    continue;
+                }
+            };
             let hook_start = Instant::now();
             let result = self.create_directory(&path, &dir.mode, &dir.owner, &dir.group);
             if let Ok(created) = &result {

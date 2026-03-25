@@ -117,8 +117,8 @@ impl ScriptletCapturer {
     fn write_files(&self, files: &[ExtractedFile]) -> Result<()> {
         let root = self.root.path();
         for file in files {
-            let rel_path = file.path.strip_prefix('/').unwrap_or(&file.path);
-            let full_path = root.join(rel_path);
+            // Use safe_join to prevent path traversal from untrusted package paths
+            let full_path = crate::filesystem::safe_join(root, &file.path)?;
 
             if let Some(parent) = full_path.parent() {
                 fs::create_dir_all(parent)?;

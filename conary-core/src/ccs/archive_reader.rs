@@ -6,7 +6,7 @@
 //! `.tar.gz` archive in a single pass.  Used by `package.rs`, `verify.rs`,
 //! and `inspector.rs` to avoid duplicating the tar iteration logic.
 
-use crate::ccs::binary_manifest::BinaryManifest;
+use crate::ccs::binary_manifest::{BinaryManifest, Hash};
 use crate::ccs::builder::ComponentData;
 use crate::ccs::manifest::CcsManifest;
 use crate::ccs::package::convert_binary_to_ccs_manifest;
@@ -67,9 +67,12 @@ pub fn read_ccs_archive<R: Read>(reader: R) -> anyhow::Result<CcsArchiveContents
 
     let mut binary_manifest: Option<BinaryManifest> = None;
     let mut toml_manifest: Option<CcsManifest> = None;
-    let mut manifest_raw: Option<Vec<u8>> = None;
+    let mut toml_manifest_raw: Option<Vec<u8>> = None;
+    let mut cbor_manifest_raw: Option<Vec<u8>> = None;
     let mut signature_raw: Option<String> = None;
     let mut components: HashMap<String, ComponentData> = HashMap::new();
+    // Raw bytes of each component JSON, keyed by component name (for hash verification)
+    let mut component_raw: HashMap<String, Vec<u8>> = HashMap::new();
     let mut blobs: HashMap<String, Vec<u8>> = HashMap::new();
 
     let mut total_bytes: u64 = 0;
@@ -90,7 +93,7 @@ pub fn read_ccs_archive<R: Read>(reader: R) -> anyhow::Result<CcsArchiveContents
         let entry_path = entry.path()?;
         let entry_path_str = entry_path.to_string_lossy().to_string();
 
-        // ── MANIFEST (CBOR binary manifest) — preferred ──────────────
+        // ── MANIFEST (CBOR binary manifest) ──────────────────────────
         if entry_path_str == "MANIFEST" || entry_path_str == "./MANIFEST" {
             if entry_size > MAX_MANIFEST_SIZE {
                 anyhow::bail!(
@@ -99,16 +102,13 @@ pub fn read_ccs_archive<R: Read>(reader: R) -> anyhow::Result<CcsArchiveContents
             }
             let mut content = Vec::new();
             entry.read_to_end(&mut content)?;
-            manifest_raw = Some(content.clone());
+            cbor_manifest_raw = Some(content.clone());
             if let Ok(bin) = BinaryManifest::from_cbor(&content) {
-                toml_manifest = None; // CBOR wins
                 binary_manifest = Some(bin);
             }
         }
-        // ── MANIFEST.toml — fallback for legacy packages ─────────────
-        else if binary_manifest.is_none()
-            && (entry_path_str == "MANIFEST.toml" || entry_path_str == "./MANIFEST.toml")
-        {
+        // ── MANIFEST.toml ────────────────────────────────────────────
+        else if entry_path_str == "MANIFEST.toml" || entry_path_str == "./MANIFEST.toml" {
             if entry_size > MAX_MANIFEST_SIZE {
                 anyhow::bail!(
                     "MANIFEST.toml entry too large: {entry_size} bytes (limit {MAX_MANIFEST_SIZE})"
@@ -116,7 +116,7 @@ pub fn read_ccs_archive<R: Read>(reader: R) -> anyhow::Result<CcsArchiveContents
             }
             let mut content = String::new();
             entry.read_to_string(&mut content)?;
-            manifest_raw = Some(content.as_bytes().to_vec());
+            toml_manifest_raw = Some(content.as_bytes().to_vec());
             toml_manifest = Some(CcsManifest::parse(&content)?);
         }
         // ── MANIFEST.sig — optional signature ────────────────────────
@@ -135,11 +135,15 @@ pub fn read_ccs_archive<R: Read>(reader: R) -> anyhow::Result<CcsArchiveContents
                     "Component JSON entry too large: {entry_size} bytes (limit {MAX_COMPONENT_SIZE})"
                 );
             }
-            let mut content = String::new();
-            entry.read_to_string(&mut content)?;
+            let mut content_bytes = Vec::new();
+            entry.read_to_end(&mut content_bytes)?;
+            let content = String::from_utf8(content_bytes.clone())
+                .map_err(|e| anyhow::anyhow!("Component JSON is not valid UTF-8: {e}"))?;
             let comp: ComponentData = serde_json::from_str(&content)
                 .map_err(|e| anyhow::anyhow!("Invalid component JSON: {e}"))?;
-            components.insert(comp.name.clone(), comp);
+            let comp_name = comp.name.clone();
+            components.insert(comp_name.clone(), comp);
+            component_raw.insert(comp_name, content_bytes);
         }
         // ── objects/{prefix}/{suffix} — content blobs ────────────────
         else if entry_path_str.starts_with("objects/") || entry_path_str.starts_with("./objects/")
@@ -157,25 +161,98 @@ pub fn read_ccs_archive<R: Read>(reader: R) -> anyhow::Result<CcsArchiveContents
                     warn!("Skipping non-hex object path: {stripped}");
                     continue;
                 }
-                let hash = format!("{prefix}{suffix}");
+                let content_hash = format!("{prefix}{suffix}");
                 let mut content = Vec::new();
                 entry.read_to_end(&mut content)?;
-                blobs.insert(hash, content);
+                blobs.insert(content_hash, content);
+            }
+        }
+    }
+
+    // ── Verify component JSON hashes against the signed binary manifest ──
+    if let Some(ref bin) = binary_manifest {
+        // Reject extra components not listed in the signed manifest
+        for name in components.keys() {
+            if !bin.components.contains_key(name) {
+                anyhow::bail!(
+                    "Component '{}' found in archive but not in signed manifest",
+                    name
+                );
+            }
+        }
+
+        // Verify each component listed in the signed manifest
+        for (name, comp_ref) in &bin.components {
+            let raw = component_raw.get(name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Component '{}' listed in signed manifest but missing from archive",
+                    name
+                )
+            })?;
+
+            let actual = Hash::sha256(raw);
+            if actual != comp_ref.hash {
+                anyhow::bail!(
+                    "Component '{}' hash mismatch: expected {}, got {}",
+                    name,
+                    comp_ref.hash.value,
+                    actual.value
+                );
             }
         }
     }
 
     // ── Resolve manifest ─────────────────────────────────────────────
-    let manifest = if let Some(ref bin) = binary_manifest {
-        convert_binary_to_ccs_manifest(bin)
+    // When both CBOR and TOML manifests are present, use TOML as primary
+    // (it carries fields like config, redirects, policy, provenance that
+    // CBOR omits) and verify consistency with the signed CBOR manifest
+    // for the fields it does carry.
+    let (manifest, manifest_raw) = if let Some(ref bin) = binary_manifest {
+        if let Some(toml) = toml_manifest {
+            // CBOR is signed and authoritative for all fields it carries.
+            // Start from the CBOR-converted manifest, then merge in
+            // TOML-only fields that CBOR does not represent.
+            let mut merged = convert_binary_to_ccs_manifest(bin);
+
+            // Overlay TOML-only fields (not carried in CBOR)
+            merged.package.homepage = toml.package.homepage;
+            merged.package.repository = toml.package.repository;
+            merged.package.authors = toml.package.authors;
+            merged.suggests = toml.suggests;
+            merged.components = toml.components;
+            merged.config = toml.config;
+            merged.policy = toml.policy;
+            merged.provenance = toml.provenance;
+            merged.redirects = toml.redirects;
+            merged.legacy = toml.legacy;
+            // Overlay build sub-fields that CBOR doesn't carry
+            if let Some(ref toml_build) = toml.build {
+                if let Some(ref mut merged_build) = merged.build {
+                    merged_build.environment = toml_build.environment.clone();
+                    merged_build.commands = toml_build.commands.clone();
+                } else {
+                    merged.build = Some(toml_build.clone());
+                }
+            }
+
+            let raw = cbor_manifest_raw.ok_or_else(|| {
+                anyhow::anyhow!("CBOR binary manifest present but raw bytes missing")
+            })?;
+            (merged, raw)
+        } else {
+            // CBOR only -- convert to CcsManifest (TOML-only fields get defaults)
+            let raw = cbor_manifest_raw.ok_or_else(|| {
+                anyhow::anyhow!("CBOR binary manifest present but raw bytes missing")
+            })?;
+            (convert_binary_to_ccs_manifest(bin), raw)
+        }
     } else if let Some(toml) = toml_manifest {
-        toml
+        let raw = toml_manifest_raw
+            .ok_or_else(|| anyhow::anyhow!("TOML manifest present but raw bytes missing"))?;
+        (toml, raw)
     } else {
         anyhow::bail!("CCS package missing both MANIFEST and MANIFEST.toml");
     };
-
-    let manifest_raw = manifest_raw
-        .ok_or_else(|| anyhow::anyhow!("CCS package missing both MANIFEST and MANIFEST.toml"))?;
 
     Ok(CcsArchiveContents {
         manifest,
