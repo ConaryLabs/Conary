@@ -15,6 +15,7 @@ mod engine;
 mod graph;
 pub mod identity;
 mod plan;
+pub mod provides_index;
 pub mod provider;
 pub mod sat;
 
