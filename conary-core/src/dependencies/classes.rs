@@ -249,6 +249,11 @@ impl LanguageDep {
             return None;
         }
 
+        // Reject trailing garbage after the closing paren
+        if close_paren != s.len() - 1 {
+            return None;
+        }
+
         let prefix = &s[..open_paren];
         let inner = &s[open_paren + 1..close_paren];
 

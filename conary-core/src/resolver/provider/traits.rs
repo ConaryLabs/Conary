@@ -134,10 +134,28 @@ impl DependencyProvider for ConaryProvider<'_> {
     }
 
     async fn get_candidates(&self, name: NameId) -> Option<Candidates> {
+        let name_str = &self.names[name.0 as usize];
         let mut candidates = self.solvables_for_name(name);
 
+        // Always include canonical equivalents so the solver can fall back to
+        // them when version constraints filter out all exact-name candidates.
+        // sort_candidates ranks exact-name matches above canonical ones.
+        for equiv in self.canonical_equivalents(name_str) {
+            if let Some(&equiv_name_id) = self.name_to_id.get(equiv) {
+                let equiv_candidates = self.solvables_for_name(equiv_name_id);
+                if !equiv_candidates.is_empty() {
+                    tracing::debug!(
+                        "Canonical candidates for {}: {} ({} candidates)",
+                        name_str,
+                        equiv,
+                        equiv_candidates.len()
+                    );
+                    candidates.extend(equiv_candidates);
+                }
+            }
+        }
+
         if candidates.is_empty() {
-            let name_str = &self.names[name.0 as usize];
             let providers = self.resolve_virtual_provide(name_str);
             for provider_name in &providers {
                 if let Some(&provider_name_id) = self.name_to_id.get(provider_name) {
@@ -145,21 +163,6 @@ impl DependencyProvider for ConaryProvider<'_> {
                 }
             }
             candidates.extend(self.solvables_for_provide(name_str));
-
-            // Canonical fallback: check cross-distro equivalents when all
-            // other lookup strategies fail. E.g. 'libssl3' -> 'openssl'.
-            if candidates.is_empty() {
-                for equiv in self.canonical_equivalents(name_str) {
-                    if let Some(&equiv_name_id) = self.name_to_id.get(equiv) {
-                        let equiv_candidates = self.solvables_for_name(equiv_name_id);
-                        if !equiv_candidates.is_empty() {
-                            tracing::debug!("Canonical fallback: {} -> {}", name_str, equiv);
-                            candidates.extend(equiv_candidates);
-                            break;
-                        }
-                    }
-                }
-            }
 
             if candidates.is_empty() {
                 return None;
@@ -178,9 +181,25 @@ impl DependencyProvider for ConaryProvider<'_> {
     }
 
     async fn sort_candidates(&self, _solver: &SolverCache<Self>, solvables: &mut [SolvableId]) {
+        // Determine the "primary" name: the first solvable's name is assumed to
+        // be the exact-name match. Canonical equivalents have different names and
+        // should sort after exact-name candidates.
+        let primary_name = solvables
+            .first()
+            .map(|s| self.solvables[s.0 as usize].name.as_str());
+
         solvables.sort_by(|a, b| {
             let pkg_a = &self.solvables[a.0 as usize];
             let pkg_b = &self.solvables[b.0 as usize];
+
+            // Exact-name candidates sort before canonical fallbacks
+            if let Some(primary) = primary_name {
+                let a_exact = pkg_a.name == primary;
+                let b_exact = pkg_b.name == primary;
+                if a_exact != b_exact {
+                    return b_exact.cmp(&a_exact);
+                }
+            }
 
             if let Some(version_cmp) =
                 super::matching::compare_package_versions_desc(&pkg_a.version, &pkg_b.version)

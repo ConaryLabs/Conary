@@ -150,7 +150,12 @@ impl RpmVersion {
         segments
     }
 
-    /// Compare two RPM versions
+    /// Compare two RPM versions.
+    ///
+    /// Delegates to `repository::versioning::compare_repo_versions` when either
+    /// version string contains `~` or `^` (tilde/caret pre-release and snapshot
+    /// markers).  For versions without those characters, uses the faster inline
+    /// segment comparison.
     pub fn compare(&self, other: &RpmVersion) -> Ordering {
         // First compare epochs
         match self.epoch.cmp(&other.epoch) {
@@ -158,7 +163,36 @@ impl RpmVersion {
             ord => return ord,
         }
 
-        // Then compare versions component-by-component
+        // If either side contains tilde or caret, delegate to the
+        // tilde/caret-aware comparator in repository::versioning which
+        // implements full RPM semantics for ~pre-release and ^snapshot.
+        let a_has_special = self.version.contains('~')
+            || self.version.contains('^')
+            || self.release.as_ref().is_some_and(|r| r.contains('~') || r.contains('^'));
+        let b_has_special = other.version.contains('~')
+            || other.version.contains('^')
+            || other.release.as_ref().is_some_and(|r| r.contains('~') || r.contains('^'));
+
+        if a_has_special || b_has_special {
+            // Reconstruct the version-release strings (without epoch, which
+            // we already compared above).
+            let a_str = match &self.release {
+                Some(rel) => format!("{}-{}", self.version, rel),
+                None => self.version.clone(),
+            };
+            let b_str = match &other.release {
+                Some(rel) => format!("{}-{}", other.version, rel),
+                None => other.version.clone(),
+            };
+            return crate::repository::versioning::compare_repo_versions(
+                crate::repository::versioning::VersionScheme::Rpm,
+                &a_str,
+                &b_str,
+            )
+            .unwrap_or(Ordering::Equal);
+        }
+
+        // Fast path: no tilde/caret, use inline segment comparison
         match Self::compare_version_strings(&self.version, &other.version) {
             Ordering::Equal => {}
             ord => return ord,

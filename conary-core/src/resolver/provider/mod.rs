@@ -292,7 +292,8 @@ impl<'db> ConaryProvider<'db> {
     /// Load repository packages for a set of names as additional candidates.
     ///
     /// This queries the `repository_packages` table for each name and adds
-    /// any packages not already present as solvables.
+    /// ALL viable candidates (all versions from all repos) so the SAT solver
+    /// can backtrack through multiple versions.
     pub fn load_repo_packages_for_names(&mut self, names: &[String]) -> Result<()> {
         use crate::repository::selector::{PackageSelector, SelectionOptions};
 
@@ -311,14 +312,14 @@ impl<'db> ConaryProvider<'db> {
                 continue;
             }
 
-            let mut candidates = Vec::new();
-            if let Ok(pkg_with_repo) = PackageSelector::find_best_package(self.conn, name, &options)
-            {
-                candidates.push(pkg_with_repo);
-            } else {
-                for pkg_with_repo in self.find_repo_providers(name)? {
-                    candidates.push(pkg_with_repo);
-                }
+            // Load ALL candidates (all versions from all repos), not just the
+            // best one. The SAT solver needs multiple candidates to backtrack.
+            let mut candidates =
+                PackageSelector::search_packages(self.conn, name, &options).unwrap_or_default();
+
+            // If no direct name matches, fall back to virtual provide search
+            if candidates.is_empty() {
+                candidates = self.find_repo_providers(name)?;
             }
 
             for pkg_with_repo in candidates {
