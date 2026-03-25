@@ -975,16 +975,26 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
 
     // The pipeline's final stage already composed an EROFS image.
     // Find it in the pipeline work dir and copy to generation output.
-    if let Some(stage) = profile.stages.last() {
-        let stage_erofs = work_dir
+    // The pipeline composes the final EROFS into pipeline/compose/root.erofs.
+    // Fall back to the last stage directory if compose output is missing.
+    let compose_erofs = work_dir.join("pipeline").join("compose").join("root.erofs");
+    let stage_erofs = profile.stages.last().map(|stage| {
+        work_dir
             .join("pipeline")
             .join(format!("stage-{}", stage.name))
-            .join("root.erofs");
-        if stage_erofs.exists() {
-            let dest = gen_dir.join("root.erofs");
-            std::fs::copy(&stage_erofs, &dest)?;
-            println!("Generation 1 EROFS: {}", dest.display());
-        }
+            .join("root.erofs")
+    });
+    let erofs_source = if compose_erofs.exists() {
+        Some(compose_erofs)
+    } else {
+        stage_erofs.filter(|p| p.exists())
+    };
+    if let Some(src) = erofs_source {
+        let dest = gen_dir.join("root.erofs");
+        std::fs::copy(&src, &dest)?;
+        println!("Generation 1 EROFS: {}", dest.display());
+    } else {
+        tracing::warn!("No EROFS image found in pipeline output -- generation may be incomplete");
     }
 
     // Write generation metadata
