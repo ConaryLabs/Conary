@@ -5,7 +5,7 @@
 ```bash
 cargo build                              # Client-only (default, use for dev)
 cargo build --features server            # With Remi server + conaryd daemon
-cargo test                               # ~269 unit tests (278 integration tests via conary-test)
+cargo test                               # ~264 unit tests (278 integration tests via conary-test)
 cargo build -p conary-test               # Test infrastructure crate
 cargo test -p conary-test                # Test engine unit tests
 cargo clippy -- -D warnings              # Lint
@@ -59,7 +59,7 @@ Scopes are optional: `feat(resolver): add SAT backtracking`.
 - **Generation**: Immutable EROFS image + composefs mount representing a system state
 - **conary-test**: Test infrastructure -- declarative TOML engine, container management (bollard), HTTP API, MCP (23 tools)
 
-Database schema is currently **v57** (69 tables, function-dispatch migrations in `schema.rs`). See ROADMAP.md for what's next.
+Database schema is currently **v57** (71 tables, function-dispatch migrations in `schema.rs`). See ROADMAP.md for what's next.
 
 ## Tool Selection
 

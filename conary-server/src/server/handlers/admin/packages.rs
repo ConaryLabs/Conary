@@ -11,7 +11,6 @@ use axum::{
 };
 use futures::StreamExt;
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
@@ -122,8 +121,9 @@ pub async fn upload_package(
         }
     };
 
+    use sha2::Digest as _;
     let mut size = 0u64;
-    let mut hasher = Sha256::new();
+    let mut hasher = sha2::Sha256::new();
     let mut stream = request.into_body().into_data_stream();
     while let Some(chunk) = stream.next().await {
         match chunk {

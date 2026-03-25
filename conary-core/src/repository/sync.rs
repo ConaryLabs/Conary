@@ -38,7 +38,11 @@ pub fn parse_timestamp(timestamp: &str) -> Result<u64> {
     let dt = DateTime::parse_from_rfc3339(timestamp)
         .map_err(|e| Error::ParseError(format!("Invalid timestamp: {e}")))?;
 
-    Ok(u64::try_from(dt.timestamp()).unwrap_or(0))
+    u64::try_from(dt.timestamp()).map_err(|_| {
+        Error::ParseError(format!(
+            "Timestamp is before Unix epoch (negative): {timestamp}"
+        ))
+    })
 }
 
 /// Rebase a download URL from metadata source to content source

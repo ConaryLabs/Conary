@@ -5,7 +5,7 @@
 //! These live in conary-core so the transaction engine can create and
 //! inspect generation metadata without depending on the CLI crate.
 
-use anyhow::Result;
+use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 

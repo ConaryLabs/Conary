@@ -92,9 +92,8 @@ impl BuildEnvironment {
 
         // mount_generation tries overlayfs composefs first, falls back to
         // plain EROFS loopback automatically.
-        crate::generation::mount::mount_generation(&opts).map_err(|e| {
-            EnvironmentError::Mount(format!("mount failed: {e}"))
-        })?;
+        crate::generation::mount::mount_generation(&opts)
+            .map_err(|e| EnvironmentError::Mount(format!("mount failed: {e}")))?;
 
         info!(
             "Mounted build environment at {} (hash: {})",
@@ -194,12 +193,7 @@ pub struct MutableEnvironment {
 impl MutableEnvironment {
     /// Construct a new mutable environment (not yet mounted).
     #[must_use]
-    pub fn new(
-        image_path: PathBuf,
-        cas_dir: PathBuf,
-        base_dir: PathBuf,
-        seed_id: String,
-    ) -> Self {
+    pub fn new(image_path: PathBuf, cas_dir: PathBuf, base_dir: PathBuf, seed_id: String) -> Self {
         Self {
             image_path,
             cas_dir,
@@ -370,19 +364,14 @@ impl MutableEnvironment {
 
         // Unmount the overlay sysroot first.
         let sysroot = self.sysroot();
-        let nix_result =
-            nix::mount::umount2(&sysroot, nix::mount::MntFlags::MNT_DETACH);
+        let nix_result = nix::mount::umount2(&sysroot, nix::mount::MntFlags::MNT_DETACH);
 
         if let Err(nix_err) = nix_result {
-            warn!(
-                "nix umount2 failed for overlay ({nix_err}), falling back to umount -l",
-            );
+            warn!("nix umount2 failed for overlay ({nix_err}), falling back to umount -l",);
             let status = Command::new("umount")
                 .args(["-l", sysroot.to_string_lossy().as_ref()])
                 .status()
-                .map_err(|e| {
-                    EnvironmentError::Unmount(format!("failed to execute umount: {e}"))
-                })?;
+                .map_err(|e| EnvironmentError::Unmount(format!("failed to execute umount: {e}")))?;
 
             if !status.success() {
                 return Err(EnvironmentError::Unmount(format!(
@@ -401,10 +390,7 @@ impl MutableEnvironment {
 
         self.mounted = false;
 
-        info!(
-            "Unmounted mutable environment at {}",
-            sysroot.display(),
-        );
+        info!("Unmounted mutable environment at {}", sysroot.display(),);
         Ok(())
     }
 }

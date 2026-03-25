@@ -6,9 +6,9 @@ After=network.target
 Type=simple
 User=peter
 WorkingDirectory=/home/peter/Conary
-Environment=CONARY_TEST_TOKEN=d7975d291a28c87499c7e74e21a67d50a019edf61cb779056fd06e49ce6b9e43
+EnvironmentFile=-/etc/conary-test/env
 Environment=DOCKER_HOST=unix:///run/user/1000/podman/podman.sock
-ExecStart=/home/peter/Conary/target/debug/conary-test serve --port 9090 --token d7975d291a28c87499c7e74e21a67d50a019edf61cb779056fd06e49ce6b9e43
+ExecStart=/home/peter/Conary/target/debug/conary-test serve --port 9090 --token ${CONARY_TEST_TOKEN}
 Restart=on-failure
 RestartSec=5
 

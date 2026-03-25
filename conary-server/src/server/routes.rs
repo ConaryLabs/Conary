@@ -300,11 +300,10 @@ async fn ban_middleware(
     // Get ban list from state
     let ban_list = state.read().await.ban_list.clone();
     let client_ip = resolve_client_ip(&state, &headers, &addr.ip()).await;
-    let ip = client_ip.to_string();
 
     // Check if banned
-    if ban_list.is_banned(&ip).await {
-        warn!(ip = %ip, "Request rejected (banned)");
+    if ban_list.is_banned(client_ip).await {
+        warn!(ip = %client_ip, "Request rejected (banned)");
         return Err(StatusCode::FORBIDDEN);
     }
 
@@ -315,9 +314,9 @@ async fn ban_middleware(
     // ban threshold. Other error codes (400, 404) are too noisy and would
     // cause false-positive bans from normal client errors.
     if (response.status() == StatusCode::UNAUTHORIZED || response.status() == StatusCode::FORBIDDEN)
-        && ban_list.record_failure(&ip).await
+        && ban_list.record_failure(client_ip).await
     {
-        warn!(ip = %ip, "IP banned due to repeated auth failures");
+        warn!(ip = %client_ip, "IP banned due to repeated auth failures");
     }
 
     Ok(response)

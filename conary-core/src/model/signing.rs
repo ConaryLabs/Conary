@@ -71,10 +71,12 @@ pub fn load_signing_key(path: &Path) -> Result<SigningKey, ModelError> {
 ///
 /// Delegates to [`crate::json::canonical_json`] for the shared implementation.
 fn canonical_json(data: &CollectionData) -> Result<String, ModelError> {
-    let bytes = crate::json::canonical_json(data)
-        .map_err(|e| ModelError::RemoteFetchError(format!("Failed to serialize collection: {e}")))?;
-    String::from_utf8(bytes)
-        .map_err(|e| ModelError::RemoteFetchError(format!("Canonical JSON is not valid UTF-8: {e}")))
+    let bytes = crate::json::canonical_json(data).map_err(|e| {
+        ModelError::RemoteFetchError(format!("Failed to serialize collection: {e}"))
+    })?;
+    String::from_utf8(bytes).map_err(|e| {
+        ModelError::RemoteFetchError(format!("Canonical JSON is not valid UTF-8: {e}"))
+    })
 }
 
 /// Get the public key ID (hex-encoded first 8 bytes of public key)

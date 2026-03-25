@@ -93,13 +93,13 @@ pub fn solve_install(
     }
 
     // Intern version sets for all dependencies so get_dependencies can find them
-    provider.intern_all_dependency_version_sets();
+    provider.intern_all_dependency_version_sets()?;
 
     // Build the problem: each request becomes a requirement
     let mut requirements = Vec::new();
     for (name, constraint) in requests {
-        let name_id = provider.intern_name(name);
-        let vs_id = provider.intern_version_set(name_id, constraint.clone());
+        let name_id = provider.intern_name(name)?;
+        let vs_id = provider.intern_version_set(name_id, constraint.clone())?;
         requirements.push(ConditionalRequirement::from(vs_id));
     }
 
@@ -151,7 +151,7 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
     provider.load_installed_packages()?;
 
     // Intern version sets for dependencies
-    provider.intern_all_dependency_version_sets();
+    provider.intern_all_dependency_version_sets()?;
 
     // Build provides index and unfiltered deps for removal analysis
     provider.load_removal_data()?;

@@ -1047,4 +1047,3 @@ pub fn migrate_v20(conn: &Connection) -> Result<()> {
     info!("Schema version 20 applied successfully (label system)");
     Ok(())
 }
-

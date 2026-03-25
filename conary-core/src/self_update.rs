@@ -79,6 +79,13 @@ pub fn verify_update_signature(
     if cfg!(test) {
         return Ok(());
     }
+    if TRUSTED_UPDATE_KEYS.is_empty() {
+        warn!(
+            "No trusted update keys configured (TRUSTED_UPDATE_KEYS is empty). \
+             Signature verification cannot be performed."
+        );
+        return Err(UpdateSignatureError::Untrusted);
+    }
     verify_update_signature_with_keys(sha256_hex, signature_base64, TRUSTED_UPDATE_KEYS)
 }
 

@@ -6,9 +6,14 @@
 //! - IP Banning (failure tracking)
 
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tracing::warn;
+
+/// Maximum number of per-IP rate limit buckets before stale entries are evicted.
+/// This bounds memory under scanning attacks where many unique IPs hit the server.
+const RATE_LIMITER_MAX_BUCKETS: usize = 100_000;
 
 /// Rate limiter state for per-IP tracking.
 ///
@@ -42,9 +47,18 @@ impl RateLimiter {
     }
 
     /// Check if request should be allowed for this IP
+    ///
+    /// If the bucket map exceeds [`RATE_LIMITER_MAX_BUCKETS`], stale entries
+    /// (older than 60 seconds) are evicted before inserting a new one.
     pub async fn check(&self, ip: &str) -> bool {
         let mut buckets = self.buckets.write().await;
         let now = Instant::now();
+
+        // Evict stale entries when at capacity
+        if buckets.len() >= RATE_LIMITER_MAX_BUCKETS && !buckets.contains_key(ip) {
+            let max_idle = Duration::from_secs(60);
+            buckets.retain(|_, bucket| now.duration_since(bucket.last_update) < max_idle);
+        }
 
         let bucket = buckets.entry(ip.to_string()).or_insert_with(|| RateBucket {
             tokens: self.burst as f64,
@@ -74,11 +88,14 @@ impl RateLimiter {
 }
 
 /// Ban list for misbehaving IPs
+///
+/// Uses `IpAddr` keys for type-safe IP tracking, avoiding string-comparison
+/// pitfalls (e.g., "::1" vs "0:0:0:0:0:0:0:1").
 pub struct BanList {
     /// Active bans: IP -> Ban Creation Time
-    bans: RwLock<HashMap<String, Instant>>,
+    bans: RwLock<HashMap<IpAddr, Instant>>,
     /// Recent failures: IP -> (Count, First Failure Time)
-    failures: RwLock<HashMap<String, (u32, Instant)>>,
+    failures: RwLock<HashMap<IpAddr, (u32, Instant)>>,
     /// Duration of a ban
     ban_duration: Duration,
     /// Number of failures before ban
@@ -100,9 +117,9 @@ impl BanList {
     }
 
     /// Check if IP is banned
-    pub async fn is_banned(&self, ip: &str) -> bool {
+    pub async fn is_banned(&self, ip: IpAddr) -> bool {
         let bans = self.bans.read().await;
-        if let Some(banned_at) = bans.get(ip) {
+        if let Some(banned_at) = bans.get(&ip) {
             // Check if ban has expired
             if banned_at.elapsed() < self.ban_duration {
                 return true;
@@ -113,7 +130,7 @@ impl BanList {
 
     /// Record a failure for an IP (e.g., 404, 401, 500)
     /// Returns true if the IP is now banned
-    pub async fn record_failure(&self, ip: &str) -> bool {
+    pub async fn record_failure(&self, ip: IpAddr) -> bool {
         // If already banned, ignore
         if self.is_banned(ip).await {
             return true;
@@ -122,7 +139,7 @@ impl BanList {
         let mut failures = self.failures.write().await;
         let now = Instant::now();
 
-        let (count, first_failure) = failures.entry(ip.to_string()).or_insert((0, now));
+        let (count, first_failure) = failures.entry(ip).or_insert((0, now));
 
         // Reset if window passed
         if now.duration_since(*first_failure) > self.failure_window {
@@ -149,16 +166,16 @@ impl BanList {
     /// `record_failure` and call `ban` simultaneously. The worst case is a redundant ban
     /// insertion, which is harmless. Combining both maps into a single lock would add
     /// contention on the hot `is_banned` read path, so this trade-off is acceptable.
-    pub async fn ban(&self, ip: &str) {
+    pub async fn ban(&self, ip: IpAddr) {
         let mut bans = self.bans.write().await;
         let mut failures = self.failures.write().await;
 
-        bans.insert(ip.to_string(), Instant::now());
+        bans.insert(ip, Instant::now());
         // Clear failures
-        failures.remove(ip);
+        failures.remove(&ip);
 
         warn!(
-            ip = ip,
+            ip = %ip,
             "IP banned for {} seconds",
             self.ban_duration.as_secs()
         );
@@ -223,42 +240,46 @@ mod tests {
     #[tokio::test]
     async fn test_ban_list_manual() {
         let ban_list = BanList::new(1, 5); // 1 second ban, 5 failures
+        let ip: IpAddr = "192.168.1.100".parse().unwrap();
+        let other_ip: IpAddr = "192.168.1.200".parse().unwrap();
 
         // Not banned initially
-        assert!(!ban_list.is_banned("bad-actor").await);
+        assert!(!ban_list.is_banned(ip).await);
 
         // Ban the IP
-        ban_list.ban("bad-actor").await;
+        ban_list.ban(ip).await;
 
         // Should be banned now
-        assert!(ban_list.is_banned("bad-actor").await);
+        assert!(ban_list.is_banned(ip).await);
 
         // Other IPs unaffected
-        assert!(!ban_list.is_banned("good-actor").await);
+        assert!(!ban_list.is_banned(other_ip).await);
 
         // Wait for ban to expire
         tokio::time::sleep(Duration::from_secs(2)).await;
 
         // Should no longer be banned
-        assert!(!ban_list.is_banned("bad-actor").await);
+        assert!(!ban_list.is_banned(ip).await);
     }
 
     #[tokio::test]
     async fn test_ban_list_failures() {
         let ban_list = BanList::new(60, 3); // 60s ban, 3 failures
+        let ip: IpAddr = "10.0.0.1".parse().unwrap();
 
-        assert!(!ban_list.record_failure("user").await); // 1
-        assert!(!ban_list.record_failure("user").await); // 2
-        assert!(ban_list.record_failure("user").await); // 3 -> Ban
+        assert!(!ban_list.record_failure(ip).await); // 1
+        assert!(!ban_list.record_failure(ip).await); // 2
+        assert!(ban_list.record_failure(ip).await); // 3 -> Ban
 
-        assert!(ban_list.is_banned("user").await);
+        assert!(ban_list.is_banned(ip).await);
     }
 
     #[tokio::test]
     async fn test_ban_list_cleanup() {
         let ban_list = BanList::new(1, 3); // 1 second ban
+        let ip: IpAddr = "10.0.0.2".parse().unwrap();
 
-        ban_list.ban("ip1").await;
+        ban_list.ban(ip).await;
 
         // Wait and cleanup
         tokio::time::sleep(Duration::from_secs(2)).await;

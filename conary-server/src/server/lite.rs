@@ -373,9 +373,14 @@ async fn health(State(state): State<Arc<RwLock<ProxyState>>>) -> Response {
 // Handler: Chunk Proxy (Pull-Through Cache)
 // =============================================================================
 
-/// Validate chunk hash format (64 hex chars for SHA-256)
+/// Validate chunk hash format (64 lowercase hex chars for SHA-256).
+///
+/// Only lowercase hex is accepted to match the CAS on-disk format.
 fn is_valid_hash(hash: &str) -> bool {
-    hash.len() == 64 && hash.chars().all(|c| c.is_ascii_hexdigit())
+    hash.len() == 64
+        && hash
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
 }
 
 /// GET /v1/chunks/:hash
@@ -666,8 +671,8 @@ mod tests {
         assert!(is_valid_hash(
             "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
         ));
-        // Uppercase hex should also be valid
-        assert!(is_valid_hash(
+        // Uppercase hex rejected (CAS uses lowercase paths)
+        assert!(!is_valid_hash(
             "ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890"
         ));
 

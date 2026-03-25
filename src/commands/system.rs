@@ -79,7 +79,7 @@ pub async fn cmd_init(db_path: &str) -> Result<()> {
         }
     }
 
-    println!("\nDefault repositories added. Use 'conary repo-sync' to download metadata.");
+    println!("\nDefault repositories added. Use 'conary repo sync' to download metadata.");
     Ok(())
 }
 
@@ -1001,7 +1001,6 @@ pub fn cmd_prewarm(
 
     Ok(())
 }
-
 
 use super::format_bytes;
 

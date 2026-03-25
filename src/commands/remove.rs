@@ -322,7 +322,7 @@ pub async fn cmd_remove(
         "  Architecture: {}",
         trove.architecture.as_deref().unwrap_or("none")
     );
-    println!("  Files removed: {}/{}", removed_count, regular_files.len());
+    println!("  Files removed: {}", removed_count);
     if dirs_removed > 0 {
         println!("  Directories removed: {}", dirs_removed);
     }

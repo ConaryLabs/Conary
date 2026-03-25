@@ -1,5 +1,18 @@
 // conary-server/src/server/handlers/mod.rs
 //! HTTP request handlers for the Remi server
+//!
+//! ## Error response conventions
+//!
+//! The admin API (`admin/` submodule) returns JSON errors via `auth::json_error()`
+//! with `{"error": "...", "code": "..."}` bodies.
+//!
+//! Public endpoints (chunks, packages, detail, etc.) return plain-text error bodies
+//! via `(StatusCode, &str).into_response()` for simplicity.
+//!
+//! New endpoints should follow the convention of their parent router:
+//! - Admin router handlers: use `json_error()` or `check_scope()`
+//! - Public router handlers: use plain-text `(StatusCode, message)` tuples
+// TODO: Unify error response format across all endpoints.
 
 pub mod admin;
 pub mod artifacts;

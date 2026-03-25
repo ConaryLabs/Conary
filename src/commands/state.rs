@@ -212,13 +212,11 @@ pub async fn cmd_state_restore(db_path: &str, state_number: i64, dry_run: bool) 
         return Ok(());
     }
 
-    // For now, just show the plan - actual restore requires more infrastructure
-    // to download/install packages that aren't locally available
-    println!("\n[NOT YET IMPLEMENTED] state restore: applying the plan is not yet available.");
-    println!("Use 'conary rollback' to reverse individual changesets,");
-    println!("or manually install/remove packages to match the target state.");
-
-    Ok(())
+    anyhow::bail!(
+        "state restore is not yet implemented.\n\
+         Use 'conary rollback' to reverse individual changesets,\n\
+         or manually install/remove packages to match the target state."
+    );
 }
 
 /// Prune old states, keeping only the most recent N

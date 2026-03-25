@@ -99,16 +99,18 @@ where
     F: FnMut() -> Result<T>,
 {
     let mut last_err = None;
+    // Clamp to at least 1 attempt to avoid panic on `last_err.expect()`
+    let max_attempts = config.max_attempts.max(1);
 
-    for attempt in 1..=config.max_attempts {
+    for attempt in 1..=max_attempts {
         match op() {
             Ok(val) => return Ok(val),
             Err(e) => {
-                if attempt < config.max_attempts {
+                if attempt < max_attempts {
                     let delay = config.delay_for_attempt(attempt);
                     warn!(
                         "Attempt {}/{} failed: {e}, retrying in {delay:?}",
-                        attempt, config.max_attempts
+                        attempt, max_attempts
                     );
                     std::thread::sleep(delay);
                 }
@@ -117,7 +119,7 @@ where
         }
     }
 
-    Err(last_err.expect("max_attempts must be >= 1"))
+    Err(last_err.expect("max_attempts is clamped to >= 1, so at least one iteration ran"))
 }
 
 /// Async version of [`with_retry`] for use in async contexts.
@@ -129,16 +131,18 @@ where
     Fut: std::future::Future<Output = Result<T>>,
 {
     let mut last_err = None;
+    // Clamp to at least 1 attempt to avoid panic on `last_err.expect()`
+    let max_attempts = config.max_attempts.max(1);
 
-    for attempt in 1..=config.max_attempts {
+    for attempt in 1..=max_attempts {
         match op().await {
             Ok(val) => return Ok(val),
             Err(e) => {
-                if attempt < config.max_attempts {
+                if attempt < max_attempts {
                     let delay = config.delay_for_attempt(attempt);
                     warn!(
                         "Attempt {}/{} failed: {e}, retrying in {delay:?}",
-                        attempt, config.max_attempts
+                        attempt, max_attempts
                     );
                     tokio::time::sleep(delay).await;
                 }
@@ -147,7 +151,7 @@ where
         }
     }
 
-    Err(last_err.expect("max_attempts must be >= 1"))
+    Err(last_err.expect("max_attempts is clamped to >= 1, so at least one iteration ran"))
 }
 
 #[cfg(test)]

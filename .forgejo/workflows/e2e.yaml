@@ -78,6 +78,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Build conary
+        run: cargo build
+
       - name: Build conary-test
         run: cargo build -p conary-test
 
@@ -105,6 +108,9 @@ jobs:
     name: E2E QEMU Boot Tests
     steps:
       - uses: actions/checkout@v4
+
+      - name: Build conary
+        run: cargo build
 
       - name: Build conary-test
         run: cargo build -p conary-test

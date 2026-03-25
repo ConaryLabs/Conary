@@ -59,7 +59,7 @@ Two servers, one CI system.
 |--------|---------|
 | `scripts/remi-health.sh --smoke` | Quick Remi check (5 endpoints) |
 | `scripts/remi-health.sh --full` | Comprehensive Remi check (includes conversion) |
-| `scripts/release.sh [conary\|erofs\|server\|test\|all]` | Auto-version bump from conventional commits |
+| `scripts/release.sh [conary\|server\|test\|all]` | Auto-version bump from conventional commits |
 | `deploy/setup-forge.sh` | Install Forgejo + Runner on Forge |
 | `deploy/deploy-sites.sh` | Deploy web content to Remi |
 | `scripts/publish-test-fixtures.sh` | Publish test fixture CCS packages to Remi |

@@ -278,10 +278,9 @@ impl TriggerDependency {
         );
         let mut stmt = conn.prepare(&sql)?;
         let mut map: HashMap<i64, Vec<String>> = HashMap::new();
-        let rows = stmt.query_map(
-            rusqlite::params_from_iter(trigger_ids.iter()),
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
-        )?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(trigger_ids.iter()), |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
         for row in rows {
             let (tid, dep) = row?;
             map.entry(tid).or_default().push(dep);
@@ -556,10 +555,7 @@ impl<'a> TriggerEngine<'a> {
             .collect();
 
         // Batch-load all dependencies in a single query
-        let loaded_ids: Vec<i64> = triggers
-            .values()
-            .filter_map(|t| t.id)
-            .collect();
+        let loaded_ids: Vec<i64> = triggers.values().filter_map(|t| t.id).collect();
         let all_deps = TriggerDependency::get_dependencies_batch(self.conn, &loaded_ids)?;
 
         // Build dependency graph

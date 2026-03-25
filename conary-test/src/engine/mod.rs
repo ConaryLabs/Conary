@@ -2,6 +2,7 @@
 
 pub mod assertions;
 pub mod container_coordinator;
+pub mod container_setup;
 pub mod executor;
 pub mod mock_server;
 pub mod qemu;

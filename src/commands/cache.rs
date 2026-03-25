@@ -5,7 +5,12 @@
 use anyhow::Result;
 
 /// Pre-fetch derivation outputs from configured substituters.
-pub async fn cmd_cache_populate(profile_path: &str, sources_only: bool, full: bool, db_path: &str) -> Result<()> {
+pub async fn cmd_cache_populate(
+    profile_path: &str,
+    sources_only: bool,
+    full: bool,
+    db_path: &str,
+) -> Result<()> {
     // Read profile TOML
     let content = std::fs::read_to_string(profile_path)
         .map_err(|e| anyhow::anyhow!("failed to read profile: {e}"))?;
@@ -30,7 +35,9 @@ pub async fn cmd_cache_populate(profile_path: &str, sources_only: bool, full: bo
     );
 
     if sources_only {
-        println!("[NOT YET IMPLEMENTED] cache populate --sources-only: source tarball download is not yet available.");
+        println!(
+            "[NOT YET IMPLEMENTED] cache populate --sources-only: source tarball download is not yet available."
+        );
         return Ok(());
     }
 
@@ -113,7 +120,9 @@ pub async fn cmd_cache_populate(profile_path: &str, sources_only: bool, full: bo
     }
 
     if full {
-        println!("\n[NOT YET IMPLEMENTED] cache populate --full: source tarball download is not yet available.");
+        println!(
+            "\n[NOT YET IMPLEMENTED] cache populate --full: source tarball download is not yet available."
+        );
     }
 
     Ok(())
@@ -121,7 +130,6 @@ pub async fn cmd_cache_populate(profile_path: &str, sources_only: bool, full: bo
 
 /// Show cache statistics and substituter peer health.
 pub async fn cmd_cache_status(db_path: &str) -> Result<()> {
-
     // CAS directory info
     let cas_dir = conary_core::db::paths::objects_dir(db_path);
     if cas_dir.exists() {
@@ -144,11 +152,10 @@ pub async fn cmd_cache_status(db_path: &str) -> Result<()> {
             .unwrap_or(0);
         println!("Cached derivations: {count}");
 
-        let mut stmt = conn
-            .prepare(
-                "SELECT endpoint, success_count, failure_count, last_seen \
+        let mut stmt = conn.prepare(
+            "SELECT endpoint, success_count, failure_count, last_seen \
                  FROM substituter_peers ORDER BY priority",
-            )?;
+        )?;
         let peers: Vec<(String, i64, i64, Option<String>)> = stmt
             .query_map([], |row| {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))

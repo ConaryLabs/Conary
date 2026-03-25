@@ -42,7 +42,7 @@
 | `src/provenance/` | Package DNA / full provenance tracking |
 | `src/trust/` | TUF supply chain trust |
 | `src/automation/` | Automated maintenance (security updates, orphan cleanup) |
-| `src/bootstrap/` | Bootstrap a complete Conary system (8-stage pipeline) |
+| `src/bootstrap/` | Bootstrap a complete Conary system (6-phase pipeline) |
 | `src/canonical/` | Cross-distro canonical name mapping (AppStream, Repology) |
 | `src/self_update.rs` | Self-update version checking, download, atomic replacement |
 | `src/hash.rs` | Multi-algorithm hashing (SHA-256, XXH128) |

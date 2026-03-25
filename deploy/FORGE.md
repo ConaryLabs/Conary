@@ -33,7 +33,7 @@ See `deploy/setup-forge.sh` for detailed steps.
 | Workflow | Trigger | Duration | What it does |
 |----------|---------|----------|-------------|
 | `ci.yaml` | Push to main | ~5 min | cargo build, test, clippy, Remi smoke |
-| `integration.yaml` | Push to main | ~15 min | 37-test suite on Fedora/Ubuntu/Arch via Podman |
+| `integration.yaml` | Push to main | ~15 min | 38-test Phase 1 suite on Fedora/Ubuntu/Arch via Podman |
 | `remi-health.yaml` | Every 6 hours | ~60s | Full Remi endpoint verification |
 
 ## Runner

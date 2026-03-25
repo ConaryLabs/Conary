@@ -14,6 +14,7 @@
 //! 6. Verify targets, check version monotonicity
 //! 7. Persist verified state to database in a single transaction
 
+use crate::hash;
 use crate::trust::metadata::{
     Role, RootMetadata, Signed, SnapshotMetadata, TargetsMetadata, TimestampMetadata,
     VerifiedTufState,
@@ -23,7 +24,6 @@ use crate::trust::verify::{
     verify_snapshot_consistency, verify_version_increase,
 };
 use crate::trust::{TrustError, TrustResult};
-use crate::hash;
 use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::BTreeMap;
 use tracing::{debug, info};

@@ -449,8 +449,15 @@ impl Trove {
     /// - "Required by *" - packages installed as dependencies
     /// - "Installed via @*" - packages installed via collections
     /// - "Explicitly installed" - packages installed directly
+    ///
+    /// Note: The patterns passed to this function are developer-controlled
+    /// (e.g., "Required by *"), not raw user input. The `*` glob is
+    /// converted to SQL `%` for LIKE matching. Do not pass unsanitized
+    /// user input directly.
     pub fn find_by_reason(conn: &Connection, pattern: &str) -> Result<Vec<Self>> {
-        // Convert glob-style pattern to SQL LIKE pattern
+        // Convert glob-style pattern to SQL LIKE pattern.
+        // Callers pass fixed patterns ("Required by *"), not user input,
+        // so we do not need to escape `%` or `_` in the pattern itself.
         let sql_pattern = pattern.replace('*', "%");
         let sql = format!(
             "SELECT {} FROM troves WHERE selection_reason LIKE ?1 ORDER BY name, version",

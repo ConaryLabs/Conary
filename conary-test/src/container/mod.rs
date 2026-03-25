@@ -3,6 +3,8 @@
 pub mod backend;
 pub mod image;
 pub mod lifecycle;
+#[cfg(test)]
+pub(crate) mod mock;
 
 pub use backend::{
     ContainerBackend, ContainerConfig, ContainerId, ContainerInspection, ExecResult, ImageInfo,

@@ -637,8 +637,7 @@ pub fn visible_realignment_proposals(
     let troves = Trove::list_packages(conn)?;
     let mut proposals = Vec::new();
 
-    for trove in troves.into_iter()
-    {
+    for trove in troves.into_iter() {
         let current_distro = current_package_distro(conn, &trove)?;
         if current_distro.as_deref() == Some(target_distro) {
             continue;

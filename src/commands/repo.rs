@@ -9,61 +9,67 @@ use std::path::Path;
 use std::time::Duration;
 use tracing::info;
 
+/// Options for adding a new repository
+pub struct RepoAddOptions {
+    pub name: String,
+    pub url: String,
+    pub db_path: String,
+    pub content_url: Option<String>,
+    pub priority: i32,
+    pub disabled: bool,
+    pub gpg_key: Option<String>,
+    pub no_gpg_check: bool,
+    pub gpg_strict: bool,
+    pub default_strategy: Option<String>,
+    pub remi_endpoint: Option<String>,
+    pub remi_distro: Option<String>,
+}
+
 /// Add a new repository
-#[allow(clippy::too_many_arguments)]
-pub async fn cmd_repo_add(
-    name: &str,
-    url: &str,
-    db_path: &str,
-    content_url: Option<String>,
-    priority: i32,
-    disabled: bool,
-    gpg_key: Option<String>,
-    no_gpg_check: bool,
-    gpg_strict: bool,
-    default_strategy: Option<String>,
-    remi_endpoint: Option<String>,
-    remi_distro: Option<String>,
-) -> Result<()> {
-    info!("Adding repository: {} ({})", name, url);
+pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
+    info!("Adding repository: {} ({})", opts.name, opts.url);
 
     // Validate remi strategy configuration
-    if let Some(ref strategy) = default_strategy
+    if let Some(ref strategy) = opts.default_strategy
         && strategy == "remi"
     {
-        if remi_endpoint.is_none() {
+        if opts.remi_endpoint.is_none() {
             anyhow::bail!("--remi-endpoint is required when --default-strategy=remi");
         }
-        if remi_distro.is_none() {
+        if opts.remi_distro.is_none() {
             anyhow::bail!("--remi-distro is required when --default-strategy=remi");
         }
     }
 
-    let conn = open_db(db_path)?;
+    // Save values needed after opts is partially moved
+    let db_path = opts.db_path;
+    let gpg_key = opts.gpg_key;
+
+    let conn = open_db(&db_path)?;
 
     // Create the repository with all settings
-    let mut repo = conary_core::db::models::Repository::new(name.to_string(), url.to_string());
-    repo.content_url = content_url;
-    repo.enabled = !disabled;
-    repo.priority = priority;
-    repo.gpg_check = !no_gpg_check;
-    repo.gpg_strict = gpg_strict;
+    let mut repo = conary_core::db::models::Repository::new(opts.name, opts.url);
+    repo.content_url = opts.content_url;
+    repo.enabled = !opts.disabled;
+    repo.priority = opts.priority;
+    repo.gpg_check = !opts.no_gpg_check;
+    repo.gpg_strict = opts.gpg_strict;
     repo.gpg_key_url = gpg_key.clone();
-    repo.default_strategy = default_strategy.clone();
-    repo.default_strategy_endpoint = remi_endpoint;
-    repo.default_strategy_distro = remi_distro;
+    repo.default_strategy = opts.default_strategy;
+    repo.default_strategy_endpoint = opts.remi_endpoint;
+    repo.default_strategy_distro = opts.remi_distro;
 
     if let Err(e) = repo.insert(&conn) {
         let msg = e.to_string();
         if msg.contains("UNIQUE constraint failed") {
             anyhow::bail!(
                 "Repository '{}' already exists.\nUse 'conary repo list' to see configured repositories.",
-                name
+                repo.name
             );
         }
         return Err(anyhow::anyhow!(
             "Failed to add repository '{}': {}",
-            name,
+            repo.name,
             e
         ));
     }
@@ -96,7 +102,7 @@ pub async fn cmd_repo_add(
     // If GPG key was provided, import it
     if let Some(key_source) = gpg_key {
         println!("  Importing GPG key...");
-        match import_gpg_key(name, &key_source, db_path).await {
+        match import_gpg_key(&repo.name, &key_source, &db_path).await {
             Ok(fingerprint) => println!("  GPG Key: {}", fingerprint),
             Err(e) => println!("  Warning: Failed to import GPG key: {}", e),
         }

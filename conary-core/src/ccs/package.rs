@@ -318,8 +318,7 @@ impl CcsPackage {
     /// This re-reads the archive and returns the content blobs by hash.
     pub fn extract_all_content(&self) -> Result<HashMap<String, Vec<u8>>> {
         let file = File::open(&self.package_path)?;
-        let contents =
-            read_ccs_archive(file).map_err(|e| Error::IoError(e.to_string()))?;
+        let contents = read_ccs_archive(file).map_err(|e| Error::IoError(e.to_string()))?;
 
         debug!(
             "Extracted {} content blobs from {}",
@@ -338,8 +337,7 @@ impl PackageFormat for CcsPackage {
     {
         let package_path = PathBuf::from(path);
         let file = File::open(&package_path)?;
-        let contents =
-            read_ccs_archive(file).map_err(|e| Error::ParseError(e.to_string()))?;
+        let contents = read_ccs_archive(file).map_err(|e| Error::ParseError(e.to_string()))?;
 
         let manifest = &contents.manifest;
 

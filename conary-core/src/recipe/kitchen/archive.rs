@@ -73,8 +73,12 @@ pub fn verify_file_checksum(path: &Path, expected: &str) -> Result<bool> {
 /// Supports: .tar.gz, .tgz, .tar.xz, .txz, .tar.bz2, .tbz2, .tar.zst, .tar
 pub fn extract_archive(archive: &Path, dest: &Path) -> Result<()> {
     let filename = archive.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    let archive_str = archive.to_str().expect("archive path must be valid utf-8");
-    let dest_str = dest.to_str().expect("dest path must be valid utf-8");
+    let archive_str = archive
+        .to_str()
+        .ok_or_else(|| Error::IoError(format!("Non-UTF-8 archive path: {}", archive.display())))?;
+    let dest_str = dest
+        .to_str()
+        .ok_or_else(|| Error::IoError(format!("Non-UTF-8 destination path: {}", dest.display())))?;
 
     let flags: &[&str] = if filename.ends_with(".tar.gz") || filename.ends_with(".tgz") {
         &["-xzf"]
@@ -116,7 +120,9 @@ pub fn apply_patch(source_dir: &Path, patch_path: &Path, strip: u32) -> Result<(
             "-p",
             &strip.to_string(),
             "-i",
-            patch_path.to_str().expect("patch path must be valid utf-8"),
+            patch_path.to_str().ok_or_else(|| {
+                Error::IoError(format!("Non-UTF-8 patch path: {}", patch_path.display()))
+            })?,
         ])
         .current_dir(source_dir)
         .output()

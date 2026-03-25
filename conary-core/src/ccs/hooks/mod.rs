@@ -366,6 +366,13 @@ impl HookExecutor {
         use std::process::Command;
         use tracing::info;
 
+        // TODO: Integrate with the sandbox module (conary-core::container::Sandbox)
+        // to run hook scripts in a namespace-isolated environment. Until then,
+        // scripts execute unsandboxed with full host access.
+        warn!(
+            "Executing unsandboxed {} script via /bin/sh -c (no sandbox isolation)",
+            label
+        );
         info!("Running {} script: {}", label, script);
 
         let status = if self.root == Path::new("/") {

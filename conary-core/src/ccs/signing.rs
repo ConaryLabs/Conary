@@ -5,7 +5,7 @@
 //! Keys can be generated, stored, and loaded for signing operations.
 
 use crate::ccs::verify::PackageSignature;
-use anyhow::{Context, Result};
+use crate::error::{Error, Result};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use rand_core_06::OsRng;
@@ -87,9 +87,15 @@ impl SigningKeyPair {
             key: BASE64.encode(self.signing_key.to_bytes()),
             key_id: self.key_id.clone(),
         };
-        let private_toml = toml::to_string_pretty(&private_data)?;
-        fs::write(private_path, private_toml)
-            .with_context(|| format!("Failed to write private key: {}", private_path.display()))?;
+        let private_toml = toml::to_string_pretty(&private_data)
+            .map_err(|e| Error::ParseError(format!("Failed to serialize private key: {}", e)))?;
+        fs::write(private_path, &private_toml).map_err(|e| {
+            Error::IoError(format!(
+                "Failed to write private key {}: {}",
+                private_path.display(),
+                e
+            ))
+        })?;
 
         // Set restrictive permissions on private key
         #[cfg(unix)]
@@ -106,32 +112,47 @@ impl SigningKeyPair {
             key: self.public_key_base64(),
             key_id: self.key_id.clone(),
         };
-        let public_toml = toml::to_string_pretty(&public_data)?;
-        fs::write(public_path, public_toml)
-            .with_context(|| format!("Failed to write public key: {}", public_path.display()))?;
+        let public_toml = toml::to_string_pretty(&public_data)
+            .map_err(|e| Error::ParseError(format!("Failed to serialize public key: {}", e)))?;
+        fs::write(public_path, &public_toml).map_err(|e| {
+            Error::IoError(format!(
+                "Failed to write public key {}: {}",
+                public_path.display(),
+                e
+            ))
+        })?;
 
         Ok(())
     }
 
     /// Load a key pair from a private key file
     pub fn load_from_file(path: &Path) -> Result<Self> {
-        let content = fs::read_to_string(path)
-            .with_context(|| format!("Failed to read key file: {}", path.display()))?;
+        let content = fs::read_to_string(path).map_err(|e| {
+            Error::IoError(format!("Failed to read key file {}: {}", path.display(), e))
+        })?;
 
-        let key_file: KeyFile = toml::from_str(&content)
-            .with_context(|| format!("Failed to parse key file: {}", path.display()))?;
+        let key_file: KeyFile = toml::from_str(&content).map_err(|e| {
+            Error::ParseError(format!(
+                "Failed to parse key file {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
 
         if key_file.algorithm != "ed25519" {
-            anyhow::bail!("Unsupported key algorithm: {}", key_file.algorithm);
+            return Err(Error::ParseError(format!(
+                "Unsupported key algorithm: {}",
+                key_file.algorithm
+            )));
         }
 
         let key_bytes = BASE64
             .decode(&key_file.key)
-            .context("Invalid base64 in key file")?;
+            .map_err(|e| Error::ParseError(format!("Invalid base64 in key file: {}", e)))?;
 
         let key_array: [u8; 32] = key_bytes
             .try_into()
-            .map_err(|_| anyhow::anyhow!("Invalid key length"))?;
+            .map_err(|_| Error::ParseError("Invalid key length (expected 32 bytes)".to_string()))?;
 
         let signing_key = SigningKey::from_bytes(&key_array);
 
@@ -153,11 +174,21 @@ struct KeyFile {
 
 /// Load a public key from a file (for trust policy)
 pub fn load_public_key(path: &Path) -> Result<String> {
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("Failed to read public key: {}", path.display()))?;
+    let content = fs::read_to_string(path).map_err(|e| {
+        Error::IoError(format!(
+            "Failed to read public key {}: {}",
+            path.display(),
+            e
+        ))
+    })?;
 
-    let key_file: KeyFile = toml::from_str(&content)
-        .with_context(|| format!("Failed to parse public key: {}", path.display()))?;
+    let key_file: KeyFile = toml::from_str(&content).map_err(|e| {
+        Error::ParseError(format!(
+            "Failed to parse public key {}: {}",
+            path.display(),
+            e
+        ))
+    })?;
 
     Ok(key_file.key)
 }

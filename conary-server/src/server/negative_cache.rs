@@ -20,9 +20,15 @@ struct NegativeEntry {
     hit_count: u64,
 }
 
+/// Maximum number of entries before we force eviction of expired entries
+/// and, if still over limit, drop the oldest entries. This bounds memory
+/// usage under sustained 404 scanning attacks.
+const MAX_ENTRIES: usize = 100_000;
+
 /// Negative cache for "not found" responses
 ///
 /// Caches URLs/keys that returned 404 to avoid repeatedly checking upstream.
+/// Bounded to [`MAX_ENTRIES`] to prevent unbounded memory growth.
 pub struct NegativeCache {
     /// Cache entries: key -> entry
     entries: RwLock<HashMap<String, NegativeEntry>>,
@@ -70,8 +76,24 @@ impl NegativeCache {
     }
 
     /// Mark a key as "not found"
+    ///
+    /// If the cache is at capacity, expired entries are evicted first.
+    /// If still full, the oldest entry is removed to make room.
     pub async fn mark_negative(&self, key: &str) {
         let mut entries = self.entries.write().await;
+        if entries.len() >= MAX_ENTRIES {
+            // Evict expired entries first
+            entries.retain(|_, entry| entry.created_at.elapsed() < self.ttl);
+            // If still at capacity, drop the oldest entry
+            if entries.len() >= MAX_ENTRIES
+                && let Some(oldest_key) = entries
+                    .iter()
+                    .min_by_key(|(_, e)| e.created_at)
+                    .map(|(k, _)| k.clone())
+            {
+                entries.remove(&oldest_key);
+            }
+        }
         entries.insert(
             key.to_string(),
             NegativeEntry {

@@ -35,12 +35,12 @@ pub mod registry;
 mod remove;
 mod replatform_rendering;
 mod repo;
-#[cfg(test)]
-pub(crate) mod test_helpers;
 mod restore;
 mod self_update;
 mod state;
 mod system;
+#[cfg(test)]
+pub(crate) mod test_helpers;
 mod triggers;
 pub mod trust;
 mod update;
@@ -121,8 +121,8 @@ pub use redirect::{
     cmd_redirect_show,
 };
 pub use repo::{
-    cmd_key_import, cmd_key_list, cmd_key_remove, cmd_repo_add, cmd_repo_disable, cmd_repo_enable,
-    cmd_repo_list, cmd_repo_remove, cmd_repo_sync, cmd_search,
+    RepoAddOptions, cmd_key_import, cmd_key_list, cmd_key_remove, cmd_repo_add, cmd_repo_disable,
+    cmd_repo_enable, cmd_repo_list, cmd_repo_remove, cmd_repo_sync, cmd_search,
 };
 pub use restore::{cmd_restore, cmd_restore_all};
 pub use self_update::cmd_self_update;

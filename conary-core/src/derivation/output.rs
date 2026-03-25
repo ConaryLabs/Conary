@@ -298,7 +298,10 @@ mod tests {
 
         let h755 = OutputManifest::compute_output_hash_v2(&files_755, &[]);
         let h644 = OutputManifest::compute_output_hash_v2(&files_644, &[]);
-        assert_ne!(h755, h644, "different modes should produce different hashes");
+        assert_ne!(
+            h755, h644,
+            "different modes should produce different hashes"
+        );
     }
 
     #[test]

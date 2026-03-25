@@ -31,16 +31,21 @@ use tokio_util::io::ReaderStream;
 /// Prevents OOM from malicious Range headers requesting the entire file into memory.
 const MAX_RANGE_SIZE: u64 = 64 * 1024 * 1024;
 
-/// Validate chunk hash format (64 hex chars for SHA-256)
+/// Validate chunk hash format (64 lowercase hex chars for SHA-256).
+///
+/// Only lowercase hex is accepted to match the CAS on-disk format and avoid
+/// ambiguity between "ABCD..." and "abcd..." referring to the same chunk.
 pub(crate) fn is_valid_hash(hash: &str) -> bool {
-    super::is_valid_hex_hash(hash)
+    hash.len() == 64
+        && hash
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
 }
 
 /// Normalize a hash to lowercase for consistent CAS path lookup.
 ///
-/// `is_valid_hash` accepts uppercase hex, but the CAS stores files with
-/// lowercase hex paths. This avoids 404s or duplicate storage for
-/// uppercase hashes.
+/// Callers that receive hashes from external sources (e.g., OCI digests)
+/// should normalize before passing to CAS operations.
 pub(crate) fn normalize_hash(hash: &str) -> String {
     hash.to_ascii_lowercase()
 }
@@ -852,6 +857,11 @@ pub async fn rebuild_bloom(State(state): State<Arc<RwLock<ServerState>>>) -> imp
 }
 
 /// Scan directory for chunk hashes
+///
+/// NOTE: This function is also called from `server/mod.rs` (Bloom filter init)
+/// and from `rebuild_bloom_filter` in this module. If similar scanning logic
+/// is needed elsewhere, reuse this function rather than duplicating the walk.
+// TODO: Consider moving to a shared `chunk_store` module if more callers appear.
 pub(crate) async fn scan_chunk_hashes(
     objects_dir: &std::path::Path,
 ) -> std::io::Result<Vec<String>> {
@@ -992,6 +1002,11 @@ mod tests {
         assert!(!is_valid_hash(
             "ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF12345678901"
         )); // too long
+
+        // Uppercase hex rejected (CAS uses lowercase paths)
+        assert!(!is_valid_hash(
+            "ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890"
+        ));
     }
 
     #[test]

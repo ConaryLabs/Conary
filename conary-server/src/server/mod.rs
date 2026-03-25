@@ -179,6 +179,13 @@ pub struct AdminEvent {
 }
 
 /// Shared server state
+///
+/// NOTE: This struct has grown large. Consider decomposing into sub-structs:
+/// - `CacheState` (chunk_cache, bloom_filter, negative_cache)
+/// - `ConversionState` (conversion_service, job_manager)
+/// - `FederationState` (federated_config, federated_cache)
+/// - `AdminState` (forgejo_url, forgejo_token, admin_events, test_db_path)
+// TODO: Decompose ServerState into focused sub-structs to improve readability.
 pub struct ServerState {
     pub config: ServerConfig,
     pub job_manager: JobManager,

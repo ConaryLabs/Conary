@@ -247,14 +247,12 @@ impl FilteredClassifier {
         &self,
         paths: &[String],
     ) -> std::collections::HashMap<ComponentType, Vec<String>> {
-        let mut result: std::collections::HashMap<ComponentType, Vec<String>> = std::collections::HashMap::new();
+        let mut result: std::collections::HashMap<ComponentType, Vec<String>> =
+            std::collections::HashMap::new();
 
         for path in paths {
             let comp_type = self.classify(path);
-            result
-                .entry(comp_type)
-                .or_default()
-                .push(path.clone());
+            result.entry(comp_type).or_default().push(path.clone());
         }
 
         result

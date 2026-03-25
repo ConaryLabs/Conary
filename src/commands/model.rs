@@ -731,9 +731,7 @@ pub async fn cmd_model_apply(opts: ApplyOptions<'_>) -> Result<()> {
         .actions
         .iter()
         .filter(|a| {
-            if skip_optional
-                && let DiffAction::Install { optional, .. } = a
-            {
+            if skip_optional && let DiffAction::Install { optional, .. } = a {
                 return !optional;
             }
             if !strict && matches!(a, DiffAction::MarkDependency { .. }) {
@@ -1501,8 +1499,8 @@ mod tests {
     use super::super::test_helpers::{create_test_db, seed_mixed_replatform_fixture};
     use super::*;
     use conary_core::db::models::DistroPin;
-    use conary_core::model::parser::SystemModel;
     use conary_core::model::ReplatformBlockedReason;
+    use conary_core::model::parser::SystemModel;
     use tempfile::tempdir;
 
     #[test]

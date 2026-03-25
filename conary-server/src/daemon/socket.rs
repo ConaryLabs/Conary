@@ -99,23 +99,15 @@ impl SocketManager {
 
         self.unix_listener = Some(unix_listener);
 
-        // Optionally bind TCP socket
-        if self.config.enable_tcp
-            && let Some(ref bind_addr) = self.config.tcp_bind
-        {
-            let tcp_listener = TcpListener::bind(bind_addr).await.map_err(|e| {
-                conary_core::Error::IoError(format!(
-                    "Failed to bind TCP socket at {}: {}",
-                    bind_addr, e
-                ))
-            })?;
-
-            log::warn!(
-                "TCP listener enabled -- read endpoints accessible without authentication. \
-                 Use only in trusted networks."
-            );
-            log::info!("Listening on TCP: {}", bind_addr);
-            self.tcp_listener = Some(tcp_listener);
+        // TCP listener support is not yet implemented (the accept loop only
+        // handles the Unix socket). Return an error so operators don't silently
+        // get a bound-but-dead TCP port.
+        if self.config.enable_tcp {
+            return Err(conary_core::Error::IoError(
+                "TCP listener not yet implemented. The daemon currently only accepts \
+                 connections on the Unix socket. Remove enable_tcp from your config."
+                    .to_string(),
+            ));
         }
 
         Ok(())

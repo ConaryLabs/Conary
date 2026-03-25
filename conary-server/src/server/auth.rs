@@ -23,11 +23,20 @@ use crate::server::rate_limit::AdminRateLimiters;
 /// Minimum interval between `touch()` DB writes for the same token (5 minutes).
 const TOUCH_DEBOUNCE_SECS: u64 = 300;
 
+/// Maximum number of entries in TOUCH_CACHE before we evict stale entries.
+/// With a 5-minute debounce, 10K entries covers well beyond any realistic
+/// concurrent token count while bounding memory usage.
+const TOUCH_CACHE_MAX_ENTRIES: usize = 10_000;
+
 /// In-memory cache of the last time each token ID was touched.
 ///
 /// Shared across requests via a `lazy_static`-style global. Using a `Mutex`
 /// is fine here because the critical section is just a HashMap lookup/insert
 /// (sub-microsecond).
+///
+/// Bounded to [`TOUCH_CACHE_MAX_ENTRIES`]: when the limit is reached, entries
+/// older than [`TOUCH_DEBOUNCE_SECS`] are evicted. If the cache is still full
+/// after eviction, the oldest entry is removed to make room.
 static TOUCH_CACHE: std::sync::LazyLock<Mutex<HashMap<i64, Instant>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -251,6 +260,19 @@ pub async fn auth_middleware(
         match cache.get(&bg_id) {
             Some(last) if now.duration_since(*last) < debounce => false,
             _ => {
+                // Evict stale entries when the cache is at capacity
+                if cache.len() >= TOUCH_CACHE_MAX_ENTRIES {
+                    cache.retain(|_, last| now.duration_since(*last) < debounce);
+                }
+                // If still full after eviction, drop the oldest entry
+                if cache.len() >= TOUCH_CACHE_MAX_ENTRIES
+                    && let Some(&oldest_id) = cache
+                        .iter()
+                        .min_by_key(|(_, instant)| *instant)
+                        .map(|(id, _)| id)
+                {
+                    cache.remove(&oldest_id);
+                }
                 cache.insert(bg_id, now);
                 true
             }

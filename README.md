@@ -2,11 +2,11 @@
 
 [![CI](https://github.com/ConaryLabs/Conary/actions/workflows/ci.yml/badge.svg)](https://github.com/ConaryLabs/Conary/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![v0.6.0](https://img.shields.io/badge/version-0.6.0-orange.svg)](CHANGELOG.md)
+[![v0.7.0](https://img.shields.io/badge/version-0.7.0-orange.svg)](CHANGELOG.md)
 
 **Website:** [conary.io](https://conary.io) | **Packages:** [packages.conary.io](https://packages.conary.io) | **Discussions:** [GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions)
 
-A cross-distribution Linux system manager with immutable generations, atomic transactions, content-addressable storage, and a declarative system model. 174K+ lines of Rust, 2,500+ unit tests and 278 integration tests, one tool for every distro.
+A cross-distribution Linux system manager with immutable generations, atomic transactions, content-addressable storage, and a declarative system model. 176K+ lines of Rust, 2,500+ unit tests and 278 integration tests, one tool for every distro.
 
 Inspired by the [original Conary](https://en.wikipedia.org/wiki/Conary_(package_manager)) from rPath, which pioneered concepts like troves, changesets, flavors, and components that were ahead of their time. This project carries those ideas forward with a modern implementation.
 
@@ -55,7 +55,7 @@ conary repo sync
 conary install nginx
 ```
 
-**174K+ lines of Rust, 2,500+ unit tests, 278 integration tests, database schema v56.** This is not a prototype.
+**176K+ lines of Rust, 2,500+ unit tests, 278 integration tests, database schema v57.** This is not a prototype.
 
 ---
 
@@ -66,18 +66,18 @@ conary install nginx
 | Immutable generations | No | No | Yes (generations) | Yes (EROFS + composefs) |
 | Atomic transactions | No | No | Yes | Yes |
 | Rollback to any state | No | No | Yes (generations) | Yes (snapshots + generations) |
-| System takeover | No | No | No | Yes |
-| Bootstrap from scratch | No | No | Yes | Yes |
+| System takeover | No | No | No | Yes (alpha) |
+| Bootstrap from scratch | No | No | Yes | Yes (alpha) |
 | Multi-format (RPM + DEB + Arch) | No | No | No | Yes |
-| Derived packages | No | No | Yes (overlays) | Yes |
+| Derived packages | No | No | Yes (overlays) | Yes (experimental) |
 | Component model (install :devel only) | No | Split packages | No | Automatic |
 | Declarative system state | No | No | Yes (flake.nix) | Yes (system.toml) |
 | Content-addressable storage | No | No | Yes | Yes |
-| Hermetic builds | No | No | Yes | Yes |
-| Dev shells | No | No | Yes | Yes |
-| OCI container export | No | No | Yes | Yes |
-| Capability enforcement (landlock/seccomp) | No | No | No | Yes |
-| Scriptlet sandboxing | No | No | N/A | Yes |
+| Hermetic builds | No | No | Yes | Yes (experimental) |
+| Dev shells | No | No | Yes | Yes (experimental) |
+| OCI container export | No | No | Yes | Yes (experimental) |
+| Capability enforcement (landlock/seccomp) | No | No | No | Yes (experimental) |
+| Scriptlet sandboxing | No | No | N/A | Yes (experimental) |
 | Single binary, no daemon required | Yes | Yes | No | Yes |
 | Mature ecosystem | Yes | Yes | Yes | No (early) |
 | Package count | 60K+ | 15K+ | 100K+ | Via conversion |
@@ -510,7 +510,7 @@ Requires Rust 1.94+ (edition 2024). The project is a Cargo workspace with 4 crat
 ```bash
 cargo build                          # Client only (default)
 cargo build --features server        # With Remi server + conaryd daemon
-cargo test                           # Run all tests (~260 unit tests)
+cargo test                           # Run all tests (~264 unit tests)
 cargo clippy -- -D warnings          # Lint check
 ```
 
@@ -525,7 +525,7 @@ cargo build --profile fast-release   # Faster compile, still optimized
 
 ## Project Status
 
-**Version 0.6.0** -- Core architecture is complete and tested. The codebase has 174,000+ lines of Rust with 2,500+ unit tests and 278 integration tests across 3 distros (schema v56). System generations (EROFS + composefs) are functional with limited production testing. System takeover, the bootstrap pipeline (31 packages from source, qcow2 image generation), and cross-distro repository capability resolution are implemented. Capability enforcement includes `conary capability audit` and `conary capability enforce` with a three-tier policy engine (allowed/prompt/denied). The CAS-layered derivation engine (bootstrap v2) supports provenance tracking, trust levels (0-4), and verification commands. A production Remi server is running at packages.conary.io with an external admin API (bearer token auth, rate limiting, audit logging, 47 MCP tools for LLM agent integration).
+**Version 0.7.0** -- Core architecture is complete and tested. The codebase has 176,000+ lines of Rust with 2,500+ unit tests and 278 integration tests across 3 distros (schema v57). System generations (EROFS + composefs) are functional with limited production testing. System takeover, the bootstrap pipeline (31 packages from source, qcow2 image generation), and cross-distro repository capability resolution are implemented. Capability enforcement includes `conary capability audit` and `conary capability enforce` with a three-tier policy engine (allowed/prompt/denied). The CAS-layered derivation engine (bootstrap v2) supports provenance tracking, trust levels (0-4), and verification commands. A production Remi server is running at packages.conary.io with an external admin API (bearer token auth, rate limiting, audit logging, 47 MCP tools for LLM agent integration).
 
 See [ROADMAP.md](ROADMAP.md) for what we're building next.
 
@@ -533,10 +533,12 @@ See [ROADMAP.md](ROADMAP.md) for what we're building next.
 
 ## What's Next
 
+The next milestone is **Phase 3: Developer Experience** -- see [ROADMAP.md](ROADMAP.md) for the full plan. Near-term priorities:
+
 - Shell integration (direnv-style dev environments)
-- Composable systems (group packages, OS composition)
+- Recipe system hardening and hermetic build improvements
+- Developer tooling: `conary why`, better error messages, shell completions
 - Federation peer discovery and chunk routing
-- P2P chunk distribution plugins
 
 ---
 
