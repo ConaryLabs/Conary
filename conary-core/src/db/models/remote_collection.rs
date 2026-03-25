@@ -62,26 +62,37 @@ impl RemoteCollection {
         }
     }
 
+    /// Normalize label for DB storage: NULL -> '' sentinel so UNIQUE works.
+    fn db_label(label: Option<&str>) -> &str {
+        label.unwrap_or("")
+    }
+
     /// Find a cached collection that hasn't expired
     ///
     /// Returns None if not cached or if the cache entry has expired.
+    /// Uses strftime to normalize both sides of the comparison so that
+    /// ISO 8601 'T' separators and SQLite space separators compare correctly.
     pub fn find_cached(conn: &Connection, name: &str, label: Option<&str>) -> Result<Option<Self>> {
         let mut stmt = conn.prepare(
             "SELECT id, name, label, version, content_hash, data_json,
                     fetched_at, expires_at, repository_id, signature, signer_key_id
              FROM remote_collections
-             WHERE name = ?1 AND (label = ?2 OR (?2 IS NULL AND label IS NULL))
-               AND expires_at > datetime('now')",
+             WHERE name = ?1 AND label = ?2
+               AND strftime('%Y-%m-%d %H:%M:%S', replace(expires_at, 'T', ' '))
+                   > strftime('%Y-%m-%d %H:%M:%S', 'now')",
         )?;
 
         let entry = stmt
-            .query_row(params![name, label], Self::from_row)
+            .query_row(params![name, Self::db_label(label)], Self::from_row)
             .optional()?;
 
         Ok(entry)
     }
 
     /// Insert or update a cache entry (upsert on name+label)
+    ///
+    /// Uses '' sentinel for NULL labels so the UNIQUE(name, label) constraint
+    /// works correctly (SQLite treats NULL != NULL in unique constraints).
     pub fn upsert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
             "INSERT INTO remote_collections
@@ -99,7 +110,7 @@ impl RemoteCollection {
                 signer_key_id = excluded.signer_key_id",
             params![
                 &self.name,
-                &self.label,
+                Self::db_label(self.label.as_deref()),
                 &self.version,
                 &self.content_hash,
                 &self.data_json,
@@ -116,9 +127,13 @@ impl RemoteCollection {
     }
 
     /// Remove all expired cache entries
+    ///
+    /// Uses strftime normalization for consistent timestamp comparison.
     pub fn purge_expired(conn: &Connection) -> Result<usize> {
         let deleted = conn.execute(
-            "DELETE FROM remote_collections WHERE expires_at <= datetime('now')",
+            "DELETE FROM remote_collections
+             WHERE strftime('%Y-%m-%d %H:%M:%S', replace(expires_at, 'T', ' '))
+                   <= strftime('%Y-%m-%d %H:%M:%S', 'now')",
             [],
         )?;
         Ok(deleted)
@@ -135,19 +150,25 @@ impl RemoteCollection {
     /// Used by `remote-diff --refresh` to force re-fetch of specific collections.
     pub fn purge_by_name(conn: &Connection, name: &str, label: Option<&str>) -> Result<usize> {
         let deleted = conn.execute(
-            "DELETE FROM remote_collections
-             WHERE name = ?1 AND (label = ?2 OR (?2 IS NULL AND label IS NULL))",
-            params![name, label],
+            "DELETE FROM remote_collections WHERE name = ?1 AND label = ?2",
+            params![name, Self::db_label(label)],
         )?;
         Ok(deleted)
     }
 
     /// Convert a database row to a RemoteCollection
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
+        // Map '' sentinel back to None for callers
+        let raw_label: String = row.get(2)?;
+        let label = if raw_label.is_empty() {
+            None
+        } else {
+            Some(raw_label)
+        };
         Ok(Self {
             id: Some(row.get(0)?),
             name: row.get(1)?,
-            label: row.get(2)?,
+            label,
             version: row.get(3)?,
             content_hash: row.get(4)?,
             data_json: row.get(5)?,

@@ -98,10 +98,11 @@ impl ProvideEntry {
 
     /// Find a provide by capability name
     ///
-    /// Returns the first trove that provides this capability
+    /// Returns the first matching provider, ordered deterministically by trove_id.
+    /// Prefer `find_all_by_capability()` when multiple providers need consideration.
     pub fn find_by_capability(conn: &Connection, capability: &str) -> Result<Option<Self>> {
         let sql = format!(
-            "SELECT {} FROM provides WHERE capability = ?1 LIMIT 1",
+            "SELECT {} FROM provides WHERE capability = ?1 ORDER BY trove_id ASC LIMIT 1",
             Self::COLUMNS
         );
         let mut stmt = conn.prepare(&sql)?;
@@ -110,9 +111,12 @@ impl ProvideEntry {
     }
 
     /// Find a provide by kind and capability name
+    ///
+    /// Returns the first match, ordered deterministically by trove_id.
+    /// Prefer `find_all_typed()` when multiple providers need consideration.
     pub fn find_typed(conn: &Connection, kind: &str, capability: &str) -> Result<Option<Self>> {
         let sql = format!(
-            "SELECT {} FROM provides WHERE kind = ?1 AND capability = ?2 LIMIT 1",
+            "SELECT {} FROM provides WHERE kind = ?1 AND capability = ?2 ORDER BY trove_id ASC LIMIT 1",
             Self::COLUMNS
         );
         let mut stmt = conn.prepare(&sql)?;
@@ -192,13 +196,14 @@ impl ProvideEntry {
         conn: &Connection,
         capability: &str,
     ) -> Result<Option<(String, String)>> {
-        // First try exact match
+        // First try exact match, ordered deterministically
         let result = conn
             .query_row(
                 "SELECT t.name, t.version
                  FROM provides p
                  JOIN troves t ON p.trove_id = t.id
                  WHERE p.capability = ?1
+                 ORDER BY t.id ASC
                  LIMIT 1",
                 [capability],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),

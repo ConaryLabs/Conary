@@ -13,6 +13,7 @@ mod resolve;
 mod scriptlets;
 mod system_pm;
 
+use rusqlite::OptionalExtension;
 pub use batch::{BatchInstaller, prepare_package_for_batch};
 pub use blocklist::is_blocked as is_package_blocked;
 pub use dep_mode::DepMode;
@@ -1452,6 +1453,27 @@ fn execute_install_transaction(
         // Set custom selection reason if provided (e.g., from collection install)
         if let Some(reason) = selection_reason {
             trove.selection_reason = Some(reason.to_string());
+        }
+
+        // Record which repository this package came from (if repo-installed).
+        // Prefer the repo matching the distro pin, then highest priority.
+        if trove.install_source == conary_core::db::models::InstallSource::Repository {
+            let repo_id: Option<i64> = tx
+                .query_row(
+                    "SELECT r.id FROM repository_packages rp
+                     JOIN repositories r ON rp.repository_id = r.id
+                     WHERE rp.name = ?1 AND rp.version = ?2
+                       AND (?3 IS NULL OR rp.architecture IS NULL OR rp.architecture = ?3)
+                     ORDER BY
+                         (r.default_strategy_distro = (SELECT distro FROM distro_pin LIMIT 1)) DESC,
+                         r.priority DESC, r.id ASC
+                     LIMIT 1",
+                    rusqlite::params![pkg.name(), pkg.version(), pkg.architecture()],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(conary_core::Error::from)?;
+            trove.installed_from_repository_id = repo_id;
         }
 
         let trove_id = trove.insert(tx)?;

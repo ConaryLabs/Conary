@@ -366,11 +366,14 @@ impl<'db> ConaryProvider<'db> {
     fn resolve_virtual_provide(&self, capability: &str) -> Vec<String> {
         let mut providers = Vec::new();
 
-        // Query the provides table for packages that provide this capability
-        if let Ok(Some(provide)) = ProvideEntry::find_by_capability(self.conn, capability) {
-            // Direct O(1) lookup by trove_id instead of scanning all troves
-            if let Ok(Some(trove)) = Trove::find_by_id(self.conn, provide.trove_id) {
-                providers.push(trove.name.clone());
+        // Query the provides table for all packages that provide this capability
+        if let Ok(provides) = ProvideEntry::find_all_by_capability(self.conn, capability) {
+            for provide in provides {
+                if let Ok(Some(trove)) = Trove::find_by_id(self.conn, provide.trove_id)
+                    && !providers.contains(&trove.name)
+                {
+                    providers.push(trove.name.clone());
+                }
             }
         }
 

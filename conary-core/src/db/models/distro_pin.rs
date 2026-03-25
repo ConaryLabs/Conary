@@ -172,17 +172,54 @@ impl SystemAffinity {
     /// repository_packages, and repositories where distro is not null.
     pub fn recompute(conn: &Connection) -> Result<()> {
         conn.execute("DELETE FROM system_affinity", [])?;
+        // Each installed trove counts toward exactly one distro:
+        //   1. Use troves.source_distro if populated (adopted/taken packages).
+        //   2. Use installed_from_repository_id -> repositories.default_strategy_distro
+        //      (set at install time with deterministic repo selection).
+        //   3. Fall back to a repo lookup for legacy troves missing both fields.
         conn.execute(
             "INSERT INTO system_affinity (distro, package_count, percentage, updated_at)
              SELECT
-                 rp.distro,
+                 distro,
                  COUNT(*) AS package_count,
-                 CAST(COUNT(*) AS REAL) * 100.0 / MAX(1, (SELECT COUNT(*) FROM troves)) AS percentage,
+                 CAST(COUNT(*) AS REAL) * 100.0
+                     / MAX(1, (SELECT COUNT(*) FROM troves)) AS percentage,
                  datetime('now')
-             FROM troves t
-             JOIN repository_packages rp ON t.name = rp.name
-             WHERE rp.distro IS NOT NULL
-             GROUP BY rp.distro",
+             FROM (
+                 -- 1. Prefer source_distro (adopted/taken packages)
+                 SELECT source_distro AS distro FROM troves
+                 WHERE source_distro IS NOT NULL
+                 UNION ALL
+                 -- 2. Use stored install provenance
+                 SELECT r.default_strategy_distro AS distro
+                 FROM troves t
+                 JOIN repositories r ON t.installed_from_repository_id = r.id
+                 WHERE t.source_distro IS NULL
+                   AND t.installed_from_repository_id IS NOT NULL
+                   AND r.default_strategy_distro IS NOT NULL
+                 UNION ALL
+                 -- 3. Legacy fallback for troves missing both fields
+                 SELECT (
+                     SELECT r.default_strategy_distro
+                     FROM repository_packages rp
+                     JOIN repositories r ON rp.repository_id = r.id
+                     WHERE rp.name = t.name AND rp.version = t.version
+                       AND (t.architecture IS NULL OR rp.architecture IS NULL
+                            OR rp.architecture = t.architecture)
+                       AND r.default_strategy_distro IS NOT NULL
+                     ORDER BY
+                         (r.default_strategy_distro = (
+                             SELECT distro FROM distro_pin LIMIT 1
+                         )) DESC,
+                         r.priority DESC, r.id ASC
+                     LIMIT 1
+                 ) AS distro
+                 FROM troves t
+                 WHERE t.source_distro IS NULL
+                   AND t.installed_from_repository_id IS NULL
+             )
+             WHERE distro IS NOT NULL
+             GROUP BY distro",
             [],
         )?;
         Ok(())

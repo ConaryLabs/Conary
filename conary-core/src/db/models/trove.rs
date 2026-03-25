@@ -106,6 +106,8 @@ pub struct Trove {
     pub source_distro: Option<String>,
     /// Native version scheme for the installed package (rpm, debian, arch).
     pub version_scheme: Option<String>,
+    /// Repository this package was installed from (for provenance/affinity).
+    pub installed_from_repository_id: Option<i64>,
 }
 
 impl Trove {
@@ -113,7 +115,7 @@ impl Trove {
     pub(crate) const COLUMNS: &'static str = "id, name, version, type, architecture, description, \
          installed_at, installed_by_changeset_id, install_source, install_reason, \
          flavor_spec, pinned, selection_reason, label_id, orphan_since, source_distro, \
-         version_scheme";
+         version_scheme, installed_from_repository_id";
 
     /// Create a new Trove
     pub fn new(name: String, version: String, trove_type: TroveType) -> Self {
@@ -135,6 +137,7 @@ impl Trove {
             orphan_since: None,
             source_distro: None,
             version_scheme: None,
+            installed_from_repository_id: None,
         }
     }
 
@@ -180,8 +183,8 @@ impl Trove {
     /// Insert this trove into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
-            "INSERT INTO troves (name, version, type, architecture, description, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason, label_id, source_distro, version_scheme)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            "INSERT INTO troves (name, version, type, architecture, description, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason, label_id, source_distro, version_scheme, installed_from_repository_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 &self.name,
                 &self.version,
@@ -197,6 +200,7 @@ impl Trove {
                 &self.label_id,
                 &self.source_distro,
                 &self.version_scheme,
+                &self.installed_from_repository_id,
             ],
         )?;
 
@@ -219,8 +223,9 @@ impl Trove {
         let mut stmt = conn.prepare_cached(
             "INSERT INTO troves (name, version, type, architecture, description, \
              installed_by_changeset_id, install_source, install_reason, flavor_spec, \
-             pinned, selection_reason, label_id, source_distro, version_scheme) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+             pinned, selection_reason, label_id, source_distro, version_scheme, \
+             installed_from_repository_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         )?;
 
         for trove in troves.iter_mut() {
@@ -239,6 +244,7 @@ impl Trove {
                 &trove.label_id,
                 &trove.source_distro,
                 &trove.version_scheme,
+                &trove.installed_from_repository_id,
             ])?;
             trove.id = Some(conn.last_insert_rowid());
         }
@@ -372,6 +378,7 @@ impl Trove {
             orphan_since: row.get(14)?,
             source_distro: row.get(15)?,
             version_scheme: row.get(16)?,
+            installed_from_repository_id: row.get(17)?,
         })
     }
 

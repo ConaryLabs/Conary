@@ -168,7 +168,7 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Resu
 
         let troves = {
             let mut stmt = tx.prepare(
-                "SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason, label_id, orphan_since, source_distro, version_scheme
+                "SELECT id, name, version, type, architecture, description, installed_at, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason, label_id, orphan_since, source_distro, version_scheme, installed_from_repository_id
                  FROM troves WHERE installed_by_changeset_id = ?1",
             )?;
             let rows = stmt.query_map([changeset_id], |row| {
@@ -236,6 +236,7 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Resu
                     orphan_since,
                     source_distro,
                     version_scheme,
+                    installed_from_repository_id: row.get(17).unwrap_or(None),
                 })
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
@@ -331,6 +332,17 @@ fn rollback_removal(
         trove.architecture = snapshot.architecture.clone();
         trove.description = snapshot.description.clone();
         trove.installed_by_changeset_id = Some(rollback_changeset_id);
+        // Preserve repo provenance if the repo still exists; null out if deleted.
+        if let Some(repo_id) = snapshot.installed_from_repository_id {
+            let repo_exists: bool = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM repositories WHERE id = ?1)",
+                    [repo_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(false);
+            trove.installed_from_repository_id = if repo_exists { Some(repo_id) } else { None };
+        }
 
         let trove_id = trove.insert(tx)?;
 
@@ -450,6 +462,18 @@ fn rollback_upgrade(
         trove.architecture = snapshot.architecture.clone();
         trove.description = snapshot.description.clone();
         trove.installed_by_changeset_id = Some(rollback_changeset_id);
+        // Preserve repo provenance if the repo still exists; null out if deleted.
+        if let Some(repo_id) = snapshot.installed_from_repository_id {
+            let repo_exists: bool = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM repositories WHERE id = ?1)",
+                    [repo_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(false);
+            trove.installed_from_repository_id = if repo_exists { Some(repo_id) } else { None };
+        }
+
         let trove_id = trove.insert(tx)?;
 
         // Restore file entries

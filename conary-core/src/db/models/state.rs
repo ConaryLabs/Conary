@@ -308,16 +308,18 @@ impl StateDiff {
         let from_members = StateMember::find_by_state(conn, from_state_id)?;
         let to_members = StateMember::find_by_state(conn, to_state_id)?;
 
-        // Build lookup maps by package name
-        let from_map: std::collections::HashMap<&str, &StateMember> = from_members
-            .iter()
-            .map(|m| (m.trove_name.as_str(), m))
-            .collect();
+        // Key on (name, architecture) to handle multi-arch installs correctly.
+        // e.g. glibc.x86_64 and glibc.i686 are distinct members.
+        type MemberKey<'a> = (&'a str, Option<&'a str>);
+        fn key(m: &StateMember) -> MemberKey<'_> {
+            (m.trove_name.as_str(), m.architecture.as_deref())
+        }
 
-        let to_map: std::collections::HashMap<&str, &StateMember> = to_members
-            .iter()
-            .map(|m| (m.trove_name.as_str(), m))
-            .collect();
+        let from_map: std::collections::HashMap<MemberKey, &StateMember> =
+            from_members.iter().map(|m| (key(m), m)).collect();
+
+        let to_map: std::collections::HashMap<MemberKey, &StateMember> =
+            to_members.iter().map(|m| (key(m), m)).collect();
 
         let mut added = Vec::new();
         let mut removed = Vec::new();
@@ -325,7 +327,7 @@ impl StateDiff {
 
         // Find added and upgraded packages
         for member in &to_members {
-            if let Some(old_member) = from_map.get(member.trove_name.as_str()) {
+            if let Some(old_member) = from_map.get(&key(member)) {
                 if old_member.trove_version != member.trove_version {
                     upgraded.push(((*old_member).clone(), member.clone()));
                 }
@@ -336,7 +338,7 @@ impl StateDiff {
 
         // Find removed packages
         for member in &from_members {
-            if !to_map.contains_key(member.trove_name.as_str()) {
+            if !to_map.contains_key(&key(member)) {
                 removed.push(member.clone());
             }
         }
