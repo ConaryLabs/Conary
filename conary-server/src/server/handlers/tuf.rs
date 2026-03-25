@@ -114,36 +114,17 @@ pub async fn get_versioned_root(
 
 /// POST /v1/admin/tuf/refresh-timestamp (admin endpoint)
 ///
-/// Regenerates timestamp metadata for all TUF-enabled repositories.
-pub async fn refresh_timestamp(State(state): State<Arc<RwLock<ServerState>>>) -> Response {
-    let db_path = {
-        let guard = state.read().await;
-        guard.config.db_path.clone()
-    };
-
-    let result = tokio::task::spawn_blocking(move || query_tuf_repos(&db_path)).await;
-
-    match result {
-        Ok(Ok(repos)) => {
-            let count = repos.len();
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "refreshed": count,
-                    "repositories": repos,
-                })),
-            )
-                .into_response()
-        }
-        Ok(Err(e)) => {
-            warn!("Failed to list TUF repositories: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-        Err(e) => {
-            warn!("Blocking task failed: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+/// Intended to regenerate timestamp metadata for all TUF-enabled repositories.
+/// Currently not implemented -- returns 501.
+pub async fn refresh_timestamp(State(_state): State<Arc<RwLock<ServerState>>>) -> Response {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(serde_json::json!({
+            "error": "TUF timestamp refresh is not yet implemented",
+            "code": "NOT_IMPLEMENTED",
+        })),
+    )
+        .into_response()
 }
 
 /// Helper: Get TUF metadata by role from the database
@@ -227,6 +208,7 @@ fn query_tuf_role_metadata(
         .optional()?)
 }
 
+#[cfg(test)]
 fn query_tuf_repos(db_path: &std::path::Path) -> anyhow::Result<Vec<String>> {
     let conn = conary_core::db::open(db_path)?;
     let mut stmt = conn.prepare("SELECT name FROM repositories WHERE tuf_enabled = 1")?;

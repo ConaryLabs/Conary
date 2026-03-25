@@ -310,9 +310,15 @@ fn store_collection(
         });
     }
 
-    // Verify content hash if present
+    // Verify content hash if present.
+    // The protocol computes the hash over JSON with content_hash blanked to avoid
+    // a chicken-and-egg problem (matching conary-core/src/model/remote.rs).
     if !data.content_hash.is_empty() {
-        let computed = conary_core::hash::sha256_prefixed(body);
+        let mut verification_data = data.clone();
+        verification_data.content_hash = String::new();
+        let verification_json = serde_json::to_vec(&verification_data)
+            .map_err(|e| StoreError::InvalidJson(format!("re-serialize for hash: {e}")))?;
+        let computed = conary_core::hash::sha256_prefixed(&verification_json);
         if computed != data.content_hash {
             return Err(StoreError::HashMismatch {
                 expected: data.content_hash.clone(),
@@ -369,21 +375,86 @@ fn store_collection(
             .map_err(|e| StoreError::Database(e.to_string()))?;
     }
 
+    // Persist the full CollectionData wire format (including includes/pins/exclude)
+    // in remote_collections so GET can serve it back without reconstruction.
+    // Compute content_hash over the canonical form (content_hash blanked).
+    // Fill published_at BEFORE computing content_hash so the stored payload
+    // matches the hash. Core verification hashes the full CollectionData with
+    // only content_hash blanked, not published_at.
+    let mut stored = data.clone();
+    if stored.published_at.is_empty() {
+        stored.published_at = chrono::Utc::now().to_rfc3339();
+    }
+
+    let mut canonical = stored.clone();
+    canonical.content_hash = String::new();
+    let canonical_json = serde_json::to_vec(&canonical)
+        .map_err(|e| StoreError::Database(format!("serialize for hash: {e}")))?;
+    stored.content_hash = conary_core::hash::sha256_prefixed(&canonical_json);
+
+    let data_json = serde_json::to_string(&stored)
+        .map_err(|e| StoreError::Database(format!("serialize wire format: {e}")))?;
+
+    // Upsert into remote_collections. Use '' sentinel for label (not NULL)
+    // to match the normalized label convention from chunk 1 fixes.
+    conn.execute(
+        "INSERT INTO remote_collections (name, label, version, content_hash, data_json, expires_at)
+         VALUES (?1, '', ?2, ?3, ?4, datetime('now', '+10 years'))
+         ON CONFLICT(name, label) DO UPDATE SET
+             version = excluded.version,
+             content_hash = excluded.content_hash,
+             data_json = excluded.data_json,
+             fetched_at = datetime('now'),
+             expires_at = excluded.expires_at,
+             signature = NULL,
+             signer_key_id = NULL",
+        rusqlite::params![stored.name, stored.version, stored.content_hash, data_json],
+    )
+    .map_err(|e| StoreError::Database(e.to_string()))?;
+
     Ok(PutModelResponse {
-        name: data.name,
-        version: data.version,
+        name: stored.name,
+        version: stored.version,
         members: member_count,
     })
 }
 
-/// Build CollectionData for a named collection from the database
+/// Build CollectionData for a named collection from the database.
+///
+/// Checks `remote_collections` first for a stored wire format (which preserves
+/// includes/pins/exclude from the original PUT). Falls back to reconstructing
+/// from troves + collection_members for legacy data.
 fn build_collection_data(
     db_path: &std::path::Path,
     name: &str,
 ) -> Result<Option<CollectionData>, anyhow::Error> {
     let conn = Connection::open(db_path)?;
 
-    // Find the collection trove
+    // Try the stored wire format first (preserves includes/pins/exclude).
+    // Use '' sentinel for label (matching the normalized convention).
+    // Also check NULL for backwards compatibility with pre-v58 data.
+    let stored: Option<String> = conn
+        .query_row(
+            "SELECT data_json FROM remote_collections
+             WHERE name = ?1 AND (label = '' OR label IS NULL)
+             ORDER BY fetched_at DESC LIMIT 1",
+            [name],
+            |row| row.get(0),
+        )
+        .optional()?;
+
+    if let Some(json) = stored {
+        if let Ok(data) = serde_json::from_str::<CollectionData>(&json) {
+            return Ok(Some(data));
+        }
+        // If deserialization fails, fall through to reconstruction
+        tracing::warn!(
+            "Stored wire format for collection '{}' is invalid, reconstructing",
+            name
+        );
+    }
+
+    // Fallback: reconstruct from troves + collection_members (legacy path)
     let troves = Trove::find_by_name(&conn, name)?;
     let collection = troves
         .into_iter()
@@ -410,22 +481,21 @@ fn build_collection_data(
         })
         .collect();
 
-    // Compute content hash over the serialized member data
-    let members_json = serde_json::to_string(&member_data)?;
-    let content_hash = conary_core::hash::sha256_prefixed(members_json.as_bytes());
-
-    let now = chrono::Utc::now().to_rfc3339();
-
-    Ok(Some(CollectionData {
+    // Compute content hash using the canonical method (content_hash blanked)
+    let mut reconstructed = CollectionData {
         name: name.to_string(),
         version: coll.version.clone(),
         members: member_data,
         includes: Vec::new(),
         pins: HashMap::new(),
         exclude: Vec::new(),
-        content_hash,
-        published_at: coll.installed_at.unwrap_or(now),
-    }))
+        content_hash: String::new(),
+        published_at: coll.installed_at.unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+    };
+    let canonical_json = serde_json::to_vec(&reconstructed)?;
+    reconstructed.content_hash = conary_core::hash::sha256_prefixed(&canonical_json);
+
+    Ok(Some(reconstructed))
 }
 
 /// Build a listing of all collections with member counts in a single query

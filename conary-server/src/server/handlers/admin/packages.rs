@@ -98,7 +98,7 @@ pub async fn upload_package(
         )
     };
 
-    let packages_dir = cache_dir.join("packages");
+    let packages_dir = cache_dir.join("packages").join(&distro);
     if let Err(err) = tokio::fs::create_dir_all(&packages_dir).await {
         tracing::error!(
             "Failed to create package cache dir {}: {}",

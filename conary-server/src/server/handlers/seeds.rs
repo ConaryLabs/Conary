@@ -375,26 +375,43 @@ pub async fn get_seed_image(
     };
 
     let object_path = cas_object_path(&chunk_dir, &cas_hash);
-    match tokio::fs::read(&object_path).await {
-        Ok(bytes) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "application/octet-stream")
-            .header(header::CONTENT_LENGTH, bytes.len())
-            .body(Body::from(bytes))
-            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+
+    // Stream the file instead of reading it all into memory
+    let file = match tokio::fs::File::open(&object_path).await {
+        Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             tracing::warn!("seeds row exists for {seed_id} but CAS object {cas_hash} missing");
-            (StatusCode::NOT_FOUND, "Seed image not found in CAS").into_response()
+            return (StatusCode::NOT_FOUND, "Seed image not found in CAS").into_response();
         }
         Err(e) => {
-            tracing::error!("Failed to read seed image CAS object {cas_hash}: {e}");
-            (
+            tracing::error!("Failed to open seed image CAS object {cas_hash}: {e}");
+            return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Failed to read seed image",
             )
-                .into_response()
+                .into_response();
         }
-    }
+    };
+
+    let metadata = match file.metadata().await {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::error!("Failed to stat seed image CAS object {cas_hash}: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to read seed image",
+            )
+                .into_response();
+        }
+    };
+
+    let stream = tokio_util::io::ReaderStream::new(file);
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .header(header::CONTENT_LENGTH, metadata.len())
+        .body(Body::from_stream(stream))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 // ────────────────────────────────────────────────────────────

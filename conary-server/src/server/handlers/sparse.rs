@@ -174,7 +174,8 @@ pub async fn list_packages(
     }
 }
 
-/// Build a sparse index entry for a specific package
+/// Build a sparse index entry for a specific package, aggregating across all
+/// repos for the distro (e.g. arch-core + arch-extra).
 fn build_sparse_entry(
     db_path: &std::path::Path,
     distro: &str,
@@ -182,25 +183,35 @@ fn build_sparse_entry(
 ) -> Result<Option<SparseIndexEntry>, anyhow::Error> {
     let conn = Connection::open(db_path)?;
 
-    // Find repository for this distro
-    let repository = find_repository_for_distro(&conn, distro)?;
-    let repo_id = match repository.and_then(|r| r.id) {
-        Some(id) => id,
-        None => return Ok(None),
-    };
+    // Find all repositories for this distro
+    let repositories = find_repositories_for_distro(&conn, distro)?;
+    let repo_ids: Vec<i64> = repositories.into_iter().filter_map(|r| r.id).collect();
+    if repo_ids.is_empty() {
+        return Ok(None);
+    }
 
-    // Get all versions of this package from the repository
-    let mut stmt = conn.prepare(
+    // Get all versions of this package across all matching repositories
+    let placeholders: String = (1..=repo_ids.len())
+        .map(|i| format!("?{i}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let name_idx = repo_ids.len() + 1;
+    let sql = format!(
         "SELECT id, repository_id, name, version, architecture, description,
                 checksum, size, download_url, dependencies, metadata, synced_at,
                 is_security_update, severity, cve_ids, advisory_id, advisory_url
          FROM repository_packages
-         WHERE repository_id = ?1 AND name = ?2
-         ORDER BY version",
-    )?;
+         WHERE repository_id IN ({placeholders}) AND name = ?{name_idx}
+         ORDER BY version"
+    );
 
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
+        repo_ids.iter().map(|id| Box::new(*id) as Box<dyn rusqlite::types::ToSql>).collect();
+    params.push(Box::new(name.to_string()));
+
+    let mut stmt = conn.prepare(&sql)?;
     let packages: Vec<RepositoryPackage> = stmt
-        .query_map(rusqlite::params![repo_id, name], |row| {
+        .query_map(rusqlite::params_from_iter(&params), |row| {
             Ok(RepositoryPackage {
                 id: Some(row.get(0)?),
                 repository_id: row.get(1)?,
@@ -268,7 +279,8 @@ fn build_sparse_entry(
     }))
 }
 
-/// Build a paginated list of unique package names for a distro
+/// Build a paginated list of unique package names for a distro, aggregating
+/// across all matching repos (e.g. arch-core + arch-extra).
 fn build_package_list(
     db_path: &std::path::Path,
     distro: &str,
@@ -277,42 +289,55 @@ fn build_package_list(
 ) -> Result<PackageListResponse, anyhow::Error> {
     let conn = Connection::open(db_path)?;
 
-    // Find repository for this distro
-    let repository = find_repository_for_distro(&conn, distro)?;
-    let repo_id = match repository.and_then(|r| r.id) {
-        Some(id) => id,
-        None => {
-            return Ok(PackageListResponse {
-                distro: distro.to_string(),
-                packages: vec![],
-                total: 0,
-                page,
-                per_page,
-            });
-        }
-    };
+    // Find all repositories for this distro
+    let repositories = find_repositories_for_distro(&conn, distro)?;
+    let repo_ids: Vec<i64> = repositories.into_iter().filter_map(|r| r.id).collect();
+    if repo_ids.is_empty() {
+        return Ok(PackageListResponse {
+            distro: distro.to_string(),
+            packages: vec![],
+            total: 0,
+            page,
+            per_page,
+        });
+    }
 
-    // Count distinct package names
+    let placeholders: String = (1..=repo_ids.len())
+        .map(|i| format!("?{i}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    // Count distinct package names across all repos
+    let count_sql = format!(
+        "SELECT COUNT(DISTINCT name) FROM repository_packages WHERE repository_id IN ({placeholders})"
+    );
+    let count_params: Vec<Box<dyn rusqlite::types::ToSql>> =
+        repo_ids.iter().map(|id| Box::new(*id) as _).collect();
     let total: usize = conn.query_row(
-        "SELECT COUNT(DISTINCT name) FROM repository_packages WHERE repository_id = ?1",
-        [repo_id],
+        &count_sql,
+        rusqlite::params_from_iter(&count_params),
         |row| row.get::<_, i64>(0).map(|v| v as usize),
     )?;
 
     // Get paginated distinct names
     let offset = (page - 1) * per_page;
-    let mut stmt = conn.prepare(
+    let limit_idx = repo_ids.len() + 1;
+    let offset_idx = repo_ids.len() + 2;
+    let list_sql = format!(
         "SELECT DISTINCT name FROM repository_packages
-         WHERE repository_id = ?1
+         WHERE repository_id IN ({placeholders})
          ORDER BY name
-         LIMIT ?2 OFFSET ?3",
-    )?;
+         LIMIT ?{limit_idx} OFFSET ?{offset_idx}"
+    );
 
+    let mut list_params: Vec<Box<dyn rusqlite::types::ToSql>> =
+        repo_ids.iter().map(|id| Box::new(*id) as _).collect();
+    list_params.push(Box::new(per_page as i64));
+    list_params.push(Box::new(offset as i64));
+
+    let mut stmt = conn.prepare(&list_sql)?;
     let packages: Vec<String> = stmt
-        .query_map(
-            rusqlite::params![repo_id, per_page as i64, offset as i64],
-            |row| row.get(0),
-        )?
+        .query_map(rusqlite::params_from_iter(&list_params), |row| row.get(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
     Ok(PackageListResponse {
@@ -324,7 +349,9 @@ fn build_package_list(
     })
 }
 
-/// Alias to shared implementation in handlers/mod.rs
+/// Alias to shared implementations in handlers/mod.rs
+use super::find_repositories_for_distro;
+#[cfg(test)]
 use super::find_repository_for_distro;
 
 #[cfg(test)]

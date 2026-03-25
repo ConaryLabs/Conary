@@ -626,13 +626,17 @@ pub async fn batch_fetch(
             .into_response();
     }
 
+    /// Maximum aggregate response size for batch fetch (256 MB).
+    const MAX_BATCH_BYTES: u64 = 256 * 1024 * 1024;
+
     let format = request.format.as_deref().unwrap_or("multipart");
     let state = state.read().await;
 
-    // Collect chunk data
+    // Collect chunk data with aggregate size cap
     let mut chunks_data: Vec<(String, Vec<u8>)> = Vec::new();
     let mut missing = Vec::new();
     let mut invalid = Vec::new();
+    let mut total_bytes: u64 = 0;
 
     for raw_hash in &request.hashes {
         if !is_valid_hash(raw_hash) {
@@ -644,6 +648,19 @@ pub async fn batch_fetch(
         let path = state.chunk_cache.chunk_path(&hash);
         match tokio::fs::read(&path).await {
             Ok(data) => {
+                total_bytes += data.len() as u64;
+                if total_bytes > MAX_BATCH_BYTES {
+                    return (
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        Json(serde_json::json!({
+                            "error": format!(
+                                "Aggregate response exceeds size limit ({} MB)",
+                                MAX_BATCH_BYTES / (1024 * 1024)
+                            )
+                        })),
+                    )
+                        .into_response();
+                }
                 state.metrics.record_hit();
                 state.metrics.record_bytes_served(data.len() as u64);
                 chunks_data.push((hash.clone(), data));

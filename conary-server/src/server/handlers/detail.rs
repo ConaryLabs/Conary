@@ -244,20 +244,29 @@ fn query_package_detail(
 ) -> anyhow::Result<Option<PackageDetail>> {
     let conn = conary_core::db::open(db_path)?;
 
-    let repo_id = match resolve_repo_id(&conn, distro)? {
-        Some(id) => id,
-        None => return Ok(None),
-    };
+    let repo_ids = resolve_all_repo_ids(&conn, distro)?;
+    if repo_ids.is_empty() {
+        return Ok(None);
+    }
 
-    // Get the latest version and basic info
-    let latest = conn.query_row(
+    // Get the latest version and basic info across all repos for this distro
+    let placeholders = repo_ids_placeholders(repo_ids.len());
+    let sql = format!(
         "SELECT rp.name, rp.version, rp.description, rp.size, rp.dependencies,
                 rp.architecture
          FROM repository_packages rp
-         WHERE rp.repository_id = ?1 AND rp.name = ?2
+         WHERE rp.repository_id IN ({placeholders}) AND rp.name = ?{}
          ORDER BY rp.synced_at DESC
          LIMIT 1",
-        rusqlite::params![repo_id, name],
+        repo_ids.len() + 1
+    );
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
+        repo_ids.iter().map(|id| Box::new(*id) as _).collect();
+    params.push(Box::new(name.to_string()));
+
+    let latest = conn.query_row(
+        &sql,
+        rusqlite::params_from_iter(&params),
         |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -333,23 +342,32 @@ fn query_versions_internal(
     distro: &str,
     name: &str,
 ) -> anyhow::Result<Vec<VersionSummary>> {
-    let repo_id = match resolve_repo_id(conn, distro)? {
-        Some(id) => id,
-        None => return Ok(Vec::new()),
-    };
+    let repo_ids = resolve_all_repo_ids(conn, distro)?;
+    if repo_ids.is_empty() {
+        return Ok(Vec::new());
+    }
 
-    let mut stmt = conn.prepare(
+    let placeholders = repo_ids_placeholders(repo_ids.len());
+    let distro_idx = repo_ids.len() + 1;
+    let name_idx = repo_ids.len() + 2;
+    let sql = format!(
         "SELECT rp.version, rp.architecture, rp.size,
                 CASE WHEN cp.id IS NOT NULL THEN 1 ELSE 0 END as is_converted
          FROM repository_packages rp
          LEFT JOIN converted_packages cp
-             ON cp.package_name = rp.name AND cp.distro = ?2
+             ON cp.package_name = rp.name AND cp.distro = ?{distro_idx}
                 AND cp.package_version = rp.version
-         WHERE rp.repository_id = ?1 AND rp.name = ?3
-         ORDER BY rp.synced_at DESC",
-    )?;
+         WHERE rp.repository_id IN ({placeholders}) AND rp.name = ?{name_idx}
+         ORDER BY rp.synced_at DESC"
+    );
 
-    let rows = stmt.query_map(rusqlite::params![repo_id, distro, name], |row| {
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
+        repo_ids.iter().map(|id| Box::new(*id) as _).collect();
+    params.push(Box::new(distro.to_string()));
+    params.push(Box::new(name.to_string()));
+
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(&params), |row| {
         Ok(VersionSummary {
             version: row.get(0)?,
             architecture: row.get(1)?,
@@ -368,21 +386,27 @@ fn query_dependencies(
 ) -> anyhow::Result<Vec<String>> {
     let conn = conary_core::db::open(db_path)?;
 
-    let repo_id = match resolve_repo_id(&conn, distro)? {
-        Some(id) => id,
-        None => return Ok(Vec::new()),
-    };
+    let repo_ids = resolve_all_repo_ids(&conn, distro)?;
+    if repo_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let placeholders = repo_ids_placeholders(repo_ids.len());
+    let name_idx = repo_ids.len() + 1;
+    let sql = format!(
+        "SELECT rp.dependencies
+         FROM repository_packages rp
+         WHERE rp.repository_id IN ({placeholders}) AND rp.name = ?{name_idx}
+         ORDER BY rp.synced_at DESC
+         LIMIT 1"
+    );
+
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
+        repo_ids.iter().map(|id| Box::new(*id) as _).collect();
+    params.push(Box::new(name.to_string()));
 
     let deps_str: Option<String> = conn
-        .query_row(
-            "SELECT rp.dependencies
-             FROM repository_packages rp
-             WHERE rp.repository_id = ?1 AND rp.name = ?2
-             ORDER BY rp.synced_at DESC
-             LIMIT 1",
-            rusqlite::params![repo_id, name],
-            |row| row.get(0),
-        )
+        .query_row(&sql, rusqlite::params_from_iter(&params), |row| row.get(0))
         .ok();
 
     parse_dependencies(deps_str.as_deref())
@@ -395,22 +419,31 @@ fn query_reverse_dependencies(
 ) -> anyhow::Result<Vec<String>> {
     let conn = conary_core::db::open(db_path)?;
 
-    let repo_id = match resolve_repo_id(&conn, distro)? {
-        Some(id) => id,
-        None => return Ok(Vec::new()),
-    };
+    let repo_ids = resolve_all_repo_ids(&conn, distro)?;
+    if repo_ids.is_empty() {
+        return Ok(Vec::new());
+    }
 
-    let mut stmt = conn.prepare(
+    let placeholders = repo_ids_placeholders(repo_ids.len());
+    let cap_idx = repo_ids.len() + 1;
+    let name_idx = repo_ids.len() + 2;
+    let sql = format!(
         "SELECT DISTINCT rp.name
          FROM repository_packages rp
          JOIN repository_requirements rr ON rr.repository_package_id = rp.id
-         WHERE rr.capability = ?1
-           AND rp.repository_id = ?2
-           AND rp.name != ?3
-         ORDER BY rp.name",
-    )?;
+         WHERE rr.capability = ?{cap_idx}
+           AND rp.repository_id IN ({placeholders})
+           AND rp.name != ?{name_idx}
+         ORDER BY rp.name"
+    );
 
-    let rows = stmt.query_map(rusqlite::params![name, repo_id, name], |row| {
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
+        repo_ids.iter().map(|id| Box::new(*id) as _).collect();
+    params.push(Box::new(name.to_string()));
+    params.push(Box::new(name.to_string()));
+
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(&params), |row| {
         row.get::<_, String>(0)
     })?;
 
@@ -475,22 +508,48 @@ fn query_recent(
     let conn = conary_core::db::open(db_path)?;
 
     if let Some(distro) = distro {
-        let repo_id = match resolve_repo_id(&conn, distro)? {
-            Some(id) => id,
-            None => return Ok(Vec::new()),
-        };
+        let repo_ids = resolve_all_repo_ids(&conn, distro)?;
+        if repo_ids.is_empty() {
+            return Ok(Vec::new());
+        }
 
-        let mut stmt = conn.prepare(
+        let n = repo_ids.len();
+        let ph = repo_ids_placeholders(n);
+        let distro_idx = n + 1;
+        let limit_idx = n + 2;
+
+        // Pick one row per package name: the one with the newest synced_at
+        // (highest id as tiebreaker for same-second syncs). The correlated
+        // subquery reuses the same ?1..?n placeholders for repo filtering.
+        let sql = format!(
             "SELECT rp.name, rp.version, rp.description, rp.size,
                     COALESCE(dc.total_count, 0) as downloads
              FROM repository_packages rp
-             LEFT JOIN download_counts dc ON dc.distro = ?2 AND dc.package_name = rp.name
-             WHERE rp.repository_id = ?1
+             LEFT JOIN download_counts dc ON dc.distro = ?{distro_idx} AND dc.package_name = rp.name
+             WHERE rp.repository_id IN ({ph})
+               AND rp.id = (
+                   SELECT rp2.id FROM repository_packages rp2
+                   WHERE rp2.name = rp.name
+                     AND rp2.repository_id IN ({ph})
+                   ORDER BY rp2.synced_at DESC, rp2.id DESC
+                   LIMIT 1
+               )
              ORDER BY rp.synced_at DESC
-             LIMIT ?3",
-        )?;
+             LIMIT ?{limit_idx}",
+        );
+        let mut stmt = conn.prepare(&sql)?;
 
-        let rows = stmt.query_map(rusqlite::params![repo_id, distro, limit as i64], |row| {
+        // Params: repo_ids + distro + limit
+        // SQLite reuses the same positional params for both IN clauses
+        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        for id in &repo_ids {
+            params_vec.push(Box::new(*id));
+        }
+        params_vec.push(Box::new(distro.to_string()));
+        params_vec.push(Box::new(limit as i64));
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+
+        let rows = stmt.query_map(param_refs.as_slice(), |row| {
             Ok(PackageSummary {
                 name: row.get(0)?,
                 distro: distro.to_string(),
@@ -587,18 +646,26 @@ fn enrich_package_summary(
     name: &str,
     download_count: i64,
 ) -> anyhow::Result<Option<PackageSummary>> {
-    let repo_id = match resolve_repo_id(conn, distro)? {
-        Some(id) => id,
-        None => return Ok(None),
-    };
+    let repo_ids = resolve_all_repo_ids(conn, distro)?;
+    if repo_ids.is_empty() {
+        return Ok(None);
+    }
 
-    let result = conn.query_row(
+    let placeholders = repo_ids_placeholders(repo_ids.len());
+    let sql = format!(
         "SELECT rp.version, rp.description, rp.size
          FROM repository_packages rp
-         WHERE rp.repository_id = ?1 AND rp.name = ?2
+         WHERE rp.repository_id IN ({placeholders}) AND rp.name = ?{}
          ORDER BY rp.synced_at DESC
          LIMIT 1",
-        rusqlite::params![repo_id, name],
+        repo_ids.len() + 1,
+    );
+    let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> =
+        repo_ids.iter().map(|id| Box::new(*id) as Box<dyn rusqlite::types::ToSql>).collect();
+    params_vec.push(Box::new(name.to_string()));
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+
+    let result = conn.query_row(&sql, param_refs.as_slice(),
         |row| {
             Ok(PackageSummary {
                 name: name.to_string(),
@@ -624,21 +691,27 @@ fn extract_metadata(
     distro: &str,
     name: &str,
 ) -> anyhow::Result<(Option<String>, Option<String>)> {
-    let repo_id = match resolve_repo_id(conn, distro)? {
-        Some(id) => id,
-        None => return Ok((None, None)),
-    };
+    let repo_ids = resolve_all_repo_ids(conn, distro)?;
+    if repo_ids.is_empty() {
+        return Ok((None, None));
+    }
+
+    let placeholders = repo_ids_placeholders(repo_ids.len());
+    let name_idx = repo_ids.len() + 1;
+    let sql = format!(
+        "SELECT rp.metadata
+         FROM repository_packages rp
+         WHERE rp.repository_id IN ({placeholders}) AND rp.name = ?{name_idx}
+         ORDER BY rp.synced_at DESC
+         LIMIT 1"
+    );
+
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
+        repo_ids.iter().map(|id| Box::new(*id) as _).collect();
+    params.push(Box::new(name.to_string()));
 
     let metadata_json: Option<String> = conn
-        .query_row(
-            "SELECT rp.metadata
-             FROM repository_packages rp
-             WHERE rp.repository_id = ?1 AND rp.name = ?2
-             ORDER BY rp.synced_at DESC
-             LIMIT 1",
-            rusqlite::params![repo_id, name],
-            |row| row.get(0),
-        )
+        .query_row(&sql, rusqlite::params_from_iter(&params), |row| row.get(0))
         .ok();
 
     if let Some(json_str) = metadata_json
@@ -684,6 +757,16 @@ fn parse_dependencies(deps_str: Option<&str>) -> anyhow::Result<Vec<String>> {
         .collect())
 }
 
-fn resolve_repo_id(conn: &Connection, distro: &str) -> anyhow::Result<Option<i64>> {
-    Ok(super::find_repository_for_distro(conn, distro)?.and_then(|r| r.id))
+/// Resolve all repository IDs for a distro (e.g. arch-core + arch-extra).
+fn resolve_all_repo_ids(conn: &Connection, distro: &str) -> anyhow::Result<Vec<i64>> {
+    let repos = super::find_repositories_for_distro(conn, distro)?;
+    Ok(repos.into_iter().filter_map(|r| r.id).collect())
+}
+
+/// Build a comma-separated `?1, ?2, ...` placeholder string for N parameters.
+fn repo_ids_placeholders(count: usize) -> String {
+    (1..=count)
+        .map(|i| format!("?{i}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }

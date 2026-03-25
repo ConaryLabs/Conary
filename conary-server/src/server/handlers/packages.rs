@@ -445,8 +445,10 @@ pub async fn download_package(
     }
 
     // No job found - look for the CCS package file on disk
-    // The conversion service stores it at: {cache_dir}/packages/{name}-{version}.ccs
-    let packages_dir = state_guard.config.cache_dir.join("packages");
+    // The conversion service stores it at: {cache_dir}/packages/{distro}/{name}-{version}.ccs
+    // Also check the legacy flat path for backwards compatibility.
+    let packages_dir = state_guard.config.cache_dir.join("packages").join(&distro);
+    let legacy_packages_dir = state_guard.config.cache_dir.join("packages");
     let analytics = state_guard.analytics.clone();
     let ua = headers
         .get(header::USER_AGENT)
@@ -454,12 +456,20 @@ pub async fn download_package(
         .map(str::to_string);
 
     // If version specified, look for exact match
-    // Otherwise, find the latest version
+    // Otherwise, find the latest version.
+    // Check the distro-namespaced path first, then fall back to legacy flat path.
     let ccs_path = if let Some(version) = &query.version {
-        packages_dir.join(format!("{}-{}.ccs", name, version))
+        let namespaced = packages_dir.join(format!("{}-{}.ccs", name, version));
+        if namespaced.exists() {
+            namespaced
+        } else {
+            legacy_packages_dir.join(format!("{}-{}.ccs", name, version))
+        }
     } else {
         // Find any matching package (glob for {name}-*.ccs)
-        match find_latest_package(&packages_dir, &name) {
+        match find_latest_package(&packages_dir, &name)
+            .or_else(|| find_latest_package(&legacy_packages_dir, &name))
+        {
             Some(path) => path,
             None => {
                 // No converted package found - trigger conversion
