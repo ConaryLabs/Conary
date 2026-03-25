@@ -682,6 +682,48 @@ pub fn migrate_v58(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 59: Add canonical_id to repository_packages + appstream_provides table
+///
+/// - canonical_id: FK linking each repo package to its cross-distro canonical
+///   identity. Set during sync by looking up package_implementations.
+/// - appstream_provides: Cross-distro capability data from AppStream metadata
+///   (libraries, binaries, python3 modules, dbus services).
+pub fn migrate_v59(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 59");
+
+    conn.execute_batch(
+        "
+        -- Add canonical_id to repository_packages for cross-distro identity
+        ALTER TABLE repository_packages ADD COLUMN canonical_id INTEGER
+            REFERENCES canonical_packages(id) ON DELETE SET NULL;
+        CREATE INDEX idx_repo_packages_canonical ON repository_packages(canonical_id);
+
+        -- Backfill from existing package_implementations data.
+        -- Use COALESCE to handle repos where default_strategy_distro is NULL.
+        UPDATE repository_packages SET canonical_id = (
+            SELECT pi.canonical_id FROM package_implementations pi
+            JOIN repositories r ON repository_packages.repository_id = r.id
+            WHERE pi.distro_name = repository_packages.name
+              AND pi.distro = COALESCE(r.default_strategy_distro, r.name)
+            LIMIT 1
+        ) WHERE canonical_id IS NULL;
+
+        -- Cross-distro provides from AppStream metadata
+        CREATE TABLE appstream_provides (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            canonical_id INTEGER NOT NULL REFERENCES canonical_packages(id) ON DELETE CASCADE,
+            provide_type TEXT NOT NULL,
+            capability TEXT NOT NULL,
+            UNIQUE(canonical_id, provide_type, capability)
+        );
+        CREATE INDEX idx_appstream_provides_cap ON appstream_provides(capability);
+        ",
+    )?;
+
+    info!("Schema version 59 applied (canonical_id + appstream_provides)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -804,5 +846,49 @@ mod tests {
             [],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn test_migrate_v59_canonical_id_and_appstream_provides() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        // Verify canonical_id column exists on repository_packages
+        conn.execute(
+            "SELECT canonical_id FROM repository_packages LIMIT 0",
+            [],
+        )
+        .unwrap();
+
+        // Verify appstream_provides table exists with FK enforcement
+        conn.execute(
+            "INSERT INTO appstream_provides (canonical_id, provide_type, capability)
+             VALUES (1, 'library', 'libssl.so.3')",
+            [],
+        )
+        .expect_err("should fail FK -- no canonical_packages row");
+
+        // Insert a real canonical package, then appstream_provides
+        conn.execute(
+            "INSERT INTO canonical_packages (name, kind) VALUES ('openssl', 'package')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO appstream_provides (canonical_id, provide_type, capability)
+             VALUES (1, 'library', 'libssl.so.3')",
+            [],
+        )
+        .unwrap();
+
+        // Verify schema version
+        let version: i32 = conn
+            .query_row(
+                "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, crate::db::schema::SCHEMA_VERSION);
     }
 }
