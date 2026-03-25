@@ -407,7 +407,18 @@ CREATE INDEX idx_appstream_provides_cap ON appstream_provides(capability);
 - Changing the resolvo SAT solver itself
 - Changing CLI flags or user-facing behavior
 - RPM rich dependency parsing (separate effort)
-- Full Repology database dump ingestion (dump ingestion for version tracking is a follow-up; rules YAML for name mapping IS in scope)
+
+## Future work: Repology database dump ingestion
+
+After this redesign lands, the next phase is ingesting Repology's full PostgreSQL database dump (~2GB compressed, updated weekly at `dumps.repology.org`) for **version intelligence**. This is orthogonal to resolution but builds on the canonical_id infrastructure:
+
+- **`repology_versions` table**: Cross-reference `repository_packages.canonical_id` against Repology's per-project version status (newest, outdated, devel, legacy)
+- **`conary outdated`**: Show which installed packages have newer versions available across distros
+- **`conary update --check`**: Preview available updates with cross-distro version context
+- **Security advisories**: Flag packages with versions marked as vulnerable
+- **Requires**: PostgreSQL dump parsing (SQL format, zstd compressed), `postgresql-libversion` semantics for version comparison
+
+The `canonical_id` column added in this redesign is the join key that makes dump ingestion useful -- without it, Repology's project-level data can't be correlated to our repository_packages rows.
 
 ## References
 
