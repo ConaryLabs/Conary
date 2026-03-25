@@ -94,6 +94,11 @@ type SeedRow = (
 /// must already exist in the CAS before calling this endpoint.
 ///
 /// Returns 201 Created on success.
+///
+/// NOTE: Auth is checked inline via `require_admin_token` rather than the admin
+/// router's middleware so that GET on the same path stays public. This means
+/// the admin rate limiters (governor-based) do not apply here.
+// TODO: Move write endpoints to the admin router to get rate limiting for free.
 pub async fn put_seed(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(seed_id): Path<String>,

@@ -614,10 +614,10 @@ async fn run() -> Result<()> {
                 remi_endpoint,
                 remi_distro,
             } => {
-                commands::cmd_repo_add(
-                    &name,
-                    &url,
-                    &db.db_path,
+                commands::cmd_repo_add(commands::RepoAddOptions {
+                    name,
+                    url,
+                    db_path: db.db_path,
                     content_url,
                     priority,
                     disabled,
@@ -627,7 +627,7 @@ async fn run() -> Result<()> {
                     default_strategy,
                     remi_endpoint,
                     remi_distro,
-                )
+                })
                 .await
             }
 
@@ -1647,12 +1647,7 @@ async fn run() -> Result<()> {
         // Daemon Command
         // =====================================================================
         #[cfg(feature = "server")]
-        Some(cli::Commands::Daemon {
-            db,
-            socket,
-            tcp,
-            foreground: _,
-        }) => {
+        Some(cli::Commands::Daemon { db, socket, tcp }) => {
             use conary_server::daemon::{DaemonConfig, run_daemon};
             use std::path::PathBuf;
 
@@ -1860,7 +1855,6 @@ async fn run() -> Result<()> {
             output,
             objects_dir,
             db,
-            oci: _,
         }) => {
             commands::export_oci(
                 generation,

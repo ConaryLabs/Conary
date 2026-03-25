@@ -43,6 +43,72 @@ pub enum ErrorCategory {
 }
 
 // ---------------------------------------------------------------------------
+// Conversions
+// ---------------------------------------------------------------------------
+
+impl From<crate::error::ConaryTestError> for StructuredError {
+    fn from(err: crate::error::ConaryTestError) -> Self {
+        use crate::error::ConaryTestError;
+        match &err {
+            ConaryTestError::Container { .. } => {
+                Self::infrastructure("container_error", err.to_string())
+            }
+            ConaryTestError::AssertionFailed { .. } => Self {
+                error: "assertion_failed".to_string(),
+                category: ErrorCategory::Assertion,
+                message: err.to_string(),
+                transient: false,
+                hint: None,
+                details: None,
+            },
+            ConaryTestError::Timeout { .. } => {
+                let mut e = Self::infrastructure("test_timeout", err.to_string());
+                e.transient = true;
+                e
+            }
+            ConaryTestError::Config(_) => Self {
+                error: "config_error".to_string(),
+                category: ErrorCategory::Config,
+                message: err.to_string(),
+                transient: false,
+                hint: None,
+                details: None,
+            },
+            ConaryTestError::Manifest { .. } => Self {
+                error: "manifest_error".to_string(),
+                category: ErrorCategory::Config,
+                message: err.to_string(),
+                transient: false,
+                hint: None,
+                details: None,
+            },
+            ConaryTestError::RunNotFound(_) => Self {
+                error: "run_not_found".to_string(),
+                category: ErrorCategory::Validation,
+                message: err.to_string(),
+                transient: false,
+                hint: None,
+                details: None,
+            },
+            ConaryTestError::TestNotFound { .. } => Self {
+                error: "test_not_found".to_string(),
+                category: ErrorCategory::Validation,
+                message: err.to_string(),
+                transient: false,
+                hint: None,
+                details: None,
+            },
+            ConaryTestError::Cancelled(_) => {
+                let mut e = Self::infrastructure("run_cancelled", err.to_string());
+                e.transient = false;
+                e
+            }
+            _ => Self::infrastructure("internal_error", err.to_string()),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Builder methods
 // ---------------------------------------------------------------------------
 

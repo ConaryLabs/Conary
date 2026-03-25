@@ -399,7 +399,9 @@ pub async fn cmd_automation_configure(
         println!("Would disable AI assistance");
     }
 
-    println!("\n[NOT YET IMPLEMENTED] automation configure: persisting configuration changes is not yet available.");
+    println!(
+        "\n[NOT YET IMPLEMENTED] automation configure: persisting configuration changes is not yet available."
+    );
     println!("Please edit {} directly.", DEFAULT_MODEL_PATH);
 
     Ok(())
@@ -422,7 +424,9 @@ pub async fn cmd_automation_daemon(
     };
 
     if !foreground {
-        println!("[NOT YET IMPLEMENTED] automation daemon: background daemon mode is not yet available. Use --foreground.");
+        println!(
+            "[NOT YET IMPLEMENTED] automation daemon: background daemon mode is not yet available. Use --foreground."
+        );
         return Ok(());
     }
 
@@ -486,34 +490,21 @@ pub async fn cmd_automation_daemon(
 }
 
 /// Show automation history
-// TODO: Query the database for actual automation history records using db_path,
-// limit, category, status, and since parameters instead of stub output.
+///
+/// Not yet implemented -- requires a database table for automation history
+/// records, populated by `conary automation apply`.
 pub async fn cmd_automation_history(
     _db_path: &str,
-    limit: usize,
-    category: Option<String>,
-    status: Option<String>,
-    since: Option<String>,
+    _limit: usize,
+    _category: Option<String>,
+    _status: Option<String>,
+    _since: Option<String>,
 ) -> Result<()> {
-    println!("=== Automation History ===\n");
-
-    if let Some(cat) = &category {
-        println!("Filtering by category: {}", cat);
-    }
-    if let Some(st) = &status {
-        println!("Filtering by status: {}", st);
-    }
-    if let Some(date) = &since {
-        println!("Showing entries since: {}", date);
-    }
-    println!("Showing up to {} entries\n", limit);
-
-    println!("No automation history recorded yet.");
-    println!();
-    println!("History is recorded when actions are applied through:");
-    println!("  conary automation apply");
-
-    Ok(())
+    anyhow::bail!(
+        "automation history is not yet implemented.\n\
+         History will be recorded when actions are applied through:\n  \
+         conary automation apply"
+    );
 }
 
 /// AI-assisted package finding by intent

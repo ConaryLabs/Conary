@@ -16,7 +16,6 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -87,6 +86,11 @@ pub async fn get_profile(
 /// 4. Write bytes into CAS at `<chunk_dir>/objects/<2>/<62>`
 ///
 /// Returns 201 Created on success.
+///
+/// NOTE: Auth is checked inline via `require_admin_token` rather than the admin
+/// router's middleware so that GET on the same path stays public. This means
+/// the admin rate limiters (governor-based) do not apply here.
+// TODO: Move write endpoints to the admin router to get rate limiting for free.
 pub async fn put_profile(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(profile_hash): Path<String>,
@@ -125,9 +129,7 @@ pub async fn put_profile(
     }
 
     // Compute SHA-256 and verify it matches the URL parameter
-    let mut hasher = Sha256::new();
-    hasher.update(&body_bytes);
-    let computed_hash = format!("{:x}", hasher.finalize());
+    let computed_hash = conary_core::hash::sha256(&body_bytes);
 
     if computed_hash != profile_hash.to_ascii_lowercase() {
         return (

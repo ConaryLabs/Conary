@@ -2,8 +2,8 @@
 
 //! Shared graph algorithms for the derivation module.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::recipe::Recipe;
 

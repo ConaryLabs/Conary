@@ -122,12 +122,7 @@ impl MockBackend {
     }
 
     /// Register pre-canned log lines and a final result for a detached exec ID.
-    pub fn with_detached_exec(
-        self,
-        exec_id: &str,
-        logs: Vec<&str>,
-        result: ExecResult,
-    ) -> Self {
+    pub fn with_detached_exec(self, exec_id: &str, logs: Vec<&str>, result: ExecResult) -> Self {
         self.log_sequences.lock().unwrap().insert(
             exec_id.to_string(),
             logs.into_iter().map(String::from).collect(),

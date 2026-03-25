@@ -15,7 +15,6 @@ use conary_core::packages::deb::DebPackage;
 use conary_core::packages::rpm::RpmPackage;
 use conary_core::packages::traits::PackageFormat;
 use conary_core::repository::download_package;
-use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -559,9 +558,7 @@ impl ConversionService {
     /// Calculate SHA-256 checksum of a file
     fn calculate_checksum(path: &Path) -> Result<String> {
         let mut file = std::fs::File::open(path)?;
-        let mut hasher = Sha256::new();
-        std::io::copy(&mut file, &mut hasher)?;
-        Ok(format!("{:x}", hasher.finalize()))
+        Ok(conary_core::hash::sha256_reader_hex(&mut file)?)
     }
 
     /// Build result from existing conversion record
@@ -604,7 +601,7 @@ impl ConversionService {
                 .clone()
                 .unwrap_or_else(|| distro.to_string()),
             chunk_hashes,
-            total_size: existing.total_size.unwrap_or(repo_pkg.size) as u64,
+            total_size: u64::try_from(existing.total_size.unwrap_or(repo_pkg.size)).unwrap_or(0),
             content_hash: existing
                 .content_hash
                 .clone()
@@ -664,11 +661,7 @@ impl ConversionService {
             .await
             .context("Failed to read cooked CCS package")?;
 
-        let content_hash = {
-            let mut hasher = Sha256::new();
-            hasher.update(&ccs_data);
-            format!("{:x}", hasher.finalize())
-        };
+        let content_hash = conary_core::hash::sha256(&ccs_data);
 
         // Copy CCS package to persistent location
         let ccs_filename = Self::safe_ccs_filename(&recipe.package.name, &recipe.package.version)?;

@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use anyhow::{Result, anyhow};
+use crate::error::{Error, Result};
 use tracing::debug;
 
 use crate::filesystem::fsverity::{FsVerityError, enable_fsverity};
@@ -76,9 +76,10 @@ pub fn supports_fsverity(path: &Path) -> bool {
 /// Returns capabilities on success, or an error if composefs is not supported.
 pub fn preflight_composefs(cas_dir: &Path) -> Result<ComposefsCaps> {
     if !supports_composefs() {
-        return Err(anyhow!(
+        return Err(Error::IoError(
             "Composefs not supported by running kernel. \
              Requires Linux 6.2+ with CONFIG_EROFS_FS and composefs module."
+                .to_string(),
         ));
     }
 

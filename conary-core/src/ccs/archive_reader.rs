@@ -80,15 +80,11 @@ pub fn read_ccs_archive<R: Read>(reader: R) -> anyhow::Result<CcsArchiveContents
 
         // Per-entry size guard
         if entry_size > MAX_ENTRY_SIZE {
-            anyhow::bail!(
-                "CCS archive entry exceeds maximum size limit: {entry_size} bytes"
-            );
+            anyhow::bail!("CCS archive entry exceeds maximum size limit: {entry_size} bytes");
         }
         total_bytes += entry_size;
         if total_bytes > MAX_TOTAL_EXTRACTION_SIZE {
-            anyhow::bail!(
-                "CCS archive total extraction size exceeds limit"
-            );
+            anyhow::bail!("CCS archive total extraction size exceeds limit");
         }
 
         let entry_path = entry.path()?;
@@ -146,8 +142,7 @@ pub fn read_ccs_archive<R: Read>(reader: R) -> anyhow::Result<CcsArchiveContents
             components.insert(comp.name.clone(), comp);
         }
         // ── objects/{prefix}/{suffix} — content blobs ────────────────
-        else if entry_path_str.starts_with("objects/")
-            || entry_path_str.starts_with("./objects/")
+        else if entry_path_str.starts_with("objects/") || entry_path_str.starts_with("./objects/")
         {
             let stripped = entry_path_str
                 .strip_prefix("./")
@@ -253,7 +248,9 @@ license = "MIT"
             header.set_size(data.len() as u64);
             header.set_mode(0o644);
             header.set_cksum();
-            builder.append_data(&mut header, "dummy.txt", &data[..]).unwrap();
+            builder
+                .append_data(&mut header, "dummy.txt", &data[..])
+                .unwrap();
             let encoder = builder.into_inner().unwrap();
             encoder.finish().unwrap();
         }

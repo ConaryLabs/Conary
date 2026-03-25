@@ -197,7 +197,11 @@ impl CrossToolsBuilder {
     /// Locates the TOML recipe under `recipes/cross-tools/`, fetches the source
     /// archive, then runs the Kitchen/Cook pipeline (prep, unpack, patch, simmer)
     /// with `$LFS` as the destination directory.
-    fn build_package(&self, name: &str, extra_env: &[(String, String)]) -> Result<(), CrossToolsError> {
+    fn build_package(
+        &self,
+        name: &str,
+        extra_env: &[(String, String)],
+    ) -> Result<(), CrossToolsError> {
         // Map package name to recipe filename (e.g. "libstdc++" -> "libstdcxx.toml")
         let recipe_filename = name.replace("++", "xx");
         let recipe_path =

@@ -601,10 +601,7 @@ pub enum Commands {
         /// Path to the Conary database (used to scope CAS objects to the generation)
         #[arg(long, default_value = "/conary/conary.db")]
         db: String,
-
-        /// Export in OCI format (currently the only supported format)
-        #[arg(long, default_value_t = true)]
-        oci: bool,
+        // NOTE: OCI is the only supported export format. No format flag is needed.
     },
 
     /// Run the conaryd daemon
@@ -624,10 +621,8 @@ pub enum Commands {
         /// Optional TCP bind address (e.g., 127.0.0.1:7890)
         #[arg(long)]
         tcp: Option<String>,
-
-        /// Run in foreground (don't daemonize)
-        #[arg(long)]
-        foreground: bool,
+        // NOTE: The daemon always runs in the foreground. Use systemd for
+        // background operation (see deploy/conary-daemon.service).
     },
 
     /// Run a zero-config Remi LAN proxy

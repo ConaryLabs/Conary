@@ -378,11 +378,19 @@ impl RepositoryPackage {
     }
 
     /// Search repository packages by pattern (name or description)
+    ///
+    /// The pattern is escaped for SQL LIKE to prevent `%` and `_` in user
+    /// input from acting as wildcards. Uses `\` as the LIKE escape character.
     pub fn search(conn: &Connection, pattern: &str) -> Result<Vec<Self>> {
-        let search_pattern = format!("%{pattern}%");
+        // Escape SQL LIKE wildcards in user input
+        let escaped = pattern
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let search_pattern = format!("%{escaped}%");
         let sql = format!(
             "SELECT {} FROM repository_packages \
-             WHERE name LIKE ?1 OR description LIKE ?1 \
+             WHERE name LIKE ?1 ESCAPE '\\' OR description LIKE ?1 ESCAPE '\\' \
              ORDER BY name, version",
             Self::COLUMNS
         );

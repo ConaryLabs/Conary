@@ -312,10 +312,7 @@ include = ["glibc"]
             "expected 85+ packages"
         );
         assert!(manifest.packages.include.contains(&"glibc".to_string()));
-        assert!(manifest
-            .packages
-            .include
-            .contains(&"linux-pam".to_string()));
+        assert!(manifest.packages.include.contains(&"linux-pam".to_string()));
         assert!(manifest.kernel.is_some());
     }
 }

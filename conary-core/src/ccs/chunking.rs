@@ -45,8 +45,7 @@ impl Chunk {
 
     /// Get the CAS-style path for this chunk (e.g., "ab/cdef1234...")
     pub fn cas_path(&self) -> PathBuf {
-        let hex = self.hash_hex();
-        PathBuf::from(&hex[..2]).join(&hex[2..])
+        crate::filesystem::object_path(Path::new(""), &self.hash_hex())
     }
 }
 
@@ -190,7 +189,7 @@ impl ChunkStore {
     /// Get the full path for a chunk hash
     fn chunk_path(&self, hash: &[u8; 32]) -> PathBuf {
         let hex = hex::encode(hash);
-        self.root.join(&hex[..2]).join(&hex[2..])
+        crate::filesystem::object_path(&self.root, &hex)
     }
 
     /// Check if a chunk exists in the store
@@ -211,13 +210,18 @@ impl ChunkStore {
             std::fs::create_dir_all(parent)?;
         }
 
-        // Write to temp file then rename (atomic)
-        let temp_path = path.with_extension("tmp");
-        let mut file = File::create(&temp_path)?;
-        file.write_all(&chunk.data)?;
-        file.sync_all()?;
+        // Write to a unique temp file then rename (atomic).
+        // Using a unique temp name avoids TOCTOU races when multiple
+        // processes store the same chunk concurrently.
+        let parent = path.parent().unwrap_or(Path::new("."));
+        let mut temp_file = tempfile::NamedTempFile::new_in(parent)
+            .with_context(|| format!("Failed to create temp file in {}", parent.display()))?;
+        temp_file.write_all(&chunk.data)?;
+        temp_file.as_file().sync_all()?;
 
-        std::fs::rename(&temp_path, &path)?;
+        temp_file
+            .persist(&path)
+            .map_err(|e| anyhow::anyhow!("Failed to persist chunk to {}: {}", path.display(), e))?;
 
         Ok(true) // Newly stored
     }

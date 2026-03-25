@@ -1588,11 +1588,19 @@ menuentry "Conary Linux (Live, Text Mode)" {
         let _ = Command::new("mmd")
             .args(["-i"])
             .arg(&esp_img)
-            .args(["::EFI", "::EFI/BOOT", "::EFI/conaryos", "::loader", "::loader/entries"])
+            .args([
+                "::EFI",
+                "::EFI/BOOT",
+                "::EFI/conaryos",
+                "::loader",
+                "::loader/entries",
+            ])
             .status();
 
         // Note: kernel population from CAS is a TODO for the first iteration
-        tracing::warn!("ESP kernel population not yet implemented -- image may need manual kernel install");
+        tracing::warn!(
+            "ESP kernel population not yet implemented -- image may need manual kernel install"
+        );
 
         // Write ESP into raw image
         {

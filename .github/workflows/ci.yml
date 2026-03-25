@@ -22,23 +22,16 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Cache cargo registry
+      - name: Cache cargo and build artifacts
         uses: actions/cache@v4
         with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Cache cargo index
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Cache target directory
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -74,6 +67,9 @@ jobs:
         run: cargo install cargo-audit
 
       - name: Run security audit
+        # RUSTSEC-2024-0447 (pgp): DoS via malformed input -- transitive dep via rpm crate, no direct PGP parsing of untrusted input
+        # RUSTSEC-2023-0071 (rsa): Marvin timing attack -- transitive dep via sigstore/sequoia/rpm, no direct RSA decryption; no upstream fix available
+        # RUSTSEC-2025-0136 (sequoia-openpgp): aes_key_unwrap underflow -- transitive dep, we don't decrypt OpenPGP messages from untrusted sources
         run: >
           cargo audit
           --ignore RUSTSEC-2024-0447

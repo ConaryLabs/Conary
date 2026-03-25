@@ -646,9 +646,14 @@ fn build_catalog(db_path: &std::path::Path) -> Result<OciCatalog, anyhow::Error>
 ///
 /// Validates that the remaining string is exactly 64 lowercase hex characters
 /// to prevent path traversal via crafted digest strings.
+/// Strip the `sha256:` prefix and validate the hash.
+///
+/// OCI digests may contain uppercase hex, so this function validates against
+/// the case-insensitive `is_valid_hex_hash` (unlike chunk endpoints which
+/// require lowercase). Callers must normalize to lowercase before CAS lookup.
 fn strip_digest_prefix(digest: &str) -> Option<&str> {
     let hash = digest.strip_prefix("sha256:")?;
-    if super::chunks::is_valid_hash(hash) {
+    if super::is_valid_hex_hash(hash) {
         Some(hash)
     } else {
         None

@@ -672,8 +672,11 @@ pub async fn build_image(state: &AppState, distro: &str) -> crate::error::Result
         return Err(ConaryTestError::Config(format!("unknown distro: {distro}")));
     }
 
-    let backend = crate::container::BollardBackend::new()
-        .map_err(|e| ConaryTestError::Container { message: e.to_string(), source: None })?;
+    let backend =
+        crate::container::BollardBackend::new().map_err(|e| ConaryTestError::Container {
+            message: e.to_string(),
+            source: None,
+        })?;
 
     let default_name = format!("Containerfile.{distro}");
     let dc = state
@@ -687,7 +690,10 @@ pub async fn build_image(state: &AppState, distro: &str) -> crate::error::Result
 
     crate::container::build_distro_image(&backend, &containerfile, distro)
         .await
-        .map_err(|e| ConaryTestError::Container { message: e.to_string(), source: None })
+        .map_err(|e| ConaryTestError::Container {
+            message: e.to_string(),
+            source: None,
+        })
 }
 
 /// List all available container images.

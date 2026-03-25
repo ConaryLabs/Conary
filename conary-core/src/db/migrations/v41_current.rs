@@ -624,7 +624,6 @@ pub fn migrate_v57(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

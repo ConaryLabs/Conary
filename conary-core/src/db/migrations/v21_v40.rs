@@ -950,4 +950,3 @@ pub fn migrate_v40(conn: &Connection) -> Result<()> {
     info!("Schema version 40 applied successfully (download statistics)");
     Ok(())
 }
-

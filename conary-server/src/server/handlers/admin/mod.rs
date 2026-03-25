@@ -48,6 +48,14 @@ pub(crate) fn validate_path_param(value: &str, param_name: &str) -> Option<Respo
 }
 
 /// Check that the caller has the required scope, returning an error response if not.
+///
+/// Returns `None` on **success** (caller is authorized) and `Some(error_response)`
+/// on **failure**. This "inverted Option" convention means callers use:
+/// ```ignore
+/// if let Some(err) = check_scope(&scopes, Scope::Admin) {
+///     return err;
+/// }
+/// ```
 pub(crate) fn check_scope(
     scopes: &Option<axum::Extension<TokenScopes>>,
     required: Scope,

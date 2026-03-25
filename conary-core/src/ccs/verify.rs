@@ -199,8 +199,12 @@ pub fn verify_package(path: &Path, policy: &TrustPolicy) -> Result<VerificationR
     let mut warnings = Vec::new();
 
     // Verify signature (over raw manifest bytes - CBOR or TOML)
-    let signature_status =
-        verify_signature(&contents.manifest_raw, signature.as_ref(), policy, &mut warnings)?;
+    let signature_status = verify_signature(
+        &contents.manifest_raw,
+        signature.as_ref(),
+        policy,
+        &mut warnings,
+    )?;
 
     // Verify content hashes
     let content_status = verify_content_hashes(&files, &contents.blobs)?;
@@ -345,8 +349,8 @@ fn verify_content_hashes(
             continue;
         }
 
-        // Skip directories
-        if file.size == 0 && file.hash.is_empty() {
+        // Skip directories (use file_type instead of size/hash heuristic)
+        if file.file_type == crate::ccs::builder::FileType::Directory {
             continue;
         }
 

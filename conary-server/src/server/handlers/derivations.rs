@@ -21,7 +21,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -191,6 +190,11 @@ pub async fn head_derivation(
 /// 5. Upsert row into `derivation_cache`
 ///
 /// Returns 201 Created on success.
+///
+/// NOTE: Auth is checked inline via `require_admin_token` rather than the admin
+/// router's middleware so that GET/HEAD on the same path stay public. This means
+/// the admin rate limiters (governor-based) do not apply here.
+// TODO: Move write endpoints to the admin router to get rate limiting for free.
 pub async fn put_derivation(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(derivation_id): Path<String>,
@@ -252,9 +256,7 @@ pub async fn put_derivation(
     }
 
     // Compute CAS hash
-    let mut hasher = Sha256::new();
-    hasher.update(&body_bytes);
-    let cas_hash = format!("{:x}", hasher.finalize());
+    let cas_hash = conary_core::hash::sha256(&body_bytes);
 
     // Write to CAS
     let object_path = cas_object_path(&chunk_dir, &cas_hash);

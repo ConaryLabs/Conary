@@ -274,7 +274,12 @@ impl VersionConstraint {
         }
     }
 
-    /// Check if a version satisfies this constraint
+    /// Check if a version satisfies this constraint.
+    ///
+    /// NOTE: This uses RPM-style version comparison (`RpmVersion::compare`).
+    /// It should only be called for packages whose version scheme is RPM or
+    /// legacy (no stored scheme). For Debian or Arch versions, use the
+    /// scheme-aware comparison in `repository::versioning` instead.
     pub fn satisfies(&self, version: &RpmVersion) -> bool {
         match self {
             VersionConstraint::Any => true,
@@ -297,9 +302,7 @@ impl VersionConstraint {
             (VersionConstraint::Any, _) | (_, VersionConstraint::Any) => true,
 
             // Two exact constraints: only compatible if they name the same version
-            (VersionConstraint::Exact(v1), VersionConstraint::Exact(v2)) => {
-                v1.compare(v2).is_eq()
-            }
+            (VersionConstraint::Exact(v1), VersionConstraint::Exact(v2)) => v1.compare(v2).is_eq(),
 
             // Exact vs range: compatible if the exact version satisfies the range
             (VersionConstraint::Exact(v), range) | (range, VersionConstraint::Exact(v)) => {

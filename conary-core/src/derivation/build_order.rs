@@ -197,8 +197,7 @@ mod tests {
         recipes.insert("gmp".to_string(), make_recipe("gmp", &[], &[]));
         recipes.insert("gcc".to_string(), make_recipe("gcc", &[], &["gmp"]));
 
-        let steps = compute_build_order(&recipes, &HashSet::new())
-            .expect("no cycle");
+        let steps = compute_build_order(&recipes, &HashSet::new()).expect("no cycle");
 
         let gmp_order = steps
             .iter()

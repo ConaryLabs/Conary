@@ -213,19 +213,13 @@ pub fn run_ldconfig_if_needed(manifest: &OutputManifest, sysroot: &Path) {
 /// Uses `safe_join` to strip leading `/` and reject `..` components, preventing
 /// path traversal attacks from malicious manifests.
 fn sysroot_path(sysroot: &Path, manifest_path: &str) -> Result<PathBuf, InstallError> {
-    crate::filesystem::path::safe_join(sysroot, manifest_path).map_err(|e| {
-        InstallError::PathTraversal(e.to_string())
-    })
+    crate::filesystem::path::safe_join(sysroot, manifest_path)
+        .map_err(|e| InstallError::PathTraversal(e.to_string()))
 }
 
 /// Return the CAS object path for `hash` under `cas_dir`.
 fn cas_object_path(cas_dir: &Path, hash: &str) -> PathBuf {
-    // Guard against unexpectedly short hashes.
-    if hash.len() < 3 {
-        return cas_dir.join(hash);
-    }
-    let (prefix, rest) = hash.split_at(2);
-    cas_dir.join(prefix).join(rest)
+    crate::filesystem::object_path(cas_dir, hash)
 }
 
 /// Remove a file or symlink at `path` if it exists; succeed silently if absent.

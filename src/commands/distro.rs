@@ -63,11 +63,12 @@ pub async fn cmd_distro_info(db_path: &str) -> Result<()> {
     Ok(())
 }
 
-// TODO: Drive this list from the database or registry instead of hardcoding
+// TODO: Drive this list from the database or registry instead of hardcoding.
+// This static list must be kept in sync with supported distros manually.
 pub async fn cmd_distro_list() -> Result<()> {
     println!("Available distros:");
     println!("  ubuntu-noble     Ubuntu 24.04 LTS (Noble Numbat)");
-    println!("  ubuntu-oracular  Ubuntu 24.10 (Oracular Oriole)");
+    println!("  ubuntu-plucky    Ubuntu 25.04 (Plucky Puffin)");
     println!("  fedora-43        Fedora 43");
     println!("  debian-12        Debian 12 (Bookworm)");
     println!("  arch             Arch Linux (rolling)");

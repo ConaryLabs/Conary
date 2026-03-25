@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
+use conary_test::engine::container_setup::initialize_container_state;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -367,7 +368,6 @@ fn print_command_result(label: &str, code: i32, stdout: &str, stderr: &str) {
     }
 }
 
-
 /// Run tests for a single distro.
 fn run_single_distro(
     config: &conary_test::config::distro::GlobalConfig,
@@ -451,7 +451,7 @@ fn run_single_distro(
             initialize_container_state(
                 config,
                 distro,
-                manifest.suite.phase,
+                manifest.suite.phase > 1,
                 &backend,
                 &container_id,
             )

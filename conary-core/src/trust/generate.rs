@@ -6,13 +6,13 @@
 //! Feature-gated behind `server` to avoid pulling in unnecessary code on clients.
 
 use crate::ccs::signing::SigningKeyPair;
+use crate::hash;
 use crate::trust::TrustResult;
 use crate::trust::keys::sign_tuf_metadata;
 use crate::trust::metadata::{
     MetaFile, Signed, SnapshotMetadata, TUF_SPEC_VERSION, TargetDescription, TargetsMetadata,
     TimestampMetadata,
 };
-use crate::hash;
 use chrono::{Duration, Utc};
 use std::collections::BTreeMap;
 

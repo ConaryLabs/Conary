@@ -285,10 +285,11 @@ impl Pipeline {
         let build_env_hash = seed.build_env_hash().to_owned();
 
         // Determine which packages to actually build (--only filter).
-        let build_set: Option<HashSet<String>> =
-            self.config.only_packages.as_ref().map(|pkgs| {
-                pkgs.iter().cloned().collect()
-            });
+        let build_set: Option<HashSet<String>> = self
+            .config
+            .only_packages
+            .as_ref()
+            .map(|pkgs| pkgs.iter().cloned().collect());
 
         // Count packages per stage for progress reporting.
         let mut stage_counts: HashMap<Stage, usize> = HashMap::new();
@@ -298,8 +299,7 @@ impl Pipeline {
 
         // Mount the mutable overlayfs environment once.
         let chroot_dir = self.config.work_dir.join("chroot");
-        std::fs::create_dir_all(&chroot_dir)
-            .map_err(|e| PipelineError::Io(e.to_string()))?;
+        std::fs::create_dir_all(&chroot_dir).map_err(|e| PipelineError::Io(e.to_string()))?;
 
         let mut env = MutableEnvironment::new(
             seed.image_path.clone(),
@@ -371,12 +371,16 @@ impl Pipeline {
                         package: pkg_name.clone(),
                     })?;
 
-                let manifest =
-                    load_manifest_from_cas(&self.executor, &record.manifest_cas_hash)?;
+                let manifest = load_manifest_from_cas(&self.executor, &record.manifest_cas_hash)?;
 
                 record_package(
-                    &manifest, &sysroot, &self.config.cas_dir,
-                    recipe, &derivation_id, pkg_name, &mut acc,
+                    &manifest,
+                    &sysroot,
+                    &self.config.cas_dir,
+                    recipe,
+                    &derivation_id,
+                    pkg_name,
+                    &mut acc,
                 )?;
 
                 on_event(&PipelineEvent::PackageCached {
@@ -412,8 +416,13 @@ impl Pipeline {
                         load_manifest_from_cas(&self.executor, &record.manifest_cas_hash)?;
 
                     record_package(
-                        &manifest, &sysroot, &self.config.cas_dir,
-                        recipe, &derivation_id, pkg_name, &mut acc,
+                        &manifest,
+                        &sysroot,
+                        &self.config.cas_dir,
+                        recipe,
+                        &derivation_id,
+                        pkg_name,
+                        &mut acc,
                     )?;
 
                     on_event(&PipelineEvent::PackageCached {
@@ -429,8 +438,13 @@ impl Pipeline {
                     let manifest = output.manifest;
 
                     record_package(
-                        &manifest, &sysroot, &self.config.cas_dir,
-                        recipe, &derivation_id, pkg_name, &mut acc,
+                        &manifest,
+                        &sysroot,
+                        &self.config.cas_dir,
+                        recipe,
+                        &derivation_id,
+                        pkg_name,
+                        &mut acc,
                     )?;
 
                     on_event(&PipelineEvent::PackageBuilt {
@@ -465,8 +479,7 @@ impl Pipeline {
         if !acc.manifests.is_empty() {
             let manifest_refs: Vec<&OutputManifest> = acc.manifests.iter().collect();
             let compose_dir = self.config.work_dir.join("compose");
-            std::fs::create_dir_all(&compose_dir)
-                .map_err(|e| PipelineError::Io(e.to_string()))?;
+            std::fs::create_dir_all(&compose_dir).map_err(|e| PipelineError::Io(e.to_string()))?;
 
             let build_result = compose_erofs(&manifest_refs, &compose_dir)?;
 
@@ -515,7 +528,9 @@ impl Pipeline {
 
 /// Group build steps by stage in stage order, preserving build order within
 /// each group. Used by [`Pipeline::generate_profile`] for dry-run planning.
-fn ordered_stages(build_steps: &[crate::derivation::build_order::BuildStep]) -> Vec<(Stage, Vec<String>)> {
+fn ordered_stages(
+    build_steps: &[crate::derivation::build_order::BuildStep],
+) -> Vec<(Stage, Vec<String>)> {
     let mut by_stage: BTreeMap<Stage, Vec<(usize, String)>> = BTreeMap::new();
 
     for step in build_steps {
@@ -545,7 +560,12 @@ fn collect_dep_ids(
 ) -> BTreeMap<String, DerivationId> {
     let mut dep_ids = BTreeMap::new();
 
-    for dep_name in recipe.build.requires.iter().chain(&recipe.build.makedepends) {
+    for dep_name in recipe
+        .build
+        .requires
+        .iter()
+        .chain(&recipe.build.makedepends)
+    {
         if let Some(id) = completed.get(dep_name.as_str()) {
             dep_ids.insert(dep_name.clone(), id.clone());
         }
@@ -588,7 +608,8 @@ fn record_package(
         derivation_id: derivation_id.as_str().to_owned(),
     });
     acc.manifests.push(manifest.clone());
-    acc.completed.insert(pkg_name.to_owned(), derivation_id.clone());
+    acc.completed
+        .insert(pkg_name.to_owned(), derivation_id.clone());
     Ok(())
 }
 
@@ -665,7 +686,8 @@ mod tests {
         recipes.insert("nginx".to_owned(), make_recipe("nginx", &[], &[]));
 
         let custom = HashSet::new();
-        let build_steps = crate::derivation::build_order::compute_build_order(&recipes, &custom).unwrap();
+        let build_steps =
+            crate::derivation::build_order::compute_build_order(&recipes, &custom).unwrap();
 
         let profile = Pipeline::generate_profile(&seed, &recipes, &build_steps, "test-manifest");
 
@@ -703,7 +725,8 @@ mod tests {
         recipes.insert("a".to_owned(), make_recipe("a", &[], &[]));
 
         let custom = HashSet::new();
-        let build_steps = crate::derivation::build_order::compute_build_order(&recipes, &custom).unwrap();
+        let build_steps =
+            crate::derivation::build_order::compute_build_order(&recipes, &custom).unwrap();
 
         let p1 = Pipeline::generate_profile(&seed, &recipes, &build_steps, "m");
         let p2 = Pipeline::generate_profile(&seed, &recipes, &build_steps, "m");
@@ -741,7 +764,8 @@ mod tests {
         recipes.insert("a".to_owned(), make_recipe("a", &[], &[]));
 
         let custom = HashSet::new();
-        let build_steps = crate::derivation::build_order::compute_build_order(&recipes, &custom).unwrap();
+        let build_steps =
+            crate::derivation::build_order::compute_build_order(&recipes, &custom).unwrap();
 
         let p1 = Pipeline::generate_profile(&seed1, &recipes, &build_steps, "m");
         let p2 = Pipeline::generate_profile(&seed2, &recipes, &build_steps, "m");
@@ -754,10 +778,26 @@ mod tests {
         use crate::derivation::build_order::BuildStep;
 
         let steps = vec![
-            BuildStep { package: "nginx".to_owned(), stage: Stage::System, order: 3 },
-            BuildStep { package: "gcc-pass1".to_owned(), stage: Stage::Toolchain, order: 0 },
-            BuildStep { package: "make".to_owned(), stage: Stage::Foundation, order: 2 },
-            BuildStep { package: "gcc-pass2".to_owned(), stage: Stage::Toolchain, order: 1 },
+            BuildStep {
+                package: "nginx".to_owned(),
+                stage: Stage::System,
+                order: 3,
+            },
+            BuildStep {
+                package: "gcc-pass1".to_owned(),
+                stage: Stage::Toolchain,
+                order: 0,
+            },
+            BuildStep {
+                package: "make".to_owned(),
+                stage: Stage::Foundation,
+                order: 2,
+            },
+            BuildStep {
+                package: "gcc-pass2".to_owned(),
+                stage: Stage::Toolchain,
+                order: 1,
+            },
         ];
 
         let stages = ordered_stages(&steps);

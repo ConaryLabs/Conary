@@ -22,6 +22,24 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 use tracing::{debug, warn};
 
+/// Compute the CAS object path for a hex hash under a root directory.
+///
+/// Uses a two-level layout: `root/<hash[..2]>/<hash[2..]>`.
+/// This is the canonical path construction shared by CAS storage,
+/// CCS builder, chunking, archive reader, and derivation install.
+///
+/// # Panics
+///
+/// Does not panic. Returns a flat path under `root` if `hash` is shorter
+/// than 3 characters (graceful fallback for edge cases).
+pub fn object_path(root: &Path, hash: &str) -> PathBuf {
+    if hash.len() < 3 {
+        return root.join(hash);
+    }
+    let (prefix, suffix) = hash.split_at(2);
+    root.join(prefix).join(suffix)
+}
+
 /// Content-addressable storage manager
 #[derive(Clone)]
 pub struct CasStore {
@@ -292,8 +310,7 @@ impl CasStore {
             )));
         }
 
-        let (prefix, suffix) = hash.split_at(2);
-        Ok(self.objects_dir.join(prefix).join(suffix))
+        Ok(object_path(&self.objects_dir, hash))
     }
 
     /// Compute hash of content using this store's algorithm

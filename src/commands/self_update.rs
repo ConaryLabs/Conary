@@ -38,8 +38,10 @@ pub async fn cmd_self_update(
     println!("Update channel: {channel_url}");
 
     if let Some(ref v) = version {
-        println!("Requested version: {v}");
-        println!("[NOT YET IMPLEMENTED] --version: downloading a specific version is not yet available; installing latest instead.");
+        anyhow::bail!(
+            "--version {v} is not yet implemented. \
+             Omit --version to install the latest available version."
+        );
     }
 
     // Check for updates
@@ -69,7 +71,11 @@ pub async fn cmd_self_update(
         }
     }
 
-    // Verify signature before downloading (normal path)
+    // Verify the SHA-256 digest signature *before* downloading the binary.
+    // This ensures the server-advertised checksum is authentic (signed by a
+    // trusted key) so that the post-download hash comparison is meaningful.
+    // Flow: 1) check version -> 2) verify signature on digest -> 3) download
+    //       -> 4) compare downloaded hash against signed digest -> 5) replace.
     if let VersionCheckResult::UpdateAvailable {
         ref sha256,
         ref signature,

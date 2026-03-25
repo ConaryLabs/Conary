@@ -487,9 +487,7 @@ impl<'a> Cook<'a> {
         // compatibility issues (e.g., Python 3.14 + host GCC 15 -Werror).
         let output = if let Some(sysroot) = &self.kitchen.config.sysroot {
             // Convert workdir to be relative to the sysroot
-            let chroot_workdir = workdir
-                .strip_prefix(sysroot)
-                .unwrap_or(workdir);
+            let chroot_workdir = workdir.strip_prefix(sysroot).unwrap_or(workdir);
 
             // Build env string for chroot (env -i clears host env)
             let mut env_args = vec!["env".to_string(), "-i".to_string()];
@@ -506,17 +504,14 @@ impl<'a> Cook<'a> {
                 self.recipe.build.jobs.unwrap_or(self.kitchen.config.jobs)
             ));
 
-            let script = format!(
-                "cd {} && {}",
-                chroot_workdir.display(),
-                command
-            );
+            // Shell-escape the chroot workdir to prevent injection from
+            // paths with spaces or special characters, matching the
+            // escaping used in run_build_step_isolated.
+            let workdir_str = chroot_workdir.to_string_lossy();
+            let escaped_workdir = format!("'{}'", workdir_str.replace('\'', "'\\''"));
+            let script = format!("cd {} && {}", escaped_workdir, command);
 
-            info!(
-                "Running {} phase in chroot {}",
-                phase,
-                sysroot.display()
-            );
+            info!("Running {} phase in chroot {}", phase, sysroot.display());
 
             Command::new("chroot")
                 .arg(sysroot)
@@ -525,9 +520,7 @@ impl<'a> Cook<'a> {
                 .arg("-c")
                 .arg(&script)
                 .output()
-                .map_err(|e| Error::IoError(format!(
-                    "Failed to chroot {} phase: {}", phase, e
-                )))?
+                .map_err(|e| Error::IoError(format!("Failed to chroot {} phase: {}", phase, e)))?
         } else {
             Command::new("sh")
                 .arg("-c")
@@ -535,9 +528,7 @@ impl<'a> Cook<'a> {
                 .current_dir(workdir)
                 .envs(env.iter().map(|(k, v)| (*k, v.as_str())))
                 .output()
-                .map_err(|e| Error::IoError(format!(
-                    "Failed to run {} phase: {}", phase, e
-                )))?
+                .map_err(|e| Error::IoError(format!("Failed to run {} phase: {}", phase, e)))?
         };
 
         let stdout = String::from_utf8_lossy(&output.stdout);

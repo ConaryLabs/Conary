@@ -972,13 +972,13 @@ const DANGEROUS_PATTERNS: &[(&str, ScriptRisk, &str)] = &[
         "Recursive deletion of root contents",
     ),
     (r"mkfs", ScriptRisk::High, "Filesystem formatting"),
-    (r"dd if=.* of=/dev/", ScriptRisk::High, "Direct device write"),
-    // Fork bomb: all special chars must be escaped for literal match
     (
-        r":\(\)\{ :\|:& \};:",
+        r"dd if=.* of=/dev/",
         ScriptRisk::High,
-        "Fork bomb",
+        "Direct device write",
     ),
+    // Fork bomb: all special chars must be escaped for literal match
+    (r":\(\)\{ :\|:& \};:", ScriptRisk::High, "Fork bomb"),
     // Medium - privilege escalation or persistence
     (
         r"chmod.*4[0-7][0-7][0-7]",

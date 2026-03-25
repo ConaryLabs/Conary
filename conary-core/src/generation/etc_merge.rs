@@ -298,9 +298,15 @@ fn upper_file_hash(
     }
 
     // Fall back to direct path check (in case the scan missed something,
-    // e.g. due to a race or symlink).
+    // e.g. due to a race or symlink). Use symlink_metadata() instead of
+    // is_file() to avoid following symlinks, which could escape the upper
+    // directory and read unintended host files.
     let abs_path = upper_dir.join(rel_path);
-    if abs_path.is_file() {
+    if abs_path
+        .symlink_metadata()
+        .map(|m| m.is_file())
+        .unwrap_or(false)
+    {
         return sha256_of_file(&abs_path).map(Some);
     }
 

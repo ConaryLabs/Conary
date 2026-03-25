@@ -107,8 +107,15 @@ impl ChunkCache {
         Ok(())
     }
 
-    /// Store a chunk
+    /// Store a chunk, verifying its content hash matches the expected hash.
     pub async fn store_chunk(&self, hash: &str, data: &[u8]) -> Result<PathBuf> {
+        // Verify content hash before writing to prevent storage of corrupted data
+        let computed = conary_core::hash::sha256(data);
+        anyhow::ensure!(
+            computed == hash,
+            "chunk hash mismatch: expected {hash}, got {computed}"
+        );
+
         let path = self.chunk_path(hash);
 
         // Create parent directory if needed

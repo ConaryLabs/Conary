@@ -161,14 +161,28 @@ pub struct BuildFixturesParams {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Convert an `anyhow::Error` to an MCP error. Used by service functions
-/// that return `anyhow::Result`.
+/// Convert an `anyhow::Error` to an MCP error.
 fn anyhow_to_mcp(err: anyhow::Error) -> McpError {
     let msg = err.to_string();
     if msg.contains("not found") {
         McpError::invalid_params(msg, None)
     } else {
         McpError::internal_error(msg, None)
+    }
+}
+
+/// Convert a `ConaryTestError` to an MCP error.
+fn error_to_mcp(err: crate::error::ConaryTestError) -> McpError {
+    use crate::error::ConaryTestError;
+    let msg = err.to_string();
+    match err {
+        ConaryTestError::RunNotFound(_) | ConaryTestError::TestNotFound { .. } => {
+            McpError::invalid_params(msg, None)
+        }
+        ConaryTestError::Config(_) | ConaryTestError::Manifest { .. } => {
+            McpError::invalid_params(msg, None)
+        }
+        _ => McpError::internal_error(msg, None),
     }
 }
 
@@ -449,7 +463,7 @@ impl TestMcpServer {
         &self,
         Parameters(params): Parameters<CancelRunParams>,
     ) -> Result<CallToolResult, McpError> {
-        service::cancel_run(&self.state, params.run_id).map_err(anyhow_to_mcp)?;
+        service::cancel_run(&self.state, params.run_id).map_err(error_to_mcp)?;
 
         let value = serde_json::json!({
             "run_id": params.run_id,
@@ -469,7 +483,7 @@ impl TestMcpServer {
         Parameters(params): Parameters<RerunTestParams>,
     ) -> Result<CallToolResult, McpError> {
         let rerun = service::rerun_test(&self.state, params.run_id, &params.test_id)
-            .map_err(anyhow_to_mcp)?;
+            .map_err(error_to_mcp)?;
 
         // Spawn execution using the original suite's manifest.
         service::spawn_run(
@@ -518,7 +532,7 @@ impl TestMcpServer {
 
         // Fall back to in-memory DashMap.
         let logs = service::get_test_logs(&self.state, params.run_id, &params.test_id)
-            .map_err(anyhow_to_mcp)?;
+            .map_err(error_to_mcp)?;
 
         let text = to_json_text(&logs)?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
@@ -531,7 +545,7 @@ impl TestMcpServer {
         Parameters(params): Parameters<GetRunParams>,
     ) -> Result<CallToolResult, McpError> {
         let artifacts =
-            service::get_run_artifacts(&self.state, params.run_id).map_err(anyhow_to_mcp)?;
+            service::get_run_artifacts(&self.state, params.run_id).map_err(error_to_mcp)?;
 
         let text = to_json_text(&artifacts)?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
@@ -545,7 +559,7 @@ impl TestMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let tag = service::build_image(&self.state, &params.distro)
             .await
-            .map_err(anyhow_to_mcp)?;
+            .map_err(error_to_mcp)?;
 
         let value = serde_json::json!({
             "distro": params.distro,

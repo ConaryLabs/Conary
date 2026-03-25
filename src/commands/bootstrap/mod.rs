@@ -113,8 +113,8 @@ pub async fn cmd_bootstrap_image(
 
         let image_format = ImageFormat::from_str(format)
             .context("Invalid image format. Use: raw, qcow2, iso, erofs")?;
-        let image_size = ImageSize::from_str(size)
-            .context("Invalid size. Use: 4G, 8G, 512M, etc.")?;
+        let image_size =
+            ImageSize::from_str(size).context("Invalid size. Use: 4G, 8G, 512M, etc.")?;
 
         let result = ImageBuilder::build_from_generation(
             Path::new(gen_dir),
@@ -126,13 +126,21 @@ pub async fn cmd_bootstrap_image(
         println!("\n[OK] Image generated successfully!");
         println!("  Path: {}", result.path.display());
         println!("  Format: {}", result.format);
-        println!("  Size: {} bytes ({:.1} GB)", result.size, result.size as f64 / 1_073_741_824.0);
+        println!(
+            "  Size: {} bytes ({:.1} GB)",
+            result.size,
+            result.size as f64 / 1_073_741_824.0
+        );
         println!("  Method: {}", result.method);
         println!("\nUsage:");
         println!(
             "  qemu-system-x86_64 -drive file={},format={} -m 2G -enable-kvm -nographic",
             output,
-            if image_format == ImageFormat::Qcow2 { "qcow2" } else { "raw" }
+            if image_format == ImageFormat::Qcow2 {
+                "qcow2"
+            } else {
+                "raw"
+            }
         );
 
         return Ok(());
@@ -569,7 +577,7 @@ pub async fn cmd_bootstrap_seed(from: &str, output: &str, target: &str) -> Resul
     use conary_core::derivation::compose::erofs_image_hash;
     use conary_core::derivation::seed::{SeedMetadata, SeedSource};
     use conary_core::filesystem::CasStore;
-    use conary_core::generation::builder::{build_erofs_image, FileEntryRef, SymlinkEntryRef};
+    use conary_core::generation::builder::{FileEntryRef, SymlinkEntryRef, build_erofs_image};
     use std::os::unix::fs::MetadataExt;
     use walkdir::WalkDir;
 
@@ -764,12 +772,12 @@ pub struct BootstrapRunOptions<'a> {
 /// profile) and creates a `current` symlink.
 pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
     use conary_core::db::schema::migrate;
+    use conary_core::derivation::build_order::Stage;
     use conary_core::derivation::build_order::compute_build_order;
     use conary_core::derivation::executor::{DerivationExecutor, ExecutorConfig};
     use conary_core::derivation::manifest::SystemManifest;
     use conary_core::derivation::pipeline::{Pipeline, PipelineConfig, PipelineEvent};
     use conary_core::derivation::seed::Seed;
-    use conary_core::derivation::build_order::Stage;
     use conary_core::filesystem::CasStore;
     use rusqlite::Connection;
     use std::collections::HashSet;
@@ -862,8 +870,7 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
     let work_dir = PathBuf::from(opts.work_dir);
     std::fs::create_dir_all(&work_dir)?;
     let db_path = work_dir.join("derivations.db");
-    let conn =
-        Connection::open(&db_path).context("Failed to open derivation database")?;
+    let conn = Connection::open(&db_path).context("Failed to open derivation database")?;
     migrate(&conn).context("Failed to run database migrations")?;
 
     // 6. Create CAS and executor
@@ -1026,11 +1033,7 @@ pub async fn cmd_bootstrap_seed_adopted(
     println!("  Distro: {distro_name} {version}");
     println!("  Output: {output}");
 
-    let meta = adopt_seed::build_adopted_seed(
-        std::path::Path::new(output),
-        distro_name,
-        version,
-    )?;
+    let meta = adopt_seed::build_adopted_seed(std::path::Path::new(output), distro_name, version)?;
 
     println!("[COMPLETE] Seed built: {}", meta.seed_id);
     Ok(())
@@ -1042,7 +1045,9 @@ pub async fn cmd_bootstrap_verify_convergence(
     _seed_b: &str,
     _diff: bool,
 ) -> Result<()> {
-    println!("[NOT YET IMPLEMENTED] bootstrap verify-convergence is planned but not yet available.");
+    println!(
+        "[NOT YET IMPLEMENTED] bootstrap verify-convergence is planned but not yet available."
+    );
     Ok(())
 }
 

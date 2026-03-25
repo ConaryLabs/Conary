@@ -6,9 +6,9 @@
 //! Provides canonical JSON serialization for deterministic key IDs and signatures.
 
 use crate::ccs::signing::SigningKeyPair;
+use crate::hash;
 use crate::trust::metadata::{KeyVal, TufKey, TufSignature};
 use crate::trust::{TrustError, TrustResult};
-use crate::hash;
 use ed25519_dalek::Signer;
 
 /// Compute the TUF key ID for a key
@@ -25,8 +25,7 @@ pub fn compute_key_id(key: &TufKey) -> TrustResult<String> {
 /// Delegates to [] for the shared implementation.
 /// Canonical JSON: object keys sorted lexicographically, no whitespace.
 pub fn canonical_json<T: serde::Serialize>(value: &T) -> TrustResult<Vec<u8>> {
-    crate::json::canonical_json(value)
-        .map_err(TrustError::SerializationError)
+    crate::json::canonical_json(value).map_err(TrustError::SerializationError)
 }
 
 /// Convert a `SigningKeyPair` to a TUF key with its computed key ID

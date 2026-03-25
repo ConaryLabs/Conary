@@ -10,8 +10,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use conary_core::derivation::{
-    DerivationId, DerivationIndex, DerivationInputs, DerivationRecord, Stage,
-    build_script_hash, capture_output, compute_build_order, source_hash,
+    DerivationId, DerivationIndex, DerivationInputs, DerivationRecord, Stage, build_script_hash,
+    capture_output, compute_build_order, source_hash,
 };
 use conary_core::filesystem::CasStore;
 use conary_core::recipe::parse_recipe_file;
@@ -321,11 +321,7 @@ fn stage_assignment_with_real_recipes() {
                 );
             }
             "zstd" => {
-                assert_eq!(
-                    step.stage,
-                    Stage::System,
-                    "zstd should be in System"
-                );
+                assert_eq!(step.stage, Stage::System, "zstd should be in System");
             }
             other => panic!("unexpected package in build steps: {other}"),
         }

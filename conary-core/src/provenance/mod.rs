@@ -76,8 +76,12 @@ impl Provenance {
         hasher.update(&self.content.canonical_bytes());
 
         let hex = hasher.finalize().value;
-        let bytes = hex::decode(&hex).expect("SHA-256 hex is always valid");
-        DnaHash::from_bytes(&bytes).expect("SHA-256 always produces 32 bytes")
+        // SHA-256 hex output is always valid hex producing exactly 32 bytes.
+        // These unwraps are safe because `Hasher::finalize()` guarantees valid
+        // hex output and SHA-256 always produces 32 bytes. Using expect() with
+        // an explanation rather than silently propagating.
+        let bytes = hex::decode(&hex).expect("SHA-256 hex output is always valid hex");
+        DnaHash::from_bytes(&bytes).expect("SHA-256 always produces exactly 32 bytes")
     }
 
     /// Serialize to JSON for storage

@@ -144,6 +144,10 @@ pub enum Error {
     /// TUF trust verification error
     #[error("Trust error: {0}")]
     TrustError(String),
+
+    /// Resolver pool overflow (too many interned items for u32 index)
+    #[error("Resolver pool overflow: {0}")]
+    PoolOverflow(String),
 }
 
 /// Result type alias using Conary's Error type

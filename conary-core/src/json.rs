@@ -20,11 +20,10 @@
 ///
 /// Returns an error string if the value cannot be serialized.
 pub fn canonical_json<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, String> {
-    let json_value = serde_json::to_value(value)
-        .map_err(|e| format!("Failed to serialize to Value: {e}"))?;
+    let json_value =
+        serde_json::to_value(value).map_err(|e| format!("Failed to serialize to Value: {e}"))?;
     let sorted = sort_json_keys(&json_value);
-    serde_json::to_vec(&sorted)
-        .map_err(|e| format!("Failed to serialize to Vec: {e}"))
+    serde_json::to_vec(&sorted).map_err(|e| format!("Failed to serialize to Vec: {e}"))
 }
 
 /// Recursively sort all JSON object keys for canonical representation.

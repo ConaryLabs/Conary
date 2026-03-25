@@ -208,6 +208,11 @@ impl FileEntry {
     }
 
     /// Format permissions as rwx string (e.g., -rw-r--r--)
+    ///
+    /// Handles setuid (04000), setgid (02000), and sticky (01000) bits:
+    /// - setuid: owner execute shows 's' (or 'S' if no execute)
+    /// - setgid: group execute shows 's' (or 'S' if no execute)
+    /// - sticky: other execute shows 't' (or 'T' if no execute)
     pub fn format_permissions(&self) -> String {
         let mode = self.permissions as u32;
         let file_type = match mode & 0o170000 {
@@ -218,13 +223,31 @@ impl FileEntry {
 
         let owner_r = if mode & 0o400 != 0 { 'r' } else { '-' };
         let owner_w = if mode & 0o200 != 0 { 'w' } else { '-' };
-        let owner_x = if mode & 0o100 != 0 { 'x' } else { '-' };
+        let owner_x = if mode & 0o4000 != 0 {
+            if mode & 0o100 != 0 { 's' } else { 'S' }
+        } else if mode & 0o100 != 0 {
+            'x'
+        } else {
+            '-'
+        };
         let group_r = if mode & 0o040 != 0 { 'r' } else { '-' };
         let group_w = if mode & 0o020 != 0 { 'w' } else { '-' };
-        let group_x = if mode & 0o010 != 0 { 'x' } else { '-' };
+        let group_x = if mode & 0o2000 != 0 {
+            if mode & 0o010 != 0 { 's' } else { 'S' }
+        } else if mode & 0o010 != 0 {
+            'x'
+        } else {
+            '-'
+        };
         let other_r = if mode & 0o004 != 0 { 'r' } else { '-' };
         let other_w = if mode & 0o002 != 0 { 'w' } else { '-' };
-        let other_x = if mode & 0o001 != 0 { 'x' } else { '-' };
+        let other_x = if mode & 0o1000 != 0 {
+            if mode & 0o001 != 0 { 't' } else { 'T' }
+        } else if mode & 0o001 != 0 {
+            'x'
+        } else {
+            '-'
+        };
 
         format!(
             "{}{}{}{}{}{}{}{}{}{}",

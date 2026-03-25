@@ -25,9 +25,8 @@ use crate::repository::versioning::{VersionScheme, infer_version_scheme};
 use crate::version::{RpmVersion, VersionConstraint};
 
 use loading::{
-    dep_entry_to_solver_dep, escape_like, find_repo_package_by_id,
-    load_repo_dependency_requests, load_repo_provided_capabilities, parse_stored_version_scheme,
-    repo_package_provides_capability,
+    dep_entry_to_solver_dep, escape_like, find_repo_package_by_id, load_repo_dependency_requests,
+    load_repo_provided_capabilities, parse_stored_version_scheme, repo_package_provides_capability,
 };
 pub(crate) use matching::constraint_matches_package;
 pub use types::{
@@ -114,16 +113,26 @@ impl<'db> ConaryProvider<'db> {
         }
     }
 
+    /// Convert a `usize` pool length to a `u32` index, returning
+    /// `Error::PoolOverflow` if the pool exceeds `u32::MAX` entries.
+    fn pool_u32(len: usize, pool_name: &str) -> Result<u32> {
+        u32::try_from(len).map_err(|_| {
+            crate::error::Error::PoolOverflow(format!(
+                "{pool_name} pool exceeds u32::MAX entries ({len})"
+            ))
+        })
+    }
+
     /// Intern a package name, returning its `NameId`.
-    pub fn intern_name(&mut self, name: &str) -> NameId {
+    pub fn intern_name(&mut self, name: &str) -> Result<NameId> {
         if let Some(&id) = self.name_to_id.get(name) {
-            return id;
+            return Ok(id);
         }
-        let id = NameId(u32::try_from(self.names.len()).expect("resolver name pool overflow"));
+        let id = NameId(Self::pool_u32(self.names.len(), "name")?);
         let owned = name.to_string();
         self.names.push(owned.clone());
         self.name_to_id.insert(owned, id);
-        id
+        Ok(id)
     }
 
     /// Intern a version constraint for a given name, deduplicating via cache.
@@ -131,18 +140,16 @@ impl<'db> ConaryProvider<'db> {
         &mut self,
         name_id: NameId,
         constraint: VersionConstraint,
-    ) -> VersionSetId {
+    ) -> Result<VersionSetId> {
         let constraint = ConaryConstraint::Legacy(constraint);
         let cache_key = (name_id.0, constraint.clone());
         if let Some(&existing) = self.version_set_cache.get(&cache_key) {
-            return existing;
+            return Ok(existing);
         }
-        let id = VersionSetId(
-            u32::try_from(self.version_sets.len()).expect("resolver version set pool overflow"),
-        );
+        let id = VersionSetId(Self::pool_u32(self.version_sets.len(), "version_set")?);
         self.version_sets.push((name_id, constraint));
         self.version_set_cache.insert(cache_key, id);
-        id
+        Ok(id)
     }
 
     pub fn intern_repo_version_set(
@@ -151,7 +158,7 @@ impl<'db> ConaryProvider<'db> {
         scheme: VersionScheme,
         constraint: crate::repository::versioning::RepoVersionConstraint,
         raw: Option<String>,
-    ) -> VersionSetId {
+    ) -> Result<VersionSetId> {
         let constraint = ConaryConstraint::Repository {
             scheme,
             constraint,
@@ -159,39 +166,39 @@ impl<'db> ConaryProvider<'db> {
         };
         let cache_key = (name_id.0, constraint.clone());
         if let Some(&existing) = self.version_set_cache.get(&cache_key) {
-            return existing;
+            return Ok(existing);
         }
-        let id = VersionSetId(
-            u32::try_from(self.version_sets.len()).expect("resolver version set pool overflow"),
-        );
+        let id = VersionSetId(Self::pool_u32(self.version_sets.len(), "version_set")?);
         self.version_sets.push((name_id, constraint));
         self.version_set_cache.insert(cache_key, id);
-        id
+        Ok(id)
     }
 
     /// Intern a version set union (OR-group), returning its `VersionSetUnionId`.
-    pub fn intern_version_set_union(&mut self, sets: Vec<VersionSetId>) -> VersionSetUnionId {
-        let id = VersionSetUnionId(
-            u32::try_from(self.version_set_unions.len())
-                .expect("resolver version set union pool overflow"),
-        );
+    pub fn intern_version_set_union(
+        &mut self,
+        sets: Vec<VersionSetId>,
+    ) -> Result<VersionSetUnionId> {
+        let id = VersionSetUnionId(Self::pool_u32(
+            self.version_set_unions.len(),
+            "version_set_union",
+        )?);
         self.union_id_index.insert(sets.clone(), id);
         self.version_set_unions.push(sets);
-        id
+        Ok(id)
     }
 
     /// Intern a display string, returning its `StringId`.
-    pub fn intern_string(&mut self, s: &str) -> StringId {
-        let id =
-            StringId(u32::try_from(self.strings.len()).expect("resolver string pool overflow"));
+    pub fn intern_string(&mut self, s: &str) -> Result<StringId> {
+        let id = StringId(Self::pool_u32(self.strings.len(), "string")?);
         self.strings.push(s.to_string());
-        id
+        Ok(id)
     }
 
     /// Register a solvable (package candidate) and return its `SolvableId`.
-    pub fn add_solvable(&mut self, pkg: ConaryPackage) -> SolvableId {
+    pub fn add_solvable(&mut self, pkg: ConaryPackage) -> Result<SolvableId> {
         let idx = self.solvables.len();
-        let id = SolvableId(u32::try_from(idx).expect("resolver solvable pool overflow"));
+        let id = SolvableId(Self::pool_u32(idx, "solvable")?);
         // Update name-to-solvable index for O(1) lookup by name.
         self.name_to_solvable_indices
             .entry(pkg.name.clone())
@@ -202,7 +209,7 @@ impl<'db> ConaryProvider<'db> {
             self.loaded_repo_package_ids.insert(repo_id);
         }
         self.solvables.push(pkg);
-        id
+        Ok(id)
     }
 
     /// Bulk-load all installed troves as solvables.
@@ -256,7 +263,7 @@ impl<'db> ConaryProvider<'db> {
                 Vec::new()
             };
             // Intern name for side effect (ensures this name is known to the solver)
-            let _name_id = self.intern_name(&trove.name);
+            let _name_id = self.intern_name(&trove.name)?;
 
             let pkg = ConaryPackage {
                 name: trove.name.clone(),
@@ -265,7 +272,7 @@ impl<'db> ConaryProvider<'db> {
                 repo_package_id: None,
                 provided_capabilities,
             };
-            let solvable_id = self.add_solvable(pkg);
+            let solvable_id = self.add_solvable(pkg)?;
 
             // Use batch-loaded dependencies
             if let Some(tid) = trove_id {
@@ -326,7 +333,7 @@ impl<'db> ConaryProvider<'db> {
 
                 let scheme = infer_version_scheme(&pkg_with_repo.repository);
 
-                let _name_id = self.intern_name(&pkg_with_repo.package.name);
+                let _name_id = self.intern_name(&pkg_with_repo.package.name)?;
 
                 let pkg = ConaryPackage {
                     name: pkg_with_repo.package.name.clone(),
@@ -342,7 +349,7 @@ impl<'db> ConaryProvider<'db> {
                         &pkg_with_repo.repository,
                     )?,
                 };
-                let solvable_id = self.add_solvable(pkg);
+                let solvable_id = self.add_solvable(pkg)?;
 
                 let sub_deps = load_repo_dependency_requests(
                     self.conn,
@@ -465,7 +472,7 @@ impl<'db> ConaryProvider<'db> {
 
     /// Intern version sets for all loaded dependencies so that `get_dependencies`
     /// can find them when the solver queries.
-    pub fn intern_all_dependency_version_sets(&mut self) {
+    pub fn intern_all_dependency_version_sets(&mut self) -> Result<()> {
         // Temporarily take ownership to avoid borrow conflict with self.intern_*()
         let all_deps = std::mem::take(&mut self.dependencies);
 
@@ -473,21 +480,21 @@ impl<'db> ConaryProvider<'db> {
             for dep in deps {
                 match dep {
                     SolverDep::Single(dep_name, constraint) => {
-                        self.intern_constraint(dep_name, constraint);
+                        self.intern_constraint(dep_name, constraint)?;
                     }
                     SolverDep::OrGroup(alternatives) => {
                         let mut vs_ids = Vec::new();
                         for (dep_name, constraint) in alternatives {
-                            self.intern_constraint(dep_name, constraint);
+                            self.intern_constraint(dep_name, constraint)?;
                             // Collect the interned version set IDs for the union
-                            let name_id = self.intern_name(dep_name);
+                            let name_id = self.intern_name(dep_name)?;
                             let cache_key = (name_id.0, constraint.clone());
                             if let Some(&vs_id) = self.version_set_cache.get(&cache_key) {
                                 vs_ids.push(vs_id);
                             }
                         }
                         if vs_ids.len() > 1 {
-                            self.intern_version_set_union(vs_ids);
+                            self.intern_version_set_union(vs_ids)?;
                         }
                     }
                 }
@@ -496,23 +503,25 @@ impl<'db> ConaryProvider<'db> {
 
         // Restore the dependencies map
         self.dependencies = all_deps;
+        Ok(())
     }
 
     /// Intern a single constraint, creating a version set for it.
-    fn intern_constraint(&mut self, dep_name: &str, constraint: &ConaryConstraint) {
-        let name_id = self.intern_name(dep_name);
+    fn intern_constraint(&mut self, dep_name: &str, constraint: &ConaryConstraint) -> Result<()> {
+        let name_id = self.intern_name(dep_name)?;
         match constraint {
             ConaryConstraint::Legacy(constraint) => {
-                self.intern_version_set(name_id, constraint.clone());
+                self.intern_version_set(name_id, constraint.clone())?;
             }
             ConaryConstraint::Repository {
                 scheme,
                 constraint,
                 raw,
             } => {
-                self.intern_repo_version_set(name_id, *scheme, constraint.clone(), raw.clone());
+                self.intern_repo_version_set(name_id, *scheme, constraint.clone(), raw.clone())?;
             }
         }
+        Ok(())
     }
 
     /// Look up a single (name, constraint) pair as a `ConditionalRequirement`.
@@ -571,16 +580,12 @@ impl<'db> ConaryProvider<'db> {
     /// Find the installed solvable for a name, if any.
     pub(super) fn installed_solvable_for_name(&self, name_id: NameId) -> Option<SolvableId> {
         let name = &self.names[name_id.0 as usize];
-        self.name_to_solvable_indices
-            .get(name)
-            .and_then(|indices| {
-                indices
-                    .iter()
-                    .find(|&&i| self.solvables[i].trove_id.is_some())
-                    .map(|&i| {
-                        SolvableId(u32::try_from(i).expect("resolver solvable pool overflow"))
-                    })
-            })
+        self.name_to_solvable_indices.get(name).and_then(|indices| {
+            indices
+                .iter()
+                .find(|&&i| self.solvables[i].trove_id.is_some())
+                .map(|&i| SolvableId(u32::try_from(i).expect("resolver solvable pool overflow")))
+        })
     }
 
     /// Build the provides index, trove-id-to-name map, and unfiltered dependency
@@ -923,9 +928,9 @@ mod tests {
         let (_dir, conn) = setup_test_db();
         let mut provider = ConaryProvider::new(&conn);
 
-        let id1 = provider.intern_name("nginx");
-        let id2 = provider.intern_name("nginx");
-        let id3 = provider.intern_name("curl");
+        let id1 = provider.intern_name("nginx").unwrap();
+        let id2 = provider.intern_name("nginx").unwrap();
+        let id3 = provider.intern_name("curl").unwrap();
 
         assert_eq!(id1, id2);
         assert_ne!(id1, id3);
@@ -938,32 +943,38 @@ mod tests {
         let (_dir, conn) = setup_test_db();
         let mut provider = ConaryProvider::new(&conn);
 
-        let name_id = provider.intern_name("lib");
+        let name_id = provider.intern_name("lib").unwrap();
         let constraint = VersionConstraint::parse(">= 2.0.0").unwrap();
-        let vs_id = provider.intern_version_set(name_id, constraint);
+        let vs_id = provider.intern_version_set(name_id, constraint).unwrap();
 
         // Add candidates at different versions
-        let s1 = provider.add_solvable(ConaryPackage {
-            name: "lib".to_string(),
-            version: ConaryPackageVersion::Installed(RpmVersion::parse("1.0.0").unwrap()),
-            trove_id: None,
-            repo_package_id: None,
-            provided_capabilities: Vec::new(),
-        });
-        let s2 = provider.add_solvable(ConaryPackage {
-            name: "lib".to_string(),
-            version: ConaryPackageVersion::Installed(RpmVersion::parse("2.0.0").unwrap()),
-            trove_id: None,
-            repo_package_id: None,
-            provided_capabilities: Vec::new(),
-        });
-        let s3 = provider.add_solvable(ConaryPackage {
-            name: "lib".to_string(),
-            version: ConaryPackageVersion::Installed(RpmVersion::parse("3.0.0").unwrap()),
-            trove_id: None,
-            repo_package_id: None,
-            provided_capabilities: Vec::new(),
-        });
+        let s1 = provider
+            .add_solvable(ConaryPackage {
+                name: "lib".to_string(),
+                version: ConaryPackageVersion::Installed(RpmVersion::parse("1.0.0").unwrap()),
+                trove_id: None,
+                repo_package_id: None,
+                provided_capabilities: Vec::new(),
+            })
+            .unwrap();
+        let s2 = provider
+            .add_solvable(ConaryPackage {
+                name: "lib".to_string(),
+                version: ConaryPackageVersion::Installed(RpmVersion::parse("2.0.0").unwrap()),
+                trove_id: None,
+                repo_package_id: None,
+                provided_capabilities: Vec::new(),
+            })
+            .unwrap();
+        let s3 = provider
+            .add_solvable(ConaryPackage {
+                name: "lib".to_string(),
+                version: ConaryPackageVersion::Installed(RpmVersion::parse("3.0.0").unwrap()),
+                trove_id: None,
+                repo_package_id: None,
+                provided_capabilities: Vec::new(),
+            })
+            .unwrap();
 
         let candidates = [s1, s2, s3];
 
@@ -988,25 +999,29 @@ mod tests {
         let (_dir, conn) = setup_test_db();
         let mut provider = ConaryProvider::new(&conn);
 
-        let name_id = provider.intern_name("nginx");
+        let name_id = provider.intern_name("nginx").unwrap();
 
         // Add an installed version
-        let installed = provider.add_solvable(ConaryPackage {
-            name: "nginx".to_string(),
-            version: ConaryPackageVersion::Installed(RpmVersion::parse("1.0.0").unwrap()),
-            trove_id: Some(42),
-            repo_package_id: None,
-            provided_capabilities: Vec::new(),
-        });
+        let installed = provider
+            .add_solvable(ConaryPackage {
+                name: "nginx".to_string(),
+                version: ConaryPackageVersion::Installed(RpmVersion::parse("1.0.0").unwrap()),
+                trove_id: Some(42),
+                repo_package_id: None,
+                provided_capabilities: Vec::new(),
+            })
+            .unwrap();
 
         // Add a repo version
-        let _repo = provider.add_solvable(ConaryPackage {
-            name: "nginx".to_string(),
-            version: ConaryPackageVersion::Installed(RpmVersion::parse("2.0.0").unwrap()),
-            trove_id: None,
-            repo_package_id: Some(100),
-            provided_capabilities: Vec::new(),
-        });
+        let _repo = provider
+            .add_solvable(ConaryPackage {
+                name: "nginx".to_string(),
+                version: ConaryPackageVersion::Installed(RpmVersion::parse("2.0.0").unwrap()),
+                trove_id: None,
+                repo_package_id: Some(100),
+                provided_capabilities: Vec::new(),
+            })
+            .unwrap();
 
         // Test candidates lookup logic directly
         let candidates = provider.solvables_for_name(name_id);
@@ -1021,27 +1036,33 @@ mod tests {
         let (_dir, conn) = setup_test_db();
         let mut provider = ConaryProvider::new(&conn);
 
-        let s1 = provider.add_solvable(ConaryPackage {
-            name: "pkg".to_string(),
-            version: ConaryPackageVersion::Installed(RpmVersion::parse("1.0.0").unwrap()),
-            trove_id: None,
-            repo_package_id: None,
-            provided_capabilities: Vec::new(),
-        });
-        let s2 = provider.add_solvable(ConaryPackage {
-            name: "pkg".to_string(),
-            version: ConaryPackageVersion::Installed(RpmVersion::parse("3.0.0").unwrap()),
-            trove_id: None,
-            repo_package_id: None,
-            provided_capabilities: Vec::new(),
-        });
-        let s3 = provider.add_solvable(ConaryPackage {
-            name: "pkg".to_string(),
-            version: ConaryPackageVersion::Installed(RpmVersion::parse("2.0.0").unwrap()),
-            trove_id: Some(1), // installed
-            repo_package_id: None,
-            provided_capabilities: Vec::new(),
-        });
+        let s1 = provider
+            .add_solvable(ConaryPackage {
+                name: "pkg".to_string(),
+                version: ConaryPackageVersion::Installed(RpmVersion::parse("1.0.0").unwrap()),
+                trove_id: None,
+                repo_package_id: None,
+                provided_capabilities: Vec::new(),
+            })
+            .unwrap();
+        let s2 = provider
+            .add_solvable(ConaryPackage {
+                name: "pkg".to_string(),
+                version: ConaryPackageVersion::Installed(RpmVersion::parse("3.0.0").unwrap()),
+                trove_id: None,
+                repo_package_id: None,
+                provided_capabilities: Vec::new(),
+            })
+            .unwrap();
+        let s3 = provider
+            .add_solvable(ConaryPackage {
+                name: "pkg".to_string(),
+                version: ConaryPackageVersion::Installed(RpmVersion::parse("2.0.0").unwrap()),
+                trove_id: Some(1), // installed
+                repo_package_id: None,
+                provided_capabilities: Vec::new(),
+            })
+            .unwrap();
 
         // Test sort logic directly
         let mut solvables = [s1, s2, s3];
@@ -1072,17 +1093,20 @@ mod tests {
         let (_dir, conn) = setup_test_db();
         let mut provider = ConaryProvider::new(&conn);
 
-        let name_id = provider.intern_name("nginx");
-        let vs_id =
-            provider.intern_version_set(name_id, VersionConstraint::parse(">= 1.0.0").unwrap());
-        let sid = provider.add_solvable(ConaryPackage {
-            name: "nginx".to_string(),
-            version: ConaryPackageVersion::Installed(RpmVersion::parse("1.24.0").unwrap()),
-            trove_id: None,
-            repo_package_id: None,
-            provided_capabilities: Vec::new(),
-        });
-        let str_id = provider.intern_string("test string");
+        let name_id = provider.intern_name("nginx").unwrap();
+        let vs_id = provider
+            .intern_version_set(name_id, VersionConstraint::parse(">= 1.0.0").unwrap())
+            .unwrap();
+        let sid = provider
+            .add_solvable(ConaryPackage {
+                name: "nginx".to_string(),
+                version: ConaryPackageVersion::Installed(RpmVersion::parse("1.24.0").unwrap()),
+                trove_id: None,
+                repo_package_id: None,
+                provided_capabilities: Vec::new(),
+            })
+            .unwrap();
+        let str_id = provider.intern_string("test string").unwrap();
 
         assert_eq!(provider.display_name(name_id).to_string(), "nginx");
         assert_eq!(provider.display_solvable(sid).to_string(), "nginx=1.24.0");
@@ -1097,23 +1121,29 @@ mod tests {
         let (_dir, conn) = setup_test_db();
         let mut provider = ConaryProvider::new(&conn);
 
-        let capability_name = provider.intern_name("kernel-modules-core-uname-r");
-        let version_set = provider.intern_version_set(
-            capability_name,
-            VersionConstraint::parse("= 6.19.6").unwrap(),
-        );
-        let candidate = provider.add_solvable(ConaryPackage {
-            name: "kernel-modules-core".to_string(),
-            version: ConaryPackageVersion::Installed(RpmVersion::parse("6.19.6-200.fc43").unwrap()),
-            trove_id: None,
-            repo_package_id: Some(42),
-            provided_capabilities: vec![(
-                "kernel-modules-core-uname-r".to_string(),
-                Some(ConaryProvidedVersion::Installed(
-                    RpmVersion::parse("6.19.6").unwrap(),
-                )),
-            )],
-        });
+        let capability_name = provider.intern_name("kernel-modules-core-uname-r").unwrap();
+        let version_set = provider
+            .intern_version_set(
+                capability_name,
+                VersionConstraint::parse("= 6.19.6").unwrap(),
+            )
+            .unwrap();
+        let candidate = provider
+            .add_solvable(ConaryPackage {
+                name: "kernel-modules-core".to_string(),
+                version: ConaryPackageVersion::Installed(
+                    RpmVersion::parse("6.19.6-200.fc43").unwrap(),
+                ),
+                trove_id: None,
+                repo_package_id: Some(42),
+                provided_capabilities: vec![(
+                    "kernel-modules-core-uname-r".to_string(),
+                    Some(ConaryProvidedVersion::Installed(
+                        RpmVersion::parse("6.19.6").unwrap(),
+                    )),
+                )],
+            })
+            .unwrap();
 
         let requested_name = &provider.names[capability_name.0 as usize];
         let (_, constraint) = &provider.version_sets[version_set.0 as usize];

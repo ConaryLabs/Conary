@@ -789,9 +789,22 @@ fn default_sig_scope() -> String {
 /// Returns an error if the mode string is not a valid octal number, rather
 /// than silently falling back to a default that could mask typos.
 pub fn parse_octal_mode(mode: &str) -> crate::Result<u32> {
+    if mode.is_empty() {
+        return Err(crate::Error::ParseError(
+            "invalid octal mode: empty string".to_string(),
+        ));
+    }
     let mode_str = mode
         .strip_prefix("0o")
-        .or_else(|| mode.strip_prefix('0'))
+        .or_else(|| {
+            // Only strip leading '0' if there are more characters after it,
+            // so that bare "0" is parsed as octal 0 (not empty string).
+            if mode.len() > 1 {
+                mode.strip_prefix('0')
+            } else {
+                None
+            }
+        })
         .unwrap_or(mode);
     u32::from_str_radix(mode_str, 8)
         .map_err(|_| crate::Error::ParseError(format!("invalid octal mode: '{mode}'")))

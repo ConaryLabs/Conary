@@ -546,11 +546,11 @@ fn write_ccs_package_internal(
     fs::create_dir_all(&objects_dir)?;
 
     for (hash, content) in &result.blobs {
-        // Store as {first2}/{rest}
-        let (prefix, suffix) = hash.split_at(2);
-        let blob_dir = objects_dir.join(prefix);
-        fs::create_dir_all(&blob_dir)?;
-        fs::write(blob_dir.join(suffix), content)?;
+        let blob_path = crate::filesystem::object_path(&objects_dir, hash);
+        if let Some(parent) = blob_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&blob_path, content)?;
     }
 
     // Create compressed tar archive

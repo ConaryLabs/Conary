@@ -1132,5 +1132,4 @@ mod tests {
         assert!(rendered.contains("Replatform zsh"));
         assert!(rendered.contains("+1 more"));
     }
-
 }
