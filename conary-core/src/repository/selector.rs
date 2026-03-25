@@ -60,11 +60,14 @@ impl PackageSelector {
     /// - RPM: `noarch`
     /// - Debian: `all`
     /// - Arch Linux / ALPM: `any`
+    ///
+    /// Also handles cross-ecosystem arch name aliases (e.g. Debian `amd64`
+    /// matches RPM `x86_64`) via [`normalize_arch`].
     pub fn is_architecture_compatible(pkg_arch: Option<&str>, system_arch: &str) -> bool {
         match pkg_arch {
             None => true,
             Some("noarch" | "all" | "any") => true,
-            Some(arch) => arch == system_arch,
+            Some(arch) => normalize_arch(arch) == normalize_arch(system_arch),
         }
     }
 
@@ -241,6 +244,33 @@ impl PackageSelector {
     }
 }
 
+/// Normalize an architecture name to a canonical form.
+///
+/// Different package ecosystems use different names for the same CPU
+/// architecture.  This function maps all known aliases to a single
+/// canonical string so that comparisons work across ecosystems:
+///
+/// | Canonical  | Aliases                     |
+/// |------------|-----------------------------|
+/// | `x86_64`   | `amd64`                     |
+/// | `aarch64`  | `arm64`                     |
+/// | `i686`     | `i386`, `i486`, `i586`      |
+///
+/// Unknown names are returned as-is (lowercase).
+pub fn normalize_arch(arch: &str) -> &str {
+    match arch {
+        "amd64" => "x86_64",
+        "arm64" => "aarch64",
+        "i386" | "i486" | "i586" => "i686",
+        // ARM 32-bit: Debian armhf, RPM armv7hl, and raw arm/armv7 all
+        // map to armv7l (the kernel's name for 32-bit ARM with hard-float)
+        "arm" | "armhf" | "armv7" | "armv7hl" => "armv7l",
+        // ppc64le aliases
+        "ppc64el" => "ppc64le",
+        other => other,
+    }
+}
+
 /// Infer the distro flavor of a repository from its name and URL.
 ///
 /// This bridges the gap between the repository model (which stores name/URL)
@@ -318,6 +348,42 @@ mod tests {
             None,
             system_arch
         ));
+    }
+
+    #[test]
+    fn test_debian_amd64_compatible_with_x86_64() {
+        assert!(PackageSelector::is_architecture_compatible(
+            Some("amd64"),
+            "x86_64"
+        ));
+    }
+
+    #[test]
+    fn test_debian_arm64_compatible_with_aarch64() {
+        assert!(PackageSelector::is_architecture_compatible(
+            Some("arm64"),
+            "aarch64"
+        ));
+    }
+
+    #[test]
+    fn test_debian_i386_compatible_with_i686() {
+        assert!(PackageSelector::is_architecture_compatible(
+            Some("i386"),
+            "i686"
+        ));
+    }
+
+    #[test]
+    fn test_normalize_arch_mappings() {
+        assert_eq!(normalize_arch("amd64"), "x86_64");
+        assert_eq!(normalize_arch("arm64"), "aarch64");
+        assert_eq!(normalize_arch("i386"), "i686");
+        assert_eq!(normalize_arch("i486"), "i686");
+        assert_eq!(normalize_arch("i586"), "i686");
+        assert_eq!(normalize_arch("x86_64"), "x86_64");
+        assert_eq!(normalize_arch("aarch64"), "aarch64");
+        assert_eq!(normalize_arch("riscv64"), "riscv64");
     }
 
     #[test]

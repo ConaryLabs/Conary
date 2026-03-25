@@ -56,7 +56,12 @@ pub enum RepositoryFormat {
     Json,
 }
 
-/// Detect repository format based on name and URL
+/// Detect repository format based on name and URL.
+///
+/// Checks for known distro indicators in the repository name and URL.
+/// RPM-based repos include Fedora, EPEL, CentOS, RHEL, Rocky, Alma, and
+/// any URL containing RPM-specific path patterns (`/repodata/`, `/Packages/`,
+/// `/Everything/`, `repomd`).
 pub fn detect_repository_format(name: &str, url: &str) -> RepositoryFormat {
     let name_lower = name.to_lowercase();
     let url_lower = url.to_lowercase();
@@ -70,10 +75,26 @@ pub fn detect_repository_format(name: &str, url: &str) -> RepositoryFormat {
         return RepositoryFormat::Arch;
     }
 
-    // Check for Fedora indicators
+    // Check for RPM-based indicators (Fedora, EPEL, CentOS, RHEL, Rocky, Alma, SUSE)
     if name_lower.contains("fedora")
+        || name_lower.contains("epel")
+        || name_lower.contains("centos")
+        || name_lower.contains("rhel")
+        || name_lower.contains("rocky")
+        || name_lower.contains("alma")
+        || name_lower.contains("suse")
         || url_lower.contains("fedora")
+        || url_lower.contains("epel")
+        || url_lower.contains("centos")
+        || url_lower.contains("rhel")
+        || url_lower.contains("rocky")
+        || url_lower.contains("alma")
+        || url_lower.contains("suse")
         || url_lower.contains("/repodata/")
+        || url_lower.contains("repomd")
+        || url_lower.contains("/packages/")
+        || url_lower.contains("/everything/")
+        || url_lower.ends_with(".rpm")
     {
         return RepositoryFormat::Fedora;
     }
@@ -81,6 +102,7 @@ pub fn detect_repository_format(name: &str, url: &str) -> RepositoryFormat {
     // Check for Debian/Ubuntu indicators
     if name_lower.contains("debian")
         || name_lower.contains("ubuntu")
+        || name_lower.contains("mint")
         || url_lower.contains("debian")
         || url_lower.contains("ubuntu")
         || url_lower.contains("/dists/")
@@ -198,6 +220,50 @@ mod tests {
         assert_eq!(
             detect_repository_format("custom", "https://example.com/"),
             RepositoryFormat::Json
+        );
+    }
+
+    #[test]
+    fn test_detect_rpm_repo_formats() {
+        // EPEL
+        assert_eq!(
+            detect_repository_format("epel-9", "https://dl.fedoraproject.org/pub/epel/"),
+            RepositoryFormat::Fedora
+        );
+        // CentOS
+        assert_eq!(
+            detect_repository_format("centos-stream", "https://mirror.centos.org/"),
+            RepositoryFormat::Fedora
+        );
+        // RHEL
+        assert_eq!(
+            detect_repository_format("rhel-9", "https://cdn.redhat.com/"),
+            RepositoryFormat::Fedora
+        );
+        // Rocky
+        assert_eq!(
+            detect_repository_format("rocky-9", "https://dl.rockylinux.org/"),
+            RepositoryFormat::Fedora
+        );
+        // Alma
+        assert_eq!(
+            detect_repository_format("alma-9", "https://repo.almalinux.org/"),
+            RepositoryFormat::Fedora
+        );
+        // URL with repomd
+        assert_eq!(
+            detect_repository_format("custom-rpm", "https://example.com/repomd.xml"),
+            RepositoryFormat::Fedora
+        );
+        // URL with /Packages/
+        assert_eq!(
+            detect_repository_format("custom-rpm", "https://example.com/Packages/foo.rpm"),
+            RepositoryFormat::Fedora
+        );
+        // Mint detected as Debian
+        assert_eq!(
+            detect_repository_format("mint-21", "https://packages.linuxmint.com/"),
+            RepositoryFormat::Debian
         );
     }
 }

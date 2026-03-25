@@ -159,7 +159,11 @@ impl PackageSource {
     }
 }
 
-/// Context for delegate chain resolution (cycle detection)
+/// Context for delegate chain resolution (cycle detection).
+///
+/// Tracks delegation depth and visited labels.  The `exit()` method must be
+/// called after each `enter()` (whether the delegation succeeds or fails) to
+/// ensure failed branches do not permanently consume depth or visited state.
 #[derive(Default)]
 struct DelegateContext {
     depth: usize,
@@ -171,6 +175,10 @@ impl DelegateContext {
         Self::default()
     }
 
+    /// Enter a new delegation level, checking depth and cycle constraints.
+    ///
+    /// The caller **must** call [`exit`] with the same label when the
+    /// delegation branch completes (success or failure).
     fn enter(&mut self, label: &str) -> Result<()> {
         if self.depth >= MAX_DELEGATE_DEPTH {
             return Err(Error::ResolutionError(format!(
@@ -186,6 +194,15 @@ impl DelegateContext {
         }
         self.depth += 1;
         Ok(())
+    }
+
+    /// Unwind one delegation level, removing the label from the visited set.
+    ///
+    /// This must be called after every successful `enter()`, regardless of
+    /// whether the delegation branch succeeded or failed.
+    fn exit(&mut self, label: &str) {
+        self.depth = self.depth.saturating_sub(1);
+        self.visited.remove(label);
     }
 }
 
@@ -442,8 +459,11 @@ impl<'a> PackageResolver<'a> {
 
             ResolutionStrategy::Delegate { label } => {
                 delegate_ctx.enter(label)?;
-                self.try_delegate(label, &pkg_with_repo.package.name, options, delegate_ctx)
-                    .await
+                let result = self
+                    .try_delegate(label, &pkg_with_repo.package.name, options, delegate_ctx)
+                    .await;
+                delegate_ctx.exit(label);
+                result
             }
 
             ResolutionStrategy::Legacy {
@@ -660,15 +680,19 @@ impl<'a> PackageResolver<'a> {
                 label_str, target_label_str, package_name
             );
 
-            // Recursively resolve through the target label
-            // DelegateContext tracks depth and visited labels for cycle detection
-            return Box::pin(self.try_delegate(
+            // Recursively resolve through the target label.
+            // DelegateContext tracks depth and visited labels for cycle detection.
+            // enter/exit bracket the recursive call so failed branches unwind.
+            delegate_ctx.enter(&target_label_str)?;
+            let result = Box::pin(self.try_delegate(
                 &target_label_str,
                 package_name,
                 options,
                 delegate_ctx,
             ))
             .await;
+            delegate_ctx.exit(&target_label_str);
+            return result;
         }
 
         // Check for repository link
@@ -845,6 +869,45 @@ mod tests {
         let result = ctx.enter("label_a");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("cycle"));
+    }
+
+    #[test]
+    fn test_delegate_context_exit_unwinds_state() {
+        let mut ctx = DelegateContext::new();
+
+        ctx.enter("label_a").unwrap();
+        ctx.enter("label_b").unwrap();
+
+        // Exit label_b -- depth and visited should unwind
+        ctx.exit("label_b");
+
+        // Re-entering label_b should succeed (no longer visited)
+        ctx.enter("label_b").unwrap();
+
+        // Exit both
+        ctx.exit("label_b");
+        ctx.exit("label_a");
+
+        // After full unwind, depth should be 0 and entering label_a works
+        ctx.enter("label_a").unwrap();
+        assert_eq!(ctx.depth, 1);
+    }
+
+    #[test]
+    fn test_delegate_context_exit_allows_reuse_after_failure() {
+        let mut ctx = DelegateContext::new();
+
+        // Fill up to max depth
+        for i in 0..MAX_DELEGATE_DEPTH {
+            ctx.enter(&format!("label{}", i)).unwrap();
+        }
+
+        // Should fail at max depth
+        assert!(ctx.enter("overflow").is_err());
+
+        // Exit one level -- should allow a new entry
+        ctx.exit(&format!("label{}", MAX_DELEGATE_DEPTH - 1));
+        ctx.enter("replacement").unwrap();
     }
 
     #[test]

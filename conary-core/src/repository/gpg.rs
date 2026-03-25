@@ -37,6 +37,31 @@ impl GpgVerifier {
         })
     }
 
+    /// Sanitize a repository name for safe use as a filesystem path component.
+    ///
+    /// Replaces any character that is not alphanumeric, dash, underscore, or
+    /// dot with an underscore.  Also rejects names containing path traversal
+    /// sequences (`..`) or forward slashes (`/`).
+    fn sanitize_repo_name(name: &str) -> Result<String> {
+        if name.contains("..") || name.contains('/') {
+            return Err(Error::ConfigError(format!(
+                "Repository name contains unsafe path characters: {}",
+                name
+            )));
+        }
+        let sanitized: String = name
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        Ok(sanitized)
+    }
+
     /// Import a GPG public key from bytes
     ///
     /// The key is stored in the keyring directory with a filename based on the key ID.
@@ -49,8 +74,9 @@ impl GpgVerifier {
         let fingerprint = cert.fingerprint().to_string();
         debug!("Importing GPG key with fingerprint: {}", fingerprint);
 
-        // Store key in keyring directory
-        let key_path = self.keyring_dir.join(format!("{}.asc", repository_name));
+        // Store key in keyring directory (sanitized to prevent path traversal)
+        let safe_name = Self::sanitize_repo_name(repository_name)?;
+        let key_path = self.keyring_dir.join(format!("{}.asc", safe_name));
         fs::write(&key_path, key_data)
             .map_err(|e| Error::IoError(format!("Failed to write GPG key: {}", e)))?;
 
@@ -68,14 +94,17 @@ impl GpgVerifier {
         self.import_key(&key_data, repository_name)
     }
 
-    /// Get the path to a repository's GPG key
-    fn get_key_path(&self, repository_name: &str) -> PathBuf {
-        self.keyring_dir.join(format!("{}.asc", repository_name))
+    /// Get the path to a repository's GPG key (sanitized).
+    fn get_key_path(&self, repository_name: &str) -> Result<PathBuf> {
+        let safe_name = Self::sanitize_repo_name(repository_name)?;
+        Ok(self.keyring_dir.join(format!("{}.asc", safe_name)))
     }
 
     /// Check if a GPG key exists for a repository
     pub fn has_key(&self, repository_name: &str) -> bool {
-        self.get_key_path(repository_name).exists()
+        self.get_key_path(repository_name)
+            .map(|p| p.exists())
+            .unwrap_or(false)
     }
 
     /// Verify a detached GPG signature for a file
@@ -99,7 +128,7 @@ impl GpgVerifier {
         );
 
         // Load the repository's GPG key
-        let key_path = self.get_key_path(repository_name);
+        let key_path = self.get_key_path(repository_name)?;
         if !key_path.exists() {
             return Err(Error::NotFound(format!(
                 "GPG key not found for repository '{}'. Run repo-sync to import keys.",
@@ -155,7 +184,7 @@ impl GpgVerifier {
 
     /// Remove a GPG key for a repository
     pub fn remove_key(&self, repository_name: &str) -> Result<()> {
-        let key_path = self.get_key_path(repository_name);
+        let key_path = self.get_key_path(repository_name)?;
         if key_path.exists() {
             fs::remove_file(&key_path)
                 .map_err(|e| Error::IoError(format!("Failed to remove GPG key: {}", e)))?;
