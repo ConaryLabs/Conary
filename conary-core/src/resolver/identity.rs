@@ -14,14 +14,14 @@ use rusqlite::{Connection, params};
 /// Full package identity for resolution, replacing ConaryPackage and ResolverCandidate.
 #[derive(Debug, Clone)]
 pub struct PackageIdentity {
-    // From repository_packages
-    pub repo_package_id: i64,
+    // From repository_packages (None for installed-only troves)
+    pub repo_package_id: Option<i64>,
     pub name: String,
     pub version: String,
     pub architecture: Option<String>,
     pub version_scheme: VersionScheme,
 
-    // From repositories (via join)
+    // From repositories (via join; defaults for installed-only troves)
     pub repository_id: i64,
     pub repository_name: String,
     pub repository_distro: Option<String>,
@@ -33,6 +33,9 @@ pub struct PackageIdentity {
 
     // Installed state (set when matching an installed trove)
     pub installed_trove_id: Option<i64>,
+
+    // Capabilities this package provides: (capability_name, optional_version_string)
+    pub provided_capabilities: Vec<(String, Option<String>)>,
 }
 
 impl PackageIdentity {
@@ -66,6 +69,7 @@ impl PackageIdentity {
                 canonical_id: row.get(9)?,
                 canonical_name: row.get(10)?,
                 installed_trove_id: None,
+                provided_capabilities: Vec::new(),
             })
         })?;
 
