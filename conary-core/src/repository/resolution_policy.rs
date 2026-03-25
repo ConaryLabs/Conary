@@ -14,6 +14,7 @@
 //! - Dependency mixing can be strict, guarded, or permissive.
 
 use super::dependency_model::RepositoryDependencyFlavor;
+use crate::repository::versioning::VersionScheme;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -57,22 +58,6 @@ pub enum DependencyMixingPolicy {
     /// Any repository may satisfy any dependency regardless of distro flavor.
     /// This is intended for expert use and testing.
     Permissive,
-}
-
-// ---------------------------------------------------------------------------
-// Candidate origin
-// ---------------------------------------------------------------------------
-
-/// Where a candidate package comes from.
-///
-/// Used by policy rules to decide whether a candidate is acceptable.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct CandidateOrigin {
-    /// Repository name.
-    pub repository: String,
-
-    /// Distro flavor of the repository.
-    pub flavor: RepositoryDependencyFlavor,
 }
 
 // ---------------------------------------------------------------------------
@@ -185,6 +170,10 @@ impl ResolutionPolicy {
     /// Evaluate whether a candidate is acceptable for a given package name
     /// under this policy.
     ///
+    /// Instead of the former `CandidateOrigin` struct, callers pass fields
+    /// directly from `PackageIdentity` -- the repository name and the
+    /// `VersionScheme` (which encodes the distro flavor).
+    ///
     /// `is_root` indicates whether this is a root-level request (user-typed)
     /// or a transitive dependency.  Request-scope restrictions apply only to
     /// root requests.
@@ -194,7 +183,8 @@ impl ResolutionPolicy {
     #[must_use]
     pub fn accepts_candidate(
         &self,
-        candidate: &CandidateOrigin,
+        repository_name: &str,
+        version_scheme: VersionScheme,
         package_name: &str,
         is_root: bool,
         primary_flavor: Option<RepositoryDependencyFlavor>,
@@ -204,12 +194,12 @@ impl ResolutionPolicy {
             match &self.request_scope {
                 RequestScope::Any => {}
                 RequestScope::Repository(repo) => {
-                    if candidate.repository != *repo {
+                    if repository_name != repo.as_str() {
                         return false;
                     }
                 }
                 RequestScope::DistroFlavor(flavor) => {
-                    if candidate.flavor != *flavor {
+                    if !scheme_matches_flavor(version_scheme, *flavor) {
                         return false;
                     }
                 }
@@ -217,13 +207,14 @@ impl ResolutionPolicy {
         }
 
         // Step 2: Check mixing policy (transitive deps).
+        let candidate_flavor = scheme_to_flavor(version_scheme);
         if let Some(primary) = primary_flavor
-            && candidate.flavor != primary
+            && candidate_flavor != primary
         {
             match self.mixing {
                 DependencyMixingPolicy::Strict => {
                     // Check for an exception rule.
-                    if !self.has_exception(package_name, candidate.flavor, &candidate.repository) {
+                    if !self.has_exception(package_name, candidate_flavor, repository_name) {
                         return false;
                     }
                 }
@@ -295,36 +286,56 @@ impl ResolutionPolicy {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Scheme / flavor bridge helpers
+// ---------------------------------------------------------------------------
+
+/// Check whether a `VersionScheme` corresponds to a `RepositoryDependencyFlavor`.
+///
+/// Used by request-scope filtering so that `--from-distro deb` matches
+/// candidates whose `version_scheme` is `Debian`.
+fn scheme_matches_flavor(scheme: VersionScheme, flavor: RepositoryDependencyFlavor) -> bool {
+    matches!(
+        (scheme, flavor),
+        (VersionScheme::Rpm, RepositoryDependencyFlavor::Rpm)
+            | (VersionScheme::Debian, RepositoryDependencyFlavor::Deb)
+            | (VersionScheme::Arch, RepositoryDependencyFlavor::Arch)
+    )
+}
+
+/// Convert a `VersionScheme` to the corresponding `RepositoryDependencyFlavor`.
+///
+/// This is the canonical direction: identity carries scheme, policy operates
+/// on flavor.
+fn scheme_to_flavor(scheme: VersionScheme) -> RepositoryDependencyFlavor {
+    match scheme {
+        VersionScheme::Rpm => RepositoryDependencyFlavor::Rpm,
+        VersionScheme::Debian => RepositoryDependencyFlavor::Deb,
+        VersionScheme::Arch => RepositoryDependencyFlavor::Arch,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn fedora_origin() -> CandidateOrigin {
-        CandidateOrigin {
-            repository: "fedora".to_string(),
-            flavor: RepositoryDependencyFlavor::Rpm,
-        }
-    }
-
-    fn debian_origin() -> CandidateOrigin {
-        CandidateOrigin {
-            repository: "ubuntu-noble".to_string(),
-            flavor: RepositoryDependencyFlavor::Deb,
-        }
-    }
+    // Test helpers: (repo_name, version_scheme) tuples replace CandidateOrigin
+    const FEDORA: (&str, VersionScheme) = ("fedora", VersionScheme::Rpm);
+    const DEBIAN: (&str, VersionScheme) = ("ubuntu-noble", VersionScheme::Debian);
 
     #[test]
     fn default_policy_accepts_anything_without_primary() {
         let policy = ResolutionPolicy::default();
-        assert!(policy.accepts_candidate(&fedora_origin(), "bash", false, None));
-        assert!(policy.accepts_candidate(&debian_origin(), "bash", false, None));
+        assert!(policy.accepts_candidate(FEDORA.0, FEDORA.1, "bash", false, None));
+        assert!(policy.accepts_candidate(DEBIAN.0, DEBIAN.1, "bash", false, None));
     }
 
     #[test]
     fn strict_mixing_rejects_cross_flavor_without_exception() {
         let policy = ResolutionPolicy::default();
         assert!(!policy.accepts_candidate(
-            &debian_origin(),
+            DEBIAN.0,
+            DEBIAN.1,
             "openssl",
             false,
             Some(RepositoryDependencyFlavor::Rpm),
@@ -335,7 +346,8 @@ mod tests {
     fn strict_mixing_allows_same_flavor() {
         let policy = ResolutionPolicy::default();
         assert!(policy.accepts_candidate(
-            &fedora_origin(),
+            FEDORA.0,
+            FEDORA.1,
             "glibc",
             false,
             Some(RepositoryDependencyFlavor::Rpm),
@@ -347,14 +359,9 @@ mod tests {
         let policy =
             ResolutionPolicy::new().with_scope(RequestScope::Repository("fedora".to_string()));
 
-        // Root request from debian is rejected.
-        assert!(!policy.accepts_candidate(&debian_origin(), "bash", true, None));
-
-        // Root request from fedora is accepted.
-        assert!(policy.accepts_candidate(&fedora_origin(), "bash", true, None));
-
-        // Transitive dep from debian is accepted (scope only applies to root).
-        assert!(policy.accepts_candidate(&debian_origin(), "glibc", false, None));
+        assert!(!policy.accepts_candidate(DEBIAN.0, DEBIAN.1, "bash", true, None));
+        assert!(policy.accepts_candidate(FEDORA.0, FEDORA.1, "bash", true, None));
+        assert!(policy.accepts_candidate(DEBIAN.0, DEBIAN.1, "glibc", false, None));
     }
 
     #[test]
@@ -362,15 +369,16 @@ mod tests {
         let policy = ResolutionPolicy::new()
             .with_scope(RequestScope::DistroFlavor(RepositoryDependencyFlavor::Rpm));
 
-        assert!(policy.accepts_candidate(&fedora_origin(), "bash", true, None));
-        assert!(!policy.accepts_candidate(&debian_origin(), "bash", true, None));
+        assert!(policy.accepts_candidate(FEDORA.0, FEDORA.1, "bash", true, None));
+        assert!(!policy.accepts_candidate(DEBIAN.0, DEBIAN.1, "bash", true, None));
     }
 
     #[test]
     fn guarded_mixing_allows_cross_flavor() {
         let policy = ResolutionPolicy::new().with_mixing(DependencyMixingPolicy::Guarded);
         assert!(policy.accepts_candidate(
-            &debian_origin(),
+            DEBIAN.0,
+            DEBIAN.1,
             "openssl",
             false,
             Some(RepositoryDependencyFlavor::Rpm),
@@ -381,7 +389,8 @@ mod tests {
     fn permissive_mixing_allows_anything() {
         let policy = ResolutionPolicy::new().with_mixing(DependencyMixingPolicy::Permissive);
         assert!(policy.accepts_candidate(
-            &debian_origin(),
+            DEBIAN.0,
+            DEBIAN.1,
             "openssl",
             false,
             Some(RepositoryDependencyFlavor::Rpm),
@@ -400,7 +409,7 @@ mod tests {
 
         // openssl from debian is accepted (exception).
         assert!(policy.accepts_candidate(
-            &debian_origin(),
+            DEBIAN.0, DEBIAN.1,
             "openssl",
             false,
             Some(RepositoryDependencyFlavor::Rpm),
@@ -408,7 +417,7 @@ mod tests {
 
         // curl from debian is rejected (no exception).
         assert!(!policy.accepts_candidate(
-            &debian_origin(),
+            DEBIAN.0, DEBIAN.1,
             "curl",
             false,
             Some(RepositoryDependencyFlavor::Rpm),
@@ -426,7 +435,7 @@ mod tests {
         });
 
         assert!(policy.accepts_candidate(
-            &debian_origin(),
+            DEBIAN.0, DEBIAN.1,
             "anything",
             false,
             Some(RepositoryDependencyFlavor::Rpm),
@@ -453,7 +462,7 @@ mod tests {
 
         // Both should match but the higher priority one is evaluated first.
         assert!(policy.accepts_candidate(
-            &debian_origin(),
+            DEBIAN.0, DEBIAN.1,
             "openssl",
             false,
             Some(RepositoryDependencyFlavor::Rpm),
