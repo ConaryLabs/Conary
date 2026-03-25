@@ -44,16 +44,22 @@
 | `src/commands/install/dep_resolution.rs` | Rewrite: `SatResolution` only, delete `ResolutionPlan` usage |
 | `src/commands/install/conversion.rs` | Rewrite: `SatResolution` only |
 | `src/commands/remove.rs` | Rewrite: `solve_removal()` only, no `Resolver` |
-| `conary-core/src/ccs/lockfile.rs` | Delete `ResolutionPlan` dependency, use `SatResolution` |
+| `src/commands/query/dependency.rs` | Rewrite: `solve_removal()` instead of `Resolver::check_removal()` |
+| `conary-core/tests/canonical.rs` | Update for `CanonicalResolver` changes |
+| `conary-core/src/repository/dependencies.rs` | Update resolver type usage |
 
 ### Deleted files
 | File | Reason |
 |------|--------|
 | `conary-core/src/resolver/graph.rs` (1,006 lines) | Graph resolver deleted. SAT is the only path. |
 | `conary-core/src/resolver/engine.rs` (592 lines) | `Resolver` struct deleted. `solve_install()` / `solve_removal()` are the API. |
-| `conary-core/src/resolver/plan.rs` (27 lines) | `ResolutionPlan` / `MissingDependency` deleted. `SatResolution` is the result type. |
 
-**Approach:** No users, no backwards compatibility. Rewrite aggressively. Delete dead code immediately. No shims, no "keep if used", no fallback paths to old types. If something references the old API, rewrite it.
+### Kept (NOT deleted)
+| File | Reason |
+|------|--------|
+| `conary-core/src/resolver/plan.rs` (27 lines) | `ResolutionPlan` / `MissingDependency` used extensively in install CLI (~15 references). Populated from `SatResolution`. |
+
+**Approach:** No users, no backwards compatibility. Rewrite aggressively. Delete dead code immediately. No shims, no fallback paths to old types. If something references the old API, rewrite it.
 
 ---
 
@@ -592,34 +598,41 @@ git commit -m "refactor(policy): enforcement uses PackageIdentity, delete Candid
 
 ---
 
-## Task 9: Delete graph resolver and all old types
+## Task 9: Delete graph resolver + rewrite all callers (combined)
+
+These were originally two tasks but share compilation breakage -- deleting graph.rs/engine.rs breaks every caller simultaneously. They must be done as one atomic task.
 
 **Files:**
 - Delete: `conary-core/src/resolver/graph.rs`
 - Delete: `conary-core/src/resolver/engine.rs`
-- Delete: `conary-core/src/resolver/plan.rs`
-- Modify: `conary-core/src/resolver/mod.rs`
-- Modify: `conary-core/src/ccs/lockfile.rs`
-- Modify: any file that references deleted types
+- Modify: `conary-core/src/resolver/mod.rs` -- gut and rewrite
+- Modify: `conary-core/src/resolver/plan.rs` -- keep but populate from SatResolution
+- Modify: `conary-core/src/resolver/sat.rs` -- delete tests that import Resolver/DependencyEdge (lines ~504-552)
+- Modify: `src/commands/install/mod.rs` -- replace Resolver with solve_install()
+- Modify: `src/commands/install/dependencies.rs` -- replace Resolver/DependencyEdge/ResolutionPlan
+- Modify: `src/commands/install/dep_resolution.rs` -- replace ResolutionPlan
+- Modify: `src/commands/install/conversion.rs` -- replace ResolutionPlan
+- Modify: `src/commands/remove.rs` -- replace Resolver::check_removal with solve_removal()
+- Modify: `src/commands/query/dependency.rs` -- replace Resolver::check_removal with solve_removal()
+- Modify: `conary-core/tests/canonical.rs` -- update CanonicalResolver usage
 
-- [ ] **Step 1: Delete the files**
+- [ ] **Step 1: Delete graph.rs and engine.rs**
 
 ```bash
 rm conary-core/src/resolver/graph.rs
 rm conary-core/src/resolver/engine.rs
-rm conary-core/src/resolver/plan.rs
 ```
 
 - [ ] **Step 2: Rewrite resolver/mod.rs**
 
-Strip it down to only the modules that remain:
+Strip down to only remaining modules. Delete all graph-resolver tests (lines ~38-370). New re-exports:
 
 ```rust
-// conary-core/src/resolver/mod.rs
 pub mod canonical;
 pub mod conflict;
 pub mod component_resolver;
 pub mod identity;
+pub mod plan;
 pub mod provider;
 pub mod provides_index;
 pub mod sat;
@@ -627,82 +640,58 @@ pub mod sat;
 pub use conflict::Conflict;
 pub use component_resolver::{ComponentResolver, ComponentResolutionPlan, ComponentSpec, MissingComponent};
 pub use identity::PackageIdentity;
+pub use plan::{ResolutionPlan, MissingDependency};
 pub use provides_index::ProvidesIndex;
 pub use sat::{SatPackage, SatResolution, SatSource, solve_install, solve_removal};
 ```
 
-Delete all `pub use` for `Resolver`, `DependencyGraph`, `PackageNode`, `DependencyEdge`, `ResolutionPlan`, `MissingDependency`. Delete all graph-resolver tests in mod.rs.
+- [ ] **Step 3: Rewrite install/mod.rs**
 
-- [ ] **Step 3: Fix every broken reference**
+Delete `Resolver::new()` / `resolver.resolve_install()` calls (~lines 53, 541-545, 851). Replace with `solve_install()`.
 
-Run `cargo check` repeatedly. Rewrite every file that references deleted types:
-- `conary-core/src/ccs/lockfile.rs` -- rewrite to use `SatResolution`
-- `src/commands/install/*.rs` -- rewrite (Task 10)
-- `src/commands/remove.rs` -- rewrite (Task 10)
-- Delete any tests that only tested graph resolver internals
+- [ ] **Step 4: Rewrite install/dependencies.rs**
 
-No shims. No compatibility wrappers. If it referenced the old API, rewrite it to use the new one.
+Delete all `Resolver`, `DependencyEdge` imports (~line 23). Dependency checking uses `solve_install()`. Missing deps come from resolvo error messages.
 
-- [ ] **Step 4: Run full tests**
+- [ ] **Step 5: Rewrite install/dep_resolution.rs + conversion.rs**
 
-Run: `cargo test`
-Expected: All remaining tests pass. Some test count may decrease (deleted graph tests).
+Replace `ResolutionPlan` usage -- either keep the type and populate from `SatResolution`, or use `SatResolution` directly if the type is thin enough.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Rewrite remove.rs**
 
-```bash
-git commit -m "refactor(resolver): delete graph resolver, plan.rs, engine.rs -- SAT is the only path"
-```
+Delete `Resolver::new(&conn)?.check_removal()` (~line 90). Use `solve_removal()`.
 
----
+- [ ] **Step 7: Rewrite query/dependency.rs**
 
-## Task 10: Rewrite CLI resolution paths
+Delete `Resolver::new(&conn)?.check_removal()` (~lines 88-89). Use `solve_removal()`.
 
-**Files:**
-- Modify: `src/commands/install/mod.rs`
-- Modify: `src/commands/install/dependencies.rs`
-- Modify: `src/commands/install/dep_resolution.rs`
-- Modify: `src/commands/install/conversion.rs`
-- Modify: `src/commands/remove.rs`
+- [ ] **Step 8: Fix sat.rs tests**
 
-This task runs concurrently with or immediately after Task 9 (they share the compilation breakage).
+Delete test functions that import `Resolver`/`DependencyEdge` (~lines 504-552). Replace with tests that use `solve_install()` directly.
 
-- [ ] **Step 1: Rewrite install resolution**
+- [ ] **Step 9: Update tests/canonical.rs**
 
-In `src/commands/install/mod.rs`, delete all `Resolver::new()` / `resolver.resolve_install()` calls. Replace with `solve_install()`. The install pipeline receives `SatResolution` directly -- no intermediate `ResolutionPlan`.
+Update the ~11 test functions that use `CanonicalResolver::new()` to work with the simplified canonical module.
 
-- [ ] **Step 2: Rewrite dependencies.rs**
+- [ ] **Step 10: Iterate cargo check until clean**
 
-Delete all `ResolutionPlan`, `DependencyEdge`, `Resolver` imports. Dependency checking uses `solve_install()` to verify the dep chain is satisfiable. Missing deps come from `SatResolution::unsatisfied` or the resolvo error message.
+Run `cargo check` repeatedly, fixing each broken reference. No shims.
 
-- [ ] **Step 3: Rewrite dep_resolution.rs**
-
-Delete `DepResolutionPlan` wrapper if it only wrapped `ResolutionPlan`. Use `SatResolution` directly.
-
-- [ ] **Step 4: Rewrite conversion.rs**
-
-Delete `ResolutionPlan` references. Resolution results flow as `SatResolution`.
-
-- [ ] **Step 5: Rewrite remove.rs**
-
-Delete `Resolver::new(&conn)?.check_removal()`. Use `solve_removal()` for safety checks.
-
-- [ ] **Step 6: Run full tests + clippy**
+- [ ] **Step 11: Run full tests + clippy**
 
 ```bash
 cargo test && cargo clippy -- -D warnings
 ```
-Expected: All pass, no warnings.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 12: Commit**
 
 ```bash
-git commit -m "refactor(cli): rewrite install/remove to use SAT-only resolution"
+git commit -m "refactor(resolver): delete graph resolver, rewrite all callers to SAT-only"
 ```
 
 ---
 
-## Task 11: Integration test
+## Task 10: Integration tests
 
 **Files:**
 - Add test in: `conary-core/src/resolver/sat.rs` or `tests/` directory
@@ -736,7 +725,7 @@ git commit -m "test(resolver): integration tests for cross-distro, multi-arch, p
 
 ---
 
-## Task 12: Cleanup and documentation
+## Task 11: Cleanup and documentation
 
 **Files:**
 - Modify: `CLAUDE.md` (schema version reference)
