@@ -149,7 +149,7 @@ impl ModelLock {
 mod tests {
     use super::*;
     use crate::model::remote::{CollectionData, CollectionMemberData};
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
     use tempfile::NamedTempFile;
 
     fn make_collection_data(name: &str, hash: &str, members: usize) -> CollectionData {
@@ -166,7 +166,7 @@ mod tests {
             version: "1.0.0".to_string(),
             members: member_list,
             includes: vec![],
-            pins: HashMap::new(),
+            pins: BTreeMap::new(),
             exclude: vec![],
             content_hash: hash.to_string(),
             published_at: "2026-01-01T00:00:00Z".to_string(),

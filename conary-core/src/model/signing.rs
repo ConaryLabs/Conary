@@ -90,7 +90,7 @@ mod tests {
     use crate::model::remote::{CollectionData, CollectionMemberData};
     use ed25519_dalek::SigningKey;
     use rand_core_06::OsRng;
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -100,7 +100,7 @@ mod tests {
             version: "1.0.0".to_string(),
             members: vec![],
             includes: vec![],
-            pins: HashMap::new(),
+            pins: BTreeMap::new(),
             exclude: vec![],
             content_hash: "sha256:test".to_string(),
             published_at: "2026-01-01T00:00:00Z".to_string(),
@@ -222,7 +222,7 @@ mod tests {
                 },
             ],
             includes: vec!["group-core@upstream:stable".to_string()],
-            pins: HashMap::from([("openssl".to_string(), "3.0.*".to_string())]),
+            pins: BTreeMap::from([("openssl".to_string(), "3.0.*".to_string())]),
             exclude: vec!["sendmail".to_string()],
             content_hash: "sha256:abc123".to_string(),
             published_at: "2026-01-15T12:00:00Z".to_string(),

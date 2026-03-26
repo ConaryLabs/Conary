@@ -7,7 +7,7 @@
 //! from a Remi `/v1/models/:name` endpoint, caches it in SQLite, and returns it
 //! as a `FetchedCollection`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 use chrono::Utc;
 use rusqlite::Connection;
@@ -30,7 +30,7 @@ pub struct CollectionData {
     pub version: String,
     pub members: Vec<CollectionMemberData>,
     pub includes: Vec<String>,
-    pub pins: HashMap<String, String>,
+    pub pins: BTreeMap<String, String>,
     pub exclude: Vec<String>,
     pub content_hash: String,
     pub published_at: String,
@@ -61,6 +61,12 @@ impl CollectionData {
             name: self.name.clone(),
             members,
             includes: self.includes.clone(),
+            pins: self
+                .pins
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            exclude: self.exclude.clone(),
         }
     }
 }
@@ -523,7 +529,11 @@ pub fn build_collection_data_from_model(
         version: version.to_string(),
         members,
         includes: model.include.models.clone(),
-        pins: model.pin.clone(),
+        pins: model
+            .pin
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
         exclude: model.config.exclude.clone(),
         content_hash: String::new(),
         published_at: Utc::now().to_rfc3339(),
@@ -559,7 +569,7 @@ mod tests {
                 },
             ],
             includes: vec!["group-core@upstream:stable".to_string()],
-            pins: HashMap::from([("openssl".to_string(), "3.0.*".to_string())]),
+            pins: BTreeMap::from([("openssl".to_string(), "3.0.*".to_string())]),
             exclude: vec!["sendmail".to_string()],
             content_hash: "sha256:abc123".to_string(),
             published_at: "2026-01-01T00:00:00Z".to_string(),
@@ -654,7 +664,7 @@ mod tests {
                 is_optional: false,
             }],
             includes: vec![],
-            pins: HashMap::new(),
+            pins: BTreeMap::new(),
             exclude: vec![],
             content_hash: "sha256:cached".to_string(),
             published_at: "2026-01-01T00:00:00Z".to_string(),
@@ -773,7 +783,7 @@ models = ["group-core@upstream:stable"]
                 },
             ],
             includes: vec!["group-core@upstream:stable".to_string()],
-            pins: HashMap::new(),
+            pins: BTreeMap::new(),
             exclude: vec![],
             content_hash: "sha256:test".to_string(),
             published_at: "2026-01-01T00:00:00Z".to_string(),

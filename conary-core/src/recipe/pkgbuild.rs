@@ -124,13 +124,24 @@ pub fn convert_pkgbuild(content: &str) -> Result<ConversionResult, PkgbuildError
     let url = vars.get("url").cloned();
     let license = vars.get("license").cloned();
 
-    // Extract source URL and checksum
+    // Extract source URL and checksum, preserving the original algorithm.
+    // PKGBUILDs can use sha256sums, sha512sums, b2sums, or md5sums.
+    // We must label the converted checksum with the correct algorithm.
     let sources = extract_array(content, "source")
         .ok_or_else(|| PkgbuildError::MissingVariable("source".to_string()))?;
-    let checksums = extract_array(content, "sha256sums")
-        .or_else(|| extract_array(content, "sha512sums"))
-        .or_else(|| extract_array(content, "b2sums"))
-        .or_else(|| extract_array(content, "md5sums"));
+
+    let (checksums, checksum_prefix) = if let Some(sums) = extract_array(content, "sha256sums") {
+        (Some(sums), "sha256")
+    } else if let Some(sums) = extract_array(content, "sha512sums") {
+        (Some(sums), "sha512")
+    } else if let Some(sums) = extract_array(content, "b2sums") {
+        (Some(sums), "blake2b")
+    } else if let Some(sums) = extract_array(content, "md5sums") {
+        warnings.push("PKGBUILD uses md5sums (weak); consider sha256sums".to_string());
+        (Some(sums), "md5")
+    } else {
+        (None, "sha256")
+    };
 
     if sources.is_empty() {
         return Err(PkgbuildError::MissingVariable("source".to_string()));
@@ -140,7 +151,13 @@ pub fn convert_pkgbuild(content: &str) -> Result<ConversionResult, PkgbuildError
     let checksum = checksums
         .as_ref()
         .and_then(|c| c.first())
-        .map(|s| format!("sha256:{}", s))
+        .map(|s| {
+            if s == "SKIP" {
+                "SKIP".to_string()
+            } else {
+                format!("{}:{}", checksum_prefix, s)
+            }
+        })
         .unwrap_or_else(|| {
             warnings.push("No checksum found, using SKIP".to_string());
             "SKIP".to_string()
@@ -155,7 +172,13 @@ pub fn convert_pkgbuild(content: &str) -> Result<ConversionResult, PkgbuildError
             let cs = checksums
                 .as_ref()
                 .and_then(|c| c.get(i + 1))
-                .map(|s| format!("sha256:{}", s))
+                .map(|s| {
+                    if s == "SKIP" {
+                        "SKIP".to_string()
+                    } else {
+                        format!("{}:{}", checksum_prefix, s)
+                    }
+                })
                 .unwrap_or_else(|| "SKIP".to_string());
             crate::recipe::format::AdditionalSource {
                 url: convert_pkgbuild_url(url, &pkgname, &pkgver),

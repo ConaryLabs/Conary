@@ -219,7 +219,7 @@ pub fn planned_replatform_actions(
     let mut actions = Vec::new();
 
     for proposal in &snapshot.visible_realignment_proposals {
-        let Some(installed) = state.installed.get(&proposal.package) else {
+        let Some(installed) = state.get_package(&proposal.package) else {
             continue;
         };
 
@@ -925,7 +925,7 @@ mod tests {
             }],
         };
         let mut state = SystemState::new();
-        state.installed.insert(
+        state.add_package(
             "vim".to_string(),
             InstalledPackage {
                 name: "vim".to_string(),

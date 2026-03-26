@@ -1010,7 +1010,7 @@ pub async fn cmd_model_remote_diff(model_path: &str, db_path: &str, refresh: boo
         let mut version_drift: Vec<(String, String, String)> = Vec::new();
 
         for member in &collection.members {
-            if let Some(installed) = state.installed.get(&member.name) {
+            if let Some(installed) = state.get_package(&member.name) {
                 // Package is installed — check version constraint
                 if let Some(constraint) = &member.version_constraint
                     && !version_matches_constraint(&installed.version, constraint)
@@ -1869,7 +1869,7 @@ strength = "strict"
             ],
         };
         let mut state = SystemState::new();
-        state.installed.insert(
+        state.add_package(
             "vim".to_string(),
             conary_core::model::InstalledPackage {
                 name: "vim".to_string(),
@@ -1879,7 +1879,7 @@ strength = "strict"
                 label: Some("fedora@f43:stable".to_string()),
             },
         );
-        state.installed.insert(
+        state.add_package(
             "bash".to_string(),
             conary_core::model::InstalledPackage {
                 name: "bash".to_string(),
@@ -1973,13 +1973,13 @@ strength = "strict"
         let state = SystemState {
             installed: HashMap::from([(
                 "nginx".to_string(),
-                conary_core::model::InstalledPackage {
+                vec![conary_core::model::InstalledPackage {
                     name: "nginx".to_string(),
                     version: "1.24.2".to_string(),
                     architecture: None,
                     explicit: true,
                     label: None,
-                },
+                }],
             )]),
             explicit: HashSet::from(["nginx".to_string()]),
             pinned: HashSet::new(),
@@ -2001,7 +2001,7 @@ strength = "strict"
         let mut version_drift = Vec::new();
 
         for member in &fetched.members {
-            if let Some(installed) = state.installed.get(&member.name) {
+            if let Some(installed) = state.get_package(&member.name) {
                 if let Some(constraint) = &member.version_constraint
                     && !version_matches_constraint(&installed.version, constraint)
                 {

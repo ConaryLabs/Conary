@@ -16,7 +16,7 @@ use conary_core::db::models::{CollectionMember, Trove, TroveType};
 use conary_core::model::remote::{CollectionData, CollectionMemberData};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -487,10 +487,12 @@ fn build_collection_data(
         version: coll.version.clone(),
         members: member_data,
         includes: Vec::new(),
-        pins: HashMap::new(),
+        pins: BTreeMap::new(),
         exclude: Vec::new(),
         content_hash: String::new(),
-        published_at: coll.installed_at.unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+        published_at: coll
+            .installed_at
+            .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
     };
     let canonical_json = serde_json::to_vec(&reconstructed)?;
     reconstructed.content_hash = conary_core::hash::sha256_prefixed(&canonical_json);
@@ -609,7 +611,7 @@ mod tests {
                 },
             ],
             includes: vec![],
-            pins: HashMap::new(),
+            pins: BTreeMap::new(),
             exclude: vec![],
             content_hash: String::new(),
             published_at: "2026-01-01T00:00:00Z".to_string(),
@@ -655,7 +657,7 @@ mod tests {
             version: "2.0.0".to_string(),
             members: vec![],
             includes: vec![],
-            pins: HashMap::new(),
+            pins: BTreeMap::new(),
             exclude: vec![],
             content_hash: String::new(),
             published_at: "2026-01-01T00:00:00Z".to_string(),
@@ -682,7 +684,7 @@ mod tests {
             version: "1.0.0".to_string(),
             members: vec![],
             includes: vec![],
-            pins: HashMap::new(),
+            pins: BTreeMap::new(),
             exclude: vec![],
             content_hash: String::new(),
             published_at: "2026-01-01T00:00:00Z".to_string(),

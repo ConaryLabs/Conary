@@ -231,6 +231,10 @@ pub struct FetchedCollection {
     pub members: Vec<IncludedMember>,
     /// Nested includes (collections can include other collections)
     pub includes: Vec<String>,
+    /// Version pins from the remote collection
+    pub pins: std::collections::HashMap<String, String>,
+    /// Package exclusions from the remote collection
+    pub exclude: Vec<String>,
 }
 
 /// Parse a trove spec like "group-base@repo:branch" or just "group-base"
@@ -253,6 +257,8 @@ async fn fetch_collection(
     name: &str,
     label: Option<&str>,
     offline: bool,
+    require_signatures: bool,
+    trusted_keys: &[String],
 ) -> ModelResult<FetchedCollection> {
     use crate::db::models::{CollectionMember, Trove, TroveType};
 
@@ -285,12 +291,22 @@ async fn fetch_collection(
             name: name.to_string(),
             members: fetched_members,
             includes: Vec::new(), // Local collections don't have nested includes (yet)
+            pins: std::collections::HashMap::new(),
+            exclude: Vec::new(),
         });
     }
 
     // Remote fetch via label
     if let Some(label_str) = label {
-        return remote::fetch_remote_collection(conn, name, label_str, offline).await;
+        return remote::fetch_and_verify_remote_collection(
+            conn,
+            name,
+            label_str,
+            offline,
+            require_signatures,
+            trusted_keys,
+        )
+        .await;
     }
 
     // No label, no local match
@@ -340,6 +356,8 @@ pub async fn resolve_includes_with_options(
         &mut resolved,
         &mut visited,
         offline,
+        model.include.require_signatures,
+        &model.include.trusted_keys,
         0,
     )
     .await?;
@@ -347,6 +365,7 @@ pub async fn resolve_includes_with_options(
     Ok(resolved)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn resolve_includes_recursive(
     includes: &[String],
     on_conflict: &parser::ConflictStrategy,
@@ -354,6 +373,8 @@ async fn resolve_includes_recursive(
     resolved: &mut ResolvedModel,
     visited: &mut HashSet<String>,
     offline: bool,
+    require_signatures: bool,
+    trusted_keys: &[String],
     depth: usize,
 ) -> ModelResult<()> {
     if depth > MAX_INCLUDE_DEPTH {
@@ -379,7 +400,15 @@ async fn resolve_includes_recursive(
         let (name, label) = parse_trove_spec(include_spec)?;
 
         // Fetch collection from local DB or repository
-        let collection = fetch_collection(conn, &name, label.as_deref(), offline).await?;
+        let collection = fetch_collection(
+            conn,
+            &name,
+            label.as_deref(),
+            offline,
+            require_signatures,
+            trusted_keys,
+        )
+        .await?;
 
         // Recursively resolve nested includes if the collection has them
         if !collection.includes.is_empty() {
@@ -390,6 +419,8 @@ async fn resolve_includes_recursive(
                 resolved,
                 visited,
                 offline,
+                require_signatures,
+                trusted_keys,
                 depth + 1,
             ))
             .await?;
@@ -451,6 +482,21 @@ async fn resolve_includes_recursive(
                     format!("included from {}", include_spec),
                 );
                 layer_packages.push(member.name.clone());
+            }
+        }
+
+        // Merge remote collection pins (local pins take precedence)
+        for (pkg, constraint) in &collection.pins {
+            resolved
+                .pins
+                .entry(pkg.clone())
+                .or_insert_with(|| constraint.clone());
+        }
+
+        // Merge remote collection excludes
+        for excluded in &collection.exclude {
+            if !resolved.exclude.contains(excluded) {
+                resolved.exclude.push(excluded.clone());
             }
         }
 
