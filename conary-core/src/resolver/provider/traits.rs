@@ -172,7 +172,11 @@ impl DependencyProvider for ConaryProvider<'_> {
             }
         }
 
-        if candidates.is_empty() {
+        // Always load virtual providers alongside exact-name candidates.
+        // The solver's ranking (sort_candidates) and filtering handle which
+        // to prefer -- suppressing virtual providers when exact-name candidates
+        // exist causes missed alternatives (e.g. library provides).
+        {
             let providers = self.resolve_virtual_provide(name_str);
             for provider_name in &providers {
                 if let Some(&provider_name_id) = self.name_to_id.get(provider_name) {
@@ -180,10 +184,10 @@ impl DependencyProvider for ConaryProvider<'_> {
                 }
             }
             candidates.extend(self.solvables_for_provide(name_str));
+        }
 
-            if candidates.is_empty() {
-                return None;
-            }
+        if candidates.is_empty() {
+            return None;
         }
 
         let favored = self.installed_solvable_for_name(name);
@@ -218,6 +222,11 @@ impl DependencyProvider for ConaryProvider<'_> {
                 }
             }
 
+            // Higher repository priority is preferred
+            if pkg_a.repository_priority != pkg_b.repository_priority {
+                return pkg_b.repository_priority.cmp(&pkg_a.repository_priority);
+            }
+
             if let Some(version_cmp) =
                 super::matching::compare_package_versions_desc(
                     &pkg_a.version,
@@ -235,6 +244,7 @@ impl DependencyProvider for ConaryProvider<'_> {
             b_installed
                 .cmp(&a_installed)
                 .then_with(|| pkg_a.name.cmp(&pkg_b.name))
+                .then_with(|| pkg_a.repository_name.cmp(&pkg_b.repository_name))
         });
     }
 

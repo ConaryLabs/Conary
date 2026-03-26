@@ -185,7 +185,12 @@ impl<'db> CanonicalResolver<'db> {
             // 0. Explicit request scope first (root requests only)
             match &policy.request_scope {
                 RequestScope::Repository(repo) => {
-                    // Prefer candidates whose distro identity matches the repo scope
+                    // TODO: ResolverCandidate lacks a `repository_name` field, so we
+                    // compare against `distro` (the distro identity). This works when
+                    // the repo scope string matches the distro (e.g. "ubuntu-noble"),
+                    // but will not work for repo-specific scoping like "fedora-updates"
+                    // vs "fedora-base". Add `repository_name` to ResolverCandidate to
+                    // support true per-repo scoping.
                     let a_match = a.distro == repo.as_str();
                     let b_match = b.distro == repo.as_str();
                     if a_match != b_match {
