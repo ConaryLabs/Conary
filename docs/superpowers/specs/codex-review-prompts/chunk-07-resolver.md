@@ -1,4 +1,12 @@
-You are performing a deep code review of a Rust codebase (Conary, a next-generation Linux package manager). This is Chunk 7: Resolver + Dependencies -- SAT-based dependency resolution using resolvo, including the resolution engine, conflict analysis, plan generation, graph building, canonical name resolution, provider loading/matching/traits, dependency type definitions, detection, version parsing with constraints, and flavor (build variation) specs. Resolution correctness directly affects install safety.
+You are performing a deep code review of a Rust codebase (Conary, a next-generation Linux package manager). This is Chunk 7: Resolver + Dependencies -- SAT-only dependency resolution using resolvo (the graph resolver was recently deleted). This module was just redesigned: PackageIdentity replaces ConaryPackage, ProvidesIndex replaces per-dep queries, all resolution goes through solve_install()/solve_removal(). Pay special attention to the new code paths and whether the redesign is complete and correct.
+
+Key architectural context:
+- PackageIdentity (identity.rs) carries full provenance: name, version, arch, repo_id, version_scheme, canonical_id
+- ProvidesIndex (provides_index.rs) is a pre-built HashMap for O(1) capability lookup, built from 3 sources
+- ConaryProvider (provider/) bridges PackageIdentity to resolvo's DependencyProvider trait
+- Canonical equivalents are found via canonical_id joins on repository_packages, not name matching
+- Version scheme comes from PackageIdentity.version_scheme (explicit from DB), not inferred at resolution time
+- graph.rs and engine.rs were deleted -- solve_install()/solve_removal() in sat.rs are the only entry points
 
 Review the following files with maximum thoroughness across ALL of these dimensions:
 
@@ -69,19 +77,19 @@ Top 3 most important findings:
 ## Files to Review
 
 ```
+conary-core/src/resolver/identity.rs
+conary-core/src/resolver/provides_index.rs
+conary-core/src/resolver/sat.rs
+conary-core/src/resolver/provider/mod.rs
+conary-core/src/resolver/provider/types.rs
+conary-core/src/resolver/provider/traits.rs
+conary-core/src/resolver/provider/loading.rs
+conary-core/src/resolver/provider/matching.rs
 conary-core/src/resolver/canonical.rs
 conary-core/src/resolver/component_resolver.rs
 conary-core/src/resolver/conflict.rs
-conary-core/src/resolver/engine.rs
-conary-core/src/resolver/graph.rs
-conary-core/src/resolver/mod.rs
 conary-core/src/resolver/plan.rs
-conary-core/src/resolver/provider/loading.rs
-conary-core/src/resolver/provider/matching.rs
-conary-core/src/resolver/provider/mod.rs
-conary-core/src/resolver/provider/traits.rs
-conary-core/src/resolver/provider/types.rs
-conary-core/src/resolver/sat.rs
+conary-core/src/resolver/mod.rs
 conary-core/src/dependencies/classes.rs
 conary-core/src/dependencies/detection.rs
 conary-core/src/dependencies/mod.rs
