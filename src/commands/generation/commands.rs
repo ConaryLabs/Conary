@@ -381,12 +381,45 @@ pub fn cmd_generation_rollback() -> Result<()> {
 /// Recover any interrupted transaction using the database at `db_path`.
 pub fn cmd_generation_recover(db_path: &str) -> Result<()> {
     let conn = crate::commands::open_db(db_path)?;
-    let config = conary_core::transaction::TransactionConfig::from_paths(
-        std::path::PathBuf::from("/"),
-        std::path::PathBuf::from(db_path),
-    );
+    let db_path_buf = std::path::PathBuf::from(db_path);
+    // Root is the parent of the database file (e.g. /conary), not /.
+    // This matches the install paths and ensures recover() reads/writes
+    // the correct /conary/current symlink and generation directories.
+    let conary_root = db_path_buf
+        .parent()
+        .unwrap_or(Path::new("/conary"))
+        .to_path_buf();
+
+    // Mount composefs at the staging point (<root>/mnt), not at /.
+    // This matches the composefs_ops/switch.rs pattern and ensures the
+    // staging mount exists for the /etc overlay lower path.
+    let staging = conary_root.join("mnt");
+    std::fs::create_dir_all(&staging)
+        .map_err(|e| anyhow!("Failed to create staging directory: {e}"))?;
+
+    let mut config =
+        conary_core::transaction::TransactionConfig::from_paths(conary_root.clone(), db_path_buf);
+    config.mount_point = staging.clone();
     let engine = conary_core::transaction::TransactionEngine::new(config)?;
     engine.recover(&conn)?;
+
+    // Restore the /etc overlay after recovery mounts the generation.
+    // recover() mounts the composefs image at <root>/mnt; the writable
+    // /etc overlay uses staging/etc as lower and live /etc as target.
+    if let Ok(Some(gen_num)) = current_generation(&conary_root) {
+        let staging_etc = staging.join("etc");
+        let upper = conary_root.join(format!("etc-state/{gen_num}"));
+        let work = conary_root.join(format!("etc-state/{gen_num}-work"));
+        if let Err(e) = conary_core::generation::mount::mount_etc_overlay(
+            &staging_etc,
+            Path::new("/etc"),
+            &upper,
+            &work,
+        ) {
+            tracing::warn!("Failed to restore /etc overlay after recovery: {e}");
+        }
+    }
+
     println!("Recovery complete.");
     Ok(())
 }

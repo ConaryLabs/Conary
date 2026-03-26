@@ -355,6 +355,7 @@ fn rollback_removal(
                 file.permissions,
                 trove_id,
             );
+            file_entry.symlink_target = file.symlink_target.clone();
             file_entry.insert(tx)?;
 
             // Record in file history only for valid SHA256 hashes
@@ -485,6 +486,7 @@ fn rollback_upgrade(
                 file.permissions,
                 trove_id,
             );
+            file_entry.symlink_target = file.symlink_target.clone();
             file_entry.insert(tx)?;
         }
 

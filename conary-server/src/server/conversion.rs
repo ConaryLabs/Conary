@@ -530,6 +530,7 @@ impl ConversionService {
                     size: f.size,
                     mode: f.mode,
                     sha256: f.sha256.clone(),
+                    symlink_target: f.symlink_target.clone(),
                 })
                 .collect(),
             dependencies: pkg

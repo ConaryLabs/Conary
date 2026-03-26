@@ -1417,14 +1417,20 @@ fn execute_install_transaction(
 
     // Store extracted file content in CAS
     progress.set_phase(pkg.name(), InstallPhase::Deploying);
-    let mut file_hashes: Vec<(String, String, i64, i32)> =
+    let mut file_hashes: Vec<(String, String, i64, i32, Option<String>)> =
         Vec::with_capacity(extraction.extracted_files.len());
     for file in &extraction.extracted_files {
         let hash = engine
             .cas()
             .store(&file.content)
             .with_context(|| format!("Failed to store {} in CAS", file.path))?;
-        file_hashes.push((file.path.clone(), hash, file.size, file.mode));
+        file_hashes.push((
+            file.path.clone(),
+            hash,
+            file.size,
+            file.mode,
+            file.symlink_target.clone(),
+        ));
     }
 
     info!(
@@ -1504,7 +1510,7 @@ fn execute_install_transaction(
             }
         }
 
-        for (path, hash, size, mode) in &file_hashes {
+        for (path, hash, size, mode, symlink_target) in &file_hashes {
             if hash.len() < 3 {
                 warn!("Skipping file with short hash: {} (hash={})", path, hash);
                 continue;
@@ -1525,6 +1531,7 @@ fn execute_install_transaction(
                 trove_id,
             );
             file_entry.component_id = component_id;
+            file_entry.symlink_target = symlink_target.clone();
             file_entry.insert(tx)?;
 
             // Record in history

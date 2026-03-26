@@ -117,19 +117,62 @@ pub fn safe_join(root: impl AsRef<Path>, path: impl AsRef<Path>) -> Result<PathB
     let sanitized = sanitize_path(path.as_ref())?;
     let joined = root.join(&sanitized);
 
-    // Defense in depth: verify the result is under root
-    // This catches any edge cases we might have missed
+    // Defense in depth: verify the result is under root.
+    // First try canonicalize (works when the full path exists).
     if let (Ok(canonical_root), Ok(canonical_joined)) = (root.canonicalize(), joined.canonicalize())
-        && !canonical_joined.starts_with(&canonical_root)
     {
-        return Err(Error::PathTraversal(format!(
-            "Path {} escapes root {}",
-            joined.display(),
-            root.display()
-        )));
+        if !canonical_joined.starts_with(&canonical_root) {
+            return Err(Error::PathTraversal(format!(
+                "Path {} escapes root {}",
+                joined.display(),
+                root.display()
+            )));
+        }
+        return Ok(joined);
     }
-    // Note: If canonicalize fails (e.g., path doesn't exist yet),
-    // we rely on the sanitize_path check above
+
+    // When the final path doesn't exist yet, walk existing ancestors to
+    // ensure none of them are symlinks that escape the root. An attacker
+    // can plant a symlink inside root so that the joined path resolves
+    // outside root once the caller creates the file.
+    //
+    // If the root itself doesn't exist, we can't do symlink checks but
+    // sanitize_path already rejected traversal components.
+    let canonical_root = match root.canonicalize() {
+        Ok(cr) => cr,
+        Err(_) => return Ok(joined),
+    };
+
+    let mut check = root.to_path_buf();
+    for component in sanitized.components() {
+        check.push(component);
+        // Only check components that exist on disk.
+        match check.symlink_metadata() {
+            Ok(meta) if meta.is_symlink() => {
+                // Resolve the symlink and verify it stays under root.
+                match check.canonicalize() {
+                    Ok(resolved) if !resolved.starts_with(&canonical_root) => {
+                        return Err(Error::PathTraversal(format!(
+                            "Symlink at {} escapes root {}",
+                            check.display(),
+                            root.display()
+                        )));
+                    }
+                    Ok(_) => {} // Symlink stays under root, continue
+                    Err(_) => {
+                        // Dangling symlink -- reject to be safe
+                        return Err(Error::PathTraversal(format!(
+                            "Dangling symlink at {} under root {}",
+                            check.display(),
+                            root.display()
+                        )));
+                    }
+                }
+            }
+            Ok(_) => {}      // Regular file or directory, fine
+            Err(_) => break, // Path doesn't exist yet, stop checking
+        }
+    }
 
     Ok(joined)
 }

@@ -380,7 +380,21 @@ impl<'a> StateEngine<'a> {
         changeset_id: Option<i64>,
     ) -> Result<SystemState> {
         let state_number = SystemState::next_state_number(self.conn)?;
+        self.create_snapshot_at(state_number, summary, description, changeset_id)
+    }
 
+    /// Create a system state snapshot at a specific, pre-reserved state number.
+    ///
+    /// Use this when the caller has already reserved the state number (e.g.,
+    /// `build_generation_from_db` reserves it up front to keep the directory
+    /// number and DB state number in sync).
+    pub fn create_snapshot_at(
+        &self,
+        state_number: i64,
+        summary: &str,
+        description: Option<&str>,
+        changeset_id: Option<i64>,
+    ) -> Result<SystemState> {
         // Count current packages
         let package_count: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM troves WHERE type = 'package'",

@@ -174,6 +174,7 @@ impl ScriptletCapturer {
                 size: metadata.len() as i64,
                 mode: metadata.permissions().mode() as i32,
                 sha256: None, // Recalculate later
+                symlink_target: None,
             });
         }
 

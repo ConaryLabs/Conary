@@ -225,6 +225,7 @@ pub async fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result
                     FileEntry::new(file_path.clone(), hash, *file_size, *file_mode, trove_id);
                 file_entry.owner = file_user.clone();
                 file_entry.group_name = file_group.clone();
+                file_entry.symlink_target = file_link_target.clone();
 
                 // Use INSERT OR REPLACE to handle shared paths (directories, etc.)
                 if let Err(e) = file_entry.insert_or_replace(tx) {

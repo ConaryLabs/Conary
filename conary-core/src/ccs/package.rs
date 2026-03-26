@@ -309,6 +309,7 @@ impl CcsPackage {
                 } else {
                     Some(f.hash.clone())
                 },
+                symlink_target: None,
             })
             .collect()
     }
@@ -482,6 +483,7 @@ impl PackageFormat for CcsPackage {
                 size: file.size as i64,
                 mode: file.mode as i32,
                 sha256,
+                symlink_target: None,
             });
         }
 
@@ -615,19 +617,30 @@ license = "MIT"
 
     #[test]
     fn test_extract_rejects_declared_size_mismatch() {
+        use crate::ccs::binary_manifest::{BinaryManifest, Hash};
+
         let (_temp, package_path) = build_test_package();
         let corrupted_path = package_path.with_file_name("size-lie.ccs");
         mutate_package(&package_path, &corrupted_path, |root| {
+            // Step 1: Mutate the component JSON (lie about file size)
             let component_path = root.join("components/runtime.json");
             let mut component: ComponentData =
                 serde_json::from_slice(&fs::read(&component_path).unwrap()).unwrap();
             component.files[0].size = 1024;
             component.size = 1024;
-            fs::write(
-                &component_path,
-                serde_json::to_vec_pretty(&component).unwrap(),
-            )
-            .unwrap();
+            let new_component_bytes = serde_json::to_vec_pretty(&component).unwrap();
+            fs::write(&component_path, &new_component_bytes).unwrap();
+
+            // Step 2: Update the MANIFEST's component hash to match the
+            // mutated JSON, so parsing succeeds and the size-mismatch
+            // check is actually exercised during extraction.
+            let manifest_path = root.join("MANIFEST");
+            let manifest_bytes = fs::read(&manifest_path).unwrap();
+            let mut manifest = BinaryManifest::from_cbor(&manifest_bytes).unwrap();
+            if let Some(comp_ref) = manifest.components.get_mut("runtime") {
+                comp_ref.hash = Hash::sha256(&new_component_bytes);
+            }
+            fs::write(&manifest_path, manifest.to_cbor().unwrap()).unwrap();
         });
 
         let package = CcsPackage::parse(corrupted_path.to_str().unwrap()).unwrap();

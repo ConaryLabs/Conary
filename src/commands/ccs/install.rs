@@ -645,6 +645,7 @@ pub async fn cmd_ccs_install(
                             sha256_hash: f.sha256_hash.clone(),
                             size: f.size,
                             permissions: f.permissions,
+                            symlink_target: f.symlink_target.clone(),
                         })
                         .collect(),
                 };
@@ -678,6 +679,7 @@ pub async fn cmd_ccs_install(
                 deployed_mode(file.mode).0,
                 trove_id,
             );
+            file_entry.symlink_target = file.symlink_target.clone();
             file_entry.insert_or_replace(&tx)?;
 
             // Register in file_contents (CAS index) and file_history

@@ -19,12 +19,14 @@ pub struct FileEntry {
     pub installed_at: Option<String>,
     /// Component ID this file belongs to (None for legacy pre-component installs)
     pub component_id: Option<i64>,
+    /// Symlink target path (None for regular files, Some for symlinks)
+    pub symlink_target: Option<String>,
 }
 
 impl FileEntry {
     /// Column list for SELECT queries.
     const COLUMNS: &'static str = "id, path, sha256_hash, size, permissions, owner, \
-         group_name, trove_id, installed_at, component_id";
+         group_name, trove_id, installed_at, component_id, symlink_target";
 
     /// Create a new FileEntry
     pub fn new(
@@ -45,6 +47,7 @@ impl FileEntry {
             trove_id,
             installed_at: None,
             component_id: None,
+            symlink_target: None,
         }
     }
 
@@ -68,14 +71,15 @@ impl FileEntry {
             trove_id,
             installed_at: None,
             component_id: Some(component_id),
+            symlink_target: None,
         }
     }
 
     /// Insert this file into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
-            "INSERT INTO files (path, sha256_hash, size, permissions, owner, group_name, trove_id, component_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO files (path, sha256_hash, size, permissions, owner, group_name, trove_id, component_id, symlink_target)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 &self.path,
                 &self.sha256_hash,
@@ -85,6 +89,7 @@ impl FileEntry {
                 &self.group_name,
                 &self.trove_id,
                 &self.component_id,
+                &self.symlink_target,
             ],
         )?;
 
@@ -118,8 +123,8 @@ impl FileEntry {
     ///   would cascade-delete the files before the new trove can claim them.
     pub fn insert_or_replace(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
-            "INSERT OR REPLACE INTO files (path, sha256_hash, size, permissions, owner, group_name, trove_id, component_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT OR REPLACE INTO files (path, sha256_hash, size, permissions, owner, group_name, trove_id, component_id, symlink_target)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 &self.path,
                 &self.sha256_hash,
@@ -129,6 +134,7 @@ impl FileEntry {
                 &self.group_name,
                 &self.trove_id,
                 &self.component_id,
+                &self.symlink_target,
             ],
         )?;
 
@@ -288,8 +294,8 @@ impl FileEntry {
 
         let mut stmt = conn.prepare_cached(
             "INSERT OR REPLACE INTO files (path, sha256_hash, size, permissions, owner, \
-             group_name, trove_id, component_id) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             group_name, trove_id, component_id, symlink_target) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         )?;
 
         for entry in entries {
@@ -302,6 +308,7 @@ impl FileEntry {
                 &entry.group_name,
                 &entry.trove_id,
                 &entry.component_id,
+                &entry.symlink_target,
             ])?;
         }
 
@@ -321,6 +328,7 @@ impl FileEntry {
             trove_id: row.get(7)?,
             installed_at: row.get(8)?,
             component_id: row.get(9)?,
+            symlink_target: row.get(10)?,
         })
     }
 }

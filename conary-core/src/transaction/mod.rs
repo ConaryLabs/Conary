@@ -270,7 +270,6 @@ impl TransactionEngine {
     ///
     /// This replaces the old journal-based roll-forward/roll-back recovery.
     pub fn recover(&self, conn: &Connection) -> Result<()> {
-        use crate::generation::builder::build_generation_from_db;
         use crate::generation::mount::current_generation;
 
         // ------------------------------------------------------------------
@@ -284,11 +283,29 @@ impl TransactionEngine {
                 .join(EROFS_IMAGE_NAME);
 
             if is_valid_erofs_image(&image_path) {
-                tracing::debug!(
-                    "Recovery: current generation {} has valid image, no action needed",
+                // Image is valid -- check if THIS generation is actually mounted.
+                // A stale mount from a different generation or an unrelated overlay
+                // at the same mount point must not short-circuit recovery.
+                let is_mounted = crate::generation::mount::is_generation_mounted(
+                    &self.config.mount_point,
+                    &image_path,
+                )
+                .unwrap_or(false);
+
+                if is_mounted {
+                    tracing::debug!(
+                        "Recovery: generation {} is valid and mounted, no action needed",
+                        current_num
+                    );
+                    return Ok(());
+                }
+
+                // Valid image but not mounted -- mount it now.
+                tracing::info!(
+                    "Recovery: generation {} has valid image but is not mounted, mounting",
                     current_num
                 );
-                return Ok(());
+                return self.mount_and_link(current_num);
             }
 
             tracing::warn!(
@@ -316,17 +333,20 @@ impl TransactionEngine {
 
         if let Some(expected) = db_gen {
             tracing::info!(
-                "Recovery: DB says generation {} should be active, rebuilding",
+                "Recovery: DB says generation {} should be active, rebuilding in place",
                 expected
             );
 
-            match build_generation_from_db(
+            // Rebuild the existing generation's EROFS image without allocating
+            // a new state number. Recovery must restore, not mutate history.
+            match crate::generation::builder::rebuild_generation_image(
                 conn,
                 &self.config.generations_dir,
+                expected,
                 &format!("Recovery rebuild of generation {expected}"),
             ) {
-                Ok((gen_num, _build_result)) => {
-                    return self.mount_and_link(gen_num);
+                Ok(_build_result) => {
+                    return self.mount_and_link(expected);
                 }
                 Err(e) => {
                     tracing::warn!("Recovery: rebuild from DB failed ({}), trying step 3", e);
@@ -358,6 +378,11 @@ impl TransactionEngine {
     }
 
     /// Mount a generation by number and update the `/conary/current` symlink.
+    ///
+    /// Mounts the composefs image at the configured mount point. The `/etc`
+    /// overlay is NOT set up here -- it requires distinct lower/target paths
+    /// that depend on the calling context (boot vs live-switch). CLI callers
+    /// (switch.rs, composefs_ops.rs) handle the /etc overlay themselves.
     fn mount_and_link(&self, gen_num: i64) -> Result<()> {
         let gen_dir = self.config.generations_dir.join(gen_num.to_string());
 
@@ -367,8 +392,8 @@ impl TransactionEngine {
             mount_point: self.config.mount_point.clone(),
             verity: false,
             digest: None,
-            upperdir: Some(self.config.etc_state_dir.join(gen_num.to_string())),
-            workdir: Some(self.config.etc_state_dir.join(format!("{gen_num}-work"))),
+            upperdir: None,
+            workdir: None,
         })?;
 
         crate::generation::mount::update_current_symlink(&self.config.root, gen_num)?;

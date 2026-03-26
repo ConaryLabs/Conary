@@ -311,14 +311,24 @@ impl PackageFormat for ArchPackage {
                     // Skip other metadata files (.MTREE, .BUILDINFO)
                 }
                 _ => {
-                    // Collect file list entry (skip directories)
-                    if !entry.header().entry_type().is_dir() {
+                    let entry_type = entry.header().entry_type();
+                    // Collect file list entry (regular files + symlinks, skip directories)
+                    if !entry_type.is_dir() {
                         let size = entry.header().size().map_err(|e| {
                             Error::InitError(format!("Failed to get file size: {}", e))
                         })?;
                         let mode = entry.header().mode().map_err(|e| {
                             Error::InitError(format!("Failed to get file mode: {}", e))
                         })?;
+                        let symlink_target = if entry_type.is_symlink() {
+                            entry
+                                .link_name()
+                                .ok()
+                                .flatten()
+                                .map(|l| l.to_string_lossy().into_owned())
+                        } else {
+                            None
+                        };
                         files.push(PackageFile {
                             path: normalize_path(&entry_path).map_err(|e| {
                                 Error::InitError(format!("Path normalization failed: {}", e))
@@ -326,6 +336,7 @@ impl PackageFormat for ArchPackage {
                             size: i64::try_from(size).unwrap_or(i64::MAX),
                             mode: mode as i32,
                             sha256: None,
+                            symlink_target,
                         });
                     }
                 }
@@ -466,18 +477,22 @@ impl PackageFormat for ArchPackage {
                 continue;
             }
 
+            let entry_type = entry.header().entry_type();
+
             // Skip directories
-            if entry.header().entry_type().is_dir() {
+            if entry_type.is_dir() {
                 continue;
             }
+
+            let is_symlink = entry_type.is_symlink();
 
             let size = entry
                 .header()
                 .size()
                 .map_err(|e| Error::InitError(format!("Failed to get file size: {}", e)))?;
 
-            // Check file size using shared utility
-            if !check_file_size(&entry_path, size) {
+            // Check file size using shared utility (symlinks are small)
+            if !is_symlink && !check_file_size(&entry_path, size) {
                 continue;
             }
 
@@ -486,14 +501,31 @@ impl PackageFormat for ArchPackage {
                 .mode()
                 .map_err(|e| Error::InitError(format!("Failed to get file mode: {}", e)))?;
 
-            // Read file content
+            let symlink_target = if is_symlink {
+                entry
+                    .link_name()
+                    .ok()
+                    .flatten()
+                    .map(|l| l.to_string_lossy().into_owned())
+            } else {
+                None
+            };
+
+            // Read file content (empty for symlinks)
             let mut content = Vec::new();
-            entry
-                .read_to_end(&mut content)
-                .map_err(|e| Error::InitError(format!("Failed to read file content: {}", e)))?;
+            if !is_symlink {
+                entry
+                    .read_to_end(&mut content)
+                    .map_err(|e| Error::InitError(format!("Failed to read file content: {}", e)))?;
+            }
 
             // Compute SHA-256 using shared utility
-            let hash = hash::sha256(&content);
+            let hash = if is_symlink {
+                // Hash the symlink target for tracking
+                hash::sha256(symlink_target.as_deref().unwrap_or("").as_bytes())
+            } else {
+                hash::sha256(&content)
+            };
 
             extracted_files.push(ExtractedFile {
                 path: normalize_path(&entry_path)
@@ -502,6 +534,7 @@ impl PackageFormat for ArchPackage {
                 size: i64::try_from(size).unwrap_or(i64::MAX),
                 mode: mode as i32,
                 sha256: Some(hash),
+                symlink_target,
             });
         }
 

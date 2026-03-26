@@ -40,15 +40,33 @@ pub fn supports_composefs() -> bool {
 /// (without error) if the filesystem does not support verity.
 #[must_use]
 pub fn supports_fsverity(path: &Path) -> bool {
-    // Use a unique temp file name to avoid races
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    // Use a unique temp file name to avoid races.
     let pid = std::process::id();
     let test_path = path.join(format!(".conary-fsverity-probe-{pid}"));
 
-    // Write content (fs-verity needs non-empty file on some implementations),
-    // then close the write handle so enable_fsverity can open read-only.
-    if std::fs::write(&test_path, b"verity-probe").is_err() {
+    // Create with O_CREAT|O_EXCL|O_WRONLY to avoid following a symlink
+    // that an attacker might have placed at the probe path. O_EXCL fails
+    // if the path already exists (including as a symlink).
+    let probe_file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true) // O_CREAT | O_EXCL
+        .mode(0o600)
+        .open(&test_path);
+
+    let mut file = match probe_file {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+
+    // fs-verity needs non-empty file on some implementations.
+    if file.write_all(b"verity-probe").is_err() {
+        let _ = std::fs::remove_file(&test_path);
         return false;
     }
+    drop(file); // Close write handle so enable_fsverity can open read-only.
 
     let result = enable_fsverity(&test_path);
     let _ = std::fs::remove_file(&test_path);

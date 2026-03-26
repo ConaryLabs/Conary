@@ -145,19 +145,31 @@ pub fn rebuild_and_mount(conn: &Connection, summary: &str) -> anyhow::Result<i64
         );
     }
 
-    // Step 6: Mount the new generation.
+    // Step 6: Mount the new generation at the staging point.
+    let staging_mount = conary_root.join("mnt");
     conary_core::generation::mount::mount_generation(
         &conary_core::generation::mount::MountOptions {
             image_path: build_result.image_path,
             basedir: conary_root.join("objects"),
-            mount_point: conary_root.join("mnt"),
+            mount_point: staging_mount.clone(),
             verity: false,
             digest: None,
-            upperdir: Some(upper_dir),
-            workdir: Some(conary_root.join("etc-state/work")),
+            upperdir: None,
+            workdir: None,
         },
     )
     .map_err(|e| anyhow::anyhow!("Failed to mount generation {gen_num}: {e}"))?;
+
+    // Step 7: Set up /etc overlay -- lower from staging, target at live /etc.
+    let etc_work = conary_root.join("etc-state/work");
+    if let Err(e) = conary_core::generation::mount::mount_etc_overlay(
+        &staging_mount.join("etc"),
+        Path::new("/etc"),
+        &upper_dir,
+        &etc_work,
+    ) {
+        warn!("Failed to mount /etc overlay: {e}; /etc may be stale");
+    }
 
     conary_core::generation::mount::update_current_symlink(conary_root, gen_num)
         .map_err(|e| anyhow::anyhow!("Failed to update current symlink: {e}"))?;

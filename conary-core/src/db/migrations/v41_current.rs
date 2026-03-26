@@ -724,6 +724,25 @@ pub fn migrate_v59(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Schema version 60: Add symlink_target column to files table
+///
+/// Tracks symlink targets so that generation building can include
+/// package symlinks in EROFS images (soname links, alternatives, etc.)
+/// instead of silently dropping them.
+pub fn migrate_v60(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 60");
+
+    conn.execute_batch(
+        "
+        ALTER TABLE files ADD COLUMN symlink_target TEXT;
+        CREATE INDEX idx_files_symlink ON files(id) WHERE symlink_target IS NOT NULL;
+        ",
+    )?;
+
+    info!("Schema version 60 applied (files.symlink_target)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

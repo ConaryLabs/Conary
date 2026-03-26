@@ -200,6 +200,8 @@ pub(crate) struct FileSnapshot {
     pub sha256_hash: String,
     pub size: i64,
     pub permissions: i32,
+    #[serde(default)]
+    pub symlink_target: Option<String>,
 }
 
 /// Open the package database with a standard error context.

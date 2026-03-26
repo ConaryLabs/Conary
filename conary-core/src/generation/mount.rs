@@ -42,55 +42,43 @@ pub struct MountOptions {
 impl MountOptions {
     /// Build the argument list for mounting a composefs generation.
     ///
-    /// composefs is NOT a kernel filesystem type. It uses overlayfs with
-    /// an EROFS metadata image as a data-only lower layer and the CAS
-    /// directory as the data source. This requires kernel 6.5+ (overlayfs
-    /// data-only lower layers) and 6.6+ for fs-verity.
+    /// Uses the composefs mount helper (`mount -t composefs`), which takes
+    /// the EROFS image as the device and resolves external CAS references
+    /// via the `basedir=` option. This matches the dracut boot path in
+    /// `packaging/dracut/90conary/conary-generator.sh`.
     ///
-    /// The mount is: `mount -t overlay overlay -o lowerdir=<erofs>::<cas>,metacopy=on,redirect_dir=on <mountpoint>`
+    /// Requires the composefs mount helper (part of the composefs userspace
+    /// package) and kernel 6.2+ with `CONFIG_EROFS_FS`.
     ///
     /// The returned `Vec<String>` can be passed directly to `Command::args`.
     #[must_use]
     pub fn to_mount_args(&self) -> Vec<String> {
-        // The EROFS image is the metadata layer, CAS objects directory is
-        // the data layer. The `::` separator creates a data-only lower layer.
-        let mut opts = vec![
-            format!(
-                "lowerdir={}::{}",
-                self.image_path.display(),
-                self.basedir.display()
-            ),
-            "metacopy=on".to_string(),
-            "redirect_dir=on".to_string(),
-        ];
+        let mut opts = vec![format!("basedir={}", self.basedir.display())];
 
         if self.verity {
-            opts.push("verity=require".to_string());
+            opts.push("verity_check=1".to_string());
         }
 
-        if let Some(upperdir) = &self.upperdir {
-            opts.push(format!("upperdir={}", upperdir.display()));
-        }
-
-        if let Some(workdir) = &self.workdir {
-            opts.push(format!("workdir={}", workdir.display()));
+        if let Some(digest) = &self.digest {
+            opts.push(format!("digest={digest}"));
         }
 
         vec![
             "-t".to_string(),
-            "overlay".to_string(),
-            "overlay".to_string(),
+            "composefs".to_string(),
+            self.image_path.to_string_lossy().into_owned(),
+            self.mount_point.to_string_lossy().into_owned(),
             "-o".to_string(),
             opts.join(","),
-            self.mount_point.to_string_lossy().into_owned(),
         ]
     }
 
     /// Build argument list for a plain EROFS loopback mount (fallback).
     ///
-    /// Used when overlayfs data-only layers aren't available (kernel < 6.5)
-    /// or when the CAS directory isn't relevant (bootstrap seed mounts).
-    /// The EROFS image must contain file data inline, not just metadata.
+    /// Used when composefs mount helper isn't available or for bootstrap
+    /// seed mounts. The EROFS image must contain file data inline (not
+    /// metadata-only with external CAS references), as plain EROFS has
+    /// no CAS resolution.
     #[must_use]
     pub fn to_erofs_mount_args(&self) -> Vec<String> {
         vec![
@@ -106,31 +94,42 @@ impl MountOptions {
 
 /// Mount a composefs generation image.
 ///
-/// Tries the full composefs experience first (overlayfs with EROFS metadata +
-/// CAS data-only layer, kernel 6.5+). Falls back to plain EROFS loopback
-/// mount if overlayfs data-only layers aren't supported.
+/// Uses `mount -t composefs` (the composefs mount helper) which resolves
+/// external CAS references via `basedir=`. Falls back to plain EROFS
+/// loopback mount if the composefs helper isn't available. Note: the EROFS
+/// fallback only works for images with inline file data, not metadata-only
+/// images that rely on CAS.
+///
+/// This function only mounts the composefs image at `mount_point`. The
+/// `/etc` overlay must be set up separately by the caller using
+/// [`mount_etc_overlay`], because the lower, upper, and target paths
+/// differ between staging (composefs at `/conary/mnt`, overlay onto
+/// `/etc`) and boot (composefs at `/`, overlay onto `/etc`). The
+/// `upperdir` and `workdir` fields on `MountOptions` are retained for
+/// informational use but are NOT consumed here.
 pub fn mount_generation(opts: &MountOptions) -> crate::Result<()> {
-    // Try overlayfs composefs mount first (kernel 6.5+)
     let args = opts.to_mount_args();
-    let status = Command::new("mount")
+    let output = Command::new("mount")
         .args(&args)
         .stderr(std::process::Stdio::piped())
-        .status()
+        .output()
         .map_err(|e| Error::IoError(format!("Failed to execute mount: {e}")))?;
 
-    if status.success() {
+    if output.status.success() {
         info!(
-            "Mounted composefs generation (overlayfs+EROFS) at {}",
+            "Mounted composefs generation at {}",
             opts.mount_point.display()
         );
         return Ok(());
     }
 
-    // Fallback: plain EROFS loopback mount (kernel 5.15+)
+    let stderr = String::from_utf8_lossy(&output.stderr);
     info!(
-        "Overlayfs composefs mount failed, falling back to EROFS loopback for {}",
+        "composefs mount failed ({}), falling back to EROFS loopback for {}",
+        stderr.trim(),
         opts.image_path.display()
     );
+
     let erofs_args = opts.to_erofs_mount_args();
     let erofs_status = Command::new("mount")
         .args(&erofs_args)
@@ -145,8 +144,67 @@ pub fn mount_generation(opts: &MountOptions) -> crate::Result<()> {
         Ok(())
     } else {
         Err(Error::IoError(format!(
-            "Both overlayfs and EROFS mount failed for image {}",
+            "Both composefs and EROFS mount failed for image {}",
             opts.image_path.display()
+        )))
+    }
+}
+
+/// Mount an overlayfs layer for `/etc` on top of a composefs generation.
+///
+/// This provides a writable `/etc` where user modifications persist across
+/// generations in the upper directory.
+///
+/// Arguments:
+/// - `etc_lower`: path to the /etc directory inside the composefs staging
+///   mount (e.g. `/conary/mnt/etc`). This is the read-only lower layer.
+/// - `etc_target`: path where the overlay should be mounted (e.g. `/etc`).
+///   This must be a different path from `etc_lower` -- mounting lowerdir
+///   onto itself is invalid.
+/// - `upperdir`: persistent directory for user modifications.
+/// - `workdir`: overlayfs work directory (must be on the same filesystem
+///   as `upperdir`).
+pub fn mount_etc_overlay(
+    etc_lower: &Path,
+    etc_target: &Path,
+    upperdir: &Path,
+    workdir: &Path,
+) -> crate::Result<()> {
+    if !etc_lower.exists() {
+        return Ok(()); // No /etc in this generation, nothing to overlay.
+    }
+
+    std::fs::create_dir_all(upperdir)
+        .map_err(|e| Error::IoError(format!("Failed to create etc upperdir: {e}")))?;
+    std::fs::create_dir_all(workdir)
+        .map_err(|e| Error::IoError(format!("Failed to create etc workdir: {e}")))?;
+
+    let opts = format!(
+        "lowerdir={},upperdir={},workdir={}",
+        etc_lower.display(),
+        upperdir.display(),
+        workdir.display()
+    );
+
+    let status = Command::new("mount")
+        .args([
+            "-t",
+            "overlay",
+            "overlay",
+            "-o",
+            &opts,
+            &etc_target.to_string_lossy(),
+        ])
+        .status()
+        .map_err(|e| Error::IoError(format!("Failed to execute etc overlay mount: {e}")))?;
+
+    if status.success() {
+        info!("Mounted /etc overlay at {}", etc_target.display());
+        Ok(())
+    } else {
+        Err(Error::IoError(format!(
+            "Failed to mount /etc overlay at {}",
+            etc_target.display()
         )))
     }
 }
@@ -253,11 +311,10 @@ pub fn symlink_target_for_generation(n: i64) -> PathBuf {
     PathBuf::from(format!("generations/{n}"))
 }
 
-/// Check whether a path is currently mounted as an overlay filesystem.
+/// Check whether a path is currently mounted as a composefs or overlay filesystem.
 ///
-/// Parses `/proc/mounts` to find an entry with filesystem type `overlay`
-/// at the given path. Returns `false` (not `Err`) if `/proc/mounts` cannot
-/// be read, as this is treated as "unknown, assume not overlay".
+/// Parses `/proc/mounts` to find an entry with filesystem type `composefs`,
+/// `overlay`, or `erofs` at the given path.
 pub fn is_overlay_mount(path: &Path) -> crate::Result<bool> {
     let mounts = std::fs::read_to_string("/proc/mounts")
         .map_err(|e| Error::IoError(format!("Failed to read /proc/mounts: {e}")))?;
@@ -268,7 +325,47 @@ pub fn is_overlay_mount(path: &Path) -> crate::Result<bool> {
         let _device = parts.next();
         let mount_point = parts.next();
         let fs_type = parts.next();
-        mount_point == Some(path_str.as_ref()) && fs_type == Some("overlay")
+        mount_point == Some(path_str.as_ref())
+            && matches!(fs_type, Some("composefs" | "overlay" | "erofs"))
+    });
+
+    Ok(found)
+}
+
+/// Check whether a specific generation's EROFS image is currently mounted.
+///
+/// More precise than [`is_overlay_mount`]: verifies the device/source in
+/// `/proc/mounts` contains the expected EROFS image path. This prevents
+/// recovery from short-circuiting when a stale or unrelated generation is
+/// mounted at the same mount point.
+pub fn is_generation_mounted(mount_point: &Path, expected_image: &Path) -> crate::Result<bool> {
+    let mounts = std::fs::read_to_string("/proc/mounts")
+        .map_err(|e| Error::IoError(format!("Failed to read /proc/mounts: {e}")))?;
+
+    let mp_str: &str = &mount_point.to_string_lossy();
+    let image_str: &str = &expected_image.to_string_lossy();
+
+    let found = mounts.lines().any(|line| {
+        let mut parts = line.split_whitespace();
+        let device = parts.next().unwrap_or("");
+        let mp = parts.next().unwrap_or("");
+        let fs_type = parts.next().unwrap_or("");
+        let options = parts.next().unwrap_or("");
+
+        if mp != mp_str {
+            return false;
+        }
+
+        match fs_type {
+            // composefs mount: device is the EROFS image path
+            "composefs" => device == image_str,
+            // erofs loopback: device is the image path (or a loop device,
+            // in which case we check mount options for the path)
+            "erofs" => device == image_str || options.contains(image_str),
+            // overlay: the image path appears in lowerdir= options
+            "overlay" => options.contains(image_str),
+            _ => false,
+        }
     });
 
     Ok(found)
@@ -292,29 +389,24 @@ mod tests {
     }
 
     #[test]
-    fn mount_command_uses_overlayfs() {
+    fn mount_command_uses_composefs() {
         let opts = base_opts();
         let args = opts.to_mount_args();
 
-        // Must use overlay filesystem type
+        // Must use composefs filesystem type
         assert_eq!(args[0], "-t");
-        assert_eq!(args[1], "overlay");
-        assert_eq!(args[2], "overlay");
-        assert_eq!(args[3], "-o");
+        assert_eq!(args[1], "composefs");
+        // Image path as device
+        assert_eq!(args[2], "/conary/generations/5/root.erofs");
+        // Mount point
+        assert_eq!(args[3], "/conary/mnt");
+        assert_eq!(args[4], "-o");
 
-        let opts_str = &args[4];
-        // lowerdir uses :: separator for data-only layer
+        let opts_str = &args[5];
         assert!(
-            opts_str.contains("lowerdir=/conary/generations/5/root.erofs::/conary/objects"),
-            "lowerdir with data-only layer missing: {opts_str}"
+            opts_str.contains("basedir=/conary/objects"),
+            "basedir missing: {opts_str}"
         );
-        assert!(opts_str.contains("metacopy=on"), "metacopy=on missing");
-        assert!(
-            opts_str.contains("redirect_dir=on"),
-            "redirect_dir=on missing"
-        );
-
-        assert_eq!(args[5], "/conary/mnt");
     }
 
     #[test]
@@ -324,10 +416,25 @@ mod tests {
             ..base_opts()
         };
         let args = opts.to_mount_args();
-        let opts_str = &args[4];
+        let opts_str = &args[5];
         assert!(
-            opts_str.contains("verity=require"),
-            "verity=require missing"
+            opts_str.contains("verity_check=1"),
+            "verity_check=1 missing"
+        );
+    }
+
+    #[test]
+    fn mount_command_with_digest() {
+        let opts = MountOptions {
+            verity: true,
+            digest: Some("abc123".to_string()),
+            ..base_opts()
+        };
+        let args = opts.to_mount_args();
+        let opts_str = &args[5];
+        assert!(
+            opts_str.contains("digest=abc123"),
+            "digest missing: {opts_str}"
         );
     }
 
@@ -335,25 +442,11 @@ mod tests {
     fn mount_command_without_verity() {
         let opts = base_opts();
         let args = opts.to_mount_args();
-        let opts_str = &args[4];
+        let opts_str = &args[5];
         assert!(
             !opts_str.contains("verity"),
             "verity must be absent when not requested"
         );
-    }
-
-    #[test]
-    fn mount_command_with_upperdir() {
-        let opts = MountOptions {
-            upperdir: Some(PathBuf::from("/overlay/upper")),
-            workdir: Some(PathBuf::from("/overlay/work")),
-            ..base_opts()
-        };
-
-        let args = opts.to_mount_args();
-        let opts_str = &args[4];
-        assert!(opts_str.contains("upperdir=/overlay/upper"));
-        assert!(opts_str.contains("workdir=/overlay/work"));
     }
 
     #[test]

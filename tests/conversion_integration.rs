@@ -36,6 +36,7 @@ fn create_test_metadata(name: &str) -> PackageMetadata {
             size: 100,
             mode: 0o755,
             sha256: Some("abc123".to_string()),
+            symlink_target: None,
         }],
         dependencies: vec![],
         scriptlets: vec![],
@@ -51,6 +52,7 @@ fn create_test_files(name: &str) -> Vec<ExtractedFile> {
         size: 20,
         mode: 0o755,
         sha256: Some("abc123".to_string()),
+        symlink_target: None,
     }]
 }
 
@@ -68,18 +70,21 @@ fn create_server_package() -> (PackageMetadata, Vec<ExtractedFile>) {
                 size: 1024,
                 mode: 0o755,
                 sha256: Some("server_binary_hash".to_string()),
+                symlink_target: None,
             },
             PackageFile {
                 path: "/etc/myserver/myserver.conf".to_string(),
                 size: 512,
                 mode: 0o644,
                 sha256: Some("config_hash".to_string()),
+                symlink_target: None,
             },
             PackageFile {
                 path: "/usr/lib/systemd/system/myserver.service".to_string(),
                 size: 256,
                 mode: 0o644,
                 sha256: Some("service_hash".to_string()),
+                symlink_target: None,
             },
         ],
         dependencies: vec![
@@ -140,6 +145,7 @@ WantedBy=multi-user.target
             size: 1024,
             mode: 0o755,
             sha256: Some("server_binary_hash".to_string()),
+            symlink_target: None,
         },
         ExtractedFile {
             path: "/etc/myserver/myserver.conf".to_string(),
@@ -147,6 +153,7 @@ WantedBy=multi-user.target
             size: 512,
             mode: 0o644,
             sha256: Some("config_hash".to_string()),
+            symlink_target: None,
         },
         ExtractedFile {
             path: "/usr/lib/systemd/system/myserver.service".to_string(),
@@ -154,6 +161,7 @@ WantedBy=multi-user.target
             size: 256,
             mode: 0o644,
             sha256: Some("service_hash".to_string()),
+            symlink_target: None,
         },
     ];
 
@@ -173,6 +181,7 @@ fn create_complex_scriptlet_package() -> (PackageMetadata, Vec<ExtractedFile>) {
             size: 100,
             mode: 0o755,
             sha256: Some("hash".to_string()),
+            symlink_target: None,
         }],
         dependencies: vec![],
         scriptlets: vec![
@@ -226,6 +235,7 @@ systemctl disable complex.service || true
         size: 100,
         mode: 0o755,
         sha256: Some("hash".to_string()),
+        symlink_target: None,
     }];
 
     (metadata, files)
@@ -521,12 +531,14 @@ fn test_nginx_wellknown_inference_during_conversion() {
                 size: 1024,
                 mode: 0o755,
                 sha256: Some("nginx_hash".to_string()),
+                symlink_target: None,
             },
             PackageFile {
                 path: "/etc/nginx/nginx.conf".to_string(),
                 size: 512,
                 mode: 0o644,
                 sha256: Some("conf_hash".to_string()),
+                symlink_target: None,
             },
         ],
         dependencies: vec![],
@@ -541,6 +553,7 @@ fn test_nginx_wellknown_inference_during_conversion() {
             size: 1024,
             mode: 0o755,
             sha256: Some("nginx_hash".to_string()),
+            symlink_target: None,
         },
         ExtractedFile {
             path: "/etc/nginx/nginx.conf".to_string(),
@@ -548,6 +561,7 @@ fn test_nginx_wellknown_inference_during_conversion() {
             size: 512,
             mode: 0o644,
             sha256: Some("conf_hash".to_string()),
+            symlink_target: None,
         },
     ];
 
@@ -703,18 +717,21 @@ fn test_file_permissions_preserved() {
                 size: 100,
                 mode: 0o755,
                 sha256: Some("exec_hash".to_string()),
+                symlink_target: None,
             },
             PackageFile {
                 path: "/etc/config".to_string(),
                 size: 50,
                 mode: 0o644,
                 sha256: Some("conf_hash".to_string()),
+                symlink_target: None,
             },
             PackageFile {
                 path: "/etc/secret".to_string(),
                 size: 30,
                 mode: 0o600,
                 sha256: Some("secret_hash".to_string()),
+                symlink_target: None,
             },
         ],
         dependencies: vec![],
@@ -729,6 +746,7 @@ fn test_file_permissions_preserved() {
             size: 100,
             mode: 0o755,
             sha256: Some("exec_hash".to_string()),
+            symlink_target: None,
         },
         ExtractedFile {
             path: "/etc/config".to_string(),
@@ -736,6 +754,7 @@ fn test_file_permissions_preserved() {
             size: 50,
             mode: 0o644,
             sha256: Some("conf_hash".to_string()),
+            symlink_target: None,
         },
         ExtractedFile {
             path: "/etc/secret".to_string(),
@@ -743,6 +762,7 @@ fn test_file_permissions_preserved() {
             size: 30,
             mode: 0o600,
             sha256: Some("secret_hash".to_string()),
+            symlink_target: None,
         },
     ];
 
@@ -824,6 +844,7 @@ fn test_large_file_handling() {
             size: large_content.len() as i64,
             mode: 0o644,
             sha256: Some("large_hash".to_string()),
+            symlink_target: None,
         }],
         dependencies: vec![],
         scriptlets: vec![],
@@ -836,6 +857,7 @@ fn test_large_file_handling() {
         size: large_content.len() as i64,
         mode: 0o644,
         sha256: Some("large_hash".to_string()),
+        symlink_target: None,
     }];
 
     let result = converter.convert(&metadata, &files, "rpm", "cs");
