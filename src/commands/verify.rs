@@ -159,8 +159,16 @@ pub async fn cmd_verify_rebuild(derivation: &str, work_dir: &str, db_path: &str)
     let sysroot = std::path::PathBuf::from(work_dir).join("sysroot");
     std::fs::create_dir_all(&sysroot)?;
 
-    let dep_ids = std::collections::BTreeMap::new(); // simplified for now
+    // The original dependency IDs and target triple are encoded in the
+    // derivation ID but not stored separately in the record.  Until the
+    // full original build inputs are persisted and can be reloaded, we
+    // rebuild with simplified inputs.  This means a hash match is only a
+    // *weak* signal -- we can mark reproducible but must NOT promote trust
+    // to level 3 (independently verified) because we cannot guarantee the
+    // same build environment.
+    let dep_ids = std::collections::BTreeMap::new();
     let target = "x86_64-unknown-linux-gnu";
+    let inputs_complete = false; // TODO: set to true once we persist + reload original inputs
 
     match executor.execute(
         &recipe,
@@ -179,13 +187,23 @@ pub async fn cmd_verify_rebuild(derivation: &str, work_dir: &str, db_path: &str)
                 println!("  Original output: {}...", &original_hash[..display_len]);
                 println!("  Rebuild output:  {}...  MATCH", &new_hash[..display_len]);
                 println!();
-                index.set_trust_level(&record.derivation_id, 3)?;
                 index.set_reproducible(&record.derivation_id, true)?;
-                println!(
-                    "  Trust level: {} -> 3 (independently verified)",
-                    record.trust_level
-                );
                 println!("  Reproducible: true");
+
+                if inputs_complete {
+                    index.set_trust_level(&record.derivation_id, 3)?;
+                    println!(
+                        "  Trust level: {} -> 3 (independently verified)",
+                        record.trust_level
+                    );
+                } else {
+                    println!(
+                        "  Trust level: {} (unchanged -- rebuild used simplified inputs; \
+                         full trust promotion requires persisted original dependency IDs \
+                         and target triple)",
+                        record.trust_level
+                    );
+                }
             } else {
                 let orig_display = 16.min(original_hash.len());
                 let new_display = 16.min(new_hash.len());

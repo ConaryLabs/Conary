@@ -11,6 +11,28 @@ use conary_core::self_update::{
 };
 
 fn check_update_signature(sha256: &str, signature: &Option<String>) -> Result<()> {
+    let have_trusted_keys = !conary_core::self_update::TRUSTED_UPDATE_KEYS.is_empty();
+
+    if !have_trusted_keys {
+        // No trusted keys shipped yet -- signature verification is impossible.
+        // Warn but allow the update.  Once release-signing keys are added to
+        // TRUSTED_UPDATE_KEYS, this early return disappears and all updates
+        // (signed or unsigned) must pass verification.
+        if signature.is_some() {
+            eprintln!(
+                "Warning: update has a signature but no trusted keys are configured to verify it. \
+                 Skipping verification."
+            );
+        } else {
+            eprintln!(
+                "Warning: update has no signature and no trusted keys are configured. \
+                 Signature enforcement will be enabled once release keys are shipped."
+            );
+        }
+        return Ok(());
+    }
+
+    // Trusted keys are configured — enforce signature verification.
     match signature {
         Some(sig) => {
             conary_core::self_update::verify_update_signature(sha256, sig)
@@ -18,7 +40,10 @@ fn check_update_signature(sha256: &str, signature: &Option<String>) -> Result<()
             println!("Signature verified");
         }
         None => {
-            eprintln!("Warning: update has no signature (pre-signing release)");
+            anyhow::bail!(
+                "Update has no signature. Refusing to install an unsigned release. \
+                 If this is a pre-signing development build, use a signed channel."
+            );
         }
     }
     Ok(())
