@@ -15,8 +15,12 @@ pub async fn cmd_update_channel_get(db_path: &str) -> Result<()> {
 }
 
 pub async fn cmd_update_channel_set(db_path: &str, url: &str) -> Result<()> {
-    if !url.starts_with("https://") && !url.starts_with("http://") {
-        return Err(anyhow::anyhow!("URL must use http:// or https:// scheme"));
+    if !url.starts_with("https://") {
+        return Err(anyhow::anyhow!(
+            "Update channel URL must use https://. \
+             Plain http:// is not allowed because update metadata must be \
+             authenticated end-to-end."
+        ));
     }
     let conn = open_db(db_path)?;
     set_update_channel(&conn, url)?;

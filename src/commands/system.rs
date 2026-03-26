@@ -97,44 +97,75 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Resu
 
     let mut conn = open_db(db_path)?;
 
-    let changeset = conary_core::db::models::Changeset::find_by_id(&conn, changeset_id)?
-        .ok_or_else(|| anyhow::anyhow!("Changeset {} not found", changeset_id))?;
+    // All preflight checks run inside a transaction to eliminate the TOCTOU gap
+    // that would allow two concurrent rollbacks to both pass checks.
+    let (changeset, metadata) = conary_core::db::transaction(&mut conn, |tx| {
+        let changeset = conary_core::db::models::Changeset::find_by_id(tx, changeset_id)?
+            .ok_or_else(|| {
+                conary_core::Error::InitError(format!("Changeset {} not found", changeset_id))
+            })?;
 
-    // TODO: Move these status/reversal checks inside the transaction to eliminate the
-    // TOCTOU gap between these reads and the actual rollback transaction below.
-    if changeset.status == conary_core::db::models::ChangesetStatus::RolledBack {
-        return Err(anyhow::anyhow!(
-            "Changeset {} is already rolled back",
-            changeset_id
-        ));
-    }
-    if changeset.status == conary_core::db::models::ChangesetStatus::Pending {
-        return Err(anyhow::anyhow!(
-            "Cannot rollback pending changeset {}",
-            changeset_id
-        ));
-    }
+        if changeset.status == conary_core::db::models::ChangesetStatus::RolledBack {
+            return Err(conary_core::Error::InitError(format!(
+                "Changeset {} is already rolled back",
+                changeset_id
+            )));
+        }
+        if changeset.status == conary_core::db::models::ChangesetStatus::Pending {
+            return Err(conary_core::Error::InitError(format!(
+                "Cannot rollback pending changeset {}",
+                changeset_id
+            )));
+        }
 
-    // Prevent double rollback: check if another changeset already reversed this one
-    let already_reversed: Option<i64> = conn.query_row(
-        "SELECT reversed_by_changeset_id FROM changesets WHERE id = ?1",
-        [changeset_id],
-        |row| row.get(0),
-    )?;
-    if let Some(reverse_id) = already_reversed {
-        return Err(anyhow::anyhow!(
-            "Changeset {} has already been reversed by changeset {}",
-            changeset_id,
-            reverse_id
-        ));
-    }
+        let already_reversed: Option<i64> = tx.query_row(
+            "SELECT reversed_by_changeset_id FROM changesets WHERE id = ?1",
+            [changeset_id],
+            |row| row.get(0),
+        )?;
+        if let Some(reverse_id) = already_reversed {
+            return Err(conary_core::Error::InitError(format!(
+                "Changeset {} has already been reversed by changeset {}",
+                changeset_id, reverse_id
+            )));
+        }
 
-    // Check if this changeset has metadata (trove snapshot for rollback)
-    let metadata: Option<String> = conn.query_row(
-        "SELECT metadata FROM changesets WHERE id = ?1",
-        [changeset_id],
-        |row| row.get(0),
-    )?;
+        // Atomically claim this changeset for rollback using a conditional UPDATE.
+        // We set reversed_by_changeset_id to a sentinel (-1) as a claim marker;
+        // the actual rollback transaction will overwrite it with the real rollback
+        // changeset ID.  This keeps status within the valid enum (pending/applied/
+        // rolled_back) while preventing a second concurrent rollback from passing
+        // the reversed_by_changeset_id IS NULL guard.
+        let claimed = tx.execute(
+            "UPDATE changesets SET reversed_by_changeset_id = -1
+             WHERE id = ?1 AND status = 'applied' AND reversed_by_changeset_id IS NULL",
+            [changeset_id],
+        )?;
+        if claimed == 0 {
+            return Err(conary_core::Error::InitError(format!(
+                "Changeset {} is no longer eligible for rollback (concurrent rollback?)",
+                changeset_id
+            )));
+        }
+
+        let metadata: Option<String> = tx.query_row(
+            "SELECT metadata FROM changesets WHERE id = ?1",
+            [changeset_id],
+            |row| row.get(0),
+        )?;
+
+        Ok((changeset, metadata))
+    })?;
+
+    // Helper: clear the -1 claim sentinel if the rollback fails, so the
+    // changeset doesn't get permanently wedged.
+    let clear_claim = |conn: &rusqlite::Connection| {
+        let _ = conn.execute(
+            "UPDATE changesets SET reversed_by_changeset_id = NULL
+             WHERE id = ?1 AND reversed_by_changeset_id = -1",
+            [changeset_id],
+        );
+    };
 
     if let Some(ref json) = metadata {
         // Check if this changeset also has installed troves (= upgrade vs removal)
@@ -146,10 +177,12 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Resu
 
         if has_troves {
             // Upgrade: remove new version, restore old version from snapshot
-            return rollback_upgrade(changeset_id, json, &mut conn, &changeset);
+            return rollback_upgrade(changeset_id, json, &mut conn, &changeset)
+                .inspect_err(|_| clear_claim(&conn));
         }
         // Removal: restore the package from snapshot
-        return rollback_removal(changeset_id, json, &mut conn, &changeset);
+        return rollback_removal(changeset_id, json, &mut conn, &changeset)
+            .inspect_err(|_| clear_claim(&conn));
     }
 
     // Otherwise, this is a fresh install - remove the installed packages
@@ -157,6 +190,7 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Resu
 
     conary_core::db::transaction(&mut conn, |tx| {
         // Read file history inside the transaction to ensure consistency (TOCTOU)
+        // Note: if this transaction fails, clear_claim (below) resets the -1 sentinel.
         {
             let mut stmt =
                 tx.prepare("SELECT path, action FROM file_history WHERE changeset_id = ?1")?;
@@ -270,7 +304,8 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Resu
         )?;
 
         Ok(troves.len())
-    })?;
+    })
+    .inspect_err(|_| clear_claim(&conn))?;
 
     let files_to_rollback = files_to_rollback.into_inner();
 
@@ -904,6 +939,91 @@ fn gc_orphaned_chunks(conn: &rusqlite::Connection, db_path: &str, dry_run: bool)
     while let Some(row) = rows.next()? {
         let hash: String = row.get(0)?;
         referenced.insert(hash);
+    }
+
+    // Add live file hashes from installed packages so we never delete CAS
+    // objects that are still referenced by troves, rollback history, etc.
+    let mut stmt = conn.prepare("SELECT DISTINCT sha256_hash FROM files WHERE sha256_hash IS NOT NULL AND sha256_hash != ''")?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let hash: String = row.get(0)?;
+        referenced.insert(hash);
+    }
+
+    // Add config backup hashes (used by config restore/diff)
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT backup_hash FROM config_backups WHERE backup_hash IS NOT NULL AND backup_hash != ''",
+    )?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let hash: String = row.get(0)?;
+        referenced.insert(hash);
+    }
+
+    // Add config file original hashes (used by config diff)
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT DISTINCT original_hash FROM config_files WHERE original_hash IS NOT NULL AND original_hash != ''",
+    ) {
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let hash: String = row.get(0)?;
+            referenced.insert(hash);
+        }
+    }
+
+    // Add derived package CAS objects (patches and overrides)
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT DISTINCT patch_hash FROM derived_patches WHERE patch_hash IS NOT NULL AND patch_hash != ''",
+    ) {
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let hash: String = row.get(0)?;
+            referenced.insert(hash);
+        }
+    }
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT DISTINCT source_hash FROM derived_overrides WHERE source_hash IS NOT NULL AND source_hash != ''",
+    ) {
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let hash: String = row.get(0)?;
+            referenced.insert(hash);
+        }
+    }
+
+    // Add derivation CAS objects (manifest + provenance hashes)
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT manifest_cas_hash FROM derivation_index WHERE manifest_cas_hash IS NOT NULL AND manifest_cas_hash != ''",
+    ) {
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let hash: String = row.get(0)?;
+            referenced.insert(hash);
+        }
+    }
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT provenance_cas_hash FROM derivation_index WHERE provenance_cas_hash IS NOT NULL AND provenance_cas_hash != ''",
+    ) {
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let hash: String = row.get(0)?;
+            referenced.insert(hash);
+        }
+    }
+
+    // Also protect hashes referenced by state snapshots (rollback/restore)
+    let mut stmt = conn.prepare("SELECT metadata FROM changesets WHERE metadata IS NOT NULL")?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let json_str: String = row.get(0)?;
+        // Snapshot metadata contains file hashes — extract them conservatively
+        // by matching hex-like strings that look like CAS hashes.
+        for word in json_str.split('"') {
+            // CAS hashes are hex strings of 64 chars (SHA-256)
+            if word.len() == 64 && word.chars().all(|c| c.is_ascii_hexdigit()) {
+                referenced.insert(word.to_string());
+            }
+        }
     }
 
     // Scan local chunks in the objects directory

@@ -240,9 +240,32 @@ pub async fn cmd_config_restore(
         pre_restore.insert(&conn)?;
     }
 
-    // Write restored content
-    std::fs::write(&fs_path, &content)
-        .map_err(|e| anyhow::anyhow!("Failed to write {}: {}", path, e))?;
+    // Reject symlinks to prevent a TOCTOU symlink-swap attack where a
+    // privileged restore could overwrite an arbitrary file outside the
+    // intended config tree.
+    if fs_path.exists() {
+        let meta = fs_path.symlink_metadata().with_context(|| {
+            format!("Failed to read metadata for '{}'", fs_path.display())
+        })?;
+        if meta.file_type().is_symlink() {
+            anyhow::bail!(
+                "Refusing to restore '{}': path is a symlink (points to {:?}). \
+                 Remove the symlink first if you intend to restore this config file.",
+                path,
+                std::fs::read_link(&fs_path).unwrap_or_default()
+            );
+        }
+    }
+
+    // Write restored content via temp-file + rename for atomicity and to avoid
+    // writing through a symlink that appears between the check and the write.
+    let parent = fs_path.parent().unwrap_or(Path::new("/"));
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("Failed to create temp file in {}", parent.display()))?;
+    std::io::Write::write_all(&mut tmp, &content)
+        .map_err(|e| anyhow::anyhow!("Failed to write temp file for {}: {}", path, e))?;
+    tmp.persist(&fs_path)
+        .map_err(|e| anyhow::anyhow!("Failed to atomically replace {}: {}", path, e))?;
 
     // Update config status
     config.mark_pristine(&conn, &backup.backup_hash)?;

@@ -551,10 +551,75 @@ pub async fn cmd_update(
             Ok(_) => {
                 let applier = DeltaApplier::new(&objects_dir)?;
                 match applier.apply_delta(&delta_info.from_hash, &delta_path, &delta_info.to_hash) {
-                    Ok(_) => {
-                        println!("  [OK] Delta applied");
-                        deltas_applied += 1;
-                        total_bytes_saved += (repo_pkg.size - delta_info.delta_size).max(0);
+                    Ok(new_hash) => {
+                        println!("  [OK] Delta applied to CAS");
+                        let delta_saved = (repo_pkg.size - delta_info.delta_size).max(0);
+                        // Delta reconstructed the new package in CAS.  Retrieve
+                        // it and feed through the normal install pipeline so all
+                        // DB metadata (files, deps, provides, history) and the
+                        // live generation transition correctly -- without a
+                        // redundant network download.
+                        let cas = conary_core::filesystem::CasStore::new(&objects_dir)?;
+                        let mut delta_installed = false;
+                        match cas.retrieve_unchecked(&new_hash) {
+                            Ok(content) => {
+                                let pkg_file = temp_dir.join(format!(
+                                    "{}-{}.ccs",
+                                    trove.name, repo_pkg.version
+                                ));
+                                if let Err(e) = std::fs::write(&pkg_file, &content) {
+                                    warn!("  Failed to write delta result for {}: {}", trove.name, e);
+                                } else {
+                                    let path_str = pkg_file.to_string_lossy().to_string();
+                                    match cmd_install(
+                                        &path_str,
+                                        super::InstallOptions {
+                                            db_path,
+                                            root,
+                                            sandbox_mode,
+                                            dep_mode: Some(dep_mode),
+                                            yes,
+                                            ..Default::default()
+                                        },
+                                    )
+                                    .await
+                                    {
+                                        Ok(()) => {
+                                            delta_installed = true;
+                                            println!(
+                                                "  [OK] {} {} -> {}",
+                                                trove.name, trove.version, repo_pkg.version
+                                            );
+                                        }
+                                        Err(e) => {
+                                            warn!("  Delta install failed for {}: {}", trove.name, e);
+                                        }
+                                    }
+                                    let _ = std::fs::remove_file(&pkg_file);
+                                }
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "  Failed to retrieve delta result from CAS: {}",
+                                    e
+                                );
+                            }
+                        }
+                        if delta_installed {
+                            // Only count success after the full install pipeline
+                            // completes -- not just after apply_delta().
+                            deltas_applied += 1;
+                            total_bytes_saved += delta_saved;
+                        } else {
+                            // Fall back to full download
+                            delta_failures += 1;
+                            had_failures = true;
+                            if let Ok(Some(repo)) =
+                                Repository::find_by_id(&conn, repo_pkg.repository_id)
+                            {
+                                full_updates.push((trove, repo_pkg, repo));
+                            }
+                        }
                     }
                     Err(e) => {
                         warn!(
@@ -797,9 +862,11 @@ pub async fn cmd_delta_stats(db_path: &str) -> Result<()> {
     Ok(())
 }
 
-/// Update all members of a collection/group atomically
+/// Update all members of a collection/group (best-effort, per-package)
 ///
 /// This updates all installed packages that are members of the specified collection.
+/// Updates are applied one package at a time; earlier members remain updated even if
+/// a later one fails.  Returns an error if any member fails to update.
 /// If `security_only` is true, only applies security updates.
 pub async fn cmd_update_group(
     name: &str,
@@ -928,6 +995,12 @@ pub async fn cmd_update_group(
     println!("  Updated: {} package(s)", updated_count);
     if failed_count > 0 {
         println!("  Failed: {} package(s)", failed_count);
+        return Err(anyhow::anyhow!(
+            "{} of {} package(s) in collection '{}' failed to update",
+            failed_count,
+            updates_to_apply.len(),
+            name
+        ));
     }
 
     Ok(())
