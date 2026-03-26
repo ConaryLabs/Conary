@@ -59,7 +59,7 @@ Scopes are optional: `feat(resolver): add SAT backtracking`.
 - **Generation**: Immutable EROFS image + composefs mount representing a system state
 - **conary-test**: Test infrastructure -- declarative TOML engine, container management (bollard), HTTP API, MCP (23 tools)
 
-Database schema is currently **v57** (71 tables, function-dispatch migrations in `schema.rs`). See ROADMAP.md for what's next.
+Database schema is currently **v59** (73 tables, function-dispatch migrations in `schema.rs`). See ROADMAP.md for what's next.
 
 ## Tool Selection
 
