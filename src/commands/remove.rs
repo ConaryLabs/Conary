@@ -87,8 +87,7 @@ pub async fn cmd_remove(
     }
 
     // Check dependency breakage BEFORE any removal (including adopted packages)
-    let resolver = conary_core::resolver::Resolver::new(&conn)?;
-    let breaking = resolver.check_removal(package_name)?;
+    let breaking = conary_core::resolver::solve_removal(&conn, &[package_name.to_string()])?;
 
     if !breaking.is_empty() {
         println!(

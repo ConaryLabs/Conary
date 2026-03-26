@@ -24,7 +24,7 @@ use super::open_db;
 use conversion::{
     ConversionResult, ConvertedCcsInstallOptions, install_converted_ccs, try_convert_to_ccs,
 };
-use dependencies::build_dependency_edges;
+use dependencies::extract_runtime_deps;
 // execute::get_files_to_remove is used by batch.rs via super::execute
 use prepare::{check_upgrade_status, parse_package};
 use resolve::{
@@ -50,7 +50,7 @@ use conary_core::db::paths::keyring_dir;
 use conary_core::dependencies::{DependencyClass, LanguageDepDetector};
 use conary_core::repository;
 use conary_core::repository::versioning::VersionScheme;
-use conary_core::resolver::Resolver;
+use conary_core::resolver::MissingDependency;
 use conary_core::scriptlet::SandboxMode;
 use conary_core::transaction::{TransactionConfig, TransactionEngine};
 use std::collections::HashMap;
@@ -308,7 +308,6 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
     let dep_ctx = DepAnalysisContext {
         conn: &conn,
         pkg: pkg.as_ref(),
-        format,
         no_deps,
         dry_run,
         dep_mode,
@@ -399,7 +398,6 @@ struct CcsInstallParams<'a> {
 struct DepAnalysisContext<'a> {
     conn: &'a rusqlite::Connection,
     pkg: &'a dyn conary_core::packages::PackageFormat,
-    format: PackageFormatType,
     no_deps: bool,
     dry_run: bool,
     dep_mode: DepMode,
@@ -822,64 +820,72 @@ async fn resolve_and_parse_package(
 
 /// Handle dependency analysis: resolve, prompt, adopt, install deps.
 async fn handle_dependencies(ctx: &DepAnalysisContext<'_>) -> Result<()> {
-    // Build dependency edges from the package
-    let dependency_edges = build_dependency_edges(ctx.pkg);
+    // Extract runtime dependencies from the package
+    let runtime_deps = extract_runtime_deps(ctx.pkg);
 
-    if ctx.no_deps && !dependency_edges.is_empty() {
+    if ctx.no_deps && !runtime_deps.is_empty() {
         info!("Skipping dependency check (--no-deps specified)");
         println!(
             "Skipping {} dependencies (--no-deps specified)",
-            dependency_edges.len()
+            runtime_deps.len()
         );
         return Ok(());
     }
 
-    if dependency_edges.is_empty() {
+    if runtime_deps.is_empty() {
         return Ok(());
     }
 
     let progress = InstallProgress::single("Installing");
     progress.set_phase(ctx.pkg.name(), InstallPhase::ResolvingDeps);
     info!(
-        "Resolving {} dependencies with constraint validation...",
-        dependency_edges.len()
+        "Resolving {} dependencies with SAT solver...",
+        runtime_deps.len()
     );
     println!("Checking dependencies for {}...", ctx.pkg.name());
 
-    // Build resolver from current system state
-    let mut resolver =
-        Resolver::new(ctx.conn).context("Failed to initialize dependency resolver")?;
+    // Use SAT solver to find missing dependencies.
+    // Build request tuples for solve_install -- this does full transitive
+    // resolution and tells us which packages need to come from repos.
+    let sat_requests: Vec<(String, conary_core::version::VersionConstraint)> = runtime_deps
+        .iter()
+        .map(|d| (d.name.clone(), d.constraint.clone()))
+        .collect();
 
-    // Resolve with the new package
-    let plan = resolver
-        .resolve_install_native(
-            ctx.pkg.name().to_string(),
-            ctx.pkg.version().to_string(),
-            version_scheme_for_format(ctx.format),
-            dependency_edges,
-        )
+    let sat_result = conary_core::resolver::solve_install(ctx.conn, &sat_requests)
         .with_context(|| format!("Failed to resolve dependencies for '{}'", ctx.pkg.name()))?;
 
-    // Check for conflicts (fail on any conflict)
-    if !plan.conflicts.is_empty() {
+    // If SAT reports a conflict, surface it
+    if let Some(ref conflict_msg) = sat_result.conflict_message {
         eprintln!("\nDependency conflicts detected:");
-        for conflict in &plan.conflicts {
-            eprintln!("  {}", conflict);
-        }
+        eprintln!("  {}", conflict_msg);
         return Err(anyhow::anyhow!(
-            "Cannot install {}: {} dependency conflict(s) detected",
+            "Cannot install {}: dependency conflict(s) detected",
             ctx.pkg.name(),
-            plan.conflicts.len()
         ));
     }
 
+    // Build list of missing dependencies from SAT results.
+    // Packages the SAT solver says come from a Repository are the ones
+    // that need to be fetched/installed.
+    let missing: Vec<MissingDependency> = sat_result
+        .install_order
+        .iter()
+        .filter(|p| p.source == conary_core::resolver::SatSource::Repository)
+        .map(|p| MissingDependency {
+            name: p.name.clone(),
+            constraint: conary_core::version::VersionConstraint::Any,
+            required_by: vec![ctx.pkg.name().to_string()],
+        })
+        .collect();
+
     // Handle missing dependencies with dep-mode awareness
-    if plan.missing.is_empty() {
+    if missing.is_empty() {
         println!("All dependencies already satisfied");
         return Ok(());
     }
 
-    info!("Found {} missing dependencies", plan.missing.len());
+    info!("Found {} missing dependencies", missing.len());
 
     // Dep-mode-aware resolution -- use policy-aware variant so the
     // system model convergence intent provides a default when the
@@ -894,7 +900,7 @@ async fn handle_dependencies(ctx: &DepAnalysisContext<'_>) -> Result<()> {
     };
     let dep_plan = dep_resolution::resolve_missing_deps_policy_aware(
         ctx.conn,
-        &plan.missing,
+        &missing,
         Some(ctx.dep_mode),
         &convergence_intent,
     );
