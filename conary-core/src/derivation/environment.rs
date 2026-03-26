@@ -327,6 +327,11 @@ impl MutableEnvironment {
             )));
         }
 
+        // Record mount state before the marker write so that Drop will
+        // clean up the mounts if the write fails.
+        self.seed_env = Some(seed_env);
+        self.mounted = true;
+
         // Persist the seed ID marker for future reset detection.
         let marker = self.base_dir.join(".seed_id");
         std::fs::write(&marker, &self.seed_id).map_err(|e| {
@@ -335,9 +340,6 @@ impl MutableEnvironment {
                 marker.display()
             ))
         })?;
-
-        self.seed_env = Some(seed_env);
-        self.mounted = true;
 
         info!(
             "Mounted mutable environment at {} (seed: {})",
