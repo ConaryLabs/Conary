@@ -84,6 +84,7 @@ pub use toolchain::{Toolchain, ToolchainKind};
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
+use tracing::{info, warn};
 
 /// Default paths for bootstrap artifacts
 pub const DEFAULT_TOOLS_DIR: &str = "/tools";
@@ -336,7 +337,13 @@ impl Bootstrap {
         let builder = Tier2Builder::new(&self.work_dir, lfs_root, self.config.clone(), toolchain)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        builder.build_all().map_err(|e| anyhow::anyhow!("{e}"))?;
+        match builder.build_all() {
+            Ok(()) => info!("Tier-2 builds complete"),
+            Err(Tier2Error::NotImplemented(msg)) => {
+                warn!("Skipping Tier-2: {msg}");
+            }
+            Err(e) => return Err(anyhow::anyhow!("{e}")),
+        }
 
         self.stages.mark_complete(BootstrapStage::Tier2, lfs_root)?;
 
