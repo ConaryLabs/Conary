@@ -830,7 +830,7 @@ exclude = ["sendmail"]
 
     // Create a state with only nginx installed
     let mut state = SystemState::new();
-    state.installed.insert(
+    state.add_package(
         "nginx".to_string(),
         conary_core::model::InstalledPackage {
             name: "nginx".to_string(),
@@ -843,7 +843,7 @@ exclude = ["sendmail"]
     state.explicit.insert("nginx".to_string());
 
     // Also have sendmail installed (should be removed)
-    state.installed.insert(
+    state.add_package(
         "sendmail".to_string(),
         conary_core::model::InstalledPackage {
             name: "sendmail".to_string(),
@@ -918,7 +918,7 @@ patches = []
 
     // State with nginx installed but not the derived package
     let mut state = SystemState::new();
-    state.installed.insert(
+    state.add_package(
         "nginx".to_string(),
         conary_core::model::InstalledPackage {
             name: "nginx".to_string(),
@@ -960,7 +960,7 @@ fn test_system_model_state_capture() {
     assert!(state.is_installed("openssl"), "openssl should be installed");
 
     // Check nginx details
-    let nginx = state.installed.get("nginx").unwrap();
+    let nginx = state.get_package("nginx").unwrap();
     assert_eq!(nginx.version, "1.24.0");
 }
 

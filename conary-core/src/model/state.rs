@@ -15,8 +15,10 @@ use super::{ModelError, ModelResult};
 /// Represents the current state of the system
 #[derive(Debug, Clone)]
 pub struct SystemState {
-    /// Currently installed packages (name -> version)
-    pub installed: HashMap<String, InstalledPackage>,
+    /// Currently installed packages (name -> list of installed instances).
+    /// A Vec is used because multilib systems can have the same package
+    /// installed for multiple architectures (e.g. glibc.x86_64 + glibc.i686).
+    pub installed: HashMap<String, Vec<InstalledPackage>>,
 
     /// Explicitly installed packages (not just dependencies)
     pub explicit: HashSet<String>,
@@ -58,14 +60,25 @@ impl SystemState {
         }
     }
 
-    /// Check if a package is installed
+    /// Check if a package is installed (any architecture)
     pub fn is_installed(&self, package: &str) -> bool {
-        self.installed.contains_key(package)
+        self.installed.get(package).is_some_and(|v| !v.is_empty())
     }
 
-    /// Get installed version of a package
+    /// Get the primary installed instance of a package.
+    /// On multilib systems, returns the first (typically native-arch) entry.
+    pub fn get_package(&self, package: &str) -> Option<&InstalledPackage> {
+        self.installed.get(package).and_then(|v| v.first())
+    }
+
+    /// Get installed version of a package (primary instance)
     pub fn get_version(&self, package: &str) -> Option<&str> {
-        self.installed.get(package).map(|p| p.version.as_str())
+        self.get_package(package).map(|p| p.version.as_str())
+    }
+
+    /// Add an installed package, preserving multi-arch entries
+    pub fn add_package(&mut self, name: String, pkg: InstalledPackage) {
+        self.installed.entry(name).or_default().push(pkg);
     }
 
     /// Check if a package was explicitly installed
@@ -78,14 +91,19 @@ impl SystemState {
         self.pinned.contains(package)
     }
 
-    /// Get all installed package names
+    /// Get all installed package names (deduplicated across architectures)
     pub fn installed_packages(&self) -> impl Iterator<Item = &str> {
         self.installed.keys().map(|s| s.as_str())
     }
 
-    /// Get count of installed packages
+    /// Get count of installed packages (unique names, not instances)
     pub fn package_count(&self) -> usize {
         self.installed.len()
+    }
+
+    /// Get total count of installed instances (including multi-arch)
+    pub fn instance_count(&self) -> usize {
+        self.installed.values().map(|v| v.len()).sum()
     }
 }
 
@@ -153,7 +171,7 @@ pub fn capture_current_state(conn: &Connection) -> ModelResult<SystemState> {
             state.pinned.insert(name.clone());
         }
 
-        state.installed.insert(name, pkg);
+        state.add_package(name, pkg);
     }
 
     state.source_pin = DistroPin::get_current(conn)
@@ -173,7 +191,7 @@ pub fn snapshot_to_model(state: &SystemState) -> super::SystemModel {
 
     // Add pinned packages with their current versions
     for name in &state.pinned {
-        if let Some(pkg) = state.installed.get(name) {
+        if let Some(pkg) = state.get_package(name) {
             model.pin.insert(name.clone(), pkg.version.clone());
         }
     }
@@ -200,7 +218,7 @@ mod tests {
     fn test_state_operations() {
         let mut state = SystemState::new();
 
-        state.installed.insert(
+        state.add_package(
             "nginx".to_string(),
             InstalledPackage {
                 name: "nginx".to_string(),
@@ -222,7 +240,7 @@ mod tests {
     fn test_snapshot_to_model() {
         let mut state = SystemState::new();
 
-        state.installed.insert(
+        state.add_package(
             "nginx".to_string(),
             InstalledPackage {
                 name: "nginx".to_string(),

@@ -203,6 +203,33 @@ impl<'a> Cook<'a> {
             self.source_dir = self.build_dir.as_path().join("source").join(extract_dir);
         }
 
+        // Extract additional source archives, honoring extract_to
+        for additional in &self.recipe.source.additional {
+            let filename = additional
+                .url
+                .split('/')
+                .next_back()
+                .unwrap_or("additional.tar.gz");
+            let additional_archive = self.source_dir.join(filename);
+
+            if additional_archive.exists() {
+                let dest = if let Some(extract_to) = &additional.extract_to {
+                    let target = self.source_dir.join(extract_to);
+                    fs::create_dir_all(&target)?;
+                    target
+                } else {
+                    self.source_dir.clone()
+                };
+
+                extract_archive(&additional_archive, &dest)?;
+                self.log_line(&format!(
+                    "Extracted additional source {} to {}",
+                    filename,
+                    dest.display()
+                ));
+            }
+        }
+
         Ok(())
     }
 

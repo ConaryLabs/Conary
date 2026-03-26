@@ -292,7 +292,7 @@ impl BuildCache {
             }
         }
 
-        // Build configuration
+        // Build configuration -- every field that affects build output
         let build_fields: &[(&str, &Option<String>)] = &[
             ("configure", &recipe.build.configure),
             ("make", &recipe.build.make),
@@ -300,11 +300,25 @@ impl BuildCache {
             ("setup", &recipe.build.setup),
             ("check", &recipe.build.check),
             ("post_install", &recipe.build.post_install),
+            ("script_file", &recipe.build.script_file),
+            ("workdir", &recipe.build.workdir),
+            ("stage", &recipe.build.stage),
         ];
         for (label, value) in build_fields {
             if let Some(v) = value {
                 data.push_str(&format!("{}:{}\n", label, v));
             }
+        }
+
+        // Jobs count (affects build parallelism and can affect output)
+        if let Some(jobs) = recipe.build.jobs {
+            data.push_str(&format!("jobs:{}\n", jobs));
+        }
+
+        // Custom variables (sorted for determinism) -- affect substitution
+        let vars: BTreeMap<_, _> = recipe.variables.iter().collect();
+        for (k, v) in vars {
+            data.push_str(&format!("var:{}={}\n", k, v));
         }
 
         // Environment (sorted for determinism)

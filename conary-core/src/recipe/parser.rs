@@ -63,9 +63,19 @@ pub fn validate_recipe(recipe: &Recipe) -> Result<Vec<String>> {
         warnings.push("Missing package license".to_string());
     }
 
+    // Reject script_file -- parsed but execution is not yet implemented.
+    // Accepting it silently would produce an empty destdir and a broken package.
+    if recipe.build.script_file.is_some() {
+        return Err(Error::ParseError(
+            "build.script_file is not yet implemented. \
+             Use inline build commands (configure/make/install) instead."
+                .to_string(),
+        ));
+    }
+
     // Warn about missing install command
-    if recipe.build.install.is_none() && recipe.build.script_file.is_none() {
-        warnings.push("No install command or script_file specified".to_string());
+    if recipe.build.install.is_none() {
+        warnings.push("No install command specified".to_string());
     }
 
     // Validate patch checksums for remote patches

@@ -572,7 +572,7 @@ fn compute_diff_inner(
         }
 
         if model_excluded.contains(package) {
-            if let Some(pkg) = state.installed.get(package) {
+            if let Some(pkg) = state.get_package(package) {
                 diff.add_action(DiffAction::Remove {
                     package: package.to_string(),
                     current_version: pkg.version.clone(),
@@ -593,7 +593,7 @@ fn compute_diff_inner(
     for package in &model_excluded {
         if state.is_installed(package)
             && !state.is_explicit(package)
-            && let Some(pkg) = state.installed.get(*package)
+            && let Some(pkg) = state.get_package(package)
         {
             diff.add_action(DiffAction::Remove {
                 package: package.to_string(),
@@ -687,7 +687,7 @@ mod tests {
     fn make_state_with_packages(packages: &[(&str, &str, bool)]) -> SystemState {
         let mut state = SystemState::new();
         for (name, version, explicit) in packages {
-            state.installed.insert(
+            state.add_package(
                 name.to_string(),
                 InstalledPackage {
                     name: name.to_string(),
