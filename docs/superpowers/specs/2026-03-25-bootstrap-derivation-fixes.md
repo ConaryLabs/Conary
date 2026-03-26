@@ -32,13 +32,13 @@ enum ComposedEntry {
 }
 ```
 
-Last writer wins regardless of type. Emit `tracing::warn!` when a path changes type (file -> symlink or vice versa). Output splits back into separate `files` and `symlinks` vectors for the EROFS builder interface.
+Last writer wins regardless of type. Emit `tracing::warn!` only on cross-type conflicts (file -> symlink or vice versa), not on same-type overwrites (which are normal last-writer-wins). Output splits back into separate `files` and `symlinks` vectors for the EROFS builder interface. Note: `ComposedEntry` is a new internal enum for dedup; the existing `ComposedEntries` return struct stays unchanged.
 
 ### 3. Mount leak on marker write failure
 
 **File:** `conary-core/src/derivation/environment.rs`
-**Problem:** After seed + overlay mounts succeed, if `.seed_id` marker write fails, mounts are left active with no cleanup path.
-**Fix:** Set `self.mounted = true` before the marker write so the destructor handles cleanup. Also explicitly call `unmount()` on the error path before returning.
+**Problem:** After seed + overlay mounts succeed, if `.seed_id` marker write fails, mounts are left active with no cleanup path. The current code sets `self.seed_env` and `self.mounted` AFTER the marker write, so the destructor won't clean up on that error path.
+**Fix:** Move both `self.seed_env = Some(seed_env)` and `self.mounted = true` to BEFORE the marker write. This ensures the destructor handles cleanup if the write fails, and avoids double-unmount (the seed_env local would otherwise be dropped separately while unmount() also tries to take it).
 
 ### 4. Pipeline mount failure is fatal
 
@@ -54,19 +54,19 @@ Last writer wins regardless of type. Emit `tracing::warn!` when a path changes t
 **Problem:** `create_iso()` and fallback ISO path return `efi_bootable: true` / `bios_bootable: true` without creating real boot artifacts.
 **Fix:** Return `false` for both. Emit `tracing::warn!("ISO boot artifact population not yet implemented")`. The ISO is still created (squashfs + xorriso) but honestly reports it's not bootable. Actual boot artifact population is sub-project 3.
 
-Same for any path through `create_efi_image()` that claims bootability without populating the EFI image with a real bootloader.
+Same for any path through `create_efi_image()` that claims bootability without populating the EFI image with a real bootloader. Note: `build_from_generation()` already correctly sets `efi_bootable = false` -- only the legacy paths (`build_raw_legacy`, `build_qcow2`, `build_iso`) need fixes.
 
 ### 6. Phase 5 boot validation
 
 **File:** `conary-core/src/bootstrap/mod.rs`
 **Problem:** `Bootstrap::build_image()` calls `ImageBuilder::build()` directly, bypassing `build_tier1_image()` validation.
-**Fix:** Route through `build_tier1_image()` when the format requires boot artifacts (raw, qcow2, iso). For EROFS-only output, skip boot validation since it's a generation artifact, not a bootable image.
+**Fix:** Route through `build_tier1_image()` when the format requires boot artifacts (raw, qcow2, iso). For EROFS-only output, skip boot validation since it's a generation artifact, not a bootable image. Note: `build_tier1_image()` validates kernel at `/boot/vmlinuz*`, EFI binary at `/boot/EFI/BOOT/BOOTX64.EFI`, and BLS entry at `/boot/loader/entries/conaryos.conf`. This means Raw/Qcow2/Iso builds will fail unless Phase 4 (`configure_system`) has provisioned these artifacts -- this is the intended behavior (fail honestly rather than produce unbootable images).
 
 ### 7. Tier-2 returns honest error
 
 **File:** `conary-core/src/bootstrap/tier2.rs`
 **Problem:** `build_all()` loops through packages but never builds anything. Returns success.
-**Fix:** Return `Err(Error::NotImplemented("Tier-2 self-hosting builds not yet implemented"))`. Keep `add_ssh_config()` callable independently since it's real code. Actual Tier-2 implementation is sub-project 4.
+**Fix:** Add a `NotImplemented(String)` variant to `Tier2Error` and return `Err(Tier2Error::NotImplemented("Tier-2 self-hosting builds not yet implemented".into()))`. Keep `add_ssh_config()` callable independently since it's real code. Actual Tier-2 implementation is sub-project 4.
 
 ## Feature: EROFS symlink collection
 
@@ -78,19 +78,24 @@ The EROFS builder itself fully supports symlinks via `SymlinkEntryRef`. The comp
 
 ### Fix
 
-**Enhance `walk_sysroot_to_cas()` return type:**
+**Enhance `walk_sysroot_to_cas()` to also collect symlinks.**
+
+The function currently uses `&mut Vec<(String, String, u64, u32)>` out-parameter for files (not a return type). Add a second out-parameter for symlinks:
 
 ```rust
 // Before
-fn walk_sysroot_to_cas(&self, ...) -> Result<Vec<(String, String, u64, u32)>>
+fn walk_sysroot_to_cas(&self, sysroot: &Path, entries: &mut Vec<(String, String, u64, u32)>) -> Result<(), ImageError>
 
-// After
-struct SysrootWalkResult {
-    files: Vec<(String, String, u64, u32)>,  // (path, hash, size, mode)
-    symlinks: Vec<(String, String)>,          // (path, target)
-}
-fn walk_sysroot_to_cas(&self, ...) -> Result<SysrootWalkResult>
+// After -- add symlinks out-parameter
+fn walk_sysroot_to_cas(
+    &self,
+    sysroot: &Path,
+    entries: &mut Vec<(String, String, u64, u32)>,  // files: (path, hash, size, mode)
+    symlinks: &mut Vec<(String, String)>,            // symlinks: (path, target)
+) -> Result<(), ImageError>
 ```
+
+Note: `fetch_additional_sources()` in `build_runner.rs` already correctly verifies checksums on cached additional sources -- only `fetch_source()` (primary sources) has the bug.
 
 When the walker encounters a symlink:
 1. Apply `is_excluded()` -- skip symlinks under `/proc`, `/sys`, `/dev`, `/tmp`
