@@ -225,14 +225,19 @@ pub async fn cmd_adopt_refresh(
                         rusqlite::params![sys_ver, sys_arch, sys_desc, changeset_id, trove_id,],
                     )?;
 
-                    // Replace files: drop old, insert fresh
-                    tx.execute("DELETE FROM files WHERE trove_id = ?1", [trove_id])?;
-
-                    // Use CAS for AdoptedFull packages (keyed off trove install_source,
-                    // not CLI --full flag) so hooks can refresh without losing CAS backing
+                    // Query ALL metadata BEFORE deleting old data so a PM
+                    // query failure does not leave the trove with empty tables.
                     let use_cas = trove.install_source == InstallSource::AdoptedFull;
 
-                    let files: Vec<FileInfoTuple> = query_package_files(pkg_mgr, &trove.name);
+                    let files: Vec<FileInfoTuple> = query_package_files(pkg_mgr, &trove.name)
+                        .map_err(|e| conary_core::Error::IoError(e.to_string()))?;
+                    let deps: Vec<DependencyInfo> = query_package_deps(pkg_mgr, &trove.name)
+                        .map_err(|e| conary_core::Error::IoError(e.to_string()))?;
+                    let provides: Vec<String> = query_package_provides(pkg_mgr, &trove.name)
+                        .map_err(|e| conary_core::Error::IoError(e.to_string()))?;
+
+                    // All queries succeeded — now safe to delete old data and replace
+                    tx.execute("DELETE FROM files WHERE trove_id = ?1", [trove_id])?;
                     for (
                         file_path,
                         file_size,
@@ -269,9 +274,7 @@ pub async fn cmd_adopt_refresh(
                         }
                     }
 
-                    // Replace deps
                     tx.execute("DELETE FROM dependencies WHERE trove_id = ?1", [trove_id])?;
-                    let deps: Vec<DependencyInfo> = query_package_deps(pkg_mgr, &trove.name);
                     for dep in deps {
                         if dep.name.is_empty() {
                             continue;
@@ -288,9 +291,7 @@ pub async fn cmd_adopt_refresh(
                         }
                     }
 
-                    // Replace provides
                     tx.execute("DELETE FROM provides WHERE trove_id = ?1", [trove_id])?;
-                    let provides: Vec<String> = query_package_provides(pkg_mgr, &trove.name);
                     for provide in provides {
                         if provide.is_empty() {
                             continue;
@@ -378,81 +379,60 @@ fn query_all_current(pkg_mgr: SystemPackageManager) -> Result<InstalledPackageMa
 }
 
 /// Query files for a package from the active package manager.
-fn query_package_files(pkg_mgr: SystemPackageManager, name: &str) -> Vec<FileInfoTuple> {
-    match pkg_mgr {
+///
+/// Returns an error on PM query failure so callers can skip the package
+/// rather than recording it with an empty file list.
+fn query_package_files(
+    pkg_mgr: SystemPackageManager,
+    name: &str,
+) -> Result<Vec<FileInfoTuple>> {
+    let raw = match pkg_mgr {
         SystemPackageManager::Rpm => rpm_query::query_package_files(name)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|f| {
-                (
-                    f.path,
-                    f.size,
-                    f.mode,
-                    f.digest,
-                    f.user,
-                    f.group,
-                    f.link_target,
-                )
-            })
-            .collect(),
+            .map_err(|e| anyhow::anyhow!("RPM file query failed for '{name}': {e}"))?,
         SystemPackageManager::Dpkg => dpkg_query::query_package_files(name)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|f| {
-                (
-                    f.path,
-                    f.size,
-                    f.mode,
-                    f.digest,
-                    f.user,
-                    f.group,
-                    f.link_target,
-                )
-            })
-            .collect(),
+            .map_err(|e| anyhow::anyhow!("DPKG file query failed for '{name}': {e}"))?,
         SystemPackageManager::Pacman => pacman_query::query_package_files(name)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|f| {
-                (
-                    f.path,
-                    f.size,
-                    f.mode,
-                    f.digest,
-                    f.user,
-                    f.group,
-                    f.link_target,
-                )
-            })
-            .collect(),
-        _ => Vec::new(),
-    }
+            .map_err(|e| anyhow::anyhow!("Pacman file query failed for '{name}': {e}"))?,
+        _ => return Ok(Vec::new()),
+    };
+    Ok(raw
+        .into_iter()
+        .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group, f.link_target))
+        .collect())
 }
 
 /// Query runtime dependencies for a package from the active package manager.
-fn query_package_deps(pkg_mgr: SystemPackageManager, name: &str) -> Vec<DependencyInfo> {
-    match pkg_mgr {
-        SystemPackageManager::Rpm => {
-            rpm_query::query_package_dependencies_full(name).unwrap_or_default()
-        }
-        SystemPackageManager::Dpkg => {
-            dpkg_query::query_package_dependencies_full(name).unwrap_or_default()
-        }
-        SystemPackageManager::Pacman => {
-            pacman_query::query_package_dependencies_full(name).unwrap_or_default()
-        }
+///
+/// Returns an error on PM query failure so callers can handle it explicitly.
+fn query_package_deps(
+    pkg_mgr: SystemPackageManager,
+    name: &str,
+) -> Result<Vec<DependencyInfo>> {
+    Ok(match pkg_mgr {
+        SystemPackageManager::Rpm => rpm_query::query_package_dependencies_full(name)
+            .map_err(|e| anyhow::anyhow!("RPM dep query failed for '{name}': {e}"))?,
+        SystemPackageManager::Dpkg => dpkg_query::query_package_dependencies_full(name)
+            .map_err(|e| anyhow::anyhow!("DPKG dep query failed for '{name}': {e}"))?,
+        SystemPackageManager::Pacman => pacman_query::query_package_dependencies_full(name)
+            .map_err(|e| anyhow::anyhow!("Pacman dep query failed for '{name}': {e}"))?,
         _ => Vec::new(),
-    }
+    })
 }
 
 /// Query provides for a package from the active package manager.
-fn query_package_provides(pkg_mgr: SystemPackageManager, name: &str) -> Vec<String> {
-    match pkg_mgr {
-        SystemPackageManager::Rpm => rpm_query::query_package_provides(name).unwrap_or_default(),
-        SystemPackageManager::Dpkg => dpkg_query::query_package_provides(name).unwrap_or_default(),
-        SystemPackageManager::Pacman => {
-            pacman_query::query_package_provides(name).unwrap_or_default()
-        }
+///
+/// Returns an error on PM query failure so callers can handle it explicitly.
+fn query_package_provides(
+    pkg_mgr: SystemPackageManager,
+    name: &str,
+) -> Result<Vec<String>> {
+    Ok(match pkg_mgr {
+        SystemPackageManager::Rpm => rpm_query::query_package_provides(name)
+            .map_err(|e| anyhow::anyhow!("RPM provides query failed for '{name}': {e}"))?,
+        SystemPackageManager::Dpkg => dpkg_query::query_package_provides(name)
+            .map_err(|e| anyhow::anyhow!("DPKG provides query failed for '{name}': {e}"))?,
+        SystemPackageManager::Pacman => pacman_query::query_package_provides(name)
+            .map_err(|e| anyhow::anyhow!("Pacman provides query failed for '{name}': {e}"))?,
         _ => Vec::new(),
-    }
+    })
 }

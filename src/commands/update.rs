@@ -664,7 +664,7 @@ pub async fn cmd_update(
                     db_path,
                     root,
                     sandbox_mode,
-                    dep_mode,
+                    dep_mode: Some(dep_mode),
                     yes,
                     ..Default::default()
                 },

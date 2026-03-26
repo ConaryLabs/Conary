@@ -257,7 +257,39 @@ pub async fn cmd_adopt_system(
 
             progress.set_phase(name, AdoptPhase::Querying);
 
-            // Create trove
+            // Query ALL PM metadata before any DB inserts so we can skip
+            // cleanly without leaving orphaned trove/file rows.
+            let files: Vec<FileInfoTuple> = match query_pm_files(pkg_mgr, name) {
+                Ok(f) => f,
+                Err(e) => {
+                    warn!("Failed to query files for '{}': {}; skipping", name, e);
+                    progress.fail_package(name, &e.to_string());
+                    error_count += 1;
+                    continue;
+                }
+            };
+            let deps: Vec<DependencyInfo> = match query_pm_deps(pkg_mgr, name) {
+                Ok(d) => d,
+                Err(e) => {
+                    warn!("Failed to query deps for '{}': {}; skipping", name, e);
+                    progress.fail_package(name, &e.to_string());
+                    error_count += 1;
+                    continue;
+                }
+            };
+            let provides: Vec<String> = match query_pm_provides(pkg_mgr, name) {
+                Ok(p) => p,
+                Err(e) => {
+                    warn!("Failed to query provides for '{}': {}; skipping", name, e);
+                    progress.fail_package(name, &e.to_string());
+                    error_count += 1;
+                    continue;
+                }
+            };
+
+            // All PM queries succeeded -- now safe to insert into the DB.
+            progress.set_phase(name, AdoptPhase::Inserting);
+
             let mut trove = Trove::new_with_source(
                 name.clone(),
                 version.clone(),
@@ -287,58 +319,6 @@ pub async fn cmd_adopt_system(
                 }
             };
 
-            progress.set_phase(name, AdoptPhase::Inserting);
-
-            // Query and insert files based on package manager
-            let files: Vec<FileInfoTuple> = match pkg_mgr {
-                SystemPackageManager::Rpm => rpm_query::query_package_files(name)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|f| {
-                        (
-                            f.path,
-                            f.size,
-                            f.mode,
-                            f.digest,
-                            f.user,
-                            f.group,
-                            f.link_target,
-                        )
-                    })
-                    .collect(),
-                SystemPackageManager::Dpkg => dpkg_query::query_package_files(name)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|f| {
-                        (
-                            f.path,
-                            f.size,
-                            f.mode,
-                            f.digest,
-                            f.user,
-                            f.group,
-                            f.link_target,
-                        )
-                    })
-                    .collect(),
-                SystemPackageManager::Pacman => pacman_query::query_package_files(name)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|f| {
-                        (
-                            f.path,
-                            f.size,
-                            f.mode,
-                            f.digest,
-                            f.user,
-                            f.group,
-                            f.link_target,
-                        )
-                    })
-                    .collect(),
-                _ => Vec::new(),
-            };
-
             for (
                 file_path,
                 file_size,
@@ -364,26 +344,10 @@ pub async fn cmd_adopt_system(
                 file_entry.group_name = file_group.clone();
                 file_entry.symlink_target = link_target.clone();
 
-                // Use INSERT OR REPLACE to handle shared paths (directories, etc.)
                 if let Err(e) = file_entry.insert_or_replace(tx) {
-                    // File might already exist from another package
                     debug!("Failed to insert file {}: {}", file_path, e);
                 }
             }
-
-            // Query and insert dependencies with version constraints
-            let deps: Vec<DependencyInfo> = match pkg_mgr {
-                SystemPackageManager::Rpm => {
-                    rpm_query::query_package_dependencies_full(name).unwrap_or_default()
-                }
-                SystemPackageManager::Dpkg => {
-                    dpkg_query::query_package_dependencies_full(name).unwrap_or_default()
-                }
-                SystemPackageManager::Pacman => {
-                    pacman_query::query_package_dependencies_full(name).unwrap_or_default()
-                }
-                _ => Vec::new(),
-            };
 
             for dep in deps {
                 if dep.name.is_empty() {
@@ -393,28 +357,14 @@ pub async fn cmd_adopt_system(
                 let mut dep_entry = DependencyEntry::new(
                     trove_id,
                     dep.name,
-                    None, // depends_on_version is for resolved version, not constraint
+                    None,
                     "runtime".to_string(),
-                    dep.constraint, // Store the version constraint
+                    dep.constraint,
                 );
                 if let Err(e) = dep_entry.insert(tx) {
                     debug!("Failed to insert dependency: {}", e);
                 }
             }
-
-            // Query and insert provides (capabilities this package offers)
-            let provides: Vec<String> = match pkg_mgr {
-                SystemPackageManager::Rpm => {
-                    rpm_query::query_package_provides(name).unwrap_or_default()
-                }
-                SystemPackageManager::Dpkg => {
-                    dpkg_query::query_package_provides(name).unwrap_or_default()
-                }
-                SystemPackageManager::Pacman => {
-                    pacman_query::query_package_provides(name).unwrap_or_default()
-                }
-                _ => Vec::new(),
-            };
 
             for provide in provides {
                 if provide.is_empty() {
@@ -538,6 +488,58 @@ pub fn compute_file_hash(
     }
     // Last resort: placeholder for files we cannot read (e.g., permission denied)
     format!("adopted-{}", file_path.replace('/', "_"))
+}
+
+/// Query files for a package from the active PM, propagating errors.
+fn query_pm_files(
+    pkg_mgr: SystemPackageManager,
+    name: &str,
+) -> Result<Vec<FileInfoTuple>> {
+    let raw = match pkg_mgr {
+        SystemPackageManager::Rpm => rpm_query::query_package_files(name)
+            .map_err(|e| anyhow::anyhow!("RPM file query failed for '{name}': {e}"))?,
+        SystemPackageManager::Dpkg => dpkg_query::query_package_files(name)
+            .map_err(|e| anyhow::anyhow!("DPKG file query failed for '{name}': {e}"))?,
+        SystemPackageManager::Pacman => pacman_query::query_package_files(name)
+            .map_err(|e| anyhow::anyhow!("Pacman file query failed for '{name}': {e}"))?,
+        _ => return Ok(Vec::new()),
+    };
+    Ok(raw
+        .into_iter()
+        .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group, f.link_target))
+        .collect())
+}
+
+/// Query dependencies for a package from the active PM, propagating errors.
+fn query_pm_deps(
+    pkg_mgr: SystemPackageManager,
+    name: &str,
+) -> Result<Vec<DependencyInfo>> {
+    Ok(match pkg_mgr {
+        SystemPackageManager::Rpm => rpm_query::query_package_dependencies_full(name)
+            .map_err(|e| anyhow::anyhow!("RPM dep query failed for '{name}': {e}"))?,
+        SystemPackageManager::Dpkg => dpkg_query::query_package_dependencies_full(name)
+            .map_err(|e| anyhow::anyhow!("DPKG dep query failed for '{name}': {e}"))?,
+        SystemPackageManager::Pacman => pacman_query::query_package_dependencies_full(name)
+            .map_err(|e| anyhow::anyhow!("Pacman dep query failed for '{name}': {e}"))?,
+        _ => Vec::new(),
+    })
+}
+
+/// Query provides for a package from the active PM, propagating errors.
+fn query_pm_provides(
+    pkg_mgr: SystemPackageManager,
+    name: &str,
+) -> Result<Vec<String>> {
+    Ok(match pkg_mgr {
+        SystemPackageManager::Rpm => rpm_query::query_package_provides(name)
+            .map_err(|e| anyhow::anyhow!("RPM provides query failed for '{name}': {e}"))?,
+        SystemPackageManager::Dpkg => dpkg_query::query_package_provides(name)
+            .map_err(|e| anyhow::anyhow!("DPKG provides query failed for '{name}': {e}"))?,
+        SystemPackageManager::Pacman => pacman_query::query_package_provides(name)
+            .map_err(|e| anyhow::anyhow!("Pacman provides query failed for '{name}': {e}"))?,
+        _ => Vec::new(),
+    })
 }
 
 #[cfg(test)]

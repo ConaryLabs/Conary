@@ -246,20 +246,24 @@ impl<'a> BatchInstaller<'a> {
             }
         }
 
-        // Phase 3: Store all package files in CAS
-        for (idx, pkg) in packages.iter().enumerate() {
+        // Phase 3: Store all package files in CAS, capturing the
+        // authoritative hash returned by the store for each file.
+        // Keyed by (package index, file index) so Phase 4 can look them up.
+        let mut cas_hashes: HashMap<(usize, usize), String> = HashMap::new();
+        for (pkg_idx, pkg) in packages.iter().enumerate() {
             info!(
                 "[{}/{}] Storing files in CAS: {} {}",
-                idx + 1,
+                pkg_idx + 1,
                 package_count,
                 pkg.name,
                 pkg.version
             );
 
-            for file in &pkg.extracted_files {
-                engine.cas().store(&file.content).with_context(|| {
+            for (file_idx, file) in pkg.extracted_files.iter().enumerate() {
+                let hash = engine.cas().store(&file.content).with_context(|| {
                     format!("Failed to store {} from {} in CAS", file.path, pkg.name)
                 })?;
+                cas_hashes.insert((pkg_idx, file_idx), hash);
             }
         }
 
@@ -273,7 +277,7 @@ impl<'a> BatchInstaller<'a> {
 
             let mut trove_ids: Vec<i64> = Vec::with_capacity(packages.len());
 
-            for pkg in &packages {
+            for (pkg_idx, pkg) in packages.iter().enumerate() {
                 // Remove old trove if upgrading
                 if let Some(ref old_trove) = pkg.old_trove
                     && let Some(old_id) = old_trove.id
@@ -309,9 +313,14 @@ impl<'a> BatchInstaller<'a> {
                     }
                 }
 
-                // Insert files
-                for file in &pkg.extracted_files {
-                    let hash = file.sha256.clone().unwrap_or_default();
+                // Insert files -- use the authoritative CAS hash from Phase 3,
+                // falling back to the embedded sha256 only as a last resort.
+                for (file_idx, file) in pkg.extracted_files.iter().enumerate() {
+                    let hash = cas_hashes
+                        .get(&(pkg_idx, file_idx))
+                        .cloned()
+                        .or_else(|| file.sha256.clone())
+                        .unwrap_or_default();
 
                     if hash.len() < 3 {
                         warn!(

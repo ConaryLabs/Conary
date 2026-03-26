@@ -41,9 +41,10 @@ pub async fn cmd_deptree(
         }
     );
 
-    // Create tree context
+    // Create tree context — seed both visited and ancestors with the root
     let mut ctx = TreeContext::new(&conn, max_depth);
     ctx.visited.insert(package_name.to_string());
+    ctx.ancestors.insert(package_name.to_string());
 
     if reverse {
         // Reverse dependency tree: what depends on this package, transitively
@@ -73,7 +74,11 @@ pub async fn cmd_deptree(
 /// Context for tree traversal, reducing parameter count
 struct TreeContext<'a> {
     conn: &'a rusqlite::Connection,
+    /// Packages already fully expanded -- used to avoid re-printing subtrees
+    /// for shared (diamond) dependencies. These get `[already shown]`.
     visited: HashSet<String>,
+    /// Current recursion stack -- used to detect true cycles.
+    ancestors: HashSet<String>,
     max_depth: Option<usize>,
     stats: TreeStats,
 }
@@ -91,6 +96,7 @@ impl<'a> TreeContext<'a> {
         Self {
             conn,
             visited: HashSet::new(),
+            ancestors: HashSet::new(),
             max_depth,
             stats: TreeStats::default(),
         }
@@ -134,8 +140,8 @@ fn print_dependency_tree(
 
         ctx.stats.total_nodes += 1;
 
-        // Check for cycles
-        if ctx.visited.contains(dep_name) {
+        // True cycle: this package is on the current recursion stack
+        if ctx.ancestors.contains(dep_name) {
             println!(
                 "{}{}{} {} [circular]",
                 prefix, connector, dep_name, dep_trove.version
@@ -144,11 +150,20 @@ fn print_dependency_tree(
             continue;
         }
 
+        // Shared dep: already fully expanded in another branch
+        if ctx.visited.contains(dep_name) {
+            println!(
+                "{}{}{} {} [already shown]",
+                prefix, connector, dep_name, dep_trove.version
+            );
+            continue;
+        }
+
         println!("{}{}{} {}", prefix, connector, dep_name, dep_trove.version);
         ctx.stats.unique_packages += 1;
 
-        // Mark as visited and recurse
-        ctx.visited.insert(dep_name.clone());
+        // Push onto recursion stack, recurse, then pop
+        ctx.ancestors.insert(dep_name.clone());
         if let Some(dep_id) = dep_trove.id {
             print_dependency_tree(
                 ctx,
@@ -157,6 +172,8 @@ fn print_dependency_tree(
                 depth + 1,
             )?;
         }
+        ctx.ancestors.remove(dep_name);
+        ctx.visited.insert(dep_name.clone());
     }
 
     Ok(())
@@ -197,13 +214,22 @@ fn print_reverse_tree(
 
         ctx.stats.total_nodes += 1;
 
-        // Check for cycles
-        if ctx.visited.contains(&dep_trove.name) {
+        // True cycle: this package is on the current recursion stack
+        if ctx.ancestors.contains(&dep_trove.name) {
             println!(
                 "{}{}{} {} [circular]",
                 prefix, connector, dep_trove.name, dep_trove.version
             );
             ctx.stats.cycles_detected += 1;
+            continue;
+        }
+
+        // Shared dep: already fully expanded in another branch
+        if ctx.visited.contains(&dep_trove.name) {
+            println!(
+                "{}{}{} {} [already shown]",
+                prefix, connector, dep_trove.name, dep_trove.version
+            );
             continue;
         }
 
@@ -213,14 +239,16 @@ fn print_reverse_tree(
         );
         ctx.stats.unique_packages += 1;
 
-        // Mark as visited and recurse
-        ctx.visited.insert(dep_trove.name.clone());
+        // Push onto recursion stack, recurse, then pop
+        ctx.ancestors.insert(dep_trove.name.clone());
         print_reverse_tree(
             ctx,
             &dep_trove.name,
             &format!("{}{}", prefix, next_prefix),
             depth + 1,
         )?;
+        ctx.ancestors.remove(&dep_trove.name);
+        ctx.visited.insert(dep_trove.name.clone());
     }
 
     Ok(())

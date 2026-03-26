@@ -207,8 +207,11 @@ pub enum Commands {
         /// satisfy:  dependencies on disk satisfy requirements without changes
         /// adopt:    auto-adopt system dependencies into Conary tracking
         /// takeover: download CCS versions from Remi and fully own dependencies
-        #[arg(long, value_enum, default_value_t = crate::commands::DepMode::Satisfy)]
-        dep_mode: crate::commands::DepMode,
+        ///
+        /// When omitted, the system model's convergence intent supplies the
+        /// default; if no model exists, defaults to satisfy.
+        #[arg(long, value_enum)]
+        dep_mode: Option<crate::commands::DepMode>,
 
         /// Install from a specific distro (cross-distro override)
         #[arg(long)]
