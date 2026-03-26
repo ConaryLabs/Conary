@@ -56,11 +56,23 @@ pub async fn cmd_ccs_build(
             .to_path_buf(),
     };
 
-    // Parse targets
+    // Parse and validate targets
+    const VALID_TARGETS: &[&str] = &["ccs", "deb", "rpm", "arch"];
     let targets: Vec<&str> = if target == "all" {
-        vec!["ccs", "deb", "rpm", "arch"]
+        VALID_TARGETS.to_vec()
     } else {
-        target.split(',').collect()
+        let parsed: Vec<&str> = target.split(',').collect();
+        let invalid: Vec<&&str> = parsed
+            .iter()
+            .filter(|t| !VALID_TARGETS.contains(t))
+            .collect();
+        if !invalid.is_empty() {
+            anyhow::bail!(
+                "Invalid target format(s): {}. Valid targets: ccs, deb, rpm, arch, all",
+                invalid.iter().map(|t| format!("'{t}'")).collect::<Vec<_>>().join(", ")
+            );
+        }
+        parsed
     };
 
     // Create output directory

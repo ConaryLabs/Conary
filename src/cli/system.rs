@@ -82,45 +82,51 @@ pub enum SystemCommands {
     Adopt {
         /// Package name(s) to adopt (ignored if --system, --status, --refresh, etc.)
         #[arg(required_unless_present_any = ["system", "status", "refresh", "convert", "sync_hook"])]
+        #[arg(conflicts_with_all = ["system", "status", "refresh", "convert", "sync_hook"])]
         packages: Vec<String>,
 
         #[command(flatten)]
         db: DbArgs,
 
         /// Copy files to CAS for full management (enables rollback)
-        #[arg(long)]
+        /// Used by: default (package adopt), --system, --refresh
+        #[arg(long, conflicts_with_all = ["status", "convert", "sync_hook"])]
         full: bool,
 
         /// Adopt all installed system packages
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["status", "refresh", "convert", "sync_hook"])]
         system: bool,
 
         /// Show adoption status
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["system", "refresh", "convert", "sync_hook"])]
         status: bool,
 
         /// Show what would be adopted without making changes
-        #[arg(long)]
+        /// Used by: --system, --convert, --refresh
+        #[arg(long, conflicts_with_all = ["status", "sync_hook"])]
         dry_run: bool,
 
         /// Only adopt packages matching this glob pattern (e.g., "lib*")
-        #[arg(long)]
+        /// Used by: --system only
+        #[arg(long, requires = "system", conflicts_with_all = ["status", "refresh", "convert", "sync_hook"])]
         pattern: Option<String>,
 
         /// Skip packages matching this glob pattern (e.g., "kernel*")
-        #[arg(long)]
+        /// Used by: --system only
+        #[arg(long, requires = "system", conflicts_with_all = ["status", "refresh", "convert", "sync_hook"])]
         exclude: Option<String>,
 
         /// Only adopt explicitly installed packages (skip auto-installed deps)
-        #[arg(long)]
+        /// Used by: --system only
+        #[arg(long, requires = "system", conflicts_with_all = ["status", "refresh", "convert", "sync_hook"])]
         explicit_only: bool,
 
         /// Check adopted packages for version drift and update changed ones
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["system", "status", "convert", "sync_hook"])]
         refresh: bool,
 
         /// Convert adopted packages to CCS format
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["system", "status", "refresh", "sync_hook"])]
         convert: bool,
 
         /// Number of parallel conversion threads (default: CPU count), requires --convert
@@ -132,15 +138,16 @@ pub enum SystemCommands {
         no_chunking: bool,
 
         /// Install/remove system PM sync hooks
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["system", "status", "refresh", "convert"])]
         sync_hook: bool,
 
         /// Remove sync hooks instead of installing (requires --sync-hook)
         #[arg(long, requires = "sync_hook")]
         remove_hook: bool,
 
-        /// Suppress output (for use by PM hooks)
-        #[arg(long)]
+        /// Suppress output (for use by PM hooks and --refresh)
+        /// Used by: --refresh only
+        #[arg(long, requires = "refresh", conflicts_with_all = ["system", "status", "convert", "sync_hook"])]
         quiet: bool,
     },
 

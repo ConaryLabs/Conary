@@ -39,7 +39,7 @@ pub enum AutomationCommands {
         common: CommonArgs,
 
         /// Only check specific categories (security, orphans, updates, integrity)
-        #[arg(long, value_delimiter = ',')]
+        #[arg(long, value_delimiter = ',', value_parser = ["security", "orphans", "updates", "integrity", "repair"])]
         categories: Option<Vec<String>>,
 
         /// Save results without prompting
@@ -60,7 +60,7 @@ pub enum AutomationCommands {
         yes: bool,
 
         /// Only apply specific categories
-        #[arg(long, value_delimiter = ',')]
+        #[arg(long, value_delimiter = ',', value_parser = ["security", "orphans", "updates", "integrity", "repair"])]
         categories: Option<Vec<String>>,
 
         /// Show what would be done without making changes

@@ -67,17 +67,22 @@ pub enum FederationCommands {
         days: u32,
     },
 
-    /// Enable or disable a peer
+    /// Enable a disabled peer
     EnablePeer {
         /// Peer URL or ID
         peer: String,
 
         #[command(flatten)]
         db: DbArgs,
+    },
 
-        /// Enable the peer (default: true)
-        #[arg(long, default_value = "true")]
-        enable: bool,
+    /// Disable an enabled peer
+    DisablePeer {
+        /// Peer URL or ID
+        peer: String,
+
+        #[command(flatten)]
+        db: DbArgs,
     },
 
     /// Test connectivity to federation peers

@@ -4,6 +4,12 @@
 use super::DbArgs;
 use clap::Subcommand;
 
+/// Parse a mode string as octal (e.g., "644" -> 0o644, "0755" -> 0o755)
+fn parse_octal_mode(s: &str) -> Result<u32, String> {
+    u32::from_str_radix(s.trim_start_matches("0o").trim_start_matches("0O"), 8)
+        .map_err(|e| format!("invalid octal mode '{}': {}", s, e))
+}
+
 #[derive(Subcommand)]
 pub enum DeriveCommands {
     /// List all derived packages
@@ -79,8 +85,8 @@ pub enum DeriveCommands {
         #[arg(long)]
         source: Option<String>,
 
-        /// File permissions (octal, e.g., 644)
-        #[arg(long)]
+        /// File permissions (octal, e.g., 644 or 0755)
+        #[arg(long, value_parser = parse_octal_mode)]
         mode: Option<u32>,
 
         #[command(flatten)]
