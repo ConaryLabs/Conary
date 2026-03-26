@@ -54,6 +54,7 @@ impl<'db> CanonicalResolver<'db> {
                 "SELECT r.name FROM repository_packages rp
                  JOIN repositories r ON rp.repository_id = r.id
                  WHERE rp.canonical_id = ?1 AND rp.name = ?2 AND r.enabled = 1
+                 ORDER BY r.priority DESC, r.id ASC
                  LIMIT 1",
                 rusqlite::params![canonical_id, distro_name],
                 |row| row.get(0),
