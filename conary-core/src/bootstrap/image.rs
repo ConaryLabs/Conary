@@ -813,11 +813,12 @@ impl ImageBuilder {
 
         let size = fs::metadata(&self.output)?.len();
 
+        warn!("Boot artifact population not yet implemented -- image may not be bootable");
         Ok(ImageResult {
             path: self.output.clone(),
             format: self.format,
             size,
-            efi_bootable: true,
+            efi_bootable: false,
             bios_bootable: false,
             method: "systemd-repart".to_string(),
             partitions: vec![
@@ -865,11 +866,12 @@ impl ImageBuilder {
 
         let size = fs::metadata(&self.output)?.len();
 
+        warn!("Boot artifact population not yet implemented -- image may not be bootable");
         Ok(ImageResult {
             path: self.output.clone(),
             format: ImageFormat::Raw,
             size,
-            efi_bootable: true,
+            efi_bootable: false,
             bios_bootable: false,
             method: "legacy".to_string(),
             partitions: vec![
@@ -919,12 +921,13 @@ impl ImageBuilder {
 
         let size = fs::metadata(&self.output)?.len();
 
+        warn!("Boot artifact population not yet implemented -- image may not be bootable");
         Ok(ImageResult {
             path: self.output.clone(),
             format: ImageFormat::Qcow2,
             size,
-            efi_bootable: true,
-            bios_bootable: true,
+            efi_bootable: false,
+            bios_bootable: false,
             method: "qemu-img".to_string(),
             partitions: vec![
                 format!("ESP ({}MB vfat)", Self::ESP_SIZE_MB),
@@ -958,12 +961,13 @@ impl ImageBuilder {
 
         let size = fs::metadata(&self.output)?.len();
 
+        warn!("Boot artifact population not yet implemented -- image may not be bootable");
         Ok(ImageResult {
             path: self.output.clone(),
             format: ImageFormat::Iso,
             size,
-            efi_bootable: true,
-            bios_bootable: true,
+            efi_bootable: false,
+            bios_bootable: false,
             method: "xorriso".to_string(),
             partitions: Vec::new(),
         })
