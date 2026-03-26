@@ -338,14 +338,16 @@ impl Bootstrap {
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         match builder.build_all() {
-            Ok(()) => info!("Tier-2 builds complete"),
+            Ok(()) => {
+                info!("Tier-2 builds complete");
+                self.stages.mark_complete(BootstrapStage::Tier2, lfs_root)?;
+            }
             Err(Tier2Error::NotImplemented(msg)) => {
                 warn!("Skipping Tier-2: {msg}");
+                // Do NOT mark complete -- resume will retry when implemented
             }
             Err(e) => return Err(anyhow::anyhow!("{e}")),
         }
-
-        self.stages.mark_complete(BootstrapStage::Tier2, lfs_root)?;
 
         Ok(())
     }
