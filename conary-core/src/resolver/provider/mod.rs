@@ -472,6 +472,42 @@ impl<'db> ConaryProvider<'db> {
                 providers.push(pkg_with_repo);
             }
         }
+
+        // Also check AppStream cross-distro provides via ProvidesIndex.
+        // These have canonical_id but no direct repo_package_id, so we
+        // resolve canonical_id -> repository_packages to get real packages.
+        if let Some(ref index) = self.provides_index {
+            for entry in index.find_providers(capability) {
+                if let Some(cid) = entry.canonical_id {
+                    let mut cid_stmt = self.conn.prepare(
+                        "SELECT rp.id FROM repository_packages rp
+                         JOIN repositories r ON rp.repository_id = r.id
+                         WHERE rp.canonical_id = ?1 AND r.enabled = 1",
+                    )?;
+                    let pkg_ids: Vec<i64> = cid_stmt
+                        .query_map([cid], |row| row.get(0))?
+                        .flatten()
+                        .collect();
+                    for pkg_id in pkg_ids {
+                        if let Some(pkg) = find_repo_package_by_id(self.conn, pkg_id)?
+                            && let Some(repo) = crate::db::models::Repository::find_by_id(
+                                self.conn,
+                                pkg.repository_id,
+                            )?
+                        {
+                            let already = providers.iter().any(|p| p.package.id == pkg.id);
+                            if !already && repo.enabled {
+                                providers.push(PackageWithRepo {
+                                    package: pkg,
+                                    repository: repo,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(providers)
     }
 
