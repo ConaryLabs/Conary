@@ -173,7 +173,9 @@ pub enum Commands {
         #[arg(long)]
         no_scripts: bool,
 
-        /// Sandbox mode for scriptlets: auto, always, never (default: never)
+        /// Scriptlet isolation: auto, always, never (default: never).
+        /// Provides PID/network namespace isolation; /etc and /var remain
+        /// writable on live root. Use target-root installs for full isolation
         #[arg(long, value_enum, default_value_t = CliSandboxMode::Never)]
         sandbox: CliSandboxMode,
 
@@ -233,7 +235,9 @@ pub enum Commands {
         #[arg(long)]
         no_scripts: bool,
 
-        /// Sandbox mode for scriptlets: auto, always, never (default: never)
+        /// Scriptlet isolation: auto, always, never (default: never).
+        /// Provides PID/network namespace isolation; /etc and /var remain
+        /// writable on live root. Use target-root installs for full isolation
         #[arg(long, value_enum, default_value_t = CliSandboxMode::Never)]
         sandbox: CliSandboxMode,
 
@@ -254,7 +258,9 @@ pub enum Commands {
         #[arg(long)]
         security: bool,
 
-        /// Scriptlet sandbox mode: auto, always, never
+        /// Scriptlet isolation: auto, always, never (default: never).
+        /// Provides PID/network namespace isolation; /etc and /var remain
+        /// writable on live root. Use target-root installs for full isolation
         #[arg(long, value_enum, default_value_t = CliSandboxMode::Never)]
         sandbox: CliSandboxMode,
 
@@ -318,7 +324,9 @@ pub enum Commands {
         #[arg(long)]
         no_scripts: bool,
 
-        /// Sandbox mode for scriptlets: auto, always, never (default: never)
+        /// Scriptlet isolation: auto, always, never (default: never).
+        /// Provides PID/network namespace isolation; /etc and /var remain
+        /// writable on live root. Use target-root installs for full isolation
         #[arg(long, value_enum, default_value_t = CliSandboxMode::Never)]
         sandbox: CliSandboxMode,
     },

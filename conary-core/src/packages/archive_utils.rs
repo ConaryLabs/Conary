@@ -42,7 +42,11 @@ pub fn check_file_size(path: &str, size: u64) -> bool {
 pub fn get_file_metadata(path: &str) -> Result<(i64, i32)> {
     use std::os::unix::fs::MetadataExt;
 
-    let meta = std::fs::metadata(path)
+    // Use symlink_metadata to avoid following symlinks. The callers
+    // (dpkg_query, pacman_query) check the mode bits to detect symlinks
+    // and read link targets; following symlinks here would misclassify
+    // them as regular files and drop broken links entirely.
+    let meta = std::fs::symlink_metadata(path)
         .map_err(|e| crate::error::Error::InitError(format!("Failed to stat {}: {}", path, e)))?;
     Ok((
         i64::try_from(meta.len()).unwrap_or(i64::MAX),

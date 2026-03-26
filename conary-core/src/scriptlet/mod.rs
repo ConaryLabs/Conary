@@ -323,11 +323,21 @@ impl ScriptletExecutor {
         args: &[String],
         env: &[(&str, &str)],
     ) -> Result<()> {
+        // NOTE: This sandbox mode provides namespace isolation (PID, mount,
+        // network) but NOT full write isolation for /var and /etc. The
+        // container runtime does not create tmpfs overlays, so these must
+        // be writable for scriptlets that update ldconfig, systemd state,
+        // etc. True isolation requires the target-root chroot path
+        // (execute_in_target) or a future overlay-backed sandbox.
+        //
+        // TODO: Add tmpfs overlay support to the container runtime so
+        // sandbox_live can capture scriptlet writes without mutating the
+        // host. Until then, this mode provides process/network isolation
+        // only, not filesystem isolation for /var and /etc.
         let config = ContainerConfig {
             timeout: self.timeout,
             bind_mounts: {
                 let mut mounts = ContainerConfig::default().bind_mounts;
-                // Add writable access to common scriptlet targets
                 mounts.push(BindMount::writable("/var", "/var"));
                 mounts.push(BindMount::writable("/etc", "/etc"));
                 mounts

@@ -422,6 +422,16 @@ pub fn extract_binary(ccs_path: &Path, target_dir: &Path) -> Result<PathBuf> {
 
         // Look for the conary binary in the CCS package
         if path_str.ends_with("usr/bin/conary") || path_str == "conary" {
+            // Guard against malicious/corrupted packages with oversized entries.
+            // A conary binary should never exceed 256 MB.
+            const MAX_BINARY_SIZE: u64 = 256 * 1024 * 1024;
+            let entry_size = entry.header().size()?;
+            if entry_size > MAX_BINARY_SIZE {
+                return Err(Error::IoError(format!(
+                    "Binary entry too large ({entry_size} bytes, max {MAX_BINARY_SIZE})"
+                )));
+            }
+
             let mut content = Vec::new();
             entry.read_to_end(&mut content)?;
             fs::write(&dest, &content)
