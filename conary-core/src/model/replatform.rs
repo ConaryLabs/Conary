@@ -932,6 +932,7 @@ mod tests {
                 version: "9.0.1".to_string(),
                 architecture: Some("x86_64".to_string()),
                 explicit: true,
+                pinned: false,
                 label: Some("fedora@f43:stable".to_string()),
             },
         );

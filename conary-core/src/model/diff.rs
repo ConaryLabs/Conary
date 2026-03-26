@@ -53,6 +53,8 @@ pub enum DiffAction {
         package: String,
         /// Current installed version
         current_version: String,
+        /// Architectures being removed (empty if arch-agnostic)
+        architectures: Vec<String>,
     },
 
     /// Update a package to match pin constraint
@@ -207,8 +209,18 @@ impl DiffAction {
             DiffAction::Remove {
                 package,
                 current_version,
+                architectures,
             } => {
-                format!("Remove {} ({})", package, current_version)
+                if architectures.is_empty() {
+                    format!("Remove {} ({})", package, current_version)
+                } else {
+                    format!(
+                        "Remove {} ({}) [{}]",
+                        package,
+                        current_version,
+                        architectures.join(", ")
+                    )
+                }
             }
             DiffAction::Update {
                 package,
@@ -573,9 +585,15 @@ fn compute_diff_inner(
 
         if model_excluded.contains(package) {
             if let Some(pkg) = state.get_package(package) {
+                let architectures: Vec<String> = state
+                    .get_all_instances(package)
+                    .iter()
+                    .filter_map(|p| p.architecture.clone())
+                    .collect();
                 diff.add_action(DiffAction::Remove {
                     package: package.to_string(),
                     current_version: pkg.version.clone(),
+                    architectures,
                 });
             }
             continue;
@@ -595,9 +613,15 @@ fn compute_diff_inner(
             && !state.is_explicit(package)
             && let Some(pkg) = state.get_package(package)
         {
+            let architectures: Vec<String> = state
+                .get_all_instances(package)
+                .iter()
+                .filter_map(|p| p.architecture.clone())
+                .collect();
             diff.add_action(DiffAction::Remove {
                 package: package.to_string(),
                 current_version: pkg.version.clone(),
+                architectures,
             });
         }
     }
@@ -694,12 +718,10 @@ mod tests {
                     version: version.to_string(),
                     architecture: None,
                     explicit: *explicit,
+                    pinned: false,
                     label: None,
                 },
             );
-            if *explicit {
-                state.explicit.insert(name.to_string());
-            }
         }
         state
     }

@@ -1876,6 +1876,7 @@ strength = "strict"
                 version: "9.0.1".to_string(),
                 architecture: Some("x86_64".to_string()),
                 explicit: true,
+                pinned: false,
                 label: Some("fedora@f43:stable".to_string()),
             },
         );
@@ -1886,6 +1887,7 @@ strength = "strict"
                 version: "5.1.0".to_string(),
                 architecture: Some("x86_64".to_string()),
                 explicit: true,
+                pinned: false,
                 label: Some("fedora@f43:stable".to_string()),
             },
         );
@@ -1978,6 +1980,7 @@ strength = "strict"
                     version: "1.24.2".to_string(),
                     architecture: None,
                     explicit: true,
+                    pinned: false,
                     label: None,
                 }],
             )]),

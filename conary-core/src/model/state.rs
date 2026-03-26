@@ -45,6 +45,9 @@ pub struct InstalledPackage {
     /// Whether this was explicitly installed
     pub explicit: bool,
 
+    /// Whether this instance is version-pinned
+    pub pinned: bool,
+
     /// Source label/repository
     pub label: Option<String>,
 }
@@ -76,17 +79,38 @@ impl SystemState {
         self.get_package(package).map(|p| p.version.as_str())
     }
 
-    /// Add an installed package, preserving multi-arch entries
+    /// Add an installed package, auto-maintaining explicit/pinned indices
     pub fn add_package(&mut self, name: String, pkg: InstalledPackage) {
+        if pkg.explicit {
+            self.explicit.insert(name.clone());
+        }
+        if pkg.pinned {
+            self.pinned.insert(name.clone());
+        }
         self.installed.entry(name).or_default().push(pkg);
     }
 
-    /// Check if a package was explicitly installed
+    /// Get all installed instances of a package (multi-arch aware)
+    pub fn get_all_instances(&self, package: &str) -> &[InstalledPackage] {
+        self.installed
+            .get(package)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Check if a package was explicitly installed (any architecture)
     pub fn is_explicit(&self, package: &str) -> bool {
         self.explicit.contains(package)
     }
 
-    /// Check if a package is pinned
+    /// Check if a specific architecture of a package was explicitly installed
+    pub fn is_explicit_arch(&self, package: &str, arch: &str) -> bool {
+        self.get_all_instances(package)
+            .iter()
+            .any(|p| p.explicit && p.architecture.as_deref() == Some(arch))
+    }
+
+    /// Check if a package is pinned (any architecture)
     pub fn is_pinned(&self, package: &str) -> bool {
         self.pinned.contains(package)
     }
@@ -160,17 +184,11 @@ pub fn capture_current_state(conn: &Connection) -> ModelResult<SystemState> {
             version,
             architecture,
             explicit,
+            pinned,
             label,
         };
 
-        if explicit {
-            state.explicit.insert(name.clone());
-        }
-
-        if pinned {
-            state.pinned.insert(name.clone());
-        }
-
+        // add_package auto-maintains explicit/pinned indices
         state.add_package(name, pkg);
     }
 
@@ -185,14 +203,23 @@ pub fn capture_current_state(conn: &Connection) -> ModelResult<SystemState> {
 pub fn snapshot_to_model(state: &SystemState) -> super::SystemModel {
     let mut model = super::SystemModel::new();
 
-    // Add explicitly installed packages
-    model.config.install = state.explicit.iter().cloned().collect::<Vec<_>>();
+    // Add explicitly installed packages -- check per-instance explicitness
+    // so multi-arch installs where only one arch is explicit are captured correctly
+    for (name, instances) in &state.installed {
+        if instances.iter().any(|p| p.explicit) {
+            model.config.install.push(name.clone());
+        }
+    }
     model.config.install.sort();
 
-    // Add pinned packages with their current versions
-    for name in &state.pinned {
-        if let Some(pkg) = state.get_package(name) {
-            model.pin.insert(name.clone(), pkg.version.clone());
+    // Add pinned packages -- use per-instance pinned flag and pick the version
+    // from the first pinned instance (all arches of the same package should
+    // share the same version, but we're explicit about which one we use)
+    for (name, instances) in &state.installed {
+        if let Some(pinned_instance) = instances.iter().find(|p| p.pinned) {
+            model
+                .pin
+                .insert(name.clone(), pinned_instance.version.clone());
         }
     }
 
@@ -225,10 +252,10 @@ mod tests {
                 version: "1.24.0".to_string(),
                 architecture: Some("x86_64".to_string()),
                 explicit: true,
+                pinned: false,
                 label: Some("fedora@f41:stable".to_string()),
             },
         );
-        state.explicit.insert("nginx".to_string());
 
         assert!(state.is_installed("nginx"));
         assert!(state.is_explicit("nginx"));
@@ -247,15 +274,65 @@ mod tests {
                 version: "1.24.0".to_string(),
                 architecture: None,
                 explicit: true,
+                pinned: true,
                 label: None,
             },
         );
-        state.explicit.insert("nginx".to_string());
-        state.pinned.insert("nginx".to_string());
 
         let model = snapshot_to_model(&state);
         assert!(model.config.install.contains(&"nginx".to_string()));
         assert_eq!(model.pin.get("nginx"), Some(&"1.24.0".to_string()));
+    }
+
+    #[test]
+    fn test_multi_arch_state() {
+        let mut state = SystemState::new();
+
+        // Simulate multilib: glibc.x86_64 (explicit) + glibc.i686 (dependency)
+        state.add_package(
+            "glibc".to_string(),
+            InstalledPackage {
+                name: "glibc".to_string(),
+                version: "2.38".to_string(),
+                architecture: Some("x86_64".to_string()),
+                explicit: true,
+                pinned: false,
+                label: None,
+            },
+        );
+        state.add_package(
+            "glibc".to_string(),
+            InstalledPackage {
+                name: "glibc".to_string(),
+                version: "2.38".to_string(),
+                architecture: Some("i686".to_string()),
+                explicit: false,
+                pinned: false,
+                label: None,
+            },
+        );
+
+        // Both instances preserved (not collapsed)
+        assert_eq!(state.package_count(), 1); // 1 unique name
+        assert_eq!(state.instance_count(), 2); // 2 instances
+        assert!(state.is_installed("glibc"));
+
+        // Per-instance data accessible
+        let instances = state.get_all_instances("glibc");
+        assert_eq!(instances.len(), 2);
+        assert_eq!(instances[0].architecture.as_deref(), Some("x86_64"));
+        assert_eq!(instances[1].architecture.as_deref(), Some("i686"));
+
+        // Name-level explicit (at least one arch is explicit)
+        assert!(state.is_explicit("glibc"));
+
+        // Per-arch explicit
+        assert!(state.is_explicit_arch("glibc", "x86_64"));
+        assert!(!state.is_explicit_arch("glibc", "i686"));
+
+        // Snapshot preserves explicitness correctly
+        let model = snapshot_to_model(&state);
+        assert!(model.config.install.contains(&"glibc".to_string()));
     }
 
     #[test]
