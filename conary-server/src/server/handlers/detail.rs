@@ -264,20 +264,16 @@ fn query_package_detail(
         repo_ids.iter().map(|id| Box::new(*id) as _).collect();
     params.push(Box::new(name.to_string()));
 
-    let latest = conn.query_row(
-        &sql,
-        rusqlite::params_from_iter(&params),
-        |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, Option<String>>(5)?,
-            ))
-        },
-    );
+    let latest = conn.query_row(&sql, rusqlite::params_from_iter(&params), |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, Option<String>>(5)?,
+        ))
+    });
 
     let (pkg_name, latest_version, description, size, deps_str, _arch) = match latest {
         Ok(row) => row,
@@ -547,7 +543,8 @@ fn query_recent(
         }
         params_vec.push(Box::new(distro.to_string()));
         params_vec.push(Box::new(limit as i64));
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params_vec.iter().map(|p| p.as_ref()).collect();
 
         let rows = stmt.query_map(param_refs.as_slice(), |row| {
             Ok(PackageSummary {
@@ -660,23 +657,24 @@ fn enrich_package_summary(
          LIMIT 1",
         repo_ids.len() + 1,
     );
-    let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> =
-        repo_ids.iter().map(|id| Box::new(*id) as Box<dyn rusqlite::types::ToSql>).collect();
+    let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = repo_ids
+        .iter()
+        .map(|id| Box::new(*id) as Box<dyn rusqlite::types::ToSql>)
+        .collect();
     params_vec.push(Box::new(name.to_string()));
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+        params_vec.iter().map(|p| p.as_ref()).collect();
 
-    let result = conn.query_row(&sql, param_refs.as_slice(),
-        |row| {
-            Ok(PackageSummary {
-                name: name.to_string(),
-                distro: distro.to_string(),
-                version: row.get(0)?,
-                description: row.get(1)?,
-                download_count,
-                size: row.get(2)?,
-            })
-        },
-    );
+    let result = conn.query_row(&sql, param_refs.as_slice(), |row| {
+        Ok(PackageSummary {
+            name: name.to_string(),
+            distro: distro.to_string(),
+            version: row.get(0)?,
+            description: row.get(1)?,
+            download_count,
+            size: row.get(2)?,
+        })
+    });
 
     match result {
         Ok(summary) => Ok(Some(summary)),

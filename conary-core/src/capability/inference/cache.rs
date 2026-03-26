@@ -121,7 +121,11 @@ impl InferenceCache {
         hasher.update(b"|opts:");
         hasher.update(options.max_tier.to_string().as_bytes());
         hasher.update(b",");
-        hasher.update(if options.enable_binary_analysis { b"1" } else { b"0" });
+        hasher.update(if options.enable_binary_analysis {
+            b"1"
+        } else {
+            b"0"
+        });
         hasher.update(b",");
         hasher.update(format!("{:?}", options.min_confidence).as_bytes());
         hasher.update(b",max_bin:");

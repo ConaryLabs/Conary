@@ -231,15 +231,14 @@ impl<'db> ConaryProvider<'db> {
             let scheme = parse_stored_version_scheme(trove.version_scheme.as_deref());
             let effective_scheme = scheme.unwrap_or(VersionScheme::Rpm);
 
-            let provided_capabilities: Vec<(String, Option<String>)> =
-                if let Some(tid) = trove_id {
-                    ProvideEntry::find_by_trove(self.conn, tid)?
-                        .into_iter()
-                        .map(|provide| (provide.capability, provide.version))
-                        .collect()
-                } else {
-                    Vec::new()
-                };
+            let provided_capabilities: Vec<(String, Option<String>)> = if let Some(tid) = trove_id {
+                ProvideEntry::find_by_trove(self.conn, tid)?
+                    .into_iter()
+                    .map(|provide| (provide.capability, provide.version))
+                    .collect()
+            } else {
+                Vec::new()
+            };
 
             // Intern name for side effect (ensures this name is known to the solver)
             let _name_id = self.intern_name(&trove.name)?;
@@ -340,10 +339,7 @@ impl<'db> ConaryProvider<'db> {
                     version_scheme: scheme,
                     repository_id: pkg_with_repo.repository.id.unwrap_or(0),
                     repository_name: pkg_with_repo.repository.name.clone(),
-                    repository_distro: pkg_with_repo
-                        .repository
-                        .default_strategy_distro
-                        .clone(),
+                    repository_distro: pkg_with_repo.repository.default_strategy_distro.clone(),
                     repository_priority: pkg_with_repo.repository.priority,
                     canonical_id: None,
                     canonical_name: None,
@@ -1035,14 +1031,11 @@ mod tests {
         let loaded = provider
             .solvables
             .iter()
-            .find(|pkg| {
-                pkg.name == "kernel-core" && pkg.repo_package_id == Some(repo_package_id)
-            })
+            .find(|pkg| pkg.name == "kernel-core" && pkg.repo_package_id == Some(repo_package_id))
             .unwrap();
 
         assert!(loaded.provided_capabilities.iter().any(|(name, version)| {
-            name == "kernel-core-uname-r"
-                && *version == Some("6.19.6-200.fc43.x86_64".to_string())
+            name == "kernel-core-uname-r" && *version == Some("6.19.6-200.fc43.x86_64".to_string())
         }));
     }
 
@@ -1165,8 +1158,7 @@ mod tests {
                 pkg_a.version_scheme,
                 &pkg_b.version,
                 pkg_b.version_scheme,
-            )
-                && version_cmp != std::cmp::Ordering::Equal
+            ) && version_cmp != std::cmp::Ordering::Equal
             {
                 return version_cmp;
             }
@@ -1437,10 +1429,7 @@ mod tests {
             .iter()
             .find(|(cap, _)| cap == "libc6")
             .unwrap();
-        assert_eq!(
-            *provide_version,
-            Some("2.39-0ubuntu2".to_string()),
-        );
+        assert_eq!(*provide_version, Some("2.39-0ubuntu2".to_string()),);
     }
 
     #[test]
@@ -1486,10 +1475,7 @@ mod tests {
             .iter()
             .find(|(cap, _)| cap == "sh")
             .unwrap();
-        assert_eq!(
-            *provide_version,
-            Some("5.2.037".to_string()),
-        );
+        assert_eq!(*provide_version, Some("5.2.037".to_string()),);
     }
 
     #[test]

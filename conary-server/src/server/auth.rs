@@ -190,10 +190,8 @@ pub async fn auth_middleware(
     };
     // Use the proxy-aware IP extraction so that rate limiting and auth
     // failure tracking use the real client IP, not the proxy's IP.
-    let client_ip = crate::server::rate_limit::extract_ip_with_proxy(
-        &request,
-        trusted_proxy_header.as_deref(),
-    );
+    let client_ip =
+        crate::server::rate_limit::extract_ip_with_proxy(&request, trusted_proxy_header.as_deref());
 
     let token = match extract_bearer(request.headers()) {
         Some(t) => t.to_owned(),

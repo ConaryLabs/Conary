@@ -13,10 +13,10 @@ mod resolve;
 mod scriptlets;
 mod system_pm;
 
-use rusqlite::OptionalExtension;
 pub use batch::{BatchInstaller, prepare_package_for_batch};
 pub use blocklist::is_blocked as is_package_blocked;
 pub use dep_mode::DepMode;
+use rusqlite::OptionalExtension;
 
 pub use prepare::{ComponentSelection, UpgradeCheck};
 

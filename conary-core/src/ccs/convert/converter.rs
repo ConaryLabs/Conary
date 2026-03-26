@@ -415,13 +415,9 @@ impl LegacyConverter {
     ) -> Result<(), ConversionError> {
         for file in files {
             // Use safe_join to prevent path traversal from untrusted package paths
-            let full_path =
-                crate::filesystem::safe_join(temp_dir, &file.path).map_err(|e| {
-                    ConversionError::IoError(format!(
-                        "Unsafe path '{}': {}",
-                        file.path, e
-                    ))
-                })?;
+            let full_path = crate::filesystem::safe_join(temp_dir, &file.path).map_err(|e| {
+                ConversionError::IoError(format!("Unsafe path '{}': {}", file.path, e))
+            })?;
 
             // Create parent directories
             if let Some(parent) = full_path.parent() {

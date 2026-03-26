@@ -36,8 +36,7 @@ pub(super) fn dep_entry_to_solver_dep(dep: &DependencyEntry, scheme: VersionSche
                     // Use an exact match on an impossible version so the solver
                     // reports this dep as unsatisfiable rather than silently
                     // accepting anything.
-                    VersionConstraint::parse("= __UNPARSEABLE__")
-                        .unwrap_or(VersionConstraint::Any)
+                    VersionConstraint::parse("= __UNPARSEABLE__").unwrap_or(VersionConstraint::Any)
                 }
             })
         }

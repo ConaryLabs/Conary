@@ -203,16 +203,15 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
     // Build provides index and unfiltered deps for removal analysis
     provider.load_removal_data()?;
 
-    let mut gone_set: std::collections::HashSet<String> =
-        to_remove.iter().cloned().collect();
+    let mut gone_set: std::collections::HashSet<String> = to_remove.iter().cloned().collect();
 
     let solvable_count = provider.solvable_count();
 
     // Helper closure: check if a single (dep_name, constraint) alternative
     // is satisfiable by any installed package that is NOT in `gone_set`.
     let alternative_satisfiable = |dep_name: &str,
-                                    constraint: &super::provider::ConaryConstraint,
-                                    gone: &std::collections::HashSet<String>|
+                                   constraint: &super::provider::ConaryConstraint,
+                                   gone: &std::collections::HashSet<String>|
      -> bool {
         // 1. Check provides index -- verify the remaining provider's version
         //    satisfies the constraint.
@@ -300,9 +299,7 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
             }
 
             if let Some(deps) = provider.get_removal_dependency_list(sid) {
-                let any_broken = deps
-                    .iter()
-                    .any(|dep| !clause_satisfiable(dep, &gone_set));
+                let any_broken = deps.iter().any(|dep| !clause_satisfiable(dep, &gone_set));
 
                 if any_broken {
                     breaking_set.insert(pkg.name.clone());

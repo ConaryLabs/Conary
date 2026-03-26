@@ -232,7 +232,10 @@ pub fn compute_deltas_for_package(
         "fedora" | "centos" | "rhel" => VersionScheme::Rpm,
         "ubuntu" | "debian" => VersionScheme::Debian,
         _ => {
-            warn!("Unknown distro '{}' for delta computation, using RPM ordering", distro);
+            warn!(
+                "Unknown distro '{}' for delta computation, using RPM ordering",
+                distro
+            );
             VersionScheme::Rpm
         }
     };
@@ -248,9 +251,8 @@ pub fn compute_deltas_for_package(
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
     // Sort with scheme-aware comparison instead of lexicographic ordering.
-    versions.sort_by(|a, b| {
-        compare_repo_versions(scheme, a, b).unwrap_or(std::cmp::Ordering::Equal)
-    });
+    versions
+        .sort_by(|a, b| compare_repo_versions(scheme, a, b).unwrap_or(std::cmp::Ordering::Equal));
 
     if versions.len() < 2 {
         debug!(

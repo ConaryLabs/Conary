@@ -274,7 +274,9 @@ pub fn normalize_arch(arch: &str) -> &str {
 ///
 /// This bridges `infer_repo_flavor` output to the `VersionScheme` that
 /// `ResolutionPolicy::accepts_candidate` now expects.
-fn flavor_to_scheme(flavor: RepositoryDependencyFlavor) -> crate::repository::versioning::VersionScheme {
+fn flavor_to_scheme(
+    flavor: RepositoryDependencyFlavor,
+) -> crate::repository::versioning::VersionScheme {
     use crate::repository::versioning::VersionScheme;
     match flavor {
         RepositoryDependencyFlavor::Rpm => VersionScheme::Rpm,

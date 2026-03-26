@@ -307,8 +307,13 @@ fn normalized_repository_capabilities(
         extract_extra_metadata_provides(&pkg_meta.extra_metadata)
             .into_iter()
             .map(|(capability, version, raw)| {
-                let mut p =
-                    RepositoryProvide::new(0, capability, version, "package".to_string(), Some(raw));
+                let mut p = RepositoryProvide::new(
+                    0,
+                    capability,
+                    version,
+                    "package".to_string(),
+                    Some(raw),
+                );
                 if let Some(ref s) = scheme_str {
                     p = p.with_version_scheme(s.clone());
                 }

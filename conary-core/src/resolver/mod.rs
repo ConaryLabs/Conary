@@ -7,8 +7,8 @@
 //! installation and removal safety checking.
 
 pub mod canonical;
-pub mod conflict;
 pub mod component_resolver;
+pub mod conflict;
 pub mod identity;
 pub mod plan;
 pub mod provider;

@@ -684,13 +684,9 @@ impl<'a> PackageResolver<'a> {
             // DelegateContext tracks depth and visited labels for cycle detection.
             // enter/exit bracket the recursive call so failed branches unwind.
             delegate_ctx.enter(&target_label_str)?;
-            let result = Box::pin(self.try_delegate(
-                &target_label_str,
-                package_name,
-                options,
-                delegate_ctx,
-            ))
-            .await;
+            let result =
+                Box::pin(self.try_delegate(&target_label_str, package_name, options, delegate_ctx))
+                    .await;
             delegate_ctx.exit(&target_label_str);
             return result;
         }

@@ -10,7 +10,7 @@ use crate::db::models::{CanonicalPackage, PackageImplementation};
 use crate::error::{Error, Result};
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::Deserialize;
 
 /// Capabilities this component provides (cross-distro).
@@ -134,9 +134,8 @@ pub fn parse_appstream_xml_enriched(
                         // Extract the origin attribute from the root element
                         for attr in e.attributes().flatten() {
                             if attr.key.as_ref() == b"origin" {
-                                origin = Some(
-                                    String::from_utf8_lossy(attr.value.as_ref()).into_owned(),
-                                );
+                                origin =
+                                    Some(String::from_utf8_lossy(attr.value.as_ref()).into_owned());
                             }
                         }
                     }
@@ -156,24 +155,18 @@ pub fn parse_appstream_xml_enriched(
                     {
                         current_tag = Some(String::from_utf8_lossy(tag.as_ref()).into_owned());
                     }
-                    b"id" | b"pkgname" | b"name" | b"summary"
-                        if in_component && !in_provides =>
-                    {
+                    b"id" | b"pkgname" | b"name" | b"summary" if in_component && !in_provides => {
                         current_tag = Some(String::from_utf8_lossy(tag.as_ref()).into_owned());
                     }
                     _ => {}
                 }
             }
             Ok(Event::Text(e)) => {
-                if in_component
-                    && let Some(ref tag) = current_tag
-                {
+                if in_component && let Some(ref tag) = current_tag {
                     let text = e
                         .decode()
                         .map_err(|err| {
-                            Error::ParseError(format!(
-                                "AppStream XML text decode error: {err}"
-                            ))
+                            Error::ParseError(format!("AppStream XML text decode error: {err}"))
                         })?
                         .into_owned();
                     if in_provides {

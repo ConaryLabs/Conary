@@ -3,43 +3,54 @@
 ## Codebase Patterns
 
 ### Server handlers (conary-server/src/server/handlers/)
-- `mod.rs` has shared helpers: `validate_name`, `serialize_json`, `json_response`, `human_bytes`
-- Handler pattern: scope check -> param validation -> get db_path -> spawn_blocking for DB -> match Result<Result<T>>
-- Write operations publish events via `state.read().await.publish_event(event_type, json_data)`
-- `admin_service.rs` shared business logic for both HTTP handlers and MCP tools
-- Rate limiters stored as axum Extension (not in RwLock ServerState)
+- Handler pattern: scope check -> param validation -> get db_path -> spawn_blocking -> match Result<Result<T>>
+- `admin_service.rs` shared by HTTP handlers and MCP tools
+- Three routers: public (:8080), internal admin (:8081), external admin (:8082 auth+rate-limit+audit)
+- Admin handlers: tokens, ci, repos, federation, audit, events, artifacts, packages, test_data
 
-### Testing patterns
-- `test_app()` creates temp DB, seeds bootstrap token, returns `(Router, PathBuf)`
-- `rebuild_app()` for multi-step tests (oneshot consumes the router)
+### conary-test crate (test infrastructure)
+- Declarative TOML manifests + Podman containers via bollard + MCP server (23 tools)
+- ContainerBackend trait: BollardBackend (real), MockBackend (test), NullBackend (QEMU-only)
+- WAL (wal.rs): SQLite buffer for results when Remi unreachable; flush/purge/mark_retry
+- Service layer (service.rs) shared by HTTP handlers and MCP tools (same pattern as conary-server)
+- Container cleanup via label filter -- containers must be labeled at creation
+- engine/container_setup.rs: shared init logic for runners and service code
+
+### CLI / Daemon / Federation / Derivation / CCS / Trust
 - Tests in same file as code, `tempfile` for FS, `:memory:` SQLite for DB
-
-### Architecture
-- Schema v57, function-dispatch migrations (`migrate_v{N}`)
-- `db::open_fast()` skips migrations for server hot paths
-- `audit_log` uses free functions (insert/query/purge), not struct methods — differs from Trove/Repository pattern
-
-### Derivation module
-- Inner loop of 114-package bootstrap pipeline — efficiency matters here
-- `canonical_string` pattern: deterministic hash inputs via sorted BTreeMap + newline-delimited format
-- `expand_variables()` in recipe_hash.rs intentionally diverges from Recipe::substitute() for hash determinism
-- Topological sort in stages.rs intentionally different from recipe::graph (BTreeMap determinism + stage scoping)
-- build_order.rs has a copied topological_sort from stages.rs — candidate for extraction to shared graph.rs
-- build_order.rs TOOLCHAIN_NAMED adds "binutils" vs stages.rs which has it in FOUNDATION — intentional divergence for chroot mode, needs documenting
-- DerivationIndex encapsulates all derivation_index queries; new queries should be methods there, not raw SQL elsewhere
-- MutableEnvironment wraps BuildEnvironment for overlayfs-on-seed pattern; unmount logic duplicated (extract helper)
+- CLI: 28 defs, options structs pattern; stub commands must bail!() not Ok(())
+- Daemon: SO_PEERCRED auth, RFC 7807 errors (intentionally not thiserror)
+- Federation: hierarchical routing, RendezvousRouter (FNV-1a), RequestCoalescer (DashMap singleflight)
+- Derivation: 19 files, canonical_string pattern, graph.rs shared topo sort, Kitchen hermetic model
+- CCS: archive_reader single-pass tar, CBOR BinaryManifest preferred
+- TUF: Ed25519 only, verify_strict required, canonical JSON via json::canonical_json
+- Model has own ModelError; Self-update TRUSTED_UPDATE_KEYS is empty pre-release
+- resolver/provider/ is a directory (5 files), not a single provider.rs
 
 ## Anti-Patterns to Flag
 
-- **Direct sha2 imports**: crate::hash::sha256() and hash::Hasher should be the standard path. Flag `use sha2::` in reviews.
-- **Whole-file reads for hashing**: use streaming I/O (hash::hash_reader or BufReader + 8KB chunks) for files that could be large
-- **CAS two-level walk duplication**: gc.rs, fsverity.rs, export.rs, system.rs all walk CAS dirs with inconsistent filtering — should share iterator
-- **CAS path computation duplication**: hash[..2]/hash[2..] pattern in install.rs, gc.rs, substituter.rs, builder.rs, chunking.rs — should all use CasStore::hash_to_path() or a free function
-- **Sysroot path joining without safe_join()**: new code joining manifest paths to sysroot must use filesystem::path::safe_join(), not bare Path::join with trim_start_matches
-- **Debug format for serialization**: `format!("{:?}", enum_value)` is fragile for anything stored or hashed. Use Display or serde.
+- **Direct sha2 imports**: use crate::hash module
+- **CAS path/walk duplication**: share CasStore::hash_to_path() and iterator
+- **Sysroot path joining without safe_join()**: use filesystem::path::safe_join()
+- **Debug format for serialization**: fragile for stored/hashed values
+- **.ok() on rusqlite queries**: use .optional() to distinguish "no rows" from DB errors
+- **reqwest::Client duplication**: 5+ modules build their own Client
+- **.expect() on paths in non-test code**: return errors instead
+- **Stub commands returning Ok(())**: must bail!() not Ok(())
+- **verify() instead of verify_strict()**: Production Ed25519 must use verify_strict()
+- **Unbounded in-memory caches**: NegativeCache, TOUCH_CACHE, RateLimiter lack max capacity
 
 ## Security (confirmed good)
-- All DB queries use parameterized ?1 bindings (no SQL injection)
-- Path traversal guarded via safe_join() and sanitize_path()
-- CAS atomic_store uses PID+counter temp names (race-safe)
-- CPIO parser has MAX_FILE_SIZE and MAX_NAME_SIZE guards
+- Parameterized SQL, safe_join() path traversal, atomic CAS store
+- TUF: verify_strict, keyid dedup, type_field checks, size limits
+- CCS: per-entry/cumulative/manifest size limits, hook input validation
+- Remi: SSRF protection, layered auth, pull-through hash verification
+- Container default: 5 namespace isolations + resource limits
+- Self-update: SHA-256 inline verify during streaming download
+
+## Doc Drift Patterns
+- Schema version drifts across docs when migrations added (db.md, portage.md, sbuild.md)
+- DB function is `db::transaction()` not `with_transaction()`; `format_bytes` in util.rs not models/
+- composefs feature flag is `composefs-rs` but crate name is `composefs` v0.3
+- conary-erofs crate was removed; old docs may still reference it
+- DB migrations split into v1_v20.rs, v21_v40.rs, v41_current.rs

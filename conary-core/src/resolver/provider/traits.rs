@@ -118,11 +118,7 @@ impl DependencyProvider for ConaryProvider<'_> {
             .filter(|&sid| {
                 let pkg = &self.solvables[sid.0 as usize];
                 let matches = if pkg.name == *requested_name {
-                    constraint_matches_package(
-                        constraint,
-                        &pkg.version,
-                        pkg.version_scheme,
-                    )
+                    constraint_matches_package(constraint, &pkg.version, pkg.version_scheme)
                 } else if let Some(provided_version) = pkg
                     .provided_capabilities
                     .iter()
@@ -227,14 +223,12 @@ impl DependencyProvider for ConaryProvider<'_> {
                 return pkg_b.repository_priority.cmp(&pkg_a.repository_priority);
             }
 
-            if let Some(version_cmp) =
-                super::matching::compare_package_versions_desc(
-                    &pkg_a.version,
-                    pkg_a.version_scheme,
-                    &pkg_b.version,
-                    pkg_b.version_scheme,
-                )
-                && version_cmp != std::cmp::Ordering::Equal
+            if let Some(version_cmp) = super::matching::compare_package_versions_desc(
+                &pkg_a.version,
+                pkg_a.version_scheme,
+                &pkg_b.version,
+                pkg_b.version_scheme,
+            ) && version_cmp != std::cmp::Ordering::Equal
             {
                 return version_cmp;
             }

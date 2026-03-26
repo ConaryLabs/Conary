@@ -266,18 +266,13 @@ fn get_packages_for_distro(
     for conv in converted {
         // Match on the structured distro field first; fall back to format
         // matching for legacy records that predate the identity fields.
-        let matches_distro = conv
-            .distro
-            .as_deref()
-            .map_or_else(|| format_matches_distro(&conv.original_format, distro), |d| d == distro);
+        let matches_distro = conv.distro.as_deref().map_or_else(
+            || format_matches_distro(&conv.original_format, distro),
+            |d| d == distro,
+        );
 
-        if matches_distro
-            && let Some(ref name) = conv.package_name
-        {
-            let version = conv
-                .package_version
-                .as_deref()
-                .unwrap_or("unknown");
+        if matches_distro && let Some(ref name) = conv.package_name {
+            let version = conv.package_version.as_deref().unwrap_or("unknown");
 
             let entry = packages
                 .entry(name.to_string())
