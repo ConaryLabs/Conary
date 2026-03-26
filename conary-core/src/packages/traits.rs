@@ -12,6 +12,8 @@ pub struct PackageFile {
     pub size: i64,
     pub mode: i32,
     pub sha256: Option<String>,
+    /// Symlink target (None for regular files, Some for symlinks)
+    pub symlink_target: Option<String>,
 }
 
 /// A file extracted from a package with its content
@@ -22,6 +24,9 @@ pub struct ExtractedFile {
     pub size: i64,
     pub mode: i32,
     pub sha256: Option<String>,
+    /// Symlink target (None for regular files, Some for symlinks).
+    /// For symlinks, `content` is empty and this field holds the target.
+    pub symlink_target: Option<String>,
 }
 
 /// Dependency information

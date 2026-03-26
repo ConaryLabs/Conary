@@ -95,11 +95,17 @@ impl RpmPackage {
                 // FileDigest can be formatted as hex string
                 let sha256 = entry.digest.as_ref().map(|d| format!("{}", d));
 
+                let symlink_target = if entry.linkto.is_empty() {
+                    None
+                } else {
+                    Some(entry.linkto.clone())
+                };
                 files.push(PackageFile {
                     path: entry.path.to_string_lossy().to_string(),
                     size: i64::try_from(entry.size).unwrap_or(i64::MAX),
                     mode: entry.mode.raw_mode() as i32,
                     sha256,
+                    symlink_target,
                 });
             }
         }
@@ -368,13 +374,15 @@ impl PackageFormat for RpmPackage {
             .next_entry()
             .map_err(|e| Error::InitError(format!("CPIO error: {}", e)))?
         {
-            // Check if regular file (S_IFREG = 0o100000)
-            if !is_regular_file_mode(entry.mode) {
+            let is_symlink = (entry.mode & 0o170000) == 0o120000;
+            let is_regular = is_regular_file_mode(entry.mode);
+
+            if !is_regular && !is_symlink {
                 continue;
             }
 
-            // Check file size using shared utility
-            if !check_file_size(&entry.name, entry.size) {
+            // Check file size using shared utility (symlinks are small)
+            if is_regular && !check_file_size(&entry.name, entry.size) {
                 continue;
             }
 
@@ -384,12 +392,20 @@ impl PackageFormat for RpmPackage {
 
             // Match with metadata to get SHA256 and confirm it's a tracked file
             if let Some(meta) = file_map.get(abs_path.as_str()) {
+                let symlink_target = if is_symlink {
+                    // In CPIO, the symlink target is stored as the file content
+                    Some(String::from_utf8_lossy(&content).into_owned())
+                } else {
+                    meta.symlink_target.clone()
+                };
+
                 extracted_files.push(ExtractedFile {
                     path: abs_path,
-                    content,
+                    content: if is_symlink { Vec::new() } else { content },
                     size: i64::try_from(entry.size).unwrap_or(i64::MAX),
                     mode: entry.mode as i32,
                     sha256: meta.sha256.clone(),
+                    symlink_target,
                 });
             }
         }

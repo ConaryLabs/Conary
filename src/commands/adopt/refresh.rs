@@ -260,6 +260,7 @@ pub async fn cmd_adopt_refresh(
                         );
                         fe.owner = file_user.clone();
                         fe.group_name = file_group.clone();
+                        fe.symlink_target = link_target.clone();
                         if let Err(e) = fe.insert_or_replace(tx) {
                             debug!(
                                 "Failed to insert file {} for {}: {}",

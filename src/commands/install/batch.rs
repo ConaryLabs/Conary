@@ -336,6 +336,7 @@ impl<'a> BatchInstaller<'a> {
                         trove_id,
                     );
                     file_entry.component_id = component_id;
+                    file_entry.symlink_target = file.symlink_target.clone();
                     file_entry.insert(tx)?;
 
                     // Record in history
@@ -814,6 +815,7 @@ mod tests {
                 size: 12,
                 mode: 0o755,
                 sha256: None,
+                symlink_target: None,
             }],
             dependencies: Vec::new(),
             scriptlets: Vec::new(),
@@ -839,6 +841,7 @@ mod tests {
                 size: 12,
                 mode: 0o755,
                 sha256: None,
+                symlink_target: None,
             }],
             dependencies: Vec::new(),
             scriptlets: Vec::new(),

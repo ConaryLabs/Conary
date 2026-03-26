@@ -127,8 +127,13 @@ pub fn plan_etc_merge(
     // Also scan the upper directory for files that may exist only there
     // (user-created files not tracked by any package). We include them in
     // the union so they appear as KeepUser if not in either generation.
-    let upper_files = scan_upper_dir(upper_dir);
-    for key in upper_files.keys() {
+    let upper_scan = scan_upper_dir(upper_dir);
+    for key in upper_scan.files.keys() {
+        all_paths.insert(key.as_str());
+    }
+    // Whiteouts represent user deletions -- include them so classify()
+    // can see that the user removed the file.
+    for key in &upper_scan.whiteouts {
         all_paths.insert(key.as_str());
     }
 
@@ -136,9 +141,26 @@ pub fn plan_etc_merge(
         let prev_hash = prev_etc_files.get(rel_path);
         let new_hash = new_etc_files.get(rel_path);
 
-        // Determine whether the user modified the file by checking the
-        // overlay upper directory.
-        let user_hash = upper_file_hash(upper_dir, rel_path, &upper_files)?;
+        // Check if this file falls under an opaque upper directory.
+        // Overlayfs opaque dirs hide ALL lower contents beneath them,
+        // so files from the package generation that live under an opaque
+        // dir should be treated as deleted by the user.
+        let is_under_opaque = is_path_under_opaque(rel_path, &upper_scan.opaque_dirs);
+
+        // If the user explicitly deleted this file (overlayfs whiteout
+        // or opaque parent dir), treat it as a user modification with a
+        // sentinel hash so that classify() sees a three-way conflict when
+        // the package also changed.
+        let user_hash = if upper_scan.whiteouts.contains(rel_path) || is_under_opaque {
+            // Sentinel: the file was deleted by the user.
+            Some("__deleted__".to_string())
+        } else if let Some(target) = upper_scan.symlinks.get(rel_path) {
+            // For symlinks, hash the target string so we can compare it
+            // against the package version.
+            Some(crate::hash::sha256(target.as_bytes()))
+        } else {
+            upper_file_hash(upper_dir, rel_path, &upper_scan.files)?
+        };
 
         let action = classify(prev_hash, new_hash, user_hash.as_deref());
 
@@ -249,40 +271,138 @@ fn classify(
 
 /// Lazily scan the upper directory to build a map of relative paths to their
 /// on-disk locations. This avoids repeated filesystem walks.
-fn scan_upper_dir(upper_dir: &Path) -> HashMap<String, PathBuf> {
-    let mut map = HashMap::new();
+///
+/// Includes regular files and symlinks. Overlayfs whiteouts (character
+/// device 0:0) are recorded in `whiteouts`; opaque directories are
+/// recorded in `opaque_dirs`.
+fn scan_upper_dir(upper_dir: &Path) -> UpperScan {
+    let mut scan = UpperScan::default();
     if !upper_dir.exists() {
-        return map;
+        return scan;
     }
-    scan_dir_recursive(upper_dir, upper_dir, &mut map);
-    map
+    scan_dir_recursive(upper_dir, upper_dir, &mut scan);
+    scan
 }
 
-fn scan_dir_recursive(base: &Path, current: &Path, map: &mut HashMap<String, PathBuf>) {
+/// Aggregated results of scanning the overlay upper directory.
+#[derive(Default)]
+struct UpperScan {
+    /// Regular files and symlinks: relative path -> absolute path on disk.
+    files: HashMap<String, PathBuf>,
+    /// Symlink entries: relative path -> symlink target string.
+    /// These are also present in `files` for path lookup.
+    symlinks: HashMap<String, String>,
+    /// Relative paths that have been whited-out (overlayfs deletion).
+    whiteouts: HashSet<String>,
+    /// Relative directory paths marked as opaque (overlayfs opaque dir).
+    opaque_dirs: HashSet<String>,
+}
+
+fn scan_dir_recursive(base: &Path, current: &Path, scan: &mut UpperScan) {
     let entries = match std::fs::read_dir(current) {
         Ok(e) => e,
         Err(_) => return,
     };
 
+    // Check if this directory is marked as opaque by overlayfs.
+    // Overlayfs sets the "trusted.overlay.opaque" xattr on directories
+    // that hide the entire lower directory contents.
+    if let Ok(rel) = current.strip_prefix(base)
+        && has_overlay_opaque_xattr(current)
+    {
+        scan.opaque_dirs.insert(rel.to_string_lossy().into_owned());
+    }
+
     for entry in entries.flatten() {
         let path = entry.path();
         // Use symlink_metadata to avoid following symlinks outside the overlay.
-        // path.is_dir() / path.is_file() follow symlinks, which could escape
-        // the overlay boundary via a crafted symlink.
         let meta = match path.symlink_metadata() {
             Ok(m) => m,
             Err(_) => continue,
         };
+
+        let rel = match path.strip_prefix(base) {
+            Ok(r) => r.to_string_lossy().into_owned(),
+            Err(_) => continue,
+        };
+
         if meta.is_dir() {
-            scan_dir_recursive(base, &path, map);
-        } else if meta.is_file()
-            && let Ok(rel) = path.strip_prefix(base)
-        {
-            map.insert(rel.to_string_lossy().into_owned(), path.clone());
+            scan_dir_recursive(base, &path, scan);
+        } else if meta.is_symlink() {
+            // Record symlinks by their target, not their content.
+            // This lets classify() detect user-created symlinks that
+            // differ from the package version.
+            if let Ok(target) = std::fs::read_link(&path) {
+                scan.symlinks
+                    .insert(rel.clone(), target.to_string_lossy().into_owned());
+            }
+            scan.files.insert(rel, path.clone());
+        } else if meta.is_file() {
+            scan.files.insert(rel, path.clone());
+        } else if is_overlayfs_whiteout(&meta) {
+            // Overlayfs whiteout: character device with rdev 0.
+            // This represents a file the user explicitly deleted.
+            scan.whiteouts.insert(rel);
         }
-        // Symlinks are intentionally skipped -- they should not be followed
-        // into locations outside the overlay upper directory.
     }
+}
+
+/// Check if a relative path falls under any opaque directory.
+///
+/// Overlayfs opaque directories hide all lower-layer contents beneath them.
+/// A file at `etc/foo/bar` is under opaque if `etc/foo` or `etc` is opaque.
+fn is_path_under_opaque(rel_path: &str, opaque_dirs: &HashSet<String>) -> bool {
+    let path = Path::new(rel_path);
+    let mut current = path.parent();
+    while let Some(p) = current {
+        if p.as_os_str().is_empty() {
+            break;
+        }
+        if opaque_dirs.contains(&p.to_string_lossy().into_owned()) {
+            return true;
+        }
+        current = p.parent();
+    }
+    false
+}
+
+/// Check if a metadata entry is an overlayfs whiteout (char device 0:0).
+fn is_overlayfs_whiteout(meta: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::FileTypeExt;
+    use std::os::unix::fs::MetadataExt;
+    meta.file_type().is_char_device() && meta.rdev() == 0
+}
+
+/// Check if a directory has the overlayfs opaque xattr.
+fn has_overlay_opaque_xattr(path: &Path) -> bool {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let c_path = match CString::new(path.as_os_str().as_bytes()) {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+
+    // Try both trusted (root) and user (unprivileged) namespaces.
+    for attr in &["trusted.overlay.opaque", "user.overlay.opaque"] {
+        let c_attr = match CString::new(*attr) {
+            Ok(a) => a,
+            Err(_) => continue,
+        };
+        let mut buf = [0u8; 8];
+        let len = unsafe {
+            libc::getxattr(
+                c_path.as_ptr(),
+                c_attr.as_ptr(),
+                buf.as_mut_ptr().cast(),
+                buf.len(),
+            )
+        };
+        if len > 0 && &buf[..len as usize] == b"y" {
+            return true;
+        }
+    }
+    false
 }
 
 /// Get the SHA-256 hash of a file in the overlay upper directory, if it

@@ -68,10 +68,30 @@ pub struct GenerationMetadata {
 
 impl GenerationMetadata {
     /// Write metadata to the generation metadata file inside the given generation directory.
+    ///
+    /// Uses a crash-safe temp-file + fsync + rename sequence so that a
+    /// power loss cannot leave a truncated metadata file next to a valid
+    /// `root.erofs`.
     pub fn write_to(&self, gen_dir: &Path) -> Result<()> {
+        use std::io::Write;
+
         let path = gen_dir.join(GENERATION_METADATA_FILE);
+        let tmp_path = gen_dir.join(".metadata.json.tmp");
         let json = serde_json::to_string_pretty(self)?;
-        std::fs::write(path, json)?;
+
+        // Write to temp file, fsync, then atomically rename.
+        let mut file = std::fs::File::create(&tmp_path)?;
+        file.write_all(json.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+
+        std::fs::rename(&tmp_path, &path)?;
+
+        // fsync the parent directory to persist the rename.
+        if let Ok(dir) = std::fs::File::open(gen_dir) {
+            let _ = dir.sync_all();
+        }
+
         Ok(())
     }
 

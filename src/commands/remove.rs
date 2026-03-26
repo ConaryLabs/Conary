@@ -204,6 +204,7 @@ pub async fn cmd_remove(
                 sha256_hash: f.sha256_hash.clone(),
                 size: f.size,
                 permissions: f.permissions,
+                symlink_target: f.symlink_target.clone(),
             })
             .collect(),
     };

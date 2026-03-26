@@ -444,14 +444,40 @@ impl<'a> TransactionPlanner<'a> {
         let mut to_create = Vec::new();
         let mut current = path;
 
-        // Walk up the path, collecting directories that need creation
+        // Walk up the path, collecting directories that need creation.
+        // Use symlink_metadata to detect type mismatches (file blocking
+        // directory, symlink parent) without following symlinks.
         while current != Path::new("") && current != Path::new("/") {
-            // Strip leading / to allow joining with non-root prefixes
             let current_str = current.to_string_lossy();
             let relative = current_str.strip_prefix('/').unwrap_or(&current_str);
             let target = self.root.join(relative);
-            if !target.exists() && !plan.dirs_to_create_set.contains(&current.to_path_buf()) {
-                to_create.push(current.to_path_buf());
+
+            match target.symlink_metadata() {
+                Ok(meta) if meta.is_dir() => {
+                    // Directory already exists, stop walking up
+                    break;
+                }
+                Ok(meta) if meta.is_symlink() => {
+                    // Symlinked parent -- flag as conflict
+                    plan.conflicts.push(ConflictInfo::ParentMissing {
+                        path: current.to_path_buf(),
+                        parent: current.to_path_buf(),
+                    });
+                    break;
+                }
+                Ok(_) => {
+                    // Non-directory (file) exists where we need a directory
+                    plan.conflicts.push(ConflictInfo::FileBlocksDirectory {
+                        path: current.to_path_buf(),
+                    });
+                    break;
+                }
+                Err(_) => {
+                    // Doesn't exist -- needs creation
+                    if !plan.dirs_to_create_set.contains(&current.to_path_buf()) {
+                        to_create.push(current.to_path_buf());
+                    }
+                }
             }
             current = current.parent().unwrap_or(Path::new(""));
         }
@@ -468,7 +494,14 @@ impl<'a> TransactionPlanner<'a> {
                     new_mode: Some(0o755),
                     symlink_target: None,
                 });
-                let _ = self.vfs.mkdir_p(&dir);
+                if let Err(e) = self.vfs.mkdir_p(&dir) {
+                    warn!(
+                        "VFS mkdir_p failed for {}: {e} -- directory conflict may exist",
+                        dir.display()
+                    );
+                    plan.conflicts
+                        .push(ConflictInfo::DirectoryBlocksFile { path: dir });
+                }
             }
         }
 

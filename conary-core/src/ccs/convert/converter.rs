@@ -536,6 +536,7 @@ mod tests {
                 size: 100,
                 mode: 0o755,
                 sha256: Some("abc123".to_string()),
+                symlink_target: None,
             }],
             dependencies: vec![Dependency {
                 name: "libc".to_string(),
@@ -560,6 +561,7 @@ mod tests {
             size: 20,
             mode: 0o755,
             sha256: Some("abc123".to_string()),
+            symlink_target: None,
         }]
     }
 
@@ -620,6 +622,7 @@ mod tests {
                 size: 0,
                 mode: 0o755,
                 sha256: Some("abc".to_string()),
+                symlink_target: None,
             },
             ExtractedFile {
                 path: "/usr/share/pkgconfig/jq.pc".to_string(),
@@ -627,6 +630,7 @@ mod tests {
                 size: 0,
                 mode: 0o644,
                 sha256: Some("def".to_string()),
+                symlink_target: None,
             },
         ];
 

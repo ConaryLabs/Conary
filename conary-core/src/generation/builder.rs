@@ -381,20 +381,23 @@ pub fn build_generation_from_db(
         })
         .collect();
 
-    // Step 4: Build EROFS image (no package symlinks from DB yet).
+    // Step 4: Build EROFS image with symlinks from DB.
     // This must succeed before we commit state to the database.
-    let result = build_erofs_image(&file_refs, &[], &gen_dir)?;
+    let symlink_refs = collect_symlink_refs(conn)?;
+    let result = build_erofs_image(&file_refs, &symlink_refs, &gen_dir)?;
 
-    // Step 5: Create system state snapshot -- only after successful image build
-    // so we never leave orphaned state records on build failure.
+    // Step 5: Create system state snapshot at the reserved number -- only
+    // after successful image build so we never leave orphaned state records
+    // on build failure. Using create_snapshot_at() ensures the DB state
+    // number matches the directory number we already created.
     let engine = StateEngine::new(conn);
-    let state = engine.create_snapshot(summary, None, None).map_err(|e| {
-        crate::error::Error::InternalError(format!("Failed to create system state snapshot: {e}"))
-    })?;
-    debug_assert_eq!(
-        state.state_number, gen_number,
-        "State number should match reserved generation number"
-    );
+    let _state = engine
+        .create_snapshot_at(gen_number, summary, None, None)
+        .map_err(|e| {
+            crate::error::Error::InternalError(format!(
+                "Failed to create system state snapshot: {e}"
+            ))
+        })?;
 
     // Step 6: Write generation metadata
     #[allow(clippy::cast_possible_wrap)]
@@ -422,6 +425,110 @@ pub fn build_generation_from_db(
     );
 
     Ok((gen_number, result))
+}
+
+/// Rebuild the EROFS image for an existing generation without allocating a
+/// new state number. Used by recovery to restore a generation that was already
+/// recorded in the database.
+///
+/// Unlike [`build_generation_from_db`], this does NOT create a new system state
+/// snapshot. It only rebuilds the EROFS image and metadata for the specified
+/// generation number, using the current DB package state.
+pub fn rebuild_generation_image(
+    conn: &rusqlite::Connection,
+    generations_root: &Path,
+    gen_number: i64,
+    summary: &str,
+) -> crate::Result<BuildResult> {
+    let gen_dir = generations_root.join(gen_number.to_string());
+    std::fs::create_dir_all(&gen_dir).map_err(|e| {
+        crate::error::Error::IoError(format!(
+            "Failed to create generation directory {}: {e}",
+            gen_dir.display()
+        ))
+    })?;
+
+    let troves = Trove::list_all(conn)?;
+    let all_files = FileEntry::find_all_ordered(conn)?;
+
+    let file_refs: Vec<FileEntryRef> = all_files
+        .iter()
+        .map(|file| {
+            #[allow(clippy::cast_sign_loss)]
+            let permissions = file.permissions as u32;
+            #[allow(clippy::cast_sign_loss)]
+            let size = file.size as u64;
+            FileEntryRef {
+                path: file.path.clone(),
+                sha256_hash: file.sha256_hash.clone(),
+                size,
+                permissions,
+            }
+        })
+        .collect();
+
+    let symlink_refs = collect_symlink_refs(conn)?;
+    let result = build_erofs_image(&file_refs, &symlink_refs, &gen_dir)?;
+
+    #[allow(clippy::cast_possible_wrap)]
+    let metadata = GenerationMetadata {
+        generation: gen_number,
+        format: GENERATION_FORMAT.to_string(),
+        erofs_size: Some(result.image_size as i64),
+        cas_objects_referenced: Some(result.cas_objects_referenced as i64),
+        fsverity_enabled: false,
+        erofs_verity_digest: None,
+        created_at: chrono::Utc::now().to_rfc3339(),
+        package_count: troves.len() as i64,
+        kernel_version: detect_kernel_version_from_troves(&troves),
+        summary: summary.to_string(),
+    };
+    metadata.write_to(&gen_dir).map_err(|e| {
+        crate::error::Error::IoError(format!("Failed to write generation metadata: {e}"))
+    })?;
+
+    info!(
+        "Generation {} rebuilt in place: {} CAS objects, {} packages",
+        gen_number,
+        result.cas_objects_referenced,
+        troves.len()
+    );
+
+    Ok(result)
+}
+
+/// Collect symlink entries from all installed troves.
+///
+/// Queries file entries that have a non-NULL symlink_target and returns them
+/// as `SymlinkEntryRef` values suitable for EROFS image building.
+///
+/// Returns an empty vec if the `file_entries` table does not have a
+/// `symlink_target` column (older schema or test databases).
+fn collect_symlink_refs(conn: &rusqlite::Connection) -> crate::Result<Vec<SymlinkEntryRef>> {
+    let mut stmt = match conn.prepare(
+        "SELECT path, symlink_target FROM files \
+         WHERE symlink_target IS NOT NULL AND symlink_target != ''",
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            // Column may not exist in pre-v60 schemas.
+            debug!("Skipping symlink collection: {e}");
+            return Ok(Vec::new());
+        }
+    };
+
+    let refs = stmt
+        .query_map([], |row| {
+            Ok(SymlinkEntryRef {
+                path: row.get(0)?,
+                target: row.get(1)?,
+            })
+        })
+        .map_err(|e| crate::error::Error::InternalError(format!("Failed to query symlinks: {e}")))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(refs)
 }
 
 /// Get kernel version from an already-loaded trove list.
