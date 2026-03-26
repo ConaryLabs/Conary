@@ -12,6 +12,8 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 
+use tracing::warn;
+
 use crate::derivation::output::OutputManifest;
 use crate::generation::builder::{BuildResult, FileEntryRef, SymlinkEntryRef, build_erofs_image};
 use crate::hash::{HashAlgorithm, hash_reader};
@@ -79,18 +81,25 @@ pub struct ComposedEntries {
     pub symlinks: Vec<SymlinkEntryRef>,
 }
 
+/// Internal enum for unified path deduplication during composition.
+enum ComposedEntry {
+    File(FileEntryRef),
+    Symlink(SymlinkEntryRef),
+}
+
 /// Merge files AND symlinks from multiple [`OutputManifest`]s.
 ///
-/// Both files and symlinks are keyed by absolute path in [`BTreeMap`]s for
-/// deterministic iteration order. When multiple manifests contain the same
-/// path, the entry from the *last* manifest wins (last-writer-wins).
+/// All entries (files and symlinks) are keyed by absolute path in a single
+/// [`BTreeMap`] for deterministic iteration order and correct cross-type
+/// deduplication. When multiple manifests contain the same path -- even as
+/// different types (file vs symlink) -- the entry from the *last* manifest
+/// wins (last-writer-wins). Cross-type conflicts emit a `tracing::warn`.
 ///
 /// Relative paths (those not starting with `/`) are converted to absolute by
 /// prefixing with `/`.
 #[must_use]
 pub fn compose_entries(manifests: &[&OutputManifest]) -> ComposedEntries {
-    let mut merged_files: BTreeMap<String, FileEntryRef> = BTreeMap::new();
-    let mut merged_symlinks: BTreeMap<String, SymlinkEntryRef> = BTreeMap::new();
+    let mut merged: BTreeMap<String, ComposedEntry> = BTreeMap::new();
 
     for manifest in manifests {
         for file in &manifest.files {
@@ -100,14 +109,21 @@ pub fn compose_entries(manifests: &[&OutputManifest]) -> ComposedEntries {
                 format!("/{}", file.path)
             };
 
-            merged_files.insert(
+            if let Some(ComposedEntry::Symlink(_)) = merged.get(&abs_path) {
+                warn!(
+                    path = %abs_path,
+                    "compose: path was symlink, now overwritten by file"
+                );
+            }
+
+            merged.insert(
                 abs_path.clone(),
-                FileEntryRef {
+                ComposedEntry::File(FileEntryRef {
                     path: abs_path,
                     sha256_hash: file.hash.clone(),
                     size: file.size,
                     permissions: file.mode,
-                },
+                }),
             );
         }
 
@@ -118,20 +134,34 @@ pub fn compose_entries(manifests: &[&OutputManifest]) -> ComposedEntries {
                 format!("/{}", symlink.path)
             };
 
-            merged_symlinks.insert(
+            if let Some(ComposedEntry::File(_)) = merged.get(&abs_path) {
+                warn!(
+                    path = %abs_path,
+                    "compose: path was file, now overwritten by symlink"
+                );
+            }
+
+            merged.insert(
                 abs_path.clone(),
-                SymlinkEntryRef {
+                ComposedEntry::Symlink(SymlinkEntryRef {
                     path: abs_path,
                     target: symlink.target.clone(),
-                },
+                }),
             );
         }
     }
 
-    ComposedEntries {
-        files: merged_files.into_values().collect(),
-        symlinks: merged_symlinks.into_values().collect(),
+    let mut files = Vec::new();
+    let mut symlinks = Vec::new();
+
+    for entry in merged.into_values() {
+        match entry {
+            ComposedEntry::File(f) => files.push(f),
+            ComposedEntry::Symlink(s) => symlinks.push(s),
+        }
     }
+
+    ComposedEntries { files, symlinks }
 }
 
 /// Compose multiple package outputs into a single EROFS image.
@@ -463,5 +493,48 @@ mod tests {
         let composed = compose_entries(&[]);
         assert!(composed.files.is_empty());
         assert!(composed.symlinks.is_empty());
+    }
+
+    #[test]
+    fn compose_entries_cross_type_conflict_last_writer_wins() {
+        // Case 1: file first, symlink second -- symlink wins.
+        let m_file = manifest_with_files_and_symlinks(
+            vec![OutputFile {
+                path: "/usr/lib/libconflict.so".to_owned(),
+                hash: "a".repeat(64),
+                size: 4096,
+                mode: 0o644,
+            }],
+            vec![],
+        );
+
+        let m_symlink = manifest_with_files_and_symlinks(
+            vec![],
+            vec![OutputSymlink {
+                path: "/usr/lib/libconflict.so".to_owned(),
+                target: "libconflict.so.1".to_owned(),
+            }],
+        );
+
+        let composed = compose_entries(&[&m_file, &m_symlink]);
+
+        assert!(
+            composed.files.is_empty(),
+            "file should be evicted by symlink"
+        );
+        assert_eq!(composed.symlinks.len(), 1);
+        assert_eq!(composed.symlinks[0].path, "/usr/lib/libconflict.so");
+        assert_eq!(composed.symlinks[0].target, "libconflict.so.1");
+
+        // Case 2: symlink first, file second -- file wins.
+        let composed = compose_entries(&[&m_symlink, &m_file]);
+
+        assert!(
+            composed.symlinks.is_empty(),
+            "symlink should be evicted by file"
+        );
+        assert_eq!(composed.files.len(), 1);
+        assert_eq!(composed.files[0].path, "/usr/lib/libconflict.so");
+        assert_eq!(composed.files[0].sha256_hash, "a".repeat(64));
     }
 }
