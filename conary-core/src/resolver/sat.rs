@@ -62,6 +62,9 @@ pub fn solve_install(
     // Load all installed packages as solvables
     provider.load_installed_packages()?;
 
+    // Build the provides index for O(1) capability-to-provider lookups.
+    provider.build_provides_index()?;
+
     // Pre-load canonical equivalents for cross-distro fallback (O(1) lookups).
     provider.load_canonical_index()?;
 
@@ -182,6 +185,12 @@ fn provider_version_satisfies_constraint(
 /// Check what packages would break if the given packages are removed.
 ///
 /// Returns the names of packages whose dependencies would be unsatisfied.
+///
+/// Instead of BFS on package names (which mishandles OR-deps and virtual
+/// provides), this evaluates each dependent's full dependency clause set.
+/// For OR-deps, a clause is only broken when ALL alternatives are gone.
+/// The analysis iterates to a fixed point: breaking one package may cause
+/// others to lose a provider, so we re-evaluate until no new breakage is found.
 pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<String>> {
     let mut provider = ConaryProvider::new(conn);
 
@@ -194,121 +203,99 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
     // Build provides index and unfiltered deps for removal analysis
     provider.load_removal_data()?;
 
-    let remove_set: std::collections::HashSet<&str> =
-        to_remove.iter().map(String::as_str).collect();
+    let mut gone_set: std::collections::HashSet<String> =
+        to_remove.iter().cloned().collect();
 
     let solvable_count = provider.solvable_count();
 
-    // Step 1: Collect everything the removed packages provide (capabilities + names).
-    // We only need to check deps that overlap with these — deps on unrelated
-    // capabilities can't be affected by the removal.
-    let mut removed_capabilities: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
-    for i in 0..solvable_count {
-        let sid = resolvo::SolvableId(i as u32);
-        let pkg = provider.get_solvable(sid);
-        if remove_set.contains(pkg.name.as_str()) && pkg.installed_trove_id.is_some() {
-            removed_capabilities.insert(pkg.name.clone());
-            for (cap, _) in &pkg.provided_capabilities {
-                removed_capabilities.insert(cap.clone());
+    // Helper closure: check if a single (dep_name, constraint) alternative
+    // is satisfiable by any installed package that is NOT in `gone_set`.
+    let alternative_satisfiable = |dep_name: &str,
+                                    constraint: &super::provider::ConaryConstraint,
+                                    gone: &std::collections::HashSet<String>|
+     -> bool {
+        // 1. Check provides index -- verify the remaining provider's version
+        //    satisfies the constraint.
+        let providers = provider.find_providers(dep_name);
+        if !providers.is_empty() {
+            let any_remaining = providers.iter().any(|(trove_id, prov_version)| {
+                let not_gone = provider
+                    .trove_name(*trove_id)
+                    .is_some_and(|name| !gone.contains(name));
+                if !not_gone {
+                    return false;
+                }
+                provider_version_satisfies_constraint(constraint, prov_version.as_deref())
+            });
+            if any_remaining {
+                return true;
             }
         }
-    }
+        // 2. Fallback: check by package name among loaded solvables.
+        (0..solvable_count).any(|j| {
+            let alt_sid = resolvo::SolvableId(j as u32);
+            let alt = provider.get_solvable(alt_sid);
+            alt.installed_trove_id.is_some()
+                && alt.name == dep_name
+                && !gone.contains(&alt.name)
+                && super::provider::constraint_matches_package(
+                    constraint,
+                    &alt.version,
+                    alt.version_scheme,
+                )
+        })
+    };
 
-    // Step 2: For each installed package, check only deps that overlap with
-    // what the removed packages provide. Build reverse dep map and breaking set.
-    let mut breaking_set: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut reverse_deps: std::collections::HashMap<String, Vec<String>> =
-        std::collections::HashMap::new();
-
-    for i in 0..solvable_count {
-        let sid = resolvo::SolvableId(i as u32);
-        let pkg = provider.get_solvable(sid);
-        if pkg.installed_trove_id.is_none() || remove_set.contains(pkg.name.as_str()) {
-            continue;
-        }
-
-        if let Some(deps) = provider.get_removal_dependency_list(sid) {
-            for dep in deps {
-                let singles: Vec<(&str, &super::provider::ConaryConstraint)> = match dep {
-                    super::provider::SolverDep::Single(name, constraint) => {
-                        vec![(name.as_str(), constraint)]
-                    }
-                    super::provider::SolverDep::OrGroup(alts) => {
-                        alts.iter().map(|(n, c)| (n.as_str(), c)).collect()
-                    }
-                };
-
-                for &(dep_name, _) in &singles {
-                    reverse_deps
-                        .entry(dep_name.to_string())
-                        .or_default()
-                        .push(pkg.name.clone());
+    // Helper closure: check if a SolverDep clause is satisfiable.
+    // For Single deps, one alternative must be satisfiable.
+    // For OrGroup deps, at least one alternative must be satisfiable.
+    let clause_satisfiable =
+        |dep: &super::provider::SolverDep, gone: &std::collections::HashSet<String>| -> bool {
+            match dep {
+                super::provider::SolverDep::Single(name, constraint) => {
+                    alternative_satisfiable(name, constraint, gone)
                 }
-
-                // Only evaluate deps that could be affected by this removal.
-                // A dep is affected if it matches something the removed
-                // packages provide (by capability or by name).
-                let affected = singles
+                super::provider::SolverDep::OrGroup(alts) => alts
                     .iter()
-                    .any(|&(dep_name, _)| removed_capabilities.contains(dep_name));
-                if !affected {
-                    continue;
-                }
+                    .any(|(name, constraint)| alternative_satisfiable(name, constraint, gone)),
+            }
+        };
 
-                if !breaking_set.contains(&pkg.name) {
-                    let any_satisfied = singles.iter().any(|&(dep_name, constraint)| {
-                        // 1. Check provides index -- verify the remaining
-                        //    provider's version satisfies the constraint, not
-                        //    just that a provider exists with that capability name.
-                        let providers = provider.find_providers(dep_name);
-                        if !providers.is_empty() {
-                            return providers.iter().any(|(trove_id, prov_version)| {
-                                let not_removed = provider
-                                    .trove_name(*trove_id)
-                                    .is_some_and(|name| !remove_set.contains(name));
-                                if !not_removed {
-                                    return false;
-                                }
-                                // Check version constraint against the provide's version
-                                provider_version_satisfies_constraint(
-                                    constraint,
-                                    prov_version.as_deref(),
-                                )
-                            });
-                        }
-                        // 2. Fallback: check by package name
-                        (0..solvable_count).any(|j| {
-                            let alt_sid = resolvo::SolvableId(j as u32);
-                            let alt = provider.get_solvable(alt_sid);
-                            alt.installed_trove_id.is_some()
-                                && alt.name == dep_name
-                                && !remove_set.contains(alt.name.as_str())
-                                && super::provider::constraint_matches_package(
-                                    constraint,
-                                    &alt.version,
-                                    alt.version_scheme,
-                                )
-                        })
-                    });
-                    if !any_satisfied {
-                        breaking_set.insert(pkg.name.clone());
-                    }
+    // Iterate to fixed point: each round may discover new broken packages
+    // whose removal breaks further dependents.
+    let mut breaking_set: std::collections::HashSet<String> = std::collections::HashSet::new();
+    loop {
+        let mut changed = false;
+
+        for i in 0..solvable_count {
+            let sid = resolvo::SolvableId(i as u32);
+            let pkg = provider.get_solvable(sid);
+
+            // Skip non-installed, already-gone, and already-broken packages
+            if pkg.installed_trove_id.is_none()
+                || gone_set.contains(&pkg.name)
+                || breaking_set.contains(&pkg.name)
+            {
+                continue;
+            }
+
+            if let Some(deps) = provider.get_removal_dependency_list(sid) {
+                let any_broken = deps
+                    .iter()
+                    .any(|dep| !clause_satisfiable(dep, &gone_set));
+
+                if any_broken {
+                    breaking_set.insert(pkg.name.clone());
+                    // A broken package is effectively gone for subsequent
+                    // dependency checks -- its provides are unreliable.
+                    gone_set.insert(pkg.name.clone());
+                    changed = true;
                 }
             }
         }
-    }
 
-    // BFS from breaking packages through reverse deps
-    let mut queue: std::collections::VecDeque<String> = breaking_set.iter().cloned().collect();
-    while let Some(broken) = queue.pop_front() {
-        if let Some(rdeps) = reverse_deps.get(&broken) {
-            for rdep in rdeps {
-                if !breaking_set.contains(rdep) && !remove_set.contains(rdep.as_str()) {
-                    breaking_set.insert(rdep.clone());
-                    queue.push_back(rdep.clone());
-                }
-            }
+        if !changed {
+            break;
         }
     }
 

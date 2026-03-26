@@ -64,9 +64,12 @@ pub fn constraint_matches_package(
 
 /// Check whether a constraint matches a provide's version.
 ///
-/// If `provide_version` is `Some`, checks the provide version first.
-/// Falls back to checking the owning package's version if the provide
-/// version does not match or is absent.
+/// If `provide_version` is `Some`, it is authoritative -- the package version
+/// is NOT used as a fallback. A package at 2.0 providing `foo = 1.0` must not
+/// satisfy `foo >= 2.0` just because the package version is high enough.
+///
+/// Only when `provide_version` is `None` (unversioned provide) do we fall back
+/// to the owning package's version.
 pub(super) fn constraint_matches_provide(
     constraint: &ConaryConstraint,
     provide_version: Option<&str>,
@@ -74,11 +77,11 @@ pub(super) fn constraint_matches_provide(
     package_version: &str,
     package_scheme: VersionScheme,
 ) -> bool {
-    if let Some(pv) = provide_version
-        && constraint_matches_package(constraint, pv, provide_scheme)
-    {
-        return true;
+    if let Some(pv) = provide_version {
+        // Explicit provide version is authoritative -- no fallback.
+        return constraint_matches_package(constraint, pv, provide_scheme);
     }
+    // Unversioned provide: fall back to the owning package's version.
     constraint_matches_package(constraint, package_version, package_scheme)
 }
 

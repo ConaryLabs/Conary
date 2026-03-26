@@ -31,9 +31,13 @@ pub(super) fn dep_entry_to_solver_dep(dep: &DependencyEntry, scheme: VersionSche
                         constraint = %s,
                         dep = %dep.depends_on_name,
                         error = %e,
-                        "Failed to parse RPM version constraint; treating as unconstrained (may over-satisfy)"
+                        "Failed to parse RPM version constraint; using unsatisfiable sentinel"
                     );
-                    VersionConstraint::Any
+                    // Use an exact match on an impossible version so the solver
+                    // reports this dep as unsatisfiable rather than silently
+                    // accepting anything.
+                    VersionConstraint::parse("= __UNPARSEABLE__")
+                        .unwrap_or(VersionConstraint::Any)
                 }
             })
         }
@@ -47,9 +51,11 @@ pub(super) fn dep_entry_to_solver_dep(dep: &DependencyEntry, scheme: VersionSche
                         constraint = %s,
                         dep = %dep.depends_on_name,
                         scheme = ?native,
-                        "Failed to parse repo version constraint; treating as unconstrained (may over-satisfy)"
+                        "Failed to parse repo version constraint; using unsatisfiable sentinel"
                     );
-                    RepoVersionConstraint::Any
+                    // Exact match on an impossible version -- no real package
+                    // will match, making the dep unsatisfiable.
+                    RepoVersionConstraint::Exact("__UNPARSEABLE__".to_string())
                 }
             },
             raw: Some(s.to_string()),
@@ -79,9 +85,9 @@ fn row_to_constraint(
                         constraint = %value,
                         capability = %row.capability,
                         scheme = ?scheme,
-                        "Failed to parse repo version constraint in requirement row; treating as unconstrained (may over-satisfy)"
+                        "Failed to parse repo version constraint in requirement row; using unsatisfiable sentinel"
                     );
-                    RepoVersionConstraint::Any
+                    RepoVersionConstraint::Exact("__UNPARSEABLE__".to_string())
                 }
             },
             raw,
@@ -98,9 +104,9 @@ fn row_to_constraint(
                     constraint = %value,
                     capability = %row.capability,
                     error = %e,
-                    "Failed to parse legacy version constraint in requirement row; treating as unconstrained (may over-satisfy)"
+                    "Failed to parse legacy version constraint in requirement row; using unsatisfiable sentinel"
                 );
-                VersionConstraint::Any
+                VersionConstraint::parse("= __UNPARSEABLE__").unwrap_or(VersionConstraint::Any)
             }
         }),
         (None, None) => ConaryConstraint::Legacy(VersionConstraint::Any),

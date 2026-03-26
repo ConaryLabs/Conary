@@ -25,6 +25,7 @@ use crate::db::models::{
 use crate::error::Result;
 use crate::repository::versioning::VersionScheme;
 use crate::resolver::identity::PackageIdentity;
+use crate::resolver::provides_index::ProvidesIndex;
 
 use loading::{
     dep_entry_to_solver_dep, escape_like, find_repo_package_by_id, load_repo_dependency_requests,
@@ -86,6 +87,10 @@ pub struct ConaryProvider<'db> {
     /// Pre-loaded as a HashMap for O(1) lookup in the hot path.
     canonical_equivalents: HashMap<String, Vec<String>>,
 
+    /// Pre-built capability-to-provider index (modeled after libsolv's whatprovides).
+    /// Built once at resolution start via `build_provides_index()`.
+    provides_index: Option<ProvidesIndex>,
+
     // --- Data source ---
     pub(super) conn: &'db rusqlite::Connection,
 }
@@ -109,6 +114,7 @@ impl<'db> ConaryProvider<'db> {
             trove_id_to_name: HashMap::new(),
             removal_deps: HashMap::new(),
             canonical_equivalents: HashMap::new(),
+            provides_index: None,
             conn,
         }
     }
@@ -299,10 +305,11 @@ impl<'db> ConaryProvider<'db> {
             let mut candidates =
                 PackageSelector::search_packages(self.conn, name, &options).unwrap_or_default();
 
-            // If no direct name matches, fall back to virtual provide search
-            if candidates.is_empty() {
-                candidates = self.find_repo_providers(name)?;
-            }
+            // Always include virtual-provide providers alongside exact-name
+            // candidates so the solver can consider both. Filtering and ranking
+            // determine which are preferred.
+            let virtual_providers = self.find_repo_providers(name)?;
+            candidates.extend(virtual_providers);
 
             for pkg_with_repo in candidates {
                 // O(1) duplicate check via loaded_repo_package_ids set.
@@ -356,11 +363,40 @@ impl<'db> ConaryProvider<'db> {
         Ok(())
     }
 
+    /// Build the `ProvidesIndex` from the database.
+    ///
+    /// Should be called once after `load_installed_packages()` and before
+    /// resolution begins. The index enables O(1) capability-to-provider
+    /// lookups, replacing per-dep DB queries.
+    pub fn build_provides_index(&mut self) -> Result<()> {
+        self.provides_index = Some(ProvidesIndex::build(self.conn)?);
+        Ok(())
+    }
+
     /// Look up which real packages provide a virtual capability.
     fn resolve_virtual_provide(&self, capability: &str) -> Vec<String> {
         let mut providers = Vec::new();
 
-        // Query the provides table for all packages that provide this capability
+        // Use the pre-built ProvidesIndex when available (O(1) lookup).
+        if let Some(ref index) = self.provides_index {
+            for entry in index.find_providers(capability) {
+                if let Some(repo_pkg_id) = entry.repo_package_id
+                    && let Ok(Some(pkg)) = find_repo_package_by_id(self.conn, repo_pkg_id)
+                    && !providers.contains(&pkg.name)
+                {
+                    providers.push(pkg.name.clone());
+                }
+                if let Some(trove_id) = entry.installed_trove_id
+                    && let Ok(Some(trove)) = Trove::find_by_id(self.conn, trove_id)
+                    && !providers.contains(&trove.name)
+                {
+                    providers.push(trove.name.clone());
+                }
+            }
+            return providers;
+        }
+
+        // Fallback: per-dep DB queries when index is not built.
         if let Ok(provides) = ProvideEntry::find_all_by_capability(self.conn, capability) {
             for provide in provides {
                 if let Ok(Some(trove)) = Trove::find_by_id(self.conn, provide.trove_id)

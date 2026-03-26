@@ -10,7 +10,7 @@ use crate::components::ComponentType;
 use crate::db::models::{Component, ComponentDependency, Trove};
 use crate::error::Result;
 use rusqlite::Connection;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
 /// A component identifier: (package_name, component_name)
 pub type ComponentSpec = (String, String);
@@ -103,6 +103,11 @@ impl<'a> ComponentResolver<'a> {
     ///
     /// Returns the components that need to be installed in dependency order
     /// (dependencies first), along with missing components.
+    ///
+    /// Uses DFS post-order traversal to produce a valid topological sort:
+    /// a component is appended to the install list only after all its
+    /// dependencies have been visited, guaranteeing that dependencies
+    /// appear before their dependents.
     pub fn resolve_install(
         &self,
         package: &str,
@@ -113,62 +118,70 @@ impl<'a> ComponentResolver<'a> {
         let mut missing = Vec::new();
         let mut already_installed = Vec::new();
         let mut visited = HashSet::new();
-        let mut queue = VecDeque::new();
 
-        // Start with the target component
+        // DFS post-order: visit dependencies before the dependent.
+        // Uses an explicit stack to avoid recursion limits.
+        // Each stack frame is (spec, deps, child_index). We advance
+        // child_index through the deps; when all children are processed
+        // we emit the spec to install_order.
         let target = (package.to_string(), component.to_string());
-        queue.push_back((target.clone(), deps.to_vec()));
+        let target_deps = deps.to_vec();
+
+        // Stack frames: (spec, component_deps, next_child_index)
+        let mut stack: Vec<(ComponentSpec, Vec<ComponentDependency>, usize)> = Vec::new();
         visited.insert(target.clone());
 
-        while let Some((spec, component_deps)) = queue.pop_front() {
-            let (pkg, comp) = &spec;
+        // Check if target is already installed
+        if self.is_installed(package, component) {
+            already_installed.push(target);
+        } else {
+            stack.push((target, target_deps, 0));
+        }
 
-            // Check if already installed
-            if self.is_installed(pkg, comp) {
-                already_installed.push(spec.clone());
-                continue;
-            }
+        while let Some(frame) = stack.last_mut() {
+            let (ref spec, ref component_deps, ref mut child_idx) = *frame;
+            let pkg = spec.0.clone();
 
-            // Process dependencies
-            for dep in &component_deps {
-                let dep_pkg = dep.depends_on_package.as_deref().unwrap_or(pkg);
-                let dep_comp = &dep.depends_on_component;
-                let dep_spec = (dep_pkg.to_string(), dep_comp.clone());
+            if *child_idx < component_deps.len() {
+                let dep = &component_deps[*child_idx];
+                *child_idx += 1;
+
+                let dep_pkg = dep
+                    .depends_on_package
+                    .as_deref()
+                    .unwrap_or(&pkg)
+                    .to_string();
+                let dep_comp = dep.depends_on_component.clone();
+                let dep_spec = (dep_pkg.clone(), dep_comp.clone());
 
                 if visited.contains(&dep_spec) {
                     continue;
                 }
                 visited.insert(dep_spec.clone());
 
-                if self.is_installed(dep_pkg, dep_comp) {
+                if self.is_installed(&dep_pkg, &dep_comp) {
                     already_installed.push(dep_spec);
                 } else {
-                    // Check if we have deps for this dependency
-                    let nested_deps = self.get_deps_for_component(dep_pkg, dep_comp);
+                    let nested_deps = self.get_deps_for_component(&dep_pkg, &dep_comp);
                     if nested_deps.is_some() || dep_pkg == pkg {
-                        // Can resolve this - add to queue
-                        queue.push_back((
-                            (dep_pkg.to_string(), dep_comp.clone()),
-                            nested_deps.unwrap_or_default(),
-                        ));
+                        // Push child onto the stack for DFS
+                        stack.push((dep_spec, nested_deps.unwrap_or_default(), 0));
                     } else {
-                        // Missing component
                         missing.push(MissingComponent {
-                            package: dep_pkg.to_string(),
-                            component: dep_comp.clone(),
+                            package: dep_pkg,
+                            component: dep_comp,
                             version_constraint: dep.version_constraint.clone(),
                             required_by: vec![spec.clone()],
                         });
                     }
                 }
+            } else {
+                // All children processed -- emit this node (post-order).
+                let finished_spec = frame.0.clone();
+                stack.pop();
+                install_order.push(finished_spec);
             }
-
-            // Add to install order (dependencies will be added before this due to queue order)
-            install_order.push(spec);
         }
-
-        // Reverse to get dependency order (dependencies first)
-        install_order.reverse();
 
         // Deduplicate missing components and aggregate required_by
         let missing = Self::dedupe_missing(missing);
