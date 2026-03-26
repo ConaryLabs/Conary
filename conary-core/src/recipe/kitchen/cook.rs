@@ -172,6 +172,11 @@ impl<'a> Cook<'a> {
 
     /// Phase 2a: Unpack sources
     pub(crate) fn unpack(&mut self) -> Result<()> {
+        // Remember the staging dir where prep() placed additional archives.
+        // source_dir may be rewritten below (single top-level dir detection),
+        // but the staged files live in the original location.
+        let staging_dir = self.source_dir.clone();
+
         let archive_path = self
             .build_dir
             .as_path()
@@ -203,14 +208,16 @@ impl<'a> Cook<'a> {
             self.source_dir = self.build_dir.as_path().join("source").join(extract_dir);
         }
 
-        // Extract additional source archives, honoring extract_to
+        // Extract additional source archives, honoring extract_to.
+        // Archives were staged by prep() into the original staging_dir,
+        // not the (possibly rewritten) source_dir.
         for additional in &self.recipe.source.additional {
             let filename = additional
                 .url
                 .split('/')
                 .next_back()
                 .unwrap_or("additional.tar.gz");
-            let additional_archive = self.source_dir.join(filename);
+            let additional_archive = staging_dir.join(filename);
 
             if additional_archive.exists() {
                 let dest = if let Some(extract_to) = &additional.extract_to {

@@ -124,23 +124,38 @@ pub fn convert_pkgbuild(content: &str) -> Result<ConversionResult, PkgbuildError
     let url = vars.get("url").cloned();
     let license = vars.get("license").cloned();
 
-    // Extract source URL and checksum, preserving the original algorithm.
-    // PKGBUILDs can use sha256sums, sha512sums, b2sums, or md5sums.
-    // We must label the converted checksum with the correct algorithm.
+    // Extract source URL and checksum.
+    // The Conary recipe pipeline only supports sha256 and xxh128 checksums.
+    // We only use sha256sums from PKGBUILDs; other algorithms (sha512sums,
+    // b2sums, md5sums) emit SKIP with a warning -- the user must add
+    // sha256 checksums to the converted recipe manually.
     let sources = extract_array(content, "source")
         .ok_or_else(|| PkgbuildError::MissingVariable("source".to_string()))?;
 
-    let (checksums, checksum_prefix) = if let Some(sums) = extract_array(content, "sha256sums") {
-        (Some(sums), "sha256")
-    } else if let Some(sums) = extract_array(content, "sha512sums") {
-        (Some(sums), "sha512")
-    } else if let Some(sums) = extract_array(content, "b2sums") {
-        (Some(sums), "blake2b")
-    } else if let Some(sums) = extract_array(content, "md5sums") {
-        warnings.push("PKGBUILD uses md5sums (weak); consider sha256sums".to_string());
-        (Some(sums), "md5")
+    let checksums = if let Some(sums) = extract_array(content, "sha256sums") {
+        Some(sums)
     } else {
-        (None, "sha256")
+        // Check if the PKGBUILD uses a non-sha256 algorithm and warn
+        if extract_array(content, "sha512sums").is_some() {
+            warnings.push(
+                "PKGBUILD uses sha512sums; converted to SKIP. \
+                 Add sha256 checksums to the recipe manually."
+                    .to_string(),
+            );
+        } else if extract_array(content, "b2sums").is_some() {
+            warnings.push(
+                "PKGBUILD uses b2sums; converted to SKIP. \
+                 Add sha256 checksums to the recipe manually."
+                    .to_string(),
+            );
+        } else if extract_array(content, "md5sums").is_some() {
+            warnings.push(
+                "PKGBUILD uses md5sums (weak, unsupported); converted to SKIP. \
+                 Add sha256 checksums to the recipe manually."
+                    .to_string(),
+            );
+        }
+        None
     };
 
     if sources.is_empty() {
@@ -155,11 +170,13 @@ pub fn convert_pkgbuild(content: &str) -> Result<ConversionResult, PkgbuildError
             if s == "SKIP" {
                 "SKIP".to_string()
             } else {
-                format!("{}:{}", checksum_prefix, s)
+                format!("sha256:{}", s)
             }
         })
         .unwrap_or_else(|| {
-            warnings.push("No checksum found, using SKIP".to_string());
+            if checksums.is_none() && extract_array(content, "sha256sums").is_none() {
+                warnings.push("No checksum found, using SKIP".to_string());
+            }
             "SKIP".to_string()
         });
 
@@ -176,7 +193,7 @@ pub fn convert_pkgbuild(content: &str) -> Result<ConversionResult, PkgbuildError
                     if s == "SKIP" {
                         "SKIP".to_string()
                     } else {
-                        format!("{}:{}", checksum_prefix, s)
+                        format!("sha256:{}", s)
                     }
                 })
                 .unwrap_or_else(|| "SKIP".to_string());
@@ -233,7 +250,7 @@ pub fn convert_pkgbuild(content: &str) -> Result<ConversionResult, PkgbuildError
             .replace("${pkgdir}", "%(destdir)s")
     });
 
-    // Detect patches from source array
+    // Detect patches from source array (only use sha256 checksums)
     let patches: Vec<PatchInfo> = sources
         .iter()
         .enumerate()
@@ -243,6 +260,7 @@ pub fn convert_pkgbuild(content: &str) -> Result<ConversionResult, PkgbuildError
             checksum: checksums
                 .as_ref()
                 .and_then(|c| c.get(i))
+                .filter(|cs| *cs != "SKIP")
                 .map(|cs| format!("sha256:{}", cs)),
             strip: 1,
             condition: None,
