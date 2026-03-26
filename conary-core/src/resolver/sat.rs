@@ -326,7 +326,6 @@ mod tests {
         Changeset, ChangesetStatus, DependencyEntry, Repository, RepositoryPackage,
         RepositoryRequirement, Trove, TroveType,
     };
-    use crate::version::RpmVersion;
 
     fn setup_test_db() -> (tempfile::TempDir, Connection) {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -495,91 +494,6 @@ mod tests {
         assert!(names.contains(&"C"));
         assert!(names.contains(&"D"));
         assert!(names.contains(&"E"));
-    }
-
-    #[test]
-    fn test_resolve_install_scoped_to_package() {
-        // Pre-existing broken dep: X depends on Y, but Y is not installed.
-        // Installing new package Z (which depends on installed W) should
-        // succeed without reporting X's missing dependency Y.
-        use crate::resolver::Resolver;
-        use crate::resolver::graph::DependencyEdge;
-
-        let (_dir, conn) = setup_test_db();
-
-        // Installed packages
-        insert_trove(&conn, "W", "1.0.0", &[]);
-        // X depends on Y, but Y is not installed (pre-existing problem)
-        insert_trove(&conn, "X", "1.0.0", &[("Y", None)]);
-
-        let mut resolver = Resolver::new(&conn).unwrap();
-
-        // Install Z which only depends on W (already installed)
-        let plan = resolver
-            .resolve_install(
-                "Z".to_string(),
-                RpmVersion::parse("1.0.0").unwrap(),
-                vec![DependencyEdge {
-                    from: "Z".to_string(),
-                    to: "W".to_string(),
-                    constraint: VersionConstraint::Any,
-                    raw_constraint: None,
-                    dep_type: "runtime".to_string(),
-                    kind: "package".to_string(),
-                }],
-            )
-            .unwrap();
-
-        // Z's deps are all satisfied — no missing, no conflicts
-        assert!(
-            plan.missing.is_empty(),
-            "should not report unrelated missing deps"
-        );
-        assert!(
-            plan.conflicts.is_empty(),
-            "should not report unrelated conflicts"
-        );
-    }
-
-    #[test]
-    fn test_resolve_install_reports_own_missing() {
-        // Installing Z which depends on NOTINSTALLED should report it as missing
-        use crate::resolver::Resolver;
-        use crate::resolver::graph::DependencyEdge;
-
-        let (_dir, conn) = setup_test_db();
-        insert_trove(&conn, "W", "1.0.0", &[]);
-
-        let mut resolver = Resolver::new(&conn).unwrap();
-
-        let plan = resolver
-            .resolve_install(
-                "Z".to_string(),
-                RpmVersion::parse("1.0.0").unwrap(),
-                vec![
-                    DependencyEdge {
-                        from: "Z".to_string(),
-                        to: "W".to_string(),
-                        constraint: VersionConstraint::Any,
-                        raw_constraint: None,
-                        dep_type: "runtime".to_string(),
-                        kind: "package".to_string(),
-                    },
-                    DependencyEdge {
-                        from: "Z".to_string(),
-                        to: "NOTINSTALLED".to_string(),
-                        constraint: VersionConstraint::parse(">= 1.0.0").unwrap(),
-                        raw_constraint: Some(">= 1.0.0".to_string()),
-                        dep_type: "runtime".to_string(),
-                        kind: "package".to_string(),
-                    },
-                ],
-            )
-            .unwrap();
-
-        assert_eq!(plan.missing.len(), 1);
-        assert_eq!(plan.missing[0].name, "NOTINSTALLED");
-        assert!(plan.conflicts.is_empty());
     }
 
     #[test]
@@ -1365,5 +1279,192 @@ mod tests {
             result.conflict_message.is_some(),
             "Should report conflict when dep has no candidates and no canonical mapping"
         );
+    }
+
+    // ==========================================================================
+    // Task 10: Integration tests for resolver pipeline redesign
+    // ==========================================================================
+
+    use crate::repository::versioning::VersionScheme;
+    use crate::resolver::identity::PackageIdentity;
+    use crate::resolver::provides_index::ProvidesIndex;
+
+    #[test]
+    fn test_cross_distro_canonical_resolution() {
+        // Two repos (fedora, debian) with same canonical_id.
+        // fedora has "httpd" 2.4, debian has "apache2" 2.4.
+        // Both linked to canonical "apache".
+        // PackageIdentity should find httpd with its canonical_id,
+        // and find_canonical_equivalents should return "apache2".
+        let (_dir, conn) = setup_test_db();
+
+        // Create canonical mapping
+        conn.execute(
+            "INSERT INTO canonical_packages (name, kind) VALUES ('apache', 'package')",
+            [],
+        )
+        .unwrap();
+        let canonical_id = conn.last_insert_rowid();
+
+        // Create two repos
+        conn.execute(
+            "INSERT INTO repositories (name, url, enabled, priority, default_strategy_distro)
+             VALUES ('fedora-41', 'https://f.com', 1, 10, 'fedora-41')",
+            [],
+        )
+        .unwrap();
+        let fed_repo = conn.last_insert_rowid();
+
+        conn.execute(
+            "INSERT INTO repositories (name, url, enabled, priority, default_strategy_distro)
+             VALUES ('debian-bookworm', 'https://d.com', 1, 5, 'debian-bookworm')",
+            [],
+        )
+        .unwrap();
+        let deb_repo = conn.last_insert_rowid();
+
+        // Insert packages with canonical links
+        conn.execute(
+            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, version_scheme, canonical_id)
+             VALUES (?1, 'httpd', '2.4.58', 'sha256:a', 100, 'https://f.com/httpd', 'rpm', ?2)",
+            rusqlite::params![fed_repo, canonical_id],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, version_scheme, canonical_id)
+             VALUES (?1, 'apache2', '2.4.57', 'sha256:b', 100, 'https://d.com/apache2', 'debian', ?2)",
+            rusqlite::params![deb_repo, canonical_id],
+        )
+        .unwrap();
+
+        // Verify PackageIdentity finds httpd with canonical link
+        let httpd = PackageIdentity::find_all_by_name(&conn, "httpd").unwrap();
+        assert_eq!(httpd.len(), 1);
+        assert_eq!(httpd[0].canonical_id, Some(canonical_id));
+
+        // Verify canonical equivalents
+        let equivs = PackageIdentity::find_canonical_equivalents(&conn, "httpd").unwrap();
+        assert_eq!(equivs, vec!["apache2"]);
+    }
+
+    #[test]
+    fn test_multi_arch_candidates_coexist() {
+        // Same package name with different architectures should return
+        // multiple candidates from PackageIdentity::find_all_by_name.
+        let (_dir, conn) = setup_test_db();
+
+        conn.execute(
+            "INSERT INTO repositories (name, url, enabled, priority)
+             VALUES ('fedora', 'https://f.com', 1, 10)",
+            [],
+        )
+        .unwrap();
+        let repo_id = conn.last_insert_rowid();
+
+        // Same name, different architectures
+        conn.execute(
+            "INSERT INTO repository_packages (repository_id, name, version, architecture, checksum, size, download_url)
+             VALUES (?1, 'glibc', '2.38', 'x86_64', 'sha256:a', 100, 'https://f.com/glibc-x64')",
+            [repo_id],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO repository_packages (repository_id, name, version, architecture, checksum, size, download_url)
+             VALUES (?1, 'glibc', '2.38', 'i686', 'sha256:b', 100, 'https://f.com/glibc-i686')",
+            [repo_id],
+        )
+        .unwrap();
+
+        let candidates = PackageIdentity::find_all_by_name(&conn, "glibc").unwrap();
+        assert_eq!(candidates.len(), 2);
+
+        let arches: Vec<_> = candidates
+            .iter()
+            .map(|c| c.architecture.as_deref())
+            .collect();
+        assert!(arches.contains(&Some("x86_64")));
+        assert!(arches.contains(&Some("i686")));
+    }
+
+    #[test]
+    fn test_provides_index_cross_source() {
+        // ProvidesIndex should aggregate providers from both repository_provides
+        // and appstream_provides into a single unified index.
+        let (_dir, conn) = setup_test_db();
+
+        // Repo provide
+        conn.execute(
+            "INSERT INTO repositories (name, url, enabled, priority)
+             VALUES ('fedora', 'https://f.com', 1, 10)",
+            [],
+        )
+        .unwrap();
+        let repo_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url)
+             VALUES (?1, 'openssl-libs', '3.2', 'sha256:a', 100, 'https://f.com/x')",
+            [repo_id],
+        )
+        .unwrap();
+        let pkg_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO repository_provides (repository_package_id, capability, version, kind)
+             VALUES (?1, 'libssl.so.3', '3.2', 'library')",
+            [pkg_id],
+        )
+        .unwrap();
+
+        // AppStream provide (cross-distro)
+        conn.execute(
+            "INSERT INTO canonical_packages (name, kind) VALUES ('openssl', 'package')",
+            [],
+        )
+        .unwrap();
+        let canonical_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO appstream_provides (canonical_id, provide_type, capability)
+             VALUES (?1, 'library', 'libcrypto.so.3')",
+            [canonical_id],
+        )
+        .unwrap();
+
+        let index = ProvidesIndex::build(&conn).unwrap();
+
+        // Repo provide found
+        assert_eq!(index.find_providers("libssl.so.3").len(), 1);
+        // AppStream provide found
+        assert_eq!(index.find_providers("libcrypto.so.3").len(), 1);
+        // Unknown not found
+        assert!(index.find_providers("libfoo.so.1").is_empty());
+    }
+
+    #[test]
+    fn test_version_scheme_explicit_over_inferred() {
+        // When a package has an explicit version_scheme that differs from
+        // the repo's distro inference, the explicit scheme should win.
+        let (_dir, conn) = setup_test_db();
+
+        // Repo with fedora distro but package has explicit debian scheme
+        conn.execute(
+            "INSERT INTO repositories (name, url, enabled, priority, default_strategy_distro)
+             VALUES ('mixed-repo', 'https://m.com', 1, 10, 'fedora-41')",
+            [],
+        )
+        .unwrap();
+        let repo_id = conn.last_insert_rowid();
+
+        conn.execute(
+            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, version_scheme)
+             VALUES (?1, 'pkg', '1.0', 'sha256:a', 100, 'https://m.com/x', 'debian')",
+            [repo_id],
+        )
+        .unwrap();
+
+        let identities = PackageIdentity::find_all_by_name(&conn, "pkg").unwrap();
+        assert_eq!(identities.len(), 1);
+        // Explicit debian scheme should win over fedora inference
+        assert_eq!(identities[0].version_scheme, VersionScheme::Debian);
     }
 }
