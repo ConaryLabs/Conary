@@ -18,6 +18,8 @@ pub struct ResolverCandidate {
     pub distro_name: String,
     pub distro: String,
     pub canonical_id: i64,
+    /// Repository name, if available from repository_packages canonical link.
+    pub repository_name: Option<String>,
 }
 
 /// Result of a mixing policy check
@@ -45,6 +47,20 @@ impl<'db> CanonicalResolver<'db> {
         Self { conn }
     }
 
+    /// Look up repository name for a canonical package implementation.
+    fn lookup_repo_name(&self, canonical_id: i64, distro_name: &str) -> Option<String> {
+        self.conn
+            .query_row(
+                "SELECT r.name FROM repository_packages rp
+                 JOIN repositories r ON rp.repository_id = r.id
+                 WHERE rp.canonical_id = ?1 AND rp.name = ?2 AND r.enabled = 1
+                 LIMIT 1",
+                rusqlite::params![canonical_id, distro_name],
+                |row| row.get(0),
+            )
+            .ok()
+    }
+
     /// Expand a package name into all known implementation candidates.
     ///
     /// First tries the name as a canonical package name. If not found,
@@ -58,10 +74,14 @@ impl<'db> CanonicalResolver<'db> {
             let impls = PackageImplementation::find_by_canonical(self.conn, canonical_id)?;
             return Ok(impls
                 .into_iter()
-                .map(|i| ResolverCandidate {
-                    distro_name: i.distro_name,
-                    distro: i.distro,
-                    canonical_id: i.canonical_id,
+                .map(|i| {
+                    let repo_name = self.lookup_repo_name(i.canonical_id, &i.distro_name);
+                    ResolverCandidate {
+                        distro_name: i.distro_name,
+                        distro: i.distro,
+                        canonical_id: i.canonical_id,
+                        repository_name: repo_name,
+                    }
                 })
                 .collect());
         }
@@ -72,10 +92,14 @@ impl<'db> CanonicalResolver<'db> {
             let impls = PackageImplementation::find_by_canonical(self.conn, canonical_id)?;
             return Ok(impls
                 .into_iter()
-                .map(|i| ResolverCandidate {
-                    distro_name: i.distro_name,
-                    distro: i.distro,
-                    canonical_id: i.canonical_id,
+                .map(|i| {
+                    let repo_name = self.lookup_repo_name(i.canonical_id, &i.distro_name);
+                    ResolverCandidate {
+                        distro_name: i.distro_name,
+                        distro: i.distro,
+                        canonical_id: i.canonical_id,
+                        repository_name: repo_name,
+                    }
                 })
                 .collect());
         }
@@ -185,14 +209,16 @@ impl<'db> CanonicalResolver<'db> {
             // 0. Explicit request scope first (root requests only)
             match &policy.request_scope {
                 RequestScope::Repository(repo) => {
-                    // TODO: ResolverCandidate lacks a `repository_name` field, so we
-                    // compare against `distro` (the distro identity). This works when
-                    // the repo scope string matches the distro (e.g. "ubuntu-noble"),
-                    // but will not work for repo-specific scoping like "fedora-updates"
-                    // vs "fedora-base". Add `repository_name` to ResolverCandidate to
-                    // support true per-repo scoping.
-                    let a_match = a.distro == repo.as_str();
-                    let b_match = b.distro == repo.as_str();
+                    // Use repository_name when available for exact repo scoping,
+                    // fall back to distro identity when repo name isn't known.
+                    let a_match = a
+                        .repository_name
+                        .as_deref()
+                        .map_or(a.distro == repo.as_str(), |rn| rn == repo.as_str());
+                    let b_match = b
+                        .repository_name
+                        .as_deref()
+                        .map_or(b.distro == repo.as_str(), |rn| rn == repo.as_str());
                     if a_match != b_match {
                         return b_match.cmp(&a_match);
                     }
@@ -358,11 +384,13 @@ mod tests {
                 distro_name: "httpd".into(),
                 distro: "fedora-41".into(),
                 canonical_id: 1,
+                repository_name: None,
             },
             ResolverCandidate {
                 distro_name: "apache2".into(),
                 distro: "ubuntu-noble".into(),
                 canonical_id: 1,
+                repository_name: None,
             },
         ];
 
@@ -385,11 +413,13 @@ mod tests {
                 distro_name: "curl".into(),
                 distro: "fedora-41".into(),
                 canonical_id: 1,
+                repository_name: None,
             },
             ResolverCandidate {
                 distro_name: "curl".into(),
                 distro: "ubuntu-noble".into(),
                 canonical_id: 1,
+                repository_name: None,
             },
         ];
 

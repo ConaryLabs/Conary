@@ -232,7 +232,7 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
             }
         }
         // 2. Fallback: check by package name among loaded solvables.
-        (0..solvable_count).any(|j| {
+        let name_match = (0..solvable_count).any(|j| {
             let alt_sid = resolvo::SolvableId(j as u32);
             let alt = provider.get_solvable(alt_sid);
             alt.installed_trove_id.is_some()
@@ -243,7 +243,27 @@ pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<Stri
                     &alt.version,
                     alt.version_scheme,
                 )
-        })
+        });
+        if name_match {
+            return true;
+        }
+        // 3. If no provider and no name match among tracked packages, this dep
+        //    is satisfied by the base system (libc.so.6, ld-linux, etc.) or
+        //    another untracked capability. Only flag as broken if we had a
+        //    provider that was in the removal set.
+        let was_provided_by_removed = providers.iter().any(|(trove_id, _)| {
+            provider
+                .trove_name(*trove_id)
+                .is_some_and(|name| gone.contains(name))
+        });
+        // Also check if any going-away solvable matches by name
+        let name_was_removed = (0..solvable_count).any(|j| {
+            let alt_sid = resolvo::SolvableId(j as u32);
+            let alt = provider.get_solvable(alt_sid);
+            alt.installed_trove_id.is_some() && alt.name == dep_name && gone.contains(&alt.name)
+        });
+        // If neither -- the dep is untracked, assume base system satisfies it
+        !was_provided_by_removed && !name_was_removed
     };
 
     // Helper closure: check if a SolverDep clause is satisfiable.

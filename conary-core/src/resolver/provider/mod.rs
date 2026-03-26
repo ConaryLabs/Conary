@@ -392,6 +392,22 @@ impl<'db> ConaryProvider<'db> {
                 {
                     providers.push(trove.name.clone());
                 }
+                // AppStream cross-distro provides: resolve canonical_id to
+                // package names via repository_packages.canonical_id
+                if let Some(cid) = entry.canonical_id
+                    && let Ok(mut stmt) = self.conn.prepare(
+                        "SELECT DISTINCT rp.name FROM repository_packages rp
+                         JOIN repositories r ON rp.repository_id = r.id
+                         WHERE rp.canonical_id = ?1 AND r.enabled = 1",
+                    )
+                    && let Ok(rows) = stmt.query_map([cid], |row| row.get::<_, String>(0))
+                {
+                    for name in rows.flatten() {
+                        if !providers.contains(&name) {
+                            providers.push(name);
+                        }
+                    }
+                }
             }
             return providers;
         }
