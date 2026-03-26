@@ -48,6 +48,13 @@ impl<'db> CanonicalResolver<'db> {
     }
 
     /// Look up repository name for a canonical package implementation.
+    /// Look up the best repository name for a canonical implementation.
+    ///
+    /// Returns the highest-priority enabled repo that carries this package.
+    /// NOTE: This is approximate -- if the same implementation exists in
+    /// multiple repos (e.g., fedora-base and fedora-updates), only the
+    /// highest-priority one is returned. Exact per-repo canonical scoping
+    /// would require expanding ResolverCandidate to carry per-repo variants.
     fn lookup_repo_name(&self, canonical_id: i64, distro_name: &str) -> Option<String> {
         self.conn
             .query_row(
@@ -600,5 +607,58 @@ mod tests {
             "fedora-41",
             RepositoryDependencyFlavor::Deb
         ));
+    }
+
+    #[test]
+    fn test_lookup_repo_name_picks_highest_priority() {
+        let (_t, conn) = create_test_db();
+
+        let mut pkg = CanonicalPackage::new("httpd-web".into(), "package".into());
+        let cid = pkg.insert(&conn).unwrap();
+
+        // Two repos for the same distro, different priorities
+        conn.execute(
+            "INSERT INTO repositories (name, url, enabled, priority, default_strategy_distro)
+             VALUES ('fedora-base', 'https://base.com', 1, 10, 'fedora-41')",
+            [],
+        )
+        .unwrap();
+        let base_repo = conn.last_insert_rowid();
+
+        conn.execute(
+            "INSERT INTO repositories (name, url, enabled, priority, default_strategy_distro)
+             VALUES ('fedora-updates', 'https://updates.com', 1, 20, 'fedora-41')",
+            [],
+        )
+        .unwrap();
+        let updates_repo = conn.last_insert_rowid();
+
+        // Same package in both repos, both linked to same canonical
+        conn.execute(
+            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, canonical_id)
+             VALUES (?1, 'httpd', '2.4.58', 'sha256:a', 100, 'https://base.com/httpd', ?2)",
+            rusqlite::params![base_repo, cid],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, canonical_id)
+             VALUES (?1, 'httpd', '2.4.59', 'sha256:b', 100, 'https://updates.com/httpd', ?2)",
+            rusqlite::params![updates_repo, cid],
+        )
+        .unwrap();
+
+        // Create the implementation so expand() finds it
+        let mut impl1 =
+            PackageImplementation::new(cid, "fedora-41".into(), "httpd".into(), "auto".into());
+        impl1.insert_or_ignore(&conn).unwrap();
+
+        let resolver = CanonicalResolver::new(&conn);
+        let candidates = resolver.expand("httpd").unwrap();
+        assert_eq!(candidates.len(), 1);
+        // Should pick fedora-updates (priority 20 > 10)
+        assert_eq!(
+            candidates[0].repository_name.as_deref(),
+            Some("fedora-updates")
+        );
     }
 }
