@@ -315,13 +315,13 @@ Review every file listed. Do not skip files. Do not summarize files without revi
 
 | # | Chunk | Status |
 |---|-------|--------|
-| 1 | Database | Pending |
-| 2 | Server Core | Pending |
-| 3 | Server Handlers | Pending |
-| 4 | Repository | Pending |
-| 5 | CCS Format | Pending |
-| 6 | Security Domain | Pending |
-| 7 | Resolver + Deps | Pending |
+| 1 | Database | Done (5H, schema v58, +installed_from_repository_id) |
+| 2 | Server Core | Done (4H 4M, audit/SSRF/version/IP/delta/prewarm/index/mcp) |
+| 3 | Server Handlers | Done (6H 2M, uploads/models/chunks/seeds/multi-repo/tuf/audit) |
+| 4 | Repository | Done (7H 1M, arch aliases/capability versions/metadata cap/delegate unwind/tilde-caret/GPG path/policy repos/RPM detect) |
+| 5 | CCS Format | Done (1C 4H 2M, component hash verify/CBOR-TOML merge/path traversal/hook paths/strict timestamps/chunk dedup/lockfile kind) |
+| 6 | Security Domain | Done (5H 2M, shared-key rotation/policy path/landlock write/path traversal/DNA hash/execute paths/cache keys) |
+| 7 | Resolver + Deps | Redesigned (pipeline rewrite: PackageIdentity, ProvidesIndex, graph deleted, SAT-only) -- re-review with updated prompt |
 | 8 | Derivation + Bootstrap | Pending |
 | 9 | Model + Recipe | Pending |
 | 10 | Filesystem Domain | Pending |
