@@ -484,7 +484,10 @@ impl Bootstrap {
             size,
         )?;
 
-        let result = builder.build()?;
+        let result = match format {
+            ImageFormat::Erofs => builder.build()?,
+            _ => builder.build_tier1_image()?,
+        };
 
         self.stages
             .mark_complete(BootstrapStage::BootableImage, &result.path)?;
