@@ -105,8 +105,21 @@ impl PackageBuildRunner {
         let target_path = self.sources_dir.join(&filename);
 
         if target_path.exists() {
-            info!("  Using cached source: {}", filename);
-            return Ok(target_path);
+            match self.verify_checksum(pkg_name, &recipe.source.checksum, &target_path) {
+                Ok(()) => {
+                    info!("  Using cached source (checksum verified): {}", filename);
+                    return Ok(target_path);
+                }
+                Err(e) => {
+                    warn!(
+                        "  Cached source {} failed verification: {e} -- re-downloading",
+                        filename
+                    );
+                    if let Err(rm_err) = std::fs::remove_file(&target_path) {
+                        warn!("  Failed to remove corrupted cache file: {rm_err}");
+                    }
+                }
+            }
         }
 
         info!("  Fetching: {}", url);
