@@ -104,13 +104,15 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
         let _ = run_command("umount", &["/etc"]);
     }
 
-    std::fs::create_dir_all("/conary/etc-state/upper")
+    let etc_upper = format!("/conary/etc-state/{gen_number}");
+    let etc_work = format!("/conary/etc-state/{gen_number}-work");
+    std::fs::create_dir_all(&etc_upper)
         .context("Failed to create /etc overlay upper dir")?;
-    std::fs::create_dir_all("/conary/etc-state/work")
+    std::fs::create_dir_all(&etc_work)
         .context("Failed to create /etc overlay work dir")?;
 
     let etc_opts = format!(
-        "lowerdir={staging_etc},upperdir=/conary/etc-state/upper,workdir=/conary/etc-state/work"
+        "lowerdir={staging_etc},upperdir={etc_upper},workdir={etc_work}"
     );
     match run_command(
         "mount",

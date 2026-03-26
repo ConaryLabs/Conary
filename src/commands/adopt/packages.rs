@@ -233,16 +233,17 @@ pub async fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result
                 }
             }
 
-            // Query and insert dependencies with version constraints
+            // Query dependencies -- propagate errors to abort the transaction
+            // rather than committing a trove with incomplete metadata.
             let deps: Vec<DependencyInfo> = match pkg_mgr {
                 SystemPackageManager::Rpm => {
-                    rpm_query::query_package_dependencies_full(&pkg_name).unwrap_or_default()
+                    rpm_query::query_package_dependencies_full(&pkg_name)?
                 }
                 SystemPackageManager::Dpkg => {
-                    dpkg_query::query_package_dependencies_full(&pkg_name).unwrap_or_default()
+                    dpkg_query::query_package_dependencies_full(&pkg_name)?
                 }
                 SystemPackageManager::Pacman => {
-                    pacman_query::query_package_dependencies_full(&pkg_name).unwrap_or_default()
+                    pacman_query::query_package_dependencies_full(&pkg_name)?
                 }
                 _ => Vec::new(),
             };
@@ -264,16 +265,16 @@ pub async fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result
                 }
             }
 
-            // Query and insert provides (capabilities this package offers)
+            // Query provides -- propagate errors to abort the transaction.
             let provides: Vec<String> = match pkg_mgr {
                 SystemPackageManager::Rpm => {
-                    rpm_query::query_package_provides(&pkg_name).unwrap_or_default()
+                    rpm_query::query_package_provides(&pkg_name)?
                 }
                 SystemPackageManager::Dpkg => {
-                    dpkg_query::query_package_provides(&pkg_name).unwrap_or_default()
+                    dpkg_query::query_package_provides(&pkg_name)?
                 }
                 SystemPackageManager::Pacman => {
-                    pacman_query::query_package_provides(&pkg_name).unwrap_or_default()
+                    pacman_query::query_package_provides(&pkg_name)?
                 }
                 _ => Vec::new(),
             };

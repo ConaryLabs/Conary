@@ -1084,6 +1084,18 @@ pub async fn cmd_bootstrap_clean(
     }
 
     if let Some(ref stage_name) = stage {
+        // Validate stage name: only allow known stage directory names to
+        // prevent path traversal (absolute paths, ".." segments, etc.).
+        const ALLOWED_STAGES: &[&str] =
+            &["cross-tools", "temp-tools", "system", "image", "sources"];
+        if !ALLOWED_STAGES.contains(&stage_name.as_str()) {
+            anyhow::bail!(
+                "Invalid stage '{}'. Allowed stages: {}",
+                stage_name,
+                ALLOWED_STAGES.join(", ")
+            );
+        }
+
         // Clean specific stage
         let stage_dir = work_path.join(stage_name);
         if stage_dir.exists() {

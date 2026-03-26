@@ -394,8 +394,14 @@ fn upgrade_to_cas_backed(
                 conary_core::Error::MissingId(format!("trove '{name}' from DB has no ID"))
             })?;
 
-            // Query files from the system PM
-            let files = query_package_files(*pm, name);
+            // Query files from the system PM -- abort this package on failure
+            let files = match query_package_files(*pm, name) {
+                Ok(f) => f,
+                Err(e) => {
+                    warn!("Skipping CAS upgrade for '{name}': {e}");
+                    continue;
+                }
+            };
 
             // Hardlink each file into CAS and update the file_entry hash
             for (path, _size, mode, digest, _user, _group, link_target) in &files {
@@ -441,14 +447,17 @@ fn upgrade_to_cas_backed(
 fn take_ownership(db_path: &str, packages: &[String], pm: SystemPackageManager) -> Result<()> {
     let cas = CasStore::new(objects_dir(db_path))?;
 
-    // Pre-capture file lists before any PM removals
-    let file_lists: Vec<(String, Vec<FileInfoTuple>)> = packages
-        .iter()
-        .map(|name| {
-            let files = query_package_files(pm, name);
-            (name.clone(), files)
-        })
-        .collect();
+    // Pre-capture file lists before any PM removals.
+    // Packages whose file query fails are skipped with a warning.
+    let mut file_lists: Vec<(String, Vec<FileInfoTuple>)> = Vec::with_capacity(packages.len());
+    for name in packages {
+        match query_package_files(pm, name) {
+            Ok(files) => file_lists.push((name.clone(), files)),
+            Err(e) => {
+                warn!("Skipping ownership transfer for '{name}': {e}");
+            }
+        }
+    }
 
     // DB transaction: CAS-back any remaining track-only, mark all as Taken
     {
@@ -588,55 +597,36 @@ fn print_dry_run(plan: &TakeoverPlan, pm: &SystemPackageManager, level: Takeover
 // ---------------------------------------------------------------------------
 
 /// Query files for a package from the active package manager.
-fn query_package_files(pkg_mgr: SystemPackageManager, name: &str) -> Vec<FileInfoTuple> {
-    match pkg_mgr {
+///
+/// Returns an error if the PM query fails -- callers must not promote
+/// a package to `AdoptedFull`/`Taken` without successfully querying its files.
+fn query_package_files(
+    pkg_mgr: SystemPackageManager,
+    name: &str,
+) -> Result<Vec<FileInfoTuple>> {
+    let raw_files = match pkg_mgr {
         SystemPackageManager::Rpm => rpm_query::query_package_files(name)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|f| {
-                (
-                    f.path,
-                    f.size,
-                    f.mode,
-                    f.digest,
-                    f.user,
-                    f.group,
-                    f.link_target,
-                )
-            })
-            .collect(),
+            .map_err(|e| anyhow!("RPM file query failed for '{name}': {e}"))?,
         SystemPackageManager::Dpkg => dpkg_query::query_package_files(name)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|f| {
-                (
-                    f.path,
-                    f.size,
-                    f.mode,
-                    f.digest,
-                    f.user,
-                    f.group,
-                    f.link_target,
-                )
-            })
-            .collect(),
+            .map_err(|e| anyhow!("DPKG file query failed for '{name}': {e}"))?,
         SystemPackageManager::Pacman => pacman_query::query_package_files(name)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|f| {
-                (
-                    f.path,
-                    f.size,
-                    f.mode,
-                    f.digest,
-                    f.user,
-                    f.group,
-                    f.link_target,
-                )
-            })
-            .collect(),
-        _ => Vec::new(),
-    }
+            .map_err(|e| anyhow!("Pacman file query failed for '{name}': {e}"))?,
+        _ => return Ok(Vec::new()),
+    };
+    Ok(raw_files
+        .into_iter()
+        .map(|f| {
+            (
+                f.path,
+                f.size,
+                f.mode,
+                f.digest,
+                f.user,
+                f.group,
+                f.link_target,
+            )
+        })
+        .collect())
 }
 
 /// Remove a package from the system package manager's database only.

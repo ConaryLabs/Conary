@@ -90,21 +90,41 @@ pub async fn cmd_ccs_shell(
                         std::fs::create_dir_all(parent)?;
                     }
 
-                    // Copy from CAS to temp dir
-                    if let Ok(content) = cas.retrieve(&file.sha256_hash) {
-                        std::fs::write(&dest_path, &content)?;
-
-                        // Set executable bit if it's in bin or has executable perms
-                        if file.path.contains("/bin/") || file.path.contains("/sbin/") {
-                            #[cfg(unix)]
-                            {
-                                use std::os::unix::fs::PermissionsExt;
-                                let perms = std::fs::Permissions::from_mode(0o755);
-                                let _ = std::fs::set_permissions(&dest_path, perms);
-                            }
-                        }
+                    // Handle symlinks: recreate as symlinks instead of writing content
+                    if let Some(ref target) = file.symlink_target {
+                        #[cfg(unix)]
+                        std::os::unix::fs::symlink(target, &dest_path)
+                            .with_context(|| format!("Failed to create symlink {}", file.path))?;
                         deployed_count += 1;
+                        continue;
                     }
+
+                    // Copy from CAS to temp dir — fail on missing objects
+                    let content = cas.retrieve(&file.sha256_hash).with_context(|| {
+                        format!(
+                            "Missing CAS object for '{}' (hash: {})",
+                            file.path, file.sha256_hash
+                        )
+                    })?;
+                    std::fs::write(&dest_path, &content)?;
+
+                    // Restore stored permissions from the file entry
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let mode = if file.permissions > 0 {
+                            file.permissions as u32
+                        } else if file.path.contains("/bin/") || file.path.contains("/sbin/") {
+                            0o755
+                        } else {
+                            0o644
+                        };
+                        let _ = std::fs::set_permissions(
+                            &dest_path,
+                            std::fs::Permissions::from_mode(mode),
+                        );
+                    }
+                    deployed_count += 1;
                 }
             }
         }
@@ -231,17 +251,38 @@ pub async fn cmd_ccs_run(
                     std::fs::create_dir_all(parent)?;
                 }
 
-                if let Ok(content) = cas.retrieve(&file.sha256_hash) {
-                    std::fs::write(&dest_path, &content)?;
+                // Handle symlinks
+                if let Some(ref target) = file.symlink_target {
+                    #[cfg(unix)]
+                    std::os::unix::fs::symlink(target, &dest_path)
+                        .with_context(|| format!("Failed to create symlink {}", file.path))?;
+                    continue;
+                }
 
-                    if file.path.contains("/bin/") || file.path.contains("/sbin/") {
-                        #[cfg(unix)]
-                        {
-                            use std::os::unix::fs::PermissionsExt;
-                            let perms = std::fs::Permissions::from_mode(0o755);
-                            let _ = std::fs::set_permissions(&dest_path, perms);
-                        }
-                    }
+                // Fail on missing CAS objects
+                let content = cas.retrieve(&file.sha256_hash).with_context(|| {
+                    format!(
+                        "Missing CAS object for '{}' (hash: {})",
+                        file.path, file.sha256_hash
+                    )
+                })?;
+                std::fs::write(&dest_path, &content)?;
+
+                // Restore stored permissions
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let mode = if file.permissions > 0 {
+                        file.permissions as u32
+                    } else if file.path.contains("/bin/") || file.path.contains("/sbin/") {
+                        0o755
+                    } else {
+                        0o644
+                    };
+                    let _ = std::fs::set_permissions(
+                        &dest_path,
+                        std::fs::Permissions::from_mode(mode),
+                    );
                 }
             }
         }

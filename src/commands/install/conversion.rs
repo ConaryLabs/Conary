@@ -181,7 +181,7 @@ pub struct ConvertedCcsInstallOptions<'a> {
     pub no_deps: bool,
     pub no_scripts: bool,
     pub allow_downgrade: bool,
-    pub dep_mode: DepMode,
+    pub dep_mode: Option<DepMode>,
     pub yes: bool,
 }
 
@@ -395,8 +395,8 @@ pub async fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Resu
                 );
             }
 
-            // Use policy-aware resolution so the convergence intent provides a
-            // default dep-mode when the user has not explicitly set one.
+            // Resolve the effective dep-mode from the explicit option or
+            // the system model convergence intent.
             let convergence_intent = if conary_core::model::model_exists(None) {
                 conary_core::model::load_model(None)
                     .ok()
@@ -405,13 +405,16 @@ pub async fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Resu
             } else {
                 conary_core::model::ConvergenceIntent::default()
             };
+            let effective = dep_mode.unwrap_or_else(|| {
+                DepMode::from_convergence_intent(&convergence_intent)
+            });
             let mut dep_plan = dep_resolution::resolve_missing_deps_policy_aware(
                 &conn,
                 &unresolved_missing,
-                Some(dep_mode),
+                Some(effective),
                 &convergence_intent,
             );
-            if matches!(dep_mode, DepMode::Satisfy) {
+            if matches!(effective, DepMode::Satisfy) {
                 promote_repo_resolvable_satisfy_deps(&conn, &mut dep_plan);
             }
 
@@ -545,7 +548,7 @@ pub async fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Resu
                         "Cannot install {}: {} unresolvable dependencies (dep-mode={}, convergence={}):\n{}",
                         ccs_pkg.name(),
                         still_missing.len(),
-                        dep_mode,
+                        effective,
                         convergence_intent.display_name(),
                         detail_lines.join("\n"),
                     ));

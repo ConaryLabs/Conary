@@ -90,8 +90,10 @@ pub struct InstallOptions<'a> {
     pub no_capture: bool,
     /// Force install even for adopted packages
     pub force: bool,
-    /// Dependency handling mode: satisfy, adopt, takeover
-    pub dep_mode: DepMode,
+    /// Dependency handling mode: satisfy, adopt, takeover.
+    /// `None` means the user did not explicitly set `--dep-mode`, so the
+    /// policy-aware resolver uses the system model convergence intent.
+    pub dep_mode: Option<DepMode>,
     /// Skip confirmation prompts
     pub yes: bool,
     /// Install from a specific distro (cross-distro canonical resolution)
@@ -256,6 +258,19 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
     // for the main install transaction.
     let conn = open_db(db_path)?;
 
+    // Resolve dep_mode: if the user explicitly set --dep-mode use that,
+    // otherwise derive from the system model convergence intent.
+    let effective_dep_mode = dep_mode.unwrap_or_else(|| {
+        if conary_core::model::model_exists(None) {
+            conary_core::model::load_model(None)
+                .ok()
+                .map(|m| DepMode::from_convergence_intent(&m.system.convergence))
+                .unwrap_or(DepMode::Satisfy)
+        } else {
+            DepMode::Satisfy
+        }
+    });
+
     // --- Phase 1: Canonical resolution + policy ---
     let policy = build_resolution_policy(&conn, from_distro.as_deref(), repo.as_deref())?;
     let resolved_name = resolve_canonical_name(&conn, package, from_distro.as_deref(), &policy)?;
@@ -263,7 +278,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
 
     // --- Phase 2: Component parsing + pre-install validation ---
     let (package_name, component_selection) =
-        parse_component_and_validate(&conn, package, dep_mode, force)?;
+        parse_component_and_validate(&conn, package, effective_dep_mode, force)?;
 
     // --- Phase 3: Dependency-as-explicit promotion check ---
     if try_promote_existing_dep(&conn, &package_name, version.as_deref(), selection_reason)? {
@@ -279,7 +294,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         no_deps,
         no_scripts,
         allow_downgrade,
-        dep_mode,
+        dep_mode: Some(effective_dep_mode),
         yes,
     };
 
@@ -310,7 +325,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         pkg: pkg.as_ref(),
         no_deps,
         dry_run,
-        dep_mode,
+        dep_mode: Some(effective_dep_mode),
         yes,
         allow_downgrade,
         db_path,
@@ -390,7 +405,7 @@ struct CcsInstallParams<'a> {
     no_deps: bool,
     no_scripts: bool,
     allow_downgrade: bool,
-    dep_mode: DepMode,
+    dep_mode: Option<DepMode>,
     yes: bool,
 }
 
@@ -400,7 +415,8 @@ struct DepAnalysisContext<'a> {
     pkg: &'a dyn conary_core::packages::PackageFormat,
     no_deps: bool,
     dry_run: bool,
-    dep_mode: DepMode,
+    /// `None` when user did not explicitly set --dep-mode.
+    dep_mode: Option<DepMode>,
     yes: bool,
     allow_downgrade: bool,
     db_path: &'a str,
@@ -901,7 +917,7 @@ async fn handle_dependencies(ctx: &DepAnalysisContext<'_>) -> Result<()> {
     let dep_plan = dep_resolution::resolve_missing_deps_policy_aware(
         ctx.conn,
         &missing,
-        Some(ctx.dep_mode),
+        ctx.dep_mode,
         &convergence_intent,
     );
 
@@ -1138,7 +1154,7 @@ fn check_unresolvable_deps(
         }
         eprintln!(
             "\nResolution context: dep-mode={}, convergence={}",
-            ctx.dep_mode,
+            ctx.dep_mode.map_or("auto".to_string(), |m| m.to_string()),
             convergence_intent.display_name(),
         );
         // List repos that were searched
