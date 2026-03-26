@@ -211,9 +211,10 @@ impl<'a> Cook<'a> {
         // Extract additional source archives, honoring extract_to.
         // Archives were staged by prep() into the original staging_dir,
         // not the (possibly rewritten) source_dir.
+        // Use the same substitution as prep() so templated filenames match.
         for additional in &self.recipe.source.additional {
-            let filename = additional
-                .url
+            let substituted_url = self.recipe.substitute(&additional.url, "");
+            let filename = substituted_url
                 .split('/')
                 .next_back()
                 .unwrap_or("additional.tar.gz");

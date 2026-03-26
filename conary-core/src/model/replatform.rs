@@ -219,7 +219,20 @@ pub fn planned_replatform_actions(
     let mut actions = Vec::new();
 
     for proposal in &snapshot.visible_realignment_proposals {
-        let Some(installed) = state.get_package(&proposal.package) else {
+        // When the proposal targets a specific architecture, look up that
+        // instance so multilib systems get the correct current_version/arch
+        // instead of always using the first (typically native-arch) instance.
+        let installed = if let Some(ref target_arch) = proposal.architecture {
+            state
+                .get_all_instances(&proposal.package)
+                .iter()
+                .find(|p| p.architecture.as_deref() == Some(target_arch))
+                .or_else(|| state.get_package(&proposal.package))
+        } else {
+            state.get_package(&proposal.package)
+        };
+
+        let Some(installed) = installed else {
             continue;
         };
 
