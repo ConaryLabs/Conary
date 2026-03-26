@@ -542,7 +542,7 @@ impl ImageBuilder {
         use crate::db::models::{FileEntry, Trove, TroveType};
         use crate::db::schema::migrate;
         use crate::filesystem::CasStore;
-        use crate::generation::builder::{FileEntryRef, build_erofs_image};
+        use crate::generation::builder::{FileEntryRef, SymlinkEntryRef, build_erofs_image};
         use crate::generation::metadata::{GENERATION_FORMAT, GenerationMetadata};
 
         self.log_line("Building composefs-native output (EROFS + CAS + DB)");
@@ -564,7 +564,13 @@ impl ImageBuilder {
             .map_err(|e| ImageError::CreationFailed(format!("Failed to create CAS store: {e}")))?;
 
         let mut file_entries: Vec<(String, String, u64, u32)> = Vec::new();
-        self.walk_sysroot_to_cas(&cas, &self.sysroot.clone(), &mut file_entries)?;
+        let mut sysroot_symlinks: Vec<(String, String)> = Vec::new();
+        self.walk_sysroot_to_cas(
+            &cas,
+            &self.sysroot.clone(),
+            &mut file_entries,
+            &mut sysroot_symlinks,
+        )?;
 
         let file_count = file_entries.len();
         self.log_line(&format!("Stored {file_count} files in CAS"));
@@ -616,7 +622,19 @@ impl ImageBuilder {
             })
             .collect();
 
-        let build_result = build_erofs_image(&erofs_entries, &[], &gen_dir)
+        let symlink_refs: Vec<SymlinkEntryRef> = sysroot_symlinks
+            .iter()
+            .map(|(path, target)| SymlinkEntryRef {
+                path: path.clone(),
+                target: target.clone(),
+            })
+            .collect();
+        self.log_line(&format!(
+            "Collected {} symlinks from sysroot",
+            symlink_refs.len()
+        ));
+
+        let build_result = build_erofs_image(&erofs_entries, &symlink_refs, &gen_dir)
             .map_err(|e| ImageError::CreationFailed(format!("Failed to build EROFS image: {e}")))?;
 
         // Step 5: Write generation metadata
@@ -686,6 +704,7 @@ impl ImageBuilder {
         cas: &crate::filesystem::CasStore,
         sysroot: &Path,
         entries: &mut Vec<(String, String, u64, u32)>,
+        symlinks: &mut Vec<(String, String)>,
     ) -> Result<(), ImageError> {
         use crate::generation::metadata::is_excluded;
 
@@ -734,9 +753,22 @@ impl ImageBuilder {
                     continue;
                 }
 
+                // Collect symlinks for EROFS generation (metadata, not CAS content)
+                if metadata.is_symlink() {
+                    match std::fs::read_link(&path) {
+                        Ok(target) => {
+                            let rel = format!("/{}", rel_path.trim_start_matches('/'));
+                            symlinks.push((rel, target.to_string_lossy().to_string()));
+                        }
+                        Err(e) => {
+                            warn!("Cannot read symlink target {}: {e}", path.display());
+                        }
+                    }
+                    continue;
+                }
+
                 if !metadata.is_file() {
-                    // Skip symlinks and special files for CAS storage.
-                    // Symlinks are handled by the EROFS builder via root symlinks.
+                    // Skip special files (sockets, devices, etc.)
                     continue;
                 }
 
