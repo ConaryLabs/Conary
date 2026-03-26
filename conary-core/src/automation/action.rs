@@ -267,46 +267,27 @@ impl ActionExecutor {
             "Executing automation action"
         );
 
-        tracing::warn!(
-            "ActionExecutor::execute is a placeholder -- no action taken for {:?}",
+        // TODO: Implement actual execution dispatch per category:
+        //   Security    -> call into install system for security updates
+        //   Orphans     -> call into remove system for orphan cleanup
+        //   Updates     -> call into upgrade system for package updates
+        //   MajorUpgrades -> upgrade with major version flag + user confirmation
+        //   Repair      -> CAS-based file restoration via generation rebuild
+        //
+        // Until implemented, return Failed so callers (CLI automation apply)
+        // do not report success for actions that were never performed.
+        let reason = format!(
+            "Action execution not yet implemented for {:?} category",
             action.category
         );
+        tracing::warn!(
+            action_id = %action.id,
+            category = ?action.category,
+            "ActionExecutor: {reason}"
+        );
 
-        // TODO: Implement actual execution logic based on category
-        // For now, this is a placeholder that would dispatch to:
-        // - Security: security update installation
-        // - Orphans: package removal
-        // - Updates: package updates
-        // - MajorUpgrades: major version upgrades
-        // - Repair: CAS-based file restoration
-
-        match action.category {
-            AutomationCategory::Security => {
-                // Would call into install system for security updates
-                self.executed.push(action.id.clone());
-                Ok(ActionStatus::Completed)
-            }
-            AutomationCategory::Orphans => {
-                // Would call into remove system
-                self.executed.push(action.id.clone());
-                Ok(ActionStatus::Completed)
-            }
-            AutomationCategory::Updates => {
-                // Would call into upgrade system
-                self.executed.push(action.id.clone());
-                Ok(ActionStatus::Completed)
-            }
-            AutomationCategory::MajorUpgrades => {
-                // Would call into upgrade system with major version flag
-                self.executed.push(action.id.clone());
-                Ok(ActionStatus::Completed)
-            }
-            AutomationCategory::Repair => {
-                // Would call into CAS restoration system
-                self.executed.push(action.id.clone());
-                Ok(ActionStatus::Completed)
-            }
-        }
+        self.failed.push((action.id.clone(), reason.clone()));
+        Ok(ActionStatus::Failed { reason })
     }
 
     /// Get list of successfully executed action IDs

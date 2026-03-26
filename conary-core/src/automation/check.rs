@@ -10,17 +10,27 @@
 
 use super::PendingAction;
 use super::action::{
-    integrity_repair_action, orphan_cleanup_action, package_update_action, security_update_action,
+    integrity_repair_action, major_upgrade_action, orphan_cleanup_action, package_update_action,
+    security_update_action,
 };
 use crate::error::Result;
 use crate::hash::verify_file_sha256;
 use crate::model::AutomationConfig;
-use crate::version::RpmVersion;
+use crate::repository::versioning::{VersionScheme, compare_repo_versions};
 use chrono::{Duration, Utc};
 use rusqlite::Connection;
 use std::collections::HashSet;
 use std::path::Path;
 use tracing::{debug, trace, warn};
+
+/// Parse a stored version_scheme string into the enum, defaulting to RPM.
+fn parse_version_scheme(s: Option<&str>) -> VersionScheme {
+    match s {
+        Some("debian") => VersionScheme::Debian,
+        Some("arch") => VersionScheme::Arch,
+        _ => VersionScheme::Rpm,
+    }
+}
 
 /// Results from an automation check run
 #[derive(Debug, Default)]
@@ -34,6 +44,9 @@ pub struct CheckResults {
     /// Available updates found
     pub updates: Vec<PendingAction>,
 
+    /// Major version upgrades (surfaced separately from regular updates)
+    pub major_upgrades: Vec<PendingAction>,
+
     /// Integrity issues found
     pub integrity: Vec<PendingAction>,
 
@@ -44,7 +57,11 @@ pub struct CheckResults {
 impl CheckResults {
     /// Total number of actions found
     pub fn total(&self) -> usize {
-        self.security.len() + self.orphans.len() + self.updates.len() + self.integrity.len()
+        self.security.len()
+            + self.orphans.len()
+            + self.updates.len()
+            + self.major_upgrades.len()
+            + self.integrity.len()
     }
 
     /// Get all actions as a flat list
@@ -53,6 +70,7 @@ impl CheckResults {
         actions.extend(self.security.iter());
         actions.extend(self.orphans.iter());
         actions.extend(self.updates.iter());
+        actions.extend(self.major_upgrades.iter());
         actions.extend(self.integrity.iter());
         actions
     }
@@ -122,14 +140,21 @@ impl<'a> AutomationChecker<'a> {
 
     /// Find packages with available security updates
     fn find_security_updates(&self) -> Result<Vec<(String, Vec<String>, String)>> {
-        // Fetch all candidates and compare versions in Rust using RpmVersion
-        // to avoid lexicographic ordering bugs (e.g. "9" > "10" in SQL).
+        // Fetch candidates with version_scheme, filtering by provenance.
+        // Join on name AND match the installed package's source_distro to the
+        // repository's distro so we don't compare against rows from a different
+        // distro on mixed-repo databases. Fall back to name-only when
+        // source_distro is NULL (pre-provenance installs).
         let mut stmt = self.conn.prepare(
             "SELECT DISTINCT t.name, t.version, rp.version,
-                    rp.security_cves, rp.security_severity
+                    rp.security_cves, rp.security_severity, t.version_scheme
              FROM troves t
              JOIN repository_packages rp ON t.name = rp.name
-             WHERE rp.is_security_update = 1",
+             JOIN repositories r ON rp.repository_id = r.id
+             WHERE rp.is_security_update = 1
+               AND (t.source_distro IS NULL
+                    OR t.source_distro = r.name
+                    OR t.source_distro = r.default_strategy_distro)",
         )?;
 
         let mut updates = Vec::new();
@@ -139,20 +164,24 @@ impl<'a> AutomationChecker<'a> {
             let repo_ver: String = row.get(2)?;
             let cves_str: Option<String> = row.get(3)?;
             let severity: String = row.get(4)?;
-            Ok((name, installed_ver, repo_ver, cves_str, severity))
+            let scheme_str: Option<String> = row.get(5)?;
+            Ok((
+                name,
+                installed_ver,
+                repo_ver,
+                cves_str,
+                severity,
+                scheme_str,
+            ))
         })?;
 
         for row in rows {
-            let (name, installed_ver, repo_ver, cves_str, severity) = row?;
+            let (name, installed_ver, repo_ver, cves_str, severity, scheme_str) = row?;
+            let scheme = parse_version_scheme(scheme_str.as_deref());
 
-            // Use semantic version comparison instead of string comparison
-            let (Ok(installed), Ok(repo)) = (
-                RpmVersion::parse(&installed_ver),
-                RpmVersion::parse(&repo_ver),
-            ) else {
-                continue;
-            };
-            if repo <= installed {
+            // Use the package's native version scheme for comparison
+            let cmp = compare_repo_versions(scheme, &installed_ver, &repo_ver);
+            if !matches!(cmp, Some(std::cmp::Ordering::Less)) {
                 continue;
             }
 
@@ -361,49 +390,53 @@ impl<'a> AutomationChecker<'a> {
 
     /// Check for available updates
     fn check_updates(&self, results: &mut CheckResults) -> Result<()> {
-        // Fetch all candidate updates and compare versions in Rust using
-        // RpmVersion to avoid lexicographic ordering bugs.
+        // Fetch candidates with version_scheme, filtering by provenance
+        // to avoid comparing against repository rows from the wrong distro.
         let mut stmt = self.conn.prepare(
-            "SELECT t.name, t.version, rp.version
+            "SELECT t.name, t.version, rp.version, t.version_scheme
              FROM troves t
              JOIN repository_packages rp ON t.name = rp.name
-             WHERE (rp.is_security_update IS NULL OR rp.is_security_update = 0)",
+             JOIN repositories r ON rp.repository_id = r.id
+             WHERE (rp.is_security_update IS NULL OR rp.is_security_update = 0)
+               AND (t.source_distro IS NULL
+                    OR t.source_distro = r.name
+                    OR t.source_distro = r.default_strategy_distro)",
         )?;
 
         let rows = stmt.query_map([], |row| {
             let name: String = row.get(0)?;
             let current: String = row.get(1)?;
             let repo: String = row.get(2)?;
-            Ok((name, current, repo))
+            let scheme_str: Option<String> = row.get(3)?;
+            Ok((name, current, repo, scheme_str))
         })?;
 
         // Filter out excluded packages
         let exclude_set: HashSet<_> = self.config.updates.exclude.iter().collect();
 
         // Keep the best (highest) repo version per package
-        let mut best: std::collections::HashMap<String, (String, String)> =
+        // Keyed by name -> (current_ver, best_repo_ver, version_scheme)
+        let mut best: std::collections::HashMap<String, (String, String, VersionScheme)> =
             std::collections::HashMap::new();
 
         for row in rows {
-            let (name, current, repo_ver) = row?;
+            let (name, current, repo_ver, scheme_str) = row?;
             if exclude_set.contains(&name) {
                 continue;
             }
 
-            let (Ok(installed), Ok(repo)) =
-                (RpmVersion::parse(&current), RpmVersion::parse(&repo_ver))
-            else {
-                continue;
-            };
-            if repo <= installed {
+            let scheme = parse_version_scheme(scheme_str.as_deref());
+            let cmp = compare_repo_versions(scheme, &current, &repo_ver);
+            if !matches!(cmp, Some(std::cmp::Ordering::Less)) {
                 continue;
             }
 
-            let dominated = best.get(&name).is_none_or(|(_, existing)| {
-                RpmVersion::parse(existing).map_or(true, |existing_ver| existing_ver < repo)
+            let dominated = best.get(&name).is_none_or(|(_, existing, s)| {
+                compare_repo_versions(*s, existing, &repo_ver)
+                    .is_some_and(|o| o == std::cmp::Ordering::Less)
             });
             if dominated {
-                best.insert(name, (current, repo_ver));
+                best.insert(name, (current, repo_ver, scheme));
             }
         }
 
@@ -411,16 +444,18 @@ impl<'a> AutomationChecker<'a> {
         let mut sorted: Vec<_> = best.into_iter().collect();
         sorted.sort_by(|a, b| a.0.cmp(&b.0));
 
-        for (name, (current, new)) in sorted {
-            // Check if this is a major version upgrade
+        for (name, (current, new, _scheme)) in sorted {
+            // Surface major version upgrades separately so users can
+            // review them with more care than routine patch updates.
             if is_major_upgrade(&current, &new) {
-                // Handle separately in major upgrades category
-                continue;
+                results
+                    .major_upgrades
+                    .push(major_upgrade_action(&name, &current, &new, &[]));
+            } else {
+                results
+                    .updates
+                    .push(package_update_action(&name, &current, &new));
             }
-
-            results
-                .updates
-                .push(package_update_action(&name, &current, &new));
         }
 
         Ok(())

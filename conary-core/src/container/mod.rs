@@ -2,14 +2,29 @@
 
 //! Container isolation for scriptlet execution
 //!
-//! Provides lightweight Linux container isolation using namespaces to safely
-//! execute package scriptlets. This protects the host system from malicious
-//! or buggy scripts by:
+//! Provides lightweight Linux container isolation using namespaces for
+//! package scriptlet execution.
 //!
+//! **Isolation levels:**
+//!
+//! - **Target-root mode** (`execute_in_target`): Full isolation via chroot
+//!   into a separate filesystem. Scriptlets cannot see or modify the host.
+//! - **Live-root mode** (`execute_sandbox_live`): Partial isolation only.
+//!   Provides PID/UTS/IPC/network namespace separation but /etc and /var
+//!   are bind-mounted writable from the host because the container runtime
+//!   does not create overlay layers. This mode does NOT protect host /etc
+//!   and /var from scriptlet writes.
+//!
+//! TODO: Implement tmpfs overlay support in the container runtime so that
+//! live-root sandbox mode can capture scriptlet writes to /etc and /var
+//! without mutating the host filesystem. This would make the "sandbox"
+//! name accurate for all modes.
+//!
+//! Namespace isolation provided in both modes:
 //! - Isolating process tree (PID namespace)
 //! - Isolating hostname (UTS namespace)
 //! - Isolating IPC resources (IPC namespace)
-//! - Isolating filesystem with bind mounts (mount namespace)
+//! - Isolating mount topology (mount namespace)
 //! - Applying resource limits (CPU, memory, time)
 //!
 //! ## Pristine Mode

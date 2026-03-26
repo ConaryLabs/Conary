@@ -106,8 +106,29 @@ impl<'a> TriggerExecutor<'a> {
                 continue;
             }
 
-            // Check if handler exists (in target root if not live)
-            let handler_cmd = trigger.handler.split_whitespace().next().unwrap_or("");
+            // Check if handler exists (in target root if not live).
+            // Surface parse errors (e.g. unterminated quotes) as warnings
+            // instead of silently treating them as "not found".
+            let handler_parts = match shell_split(&trigger.handler) {
+                Ok(parts) => parts,
+                Err(e) => {
+                    let msg = format!("malformed handler: {e}");
+                    warn!(
+                        "Trigger '{}' has malformed handler '{}': {e}",
+                        trigger.name, trigger.handler
+                    );
+                    // Persist failure in DB so get_execution_order() does not
+                    // pick up the same broken trigger on the next run.
+                    ChangesetTrigger::mark_failed(self.conn, changeset_id, trigger_id, &msg)?;
+                    results.failed += 1;
+                    results.errors.push(format!("{}: {msg}", trigger.name));
+                    continue;
+                }
+            };
+            let handler_cmd = handler_parts
+                .first()
+                .map(String::as_str)
+                .unwrap_or_default();
             let handler_check = if self.is_live_root() {
                 handler_exists(handler_cmd)
             } else {
@@ -174,13 +195,18 @@ impl<'a> TriggerExecutor<'a> {
 
     /// Execute a single trigger handler
     fn execute_handler(&self, trigger: &Trigger) -> Result<Option<String>> {
-        let parts: Vec<&str> = trigger.handler.split_whitespace().collect();
+        let parts = shell_split(&trigger.handler).map_err(|e| {
+            Error::TriggerError(format!(
+                "Failed to parse handler '{}': {e}",
+                trigger.handler
+            ))
+        })?;
         if parts.is_empty() {
             return Err(Error::TriggerError("Empty handler command".to_string()));
         }
 
-        let cmd = parts[0];
-        let args = &parts[1..];
+        let cmd = parts[0].as_str();
+        let args: Vec<&str> = parts[1..].iter().map(String::as_str).collect();
 
         debug!("Executing: {} {:?}", cmd, args);
 
@@ -204,13 +230,18 @@ impl<'a> TriggerExecutor<'a> {
     /// necessary for triggers to work correctly during bootstrap or when
     /// installing to a non-live filesystem.
     fn execute_handler_in_target(&self, trigger: &Trigger) -> Result<Option<String>> {
-        let parts: Vec<&str> = trigger.handler.split_whitespace().collect();
+        let parts = shell_split(&trigger.handler).map_err(|e| {
+            Error::TriggerError(format!(
+                "Failed to parse handler '{}': {e}",
+                trigger.handler
+            ))
+        })?;
         if parts.is_empty() {
             return Err(Error::TriggerError("Empty handler command".to_string()));
         }
 
-        let cmd = parts[0];
-        let args = &parts[1..];
+        let cmd = parts[0].as_str();
+        let args: Vec<&str> = parts[1..].iter().map(String::as_str).collect();
 
         debug!(
             "Executing in chroot {}: {} {:?}",
@@ -419,6 +450,63 @@ impl TriggerResults {
     pub fn total(&self) -> usize {
         self.succeeded + self.failed + self.skipped
     }
+}
+
+/// Split a command string into tokens, respecting single and double quotes.
+///
+/// Handles the common shell quoting rules:
+/// - Unquoted tokens are split on whitespace
+/// - Single-quoted strings preserve literal content (no escaping)
+/// - Double-quoted strings allow `\"` and `\\` escapes
+///
+/// Returns an error for unterminated quotes.
+fn shell_split(input: &str) -> std::result::Result<Vec<String>, String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut chars = input.chars().peekable();
+    let mut in_single = false;
+    let mut in_double = false;
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\'' if !in_double => {
+                in_single = !in_single;
+            }
+            '"' if !in_single => {
+                in_double = !in_double;
+            }
+            '\\' if in_double => {
+                // Inside double quotes, only \" and \\ are special
+                if let Some(&next) = chars.peek() {
+                    if next == '"' || next == '\\' {
+                        current.push(chars.next().unwrap());
+                    } else {
+                        current.push('\\');
+                    }
+                } else {
+                    current.push('\\');
+                }
+            }
+            c if c.is_whitespace() && !in_single && !in_double => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            c => current.push(c),
+        }
+    }
+
+    if in_single {
+        return Err("Unterminated single quote".to_string());
+    }
+    if in_double {
+        return Err("Unterminated double quote".to_string());
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+
+    Ok(tokens)
 }
 
 #[cfg(test)]
