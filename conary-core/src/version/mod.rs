@@ -168,10 +168,16 @@ impl RpmVersion {
         // implements full RPM semantics for ~pre-release and ^snapshot.
         let a_has_special = self.version.contains('~')
             || self.version.contains('^')
-            || self.release.as_ref().is_some_and(|r| r.contains('~') || r.contains('^'));
+            || self
+                .release
+                .as_ref()
+                .is_some_and(|r| r.contains('~') || r.contains('^'));
         let b_has_special = other.version.contains('~')
             || other.version.contains('^')
-            || other.release.as_ref().is_some_and(|r| r.contains('~') || r.contains('^'));
+            || other
+                .release
+                .as_ref()
+                .is_some_and(|r| r.contains('~') || r.contains('^'));
 
         if a_has_special || b_has_special {
             // Reconstruct the version-release strings (without epoch, which

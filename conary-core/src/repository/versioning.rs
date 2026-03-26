@@ -209,7 +209,11 @@ fn split_tilde_caret(version: &str) -> Vec<(Option<char>, &str)> {
 /// Ordering rules for special separators:
 /// - Tilde (`~`) sorts before everything, including end-of-string.
 /// - Caret (`^`) sorts after end-of-string but before any regular segment.
-fn compare_tilde_caret_parts(a_parts: &[(Option<char>, &str)], b_parts: &[(Option<char>, &str)], flavor: SegmentFlavor) -> Ordering {
+fn compare_tilde_caret_parts(
+    a_parts: &[(Option<char>, &str)],
+    b_parts: &[(Option<char>, &str)],
+    flavor: SegmentFlavor,
+) -> Ordering {
     let max_len = a_parts.len().max(b_parts.len());
 
     for i in 0..max_len {

@@ -854,11 +854,8 @@ mod tests {
         migrate(&conn).unwrap();
 
         // Verify canonical_id column exists on repository_packages
-        conn.execute(
-            "SELECT canonical_id FROM repository_packages LIMIT 0",
-            [],
-        )
-        .unwrap();
+        conn.execute("SELECT canonical_id FROM repository_packages LIMIT 0", [])
+            .unwrap();
 
         // Verify appstream_provides table exists with FK enforcement
         conn.execute(

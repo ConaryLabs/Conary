@@ -278,7 +278,9 @@ pub async fn cmd_system_takeover(
             .collect();
         let failed = eligible.len() - newly_adopted.len();
         if failed > 0 {
-            println!("  [WARN] {failed} packages failed adoption and will not be removed from system PM");
+            println!(
+                "  [WARN] {failed} packages failed adoption and will not be removed from system PM"
+            );
         }
         plan.needs_pm_removal.extend(newly_adopted);
     }

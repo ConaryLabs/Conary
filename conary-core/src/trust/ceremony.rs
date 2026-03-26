@@ -252,9 +252,15 @@ mod tests {
                 .unwrap();
 
         let new_targets_key = SigningKeyPair::generate();
-        let rotated =
-            rotate_key(&initial, "targets", &targets_key, &new_targets_key, &root_key, 365)
-                .unwrap();
+        let rotated = rotate_key(
+            &initial,
+            "targets",
+            &targets_key,
+            &new_targets_key,
+            &root_key,
+            365,
+        )
+        .unwrap();
 
         // Old targets key should be removed since no other role uses it
         let (old_id, _) = signing_keypair_to_tuf_key(&targets_key).unwrap();

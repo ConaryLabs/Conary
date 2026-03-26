@@ -115,11 +115,8 @@ pub async fn audit_middleware(
     // Extract client IP using the proxy-aware shared helper so that
     // audit logs record the real client IP, not the proxy's IP.
     let source_ip = Some(
-        crate::server::rate_limit::extract_ip_with_proxy(
-            &request,
-            trusted_proxy_header.as_deref(),
-        )
-        .to_string(),
+        crate::server::rate_limit::extract_ip_with_proxy(&request, trusted_proxy_header.as_deref())
+            .to_string(),
     );
 
     // Maximum number of bytes to log from request/response bodies.

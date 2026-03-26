@@ -205,8 +205,10 @@ fn build_sparse_entry(
          ORDER BY version"
     );
 
-    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
-        repo_ids.iter().map(|id| Box::new(*id) as Box<dyn rusqlite::types::ToSql>).collect();
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = repo_ids
+        .iter()
+        .map(|id| Box::new(*id) as Box<dyn rusqlite::types::ToSql>)
+        .collect();
     params.push(Box::new(name.to_string()));
 
     let mut stmt = conn.prepare(&sql)?;

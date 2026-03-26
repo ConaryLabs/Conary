@@ -409,7 +409,8 @@ mod tests {
 
         // openssl from debian is accepted (exception).
         assert!(policy.accepts_candidate(
-            DEBIAN.0, DEBIAN.1,
+            DEBIAN.0,
+            DEBIAN.1,
             "openssl",
             false,
             Some(RepositoryDependencyFlavor::Rpm),
@@ -417,7 +418,8 @@ mod tests {
 
         // curl from debian is rejected (no exception).
         assert!(!policy.accepts_candidate(
-            DEBIAN.0, DEBIAN.1,
+            DEBIAN.0,
+            DEBIAN.1,
             "curl",
             false,
             Some(RepositoryDependencyFlavor::Rpm),
@@ -435,7 +437,8 @@ mod tests {
         });
 
         assert!(policy.accepts_candidate(
-            DEBIAN.0, DEBIAN.1,
+            DEBIAN.0,
+            DEBIAN.1,
             "anything",
             false,
             Some(RepositoryDependencyFlavor::Rpm),
@@ -462,7 +465,8 @@ mod tests {
 
         // Both should match but the higher priority one is evaluated first.
         assert!(policy.accepts_candidate(
-            DEBIAN.0, DEBIAN.1,
+            DEBIAN.0,
+            DEBIAN.1,
             "openssl",
             false,
             Some(RepositoryDependencyFlavor::Rpm),
