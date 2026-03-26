@@ -307,9 +307,11 @@ impl Pipeline {
             chroot_dir,
             build_env_hash.clone(),
         );
-        if let Err(e) = env.mount() {
-            warn!("Could not mount mutable environment (requires root): {e}");
-        }
+        env.mount().map_err(|e| {
+            PipelineError::Io(format!(
+                "Mutable environment mount failed (requires root): {e}"
+            ))
+        })?;
 
         let sysroot = env.sysroot();
 
