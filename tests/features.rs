@@ -837,10 +837,10 @@ exclude = ["sendmail"]
             version: "1.24.0".to_string(),
             architecture: None,
             explicit: true,
+            pinned: false,
             label: None,
         },
     );
-    state.explicit.insert("nginx".to_string());
 
     // Also have sendmail installed (should be removed)
     state.add_package(
@@ -850,10 +850,10 @@ exclude = ["sendmail"]
             version: "8.0.0".to_string(),
             architecture: None,
             explicit: true,
+            pinned: false,
             label: None,
         },
     );
-    state.explicit.insert("sendmail".to_string());
 
     // Compute diff
     let diff = compute_diff(&model, &state);
@@ -925,10 +925,10 @@ patches = []
             version: "1.24.0".to_string(),
             architecture: None,
             explicit: true,
+            pinned: false,
             label: None,
         },
     );
-    state.explicit.insert("nginx".to_string());
 
     // Compute diff
     let diff = compute_diff(&model, &state);
