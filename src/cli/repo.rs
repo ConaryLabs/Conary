@@ -52,7 +52,7 @@ pub enum RepoCommands {
         /// - remi: Convert packages via Remi server (requires --remi-endpoint and --remi-distro)
         /// - binary: Download pre-built packages directly (default behavior)
         /// - legacy: Use repository_packages table (same as binary)
-        #[arg(long, value_name = "STRATEGY")]
+        #[arg(long, value_name = "STRATEGY", value_parser = ["remi", "binary", "legacy"])]
         default_strategy: Option<String>,
 
         /// Remi server endpoint URL (required when --default-strategy=remi)

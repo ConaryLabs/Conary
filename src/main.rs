@@ -1631,8 +1631,11 @@ async fn run() -> Result<()> {
             cli::FederationCommands::Stats { db, days } => {
                 commands::cmd_federation_stats(&db.db_path, days).await
             }
-            cli::FederationCommands::EnablePeer { peer, db, enable } => {
-                commands::cmd_federation_enable_peer(&peer, &db.db_path, enable).await
+            cli::FederationCommands::EnablePeer { peer, db } => {
+                commands::cmd_federation_enable_peer(&peer, &db.db_path, true).await
+            }
+            cli::FederationCommands::DisablePeer { peer, db } => {
+                commands::cmd_federation_enable_peer(&peer, &db.db_path, false).await
             }
             cli::FederationCommands::Test { db, peer, timeout } => {
                 commands::cmd_federation_test(&db.db_path, peer.as_deref(), timeout).await
