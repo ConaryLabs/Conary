@@ -16,6 +16,10 @@ use super::config::BootstrapConfig;
 use super::toolchain::Toolchain;
 
 /// Tier-2 package build order (BLFS + Conary).
+///
+/// Currently unused -- `build_all()` returns `NotImplemented` until the
+/// recipe-driven build pipeline is wired end-to-end.
+#[allow(dead_code)]
 const TIER2_ORDER: &[&str] = &[
     "linux-pam",
     "openssh",
@@ -42,6 +46,10 @@ pub enum Tier2Error {
     #[error("SSH configuration failed: {0}")]
     SshConfig(String),
 
+    /// Feature not yet implemented.
+    #[error("not implemented: {0}")]
+    NotImplemented(String),
+
     /// I/O error during the build.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
@@ -57,12 +65,15 @@ pub enum Tier2Error {
 /// bootstrap.
 pub struct Tier2Builder {
     /// Working directory for build artifacts.
+    #[allow(dead_code)] // Used once recipe-driven pipeline is wired
     work_dir: PathBuf,
     /// Root of the installed system.
     system_root: PathBuf,
     /// Bootstrap configuration.
+    #[allow(dead_code)] // Used once recipe-driven pipeline is wired
     config: BootstrapConfig,
     /// System toolchain.
+    #[allow(dead_code)] // Used once recipe-driven pipeline is wired
     toolchain: Toolchain,
     /// Shared build runner for source fetching and verification.
     _runner: PackageBuildRunner,
@@ -115,37 +126,11 @@ impl Tier2Builder {
     /// After building openssh, calls [`add_ssh_config`](Self::add_ssh_config)
     /// to configure sshd for bootstrap/test access.
     pub fn build_all(&self) -> Result<(), Tier2Error> {
-        info!(
-            "Phase 6: Building Tier-2 packages ({} packages)",
-            TIER2_ORDER.len()
-        );
-
-        for (i, pkg) in TIER2_ORDER.iter().enumerate() {
-            info!(
-                "Building Tier-2 package [{}/{}]: {}",
-                i + 1,
-                TIER2_ORDER.len(),
-                pkg
-            );
-            // Recipe-driven build delegated to the build runner (placeholder
-            // until recipe execution is wired end-to-end).
-            debug!(
-                "  build_package({}) -- root={}, toolchain={}",
-                pkg,
-                self.system_root.display(),
-                self.toolchain.target
-            );
-            let _ = &self.config;
-            let _ = &self.work_dir;
-
-            // After openssh is built, configure SSH for bootstrap access.
-            if *pkg == "openssh" {
-                self.add_ssh_config()?;
-            }
-        }
-
-        info!("Phase 6 complete: Conary self-hosting achieved");
-        Ok(())
+        Err(Tier2Error::NotImplemented(
+            "Tier-2 self-hosting builds not yet implemented. \
+             Recipe-driven build pipeline needed."
+                .to_string(),
+        ))
     }
 
     /// Configure SSH inside the sysroot for bootstrap/test access.
