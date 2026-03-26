@@ -85,8 +85,7 @@ pub async fn cmd_whatbreaks(package_name: &str, db_path: &str) -> Result<()> {
     conary_core::db::models::Trove::find_one_by_name(&conn, package_name)?
         .ok_or_else(|| anyhow::anyhow!("Package '{}' not found", package_name))?;
 
-    let resolver = conary_core::resolver::Resolver::new(&conn)?;
-    let breaking = resolver.check_removal(package_name)?;
+    let breaking = conary_core::resolver::solve_removal(&conn, &[package_name.to_string()])?;
 
     if breaking.is_empty() {
         println!(
