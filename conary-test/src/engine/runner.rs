@@ -956,10 +956,10 @@ mod tests {
         assert_eq!(suite.failed(), 0);
         assert_eq!(suite.passed(), 1);
         assert_eq!(
-            backend.killed_execs.lock().unwrap().as_slice(),
+            backend.killed_execs().as_slice(),
             [("exec-1".to_string(), "SIGKILL".to_string())]
         );
-        let detached_calls = backend.detached_calls.lock().unwrap().clone();
+        let detached_calls = backend.detached_calls();
         assert_eq!(detached_calls.len(), 1);
         assert!(
             detached_calls[0]
@@ -1165,7 +1165,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(suite.failed(), 1);
-        assert_eq!(backend.created_containers.lock().unwrap().len(), 2);
+        assert_eq!(backend.created_containers().len(), 2);
     }
 
     #[test]

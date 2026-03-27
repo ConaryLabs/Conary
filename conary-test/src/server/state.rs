@@ -20,6 +20,8 @@ pub struct RunMeta {
     pub suite_name: String,
     pub distro: String,
     pub phase: u32,
+    /// When set, only this single test ID is executed (for reruns).
+    pub test_filter: Option<String>,
 }
 
 static RUN_COUNTER: AtomicU64 = AtomicU64::new(1);

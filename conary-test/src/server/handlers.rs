@@ -245,16 +245,50 @@ pub async fn cleanup_containers(State(state): State<AppState>) -> impl IntoRespo
 
 /// SSE endpoint that streams live test events for a specific run.
 ///
-/// Subscribes to the broadcast channel, filters events by `run_id`, and
-/// streams them as `text/event-stream`. The stream ends when the
-/// `RunComplete` event is received or the channel closes.
+/// Subscribes to the broadcast channel *before* checking run state (to
+/// close the race window), filters events by `run_id`, and streams them
+/// as `text/event-stream`. The stream ends when the `RunComplete` event
+/// is received or the channel closes.
+///
+/// If the run is already finished when the client connects, a synthetic
+/// `RunComplete` event is emitted immediately so the stream terminates
+/// instead of hanging forever on keepalives.
 pub async fn stream_run(
     State(state): State<AppState>,
     Path(id): Path<u64>,
 ) -> axum::response::Response {
+    use crate::engine::suite::RunStatus;
+
+    // Subscribe BEFORE reading state to close the race window.
     let rx = state.event_tx.subscribe();
 
+    // Snapshot current run state to detect already-finished runs.
+    let already_finished = state.runs.get(&id).map(|entry| {
+        let s = entry.status;
+        (s, entry.passed(), entry.failed(), entry.skipped())
+    });
+
     let stream = async_stream::stream! {
+        // If the run is already finished, emit a synthetic terminal event
+        // so late subscribers don't hang forever.
+        if let Some((status, passed, failed, skipped)) = already_finished
+            && matches!(status, RunStatus::Completed | RunStatus::Cancelled)
+        {
+            let event = crate::report::stream::TestEvent::RunComplete {
+                run_id: id,
+                passed,
+                failed,
+                skipped,
+            };
+            let data = serde_json::to_string(&event).unwrap_or_default();
+            yield Ok::<_, std::convert::Infallible>(
+                axum::response::sse::Event::default()
+                    .event(event.event_name())
+                    .data(data)
+            );
+            return;
+        }
+
         let mut rx = rx;
         loop {
             match rx.recv().await {
