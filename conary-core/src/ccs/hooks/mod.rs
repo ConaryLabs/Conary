@@ -381,38 +381,64 @@ impl HookExecutor {
     /// The script is run via `/bin/sh -c` in the target root. If root != "/",
     /// the command is run with `chroot` (best-effort -- requires root).
     pub fn execute_script(&self, label: &str, script: &str) -> Result<()> {
-        use std::process::Command;
+        use crate::container::{BindMount, ContainerConfig, Sandbox, write_executable_script};
         use tracing::info;
 
-        // TODO: Integrate with the sandbox module (conary-core::container::Sandbox)
-        // to run hook scripts in a namespace-isolated environment. Until then,
-        // scripts execute unsandboxed with full host access.
-        warn!(
-            "Executing unsandboxed {} script via /bin/sh -c (no sandbox isolation)",
-            label
-        );
         info!("Running {} script: {}", label, script);
 
-        let status = if self.root == Path::new("/") {
-            Command::new("/bin/sh").arg("-c").arg(script).status()
-        } else {
-            // When installing to a target root, use chroot
-            Command::new("chroot")
-                .arg(&self.root)
-                .arg("/bin/sh")
-                .arg("-c")
-                .arg(script)
-                .status()
-        };
+        let mut config = ContainerConfig::default();
+        let mut env_vars = vec![("CONARY_HOOK_LABEL".to_string(), label.to_string())];
+        let mut target_script_path = None;
 
-        match status {
-            Ok(s) if s.success() => Ok(()),
-            Ok(s) => anyhow::bail!(
-                "{} script failed with exit code {}",
+        let script_content = if self.root == Path::new("/") {
+            script.to_string()
+        } else {
+            let script_dir = self.root.join("tmp/conary-hooks");
+            std::fs::create_dir_all(&script_dir)?;
+            let script_path = script_dir.join(format!(
+                "{}-{}-{}.sh",
                 label,
-                s.code().unwrap_or(-1)
-            ),
-            Err(e) => anyhow::bail!("{} script failed to execute: {}", label, e),
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)?
+                    .as_nanos()
+            ));
+            write_executable_script(&script_path, script)?;
+
+            let script_in_chroot = script_path.strip_prefix(&self.root).unwrap_or(&script_path);
+            let script_in_chroot = format!("/{}", script_in_chroot.display());
+            config.add_bind_mount(BindMount::writable(&self.root, &self.root));
+            env_vars.push((
+                "CONARY_HOOK_ROOT".to_string(),
+                self.root.to_string_lossy().to_string(),
+            ));
+            env_vars.push(("CONARY_HOOK_SCRIPT".to_string(), script_in_chroot));
+            target_script_path = Some(script_path);
+
+            r#"exec chroot "$CONARY_HOOK_ROOT" /bin/sh "$CONARY_HOOK_SCRIPT""#.to_string()
+        };
+        let mut sandbox = Sandbox::new(config);
+        let env_refs = env_vars
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect::<Vec<_>>();
+        let result = sandbox.execute("/bin/sh", &script_content, &[], &env_refs);
+
+        if let Some(script_path) = target_script_path {
+            let _ = std::fs::remove_file(&script_path);
+            let _ = std::fs::remove_dir(script_path.parent().unwrap_or(&self.root));
+        }
+
+        match result {
+            Ok((0, _, _)) => Ok(()),
+            Ok((code, _, stderr)) => {
+                let stderr = stderr.trim();
+                if stderr.is_empty() {
+                    anyhow::bail!("{} script failed with exit code {}", label, code);
+                }
+                anyhow::bail!("{} script failed with exit code {}: {}", label, code, stderr);
+            }
+            Err(e) => anyhow::bail!("{} script failed to execute in sandbox: {}", label, e),
         }
     }
 
@@ -661,5 +687,29 @@ mod tests {
 
         assert_eq!(parsed.succeeded, 1);
         assert_eq!(parsed.total_duration_ms, 30);
+    }
+
+    #[test]
+    fn test_execute_script_does_not_write_to_host_tmp() {
+        let executor = HookExecutor::new(Path::new("/"));
+        let marker = format!(
+            "/tmp/conary-hook-sandbox-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let script = format!("printf sandboxed > {marker}");
+
+        let _ = std::fs::remove_file(&marker);
+        let result = executor.execute_script("post_install", &script);
+
+        assert!(
+            result.is_err() || !Path::new(&marker).exists(),
+            "hook script wrote to host tmp without sandbox isolation"
+        );
+
+        let _ = std::fs::remove_file(&marker);
     }
 }
