@@ -466,6 +466,8 @@ impl<'a> BatchInstaller<'a> {
         let _gen_num = crate::commands::composefs_ops::rebuild_and_mount(
             &conn,
             &format!("Batch install: {}", main_pkg_name),
+            None,
+            std::path::Path::new("/conary"),
         )?;
 
         // Release transaction lock

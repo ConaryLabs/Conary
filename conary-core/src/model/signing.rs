@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 
 use super::ModelError;
 use super::remote::CollectionData;
@@ -39,7 +39,9 @@ pub fn verify_collection(
     );
 
     let canonical = canonical_json(data)?;
-    Ok(public_key.verify(canonical.as_bytes(), &signature).is_ok())
+    Ok(public_key
+        .verify_strict(canonical.as_bytes(), &signature)
+        .is_ok())
 }
 
 /// Load a signing key from a file (32-byte raw seed or 64 hex chars)

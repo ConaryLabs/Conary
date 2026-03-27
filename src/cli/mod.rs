@@ -536,6 +536,10 @@ pub enum Commands {
         /// Install a specific version
         #[arg(long)]
         version: Option<String>,
+
+        /// Skip signature verification (NOT RECOMMENDED)
+        #[arg(long)]
+        no_verify: bool,
     },
 
     /// Package DNA / Provenance queries

@@ -10,7 +10,7 @@ use crate::ccs::builder::FileEntry;
 use crate::hash;
 use anyhow::{Context, Result};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
@@ -207,22 +207,60 @@ pub fn verify_package(path: &Path, policy: &TrustPolicy) -> Result<VerificationR
     )?;
 
     // Verify content hashes
-    let content_status = verify_content_hashes(&files, &contents.blobs)?;
+    let mut content_status = verify_content_hashes(&files, &contents.blobs)?;
 
-    // Verify Merkle root against binary manifest's content_root
+    // Verify Merkle root against binary manifest's content_root.
+    // A Merkle root mismatch is a structural integrity failure: also mark
+    // content_status as Invalid so callers see the failure even if every
+    // individual file hash looks correct.
     let mut merkle_valid = true;
     if let Some(ref bin_manifest) = contents.binary_manifest
         && !MerkleTree::verify_root(&bin_manifest.components, &bin_manifest.content_root)
     {
         let calculated = MerkleTree::calculate_root(&bin_manifest.components);
-        warnings.push(format!(
+        let mismatch_msg = format!(
             "Merkle root mismatch: expected {}, got {}",
             bin_manifest.content_root.value, calculated.value
-        ));
+        );
+        warnings.push(mismatch_msg.clone());
         merkle_valid = false;
+        // Propagate into content_status so the structural failure is visible.
+        content_status = match content_status {
+            ContentStatus::Invalid { mut errors } => {
+                errors.push(mismatch_msg);
+                ContentStatus::Invalid { errors }
+            }
+            _ => ContentStatus::Invalid {
+                errors: vec![mismatch_msg],
+            },
+        };
+    }
+
+    // Verify TOML integrity hash when the binary manifest contains one
+    let mut toml_integrity_valid = true;
+    if let Some(ref bin_manifest) = contents.binary_manifest
+        && let Some(ref expected_hash) = bin_manifest.toml_integrity_hash
+    {
+        if let Some(ref toml_raw) = contents.toml_raw {
+            let actual_hash = hash::sha256(toml_raw);
+            if actual_hash != *expected_hash {
+                warnings.push(format!(
+                    "TOML manifest integrity check failed: expected {expected_hash}, got {actual_hash}"
+                ));
+                toml_integrity_valid = false;
+            }
+        } else {
+            // Binary manifest claims a TOML hash but no TOML was found in the archive
+            warnings.push(
+                "TOML integrity hash present in CBOR manifest but MANIFEST.toml is missing"
+                    .to_string(),
+            );
+            toml_integrity_valid = false;
+        }
     }
 
     let valid = merkle_valid
+        && toml_integrity_valid
         && matches!(
             (&signature_status, &content_status),
             (
@@ -286,7 +324,7 @@ fn verify_signature(
 
     // Verify signature
     verifying_key
-        .verify(manifest_raw, &signature)
+        .verify_strict(manifest_raw, &signature)
         .map_err(|e| {
             VerifyError::SignatureInvalid(format!("Signature verification failed: {}", e))
         })?;

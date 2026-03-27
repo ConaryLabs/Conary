@@ -372,8 +372,24 @@ impl OperationQueue {
         }
     }
 
-    /// Enqueue a job
+    /// Enqueue a job, deduplicating by idempotency key.
+    ///
+    /// If a job with the same `idempotency_key` is already queued (but not
+    /// yet running), the existing job's cancel token is returned and no new
+    /// entry is added to the queue.  This prevents duplicate work when a
+    /// client retries a request before the first copy has been dispatched.
+    /// (fix 11.6)
     pub async fn enqueue(&self, job: DaemonJob, priority: JobPriority) -> Arc<AtomicBool> {
+        // Dedup: if an identical idempotency key is already queued, reuse it.
+        if let Some(ref key) = job.idempotency_key {
+            let queue = self.queue.lock().await;
+            if let Some(existing) = queue.iter().find(|qj| {
+                qj.job.idempotency_key.as_deref() == Some(key.as_str())
+            }) {
+                return existing.cancel_token.clone();
+            }
+        }
+
         let cancel_token = Arc::new(AtomicBool::new(false));
         let queued = QueuedJob {
             job: job.clone(),

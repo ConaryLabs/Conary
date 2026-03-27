@@ -61,6 +61,8 @@ pub fn compose_file_entries(manifests: &[&OutputManifest]) -> Vec<FileEntryRef> 
                     sha256_hash: file.hash.clone(),
                     size: file.size,
                     permissions: file.mode,
+                    owner: None,
+                    group_name: None,
                 },
             );
         }
@@ -123,6 +125,8 @@ pub fn compose_entries(manifests: &[&OutputManifest]) -> ComposedEntries {
                     sha256_hash: file.hash.clone(),
                     size: file.size,
                     permissions: file.mode,
+                    owner: None,
+                    group_name: None,
                 }),
             );
         }

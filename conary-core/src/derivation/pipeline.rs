@@ -19,7 +19,7 @@ use tracing::{info, warn};
 
 use crate::recipe::Recipe;
 
-use super::compose::{ComposeError, compose_erofs};
+use super::compose::compose_erofs;
 use super::environment::MutableEnvironment;
 use super::executor::{DerivationExecutor, ExecutionResult, ExecutorError};
 use super::id::{DerivationId, DerivationInputs};
@@ -154,8 +154,8 @@ pub enum PipelineError {
     Executor(#[from] ExecutorError),
 
     /// EROFS composition or hashing failed.
-    #[error("compose error: {0}")]
-    Compose(String),
+    #[error(transparent)]
+    Compose(#[from] crate::derivation::compose::ComposeError),
 
     /// A general I/O error.
     #[error("I/O error: {0}")]
@@ -172,11 +172,7 @@ pub enum PipelineError {
     Install(String),
 }
 
-impl From<ComposeError> for PipelineError {
-    fn from(e: ComposeError) -> Self {
-        PipelineError::Compose(e.to_string())
-    }
-}
+// From<ComposeError> is derived via #[from] on the Compose variant above.
 
 // ---------------------------------------------------------------------------
 // Pipeline
@@ -315,8 +311,37 @@ impl Pipeline {
 
         let sysroot = env.sysroot();
 
+        // When --only is active, pre-populate acc.completed from the index so
+        // that collect_dep_ids produces correct derivation IDs for all packages
+        // that will be served from cache.  Without this, early non-targeted
+        // packages have an empty dep map, producing wrong IDs for later packages
+        // that depend on them.
+        let mut completed_seed: HashMap<String, DerivationId> = HashMap::new();
+        if build_set.is_some() {
+            for step in build_steps {
+                let pkg_name = &step.package;
+                let Some(recipe) = recipes.get(pkg_name.as_str()) else {
+                    continue;
+                };
+                // Compute ID using whatever is already in completed_seed (which
+                // grows in topological order, same as the main loop).
+                let dep_ids = collect_dep_ids(recipe, &completed_seed);
+                let inputs = DerivationInputs {
+                    source_hash: recipe_hash::source_hash(recipe),
+                    build_script_hash: recipe_hash::build_script_hash(recipe),
+                    dependency_ids: dep_ids,
+                    build_env_hash: build_env_hash.clone(),
+                    target_triple: self.config.target_triple.clone(),
+                    build_options: BTreeMap::new(),
+                };
+                if let Ok(id) = DerivationId::compute(&inputs) {
+                    completed_seed.insert(pkg_name.clone(), id);
+                }
+            }
+        }
+
         let mut acc = BuildAccumulator {
-            completed: HashMap::new(),
+            completed: completed_seed,
             derivations: Vec::new(),
             manifests: Vec::new(),
         };
@@ -641,7 +666,7 @@ fn load_manifest_from_cas(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::derivation::compose::erofs_image_hash;
+    use crate::derivation::compose::{ComposeError, erofs_image_hash};
     use crate::derivation::id::DerivationInputs;
     use crate::derivation::seed::{SeedMetadata, SeedSource};
     use crate::derivation::test_helpers::helpers::make_recipe;

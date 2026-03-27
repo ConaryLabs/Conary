@@ -597,6 +597,107 @@ fn apply_derived_packages(
     (derived_built, derived_rebuilt, errors)
 }
 
+/// Apply package metadata changes: pin/unpin, mark explicit/dependency, update.
+///
+/// Returns the number of changes applied and any errors encountered.
+fn apply_metadata_changes(conn: &Connection, actions: &[&DiffAction]) -> (usize, Vec<String>) {
+    let mut applied = 0usize;
+    let mut errors: Vec<String> = Vec::new();
+
+    for action in actions {
+        match action {
+            DiffAction::Pin { package, pattern } => match Trove::find_one_by_name(conn, package) {
+                Ok(Some(trove)) => {
+                    if let Some(id) = trove.id {
+                        if let Err(e) = Trove::pin(conn, id) {
+                            errors.push(format!("Pin '{}': {}", package, e));
+                        } else {
+                            println!("Pinned '{}' to pattern '{}'", package, pattern);
+                            applied += 1;
+                        }
+                    }
+                }
+                Ok(None) => {
+                    errors.push(format!("Pin '{}': package not installed", package));
+                }
+                Err(e) => errors.push(format!("Pin '{}': {}", package, e)),
+            },
+
+            DiffAction::Unpin { package } => match Trove::find_one_by_name(conn, package) {
+                Ok(Some(trove)) => {
+                    if let Some(id) = trove.id {
+                        if let Err(e) = Trove::unpin(conn, id) {
+                            errors.push(format!("Unpin '{}': {}", package, e));
+                        } else {
+                            println!("Unpinned '{}'", package);
+                            applied += 1;
+                        }
+                    }
+                }
+                Ok(None) => {
+                    errors.push(format!("Unpin '{}': package not installed", package));
+                }
+                Err(e) => errors.push(format!("Unpin '{}': {}", package, e)),
+            },
+
+            DiffAction::MarkExplicit { package } => {
+                match Trove::promote_to_explicit(
+                    conn,
+                    package,
+                    Some("Marked explicit by model apply"),
+                ) {
+                    Ok(true) => {
+                        println!("Marked '{}' as explicitly installed", package);
+                        applied += 1;
+                    }
+                    Ok(false) => {
+                        debug!("'{}' already explicit or not found", package);
+                    }
+                    Err(e) => errors.push(format!("MarkExplicit '{}': {}", package, e)),
+                }
+            }
+
+            DiffAction::MarkDependency { package } => {
+                match conn.execute(
+                    "UPDATE troves SET install_reason = 'dependency' \
+                     WHERE name = ?1 AND install_reason = 'explicit' AND type = 'package'",
+                    rusqlite::params![package],
+                ) {
+                    Ok(rows) if rows > 0 => {
+                        println!("Marked '{}' as dependency", package);
+                        applied += 1;
+                    }
+                    Ok(_) => {
+                        debug!("'{}' already a dependency or not found", package);
+                    }
+                    Err(e) => errors.push(format!("MarkDependency '{}': {}", package, e)),
+                }
+            }
+
+            DiffAction::Update {
+                package,
+                current_version,
+                target_version,
+            } => {
+                println!(
+                    "Package '{}' needs update: {} -> {}",
+                    package, current_version, target_version
+                );
+                println!(
+                    "  [NOTE: Package update not yet implemented - run 'conary update {}' manually]",
+                    package
+                );
+                // Count as applied so the summary reflects it was processed
+                applied += 1;
+            }
+
+            _ => {}
+        }
+    }
+
+    (applied, errors)
+}
+
 /// Show what changes are needed to reach the model state
 pub async fn cmd_model_diff(model_path: &str, db_path: &str, offline: bool) -> Result<()> {
     let model_path = Path::new(model_path);
@@ -809,8 +910,12 @@ pub async fn cmd_model_apply(opts: ApplyOptions<'_>) -> Result<()> {
     let (installs, removes) = apply_package_changes(&actions);
 
     // Phase 3: derived packages
-    let (derived_built, derived_rebuilt, errors) =
+    let (derived_built, derived_rebuilt, mut errors) =
         apply_derived_packages(&conn, &actions, &model, model_dir, &cas);
+
+    // Phase 4: metadata changes (pin/unpin, mark explicit/dependency, update)
+    let (metadata_applied, metadata_errors) = apply_metadata_changes(&conn, &actions);
+    errors.extend(metadata_errors);
 
     if autoremove {
         println!();
@@ -832,6 +937,9 @@ pub async fn cmd_model_apply(opts: ApplyOptions<'_>) -> Result<()> {
     }
     if !removes.is_empty() {
         println!("  Packages to remove (manual): {}", removes.len());
+    }
+    if metadata_applied > 0 {
+        println!("  Metadata changes applied: {}", metadata_applied);
     }
     if diff_summary.source_policy_changes > 0 {
         println!(
@@ -1356,29 +1464,31 @@ fn publish_local(
         .map_err(|e| anyhow!("No write permission to repository {}: {}", repo_path, e))?;
     std::fs::remove_file(&test_path)?;
 
-    // Check if collection already exists
+    // Check if collection already exists (pre-flight, outside transaction)
     let existing = Trove::find_by_name(&inputs.conn, &inputs.group_name)?;
-    if !existing.is_empty()
-        && existing
-            .iter()
-            .any(|t| t.trove_type == TroveType::Collection)
-    {
-        if force {
-            for t in &existing {
-                if t.trove_type == TroveType::Collection
-                    && let Some(id) = t.id
-                {
-                    CollectionMember::delete_all_for_collection(&inputs.conn, id)?;
-                    Trove::delete(&inputs.conn, id)?;
-                }
-            }
-        } else {
-            return Err(anyhow!(
-                "Collection '{}' already exists. Use --force to overwrite.",
-                inputs.group_name
-            ));
-        }
+    let has_existing_collection = existing
+        .iter()
+        .any(|t| t.trove_type == TroveType::Collection);
+
+    if has_existing_collection && !force {
+        return Err(anyhow!(
+            "Collection '{}' already exists. Use --force to overwrite.",
+            inputs.group_name
+        ));
     }
+
+    // Collect IDs to delete under --force so we can do it inside the
+    // transaction, making delete + insert atomic. Without this, a crash
+    // between the delete and the insert would leave the collection absent.
+    let ids_to_delete: Vec<i64> = if force {
+        existing
+            .iter()
+            .filter(|t| t.trove_type == TroveType::Collection)
+            .filter_map(|t| t.id)
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     // Create the collection in the database
     let model_path_display = inputs.model_path.display().to_string();
@@ -1386,6 +1496,14 @@ fn publish_local(
     let model = &inputs.model;
 
     db::transaction(&mut inputs.conn, |tx| {
+        // Atomic replace: delete existing collection(s) and insert the new one
+        // in a single transaction so there is never a window where the collection
+        // is absent.
+        for id in &ids_to_delete {
+            CollectionMember::delete_all_for_collection(tx, *id)?;
+            Trove::delete(tx, *id)?;
+        }
+
         let mut trove = Trove::new(
             group_name.clone(),
             version.to_string(),

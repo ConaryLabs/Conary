@@ -84,18 +84,59 @@ pub use toolchain::{Toolchain, ToolchainKind};
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
-use tracing::{info, warn};
+use tracing::info;
 
 /// Default paths for bootstrap artifacts
 pub const DEFAULT_TOOLS_DIR: &str = "/tools";
 pub const DEFAULT_SYSROOT_DIR: &str = "/conary/sysroot";
+
+/// Validate that a recipe field does not contain shell injection characters.
+///
+/// Rejects backticks, `$()`, semicolons, and pipes that could allow arbitrary
+/// command execution when the value is interpolated into a shell script.
+///
+/// Returns `Ok(())` if the value is safe, or `Err(msg)` describing the
+/// first forbidden pattern found.
+fn validate_shell_safe(value: &str, field: &str) -> Result<(), String> {
+    // Ordered by likely occurrence; we report the first hit.
+    if value.contains('`') {
+        return Err(format!("{field} contains backtick (shell injection risk)"));
+    }
+    if value.contains("$(") {
+        return Err(format!("{field} contains $() (shell injection risk)"));
+    }
+    if value.contains(';') {
+        return Err(format!("{field} contains semicolon (shell injection risk)"));
+    }
+    if value.contains('|') {
+        return Err(format!("{field} contains pipe (shell injection risk)"));
+    }
+    Ok(())
+}
 
 /// Assemble a build script from recipe fields with variable substitution.
 ///
 /// Used by chroot builds (Phase 2b and 3) where the Kitchen cannot run
 /// directly. Each build phase (setup, configure, make, install, post_install)
 /// is concatenated into a single `set -e` script.
+///
+/// Before interpolation, `recipe.package.version` and `recipe.package.name`
+/// are validated against a shell-injection denylist (backticks, `$()`,
+/// semicolons, pipes). If either field fails validation the offending recipe
+/// field is replaced with an `echo` error line and the script is returned as
+/// a no-op that exits non-zero so the build fails loudly rather than silently
+/// executing injected commands.
 pub fn assemble_build_script(recipe: &crate::recipe::Recipe, destdir: &str) -> String {
+    // Validate fields that are interpolated as `%(version)s` / `%(name)s`.
+    for (field_name, field_value) in [
+        ("package.version", recipe.package.version.as_str()),
+        ("package.name", recipe.package.name.as_str()),
+    ] {
+        if let Err(msg) = validate_shell_safe(field_value, field_name) {
+            return format!("set -e\necho 'ERROR: {msg}' >&2\nexit 1\n");
+        }
+    }
+
     let mut script = String::from("set -e\n");
     for phase in [
         &recipe.build.setup,
@@ -257,12 +298,14 @@ impl Bootstrap {
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         builder
-            .build_cross_packages(&completed)
+            .build_cross_packages(&completed, &mut self.stages)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
-        let _chroot_env = builder.setup_chroot().map_err(|e| anyhow::anyhow!("{e}"))?;
+        // IMPORTANT: chroot_env must stay alive until build_chroot_packages() completes.
+        let chroot_env = builder.setup_chroot().map_err(|e| anyhow::anyhow!("{e}"))?;
         builder
-            .build_chroot_packages(&completed)
+            .build_chroot_packages(&completed, &mut self.stages)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
+        drop(chroot_env);
 
         self.stages
             .mark_complete(BootstrapStage::TempTools, lfs_root)?;
@@ -294,7 +337,7 @@ impl Bootstrap {
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         builder
-            .build_all(&completed)
+            .build_all(&completed, &mut self.stages)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         self.stages
@@ -343,7 +386,7 @@ impl Bootstrap {
                 self.stages.mark_complete(BootstrapStage::Tier2, lfs_root)?;
             }
             Err(Tier2Error::NotImplemented(msg)) => {
-                warn!("Skipping Tier-2: {msg}");
+                info!("Tier-2 skipped (not yet implemented): {msg}");
                 // Do NOT mark complete -- resume will retry when implemented
             }
             Err(e) => return Err(anyhow::anyhow!("{e}")),

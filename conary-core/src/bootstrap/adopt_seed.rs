@@ -27,7 +27,8 @@ pub enum AdoptSeedError {
 ///    required build tools. Returns [`AdoptSeedError::ValidationFailed`] with
 ///    the list of missing tools if any are absent.
 /// 2. Creates `output_dir` on disk.
-/// 3. Runs `mkfs.erofs` to pack `/usr`, `/bin`, `/lib`, `/sbin`, `/etc` into
+/// 3. Runs `mkfs.erofs` with `/` as the single source directory so that
+///    `/usr`, `/bin`, `/lib`, `/sbin`, and `/etc` are all captured in
 ///    `output_dir/seed.erofs`.
 /// 4. Hashes the resulting image with [`erofs_image_hash`].
 /// 5. Writes `output_dir/seed.toml` containing the computed [`SeedMetadata`].
@@ -54,9 +55,12 @@ pub fn build_adopted_seed(
 
     let image_path = output_dir.join("seed.erofs");
 
+    // mkfs.erofs takes exactly one source directory; passing multiple
+    // directories is not supported and silently uses only the first.
+    // Use "/" so that /usr, /bin, /lib, /sbin, and /etc are all captured.
     let status = Command::new("mkfs.erofs")
         .arg(&image_path)
-        .args(["/usr", "/bin", "/lib", "/sbin", "/etc"])
+        .arg("/")
         .status()
         .map_err(|e| AdoptSeedError::ErofsBuild(format!("failed to spawn mkfs.erofs: {e}")))?;
 

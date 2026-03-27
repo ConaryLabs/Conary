@@ -743,6 +743,69 @@ pub fn migrate_v60(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 61: Add state_cas_hashes for GC-safe CAS liveness tracking
+///
+/// The GC liveness query previously joined files -> troves -> state_members,
+/// which broke on package upgrade: trove deletion cascade-deletes file rows,
+/// so hashes needed by older surviving generations were lost.
+///
+/// This table snapshots CAS hashes at state creation time, decoupling GC
+/// liveness from the mutable troves/files tables.
+pub fn migrate_v61(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 61");
+    conn.execute_batch(
+        "
+        CREATE TABLE state_cas_hashes (
+            state_id INTEGER NOT NULL REFERENCES system_states(id) ON DELETE CASCADE,
+            sha256_hash TEXT NOT NULL,
+            UNIQUE(state_id, sha256_hash)
+        );
+        CREATE INDEX idx_state_cas_hashes_state ON state_cas_hashes(state_id);
+        ",
+    )?;
+
+    // Backfill: snapshot hashes from surviving states whose troves still exist.
+    // Hashes for states whose troves were already cascade-deleted are irrecoverable;
+    // those states are already GC-unsafe and should be pruned.
+    conn.execute_batch(
+        "
+        INSERT OR IGNORE INTO state_cas_hashes (state_id, sha256_hash)
+        SELECT sm.state_id, f.sha256_hash
+        FROM state_members sm
+        JOIN troves t ON t.name = sm.trove_name AND t.version = sm.trove_version
+        JOIN files f ON f.trove_id = t.id
+        WHERE f.sha256_hash IS NOT NULL
+          AND f.sha256_hash != ''
+          AND NOT f.sha256_hash LIKE 'adopted-%';
+        ",
+    )?;
+
+    info!("Schema version 61 applied successfully (state_cas_hashes for GC safety)");
+    Ok(())
+}
+
+/// Version 62: Add group_id to dependencies for OR-group support
+///
+/// When a Debian package has `A | B` alternatives, only `A` was recorded
+/// because the dependencies table had no way to express OR groups.
+/// The nullable `group_id` column links dependency rows that belong to the
+/// same OR group: rows sharing the same (trove_id, group_id) are
+/// alternatives.  Existing rows get NULL (backward compatible -- they
+/// represent simple single-clause dependencies).
+pub fn migrate_v62(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 62");
+
+    conn.execute_batch(
+        "
+        ALTER TABLE dependencies ADD COLUMN group_id INTEGER;
+        CREATE INDEX idx_dependencies_group ON dependencies(trove_id, group_id);
+        ",
+    )?;
+
+    info!("Schema version 62 applied successfully (dependencies.group_id for OR groups)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

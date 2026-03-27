@@ -8,9 +8,38 @@ pub mod arch;
 pub mod deb;
 pub mod rpm;
 
+use crate::ccs::builder::FileEntry;
 use crate::ccs::manifest::Hooks;
+use anyhow::anyhow;
 use std::collections::HashMap;
 use std::sync::LazyLock;
+
+/// Retrieve file content from the blob map, handling both whole-file and
+/// CDC-chunked storage.
+///
+/// When a file has `chunks: Some(chunk_hashes)`, the content is assembled by
+/// concatenating the blobs keyed by each chunk hash in order. When `chunks`
+/// is `None`, the content is looked up by the whole-file hash directly.
+pub fn get_file_content(
+    file: &FileEntry,
+    blobs: &HashMap<String, Vec<u8>>,
+) -> anyhow::Result<Vec<u8>> {
+    if let Some(chunk_hashes) = &file.chunks {
+        let mut assembled = Vec::with_capacity(file.size as usize);
+        for chunk_hash in chunk_hashes {
+            let chunk = blobs
+                .get(chunk_hash)
+                .ok_or_else(|| anyhow!("Chunk {} not found for file {}", chunk_hash, file.path))?;
+            assembled.extend_from_slice(chunk);
+        }
+        Ok(assembled)
+    } else {
+        blobs
+            .get(&file.hash)
+            .cloned()
+            .ok_or_else(|| anyhow!("Blob not found for file {}", file.path))
+    }
+}
 
 /// Information that may be lost when converting to legacy formats
 #[derive(Debug, Default)]
@@ -631,5 +660,72 @@ mod tests {
         report.add_unsupported("merkle tree verification");
         assert!(!report.is_empty());
         assert_eq!(report.unsupported_features.len(), 1);
+    }
+
+    #[test]
+    fn test_get_file_content_whole_blob() {
+        use crate::ccs::builder::FileType;
+
+        let mut blobs = HashMap::new();
+        blobs.insert("abc123".to_string(), b"hello world".to_vec());
+
+        let file = FileEntry {
+            path: "/usr/bin/foo".to_string(),
+            hash: "abc123".to_string(),
+            size: 11,
+            mode: 0o755,
+            component: "runtime".to_string(),
+            file_type: FileType::Regular,
+            target: None,
+            chunks: None,
+        };
+
+        let content = get_file_content(&file, &blobs).unwrap();
+        assert_eq!(content, b"hello world");
+    }
+
+    #[test]
+    fn test_get_file_content_chunked() {
+        use crate::ccs::builder::FileType;
+
+        let mut blobs = HashMap::new();
+        blobs.insert("chunk1".to_string(), b"hello ".to_vec());
+        blobs.insert("chunk2".to_string(), b"world".to_vec());
+
+        let file = FileEntry {
+            path: "/usr/bin/bar".to_string(),
+            hash: "whole_file_hash".to_string(),
+            size: 11,
+            mode: 0o755,
+            component: "runtime".to_string(),
+            file_type: FileType::Regular,
+            target: None,
+            chunks: Some(vec!["chunk1".to_string(), "chunk2".to_string()]),
+        };
+
+        let content = get_file_content(&file, &blobs).unwrap();
+        assert_eq!(content, b"hello world");
+    }
+
+    #[test]
+    fn test_get_file_content_missing_chunk_errors() {
+        use crate::ccs::builder::FileType;
+
+        let blobs = HashMap::new();
+
+        let file = FileEntry {
+            path: "/usr/bin/baz".to_string(),
+            hash: "whole_file_hash".to_string(),
+            size: 5,
+            mode: 0o755,
+            component: "runtime".to_string(),
+            file_type: FileType::Regular,
+            target: None,
+            chunks: Some(vec!["missing_chunk".to_string()]),
+        };
+
+        let result = get_file_content(&file, &blobs);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("missing_chunk"));
     }
 }

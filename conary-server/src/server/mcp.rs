@@ -71,9 +71,18 @@ impl RemiMcpServer {
 // Forgejo proxy helpers (map ForgejoError -> McpError)
 // ---------------------------------------------------------------------------
 
-/// Map a [`crate::server::forgejo::ForgejoError`] to an MCP internal error.
+/// Map a [`crate::server::forgejo::ForgejoError`] to an MCP error.
+///
+/// 4xx responses from Forgejo indicate bad input (invalid workflow name, bad
+/// run ID, etc.) and map to `invalid_params` so callers know to retry with
+/// corrected arguments.  5xx and network errors are `internal_error`. (fix 10.8)
 fn forgejo_err_to_mcp(e: crate::server::forgejo::ForgejoError) -> McpError {
-    McpError::internal_error(e.message, None)
+    match e.status {
+        Some(code) if (400..500).contains(&code) => {
+            McpError::invalid_params(e.message, None)
+        }
+        _ => McpError::internal_error(e.message, None),
+    }
 }
 
 // ---------------------------------------------------------------------------

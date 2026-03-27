@@ -15,9 +15,9 @@
 
 use std::path::{Path, PathBuf};
 
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
-use crate::db::models::{FileEntry, StateEngine, SystemState, Trove};
+use crate::db::models::{FileEntry, InstallSource, StateEngine, SystemState, Trove};
 use crate::generation::metadata::{EROFS_IMAGE_NAME, GENERATION_FORMAT, GenerationMetadata};
 #[cfg(feature = "composefs-rs")]
 use crate::generation::metadata::{ROOT_SYMLINKS, is_excluded};
@@ -36,6 +36,12 @@ pub struct FileEntryRef {
     pub size: u64,
     /// Unix permission bits (e.g., 0o755)
     pub permissions: u32,
+    /// Owner username (e.g., `"root"`). Resolved to numeric UID at EROFS
+    /// build time via `getpwnam_r`. Defaults to root (UID 0) when `None`.
+    pub owner: Option<String>,
+    /// Group name (e.g., `"wheel"`). Resolved to numeric GID at EROFS
+    /// build time via `getgrnam_r`. Defaults to root (GID 0) when `None`.
+    pub group_name: Option<String>,
 }
 
 /// A symbolic link entry for EROFS building.
@@ -59,6 +65,85 @@ pub struct BuildResult {
     pub image_size: u64,
     /// Number of CAS objects (external file references) in the image
     pub cas_objects_referenced: u64,
+}
+
+/// Resolve a username to numeric UID via libc `getpwnam_r` (reentrant).
+/// Returns 0 (root) if the user does not exist on this system.
+fn resolve_uid(owner: Option<&str>) -> u32 {
+    let Some(name) = owner else { return 0 };
+    if name == "root" || name.is_empty() {
+        return 0;
+    }
+    let c_name = match std::ffi::CString::new(name) {
+        Ok(s) => s,
+        Err(_) => {
+            warn!("Username '{}' contains null byte, defaulting to root", name);
+            return 0;
+        }
+    };
+    let mut buf = vec![0u8; 4096];
+    let mut pwd = std::mem::MaybeUninit::<libc::passwd>::uninit();
+    let mut result: *mut libc::passwd = std::ptr::null_mut();
+    // SAFETY: getpwnam_r is a POSIX reentrant function. We pass valid pointers
+    // to owned buffers that outlive the call. `result` is set to null or a
+    // pointer into `pwd` on success.
+    let rc = unsafe {
+        libc::getpwnam_r(
+            c_name.as_ptr(),
+            pwd.as_mut_ptr(),
+            buf.as_mut_ptr().cast::<libc::c_char>(),
+            buf.len(),
+            &mut result,
+        )
+    };
+    if rc == 0 && !result.is_null() {
+        // SAFETY: `result` points into our `pwd` buffer and the call succeeded.
+        unsafe { (*result).pw_uid }
+    } else {
+        warn!("Unknown user '{}', defaulting to root", name);
+        0
+    }
+}
+
+/// Resolve a group name to numeric GID via libc `getgrnam_r` (reentrant).
+/// Returns 0 (root) if the group does not exist on this system.
+fn resolve_gid(group: Option<&str>) -> u32 {
+    let Some(name) = group else { return 0 };
+    if name == "root" || name.is_empty() {
+        return 0;
+    }
+    let c_name = match std::ffi::CString::new(name) {
+        Ok(s) => s,
+        Err(_) => {
+            warn!(
+                "Group name '{}' contains null byte, defaulting to root",
+                name
+            );
+            return 0;
+        }
+    };
+    let mut buf = vec![0u8; 4096];
+    let mut grp = std::mem::MaybeUninit::<libc::group>::uninit();
+    let mut result: *mut libc::group = std::ptr::null_mut();
+    // SAFETY: getgrnam_r is a POSIX reentrant function. We pass valid pointers
+    // to owned buffers that outlive the call. `result` is set to null or a
+    // pointer into `grp` on success.
+    let rc = unsafe {
+        libc::getgrnam_r(
+            c_name.as_ptr(),
+            grp.as_mut_ptr(),
+            buf.as_mut_ptr().cast::<libc::c_char>(),
+            buf.len(),
+            &mut result,
+        )
+    };
+    if rc == 0 && !result.is_null() {
+        // SAFETY: `result` points into our `grp` buffer and the call succeeded.
+        unsafe { (*result).gr_gid }
+    } else {
+        warn!("Unknown group '{}', defaulting to root", name);
+        0
+    }
 }
 
 /// Convert a 64-character hex string to a 32-byte digest array.
@@ -87,6 +172,11 @@ pub fn hex_to_digest(hex: &str) -> crate::Result<[u8; 32]> {
 /// (bin -> usr/bin, etc.) are always added. Package symlinks from the
 /// `symlinks` slice are inserted using the same `LeafContent::Symlink` path.
 ///
+/// Owner and group names on [`FileEntryRef`] entries are resolved to numeric
+/// uid/gid via `getpwnam_r`/`getgrnam_r` at build time. Unknown users or
+/// groups default to root (0) with a warning. Synthetic directories (root,
+/// `/usr`, symlinks) always use root:root ownership.
+///
 /// Requires the `composefs-rs` feature. Without it, this function is a
 /// compile-time stub that returns an error.
 #[cfg(feature = "composefs-rs")]
@@ -105,11 +195,24 @@ pub fn build_erofs_image(
     use composefs::tree::{Directory, FileSystem, Inode, Leaf, LeafContent, RegularFile, Stat};
 
     /// Helper: create a Stat with default root ownership and the given mode.
+    /// Used for synthetic directories (root, /usr, symlinks) where root:root
+    /// is correct.
     fn dir_stat(mode: u32) -> Stat {
         Stat {
             st_mode: mode,
             st_uid: 0,
             st_gid: 0,
+            st_mtim_sec: 0,
+            xattrs: RefCell::new(BTreeMap::new()),
+        }
+    }
+
+    /// Helper: create a Stat with explicit uid/gid for real file entries.
+    fn file_stat(mode: u32, uid: u32, gid: u32) -> Stat {
+        Stat {
+            st_mode: mode,
+            st_uid: uid,
+            st_gid: gid,
             st_mtim_sec: 0,
             xattrs: RefCell::new(BTreeMap::new()),
         }
@@ -211,12 +314,16 @@ pub fn build_erofs_image(
         let (dir_path, file_name) = ensure_parent_dirs(&mut fs.root, &entry.path)?;
         let parent_dir = get_parent_dir(&mut fs.root, &dir_path, &entry.path)?;
 
+        // Resolve owner/group names to numeric uid/gid
+        let uid = resolve_uid(entry.owner.as_deref());
+        let gid = resolve_gid(entry.group_name.as_deref());
+
         // Add the file as an External CAS reference
         parent_dir.insert(
             OsStr::new(&file_name),
             Inode::Leaf(Rc::new(Leaf {
                 content: LeafContent::Regular(RegularFile::External(hash, entry.size)),
-                stat: dir_stat(entry.permissions),
+                stat: file_stat(entry.permissions, uid, gid),
             })),
         );
 
@@ -342,7 +449,37 @@ pub fn build_generation_from_db(
         ))
     })?;
 
-    // Step 2: Reserve the generation number and create the directory
+    // Step 2: Reserve the generation number and create the directory.
+    //
+    // TOCTOU guard: hold an exclusive advisory lock on the generations
+    // directory for the duration of number-allocation + directory-creation.
+    // Without this, two concurrent `build_generation_from_db` calls could
+    // read the same `next_state_number`, both try to create the same
+    // directory, and one would silently overwrite the other's work.
+    //
+    // The lock is released automatically when `_gen_lock` is dropped at the
+    // end of this function (or on any early-return error path).
+    let lock_path = generations_root.join(".generation-build.lock");
+    let lock_file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|e| {
+            crate::error::Error::IoError(format!(
+                "Failed to open generation lock file {}: {e}",
+                lock_path.display()
+            ))
+        })?;
+    use fs2::FileExt as _;
+    lock_file.lock_exclusive().map_err(|e| {
+        crate::error::Error::IoError(format!(
+            "Failed to acquire generation build lock: {e}"
+        ))
+    })?;
+    // RAII guard: lock is released when this drops.
+    let _gen_lock = lock_file;
+
     let gen_number = SystemState::next_state_number(conn).map_err(|e| {
         crate::error::Error::InternalError(format!("Failed to determine next state number: {e}"))
     })?;
@@ -360,9 +497,23 @@ pub fn build_generation_from_db(
         ))
     })?;
 
-    // Step 3: Collect file entries from all installed troves (single bulk query)
+    // Step 3: Collect file entries from all installed troves (single bulk query).
+    // Exclude files belonging to adopted-track troves: those troves are metadata-
+    // only and their file records use placeholder hashes that cannot be resolved
+    // in the CAS. Filtering here makes the intent explicit and avoids silently
+    // relying on hex parse failures to skip them.
     let troves = Trove::list_all(conn)?;
-    let all_files = FileEntry::find_all_ordered(conn)?;
+    // Build the adopted-track trove id set so we can exclude their files.
+    let adopted_track_ids: std::collections::HashSet<i64> = troves
+        .iter()
+        .filter(|t| t.install_source == InstallSource::AdoptedTrack)
+        .filter_map(|t| t.id)
+        .collect();
+    let all_files_raw = FileEntry::find_all_ordered(conn)?;
+    let all_files: Vec<FileEntry> = all_files_raw
+        .into_iter()
+        .filter(|f| !adopted_track_ids.contains(&f.trove_id))
+        .collect();
 
     let file_refs: Vec<FileEntryRef> = all_files
         .iter()
@@ -377,6 +528,8 @@ pub fn build_generation_from_db(
                 sha256_hash: file.sha256_hash.clone(),
                 size,
                 permissions,
+                owner: file.owner.clone(),
+                group_name: file.group_name.clone(),
             }
         })
         .collect();
@@ -463,6 +616,8 @@ pub fn rebuild_generation_image(
                 sha256_hash: file.sha256_hash.clone(),
                 size,
                 permissions,
+                owner: file.owner.clone(),
+                group_name: file.group_name.clone(),
             }
         })
         .collect();
@@ -541,10 +696,8 @@ pub fn detect_kernel_version_from_troves(troves: &[Trove]) -> Option<String> {
             return Some(trove.version.clone());
         }
     }
-    // Fall back to running kernel
-    std::fs::read_to_string("/proc/version")
-        .ok()
-        .and_then(|v| v.split_whitespace().nth(2).map(String::from))
+    // Fall back to running kernel version from /proc/sys/kernel/osrelease
+    crate::generation::metadata::running_kernel_version()
 }
 
 #[cfg(test)]
@@ -579,6 +732,51 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
+    // resolve_uid / resolve_gid tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn resolve_uid_none_returns_root() {
+        assert_eq!(resolve_uid(None), 0);
+    }
+
+    #[test]
+    fn resolve_uid_root_returns_zero() {
+        assert_eq!(resolve_uid(Some("root")), 0);
+    }
+
+    #[test]
+    fn resolve_uid_empty_returns_zero() {
+        assert_eq!(resolve_uid(Some("")), 0);
+    }
+
+    #[test]
+    fn resolve_gid_none_returns_root() {
+        assert_eq!(resolve_gid(None), 0);
+    }
+
+    #[test]
+    fn resolve_gid_root_returns_zero() {
+        assert_eq!(resolve_gid(Some("root")), 0);
+    }
+
+    #[test]
+    fn resolve_gid_empty_returns_zero() {
+        assert_eq!(resolve_gid(Some("")), 0);
+    }
+
+    #[test]
+    fn resolve_uid_unknown_returns_zero() {
+        // A user that almost certainly does not exist
+        assert_eq!(resolve_uid(Some("conary_nonexistent_test_user_xyz")), 0);
+    }
+
+    #[test]
+    fn resolve_gid_unknown_returns_zero() {
+        assert_eq!(resolve_gid(Some("conary_nonexistent_test_group_xyz")), 0);
+    }
+
+    // ---------------------------------------------------------------
     // EROFS builder tests (composefs-rs feature required)
     // ---------------------------------------------------------------
 
@@ -597,6 +795,8 @@ mod tests {
                         .to_string(),
                     size: 1024,
                     permissions: 0o755,
+                    owner: None,
+                    group_name: None,
                 },
                 FileEntryRef {
                     path: "/usr/lib/libfoo.so".to_string(),
@@ -604,6 +804,8 @@ mod tests {
                         .to_string(),
                     size: 4096,
                     permissions: 0o644,
+                    owner: None,
+                    group_name: None,
                 },
             ];
 
@@ -637,6 +839,8 @@ mod tests {
                         .to_string(),
                     size: 1024,
                     permissions: 0o755,
+                    owner: None,
+                    group_name: None,
                 },
                 FileEntryRef {
                     path: "/var/log/messages".to_string(),
@@ -644,6 +848,8 @@ mod tests {
                         .to_string(),
                     size: 2048,
                     permissions: 0o644,
+                    owner: None,
+                    group_name: None,
                 },
             ];
 
@@ -683,6 +889,8 @@ mod tests {
                         .to_string(),
                     size: 1024,
                     permissions: 0o755,
+                    owner: None,
+                    group_name: None,
                 },
                 FileEntryRef {
                     path: "/usr/lib/libfoo.so".to_string(),
@@ -690,6 +898,8 @@ mod tests {
                         .to_string(),
                     size: 4096,
                     permissions: 0o644,
+                    owner: None,
+                    group_name: None,
                 },
             ];
 
@@ -703,6 +913,23 @@ mod tests {
                 bytes1, bytes2,
                 "Two builds with identical entries must produce identical images"
             );
+        }
+
+        #[test]
+        fn build_erofs_with_owner_group() {
+            let tmp = TempDir::new().unwrap();
+            let entries = vec![FileEntryRef {
+                path: "/usr/bin/owned".to_string(),
+                sha256_hash: "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd"
+                    .to_string(),
+                size: 512,
+                permissions: 0o755,
+                owner: Some("root".to_string()),
+                group_name: Some("root".to_string()),
+            }];
+
+            let result = build_erofs_image(&entries, &[], tmp.path()).unwrap();
+            assert_eq!(result.cas_objects_referenced, 1);
         }
     }
 

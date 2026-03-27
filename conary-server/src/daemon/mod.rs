@@ -619,12 +619,15 @@ async fn job_executor_loop(state: Arc<DaemonState>) {
 
         let update_id = job_id.clone();
         let db_state = state.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            if let Ok(conn) = db_state.open_db() {
-                let _ = DaemonJob::update_status(&conn, &update_id, JobStatus::Running);
-            }
+        if let Err(e) = tokio::task::spawn_blocking(move || {
+            let conn = db_state.open_db().map_err(|e| format!("open_db: {e}"))?;
+            DaemonJob::update_status(&conn, &update_id, JobStatus::Running)
+                .map_err(|e| format!("update_status Running: {e}"))
         })
-        .await;
+        .await
+        {
+            tracing::error!("Failed to persist Running status for job {job_id}: {e}");
+        }
 
         state.metrics.jobs_running.fetch_add(1, Ordering::Relaxed);
         state.emit(DaemonEvent::JobStarted {
@@ -659,16 +662,22 @@ async fn job_executor_loop(state: Arc<DaemonState>) {
         let db_state = state.clone();
         match result {
             Ok(result_value) => {
-                let _ = tokio::task::spawn_blocking(move || {
-                    if let Ok(conn) = db_state.open_db() {
-                        if let Some(ref val) = result_value {
-                            let _ = DaemonJob::set_result(&conn, &final_id, val);
-                        }
-                        let _ =
-                            DaemonJob::update_status(&conn, &final_id, JobStatus::Completed);
+                let log_id = final_id.clone();
+                if let Err(e) = tokio::task::spawn_blocking(move || {
+                    let conn = db_state.open_db().map_err(|e| format!("open_db: {e}"))?;
+                    if let Some(ref val) = result_value {
+                        DaemonJob::set_result(&conn, &final_id, val)
+                            .map_err(|e| format!("set_result: {e}"))?;
                     }
+                    DaemonJob::update_status(&conn, &final_id, JobStatus::Completed)
+                        .map_err(|e| format!("update_status Completed: {e}"))
                 })
-                .await;
+                .await
+                {
+                    tracing::error!(
+                        "Failed to persist Completed status for job {log_id}: {e}"
+                    );
+                }
 
                 state.metrics.jobs_completed.fetch_add(1, Ordering::Relaxed);
                 state.emit(DaemonEvent::JobCompleted {
@@ -680,13 +689,20 @@ async fn job_executor_loop(state: Arc<DaemonState>) {
             Err(error_msg) => {
                 let daemon_error = DaemonError::internal(&error_msg);
                 let err_for_db = daemon_error.clone();
-                let _ = tokio::task::spawn_blocking(move || {
-                    if let Ok(conn) = db_state.open_db() {
-                        let _ = DaemonJob::set_error(&conn, &final_id, &err_for_db);
-                        let _ = DaemonJob::update_status(&conn, &final_id, JobStatus::Failed);
-                    }
+                let log_id = final_id.clone();
+                if let Err(e) = tokio::task::spawn_blocking(move || {
+                    let conn = db_state.open_db().map_err(|e| format!("open_db: {e}"))?;
+                    DaemonJob::set_error(&conn, &final_id, &err_for_db)
+                        .map_err(|e| format!("set_error: {e}"))?;
+                    DaemonJob::update_status(&conn, &final_id, JobStatus::Failed)
+                        .map_err(|e| format!("update_status Failed: {e}"))
                 })
-                .await;
+                .await
+                {
+                    tracing::error!(
+                        "Failed to persist Failed status for job {log_id}: {e}"
+                    );
+                }
 
                 state.metrics.jobs_failed.fetch_add(1, Ordering::Relaxed);
                 state.emit(DaemonEvent::JobFailed {
@@ -752,6 +768,44 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<()> {
     // Create daemon state
     let state = Arc::new(DaemonState::new(config.clone(), system_lock));
 
+    // Re-enqueue any jobs that were left in 'queued' state from a previous
+    // daemon run (e.g. after a crash or SIGKILL).  Jobs that were 'running'
+    // are reset to 'queued' first, since we cannot resume mid-execution.
+    // (Gemini fix: re-enqueue stuck jobs on startup)
+    {
+        let db_path = state.config.db_path.clone();
+        match tokio::task::spawn_blocking(move || {
+            let conn = conary_core::db::open_fast(&db_path)?;
+            // Reset any jobs stuck in 'running' (interrupted by previous crash)
+            conn.execute(
+                "UPDATE daemon_jobs SET status = 'queued', started_at = NULL
+                 WHERE status = 'running'",
+                [],
+            )?;
+            jobs::DaemonJob::list_by_status(&conn, JobStatus::Queued, None)
+        })
+        .await
+        {
+            Ok(Ok(queued_jobs)) => {
+                if !queued_jobs.is_empty() {
+                    log::info!(
+                        "Re-enqueueing {} job(s) left over from previous daemon run",
+                        queued_jobs.len()
+                    );
+                    for job in queued_jobs {
+                        state.queue.enqueue(job, jobs::JobPriority::Normal).await;
+                    }
+                }
+            }
+            Ok(Err(e)) => {
+                log::warn!("Failed to query stuck jobs on startup: {}", e);
+            }
+            Err(e) => {
+                log::warn!("Startup job scan task panicked: {}", e);
+            }
+        }
+    }
+
     // Build router
     let app = routes::build_router(state.clone());
 
@@ -774,9 +828,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<()> {
             ))
         })?;
         let listener = tokio::net::UnixListener::from_std(std_listener).map_err(|e| {
-            conary_core::Error::IoError(format!(
-                "Failed to adopt socket-activated listener: {e}"
-            ))
+            conary_core::Error::IoError(format!("Failed to adopt socket-activated listener: {e}"))
         })?;
         log::info!("Adopted systemd socket-activated listener (FD {})", fds[0]);
         (None, listener)

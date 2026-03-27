@@ -60,6 +60,8 @@ pub fn extract_tar(archive: &Path, dest: &Path, strip_components: bool) -> Resul
     if strip_components {
         cmd.arg("--strip-components=1");
     }
+    cmd.arg("--no-same-owner");
+    cmd.arg("--no-same-permissions");
 
     let output = cmd.output().map_err(|e| e.to_string())?;
 

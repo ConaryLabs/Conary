@@ -17,65 +17,81 @@ pub async fn cmd_init(db_path: &str) -> Result<()> {
     conary_core::db::init(db_path)?;
     println!("Database initialized successfully at: {}", db_path);
 
-    let conn = open_db(db_path)?;
+    let mut conn = open_db(db_path)?;
     info!("Adding default repositories...");
 
-    let mut remi_repo = conary_core::db::models::Repository::new(
-        "remi".to_string(),
-        "https://packages.conary.io".to_string(),
-    );
-    remi_repo.priority = 110;
-    remi_repo.default_strategy = Some("remi".to_string());
-    remi_repo.default_strategy_endpoint = Some("https://packages.conary.io".to_string());
-    remi_repo.default_strategy_distro = Some("fedora".to_string());
-    match remi_repo.insert(&conn) {
-        Ok(_) => println!("  Added: remi (Conary Remi (CCS))"),
-        Err(e) => eprintln!("  Warning: Could not add remi: {}", e),
-    }
+    // Collect messages inside the transaction; print after commit to avoid
+    // interleaving output with a potential rollback log.
+    let mut messages: Vec<String> = Vec::new();
 
-    let default_repos = [
-        (
-            "arch-core",
-            "https://geo.mirror.pkgbuild.com/core/os/x86_64",
-            100,
-            "Arch Linux",
-        ),
-        (
-            "arch-extra",
-            "https://geo.mirror.pkgbuild.com/extra/os/x86_64",
-            95,
-            "Arch Linux",
-        ),
-        (
-            "fedora-43",
-            "https://dl.fedoraproject.org/pub/fedora/linux/releases/43/Everything/x86_64/os",
-            90,
-            "Fedora 43",
-        ),
-        (
-            "arch-multilib",
-            "https://geo.mirror.pkgbuild.com/multilib/os/x86_64",
-            85,
-            "Arch Linux",
-        ),
-        (
-            "ubuntu-noble",
-            "http://archive.ubuntu.com/ubuntu",
-            80,
-            "Ubuntu 24.04 LTS",
-        ),
-    ];
+    conary_core::db::transaction(&mut conn, |tx| {
+        let mut remi_repo = conary_core::db::models::Repository::new(
+            "remi".to_string(),
+            "https://packages.conary.io".to_string(),
+        );
+        remi_repo.priority = 110;
+        remi_repo.default_strategy = Some("remi".to_string());
+        remi_repo.default_strategy_endpoint = Some("https://packages.conary.io".to_string());
+        remi_repo.default_strategy_distro = Some("fedora".to_string());
+        match remi_repo.insert(tx) {
+            Ok(_) => messages.push("  Added: remi (Conary Remi (CCS))".to_string()),
+            Err(e) => messages.push(format!("  Warning: Could not add remi: {e}")),
+        }
 
-    for (name, url, priority, desc) in default_repos {
-        match conary_core::repository::add_repository(
-            &conn,
-            name.to_string(),
-            url.to_string(),
-            true,
-            priority,
-        ) {
-            Ok(_) => println!("  Added: {} ({})", name, desc),
-            Err(e) => eprintln!("  Warning: Could not add {}: {}", name, e),
+        let default_repos = [
+            (
+                "arch-core",
+                "https://geo.mirror.pkgbuild.com/core/os/x86_64",
+                100,
+                "Arch Linux",
+            ),
+            (
+                "arch-extra",
+                "https://geo.mirror.pkgbuild.com/extra/os/x86_64",
+                95,
+                "Arch Linux",
+            ),
+            (
+                "fedora-43",
+                "https://dl.fedoraproject.org/pub/fedora/linux/releases/43/Everything/x86_64/os",
+                90,
+                "Fedora 43",
+            ),
+            (
+                "arch-multilib",
+                "https://geo.mirror.pkgbuild.com/multilib/os/x86_64",
+                85,
+                "Arch Linux",
+            ),
+            (
+                "ubuntu-noble",
+                "http://archive.ubuntu.com/ubuntu",
+                80,
+                "Ubuntu 24.04 LTS",
+            ),
+        ];
+
+        for (name, url, priority, desc) in default_repos {
+            match conary_core::repository::add_repository(
+                tx,
+                name.to_string(),
+                url.to_string(),
+                true,
+                priority,
+            ) {
+                Ok(_) => messages.push(format!("  Added: {name} ({desc})")),
+                Err(e) => messages.push(format!("  Warning: Could not add {name}: {e}")),
+            }
+        }
+
+        Ok(())
+    })?;
+
+    for msg in &messages {
+        if msg.contains("Warning:") {
+            eprintln!("{msg}");
+        } else {
+            println!("{msg}");
         }
     }
 
@@ -313,6 +329,8 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Resu
     let _gen_num = crate::commands::composefs_ops::rebuild_and_mount(
         &conn,
         &format!("Rollback changeset {}", changeset_id),
+        None,
+        std::path::Path::new("/conary"),
     )?;
 
     println!(
@@ -420,6 +438,8 @@ fn rollback_removal(
     let _gen_num = crate::commands::composefs_ops::rebuild_and_mount(
         conn,
         &format!("Rollback removal of {}", snapshot.name),
+        None,
+        std::path::Path::new("/conary"),
     )?;
 
     println!(
@@ -542,6 +562,8 @@ fn rollback_upgrade(
     let _gen_num = crate::commands::composefs_ops::rebuild_and_mount(
         conn,
         &format!("Rollback upgrade of {}", snapshot.name),
+        None,
+        std::path::Path::new("/conary"),
     )?;
 
     println!(

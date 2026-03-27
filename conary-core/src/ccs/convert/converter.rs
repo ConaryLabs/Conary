@@ -75,6 +75,10 @@ pub struct ConversionResult {
     pub detected_hooks: Hooks,
     /// Inferred capabilities (if inference was enabled)
     pub inferred_capabilities: Option<InferredCapabilities>,
+    /// Error message from capability inference, if inference failed.
+    /// Populated when `enable_inference` is true but inference returns an error,
+    /// providing an audit trail without failing the overall conversion.
+    pub inference_error: Option<String>,
     /// Provenance information extracted from the legacy package
     pub legacy_provenance: Option<LegacyProvenance>,
 }
@@ -228,7 +232,7 @@ impl LegacyConverter {
             .map_err(|e| ConversionError::BuildError(format!("CCS build failed: {}", e)))?;
 
         // Step 5.5: Infer capabilities if enabled
-        let inferred_capabilities = if self.options.enable_inference {
+        let (inferred_capabilities, inference_error) = if self.options.enable_inference {
             let inference_files: Vec<InferencePackageFile> = final_files
                 .iter()
                 .map(|f| {
@@ -266,19 +270,19 @@ impl LegacyConverter {
                         caps.source,
                         caps.confidence.primary
                     );
-                    Some(caps)
+                    (Some(caps), None)
                 }
                 Err(e) => {
-                    tracing::warn!(
+                    let msg = format!(
                         "Failed to infer capabilities for '{}': {}",
-                        final_metadata.name,
-                        e
+                        final_metadata.name, e
                     );
-                    None
+                    tracing::warn!("{}", msg);
+                    (None, Some(msg))
                 }
             }
         } else {
-            None
+            (None, None)
         };
 
         // Step 6: Write the package file
@@ -325,6 +329,7 @@ impl LegacyConverter {
             original_checksum: checksum.to_string(),
             detected_hooks,
             inferred_capabilities,
+            inference_error,
             legacy_provenance,
         })
     }

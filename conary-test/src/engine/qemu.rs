@@ -409,18 +409,9 @@ mod tests {
     #[test]
     fn test_image_filename_strips_path_traversal() {
         // Path traversal attempts should be stripped to just the filename.
-        assert_eq!(
-            image_filename("../../tmp/owned"),
-            "owned.qcow2"
-        );
-        assert_eq!(
-            image_filename("../../../etc/passwd"),
-            "passwd.qcow2"
-        );
-        assert_eq!(
-            image_filename("subdir/image.qcow2"),
-            "image.qcow2"
-        );
+        assert_eq!(image_filename("../../tmp/owned"), "owned.qcow2");
+        assert_eq!(image_filename("../../../etc/passwd"), "passwd.qcow2");
+        assert_eq!(image_filename("subdir/image.qcow2"), "image.qcow2");
     }
 
     #[test]

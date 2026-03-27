@@ -195,6 +195,14 @@ pub fn safe_join(root: impl AsRef<Path>, path: impl AsRef<Path>) -> Result<PathB
 /// assert!(sanitize_filename("subdir/package.rpm").is_err());
 /// ```
 pub fn sanitize_filename(name: &str) -> Result<String> {
+    // Check for null bytes -- these truncate filenames at C API boundaries
+    if name.contains('\0') {
+        return Err(Error::PathTraversal(format!(
+            "Filename contains null byte: {}",
+            name.replace('\0', "\\0")
+        )));
+    }
+
     // Check for path separators
     if name.contains('/') || name.contains('\\') {
         return Err(Error::PathTraversal(format!(
@@ -312,5 +320,12 @@ mod tests {
         assert!(sanitize_filename("..").is_err());
         assert!(sanitize_filename(".").is_err());
         assert!(sanitize_filename("").is_err());
+    }
+
+    #[test]
+    fn test_sanitize_filename_null_byte_rejected() {
+        assert!(sanitize_filename("package\0.rpm").is_err());
+        assert!(sanitize_filename("\0").is_err());
+        assert!(sanitize_filename("etc/passwd\0.rpm").is_err());
     }
 }

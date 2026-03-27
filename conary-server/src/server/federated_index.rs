@@ -293,25 +293,40 @@ fn build_local_sparse_entry(
     distro: &str,
     name: &str,
 ) -> Result<Option<SparseIndexEntry>> {
-    use crate::server::handlers::find_repository_for_distro;
+    use crate::server::handlers::find_repositories_for_distro;
 
-    let repository = find_repository_for_distro(conn, distro)?;
-    let repo_id = match repository.and_then(|r| r.id) {
-        Some(id) => id,
-        None => return Ok(None),
-    };
+    // Use plural lookup so multi-repo distros (e.g. arch-core + arch-extra)
+    // are all queried, matching the non-federated sparse path. (fix 10.7)
+    let repositories = find_repositories_for_distro(conn, distro)?;
+    let repo_ids: Vec<i64> = repositories.into_iter().filter_map(|r| r.id).collect();
+    if repo_ids.is_empty() {
+        return Ok(None);
+    }
 
-    let mut stmt = conn.prepare(
+    let placeholders: String = (1..=repo_ids.len())
+        .map(|i| format!("?{i}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let name_idx = repo_ids.len() + 1;
+    let sql = format!(
         "SELECT id, repository_id, name, version, architecture, description,
                 checksum, size, download_url, dependencies, metadata, synced_at,
                 is_security_update, severity, cve_ids, advisory_id, advisory_url
          FROM repository_packages
-         WHERE repository_id = ?1 AND name = ?2
-         ORDER BY version",
-    )?;
+         WHERE repository_id IN ({placeholders}) AND name = ?{name_idx}
+         ORDER BY version"
+    );
+
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = repo_ids
+        .iter()
+        .map(|id| Box::new(*id) as Box<dyn rusqlite::types::ToSql>)
+        .collect();
+    params.push(Box::new(name.to_string()));
+
+    let mut stmt = conn.prepare(&sql)?;
 
     let packages: Vec<conary_core::db::models::RepositoryPackage> = stmt
-        .query_map(rusqlite::params![repo_id, name], |row| {
+        .query_map(rusqlite::params_from_iter(&params), |row| {
             Ok(conary_core::db::models::RepositoryPackage {
                 id: Some(row.get(0)?),
                 repository_id: row.get(1)?,

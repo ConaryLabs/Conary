@@ -69,7 +69,11 @@ pub async fn cmd_ccs_build(
         if !invalid.is_empty() {
             anyhow::bail!(
                 "Invalid target format(s): {}. Valid targets: ccs, deb, rpm, arch, all",
-                invalid.iter().map(|t| format!("'{t}'")).collect::<Vec<_>>().join(", ")
+                invalid
+                    .iter()
+                    .map(|t| format!("'{t}'"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             );
         }
         parsed

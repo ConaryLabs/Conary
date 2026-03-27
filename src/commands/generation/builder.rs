@@ -81,11 +81,36 @@ pub fn build_generation(conn: &rusqlite::Connection, db_path: &str, summary: &st
             conary_core::filesystem::fsverity::enable_fsverity_on_cas(&obj_dir);
         info!("fs-verity: {enabled} newly enabled, {already} already enabled, {errors} errors");
 
-        // Update the metadata with fsverity status
+        // A non-zero error count means some CAS objects could not be
+        // protected. Warn rather than hard-fail: the generation is still
+        // usable, but integrity verification will be incomplete.
+        if errors > 0 {
+            warn!(
+                "fs-verity: {errors} CAS object(s) could not have verity enabled; \
+                 the generation will work but may lack full integrity protection"
+            );
+        }
+
+        // Update the metadata with fsverity status.
+        // Propagate write errors — a stale metadata.json could mislead
+        // subsequent commands about whether verity is active.
         let gen_dir = generation_path(gen_number);
-        if let Ok(mut metadata) = GenerationMetadata::read_from(&gen_dir) {
-            metadata.fsverity_enabled = true;
-            let _ = metadata.write_to(&gen_dir);
+        match GenerationMetadata::read_from(&gen_dir) {
+            Ok(mut metadata) => {
+                metadata.fsverity_enabled = true;
+                metadata.write_to(&gen_dir).with_context(|| {
+                    format!(
+                        "Failed to update fsverity status in generation {} metadata",
+                        gen_number
+                    )
+                })?;
+            }
+            Err(e) => {
+                warn!(
+                    "Could not read generation {} metadata to update fsverity status: {e}",
+                    gen_number
+                );
+            }
         }
     } else {
         debug!("fs-verity not supported on CAS filesystem, skipping");

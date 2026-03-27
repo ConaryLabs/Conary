@@ -11,7 +11,8 @@ use crate::db::models::{
 };
 use crate::error::{Error, Result};
 use crate::repository::dependency_model::{
-    ConditionalRequirementBehavior, RepositoryDependencyFlavor, RepositoryRequirementKind,
+    ConditionalRequirementBehavior, RepositoryCapabilityKind, RepositoryDependencyFlavor,
+    RepositoryRequirementKind,
 };
 use crate::repository::parsers::{DependencyType, PackageMetadata};
 use crate::repository::versioning::VersionScheme;
@@ -291,35 +292,61 @@ fn normalized_repository_capabilities(
     // uses the correct distro-native comparator (RPM/Debian/Arch).
     let scheme_str = pkg_meta.version_scheme.map(version_scheme_to_db);
 
-    let mut self_provide = RepositoryProvide::new(
-        0,
-        pkg_meta.name.clone(),
-        Some(pkg_meta.version.clone()),
-        "package".to_string(),
-        Some(pkg_meta.name.clone()),
-    );
-    if let Some(ref s) = scheme_str {
-        self_provide = self_provide.with_version_scheme(s.clone());
-    }
-    let mut provides = vec![self_provide];
-
-    provides.extend(
-        extract_extra_metadata_provides(&pkg_meta.extra_metadata)
-            .into_iter()
-            .map(|(capability, version, raw)| {
-                let mut p = RepositoryProvide::new(
+    // Prefer structured provides from the parser when available; fall back
+    // to legacy extra_metadata-based extraction for backward compatibility
+    // with parsers that have not been updated yet.
+    let provides = if !pkg_meta.provides.is_empty() {
+        pkg_meta
+            .provides
+            .iter()
+            .map(|p| {
+                let kind = capability_kind_to_db(p.kind);
+                let mut db_provide = RepositoryProvide::new(
                     0,
-                    capability,
-                    version,
-                    "package".to_string(),
-                    Some(raw),
+                    p.name.clone(),
+                    p.version.clone(),
+                    kind,
+                    p.native_text.clone(),
                 );
                 if let Some(ref s) = scheme_str {
-                    p = p.with_version_scheme(s.clone());
+                    db_provide = db_provide.with_version_scheme(s.clone());
                 }
-                p
-            }),
-    );
+                db_provide
+            })
+            .collect()
+    } else {
+        let mut self_provide = RepositoryProvide::new(
+            0,
+            pkg_meta.name.clone(),
+            Some(pkg_meta.version.clone()),
+            "package".to_string(),
+            Some(pkg_meta.name.clone()),
+        );
+        if let Some(ref s) = scheme_str {
+            self_provide = self_provide.with_version_scheme(s.clone());
+        }
+        let mut fallback = vec![self_provide];
+
+        fallback.extend(
+            extract_extra_metadata_provides(&pkg_meta.extra_metadata)
+                .into_iter()
+                .map(|(capability, version, raw)| {
+                    let mut p = RepositoryProvide::new(
+                        0,
+                        capability,
+                        version,
+                        "package".to_string(),
+                        Some(raw),
+                    );
+                    if let Some(ref s) = scheme_str {
+                        p = p.with_version_scheme(s.clone());
+                    }
+                    p
+                }),
+        );
+
+        fallback
+    };
 
     let requirements = pkg_meta
         .dependencies
@@ -417,6 +444,17 @@ fn version_scheme_to_db(scheme: VersionScheme) -> String {
         VersionScheme::Rpm => "rpm".to_string(),
         VersionScheme::Debian => "debian".to_string(),
         VersionScheme::Arch => "arch".to_string(),
+    }
+}
+
+/// Convert a `RepositoryCapabilityKind` to its database string representation.
+fn capability_kind_to_db(kind: RepositoryCapabilityKind) -> String {
+    match kind {
+        RepositoryCapabilityKind::PackageName => "package".to_string(),
+        RepositoryCapabilityKind::Virtual => "virtual".to_string(),
+        RepositoryCapabilityKind::Soname => "soname".to_string(),
+        RepositoryCapabilityKind::File => "file".to_string(),
+        RepositoryCapabilityKind::Generic => "generic".to_string(),
     }
 }
 

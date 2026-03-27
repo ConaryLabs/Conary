@@ -17,12 +17,16 @@ pub struct DependencyEntry {
     pub version_constraint: Option<String>,
     /// The kind of dependency (package, python, soname, pkgconfig, etc.)
     pub kind: String,
+    /// OR-group identifier: rows sharing the same `(trove_id, group_id)` are
+    /// alternatives (any one satisfies the requirement).  `None` means this
+    /// is a simple single-clause dependency.
+    pub group_id: Option<i64>,
 }
 
 impl DependencyEntry {
     /// Column list for SELECT queries.
     const COLUMNS: &'static str = "id, trove_id, depends_on_name, depends_on_version, \
-         dependency_type, version_constraint, kind";
+         dependency_type, version_constraint, kind, group_id";
 
     /// Create a new DependencyEntry
     pub fn new(
@@ -40,6 +44,7 @@ impl DependencyEntry {
             dependency_type,
             version_constraint,
             kind: "package".to_string(),
+            group_id: None,
         }
     }
 
@@ -60,14 +65,15 @@ impl DependencyEntry {
             dependency_type,
             version_constraint,
             kind: kind.to_string(),
+            group_id: None,
         }
     }
 
     /// Insert this dependency into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
-            "INSERT INTO dependencies (trove_id, depends_on_name, depends_on_version, dependency_type, version_constraint, kind)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO dependencies (trove_id, depends_on_name, depends_on_version, dependency_type, version_constraint, kind, group_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 &self.trove_id,
                 &self.depends_on_name,
@@ -75,6 +81,7 @@ impl DependencyEntry {
                 &self.dependency_type,
                 &self.version_constraint,
                 &self.kind,
+                &self.group_id,
             ],
         )?;
 
@@ -96,8 +103,8 @@ impl DependencyEntry {
 
         let mut stmt = conn.prepare_cached(
             "INSERT INTO dependencies (trove_id, depends_on_name, depends_on_version, \
-             dependency_type, version_constraint, kind) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+             dependency_type, version_constraint, kind, group_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )?;
 
         for entry in entries {
@@ -108,6 +115,7 @@ impl DependencyEntry {
                 &entry.dependency_type,
                 &entry.version_constraint,
                 &entry.kind,
+                &entry.group_id,
             ])?;
         }
 
@@ -238,6 +246,7 @@ impl DependencyEntry {
     /// Convert a database row to a DependencyEntry
     ///
     /// Schema v52 guarantees all columns exist -- no compat fallbacks needed.
+    /// group_id (column 7) added in v62; nullable.
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
         Ok(Self {
             id: Some(row.get(0)?),
@@ -247,6 +256,7 @@ impl DependencyEntry {
             dependency_type: row.get(4)?,
             version_constraint: row.get(5)?,
             kind: row.get::<_, String>(6)?,
+            group_id: row.get(7)?,
         })
     }
 

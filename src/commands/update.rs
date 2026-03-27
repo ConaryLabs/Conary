@@ -528,11 +528,6 @@ pub async fn cmd_update(
     for (trove, repo_pkg, delta_info) in delta_updates {
         println!("\nUpdating {} (delta)...", trove.name);
 
-        let delta_path = temp_dir.join(format!(
-            "{}-{}-to-{}.delta",
-            trove.name, trove.version, repo_pkg.version
-        ));
-
         match repository::download_delta(
             &repository::DeltaInfo {
                 from_version: delta_info.from_version.clone(),
@@ -548,9 +543,9 @@ pub async fn cmd_update(
         )
         .await
         {
-            Ok(_) => {
+            Ok(actual_delta_path) => {
                 let applier = DeltaApplier::new(&objects_dir)?;
-                match applier.apply_delta(&delta_info.from_hash, &delta_path, &delta_info.to_hash) {
+                match applier.apply_delta(&delta_info.from_hash, &actual_delta_path, &delta_info.to_hash) {
                     Ok(new_hash) => {
                         println!("  [OK] Delta applied to CAS");
                         let delta_saved = (repo_pkg.size - delta_info.delta_size).max(0);
@@ -563,12 +558,13 @@ pub async fn cmd_update(
                         let mut delta_installed = false;
                         match cas.retrieve_unchecked(&new_hash) {
                             Ok(content) => {
-                                let pkg_file = temp_dir.join(format!(
-                                    "{}-{}.ccs",
-                                    trove.name, repo_pkg.version
-                                ));
+                                let pkg_file = temp_dir
+                                    .join(format!("{}-{}.ccs", trove.name, repo_pkg.version));
                                 if let Err(e) = std::fs::write(&pkg_file, &content) {
-                                    warn!("  Failed to write delta result for {}: {}", trove.name, e);
+                                    warn!(
+                                        "  Failed to write delta result for {}: {}",
+                                        trove.name, e
+                                    );
                                 } else {
                                     let path_str = pkg_file.to_string_lossy().to_string();
                                     match cmd_install(
@@ -592,17 +588,17 @@ pub async fn cmd_update(
                                             );
                                         }
                                         Err(e) => {
-                                            warn!("  Delta install failed for {}: {}", trove.name, e);
+                                            warn!(
+                                                "  Delta install failed for {}: {}",
+                                                trove.name, e
+                                            );
                                         }
                                     }
                                     let _ = std::fs::remove_file(&pkg_file);
                                 }
                             }
                             Err(e) => {
-                                warn!(
-                                    "  Failed to retrieve delta result from CAS: {}",
-                                    e
-                                );
+                                warn!("  Failed to retrieve delta result from CAS: {}", e);
                             }
                         }
                         if delta_installed {
@@ -636,7 +632,7 @@ pub async fn cmd_update(
                         }
                     }
                 }
-                let _ = std::fs::remove_file(delta_path);
+                let _ = std::fs::remove_file(&actual_delta_path);
             }
             Err(e) => {
                 warn!("  Delta download failed: {}, will download full package", e);

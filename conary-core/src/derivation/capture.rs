@@ -89,13 +89,14 @@ pub fn capture_output(
         // Directories are skipped (implicit from file paths).
     }
 
-    let output_hash = OutputManifest::compute_output_hash(&files, &symlinks);
+    // Use v2 hash (includes file permissions) for correct content addressing.
+    let output_hash = OutputManifest::compute_output_hash_v2(&files, &symlinks);
     let built_at = Utc::now().to_rfc3339();
 
     Ok(OutputManifest {
         derivation_id: derivation_id.to_owned(),
         output_hash,
-        hash_version: 1,
+        hash_version: 2,
         files,
         symlinks,
         build_duration_secs,

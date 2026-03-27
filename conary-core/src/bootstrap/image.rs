@@ -619,6 +619,8 @@ impl ImageBuilder {
                 sha256_hash: hash.clone(),
                 size: *size,
                 permissions: *perms,
+                owner: None,
+                group_name: None,
             })
             .collect();
 

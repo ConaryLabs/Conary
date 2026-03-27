@@ -7,6 +7,7 @@ pub enum ConaryTestError {
     #[error("container error: {message}")]
     Container {
         message: String,
+        #[source]
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
 

@@ -417,6 +417,20 @@ impl<'a> StateEngine<'a> {
             [state_id],
         )?;
 
+        // Snapshot all CAS hashes for GC liveness tracking.
+        // This captures the complete file set at snapshot time, decoupled from
+        // the mutable troves/files tables that may change during future upgrades.
+        self.conn.execute(
+            "INSERT OR IGNORE INTO state_cas_hashes (state_id, sha256_hash)
+             SELECT ?1, f.sha256_hash FROM files f
+             JOIN troves t ON f.trove_id = t.id
+             WHERE t.type = 'package'
+               AND f.sha256_hash IS NOT NULL
+               AND f.sha256_hash != ''
+               AND NOT f.sha256_hash LIKE 'adopted-%'",
+            params![state_id],
+        )?;
+
         // Set as active state
         state.set_active(self.conn)?;
         state.is_active = true;

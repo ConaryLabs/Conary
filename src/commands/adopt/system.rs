@@ -15,7 +15,6 @@ use conary_core::db::models::{
 use conary_core::packages::{
     DependencyInfo, SystemPackageManager, dpkg_query, pacman_query, rpm_query,
 };
-use std::path::PathBuf;
 use tracing::{debug, warn};
 
 /// Match a package name against a glob pattern using the `glob` crate.
@@ -82,7 +81,9 @@ pub async fn cmd_adopt_system(
             .map(|(name, info)| {
                 (
                     name,
-                    info.version_only(),
+                    // Use full_version (epoch:version-release) for RPM so that
+                    // drift detection in refresh.rs compares apples to apples.
+                    info.full_version(),
                     info.arch.clone(),
                     info.description.clone().or(info.summary.clone()),
                 )
@@ -215,10 +216,7 @@ pub async fn cmd_adopt_system(
     };
 
     // Set up CAS for full mode
-    let objects_dir = PathBuf::from(db_path)
-        .parent()
-        .unwrap_or(std::path::Path::new("."))
-        .join("objects");
+    let objects_dir = conary_core::db::paths::objects_dir(db_path);
 
     let cas = if full {
         Some(conary_core::filesystem::CasStore::new(&objects_dir)?)
@@ -240,68 +238,110 @@ pub async fn cmd_adopt_system(
     let mode_label = if full { "Adopting (full)" } else { "Adopting" };
     let mut progress = AdoptProgress::new(total as u64, mode_label);
 
-    // Single transaction is intentional: adopting hundreds of packages must be
-    // atomic so a crash mid-way does not leave the DB in a half-adopted state.
-    // The trade-off is a longer-held write lock, which is acceptable because
-    // adopt-system is an infrequent, user-initiated operation.
+    // Pre-fetch all PM metadata and perform CAS writes OUTSIDE the transaction.
+    // This keeps the SQLite write lock short (DB inserts only) and avoids
+    // CAS-vs-DB inconsistency: if the DB transaction later rolls back, any CAS
+    // objects that were already written become unreachable orphans that the GC
+    // will clean up -- the same trade-off the install pipeline makes.
+    struct PackageData {
+        name: String,
+        version: String,
+        arch: String,
+        description: Option<String>,
+        files: Vec<(FileInfoTuple, String)>, // (file tuple, pre-computed hash)
+        deps: Vec<DependencyInfo>,
+        provides: Vec<String>,
+        is_dependency: bool,
+    }
+
+    let mut pre_collected: Vec<PackageData> = Vec::new();
+
+    for (name, version, arch, description) in &installed {
+        // Skip already-tracked packages
+        if tracked_packages.contains(name) {
+            skipped_count += 1;
+            progress.skip_package();
+            continue;
+        }
+
+        progress.set_phase(name, AdoptPhase::Querying);
+
+        // Query ALL PM metadata before opening the DB transaction.
+        let files: Vec<FileInfoTuple> = match query_pm_files(pkg_mgr, name) {
+            Ok(f) => f,
+            Err(e) => {
+                warn!("Failed to query files for '{}': {}; skipping", name, e);
+                progress.fail_package(name, &e.to_string());
+                error_count += 1;
+                continue;
+            }
+        };
+        let deps: Vec<DependencyInfo> = match query_pm_deps(pkg_mgr, name) {
+            Ok(d) => d,
+            Err(e) => {
+                warn!("Failed to query deps for '{}': {}; skipping", name, e);
+                progress.fail_package(name, &e.to_string());
+                error_count += 1;
+                continue;
+            }
+        };
+        let provides: Vec<String> = match query_pm_provides(pkg_mgr, name) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("Failed to query provides for '{}': {}; skipping", name, e);
+                progress.fail_package(name, &e.to_string());
+                error_count += 1;
+                continue;
+            }
+        };
+
+        // Perform CAS writes (hardlinks) OUTSIDE the transaction.
+        let files_with_hashes: Vec<(FileInfoTuple, String)> = files
+            .into_iter()
+            .map(|f| {
+                let hash = compute_file_hash(
+                    &f.0,
+                    f.2,
+                    f.3.as_deref(),
+                    f.6.as_deref(),
+                    full,
+                    cas.as_ref(),
+                );
+                (f, hash)
+            })
+            .collect();
+
+        let is_dependency = has_install_reason_data && !user_installed.contains(name);
+
+        pre_collected.push(PackageData {
+            name: name.clone(),
+            version: version.clone(),
+            arch: arch.clone(),
+            description: description.clone(),
+            files: files_with_hashes,
+            deps,
+            provides,
+            is_dependency,
+        });
+    }
+
+    // DB-only transaction: all PM queries and CAS writes are already done.
     let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
         let changeset_id = changeset.insert(tx)?;
 
-        for (name, version, arch, description) in &installed {
-            // Skip already-tracked packages
-            if tracked_packages.contains(name) {
-                skipped_count += 1;
-                progress.skip_package();
-                continue;
-            }
-
-            progress.set_phase(name, AdoptPhase::Querying);
-
-            // Query ALL PM metadata before any DB inserts so we can skip
-            // cleanly without leaving orphaned trove/file rows.
-            let files: Vec<FileInfoTuple> = match query_pm_files(pkg_mgr, name) {
-                Ok(f) => f,
-                Err(e) => {
-                    warn!("Failed to query files for '{}': {}; skipping", name, e);
-                    progress.fail_package(name, &e.to_string());
-                    error_count += 1;
-                    continue;
-                }
-            };
-            let deps: Vec<DependencyInfo> = match query_pm_deps(pkg_mgr, name) {
-                Ok(d) => d,
-                Err(e) => {
-                    warn!("Failed to query deps for '{}': {}; skipping", name, e);
-                    progress.fail_package(name, &e.to_string());
-                    error_count += 1;
-                    continue;
-                }
-            };
-            let provides: Vec<String> = match query_pm_provides(pkg_mgr, name) {
-                Ok(p) => p,
-                Err(e) => {
-                    warn!("Failed to query provides for '{}': {}; skipping", name, e);
-                    progress.fail_package(name, &e.to_string());
-                    error_count += 1;
-                    continue;
-                }
-            };
-
-            // All PM queries succeeded -- now safe to insert into the DB.
-            progress.set_phase(name, AdoptPhase::Inserting);
-
+        for pkg in &pre_collected {
             let mut trove = Trove::new_with_source(
-                name.clone(),
-                version.clone(),
+                pkg.name.clone(),
+                pkg.version.clone(),
                 TroveType::Package,
                 install_source.clone(),
             );
-            trove.architecture = Some(arch.clone());
-            trove.description = description.clone();
+            trove.architecture = Some(pkg.arch.clone());
+            trove.description = pkg.description.clone();
             trove.installed_by_changeset_id = Some(changeset_id);
             trove.source_distro = source_identity.source_distro.clone();
             trove.version_scheme = source_identity.version_scheme.clone();
-            if has_install_reason_data && !user_installed.contains(name) {
+            if pkg.is_dependency {
                 trove.install_reason = InstallReason::Dependency;
                 trove.selection_reason =
                     Some("Auto-installed dependency (from system package manager)".to_string());
@@ -312,72 +352,83 @@ pub async fn cmd_adopt_system(
             let trove_id = match trove.insert(tx) {
                 Ok(id) => id,
                 Err(e) => {
-                    warn!("Failed to insert trove for {}: {}", name, e);
-                    progress.fail_package(name, &e.to_string());
+                    warn!("Failed to insert trove for {}: {}", pkg.name, e);
                     error_count += 1;
                     continue;
                 }
             };
 
-            for (
-                file_path,
-                file_size,
-                file_mode,
-                file_digest,
-                file_user,
-                file_group,
-                link_target,
-            ) in &files
-            {
-                let hash = compute_file_hash(
-                    file_path,
-                    *file_mode,
-                    file_digest.as_deref(),
-                    link_target.as_deref(),
-                    full,
-                    cas.as_ref(),
-                );
+            // Track insert successes/failures for files, deps, and provides.
+            // If every insert for this package fails, the trove record is
+            // effectively empty — skip it so we don't pollute the DB with
+            // ghost entries.
+            let total_inserts = pkg.files.len() + pkg.deps.len() + pkg.provides.len();
+            let mut insert_failures: usize = 0;
 
-                let mut file_entry =
-                    FileEntry::new(file_path.clone(), hash, *file_size, *file_mode, trove_id);
+            for (
+                (file_path, file_size, file_mode, _digest, file_user, file_group, link_target),
+                hash,
+            ) in &pkg.files
+            {
+                let mut file_entry = FileEntry::new(
+                    file_path.clone(),
+                    hash.clone(),
+                    *file_size,
+                    *file_mode,
+                    trove_id,
+                );
                 file_entry.owner = file_user.clone();
                 file_entry.group_name = file_group.clone();
                 file_entry.symlink_target = link_target.clone();
 
                 if let Err(e) = file_entry.insert_or_replace(tx) {
                     debug!("Failed to insert file {}: {}", file_path, e);
+                    insert_failures += 1;
                 }
             }
 
-            for dep in deps {
+            for dep in &pkg.deps {
                 if dep.name.is_empty() {
                     continue;
                 }
 
                 let mut dep_entry = DependencyEntry::new(
                     trove_id,
-                    dep.name,
+                    dep.name.clone(),
                     None,
                     "runtime".to_string(),
-                    dep.constraint,
+                    dep.constraint.clone(),
                 );
                 if let Err(e) = dep_entry.insert(tx) {
                     debug!("Failed to insert dependency: {}", e);
+                    insert_failures += 1;
                 }
             }
 
-            for provide in provides {
+            for provide in &pkg.provides {
                 if provide.is_empty() {
                     continue;
                 }
-                let mut provide_entry = ProvideEntry::new(trove_id, provide, None);
+                let mut provide_entry = ProvideEntry::new(trove_id, provide.clone(), None);
                 if let Err(e) = provide_entry.insert_or_ignore(tx) {
                     debug!("Failed to insert provide: {}", e);
+                    insert_failures += 1;
                 }
             }
 
+            // If the package has metadata to insert and every single insert
+            // failed, the trove record is empty and useless — skip it.
+            if total_inserts > 0 && insert_failures == total_inserts {
+                warn!(
+                    "All {} insert(s) failed for '{}'; skipping trove",
+                    total_inserts, pkg.name
+                );
+                error_count += 1;
+                continue;
+            }
+
             adopted_count += 1;
-            progress.complete_package(name);
+            progress.complete_package(&pkg.name);
         }
 
         changeset.update_status(tx, ChangesetStatus::Applied)?;
@@ -491,10 +542,7 @@ pub fn compute_file_hash(
 }
 
 /// Query files for a package from the active PM, propagating errors.
-fn query_pm_files(
-    pkg_mgr: SystemPackageManager,
-    name: &str,
-) -> Result<Vec<FileInfoTuple>> {
+fn query_pm_files(pkg_mgr: SystemPackageManager, name: &str) -> Result<Vec<FileInfoTuple>> {
     let raw = match pkg_mgr {
         SystemPackageManager::Rpm => rpm_query::query_package_files(name)
             .map_err(|e| anyhow::anyhow!("RPM file query failed for '{name}': {e}"))?,
@@ -506,15 +554,22 @@ fn query_pm_files(
     };
     Ok(raw
         .into_iter()
-        .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group, f.link_target))
+        .map(|f| {
+            (
+                f.path,
+                f.size,
+                f.mode,
+                f.digest,
+                f.user,
+                f.group,
+                f.link_target,
+            )
+        })
         .collect())
 }
 
 /// Query dependencies for a package from the active PM, propagating errors.
-fn query_pm_deps(
-    pkg_mgr: SystemPackageManager,
-    name: &str,
-) -> Result<Vec<DependencyInfo>> {
+fn query_pm_deps(pkg_mgr: SystemPackageManager, name: &str) -> Result<Vec<DependencyInfo>> {
     Ok(match pkg_mgr {
         SystemPackageManager::Rpm => rpm_query::query_package_dependencies_full(name)
             .map_err(|e| anyhow::anyhow!("RPM dep query failed for '{name}': {e}"))?,
@@ -527,10 +582,7 @@ fn query_pm_deps(
 }
 
 /// Query provides for a package from the active PM, propagating errors.
-fn query_pm_provides(
-    pkg_mgr: SystemPackageManager,
-    name: &str,
-) -> Result<Vec<String>> {
+fn query_pm_provides(pkg_mgr: SystemPackageManager, name: &str) -> Result<Vec<String>> {
     Ok(match pkg_mgr {
         SystemPackageManager::Rpm => rpm_query::query_package_provides(name)
             .map_err(|e| anyhow::anyhow!("RPM provides query failed for '{name}': {e}"))?,

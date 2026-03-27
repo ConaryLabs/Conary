@@ -10,26 +10,34 @@ use conary_core::self_update::{
     download_update_with_progress, extract_binary, get_update_channel, verify_binary,
 };
 
-fn check_update_signature(sha256: &str, signature: &Option<String>) -> Result<()> {
+fn check_update_signature(
+    sha256: &str,
+    signature: &Option<String>,
+    no_verify: bool,
+) -> Result<()> {
+    // --no-verify explicitly bypasses all signature checks
+    if no_verify {
+        eprintln!("Warning: --no-verify specified, skipping signature verification.");
+        return Ok(());
+    }
+
     let have_trusted_keys = !conary_core::self_update::TRUSTED_UPDATE_KEYS.is_empty();
 
     if !have_trusted_keys {
         // No trusted keys shipped yet -- signature verification is impossible.
-        // Warn but allow the update.  Once release-signing keys are added to
-        // TRUSTED_UPDATE_KEYS, this early return disappears and all updates
-        // (signed or unsigned) must pass verification.
+        // Refuse by default; the user must pass --no-verify to proceed with
+        // an unverifiable update.  This prevents silent unsigned binary
+        // replacement when TRUSTED_UPDATE_KEYS is empty.
         if signature.is_some() {
-            eprintln!(
-                "Warning: update has a signature but no trusted keys are configured to verify it. \
-                 Skipping verification."
-            );
-        } else {
-            eprintln!(
-                "Warning: update has no signature and no trusted keys are configured. \
-                 Signature enforcement will be enabled once release keys are shipped."
+            anyhow::bail!(
+                "Update has a signature but no trusted keys are configured to verify it. \
+                 Use --no-verify to proceed without verification (NOT RECOMMENDED)."
             );
         }
-        return Ok(());
+        anyhow::bail!(
+            "Update has no signature and no trusted keys are configured. \
+             Refusing unsigned update. Use --no-verify to override (NOT RECOMMENDED)."
+        );
     }
 
     // Trusted keys are configured — enforce signature verification.
@@ -42,7 +50,7 @@ fn check_update_signature(sha256: &str, signature: &Option<String>) -> Result<()
         None => {
             anyhow::bail!(
                 "Update has no signature. Refusing to install an unsigned release. \
-                 If this is a pre-signing development build, use a signed channel."
+                 Use --no-verify to override (NOT RECOMMENDED)."
             );
         }
     }
@@ -54,6 +62,7 @@ pub async fn cmd_self_update(
     check: bool,
     force: bool,
     version: Option<String>,
+    no_verify: bool,
 ) -> Result<()> {
     let current_version = env!("CARGO_PKG_VERSION");
     let conn = open_db(db_path)?;
@@ -107,7 +116,7 @@ pub async fn cmd_self_update(
         ..
     } = result
     {
-        check_update_signature(sha256, signature)?;
+        check_update_signature(sha256, signature, no_verify)?;
     }
 
     // Determine download URL and expected version
@@ -119,12 +128,18 @@ pub async fn cmd_self_update(
             ..
         } => (download_url.clone(), sha256.clone(), latest.clone()),
         VersionCheckResult::UpToDate { .. } => {
-            // --force path: re-fetch latest info
-            let info: LatestVersionInfo = reqwest::get(format!("{channel_url}/latest"))
+            // --force path: re-fetch latest info using the same timeout as the normal path
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .map_err(|e| anyhow::anyhow!("Failed to build HTTP client: {e}"))?;
+            let info: LatestVersionInfo = client
+                .get(format!("{channel_url}/latest"))
+                .send()
                 .await?
                 .json()
                 .await?;
-            check_update_signature(&info.sha256, &info.signature)?;
+            check_update_signature(&info.sha256, &info.signature, no_verify)?;
             (info.download_url, info.sha256, info.version)
         }
     };

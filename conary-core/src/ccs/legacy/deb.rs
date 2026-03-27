@@ -238,17 +238,16 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
 
         match file.file_type {
             FileType::Regular => {
-                if let Some(content) = result.blobs.get(&file.hash) {
-                    fs::write(&dest_path, content)?;
+                let content = super::get_file_content(file, &result.blobs)?;
+                fs::write(&dest_path, &content)?;
 
-                    // Set permissions
-                    let mut perms = fs::metadata(&dest_path)?.permissions();
-                    perms.set_mode(file.mode);
-                    fs::set_permissions(&dest_path, perms)?;
+                // Set permissions
+                let mut perms = fs::metadata(&dest_path)?.permissions();
+                perms.set_mode(file.mode);
+                fs::set_permissions(&dest_path, perms)?;
 
-                    // Add to md5sums using the already-computed relative path.
-                    md5sums.push(format!("{}  {}", compute_md5(content), rel_path));
-                }
+                // Add to md5sums using the already-computed relative path.
+                md5sums.push(format!("{}  {}", compute_md5(&content), rel_path));
             }
             FileType::Symlink => {
                 if let Some(target) = &file.target {

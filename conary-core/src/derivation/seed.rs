@@ -141,17 +141,17 @@ impl Seed {
         let image_path = seed_dir.join("seed.erofs");
         let metadata_path = seed_dir.join("seed.toml");
 
-        // Hash the image first; map NotFound to MissingImage (checked before
-        // metadata so that a missing image is reported even if metadata is
-        // also absent).
-        let actual_hash = erofs_image_hash(&image_path).map_err(|e| {
-            let msg = e.to_string();
-            if msg.contains("No such file or directory") {
-                SeedError::MissingImage(format!("{}", image_path.display()))
-            } else {
-                SeedError::Io(format!("hashing {}: {e}", image_path.display()))
-            }
-        })?;
+        // Check for a missing image explicitly before attempting to hash it.
+        // This avoids relying on error message string matching for NotFound detection.
+        if !image_path.exists() {
+            return Err(SeedError::MissingImage(format!(
+                "{}",
+                image_path.display()
+            )));
+        }
+
+        let actual_hash = erofs_image_hash(&image_path)
+            .map_err(|e| SeedError::Io(format!("hashing {}: {e}", image_path.display())))?;
 
         // Read and parse metadata directly; map NotFound to MissingMetadata.
         let toml_content = std::fs::read_to_string(&metadata_path).map_err(|e| {

@@ -642,6 +642,8 @@ pub async fn cmd_bootstrap_seed(from: &str, output: &str, target: &str) -> Resul
                 sha256_hash: hash,
                 size: metadata.len(),
                 permissions: metadata.mode() & 0o7777,
+                owner: None,
+                group_name: None,
             });
             file_count += 1;
         }

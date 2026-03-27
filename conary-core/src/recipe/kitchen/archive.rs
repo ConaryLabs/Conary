@@ -10,6 +10,14 @@ use std::process::Command;
 
 /// Download a file from a URL
 pub fn download_file(url: &str, dest: &Path) -> Result<()> {
+    // Reject non-HTTP(S) URL schemes to prevent file:// and other injections
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err(Error::DownloadError(format!(
+            "Only http:// and https:// URLs are supported for source downloads, got: {}",
+            &url[..url.len().min(50)]
+        )));
+    }
+
     // Use curl for now (could use reqwest later)
     let dest_str = dest.to_str().ok_or_else(|| {
         Error::DownloadError(format!("Non-UTF-8 download path: {}", dest.display()))
@@ -41,11 +49,15 @@ pub fn download_file(url: &str, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Verify file checksum
+/// Verify file checksum.
 ///
 /// The expected checksum should be in the format "algorithm:hash"
 /// (e.g., "sha256:abc123..." or "xxh128:def456...")
-pub fn verify_file_checksum(path: &Path, expected: &str) -> Result<bool> {
+///
+/// Returns `Ok(None)` when the checksum matches, or `Ok(Some(actual_hash))`
+/// when it does not, allowing callers to include the actual hash in error
+/// messages. Returns `Err` on I/O failure or unsupported algorithm.
+pub fn verify_file_checksum(path: &Path, expected: &str) -> Result<Option<String>> {
     let content = fs::read(path)?;
 
     let (algorithm, expected_hash) = expected
@@ -55,17 +67,20 @@ pub fn verify_file_checksum(path: &Path, expected: &str) -> Result<bool> {
     let algo = match algorithm {
         "sha256" => HashAlgorithm::Sha256,
         "xxh128" => HashAlgorithm::Xxh128,
-        "md5" => HashAlgorithm::Md5,
         _ => {
             return Err(Error::ParseError(format!(
-                "Unsupported checksum algorithm: {} (supported: sha256, xxh128, md5)",
+                "Unsupported checksum algorithm: {} (supported: sha256, xxh128)",
                 algorithm
             )));
         }
     };
 
     let actual = hash_bytes(algo, &content);
-    Ok(actual.as_str() == expected_hash)
+    if actual.as_str() == expected_hash {
+        Ok(None)
+    } else {
+        Ok(Some(format!("{}:{}", algorithm, actual.as_str())))
+    }
 }
 
 /// Extract an archive to a destination directory
@@ -100,6 +115,8 @@ pub fn extract_archive(archive: &Path, dest: &Path) -> Result<()> {
     let output = Command::new("tar")
         .args(flags)
         .args([archive_str, "-C", dest_str])
+        .arg("--no-same-owner")
+        .arg("--no-same-permissions")
         .output()
         .map_err(|e| Error::IoError(format!("tar failed: {}", e)))?;
 

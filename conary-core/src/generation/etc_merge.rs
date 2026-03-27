@@ -315,6 +315,16 @@ fn scan_dir_recursive(base: &Path, current: &Path, scan: &mut UpperScan) {
 
     for entry in entries.flatten() {
         let path = entry.path();
+
+        // Skip internal metadata files (e.g. .base-gen) that are not
+        // part of the /etc overlay content.
+        if let Some(name) = path.file_name().and_then(|n| n.to_str())
+            && name.starts_with('.')
+            && name != ".wh..wh..opq"
+        {
+            continue;
+        }
+
         // Use symlink_metadata to avoid following symlinks outside the overlay.
         let meta = match path.symlink_metadata() {
             Ok(m) => m,
