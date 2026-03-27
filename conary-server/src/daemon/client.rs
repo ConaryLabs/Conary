@@ -9,11 +9,13 @@
 //!
 //! ```ignore
 //! use crate::daemon::client::DaemonClient;
+//! use crate::daemon::enhance::EnhanceJobSpec;
 //!
 //! // Try to connect to daemon
 //! if let Ok(client) = DaemonClient::connect() {
-//!     // Forward install command to daemon
-//!     let job = client.install(&["nginx"], Default::default())?;
+//!     // Trigger background enhancement
+//!     let spec = EnhanceJobSpec { batch_size: 10, ..Default::default() };
+//!     let job = client.enhance(&spec)?;
 //!     println!("Job queued: {}", job.job_id);
 //!
 //!     // Wait for completion with progress
@@ -25,6 +27,10 @@
 //!     // ...
 //! }
 //! ```
+//!
+//! Note: `install()`, `remove()`, and `update()` are defined but will return
+//! an error from the server until those job kinds are implemented in the
+//! daemon executor.  Use the CLI directly for package operations.
 
 use crate::daemon::{DaemonConfig, DaemonError, DaemonEvent};
 use conary_core::Result;
@@ -154,6 +160,9 @@ impl DaemonClient {
     }
 
     /// Install packages
+    ///
+    /// TODO: Server rejects install jobs until the daemon executor implements
+    /// this kind.  Use the CLI directly for now.
     pub fn install(
         &self,
         packages: &[&str],
@@ -170,6 +179,9 @@ impl DaemonClient {
     }
 
     /// Remove packages
+    ///
+    /// TODO: Server rejects remove jobs until the daemon executor implements
+    /// this kind.  Use the CLI directly for now.
     pub fn remove(
         &self,
         packages: &[&str],
@@ -186,6 +198,9 @@ impl DaemonClient {
     }
 
     /// Update packages
+    ///
+    /// TODO: Server rejects update jobs until the daemon executor implements
+    /// this kind.  Use the CLI directly for now.
     pub fn update(
         &self,
         packages: &[&str],
@@ -197,6 +212,29 @@ impl DaemonClient {
         });
 
         let response = self.request("POST", "/v1/packages/update", Some(&body.to_string()))?;
+
+        self.parse_response(response)
+    }
+
+    /// Trigger a background enhancement job
+    ///
+    /// This is the only currently executable job kind in the daemon.
+    /// Pass an `idempotency_key` to deduplicate retried requests.
+    pub fn enhance(
+        &self,
+        spec: &crate::daemon::EnhanceJobSpec,
+        idempotency_key: Option<&str>,
+    ) -> Result<CreateTransactionResponse> {
+        let body = serde_json::to_string(spec)
+            .map_err(|e| conary_core::Error::IoError(format!("Serialization error: {e}")))?;
+
+        let extra_headers: Vec<(&str, &str)> = idempotency_key
+            .iter()
+            .map(|k| ("X-Idempotency-Key", *k))
+            .collect();
+
+        let response =
+            self.request_with_headers("POST", "/v1/enhance", Some(&body), &extra_headers)?;
 
         self.parse_response(response)
     }
@@ -338,6 +376,17 @@ impl DaemonClient {
 
     /// Make an HTTP request to the daemon
     fn request(&self, method: &str, path: &str, body: Option<&str>) -> Result<HttpResponse> {
+        self.request_with_headers(method, path, body, &[])
+    }
+
+    /// Make an HTTP request with optional extra headers
+    fn request_with_headers(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&str>,
+        extra_headers: &[(&str, &str)],
+    ) -> Result<HttpResponse> {
         let mut stream = UnixStream::connect(&self.socket_path)?;
         stream.set_read_timeout(Some(self.timeout))?;
         stream.set_write_timeout(Some(self.timeout))?;
@@ -349,10 +398,15 @@ impl DaemonClient {
              Host: localhost\r\n\
              Content-Type: application/json\r\n\
              Content-Length: {}\r\n\
-             Connection: close\r\n\
-             \r\n",
+             Connection: close\r\n",
             method, path, content_length
         );
+
+        for (name, value) in extra_headers {
+            request.push_str(&format!("{}: {}\r\n", name, value));
+        }
+
+        request.push_str("\r\n");
 
         if let Some(body) = body {
             request.push_str(body);

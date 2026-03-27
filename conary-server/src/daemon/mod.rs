@@ -586,13 +586,131 @@ pub fn get_daemon_pid() -> Option<u32> {
     SystemLock::holder_pid(SystemLock::DEFAULT_PATH).filter(|_| is_daemon_running())
 }
 
+/// Background job executor loop.
+///
+/// Continuously dequeues jobs from the operation queue, executes them,
+/// updates DB status/result/error, and emits lifecycle events. Without
+/// this loop, jobs accepted by the API would remain queued forever.
+async fn job_executor_loop(state: Arc<DaemonState>) {
+    use std::sync::atomic::Ordering;
+
+    log::info!("Job executor started");
+
+    loop {
+        // Dequeue the next job (non-blocking check)
+        let queued = state.queue.dequeue().await;
+
+        let Some(queued) = queued else {
+            // No pending jobs -- sleep briefly before polling again
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            continue;
+        };
+
+        let job = queued.job;
+        let cancel_token = queued.cancel_token;
+        let job_id = job.id.clone();
+        let job_kind = job.kind;
+
+        log::info!("Executing job {} (kind: {})", job_id, job_kind.as_str());
+
+        // Mark as current and update DB status to Running
+        state.queue.set_current(Some(job_id.clone())).await;
+        let start_time = std::time::Instant::now();
+
+        let update_id = job_id.clone();
+        let db_state = state.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Ok(conn) = db_state.open_db() {
+                let _ = DaemonJob::update_status(&conn, &update_id, JobStatus::Running);
+            }
+        })
+        .await;
+
+        state.metrics.jobs_running.fetch_add(1, Ordering::Relaxed);
+        state.emit(DaemonEvent::JobStarted {
+            job_id: job_id.clone(),
+        });
+
+        // Execute the job based on its kind
+        let result: std::result::Result<Option<serde_json::Value>, String> = match job_kind {
+            JobKind::Enhance => {
+                let spec: enhance::EnhanceJobSpec =
+                    serde_json::from_value(job.spec.clone()).unwrap_or_default();
+                match enhance::execute_enhance_job(state.clone(), spec, cancel_token).await {
+                    Ok(r) => Ok(serde_json::to_value(r).ok()),
+                    Err(e) => Err(e.to_string()),
+                }
+            }
+            // TODO: Implement Install, Remove, Update, Rollback, Verify,
+            // GarbageCollect, and DryRun job execution.  These are currently
+            // rejected at the API boundary (routes.rs) but this fallback
+            // provides defense-in-depth.
+            _ => Err(format!(
+                "Job kind '{}' execution not yet implemented",
+                job_kind.as_str()
+            )),
+        };
+
+        let duration_ms = start_time.elapsed().as_millis() as u64;
+        state.metrics.jobs_running.fetch_sub(1, Ordering::Relaxed);
+
+        // Persist result and emit terminal event
+        let final_id = job_id.clone();
+        let db_state = state.clone();
+        match result {
+            Ok(result_value) => {
+                let _ = tokio::task::spawn_blocking(move || {
+                    if let Ok(conn) = db_state.open_db() {
+                        if let Some(ref val) = result_value {
+                            let _ = DaemonJob::set_result(&conn, &final_id, val);
+                        }
+                        let _ =
+                            DaemonJob::update_status(&conn, &final_id, JobStatus::Completed);
+                    }
+                })
+                .await;
+
+                state.metrics.jobs_completed.fetch_add(1, Ordering::Relaxed);
+                state.emit(DaemonEvent::JobCompleted {
+                    job_id: job_id.clone(),
+                    duration_ms,
+                });
+                log::info!("Job {} completed in {}ms", job_id, duration_ms);
+            }
+            Err(error_msg) => {
+                let daemon_error = DaemonError::internal(&error_msg);
+                let err_for_db = daemon_error.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    if let Ok(conn) = db_state.open_db() {
+                        let _ = DaemonJob::set_error(&conn, &final_id, &err_for_db);
+                        let _ = DaemonJob::update_status(&conn, &final_id, JobStatus::Failed);
+                    }
+                })
+                .await;
+
+                state.metrics.jobs_failed.fetch_add(1, Ordering::Relaxed);
+                state.emit(DaemonEvent::JobFailed {
+                    job_id: job_id.clone(),
+                    error: daemon_error,
+                });
+                log::error!("Job {} failed: {}", job_id, error_msg);
+            }
+        }
+
+        // Clear current job and clean up cancel token
+        state.queue.set_current(None).await;
+        state.queue.remove_token(&job_id).await;
+    }
+}
+
 /// Run the daemon
 ///
 /// This is the main entry point for the daemon. It:
 /// 1. Acquires the system lock
 /// 2. Binds to Unix and optionally TCP sockets
 /// 3. Sets up the Axum router
-/// 4. Runs until shutdown signal
+/// 4. Runs the job executor loop
+/// 5. Runs until shutdown signal
 ///
 /// # Arguments
 /// * `config` - Daemon configuration
@@ -637,33 +755,65 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<()> {
     // Build router
     let app = routes::build_router(state.clone());
 
-    // Create socket manager
-    let socket_config = socket::SocketConfig {
-        unix_path: config.socket_path.clone(),
-        unix_mode: config.socket_mode,
-        unix_group: config.socket_group.clone(),
-        enable_tcp: config.enable_tcp,
-        tcp_bind: config.tcp_bind.clone(),
-    };
+    // Acquire a Unix listener -- either from systemd socket activation or
+    // by binding a fresh socket ourselves.
+    let (_socket_manager, unix_listener) = if systemd::is_socket_activated() {
+        let fds = systemd::listen_fds();
+        if fds.is_empty() {
+            return Err(conary_core::Error::IoError(
+                "Socket activation detected but no file descriptors received".to_string(),
+            ));
+        }
 
-    let mut socket_manager = socket::SocketManager::new(socket_config);
-    socket_manager.bind().await?;
+        // Adopt the first passed FD (FD 3) as our Unix listener.
+        use std::os::unix::io::FromRawFd;
+        let std_listener = unsafe { std::os::unix::net::UnixListener::from_raw_fd(fds[0]) };
+        std_listener.set_nonblocking(true).map_err(|e| {
+            conary_core::Error::IoError(format!(
+                "Failed to set socket-activated FD non-blocking: {e}"
+            ))
+        })?;
+        let listener = tokio::net::UnixListener::from_std(std_listener).map_err(|e| {
+            conary_core::Error::IoError(format!(
+                "Failed to adopt socket-activated listener: {e}"
+            ))
+        })?;
+        log::info!("Adopted systemd socket-activated listener (FD {})", fds[0]);
+        (None, listener)
+    } else {
+        let socket_config = socket::SocketConfig {
+            unix_path: config.socket_path.clone(),
+            unix_mode: config.socket_mode,
+            unix_group: config.socket_group.clone(),
+            enable_tcp: config.enable_tcp,
+            tcp_bind: config.tcp_bind.clone(),
+        };
+
+        let mut mgr = socket::SocketManager::new(socket_config);
+        mgr.bind().await?;
+
+        let listener = mgr.take_unix_listener().ok_or_else(|| {
+            conary_core::Error::IoError(
+                "Unix listener not bound - check socket configuration".to_string(),
+            )
+        })?;
+        (Some(mgr), listener)
+    };
 
     // Notify systemd we're ready
     systemd_manager.notify_ready(Some("conaryd ready for connections"));
     log::info!("Notified systemd: READY");
 
-    // Get Unix listener
-    let unix_listener = socket_manager.take_unix_listener().ok_or_else(|| {
-        conary_core::Error::IoError(
-            "Unix listener not bound - check socket configuration".to_string(),
-        )
-    })?;
-
     log::info!("Daemon ready, accepting connections");
 
     // Track active connections for idle timeout
     let active_connections = Arc::new(AtomicU64::new(0));
+
+    // Spawn the job executor task that drains the operation queue
+    let executor_state = state.clone();
+    let _executor_handle = tokio::spawn(async move {
+        job_executor_loop(executor_state).await;
+    });
 
     // Setup shutdown signal
     let shutdown = tokio::signal::ctrl_c();
