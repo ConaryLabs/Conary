@@ -581,3 +581,27 @@ cargo run -p conary-test -- run --distro fedora43 --suite phase2-group-a --phase
 ```
 
 **Verification:** After all phases, dispatch `sbuild` for full release verification.
+
+---
+
+## Minimax-Unique Findings (folded into plan)
+
+3 findings from the Minimax independent review not covered by existing tasks:
+
+### Fold into Task 2 (seccomp Enforce): Remove setuid/setgid from seccomp allowlist (Minimax A6-C4)
+
+**Finding:** The default seccomp allowlist includes `setuid` (syscall #146) and `setgid` (#149). Combined with writable /etc and Warn-mode seccomp, enables UID/GID escalation inside the sandbox.
+
+**Fix:** When setting seccomp to Enforce in Task 2, also remove `setuid` and `setgid` from the allowlist in `conary-core/src/capability/enforcement/seccomp_enforce.rs`. Add to Task 2's steps.
+
+### New Task (Phase 2): Daemon PID reuse defense (Minimax A9-C1)
+
+**Finding:** SO_PEERCRED captures PID at connection time. After daemon crash, a malicious local user can spawn a process with the same PID and inherit root credentials. Race window is several seconds.
+
+**Fix:** Re-validate peer credentials on each request (not just connection time). Add to Task 19 alongside daemon auth-gating. Modify: `conary-server/src/daemon/auth.rs`
+
+### New Task (Phase 2): MCP auth integration test (Minimax A4-C1)
+
+**Finding:** MCP router's `route_layer` checks `TokenScopes` from request extensions. If parent auth middleware extensions don't propagate (axum layer ordering), the check sees `None` and returns 403 (fails closed). Currently safe but fragile -- no integration test verifies this.
+
+**Fix:** Add integration test that sends unauthenticated request to `/mcp` and verifies 401/403 rejection. Add to Task 19 or create standalone test task.
