@@ -136,6 +136,10 @@ pub struct CommonArgs {
 #[command(version)]
 #[command(about = "A next-generation package manager with atomic transactions", long_about = None)]
 pub struct Cli {
+    /// Use seccomp warn mode for scriptlets instead of enforcing blocked syscalls
+    #[arg(long, global = true)]
+    pub seccomp_warn: bool,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -703,4 +707,16 @@ pub enum Commands {
         #[arg(long)]
         validate: bool,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use clap::Parser;
+
+    #[test]
+    fn cli_accepts_seccomp_warn_flag() {
+        Cli::try_parse_from(["conary", "--seccomp-warn", "list"])
+            .expect("--seccomp-warn should parse as a global CLI flag");
+    }
 }
