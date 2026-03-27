@@ -140,7 +140,13 @@ impl TestSuite {
     }
 
     pub fn finish(&mut self) {
-        self.status = RunStatus::Completed;
+        // Preserve Cancelled status when every test was cancelled (the run
+        // was stopped via cancel flag, not because tests naturally finished).
+        if self.cancelled() > 0 && self.passed() == 0 && self.failed() == 0 {
+            self.status = RunStatus::Cancelled;
+        } else {
+            self.status = RunStatus::Completed;
+        }
         self.finished_at = Some(Utc::now());
     }
 }

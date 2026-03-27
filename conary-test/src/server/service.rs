@@ -103,12 +103,16 @@ pub fn start_run(
     let run_id = AppState::next_run_id();
     let suite = TestSuite::new(suite_name, phase);
     state.insert_run(run_id, suite);
+    // Register the cancel flag immediately so queued runs waiting for a
+    // semaphore permit can still be cancelled before execution begins.
+    let _flag = state.register_cancel_flag(run_id);
     state.run_meta.insert(
         run_id,
         crate::server::state::RunMeta {
             suite_name: suite_name.to_string(),
             distro: distro.to_string(),
             phase,
+            test_filter: None,
         },
     );
 
@@ -159,10 +163,34 @@ async fn execute_run(
     distro: &str,
     phase: u32,
 ) -> Result<()> {
+    use std::sync::atomic::AtomicBool;
+
     use crate::container::{BollardBackend, ContainerBackend, ContainerConfig, VolumeMount};
     use crate::engine::runner::{RemiStreamCtx, TestRunner};
 
     tracing::info!(run_id, suite_name, distro, phase, "starting test run");
+
+    // Check for pre-start cancellation before doing any expensive work
+    // (image builds, container creation, Remi run creation).
+    if state
+        .cancellation_flags
+        .get(&run_id)
+        .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+    {
+        tracing::info!(run_id, "run cancelled before start, skipping setup");
+        if let Some(mut entry) = state.runs.get_mut(&run_id) {
+            entry.status = RunStatus::Cancelled;
+        }
+        // Emit a terminal event so any SSE subscribers terminate cleanly.
+        state.emit_event(crate::report::stream::TestEvent::RunComplete {
+            run_id,
+            passed: 0,
+            failed: 0,
+            skipped: 0,
+        });
+        state.remove_cancel_flag(run_id);
+        return Ok(());
+    }
 
     // Mark as running.
     if let Some(mut entry) = state.runs.get_mut(&run_id) {
@@ -188,8 +216,12 @@ async fn execute_run(
         None
     };
 
-    // Register cancellation flag.
-    let cancel_flag = state.register_cancel_flag(run_id);
+    // Retrieve the cancellation flag (registered at run creation time).
+    let cancel_flag = state
+        .cancellation_flags
+        .get(&run_id)
+        .map(|f| Arc::clone(&f))
+        .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
 
     // Build the image (serialized per-distro to avoid Podman contention).
     let image_tag = {
@@ -248,10 +280,19 @@ async fn execute_run(
     // Initialize conary state inside the container.
     initialize_container(state, distro, phase, &backend, &container_id).await?;
 
-    // Load the manifest.
+    // Load the manifest, optionally filtering to a single test for reruns.
     let manifest_path =
         std::path::PathBuf::from(&state.manifest_dir).join(format!("{suite_name}.toml"));
-    let manifest = crate::config::load_manifest(&manifest_path)?;
+    let mut manifest = crate::config::load_manifest(&manifest_path)?;
+
+    if let Some(ref meta) = state.run_meta.get(&run_id)
+        && let Some(ref test_id) = meta.test_filter
+    {
+        manifest.test.retain(|t| t.id == *test_id);
+        if manifest.test.is_empty() {
+            anyhow::bail!("test {test_id} not found in manifest {suite_name}");
+        }
+    }
 
     // Build the Remi streaming context if we have both a client and a run ID.
     let remi_ctx = match (&state.remi_client, remi_run_id) {
@@ -537,15 +578,13 @@ pub fn list_distros(state: &AppState) -> Vec<DistroInfo> {
 // ---------------------------------------------------------------------------
 
 /// Cancel a running test run. Sets the cancellation flag and marks the
-/// suite as cancelled.
+/// suite as cancelled. No-ops for already-finished runs.
 pub fn cancel_run(state: &AppState, run_id: u64) -> crate::error::Result<()> {
     if !state.cancel_run(run_id) {
         // No cancellation flag found -- check if the run exists at all.
         if state.runs.contains_key(&run_id) {
-            // Run exists but has no flag (already finished). Still mark it.
-            if let Some(mut entry) = state.runs.get_mut(&run_id) {
-                entry.status = RunStatus::Cancelled;
-            }
+            // Run exists but has no active flag (already finished). Don't
+            // rewrite history -- return success without modifying status.
             return Ok(());
         }
         return Err(ConaryTestError::RunNotFound(run_id.to_string()));
@@ -596,12 +635,14 @@ pub fn rerun_test(
     let new_run_id = AppState::next_run_id();
     let suite = TestSuite::new(&suite_name, phase);
     state.insert_run(new_run_id, suite);
+    let _flag = state.register_cancel_flag(new_run_id);
     state.run_meta.insert(
         new_run_id,
         crate::server::state::RunMeta {
             suite_name: original_suite.clone(),
             distro: distro.clone(),
             phase,
+            test_filter: Some(test_id.to_string()),
         },
     );
 
@@ -829,7 +870,7 @@ mod tests {
     fn test_cancel_run_sets_flag() {
         let state = test_fixtures::test_app_state();
         let run = start_run(&state, "smoke", "fedora43", 1).unwrap();
-        let _flag = state.register_cancel_flag(run.run_id);
+        // start_run already registers the cancel flag.
 
         cancel_run(&state, run.run_id).unwrap();
 
@@ -838,15 +879,20 @@ mod tests {
     }
 
     #[test]
-    fn test_cancel_run_finished_still_marks_cancelled() {
+    fn test_cancel_run_finished_preserves_status() {
         use crate::engine::suite::RunStatus;
 
         let state = test_fixtures::test_app_state();
         let run = start_run(&state, "smoke", "fedora43", 1).unwrap();
-        // Don't register a cancel flag (simulates finished run).
+        // Simulate a finished run by removing the cancel flag (as
+        // execute_run does via remove_cancel_flag on completion).
+        state.remove_cancel_flag(run.run_id);
+
+        // cancel_run should succeed but NOT rewrite the status.
         cancel_run(&state, run.run_id).unwrap();
         let entry = state.runs.get(&run.run_id).unwrap();
-        assert_eq!(entry.status, RunStatus::Cancelled);
+        // Status remains Pending (unchanged) rather than being overwritten to Cancelled.
+        assert_eq!(entry.status, RunStatus::Pending);
     }
 
     #[test]

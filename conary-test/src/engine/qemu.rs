@@ -220,10 +220,15 @@ fn image_filename(image: &str) -> String {
         let tail = image.rsplit('/').next().unwrap_or("image.qcow2");
         return tail.to_string();
     }
-    if image.ends_with(".qcow2") {
-        image.to_string()
+    // Strip path components to prevent directory traversal (e.g. "../../tmp/owned").
+    let basename = Path::new(image)
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or("image.qcow2");
+    if basename.ends_with(".qcow2") {
+        basename.to_string()
     } else {
-        format!("{image}.qcow2")
+        format!("{basename}.qcow2")
     }
 }
 
@@ -398,6 +403,23 @@ mod tests {
         assert_eq!(
             image_filename("https://example.com/test-artifacts/minimal-boot-v1.qcow2"),
             "minimal-boot-v1.qcow2"
+        );
+    }
+
+    #[test]
+    fn test_image_filename_strips_path_traversal() {
+        // Path traversal attempts should be stripped to just the filename.
+        assert_eq!(
+            image_filename("../../tmp/owned"),
+            "owned.qcow2"
+        );
+        assert_eq!(
+            image_filename("../../../etc/passwd"),
+            "passwd.qcow2"
+        );
+        assert_eq!(
+            image_filename("subdir/image.qcow2"),
+            "image.qcow2"
         );
     }
 

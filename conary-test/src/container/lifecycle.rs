@@ -263,6 +263,37 @@ impl ContainerBackend for BollardBackend {
 
             if tokio::time::timeout(timeout, collect_future).await.is_err() {
                 warn!(id = %id, cmd = ?cmd, "exec timed out");
+
+                // Kill the still-running exec process to prevent it from
+                // leaking into subsequent test steps. The PID from
+                // inspect_exec() is the *host-namespace* PID, so we must
+                // kill from the host side, not inside the container.
+                if let Ok(inspect) = self.docker.inspect_exec(&exec_instance.id).await
+                    && inspect.running == Some(true)
+                    && let Some(pid) = inspect.pid.filter(|&p| p > 0)
+                {
+                    let pid_str = pid.to_string();
+                    match tokio::process::Command::new("kill")
+                        .args(["-9", &pid_str])
+                        .output()
+                        .await
+                    {
+                        Ok(out) if out.status.success() => {
+                            debug!(id = %id, pid, "killed timed-out exec process from host");
+                        }
+                        Ok(out) => {
+                            let err = String::from_utf8_lossy(&out.stderr);
+                            // "No such process" means it already exited -- not an error.
+                            if !err.contains("No such process") {
+                                warn!(id = %id, pid, error = %err, "failed to kill timed-out exec");
+                            }
+                        }
+                        Err(e) => {
+                            warn!(id = %id, pid, error = %e, "failed to invoke kill for timed-out exec");
+                        }
+                    }
+                }
+
                 return Ok(ExecResult {
                     exit_code: -1,
                     stdout,
