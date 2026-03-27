@@ -600,6 +600,24 @@ cargo run -p conary-test -- run --distro fedora43 --suite phase2-group-a --phase
 
 **Fix:** Re-validate peer credentials on each request (not just connection time). Add to Task 19 alongside daemon auth-gating. Modify: `conary-server/src/daemon/auth.rs`
 
+### Fold into Task 6 (CCS transaction lock): Fix lockfile truncation (Gemini H3)
+
+**Finding:** `File::create` truncates the lockfile even if another process holds a lock. The error message encourages users to delete the lockfile, which can cause two processes to hold "exclusive" locks on different inodes.
+
+**Fix:** Use `OpenOptions::new().create(true).truncate(false).write(true).open()` instead of `File::create`. Update error message to NOT suggest deleting the lockfile. Modify: `conary-core/src/transaction/mod.rs`
+
+### Fold into Task 9 (hook validation): Unicode normalization in path sanitization (Gemini H4)
+
+**Finding:** `sanitize_path()` doesn't normalize Unicode. Homoglyphs like U+FF0F (fullwidth solidus) could bypass `/` detection on normalizing filesystems (macOS HFS+, potentially future Linux).
+
+**Fix:** Add Unicode NFC normalization before component validation in `sanitize_path()`. Or reject any non-ASCII characters in paths from untrusted sources. Modify: `conary-core/src/filesystem/path.rs`
+
+### Fold into Task 23 (compression bombs): CPIO cumulative size limit (Gemini M3)
+
+**Finding:** CPIO parser limits individual file sizes (512 MB) but not cumulative extracted size. A crafted RPM with many entries can fill disk.
+
+**Fix:** Add cumulative size tracking in `conary-core/src/packages/cpio.rs` matching the pattern in `archive_reader.rs`.
+
 ### New Task (Phase 2): MCP auth integration test (Minimax A4-C1)
 
 **Finding:** MCP router's `route_layer` checks `TokenScopes` from request extensions. If parent auth middleware extensions don't propagate (axum layer ordering), the check sees `None` and returns 403 (fails closed). Currently safe but fragile -- no integration test verifies this.
