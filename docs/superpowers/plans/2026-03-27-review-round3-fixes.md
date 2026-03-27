@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Fix all 151 findings from the round 3 adversarial + invariant review, organized into 6 phases with ~30 implementation tasks.
+**Goal:** Fix all 160+ findings from the round 3 adversarial + invariant review (5 independent reviewers), organized into 4 phases with ~45 implementation tasks.
+
+> **IMPORTANT:** The appendix at the end contains "Fold into Task N" items from Minimax, Gemini, and Codex reviews. Check the appendix for additional sub-steps when working on any task.
 
 **Architecture:** Fixes are grouped by subsystem and severity. Phase 1 addresses the most dangerous exploitation chains (sandbox, self-update, metadata signing). Later phases address defense-in-depth, DoS, and test coverage. Tasks within each phase can be parallelized via `emerge`.
 
@@ -16,6 +18,27 @@
 ## Phase 1: Critical Exploitation Chains (P0)
 
 These are directly exploitable with significant impact. Fix before any release.
+
+### Task 0: Fix CCS symlink-following arbitrary write (Codex C1)
+
+**Findings:** A CCS package can create a symlink (`usr/lib/link -> /etc`) then write a child file (`usr/lib/link/cron.d/persist`). `sanitize_package_relative_path()` only rejects `..`, not paths whose ancestors are symlinks created by the same package. The write follows the symlink to the host. **This is an arbitrary write as root from any CCS package.**
+
+**Files:**
+- Modify: `src/commands/ccs/install.rs`
+
+**Fix:** Before writing each file during CCS install, check that no ancestor component in the destination path is a symlink (either pre-existing or created earlier in the same install). Use `O_NOFOLLOW` semantics or `openat2` with `RESOLVE_NO_SYMLINKS`, or track created symlinks and reject child writes under them.
+
+- [ ] Read `src/commands/ccs/install.rs` -- find the file deployment loop
+- [ ] Track all symlinks created during the install in a `HashSet<PathBuf>`
+- [ ] Before each file write, check if any ancestor of the destination path is in the symlink set
+- [ ] If a symlink ancestor is found, reject the file with `Error::PathTraversal`
+- [ ] Add regression test: package with symlink then child file write-through
+- [ ] Run: `cargo test`
+- [ ] Commit: `security(ccs): prevent symlink-following arbitrary write during install`
+
+> **File conflict:** This task and Task 6 both modify `src/commands/ccs/install.rs`. Do Task 0 first, then Task 6.
+
+---
 
 ### Task 1: Sandbox CCS hook scripts through container isolation (A1-C1, A6-C2)
 
@@ -45,6 +68,7 @@ These are directly exploitable with significant impact. Fix before any release.
 
 - [ ] Read `conary-core/src/scriptlet/mod.rs` around line 427
 - [ ] Change `seccomp_mode = EnforcementMode::Warn` to `seccomp_mode = EnforcementMode::Enforce`
+- [ ] Also remove `setuid` and `setgid` from the seccomp allowlist in `conary-core/src/capability/enforcement/seccomp_enforce.rs` (Minimax A6-C4: these syscalls enable UID/GID escalation inside sandbox)
 - [ ] Add `--seccomp-warn` CLI flag for development/debugging that overrides to Warn
 - [ ] Run: `cargo test -p conary-core scriptlet`
 - [ ] Commit: `security(scriptlet): set seccomp to Enforce mode by default`
@@ -75,7 +99,7 @@ These are directly exploitable with significant impact. Fix before any release.
 **Files:**
 - Modify: `conary-core/src/container/mod.rs:688-711`
 
-**Fix:** Add `CLONE_NEWUSER` to unshare flags. Write uid_map/gid_map to map root inside to unprivileged UID outside.
+**Fix:** Add `CLONE_NEWUSER` to unshare flags. Write uid_map/gid_map to map root inside to unprivileged UID outside. If `CLONE_NEWUSER` fails (kernel restriction), log a warning and continue with existing namespace isolation -- do not hard-fail. Ensure the seccomp filter permits `unshare` during sandbox initialization.
 
 - [ ] Read `child_setup_and_execute()` in container/mod.rs
 - [ ] Add `CLONE_NEWUSER` to the `unshare()` flags
@@ -241,6 +265,55 @@ These are directly exploitable with significant impact. Fix before any release.
 
 ---
 
+### Task 12b: Require authentication for mDNS-discovered peers (Minimax CRITICAL-A5)
+
+**Findings:** Any device on the LAN can register as a federation peer via mDNS. `conary-server/src/federation/mdns.rs` adds discovered peers without checking the allowlist or requiring mTLS verification. Zero authentication.
+
+**Files:**
+- Modify: `conary-server/src/federation/mdns.rs`
+- Modify: `conary-server/src/federation/mod.rs`
+
+- [ ] Read mDNS discovery callback in `mdns.rs` and `mod.rs`
+- [ ] Before adding a discovered peer, check against the configured peer allowlist
+- [ ] If no allowlist configured, require mTLS for all federation connections (not just WAN)
+- [ ] At minimum, log a prominent warning when unauthenticated peers are accepted
+- [ ] Run: `cargo test -p conary-server federation`
+- [ ] Commit: `security(federation): require allowlist or mTLS for mDNS-discovered peers`
+
+---
+
+### Task 12c: Enforce daemon socket authentication regardless of connection type (Minimax CRITICAL-A9)
+
+**Findings:** Socket mode `0o660` allows any user in the group to connect. `RequireAuth` is not enforced for Unix socket connections, giving group members full admin access.
+
+**Files:**
+- Modify: `conary-server/src/daemon/routes.rs`
+- Modify: `conary-server/src/daemon/auth.rs`
+
+- [ ] Read auth middleware in daemon routes -- find where Unix socket connections bypass auth
+- [ ] Enforce `RequireAuth` for ALL connection types, including Unix socket
+- [ ] Existing `PeerCredentials` from `SO_PEERCRED` should be checked against an authorization policy (at minimum: uid == 0 or uid == daemon uid)
+- [ ] Run: `cargo test -p conary-server daemon`
+- [ ] Commit: `security(daemon): enforce auth for Unix socket connections`
+
+---
+
+### Task 12d: Add MCP auth integration test (Minimax CRITICAL-A4)
+
+**Findings:** MCP router's `route_layer` checks `TokenScopes` from request extensions. If parent auth middleware extensions don't propagate (axum layer ordering), the check sees `None` and returns 403 (currently fails closed). But this is fragile with no test coverage.
+
+**Files:**
+- Modify: `conary-server/src/server/routes.rs` (add re-validation)
+- Create: test in `conary-server/src/server/` (integration test)
+
+- [ ] Add explicit `check_scope()` call inside the MCP handler itself (defense-in-depth, don't rely solely on route_layer)
+- [ ] Add integration test: unauthenticated request to `/mcp` returns 401/403
+- [ ] Add integration test: token with non-admin scope to `/mcp` returns 403
+- [ ] Run: `cargo test -p conary-server`
+- [ ] Commit: `security(server): explicit MCP auth re-validation with integration tests`
+
+---
+
 ## Phase 2: High-Severity Security Hardening (P1)
 
 ### Task 13: Scriptlet env_clear + host /tmp isolation (A6-C3, A6-H2)
@@ -327,13 +400,19 @@ These are directly exploitable with significant impact. Fix before any release.
 
 ---
 
-### Task 21: Self-update download_url origin validation (A3 additional)
+### Task 20b: Additional trust model fixes (Minimax HIGHs)
 
-**Files:** `conary-core/src/self_update.rs`
+**Findings from Minimax not covered elsewhere:**
 
-- [ ] Validate `download_url` scheme+host matches channel URL scheme+host
-- [ ] Reject file://, data:, or other non-https schemes
-- [ ] Commit: `security(self-update): validate download URL origin matches channel`
+- [ ] **PeerId from URL not cert-bound (Minimax HIGH-A5):** In `conary-server/src/federation/peer.rs`, bind PeerId to TLS certificate fingerprint instead of URL hash. A DNS hijack currently allows peer impersonation.
+- [ ] **TrustPolicy::permissive() accepts self-signed packages (Minimax HIGH-I3):** In `conary-core/src/ccs/verify.rs`, `TrustPolicy::Permissive` returns success for `Untrusted` signature status. Add warning or refuse in non-development contexts.
+- [ ] **Model remote.rs empty keys returns Ok(false) (Minimax HIGH-I3):** In `conary-core/src/model/remote.rs`, when `trusted_keys` is empty and `require_signatures` is true, silently returns `Ok(false)`. Should error, matching federation manifest fix in Task 12.
+- [ ] **EROFS image written outside DB transaction (Minimax HIGH-I2):** In `conary-core/src/generation/builder.rs`, the EROFS image is written and persisted before the DB snapshot transaction. Add a pending marker or wrap in the snapshot transaction.
+- [ ] Commit per-subsystem as appropriate.
+
+---
+
+### ~~Task 21: MERGED INTO TASK 5~~ (download_url validation is part of Task 5)
 
 ---
 
@@ -563,9 +642,11 @@ These are directly exploitable with significant impact. Fix before any release.
 ## Execution Notes
 
 **Parallelization:** Within each phase, most tasks touch different files and can be dispatched in parallel via `emerge`. Exceptions:
+- Task 0 and Task 6 both modify `src/commands/ccs/install.rs` -- do Task 0 first (symlink write), then Task 6 (transaction lock)
 - Task 1 and Task 2 both modify sandbox-related code -- do Task 1 first (hooks), then Task 2 (seccomp)
 - Task 3 depends on Task 2 (both modify scriptlet/mod.rs)
 - Task 5 and Task 22 both modify self_update.rs -- coordinate
+- Task 21 merged into Task 5 (duplicate)
 
 **Testing:** After each phase, run:
 ```bash
