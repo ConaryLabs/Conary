@@ -152,30 +152,29 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
 
         match file.file_type {
             FileType::Regular => {
-                if let Some(content) = result.blobs.get(&file.hash) {
-                    // Write to temp location
-                    let temp_path = temp_dir.path().join(file.hash.clone());
-                    fs::write(&temp_path, content)?;
+                let content = super::get_file_content(file, &result.blobs)?;
+                // Write to temp location
+                let temp_path = temp_dir.path().join(file.hash.clone());
+                fs::write(&temp_path, &content)?;
 
-                    // Determine file options
-                    let options = rpm::FileOptions::new(&file.path)
-                        .mode(rpm::FileMode::from(file.mode as i32));
+                // Determine file options
+                let options =
+                    rpm::FileOptions::new(&file.path).mode(rpm::FileMode::from(file.mode as i32));
 
-                    // Check if config file
-                    let options = if manifest.config.files.contains(&file.path) {
-                        if manifest.config.noreplace {
-                            options.is_config_noreplace()
-                        } else {
-                            options.is_config()
-                        }
+                // Check if config file
+                let options = if manifest.config.files.contains(&file.path) {
+                    if manifest.config.noreplace {
+                        options.is_config_noreplace()
                     } else {
-                        options
-                    };
+                        options.is_config()
+                    }
+                } else {
+                    options
+                };
 
-                    builder = builder
-                        .with_file(&temp_path, options)
-                        .context(format!("Failed to add file: {}", file.path))?;
-                }
+                builder = builder
+                    .with_file(&temp_path, options)
+                    .context(format!("Failed to add file: {}", file.path))?;
             }
             FileType::Symlink => {
                 if let Some(target) = &file.target {

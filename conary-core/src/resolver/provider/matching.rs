@@ -57,6 +57,20 @@ pub fn constraint_matches_package(
                     .map(|v| legacy.satisfies(&v))
                     .unwrap_or(false);
             }
+            // Cross-distro version scheme mismatch: the constraint was built
+            // for one versioning scheme (e.g. RPM) but the candidate uses a
+            // different scheme (e.g. Debian/ALPM).  We cannot compare them
+            // meaningfully, so reject with a diagnostic warning.
+            // TODO(G2): detect the target repo's version scheme *before*
+            // creating the constraint so cross-distro versioned installs work
+            // end-to-end instead of silently rejecting all candidates.
+            tracing::warn!(
+                "Version scheme mismatch: constraint uses {:?} but candidate version \
+                 '{}' uses {:?} -- cross-distro versioned install not yet supported",
+                constraint_scheme,
+                version,
+                scheme,
+            );
             false
         }
     }

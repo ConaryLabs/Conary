@@ -244,9 +244,9 @@ pub async fn cmd_config_restore(
     // privileged restore could overwrite an arbitrary file outside the
     // intended config tree.
     if fs_path.exists() {
-        let meta = fs_path.symlink_metadata().with_context(|| {
-            format!("Failed to read metadata for '{}'", fs_path.display())
-        })?;
+        let meta = fs_path
+            .symlink_metadata()
+            .with_context(|| format!("Failed to read metadata for '{}'", fs_path.display()))?;
         if meta.file_type().is_symlink() {
             anyhow::bail!(
                 "Refusing to restore '{}': path is a symlink (points to {:?}). \

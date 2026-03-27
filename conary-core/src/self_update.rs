@@ -8,7 +8,7 @@
 use crate::db::models::settings;
 use crate::error::{Error, Result};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 use rusqlite::Connection;
 use serde::Deserialize;
 use std::fs;
@@ -60,7 +60,7 @@ fn verify_update_signature_with_keys(
             Ok(k) => k,
             Err(_) => continue,
         };
-        if verifying_key.verify(message, &signature).is_ok() {
+        if verifying_key.verify_strict(message, &signature).is_ok() {
             return Ok(());
         }
     }
@@ -401,19 +401,19 @@ pub async fn download_update_with_progress(
 
 /// Extract the conary binary from a CCS package to a temp file
 ///
-/// Returns the path to the extracted binary. The binary is placed on the
-/// same filesystem as `target_dir` to enable atomic rename().
+/// Returns the path to the extracted binary. The binary is placed in
+/// `target_dir` (the same filesystem as the final install path) so that
+/// `apply_update`'s atomic `rename()` works. A `NamedTempFile` is used
+/// so the partial file is automatically removed on failure.
 pub fn extract_binary(ccs_path: &Path, target_dir: &Path) -> Result<PathBuf> {
     use flate2::read::GzDecoder;
-    use std::io::Read;
+    use std::io::{Read, Write as _};
     use tar::Archive;
 
     let file = fs::File::open(ccs_path)
         .map_err(|e| Error::IoError(format!("Failed to open CCS package: {e}")))?;
     let decoder = GzDecoder::new(file);
     let mut archive = Archive::new(decoder);
-
-    let dest = target_dir.join(".conary-update.tmp");
 
     for entry in archive.entries()? {
         let mut entry = entry?;
@@ -434,15 +434,29 @@ pub fn extract_binary(ccs_path: &Path, target_dir: &Path) -> Result<PathBuf> {
 
             let mut content = Vec::new();
             entry.read_to_end(&mut content)?;
-            fs::write(&dest, &content)
+
+            // Use a NamedTempFile in target_dir (same filesystem as the install
+            // target) so the file is cleaned up automatically on failure. On
+            // success the caller will rename() it into place atomically.
+            let tmp = tempfile::Builder::new()
+                .prefix(".conary-update-")
+                .tempfile_in(target_dir)
+                .map_err(|e| Error::IoError(format!("Failed to create temp file: {e}")))?;
+            tmp.as_file()
+                .write_all(&content)
                 .map_err(|e| Error::IoError(format!("Failed to write binary: {e}")))?;
 
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                fs::set_permissions(&dest, fs::Permissions::from_mode(0o755))?;
+                fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o755))?;
             }
 
+            // Persist the temp file so the caller can rename() it.
+            let dest = tmp
+                .keep()
+                .map_err(|e| Error::IoError(format!("Failed to persist temp file: {e}")))?
+                .1;
             return Ok(dest);
         }
     }

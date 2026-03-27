@@ -47,6 +47,25 @@ pub enum ServiceError {
 }
 
 // ---------------------------------------------------------------------------
+// Error conversions
+// ---------------------------------------------------------------------------
+
+impl From<conary_core::Error> for ServiceError {
+    fn from(e: conary_core::Error) -> Self {
+        match &e {
+            conary_core::Error::NotFound(_) => ServiceError::NotFound(e.to_string()),
+            conary_core::Error::ConflictError(_) | conary_core::Error::AlreadyExists(_) => {
+                ServiceError::Conflict(e.to_string())
+            }
+            conary_core::Error::ParseError(_) | conary_core::Error::ConfigError(_) => {
+                ServiceError::BadRequest(e.to_string())
+            }
+            _ => ServiceError::Internal(e.to_string()),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -64,15 +83,26 @@ where
 {
     match tokio::task::spawn_blocking(f).await {
         Ok(Ok(val)) => Ok(val),
-        Ok(Err(e)) => Err(ServiceError::Internal(e.to_string())),
+        Ok(Err(e)) => Err(ServiceError::from(e)),
         Err(e) => Err(ServiceError::Internal(format!("task join error: {e}"))),
     }
 }
 
+/// Typed not-found error for use inside `blocking_anyhow` closures.
+///
+/// Downcast by `blocking_anyhow` to produce `ServiceError::NotFound` instead
+/// of `ServiceError::Internal`. Use this instead of `anyhow::anyhow!("... not
+/// found ...")` string-matching heuristics.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+struct NotFoundError(String);
+
 /// Like [`blocking`] but for closures that return `anyhow::Result`.
 ///
 /// The test data module uses anyhow rather than `conary_core::Error`, so
-/// we need a parallel helper.
+/// we need a parallel helper.  If the returned error is a [`NotFoundError`],
+/// it maps to `ServiceError::NotFound`; all other errors map to
+/// `ServiceError::Internal`.
 async fn blocking_anyhow<F, T>(f: F) -> Result<T, ServiceError>
 where
     F: FnOnce() -> anyhow::Result<T> + Send + 'static,
@@ -80,7 +110,13 @@ where
 {
     match tokio::task::spawn_blocking(f).await {
         Ok(Ok(val)) => Ok(val),
-        Ok(Err(e)) => Err(ServiceError::Internal(e.to_string())),
+        Ok(Err(e)) => {
+            if let Some(nf) = e.downcast_ref::<NotFoundError>() {
+                Err(ServiceError::NotFound(nf.0.clone()))
+            } else {
+                Err(ServiceError::Internal(e.to_string()))
+            }
+        }
         Err(e) => Err(ServiceError::Internal(format!("task join error: {e}"))),
     }
 }
@@ -521,11 +557,13 @@ pub async fn sync_repo(
             }));
         }
 
-        if repo.gpg_check {
-            let _ = handle.block_on(conary_core::repository::maybe_fetch_gpg_key(
+        if repo.gpg_check
+            && let Err(e) = handle.block_on(conary_core::repository::maybe_fetch_gpg_key(
                 &repo,
                 &keyring_dir,
-            ));
+            ))
+        {
+            tracing::warn!("Failed to fetch GPG key for repo {}: {e}", repo.name);
         }
 
         let packages_synced = handle
@@ -820,15 +858,11 @@ pub async fn get_test_run_detail(
     blocking_anyhow(move || {
         let conn = test_db::init(&db)?;
         let run = test_db::TestRun::find_by_id(&conn, run_id)?
-            .ok_or_else(|| anyhow::anyhow!("test run {run_id} not found"))?;
+            .ok_or_else(|| NotFoundError(format!("test run {run_id} not found")))?;
         let results = test_db::TestResult::find_by_run(&conn, run_id)?;
         Ok(TestRunDetail { run, results })
     })
     .await
-    .map_err(|e| match e {
-        ServiceError::Internal(msg) if msg.contains("not found") => ServiceError::NotFound(msg),
-        other => other,
-    })
 }
 
 /// Get a single test result with its steps and logs.
@@ -841,7 +875,7 @@ pub async fn get_test_detail(
     blocking_anyhow(move || {
         let conn = test_db::init(&db)?;
         let result = test_db::TestResult::find_by_run_and_test(&conn, run_id, &test_id)?
-            .ok_or_else(|| anyhow::anyhow!("test {test_id} not found in run {run_id}"))?;
+            .ok_or_else(|| NotFoundError(format!("test {test_id} not found in run {run_id}")))?;
 
         let steps = test_db::TestStep::find_by_result(&conn, result.id)?;
         let mut steps_with_logs = Vec::with_capacity(steps.len());
@@ -856,10 +890,6 @@ pub async fn get_test_detail(
         })
     })
     .await
-    .map_err(|e| match e {
-        ServiceError::Internal(msg) if msg.contains("not found") => ServiceError::NotFound(msg),
-        other => other,
-    })
 }
 
 /// Get log entries for a specific test, optionally filtered by stream or step.
@@ -874,7 +904,7 @@ pub async fn get_test_logs(
     blocking_anyhow(move || {
         let conn = test_db::init(&db)?;
         let result = test_db::TestResult::find_by_run_and_test(&conn, run_id, &test_id)?
-            .ok_or_else(|| anyhow::anyhow!("test {test_id} not found in run {run_id}"))?;
+            .ok_or_else(|| NotFoundError(format!("test {test_id} not found in run {run_id}")))?;
 
         let steps = test_db::TestStep::find_by_result(&conn, result.id)?;
         let mut all_logs = Vec::new();
@@ -898,10 +928,6 @@ pub async fn get_test_logs(
         Ok(all_logs)
     })
     .await
-    .map_err(|e| match e {
-        ServiceError::Internal(msg) if msg.contains("not found") => ServiceError::NotFound(msg),
-        other => other,
-    })
 }
 
 /// Return a health summary of recent test activity.
@@ -916,7 +942,7 @@ pub async fn test_health(
             .query_row("SELECT COUNT(*) FROM test_runs", [], |r| {
                 r.get::<_, i64>(0).map(|v| v as u64)
             })
-            .unwrap_or(0);
+            .map_err(|e| anyhow::anyhow!("Failed to count test runs: {e}"))?;
         let last_status = recent_runs.first().map(|r| r.status.clone());
 
         Ok(TestHealthSummary {

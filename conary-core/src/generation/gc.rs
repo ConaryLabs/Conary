@@ -22,12 +22,16 @@ pub struct GcStats {
     pub objects_removed: u64,
     /// Bytes freed by removing unreferenced objects.
     pub bytes_freed: u64,
+    /// Hashes of all CAS objects that were deleted (audit trail).
+    pub deleted_hashes: Vec<String>,
 }
 
 /// Get the set of CAS hashes referenced by surviving generations.
 ///
-/// Queries the database for all distinct `sha256_hash` values from files
-/// belonging to troves that are members of the given state snapshots.
+/// Queries `state_cas_hashes` -- an immutable snapshot table populated at
+/// state creation time -- instead of joining through the mutable
+/// `files`/`troves`/`state_members` tables. This ensures GC correctness
+/// even after package upgrades cascade-delete old trove and file rows.
 ///
 /// Uses `json_each()` to bind the state ID list as a single JSON array
 /// parameter, avoiding the `SQLITE_MAX_VARIABLE_NUMBER` limit that a
@@ -42,10 +46,12 @@ pub fn live_cas_hashes(
 
     let json_array = serde_json::to_string(surviving_state_ids)?;
 
-    let sql = "SELECT DISTINCT f.sha256_hash FROM files f \
-               JOIN troves t ON f.trove_id = t.id \
-               JOIN state_members sm ON sm.trove_name = t.name AND sm.trove_version = t.version \
-               WHERE sm.state_id IN (SELECT value FROM json_each(?1))";
+    // Query the snapshot table directly -- no join through mutable troves/files.
+    // state_cas_hashes is populated at snapshot creation time and is immutable
+    // thereafter, so it correctly reflects the CAS objects each generation needs
+    // even after package upgrades delete old trove/file rows.
+    let sql = "SELECT DISTINCT sha256_hash FROM state_cas_hashes \
+               WHERE state_id IN (SELECT value FROM json_each(?1))";
 
     let mut stmt = conn.prepare(sql)?;
     let rows = stmt.query_map([&json_array], |row| row.get::<_, String>(0))?;
@@ -89,6 +95,7 @@ pub fn gc_cas_objects(objects_dir: &Path, live_hashes: &HashSet<String>) -> crat
             match std::fs::remove_file(&path) {
                 Ok(()) => {
                     stats.objects_removed += 1;
+                    stats.deleted_hashes.push(hash.clone());
                     debug!("Removed unreferenced CAS object: {hash}");
                 }
                 Err(e) => {
@@ -165,6 +172,9 @@ mod tests {
     }
 
     /// Create a system state with the given members, returning its ID.
+    ///
+    /// Also populates `state_cas_hashes` by joining through troves/files,
+    /// mirroring what `StateEngine::create_snapshot_at()` does in production.
     fn create_state_with_members(
         conn: &Connection,
         state_number: i64,
@@ -186,6 +196,21 @@ mod tests {
             )
             .unwrap();
         }
+
+        // Snapshot CAS hashes for GC liveness (mirrors create_snapshot_at).
+        conn.execute(
+            "INSERT OR IGNORE INTO state_cas_hashes (state_id, sha256_hash)
+             SELECT ?1, f.sha256_hash
+             FROM state_members sm
+             JOIN troves t ON t.name = sm.trove_name AND t.version = sm.trove_version
+             JOIN files f ON f.trove_id = t.id
+             WHERE sm.state_id = ?1
+               AND f.sha256_hash IS NOT NULL
+               AND f.sha256_hash != ''
+               AND NOT f.sha256_hash LIKE 'adopted-%'",
+            params![state_id],
+        )
+        .unwrap();
 
         state_id
     }
@@ -286,6 +311,53 @@ mod tests {
             hashes.is_empty(),
             "No surviving states means no live hashes"
         );
+    }
+
+    /// Regression test for the cascade-delete GC bug (finding 4.1).
+    ///
+    /// Scenario: trove foo-1.0 is installed (state 1), then upgraded to
+    /// foo-2.0 (state 2). The upgrade deletes the foo-1.0 trove row,
+    /// which CASCADE-deletes its file rows. Without the state_cas_hashes
+    /// snapshot table, GC would lose foo-1.0's hashes and incorrectly
+    /// collect CAS objects still needed by state 1.
+    #[test]
+    fn test_live_cas_hashes_survives_trove_cascade_delete() {
+        let (_tmp, conn) = create_test_db();
+
+        let hash_v1 = "aaaa000000000000000000000000000000000000000000000000000000000099";
+        let hash_v2 = "bbbb000000000000000000000000000000000000000000000000000000000099";
+
+        // Install foo-1.0 with hash_v1
+        insert_trove_with_files(&conn, "foo", "1.0", &[("/usr/bin/foo", hash_v1)]);
+
+        // Create state 1 snapshot (captures hash_v1 in state_cas_hashes)
+        let state1 = create_state_with_members(&conn, 1, &[("foo", "1.0")]);
+
+        // Upgrade: delete foo-1.0 first (CASCADE deletes its file rows),
+        // then install foo-2.0 at the same path. This mirrors the real
+        // upgrade sequence where the old trove is removed before the new
+        // one is installed (files.path has a UNIQUE constraint).
+        conn.execute(
+            "DELETE FROM troves WHERE name = 'foo' AND version = '1.0'",
+            [],
+        )
+        .unwrap();
+        insert_trove_with_files(&conn, "foo", "2.0", &[("/usr/bin/foo", hash_v2)]);
+
+        // Create state 2 snapshot (captures hash_v2 in state_cas_hashes)
+        let state2 = create_state_with_members(&conn, 2, &[("foo", "2.0")]);
+
+        // Both states survive -- GC must see BOTH hashes
+        let hashes = live_cas_hashes(&conn, &[state1, state2]).unwrap();
+        assert!(
+            hashes.contains(hash_v1),
+            "hash_v1 from deleted trove must still be live via state_cas_hashes snapshot"
+        );
+        assert!(
+            hashes.contains(hash_v2),
+            "hash_v2 from current trove must be live"
+        );
+        assert_eq!(hashes.len(), 2);
     }
 
     #[test]

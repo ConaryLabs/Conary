@@ -57,7 +57,10 @@ async fn get_config(
         status: None,
         message: "Forgejo not configured".to_string(),
     })?;
-    let token = s.forgejo_token.clone().unwrap_or_default();
+    let token = s.forgejo_token.clone().filter(|t| !t.is_empty()).ok_or_else(|| ForgejoError {
+        status: None,
+        message: "Forgejo token not configured (empty or missing)".to_string(),
+    })?;
     let client = s.http_client.clone();
     Ok((base.trim_end_matches('/').to_string(), token, client))
 }

@@ -182,6 +182,8 @@ mod tests {
                     .to_string(),
                 size: 1024,
                 permissions: 0o755,
+                owner: None,
+                group_name: None,
             },
             FileEntryRef {
                 path: "/usr/lib/libfoo.so".to_string(),
@@ -189,6 +191,8 @@ mod tests {
                     .to_string(),
                 size: 4096,
                 permissions: 0o644,
+                owner: None,
+                group_name: None,
             },
         ];
         let entries_v2 = vec![
@@ -198,6 +202,8 @@ mod tests {
                     .to_string(),
                 size: 1024,
                 permissions: 0o755,
+                owner: None,
+                group_name: None,
             },
             FileEntryRef {
                 path: "/usr/lib/libfoo.so".to_string(),
@@ -205,6 +211,8 @@ mod tests {
                     .to_string(),
                 size: 8192,
                 permissions: 0o644,
+                owner: None,
+                group_name: None,
             },
             FileEntryRef {
                 path: "/usr/bin/world".to_string(),
@@ -212,6 +220,8 @@ mod tests {
                     .to_string(),
                 size: 512,
                 permissions: 0o755,
+                owner: None,
+                group_name: None,
             },
         ];
 

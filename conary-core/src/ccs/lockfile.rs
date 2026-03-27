@@ -1,5 +1,7 @@
 // conary-core/src/ccs/lockfile.rs
 
+// TODO: integrate with build/install pipeline -- currently standalone/unused
+
 //! CCS Lockfile for reproducible builds
 //!
 //! The lockfile (`ccs.lock`) captures the exact resolved state of all dependencies

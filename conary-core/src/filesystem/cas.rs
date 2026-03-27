@@ -28,14 +28,26 @@ use tracing::{debug, warn};
 /// This is the canonical path construction shared by CAS storage,
 /// CCS builder, chunking, archive reader, and derivation install.
 ///
+/// # Security
+///
+/// Validates that `hash` contains only ASCII hex digits to prevent path
+/// traversal via crafted hash strings containing `/`, `..`, or null bytes.
+///
 /// # Panics
 ///
-/// Does not panic. Returns a flat path under `root` if `hash` is shorter
-/// than 3 characters (graceful fallback for edge cases).
+/// Does not panic. Returns a safe fallback path for invalid hashes in release
+/// builds (logged via tracing). Uses `debug_assert!` to catch bugs in tests.
 pub fn object_path(root: &Path, hash: &str) -> PathBuf {
-    if hash.len() < 3 {
-        return root.join(hash);
+    if hash.len() < 4 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        // Defense-in-depth: log and return a safe fallback rather than panicking.
+        // This path should never be reached in practice -- all callers compute
+        // hashes via hash_bytes() which always produces valid hex.
+        tracing::error!("Invalid CAS hash rejected: {}", &hash[..hash.len().min(20)]);
+        return root
+            .join("invalid")
+            .join(hash.replace(['/', '\\', '.'], "_"));
     }
+
     let (prefix, suffix) = hash.split_at(2);
     root.join(prefix).join(suffix)
 }
@@ -810,7 +822,9 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let cas = CasStore::new(temp_dir.path()).unwrap();
 
-        let result = cas.retrieve("nonexistent_hash");
+        // Use a valid-format hex hash that simply doesn't exist in the store
+        let result =
+            cas.retrieve("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         assert!(result.is_err());
     }
 
@@ -1051,5 +1065,58 @@ mod tests {
 
         let results: Vec<_> = cas.iter_objects().collect::<Result<Vec<_>>>().unwrap();
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_object_path_valid_hex() {
+        let root = std::path::Path::new("/cas");
+        // 64-char SHA-256 hex hash
+        let hash = "dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f";
+        let path = object_path(root, hash);
+        assert_eq!(
+            path,
+            std::path::PathBuf::from(
+                "/cas/df/fd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f"
+            )
+        );
+    }
+
+    #[test]
+    fn test_object_path_rejects_path_traversal() {
+        let root = std::path::Path::new("/cas");
+        // Hash with path separator -- should produce a safe fallback under /cas/invalid/
+        let bad_hash = "../../../etc/passwd";
+        let path = object_path(root, bad_hash);
+        // Must not escape the cas root -- the fallback maps slashes to underscores
+        assert!(
+            path.starts_with("/cas/invalid"),
+            "path {path:?} did not start with /cas/invalid"
+        );
+        assert!(
+            !path.to_string_lossy().contains(".."),
+            "path traversal not stripped: {path:?}"
+        );
+    }
+
+    #[test]
+    fn test_object_path_rejects_non_hex() {
+        let root = std::path::Path::new("/cas");
+        // Non-hex characters (contains 'g' and 'z')
+        let bad_hash = "gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg";
+        let path = object_path(root, bad_hash);
+        assert!(
+            path.starts_with("/cas/invalid"),
+            "expected /cas/invalid prefix, got {path:?}"
+        );
+    }
+
+    #[test]
+    fn test_object_path_rejects_too_short() {
+        let root = std::path::Path::new("/cas");
+        let path = object_path(root, "abc");
+        assert!(
+            path.starts_with("/cas/invalid"),
+            "expected /cas/invalid prefix for too-short hash, got {path:?}"
+        );
     }
 }

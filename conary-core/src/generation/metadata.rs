@@ -128,6 +128,17 @@ pub fn gc_roots_dir() -> PathBuf {
     PathBuf::from("/conary/gc-roots")
 }
 
+/// Read the running kernel version from `/proc/sys/kernel/osrelease`.
+///
+/// Falls back to `None` if the file cannot be read (e.g. in tests or containers
+/// without a mounted procfs).
+pub fn running_kernel_version() -> Option<String> {
+    std::fs::read_to_string("/proc/sys/kernel/osrelease")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 /// Detect kernel version(s) by scanning `gen_dir/usr/lib/modules/` for subdirectories.
 ///
 /// Used when a generation has a deployed file tree (reflink format) and

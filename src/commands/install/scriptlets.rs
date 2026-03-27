@@ -42,6 +42,11 @@ pub fn build_execution_mode(old_version: Option<&str>) -> ExecutionMode {
 ///
 /// For Arch packages during upgrade, uses PreUpgrade phase.
 /// For RPM/DEB, always uses PreInstall (they distinguish via $1 argument).
+///
+/// The `sandbox_mode` argument comes from the CLI flag or daemon request.
+/// TODO(round2): When a CCS manifest declares a `scriptlet_sandbox` field,
+/// respect it as a floor — the package can request stricter sandboxing than
+/// the caller's default but cannot request a looser mode. (fix 1.7)
 pub fn run_pre_install(
     root: &Path,
     pkg_name: &str,

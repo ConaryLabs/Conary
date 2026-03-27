@@ -11,11 +11,12 @@
 //! make, etc.) to build the final system without any host dependencies.
 
 use std::path::{Path, PathBuf};
-use tracing::info;
+use tracing::{info, warn};
 
 use super::build_runner::PackageBuildRunner;
 use super::chroot_env::ChrootEnv;
 use super::config::BootstrapConfig;
+use super::stages::{BootstrapStage, StageManager};
 use super::toolchain::Toolchain;
 use crate::recipe::parser::parse_recipe_file;
 use crate::recipe::{Kitchen, KitchenConfig};
@@ -147,7 +148,15 @@ impl TempToolsBuilder {
     /// Uses the Phase 1 cross-toolchain to build each package and installs
     /// the results into `$LFS/`. Accepts `completed` for resume support --
     /// packages whose names appear in the slice are skipped.
-    pub fn build_cross_packages(&self, completed: &[String]) -> Result<(), TempToolsError> {
+    ///
+    /// `stage_manager` is used to persist per-package completions to disk
+    /// immediately after each successful build, enabling crash-resumable
+    /// Phase 2 runs.
+    pub fn build_cross_packages(
+        &self,
+        completed: &[String],
+        stage_manager: &mut StageManager,
+    ) -> Result<(), TempToolsError> {
         info!(
             "Phase 2a: Cross-compiling temp tools ({} packages)",
             CH6_PACKAGES.len()
@@ -158,7 +167,7 @@ impl TempToolsBuilder {
         // never touch the process-wide environment (which would be UB in a
         // multi-threaded context per Rust 1.83+).
         let tools_bin = self.lfs_root.join("tools/bin");
-        let host_path = std::env::var("PATH").unwrap_or_default();
+        let host_path = crate::bootstrap::toolchain::Toolchain::BOOTSTRAP_PATH_FALLBACK;
         let bootstrap_env: Vec<(String, String)> = vec![
             ("LFS".into(), self.lfs_root.display().to_string()),
             ("LFS_TGT".into(), self.cross_toolchain.target.clone()),
@@ -235,6 +244,12 @@ impl TempToolsBuilder {
             })?;
 
             info!("  [OK] {pkg} built successfully");
+
+            // Persist per-package completion immediately so a crash during the
+            // next package does not lose this one's progress.
+            if let Err(e) = stage_manager.mark_package_complete(BootstrapStage::TempTools, pkg) {
+                warn!("Failed to persist checkpoint for {pkg}: {e}");
+            }
         }
         info!("Phase 2a complete: all Chapter 6 packages cross-compiled");
         Ok(())
@@ -262,7 +277,15 @@ impl TempToolsBuilder {
     /// These are built natively (not cross-compiled) using the tools
     /// that are now available inside the chroot. Accepts `completed` for
     /// resume support -- packages whose names appear in the slice are skipped.
-    pub fn build_chroot_packages(&self, completed: &[String]) -> Result<(), TempToolsError> {
+    ///
+    /// `stage_manager` is used to persist per-package completions to disk
+    /// immediately after each successful build, enabling crash-resumable
+    /// Phase 2 runs.
+    pub fn build_chroot_packages(
+        &self,
+        completed: &[String],
+        stage_manager: &mut StageManager,
+    ) -> Result<(), TempToolsError> {
         info!(
             "Phase 2b: Building chroot packages ({} packages)",
             CH7_PACKAGES.len()
@@ -324,6 +347,12 @@ impl TempToolsBuilder {
             }
 
             info!("  [OK] {pkg} built successfully in chroot");
+
+            // Persist per-package completion immediately so a crash during the
+            // next package does not lose this one's progress.
+            if let Err(e) = stage_manager.mark_package_complete(BootstrapStage::TempTools, pkg) {
+                warn!("Failed to persist checkpoint for {pkg}: {e}");
+            }
         }
         info!("Phase 2b complete: all Chapter 7 packages built");
         Ok(())
@@ -374,6 +403,7 @@ impl TempToolsBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bootstrap::stages::StageManager;
     use crate::bootstrap::toolchain::ToolchainKind;
 
     #[test]
@@ -449,7 +479,8 @@ mod tests {
             is_static: false,
         };
 
+        let mut sm = StageManager::new(work.path()).unwrap();
         let builder = TempToolsBuilder::new(work.path(), lfs.path(), config, cross_tc).unwrap();
-        assert!(builder.build_cross_packages(&[]).is_ok());
+        assert!(builder.build_cross_packages(&[], &mut sm).is_ok());
     }
 }

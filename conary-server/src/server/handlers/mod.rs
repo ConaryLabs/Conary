@@ -222,7 +222,9 @@ pub fn json_response(json: String, cache_max_age: u32) -> Response {
 /// Find a repository configured for the given distro
 ///
 /// Tries `default_strategy_distro` first, then falls back to name matching.
-/// Returns the first match only (used by conversion endpoints).
+/// Returns the first match only (used by conversion endpoints and tests).
+// Used by test modules in sparse.rs and index.rs.
+#[allow(dead_code)]
 pub fn find_repository_for_distro(
     conn: &Connection,
     distro: &str,

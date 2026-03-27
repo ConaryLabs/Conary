@@ -128,6 +128,71 @@ pub async fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result
 
         progress.set_phase(&pkg_name, AdoptPhase::Querying);
 
+        // Pre-fetch all PM metadata and perform CAS writes OUTSIDE the
+        // transaction so the SQLite write lock is held only for DB inserts.
+        // Any CAS objects written before a DB failure become GC-reclaimable
+        // orphans -- the same trade-off the install pipeline makes.
+        let raw_files: Vec<FileInfoTuple> = match pkg_mgr {
+            SystemPackageManager::Rpm => rpm_query::query_package_files(&pkg_name)
+                .map_err(|e| anyhow::anyhow!("RPM file query failed: {e}"))?,
+            SystemPackageManager::Dpkg => dpkg_query::query_package_files(&pkg_name)
+                .map_err(|e| anyhow::anyhow!("dpkg file query failed: {e}"))?,
+            SystemPackageManager::Pacman => pacman_query::query_package_files(&pkg_name)
+                .map_err(|e| anyhow::anyhow!("pacman file query failed: {e}"))?,
+            _ => Vec::new(),
+        }
+        .into_iter()
+        .map(|f| {
+            (
+                f.path,
+                f.size,
+                f.mode,
+                f.digest,
+                f.user,
+                f.group,
+                f.link_target,
+            )
+        })
+        .collect();
+
+        // Perform CAS writes (hardlinks) before opening the transaction.
+        let files_with_hashes: Vec<(FileInfoTuple, String)> = raw_files
+            .into_iter()
+            .map(|f| {
+                let hash = compute_file_hash(
+                    &f.0,
+                    f.2,
+                    f.3.as_deref(),
+                    f.6.as_deref(),
+                    full,
+                    cas.as_ref(),
+                );
+                (f, hash)
+            })
+            .collect();
+
+        let deps: Vec<DependencyInfo> = match pkg_mgr {
+            SystemPackageManager::Rpm => rpm_query::query_package_dependencies_full(&pkg_name)
+                .map_err(|e| anyhow::anyhow!("RPM dep query failed: {e}"))?,
+            SystemPackageManager::Dpkg => dpkg_query::query_package_dependencies_full(&pkg_name)
+                .map_err(|e| anyhow::anyhow!("dpkg dep query failed: {e}"))?,
+            SystemPackageManager::Pacman => {
+                pacman_query::query_package_dependencies_full(&pkg_name)
+                    .map_err(|e| anyhow::anyhow!("pacman dep query failed: {e}"))?
+            }
+            _ => Vec::new(),
+        };
+
+        let provides: Vec<String> = match pkg_mgr {
+            SystemPackageManager::Rpm => rpm_query::query_package_provides(&pkg_name)
+                .map_err(|e| anyhow::anyhow!("RPM provides query failed: {e}"))?,
+            SystemPackageManager::Dpkg => dpkg_query::query_package_provides(&pkg_name)
+                .map_err(|e| anyhow::anyhow!("dpkg provides query failed: {e}"))?,
+            SystemPackageManager::Pacman => pacman_query::query_package_provides(&pkg_name)
+                .map_err(|e| anyhow::anyhow!("pacman provides query failed: {e}"))?,
+            _ => Vec::new(),
+        };
+
         // Create changeset for this package
         let mut changeset = Changeset::new(format!(
             "Adopt {} {} ({})",
@@ -136,6 +201,7 @@ pub async fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result
             if full { "full" } else { "track" }
         ));
 
+        // DB-only transaction: all PM queries and CAS writes are already done.
         let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
             let changeset_id = changeset.insert(tx)?;
 
@@ -154,75 +220,20 @@ pub async fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result
 
             let trove_id = trove.insert(tx)?;
 
-            // Query and insert files based on package manager
-            let files: Vec<FileInfoTuple> = match pkg_mgr {
-                SystemPackageManager::Rpm => rpm_query::query_package_files(&pkg_name)?
-                    .into_iter()
-                    .map(|f| {
-                        (
-                            f.path,
-                            f.size,
-                            f.mode,
-                            f.digest,
-                            f.user,
-                            f.group,
-                            f.link_target,
-                        )
-                    })
-                    .collect(),
-                SystemPackageManager::Dpkg => dpkg_query::query_package_files(&pkg_name)?
-                    .into_iter()
-                    .map(|f| {
-                        (
-                            f.path,
-                            f.size,
-                            f.mode,
-                            f.digest,
-                            f.user,
-                            f.group,
-                            f.link_target,
-                        )
-                    })
-                    .collect(),
-                SystemPackageManager::Pacman => pacman_query::query_package_files(&pkg_name)?
-                    .into_iter()
-                    .map(|f| {
-                        (
-                            f.path,
-                            f.size,
-                            f.mode,
-                            f.digest,
-                            f.user,
-                            f.group,
-                            f.link_target,
-                        )
-                    })
-                    .collect(),
-                _ => Vec::new(),
-            };
             progress.set_phase(&pkg_name, AdoptPhase::Inserting);
 
             for (
-                file_path,
-                file_size,
-                file_mode,
-                file_digest,
-                file_user,
-                file_group,
-                file_link_target,
-            ) in &files
+                (file_path, file_size, file_mode, _digest, file_user, file_group, file_link_target),
+                hash,
+            ) in &files_with_hashes
             {
-                let hash = compute_file_hash(
-                    file_path,
+                let mut file_entry = FileEntry::new(
+                    file_path.clone(),
+                    hash.clone(),
+                    *file_size,
                     *file_mode,
-                    file_digest.as_deref(),
-                    file_link_target.as_deref(),
-                    full,
-                    cas.as_ref(),
+                    trove_id,
                 );
-
-                let mut file_entry =
-                    FileEntry::new(file_path.clone(), hash, *file_size, *file_mode, trove_id);
                 file_entry.owner = file_user.clone();
                 file_entry.group_name = file_group.clone();
                 file_entry.symlink_target = file_link_target.clone();
@@ -233,22 +244,7 @@ pub async fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result
                 }
             }
 
-            // Query dependencies -- propagate errors to abort the transaction
-            // rather than committing a trove with incomplete metadata.
-            let deps: Vec<DependencyInfo> = match pkg_mgr {
-                SystemPackageManager::Rpm => {
-                    rpm_query::query_package_dependencies_full(&pkg_name)?
-                }
-                SystemPackageManager::Dpkg => {
-                    dpkg_query::query_package_dependencies_full(&pkg_name)?
-                }
-                SystemPackageManager::Pacman => {
-                    pacman_query::query_package_dependencies_full(&pkg_name)?
-                }
-                _ => Vec::new(),
-            };
-
-            for dep in deps {
+            for dep in &deps {
                 if dep.name.is_empty() {
                     continue;
                 }
@@ -258,28 +254,14 @@ pub async fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result
                     dep.name.clone(),
                     None, // depends_on_version is for resolved version, not constraint
                     "runtime".to_string(),
-                    dep.constraint, // Store the version constraint
+                    dep.constraint.clone(), // Store the version constraint
                 );
                 if let Err(e) = dep_entry.insert(tx) {
                     debug!("Failed to insert dependency {}: {}", dep.name, e);
                 }
             }
 
-            // Query provides -- propagate errors to abort the transaction.
-            let provides: Vec<String> = match pkg_mgr {
-                SystemPackageManager::Rpm => {
-                    rpm_query::query_package_provides(&pkg_name)?
-                }
-                SystemPackageManager::Dpkg => {
-                    dpkg_query::query_package_provides(&pkg_name)?
-                }
-                SystemPackageManager::Pacman => {
-                    pacman_query::query_package_provides(&pkg_name)?
-                }
-                _ => Vec::new(),
-            };
-
-            for provide in provides {
+            for provide in &provides {
                 if provide.is_empty() {
                     continue;
                 }

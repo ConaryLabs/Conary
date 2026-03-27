@@ -16,6 +16,7 @@ use tracing::{info, warn};
 
 use super::build_runner::PackageBuildRunner;
 use super::config::BootstrapConfig;
+use super::stages::{BootstrapStage, StageManager};
 use super::toolchain::Toolchain;
 use crate::recipe::parser::parse_recipe_file;
 
@@ -199,7 +200,15 @@ impl FinalSystemBuilder {
     }
 
     /// Build all 77 packages from the beginning.
-    pub fn build_all(&mut self, already_completed: &[String]) -> Result<(), FinalSystemError> {
+    ///
+    /// `stage_manager` is used to persist per-package completions to disk
+    /// immediately after each successful build, enabling crash-resumable
+    /// Phase 3 runs.
+    pub fn build_all(
+        &mut self,
+        already_completed: &[String],
+        stage_manager: &mut StageManager,
+    ) -> Result<(), FinalSystemError> {
         info!(
             "Phase 3: Building final system ({} packages)",
             SYSTEM_BUILD_ORDER.len()
@@ -218,6 +227,11 @@ impl FinalSystemBuilder {
             );
             self.build_package(pkg)?;
             self.completed.push((*pkg).to_string());
+            // Persist per-package completion immediately so a crash during the
+            // next package does not lose this one's progress.
+            if let Err(e) = stage_manager.mark_package_complete(BootstrapStage::FinalSystem, pkg) {
+                warn!("Failed to persist checkpoint for {pkg}: {e}");
+            }
         }
 
         info!(
@@ -232,11 +246,19 @@ impl FinalSystemBuilder {
     /// Skips all packages before `from_package` in the build order and
     /// builds from that point onward.
     ///
+    /// `stage_manager` is used to persist per-package completions to disk
+    /// immediately after each successful build, enabling crash-resumable
+    /// Phase 3 runs.
+    ///
     /// # Errors
     ///
     /// Returns `FinalSystemError::InvalidResume` if `from_package` is not
     /// in `SYSTEM_BUILD_ORDER`.
-    pub fn build_from(&mut self, from_package: &str) -> Result<(), FinalSystemError> {
+    pub fn build_from(
+        &mut self,
+        from_package: &str,
+        stage_manager: &mut StageManager,
+    ) -> Result<(), FinalSystemError> {
         let start_idx = SYSTEM_BUILD_ORDER
             .iter()
             .position(|&p| p == from_package)
@@ -257,6 +279,11 @@ impl FinalSystemBuilder {
             );
             self.build_package(pkg)?;
             self.completed.push((*pkg).to_string());
+            // Persist per-package completion immediately so a crash during the
+            // next package does not lose this one's progress.
+            if let Err(e) = stage_manager.mark_package_complete(BootstrapStage::FinalSystem, pkg) {
+                warn!("Failed to persist checkpoint for {pkg}: {e}");
+            }
         }
 
         info!("Phase 3 resumed build complete");
@@ -370,6 +397,7 @@ impl FinalSystemBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bootstrap::stages::StageManager;
     use crate::bootstrap::toolchain::ToolchainKind;
 
     #[test]
@@ -449,8 +477,9 @@ mod tests {
             is_static: false,
         };
 
+        let mut sm = StageManager::new(work.path()).unwrap();
         let mut builder = FinalSystemBuilder::new(work.path(), lfs.path(), config, tc).unwrap();
-        assert!(builder.build_all(&[]).is_ok());
+        assert!(builder.build_all(&[], &mut sm).is_ok());
         assert_eq!(builder.completed().len(), 77);
     }
 
@@ -476,8 +505,9 @@ mod tests {
             is_static: false,
         };
 
+        let mut sm = StageManager::new(work.path()).unwrap();
         let mut builder = FinalSystemBuilder::new(work.path(), lfs.path(), config, tc).unwrap();
-        assert!(builder.build_from("gcc").is_ok());
+        assert!(builder.build_from("gcc", &mut sm).is_ok());
         // gcc is at index 25, so 77 - 25 = 52 remaining
         assert_eq!(builder.completed().len(), 52);
     }
@@ -499,8 +529,9 @@ mod tests {
             is_static: false,
         };
 
+        let mut sm = StageManager::new(work.path()).unwrap();
         let mut builder = FinalSystemBuilder::new(work.path(), lfs.path(), config, tc).unwrap();
-        let result = builder.build_from("nonexistent-package");
+        let result = builder.build_from("nonexistent-package", &mut sm);
         assert!(result.is_err());
     }
 }

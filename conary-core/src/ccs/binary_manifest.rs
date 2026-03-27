@@ -62,6 +62,13 @@ pub struct BinaryManifest {
 
     /// Merkle root of all content (SHA-256)
     pub content_root: Hash,
+
+    /// SHA-256 hash of MANIFEST.toml content. When present, the verifier
+    /// checks that the TOML in the archive matches this hash, preventing
+    /// post-build modification of TOML-only fields (provenance, redirects,
+    /// policy, capabilities, enhancements).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toml_integrity_hash: Option<String>,
 }
 
 impl BinaryManifest {
@@ -78,9 +85,28 @@ impl BinaryManifest {
     }
 
     /// Calculate SHA-256 hash of the encoded manifest
+    ///
+    /// # Deprecated
+    ///
+    /// This method re-serializes the manifest to CBOR before hashing, which is
+    /// non-deterministic: field ordering and encoding details may vary between
+    /// ciborium versions or serde derive changes, producing different hashes for
+    /// the same logical manifest.  Prefer [`hash_raw`](Self::hash_raw) with the
+    /// original CBOR bytes obtained at parse time.
+    #[deprecated(note = "Use hash_raw() with the original CBOR bytes instead of re-serializing")]
     pub fn hash(&self) -> Result<Hash, ciborium::ser::Error<std::io::Error>> {
         let cbor = self.to_cbor()?;
         Ok(Hash::sha256(&cbor))
+    }
+
+    /// Calculate SHA-256 hash from raw CBOR bytes.
+    ///
+    /// Use this instead of [`hash`](Self::hash) when you have the original bytes
+    /// that the manifest was decoded from (e.g. the bytes read directly out of
+    /// the package archive).  Hashing the raw bytes is deterministic and avoids
+    /// round-trip serialization drift.
+    pub fn hash_raw(bytes: &[u8]) -> Hash {
+        Hash::sha256(bytes)
     }
 }
 
@@ -377,6 +403,7 @@ mod tests {
             build: None,
             capabilities: None,
             content_root: Hash::sha256(b"empty"),
+            toml_integrity_hash: None,
         };
 
         let cbor = manifest.to_cbor().unwrap();

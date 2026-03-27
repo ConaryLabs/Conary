@@ -278,14 +278,18 @@ pub async fn fetch_and_verify_remote_collection(
     let data: CollectionData = serde_json::from_slice(&bytes)
         .map_err(|e| ModelError::RemoteFetchError(format!("Invalid JSON from {url}: {e}")))?;
 
-    // Verify content hash.
-    // The content_hash is computed over JSON with content_hash set to "".
-    // To verify, we must zero out content_hash before hashing, otherwise
-    // we'd be hashing JSON that includes the hash itself (chicken-and-egg).
+    // Verify content hash using canonical JSON — the same representation used
+    // by signing.rs when signing/verifying collections. serde_json::to_vec is
+    // non-deterministic across serde versions (field ordering may vary), whereas
+    // crate::json::canonical_json produces sorted, whitespace-free JSON that is
+    // stable regardless of struct field declaration order.
+    // The content_hash is computed over JSON with content_hash set to "" to
+    // avoid the chicken-and-egg problem of hashing a struct that contains its
+    // own hash.
     let computed_hash = if !data.content_hash.is_empty() {
         let mut verification_data = data.clone();
         verification_data.content_hash = String::new();
-        let verification_json = serde_json::to_vec(&verification_data)
+        let verification_json = crate::json::canonical_json(&verification_data)
             .map_err(|e| ModelError::RemoteFetchError(format!("Re-serialize failed: {e}")))?;
         let hash = hash::sha256_prefixed(&verification_json);
         if hash != data.content_hash {
@@ -539,8 +543,9 @@ pub fn build_collection_data_from_model(
         published_at: Utc::now().to_rfc3339(),
     };
 
-    // Compute content hash over the full JSON (with empty content_hash)
-    let json_bytes = serde_json::to_vec(&data).unwrap_or_default();
+    // Compute content hash using canonical JSON so the hash is stable and
+    // matches what fetch_and_verify_remote_collection verifies against.
+    let json_bytes = crate::json::canonical_json(&data).unwrap_or_default();
     data.content_hash = hash::sha256_prefixed(&json_bytes);
 
     data

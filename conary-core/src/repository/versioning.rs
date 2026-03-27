@@ -159,18 +159,45 @@ pub fn infer_version_scheme(repo: &Repository) -> Option<VersionScheme> {
     }
 }
 
+/// Parse a stored version_scheme string into a `VersionScheme`.
+///
+/// Returns `None` for unrecognised values so callers can fall back to
+/// name-based inference.
+fn parse_db_version_scheme(s: &str) -> Option<VersionScheme> {
+    match s {
+        "rpm" => Some(VersionScheme::Rpm),
+        "debian" => Some(VersionScheme::Debian),
+        "arch" => Some(VersionScheme::Arch),
+        _ => None,
+    }
+}
+
+/// Resolve the `VersionScheme` for a `RepositoryPackage`.
+///
+/// Preference order:
+/// 1. Use the per-row `version_scheme` stored in the DB (populated during sync).
+/// 2. Fall back to name-based inference from the parent `Repository`.
+pub fn resolve_package_version_scheme(
+    pkg: &RepositoryPackage,
+    repo: &Repository,
+) -> Option<VersionScheme> {
+    pkg.version_scheme
+        .as_deref()
+        .and_then(parse_db_version_scheme)
+        .or_else(|| infer_version_scheme(repo))
+}
+
 pub fn compare_repo_package_versions(
     a: &RepositoryPackage,
     a_repo: &Repository,
     b: &RepositoryPackage,
     b_repo: &Repository,
 ) -> Option<Ordering> {
-    compare_mixed_repo_versions(
-        infer_version_scheme(a_repo)?,
-        &a.version,
-        infer_version_scheme(b_repo)?,
-        &b.version,
-    )
+    // Use the stored version_scheme from the DB when available (finding 3.3);
+    // fall back to name-based inference for packages that predate the column.
+    let a_scheme = resolve_package_version_scheme(a, a_repo)?;
+    let b_scheme = resolve_package_version_scheme(b, b_repo)?;
+    compare_mixed_repo_versions(a_scheme, &a.version, b_scheme, &b.version)
 }
 
 /// Split a version part (version or release) into tilde/caret components.

@@ -520,34 +520,38 @@ async fn insert_or_dedup(
     job: DaemonJob,
 ) -> Result<Option<DaemonJob>, ApiError> {
     let state = state.clone();
-    tokio::task::spawn_blocking(move || -> std::result::Result<Option<DaemonJob>, Box<DaemonError>> {
-        let conn = state
-            .open_db()
-            .map_err(|e| Box::new(DaemonError::internal(&format!("Database error: {e}"))))?;
+    tokio::task::spawn_blocking(
+        move || -> std::result::Result<Option<DaemonJob>, Box<DaemonError>> {
+            let conn = state
+                .open_db()
+                .map_err(|e| Box::new(DaemonError::internal(&format!("Database error: {e}"))))?;
 
-        match job.insert(&conn) {
-            Ok(()) => Ok(None),
-            Err(conary_core::Error::Database(ref db_err))
-                if db_err.sqlite_error_code()
-                    == Some(rusqlite::ErrorCode::ConstraintViolation) =>
-            {
-                // Unique-constraint violation -- look up the winner by key
-                if let Some(ref key) = job.idempotency_key {
-                    match DaemonJob::find_by_idempotency_key(&conn, key) {
-                        Ok(Some(existing)) => Ok(Some(existing)),
-                        _ => Err(Box::new(DaemonError::internal(
-                            "Idempotency conflict but existing job not found",
-                        ))),
+            match job.insert(&conn) {
+                Ok(()) => Ok(None),
+                Err(conary_core::Error::Database(ref db_err))
+                    if db_err.sqlite_error_code()
+                        == Some(rusqlite::ErrorCode::ConstraintViolation) =>
+                {
+                    // Unique-constraint violation -- look up the winner by key
+                    if let Some(ref key) = job.idempotency_key {
+                        match DaemonJob::find_by_idempotency_key(&conn, key) {
+                            Ok(Some(existing)) => Ok(Some(existing)),
+                            _ => Err(Box::new(DaemonError::internal(
+                                "Idempotency conflict but existing job not found",
+                            ))),
+                        }
+                    } else {
+                        Err(Box::new(DaemonError::internal(&format!(
+                            "Insert failed: {db_err}"
+                        ))))
                     }
-                } else {
-                    Err(Box::new(DaemonError::internal(&format!(
-                        "Insert failed: {db_err}"
-                    ))))
                 }
+                Err(e) => Err(Box::new(DaemonError::internal(&format!(
+                    "Insert failed: {e}"
+                )))),
             }
-            Err(e) => Err(Box::new(DaemonError::internal(&format!("Insert failed: {e}")))),
-        }
-    })
+        },
+    )
     .await
     .map_err(|e| {
         ApiError(Box::new(DaemonError::internal(&format!(
@@ -1030,9 +1034,9 @@ async fn transaction_stream_handler(
             },
             JobStatus::Failed => DaemonEvent::JobFailed {
                 job_id: job.id.clone(),
-                error: job.error.unwrap_or_else(|| {
-                    DaemonError::internal("Job failed (details unavailable)")
-                }),
+                error: job
+                    .error
+                    .unwrap_or_else(|| DaemonError::internal("Job failed (details unavailable)")),
             },
             JobStatus::Cancelled => DaemonEvent::JobCancelled {
                 job_id: job.id.clone(),
@@ -1071,9 +1075,7 @@ async fn transaction_stream_handler(
     };
 
     // connected -> terminal (if finished) -> live events (if active)
-    let final_stream = connected_event
-        .chain(terminal_stream)
-        .chain(live_stream);
+    let final_stream = connected_event.chain(terminal_stream).chain(live_stream);
 
     Ok(Sse::new(final_stream).keep_alive(
         KeepAlive::new()
@@ -1230,14 +1232,18 @@ async fn get_package_handler(
 
     let result = run_db_query(&state, move |conn| {
         let trove = Trove::find_one_by_name(conn, &pkg_name)?;
-        Ok(trove.map(|t| {
-            let deps = if let Some(id) = t.id {
-                DependencyEntry::find_by_trove(conn, id).unwrap_or_default()
-            } else {
-                vec![]
-            };
-            (t, deps)
-        }))
+        // Propagate dependency query errors instead of silently defaulting. (fix 11.8)
+        match trove {
+            None => Ok(None),
+            Some(t) => {
+                let deps = if let Some(id) = t.id {
+                    DependencyEntry::find_by_trove(conn, id)?
+                } else {
+                    vec![]
+                };
+                Ok(Some((t, deps)))
+            }
+        }
     })
     .await?;
 
@@ -1518,13 +1524,18 @@ async fn depends_handler(
 
     let result = run_db_query(&state, move |conn| {
         let trove = Trove::find_one_by_name(conn, &pkg_name)?;
-        Ok(trove.map(|t| {
-            if let Some(id) = t.id {
-                DependencyEntry::find_by_trove(conn, id).unwrap_or_default()
-            } else {
-                vec![]
+        // Propagate dependency query errors instead of silently defaulting. (fix 11.8)
+        match trove {
+            None => Ok(None),
+            Some(t) => {
+                let deps = if let Some(id) = t.id {
+                    DependencyEntry::find_by_trove(conn, id)?
+                } else {
+                    vec![]
+                };
+                Ok(Some(deps))
             }
-        }))
+        }
     })
     .await?;
 
@@ -2098,7 +2109,12 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         let json = body_json(response).await;
-        assert!(json["detail"].as_str().unwrap().contains("not yet supported"));
+        assert!(
+            json["detail"]
+                .as_str()
+                .unwrap()
+                .contains("not yet supported")
+        );
     }
 
     // -- POST /v1/transactions (empty operations = 400) -----------------------
@@ -2378,7 +2394,12 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         let json = body_json(response).await;
-        assert!(json["detail"].as_str().unwrap().contains("not yet supported"));
+        assert!(
+            json["detail"]
+                .as_str()
+                .unwrap()
+                .contains("not yet supported")
+        );
     }
 
     // -- POST /v1/packages/install (empty packages = 400) ---------------------

@@ -405,9 +405,8 @@ pub async fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Resu
             } else {
                 conary_core::model::ConvergenceIntent::default()
             };
-            let effective = dep_mode.unwrap_or_else(|| {
-                DepMode::from_convergence_intent(&convergence_intent)
-            });
+            let effective =
+                dep_mode.unwrap_or_else(|| DepMode::from_convergence_intent(&convergence_intent));
             let mut dep_plan = dep_resolution::resolve_missing_deps_policy_aware(
                 &conn,
                 &unresolved_missing,

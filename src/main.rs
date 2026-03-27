@@ -25,13 +25,39 @@ async fn main() {
         .init();
 
     if let Err(err) = run().await {
-        let msg = format!("{err:#}");
-        if msg.contains("Database not found") {
-            eprintln!("Error: Database not initialized.");
-            eprintln!("Run 'conary system init' to set up the package database.");
-            std::process::exit(1);
+        // Try to downcast to conary_core::Error for user-friendly hints
+        if let Some(core_err) = err.downcast_ref::<conary_core::Error>() {
+            match core_err {
+                conary_core::Error::DatabaseNotFound(_) => {
+                    eprintln!("Error: Database not initialized.");
+                    eprintln!(
+                        "Run 'conary system init' to set up the package database."
+                    );
+                }
+                conary_core::Error::NotFound(detail) => {
+                    eprintln!("Error: {detail}");
+                }
+                conary_core::Error::ConflictError(detail) => {
+                    eprintln!("Error: Conflict -- {detail}");
+                    eprintln!("Try 'conary remove' first or use '--force' if available.");
+                }
+                conary_core::Error::PathTraversal(detail) => {
+                    eprintln!("Error: Path safety violation -- {detail}");
+                    eprintln!("This may indicate a malicious or corrupt package.");
+                }
+                other => {
+                    eprintln!("Error: {other}");
+                }
+            }
+        } else {
+            // Fallback: print the full error chain safely
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                format!("{err:#}")
+            })) {
+                Ok(msg) => eprintln!("Error: {msg}"),
+                Err(_) => eprintln!("Error: {err}"),
+            }
         }
-        eprintln!("Error: {msg}");
         std::process::exit(1);
     }
 }
@@ -1906,7 +1932,8 @@ async fn run() -> Result<()> {
             check,
             force,
             version,
-        }) => commands::cmd_self_update(&db.db_path, check, force, version).await,
+            no_verify,
+        }) => commands::cmd_self_update(&db.db_path, check, force, version, no_verify).await,
 
         // =====================================================================
         // Derivation Verification

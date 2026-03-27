@@ -138,13 +138,21 @@ impl CircuitBreaker {
         }
     }
 
-    /// Open the circuit with jitter-based cooldown
+    /// Open the circuit with jitter-based cooldown.
+    ///
+    /// Jitter is re-randomised on every call, including re-opens from
+    /// HalfOpen after a failed probe.  This spreads out retry storms when
+    /// many peers fail simultaneously. (fix 11.3)
+    ///
+    /// TODO(round2): Apply exponential backoff on successive re-opens so
+    /// that persistent peer failures do not continue to probe at the same
+    /// base rate.
     fn open(&mut self) {
         debug!("Circuit breaker opening (failures: {})", self.failure_count);
         self.state = CircuitState::Open;
         self.opened_at = Some(Instant::now());
 
-        // Compute cooldown with random jitter
+        // Compute cooldown with fresh random jitter on every open/re-open.
         let jitter = rand::random::<f32>() * self.jitter_factor;
         self.computed_cooldown = self.base_cooldown.mul_f32(1.0 + jitter);
 

@@ -8,6 +8,7 @@
 use super::super::open_db;
 use anyhow::{Context, Result};
 use conary_core::ccs::{CcsPackage, HookExecutor, TrustPolicy, verify};
+use tracing::warn;
 use conary_core::db::models::generate_capability_variations;
 use conary_core::db::models::{Changeset, ChangesetStatus};
 use conary_core::dependencies::{DependencyClass, LanguageDepDetector};
@@ -608,6 +609,7 @@ pub async fn cmd_ccs_install(
         std::thread::sleep(delay);
     }
     let is_upgrade = !existing.is_empty();
+    let applied_changeset_id: i64;
     {
         let tx = conn.unchecked_transaction()?;
 
@@ -624,6 +626,7 @@ pub async fn cmd_ccs_install(
         };
         let mut changeset = Changeset::new(description);
         let changeset_id = changeset.insert(&tx)?;
+        applied_changeset_id = changeset_id;
 
         // Remove old version if upgrading (snapshot first for rollback)
         if is_upgrade {
@@ -806,6 +809,10 @@ pub async fn cmd_ccs_install(
     }
 
     // Step 9: Execute post-hooks (including post_install script)
+    // Note: the DB transaction is already committed at this point (changeset
+    // status = Applied).  If post-hooks fail the package is installed but hooks
+    // did not complete -- log a warning with the changeset ID so the operator
+    // can identify and investigate the partially-configured state.
     if !hooks.systemd.is_empty()
         || !hooks.tmpfiles.is_empty()
         || !hooks.sysctl.is_empty()
@@ -815,7 +822,20 @@ pub async fn cmd_ccs_install(
         non_script_hooks.post_install = None;
         println!("Executing post-install hooks...");
         if let Err(e) = hook_executor.execute_post_hooks(&non_script_hooks) {
-            anyhow::bail!("Post-install hook failed: {}", e);
+            warn!(
+                changeset_id = applied_changeset_id,
+                package = ccs_pkg.name(),
+                version = ccs_pkg.version(),
+                "Post-install hook failed after DB commit (package is installed, hooks incomplete): {}",
+                e
+            );
+            anyhow::bail!(
+                "Post-install hook failed for {} {} (changeset {:?}): {}",
+                ccs_pkg.name(),
+                ccs_pkg.version(),
+                applied_changeset_id,
+                e
+            );
         }
     }
 
@@ -840,6 +860,13 @@ pub async fn cmd_ccs_install(
         )
         .with_sandbox_mode(sandbox_mode);
         if let Err(error) = executor.execute(&scriptlet, &ExecutionMode::Install) {
+            warn!(
+                changeset_id = applied_changeset_id,
+                package = ccs_pkg.name(),
+                version = ccs_pkg.version(),
+                "Post-install script failed after DB commit (package is installed, script incomplete): {}",
+                error
+            );
             if matches!(sandbox, crate::commands::SandboxMode::Always) {
                 anyhow::bail!("{}", sandbox_failure_message(&hook.script, &error));
             }

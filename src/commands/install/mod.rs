@@ -271,10 +271,26 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         }
     });
 
-    // --- Phase 1: Canonical resolution + policy ---
+    // --- Phase 1: Component parsing + canonical resolution + policy ---
+    //
+    // Parse component spec FIRST so that `nginx:devel` is split into base
+    // name `nginx` and component `devel` before canonical resolution.
+    // Without this, `resolve_canonical_name("nginx:devel")` looks for a
+    // canonical package literally named "nginx:devel" and fails.
+    let (base_name_for_canonical, early_component) =
+        parse_component_spec(package).map_or_else(|| (package.to_string(), None), |(b, c)| (b, Some(c)));
+
     let policy = build_resolution_policy(&conn, from_distro.as_deref(), repo.as_deref())?;
-    let resolved_name = resolve_canonical_name(&conn, package, from_distro.as_deref(), &policy)?;
-    let package = resolved_name.as_deref().unwrap_or(package);
+    let resolved_name =
+        resolve_canonical_name(&conn, &base_name_for_canonical, from_distro.as_deref(), &policy)?;
+    // If canonical resolution found a mapping, re-attach any component suffix
+    // so downstream `parse_component_and_validate` sees the full spec.
+    let resolved_package: String = match (&resolved_name, &early_component) {
+        (Some(resolved), Some(comp)) => format!("{resolved}:{comp}"),
+        (Some(resolved), None) => resolved.clone(),
+        _ => package.to_string(),
+    };
+    let package: &str = &resolved_package;
 
     // --- Phase 2: Component parsing + pre-install validation ---
     let (package_name, component_selection) =
@@ -718,7 +734,11 @@ async fn resolve_and_parse_package(
         primary_flavor: None, // Will be inferred from the pinned distro inside selector
     };
 
-    // Resolve package path (download if needed)
+    // Resolve package path (download if needed).
+    // Checksum verification and temp-file cleanup on failure are handled
+    // inside conary_core::repository::download (fix 1.4).
+    // TODO(round2): Surface partial-download byte counts in error messages
+    // so users can diagnose connection issues vs corrupt mirrors.
     let resolved = match resolve_package_path_with_policy(
         package_name,
         db_path,
@@ -1462,6 +1482,10 @@ fn execute_install_transaction(
     let language_provides = &extraction.language_provides;
     let scriptlets = pkg.scriptlets();
 
+    // Capture /etc snapshot BEFORE the DB transaction so the three-way merge
+    // can distinguish pre- from post-install state.
+    let prev_etc = crate::commands::composefs_ops::collect_etc_files(conn)?;
+
     let db_result = conary_core::db::transaction(conn, |tx| {
         // Create changeset for this install/upgrade
         let mut changeset = Changeset::new(tx_description.clone());
@@ -1622,8 +1646,14 @@ fn execute_install_transaction(
         }
     };
 
-    // Composefs-native: build EROFS image from DB state and mount new generation
-    let _gen_num = crate::commands::composefs_ops::rebuild_and_mount(conn, &tx_description)?;
+    // Composefs-native: build EROFS image from DB state and mount new generation.
+    // Pass the pre-captured prev_etc so the three-way merge sees the correct base.
+    let _gen_num = crate::commands::composefs_ops::rebuild_and_mount(
+        conn,
+        &tx_description,
+        Some(prev_etc),
+        std::path::Path::new("/conary"),
+    )?;
 
     // Release transaction lock
     engine.release_lock();

@@ -114,7 +114,10 @@ impl Federation {
                 if Self::is_peer_allowed(&config, &peer) {
                     peer_registry.add(peer);
                 } else {
-                    warn!("[federation] Configured cell hub {} rejected by allowlist", endpoint);
+                    warn!(
+                        "[federation] Configured cell hub {} rejected by allowlist",
+                        endpoint
+                    );
                 }
             }
         }
@@ -125,7 +128,10 @@ impl Federation {
                 if Self::is_peer_allowed(&config, &peer) {
                     peer_registry.add(peer);
                 } else {
-                    warn!("[federation] Configured region hub {} rejected by allowlist", endpoint);
+                    warn!(
+                        "[federation] Configured region hub {} rejected by allowlist",
+                        endpoint
+                    );
                 }
             }
         }
@@ -275,7 +281,11 @@ impl Federation {
         }
 
         // Per-tier allowlist check
-        if !self.config.tier_allowlists.is_allowed(&peer.endpoint, peer.tier) {
+        if !self
+            .config
+            .tier_allowlists
+            .is_allowed(&peer.endpoint, peer.tier)
+        {
             return Err(format!(
                 "Peer {} rejected: not in tier allowlist for {:?}",
                 peer.endpoint, peer.tier

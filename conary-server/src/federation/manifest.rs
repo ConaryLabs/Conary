@@ -32,7 +32,7 @@
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use conary_core::ccs::signing::SigningKeyPair;
 use conary_core::ccs::verify::PackageSignature;
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -217,7 +217,7 @@ impl FederationManifest {
 
         let canonical = self.canonical_bytes()?;
         verifying_key
-            .verify(&canonical, &sig)
+            .verify_strict(&canonical, &sig)
             .map_err(|_| ManifestError::SignatureFailed)?;
 
         Ok(())

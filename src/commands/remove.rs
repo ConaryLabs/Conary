@@ -124,10 +124,8 @@ pub async fn cmd_remove(
             ));
             let changeset_id = changeset.insert(tx)?;
 
-            // Remove DB records (files, deps, provides, trove)
-            tx.execute("DELETE FROM files WHERE trove_id = ?1", [trove_id])?;
-            tx.execute("DELETE FROM dependencies WHERE trove_id = ?1", [trove_id])?;
-            tx.execute("DELETE FROM provides WHERE trove_id = ?1", [trove_id])?;
+            // Remove DB records -- ON DELETE CASCADE handles files, dependencies,
+            // and provides automatically when the trove row is deleted.
             conary_core::db::models::Trove::delete(tx, trove_id)?;
             changeset.update_status(tx, conary_core::db::models::ChangesetStatus::Applied)?;
             Ok(changeset_id)
@@ -224,8 +222,25 @@ pub async fn cmd_remove(
     // package is already correctly marked as removed. Leftover files on disk are
     // harmless orphans rather than a broken state where files are gone but the
     // package is still recorded as installed.
+    // Capture /etc snapshot BEFORE the DB transaction so the three-way merge
+    // can distinguish pre- from post-removal state.
+    let prev_etc = crate::commands::composefs_ops::collect_etc_files(&conn)?;
+
     progress.set_phase(RemovePhase::UpdatingDb);
+    let pkg_name_for_tx = package_name.to_string();
     let remove_changeset_id = conary_core::db::transaction(&mut conn, |tx| {
+        // Re-check dependency breakage inside the transaction to close the TOCTOU
+        // window between the pre-check above and the actual delete. (fix X1.6)
+        let breaking_now =
+            conary_core::resolver::solve_removal(tx, std::slice::from_ref(&pkg_name_for_tx))?;
+        if !breaking_now.is_empty() {
+            return Err(conary_core::Error::IoError(format!(
+                "Concurrent change: '{}' now required by: {}",
+                pkg_name_for_tx,
+                breaking_now.join(", ")
+            )));
+        }
+
         let mut changeset = conary_core::db::models::Changeset::new(format!(
             "Remove {}-{}",
             trove.name, trove.version
@@ -290,6 +305,8 @@ pub async fn cmd_remove(
     let _gen_num = crate::commands::composefs_ops::rebuild_and_mount(
         &conn,
         &format!("Remove {}", package_name),
+        Some(prev_etc),
+        std::path::Path::new("/conary"),
     )?;
 
     // Execute post-remove scriptlet (best effort - warn on failure, don't abort)

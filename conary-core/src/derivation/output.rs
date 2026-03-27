@@ -121,6 +121,9 @@ impl OutputManifest {
     }
 
     /// Build a new `OutputManifest`, computing the output hash automatically.
+    ///
+    /// Uses [`compute_output_hash_v2`] (includes file permissions) and sets
+    /// `hash_version: 2`.
     #[must_use]
     pub fn new(
         derivation_id: &DerivationId,
@@ -129,11 +132,11 @@ impl OutputManifest {
         build_duration_secs: u64,
         built_at: String,
     ) -> Self {
-        let output_hash = Self::compute_output_hash(&files, &symlinks);
+        let output_hash = Self::compute_output_hash_v2(&files, &symlinks);
         Self {
             derivation_id: derivation_id.to_string(),
             output_hash,
-            hash_version: 1,
+            hash_version: 2,
             files,
             symlinks,
             build_duration_secs,

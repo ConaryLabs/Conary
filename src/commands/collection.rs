@@ -19,6 +19,20 @@ fn find_collection_id(conn: &Connection, name: &str) -> Result<i64> {
         .ok_or_else(|| anyhow::anyhow!("Collection has no ID"))
 }
 
+/// Like `find_collection_id` but returns `conary_core::Result` for use inside transactions.
+fn find_collection_id_core(conn: &Connection, name: &str) -> conary_core::Result<i64> {
+    let troves = conary_core::db::models::Trove::find_by_name(conn, name)?;
+    let trove = troves
+        .iter()
+        .find(|t| t.trove_type == conary_core::db::models::TroveType::Collection)
+        .ok_or_else(|| {
+            conary_core::Error::NotFound(format!("Collection '{}' not found", name))
+        })?;
+    trove
+        .id
+        .ok_or_else(|| conary_core::Error::NotFound("Collection has no ID".to_string()))
+}
+
 /// Create a new collection
 pub async fn cmd_collection_create(
     name: &str,
@@ -155,9 +169,9 @@ pub async fn cmd_collection_show(name: &str, db_path: &str) -> Result<()> {
 pub async fn cmd_collection_add(name: &str, members: &[String], db_path: &str) -> Result<()> {
     info!("Adding members to collection: {}", name);
     let mut conn = open_db(db_path)?;
-    let collection_id = find_collection_id(&conn, name)?;
 
     conary_core::db::transaction(&mut conn, |tx| {
+        let collection_id = find_collection_id_core(tx, name)?;
         for member_name in members {
             // Check if already a member
             if conary_core::db::models::CollectionMember::is_member(tx, collection_id, member_name)?
@@ -185,9 +199,9 @@ pub async fn cmd_collection_remove_member(
 ) -> Result<()> {
     info!("Removing members from collection: {}", name);
     let mut conn = open_db(db_path)?;
-    let collection_id = find_collection_id(&conn, name)?;
 
     conary_core::db::transaction(&mut conn, |tx| {
+        let collection_id = find_collection_id_core(tx, name)?;
         for member_name in members {
             if let Some(member) = conary_core::db::models::CollectionMember::find_member(
                 tx,
@@ -213,9 +227,9 @@ pub async fn cmd_collection_remove_member(
 pub async fn cmd_collection_delete(name: &str, db_path: &str) -> Result<()> {
     info!("Deleting collection: {}", name);
     let mut conn = open_db(db_path)?;
-    let collection_id = find_collection_id(&conn, name)?;
 
     conary_core::db::transaction(&mut conn, |tx| {
+        let collection_id = find_collection_id_core(tx, name)?;
         conary_core::db::models::Trove::delete(tx, collection_id)?;
         Ok(())
     })?;

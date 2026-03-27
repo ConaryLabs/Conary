@@ -197,7 +197,9 @@ pub async fn auth_middleware(
         Some(t) => t.to_owned(),
         None => {
             tracing::warn!("Auth failed: missing or invalid Authorization header");
-            // Check rate limit BEFORE consuming a token to prevent N+1 attempts
+            // Record this auth failure against the client IP rate limit bucket.
+            // The check returns true if the caller has exceeded the burst limit,
+            // in which case we respond with 429 instead of 401. (fix 10.9)
             if let Some(ref l) = limiters
                 && crate::server::rate_limit::check_auth_failure(l, client_ip)
             {
@@ -257,7 +259,7 @@ pub async fn auth_middleware(
     let bg_db_path = db_path;
     let bg_id = token_record.id;
     let should_touch = {
-        let mut cache = TOUCH_CACHE.lock().expect("TOUCH_CACHE poisoned");
+        let mut cache = TOUCH_CACHE.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
         let debounce = std::time::Duration::from_secs(TOUCH_DEBOUNCE_SECS);
         match cache.get(&bg_id) {

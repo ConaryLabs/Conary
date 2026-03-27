@@ -381,6 +381,35 @@ fn is_rich_dep(name: &str) -> bool {
     name.starts_with('(') && name.ends_with(')')
 }
 
+/// Try to parse an RPM rich dependency `(A or B)` into individual clause names.
+///
+/// Returns `Some(vec!["A", "B"])` for `(A or B)` style deps.
+/// Returns `None` for conditionals like `(A if B)`, `(A unless B)`,
+/// nested rich deps, or anything we cannot safely decompose.
+fn parse_rich_dep_or(name: &str) -> Option<Vec<String>> {
+    // Strip outer parens
+    let inner = name.strip_prefix('(')?.strip_suffix(')')?;
+
+    // Reject conditionals and nested rich deps
+    if inner.contains(" if ")
+        || inner.contains(" unless ")
+        || inner.contains(" else ")
+        || inner.contains(" with ")
+        || inner.contains(" without ")
+        || inner.contains('(')
+    {
+        return None;
+    }
+
+    // Split on " or " (RPM rich dep OR separator)
+    let parts: Vec<String> = inner.split(" or ").map(|s| s.trim().to_string()).collect();
+    if parts.len() >= 2 && parts.iter().all(|p| !p.is_empty()) {
+        Some(parts)
+    } else {
+        None
+    }
+}
+
 /// Build a `RepositoryRequirementGroup` from a single RPM requires entry.
 fn rpm_require_to_group(name: &str, constraint: &str) -> RepositoryRequirementGroup {
     let native_text = if constraint.is_empty() {
@@ -390,7 +419,34 @@ fn rpm_require_to_group(name: &str, constraint: &str) -> RepositoryRequirementGr
     };
 
     if is_rich_dep(name) {
-        // Rich/conditional dep -- mark as conditional, keep opaque text
+        // Try to decompose `(A or B)` into a proper OR-group
+        if let Some(alternatives) = parse_rich_dep_or(name) {
+            let clauses: Vec<RepositoryRequirementClause> = alternatives
+                .into_iter()
+                .map(|alt| {
+                    // Each alternative may have a version constraint, e.g. "foo >= 1.0".
+                    // Split into name and optional constraint at the first comparison op.
+                    if let Some(idx) = alt.find(['>', '<', '=']) {
+                        let pkg_name = alt[..idx].trim();
+                        let constraint = alt[idx..].trim();
+                        RepositoryRequirementClause {
+                            name: pkg_name.to_string(),
+                            version_constraint: Some(constraint.to_string()),
+                            ..RepositoryRequirementClause::name_only(pkg_name.to_string())
+                        }
+                    } else {
+                        RepositoryRequirementClause::name_only(alt)
+                    }
+                })
+                .collect();
+            return RepositoryRequirementGroup::alternatives(
+                RepositoryRequirementKind::Depends,
+                clauses,
+            )
+            .with_native_text(native_text);
+        }
+
+        // Other rich/conditional dep -- mark as conditional, keep opaque text
         let clause = RepositoryRequirementClause {
             name: name.to_string(),
             capability_kind: None,
@@ -923,5 +979,81 @@ mod tests {
             .find(|p| p.name == "test-package" && p.kind == RepositoryCapabilityKind::PackageName)
             .expect("implicit self-provide not found");
         assert_eq!(self_provide.version.as_deref(), Some("1:2.3.4-5.fc43"));
+    }
+
+    #[test]
+    fn test_rich_dep_or_parsed_into_alternatives() {
+        let parser = FedoraParser::new("x86_64".to_string());
+        let xml = r#"
+<metadata xmlns:rpm="http://linux.duke.edu/metadata/rpm">
+  <package type="rpm">
+    <name>test-pkg</name>
+    <arch>x86_64</arch>
+    <version epoch="0" ver="1.0" rel="1.fc43"/>
+    <checksum type="sha256">beef1234</checksum>
+    <summary>Test</summary>
+    <description>Test</description>
+    <size package="100"/>
+    <location href="Packages/t/test-pkg-1.0-1.fc43.x86_64.rpm"/>
+    <format>
+      <rpm:requires>
+        <rpm:entry name="(foo or bar)"/>
+        <rpm:entry name="(foo if bar)"/>
+        <rpm:entry name="(a or b or c)"/>
+      </rpm:requires>
+    </format>
+  </package>
+</metadata>
+"#;
+
+        let packages = parser
+            .parse_primary_xml(xml, "https://example.com")
+            .unwrap();
+        let pkg = &packages[0];
+
+        assert_eq!(pkg.requirements.len(), 3);
+
+        // `(foo or bar)` should be parsed into an OR-group with two alternatives
+        let or_group = &pkg.requirements[0];
+        assert_eq!(or_group.behavior, ConditionalRequirementBehavior::Hard);
+        assert_eq!(or_group.alternatives.len(), 2);
+        assert_eq!(or_group.alternatives[0].name, "foo");
+        assert_eq!(or_group.alternatives[1].name, "bar");
+
+        // `(foo if bar)` should remain conditional (not decomposed)
+        let conditional = &pkg.requirements[1];
+        assert_eq!(conditional.behavior, ConditionalRequirementBehavior::Conditional);
+        assert_eq!(conditional.alternatives.len(), 1);
+        assert_eq!(conditional.alternatives[0].name, "(foo if bar)");
+
+        // `(a or b or c)` should be parsed into a 3-way OR-group
+        let triple = &pkg.requirements[2];
+        assert_eq!(triple.behavior, ConditionalRequirementBehavior::Hard);
+        assert_eq!(triple.alternatives.len(), 3);
+        assert_eq!(triple.alternatives[0].name, "a");
+        assert_eq!(triple.alternatives[1].name, "b");
+        assert_eq!(triple.alternatives[2].name, "c");
+    }
+
+    #[test]
+    fn test_parse_rich_dep_or_helper() {
+        // Simple binary OR
+        assert_eq!(
+            parse_rich_dep_or("(foo or bar)"),
+            Some(vec!["foo".to_string(), "bar".to_string()])
+        );
+        // Triple OR
+        assert_eq!(
+            parse_rich_dep_or("(a or b or c)"),
+            Some(vec!["a".to_string(), "b".to_string(), "c".to_string()])
+        );
+        // Conditional -- not an OR
+        assert_eq!(parse_rich_dep_or("(foo if bar)"), None);
+        // Unless -- not an OR
+        assert_eq!(parse_rich_dep_or("(foo unless bar)"), None);
+        // Nested -- not safe to decompose
+        assert_eq!(parse_rich_dep_or("((foo or bar) if baz)"), None);
+        // Not a rich dep at all
+        assert_eq!(parse_rich_dep_or("foo"), None);
     }
 }

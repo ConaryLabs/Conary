@@ -148,7 +148,7 @@ impl CrossToolsBuilder {
         // never touch the process-wide environment (which would be UB in a
         // multi-threaded context per Rust 1.83+).
         let tools_bin = self.lfs_root.join("tools/bin");
-        let host_path = std::env::var("PATH").unwrap_or_default();
+        let host_path = crate::bootstrap::toolchain::Toolchain::BOOTSTRAP_PATH_FALLBACK;
         let bootstrap_env: Vec<(String, String)> = vec![
             ("LFS".into(), self.lfs_root.display().to_string()),
             ("LFS_TGT".into(), target.to_string()),

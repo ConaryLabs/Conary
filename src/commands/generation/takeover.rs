@@ -376,8 +376,42 @@ fn upgrade_to_cas_backed(
     pm: &SystemPackageManager,
 ) -> Result<()> {
     let cas = CasStore::new(objects_dir(db_path))?;
-    let mut conn = open_db(db_path)?;
 
+    // Pre-fetch file lists and perform CAS writes (hardlinks) OUTSIDE the
+    // transaction. Any CAS objects written before a DB failure become
+    // GC-reclaimable orphans -- the same trade-off the install pipeline makes.
+    struct CasUpgradeEntry {
+        name: String,
+        files_with_hashes: Vec<(FileInfoTuple, String)>,
+    }
+
+    let mut entries: Vec<CasUpgradeEntry> = Vec::with_capacity(packages.len());
+    for name in packages {
+        let files = match query_package_files(*pm, name) {
+            Ok(f) => f,
+            Err(e) => {
+                warn!("Skipping CAS upgrade for '{name}': {e}");
+                continue;
+            }
+        };
+
+        let files_with_hashes: Vec<(FileInfoTuple, String)> = files
+            .into_iter()
+            .map(|f| {
+                let hash =
+                    compute_file_hash(&f.0, f.2, f.3.as_deref(), f.6.as_deref(), true, Some(&cas));
+                (f, hash)
+            })
+            .collect();
+
+        entries.push(CasUpgradeEntry {
+            name: name.clone(),
+            files_with_hashes,
+        });
+    }
+
+    // DB-only transaction: all PM queries and CAS writes are already done.
+    let mut conn = open_db(db_path)?;
     conary_core::db::transaction(&mut conn, |tx| {
         let mut cs = Changeset::new("Takeover: CAS-upgrade track-only packages".into());
         cs.insert(tx)?;
@@ -385,45 +419,30 @@ fn upgrade_to_cas_backed(
             conary_core::Error::MissingId("changeset insert did not return an ID".into())
         })?;
 
-        for name in packages {
-            let Some(trove) = Trove::find_one_by_name(tx, name)? else {
-                warn!("Trove '{name}' not found during CAS upgrade, skipping");
+        for entry in &entries {
+            let Some(trove) = Trove::find_one_by_name(tx, &entry.name)? else {
+                warn!(
+                    "Trove '{}' not found during CAS upgrade, skipping",
+                    entry.name
+                );
                 continue;
             };
             let trove_id = trove.id.ok_or_else(|| {
-                conary_core::Error::MissingId(format!("trove '{name}' from DB has no ID"))
+                conary_core::Error::MissingId(format!("trove '{}' from DB has no ID", entry.name))
             })?;
 
-            // Query files from the system PM -- abort this package on failure
-            let files = match query_package_files(*pm, name) {
-                Ok(f) => f,
-                Err(e) => {
-                    warn!("Skipping CAS upgrade for '{name}': {e}");
-                    continue;
-                }
-            };
-
-            // Hardlink each file into CAS and update the file_entry hash
-            for (path, _size, mode, digest, _user, _group, link_target) in &files {
-                let hash = compute_file_hash(
-                    path,
-                    *mode,
-                    digest.as_deref(),
-                    link_target.as_deref(),
-                    true,
-                    Some(&cas),
-                );
-
-                // Update existing file entry hash if present
-                if let Some(mut fe) = FileEntry::find_by_path(tx, path)?
+            // Update file entry hashes with the pre-computed CAS hashes.
+            for ((path, _size, _mode, _digest, _user, _group, _link_target), hash) in
+                &entry.files_with_hashes
+            {
+                if let Some(fe) = FileEntry::find_by_path(tx, path)?
                     && fe.trove_id == trove_id
-                    && fe.sha256_hash != hash
+                    && fe.sha256_hash != *hash
                 {
                     tx.execute(
                         "UPDATE files SET sha256_hash = ?1 WHERE id = ?2",
                         params![hash, fe.id],
                     )?;
-                    fe.sha256_hash = hash;
                 }
             }
 
@@ -447,19 +466,46 @@ fn upgrade_to_cas_backed(
 fn take_ownership(db_path: &str, packages: &[String], pm: SystemPackageManager) -> Result<()> {
     let cas = CasStore::new(objects_dir(db_path))?;
 
-    // Pre-capture file lists before any PM removals.
+    // Pre-capture file lists and perform CAS writes OUTSIDE the transaction.
     // Packages whose file query fails are skipped with a warning.
-    let mut file_lists: Vec<(String, Vec<FileInfoTuple>)> = Vec::with_capacity(packages.len());
+    // Any CAS objects written before a DB failure become GC-reclaimable orphans.
+    struct OwnershipEntry {
+        name: String,
+        files_with_hashes: Vec<(FileInfoTuple, String)>,
+    }
+
+    let mut entries: Vec<OwnershipEntry> = Vec::with_capacity(packages.len());
     for name in packages {
         match query_package_files(pm, name) {
-            Ok(files) => file_lists.push((name.clone(), files)),
+            Ok(files) => {
+                let files_with_hashes: Vec<(FileInfoTuple, String)> = files
+                    .into_iter()
+                    .map(|f| {
+                        // Always compute CAS hash: track-only packages need
+                        // CAS-backing here and full packages get hash refresh.
+                        let hash = compute_file_hash(
+                            &f.0,
+                            f.2,
+                            f.3.as_deref(),
+                            f.6.as_deref(),
+                            true,
+                            Some(&cas),
+                        );
+                        (f, hash)
+                    })
+                    .collect();
+                entries.push(OwnershipEntry {
+                    name: name.clone(),
+                    files_with_hashes,
+                });
+            }
             Err(e) => {
                 warn!("Skipping ownership transfer for '{name}': {e}");
             }
         }
     }
 
-    // DB transaction: CAS-back any remaining track-only, mark all as Taken
+    // DB-only transaction: all PM queries and CAS writes are already done.
     {
         let mut conn = open_db(db_path)?;
         conary_core::db::transaction(&mut conn, |tx| {
@@ -469,29 +515,26 @@ fn take_ownership(db_path: &str, packages: &[String], pm: SystemPackageManager) 
                 .id
                 .ok_or_else(|| conary_core::Error::MissingId("changeset".into()))?;
 
-            for (name, files) in &file_lists {
-                let Some(trove) = Trove::find_one_by_name(tx, name)? else {
-                    warn!("Trove '{name}' not found during ownership transfer, skipping");
+            for entry in &entries {
+                let Some(trove) = Trove::find_one_by_name(tx, &entry.name)? else {
+                    warn!(
+                        "Trove '{}' not found during ownership transfer, skipping",
+                        entry.name
+                    );
                     continue;
                 };
-                let trove_id = trove
-                    .id
-                    .ok_or_else(|| conary_core::Error::MissingId(format!("trove '{name}'")))?;
+                let trove_id = trove.id.ok_or_else(|| {
+                    conary_core::Error::MissingId(format!("trove '{}'", entry.name))
+                })?;
 
-                // If still AdoptedTrack, CAS-back files first
+                // If still AdoptedTrack, update file hashes with pre-computed CAS hashes.
                 if trove.install_source == InstallSource::AdoptedTrack {
-                    for (path, _size, mode, digest, _user, _group, link_target) in files {
-                        let hash = compute_file_hash(
-                            path,
-                            *mode,
-                            digest.as_deref(),
-                            link_target.as_deref(),
-                            true,
-                            Some(&cas),
-                        );
+                    for ((path, _size, _mode, _digest, _user, _group, _link_target), hash) in
+                        &entry.files_with_hashes
+                    {
                         if let Some(fe) = FileEntry::find_by_path(tx, path)?
                             && fe.trove_id == trove_id
-                            && fe.sha256_hash != hash
+                            && fe.sha256_hash != *hash
                         {
                             tx.execute(
                                 "UPDATE files SET sha256_hash = ?1 WHERE id = ?2",
@@ -516,7 +559,8 @@ fn take_ownership(db_path: &str, packages: &[String], pm: SystemPackageManager) 
 
     // Post-commit: remove from system PM database
     let mut failed = Vec::new();
-    for (name, _) in &file_lists {
+    for entry in &entries {
+        let name = &entry.name;
         println!("  Removing {name} from {} database ...", pm.display_name());
         if let Err(e) = remove_from_system_pm(pm, name) {
             warn!("Failed to remove {name} from PM: {e}");
@@ -600,10 +644,7 @@ fn print_dry_run(plan: &TakeoverPlan, pm: &SystemPackageManager, level: Takeover
 ///
 /// Returns an error if the PM query fails -- callers must not promote
 /// a package to `AdoptedFull`/`Taken` without successfully querying its files.
-fn query_package_files(
-    pkg_mgr: SystemPackageManager,
-    name: &str,
-) -> Result<Vec<FileInfoTuple>> {
+fn query_package_files(pkg_mgr: SystemPackageManager, name: &str) -> Result<Vec<FileInfoTuple>> {
     let raw_files = match pkg_mgr {
         SystemPackageManager::Rpm => rpm_query::query_package_files(name)
             .map_err(|e| anyhow!("RPM file query failed for '{name}': {e}"))?,

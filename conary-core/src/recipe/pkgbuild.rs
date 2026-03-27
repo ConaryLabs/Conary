@@ -138,19 +138,19 @@ pub fn convert_pkgbuild(content: &str) -> Result<ConversionResult, PkgbuildError
         // Check if the PKGBUILD uses a non-sha256 algorithm and warn
         if extract_array(content, "sha512sums").is_some() {
             warnings.push(
-                "PKGBUILD uses sha512sums; converted to SKIP. \
+                "PKGBUILD uses sha512sums; converted to placeholder. \
                  Add sha256 checksums to the recipe manually."
                     .to_string(),
             );
         } else if extract_array(content, "b2sums").is_some() {
             warnings.push(
-                "PKGBUILD uses b2sums; converted to SKIP. \
+                "PKGBUILD uses b2sums; converted to placeholder. \
                  Add sha256 checksums to the recipe manually."
                     .to_string(),
             );
         } else if extract_array(content, "md5sums").is_some() {
             warnings.push(
-                "PKGBUILD uses md5sums (weak, unsupported); converted to SKIP. \
+                "PKGBUILD uses md5sums (weak, unsupported); converted to placeholder. \
                  Add sha256 checksums to the recipe manually."
                     .to_string(),
             );
@@ -168,16 +168,18 @@ pub fn convert_pkgbuild(content: &str) -> Result<ConversionResult, PkgbuildError
         .and_then(|c| c.first())
         .map(|s| {
             if s == "SKIP" {
-                "SKIP".to_string()
+                "sha256:VERIFY_BEFORE_BUILD".to_string()
             } else {
                 format!("sha256:{}", s)
             }
         })
         .unwrap_or_else(|| {
             if checksums.is_none() && extract_array(content, "sha256sums").is_none() {
-                warnings.push("No checksum found, using SKIP".to_string());
+                warnings.push(
+                    "No checksum found, using placeholder sha256:VERIFY_BEFORE_BUILD".to_string(),
+                );
             }
-            "SKIP".to_string()
+            "sha256:VERIFY_BEFORE_BUILD".to_string()
         });
 
     // Handle additional sources
@@ -191,12 +193,12 @@ pub fn convert_pkgbuild(content: &str) -> Result<ConversionResult, PkgbuildError
                 .and_then(|c| c.get(i + 1))
                 .map(|s| {
                     if s == "SKIP" {
-                        "SKIP".to_string()
+                        "sha256:VERIFY_BEFORE_BUILD".to_string()
                     } else {
                         format!("sha256:{}", s)
                     }
                 })
-                .unwrap_or_else(|| "SKIP".to_string());
+                .unwrap_or_else(|| "sha256:VERIFY_BEFORE_BUILD".to_string());
             crate::recipe::format::AdditionalSource {
                 url: convert_pkgbuild_url(url, &pkgname, &pkgver),
                 checksum: cs,
@@ -606,5 +608,30 @@ package() {
         assert_eq!(result.recipe.package.name, "hello");
         assert_eq!(result.recipe.package.version, "1.0");
         assert!(result.recipe.build.install.is_some());
+    }
+
+    #[test]
+    fn test_pkgbuild_skip_checksum_produces_placeholder() {
+        let content = r#"
+pkgname=test
+pkgver=1.0
+pkgrel=1
+source=("https://example.com/test-1.0.tar.gz")
+sha512sums=('SKIP')
+"#;
+        let result = convert_pkgbuild(content).unwrap();
+        assert!(
+            result
+                .recipe
+                .source
+                .checksum
+                .contains("sha256:VERIFY_BEFORE_BUILD"),
+            "SKIP should be converted to placeholder, got: {}",
+            result.recipe.source.checksum
+        );
+        assert!(
+            !result.recipe.source.checksum.contains("SKIP"),
+            "Literal SKIP should not appear in output"
+        );
     }
 }

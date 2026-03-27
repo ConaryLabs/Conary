@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use rusqlite::Connection;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use conary_core::db::models::FileEntry;
 use conary_core::generation::etc_merge::{self, MergeAction};
@@ -25,7 +25,7 @@ use conary_core::generation::etc_merge::{self, MergeAction};
 /// Paths are stored as absolute in the database (`/etc/foo`); we strip the
 /// leading `/` to produce relative keys (`etc/foo`) matching the overlay
 /// upper directory layout.
-fn collect_etc_files(conn: &Connection) -> anyhow::Result<HashMap<String, String>> {
+pub(crate) fn collect_etc_files(conn: &Connection) -> anyhow::Result<HashMap<String, String>> {
     let files = FileEntry::find_by_path_pattern(conn, "/etc/%")
         .map_err(|e| anyhow::anyhow!("Failed to query /etc files: {e}"))?;
 
@@ -33,6 +33,42 @@ fn collect_etc_files(conn: &Connection) -> anyhow::Result<HashMap<String, String
     for f in files {
         let rel = f.path.strip_prefix('/').unwrap_or(&f.path).to_string();
         map.insert(rel, f.sha256_hash);
+    }
+    Ok(map)
+}
+
+/// Collect /etc files from a specific generation's state snapshot.
+///
+/// Joins `state_members` -> `troves` -> `files` to find the /etc files
+/// that were part of the given generation. Returns empty map if the
+/// generation's troves have been deleted (upgrade cascade).
+fn collect_etc_files_for_state(
+    conn: &Connection,
+    state_number: i64,
+) -> anyhow::Result<HashMap<String, String>> {
+    // Join on (name, version, architecture) to avoid cross-product in
+    // multilib states where multiple troves share the same name+version
+    // but differ by architecture.
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT f.path, f.sha256_hash FROM files f \
+         JOIN troves t ON f.trove_id = t.id \
+         JOIN state_members sm ON sm.trove_name = t.name \
+             AND sm.trove_version = t.version \
+             AND (sm.architecture IS NULL OR t.architecture IS NULL \
+                  OR sm.architecture = t.architecture) \
+         JOIN system_states ss ON sm.state_id = ss.id \
+         WHERE ss.state_number = ?1 AND f.path LIKE '/etc/%'"
+    ).map_err(|e| anyhow::anyhow!("Failed to prepare state /etc query: {e}"))?;
+
+    let rows = stmt.query_map([state_number], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    }).map_err(|e| anyhow::anyhow!("Failed to query state /etc files: {e}"))?;
+
+    let mut map = HashMap::new();
+    for row in rows {
+        let (path, hash) = row.map_err(|e| anyhow::anyhow!("Row error: {e}"))?;
+        let rel = path.strip_prefix('/').unwrap_or(&path).to_string();
+        map.insert(rel, hash);
     }
     Ok(map)
 }
@@ -51,20 +87,112 @@ fn collect_etc_files(conn: &Connection) -> anyhow::Result<HashMap<String, String
 /// 6. Mounts it via composefs with `/etc` overlay
 /// 7. Updates the `/conary/current` symlink
 ///
+/// `prev_etc_snapshot` must be captured **before** the mutating DB transaction
+/// so the three-way merge can distinguish pre- from post-transaction state.
+/// Pass `Some(map)` when the caller captured it ahead of the transaction (install,
+/// remove).  Pass `None` for callers that do not perform a prior mutation (restore,
+/// rollback, `system init`) -- the snapshot will be read from the current DB state.
+///
+/// `conary_root` is the Conary data directory (typically `/conary`). Callers
+/// must pass this explicitly rather than relying on a hardcoded default so
+/// that alternate roots (tests, alternate layouts) work correctly.
+///
 /// Returns the new generation number on success.
-pub fn rebuild_and_mount(conn: &Connection, summary: &str) -> anyhow::Result<i64> {
-    let conary_root = Path::new("/conary");
-    let upper_dir = conary_root.join("etc-state/upper");
+pub fn rebuild_and_mount(
+    conn: &Connection,
+    summary: &str,
+    prev_etc_snapshot: Option<HashMap<String, String>>,
+    conary_root: &Path,
+) -> anyhow::Result<i64> {
 
-    // Step 1: Snapshot the previous generation's /etc files from DB *before*
-    // the build mutates state.
-    let prev_etc = collect_etc_files(conn)?;
+    // Record the currently active generation before building the new one.
+    // This is written to etc-state/{N}/.base-gen so that the merge logic
+    // can identify the correct reference point even after rollback.
+    let current_gen = conary_core::generation::mount::current_generation(conary_root)
+        .unwrap_or(None)
+        .unwrap_or(0);
+
+    // Step 1: Determine the correct "previous" /etc state.
+    // - If a pre-captured snapshot was provided (install/remove callers), use it.
+    // - Otherwise, check if the currently active generation has a .base-gen marker.
+    //   If so, that tells us which generation was active when the current upper dir
+    //   was created -- we should use THAT generation's DB state as the base.
+    //   This handles the rollback case correctly.
+    // - Final fallback: read from current DB state (for init/first-run).
+    let prev_etc = match prev_etc_snapshot {
+        Some(snapshot) => snapshot,
+        None => {
+            // Try to read .base-gen from the current generation's upper dir
+            let active_upper = conary_root.join(format!("etc-state/{current_gen}"));
+            let base_gen_file = active_upper.join(".base-gen");
+            if let Ok(content) = std::fs::read_to_string(&base_gen_file)
+                && let Ok(base_num) = content.trim().parse::<i64>()
+                && base_num > 0
+            {
+                debug!(
+                    "Using base generation {} from .base-gen for /etc merge",
+                    base_num
+                );
+                // Query /etc files from the base generation's state snapshot.
+                // This is the correct "previous" state for the three-way merge,
+                // even after a rollback where the current DB may not match.
+                let base_etc = collect_etc_files_for_state(conn, base_num)?;
+                if base_etc.is_empty() {
+                    // Distinguish "no /etc files" (legitimate) from "troves
+                    // deleted" (cascade, need fallback). Check if the state's
+                    // members can still be resolved to trove rows.
+                    // Match architecture to avoid false positives from
+                    // multilib: if base had foo.x86_64 but only foo.i686
+                    // survives, the base troves are effectively deleted.
+                    let has_resolvable_troves: bool = conn
+                        .query_row(
+                            "SELECT EXISTS(SELECT 1 FROM state_members sm \
+                             JOIN troves t ON t.name = sm.trove_name \
+                                 AND t.version = sm.trove_version \
+                                 AND (sm.architecture IS NULL \
+                                      OR t.architecture IS NULL \
+                                      OR sm.architecture = t.architecture) \
+                             JOIN system_states ss ON sm.state_id = ss.id \
+                             WHERE ss.state_number = ?1)",
+                            [base_num],
+                            |row| row.get(0),
+                        )
+                        .unwrap_or(false);
+
+                    if has_resolvable_troves {
+                        // State exists and has troves, they just have no /etc
+                        // files. An empty map IS the correct base.
+                        debug!("Base generation {} has no /etc files (correct)", base_num);
+                        base_etc
+                    } else {
+                        // Troves were cascade-deleted. Fall back to current DB.
+                        debug!("Base generation {} troves deleted, falling back to current DB", base_num);
+                        collect_etc_files(conn)?
+                    }
+                } else {
+                    base_etc
+                }
+            } else {
+                collect_etc_files(conn)?
+            }
+        }
+    };
 
     // Step 2: Build the new generation (creates state snapshot + EROFS image).
     let generations_dir = conary_core::generation::metadata::generations_dir();
     let (gen_num, build_result) =
         conary_core::generation::builder::build_generation_from_db(conn, &generations_dir, summary)
             .map_err(|e| anyhow::anyhow!("Failed to build EROFS generation: {e}"))?;
+
+    // Per-generation /etc overlay directories -- isolate user modifications so
+    // they do not bleed across generation switches.
+    let upper_dir = conary_root.join(format!("etc-state/{gen_num}"));
+    std::fs::create_dir_all(&upper_dir)?;
+
+    // Record which generation was active when this upper directory was created.
+    // The merge logic reads this to find the correct base after rollback,
+    // instead of assuming the numerically previous generation is always correct.
+    std::fs::write(upper_dir.join(".base-gen"), current_gen.to_string())?;
 
     info!(
         "Built generation {gen_num} ({} bytes, {} CAS objects)",
@@ -161,7 +289,7 @@ pub fn rebuild_and_mount(conn: &Connection, summary: &str) -> anyhow::Result<i64
     .map_err(|e| anyhow::anyhow!("Failed to mount generation {gen_num}: {e}"))?;
 
     // Step 7: Set up /etc overlay -- lower from staging, target at live /etc.
-    let etc_work = conary_root.join("etc-state/work");
+    let etc_work = conary_root.join(format!("etc-state/{gen_num}-work"));
     if let Err(e) = conary_core::generation::mount::mount_etc_overlay(
         &staging_mount.join("etc"),
         Path::new("/etc"),

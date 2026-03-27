@@ -100,7 +100,8 @@ fn builds_for_seed(conn: &Connection, seed_id: &str) -> Result<HashMap<String, S
     let mut stmt = conn.prepare_cached(
         "SELECT package_name, output_hash
          FROM derivation_index
-         WHERE build_env_hash = ?1",
+         WHERE build_env_hash = ?1
+         ORDER BY rowid DESC",
     )?;
 
     let rows = stmt.query_map([seed_id], |row| {
@@ -110,10 +111,10 @@ fn builds_for_seed(conn: &Connection, seed_id: &str) -> Result<HashMap<String, S
     let mut map = HashMap::new();
     for row in rows {
         let (pkg, hash) = row?;
-        // Last writer wins when a seed has multiple builds for the same package
-        // (e.g. rebuild after a cache clear). The caller can use by_package()
-        // on DerivationIndex if finer-grained control is needed.
-        map.insert(pkg, hash);
+        // Rows are ordered newest-first (ORDER BY rowid DESC). Use
+        // entry().or_insert() so the first (newest) row wins and
+        // subsequent older rows for the same package are ignored.
+        map.entry(pkg).or_insert(hash);
     }
     Ok(map)
 }

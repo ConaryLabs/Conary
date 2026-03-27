@@ -164,6 +164,109 @@ pub async fn cmd_adopt_refresh(
         .join("objects");
     let cas = conary_core::filesystem::CasStore::new(&objects_dir)?;
 
+    // Pre-fetch all PM metadata and perform CAS writes OUTSIDE the transaction
+    // for packages that need updating. This keeps the SQLite write lock short
+    // and avoids CAS-vs-DB inconsistency (orphaned CAS objects are GC-reclaimable).
+    struct UpdateData<'a> {
+        trove: &'a Trove,
+        trove_id: i64,
+        sys_ver: String,
+        sys_arch: String,
+        sys_desc: Option<String>,
+        files_with_hashes: Vec<(FileInfoTuple, String)>,
+        deps: Vec<DependencyInfo>,
+        provides: Vec<String>,
+    }
+
+    let mut update_data: Vec<UpdateData<'_>> = Vec::new();
+    let mut skip_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for (trove, outcome) in &results {
+        if let DriftOutcome::Updated { .. } = outcome {
+            let trove_id = match trove.id {
+                Some(id) => id,
+                None => {
+                    warn!("Trove {} has no id, skipping", trove.name);
+                    skip_names.insert(trove.name.clone());
+                    continue;
+                }
+            };
+
+            let (sys_ver, sys_arch, sys_desc) = match system_packages.get(&trove.name) {
+                Some(entry) => entry,
+                None => {
+                    warn!(
+                        "Trove '{}' marked as updated but missing from system_packages map, skipping",
+                        trove.name
+                    );
+                    skip_names.insert(trove.name.clone());
+                    continue;
+                }
+            };
+
+            let use_cas = trove.install_source == InstallSource::AdoptedFull;
+
+            // Query PM metadata outside the transaction.
+            let raw_files = match query_package_files(pkg_mgr, &trove.name) {
+                Ok(f) => f,
+                Err(e) => {
+                    warn!(
+                        "Failed to query files for '{}': {}; skipping",
+                        trove.name, e
+                    );
+                    skip_names.insert(trove.name.clone());
+                    continue;
+                }
+            };
+            let deps = match query_package_deps(pkg_mgr, &trove.name) {
+                Ok(d) => d,
+                Err(e) => {
+                    warn!("Failed to query deps for '{}': {}; skipping", trove.name, e);
+                    skip_names.insert(trove.name.clone());
+                    continue;
+                }
+            };
+            let provides = match query_package_provides(pkg_mgr, &trove.name) {
+                Ok(p) => p,
+                Err(e) => {
+                    warn!(
+                        "Failed to query provides for '{}': {}; skipping",
+                        trove.name, e
+                    );
+                    skip_names.insert(trove.name.clone());
+                    continue;
+                }
+            };
+
+            // Perform CAS writes outside the transaction.
+            let files_with_hashes: Vec<(FileInfoTuple, String)> = raw_files
+                .into_iter()
+                .map(|f| {
+                    let hash = compute_file_hash(
+                        &f.0,
+                        f.2,
+                        f.3.as_deref(),
+                        f.6.as_deref(),
+                        use_cas,
+                        if use_cas { Some(&cas) } else { None },
+                    );
+                    (f, hash)
+                })
+                .collect();
+
+            update_data.push(UpdateData {
+                trove,
+                trove_id,
+                sys_ver: sys_ver.clone(),
+                sys_arch: sys_arch.clone(),
+                sys_desc: sys_desc.clone(),
+                files_with_hashes,
+                deps,
+                provides,
+            });
+        }
+    }
+
     let mut changeset = Changeset::new(format!(
         "Refresh adopted packages: {} updated, {} removed",
         updated_count, removed_count
@@ -172,22 +275,19 @@ pub async fn cmd_adopt_refresh(
     let mut actually_updated = 0u32;
     let mut actually_removed = 0u32;
 
+    // DB-only transaction: all PM queries and CAS writes are already done.
     let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
         let changeset_id = changeset.insert(tx)?;
 
         for (trove, outcome) in &results {
-            let trove_id = match trove.id {
-                Some(id) => id,
-                None => {
-                    warn!("Trove {} has no id, skipping", trove.name);
-                    continue;
-                }
-            };
-
             match outcome {
                 DriftOutcome::Unchanged => {}
 
                 DriftOutcome::Removed => {
+                    let trove_id = match trove.id {
+                        Some(id) => id,
+                        None => continue, // already warned above
+                    };
                     // Remove from tracking — the system package was uninstalled
                     tx.execute("DELETE FROM files WHERE trove_id = ?1", [trove_id])?;
                     tx.execute("DELETE FROM dependencies WHERE trove_id = ?1", [trove_id])?;
@@ -206,59 +306,51 @@ pub async fn cmd_adopt_refresh(
                     old_version,
                     new_version,
                 } => {
-                    let (sys_ver, sys_arch, sys_desc) = match system_packages.get(&trove.name) {
-                        Some(entry) => entry,
-                        None => {
-                            warn!(
-                                "Trove '{}' marked as updated but missing from system_packages map, skipping",
-                                trove.name
-                            );
-                            continue;
-                        }
+                    // Skip packages whose pre-fetch failed.
+                    if skip_names.contains(&trove.name) {
+                        continue;
+                    }
+
+                    let data = match update_data.iter().find(|d| d.trove.name == trove.name) {
+                        Some(d) => d,
+                        None => continue,
                     };
+
+                    // Use the trove_id captured during pre-fetch.
+                    let trove_id = data.trove_id;
 
                     // Update version and metadata on the trove record
                     tx.execute(
                         "UPDATE troves SET version = ?1, architecture = ?2, description = ?3,
                          installed_by_changeset_id = ?4
                          WHERE id = ?5",
-                        rusqlite::params![sys_ver, sys_arch, sys_desc, changeset_id, trove_id,],
+                        rusqlite::params![
+                            data.sys_ver,
+                            data.sys_arch,
+                            data.sys_desc,
+                            changeset_id,
+                            trove_id,
+                        ],
                     )?;
 
-                    // Query ALL metadata BEFORE deleting old data so a PM
-                    // query failure does not leave the trove with empty tables.
-                    let use_cas = trove.install_source == InstallSource::AdoptedFull;
-
-                    let files: Vec<FileInfoTuple> = query_package_files(pkg_mgr, &trove.name)
-                        .map_err(|e| conary_core::Error::IoError(e.to_string()))?;
-                    let deps: Vec<DependencyInfo> = query_package_deps(pkg_mgr, &trove.name)
-                        .map_err(|e| conary_core::Error::IoError(e.to_string()))?;
-                    let provides: Vec<String> = query_package_provides(pkg_mgr, &trove.name)
-                        .map_err(|e| conary_core::Error::IoError(e.to_string()))?;
-
-                    // All queries succeeded — now safe to delete old data and replace
+                    // Replace file records with pre-computed data.
                     tx.execute("DELETE FROM files WHERE trove_id = ?1", [trove_id])?;
                     for (
-                        file_path,
-                        file_size,
-                        file_mode,
-                        file_digest,
-                        file_user,
-                        file_group,
-                        link_target,
-                    ) in &files
-                    {
-                        let hash = compute_file_hash(
+                        (
                             file_path,
-                            *file_mode,
-                            file_digest.as_deref(),
-                            link_target.as_deref(),
-                            use_cas,
-                            if use_cas { Some(&cas) } else { None },
-                        );
+                            file_size,
+                            file_mode,
+                            _digest,
+                            file_user,
+                            file_group,
+                            link_target,
+                        ),
+                        hash,
+                    ) in &data.files_with_hashes
+                    {
                         let mut fe = FileEntry::new(
                             file_path.clone(),
-                            hash,
+                            hash.clone(),
                             *file_size,
                             *file_mode,
                             trove_id,
@@ -275,16 +367,16 @@ pub async fn cmd_adopt_refresh(
                     }
 
                     tx.execute("DELETE FROM dependencies WHERE trove_id = ?1", [trove_id])?;
-                    for dep in deps {
+                    for dep in &data.deps {
                         if dep.name.is_empty() {
                             continue;
                         }
                         let mut de = DependencyEntry::new(
                             trove_id,
-                            dep.name,
+                            dep.name.clone(),
                             None,
                             "runtime".to_string(),
-                            dep.constraint,
+                            dep.constraint.clone(),
                         );
                         if let Err(e) = de.insert(tx) {
                             debug!("Failed to insert dep for {}: {}", trove.name, e);
@@ -292,11 +384,11 @@ pub async fn cmd_adopt_refresh(
                     }
 
                     tx.execute("DELETE FROM provides WHERE trove_id = ?1", [trove_id])?;
-                    for provide in provides {
+                    for provide in &data.provides {
                         if provide.is_empty() {
                             continue;
                         }
-                        let mut pe = ProvideEntry::new(trove_id, provide, None);
+                        let mut pe = ProvideEntry::new(trove_id, provide.clone(), None);
                         if let Err(e) = pe.insert_or_ignore(tx) {
                             debug!("Failed to insert provide for {}: {}", trove.name, e);
                         }
@@ -344,7 +436,9 @@ fn query_all_current(pkg_mgr: SystemPackageManager) -> Result<InstalledPackageMa
             .into_iter()
             .map(|(name, info)| {
                 let desc = info.description.clone().or(info.summary.clone());
-                (name, (info.version_only(), info.arch.clone(), desc))
+                // Use full_version (epoch:version-release) to match the version
+                // stored during adopt, so drift detection compares apples to apples.
+                (name, (info.full_version(), info.arch.clone(), desc))
             })
             .collect(),
         SystemPackageManager::Dpkg => dpkg_query::query_all_packages()?
@@ -382,10 +476,7 @@ fn query_all_current(pkg_mgr: SystemPackageManager) -> Result<InstalledPackageMa
 ///
 /// Returns an error on PM query failure so callers can skip the package
 /// rather than recording it with an empty file list.
-fn query_package_files(
-    pkg_mgr: SystemPackageManager,
-    name: &str,
-) -> Result<Vec<FileInfoTuple>> {
+fn query_package_files(pkg_mgr: SystemPackageManager, name: &str) -> Result<Vec<FileInfoTuple>> {
     let raw = match pkg_mgr {
         SystemPackageManager::Rpm => rpm_query::query_package_files(name)
             .map_err(|e| anyhow::anyhow!("RPM file query failed for '{name}': {e}"))?,
@@ -397,17 +488,24 @@ fn query_package_files(
     };
     Ok(raw
         .into_iter()
-        .map(|f| (f.path, f.size, f.mode, f.digest, f.user, f.group, f.link_target))
+        .map(|f| {
+            (
+                f.path,
+                f.size,
+                f.mode,
+                f.digest,
+                f.user,
+                f.group,
+                f.link_target,
+            )
+        })
         .collect())
 }
 
 /// Query runtime dependencies for a package from the active package manager.
 ///
 /// Returns an error on PM query failure so callers can handle it explicitly.
-fn query_package_deps(
-    pkg_mgr: SystemPackageManager,
-    name: &str,
-) -> Result<Vec<DependencyInfo>> {
+fn query_package_deps(pkg_mgr: SystemPackageManager, name: &str) -> Result<Vec<DependencyInfo>> {
     Ok(match pkg_mgr {
         SystemPackageManager::Rpm => rpm_query::query_package_dependencies_full(name)
             .map_err(|e| anyhow::anyhow!("RPM dep query failed for '{name}': {e}"))?,
@@ -422,10 +520,7 @@ fn query_package_deps(
 /// Query provides for a package from the active package manager.
 ///
 /// Returns an error on PM query failure so callers can handle it explicitly.
-fn query_package_provides(
-    pkg_mgr: SystemPackageManager,
-    name: &str,
-) -> Result<Vec<String>> {
+fn query_package_provides(pkg_mgr: SystemPackageManager, name: &str) -> Result<Vec<String>> {
     Ok(match pkg_mgr {
         SystemPackageManager::Rpm => rpm_query::query_package_provides(name)
             .map_err(|e| anyhow::anyhow!("RPM provides query failed for '{name}': {e}"))?,

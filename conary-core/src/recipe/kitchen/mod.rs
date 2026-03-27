@@ -511,8 +511,8 @@ impl Kitchen {
         // Check if already cached
         if cached_path.exists() {
             debug!("Using cached source: {}", cached_path.display());
-            // Verify checksum
-            if verify_file_checksum(&cached_path, checksum)? {
+            // Verify checksum -- None means match
+            if verify_file_checksum(&cached_path, checksum)?.is_none() {
                 return Ok(cached_path);
             }
             warn!("Cached file checksum mismatch, re-downloading");
@@ -525,12 +525,12 @@ impl Kitchen {
 
         download_file(url, &temp_path)?;
 
-        // Verify checksum
-        if !verify_file_checksum(&temp_path, checksum)? {
+        // Verify checksum -- Some(actual) means mismatch
+        if let Some(actual) = verify_file_checksum(&temp_path, checksum)? {
             fs::remove_file(&temp_path)?;
             return Err(Error::ChecksumMismatch {
                 expected: checksum.to_string(),
-                actual: "mismatch".to_string(),
+                actual,
             });
         }
 

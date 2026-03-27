@@ -15,6 +15,8 @@ fn generate_entries(count: usize) -> Vec<FileEntryRef> {
             sha256_hash: format!("{i:064x}"),
             size: 4096,
             permissions: 0o644,
+            owner: None,
+            group_name: None,
         })
         .collect()
 }

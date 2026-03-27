@@ -1336,6 +1336,7 @@ mod tests {
             original_checksum: "sha256:test".to_string(),
             detected_hooks: Hooks::default(),
             inferred_capabilities: None,
+            inference_error: None,
             legacy_provenance: None,
         }
     }

@@ -90,7 +90,13 @@ pub fn notify(states: &[NotifyState<'_>]) -> bool {
         .collect();
 
     if !sd_states.is_empty() {
-        sd_notify::notify(&sd_states).is_ok()
+        match sd_notify::notify(&sd_states) {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::warn!("sd_notify failed: {e}");
+                false
+            }
+        }
     } else {
         false
     }
@@ -120,6 +126,13 @@ pub fn notify_stopping() -> bool {
 ///
 /// Returns true if LISTEN_FDS environment variable is set,
 /// indicating systemd has passed pre-opened sockets.
+///
+/// # Platform note
+///
+/// Socket activation via `LISTEN_FDS` is a systemd-specific protocol.
+/// No fallback is provided for other init systems (e.g. SysV, OpenRC,
+/// runit). On non-systemd systems this function always returns `false`
+/// and the daemon falls back to binding its own socket.
 pub fn is_socket_activated() -> bool {
     std::env::var("LISTEN_FDS").is_ok()
 }

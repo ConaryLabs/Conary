@@ -40,6 +40,10 @@ pub struct CcsArchiveContents {
     /// The CBOR `BinaryManifest`, if the archive contained one.
     pub binary_manifest: Option<BinaryManifest>,
 
+    /// Raw MANIFEST.toml bytes, if the archive contained one.
+    /// Used by the verifier to check the TOML integrity hash.
+    pub toml_raw: Option<Vec<u8>>,
+
     /// Parsed `MANIFEST.sig` JSON, if present.
     pub signature_raw: Option<String>,
 
@@ -105,6 +109,8 @@ pub fn read_ccs_archive<R: Read>(reader: R) -> anyhow::Result<CcsArchiveContents
             cbor_manifest_raw = Some(content.clone());
             if let Ok(bin) = BinaryManifest::from_cbor(&content) {
                 binary_manifest = Some(bin);
+            } else {
+                warn!("Failed to parse CBOR MANIFEST entry; falling back to MANIFEST.toml if present");
             }
         }
         // ── MANIFEST.toml ────────────────────────────────────────────
@@ -202,6 +208,11 @@ pub fn read_ccs_archive<R: Read>(reader: R) -> anyhow::Result<CcsArchiveContents
         }
     }
 
+    // Save a copy of the raw TOML bytes for integrity verification.
+    // The resolution logic below consumes `toml_manifest_raw` in the
+    // TOML-only path, so we must clone before that happens.
+    let toml_raw_copy = toml_manifest_raw.clone();
+
     // ── Resolve manifest ─────────────────────────────────────────────
     // When both CBOR and TOML manifests are present, use TOML as primary
     // (it carries fields like config, redirects, policy, provenance that
@@ -258,6 +269,7 @@ pub fn read_ccs_archive<R: Read>(reader: R) -> anyhow::Result<CcsArchiveContents
         manifest,
         manifest_raw,
         binary_manifest,
+        toml_raw: toml_raw_copy,
         signature_raw,
         components,
         blobs,

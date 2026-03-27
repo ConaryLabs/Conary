@@ -9,6 +9,7 @@ use crate::ccs::chunking::{Chunker, MIN_CHUNK_SIZE};
 use crate::ccs::manifest::CcsManifest;
 use crate::ccs::policy::{PolicyAction, PolicyChain};
 use crate::components::ComponentClassifier;
+use crate::filesystem::CasStore;
 use crate::hash;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -359,8 +360,17 @@ impl CcsBuilder {
             (FileType::Regular, content, None)
         };
 
-        // Compute initial hash
-        let hash_val = hash::sha256(&content);
+        // Compute initial hash.
+        // For symlinks use CasStore::compute_symlink_hash so the hash stored in
+        // the FileEntry matches what CasStore::store_symlink/retrieve_symlink
+        // produce (both are sha256 of the raw target bytes, but using the
+        // canonical helper makes the invariant explicit and guards against
+        // future divergence).
+        let hash_val = if let Some(ref target_str) = target {
+            CasStore::compute_symlink_hash(target_str)
+        } else {
+            hash::sha256(&content)
+        };
         let size = content.len() as u64;
 
         // Classify component
@@ -384,10 +394,15 @@ impl CcsBuilder {
     fn scan_source_files(&self) -> Result<Vec<PathBuf>> {
         let mut files = Vec::new();
 
-        for entry in WalkDir::new(&self.source_dir)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
+        for entry in WalkDir::new(&self.source_dir).into_iter().filter_map(|e| {
+            match e {
+                Ok(entry) => Some(entry),
+                Err(err) => {
+                    tracing::warn!("WalkDir error scanning source directory: {err}");
+                    None
+                }
+            }
+        }) {
             let path = entry.path();
             let metadata = entry.metadata()?;
 
@@ -522,7 +537,15 @@ fn write_ccs_package_internal(
     let content_root = MerkleTree::calculate_root(&component_refs);
 
     // Build binary manifest
-    let binary_manifest = build_binary_manifest(result, component_refs, content_root)?;
+    let mut binary_manifest = build_binary_manifest(result, component_refs, content_root)?;
+
+    // Serialize MANIFEST.toml first so we can embed its hash in the CBOR manifest
+    let manifest_toml = result.manifest.to_toml()?;
+
+    // Compute SHA-256 of TOML content and embed in binary manifest before signing.
+    // This binds TOML-only fields (provenance, redirects, policy, capabilities,
+    // enhancements) into the signed CBOR envelope.
+    binary_manifest.toml_integrity_hash = Some(hash::sha256(manifest_toml.as_bytes()));
 
     // Write MANIFEST (CBOR-encoded binary manifest)
     let manifest_cbor = binary_manifest
@@ -530,8 +553,7 @@ fn write_ccs_package_internal(
         .map_err(|e| BuilderError::ManifestEncoding(e.to_string()))?;
     fs::write(temp_dir.path().join("MANIFEST"), &manifest_cbor)?;
 
-    // Write MANIFEST.toml (human-readable, for debugging)
-    let manifest_toml = result.manifest.to_toml()?;
+    // Write MANIFEST.toml (human-readable)
     fs::write(temp_dir.path().join("MANIFEST.toml"), &manifest_toml)?;
 
     // Sign the CBOR manifest if a signing key is provided
@@ -715,6 +737,7 @@ fn build_binary_manifest(
         build,
         capabilities: manifest.capabilities.clone(),
         content_root,
+        toml_integrity_hash: None,
     })
 }
 

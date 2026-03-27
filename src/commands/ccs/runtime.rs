@@ -279,10 +279,8 @@ pub async fn cmd_ccs_run(
                     } else {
                         0o644
                     };
-                    let _ = std::fs::set_permissions(
-                        &dest_path,
-                        std::fs::Permissions::from_mode(mode),
-                    );
+                    let _ =
+                        std::fs::set_permissions(&dest_path, std::fs::Permissions::from_mode(mode));
                 }
             }
         }
