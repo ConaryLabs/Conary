@@ -557,8 +557,6 @@ static SCRIPTLET_EXTRA: &[&str] = &[
     "getgid",
     "geteuid",
     "getegid",
-    "setuid",
-    "setgid",
     "setgroups",
     "setsid",
     "umask",
@@ -734,7 +732,15 @@ mod tests {
         }
 
         // Must NOT contain dangerous syscalls
-        let forbidden = ["ptrace", "kexec_load", "init_module", "bpf", "reboot"];
+        let forbidden = [
+            "ptrace",
+            "kexec_load",
+            "init_module",
+            "bpf",
+            "reboot",
+            "setuid",
+            "setgid",
+        ];
         for name in &forbidden {
             assert!(
                 !syscalls.contains(name),

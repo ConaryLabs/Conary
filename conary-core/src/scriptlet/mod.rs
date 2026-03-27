@@ -35,6 +35,7 @@ use std::fs;
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tempfile::TempDir;
 use tracing::{debug, info, warn};
@@ -101,6 +102,7 @@ impl SandboxMode {
 
 /// Default timeout for scriptlet execution (60 seconds)
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
+static SECCOMP_WARN_OVERRIDE: AtomicBool = AtomicBool::new(false);
 
 /// Package format types for argument handling
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -424,7 +426,7 @@ impl ScriptletExecutor {
         let root = self.root.clone();
 
         // Build seccomp BPF filter in parent process (avoids allocation after fork)
-        let seccomp_mode = EnforcementMode::Warn;
+        let seccomp_mode = current_seccomp_mode();
         let bpf_filter = build_scriptlet_seccomp(seccomp_mode);
         let seccomp_enabled = bpf_filter.is_some();
 
@@ -643,6 +645,18 @@ impl ScriptletExecutor {
             "#!/bin/bash\nset -e\n\n# Arch .INSTALL content:\n{}\n\n# Call the function if it exists\nif declare -f {} > /dev/null; then\n    {} \"$@\"\nfi\n",
             content, function_name, function_name
         )
+    }
+}
+
+pub fn set_seccomp_warn_override(enabled: bool) {
+    SECCOMP_WARN_OVERRIDE.store(enabled, Ordering::Relaxed);
+}
+
+fn current_seccomp_mode() -> EnforcementMode {
+    if SECCOMP_WARN_OVERRIDE.load(Ordering::Relaxed) {
+        EnforcementMode::Warn
+    } else {
+        EnforcementMode::Enforce
     }
 }
 
@@ -1091,6 +1105,12 @@ mod tests {
                 "build_scriptlet_seccomp should return None when seccomp is unsupported"
             );
         }
+    }
+
+    #[test]
+    fn test_current_seccomp_mode_defaults_to_enforce() {
+        set_seccomp_warn_override(false);
+        assert_eq!(current_seccomp_mode(), EnforcementMode::Enforce);
     }
 
     // -- GAP 4: execute_direct double-wait fix (stdout/stderr + timeout) ------

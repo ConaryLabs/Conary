@@ -64,6 +64,7 @@ async fn main() {
 
 async fn run() -> Result<()> {
     let cli = Cli::parse();
+    conary_core::scriptlet::set_seccomp_warn_override(cli.seccomp_warn);
 
     match cli.command {
         // =====================================================================
