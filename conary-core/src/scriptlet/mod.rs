@@ -459,7 +459,21 @@ impl ScriptletExecutor {
         // All operations (chroot, chdir, prctl, seccomp) are async-signal-safe.
         unsafe {
             cmd.pre_exec(move || {
-                // 1. chroot into the target root
+                // 1. Isolate mount topology before entering the target root.
+                nix::sched::unshare(chroot_namespace_flags())
+                    .map_err(|e| std::io::Error::other(format!("unshare failed: {e}")))?;
+                nix::mount::mount::<str, str, str, str>(
+                    None,
+                    "/",
+                    None,
+                    chroot_mount_private_flags(),
+                    None,
+                )
+                .map_err(|e| {
+                    std::io::Error::other(format!("mount --make-rprivate failed: {e}"))
+                })?;
+
+                // 2. chroot into the target root
                 nix::unistd::chroot(&root).map_err(|e| {
                     std::io::Error::new(
                         std::io::ErrorKind::PermissionDenied,
@@ -469,13 +483,13 @@ impl ScriptletExecutor {
                 nix::unistd::chdir("/")
                     .map_err(|e| std::io::Error::other(format!("chdir failed: {e}")))?;
 
-                // 2. Set NO_NEW_PRIVS (required for unprivileged seccomp)
+                // 3. Set NO_NEW_PRIVS (required for unprivileged seccomp)
                 let ret = libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
                 if ret != 0 {
                     return Err(std::io::Error::last_os_error());
                 }
 
-                // 3. Apply seccomp filter
+                // 4. Apply seccomp filter
                 if let Some(ref filter) = bpf_filter
                     && seccompiler::apply_filter(filter).is_err()
                 {
@@ -658,6 +672,14 @@ fn current_seccomp_mode() -> EnforcementMode {
     } else {
         EnforcementMode::Enforce
     }
+}
+
+fn chroot_namespace_flags() -> nix::sched::CloneFlags {
+    nix::sched::CloneFlags::CLONE_NEWNS
+}
+
+fn chroot_mount_private_flags() -> nix::mount::MsFlags {
+    nix::mount::MsFlags::MS_PRIVATE | nix::mount::MsFlags::MS_REC
 }
 
 /// Wait for a child process to exit (with timeout), capture its stdout/stderr,
@@ -1111,6 +1133,18 @@ mod tests {
     fn test_current_seccomp_mode_defaults_to_enforce() {
         set_seccomp_warn_override(false);
         assert_eq!(current_seccomp_mode(), EnforcementMode::Enforce);
+    }
+
+    #[test]
+    fn test_chroot_namespace_flags_include_mount_namespace() {
+        assert!(chroot_namespace_flags().contains(nix::sched::CloneFlags::CLONE_NEWNS));
+    }
+
+    #[test]
+    fn test_chroot_mount_propagation_is_private_recursive() {
+        let flags = chroot_mount_private_flags();
+        assert!(flags.contains(nix::mount::MsFlags::MS_PRIVATE));
+        assert!(flags.contains(nix::mount::MsFlags::MS_REC));
     }
 
     // -- GAP 4: execute_direct double-wait fix (stdout/stderr + timeout) ------
