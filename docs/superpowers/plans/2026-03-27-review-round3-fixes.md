@@ -612,6 +612,36 @@ cargo run -p conary-test -- run --distro fedora43 --suite phase2-group-a --phase
 
 **Fix:** Add Unicode NFC normalization before component validation in `sanitize_path()`. Or reject any non-ASCII characters in paths from untrusted sources. Modify: `conary-core/src/filesystem/path.rs`
 
+### NEW Task (Phase 1): CCS symlink-following arbitrary write (Codex C1)
+
+**Finding:** A CCS package can create a symlink (`usr/lib/link -> /etc`) then write a child file (`usr/lib/link/cron.d/persist`). `sanitize_package_relative_path()` only rejects `..`, not paths whose ancestors are symlinks created earlier in the same install. The write follows the symlink to the host.
+
+**Fix:** Before writing each file during CCS install, check that no ancestor in the destination path is a symlink created by the same package. Or stage all files into a temp tree (no symlink following) then move atomically.
+Modify: `src/commands/ccs/install.rs`, add regression test for "symlink first, child file second" attack.
+
+**Priority:** P0 -- this is an arbitrary write as root from any CCS package.
+
+### Fold into Task 9 (hook validation): Call revert_pre_hooks on failure (Codex M1)
+
+**Finding:** `revert_pre_hooks()` exists in `ccs/hooks/mod.rs` but is never called. Failed installs leave created users/groups/directories behind.
+
+**Fix:** Call `revert_pre_hooks()` on every post-hook/deployment/DB failure path after pre-hooks have run. Add end-to-end test.
+Modify: `src/commands/ccs/install.rs`
+
+### Fold into Task 10 (GPG verification): Make gpg_strict the default (Codex H4)
+
+**Finding:** `gpg_check = true` but `gpg_strict = false` is the default. Missing `.sig` just logs a warning and passes. Attacker omits signature file to bypass GPG.
+
+**Fix:** Change `gpg_strict` default to `true`. Non-strict mode should require explicit opt-in with visible warning.
+Modify: `conary-core/src/db/models/repository.rs`
+
+### Fold into Task 14 (rollback scriptlets): Post-install deliberate failure (Codex H2)
+
+**Finding:** Malicious post_install plants persistence then exits non-zero. DB is already committed, CLI reports failure, but package remains installed. Operators misled into thinking install failed cleanly.
+
+**Fix:** Either run post-install before commit (rollback-safe) or treat post-commit script failure as degraded-success, never as "failed install." Add changeset status `PostHooksFailed`.
+Modify: `src/commands/ccs/install.rs`
+
 ### Fold into Task 23 (compression bombs): CPIO cumulative size limit (Gemini M3)
 
 **Finding:** CPIO parser limits individual file sizes (512 MB) but not cumulative extracted size. A crafted RPM with many entries can fill disk.
