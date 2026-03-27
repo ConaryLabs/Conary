@@ -108,17 +108,25 @@ impl Federation {
 
         let mut peer_registry = PeerRegistry::new();
 
-        // Add configured cell hubs
+        // Add configured cell hubs (filtered by allowlists)
         for endpoint in &config.cell_hubs {
             if let Ok(peer) = Peer::from_endpoint(endpoint, PeerTier::CellHub) {
-                peer_registry.add(peer);
+                if Self::is_peer_allowed(&config, &peer) {
+                    peer_registry.add(peer);
+                } else {
+                    warn!("[federation] Configured cell hub {} rejected by allowlist", endpoint);
+                }
             }
         }
 
-        // Add configured region hubs
+        // Add configured region hubs (filtered by allowlists)
         for endpoint in &config.region_hubs {
             if let Ok(peer) = Peer::from_endpoint(endpoint, PeerTier::RegionHub) {
-                peer_registry.add(peer);
+                if Self::is_peer_allowed(&config, &peer) {
+                    peer_registry.add(peer);
+                } else {
+                    warn!("[federation] Configured region hub {} rejected by allowlist", endpoint);
+                }
             }
         }
 
@@ -191,6 +199,18 @@ impl Federation {
         Ok(Some(client))
     }
 
+    /// Check whether a peer is permitted by the configured allowlists
+    fn is_peer_allowed(config: &FederationConfig, peer: &Peer) -> bool {
+        // Global allowlist
+        if let Some(ref allowed) = config.allowed_peers
+            && !allowed.iter().any(|a| a == &peer.endpoint)
+        {
+            return false;
+        }
+        // Per-tier allowlist
+        config.tier_allowlists.is_allowed(&peer.endpoint, peer.tier)
+    }
+
     /// Get the appropriate HTTP client for a peer based on its tier
     ///
     /// - Cell hubs and leaves use the LAN client (no mTLS)
@@ -240,9 +260,31 @@ impl Federation {
     }
 
     /// Add a peer dynamically
-    pub async fn add_peer(&self, peer: Peer) {
+    ///
+    /// Rejects peers that are not permitted by the configured `allowed_peers`
+    /// global allowlist or the per-tier `tier_allowlists`.
+    pub async fn add_peer(&self, peer: Peer) -> std::result::Result<(), String> {
+        // Global allowlist check
+        if let Some(ref allowed) = self.config.allowed_peers
+            && !allowed.iter().any(|a| a == &peer.endpoint)
+        {
+            return Err(format!(
+                "Peer {} rejected: not in allowed_peers list",
+                peer.endpoint
+            ));
+        }
+
+        // Per-tier allowlist check
+        if !self.config.tier_allowlists.is_allowed(&peer.endpoint, peer.tier) {
+            return Err(format!(
+                "Peer {} rejected: not in tier allowlist for {:?}",
+                peer.endpoint, peer.tier
+            ));
+        }
+
         let mut registry = self.peers.write().await;
         registry.add(peer);
+        Ok(())
     }
 
     /// Remove a peer and clean up its circuit breaker state.
@@ -467,7 +509,7 @@ impl Federation {
         // Select client based on peer tier
         let client = self.client_for_peer(peer)?;
 
-        let response = client
+        let mut response = client
             .get(&url)
             .timeout(Duration::from_millis(self.config.request_timeout_ms))
             .send()
@@ -493,29 +535,45 @@ impl Federation {
             )));
         }
 
-        let data = response
-            .bytes()
-            .await
-            .map_err(|e| Error::DownloadError(format!("Failed to read response: {e}")))?;
+        // Read body incrementally to avoid buffering an arbitrarily large
+        // response into memory.  A malicious peer could omit or lie about
+        // Content-Length, so we enforce the limit on actual bytes received.
+        let max = self.config.max_chunk_size;
+        let mut body = Vec::with_capacity(
+            response
+                .content_length()
+                .map_or(64 * 1024, |cl| cl as usize)
+                .min(max),
+        );
 
-        // Enforce max chunk size (also catches responses without Content-Length)
-        if data.len() > self.config.max_chunk_size {
-            return Err(Error::DownloadError(format!(
-                "Chunk {} exceeds max size ({} > {})",
-                hash,
-                data.len(),
-                self.config.max_chunk_size
-            )));
+        loop {
+            match response.chunk().await {
+                Ok(Some(chunk)) => {
+                    if body.len() + chunk.len() > max {
+                        return Err(Error::DownloadError(format!(
+                            "Chunk {} exceeds max size (>{} bytes received)",
+                            hash, max
+                        )));
+                    }
+                    body.extend_from_slice(&chunk);
+                }
+                Ok(None) => break, // end of body
+                Err(e) => {
+                    return Err(Error::DownloadError(format!(
+                        "Failed to read response: {e}"
+                    )));
+                }
+            }
         }
 
         // Verify hash
-        verify_sha256(&data, hash).map_err(|e| Error::ChecksumMismatch {
+        verify_sha256(&body, hash).map_err(|e| Error::ChecksumMismatch {
             expected: e.expected,
             actual: e.actual,
         })?;
 
         info!("[federation] chunk {} from {}", hash, peer.endpoint);
-        Ok(data.to_vec())
+        Ok(body)
     }
 
     /// Check if a chunk exists at any peer (HEAD request)

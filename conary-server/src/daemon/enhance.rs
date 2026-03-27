@@ -13,7 +13,6 @@ use conary_core::ccs::enhancement::{
 };
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::{debug, error, info, warn};
@@ -114,8 +113,38 @@ pub async fn execute_enhance_job(
     let trove_ids = tokio::task::spawn_blocking(move || -> Result<Vec<i64>, conary_core::Error> {
         let conn = state_clone.open_db()?;
         if spec_clone.trove_ids.is_empty() {
-            get_pending_by_priority(&conn, spec_clone.batch_size)
-                .map_err(|e| conary_core::Error::IoError(e.to_string()))
+            // Fetch more candidates than needed so we can filter by min_priority
+            // client-side (get_pending_by_priority returns results ordered by
+            // priority DESC, so we can stop once we hit a package below the
+            // threshold).
+            let min_priority_val = spec_clone.min_priority.as_i32();
+            let candidates = get_pending_by_priority(&conn, spec_clone.batch_size * 2)
+                .map_err(|e| conary_core::Error::IoError(e.to_string()))?;
+
+            // Filter out packages below min_priority
+            if min_priority_val > 0 {
+                let mut filtered = Vec::new();
+                for trove_id in candidates {
+                    // Look up the stored priority for this trove
+                    let priority: i32 = conn
+                        .query_row(
+                            "SELECT COALESCE(enhancement_priority, 1) FROM converted_packages WHERE trove_id = ?1",
+                            [trove_id],
+                            |row| row.get(0),
+                        )
+                        .unwrap_or(1);
+                    if priority >= min_priority_val {
+                        filtered.push(trove_id);
+                    }
+                    if filtered.len() >= spec_clone.batch_size {
+                        break;
+                    }
+                }
+                Ok(filtered)
+            } else {
+                // min_priority is Low (0) -- accept everything, just cap at batch_size
+                Ok(candidates.into_iter().take(spec_clone.batch_size).collect())
+            }
         } else {
             Ok(spec_clone.trove_ids.clone())
         }
@@ -153,7 +182,7 @@ pub async fn execute_enhance_job(
         let options = EnhancementOptions {
             types,
             force: spec.force,
-            install_root: PathBuf::from("/"),
+            install_root: state_for_loop.config.root.clone(),
             fail_fast: false,
             parallel: true,
             parallel_workers: 0,

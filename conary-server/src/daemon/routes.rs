@@ -505,6 +505,58 @@ fn get_idempotency_key(headers: &axum::http::HeaderMap) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// Insert a job into the database, handling unique-constraint conflicts on
+/// `idempotency_key` by re-reading the existing job.
+///
+/// The insert and conflict detection happen in a single `spawn_blocking`
+/// closure so we can inspect the raw `rusqlite::Error` code and only
+/// deduplicate on an actual UNIQUE constraint violation -- not on unrelated
+/// DB failures.
+///
+/// Returns `Ok(None)` if the insert succeeded (new job), or `Ok(Some(job))`
+/// if a concurrent request already inserted a job with the same key.
+async fn insert_or_dedup(
+    state: &SharedState,
+    job: DaemonJob,
+) -> Result<Option<DaemonJob>, ApiError> {
+    let state = state.clone();
+    tokio::task::spawn_blocking(move || -> std::result::Result<Option<DaemonJob>, Box<DaemonError>> {
+        let conn = state
+            .open_db()
+            .map_err(|e| Box::new(DaemonError::internal(&format!("Database error: {e}"))))?;
+
+        match job.insert(&conn) {
+            Ok(()) => Ok(None),
+            Err(conary_core::Error::Database(ref db_err))
+                if db_err.sqlite_error_code()
+                    == Some(rusqlite::ErrorCode::ConstraintViolation) =>
+            {
+                // Unique-constraint violation -- look up the winner by key
+                if let Some(ref key) = job.idempotency_key {
+                    match DaemonJob::find_by_idempotency_key(&conn, key) {
+                        Ok(Some(existing)) => Ok(Some(existing)),
+                        _ => Err(Box::new(DaemonError::internal(
+                            "Idempotency conflict but existing job not found",
+                        ))),
+                    }
+                } else {
+                    Err(Box::new(DaemonError::internal(&format!(
+                        "Insert failed: {db_err}"
+                    ))))
+                }
+            }
+            Err(e) => Err(Box::new(DaemonError::internal(&format!("Insert failed: {e}")))),
+        }
+    })
+    .await
+    .map_err(|e| {
+        ApiError(Box::new(DaemonError::internal(&format!(
+            "Task join error: {e}"
+        ))))
+    })?
+    .map_err(ApiError)
+}
+
 /// Build the main router
 pub fn build_router(state: SharedState) -> Router {
     Router::new()
@@ -537,6 +589,8 @@ fn build_v1_router(state: SharedState) -> Router<SharedState> {
         .route("/packages/install", post(install_packages_handler))
         .route("/packages/remove", post(remove_packages_handler))
         .route("/packages/update", post(update_packages_handler))
+        // Enhancement (the only currently executable job kind)
+        .route("/enhance", post(enhance_handler))
         // Search
         .route("/search", get(search_handler))
         // Dependencies
@@ -732,6 +786,17 @@ async fn create_transaction_handler(
     // Determine job kind from operations
     let job_kind = determine_job_kind(&request.operations);
 
+    // TODO: Remove this gate once the job executor implements Install, Remove,
+    // Update, etc.  Until then, only Enhance jobs are executable.  Other kinds
+    // should use the CLI directly.  Use POST /v1/enhance to create Enhance jobs.
+    if !matches!(job_kind, crate::daemon::JobKind::Enhance) {
+        return Err(ApiError(Box::new(DaemonError::bad_request(&format!(
+            "Job kind '{}' is not yet supported by the daemon. \
+             Use the CLI directly for install/remove/update operations.",
+            job_kind.as_str()
+        )))));
+    }
+
     // Create the job
     let spec = serde_json::to_value(&request.operations).map_err(|e| {
         ApiError(Box::new(DaemonError::internal(&format!(
@@ -747,9 +812,23 @@ async fn create_transaction_handler(
 
     let job_id = job.id.clone();
 
-    // Insert into database
-    let insert_job = job.clone();
-    run_db_query(&state, move |conn| insert_job.insert(conn)).await?;
+    // Insert with dedup: if a concurrent request already inserted the same
+    // idempotency key, return the existing job instead of a 500.
+    if let Some(existing_job) = insert_or_dedup(&state, job.clone()).await? {
+        let location = format!("/v1/transactions/{}", existing_job.id);
+        let queue_position = state.queue.position(&existing_job.id).await.unwrap_or(0);
+        let response = CreateTransactionResponse {
+            job_id: existing_job.id,
+            status: existing_job.status.as_str().to_string(),
+            queue_position,
+            location: location.clone(),
+        };
+        return Ok((
+            StatusCode::OK,
+            [(axum::http::header::LOCATION, location)],
+            Json(response),
+        ));
+    }
 
     // Enqueue the job
     let _cancel_token = state
@@ -892,16 +971,19 @@ async fn transaction_stream_handler(
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
     let job_id = id.clone();
 
-    // First verify the job exists
-    let check_id = job_id.clone();
-    let exists = run_db_query(&state, move |conn| {
-        Ok(DaemonJob::find_by_id(conn, &check_id)?.is_some())
-    })
-    .await?;
+    // Subscribe to broadcasts BEFORE reading DB state.  This closes the race
+    // where the job completes between the DB read and the subscribe: any
+    // terminal event broadcast after this point will be captured by `rx`.
+    let rx = state.subscribe();
 
-    if !exists {
-        return Err(not_found_error("transaction", &id));
-    }
+    // Now read current job state (also verifies it exists)
+    let check_id = job_id.clone();
+    let job = run_db_query(&state, move |conn| DaemonJob::find_by_id(conn, &check_id)).await?;
+
+    let job = match job {
+        Some(j) => j,
+        None => return Err(not_found_error("transaction", &id)),
+    };
 
     // Track SSE connection (guard decrements on drop when stream ends)
     state
@@ -912,38 +994,18 @@ async fn transaction_stream_handler(
         metrics: state.clone(),
     };
 
-    // Subscribe to the event broadcast channel
-    let rx = state.subscribe();
-    let filter_job_id = job_id.clone();
+    // Helper: build an SSE event from a DaemonEvent
+    fn daemon_event_to_sse(event: &DaemonEvent) -> Option<Result<Event, Infallible>> {
+        serde_json::to_string(event)
+            .ok()
+            .map(|json| Ok(Event::default().event(event.event_type_name()).data(json)))
+    }
 
-    // Create a stream that filters to only this job's events
-    let event_stream = BroadcastStream::new(rx).filter_map(move |result| {
-        let job_id = filter_job_id.clone();
-        match result {
-            Ok(event) => {
-                if event.job_id() != Some(job_id.as_str()) {
-                    return None;
-                }
-                match serde_json::to_string(&event) {
-                    Ok(json) => Some(Ok(Event::default()
-                        .event(event.event_type_name())
-                        .data(json))),
-                    Err(_) => None,
-                }
-            }
-            Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
-                tracing::warn!("SSE client (job {}) lagged {} events", job_id, n);
-                Some(Ok(Event::default()
-                    .event("warning")
-                    .data(format!(r#"{{"lagged": {}}}"#, n))))
-            }
-        }
-    });
-
-    // Prepend a "connected" event with job info
+    // Prepend a "connected" event with current job status
     let connected_data = serde_json::json!({
         "status": "connected",
-        "job_id": job_id
+        "job_id": &job.id,
+        "current_status": job.status.as_str()
     });
     let connected_event = stream::once(async move {
         Ok(Event::default()
@@ -951,22 +1013,143 @@ async fn transaction_stream_handler(
             .data(connected_data.to_string()))
     });
 
-    // Move guard into the stream so it lives as long as the stream does
-    let guard_stream = futures::stream::once(async move {
-        let _guard = _guard;
-        // This stream item is never yielded; it just keeps the guard alive
-        futures::future::pending::<Result<Event, Infallible>>().await
-    });
+    // If the job is already in a terminal state, emit the terminal event
+    // immediately and close the stream -- no need to subscribe to broadcasts.
+    let is_already_terminal = matches!(
+        job.status,
+        JobStatus::Completed | JobStatus::Failed | JobStatus::Cancelled
+    );
 
-    // Create the final stream
-    let stream = connected_event.chain(event_stream).chain(guard_stream);
+    // Build a synthetic terminal event from DB state (for already-finished jobs)
+    // or an empty stream (for active jobs where we'll get real events).
+    let terminal_stream = if is_already_terminal {
+        let terminal_event = match job.status {
+            JobStatus::Completed => DaemonEvent::JobCompleted {
+                job_id: job.id.clone(),
+                duration_ms: 0,
+            },
+            JobStatus::Failed => DaemonEvent::JobFailed {
+                job_id: job.id.clone(),
+                error: job.error.unwrap_or_else(|| {
+                    DaemonError::internal("Job failed (details unavailable)")
+                }),
+            },
+            JobStatus::Cancelled => DaemonEvent::JobCancelled {
+                job_id: job.id.clone(),
+            },
+            _ => unreachable!(),
+        };
 
-    // Return SSE response with keepalive
-    Ok(Sse::new(stream).keep_alive(
+        futures::future::Either::Left(stream::once(async move {
+            daemon_event_to_sse(&terminal_event).unwrap_or_else(|| {
+                Ok(Event::default()
+                    .event("error")
+                    .data(r#"{"error":"failed to serialize terminal event"}"#))
+            })
+        }))
+    } else {
+        futures::future::Either::Right(stream::empty())
+    };
+
+    // Live event stream from broadcasts (only used when job is still active).
+    //
+    // Uses `JobSseStream`, a custom `Stream` impl that yields events for a
+    // specific job and terminates immediately after yielding a terminal event
+    // (JobCompleted / JobFailed / JobCancelled).  This avoids the problem where
+    // combinator-based approaches (take_while, filter_map) require a *next*
+    // broadcast poll to observe the termination flag.
+    let live_stream = if is_already_terminal {
+        drop(_guard);
+        futures::future::Either::Left(stream::empty())
+    } else {
+        futures::future::Either::Right(JobSseStream {
+            inner: BroadcastStream::new(rx),
+            job_id: job_id.clone(),
+            terminated: false,
+            _guard,
+        })
+    };
+
+    // connected -> terminal (if finished) -> live events (if active)
+    let final_stream = connected_event
+        .chain(terminal_stream)
+        .chain(live_stream);
+
+    Ok(Sse::new(final_stream).keep_alive(
         KeepAlive::new()
             .interval(Duration::from_secs(30))
             .text("keepalive"),
     ))
+}
+
+/// Per-job SSE stream that filters broadcast events and terminates immediately
+/// after yielding a terminal event (JobCompleted / JobFailed / JobCancelled).
+///
+/// This avoids the problem with combinator chains (take_while + filter_map)
+/// where termination requires a *subsequent* poll from the underlying stream.
+/// Here, `poll_next` returns `Poll::Ready(None)` on the very next call after
+/// the terminal event has been yielded.
+///
+/// The `SseConnectionGuard` is held as a field so it is dropped exactly when
+/// the stream adapter is dropped -- no forever-pending tail stream needed.
+struct JobSseStream {
+    inner: BroadcastStream<DaemonEvent>,
+    job_id: String,
+    terminated: bool,
+    _guard: SseConnectionGuard,
+}
+
+impl Stream for JobSseStream {
+    type Item = Result<Event, Infallible>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        use std::task::Poll;
+
+        let this = self.get_mut();
+
+        if this.terminated {
+            return Poll::Ready(None);
+        }
+
+        loop {
+            match std::pin::Pin::new(&mut this.inner).poll_next(cx) {
+                Poll::Ready(Some(Ok(event))) => {
+                    if event.job_id() != Some(this.job_id.as_str()) {
+                        continue; // skip events for other jobs
+                    }
+                    let is_term = matches!(
+                        event,
+                        DaemonEvent::JobCompleted { .. }
+                            | DaemonEvent::JobFailed { .. }
+                            | DaemonEvent::JobCancelled { .. }
+                    );
+                    if is_term {
+                        this.terminated = true;
+                    }
+                    if let Ok(json) = serde_json::to_string(&event) {
+                        return Poll::Ready(Some(Ok(Event::default()
+                            .event(event.event_type_name())
+                            .data(json))));
+                    }
+                    // Serialization failed -- skip this event
+                    continue;
+                }
+                Poll::Ready(Some(Err(
+                    tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n),
+                ))) => {
+                    tracing::warn!("SSE client (job {}) lagged {} events", this.job_id, n);
+                    return Poll::Ready(Some(Ok(Event::default()
+                        .event("warning")
+                        .data(format!(r#"{{"lagged": {}}}"#, n)))));
+                }
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+    }
 }
 
 /// Dry-run a transaction
@@ -1182,6 +1365,103 @@ async fn update_packages_handler(
         }
     })
     .await
+}
+
+/// POST /v1/enhance
+///
+/// Trigger a background enhancement job. This is the only currently executable
+/// job kind in the daemon.
+async fn enhance_handler(
+    State(state): State<SharedState>,
+    Extension(creds): Extension<Option<PeerCredentials>>,
+    headers: axum::http::HeaderMap,
+    Json(spec): Json<crate::daemon::EnhanceJobSpec>,
+) -> TransactionResult {
+    require_auth(&state.auth_checker, &creds, Action::Enhance)?;
+
+    // Idempotency: reuse existing job if the same key was already seen
+    let idempotency_key = get_idempotency_key(&headers);
+    if let Some(ref key) = idempotency_key {
+        let key_clone = key.clone();
+        let existing = run_db_query(&state, move |conn| {
+            DaemonJob::find_by_idempotency_key(conn, &key_clone)
+        })
+        .await?;
+
+        if let Some(existing_job) = existing {
+            let location = format!("/v1/transactions/{}", existing_job.id);
+            let queue_position = state.queue.position(&existing_job.id).await.unwrap_or(0);
+            let response = CreateTransactionResponse {
+                job_id: existing_job.id,
+                status: existing_job.status.as_str().to_string(),
+                queue_position,
+                location: location.clone(),
+            };
+            return Ok((
+                StatusCode::OK,
+                [(axum::http::header::LOCATION, location)],
+                Json(response),
+            ));
+        }
+    }
+
+    let job_spec = serde_json::to_value(&spec).map_err(|e| {
+        ApiError(Box::new(DaemonError::internal(&format!(
+            "Serialization error: {e}"
+        ))))
+    })?;
+
+    let mut job = DaemonJob::new(crate::daemon::JobKind::Enhance, job_spec);
+    if let Some(key) = idempotency_key {
+        job.idempotency_key = Some(key);
+    }
+    let job_id = job.id.clone();
+
+    // Insert with dedup: if a concurrent request already inserted the same
+    // idempotency key, return the existing job instead of a 500.
+    if let Some(existing_job) = insert_or_dedup(&state, job.clone()).await? {
+        let location = format!("/v1/transactions/{}", existing_job.id);
+        let queue_position = state.queue.position(&existing_job.id).await.unwrap_or(0);
+        let response = CreateTransactionResponse {
+            job_id: existing_job.id,
+            status: existing_job.status.as_str().to_string(),
+            queue_position,
+            location: location.clone(),
+        };
+        return Ok((
+            StatusCode::OK,
+            [(axum::http::header::LOCATION, location)],
+            Json(response),
+        ));
+    }
+
+    let _cancel_token = state
+        .queue
+        .enqueue(job, crate::daemon::JobPriority::Normal)
+        .await;
+
+    let queue_position = state.queue.position(&job_id).await.unwrap_or(0);
+
+    state.emit(DaemonEvent::JobQueued {
+        job_id: job_id.clone(),
+        position: queue_position,
+    });
+
+    state.metrics.jobs_total.fetch_add(1, Ordering::Relaxed);
+
+    let location = format!("/v1/transactions/{}", job_id);
+    let response = CreateTransactionResponse {
+        job_id,
+        status: "queued".to_string(),
+        queue_position,
+        location: location.clone(),
+    };
+
+    Ok((
+        StatusCode::ACCEPTED,
+        [(axum::http::header::LOCATION, location)],
+        Json(response),
+    ))
 }
 
 // =============================================================================
@@ -1788,7 +2068,6 @@ mod tests {
     #[tokio::test]
     async fn test_handler_create_transaction_valid() {
         let (state, _dir) = create_test_state();
-        // Root credentials required for mutating operations
         let root_creds = Some(PeerCredentials {
             pid: 1,
             uid: 0,
@@ -1796,6 +2075,8 @@ mod tests {
         });
         let app = test_router(state, root_creds);
 
+        // Install/remove/update are not yet executable by the daemon --
+        // they are rejected with 400 to prevent silently broken jobs.
         let body = serde_json::json!({
             "operations": [
                 {
@@ -1814,26 +2095,10 @@ mod tests {
 
         let response = app.oneshot(request).await.unwrap();
 
-        assert_eq!(response.status(), StatusCode::ACCEPTED);
-
-        // Should have a Location header
-        let location = response
-            .headers()
-            .get("location")
-            .unwrap()
-            .to_str()
-            .unwrap();
-        assert!(location.starts_with("/v1/transactions/"));
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         let json = body_json(response).await;
-        assert!(!json["job_id"].as_str().unwrap().is_empty());
-        assert_eq!(json["status"], "queued");
-        assert!(
-            json["location"]
-                .as_str()
-                .unwrap()
-                .starts_with("/v1/transactions/")
-        );
+        assert!(json["detail"].as_str().unwrap().contains("not yet supported"));
     }
 
     // -- POST /v1/transactions (empty operations = 400) -----------------------
@@ -1936,6 +2201,8 @@ mod tests {
             gid: 0,
         });
 
+        // Unsupported kinds are rejected before enqueueing, so both calls
+        // should consistently return 400.
         let body = serde_json::json!({
             "operations": [
                 {
@@ -1946,7 +2213,6 @@ mod tests {
         });
         let body_str = serde_json::to_string(&body).unwrap();
 
-        // First request creates the job
         let app1 = test_router(state.clone(), root_creds);
         let request1 = axum::http::Request::builder()
             .method("POST")
@@ -1957,11 +2223,8 @@ mod tests {
             .unwrap();
 
         let response1 = app1.oneshot(request1).await.unwrap();
-        assert_eq!(response1.status(), StatusCode::ACCEPTED);
-        let json1 = body_json(response1).await;
-        let first_job_id = json1["job_id"].as_str().unwrap().to_string();
+        assert_eq!(response1.status(), StatusCode::BAD_REQUEST);
 
-        // Second request with same key returns existing job (200 OK, not 202)
         let app2 = test_router(state, root_creds);
         let request2 = axum::http::Request::builder()
             .method("POST")
@@ -1972,9 +2235,7 @@ mod tests {
             .unwrap();
 
         let response2 = app2.oneshot(request2).await.unwrap();
-        assert_eq!(response2.status(), StatusCode::OK);
-        let json2 = body_json(response2).await;
-        assert_eq!(json2["job_id"].as_str().unwrap(), first_job_id);
+        assert_eq!(response2.status(), StatusCode::BAD_REQUEST);
     }
 
     // -- GET /v1/transactions/:id (after creation) ----------------------------
@@ -1988,42 +2249,29 @@ mod tests {
             gid: 0,
         });
 
-        // Create a transaction first
-        let body = serde_json::json!({
-            "operations": [
-                {
-                    "type": "remove",
-                    "packages": ["vim"]
-                }
-            ]
-        });
+        // Insert a job directly (transaction API rejects unsupported kinds)
+        let job = DaemonJob::new(
+            crate::daemon::JobKind::Enhance,
+            serde_json::json!({"batch_size": 5}),
+        );
+        let job_id = job.id.clone();
+        {
+            let conn = state.open_db().unwrap();
+            job.insert(&conn).unwrap();
+        }
 
-        let app1 = test_router(state.clone(), root_creds);
-        let create_req = axum::http::Request::builder()
-            .method("POST")
-            .uri("/v1/transactions")
-            .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_string(&body).unwrap()))
-            .unwrap();
-
-        let create_resp = app1.oneshot(create_req).await.unwrap();
-        assert_eq!(create_resp.status(), StatusCode::ACCEPTED);
-        let create_json = body_json(create_resp).await;
-        let job_id = create_json["job_id"].as_str().unwrap().to_string();
-
-        // Now fetch the transaction details
-        let app2 = test_router(state, root_creds);
+        let app = test_router(state, root_creds);
         let get_req = axum::http::Request::builder()
             .uri(format!("/v1/transactions/{}", job_id))
             .body(Body::empty())
             .unwrap();
 
-        let get_resp = app2.oneshot(get_req).await.unwrap();
+        let get_resp = app.oneshot(get_req).await.unwrap();
         assert_eq!(get_resp.status(), StatusCode::OK);
 
         let details = body_json(get_resp).await;
         assert_eq!(details["id"].as_str().unwrap(), job_id);
-        assert_eq!(details["kind"], "remove");
+        assert_eq!(details["kind"], "enhance");
         assert_eq!(details["status"], "queued");
     }
 
@@ -2038,26 +2286,15 @@ mod tests {
             gid: 0,
         });
 
-        // Create a transaction so there's something to list
-        let body = serde_json::json!({
-            "operations": [
-                {
-                    "type": "update",
-                    "packages": ["bash"]
-                }
-            ]
-        });
-
-        let app1 = test_router(state.clone(), root_creds);
-        let create_req = axum::http::Request::builder()
-            .method("POST")
-            .uri("/v1/transactions")
-            .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_string(&body).unwrap()))
-            .unwrap();
-
-        let create_resp = app1.oneshot(create_req).await.unwrap();
-        assert_eq!(create_resp.status(), StatusCode::ACCEPTED);
+        // Insert a job directly (transaction API rejects unsupported kinds)
+        let job = DaemonJob::new(
+            crate::daemon::JobKind::Enhance,
+            serde_json::json!({"batch_size": 5}),
+        );
+        {
+            let conn = state.open_db().unwrap();
+            job.insert(&conn).unwrap();
+        }
 
         // List queued transactions
         let app2 = test_router(state.clone(), root_creds);
@@ -2124,6 +2361,7 @@ mod tests {
         });
         let app = test_router(state, root_creds);
 
+        // Install kind is not yet supported -- rejected at API boundary
         let body = serde_json::json!({
             "packages": ["nginx", "curl"]
         });
@@ -2137,11 +2375,10 @@ mod tests {
 
         let response = app.oneshot(request).await.unwrap();
 
-        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         let json = body_json(response).await;
-        assert!(!json["job_id"].as_str().unwrap().is_empty());
-        assert_eq!(json["status"], "queued");
+        assert!(json["detail"].as_str().unwrap().contains("not yet supported"));
     }
 
     // -- POST /v1/packages/install (empty packages = 400) ---------------------
@@ -2216,7 +2453,7 @@ mod tests {
         });
         let app = test_router(state, root_creds);
 
-        // Update with empty packages means "update all" -- should be accepted
+        // Update kind is not yet supported -- rejected at API boundary
         let body = serde_json::json!({
             "packages": []
         });
@@ -2230,7 +2467,7 @@ mod tests {
 
         let response = app.oneshot(request).await.unwrap();
 
-        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     // -- GET /v1/depends/:name (404) ------------------------------------------

@@ -187,9 +187,14 @@ impl CircuitBreakerRegistry {
     }
 
     /// Check if a peer's circuit is open
+    ///
+    /// Uses mutable access via `DashMap::get_mut` so that the
+    /// `Open -> HalfOpen` transition fires when the cooldown elapses.
+    /// Without this, `record_success` in the fetch path would be a no-op
+    /// (the breaker stays `Open`) and recovery would never complete.
     pub fn is_open(&self, peer_id: &PeerId) -> bool {
-        if let Some(breaker) = self.breakers.get(peer_id) {
-            breaker.is_open()
+        if let Some(mut breaker) = self.breakers.get_mut(peer_id) {
+            matches!(breaker.get_state(), CircuitState::Open)
         } else {
             false // No breaker = closed
         }
