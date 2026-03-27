@@ -21,7 +21,7 @@ use conary_core::scriptlet::{
     ExecutionMode, PackageFormat as ScriptletPackageFormat, ScriptletExecutor,
 };
 use rusqlite::params;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
@@ -89,6 +89,62 @@ fn deployed_mode(mode: i32) -> (i32, bool) {
 
 fn is_symlink_mode(mode: i32) -> bool {
     (mode & 0o170000) == 0o120000
+}
+
+fn find_symlink_blocker(
+    root_path: &Path,
+    relative_path: &Path,
+    created_symlinks: &HashSet<PathBuf>,
+    include_self: bool,
+) -> Result<Option<PathBuf>> {
+    let mut prefix = PathBuf::new();
+    let mut components = relative_path.components().peekable();
+
+    while let Some(component) = components.next() {
+        prefix.push(component.as_os_str());
+
+        let is_self = components.peek().is_none();
+        if is_self && !include_self {
+            break;
+        }
+
+        if created_symlinks.contains(&prefix) {
+            return Ok(Some(prefix));
+        }
+
+        match std::fs::symlink_metadata(root_path.join(&prefix)) {
+            Ok(metadata) if metadata.file_type().is_symlink() => return Ok(Some(prefix)),
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| format!("failed to inspect {}", root_path.join(&prefix).display()));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+fn ensure_no_symlink_ancestor(
+    root_path: &Path,
+    relative_path: &Path,
+    created_symlinks: &HashSet<PathBuf>,
+    include_self: bool,
+) -> Result<()> {
+    if let Some(blocker) =
+        find_symlink_blocker(root_path, relative_path, created_symlinks, include_self)?
+    {
+        return Err(anyhow::Error::new(conary_core::Error::PathTraversal(
+            format!(
+                "package path {} resolves through symlink {}",
+                relative_path.display(),
+                blocker.display()
+            ),
+        )));
+    }
+
+    Ok(())
 }
 
 fn sandbox_failure_message(script: &str, error: &dyn std::fmt::Display) -> String {
@@ -532,18 +588,22 @@ pub async fn cmd_ccs_install(
     let objects_dir = conary_core::db::paths::objects_dir(db_path);
     std::fs::create_dir_all(&objects_dir)?;
     let mut files_deployed = 0;
+    let mut created_symlinks = HashSet::new();
 
     for file in &extracted_files {
         let relative_path = sanitize_package_relative_path(&file.path)?;
         let dest_path = root_path.join(&relative_path);
+        let current_is_symlink = is_symlink_mode(file.mode);
         let (effective_mode, stripped_special_bits) = deployed_mode(file.mode);
+
+        ensure_no_symlink_ancestor(root_path, &relative_path, &created_symlinks, !current_is_symlink)?;
 
         // Create parent directories
         if let Some(parent) = dest_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
-        if is_symlink_mode(file.mode) {
+        if current_is_symlink {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::symlink;
@@ -551,6 +611,7 @@ pub async fn cmd_ccs_install(
                 let target = std::str::from_utf8(&file.content)
                     .context("invalid symlink target in package payload")?;
                 symlink(target, &dest_path)?;
+                created_symlinks.insert(relative_path.clone());
             }
             #[cfg(not(unix))]
             {
@@ -564,7 +625,7 @@ pub async fn cmd_ccs_install(
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            if !is_symlink_mode(file.mode) {
+            if !current_is_symlink {
                 std::fs::set_permissions(
                     &dest_path,
                     std::fs::Permissions::from_mode(effective_mode as u32),
@@ -886,6 +947,8 @@ pub async fn cmd_ccs_install(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::installed_versions_satisfying_constraint;
     use super::validate_incoming_version_against_dependents;
     use super::validate_package_dependency;
@@ -1124,5 +1187,98 @@ mod tests {
 
         let err = sanitize_package_relative_path("").unwrap_err();
         assert!(err.to_string().contains("empty package path"));
+    }
+
+    #[tokio::test]
+    async fn ccs_install_rejects_child_write_beneath_package_symlink() {
+        use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
+        use conary_core::ccs::builder::write_ccs_package;
+        use conary_core::filesystem::CasStore;
+        use conary_core::hash;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let outside_root = temp_dir.path().join("outside");
+        let package_path = temp_dir.path().join("symlink-escape.ccs");
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+
+        std::fs::create_dir_all(&install_root).unwrap();
+        std::fs::create_dir_all(&outside_root).unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+
+        let symlink_target = outside_root.to_string_lossy().to_string();
+        let symlink_hash = CasStore::compute_symlink_hash(&symlink_target);
+        let child_path = "/usr/lib/link/cron.d/persist".to_string();
+        let child_content = b"persist".to_vec();
+        let child_hash = hash::sha256(&child_content);
+
+        let files = vec![
+            FileEntry {
+                path: "/usr/lib/link".to_string(),
+                hash: symlink_hash.clone(),
+                size: symlink_target.len() as u64,
+                mode: 0o120777,
+                component: "runtime".to_string(),
+                file_type: FileType::Symlink,
+                target: Some(symlink_target.clone()),
+                chunks: None,
+            },
+            FileEntry {
+                path: child_path.clone(),
+                hash: child_hash.clone(),
+                size: child_content.len() as u64,
+                mode: 0o100644,
+                component: "runtime".to_string(),
+                file_type: FileType::Regular,
+                target: None,
+                chunks: None,
+            },
+        ];
+
+        let result = BuildResult {
+            manifest: CcsManifest::new_minimal("symlink-escape", "1.0.0"),
+            components: HashMap::from([(
+                "runtime".to_string(),
+                ComponentData {
+                    name: "runtime".to_string(),
+                    files: files.clone(),
+                    hash: "test-runtime".to_string(),
+                    size: (symlink_target.len() + child_content.len()) as u64,
+                },
+            )]),
+            files,
+            blobs: HashMap::from([
+                (symlink_hash, symlink_target.as_bytes().to_vec()),
+                (child_hash, child_content.clone()),
+            ]),
+            total_size: (symlink_target.len() + child_content.len()) as u64,
+            chunked: false,
+            chunk_stats: None,
+        };
+        write_ccs_package(&result, &package_path).unwrap();
+
+        let err = super::cmd_ccs_install(
+            package_path.to_str().unwrap(),
+            db_path_str,
+            install_root.to_str().unwrap(),
+            false,
+            true,
+            None,
+            None,
+            crate::commands::SandboxMode::None,
+            true,
+            false,
+            false,
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("path traversal") || err.to_string().contains("symlink"),
+            "unexpected error: {err:#}"
+        );
+        assert!(!outside_root.join("cron.d/persist").exists());
     }
 }
