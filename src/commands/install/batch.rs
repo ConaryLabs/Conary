@@ -478,14 +478,6 @@ impl<'a> BatchInstaller<'a> {
             package_count
         );
 
-        // Create state snapshot
-        let snapshot_desc = if package_count == 1 {
-            format!("Install {}", packages[0].name)
-        } else {
-            format!("Install {} + {} deps", main_pkg_name, package_count - 1)
-        };
-        crate::commands::create_state_snapshot(&conn, changeset_id, &snapshot_desc)?;
-
         // Print summary
         println!(
             "Batch installed {} package(s) successfully:",
