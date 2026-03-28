@@ -96,7 +96,7 @@ pub fn install_to_sysroot(
         remove_if_exists(&dest)?;
 
         // Locate the CAS object and link/copy it into the sysroot.
-        let cas_path = cas_object_path(cas_dir, &file.hash);
+        let cas_path = cas_object_path(cas_dir, &file.hash)?;
 
         match fs::hard_link(&cas_path, &dest) {
             Ok(()) => {}
@@ -218,8 +218,9 @@ fn sysroot_path(sysroot: &Path, manifest_path: &str) -> Result<PathBuf, InstallE
 }
 
 /// Return the CAS object path for `hash` under `cas_dir`.
-fn cas_object_path(cas_dir: &Path, hash: &str) -> PathBuf {
+fn cas_object_path(cas_dir: &Path, hash: &str) -> Result<PathBuf, InstallError> {
     crate::filesystem::object_path(cas_dir, hash)
+        .map_err(|_| InstallError::MissingCasObject(hash.to_string()))
 }
 
 /// Remove a file or symlink at `path` if it exists; succeed silently if absent.

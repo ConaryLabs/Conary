@@ -35,21 +35,31 @@ use tracing::{debug, warn};
 ///
 /// # Panics
 ///
-/// Does not panic. Returns a safe fallback path for invalid hashes in release
-/// builds (logged via tracing). Uses `debug_assert!` to catch bugs in tests.
-pub fn object_path(root: &Path, hash: &str) -> PathBuf {
-    if hash.len() < 4 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
-        // Defense-in-depth: log and return a safe fallback rather than panicking.
-        // This path should never be reached in practice -- all callers compute
-        // hashes via hash_bytes() which always produces valid hex.
-        tracing::error!("Invalid CAS hash rejected: {}", &hash[..hash.len().min(20)]);
-        return root
-            .join("invalid")
-            .join(hash.replace(['/', '\\', '.'], "_"));
+/// Does not panic. Returns an error for invalid hashes instead of constructing
+/// a fallback path.
+pub fn object_path(root: &Path, hash: &str) -> Result<PathBuf> {
+    validate_hash_path(hash)?;
+    let (prefix, suffix) = hash.split_at(2);
+    Ok(root.join(prefix).join(suffix))
+}
+
+fn validate_hash_path(hash: &str) -> Result<()> {
+    if hash.len() < 4 {
+        return Err(crate::Error::InvalidPath(format!(
+            "hash too short for CAS path (need >= 4 hex chars, got {}): '{}'",
+            hash.len(),
+            hash
+        )));
     }
 
-    let (prefix, suffix) = hash.split_at(2);
-    root.join(prefix).join(suffix)
+    if !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(crate::Error::InvalidPath(format!(
+            "hash contains non-hex characters: '{}'",
+            &hash[..hash.len().min(20)]
+        )));
+    }
+
+    Ok(())
 }
 
 /// Content-addressable storage manager
@@ -314,15 +324,7 @@ impl CasStore {
     /// Path format: objects/{first2}/{remaining}
     /// Example: abc123... -> objects/ab/c123...
     pub fn hash_to_path(&self, hash: &str) -> Result<PathBuf> {
-        if hash.len() < 2 {
-            return Err(crate::Error::InvalidPath(format!(
-                "hash too short for CAS path (need >= 2 hex chars, got {}): '{}'",
-                hash.len(),
-                hash
-            )));
-        }
-
-        Ok(object_path(&self.objects_dir, hash))
+        object_path(&self.objects_dir, hash)
     }
 
     /// Compute hash of content using this store's algorithm
@@ -1072,7 +1074,7 @@ mod tests {
         let root = std::path::Path::new("/cas");
         // 64-char SHA-256 hex hash
         let hash = "dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f";
-        let path = object_path(root, hash);
+        let path = object_path(root, hash).unwrap();
         assert_eq!(
             path,
             std::path::PathBuf::from(
@@ -1084,39 +1086,31 @@ mod tests {
     #[test]
     fn test_object_path_rejects_path_traversal() {
         let root = std::path::Path::new("/cas");
-        // Hash with path separator -- should produce a safe fallback under /cas/invalid/
         let bad_hash = "../../../etc/passwd";
-        let path = object_path(root, bad_hash);
-        // Must not escape the cas root -- the fallback maps slashes to underscores
-        assert!(
-            path.starts_with("/cas/invalid"),
-            "path {path:?} did not start with /cas/invalid"
-        );
-        assert!(
-            !path.to_string_lossy().contains(".."),
-            "path traversal not stripped: {path:?}"
-        );
+        let err = object_path(root, bad_hash).unwrap_err();
+        assert!(matches!(err, crate::Error::InvalidPath(_)));
     }
 
     #[test]
     fn test_object_path_rejects_non_hex() {
         let root = std::path::Path::new("/cas");
-        // Non-hex characters (contains 'g' and 'z')
         let bad_hash = "gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg";
-        let path = object_path(root, bad_hash);
-        assert!(
-            path.starts_with("/cas/invalid"),
-            "expected /cas/invalid prefix, got {path:?}"
-        );
+        let err = object_path(root, bad_hash).unwrap_err();
+        assert!(matches!(err, crate::Error::InvalidPath(_)));
     }
 
     #[test]
     fn test_object_path_rejects_too_short() {
         let root = std::path::Path::new("/cas");
-        let path = object_path(root, "abc");
-        assert!(
-            path.starts_with("/cas/invalid"),
-            "expected /cas/invalid prefix for too-short hash, got {path:?}"
-        );
+        let err = object_path(root, "abc").unwrap_err();
+        assert!(matches!(err, crate::Error::InvalidPath(_)));
+    }
+
+    #[test]
+    fn test_hash_to_path_rejects_non_hex_hashes() {
+        let temp_dir = TempDir::new().unwrap();
+        let cas = CasStore::new(temp_dir.path()).unwrap();
+        let err = cas.hash_to_path("zzzz").unwrap_err();
+        assert!(matches!(err, crate::Error::InvalidPath(_)));
     }
 }
