@@ -92,6 +92,7 @@ pub use state::{InstalledPackage, SystemState, capture_current_state, snapshot_t
 
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
+use tracing::warn;
 use std::path::Path;
 use thiserror::Error;
 
@@ -345,6 +346,12 @@ pub async fn resolve_includes_with_options(
 
     if model.include.models.is_empty() {
         return Ok(resolved);
+    }
+
+    if !model.include.require_signatures {
+        warn!(
+            "Remote includes are configured with signature verification disabled; unsigned collections may be accepted"
+        );
     }
 
     let mut visited: HashSet<String> = HashSet::new();

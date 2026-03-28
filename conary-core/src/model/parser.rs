@@ -514,7 +514,7 @@ fn default_version_inherit() -> String {
 }
 
 /// Configuration for including remote models/collections
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IncludeConfig {
     /// Remote models to include (e.g., "group-base@repo:branch")
     #[serde(default)]
@@ -524,13 +524,28 @@ pub struct IncludeConfig {
     #[serde(default)]
     pub on_conflict: ConflictStrategy,
 
-    /// Require Ed25519 signatures on remote collections
-    #[serde(default)]
+    /// Require Ed25519 signatures on remote collections (default: true)
+    #[serde(default = "default_require_signatures")]
     pub require_signatures: bool,
 
     /// Trusted public key IDs (hex-encoded)
     #[serde(default)]
     pub trusted_keys: Vec<String>,
+}
+
+fn default_require_signatures() -> bool {
+    true
+}
+
+impl Default for IncludeConfig {
+    fn default() -> Self {
+        Self {
+            models: Vec::new(),
+            on_conflict: ConflictStrategy::default(),
+            require_signatures: default_require_signatures(),
+            trusted_keys: Vec::new(),
+        }
+    }
 }
 
 /// Strategy for resolving conflicts between local and remote model definitions
@@ -1115,6 +1130,7 @@ on_conflict = "local"
         assert_eq!(model.include.models.len(), 2);
         assert_eq!(model.include.models[0], "group-base-server@myrepo:stable");
         assert_eq!(model.include.on_conflict, ConflictStrategy::Local);
+        assert!(model.include.require_signatures);
     }
 
     #[test]
@@ -1130,6 +1146,20 @@ on_conflict = "error"
 "#;
         let model = parse_model_string(toml).unwrap();
         assert_eq!(model.include.on_conflict, ConflictStrategy::Error);
+    }
+
+    #[test]
+    fn test_parse_include_can_explicitly_disable_signature_requirement() {
+        let toml = r#"
+[model]
+version = 1
+
+[include]
+models = ["group-base@myrepo:stable"]
+require_signatures = false
+"#;
+        let model = parse_model_string(toml).unwrap();
+        assert!(!model.include.require_signatures);
     }
 
     #[test]
