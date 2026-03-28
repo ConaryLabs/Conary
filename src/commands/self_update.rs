@@ -7,7 +7,7 @@ use anyhow::Result;
 use conary_core::db::paths::objects_dir;
 use conary_core::self_update::{
     LatestVersionInfo, VersionCheckResult, apply_update, check_for_update,
-    download_update_with_progress, extract_binary, get_update_channel, verify_binary,
+    download_update_with_progress, extract_binary, get_update_channel, validate_download_origin,
 };
 
 fn check_update_signature(
@@ -139,6 +139,7 @@ pub async fn cmd_self_update(
                 .await?
                 .json()
                 .await?;
+            validate_download_origin(&channel_url, &info.download_url)?;
             check_update_signature(&info.sha256, &info.signature, no_verify)?;
             (info.download_url, info.sha256, info.version)
         }
@@ -165,9 +166,6 @@ pub async fn cmd_self_update(
 
     println!("Extracting binary...");
     let new_binary = extract_binary(&ccs_path, target_dir)?;
-
-    println!("Verifying new binary...");
-    verify_binary(&new_binary, &expected_version)?;
 
     println!("Replacing binary...");
     let obj_dir = objects_dir(db_path);
