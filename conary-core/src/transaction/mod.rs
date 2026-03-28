@@ -24,7 +24,7 @@ pub use planner::{
 
 use crate::Result;
 use crate::filesystem::CasStore;
-use crate::generation::metadata::EROFS_IMAGE_NAME;
+use crate::generation::metadata::{EROFS_IMAGE_NAME, is_generation_pending};
 use crate::hash::HashAlgorithm;
 use fs2::FileExt;
 use rusqlite::Connection;
@@ -426,6 +426,15 @@ impl TransactionEngine {
         candidates.sort_unstable_by(|a, b| b.cmp(a));
 
         for gen_num in candidates {
+            let gen_dir = self.config.generations_dir.join(gen_num.to_string());
+            if is_generation_pending(&gen_dir) {
+                tracing::debug!(
+                    "Recovery: generation {} is still pending, skipping",
+                    gen_num
+                );
+                continue;
+            }
+
             let image_path = self
                 .config
                 .generations_dir
@@ -892,5 +901,41 @@ mod tests {
             found, None,
             "no intact image should result in None from find_latest_intact_generation"
         );
+    }
+
+    #[test]
+    fn test_find_latest_intact_generation_skips_pending_generation() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().to_path_buf();
+        let generations_dir = root.join("generations");
+        std::fs::create_dir_all(generations_dir.join("6")).unwrap();
+
+        let image_path = generations_dir.join("6").join(EROFS_IMAGE_NAME);
+        write_stub_erofs(&image_path);
+        crate::generation::metadata::mark_generation_pending(&generations_dir.join("6")).unwrap();
+
+        let config = TransactionConfig {
+            root: root.clone(),
+            db_path: root.join("conary.db"),
+            objects_dir: root.join("objects"),
+            generations_dir: generations_dir.clone(),
+            etc_state_dir: root.join("etc-state"),
+            mount_point: PathBuf::from("/"),
+            hash_algorithm: crate::hash::HashAlgorithm::Sha256,
+            lock_timeout_secs: TransactionConfig::DEFAULT_LOCK_TIMEOUT_SECS,
+        };
+        std::fs::create_dir_all(&config.objects_dir).unwrap();
+        let cas = crate::filesystem::CasStore::with_algorithm(
+            config.objects_dir.clone(),
+            config.hash_algorithm,
+        )
+        .unwrap();
+        let engine = TransactionEngine {
+            config,
+            cas,
+            lock_file: None,
+        };
+
+        assert_eq!(engine.find_latest_intact_generation(), None);
     }
 }

@@ -18,6 +18,9 @@ pub const GENERATION_FORMAT: &str = "composefs";
 /// Name of the metadata JSON file within a generation directory.
 pub const GENERATION_METADATA_FILE: &str = ".conary-gen.json";
 
+/// Name of the marker file used while a generation is still being built.
+pub const GENERATION_PENDING_MARKER: &str = ".conary-gen.pending";
+
 /// Directories excluded from generation trees.
 ///
 /// These are runtime, user, or virtual filesystem directories that should
@@ -97,10 +100,61 @@ impl GenerationMetadata {
 
     /// Read metadata from the generation metadata file inside the given generation directory.
     pub fn read_from(gen_dir: &Path) -> Result<Self> {
+        if is_generation_pending(gen_dir) {
+            return Err(crate::error::Error::NotFound(format!(
+                "generation at {} is still pending and has not committed metadata yet",
+                gen_dir.display()
+            )));
+        }
+
         let path = gen_dir.join(GENERATION_METADATA_FILE);
         let json = std::fs::read_to_string(path)?;
         let metadata: Self = serde_json::from_str(&json)?;
         Ok(metadata)
+    }
+}
+
+/// Returns the pending marker path inside a generation directory.
+#[must_use]
+pub fn generation_pending_marker_path(gen_dir: &Path) -> PathBuf {
+    gen_dir.join(GENERATION_PENDING_MARKER)
+}
+
+/// Return true when the generation directory is marked as incomplete.
+#[must_use]
+pub fn is_generation_pending(gen_dir: &Path) -> bool {
+    generation_pending_marker_path(gen_dir).exists()
+}
+
+/// Mark a generation directory as pending using a durable temp-file + rename sequence.
+pub fn mark_generation_pending(gen_dir: &Path) -> Result<()> {
+    use std::io::Write;
+
+    let path = generation_pending_marker_path(gen_dir);
+    let tmp_path = gen_dir.join(".pending.tmp");
+    let mut file = std::fs::File::create(&tmp_path)?;
+    file.write_all(b"pending\n")?;
+    file.sync_all()?;
+    drop(file);
+
+    std::fs::rename(&tmp_path, &path)?;
+    sync_generation_dir(gen_dir);
+    Ok(())
+}
+
+/// Remove the pending marker after a generation fully commits.
+pub fn clear_generation_pending(gen_dir: &Path) -> Result<()> {
+    let path = generation_pending_marker_path(gen_dir);
+    if path.exists() {
+        std::fs::remove_file(&path)?;
+        sync_generation_dir(gen_dir);
+    }
+    Ok(())
+}
+
+fn sync_generation_dir(gen_dir: &Path) {
+    if let Ok(dir) = std::fs::File::open(gen_dir) {
+        let _ = dir.sync_all();
     }
 }
 
@@ -254,6 +308,29 @@ mod tests {
         assert!(!loaded.fsverity_enabled); // serde(default) gives false
         assert_eq!(loaded.erofs_verity_digest, None);
         assert_eq!(loaded.summary, "old generation");
+    }
+
+    #[test]
+    fn test_pending_marker_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+
+        assert!(!is_generation_pending(tmp.path()));
+
+        mark_generation_pending(tmp.path()).unwrap();
+        assert!(is_generation_pending(tmp.path()));
+        assert!(generation_pending_marker_path(tmp.path()).exists());
+
+        clear_generation_pending(tmp.path()).unwrap();
+        assert!(!is_generation_pending(tmp.path()));
+    }
+
+    #[test]
+    fn test_read_from_rejects_pending_generation() {
+        let tmp = TempDir::new().unwrap();
+        mark_generation_pending(tmp.path()).unwrap();
+
+        let err = GenerationMetadata::read_from(tmp.path()).unwrap_err();
+        assert!(err.to_string().contains("still pending"));
     }
 
     #[test]

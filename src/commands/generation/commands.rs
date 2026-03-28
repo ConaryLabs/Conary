@@ -2,7 +2,9 @@
 //! CLI implementations for generation list, info, gc, build, switch, rollback,
 //! and recover commands
 
-use super::metadata::{GenerationMetadata, gc_roots_dir, generation_path, generations_dir};
+use super::metadata::{
+    GenerationMetadata, gc_roots_dir, generation_path, generations_dir, is_generation_pending,
+};
 use crate::commands::format_bytes;
 use anyhow::{Result, anyhow};
 use conary_core::generation::mount::current_generation;
@@ -41,6 +43,10 @@ pub async fn cmd_generation_list() -> Result<()> {
 
         if let Ok(number) = name_str.parse::<i64>() {
             let gen_dir = entry.path();
+            if is_generation_pending(&gen_dir) {
+                eprintln!("Warning: skipping incomplete generation {number}");
+                continue;
+            }
             match GenerationMetadata::read_from(&gen_dir) {
                 Ok(meta) => generations.push((number, meta)),
                 Err(e) => {
@@ -145,17 +151,23 @@ pub async fn cmd_generation_gc(keep: usize, db_path: &str) -> Result<()> {
     }
 
     let mut all_numbers: Vec<i64> = Vec::new();
+    let mut pending_numbers: Vec<i64> = Vec::new();
 
     for entry in std::fs::read_dir(&dir)? {
         let entry = entry?;
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
         if let Ok(number) = name_str.parse::<i64>() {
-            all_numbers.push(number);
+            if is_generation_pending(&entry.path()) {
+                pending_numbers.push(number);
+            } else {
+                all_numbers.push(number);
+            }
         }
     }
 
     all_numbers.sort();
+    pending_numbers.sort();
 
     // Build the keep set: current + booted + gc_roots + last N generations
     let mut keep_set = std::collections::HashSet::new();
@@ -192,6 +204,26 @@ pub async fn cmd_generation_gc(keep: usize, db_path: &str) -> Result<()> {
 
     let mut removed_count = 0u64;
     let mut freed_bytes = 0u64;
+
+    for gen_number in &pending_numbers {
+        let gen_dir = generation_path(*gen_number);
+        let size = dir_size_bytes(&gen_dir);
+        match std::fs::remove_dir_all(&gen_dir) {
+            Ok(()) => {
+                info!("Removed incomplete pending generation {gen_number}");
+                removed_count += 1;
+                freed_bytes += size;
+                if let Err(error) = remove_generation_etc_state(&conary_root, *gen_number) {
+                    eprintln!(
+                        "Warning: failed to remove etc-state directories for incomplete generation {gen_number}: {error}"
+                    );
+                }
+            }
+            Err(e) => {
+                eprintln!("Warning: failed to remove incomplete generation {gen_number}: {e}");
+            }
+        }
+    }
 
     for gen_number in &to_remove {
         let gen_dir = generation_path(*gen_number);

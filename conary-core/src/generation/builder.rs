@@ -18,7 +18,10 @@ use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
 use crate::db::models::{FileEntry, InstallSource, StateEngine, SystemState, Trove};
-use crate::generation::metadata::{EROFS_IMAGE_NAME, GENERATION_FORMAT, GenerationMetadata};
+use crate::generation::metadata::{
+    EROFS_IMAGE_NAME, GENERATION_FORMAT, GenerationMetadata, clear_generation_pending,
+    mark_generation_pending,
+};
 #[cfg(feature = "composefs-rs")]
 use crate::generation::metadata::{ROOT_SYMLINKS, is_excluded};
 
@@ -446,6 +449,40 @@ pub fn build_generation_from_db(
     generations_root: &Path,
     summary: &str,
 ) -> crate::Result<(i64, BuildResult)> {
+    struct PendingGenerationGuard {
+        gen_dir: PathBuf,
+        armed: bool,
+    }
+
+    impl PendingGenerationGuard {
+        fn new(gen_dir: PathBuf) -> Self {
+            Self {
+                gen_dir,
+                armed: true,
+            }
+        }
+
+        fn disarm(&mut self) {
+            self.armed = false;
+        }
+    }
+
+    impl Drop for PendingGenerationGuard {
+        fn drop(&mut self) {
+            if !self.armed {
+                return;
+            }
+
+            if let Err(error) = std::fs::remove_dir_all(&self.gen_dir) {
+                warn!(
+                    "Failed to clean up incomplete generation {}: {}",
+                    self.gen_dir.display(),
+                    error
+                );
+            }
+        }
+    }
+
     // Step 1: Ensure generations base directory exists
     std::fs::create_dir_all(generations_root).map_err(|e| {
         crate::error::Error::IoError(format!(
@@ -501,6 +538,13 @@ pub fn build_generation_from_db(
             gen_dir.display()
         ))
     })?;
+    mark_generation_pending(&gen_dir).map_err(|e| {
+        crate::error::Error::IoError(format!(
+            "Failed to mark generation {} as pending: {e}",
+            gen_dir.display()
+        ))
+    })?;
+    let mut pending_guard = PendingGenerationGuard::new(gen_dir.clone());
 
     // Step 3: Collect file entries from all installed troves (single bulk query).
     // Exclude files belonging to adopted-track troves: those troves are metadata-
@@ -574,6 +618,13 @@ pub fn build_generation_from_db(
     metadata.write_to(&gen_dir).map_err(|e| {
         crate::error::Error::IoError(format!("Failed to write generation metadata: {e}"))
     })?;
+    clear_generation_pending(&gen_dir).map_err(|e| {
+        crate::error::Error::IoError(format!(
+            "Failed to clear pending marker for generation {}: {e}",
+            gen_dir.display()
+        ))
+    })?;
+    pending_guard.disarm();
 
     info!(
         "Generation {} built: {} CAS objects, {} packages, composefs format",
