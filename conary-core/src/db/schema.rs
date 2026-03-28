@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use tracing::info;
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 62;
+pub const SCHEMA_VERSION: i32 = 63;
 
 /// Initialize the schema version tracking table
 fn init_schema_version(conn: &Connection) -> Result<()> {
@@ -64,14 +64,33 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     // Apply migrations in order, each wrapped in a transaction for atomicity
     for version in (current_version + 1)..=SCHEMA_VERSION {
         info!("Applying migration to version {}", version);
+
+        if migration_requires_foreign_keys_disabled(version) {
+            conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
+        }
+
         let tx = conn.unchecked_transaction()?;
         match apply_migration(&tx, version).and_then(|()| set_schema_version(&tx, version)) {
             Ok(()) => tx.commit()?,
             Err(e) => {
                 drop(tx); // rollback on drop
+                if migration_requires_foreign_keys_disabled(version) {
+                    let _ = conn.execute_batch("PRAGMA foreign_keys = ON;");
+                }
                 return Err(e);
             }
         };
+
+        if migration_requires_foreign_keys_disabled(version) {
+            conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+            let mut stmt = conn.prepare("PRAGMA foreign_key_check")?;
+            if stmt.exists([])? {
+                return Err(crate::error::Error::InitError(format!(
+                    "Foreign key check failed after migration version {}",
+                    version
+                )));
+            }
+        }
     }
 
     info!(
@@ -79,6 +98,10 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         SCHEMA_VERSION
     );
     Ok(())
+}
+
+fn migration_requires_foreign_keys_disabled(version: i32) -> bool {
+    version == 63
 }
 
 /// Apply a specific migration version
@@ -146,6 +169,7 @@ fn apply_migration(conn: &Connection, version: i32) -> Result<()> {
         60 => migrations::migrate_v60(conn),
         61 => migrations::migrate_v61(conn),
         62 => migrations::migrate_v62(conn),
+        63 => migrations::migrate_v63(conn),
         _ => Err(crate::error::Error::InitError(format!(
             "Unknown migration version: {}",
             version
@@ -216,6 +240,28 @@ mod tests {
 
         assert_eq!(version1, version2);
         assert_eq!(version1, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn test_migrate_allows_post_hooks_failed_changesets() {
+        let (_temp, conn) = create_test_db();
+        migrate(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO changesets (description, status, applied_at)
+             VALUES (?1, 'post_hooks_failed', CURRENT_TIMESTAMP)",
+            ["post-hooks degraded install"],
+        )
+        .unwrap();
+
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM changesets ORDER BY id DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "post_hooks_failed");
     }
 
     #[test]

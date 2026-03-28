@@ -12,6 +12,7 @@ use strum_macros::{AsRefStr, Display, EnumString};
 pub enum ChangesetStatus {
     Pending,
     Applied,
+    PostHooksFailed,
     RolledBack,
 }
 
@@ -125,9 +126,11 @@ impl Changeset {
         })?;
 
         match new_status {
-            ChangesetStatus::Applied => {
+            ChangesetStatus::Applied | ChangesetStatus::PostHooksFailed => {
                 conn.execute(
-                    "UPDATE changesets SET status = ?1, applied_at = CURRENT_TIMESTAMP WHERE id = ?2",
+                    "UPDATE changesets
+                     SET status = ?1, applied_at = COALESCE(applied_at, CURRENT_TIMESTAMP)
+                     WHERE id = ?2",
                     params![new_status.as_str(), id],
                 )?;
             }

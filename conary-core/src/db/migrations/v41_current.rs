@@ -1,5 +1,5 @@
 // conary-core/src/db/migrations/v41_current.rs
-//! Database migrations v41 through v57
+//! Database migrations v41 through current
 
 use crate::error::Result;
 use rusqlite::Connection;
@@ -806,6 +806,71 @@ pub fn migrate_v62(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 63: Allow degraded post-install hook status on changesets
+///
+/// CCS installs now record committed-but-incomplete post-install hook/script
+/// failures as `post_hooks_failed` instead of mutating the changeset
+/// description. This rebuilds the `changesets` table to extend the status
+/// CHECK constraint while preserving data and indexes.
+pub fn migrate_v63(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 63");
+
+    conn.execute_batch(
+        "
+        CREATE TABLE changesets_v63 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            description TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(
+                status IN ('pending', 'applied', 'post_hooks_failed', 'rolled_back')
+            ),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            applied_at TEXT,
+            rolled_back_at TEXT,
+            reversed_by_changeset_id INTEGER REFERENCES changesets(id) ON DELETE SET NULL,
+            tx_uuid TEXT,
+            metadata TEXT
+        );
+
+        INSERT INTO changesets_v63 (
+            id,
+            description,
+            status,
+            created_at,
+            applied_at,
+            rolled_back_at,
+            reversed_by_changeset_id,
+            tx_uuid,
+            metadata
+        )
+        SELECT
+            id,
+            description,
+            status,
+            created_at,
+            applied_at,
+            rolled_back_at,
+            reversed_by_changeset_id,
+            tx_uuid,
+            metadata
+        FROM changesets;
+
+        DROP INDEX IF EXISTS idx_changesets_status;
+        DROP INDEX IF EXISTS idx_changesets_created_at;
+        DROP INDEX IF EXISTS idx_changesets_tx_uuid;
+        DROP TABLE changesets;
+        ALTER TABLE changesets_v63 RENAME TO changesets;
+
+        CREATE INDEX idx_changesets_status ON changesets(status);
+        CREATE INDEX idx_changesets_created_at ON changesets(created_at);
+        CREATE UNIQUE INDEX idx_changesets_tx_uuid
+            ON changesets(tx_uuid) WHERE tx_uuid IS NOT NULL;
+        ",
+    )?;
+
+    info!("Schema version 63 applied successfully (changesets.post_hooks_failed)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -969,5 +1034,56 @@ mod tests {
             )
             .unwrap();
         assert_eq!(version, crate::db::schema::SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn test_migrate_v63_preserves_changesets_and_allows_post_hooks_failed() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "
+            CREATE TABLE changesets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                description TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('pending', 'applied', 'rolled_back')),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                applied_at TEXT,
+                rolled_back_at TEXT,
+                reversed_by_changeset_id INTEGER REFERENCES changesets(id) ON DELETE SET NULL,
+                tx_uuid TEXT,
+                metadata TEXT
+            );
+            CREATE INDEX idx_changesets_status ON changesets(status);
+            CREATE INDEX idx_changesets_created_at ON changesets(created_at);
+            CREATE UNIQUE INDEX idx_changesets_tx_uuid
+                ON changesets(tx_uuid) WHERE tx_uuid IS NOT NULL;
+            ",
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO changesets (description, status, applied_at, tx_uuid)
+             VALUES (?1, 'applied', CURRENT_TIMESTAMP, ?2)",
+            ("pre-v63 changeset", "tx-123"),
+        )
+        .unwrap();
+
+        migrate_v63(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO changesets (description, status, applied_at)
+             VALUES (?1, 'post_hooks_failed', CURRENT_TIMESTAMP)",
+            ["degraded install"],
+        )
+        .unwrap();
+
+        let preserved: (String, String) = conn
+            .query_row(
+                "SELECT description, tx_uuid FROM changesets WHERE tx_uuid = 'tx-123'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(preserved.0, "pre-v63 changeset");
+        assert_eq!(preserved.1, "tx-123".to_string());
     }
 }
