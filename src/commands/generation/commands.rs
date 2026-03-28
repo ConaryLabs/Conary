@@ -134,6 +134,10 @@ pub async fn cmd_generation_gc(keep: usize, db_path: &str) -> Result<()> {
     let current = current_generation(Path::new("/conary"))?;
     let gc_roots = load_gc_roots();
     let dir = generations_dir();
+    let conary_root = dir
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("/conary"));
 
     if !dir.exists() {
         println!("No generations directory found. Nothing to collect.");
@@ -198,6 +202,11 @@ pub async fn cmd_generation_gc(keep: usize, db_path: &str) -> Result<()> {
                 info!("Removed generation {gen_number}");
                 removed_count += 1;
                 freed_bytes += size;
+                if let Err(error) = remove_generation_etc_state(&conary_root, *gen_number) {
+                    eprintln!(
+                        "Warning: failed to remove etc-state directories for generation {gen_number}: {error}"
+                    );
+                }
             }
             Err(e) => {
                 eprintln!("Warning: failed to remove generation {gen_number}: {e}");
@@ -537,6 +546,26 @@ fn warn_removed_side_effect_packages(from_generation: i64, to_generation: i64) {
     }
 }
 
+fn etc_state_paths(conary_root: &Path, generation: i64) -> [std::path::PathBuf; 2] {
+    [
+        conary_root.join(format!("etc-state/{generation}")),
+        conary_root.join(format!("etc-state/{generation}-work")),
+    ]
+}
+
+fn remove_generation_etc_state(conary_root: &Path, generation: i64) -> Result<()> {
+    for path in etc_state_paths(conary_root, generation) {
+        if !path.exists() {
+            continue;
+        }
+
+        std::fs::remove_dir_all(&path)
+            .map_err(|error| anyhow!("failed to remove {}: {error}", path.display()))?;
+    }
+
+    Ok(())
+}
+
 /// Build a new generation from the current system state and print its number.
 pub fn cmd_generation_build(db_path: &str, summary: &str) -> Result<()> {
     let conn = crate::commands::open_db(db_path)?;
@@ -645,7 +674,8 @@ pub fn cmd_generation_recover(db_path: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_side_effect_reasons, removed_members_for_side_effect_warning,
+        classify_side_effect_reasons, etc_state_paths, remove_generation_etc_state,
+        removed_members_for_side_effect_warning,
     };
     use conary_core::db::models::{StateDiff, StateMember};
 
@@ -701,5 +731,25 @@ mod tests {
                 ("replaced".to_string(), "2.0.0".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn remove_generation_etc_state_deletes_both_overlay_directories() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let conary_root = tmp.path();
+        let [upper, work] = etc_state_paths(conary_root, 7);
+        std::fs::create_dir_all(&upper).unwrap();
+        std::fs::create_dir_all(&work).unwrap();
+
+        remove_generation_etc_state(conary_root, 7).unwrap();
+
+        assert!(!upper.exists());
+        assert!(!work.exists());
+    }
+
+    #[test]
+    fn remove_generation_etc_state_is_noop_when_missing() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        remove_generation_etc_state(tmp.path(), 11).unwrap();
     }
 }
