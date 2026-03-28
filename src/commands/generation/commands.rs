@@ -3,15 +3,18 @@
 //! and recover commands
 
 use super::metadata::{
-    GenerationMetadata, gc_roots_dir, generation_path, generations_dir, is_generation_pending,
+    GenerationMetadata, generation_path, generations_dir, is_generation_pending,
 };
 use crate::commands::format_bytes;
 use anyhow::{Result, anyhow};
 use conary_core::generation::mount::current_generation;
+use conary_core::transaction::{TransactionConfig, TransactionEngine};
+use rusqlite::Connection;
 use std::path::Path;
 use tracing::{info, warn};
 
 const GENERATION_DB_CANDIDATES: &[&str] = &["/conary/conary.db", "/var/lib/conary/conary.db"];
+const GC_ROOTS_SETTING_KEY: &str = "generation.gc_roots";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SideEffectPackageWarning {
@@ -137,13 +140,26 @@ pub async fn cmd_generation_info(gen_number: i64) -> Result<()> {
 /// CAS garbage collection: queries the database for hashes referenced by
 /// surviving generations and removes unreferenced objects from the CAS store.
 pub async fn cmd_generation_gc(keep: usize, db_path: &str) -> Result<()> {
-    let current = current_generation(Path::new("/conary"))?;
-    let gc_roots = load_gc_roots();
     let dir = generations_dir();
     let conary_root = dir
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| std::path::PathBuf::from("/conary"));
+    let mut engine = TransactionEngine::new(TransactionConfig::from_paths(
+        conary_root.clone(),
+        db_path.into(),
+    ))?;
+    engine.begin()?;
+    let result = cmd_generation_gc_locked(keep, db_path, &conary_root);
+    engine.release_lock();
+    result
+}
+
+fn cmd_generation_gc_locked(keep: usize, db_path: &str, conary_root: &Path) -> Result<()> {
+    let current = current_generation(Path::new("/conary"))?;
+    let conn = crate::commands::open_db(db_path)?;
+    let gc_roots = load_gc_roots(&conn)?;
+    let dir = generations_dir();
 
     if !dir.exists() {
         println!("No generations directory found. Nothing to collect.");
@@ -213,7 +229,7 @@ pub async fn cmd_generation_gc(keep: usize, db_path: &str) -> Result<()> {
                 info!("Removed incomplete pending generation {gen_number}");
                 removed_count += 1;
                 freed_bytes += size;
-                if let Err(error) = remove_generation_etc_state(&conary_root, *gen_number) {
+                if let Err(error) = remove_generation_etc_state(conary_root, *gen_number) {
                     eprintln!(
                         "Warning: failed to remove etc-state directories for incomplete generation {gen_number}: {error}"
                     );
@@ -234,7 +250,7 @@ pub async fn cmd_generation_gc(keep: usize, db_path: &str) -> Result<()> {
                 info!("Removed generation {gen_number}");
                 removed_count += 1;
                 freed_bytes += size;
-                if let Err(error) = remove_generation_etc_state(&conary_root, *gen_number) {
+                if let Err(error) = remove_generation_etc_state(conary_root, *gen_number) {
                     eprintln!(
                         "Warning: failed to remove etc-state directories for generation {gen_number}: {error}"
                     );
@@ -347,20 +363,23 @@ fn booted_generation() -> Option<i64> {
         .ok()
 }
 
-/// Read GC root entries from the gc-roots directory.
+/// Read GC root entries from the database.
 ///
-/// Each entry name is expected to parse as an i64 generation number.
-fn load_gc_roots() -> Vec<i64> {
-    let dir = gc_roots_dir();
+/// Raw filesystem entries under `/conary/gc-roots` are intentionally ignored;
+/// callers must register pins in the database before GC will honor them.
+fn load_gc_roots(conn: &Connection) -> Result<Vec<i64>> {
+    use conary_core::db::models::settings;
 
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return Vec::new();
-    };
+    Ok(settings::get(conn, GC_ROOTS_SETTING_KEY)?
+        .map(|serialized| parse_gc_root_setting(&serialized))
+        .unwrap_or_default())
+}
 
-    entries
-        .flatten()
-        .filter_map(|entry| entry.file_name().to_string_lossy().parse::<i64>().ok())
-        .collect()
+fn parse_gc_root_setting(serialized: &str) -> Vec<i64> {
+    let mut generations = serde_json::from_str::<Vec<i64>>(serialized).unwrap_or_default();
+    generations.sort_unstable();
+    generations.dedup();
+    generations
 }
 
 /// Calculate total size of all files under `path` recursively.
@@ -706,10 +725,14 @@ pub fn cmd_generation_recover(db_path: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_side_effect_reasons, etc_state_paths, remove_generation_etc_state,
-        removed_members_for_side_effect_warning,
+        classify_side_effect_reasons, etc_state_paths, load_gc_roots, parse_gc_root_setting,
+        remove_generation_etc_state, removed_members_for_side_effect_warning,
     };
+    use conary_core::db::models::settings;
+    use conary_core::db::schema;
     use conary_core::db::models::{StateDiff, StateMember};
+    use rusqlite::Connection;
+    use tempfile::TempDir;
 
     fn member(name: &str, version: &str) -> StateMember {
         StateMember {
@@ -783,5 +806,27 @@ mod tests {
     fn remove_generation_etc_state_is_noop_when_missing() {
         let tmp = tempfile::TempDir::new().unwrap();
         remove_generation_etc_state(tmp.path(), 11).unwrap();
+    }
+
+    #[test]
+    fn parse_gc_root_setting_sorts_and_deduplicates_values() {
+        assert_eq!(parse_gc_root_setting("[7,3,7,5]"), vec![3, 5, 7]);
+    }
+
+    #[test]
+    fn load_gc_roots_ignores_filesystem_entries_without_db_registration() {
+        let temp_dir = TempDir::new().unwrap();
+        let gc_roots_dir = temp_dir.path().join("gc-roots");
+        std::fs::create_dir_all(&gc_roots_dir).unwrap();
+        std::fs::write(gc_roots_dir.join("7"), b"").unwrap();
+
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        schema::migrate(&conn).unwrap();
+
+        assert_eq!(load_gc_roots(&conn).unwrap(), Vec::<i64>::new());
+
+        settings::set(&conn, "generation.gc_roots", "[7,5]").unwrap();
+        assert_eq!(load_gc_roots(&conn).unwrap(), vec![5, 7]);
     }
 }
