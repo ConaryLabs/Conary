@@ -221,6 +221,12 @@ pub async fn fetch_and_verify_remote_collection(
     require_signatures: bool,
     trusted_keys: &[String],
 ) -> ModelResult<FetchedCollection> {
+    if require_signatures && trusted_keys.is_empty() {
+        return Err(ModelError::RemoteFetchError(format!(
+            "Collection '{name}' requires signatures, but no trusted keys are configured"
+        )));
+    }
+
     // Check cache first
     if let Some(cached) = RemoteCollection::find_cached(conn, name, Some(label))
         .map_err(|e| ModelError::DatabaseError(e.to_string()))?
@@ -420,7 +426,10 @@ fn verify_against_trusted_keys(
     use super::signing;
 
     if trusted_keys.is_empty() {
-        return Ok(false);
+        return Err(ModelError::RemoteFetchError(
+            "Remote signature verification requested, but no trusted keys are configured"
+                .to_string(),
+        ));
     }
 
     for key_hex in trusted_keys {
@@ -705,6 +714,17 @@ mod tests {
         assert!(err.contains("offline"));
     }
 
+    #[tokio::test]
+    async fn test_fetch_requires_trusted_keys_when_signatures_required() {
+        let (_temp, conn) = create_test_db();
+
+        let result =
+            fetch_and_verify_remote_collection(&conn, "group-missing", "repo:tag", true, true, &[])
+                .await;
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("no trusted keys are configured"));
+    }
+
     #[test]
     fn test_model_to_collection_data() {
         use crate::model::parser::parse_model_string;
@@ -805,5 +825,24 @@ models = ["group-core@upstream:stable"]
         assert!(!fetched.members[0].is_optional);
         assert!(fetched.members[1].is_optional);
         assert_eq!(fetched.includes.len(), 1);
+    }
+
+    #[test]
+    fn test_verify_against_trusted_keys_rejects_empty_trust_anchor_set() {
+        let data = CollectionData {
+            name: "group-test".to_string(),
+            version: "1.0".to_string(),
+            members: vec![],
+            includes: vec![],
+            pins: BTreeMap::new(),
+            exclude: vec![],
+            content_hash: "sha256:test".to_string(),
+            published_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+
+        let err = verify_against_trusted_keys(&data, &[0u8; 64], &[])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no trusted keys are configured"));
     }
 }
