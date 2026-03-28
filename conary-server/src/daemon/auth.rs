@@ -96,6 +96,14 @@ impl PeerCredentials {
         self.uid == 0
     }
 
+    /// Check if the peer matches the daemon's own identity.
+    ///
+    /// Daemon API access is reserved for root and the daemon service user even
+    /// when the Unix socket is group-accessible.
+    pub fn matches_daemon_identity(&self, daemon_uid: u32) -> bool {
+        self.is_root() || self.uid == daemon_uid
+    }
+
     /// Check if the peer is a member of an admin group
     ///
     /// Checks the peer's primary GID and supplementary groups for
@@ -496,6 +504,31 @@ mod tests {
             gid: 1000,
         };
         assert!(!user.is_root());
+    }
+
+    #[test]
+    fn test_peer_credentials_matches_daemon_identity() {
+        let daemon_uid = nix::unistd::geteuid().as_raw();
+        let daemon_user = PeerCredentials {
+            pid: 1000,
+            uid: daemon_uid,
+            gid: daemon_uid,
+        };
+        let root = PeerCredentials {
+            pid: 1,
+            uid: 0,
+            gid: 0,
+        };
+        let other_uid = if daemon_uid == 42_424 { 42_425 } else { 42_424 };
+        let other_user = PeerCredentials {
+            pid: 2000,
+            uid: other_uid,
+            gid: other_uid,
+        };
+
+        assert!(daemon_user.matches_daemon_identity(daemon_uid));
+        assert!(root.matches_daemon_identity(daemon_uid));
+        assert!(!other_user.matches_daemon_identity(daemon_uid));
     }
 
     #[test]
