@@ -11,6 +11,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::{net::IpAddr, str::FromStr};
 use tokio::sync::RwLock;
 
 use conary_core::db::models::Repository;
@@ -133,6 +134,98 @@ async fn test_db_path(state: &Arc<RwLock<ServerState>>) -> Result<String, Servic
         .ok_or_else(|| ServiceError::Internal("test_db_path not configured".to_string()))
 }
 
+/// Validate that a stored external URL cannot target local or cloud-metadata services.
+async fn validate_external_url(url_str: &str) -> Result<(), ServiceError> {
+    let parsed = url::Url::parse(url_str.trim())
+        .map_err(|e| ServiceError::BadRequest(format!("Invalid URL '{url_str}': {e}")))?;
+
+    match parsed.scheme() {
+        "http" | "https" => {}
+        scheme => {
+            return Err(ServiceError::BadRequest(format!(
+                "Only http:// and https:// URLs are allowed, got {scheme}://"
+            )));
+        }
+    }
+
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| ServiceError::BadRequest("URL has no host".to_string()))?;
+
+    validate_external_host(host)?;
+
+    if let Ok(ip) = IpAddr::from_str(host) {
+        validate_external_ip(&ip)?;
+    }
+
+    let port = parsed
+        .port()
+        .unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
+    let resolved_addrs: Vec<std::net::SocketAddr> =
+        tokio::net::lookup_host((host, port))
+            .await
+            .map_err(|e| ServiceError::BadRequest(format!("Failed to resolve '{host}': {e}")))?
+            .collect();
+
+    if resolved_addrs.is_empty() {
+        return Err(ServiceError::BadRequest(format!(
+            "DNS resolution for '{host}' returned no addresses"
+        )));
+    }
+
+    for addr in resolved_addrs {
+        validate_external_ip(&addr.ip())?;
+    }
+
+    Ok(())
+}
+
+fn validate_external_host(host: &str) -> Result<(), ServiceError> {
+    let lower_host = host.to_ascii_lowercase();
+    if lower_host == "localhost"
+        || lower_host.ends_with(".localhost")
+        || lower_host == "127.0.0.1"
+        || lower_host == "::1"
+        || lower_host == "0.0.0.0"
+    {
+        return Err(ServiceError::BadRequest(
+            "URLs targeting localhost are not allowed".to_string(),
+        ));
+    }
+
+    if lower_host == "metadata.google.internal" {
+        return Err(ServiceError::BadRequest(
+            "Cloud metadata endpoints are not allowed".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_external_ip(ip: &IpAddr) -> Result<(), ServiceError> {
+    match ip {
+        IpAddr::V4(v4) => {
+            if v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified() {
+                return Err(ServiceError::BadRequest(format!(
+                    "URLs targeting private or link-local IPs are not allowed: {ip}"
+                )));
+            }
+        }
+        IpAddr::V6(v6) => {
+            let segments = v6.segments();
+            let is_unique_local = (segments[0] & 0xfe00) == 0xfc00;
+            let is_link_local = (segments[0] & 0xffc0) == 0xfe80;
+            if v6.is_loopback() || v6.is_unspecified() || is_unique_local || is_link_local {
+                return Err(ServiceError::BadRequest(format!(
+                    "URLs targeting private or link-local IPs are not allowed: {ip}"
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Token operations
 // ---------------------------------------------------------------------------
@@ -252,6 +345,7 @@ pub async fn add_peer(
     if url::Url::parse(&endpoint).is_err() {
         return Err(ServiceError::BadRequest("Invalid endpoint URL".to_string()));
     }
+    validate_external_url(&endpoint).await?;
 
     let tier = input.tier.unwrap_or_else(|| "leaf".to_string());
     if !["leaf", "cell_hub", "region_hub"].contains(&tier.as_str()) {
@@ -425,6 +519,13 @@ pub async fn create_repo(
     state: &Arc<RwLock<ServerState>>,
     input: CreateRepoInput,
 ) -> Result<Repository, ServiceError> {
+    validate_external_url(&input.url).await?;
+    if let Some(ref content_url) = input.content_url
+        && !content_url.trim().is_empty()
+    {
+        validate_external_url(content_url).await?;
+    }
+
     let db = db_path(state).await;
     blocking(move || {
         let conn = conary_core::db::open_fast(&db)?;
@@ -464,6 +565,13 @@ pub async fn update_repo(
     name: &str,
     input: UpdateRepoInput,
 ) -> Result<Option<Repository>, ServiceError> {
+    validate_external_url(&input.url).await?;
+    if let Some(ref content_url) = input.content_url
+        && !content_url.trim().is_empty()
+    {
+        validate_external_url(content_url).await?;
+    }
+
     let db = db_path(state).await;
     let name_owned = name.to_string();
     blocking(move || {
