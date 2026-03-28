@@ -7,7 +7,16 @@ use crate::commands::format_bytes;
 use anyhow::{Result, anyhow};
 use conary_core::generation::mount::current_generation;
 use std::path::Path;
-use tracing::info;
+use tracing::{info, warn};
+
+const GENERATION_DB_CANDIDATES: &[&str] = &["/conary/conary.db", "/var/lib/conary/conary.db"];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SideEffectPackageWarning {
+    name: String,
+    version: String,
+    reasons: Vec<&'static str>,
+}
 
 /// List all generations with a summary table.
 ///
@@ -324,6 +333,210 @@ fn dir_size_bytes(path: &std::path::Path) -> u64 {
         .sum()
 }
 
+fn open_generation_db() -> Result<rusqlite::Connection> {
+    let mut last_error = None;
+
+    for path in GENERATION_DB_CANDIDATES {
+        match crate::commands::open_db(path) {
+            Ok(conn) => return Ok(conn),
+            Err(err) => last_error = Some((path, err)),
+        }
+    }
+
+    let (path, err) = last_error.expect("generation DB candidate list must not be empty");
+    Err(anyhow!(
+        "Failed to open generation state database at {path}: {err}"
+    ))
+}
+
+fn removed_members_for_side_effect_warning(
+    diff: &conary_core::db::models::StateDiff,
+) -> Vec<conary_core::db::models::StateMember> {
+    let mut removed = diff.removed.clone();
+    removed.extend(diff.upgraded.iter().map(|(old, _)| old.clone()));
+    removed.sort_by(|left, right| {
+        (&left.trove_name, &left.trove_version, &left.architecture).cmp(&(
+            &right.trove_name,
+            &right.trove_version,
+            &right.architecture,
+        ))
+    });
+    removed.dedup_by(|left, right| {
+        left.trove_name == right.trove_name
+            && left.trove_version == right.trove_version
+            && left.architecture == right.architecture
+    });
+    removed
+}
+
+fn has_user_group_side_effect(script: &str) -> bool {
+    [
+        "useradd",
+        "usermod",
+        "userdel",
+        "adduser",
+        "deluser",
+        "groupadd",
+        "groupmod",
+        "groupdel",
+        "addgroup",
+        "delgroup",
+    ]
+    .iter()
+    .any(|needle| script.contains(needle))
+}
+
+fn classify_side_effect_reasons<'a>(
+    file_paths: impl IntoIterator<Item = &'a str>,
+    script_contents: impl IntoIterator<Item = &'a str>,
+) -> Vec<&'static str> {
+    let file_paths: Vec<&str> = file_paths.into_iter().collect();
+    let lowercased_scripts: Vec<String> = script_contents
+        .into_iter()
+        .map(str::to_ascii_lowercase)
+        .collect();
+
+    let mut reasons = Vec::new();
+
+    let has_user_group_state = file_paths
+        .iter()
+        .any(|path| path.starts_with("/usr/lib/sysusers.d/") || path.starts_with("/etc/sysusers.d/"))
+        || lowercased_scripts
+            .iter()
+            .any(|script| has_user_group_side_effect(script));
+    if has_user_group_state {
+        reasons.push("users/groups");
+    }
+
+    let has_systemd_state = file_paths.iter().any(|path| {
+        path.starts_with("/usr/lib/systemd/system/")
+            || path.starts_with("/etc/systemd/system/")
+            || path.starts_with("/usr/lib/systemd/user/")
+            || path.starts_with("/etc/systemd/user/")
+    }) || lowercased_scripts.iter().any(|script| {
+        script.contains("systemctl ")
+            || script.contains("daemon-reload")
+            || script.contains("preset ")
+    });
+    if has_systemd_state {
+        reasons.push("systemd units");
+    }
+
+    let has_cron_state = file_paths.iter().any(|path| {
+        path == &"/etc/crontab"
+            || path.starts_with("/etc/cron.")
+            || path.starts_with("/etc/cron/")
+            || path.starts_with("/var/spool/cron/")
+            || path.starts_with("/usr/lib/cron/")
+    }) || lowercased_scripts
+        .iter()
+        .any(|script| script.contains("crontab "));
+    if has_cron_state {
+        reasons.push("cron jobs");
+    }
+
+    reasons
+}
+
+fn find_side_effect_package_warning(
+    conn: &rusqlite::Connection,
+    member: &conary_core::db::models::StateMember,
+) -> Result<Option<SideEffectPackageWarning>> {
+    let trove = conary_core::db::models::Trove::find_by_name(conn, &member.trove_name)?
+        .into_iter()
+        .filter(|trove| {
+            trove.version == member.trove_version && trove.architecture == member.architecture
+        })
+        .max_by_key(|trove| trove.id.unwrap_or_default());
+
+    let Some(trove) = trove else {
+        return Ok(None);
+    };
+    let Some(trove_id) = trove.id else {
+        return Ok(None);
+    };
+
+    let files = conary_core::db::models::FileEntry::find_by_trove(conn, trove_id)?;
+    let scriptlets = conary_core::db::models::ScriptletEntry::find_by_trove(conn, trove_id)?;
+    let reasons = classify_side_effect_reasons(
+        files.iter().map(|file| file.path.as_str()),
+        scriptlets.iter().map(|scriptlet| scriptlet.content.as_str()),
+    );
+
+    if reasons.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(SideEffectPackageWarning {
+        name: member.trove_name.clone(),
+        version: member.trove_version.clone(),
+        reasons,
+    }))
+}
+
+fn collect_side_effect_package_warnings(
+    from_generation: i64,
+    to_generation: i64,
+) -> Result<Vec<SideEffectPackageWarning>> {
+    let conn = open_generation_db()?;
+    let from_state = conary_core::db::models::SystemState::find_by_number(&conn, from_generation)?
+        .ok_or_else(|| anyhow!("State {from_generation} not found in generation database"))?;
+    let to_state = conary_core::db::models::SystemState::find_by_number(&conn, to_generation)?
+        .ok_or_else(|| anyhow!("State {to_generation} not found in generation database"))?;
+    let from_id = from_state
+        .id
+        .ok_or_else(|| anyhow!("State {from_generation} is missing an ID"))?;
+    let to_id = to_state
+        .id
+        .ok_or_else(|| anyhow!("State {to_generation} is missing an ID"))?;
+
+    let diff = conary_core::db::models::StateDiff::compare(&conn, from_id, to_id)?;
+    let mut warnings = Vec::new();
+
+    for member in removed_members_for_side_effect_warning(&diff) {
+        if let Some(package) = find_side_effect_package_warning(&conn, &member)? {
+            warnings.push(package);
+        }
+    }
+
+    warnings.sort_by(|left, right| (&left.name, &left.version).cmp(&(&right.name, &right.version)));
+    Ok(warnings)
+}
+
+fn warn_removed_side_effect_packages(from_generation: i64, to_generation: i64) {
+    match collect_side_effect_package_warnings(from_generation, to_generation) {
+        Ok(packages) if !packages.is_empty() => {
+            eprintln!(
+                "WARNING: Generation switch {} -> {} removed package versions without running removal scriptlets.",
+                from_generation, to_generation
+            );
+            eprintln!(
+                "WARNING: Persistent side effects are not automatically undone during rollback."
+            );
+            for package in packages {
+                eprintln!(
+                    "  - {} {} ({})",
+                    package.name,
+                    package.version,
+                    package.reasons.join(", ")
+                );
+            }
+            eprintln!(
+                "WARNING: Review those packages manually; `--undo-scriptlets` is not implemented yet."
+            );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            warn!(
+                from_generation,
+                to_generation,
+                "Failed to inspect removed package side effects during generation switch: {}",
+                error
+            );
+        }
+    }
+}
+
 /// Build a new generation from the current system state and print its number.
 pub fn cmd_generation_build(db_path: &str, summary: &str) -> Result<()> {
     let conn = crate::commands::open_db(db_path)?;
@@ -334,9 +547,13 @@ pub fn cmd_generation_build(db_path: &str, summary: &str) -> Result<()> {
 
 /// Switch the live system to `number`, update the boot entry, and optionally reboot.
 pub fn cmd_generation_switch(number: i64, reboot: bool) -> Result<()> {
+    let current = current_generation(Path::new("/conary"))?;
     super::switch::switch_live(number)?;
     if let Err(e) = super::boot::write_boot_entry(number) {
         eprintln!("Boot entry skipped: {}", e);
+    }
+    if let Some(current) = current {
+        warn_removed_side_effect_packages(current, number);
     }
     if reboot {
         println!("Rebooting...");
@@ -374,6 +591,7 @@ pub fn cmd_generation_rollback() -> Result<()> {
     if let Err(e) = super::boot::write_boot_entry(*previous) {
         eprintln!("Boot entry skipped: {}", e);
     }
+    warn_removed_side_effect_packages(current, *previous);
     println!("Rolled back to generation {previous}");
     Ok(())
 }
@@ -422,4 +640,66 @@ pub fn cmd_generation_recover(db_path: &str) -> Result<()> {
 
     println!("Recovery complete.");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        classify_side_effect_reasons, removed_members_for_side_effect_warning,
+    };
+    use conary_core::db::models::{StateDiff, StateMember};
+
+    fn member(name: &str, version: &str) -> StateMember {
+        StateMember {
+            id: None,
+            state_id: 1,
+            trove_name: name.to_string(),
+            trove_version: version.to_string(),
+            architecture: Some("x86_64".to_string()),
+            install_reason: "explicit".to_string(),
+            selection_reason: None,
+        }
+    }
+
+    #[test]
+    fn classify_side_effect_reasons_detects_all_requested_categories() {
+        let reasons = classify_side_effect_reasons(
+            [
+                "/usr/lib/systemd/system/example.service",
+                "/etc/cron.d/example",
+                "/usr/lib/sysusers.d/example.conf",
+            ],
+            ["groupadd example", "systemctl preset example.service", "crontab -r"],
+        );
+
+        assert_eq!(reasons, vec!["users/groups", "systemd units", "cron jobs"]);
+    }
+
+    #[test]
+    fn removed_members_for_side_effect_warning_includes_replaced_versions_once() {
+        let removed = member("removed-only", "1.0.0");
+        let upgraded_old = member("replaced", "2.0.0");
+        let upgraded_new = member("replaced", "1.5.0");
+        let diff = StateDiff {
+            added: Vec::new(),
+            removed: vec![removed.clone()],
+            upgraded: vec![
+                (upgraded_old.clone(), upgraded_new),
+                (upgraded_old.clone(), member("replaced", "1.0.0")),
+            ],
+        };
+
+        let members = removed_members_for_side_effect_warning(&diff);
+        let rendered: Vec<_> = members
+            .into_iter()
+            .map(|member| (member.trove_name, member.trove_version))
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                ("removed-only".to_string(), "1.0.0".to_string()),
+                ("replaced".to_string(), "2.0.0".to_string()),
+            ]
+        );
+    }
 }
