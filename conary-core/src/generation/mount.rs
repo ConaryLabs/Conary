@@ -13,6 +13,8 @@ use std::process::Command;
 use tracing::info;
 
 use crate::error::Error;
+#[cfg(feature = "composefs-rs")]
+use composefs::fsverity::{FsVerityHashValue, Sha256HashValue};
 
 /// Options for mounting a composefs generation image.
 ///
@@ -92,6 +94,34 @@ impl MountOptions {
     }
 }
 
+#[cfg(feature = "composefs-rs")]
+fn verify_erofs_verity_digest(image_path: &Path, expected_digest: &str) -> crate::Result<()> {
+    let image_bytes = std::fs::read(image_path).map_err(|e| {
+        Error::IoError(format!(
+            "Failed to read EROFS image {} for verity verification: {e}",
+            image_path.display()
+        ))
+    })?;
+    let actual_digest =
+        composefs::fsverity::compute_verity::<Sha256HashValue>(&image_bytes).to_hex();
+
+    if actual_digest == expected_digest {
+        Ok(())
+    } else {
+        Err(Error::ChecksumMismatch {
+            expected: expected_digest.to_string(),
+            actual: actual_digest,
+        })
+    }
+}
+
+#[cfg(not(feature = "composefs-rs"))]
+fn verify_erofs_verity_digest(_image_path: &Path, _expected_digest: &str) -> crate::Result<()> {
+    Err(Error::NotImplemented(
+        "EROFS verity verification requires the 'composefs-rs' feature".to_string(),
+    ))
+}
+
 /// Mount a composefs generation image.
 ///
 /// Uses `mount -t composefs` (the composefs mount helper) which resolves
@@ -108,6 +138,10 @@ impl MountOptions {
 /// `upperdir` and `workdir` fields on `MountOptions` are retained for
 /// informational use but are NOT consumed here.
 pub fn mount_generation(opts: &MountOptions) -> crate::Result<()> {
+    if let Some(expected_digest) = &opts.digest {
+        verify_erofs_verity_digest(&opts.image_path, expected_digest)?;
+    }
+
     let args = opts.to_mount_args();
     let output = Command::new("mount")
         .args(&args)
@@ -375,6 +409,8 @@ pub fn is_generation_mounted(mount_point: &Path, expected_image: &Path) -> crate
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    #[cfg(feature = "composefs-rs")]
+    use tempfile::TempDir;
 
     fn base_opts() -> MountOptions {
         MountOptions {
@@ -460,6 +496,30 @@ mod tests {
         assert_eq!(args[3], "loop,ro");
         assert_eq!(args[4], "/conary/generations/5/root.erofs");
         assert_eq!(args[5], "/conary/mnt");
+    }
+
+    #[cfg(feature = "composefs-rs")]
+    #[test]
+    fn verify_erofs_verity_digest_accepts_matching_digest() {
+        let tmp = TempDir::new().unwrap();
+        let image_path = tmp.path().join("root.erofs");
+        std::fs::write(&image_path, b"synthetic erofs bytes").unwrap();
+        let digest =
+            composefs::fsverity::compute_verity::<Sha256HashValue>(b"synthetic erofs bytes")
+                .to_hex();
+
+        verify_erofs_verity_digest(&image_path, &digest).unwrap();
+    }
+
+    #[cfg(feature = "composefs-rs")]
+    #[test]
+    fn verify_erofs_verity_digest_rejects_mismatch() {
+        let tmp = TempDir::new().unwrap();
+        let image_path = tmp.path().join("root.erofs");
+        std::fs::write(&image_path, b"synthetic erofs bytes").unwrap();
+
+        let err = verify_erofs_verity_digest(&image_path, &"00".repeat(32)).unwrap_err();
+        assert!(matches!(err, Error::ChecksumMismatch { .. }));
     }
 
     #[test]

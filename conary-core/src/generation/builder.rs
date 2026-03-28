@@ -65,6 +65,8 @@ pub struct BuildResult {
     pub image_size: u64,
     /// Number of CAS objects (external file references) in the image
     pub cas_objects_referenced: u64,
+    /// Hex-encoded fs-verity digest of the generated EROFS image
+    pub erofs_verity_digest: Option<String>,
 }
 
 /// Resolve a username to numeric UID via libc `getpwnam_r` (reentrant).
@@ -362,6 +364,8 @@ pub fn build_erofs_image(
     // Build the EROFS image
     let image_bytes = mkfs_erofs(&fs);
     let image_size = image_bytes.len() as u64;
+    let erofs_verity_digest = composefs::fsverity::compute_verity::<Sha256HashValue>(&image_bytes)
+        .to_hex();
 
     // Write EROFS image atomically: temp file -> fsync -> rename -> fsync parent.
     // This prevents partial writes from surviving a crash during recovery.
@@ -408,6 +412,7 @@ pub fn build_erofs_image(
         image_path,
         image_size,
         cas_objects_referenced: cas_objects,
+        erofs_verity_digest: Some(erofs_verity_digest),
     })
 }
 
@@ -560,7 +565,7 @@ pub fn build_generation_from_db(
         erofs_size: Some(result.image_size as i64),
         cas_objects_referenced: Some(result.cas_objects_referenced as i64),
         fsverity_enabled: false, // Caller can enable separately
-        erofs_verity_digest: None,
+        erofs_verity_digest: result.erofs_verity_digest.clone(),
         created_at: chrono::Utc::now().to_rfc3339(),
         package_count: troves.len() as i64,
         kernel_version: detect_kernel_version_from_troves(&troves),
@@ -632,7 +637,7 @@ pub fn rebuild_generation_image(
         erofs_size: Some(result.image_size as i64),
         cas_objects_referenced: Some(result.cas_objects_referenced as i64),
         fsverity_enabled: false,
-        erofs_verity_digest: None,
+        erofs_verity_digest: result.erofs_verity_digest.clone(),
         created_at: chrono::Utc::now().to_rfc3339(),
         package_count: troves.len() as i64,
         kernel_version: detect_kernel_version_from_troves(&troves),
@@ -813,6 +818,10 @@ mod tests {
 
             assert!(result.image_path.exists(), "EROFS image file must exist");
             assert!(result.image_size > 0, "EROFS image must be non-empty");
+            assert!(
+                result.erofs_verity_digest.is_some(),
+                "EROFS build should compute an fs-verity digest"
+            );
             assert_eq!(
                 result.cas_objects_referenced, 2,
                 "Should reference 2 CAS objects"
@@ -930,6 +939,26 @@ mod tests {
 
             let result = build_erofs_image(&entries, &[], tmp.path()).unwrap();
             assert_eq!(result.cas_objects_referenced, 1);
+        }
+
+        #[test]
+        fn deterministic_builds_produce_same_verity_digest() {
+            let tmp1 = TempDir::new().unwrap();
+            let tmp2 = TempDir::new().unwrap();
+            let entries = vec![FileEntryRef {
+                path: "/usr/bin/hello".to_string(),
+                sha256_hash: "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd"
+                    .to_string(),
+                size: 1024,
+                permissions: 0o755,
+                owner: None,
+                group_name: None,
+            }];
+
+            let r1 = build_erofs_image(&entries, &[], tmp1.path()).unwrap();
+            let r2 = build_erofs_image(&entries, &[], tmp2.path()).unwrap();
+
+            assert_eq!(r1.erofs_verity_digest, r2.erofs_verity_digest);
         }
     }
 
