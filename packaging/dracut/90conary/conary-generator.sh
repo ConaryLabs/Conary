@@ -2,31 +2,48 @@
 # packaging/dracut/90conary/conary-generator.sh
 # Pre-pivot hook: mount Conary generation via composefs
 
-# Read conary.generation=N from kernel cmdline
-CONARY_GEN=""
-for opt in $(cat /proc/cmdline); do
-    case "$opt" in
-        conary.generation=*)
-            CONARY_GEN="${opt#conary.generation=}"
-            ;;
-    esac
-done
+SYSROOT="${CONARY_SYSROOT:-/sysroot}"
+CMDLINE_FILE="${CONARY_CMDLINE_FILE:-/proc/cmdline}"
 
-# Fall back to /conary/current symlink
-if [ -z "$CONARY_GEN" ]; then
-    if [ -L /sysroot/conary/current ]; then
-        # Resolve symlink relative to /sysroot (target is absolute e.g. /conary/generations/N)
-        RAW_TARGET=$(readlink /sysroot/conary/current)
-        GEN_DIR="/sysroot${RAW_TARGET}"
-    else
-        exit 0  # No generation system configured
+read_kernel_generation() {
+    if [ ! -r "$CMDLINE_FILE" ]; then
+        return 0
     fi
-else
-    GEN_DIR="/sysroot/conary/generations/${CONARY_GEN}"
+
+    for opt in $(cat "$CMDLINE_FILE"); do
+        case "$opt" in
+            conary.generation=*)
+                printf '%s\n' "${opt#conary.generation=}"
+                return 0
+                ;;
+        esac
+    done
+}
+
+read_current_generation() {
+    local current_link="${SYSROOT}/conary/current"
+    local raw_target
+
+    if [ ! -L "$current_link" ]; then
+        return 0
+    fi
+
+    raw_target=$(readlink "$current_link") || return 0
+    basename "$raw_target"
+}
+
+CONARY_GEN="$(read_kernel_generation)"
+if [ -z "$CONARY_GEN" ]; then
+    CONARY_GEN="$(read_current_generation)"
 fi
 
+if [ -z "$CONARY_GEN" ]; then
+    exit 0  # No generation system configured
+fi
+
+GEN_DIR="${SYSROOT}/conary/generations/${CONARY_GEN}"
 EROFS_IMG="${GEN_DIR}/root.erofs"
-CAS_DIR="/sysroot/conary/objects"
+CAS_DIR="${SYSROOT}/conary/objects"
 
 # Check for EROFS image (composefs format)
 if [ ! -f "$EROFS_IMG" ]; then
@@ -34,7 +51,7 @@ if [ ! -f "$EROFS_IMG" ]; then
     if [ -d "$GEN_DIR" ]; then
         for dir in usr etc; do
             if [ -d "${GEN_DIR}/${dir}" ]; then
-                mount --bind "${GEN_DIR}/${dir}" "/sysroot/${dir}"
+                mount --bind "${GEN_DIR}/${dir}" "${SYSROOT}/${dir}"
             fi
         done
     else
@@ -44,24 +61,26 @@ if [ ! -f "$EROFS_IMG" ]; then
 fi
 
 # Mount composefs at staging point
-mkdir -p /sysroot/conary/mnt
-mount -t composefs "$EROFS_IMG" /sysroot/conary/mnt \
+mkdir -p "${SYSROOT}/conary/mnt"
+mount -t composefs "$EROFS_IMG" "${SYSROOT}/conary/mnt" \
     -o "basedir=${CAS_DIR},verity_check=1" 2>/dev/null || \
-mount -t composefs "$EROFS_IMG" /sysroot/conary/mnt \
+mount -t composefs "$EROFS_IMG" "${SYSROOT}/conary/mnt" \
     -o "basedir=${CAS_DIR}" || {
     echo "conary: composefs mount failed for $EROFS_IMG" >&2
     exit 1
 }
 
 # Bind-mount /usr from composefs tree (read-only)
-if [ -d /sysroot/conary/mnt/usr ]; then
-    mount --bind /sysroot/conary/mnt/usr /sysroot/usr
-    mount -o remount,ro /sysroot/usr
+if [ -d "${SYSROOT}/conary/mnt/usr" ]; then
+    mount --bind "${SYSROOT}/conary/mnt/usr" "${SYSROOT}/usr"
+    mount -o remount,ro "${SYSROOT}/usr"
 fi
 
 # Overlayfs for /etc (writable upper on immutable composefs lower)
-if [ -d /sysroot/conary/mnt/etc ]; then
-    mkdir -p /sysroot/conary/etc-state/upper /sysroot/conary/etc-state/work
-    mount -t overlay overlay /sysroot/etc \
-        -o "lowerdir=/sysroot/conary/mnt/etc,upperdir=/sysroot/conary/etc-state/upper,workdir=/sysroot/conary/etc-state/work"
+if [ -d "${SYSROOT}/conary/mnt/etc" ]; then
+    ETC_UPPER="${SYSROOT}/conary/etc-state/${CONARY_GEN}"
+    ETC_WORK="${SYSROOT}/conary/etc-state/${CONARY_GEN}-work"
+    mkdir -p "$ETC_UPPER" "$ETC_WORK"
+    mount -t overlay overlay "${SYSROOT}/etc" \
+        -o "lowerdir=${SYSROOT}/conary/mnt/etc,upperdir=${ETC_UPPER},workdir=${ETC_WORK}"
 fi
