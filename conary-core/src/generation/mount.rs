@@ -41,6 +41,13 @@ pub struct MountOptions {
     pub workdir: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GenerationMountOutcome {
+    ComposefsVerity,
+    ComposefsPlain,
+    ErofsFallback,
+}
+
 impl MountOptions {
     /// Build the argument list for mounting a composefs generation.
     ///
@@ -137,7 +144,7 @@ fn verify_erofs_verity_digest(_image_path: &Path, _expected_digest: &str) -> cra
 /// `/etc`) and boot (composefs at `/`, overlay onto `/etc`). The
 /// `upperdir` and `workdir` fields on `MountOptions` are retained for
 /// informational use but are NOT consumed here.
-pub fn mount_generation(opts: &MountOptions) -> crate::Result<()> {
+pub fn mount_generation(opts: &MountOptions) -> crate::Result<GenerationMountOutcome> {
     if let Some(expected_digest) = &opts.digest {
         verify_erofs_verity_digest(&opts.image_path, expected_digest)?;
     }
@@ -154,7 +161,11 @@ pub fn mount_generation(opts: &MountOptions) -> crate::Result<()> {
             "Mounted composefs generation at {}",
             opts.mount_point.display()
         );
-        return Ok(());
+        return Ok(if opts.verity {
+            GenerationMountOutcome::ComposefsVerity
+        } else {
+            GenerationMountOutcome::ComposefsPlain
+        });
     }
 
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -175,12 +186,35 @@ pub fn mount_generation(opts: &MountOptions) -> crate::Result<()> {
             "Mounted generation (EROFS loopback) at {}",
             opts.mount_point.display()
         );
-        Ok(())
+        Ok(GenerationMountOutcome::ErofsFallback)
     } else {
         Err(Error::IoError(format!(
             "Both composefs and EROFS mount failed for image {}",
             opts.image_path.display()
         )))
+    }
+}
+
+#[must_use]
+pub fn verity_downgrade_warning(
+    requested_verity: bool,
+    outcome: GenerationMountOutcome,
+    image_path: &Path,
+) -> Option<String> {
+    if !requested_verity {
+        return None;
+    }
+
+    match outcome {
+        GenerationMountOutcome::ComposefsVerity => None,
+        GenerationMountOutcome::ComposefsPlain => Some(format!(
+            "Mounted generation image {} without fs-verity enforcement after a fallback retry. Integrity protection is downgraded until composefs verity can be restored.",
+            image_path.display()
+        )),
+        GenerationMountOutcome::ErofsFallback => Some(format!(
+            "Mounted generation image {} via plain EROFS fallback instead of a verity-enforced composefs mount. Integrity protection is downgraded until composefs verity can be restored.",
+            image_path.display()
+        )),
     }
 }
 
@@ -568,5 +602,34 @@ mod tests {
             .expect("current_generation")
             .expect("Some");
         assert_eq!(n, 2, "second update should win");
+    }
+
+    #[test]
+    fn verity_downgrade_warning_only_emits_for_real_downgrades() {
+        assert!(
+            verity_downgrade_warning(
+                true,
+                GenerationMountOutcome::ComposefsVerity,
+                Path::new("/conary/generations/1/root.erofs")
+            )
+            .is_none()
+        );
+
+        let plain = verity_downgrade_warning(
+            true,
+            GenerationMountOutcome::ComposefsPlain,
+            Path::new("/conary/generations/1/root.erofs"),
+        )
+        .unwrap();
+        assert!(plain.contains("downgraded"));
+
+        assert!(
+            verity_downgrade_warning(
+                false,
+                GenerationMountOutcome::ComposefsPlain,
+                Path::new("/conary/generations/1/root.erofs")
+            )
+            .is_none()
+        );
     }
 }

@@ -9,6 +9,7 @@ use super::metadata::{GenerationMetadata, generation_path};
 use anyhow::{Context, Result, anyhow};
 use conary_core::generation::mount::{
     MountOptions, is_overlay_mount, mount_generation, unmount_generation, update_current_symlink,
+    verity_downgrade_warning,
 };
 use std::path::Path;
 use std::process::Command;
@@ -71,7 +72,7 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
         ..opts_verity.clone()
     };
 
-    mount_generation(&opts_verity)
+    let mount_outcome = mount_generation(&opts_verity)
         .or_else(|error| {
             if matches!(error, conary_core::Error::ChecksumMismatch { .. }) {
                 return Err(anyhow!("EROFS verity digest mismatch: {error}"));
@@ -80,6 +81,10 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
             mount_generation(&opts_plain).map_err(anyhow::Error::from)
         })
         .map_err(|e| anyhow!("Failed to mount composefs image: {e}"))?;
+    if let Some(message) = verity_downgrade_warning(true, mount_outcome, &erofs_img) {
+        warn!("{message}");
+        eprintln!("Warning: {message}");
+    }
 
     // Step 2: Bind-mount /usr from composefs tree (read-only)
     // WARNING: This overwrites the live /usr. Processes with open file descriptors

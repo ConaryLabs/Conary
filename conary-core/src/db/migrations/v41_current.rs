@@ -871,6 +871,20 @@ pub fn migrate_v63(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 64: Store each generation's /etc merge base in the database
+pub fn migrate_v64(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 64");
+
+    conn.execute_batch(
+        "
+        ALTER TABLE system_states ADD COLUMN base_generation INTEGER;
+        ",
+    )?;
+
+    info!("Schema version 64 applied successfully (system_states.base_generation)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1085,5 +1099,43 @@ mod tests {
             .unwrap();
         assert_eq!(preserved.0, "pre-v63 changeset");
         assert_eq!(preserved.1, "tx-123".to_string());
+    }
+
+    #[test]
+    fn test_migrate_v64_adds_base_generation_to_system_states() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "
+            CREATE TABLE system_states (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                state_number INTEGER NOT NULL UNIQUE,
+                summary TEXT NOT NULL,
+                description TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                changeset_id INTEGER,
+                is_active INTEGER NOT NULL DEFAULT 0,
+                package_count INTEGER NOT NULL DEFAULT 0
+            );
+            ",
+        )
+        .unwrap();
+
+        migrate_v64(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO system_states (state_number, summary, is_active, package_count, base_generation)
+             VALUES (1, 'baseline', 1, 0, 0)",
+            [],
+        )
+        .unwrap();
+
+        let base_generation: i64 = conn
+            .query_row(
+                "SELECT base_generation FROM system_states WHERE state_number = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(base_generation, 0);
     }
 }

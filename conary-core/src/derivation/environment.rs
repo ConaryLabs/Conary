@@ -92,7 +92,7 @@ impl BuildEnvironment {
 
         // mount_generation tries overlayfs composefs first, falls back to
         // plain EROFS loopback automatically.
-        crate::generation::mount::mount_generation(&opts)
+        let _mount_outcome = crate::generation::mount::mount_generation(&opts)
             .map_err(|e| EnvironmentError::Mount(format!("mount failed: {e}")))?;
 
         info!(
