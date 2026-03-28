@@ -72,9 +72,12 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
     };
 
     mount_generation(&opts_verity)
-        .or_else(|_| {
+        .or_else(|error| {
+            if matches!(error, conary_core::Error::ChecksumMismatch { .. }) {
+                return Err(anyhow!("EROFS verity digest mismatch: {error}"));
+            }
             warn!("composefs mount with verity failed, retrying without");
-            mount_generation(&opts_plain)
+            mount_generation(&opts_plain).map_err(anyhow::Error::from)
         })
         .map_err(|e| anyhow!("Failed to mount composefs image: {e}"))?;
 
