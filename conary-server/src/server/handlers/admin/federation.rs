@@ -326,7 +326,7 @@ mod tests {
 
         // Add a peer
         let add_body = serde_json::json!({
-            "endpoint": "https://peer1.example.com:7891",
+            "endpoint": "https://example.com:7891",
             "tier": "leaf",
             "node_name": "peer1",
             "tls_fingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -349,7 +349,7 @@ mod tests {
             .await
             .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-        assert_eq!(body["endpoint"], "https://peer1.example.com:7891");
+        assert_eq!(body["endpoint"], "https://example.com:7891");
         assert_eq!(body["tier"], "leaf");
         assert_eq!(body["is_enabled"], true);
         let peer_id = body["id"]
@@ -414,9 +414,34 @@ mod tests {
         let token = "test-admin-token-12345";
 
         let add_body = serde_json::json!({
-            "endpoint": "https://peer2.example.com:7891",
+            "endpoint": "https://example.com:7891",
             "tier": "leaf",
             "node_name": "peer2"
+        });
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/admin/federation/peers")
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(add_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_add_peer_rejects_metadata_endpoint() {
+        let (app, _) = test_app().await;
+        let token = "test-admin-token-12345";
+
+        let add_body = serde_json::json!({
+            "endpoint": "http://169.254.169.254/latest/meta-data",
+            "tier": "leaf"
         });
         let resp = app
             .oneshot(

@@ -149,6 +149,12 @@ pub async fn create_repo(
             drop(guard);
             (StatusCode::CREATED, Json(RepoResponse::from(repo))).into_response()
         }
+        Err(admin_service::ServiceError::BadRequest(msg)) => {
+            json_error(400, &msg, "BAD_REQUEST")
+        }
+        Err(admin_service::ServiceError::Conflict(msg)) => {
+            json_error(409, &msg, "CONFLICT")
+        }
         Err(e) => {
             tracing::error!("Failed to create repo: {e}");
             json_error(500, "Failed to create repository", "INTERNAL_ERROR")
@@ -238,6 +244,12 @@ pub async fn update_repo(
             Json(RepoResponse::from(repo)).into_response()
         }
         Ok(None) => json_error(404, "Repository not found", "NOT_FOUND"),
+        Err(admin_service::ServiceError::BadRequest(msg)) => {
+            json_error(400, &msg, "BAD_REQUEST")
+        }
+        Err(admin_service::ServiceError::Conflict(msg)) => {
+            json_error(409, &msg, "CONFLICT")
+        }
         Err(e) => {
             tracing::error!("Failed to update repo: {e}");
             json_error(500, "Failed to update repository", "INTERNAL_ERROR")
@@ -387,7 +399,7 @@ mod tests {
         // Create a repo
         let create_body = serde_json::json!({
             "name": "fedora",
-            "url": "https://mirrors.example.com/fedora",
+            "url": "https://example.com/fedora",
             "enabled": true,
             "priority": 10
         });
@@ -451,7 +463,7 @@ mod tests {
         let app4 = rebuild_app(&db_path);
         let update_body = serde_json::json!({
             "name": "fedora",
-            "url": "https://mirrors2.example.com/fedora",
+            "url": "https://example.org/fedora",
             "priority": 20
         });
         let resp = app4
@@ -572,5 +584,71 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_create_repo_rejects_localhost_url() {
+        let (app, _db_path) = test_app().await;
+
+        let create_body = serde_json::json!({
+            "name": "bad-repo",
+            "url": "http://localhost:8080/repo"
+        });
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/admin/repos")
+                    .header("Authorization", "Bearer test-admin-token-12345")
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(create_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_update_repo_rejects_private_content_url() {
+        let (app, db_path) = test_app().await;
+
+        let create_body = serde_json::json!({
+            "name": "fedora",
+            "url": "https://example.com/fedora"
+        });
+        let create_resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/admin/repos")
+                    .header("Authorization", "Bearer test-admin-token-12345")
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(create_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create_resp.status(), StatusCode::CREATED);
+
+        let app2 = rebuild_app(&db_path);
+        let update_body = serde_json::json!({
+            "name": "fedora",
+            "url": "https://example.com/fedora",
+            "content_url": "http://10.0.0.42/content"
+        });
+        let resp = app2
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("PUT")
+                    .uri("/v1/admin/repos/fedora")
+                    .header("Authorization", "Bearer test-admin-token-12345")
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(update_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }
