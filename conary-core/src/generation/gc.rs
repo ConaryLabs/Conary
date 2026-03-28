@@ -8,10 +8,13 @@
 
 use std::collections::HashSet;
 use std::path::Path;
+use std::time::{Duration, SystemTime};
 
 use crate::filesystem::CasStore;
 use rusqlite::Connection;
 use tracing::{debug, info};
+
+const GC_RECENT_OBJECT_GRACE_PERIOD: Duration = Duration::from_secs(60 * 60);
 
 /// Statistics from a CAS garbage collection run.
 #[derive(Debug, Clone, Default)]
@@ -88,6 +91,11 @@ pub fn gc_cas_objects(objects_dir: &Path, live_hashes: &HashSet<String>) -> crat
         stats.objects_checked += 1;
 
         if !live_hashes.contains(&hash) {
+            if should_skip_recent_object(&path, SystemTime::now(), GC_RECENT_OBJECT_GRACE_PERIOD) {
+                debug!("Skipping recent CAS object during GC grace period: {hash}");
+                continue;
+            }
+
             if let Ok(metadata) = path.metadata() {
                 stats.bytes_freed += metadata.len();
             }
@@ -125,6 +133,14 @@ pub fn gc_cas_objects(objects_dir: &Path, live_hashes: &HashSet<String>) -> crat
     );
 
     Ok(stats)
+}
+
+fn should_skip_recent_object(path: &Path, now: SystemTime, grace_period: Duration) -> bool {
+    path.metadata()
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| now.duration_since(modified).ok())
+        .is_some_and(|age| age < grace_period)
 }
 
 #[cfg(test)]
@@ -463,5 +479,41 @@ mod tests {
         // Temp files should still exist
         assert!(prefix_dir.join(".tmp_write_in_progress").exists());
         assert!(prefix_dir.join("something.tmp").exists());
+    }
+
+    #[test]
+    fn test_gc_skips_recently_modified_objects_within_grace_period() {
+        let tmp = TempDir::new().unwrap();
+        let objects_dir = tmp.path().join("objects");
+        std::fs::create_dir_all(&objects_dir).unwrap();
+
+        let recent_hash = "ab44000000000000000000000000000000000000000000000000000000000044";
+        create_cas_object(&objects_dir, recent_hash, b"recent");
+
+        let live_hashes = HashSet::new();
+        let stats = gc_cas_objects(&objects_dir, &live_hashes).unwrap();
+
+        assert_eq!(stats.objects_checked, 1);
+        assert_eq!(stats.objects_removed, 0);
+
+        let (prefix, suffix) = recent_hash.split_at(2);
+        assert!(
+            objects_dir.join(prefix).join(suffix).exists(),
+            "recent objects should survive the GC grace period"
+        );
+    }
+
+    #[test]
+    fn test_recent_object_helper_allows_nonrecent_objects() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("object");
+        std::fs::write(&path, b"old").unwrap();
+
+        let now = SystemTime::now();
+        assert!(!should_skip_recent_object(
+            &path,
+            now + Duration::from_secs(1),
+            Duration::ZERO
+        ));
     }
 }
