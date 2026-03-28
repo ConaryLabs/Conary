@@ -90,6 +90,11 @@ pub struct DiscoveredPeer {
 impl DiscoveredPeer {
     /// Convert to a federation Peer
     pub fn to_peer(&self) -> Result<Peer> {
+        self.to_peer_with_secure_transport(false)
+    }
+
+    /// Convert to a federation Peer, optionally forcing authenticated HTTPS transport.
+    pub fn to_peer_with_secure_transport(&self, require_secure_transport: bool) -> Result<Peer> {
         // Prefer IPv4 addresses for simplicity, fall back to IPv6
         let addr = self
             .addresses
@@ -98,8 +103,10 @@ impl DiscoveredPeer {
             .or_else(|| self.addresses.first())
             .ok_or_else(|| Error::NotFound("No IP address for peer".into()))?;
 
-        // Use HTTPS for RegionHub peers since they require mTLS for WAN transport
-        let scheme = if self.tier == PeerTier::RegionHub {
+        // Region hubs always use HTTPS. When authenticated transport is required
+        // for mDNS-discovered peers, promote all peers to HTTPS so the mTLS
+        // client path is exercised during fetches.
+        let scheme = if require_secure_transport || self.tier == PeerTier::RegionHub {
             "https"
         } else {
             "http"
@@ -525,6 +532,23 @@ mod tests {
 
         let peer = discovered.to_peer().unwrap();
         assert_eq!(peer.endpoint, "http://192.168.1.100:7891");
+    }
+
+    #[test]
+    fn test_discovered_peer_uses_https_when_secure_transport_required() {
+        let discovered = DiscoveredPeer {
+            id: "test-id".to_string(),
+            instance_name: "test-instance".to_string(),
+            hostname: "test-host.local.".to_string(),
+            addresses: vec!["192.168.1.100".parse().unwrap()],
+            port: 7891,
+            tier: PeerTier::Leaf,
+            version: "1".to_string(),
+            properties: HashMap::new(),
+        };
+
+        let peer = discovered.to_peer_with_secure_transport(true).unwrap();
+        assert_eq!(peer.endpoint, "https://192.168.1.100:7891");
     }
 
     #[test]

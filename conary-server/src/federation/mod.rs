@@ -85,6 +85,16 @@ pub struct Federation {
 }
 
 impl Federation {
+    /// Whether any peer allowlist is configured.
+    fn has_peer_allowlist(config: &FederationConfig) -> bool {
+        config.allowed_peers.is_some() || config.tier_allowlists.has_any()
+    }
+
+    /// Whether mDNS-discovered peers must use authenticated transport.
+    fn requires_authenticated_mdns(config: &FederationConfig) -> bool {
+        !Self::has_peer_allowlist(config)
+    }
+
     /// Create a new Federation coordinator
     pub fn new(config: FederationConfig) -> Result<Self> {
         // Create LAN client (no mTLS, for cell hubs)
@@ -217,30 +227,51 @@ impl Federation {
         config.tier_allowlists.is_allowed(&peer.endpoint, peer.tier)
     }
 
+    /// Validate and normalize an mDNS-discovered peer before admitting it.
+    fn prepare_discovered_peer(
+        config: &FederationConfig,
+        has_mtls: bool,
+        discovered: &DiscoveredPeer,
+    ) -> Result<Peer> {
+        let require_authenticated_transport = Self::requires_authenticated_mdns(config);
+
+        if require_authenticated_transport && !has_mtls {
+            return Err(Error::Federation(format!(
+                "mDNS peer {} rejected: configure allowed_peers/tier_allowlists or mTLS before accepting discovered peers",
+                discovered.instance_name
+            )));
+        }
+
+        let peer = discovered.to_peer_with_secure_transport(require_authenticated_transport)?;
+        if !Self::is_peer_allowed(config, &peer) {
+            return Err(Error::Federation(format!(
+                "mDNS peer {} rejected by allowlist: {}",
+                discovered.instance_name, peer.endpoint
+            )));
+        }
+
+        Ok(peer)
+    }
+
     /// Get the appropriate HTTP client for a peer based on its tier
     ///
-    /// - Cell hubs and leaves use the LAN client (no mTLS)
-    /// - Region hubs use the WAN client with mTLS (if configured)
+    /// - HTTPS peers use the mTLS-capable client
+    /// - HTTP peers use the LAN client unless a region hub is configured to require mTLS
     fn client_for_peer(&self, peer: &Peer) -> Result<&reqwest::Client> {
+        if peer.endpoint.starts_with("https://") {
+            return self.wan_client.as_ref().ok_or_else(|| {
+                Error::Federation(format!(
+                    "mTLS required for peer {} but not configured",
+                    peer.endpoint
+                ))
+            });
+        }
+
         match peer.tier {
-            PeerTier::RegionHub => {
-                // Region hubs require mTLS if configured
-                if self.config.require_mtls_wan {
-                    self.wan_client.as_ref().ok_or_else(|| {
-                        Error::Federation(format!(
-                            "mTLS required for region hub {} but not configured",
-                            peer.endpoint
-                        ))
-                    })
-                } else {
-                    // Use WAN client if available, fall back to LAN client
-                    Ok(self.wan_client.as_ref().unwrap_or(&self.lan_client))
-                }
-            }
-            PeerTier::CellHub | PeerTier::Leaf => {
-                // Cell hubs and leaves use LAN client
-                Ok(&self.lan_client)
-            }
+            PeerTier::RegionHub if self.config.require_mtls_wan => Err(Error::Federation(
+                format!("mTLS required for region hub {} but not configured", peer.endpoint),
+            )),
+            PeerTier::RegionHub | PeerTier::CellHub | PeerTier::Leaf => Ok(&self.lan_client),
         }
     }
 
@@ -321,6 +352,14 @@ impl Federation {
             ));
         }
 
+        let require_authenticated_mdns = Self::requires_authenticated_mdns(&self.config);
+        let has_mtls = self.has_mtls();
+        if require_authenticated_mdns && !has_mtls {
+            warn!(
+                "[mdns] No peer allowlist or mTLS configured; discovered peers will be rejected until one of those trust controls is enabled"
+            );
+        }
+
         // Create mDNS manager if not exists
         if self.mdns.is_none() {
             let mdns = MdnsDiscovery::new()?;
@@ -353,6 +392,7 @@ impl Federation {
 
         // Start discovery with a callback that adds peers to our registry
         let peers = Arc::clone(&self.peers);
+        let config = self.config.clone();
         mdns.start_discovery(move |event| {
             match event {
                 MdnsEvent::PeerFound(discovered) => {
@@ -369,7 +409,7 @@ impl Federation {
                     );
 
                     // Convert to Peer and add to registry
-                    match discovered.to_peer() {
+                    match Self::prepare_discovered_peer(&config, has_mtls, &discovered) {
                         Ok(peer) => {
                             // Use try_write to avoid blocking in the callback.
                             // If the lock is contended, the peer is silently
@@ -384,7 +424,7 @@ impl Federation {
                             }
                         }
                         Err(e) => {
-                            warn!("[mdns] Failed to convert discovered peer: {}", e);
+                            warn!("[mdns] Refused discovered peer: {}", e);
                         }
                     }
                 }
@@ -845,6 +885,19 @@ impl ChunkFetcher for FederatedChunkFetcher {
 mod tests {
     use super::*;
 
+    fn discovered_peer() -> DiscoveredPeer {
+        DiscoveredPeer {
+            id: "peer-1".to_string(),
+            instance_name: "conary-peer-1".to_string(),
+            hostname: "peer-1.local.".to_string(),
+            addresses: vec!["192.168.1.100".parse().unwrap()],
+            port: 7891,
+            tier: PeerTier::CellHub,
+            version: "1".to_string(),
+            properties: HashMap::new(),
+        }
+    }
+
     #[test]
     fn test_federation_config_default() {
         let config = FederationConfig::default();
@@ -868,5 +921,38 @@ mod tests {
 
         assert!(!stats.enabled);
         assert_eq!(stats.total_peers, 0);
+    }
+
+    #[test]
+    fn test_prepare_discovered_peer_rejects_without_allowlist_or_mtls() {
+        let config = FederationConfig::default();
+        let result = Federation::prepare_discovered_peer(&config, false, &discovered_peer());
+
+        assert!(matches!(result, Err(Error::Federation(_))));
+    }
+
+    #[test]
+    fn test_prepare_discovered_peer_accepts_allowlisted_mdns_peer() {
+        let config = FederationConfig {
+            tier_allowlists: super::config::TierAllowlists {
+                cell_hubs: Some(vec!["http://192.168.1.100:7891".to_string()]),
+                ..Default::default()
+            },
+            ..FederationConfig::default()
+        };
+
+        let peer = Federation::prepare_discovered_peer(&config, false, &discovered_peer())
+            .expect("allowlisted mDNS peer should be accepted");
+
+        assert_eq!(peer.endpoint, "http://192.168.1.100:7891");
+    }
+
+    #[test]
+    fn test_prepare_discovered_peer_requires_https_when_using_mtls_without_allowlist() {
+        let config = FederationConfig::default();
+        let peer = Federation::prepare_discovered_peer(&config, true, &discovered_peer())
+            .expect("mTLS-backed discovered peer should be accepted");
+
+        assert_eq!(peer.endpoint, "https://192.168.1.100:7891");
     }
 }
