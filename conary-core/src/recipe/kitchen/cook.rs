@@ -17,6 +17,19 @@ use super::Kitchen;
 use super::archive::{apply_patch, extract_archive};
 use super::provenance_capture::ProvenanceCapture;
 
+const DANGEROUS_BUILD_ENV_VARS: &[&str] =
+    &["LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "LD_BIND_NOT"];
+
+fn is_dangerous_build_env_var(key: &str) -> bool {
+    DANGEROUS_BUILD_ENV_VARS.contains(&key)
+}
+
+fn filtered_build_env<'a>(env: &'a [(&'a str, String)]) -> impl Iterator<Item = (&'a str, &'a str)> {
+    env.iter()
+        .filter(|(key, _)| !is_dangerous_build_env_var(key))
+        .map(|(key, value)| (*key, value.as_str()))
+}
+
 fn apply_direct_build_env(cmd: &mut Command, env: &[(&str, String)]) {
     cmd.env_clear()
         .env("HOME", "/root")
@@ -28,9 +41,22 @@ fn apply_direct_build_env(cmd: &mut Command, env: &[(&str, String)]) {
         cmd.env("PATH", "/usr/bin:/usr/sbin:/bin:/sbin:/tools/bin");
     }
 
-    for (key, value) in env {
-        cmd.env(*key, value);
+    for (key, value) in filtered_build_env(env) {
+        cmd.env(key, value);
     }
+}
+
+fn chroot_env_args(env: &[(&str, String)], jobs: u32) -> Vec<String> {
+    let mut env_args = vec!["env".to_string(), "-i".to_string()];
+    for (key, value) in filtered_build_env(env) {
+        env_args.push(format!("{key}={value}"));
+    }
+    env_args.push("PATH=/usr/bin:/usr/sbin:/bin:/sbin:/tools/bin".to_string());
+    env_args.push("HOME=/root".to_string());
+    env_args.push("TERM=xterm".to_string());
+    env_args.push("LC_ALL=C".to_string());
+    env_args.push(format!("MAKEFLAGS=-j{jobs}"));
+    env_args
 }
 
 /// A single cook operation
@@ -541,19 +567,8 @@ impl<'a> Cook<'a> {
             let chroot_workdir = workdir.strip_prefix(sysroot).unwrap_or(workdir);
 
             // Build env string for chroot (env -i clears host env)
-            let mut env_args = vec!["env".to_string(), "-i".to_string()];
-            for (k, v) in env {
-                env_args.push(format!("{k}={v}"));
-            }
-            // Standard PATH inside the chroot
-            env_args.push("PATH=/usr/bin:/usr/sbin:/bin:/sbin:/tools/bin".to_string());
-            env_args.push("HOME=/root".to_string());
-            env_args.push("TERM=xterm".to_string());
-            env_args.push("LC_ALL=C".to_string());
-            env_args.push(format!(
-                "MAKEFLAGS=-j{}",
-                self.recipe.build.jobs.unwrap_or(self.kitchen.config.jobs)
-            ));
+            let env_args =
+                chroot_env_args(env, self.recipe.build.jobs.unwrap_or(self.kitchen.config.jobs));
 
             // Shell-escape the chroot workdir to prevent injection from
             // paths with spaces or special characters, matching the
@@ -778,5 +793,45 @@ mod tests {
             result.is_ok(),
             "direct kitchen build steps should not inherit host environment variables: {result:?}"
         );
+    }
+
+    #[test]
+    fn test_apply_direct_build_env_filters_dangerous_loader_variables() {
+        let mut cmd = Command::new("env");
+        apply_direct_build_env(
+            &mut cmd,
+            &[
+                ("LD_PRELOAD", "/tmp/malicious.so".to_string()),
+                ("SAFE_FLAG", "1".to_string()),
+            ],
+        );
+
+        let envs: HashMap<String, Option<String>> = cmd
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+
+        assert!(!envs.contains_key("LD_PRELOAD"));
+        assert_eq!(envs.get("SAFE_FLAG"), Some(&Some("1".to_string())));
+    }
+
+    #[test]
+    fn test_chroot_env_args_filter_dangerous_loader_variables() {
+        let args = chroot_env_args(
+            &[
+                ("LD_LIBRARY_PATH", "/tmp/evil".to_string()),
+                ("CUSTOM", "value".to_string()),
+            ],
+            8,
+        );
+
+        assert!(!args.iter().any(|arg| arg.starts_with("LD_LIBRARY_PATH=")));
+        assert!(args.iter().any(|arg| arg == "CUSTOM=value"));
+        assert!(args.iter().any(|arg| arg == "MAKEFLAGS=-j8"));
     }
 }
