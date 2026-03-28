@@ -104,6 +104,32 @@ impl PeerCredentials {
         self.is_root() || self.uid == daemon_uid
     }
 
+    /// Check that the live process behind this PID still matches the
+    /// credentials captured when the socket was accepted.
+    pub fn matches_current_process_identity(&self) -> bool {
+        match Self::read_proc_status(self.pid) {
+            Ok((proc_uid, _)) if proc_uid == self.uid => true,
+            Ok((proc_uid, _)) => {
+                tracing::warn!(
+                    pid = self.pid,
+                    expected_uid = self.uid,
+                    current_uid = proc_uid,
+                    "Daemon peer credential revalidation failed: PID identity changed"
+                );
+                false
+            }
+            Err(err) => {
+                tracing::warn!(
+                    pid = self.pid,
+                    uid = self.uid,
+                    error = %err,
+                    "Daemon peer credential revalidation failed: PID no longer available"
+                );
+                false
+            }
+        }
+    }
+
     /// Check if the peer is a member of an admin group
     ///
     /// Checks the peer's primary GID and supplementary groups for
@@ -529,6 +555,30 @@ mod tests {
         assert!(daemon_user.matches_daemon_identity(daemon_uid));
         assert!(root.matches_daemon_identity(daemon_uid));
         assert!(!other_user.matches_daemon_identity(daemon_uid));
+    }
+
+    #[test]
+    fn test_peer_credentials_matches_current_process_identity() {
+        let creds = PeerCredentials {
+            pid: std::process::id(),
+            uid: nix::unistd::getuid().as_raw(),
+            gid: nix::unistd::getgid().as_raw(),
+        };
+
+        assert!(creds.matches_current_process_identity());
+    }
+
+    #[test]
+    fn test_peer_credentials_rejects_changed_process_identity() {
+        let actual_uid = nix::unistd::getuid().as_raw();
+        let fake_uid = actual_uid.wrapping_add(1);
+        let creds = PeerCredentials {
+            pid: std::process::id(),
+            uid: fake_uid,
+            gid: nix::unistd::getgid().as_raw(),
+        };
+
+        assert!(!creds.matches_current_process_identity());
     }
 
     #[test]
