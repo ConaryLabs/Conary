@@ -27,6 +27,12 @@ pub enum CompressionError {
     )]
     DecompressionBomb { format: &'static str, limit: u64 },
 
+    #[error("Archive {archive} exceeds {limit} entries (possible archive bomb)")]
+    ArchiveEntryLimit {
+        archive: &'static str,
+        limit: usize,
+    },
+
     #[error("Unsupported compression format: {0}")]
     UnsupportedFormat(String),
 }
@@ -152,6 +158,19 @@ pub fn create_decoder<'a, R: Read + 'a>(
     }
 }
 
+/// Create a decompressing reader with a cumulative output limit.
+///
+/// The returned reader stops after `limit + 1` decompressed bytes so callers can
+/// detect and reject oversized streams instead of silently truncating them.
+pub fn create_decoder_limited<'a, R: Read + 'a>(
+    reader: R,
+    format: CompressionFormat,
+    limit: u64,
+) -> Result<Box<dyn Read + 'a>, CompressionError> {
+    let decoder = create_decoder(reader, format)?;
+    Ok(Box::new(decoder.take(limit + 1)))
+}
+
 /// Decompress a byte slice to a Vec
 ///
 /// Convenience function that detects format from magic bytes and decompresses.
@@ -163,15 +182,28 @@ pub fn decompress_auto(data: &[u8]) -> Result<Vec<u8>, CompressionError> {
 /// Maximum decompressed output size (2 GiB) to guard against decompression bombs.
 pub const MAX_DECOMPRESS_SIZE: u64 = 2 * 1024 * 1024 * 1024;
 
+/// Tighter decompression budget for repository metadata and similar control-plane content.
+pub const MAX_METADATA_DECOMPRESS_SIZE: u64 = 512 * 1024 * 1024;
+
+/// Maximum number of entries allowed in a single archive traversal.
+pub const MAX_ARCHIVE_ENTRIES: usize = 500_000;
+
 /// Decompress a byte slice using the specified format.
 ///
 /// Output is capped at `MAX_DECOMPRESS_SIZE` bytes to prevent decompression bombs.
 /// Returns an error if the decompressed output exceeds the limit rather than
 /// silently truncating.
 pub fn decompress(data: &[u8], format: CompressionFormat) -> Result<Vec<u8>, CompressionError> {
-    let decoder = create_decoder(data, format)?;
-    // Read one extra byte beyond the limit to detect truncation
-    let mut limited = decoder.take(MAX_DECOMPRESS_SIZE + 1);
+    decompress_with_limit(data, format, MAX_DECOMPRESS_SIZE)
+}
+
+/// Decompress a byte slice with an explicit output limit.
+pub fn decompress_with_limit(
+    data: &[u8],
+    format: CompressionFormat,
+    limit: u64,
+) -> Result<Vec<u8>, CompressionError> {
+    let mut limited = create_decoder_limited(data, format, limit)?;
     let mut output = Vec::new();
     limited
         .read_to_end(&mut output)
@@ -179,13 +211,19 @@ pub fn decompress(data: &[u8], format: CompressionFormat) -> Result<Vec<u8>, Com
             format: format.name(),
             source: e,
         })?;
-    if output.len() as u64 > MAX_DECOMPRESS_SIZE {
+    if output.len() as u64 > limit {
         return Err(CompressionError::DecompressionBomb {
             format: format.name(),
-            limit: MAX_DECOMPRESS_SIZE,
+            limit,
         });
     }
     Ok(output)
+}
+
+/// Decompress a byte slice with automatic format detection and an explicit limit.
+pub fn decompress_auto_with_limit(data: &[u8], limit: u64) -> Result<Vec<u8>, CompressionError> {
+    let format = CompressionFormat::from_magic_bytes(data);
+    decompress_with_limit(data, format, limit)
 }
 
 /// Create a decompressing reader, auto-detecting format from data
@@ -198,9 +236,27 @@ pub fn create_decoder_auto(data: &[u8]) -> Result<Box<dyn Read + '_>, Compressio
     create_decoder(data, format)
 }
 
+/// Reject archives with pathologically large entry counts.
+pub fn check_archive_entry_limit(
+    entries_seen: usize,
+    archive: &'static str,
+) -> Result<(), CompressionError> {
+    if entries_seen > MAX_ARCHIVE_ENTRIES {
+        Err(CompressionError::ArchiveEntryLimit {
+            archive,
+            limit: MAX_ARCHIVE_ENTRIES,
+        })
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+    use std::io::Write;
 
     #[test]
     fn test_format_from_extension() {
@@ -302,5 +358,34 @@ mod tests {
         ];
         let result = decompress_auto(gzip_data).unwrap();
         assert_eq!(result, b"hello");
+    }
+
+    #[test]
+    fn test_decompress_auto_with_limit_rejects_oversized_output() {
+        let payload = vec![b'a'; 1024];
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&payload).unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        let err = decompress_auto_with_limit(&compressed, 512).unwrap_err();
+        assert!(matches!(
+            err,
+            CompressionError::DecompressionBomb {
+                format: "gzip",
+                limit: 512
+            }
+        ));
+    }
+
+    #[test]
+    fn test_check_archive_entry_limit_rejects_too_many_entries() {
+        let err = check_archive_entry_limit(MAX_ARCHIVE_ENTRIES + 1, "test archive").unwrap_err();
+        assert!(matches!(
+            err,
+            CompressionError::ArchiveEntryLimit {
+                archive: "test archive",
+                limit: MAX_ARCHIVE_ENTRIES,
+            }
+        ));
     }
 }

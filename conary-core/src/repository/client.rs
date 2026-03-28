@@ -5,7 +5,10 @@
 //! Provides a wrapper around reqwest with retry support for
 //! fetching metadata and downloading files.
 
-use crate::compression::{CompressionFormat, decompress_auto};
+use crate::compression::{
+    CompressionFormat, MAX_METADATA_DECOMPRESS_SIZE, decompress_auto_with_limit,
+    decompress_with_limit,
+};
 use crate::error::{Error, Result};
 use crate::repository::error_helpers::ResultExt;
 use indicatif::ProgressBar;
@@ -324,8 +327,8 @@ impl RepositoryClient {
         let bytes = self.download_to_bytes(url).await?;
 
         // Auto-detect and decompress
-        let decompressed =
-            decompress_auto(&bytes).parse_context(&format!("decompress data from {url}"))?;
+        let decompressed = decompress_auto_with_limit(&bytes, MAX_METADATA_DECOMPRESS_SIZE)
+            .parse_context(&format!("decompress data from {url}"))?;
 
         debug!(
             "Decompressed {} bytes -> {} bytes",
@@ -359,13 +362,13 @@ impl RepositoryClient {
                     "URL {} has no extension but detected {} compression",
                     url, detected
                 );
-                return decompress_auto(&bytes)
+                return decompress_auto_with_limit(&bytes, MAX_METADATA_DECOMPRESS_SIZE)
                     .map_err(|e| Error::ParseError(format!("Failed to decompress: {}", e)));
             }
             return Ok(bytes);
         }
 
-        decompress_auto(&bytes)
+        decompress_with_limit(&bytes, format, MAX_METADATA_DECOMPRESS_SIZE)
             .map_err(|e| Error::ParseError(format!("Failed to decompress {} data: {}", format, e)))
     }
 

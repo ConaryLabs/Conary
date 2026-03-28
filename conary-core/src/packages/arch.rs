@@ -54,7 +54,7 @@ impl ArchPackage {
             .map_err(|e| Error::InitError(format!("Failed to open package file: {}", e)))?;
 
         let format = Self::detect_compression(path)?;
-        let reader = compression::create_decoder(file, format)
+        let reader = compression::create_decoder_limited(file, format, compression::MAX_DECOMPRESS_SIZE)
             .map_err(|e| Error::InitError(format!("Failed to create decoder: {}", e)))?;
 
         Ok(Archive::new(reader))
@@ -279,11 +279,15 @@ impl PackageFormat for ArchPackage {
         let mut pkginfo_content = None;
         let mut install_content = None;
         let mut files = Vec::new();
+        let mut entries_seen = 0usize;
 
         for entry in archive
             .entries()
             .map_err(|e| Error::InitError(format!("Failed to read archive: {}", e)))?
         {
+            entries_seen += 1;
+            compression::check_archive_entry_limit(entries_seen, "Arch package archive")
+                .map_err(|e| Error::InitError(format!("Failed to read archive: {}", e)))?;
             let mut entry =
                 entry.map_err(|e| Error::InitError(format!("Failed to read entry: {}", e)))?;
 
@@ -459,11 +463,15 @@ impl PackageFormat for ArchPackage {
             })?;
         let mut archive = Self::open_archive(path_str)?;
         let mut extracted_files = Vec::new();
+        let mut entries_seen = 0usize;
 
         for entry in archive
             .entries()
             .map_err(|e| Error::InitError(format!("Failed to read archive: {}", e)))?
         {
+            entries_seen += 1;
+            compression::check_archive_entry_limit(entries_seen, "Arch package archive")
+                .map_err(|e| Error::InitError(format!("Failed to read archive: {}", e)))?;
             let mut entry =
                 entry.map_err(|e| Error::InitError(format!("Failed to read entry: {}", e)))?;
 

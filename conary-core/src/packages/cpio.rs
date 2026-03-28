@@ -1,5 +1,6 @@
 // conary-core/src/packages/cpio.rs
 
+use crate::compression::{MAX_ARCHIVE_ENTRIES, MAX_DECOMPRESS_SIZE};
 use std::io::{self, Read};
 
 /// CPIO New ASCII Format (newc) header size
@@ -29,11 +30,25 @@ pub struct CpioEntry {
 /// A reader for CPIO (New ASCII) archives
 pub struct CpioReader<R: Read> {
     reader: R,
+    entries_seen: usize,
+    total_content_size: u64,
+    max_entries: usize,
+    max_total_content_size: u64,
 }
 
 impl<R: Read> CpioReader<R> {
     pub fn new(reader: R) -> Self {
-        Self { reader }
+        Self::with_limits(reader, MAX_ARCHIVE_ENTRIES, MAX_DECOMPRESS_SIZE)
+    }
+
+    fn with_limits(reader: R, max_entries: usize, max_total_content_size: u64) -> Self {
+        Self {
+            reader,
+            entries_seen: 0,
+            total_content_size: 0,
+            max_entries,
+            max_total_content_size,
+        }
     }
 
     /// Read the next entry from the CPIO archive
@@ -110,6 +125,14 @@ impl<R: Read> CpioReader<R> {
             return Ok(None);
         }
 
+        self.entries_seen += 1;
+        if self.entries_seen > self.max_entries {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("CPIO entry count exceeds maximum {}", self.max_entries),
+            ));
+        }
+
         // Skip padding after filename (align to 4 bytes)
         let header_plus_name = HEADER_SIZE.checked_add(namesize as usize).ok_or_else(|| {
             io::Error::new(
@@ -128,6 +151,25 @@ impl<R: Read> CpioReader<R> {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("CPIO entry file size {filesize} exceeds maximum {MAX_FILE_SIZE}"),
+            ));
+        }
+
+        self.total_content_size = self
+            .total_content_size
+            .checked_add(filesize)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "CPIO cumulative content size overflow",
+                )
+            })?;
+        if self.total_content_size > self.max_total_content_size {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "CPIO cumulative content size {} exceeds maximum {}",
+                    self.total_content_size, self.max_total_content_size
+                ),
             ));
         }
 
@@ -227,5 +269,52 @@ mod tests {
         assert_eq!(entry.0.name, "hello");
         assert_eq!(entry.0.size, 3);
         assert_eq!(&entry.1, b"abc");
+    }
+
+    fn append_entry(data: &mut Vec<u8>, name: &str, content: &[u8]) {
+        let namesize = name.len() + 1;
+        let header = make_header(&format!("{namesize:08X}"), &format!("{:08X}", content.len()));
+        data.extend_from_slice(&header);
+        data.extend_from_slice(name.as_bytes());
+        data.push(0);
+        let name_pad = (4 - ((HEADER_SIZE + namesize) % 4)) % 4;
+        data.extend(std::iter::repeat_n(0, name_pad));
+        data.extend_from_slice(content);
+        let content_pad = (4 - (content.len() % 4)) % 4;
+        data.extend(std::iter::repeat_n(0, content_pad));
+    }
+
+    #[test]
+    fn reject_too_many_entries() {
+        let mut data = Vec::new();
+        append_entry(&mut data, "one", b"a");
+        append_entry(&mut data, "two", b"b");
+        append_entry(&mut data, "TRAILER!!!", b"");
+
+        let mut reader = CpioReader::with_limits(data.as_slice(), 1, u64::MAX);
+        assert!(reader.next_entry().unwrap().is_some());
+        let err = reader.next_entry().unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string().contains("entry count"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn reject_cumulative_content_over_limit() {
+        let mut data = Vec::new();
+        append_entry(&mut data, "one", b"abc");
+        append_entry(&mut data, "two", b"def");
+        append_entry(&mut data, "TRAILER!!!", b"");
+
+        let mut reader = CpioReader::with_limits(data.as_slice(), usize::MAX, 5);
+        assert!(reader.next_entry().unwrap().is_some());
+        let err = reader.next_entry().unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string().contains("cumulative"),
+            "unexpected error: {err}"
+        );
     }
 }
