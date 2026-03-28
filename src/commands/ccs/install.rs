@@ -20,6 +20,7 @@ use conary_core::repository::versioning::{
 use conary_core::scriptlet::{
     ExecutionMode, PackageFormat as ScriptletPackageFormat, ScriptletExecutor,
 };
+use conary_core::transaction::{TransactionConfig, TransactionEngine};
 use rusqlite::params;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
@@ -463,7 +464,7 @@ pub async fn cmd_ccs_install(
     }
 
     // Step 3: Check for existing installation
-    let conn = open_db(db_path)?;
+    let mut conn = open_db(db_path)?;
 
     let existing = conary_core::db::models::Trove::find_by_name(&conn, ccs_pkg.name())?;
     if !existing.is_empty() {
@@ -542,6 +543,10 @@ pub async fn cmd_ccs_install(
         }
         return Ok(());
     }
+
+    let mut engine =
+        TransactionEngine::new(TransactionConfig::from_paths(PathBuf::from(root), db_path.into()))?;
+    engine.begin()?;
 
     // Step 5: Extract file contents
     println!("Extracting files...");
@@ -650,11 +655,20 @@ pub async fn cmd_ccs_install(
                     objects_dir.display()
                 );
             }
-            let cas_dir = objects_dir.join(&hash[0..2]);
-            let cas_path = cas_dir.join(&hash[2..]);
-            if !cas_path.exists() {
-                std::fs::create_dir_all(&cas_dir)?;
-                std::fs::write(&cas_path, &file.content)?;
+            let stored_hash = if current_is_symlink {
+                let target = std::str::from_utf8(&file.content)
+                    .context("invalid symlink target in package payload")?;
+                engine.cas().store_symlink(target)?
+            } else {
+                engine.cas().store(&file.content)?
+            };
+            if stored_hash != *hash {
+                anyhow::bail!(
+                    "CAS hash mismatch for {}: manifest {} != stored {}",
+                    file.path,
+                    hash,
+                    stored_hash
+                );
             }
         }
 
@@ -670,10 +684,8 @@ pub async fn cmd_ccs_install(
         std::thread::sleep(delay);
     }
     let is_upgrade = !existing.is_empty();
-    let applied_changeset_id: i64;
-    {
-        let tx = conn.unchecked_transaction()?;
-
+    let mut applied_changeset_id = 0_i64;
+    conary_core::db::transaction(&mut conn, |tx| {
         // Create changeset for history and rollback support
         let description = if is_upgrade {
             format!(
@@ -686,7 +698,7 @@ pub async fn cmd_ccs_install(
             format!("CCS install {} {}", ccs_pkg.name(), ccs_pkg.version())
         };
         let mut changeset = Changeset::new(description);
-        let changeset_id = changeset.insert(&tx)?;
+        let changeset_id = changeset.insert(tx)?;
         applied_changeset_id = changeset_id;
 
         // Remove old version if upgrading (snapshot first for rollback)
@@ -694,7 +706,7 @@ pub async fn cmd_ccs_install(
             let old = &existing[0];
             if let Some(old_id) = old.id {
                 // Snapshot old trove for rollback support
-                let old_files = conary_core::db::models::FileEntry::find_by_trove(&tx, old_id)?;
+                let old_files = conary_core::db::models::FileEntry::find_by_trove(tx, old_id)?;
                 let snapshot = crate::commands::TroveSnapshot {
                     name: old.name.clone(),
                     version: old.version.clone(),
@@ -731,7 +743,7 @@ pub async fn cmd_ccs_install(
         // Create trove linked to changeset
         let mut trove = ccs_pkg.to_trove();
         trove.installed_by_changeset_id = Some(changeset_id);
-        let trove_id = trove.insert(&tx)?;
+        let trove_id = trove.insert(tx)?;
 
         // Register files, store in CAS index, and record history for rollback
         for file in &extracted_files {
@@ -744,7 +756,7 @@ pub async fn cmd_ccs_install(
                 trove_id,
             );
             file_entry.symlink_target = file.symlink_target.clone();
-            file_entry.insert_or_replace(&tx)?;
+            file_entry.insert_or_replace(tx)?;
 
             // Register in file_contents (CAS index) and file_history
             if hash.len() == 64 {
@@ -773,14 +785,14 @@ pub async fn cmd_ccs_install(
             ccs_pkg.name().to_string(),
             Some(ccs_pkg.version().to_string()),
         );
-        provide.insert(&tx)?;
+        provide.insert(tx)?;
 
         // Register additional provides from manifest
         for cap in &ccs_pkg.manifest().provides.capabilities {
             if cap != ccs_pkg.name() {
                 let mut cap_provide =
                     conary_core::db::models::ProvideEntry::new(trove_id, cap.clone(), None);
-                cap_provide.insert(&tx)?;
+                cap_provide.insert(tx)?;
             }
         }
 
@@ -791,7 +803,7 @@ pub async fn cmd_ccs_install(
                 soname.clone(),
                 None,
             );
-            soname_provide.insert_or_ignore(&tx)?;
+            soname_provide.insert_or_ignore(tx)?;
         }
 
         for binary in &ccs_pkg.manifest().provides.binaries {
@@ -801,7 +813,7 @@ pub async fn cmd_ccs_install(
                 binary.clone(),
                 None,
             );
-            binary_provide.insert_or_ignore(&tx)?;
+            binary_provide.insert_or_ignore(tx)?;
         }
 
         for module in &ccs_pkg.manifest().provides.pkgconfig {
@@ -811,7 +823,7 @@ pub async fn cmd_ccs_install(
                 module.clone(),
                 None,
             );
-            pkgconfig_provide.insert_or_ignore(&tx)?;
+            pkgconfig_provide.insert_or_ignore(tx)?;
         }
 
         for dep in &detected_provides {
@@ -825,7 +837,7 @@ pub async fn cmd_ccs_install(
                 dep.name.clone(),
                 dep.version_constraint.clone(),
             );
-            detected_provide.insert_or_ignore(&tx)?;
+            detected_provide.insert_or_ignore(tx)?;
         }
 
         for dep in &ccs_pkg.manifest().requires.packages {
@@ -836,7 +848,7 @@ pub async fn cmd_ccs_install(
                 "runtime".to_string(),
                 dep.version.clone(),
             );
-            dep_entry.insert(&tx)?;
+            dep_entry.insert(tx)?;
         }
 
         for cap in &ccs_pkg.manifest().requires.capabilities {
@@ -848,7 +860,7 @@ pub async fn cmd_ccs_install(
                 "runtime".to_string(),
                 cap.version().map(|v| v.to_string()),
             );
-            dep_entry.insert(&tx)?;
+            dep_entry.insert(tx)?;
         }
 
         // Store pre_remove script as a scriptlet entry so cmd_remove can find it
@@ -860,14 +872,14 @@ pub async fn cmd_ccs_install(
                 hook.script.clone(),
                 "ccs",
             );
-            scriptlet.insert(&tx)?;
+            scriptlet.insert(tx)?;
         }
 
         // Mark changeset as applied
-        changeset.update_status(&tx, ChangesetStatus::Applied)?;
+        changeset.update_status(tx, ChangesetStatus::Applied)?;
 
-        tx.commit()?;
-    }
+        Ok(())
+    })?;
 
     // Step 9: Execute post-hooks (including post_install script)
     // Note: the DB transaction is already committed at this point (changeset
@@ -942,6 +954,7 @@ pub async fn cmd_ccs_install(
         ccs_pkg.version()
     );
 
+    engine.release_lock();
     Ok(())
 }
 

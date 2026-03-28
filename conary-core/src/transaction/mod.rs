@@ -29,7 +29,7 @@ use crate::hash::HashAlgorithm;
 use fs2::FileExt;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 
 /// Transaction state machine phases.
@@ -201,7 +201,11 @@ impl TransactionEngine {
     /// exponential backoff up to the configured timeout.
     pub fn begin(&mut self) -> Result<()> {
         let lock_path = self.config.objects_dir.join("conary.lock");
-        let lock_file = File::create(&lock_path)?;
+        let lock_file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)?;
 
         let timeout = std::time::Duration::from_secs(self.config.lock_timeout_secs);
         let start = std::time::Instant::now();
@@ -236,8 +240,8 @@ impl TransactionEngine {
             return Err(crate::Error::IoError(format!(
                 "Failed to acquire transaction lock after {:.1}s (timeout: {}s). \
                  Another conary transaction is likely in progress. \
-                 If you are sure no other transaction is running, remove the lock file \
-                 at {} and try again.",
+                 Wait for the active transaction to finish and then retry. \
+                 Lock path: {}",
                 waited.as_secs_f64(),
                 self.config.lock_timeout_secs,
                 lock_path.display(),
@@ -741,6 +745,43 @@ mod tests {
 
         engine.release_lock();
         assert!(engine.lock_file.is_none());
+    }
+
+    #[test]
+    fn engine_begin_preserves_existing_lockfile_contents() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = TransactionConfig::new(temp_dir.path());
+        let lock_path = config.objects_dir.join("conary.lock");
+        std::fs::create_dir_all(&config.objects_dir).unwrap();
+        std::fs::write(&lock_path, b"keep-me").unwrap();
+
+        let mut engine = TransactionEngine::new(config).unwrap();
+        engine.begin().unwrap();
+        engine.release_lock();
+
+        assert_eq!(std::fs::read(&lock_path).unwrap(), b"keep-me");
+    }
+
+    #[test]
+    fn engine_begin_timeout_message_does_not_suggest_deleting_lockfile() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut config = TransactionConfig::new(temp_dir.path());
+        config.lock_timeout_secs = 0;
+        let lock_path = config.objects_dir.join("conary.lock");
+        std::fs::create_dir_all(&config.objects_dir).unwrap();
+
+        let lock_file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)
+            .unwrap();
+        lock_file.try_lock_exclusive().unwrap();
+
+        let mut engine = TransactionEngine::new(config).unwrap();
+        let err = engine.begin().unwrap_err().to_string();
+        assert!(!err.contains("remove the lock file"));
+        assert!(err.contains("Wait for the active transaction to finish"));
     }
 
     /// Write a minimal valid EROFS image stub: at least EROFS_MIN_SIZE bytes
