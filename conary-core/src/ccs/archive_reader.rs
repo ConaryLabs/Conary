@@ -66,7 +66,14 @@ pub struct CcsArchiveContents {
 /// Returns an error if the archive is malformed, exceeds size limits, or
 /// contains neither a CBOR `MANIFEST` nor a `MANIFEST.toml`.
 pub fn read_ccs_archive<R: Read>(reader: R) -> anyhow::Result<CcsArchiveContents> {
-    let decoder = GzDecoder::new(reader);
+    read_ccs_archive_with_limits(reader, MAX_TOTAL_EXTRACTION_SIZE)
+}
+
+fn read_ccs_archive_with_limits<R: Read>(
+    reader: R,
+    total_extraction_limit: u64,
+) -> anyhow::Result<CcsArchiveContents> {
+    let decoder = GzDecoder::new(reader).take(total_extraction_limit);
     let mut archive = Archive::new(decoder);
 
     let mut binary_manifest: Option<BinaryManifest> = None;
@@ -90,7 +97,7 @@ pub fn read_ccs_archive<R: Read>(reader: R) -> anyhow::Result<CcsArchiveContents
             anyhow::bail!("CCS archive entry exceeds maximum size limit: {entry_size} bytes");
         }
         total_bytes += entry_size;
-        if total_bytes > MAX_TOTAL_EXTRACTION_SIZE {
+        if total_bytes > total_extraction_limit {
             anyhow::bail!("CCS archive total extraction size exceeds limit");
         }
 
@@ -348,6 +355,20 @@ license = "MIT"
         let err = read_ccs_archive(cursor).unwrap_err();
         assert!(
             err.to_string().contains("missing both MANIFEST"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_read_ccs_archive_respects_total_extraction_limit() {
+        let (_temp, path) = build_test_package();
+        let file = std::fs::File::open(&path).unwrap();
+        let err = read_ccs_archive_with_limits(file, 32).unwrap_err();
+        assert!(
+            err.to_string().contains("missing both MANIFEST")
+                || err.to_string().contains("failed to iterate over archive")
+                || err.to_string().contains("failed to read entire block")
+                || err.to_string().contains("unexpected end of file"),
             "unexpected error: {err}"
         );
     }

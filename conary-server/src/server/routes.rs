@@ -42,6 +42,12 @@ use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, info, warn};
 
+const MAX_REQUEST_BODY_BYTES: usize = 16 * 1024 * 1024;
+
+fn request_body_limit_bytes() -> usize {
+    MAX_REQUEST_BODY_BYTES
+}
+
 /// Cloudflare IP ranges (IPv4)
 /// These should be periodically updated from https://www.cloudflare.com/ips-v4
 const CLOUDFLARE_IPV4_RANGES: &[&str] = &[
@@ -563,7 +569,7 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
     ));
 
     // Add body size limit (16MB max for all requests)
-    app = app.layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024));
+    app = app.layer(axum::extract::DefaultBodyLimit::max(request_body_limit_bytes()));
 
     // Add audit logging if enabled
     if config.enable_audit_log {
@@ -1096,6 +1102,11 @@ mod tests {
         let config = ServerConfig::default();
         let _cors = create_cors_layer(&config, false);
         // Public CORS should be permissive
+    }
+
+    #[test]
+    fn test_request_body_limit_matches_task_29_cap() {
+        assert_eq!(request_body_limit_bytes(), 16 * 1024 * 1024);
     }
 
     #[test]

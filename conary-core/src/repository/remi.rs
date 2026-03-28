@@ -42,6 +42,21 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// Chunk download timeout (60 seconds per chunk)
 const CHUNK_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Maximum total chunk bytes accepted from a single Remi package download.
+const MAX_TOTAL_CHUNK_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+fn check_total_chunk_bytes(current: u64, next: u64) -> Result<u64> {
+    let total = current
+        .checked_add(next)
+        .ok_or_else(|| Error::DownloadError("Total chunk bytes overflowed".to_string()))?;
+    if total > MAX_TOTAL_CHUNK_BYTES {
+        return Err(Error::DownloadError(format!(
+            "Remi package exceeds maximum total chunk bytes ({total} > {MAX_TOTAL_CHUNK_BYTES})"
+        )));
+    }
+    Ok(total)
+}
+
 /// Response when package needs conversion (202 Accepted)
 #[derive(Debug, Deserialize)]
 pub struct ConversionAccepted {
@@ -385,7 +400,9 @@ impl RemiClient {
             manifest.name
         );
 
-        let total_size: u64 = manifest.chunks.iter().map(|c| c.size).sum();
+        let total_size = manifest.chunks.iter().try_fold(0u64, |acc, chunk| {
+            check_total_chunk_bytes(acc, chunk.size)
+        })?;
         let mut downloaded: u64 = 0;
 
         if let Some(pb) = progress {
@@ -442,7 +459,7 @@ impl RemiClient {
                 }
             })?;
 
-            downloaded += data.len() as u64;
+            downloaded = check_total_chunk_bytes(downloaded, data.len() as u64)?;
             if let Some(pb) = progress {
                 pb.set_position(downloaded);
             }
@@ -1044,6 +1061,16 @@ mod tests {
         let normal = "nginx-1.24.0.ccs";
         let result = sanitize_filename(normal).unwrap();
         assert_eq!(result, "nginx-1.24.0.ccs");
+    }
+
+    #[test]
+    fn test_chunk_byte_limit_rejects_excessive_total() {
+        let err = check_total_chunk_bytes(
+            MAX_TOTAL_CHUNK_BYTES - 4,
+            8,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("chunk bytes"));
     }
 
     #[cfg(feature = "server")]
