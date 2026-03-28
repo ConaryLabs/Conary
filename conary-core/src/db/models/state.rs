@@ -157,6 +157,19 @@ impl SystemState {
         }
     }
 
+    fn set_active_inner(&self, conn: &Connection) -> Result<()> {
+        let id = self.id.ok_or_else(|| {
+            crate::error::Error::MissingId("Cannot set active without ID".to_string())
+        })?;
+
+        conn.execute(
+            "UPDATE system_states SET is_active = 0 WHERE is_active = 1",
+            [],
+        )?;
+        conn.execute("UPDATE system_states SET is_active = 1 WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
     /// Delete a state by ID
     pub fn delete(conn: &Connection, id: i64) -> Result<()> {
         conn.execute("DELETE FROM system_states WHERE id = ?1", [id])?;
@@ -395,8 +408,10 @@ impl<'a> StateEngine<'a> {
         description: Option<&str>,
         changeset_id: Option<i64>,
     ) -> Result<SystemState> {
+        let tx = self.conn.unchecked_transaction()?;
+
         // Count current packages
-        let package_count: i64 = self.conn.query_row(
+        let package_count: i64 = tx.query_row(
             "SELECT COUNT(*) FROM troves WHERE type = 'package'",
             [],
             |row| row.get(0),
@@ -407,10 +422,10 @@ impl<'a> StateEngine<'a> {
         state.description = description.map(String::from);
         state.changeset_id = changeset_id;
         state.package_count = package_count;
-        let state_id = state.insert(self.conn)?;
+        let state_id = state.insert(&tx)?;
 
         // Populate with current packages
-        self.conn.execute(
+        tx.execute(
             "INSERT INTO state_members (state_id, trove_name, trove_version, architecture, install_reason, selection_reason)
              SELECT ?1, name, version, architecture, install_reason, selection_reason
              FROM troves WHERE type = 'package'",
@@ -420,7 +435,7 @@ impl<'a> StateEngine<'a> {
         // Snapshot all CAS hashes for GC liveness tracking.
         // This captures the complete file set at snapshot time, decoupled from
         // the mutable troves/files tables that may change during future upgrades.
-        self.conn.execute(
+        tx.execute(
             "INSERT OR IGNORE INTO state_cas_hashes (state_id, sha256_hash)
              SELECT ?1, f.sha256_hash FROM files f
              JOIN troves t ON f.trove_id = t.id
@@ -432,9 +447,10 @@ impl<'a> StateEngine<'a> {
         )?;
 
         // Set as active state
-        state.set_active(self.conn)?;
+        state.set_active_inner(&tx)?;
         state.is_active = true;
 
+        tx.commit()?;
         Ok(state)
     }
 
@@ -624,6 +640,49 @@ mod tests {
         assert_eq!(diff.upgraded.len(), 1);
         assert_eq!(diff.upgraded[0].0.trove_version, "1.0");
         assert_eq!(diff.upgraded[0].1.trove_version, "2.0");
+    }
+
+    #[test]
+    fn test_create_snapshot_at_rolls_back_on_failure() {
+        let (_temp, conn) = create_test_db();
+        conn.execute("DELETE FROM system_states", []).unwrap();
+
+        let mut trove = crate::db::models::Trove::new(
+            "pkg-a".to_string(),
+            "1.0".to_string(),
+            crate::db::models::TroveType::Package,
+        );
+        trove.insert(&conn).unwrap();
+
+        conn.execute(
+            "CREATE TEMP TRIGGER fail_state_members
+             BEFORE INSERT ON state_members
+             BEGIN
+               SELECT RAISE(FAIL, 'state member failure');
+             END;",
+            [],
+        )
+        .unwrap();
+
+        let engine = StateEngine::new(&conn);
+        let err = engine
+            .create_snapshot_at(1, "broken snapshot", None, None)
+            .unwrap_err();
+        assert!(err.to_string().contains("state member failure"));
+
+        let state_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM system_states", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(state_count, 0, "snapshot should rollback completely");
+
+        let active_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM system_states WHERE is_active = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(active_count, 0);
     }
 
     #[test]
