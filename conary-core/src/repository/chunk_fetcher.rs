@@ -417,6 +417,14 @@ impl LocalCacheFetcher {
         self.cache_dir.join("objects").join(prefix).join(rest)
     }
 
+    /// Verify a cached chunk still matches the requested hash.
+    fn verify_hash(hash: &str, data: &[u8]) -> Result<()> {
+        verify_sha256(data, hash).map_err(|e| Error::ChecksumMismatch {
+            expected: e.expected,
+            actual: e.actual,
+        })
+    }
+
     /// Store a chunk in the cache
     pub async fn store(&self, hash: &str, data: &[u8]) -> Result<()> {
         let path = self.chunk_path(hash);
