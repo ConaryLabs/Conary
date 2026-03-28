@@ -132,9 +132,9 @@ impl FederationManifest {
             metadata: &self.metadata,
         };
 
-        // Use JSON for deterministic serialization
-        serde_json::to_vec(&canonical)
-            .map_err(|e| ManifestError::InvalidData(format!("canonical serialization failed: {e}")))
+        conary_core::json::canonical_json(&canonical).map_err(|e| {
+            ManifestError::InvalidData(format!("canonical serialization failed: {e}"))
+        })
     }
 
     /// Sign the manifest with the given key pair
@@ -484,6 +484,27 @@ mod tests {
         // Signature should still verify
         let policy = ManifestTrustPolicy::strict(vec![keypair.public_key_base64()]);
         assert!(loaded.verify(&policy).is_ok());
+    }
+
+    #[test]
+    fn test_canonical_bytes_matches_shared_canonical_json() {
+        let manifest = ManifestBuilder::new("package-1.0.0")
+            .add_chunk("hash1", 1000)
+            .metadata("z-key", "last")
+            .metadata("a-key", "first")
+            .build();
+
+        let canonical = CanonicalManifest {
+            version: manifest.version,
+            resource_id: &manifest.resource_id,
+            chunks: &manifest.chunks,
+            total_size: manifest.total_size,
+            content_type: manifest.content_type.as_deref(),
+            metadata: &manifest.metadata,
+        };
+
+        let shared = conary_core::json::canonical_json(&canonical).unwrap();
+        assert_eq!(manifest.canonical_bytes().unwrap(), shared);
     }
 
     #[test]
