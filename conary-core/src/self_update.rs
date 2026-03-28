@@ -71,15 +71,11 @@ fn verify_update_signature_with_keys(
 
 /// Verify an Ed25519 signature over the SHA-256 hash of a CCS update package.
 ///
-/// In test mode, always returns `Ok(())` to avoid needing real keys in unit tests.
-/// In production, checks against [`TRUSTED_UPDATE_KEYS`].
+/// Checks against [`TRUSTED_UPDATE_KEYS`].
 pub fn verify_update_signature(
     sha256_hex: &str,
     signature_base64: &str,
 ) -> std::result::Result<(), UpdateSignatureError> {
-    if cfg!(test) {
-        return Ok(());
-    }
     if TRUSTED_UPDATE_KEYS.is_empty() {
         warn!(
             "No trusted update keys configured (TRUSTED_UPDATE_KEYS is empty). \
@@ -878,6 +874,19 @@ mod tests {
         let sig_b64 = BASE64.encode(signature.to_bytes());
 
         let result = verify_update_signature_with_keys(sha256_hex, &sig_b64, &[]);
+        assert!(matches!(result, Err(UpdateSignatureError::Untrusted)));
+    }
+
+    #[test]
+    fn test_verify_update_signature_does_not_bypass_in_tests() {
+        use ed25519_dalek::Signer;
+
+        let (signing_key, _) = test_keypair();
+        let sha256_hex = "abc123def456";
+        let signature = signing_key.sign(sha256_hex.as_bytes());
+        let sig_b64 = BASE64.encode(signature.to_bytes());
+
+        let result = verify_update_signature(sha256_hex, &sig_b64);
         assert!(matches!(result, Err(UpdateSignatureError::Untrusted)));
     }
 }
