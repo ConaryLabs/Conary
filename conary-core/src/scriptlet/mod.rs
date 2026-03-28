@@ -48,6 +48,22 @@ fn write_executable_script(path: &Path, content: &str) -> Result<()> {
     crate::container::write_executable_script(path, content)
 }
 
+fn apply_sanitized_command_env(cmd: &mut Command, env: &[(&str, &str)]) {
+    cmd.env_clear()
+        .env("HOME", "/root")
+        .env("TERM", "dumb")
+        .env("LANG", "C.UTF-8")
+        .env("SHELL", "/bin/sh");
+
+    if !env.iter().any(|(key, _)| *key == "PATH") {
+        cmd.env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin");
+    }
+
+    for (key, value) in env {
+        cmd.env(*key, *value);
+    }
+}
+
 /// Log captured stdout/stderr lines with a phase prefix.
 fn log_script_output(phase: &str, stdout: &str, stderr: &str) {
     if !stdout.is_empty() {
@@ -336,16 +352,10 @@ impl ScriptletExecutor {
         // sandbox_live can capture scriptlet writes without mutating the
         // host. Until then, this mode provides process/network isolation
         // only, not filesystem isolation for /var and /etc.
-        let config = ContainerConfig {
-            timeout: self.timeout,
-            bind_mounts: {
-                let mut mounts = ContainerConfig::default().bind_mounts;
-                mounts.push(BindMount::writable("/var", "/var"));
-                mounts.push(BindMount::writable("/etc", "/etc"));
-                mounts
-            },
-            ..ContainerConfig::default()
-        };
+        let mut config = ContainerConfig::default();
+        config.timeout = self.timeout;
+        config.bind_mounts.push(BindMount::writable("/var", "/var"));
+        config.bind_mounts.push(BindMount::writable("/etc", "/etc"));
 
         let mut sandbox = Sandbox::new(config);
         let (code, stdout, stderr) = sandbox.execute(interpreter, content, args, env)?;
@@ -553,10 +563,7 @@ impl ScriptletExecutor {
             .stdin(Stdio::null()) // CRITICAL: Prevent stdin hangs
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-
-        for (key, value) in env {
-            cmd.env(*key, *value);
-        }
+        apply_sanitized_command_env(&mut cmd, env);
 
         let mut child = cmd
             .spawn()
@@ -789,6 +796,9 @@ fn build_scriptlet_seccomp(mode: EnforcementMode) -> Option<seccompiler::BpfProg
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{LazyLock, Mutex};
+
+    static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     #[test]
     fn test_package_format_from_str() {
@@ -1083,6 +1093,35 @@ mod tests {
             ],
         );
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_execute_direct_clears_host_environment() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var("CONARY_SCRIPTLET_LEAK", "host-secret");
+        }
+
+        let executor =
+            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm)
+                .with_sandbox_mode(SandboxMode::None);
+
+        let result = executor.execute_direct(
+            "post-install",
+            "/bin/sh",
+            "test -z \"$CONARY_SCRIPTLET_LEAK\"",
+            &["1".to_string()],
+            &[("CONARY_PACKAGE_NAME", "test-pkg")],
+        );
+
+        unsafe {
+            std::env::remove_var("CONARY_SCRIPTLET_LEAK");
+        }
+
+        assert!(
+            result.is_ok(),
+            "direct scriptlet execution should not inherit host environment variables: {result:?}"
+        );
     }
 
     #[test]

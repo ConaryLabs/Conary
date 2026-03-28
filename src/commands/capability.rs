@@ -474,11 +474,9 @@ pub async fn cmd_capability_run(
     };
 
     // Build container config with enforcement
-    let mut config = ContainerConfig {
-        timeout: Duration::from_secs(3600), // generous timeout for interactive use
-        capability_policy: Some(policy),
-        ..ContainerConfig::default()
-    };
+    let mut config = ContainerConfig::default();
+    config.timeout = Duration::from_secs(3600); // generous timeout for interactive use
+    config.capability_policy = Some(policy);
 
     // Wire network isolation from capabilities
     if caps.network.none {

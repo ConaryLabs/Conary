@@ -50,7 +50,7 @@ use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use tracing::{debug, warn};
@@ -164,6 +164,11 @@ pub struct ContainerConfig {
     pub workdir: PathBuf,
     /// Optional capability enforcement policy (landlock + seccomp)
     pub capability_policy: Option<EnforcementPolicy>,
+    /// Owned tempdirs backing private bind mounts (for example, bootstrap /tmp).
+    ///
+    /// These are kept on the config so the directories live for the lifetime of
+    /// any cloned config handed to a sandbox.
+    owned_temp_dirs: Vec<Arc<TempDir>>,
 }
 
 impl Default for ContainerConfig {
@@ -183,6 +188,7 @@ impl Default for ContainerConfig {
             bind_mounts: default_bind_mounts(),
             workdir: PathBuf::from("/"),
             capability_policy: None,
+            owned_temp_dirs: Vec::new(),
         }
     }
 }
@@ -205,6 +211,7 @@ impl ContainerConfig {
             bind_mounts: Vec::new(),
             workdir: PathBuf::from("/"),
             capability_policy: None,
+            owned_temp_dirs: Vec::new(),
         }
     }
 
@@ -256,6 +263,7 @@ impl ContainerConfig {
             bind_mounts: Vec::new(), // No host mounts!
             workdir: PathBuf::from("/"),
             capability_policy: None,
+            owned_temp_dirs: Vec::new(),
         }
     }
 
@@ -294,8 +302,19 @@ impl ContainerConfig {
                 config.add_bind_mount(BindMount::readonly(p, p));
             }
         }
-        // /tmp is needed for configure scripts and intermediate files
-        config.add_bind_mount(BindMount::writable("/tmp", "/tmp"));
+
+        // /tmp is needed for configure scripts and intermediate files, but a
+        // pristine bootstrap container must not share the host /tmp.
+        let private_tmp =
+            Arc::new(TempDir::new().expect("failed to create private bootstrap tmpdir"));
+        let mut perms = fs::metadata(private_tmp.path())
+            .expect("failed to stat private bootstrap tmpdir")
+            .permissions();
+        perms.set_mode(0o1777);
+        fs::set_permissions(private_tmp.path(), perms)
+            .expect("failed to chmod private bootstrap tmpdir");
+        config.add_bind_mount(BindMount::writable(private_tmp.path(), "/tmp"));
+        config.owned_temp_dirs.push(private_tmp);
 
         // Mount the toolchain sysroot (read-only)
         config.add_bind_mount(BindMount::readonly(sysroot, sysroot));
@@ -1444,6 +1463,14 @@ mod tests {
         assert!(mount_sources.contains(&"/src/gcc".to_string()));
         assert!(mount_sources.contains(&"/build/gcc".to_string()));
         assert!(mount_sources.contains(&"/destdir".to_string()));
+
+        let tmp_mount = config
+            .bind_mounts
+            .iter()
+            .find(|m| m.target == Path::new("/tmp"))
+            .expect("bootstrap config should mount a private /tmp");
+        assert_ne!(tmp_mount.source, PathBuf::from("/tmp"));
+        assert_eq!(config.owned_temp_dirs.len(), 1);
     }
 
     #[test]
