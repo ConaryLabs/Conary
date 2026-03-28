@@ -17,6 +17,22 @@ use super::Kitchen;
 use super::archive::{apply_patch, extract_archive};
 use super::provenance_capture::ProvenanceCapture;
 
+fn apply_direct_build_env(cmd: &mut Command, env: &[(&str, String)]) {
+    cmd.env_clear()
+        .env("HOME", "/root")
+        .env("TERM", "xterm")
+        .env("LC_ALL", "C")
+        .env("SHELL", "/bin/sh");
+
+    if !env.iter().any(|(key, _)| *key == "PATH") {
+        cmd.env("PATH", "/usr/bin:/usr/sbin:/bin:/sbin:/tools/bin");
+    }
+
+    for (key, value) in env {
+        cmd.env(*key, value);
+    }
+}
+
 /// A single cook operation
 pub struct Cook<'a> {
     pub(super) kitchen: &'a Kitchen,
@@ -557,12 +573,10 @@ impl<'a> Cook<'a> {
                 .output()
                 .map_err(|e| Error::IoError(format!("Failed to chroot {} phase: {}", phase, e)))?
         } else {
-            Command::new("sh")
-                .arg("-c")
-                .arg(command)
-                .current_dir(workdir)
-                .envs(env.iter().map(|(k, v)| (*k, v.as_str())))
-                .output()
+            let mut cmd = Command::new("sh");
+            cmd.arg("-c").arg(command).current_dir(workdir);
+            apply_direct_build_env(&mut cmd, env);
+            cmd.output()
                 .map_err(|e| Error::IoError(format!("Failed to run {} phase: {}", phase, e)))?
         };
 
@@ -681,5 +695,88 @@ impl<'a> Cook<'a> {
             self.log.push_str(stderr);
             self.log.push('\n');
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::recipe::format::{BuildSection, PackageSection, Recipe, SourceSection};
+    use crate::recipe::kitchen::KitchenConfig;
+    use std::collections::HashMap;
+    use std::sync::{LazyLock, Mutex};
+
+    static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    fn minimal_recipe() -> Recipe {
+        Recipe {
+            package: PackageSection {
+                name: "test-pkg".to_string(),
+                version: "1.0.0".to_string(),
+                release: "1".to_string(),
+                summary: None,
+                description: None,
+                license: None,
+                homepage: None,
+            },
+            source: SourceSection {
+                archive: "https://example.invalid/test.tar.gz".to_string(),
+                checksum: "sha256:test".to_string(),
+                signature: None,
+                additional: Vec::new(),
+                extract_dir: None,
+            },
+            build: BuildSection {
+                requires: Vec::new(),
+                makedepends: Vec::new(),
+                configure: None,
+                make: None,
+                install: None,
+                check: None,
+                setup: None,
+                post_install: None,
+                environment: HashMap::new(),
+                workdir: None,
+                script_file: None,
+                jobs: None,
+                stage: None,
+            },
+            cross: None,
+            patches: None,
+            components: None,
+            variables: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_run_build_step_direct_clears_host_environment() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var("CONARY_KITCHEN_LEAK", "host-secret");
+        }
+
+        let kitchen = Kitchen::new(KitchenConfig {
+            use_isolation: false,
+            ..KitchenConfig::default()
+        });
+        let recipe = minimal_recipe();
+        let mut cook = Cook::new(&kitchen, &recipe).unwrap();
+        let workdir = cook.build_dir.clone();
+
+        let result = cook.run_build_step_direct(
+            "configure",
+            "test -z \"$CONARY_KITCHEN_LEAK\"",
+            &workdir,
+            &[],
+        );
+
+        unsafe {
+            std::env::remove_var("CONARY_KITCHEN_LEAK");
+        }
+
+        assert!(
+            result.is_ok(),
+            "direct kitchen build steps should not inherit host environment variables: {result:?}"
+        );
     }
 }
