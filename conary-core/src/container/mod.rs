@@ -955,15 +955,16 @@ impl Sandbox {
                 })?;
 
             // Remount read-only if needed
-            if !bm.writable {
-                mount::<Path, Path, str, str>(
+            if !bm.writable
+                && let Err(error) = mount::<Path, Path, str, str>(
                     None,
                     &target,
                     None,
                     MsFlags::MS_REMOUNT | MsFlags::MS_BIND | MsFlags::MS_RDONLY,
                     None,
                 )
-                .ok(); // Best effort
+            {
+                self.handle_readonly_remount_failure(&target, error)?;
             }
         }
 
@@ -980,12 +981,7 @@ impl Sandbox {
         if let Err(e) = self.try_pivot_root(root) {
             // In Enforce mode, chroot fallback is not acceptable because a
             // privileged process can escape chroot via chroot(".") + chdir("..").
-            let is_enforce = self
-                .config
-                .capability_policy
-                .as_ref()
-                .is_some_and(|p| p.mode == EnforcementMode::Enforce);
-            if is_enforce {
+            if self.is_enforce_mode() {
                 return Err(Error::ScriptletError(format!(
                     "pivot_root failed ({}) and chroot fallback is not allowed in Enforce mode",
                     e
@@ -1001,6 +997,27 @@ impl Sandbox {
             self.chroot_into(root)?;
         }
 
+        Ok(())
+    }
+
+    fn is_enforce_mode(&self) -> bool {
+        self.config
+            .capability_policy
+            .as_ref()
+            .is_some_and(|policy| policy.mode == EnforcementMode::Enforce)
+    }
+
+    fn handle_readonly_remount_failure(
+        &self,
+        target: &Path,
+        error: nix::errno::Errno,
+    ) -> Result<()> {
+        let message = format!("read-only remount failed for {}: {error}", target.display());
+        if self.is_enforce_mode() {
+            return Err(Error::ScriptletError(message));
+        }
+
+        warn!("{message}");
         Ok(())
     }
 
@@ -1333,6 +1350,7 @@ pub fn isolation_available() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capability::enforcement::{EnforcementMode, EnforcementPolicy};
 
     #[test]
     fn test_script_analysis_safe() {
@@ -1365,6 +1383,42 @@ mod tests {
 
         let rw = BindMount::writable("/tmp", "/tmp");
         assert!(rw.writable);
+    }
+
+    #[test]
+    fn test_readonly_remount_failure_is_fatal_in_enforce_mode() {
+        let mut config = ContainerConfig::minimal(Duration::from_secs(30));
+        config.capability_policy = Some(EnforcementPolicy {
+            mode: EnforcementMode::Enforce,
+            filesystem: None,
+            syscalls: None,
+            network_isolation: false,
+        });
+
+        let sandbox = Sandbox::new(config);
+        let err = sandbox
+            .handle_readonly_remount_failure(Path::new("/etc/passwd"), nix::errno::Errno::EPERM)
+            .expect_err("enforce mode should fail closed on read-only remount errors");
+        assert!(err.to_string().contains("read-only remount failed"));
+    }
+
+    #[test]
+    fn test_readonly_remount_failure_is_nonfatal_outside_enforce_mode() {
+        let mut config = ContainerConfig::minimal(Duration::from_secs(30));
+        config.capability_policy = Some(EnforcementPolicy {
+            mode: EnforcementMode::Warn,
+            filesystem: None,
+            syscalls: None,
+            network_isolation: false,
+        });
+
+        let sandbox = Sandbox::new(config);
+        assert!(
+            sandbox
+                .handle_readonly_remount_failure(Path::new("/etc/passwd"), nix::errno::Errno::EPERM)
+                .is_ok(),
+            "warn mode should log and continue on read-only remount errors"
+        );
     }
 
     #[test]
