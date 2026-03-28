@@ -234,7 +234,7 @@ pub async fn cmd_remove(
 
     progress.set_phase(RemovePhase::UpdatingDb);
     let pkg_name_for_tx = package_name.to_string();
-    let remove_changeset_id = conary_core::db::transaction(&mut conn, |tx| {
+    let _remove_changeset_id = conary_core::db::transaction(&mut conn, |tx| {
         // Re-check dependency breakage inside the transaction to close the TOCTOU
         // window between the pre-check above and the actual delete. (fix X1.6)
         let breaking_now =
@@ -353,13 +353,6 @@ pub async fn cmd_remove(
     }
     // Note: composefs-native removal rebuilds the entire EROFS image,
     // so individual file failure tracking is not applicable.
-
-    // Create state snapshot after successful remove
-    create_state_snapshot(
-        &conn,
-        remove_changeset_id,
-        &format!("Remove {}", trove.name),
-    )?;
 
     Ok(())
 }
