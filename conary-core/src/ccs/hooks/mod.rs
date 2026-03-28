@@ -28,8 +28,12 @@ mod tmpfiles;
 mod user_group;
 
 // Re-export helper functions that may be useful externally
+pub(crate) use systemd::is_safe_unit_name;
+pub(crate) use sysctl::is_denied_sysctl_key;
 pub use systemd::{compute_relative_unit_path, parse_systemd_install_section};
 pub use tmpfiles::hash_string;
+pub(crate) use tmpfiles::validate_tmpfiles_entry_type;
+pub(crate) use user_group::{validate_shell, validate_username};
 
 use crate::ccs::manifest::Hooks;
 use anyhow::Result;

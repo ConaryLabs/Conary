@@ -7,10 +7,38 @@
 
 use super::HookExecutor;
 use anyhow::{Context, Result};
+use regex::Regex;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::process::Command;
+use std::sync::OnceLock;
 use tracing::{debug, info};
+
+pub(crate) fn validate_username(name: &str) -> Result<()> {
+    static USERNAME_RE: OnceLock<Regex> = OnceLock::new();
+
+    if name.is_empty() {
+        return Err(anyhow::anyhow!("username cannot be empty"));
+    }
+    if name.len() > 32 {
+        return Err(anyhow::anyhow!("username exceeds 32 characters: {}", name));
+    }
+
+    let username_re =
+        USERNAME_RE.get_or_init(|| Regex::new(r"^[a-z_][a-z0-9_-]*$").expect("valid regex"));
+    if !username_re.is_match(name) {
+        return Err(anyhow::anyhow!("invalid system username: {}", name));
+    }
+
+    Ok(())
+}
+
+pub(crate) fn validate_shell(shell: &str) -> Result<()> {
+    match shell {
+        "/usr/sbin/nologin" | "/sbin/nologin" | "/bin/false" => Ok(()),
+        _ => Err(anyhow::anyhow!("unsupported login shell: {}", shell)),
+    }
+}
 
 impl HookExecutor {
     /// Check if we're operating on the live root
@@ -100,6 +128,14 @@ impl HookExecutor {
         shell: Option<&str>,
         group: Option<&str>,
     ) -> Result<bool> {
+        validate_username(name)?;
+        if let Some(shell) = shell {
+            validate_shell(shell)?;
+        }
+        if let Some(group) = group {
+            validate_username(group)?;
+        }
+
         if self.user_exists(name) {
             debug!("User '{}' already exists, skipping", name);
             return Ok(false);
@@ -202,6 +238,8 @@ impl HookExecutor {
     /// When root != "/", uses `groupadd --root <target>` to create the group
     /// in the target filesystem's /etc/group without affecting the host.
     pub(super) fn create_group(&self, name: &str, system: bool) -> Result<bool> {
+        validate_username(name)?;
+
         if self.group_exists(name) {
             debug!("Group '{}' already exists, skipping", name);
             return Ok(false);
@@ -274,6 +312,37 @@ impl HookExecutor {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_validate_username_accepts_system_names() {
+        assert!(validate_username("root").is_ok());
+        assert!(validate_username("_daemon").is_ok());
+        assert!(validate_username("system-user").is_ok());
+        assert!(validate_username("service_01").is_ok());
+    }
+
+    #[test]
+    fn test_validate_username_rejects_invalid_names() {
+        assert!(validate_username("").is_err());
+        assert!(validate_username("Root").is_err());
+        assert!(validate_username("9daemon").is_err());
+        assert!(validate_username("daemon!").is_err());
+        assert!(validate_username(&"a".repeat(33)).is_err());
+    }
+
+    #[test]
+    fn test_validate_shell_accepts_nologin_allowlist() {
+        assert!(validate_shell("/usr/sbin/nologin").is_ok());
+        assert!(validate_shell("/sbin/nologin").is_ok());
+        assert!(validate_shell("/bin/false").is_ok());
+    }
+
+    #[test]
+    fn test_validate_shell_rejects_interactive_shells() {
+        assert!(validate_shell("/bin/sh").is_err());
+        assert!(validate_shell("/bin/bash").is_err());
+        assert!(validate_shell("/usr/bin/zsh").is_err());
+    }
 
     #[test]
     fn test_user_exists_in_target() {

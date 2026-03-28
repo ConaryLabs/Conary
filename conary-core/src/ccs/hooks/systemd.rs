@@ -69,6 +69,13 @@ impl HookExecutor {
 
     /// Enable a systemd unit on the live system
     fn systemd_enable_live(&self, unit: &str) -> Result<()> {
+        if !is_safe_unit_name(unit) {
+            return Err(anyhow::anyhow!(
+                "Unsafe systemd unit '{}': contains path separators or traversal",
+                unit
+            ));
+        }
+
         if !self.has_systemctl() {
             debug!("systemctl not available, skipping enable for {}", unit);
             return Ok(());
@@ -95,6 +102,13 @@ impl HookExecutor {
     /// 2. Reads the [Install] section to determine where to symlink
     /// 3. Creates the appropriate symlinks in /etc/systemd/system/
     pub(super) fn systemd_enable_target(&self, unit: &str) -> Result<()> {
+        if !is_safe_unit_name(unit) {
+            return Err(anyhow::anyhow!(
+                "Unsafe systemd unit '{}': contains path separators or traversal",
+                unit
+            ));
+        }
+
         // Systemd unit search paths in priority order
         let search_paths = [
             "etc/systemd/system",
@@ -210,7 +224,7 @@ impl HookExecutor {
 ///
 /// Rejects names containing `/`, `\`, or `..` which could be used to escape
 /// the intended `/etc/systemd/system/<target>.wants/` directory.
-fn is_safe_unit_name(name: &str) -> bool {
+pub(crate) fn is_safe_unit_name(name: &str) -> bool {
     !name.is_empty()
         && !name.contains('/')
         && !name.contains('\\')
@@ -358,5 +372,14 @@ WantedBy=multi-user.target
                 .contains("usr/lib/systemd/system/test.service"),
             "Symlink should point to unit file"
         );
+    }
+
+    #[test]
+    fn test_is_safe_unit_name_rejects_traversal_and_separators() {
+        assert!(is_safe_unit_name("sshd.service"));
+        assert!(!is_safe_unit_name("../evil.service"));
+        assert!(!is_safe_unit_name("multi-user.target/evil.service"));
+        assert!(!is_safe_unit_name("evil\\unit.service"));
+        assert!(!is_safe_unit_name(""));
     }
 }
