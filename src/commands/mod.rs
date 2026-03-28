@@ -337,18 +337,11 @@ pub(crate) fn create_state_snapshot(
     summary: &str,
 ) -> Result<()> {
     use conary_core::db::models::StateEngine;
-    use tracing::{info, warn};
+    use tracing::info;
 
     let engine = StateEngine::new(conn);
-    match engine.create_snapshot(summary, None, Some(changeset_id)) {
-        Ok(state) => {
-            info!("Created state {} ({})", state.state_number, summary);
-        }
-        Err(e) => {
-            warn!("Failed to create state snapshot: {}", e);
-            // Don't fail the operation if snapshot creation fails
-        }
-    }
+    let state = engine.create_snapshot(summary, None, Some(changeset_id))?;
+    info!("Created state {} ({})", state.state_number, summary);
     Ok(())
 }
 
@@ -427,5 +420,14 @@ mod tests {
             result.is_err(),
             "Plain .tar.xz should not be detected as any package format"
         );
+    }
+
+    #[test]
+    fn test_create_state_snapshot_propagates_errors() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+
+        let err = create_state_snapshot(&conn, 42, "missing schema").unwrap_err();
+
+        assert!(err.to_string().contains("no such table"));
     }
 }

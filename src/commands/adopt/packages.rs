@@ -19,6 +19,10 @@ use conary_core::packages::{
 use std::path::PathBuf;
 use tracing::debug;
 
+fn metadata_insert_succeeded(total_inserts: usize, insert_failures: usize) -> bool {
+    total_inserts == 0 || insert_failures < total_inserts
+}
+
 /// Adopt specific packages
 pub async fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
     if packages.is_empty() {
@@ -202,7 +206,7 @@ pub async fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result
         ));
 
         // DB-only transaction: all PM queries and CAS writes are already done.
-        let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
+        let (changeset_id, adopted) = conary_core::db::transaction(&mut conn, |tx| {
             let changeset_id = changeset.insert(tx)?;
 
             // Create trove
@@ -221,6 +225,10 @@ pub async fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result
             let trove_id = trove.insert(tx)?;
 
             progress.set_phase(&pkg_name, AdoptPhase::Inserting);
+            let total_inserts = files_with_hashes.len()
+                + deps.iter().filter(|dep| !dep.name.is_empty()).count()
+                + provides.iter().filter(|provide| !provide.is_empty()).count();
+            let mut insert_failures = 0usize;
 
             for (
                 (file_path, file_size, file_mode, _digest, file_user, file_group, file_link_target),
@@ -241,6 +249,7 @@ pub async fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result
                 // Use INSERT OR REPLACE to handle shared paths (directories, etc.)
                 if let Err(e) = file_entry.insert_or_replace(tx) {
                     debug!("Failed to insert file {}: {}", file_path, e);
+                    insert_failures += 1;
                 }
             }
 
@@ -258,6 +267,7 @@ pub async fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result
                 );
                 if let Err(e) = dep_entry.insert(tx) {
                     debug!("Failed to insert dependency {}: {}", dep.name, e);
+                    insert_failures += 1;
                 }
             }
 
@@ -268,12 +278,27 @@ pub async fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result
                 let mut provide_entry = ProvideEntry::new(trove_id, provide.clone(), None);
                 if let Err(e) = provide_entry.insert_or_ignore(tx) {
                     debug!("Failed to insert provide {}: {}", provide, e);
+                    insert_failures += 1;
                 }
             }
 
+            if !metadata_insert_succeeded(total_inserts, insert_failures) {
+                debug!(
+                    "All {} metadata insert(s) failed for {}; removing empty adopted trove",
+                    total_inserts, pkg_name
+                );
+                conary_core::db::models::Trove::delete(tx, trove_id)?;
+                changeset.update_status(tx, ChangesetStatus::RolledBack)?;
+                return Ok((changeset_id, false));
+            }
+
             changeset.update_status(tx, ChangesetStatus::Applied)?;
-            Ok(changeset_id)
+            Ok((changeset_id, true))
         })?;
+
+        if !adopted {
+            continue;
+        }
 
         // Create state snapshot for rollback safety
         create_state_snapshot(&conn, changeset_id, &format!("Adopt {}", pkg_name))?;
@@ -284,4 +309,20 @@ pub async fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result
     progress.finish("Adoption complete");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::metadata_insert_succeeded;
+
+    #[test]
+    fn metadata_insert_succeeded_rejects_empty_troves() {
+        assert!(!metadata_insert_succeeded(3, 3));
+    }
+
+    #[test]
+    fn metadata_insert_succeeded_allows_partial_or_empty_metadata() {
+        assert!(metadata_insert_succeeded(3, 2));
+        assert!(metadata_insert_succeeded(0, 0));
+    }
 }
