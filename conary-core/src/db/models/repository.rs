@@ -57,7 +57,7 @@ impl Repository {
             enabled: true,
             priority: 0,
             gpg_check: true,
-            gpg_strict: false,
+            gpg_strict: true,
             gpg_key_url: None,
             metadata_expire: 3600, // Default: 1 hour
             last_sync: None,

@@ -6,12 +6,14 @@
 //! in a custom text format with %FIELD% markers.
 
 use super::{ChecksumType, Dependency, PackageMetadata, RepositoryParser};
+use crate::compression::decompress_auto;
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
 use crate::repository::dependency_model::{
     RepositoryCapabilityKind, RepositoryDependencyFlavor, RepositoryProvide,
     RepositoryRequirementClause, RepositoryRequirementGroup, RepositoryRequirementKind,
 };
+use crate::repository::gpg::MetadataSignatureVerifier;
 use crate::repository::versioning::VersionScheme;
 use std::collections::HashMap;
 use std::io::Read;
@@ -24,12 +26,24 @@ use super::common::{self, MAX_PACKAGE_SIZE};
 pub struct ArchParser {
     /// Repository name (e.g., "core", "extra", "community")
     repo_name: String,
+    metadata_signature_verifier: Option<MetadataSignatureVerifier>,
 }
 
 impl ArchParser {
     /// Create a new Arch Linux parser for a specific repository
     pub fn new(repo_name: String) -> Self {
-        Self { repo_name }
+        Self {
+            repo_name,
+            metadata_signature_verifier: None,
+        }
+    }
+
+    pub fn with_metadata_signature_verifier(
+        mut self,
+        metadata_signature_verifier: Option<MetadataSignatureVerifier>,
+    ) -> Self {
+        self.metadata_signature_verifier = metadata_signature_verifier;
+        self
     }
 
     /// Download and decompress the repository database
@@ -40,7 +54,14 @@ impl ArchParser {
         debug!("Downloading Arch database from: {}", db_url);
 
         let client = RepositoryClient::new()?;
-        client.fetch_and_decompress(&db_url).await
+        let raw_bytes = client.download_to_bytes(&db_url).await?;
+        if let Some(verifier) = &self.metadata_signature_verifier {
+            verifier
+                .verify_metadata_bytes(&db_url, &raw_bytes, "arch database")
+                .await?;
+        }
+        decompress_auto(&raw_bytes)
+            .map_err(|error| Error::ParseError(format!("Failed to decompress {}: {}", db_url, error)))
     }
 
     /// Parse a desc file from the tarball

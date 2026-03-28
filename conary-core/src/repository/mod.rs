@@ -201,29 +201,29 @@ mod tests {
     fn test_repository_gpg_strict() {
         let (_temp, conn) = create_test_db();
 
-        // Create repository with default settings (gpg_strict = false)
+        // Create repository with default settings (gpg_strict = true)
         let mut repo = Repository::new(
             "test-repo".to_string(),
             "https://example.com/repo".to_string(),
         );
-        assert!(!repo.gpg_strict); // Default should be false
+        assert!(repo.gpg_strict); // Default should be strict
         repo.insert(&conn).unwrap();
 
         // Verify it was stored correctly
         let fetched = Repository::find_by_name(&conn, "test-repo")
             .unwrap()
             .unwrap();
-        assert!(!fetched.gpg_strict);
+        assert!(fetched.gpg_strict);
 
-        // Update to enable strict mode
+        // Update to disable strict mode explicitly
         let mut repo = fetched;
-        repo.gpg_strict = true;
+        repo.gpg_strict = false;
         repo.update(&conn).unwrap();
 
         // Verify the update
         let fetched = Repository::find_by_name(&conn, "test-repo")
             .unwrap()
             .unwrap();
-        assert!(fetched.gpg_strict);
+        assert!(!fetched.gpg_strict);
     }
 }

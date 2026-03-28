@@ -6,12 +6,129 @@
 //! using the sequoia-openpgp library (pure Rust implementation).
 
 use crate::error::{Error, Result};
+use crate::repository::client::RepositoryClient;
 use openpgp::parse::Parse;
 use openpgp::policy::StandardPolicy;
 use sequoia_openpgp as openpgp;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
+
+fn detached_signature_urls(url: &str) -> Vec<String> {
+    vec![format!("{url}.sig"), format!("{url}.asc")]
+}
+
+#[derive(Debug, Clone)]
+pub struct MetadataSignatureVerifier {
+    keyring_dir: PathBuf,
+    repository_name: String,
+    enabled: bool,
+}
+
+impl MetadataSignatureVerifier {
+    pub fn new(keyring_dir: PathBuf, repository_name: String, enabled: bool) -> Self {
+        Self {
+            keyring_dir,
+            repository_name,
+            enabled,
+        }
+    }
+
+    pub async fn verify_metadata_bytes(
+        &self,
+        metadata_url: &str,
+        metadata_bytes: &[u8],
+        metadata_label: &str,
+    ) -> Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+
+        let verifier = GpgVerifier::new(self.keyring_dir.clone())?;
+        if !verifier.has_key(&self.repository_name) {
+            warn!(
+                repository = self.repository_name,
+                metadata = metadata_label,
+                url = metadata_url,
+                "Repository metadata GPG verification enabled but no key is imported; skipping verification"
+            );
+            return Ok(());
+        }
+
+        let client = RepositoryClient::new()?;
+        let mut last_download_error = None;
+
+        for signature_url in detached_signature_urls(metadata_url) {
+            match client.download_to_bytes(&signature_url).await {
+                Ok(signature_bytes) => {
+                    let metadata_file = tempfile::NamedTempFile::new().map_err(|error| {
+                        Error::IoError(format!(
+                            "Failed to create temporary file for {}: {}",
+                            metadata_label, error
+                        ))
+                    })?;
+                    fs::write(metadata_file.path(), metadata_bytes).map_err(|error| {
+                        Error::IoError(format!(
+                            "Failed to write temporary metadata file for {}: {}",
+                            metadata_label, error
+                        ))
+                    })?;
+
+                    let signature_file = tempfile::NamedTempFile::new().map_err(|error| {
+                        Error::IoError(format!(
+                            "Failed to create temporary signature file for {}: {}",
+                            metadata_label, error
+                        ))
+                    })?;
+                    fs::write(signature_file.path(), &signature_bytes).map_err(|error| {
+                        Error::IoError(format!(
+                            "Failed to write temporary signature file for {}: {}",
+                            metadata_label, error
+                        ))
+                    })?;
+
+                    verifier.verify_signature(
+                        metadata_file.path(),
+                        signature_file.path(),
+                        &self.repository_name,
+                    )?;
+                    info!(
+                        repository = self.repository_name,
+                        metadata = metadata_label,
+                        url = metadata_url,
+                        signature_url = signature_url,
+                        "Verified detached GPG signature for repository metadata"
+                    );
+                    return Ok(());
+                }
+                Err(Error::DownloadError(message))
+                    if message.starts_with("HTTP 404") || message.starts_with("HTTP 403") =>
+                {
+                    continue;
+                }
+                Err(error) => {
+                    last_download_error = Some((signature_url, error));
+                    break;
+                }
+            }
+        }
+
+        if let Some((signature_url, error)) = last_download_error {
+            return Err(Error::DownloadError(format!(
+                "Failed to download metadata signature for {} from {}: {}",
+                metadata_label, signature_url, error
+            )));
+        }
+
+        warn!(
+            repository = self.repository_name,
+            metadata = metadata_label,
+            url = metadata_url,
+            "Repository metadata GPG verification enabled but no detached signature was found"
+        );
+        Ok(())
+    }
+}
 
 /// GPG key and signature verifier
 pub struct GpgVerifier {
@@ -249,5 +366,17 @@ mod tests {
 
         let keys = verifier.list_keys().unwrap();
         assert_eq!(keys.len(), 0);
+    }
+
+    #[test]
+    fn test_detached_signature_urls_try_sig_then_asc() {
+        let urls = detached_signature_urls("https://example.com/repodata/repomd.xml");
+        assert_eq!(
+            urls,
+            vec![
+                "https://example.com/repodata/repomd.xml.sig".to_string(),
+                "https://example.com/repodata/repomd.xml.asc".to_string(),
+            ]
+        );
     }
 }
