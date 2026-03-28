@@ -1221,7 +1221,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let cas = CasStore::new(temp_dir.path()).unwrap();
         let expected_hash = conary_core::hash::sha256(b"expected-bytes");
-        let corrupted_path = object_path(temp_dir.path(), &expected_hash);
+        let corrupted_path = object_path(temp_dir.path(), &expected_hash).unwrap();
         std::fs::create_dir_all(corrupted_path.parent().unwrap()).unwrap();
         std::fs::write(&corrupted_path, b"corrupted-bytes").unwrap();
 

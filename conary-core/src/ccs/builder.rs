@@ -582,7 +582,7 @@ fn write_ccs_package_internal(
     fs::create_dir_all(&objects_dir)?;
 
     for (hash, content) in &result.blobs {
-        let blob_path = crate::filesystem::object_path(&objects_dir, hash);
+        let blob_path = crate::filesystem::object_path(&objects_dir, hash)?;
         if let Some(parent) = blob_path.parent() {
             fs::create_dir_all(parent)?;
         }

@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, info, warn};
 
 /// Result of a chunk fetch operation
@@ -411,10 +412,19 @@ impl LocalCacheFetcher {
     }
 
     /// Get the path for a chunk hash
-    fn chunk_path(&self, hash: &str) -> PathBuf {
-        // Use two-level directory structure: {hash[0:2]}/{hash[2:]}
-        let (prefix, rest) = hash.split_at(2.min(hash.len()));
-        self.cache_dir.join("objects").join(prefix).join(rest)
+    fn chunk_path(&self, hash: &str) -> Result<PathBuf> {
+        crate::filesystem::object_path(&self.cache_dir.join("objects"), hash)
+    }
+
+    fn next_temp_id() -> u64 {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    }
+
+    fn temp_path(&self, hash: &str) -> Result<PathBuf> {
+        let path = self.chunk_path(hash)?;
+        let temp_ext = format!("tmp.{}.{}", std::process::id(), Self::next_temp_id());
+        Ok(path.with_extension(temp_ext))
     }
 
     /// Verify a cached chunk still matches the requested hash.
@@ -427,7 +437,7 @@ impl LocalCacheFetcher {
 
     /// Store a chunk in the cache
     pub async fn store(&self, hash: &str, data: &[u8]) -> Result<()> {
-        let path = self.chunk_path(hash);
+        let path = self.chunk_path(hash)?;
 
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent)
@@ -436,7 +446,7 @@ impl LocalCacheFetcher {
         }
 
         // Write atomically via temp file
-        let temp_path = path.with_extension("tmp");
+        let temp_path = self.temp_path(hash)?;
         tokio::fs::write(&temp_path, data)
             .await
             .map_err(|e| Error::IoError(format!("Failed to write chunk to cache: {e}")))?;
@@ -452,7 +462,7 @@ impl LocalCacheFetcher {
 #[async_trait]
 impl ChunkFetcher for LocalCacheFetcher {
     async fn fetch(&self, hash: &str) -> Result<Vec<u8>> {
-        let path = self.chunk_path(hash);
+        let path = self.chunk_path(hash)?;
 
         if !path.exists() {
             return Err(Error::NotFound(format!("Chunk {} not in cache", hash)));
@@ -469,7 +479,7 @@ impl ChunkFetcher for LocalCacheFetcher {
     }
 
     async fn exists(&self, hash: &str) -> bool {
-        self.chunk_path(hash).exists()
+        self.chunk_path(hash).is_ok_and(|path| path.exists())
     }
 
     fn name(&self) -> &str {
@@ -688,8 +698,23 @@ mod tests {
     #[test]
     fn test_local_cache_path() {
         let cache = LocalCacheFetcher::new("/var/cache/conary");
-        let path = cache.chunk_path("abcdef1234567890");
+        let path = cache.chunk_path("abcdef1234567890").unwrap();
         assert!(path.to_string_lossy().contains("objects/ab/cdef1234567890"));
+    }
+
+    #[test]
+    fn test_local_cache_path_rejects_non_hex_hash() {
+        let cache = LocalCacheFetcher::new("/var/cache/conary");
+        let err = cache.chunk_path("bad/hash").unwrap_err();
+        assert!(matches!(err, Error::InvalidPath(_)));
+    }
+
+    #[test]
+    fn test_local_cache_temp_paths_are_unique() {
+        let cache = LocalCacheFetcher::new("/var/cache/conary");
+        let first = cache.temp_path("abcdef1234567890").unwrap();
+        let second = cache.temp_path("abcdef1234567890").unwrap();
+        assert_ne!(first, second);
     }
 
     #[test]

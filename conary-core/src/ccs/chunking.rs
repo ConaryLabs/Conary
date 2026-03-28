@@ -46,6 +46,7 @@ impl Chunk {
     /// Get the CAS-style path for this chunk (e.g., "ab/cdef1234...")
     pub fn cas_path(&self) -> PathBuf {
         crate::filesystem::object_path(Path::new(""), &self.hash_hex())
+            .expect("hex-encoded chunk hash should always produce a valid CAS path")
     }
 }
 
@@ -190,6 +191,7 @@ impl ChunkStore {
     fn chunk_path(&self, hash: &[u8; 32]) -> PathBuf {
         let hex = hex::encode(hash);
         crate::filesystem::object_path(&self.root, &hex)
+            .expect("hex-encoded chunk hash should always produce a valid CAS path")
     }
 
     /// Check if a chunk exists in the store
