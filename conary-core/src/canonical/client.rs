@@ -10,6 +10,8 @@ use rusqlite::Connection;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
+const CANONICAL_MAP_SHA256_HEADER: &str = "x-conary-canonical-sha256";
+
 #[derive(Debug, Deserialize)]
 struct CanonicalMapResponse {
     #[allow(dead_code)]
@@ -67,11 +69,18 @@ pub async fn fetch_canonical_map(conn: &Connection, endpoint: &str) -> Result<Op
         .get("etag")
         .and_then(|v| v.to_str().ok())
         .map(String::from);
+    let expected_checksum = extract_expected_checksum(response.headers())?;
 
     let body = response
-        .text()
+        .bytes()
         .await
         .map_err(|e| Error::DownloadError(e.to_string()))?;
+    crate::hash::verify_sha256(&body, &expected_checksum).map_err(|e| Error::ChecksumMismatch {
+        expected: e.expected,
+        actual: e.actual,
+    })?;
+    let body = String::from_utf8(body.to_vec())
+        .map_err(|e| Error::ParseError(format!("canonical map is not valid UTF-8: {e}")))?;
     let count = ingest_canonical_map_json(conn, &body)?;
 
     if let Some(etag_val) = new_etag {
@@ -79,6 +88,20 @@ pub async fn fetch_canonical_map(conn: &Connection, endpoint: &str) -> Result<Op
     }
 
     Ok(Some(count))
+}
+
+fn extract_expected_checksum(headers: &reqwest::header::HeaderMap) -> Result<String> {
+    headers
+        .get(CANONICAL_MAP_SHA256_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| value.len() == 64 && value.chars().all(|ch| ch.is_ascii_hexdigit()))
+        .map(str::to_string)
+        .ok_or_else(|| {
+            Error::TrustError(
+                "Canonical map response missing valid X-Conary-Canonical-Sha256 checksum"
+                    .to_string(),
+            )
+        })
 }
 
 /// Parse a canonical map JSON response and replace the local canonical DB.
@@ -94,6 +117,11 @@ pub fn ingest_canonical_map_json(conn: &Connection, json: &str) -> Result<usize>
 
     let mut count = 0;
     for entry in &map.entries {
+        super::sync::validate_canonical_mapping(
+            &entry.canonical,
+            entry.implementations.values().map(String::as_str),
+        )?;
+
         let mut canonical = CanonicalPackage::new(entry.canonical.clone(), "package".to_string());
         let id = canonical.insert_or_ignore(&tx)?;
         let canonical_id = match id {
@@ -192,5 +220,45 @@ mod tests {
 
         let result = ingest_canonical_map_json(&conn, "not json");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ingest_rejects_suspicious_remote_mapping() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::schema::migrate(&conn).unwrap();
+
+        let json = r#"{
+            "version": 1,
+            "generated_at": "2026-03-19",
+            "entries": [
+                {
+                    "canonical": "openssl",
+                    "implementations": {"fedora": "totally-malicious-package"}
+                }
+            ]
+        }"#;
+
+        let err = ingest_canonical_map_json(&conn, json).unwrap_err();
+        assert!(
+            err.to_string().contains("Suspicious canonical mapping"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_extract_expected_checksum_from_header_accepts_sha256() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::HeaderName::from_static("x-conary-canonical-sha256"),
+            reqwest::header::HeaderValue::from_static(
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            ),
+        );
+
+        let checksum = extract_expected_checksum(&headers).unwrap();
+        assert_eq!(
+            checksum,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        );
     }
 }

@@ -248,7 +248,9 @@ pub async fn canonical_map(
     .await?;
 
     let (version, map_response) = response;
-    let etag = format!("W/\"v{version}\"");
+    let json = super::serialize_json(&map_response, "canonical map")?;
+    let checksum = conary_core::hash::sha256(json.as_bytes());
+    let etag = format!("\"sha256:{checksum}\"");
 
     if headers.get("if-none-match").and_then(|v| v.to_str().ok()) == Some(etag.as_str()) {
         return Ok(axum::http::Response::builder()
@@ -258,11 +260,23 @@ pub async fn canonical_map(
             .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response()));
     }
 
-    let json = super::serialize_json(&map_response, "canonical map")?;
     let mut response = super::json_response(json, 300);
     response.headers_mut().insert(
         "ETag",
         etag.parse()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?,
+    );
+    response.headers_mut().insert(
+        "X-Conary-Canonical-Sha256",
+        checksum
+            .parse()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?,
+    );
+    response.headers_mut().insert(
+        "X-Conary-Canonical-Version",
+        version
+            .to_string()
+            .parse()
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?,
     );
     Ok(response)
