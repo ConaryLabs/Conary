@@ -12,6 +12,7 @@
 use crate::daemon::auth::{Action, AuthChecker, PeerCredentials};
 use crate::daemon::{DaemonError, DaemonEvent, DaemonJob, DaemonState, JobStatus};
 use axum::{
+    extract::DefaultBodyLimit,
     Router,
     extract::{Extension, Path, Query, Request, State},
     http::StatusCode,
@@ -27,11 +28,15 @@ use futures::stream::{self, Stream};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::Infallible;
+use std::fmt::Display;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::BroadcastStream;
+
+const DAEMON_BODY_LIMIT_BYTES: usize = 2 * 1024 * 1024;
+const INTERNAL_ERROR_DETAIL: &str = "An internal daemon error occurred";
 
 /// Shared daemon state type
 pub type SharedState = Arc<DaemonState>;
@@ -112,6 +117,20 @@ fn not_implemented_error(detail: &str) -> ApiError {
     )))
 }
 
+fn internal_error(message: &str) -> DaemonError {
+    tracing::error!("{message}");
+    DaemonError::internal(INTERNAL_ERROR_DETAIL)
+}
+
+fn internal_error_with(context: &str, error: impl Display) -> DaemonError {
+    tracing::error!(error = %error, "{context}");
+    DaemonError::internal(INTERNAL_ERROR_DETAIL)
+}
+
+fn internal_api_error(context: &str, error: impl Display) -> ApiError {
+    ApiError(Box::new(internal_error_with(context, error)))
+}
+
 fn action_for_job_kind(kind: crate::daemon::JobKind) -> Action {
     match kind {
         crate::daemon::JobKind::Install => Action::Install,
@@ -138,16 +157,11 @@ async fn run_db_query<T: Send + 'static>(
     tokio::task::spawn_blocking(move || {
         let conn = state
             .open_db()
-            .map_err(|e| DaemonError::internal(&format!("Database error: {}", e)))?;
-        f(&conn).map_err(|e| DaemonError::internal(&format!("Database error: {}", e)))
+            .map_err(|e| internal_error_with("Failed to open daemon database", e))?;
+        f(&conn).map_err(|e| internal_error_with("Daemon database query failed", e))
     })
     .await
-    .map_err(|e| {
-        ApiError(Box::new(DaemonError::internal(&format!(
-            "Task join error: {}",
-            e
-        ))))
-    })?
+    .map_err(|e| internal_api_error("Daemon database task join failed", e))?
     .map_err(|e| ApiError(Box::new(e)))
 }
 
@@ -633,7 +647,7 @@ async fn insert_or_dedup(
         move || -> std::result::Result<Option<DaemonJob>, Box<DaemonError>> {
             let conn = state
                 .open_db()
-                .map_err(|e| Box::new(DaemonError::internal(&format!("Database error: {e}"))))?;
+                .map_err(|e| Box::new(internal_error_with("Failed to open daemon database", e)))?;
 
             match job.insert(&conn) {
                 Ok(()) => Ok(None),
@@ -645,28 +659,23 @@ async fn insert_or_dedup(
                     if let Some(ref key) = job.idempotency_key {
                         match DaemonJob::find_by_idempotency_key(&conn, key) {
                             Ok(Some(existing)) => Ok(Some(existing)),
-                            _ => Err(Box::new(DaemonError::internal(
+                            _ => Err(Box::new(internal_error(
                                 "Idempotency conflict but existing job not found",
                             ))),
                         }
                     } else {
-                        Err(Box::new(DaemonError::internal(&format!(
-                            "Insert failed: {db_err}"
-                        ))))
+                        Err(Box::new(internal_error_with(
+                            "Daemon job insert failed without idempotency key",
+                            db_err,
+                        )))
                     }
                 }
-                Err(e) => Err(Box::new(DaemonError::internal(&format!(
-                    "Insert failed: {e}"
-                )))),
+                Err(e) => Err(Box::new(internal_error_with("Daemon job insert failed", e))),
             }
         },
     )
     .await
-    .map_err(|e| {
-        ApiError(Box::new(DaemonError::internal(&format!(
-            "Task join error: {e}"
-        ))))
-    })?
+    .map_err(|e| internal_api_error("Daemon job insert task join failed", e))?
     .map_err(ApiError)
 }
 
@@ -720,6 +729,7 @@ fn build_v1_router(state: SharedState) -> Router<SharedState> {
         .route("/events", get(events_handler))
         // Defense-in-depth: reject mutating requests without credentials
         .layer(middleware::from_fn_with_state(state, auth_gate_middleware))
+        .layer(DefaultBodyLimit::max(DAEMON_BODY_LIMIT_BYTES))
 }
 
 // =============================================================================
@@ -917,10 +927,7 @@ async fn create_transaction_handler(
 
     // Create the job
     let spec = serde_json::to_value(&request.operations).map_err(|e| {
-        ApiError(Box::new(DaemonError::internal(&format!(
-            "Serialization error: {}",
-            e
-        ))))
+        internal_api_error("Failed to serialize daemon transaction request", e)
     })?;
 
     let mut job = DaemonJob::new(job_kind, spec);
@@ -1530,9 +1537,7 @@ async fn enhance_handler(
     }
 
     let job_spec = serde_json::to_value(&spec).map_err(|e| {
-        ApiError(Box::new(DaemonError::internal(&format!(
-            "Serialization error: {e}"
-        ))))
+        internal_api_error("Failed to serialize daemon enhancement request", e)
     })?;
 
     let mut job = DaemonJob::new(crate::daemon::JobKind::Enhance, job_spec);
@@ -1958,6 +1963,33 @@ mod tests {
         (state, temp_dir)
     }
 
+    fn create_test_state_with_db_path(
+        db_path: std::path::PathBuf,
+    ) -> (SharedState, tempfile::TempDir) {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let lock_path = temp_dir.path().join("daemon.lock");
+        let config = crate::daemon::DaemonConfig {
+            db_path,
+            lock_path: lock_path.clone(),
+            ..Default::default()
+        };
+
+        let system_lock = crate::daemon::SystemLock::try_acquire(&lock_path)
+            .unwrap()
+            .expect("Failed to acquire test lock");
+
+        let state = Arc::new(crate::daemon::DaemonState::new(config, system_lock));
+        (state, temp_dir)
+    }
+
+    fn current_process_creds() -> Option<PeerCredentials> {
+        Some(PeerCredentials {
+            pid: std::process::id(),
+            uid: nix::unistd::geteuid().as_raw(),
+            gid: nix::unistd::getegid().as_raw(),
+        })
+    }
+
     /// Build a test router with peer credentials injected as a layer.
     ///
     /// The daemon normally injects credentials per-connection in run_daemon.
@@ -2026,6 +2058,49 @@ mod tests {
         assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(json["api_version"], "1.0");
         assert!(json["schema_version"].is_number());
+    }
+
+    #[tokio::test]
+    async fn test_v1_router_rejects_request_bodies_over_2mb() {
+        let (state, _dir) = create_test_state();
+        let app = test_router(state, current_process_creds());
+        let oversized = "1,".repeat(DAEMON_BODY_LIMIT_BYTES / 2 + 64);
+        let body = format!(
+            "{{\"batch_size\":10,\"trove_ids\":[{}],\"types\":[],\"force\":false}}",
+            oversized
+        );
+
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/enhance")
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn test_internal_errors_are_sanitized_for_clients() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let bad_db_path = temp_dir.path().join("db-dir");
+        std::fs::create_dir_all(&bad_db_path).unwrap();
+        let (state, _guard) = create_test_state_with_db_path(bad_db_path.clone());
+        let app = test_router(state, current_process_creds());
+
+        let request = axum::http::Request::builder()
+            .uri("/v1/packages")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body = String::from_utf8(body_bytes(response).await).unwrap();
+        assert!(body.contains(INTERNAL_ERROR_DETAIL));
+        assert!(!body.contains("Database error"));
+        assert!(!body.contains(&bad_db_path.display().to_string()));
     }
 
     // -- GET /v1/metrics ------------------------------------------------------

@@ -15,6 +15,7 @@ use conary_core::Result;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::{Mutex, OnceLock};
 use tokio::net::{TcpListener, UnixListener};
 
 /// Socket configuration
@@ -74,12 +75,15 @@ impl SocketManager {
         }
 
         // Bind Unix socket
-        let unix_listener = UnixListener::bind(&self.config.unix_path).map_err(|e| {
-            conary_core::Error::IoError(format!(
-                "Failed to bind Unix socket at {:?}: {}",
-                self.config.unix_path, e
-            ))
-        })?;
+        let unix_listener =
+            with_process_umask(0o077, || UnixListener::bind(&self.config.unix_path)).map_err(
+                |e| {
+                    conary_core::Error::IoError(format!(
+                        "Failed to bind Unix socket at {:?}: {}",
+                        self.config.unix_path, e
+                    ))
+                },
+            )?;
 
         // Set socket permissions
         let perms = std::fs::Permissions::from_mode(self.config.unix_mode);
@@ -222,6 +226,35 @@ pub fn get_peer_credentials(
 /// Create an Arc wrapper for shared socket state
 pub type SharedSocketManager = Arc<SocketManager>;
 
+fn with_process_umask<T>(mask: libc::mode_t, f: impl FnOnce() -> T) -> T {
+    struct UmaskGuard {
+        previous: libc::mode_t,
+    }
+
+    impl UmaskGuard {
+        fn set(mask: libc::mode_t) -> Self {
+            let previous = unsafe { libc::umask(mask) };
+            Self { previous }
+        }
+    }
+
+    impl Drop for UmaskGuard {
+        fn drop(&mut self) {
+            unsafe {
+                libc::umask(self.previous);
+            }
+        }
+    }
+
+    static UMASK_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let _lock = UMASK_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("umask mutex poisoned");
+    let _guard = UmaskGuard::set(mask);
+    f()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,5 +321,26 @@ mod tests {
             gid: 1000,
         };
         assert!(!user_creds.is_root());
+    }
+
+    #[test]
+    fn test_with_process_umask_masks_new_file_permissions() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("umask-test");
+
+        with_process_umask(0o077, || {
+            std::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&file_path)
+                .unwrap();
+        });
+
+        let mode = std::fs::metadata(&file_path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
     }
 }
