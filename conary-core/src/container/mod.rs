@@ -10,10 +10,11 @@
 //! - **Target-root mode** (`execute_in_target`): Full isolation via chroot
 //!   into a separate filesystem. Scriptlets cannot see or modify the host.
 //! - **Live-root mode** (`execute_sandbox_live`): Partial isolation only.
-//!   Provides PID/UTS/IPC/network namespace separation but /etc and /var
-//!   are bind-mounted writable from the host because the container runtime
-//!   does not create overlay layers. This mode does NOT protect host /etc
-//!   and /var from scriptlet writes.
+//!   Provides PID/UTS/IPC/network namespace separation and maps container root
+//!   to an unprivileged UID outside the user namespace, but /etc and /var are
+//!   still bind-mounted from the host because the container runtime does not
+//!   create overlay layers. This blocks writes to root-owned host files, but
+//!   world-writable paths can still be mutated.
 //!
 //! TODO: Implement tmpfs overlay support in the container runtime so that
 //! live-root sandbox mode can capture scriptlet writes to /etc and /var
@@ -42,7 +43,7 @@ use nix::mount::{MsFlags, mount};
 use nix::sched::{CloneFlags, unshare};
 use nix::sys::signal::{Signal, kill};
 use nix::sys::wait::{WaitStatus, waitpid};
-use nix::unistd::{ForkResult, Pid, Uid, fork};
+use nix::unistd::{ForkResult, Gid, Pid, Uid, fork};
 use regex::RegexSet;
 use std::fs::{self, File};
 use std::io::{Read, Write};
@@ -59,6 +60,7 @@ pub const DEFAULT_MEMORY_LIMIT: u64 = 512 * 1024 * 1024; // 512 MB
 pub const DEFAULT_CPU_TIME_LIMIT: u64 = 60; // 60 seconds CPU time
 pub const DEFAULT_FILE_SIZE_LIMIT: u64 = 100 * 1024 * 1024; // 100 MB max file size
 pub const DEFAULT_NPROC_LIMIT: u64 = 1024; // Max 1024 processes
+const HOST_NOBODY_ID: u32 = 65_534;
 
 /// Severity levels for dangerous script detection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -412,6 +414,11 @@ pub struct Sandbox {
     config: ContainerConfig,
 }
 
+struct UserNamespaceSync {
+    request_fd: std::os::fd::OwnedFd,
+    ack_fd: std::os::fd::OwnedFd,
+}
+
 impl Sandbox {
     /// Create a new sandbox with the given configuration
     pub fn new(config: ContainerConfig) -> Self {
@@ -487,12 +494,17 @@ impl Sandbox {
 
         let script_path = root_dir.path().join("script.sh");
         write_executable_script(&script_path, script_content)?;
+        prepare_user_namespace_entrypoint(root_dir.path(), &script_path)?;
 
         // Set up pipes before fork to capture child stdout/stderr
         let (stdout_read_fd, stdout_write_fd) = nix::unistd::pipe()
             .map_err(|e| Error::ScriptletError(format!("Failed to create stdout pipe: {e}")))?;
         let (stderr_read_fd, stderr_write_fd) = nix::unistd::pipe()
             .map_err(|e| Error::ScriptletError(format!("Failed to create stderr pipe: {e}")))?;
+        let (userns_request_read_fd, userns_request_write_fd) = nix::unistd::pipe()
+            .map_err(|e| Error::ScriptletError(format!("Failed to create userns pipe: {e}")))?;
+        let (userns_ack_read_fd, userns_ack_write_fd) = nix::unistd::pipe()
+            .map_err(|e| Error::ScriptletError(format!("Failed to create userns ack pipe: {e}")))?;
 
         // Fork and execute in isolated namespaces
         let start = Instant::now();
@@ -502,6 +514,16 @@ impl Sandbox {
                 // Parent: close write ends of pipes (dropping OwnedFd closes them)
                 drop(stdout_write_fd);
                 drop(stderr_write_fd);
+                drop(userns_request_write_fd);
+                drop(userns_ack_read_fd);
+
+                self.complete_user_namespace_handshake(
+                    child,
+                    &userns_request_read_fd,
+                    &userns_ack_write_fd,
+                )?;
+                drop(userns_request_read_fd);
+                drop(userns_ack_write_fd);
 
                 // Wait for child, then read captured output
                 let (code, _, _) = self.wait_for_child(child, start)?;
@@ -522,6 +544,8 @@ impl Sandbox {
                 // Child: close read ends of pipes
                 drop(stdout_read_fd);
                 drop(stderr_read_fd);
+                drop(userns_request_read_fd);
+                drop(userns_ack_write_fd);
 
                 // Redirect stdout and stderr to pipe write ends
                 use std::os::fd::FromRawFd;
@@ -543,16 +567,30 @@ impl Sandbox {
                     &script_path,
                     args,
                     env,
+                    Some(UserNamespaceSync {
+                        request_fd: userns_request_write_fd,
+                        ack_fd: userns_ack_read_fd,
+                    }),
                 );
 
                 // Exit with appropriate code
-                std::process::exit(result.unwrap_or(127));
+                match result {
+                    Ok(code) => std::process::exit(code),
+                    Err(err) => {
+                        eprintln!("{err}");
+                        std::process::exit(127);
+                    }
+                }
             }
             Err(e) => {
                 drop(stdout_read_fd);
                 drop(stdout_write_fd);
                 drop(stderr_read_fd);
                 drop(stderr_write_fd);
+                drop(userns_request_read_fd);
+                drop(userns_request_write_fd);
+                drop(userns_ack_read_fd);
+                drop(userns_ack_write_fd);
                 Err(Error::ScriptletError(format!("Fork failed: {}", e)))
             }
         }
@@ -639,6 +677,10 @@ impl Sandbox {
             }
         }
 
+        let mut tmp_perms = fs::metadata(root.join("tmp"))?.permissions();
+        tmp_perms.set_mode(0o1777);
+        fs::set_permissions(root.join("tmp"), tmp_perms)?;
+
         // Create device node placeholders
         let dev = root.join("dev");
         for node in &["null", "zero", "urandom", "random"] {
@@ -646,6 +688,9 @@ impl Sandbox {
             if !path.exists() {
                 File::create(&path)?;
             }
+            let mut perms = fs::metadata(&path)?.permissions();
+            perms.set_mode(0o666);
+            fs::set_permissions(&path, perms)?;
         }
 
         Ok(())
@@ -685,6 +730,41 @@ impl Sandbox {
         }
     }
 
+    fn complete_user_namespace_handshake(
+        &self,
+        child: Pid,
+        request_fd: &std::os::fd::OwnedFd,
+        ack_fd: &std::os::fd::OwnedFd,
+    ) -> Result<()> {
+        let mut message = [0_u8; 1];
+        let bytes_read = nix::unistd::read(request_fd, &mut message)
+            .map_err(|e| Error::ScriptletError(format!("User namespace handshake failed: {e}")))?;
+        if bytes_read == 0 {
+            return Ok(());
+        }
+
+        match message[0] {
+            b'U' => {
+                configure_user_namespace_root_mapping_for_pid(
+                    child,
+                    sandbox_host_uid(Uid::effective().as_raw()),
+                    sandbox_host_gid(Gid::effective().as_raw()),
+                )?;
+            }
+            b'N' => {}
+            other => {
+                return Err(Error::ScriptletError(format!(
+                    "Unexpected user namespace handshake message: {other}"
+                )));
+            }
+        }
+
+        nix::unistd::write(ack_fd, b"O").map_err(|e| {
+            Error::ScriptletError(format!("User namespace handshake ack failed: {e}"))
+        })?;
+        Ok(())
+    }
+
     /// Child process: set up namespaces and execute
     fn child_setup_and_execute(
         &self,
@@ -693,7 +773,12 @@ impl Sandbox {
         script_path: &Path,
         args: &[String],
         env: &[(&str, &str)],
+        userns_sync: Option<UserNamespaceSync>,
     ) -> Result<i32> {
+        let script_in_container = script_path
+            .strip_prefix(root)
+            .map(|relative| Path::new("/").join(relative))
+            .unwrap_or_else(|_| script_path.to_path_buf());
         let namespace_flags: &[(bool, CloneFlags)] = &[
             (self.config.isolate_pid, CloneFlags::CLONE_NEWPID),
             (self.config.isolate_uts, CloneFlags::CLONE_NEWUTS),
@@ -705,9 +790,22 @@ impl Sandbox {
             .iter()
             .filter(|(enabled, _)| *enabled)
             .fold(CloneFlags::empty(), |acc, (_, flag)| acc | *flag);
+        let flags_with_user = sandbox_namespace_flags(flags);
+        let mut user_namespace_enabled = false;
 
-        if !flags.is_empty() {
-            unshare(flags).map_err(|e| Error::ScriptletError(format!("Unshare failed: {}", e)))?;
+        if !flags_with_user.is_empty() {
+            if let Err(userns_error) = unshare(flags_with_user) {
+                warn!(
+                    "User namespace isolation unavailable ({}); continuing with existing namespace isolation",
+                    userns_error
+                );
+                unshare(flags)
+                    .map_err(|e| Error::ScriptletError(format!("Unshare failed: {}", e)))?;
+                signal_parent_user_namespace_ready(userns_sync.as_ref(), false)?;
+            } else {
+                user_namespace_enabled = true;
+                signal_parent_user_namespace_ready(userns_sync.as_ref(), true)?;
+            }
         }
 
         // Set up loopback interface if network namespace was created
@@ -738,7 +836,7 @@ impl Sandbox {
 
         // Set up mount namespace
         if self.config.isolate_mount {
-            self.setup_mount_namespace(root)?;
+            self.setup_mount_namespace(root, user_namespace_enabled)?;
         }
 
         // Apply resource limits
@@ -776,7 +874,7 @@ impl Sandbox {
 
         // Execute the script
         let mut cmd = Command::new(interpreter);
-        cmd.arg(script_path)
+        cmd.arg(&script_in_container)
             .args(args)
             .stdin(Stdio::null())
             .env_clear()
@@ -804,7 +902,7 @@ impl Sandbox {
     }
 
     /// Set up mount namespace with bind mounts
-    fn setup_mount_namespace(&self, root: &Path) -> Result<()> {
+    fn setup_mount_namespace(&self, root: &Path, user_namespace_enabled: bool) -> Result<()> {
         // Make all mounts private so changes don't propagate to host
         mount::<str, str, str, str>(None, "/", None, MsFlags::MS_PRIVATE | MsFlags::MS_REC, None)
             .map_err(|e| Error::ScriptletError(format!("mount --make-rprivate failed: {}", e)))?;
@@ -850,6 +948,14 @@ impl Sandbox {
             }
         }
 
+        // Unprivileged user namespaces map root to a non-host-root UID, which
+        // already blocks writes to host-owned paths. Use chroot directly there
+        // because pivot_root is fragile with symlinked host mount layouts.
+        if user_namespace_enabled {
+            self.chroot_into(root)?;
+            return Ok(());
+        }
+
         // Try pivot_root first (more secure than chroot -- cannot be escaped
         // from within a mount namespace). Fall back to chroot if pivot_root fails.
         if let Err(e) = self.try_pivot_root(root) {
@@ -873,18 +979,24 @@ impl Sandbox {
                  This is less secure -- chroot can be escaped by a privileged process.",
                 e
             );
-            unsafe {
-                let root_string = root.to_string_lossy().into_owned();
-                let root_cstr = std::ffi::CString::new(root_string)
-                    .map_err(|e| Error::ScriptletError(format!("Invalid root path: {}", e)))?;
-                if libc::chroot(root_cstr.as_ptr()) != 0 {
-                    return Err(Error::ScriptletError("chroot failed".to_string()));
-                }
-                if libc::chdir(c"/".as_ptr()) != 0 {
-                    return Err(Error::ScriptletError(
-                        "chdir after chroot failed".to_string(),
-                    ));
-                }
+            self.chroot_into(root)?;
+        }
+
+        Ok(())
+    }
+
+    fn chroot_into(&self, root: &Path) -> Result<()> {
+        unsafe {
+            let root_string = root.to_string_lossy().into_owned();
+            let root_cstr = std::ffi::CString::new(root_string)
+                .map_err(|e| Error::ScriptletError(format!("Invalid root path: {}", e)))?;
+            if libc::chroot(root_cstr.as_ptr()) != 0 {
+                return Err(Error::ScriptletError("chroot failed".to_string()));
+            }
+            if libc::chdir(c"/".as_ptr()) != 0 {
+                return Err(Error::ScriptletError(
+                    "chdir after chroot failed".to_string(),
+                ));
             }
         }
 
@@ -954,6 +1066,88 @@ fn set_rlimit(resource: libc::__rlimit_resource_t, value: u64, name: &str) {
             }
         }
     }
+}
+
+fn sandbox_namespace_flags(flags: CloneFlags) -> CloneFlags {
+    if flags.is_empty() {
+        flags
+    } else {
+        flags | CloneFlags::CLONE_NEWUSER
+    }
+}
+
+fn sandbox_host_uid(euid: u32) -> u32 {
+    if euid == 0 { HOST_NOBODY_ID } else { euid }
+}
+
+fn sandbox_host_gid(egid: u32) -> u32 {
+    if egid == 0 { HOST_NOBODY_ID } else { egid }
+}
+
+fn namespace_map_contents(host_id: u32) -> String {
+    format!("0 {host_id} 1\n")
+}
+
+fn write_namespace_map(path: &str, contents: &str) -> Result<()> {
+    fs::write(path, contents)
+        .map_err(|e| Error::ScriptletError(format!("Failed to write {path}: {e}")))?;
+    Ok(())
+}
+
+fn configure_user_namespace_root_mapping_for_pid(
+    pid: Pid,
+    host_uid: u32,
+    host_gid: u32,
+) -> Result<()> {
+    let proc_root = format!("/proc/{}", pid.as_raw());
+    write_namespace_map(&format!("{proc_root}/setgroups"), "deny")?;
+    write_namespace_map(
+        &format!("{proc_root}/uid_map"),
+        &namespace_map_contents(host_uid),
+    )?;
+    write_namespace_map(
+        &format!("{proc_root}/gid_map"),
+        &namespace_map_contents(host_gid),
+    )?;
+    Ok(())
+}
+
+fn prepare_user_namespace_entrypoint(root: &Path, script_path: &Path) -> Result<()> {
+    let mut root_perms = fs::metadata(root)?.permissions();
+    root_perms.set_mode(root_perms.mode() | 0o011);
+    fs::set_permissions(root, root_perms)?;
+
+    let mut script_perms = fs::metadata(script_path)?.permissions();
+    script_perms.set_mode(script_perms.mode() | 0o055);
+    fs::set_permissions(script_path, script_perms)?;
+
+    Ok(())
+}
+
+fn signal_parent_user_namespace_ready(
+    sync: Option<&UserNamespaceSync>,
+    user_namespace_enabled: bool,
+) -> Result<()> {
+    let Some(sync) = sync else {
+        return Ok(());
+    };
+
+    let message = if user_namespace_enabled { b"U" } else { b"N" };
+    nix::unistd::write(&sync.request_fd, message).map_err(|e| {
+        Error::ScriptletError(format!("User namespace handshake request failed: {e}"))
+    })?;
+
+    let mut ack = [0_u8; 1];
+    let bytes_read = nix::unistd::read(&sync.ack_fd, &mut ack).map_err(|e| {
+        Error::ScriptletError(format!("User namespace handshake ack failed: {e}"))
+    })?;
+    if bytes_read != 1 || ack[0] != b'O' {
+        return Err(Error::ScriptletError(
+            "User namespace handshake was not acknowledged".to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
 /// Dangerous patterns: (regex, risk level, human description).
@@ -1305,6 +1499,65 @@ mod tests {
         let config = ContainerConfig::minimal(Duration::from_secs(30));
         // Minimal should have NO network isolation (no isolation at all)
         assert!(!config.isolate_network);
+    }
+
+    #[test]
+    fn test_sandbox_namespace_flags_include_user_namespace() {
+        let flags = CloneFlags::CLONE_NEWNS | CloneFlags::CLONE_NEWNET;
+        let sandbox_flags = sandbox_namespace_flags(flags);
+        assert!(sandbox_flags.contains(CloneFlags::CLONE_NEWUSER));
+        assert!(sandbox_flags.contains(CloneFlags::CLONE_NEWNS));
+        assert!(sandbox_flags.contains(CloneFlags::CLONE_NEWNET));
+    }
+
+    #[test]
+    fn test_root_mapping_uses_nobody() {
+        assert_eq!(sandbox_host_uid(0), HOST_NOBODY_ID);
+        assert_eq!(sandbox_host_gid(0), HOST_NOBODY_ID);
+    }
+
+    #[test]
+    fn test_unprivileged_mapping_uses_current_ids() {
+        assert_eq!(sandbox_host_uid(1000), 1000);
+        assert_eq!(sandbox_host_gid(1000), 1000);
+    }
+
+    #[test]
+    fn test_namespace_map_contents_maps_root_inside() {
+        assert_eq!(namespace_map_contents(65_534), "0 65534 1\n");
+    }
+
+    #[test]
+    fn test_sandbox_reports_root_inside_without_host_write_access() {
+        if !isolation_available() {
+            return;
+        }
+
+        let mut config = ContainerConfig::minimal(Duration::from_secs(30));
+        config.isolate_mount = true;
+        config.bind_mounts = default_bind_mounts();
+        config.add_bind_mount(BindMount::writable("/etc/passwd", "/host-passwd"));
+        let mut sandbox = Sandbox::new(config);
+
+        let (code, stdout, stderr) = sandbox
+            .execute(
+                "/bin/sh",
+                r#"#!/bin/sh
+printf 'uid=%s\n' "$(id -u)"
+if [ -w /host-passwd ]; then
+    echo host-write-access
+else
+    echo host-write-blocked
+fi
+"#,
+                &[],
+                &[],
+            )
+            .expect("sandbox execution should succeed");
+
+        assert_eq!(code, 0, "stderr: {stderr}");
+        assert!(stdout.contains("uid=0"), "stdout: {stdout}");
+        assert!(stdout.contains("host-write-blocked"), "stdout: {stdout}");
     }
 
     #[test]
