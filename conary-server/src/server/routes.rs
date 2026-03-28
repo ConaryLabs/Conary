@@ -32,10 +32,12 @@ use axum::{
     routing::{delete, get, head, post, put},
 };
 use serde::Serialize;
+use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
+use tower::Service;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, info, warn};
@@ -59,6 +61,16 @@ const CLOUDFLARE_IPV4_RANGES: &[&str] = &[
     "172.64.0.0/13",
     "131.0.72.0/22",
 ];
+
+fn mcp_scope_error(request: &Request<Body>) -> Option<Response> {
+    let scopes = request
+        .extensions()
+        .get::<crate::server::auth::TokenScopes>()
+        .cloned()
+        .map(axum::Extension);
+
+    crate::server::handlers::admin::check_scope(&scopes, crate::server::auth::Scope::Admin)
+}
 
 /// Check if an IP is in Cloudflare's ranges
 fn is_cloudflare_ip(ip: &IpAddr) -> bool {
@@ -658,6 +670,18 @@ pub fn create_external_admin_router(
         ),
         Default::default(),
     );
+    let mcp_service = tower::service_fn(move |request: Request<Body>| {
+        let mut service = mcp_service.clone();
+        async move {
+            if let Some(err) = mcp_scope_error(&request) {
+                return Ok::<Response, Infallible>(err);
+            }
+            service
+                .call(request)
+                .await
+                .map(|response| response.map(Body::new))
+        }
+    });
 
     // MCP routes require admin scope (MCP tools provide full admin control)
     let mcp_router =
@@ -665,17 +689,8 @@ pub fn create_external_admin_router(
             .nest_service("/mcp", mcp_service)
             .route_layer(middleware::from_fn(
                 |request: Request<Body>, next: Next| async move {
-                    let has_admin = request
-                        .extensions()
-                        .get::<crate::server::auth::TokenScopes>()
-                        .map(|s| s.has_scope(crate::server::auth::Scope::Admin))
-                        .unwrap_or(false);
-                    if !has_admin {
-                        return crate::server::auth::json_error(
-                            403,
-                            "Admin scope required for MCP",
-                            "FORBIDDEN",
-                        );
+                    if let Some(err) = mcp_scope_error(&request) {
+                        return err;
                     }
                     next.run(request).await
                 },
@@ -1054,7 +1069,9 @@ async fn refresh_upstream(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::Body;
     use std::net::Ipv4Addr;
+    use tower::ServiceExt;
 
     #[test]
     fn test_cors_layer_restricted_no_origins() {
@@ -1154,5 +1171,53 @@ mod tests {
         let result = extract_client_ip(&headers, &conn_ip, Some("X-Forwarded-For"));
         // Should take the first IP (original client)
         assert_eq!(result, IpAddr::V4(Ipv4Addr::new(203, 0, 113, 50)));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_route_rejects_unauthenticated_requests() {
+        let (app, _db_path) = crate::server::handlers::admin::test_helpers::test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/mcp")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            matches!(
+                response.status(),
+                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+            ),
+            "unauthenticated MCP requests should be rejected"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mcp_route_rejects_non_admin_scope() {
+        let (_app, db_path) = crate::server::handlers::admin::test_helpers::test_app().await;
+        let token = "test-ci-token-54321";
+        let hash = crate::server::auth::hash_token(token);
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conary_core::db::models::admin_token::create(&conn, "test-ci", &hash, "ci:read")
+            .unwrap();
+        drop(conn);
+
+        let app = crate::server::handlers::admin::test_helpers::rebuild_app(&db_path);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/mcp")
+                    .header("Authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 }
