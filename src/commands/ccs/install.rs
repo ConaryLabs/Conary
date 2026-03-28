@@ -8,7 +8,6 @@
 use super::super::open_db;
 use anyhow::{Context, Result};
 use conary_core::ccs::{CcsPackage, HookExecutor, TrustPolicy, verify};
-use tracing::warn;
 use conary_core::db::models::generate_capability_variations;
 use conary_core::db::models::{Changeset, ChangesetStatus};
 use conary_core::dependencies::{DependencyClass, LanguageDepDetector};
@@ -26,6 +25,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
+use tracing::warn;
 
 fn package_provided_names(ccs_pkg: &CcsPackage) -> std::collections::HashSet<String> {
     std::iter::once(ccs_pkg.name().to_string())
@@ -59,24 +59,29 @@ fn test_hold_ms(var_name: &str) -> Option<Duration> {
         .map(Duration::from_millis)
 }
 
-fn note_changeset_post_hooks_failed(
-    conn: &rusqlite::Connection,
-    changeset_id: i64,
-    warning: &str,
-) {
-    if let Err(error) = conn.execute(
-        "UPDATE changesets
-         SET description = description || ' [post-hooks failed]'
-         WHERE id = ?1 AND description NOT LIKE '%[post-hooks failed]%'",
-        [changeset_id],
-    ) {
-        warn!(
+fn mark_changeset_post_hooks_failed(conn: &rusqlite::Connection, changeset_id: i64, warning: &str) {
+    match Changeset::find_by_id(conn, changeset_id) {
+        Ok(Some(mut changeset)) => {
+            if let Err(error) = changeset.update_status(conn, ChangesetStatus::PostHooksFailed) {
+                warn!(
+                    changeset_id,
+                    "Failed to mark changeset after post-install hook failure: {}", error
+                );
+            } else {
+                warn!(
+                    changeset_id,
+                    "Marked applied changeset as post_hooks_failed: {}", warning
+                );
+            }
+        }
+        Ok(None) => warn!(
             changeset_id,
-            "Failed to annotate changeset after post-install hook failure: {}",
-            error
-        );
-    } else {
-        warn!(changeset_id, "Annotated applied changeset with post-hook failure: {}", warning);
+            "Could not mark post-hook failure because the changeset no longer exists"
+        ),
+        Err(error) => warn!(
+            changeset_id,
+            "Failed to load changeset after post-install hook failure: {}", error
+        ),
     }
 }
 
@@ -139,8 +144,9 @@ fn find_symlink_blocker(
             Ok(_) => {}
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
             Err(err) => {
-                return Err(err)
-                    .with_context(|| format!("failed to inspect {}", root_path.join(&prefix).display()));
+                return Err(err).with_context(|| {
+                    format!("failed to inspect {}", root_path.join(&prefix).display())
+                });
             }
         }
     }
@@ -544,8 +550,10 @@ pub async fn cmd_ccs_install(
         return Ok(());
     }
 
-    let mut engine =
-        TransactionEngine::new(TransactionConfig::from_paths(PathBuf::from(root), db_path.into()))?;
+    let mut engine = TransactionEngine::new(TransactionConfig::from_paths(
+        PathBuf::from(root),
+        db_path.into(),
+    ))?;
     engine.begin()?;
 
     // Step 5: Extract file contents
@@ -586,7 +594,10 @@ pub async fn cmd_ccs_install(
         pre_hooks_ran = true;
         if let Err(e) = hook_executor.execute_pre_hooks(hooks) {
             if let Err(revert_err) = hook_executor.revert_pre_hooks() {
-                warn!("Failed to revert pre-install hooks after pre-hook error: {}", revert_err);
+                warn!(
+                    "Failed to revert pre-install hooks after pre-hook error: {}",
+                    revert_err
+                );
             }
             anyhow::bail!("Pre-install hook failed: {}", e);
         }
@@ -699,199 +710,199 @@ pub async fn cmd_ccs_install(
             std::thread::sleep(delay);
         }
         conary_core::db::transaction(&mut conn, |tx| {
-        // Create changeset for history and rollback support
-        let description = if is_upgrade {
-            format!(
-                "CCS upgrade {} {} -> {}",
-                ccs_pkg.name(),
-                existing[0].version,
-                ccs_pkg.version()
-            )
-        } else {
-            format!("CCS install {} {}", ccs_pkg.name(), ccs_pkg.version())
-        };
-        let mut changeset = Changeset::new(description);
-        let changeset_id = changeset.insert(tx)?;
-        applied_changeset_id = changeset_id;
-
-        // Remove old version if upgrading (snapshot first for rollback)
-        if is_upgrade {
-            let old = &existing[0];
-            if let Some(old_id) = old.id {
-                // Snapshot old trove for rollback support
-                let old_files = conary_core::db::models::FileEntry::find_by_trove(tx, old_id)?;
-                let snapshot = crate::commands::TroveSnapshot {
-                    name: old.name.clone(),
-                    version: old.version.clone(),
-                    architecture: old.architecture.clone(),
-                    description: old.description.clone(),
-                    install_source: old.install_source.as_str().to_string(),
-                    installed_from_repository_id: old.installed_from_repository_id,
-                    files: old_files
-                        .iter()
-                        .map(|f| crate::commands::FileSnapshot {
-                            path: f.path.clone(),
-                            sha256_hash: f.sha256_hash.clone(),
-                            size: f.size,
-                            permissions: f.permissions,
-                            symlink_target: f.symlink_target.clone(),
-                        })
-                        .collect(),
-                };
-                let snapshot_json = serde_json::to_string(&snapshot)?;
-                tx.execute(
-                    "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
-                    params![&snapshot_json, changeset_id],
-                )?;
-
-                // Delete old files
-                tx.execute("DELETE FROM files WHERE trove_id = ?1", [old_id])?;
-                // Delete old provides
-                tx.execute("DELETE FROM provides WHERE trove_id = ?1", [old_id])?;
-                // Delete old trove
-                tx.execute("DELETE FROM troves WHERE id = ?1", [old_id])?;
-            }
-        }
-
-        // Create trove linked to changeset
-        let mut trove = ccs_pkg.to_trove();
-        trove.installed_by_changeset_id = Some(changeset_id);
-        let trove_id = trove.insert(tx)?;
-
-        // Register files, store in CAS index, and record history for rollback
-        for file in &extracted_files {
-            let hash = file.sha256.clone().unwrap_or_default();
-            let mut file_entry = conary_core::db::models::FileEntry::new(
-                file.path.clone(),
-                hash.clone(),
-                file.size,
-                deployed_mode(file.mode).0,
-                trove_id,
-            );
-            file_entry.symlink_target = file.symlink_target.clone();
-            file_entry.insert_or_replace(tx)?;
-
-            // Register in file_contents (CAS index) and file_history
-            if hash.len() == 64 {
-                tx.execute(
-                    "INSERT OR IGNORE INTO file_contents (sha256_hash, content_path, size) \
-                     VALUES (?1, ?2, ?3)",
-                    params![
-                        &hash,
-                        format!("objects/{}/{}", &hash[0..2], &hash[2..]),
-                        file.size
-                    ],
-                )?;
-
-                let action = if is_upgrade { "modify" } else { "add" };
-                tx.execute(
-                    "INSERT INTO file_history (changeset_id, path, sha256_hash, action) \
-                     VALUES (?1, ?2, ?3, ?4)",
-                    params![changeset_id, &file.path, &hash, action],
-                )?;
-            }
-        }
-
-        // Create provides entry for the package itself
-        let mut provide = conary_core::db::models::ProvideEntry::new(
-            trove_id,
-            ccs_pkg.name().to_string(),
-            Some(ccs_pkg.version().to_string()),
-        );
-        provide.insert(tx)?;
-
-        // Register additional provides from manifest
-        for cap in &ccs_pkg.manifest().provides.capabilities {
-            if cap != ccs_pkg.name() {
-                let mut cap_provide =
-                    conary_core::db::models::ProvideEntry::new(trove_id, cap.clone(), None);
-                cap_provide.insert(tx)?;
-            }
-        }
-
-        for soname in &ccs_pkg.manifest().provides.sonames {
-            let mut soname_provide = conary_core::db::models::ProvideEntry::new_typed(
-                trove_id,
-                DependencyClass::Soname.prefix(),
-                soname.clone(),
-                None,
-            );
-            soname_provide.insert_or_ignore(tx)?;
-        }
-
-        for binary in &ccs_pkg.manifest().provides.binaries {
-            let mut binary_provide = conary_core::db::models::ProvideEntry::new_typed(
-                trove_id,
-                DependencyClass::Binary.prefix(),
-                binary.clone(),
-                None,
-            );
-            binary_provide.insert_or_ignore(tx)?;
-        }
-
-        for module in &ccs_pkg.manifest().provides.pkgconfig {
-            let mut pkgconfig_provide = conary_core::db::models::ProvideEntry::new_typed(
-                trove_id,
-                DependencyClass::PkgConfig.prefix(),
-                module.clone(),
-                None,
-            );
-            pkgconfig_provide.insert_or_ignore(tx)?;
-        }
-
-        for dep in &detected_provides {
-            let kind = match dep.class {
-                DependencyClass::Package => "package",
-                _ => dep.class.prefix(),
+            // Create changeset for history and rollback support
+            let description = if is_upgrade {
+                format!(
+                    "CCS upgrade {} {} -> {}",
+                    ccs_pkg.name(),
+                    existing[0].version,
+                    ccs_pkg.version()
+                )
+            } else {
+                format!("CCS install {} {}", ccs_pkg.name(), ccs_pkg.version())
             };
-            let mut detected_provide = conary_core::db::models::ProvideEntry::new_typed(
+            let mut changeset = Changeset::new(description);
+            let changeset_id = changeset.insert(tx)?;
+            applied_changeset_id = changeset_id;
+
+            // Remove old version if upgrading (snapshot first for rollback)
+            if is_upgrade {
+                let old = &existing[0];
+                if let Some(old_id) = old.id {
+                    // Snapshot old trove for rollback support
+                    let old_files = conary_core::db::models::FileEntry::find_by_trove(tx, old_id)?;
+                    let snapshot = crate::commands::TroveSnapshot {
+                        name: old.name.clone(),
+                        version: old.version.clone(),
+                        architecture: old.architecture.clone(),
+                        description: old.description.clone(),
+                        install_source: old.install_source.as_str().to_string(),
+                        installed_from_repository_id: old.installed_from_repository_id,
+                        files: old_files
+                            .iter()
+                            .map(|f| crate::commands::FileSnapshot {
+                                path: f.path.clone(),
+                                sha256_hash: f.sha256_hash.clone(),
+                                size: f.size,
+                                permissions: f.permissions,
+                                symlink_target: f.symlink_target.clone(),
+                            })
+                            .collect(),
+                    };
+                    let snapshot_json = serde_json::to_string(&snapshot)?;
+                    tx.execute(
+                        "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
+                        params![&snapshot_json, changeset_id],
+                    )?;
+
+                    // Delete old files
+                    tx.execute("DELETE FROM files WHERE trove_id = ?1", [old_id])?;
+                    // Delete old provides
+                    tx.execute("DELETE FROM provides WHERE trove_id = ?1", [old_id])?;
+                    // Delete old trove
+                    tx.execute("DELETE FROM troves WHERE id = ?1", [old_id])?;
+                }
+            }
+
+            // Create trove linked to changeset
+            let mut trove = ccs_pkg.to_trove();
+            trove.installed_by_changeset_id = Some(changeset_id);
+            let trove_id = trove.insert(tx)?;
+
+            // Register files, store in CAS index, and record history for rollback
+            for file in &extracted_files {
+                let hash = file.sha256.clone().unwrap_or_default();
+                let mut file_entry = conary_core::db::models::FileEntry::new(
+                    file.path.clone(),
+                    hash.clone(),
+                    file.size,
+                    deployed_mode(file.mode).0,
+                    trove_id,
+                );
+                file_entry.symlink_target = file.symlink_target.clone();
+                file_entry.insert_or_replace(tx)?;
+
+                // Register in file_contents (CAS index) and file_history
+                if hash.len() == 64 {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO file_contents (sha256_hash, content_path, size) \
+                     VALUES (?1, ?2, ?3)",
+                        params![
+                            &hash,
+                            format!("objects/{}/{}", &hash[0..2], &hash[2..]),
+                            file.size
+                        ],
+                    )?;
+
+                    let action = if is_upgrade { "modify" } else { "add" };
+                    tx.execute(
+                        "INSERT INTO file_history (changeset_id, path, sha256_hash, action) \
+                     VALUES (?1, ?2, ?3, ?4)",
+                        params![changeset_id, &file.path, &hash, action],
+                    )?;
+                }
+            }
+
+            // Create provides entry for the package itself
+            let mut provide = conary_core::db::models::ProvideEntry::new(
                 trove_id,
-                kind,
-                dep.name.clone(),
-                dep.version_constraint.clone(),
+                ccs_pkg.name().to_string(),
+                Some(ccs_pkg.version().to_string()),
             );
-            detected_provide.insert_or_ignore(tx)?;
-        }
+            provide.insert(tx)?;
 
-        for dep in &ccs_pkg.manifest().requires.packages {
-            let mut dep_entry = conary_core::db::models::DependencyEntry::new(
-                trove_id,
-                dep.name.clone(),
-                None,
-                "runtime".to_string(),
-                dep.version.clone(),
-            );
-            dep_entry.insert(tx)?;
-        }
+            // Register additional provides from manifest
+            for cap in &ccs_pkg.manifest().provides.capabilities {
+                if cap != ccs_pkg.name() {
+                    let mut cap_provide =
+                        conary_core::db::models::ProvideEntry::new(trove_id, cap.clone(), None);
+                    cap_provide.insert(tx)?;
+                }
+            }
 
-        for cap in &ccs_pkg.manifest().requires.capabilities {
-            let mut dep_entry = conary_core::db::models::DependencyEntry::new_typed(
-                trove_id,
-                "capability",
-                cap.name().to_string(),
-                None,
-                "runtime".to_string(),
-                cap.version().map(|v| v.to_string()),
-            );
-            dep_entry.insert(tx)?;
-        }
+            for soname in &ccs_pkg.manifest().provides.sonames {
+                let mut soname_provide = conary_core::db::models::ProvideEntry::new_typed(
+                    trove_id,
+                    DependencyClass::Soname.prefix(),
+                    soname.clone(),
+                    None,
+                );
+                soname_provide.insert_or_ignore(tx)?;
+            }
 
-        // Store pre_remove script as a scriptlet entry so cmd_remove can find it
-        if let Some(ref hook) = hooks.pre_remove {
-            let mut scriptlet = conary_core::db::models::ScriptletEntry::new(
-                trove_id,
-                "pre-remove".to_string(),
-                "/bin/sh".to_string(),
-                hook.script.clone(),
-                "ccs",
-            );
-            scriptlet.insert(tx)?;
-        }
+            for binary in &ccs_pkg.manifest().provides.binaries {
+                let mut binary_provide = conary_core::db::models::ProvideEntry::new_typed(
+                    trove_id,
+                    DependencyClass::Binary.prefix(),
+                    binary.clone(),
+                    None,
+                );
+                binary_provide.insert_or_ignore(tx)?;
+            }
 
-        // Mark changeset as applied
-        changeset.update_status(tx, ChangesetStatus::Applied)?;
+            for module in &ccs_pkg.manifest().provides.pkgconfig {
+                let mut pkgconfig_provide = conary_core::db::models::ProvideEntry::new_typed(
+                    trove_id,
+                    DependencyClass::PkgConfig.prefix(),
+                    module.clone(),
+                    None,
+                );
+                pkgconfig_provide.insert_or_ignore(tx)?;
+            }
 
-        Ok(())
+            for dep in &detected_provides {
+                let kind = match dep.class {
+                    DependencyClass::Package => "package",
+                    _ => dep.class.prefix(),
+                };
+                let mut detected_provide = conary_core::db::models::ProvideEntry::new_typed(
+                    trove_id,
+                    kind,
+                    dep.name.clone(),
+                    dep.version_constraint.clone(),
+                );
+                detected_provide.insert_or_ignore(tx)?;
+            }
+
+            for dep in &ccs_pkg.manifest().requires.packages {
+                let mut dep_entry = conary_core::db::models::DependencyEntry::new(
+                    trove_id,
+                    dep.name.clone(),
+                    None,
+                    "runtime".to_string(),
+                    dep.version.clone(),
+                );
+                dep_entry.insert(tx)?;
+            }
+
+            for cap in &ccs_pkg.manifest().requires.capabilities {
+                let mut dep_entry = conary_core::db::models::DependencyEntry::new_typed(
+                    trove_id,
+                    "capability",
+                    cap.name().to_string(),
+                    None,
+                    "runtime".to_string(),
+                    cap.version().map(|v| v.to_string()),
+                );
+                dep_entry.insert(tx)?;
+            }
+
+            // Store pre_remove script as a scriptlet entry so cmd_remove can find it
+            if let Some(ref hook) = hooks.pre_remove {
+                let mut scriptlet = conary_core::db::models::ScriptletEntry::new(
+                    trove_id,
+                    "pre-remove".to_string(),
+                    "/bin/sh".to_string(),
+                    hook.script.clone(),
+                    "ccs",
+                );
+                scriptlet.insert(tx)?;
+            }
+
+            // Mark changeset as applied
+            changeset.update_status(tx, ChangesetStatus::Applied)?;
+
+            Ok(())
         })?;
 
         // Step 9: Execute post-hooks (including post_install script)
@@ -907,21 +918,33 @@ pub async fn cmd_ccs_install(
             let mut non_script_hooks = hooks.clone();
             non_script_hooks.post_install = None;
             println!("Executing post-install hooks...");
-            if let Err(e) = hook_executor.execute_post_hooks(&non_script_hooks) {
+            let results = hook_executor.execute_post_hooks_with_results(&non_script_hooks);
+            let failures = results
+                .failures()
+                .map(|failure| {
+                    format!(
+                        "{} '{}' failed: {}",
+                        failure.hook_type,
+                        failure.name,
+                        failure.error.as_deref().unwrap_or("unknown error")
+                    )
+                })
+                .collect::<Vec<_>>();
+            if !failures.is_empty() {
                 let warning = format!(
-                    "Post-install hook failed for {} {} after commit: {}",
+                    "Post-install hooks failed for {} {} after commit: {}",
                     ccs_pkg.name(),
                     ccs_pkg.version(),
-                    e
+                    failures.join("; ")
                 );
                 warn!(
                     changeset_id = applied_changeset_id,
                     package = ccs_pkg.name(),
                     version = ccs_pkg.version(),
-                    "Post-install hook failed after DB commit (package is installed, hooks incomplete): {}",
-                    e
+                    "Post-install hooks failed after DB commit (package is installed, hooks incomplete): {}",
+                    warning
                 );
-                note_changeset_post_hooks_failed(&conn, applied_changeset_id, &warning);
+                mark_changeset_post_hooks_failed(&conn, applied_changeset_id, &warning);
                 eprintln!("WARNING: {warning}");
                 post_commit_warnings.push(warning);
             }
@@ -961,7 +984,7 @@ pub async fn cmd_ccs_install(
                     "Post-install script failed after DB commit (package is installed, script incomplete): {}",
                     error
                 );
-                note_changeset_post_hooks_failed(&conn, applied_changeset_id, &warning);
+                mark_changeset_post_hooks_failed(&conn, applied_changeset_id, &warning);
                 eprintln!("WARNING: {warning}");
                 post_commit_warnings.push(warning);
             }
@@ -1252,8 +1275,8 @@ mod tests {
 
     #[tokio::test]
     async fn ccs_install_rejects_child_write_beneath_package_symlink() {
-        use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
         use conary_core::ccs::builder::write_ccs_package;
+        use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
         use conary_core::filesystem::CasStore;
         use conary_core::hash;
 
@@ -1344,12 +1367,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ccs_install_marks_changeset_post_hooks_failed_after_post_install_error() {
+        use conary_core::ccs::builder::write_ccs_package;
+        use conary_core::ccs::manifest::ScriptHook;
+        use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
+        use conary_core::hash;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let package_path = temp_dir.path().join("post-hook-fails.ccs");
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+        let deployed_file = temp_dir.path().join("installed").join("hello");
+
+        conary_core::db::init(db_path_str).unwrap();
+        std::fs::create_dir_all(deployed_file.parent().unwrap()).unwrap();
+
+        let content = b"hello".to_vec();
+        let hash = hash::sha256(&content);
+        let files = vec![FileEntry {
+            path: deployed_file.to_string_lossy().to_string(),
+            hash: hash.clone(),
+            size: content.len() as u64,
+            mode: 0o100755,
+            component: "runtime".to_string(),
+            file_type: FileType::Regular,
+            target: None,
+            chunks: None,
+        }];
+
+        let mut manifest = CcsManifest::new_minimal("post-hook-fails", "1.0.0");
+        manifest.hooks.post_install = Some(ScriptHook {
+            script: "exit 23".to_string(),
+        });
+
+        let result = BuildResult {
+            manifest,
+            components: HashMap::from([(
+                "runtime".to_string(),
+                ComponentData {
+                    name: "runtime".to_string(),
+                    files: files.clone(),
+                    hash: "runtime".to_string(),
+                    size: content.len() as u64,
+                },
+            )]),
+            files,
+            blobs: HashMap::from([(hash, content)]),
+            total_size: 5,
+            chunked: false,
+            chunk_stats: None,
+        };
+        write_ccs_package(&result, &package_path).unwrap();
+
+        super::cmd_ccs_install(
+            package_path.to_str().unwrap(),
+            db_path_str,
+            "/",
+            false,
+            true,
+            None,
+            None,
+            crate::commands::SandboxMode::None,
+            true,
+            false,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let conn = conary_core::db::open(db_path_str).unwrap();
+        let (status, description): (String, String) = conn
+            .query_row(
+                "SELECT status, description FROM changesets ORDER BY id DESC LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "post_hooks_failed");
+        assert!(!description.contains("[post-hooks failed]"));
+    }
+
+    #[tokio::test]
     async fn ccs_install_reverts_pre_hook_directories_when_deploy_fails() {
         use conary_core::ccs::builder::write_ccs_package;
-        use conary_core::ccs::{
-            BuildResult, CcsManifest, ComponentData, FileEntry, FileType,
-        };
         use conary_core::ccs::manifest::DirectoryHook;
+        use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
         use conary_core::hash;
 
         let temp_dir = tempfile::tempdir().unwrap();

@@ -164,6 +164,13 @@ mod tests {
         assert_eq!(updated.status, ChangesetStatus::Applied);
         assert!(updated.applied_at.is_some());
 
+        changeset
+            .update_status(&conn, ChangesetStatus::PostHooksFailed)
+            .unwrap();
+        let degraded = Changeset::find_by_id(&conn, id).unwrap().unwrap();
+        assert_eq!(degraded.status, ChangesetStatus::PostHooksFailed);
+        assert!(degraded.applied_at.is_some());
+
         // List all
         let all = Changeset::list_all(&conn).unwrap();
         assert_eq!(all.len(), 1);

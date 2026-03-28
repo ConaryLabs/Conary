@@ -99,6 +99,18 @@ pub async fn cmd_init(db_path: &str) -> Result<()> {
     Ok(())
 }
 
+fn rollback_claim_statuses() -> [&'static str; 2] {
+    ["applied", "post_hooks_failed"]
+}
+
+fn is_rollback_eligible_status(status: &conary_core::db::models::ChangesetStatus) -> bool {
+    matches!(
+        status,
+        conary_core::db::models::ChangesetStatus::Applied
+            | conary_core::db::models::ChangesetStatus::PostHooksFailed
+    )
+}
+
 /// Rollback a changeset
 pub async fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Result<()> {
     info!("Rolling back changeset: {}", changeset_id);
@@ -133,6 +145,12 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Resu
                 changeset_id
             )));
         }
+        if !is_rollback_eligible_status(&changeset.status) {
+            return Err(conary_core::Error::InitError(format!(
+                "Changeset {} is not eligible for rollback (status: {})",
+                changeset_id, changeset.status
+            )));
+        }
 
         let already_reversed: Option<i64> = tx.query_row(
             "SELECT reversed_by_changeset_id FROM changesets WHERE id = ?1",
@@ -149,13 +167,15 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Resu
         // Atomically claim this changeset for rollback using a conditional UPDATE.
         // We set reversed_by_changeset_id to a sentinel (-1) as a claim marker;
         // the actual rollback transaction will overwrite it with the real rollback
-        // changeset ID.  This keeps status within the valid enum (pending/applied/
-        // rolled_back) while preventing a second concurrent rollback from passing
+        // changeset ID. This keeps status within the valid enum
+        // (pending/applied/post_hooks_failed/rolled_back) while preventing a
+        // second concurrent rollback from passing
         // the reversed_by_changeset_id IS NULL guard.
+        let rollback_statuses = rollback_claim_statuses();
         let claimed = tx.execute(
             "UPDATE changesets SET reversed_by_changeset_id = -1
-             WHERE id = ?1 AND status = 'applied' AND reversed_by_changeset_id IS NULL",
-            [changeset_id],
+             WHERE id = ?1 AND status IN (?2, ?3) AND reversed_by_changeset_id IS NULL",
+            rusqlite::params![changeset_id, rollback_statuses[0], rollback_statuses[1]],
         )?;
         if claimed == 0 {
             return Err(conary_core::Error::InitError(format!(
@@ -1174,7 +1194,7 @@ use super::format_bytes;
 
 #[cfg(test)]
 mod tests {
-    use super::cmd_init;
+    use super::{cmd_init, rollback_claim_statuses};
 
     #[tokio::test]
     async fn init_adds_remi_with_strategy_defaults() {
@@ -1195,5 +1215,10 @@ mod tests {
             Some("https://packages.conary.io")
         );
         assert_eq!(repo.default_strategy_distro.as_deref(), Some("fedora"));
+    }
+
+    #[test]
+    fn rollback_claim_statuses_include_post_hooks_failed() {
+        assert_eq!(rollback_claim_statuses(), ["applied", "post_hooks_failed"]);
     }
 }
