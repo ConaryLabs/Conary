@@ -49,6 +49,15 @@ pub fn sanitize_path(path: impl AsRef<Path>) -> Result<PathBuf> {
         return Err(Error::PathTraversal("path contains null byte".to_string()));
     }
 
+    // Reject non-ASCII paths from untrusted sources to avoid Unicode
+    // normalization edge cases on filesystems that treat homoglyphs as
+    // separators or normalize canonically equivalent forms.
+    if !path_str.is_ascii() {
+        return Err(Error::PathTraversal(
+            "path contains non-ASCII characters".to_string(),
+        ));
+    }
+
     // Strip leading slashes to make relative
     let relative = path_str.trim_start_matches('/');
 
@@ -286,6 +295,12 @@ mod tests {
         assert!(sanitize_path("/").is_err());
         assert!(sanitize_path("///").is_err());
         assert!(sanitize_path("./").is_err());
+    }
+
+    #[test]
+    fn test_sanitize_path_non_ascii_rejected() {
+        assert!(sanitize_path("usr/bin/cafe\u{301}").is_err());
+        assert!(sanitize_path("usr\u{ff0f}bin\u{ff0f}tool").is_err());
     }
 
     #[test]

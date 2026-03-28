@@ -580,112 +580,124 @@ pub async fn cmd_ccs_install(
     let mut hook_executor = HookExecutor::new(Path::new(root));
     let hooks = &ccs_pkg.manifest().hooks;
 
+    let mut pre_hooks_ran = false;
     if !hooks.users.is_empty() || !hooks.groups.is_empty() || !hooks.directories.is_empty() {
         println!("Executing pre-install hooks...");
+        pre_hooks_ran = true;
         if let Err(e) = hook_executor.execute_pre_hooks(hooks) {
+            if let Err(revert_err) = hook_executor.revert_pre_hooks() {
+                warn!("Failed to revert pre-install hooks after pre-hook error: {}", revert_err);
+            }
             anyhow::bail!("Pre-install hook failed: {}", e);
         }
     }
 
-    // Step 7: Deploy files to filesystem and store in CAS
-    println!("Deploying files to filesystem...");
     let root_path = std::path::Path::new(root);
     let objects_dir = conary_core::db::paths::objects_dir(db_path);
-    std::fs::create_dir_all(&objects_dir)?;
-    let mut files_deployed = 0;
-    let mut created_symlinks = HashSet::new();
-
-    for file in &extracted_files {
-        let relative_path = sanitize_package_relative_path(&file.path)?;
-        let dest_path = root_path.join(&relative_path);
-        let current_is_symlink = is_symlink_mode(file.mode);
-        let (effective_mode, stripped_special_bits) = deployed_mode(file.mode);
-
-        ensure_no_symlink_ancestor(root_path, &relative_path, &created_symlinks, !current_is_symlink)?;
-
-        // Create parent directories
-        if let Some(parent) = dest_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        if current_is_symlink {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::symlink;
-
-                let target = std::str::from_utf8(&file.content)
-                    .context("invalid symlink target in package payload")?;
-                symlink(target, &dest_path)?;
-                created_symlinks.insert(relative_path.clone());
-            }
-            #[cfg(not(unix))]
-            {
-                anyhow::bail!("symlink payloads are not supported on this platform");
-            }
-        } else {
-            std::fs::write(&dest_path, &file.content)?;
-        }
-
-        // Set permissions
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if !current_is_symlink {
-                std::fs::set_permissions(
-                    &dest_path,
-                    std::fs::Permissions::from_mode(effective_mode as u32),
-                )?;
-            }
-        }
-
-        if stripped_special_bits {
-            println!("Warning: stripped setuid/setgid bits from {}", file.path);
-        }
-
-        // Store in CAS for rollback support
-        if let Some(ref hash) = file.sha256
-            && hash.len() == 64
-        {
-            if let Some(delay) = test_hold_ms("CONARY_TEST_HOLD_BEFORE_CAS_WRITE_MS") {
-                std::thread::sleep(delay);
-            }
-            if !objects_dir.exists() {
-                anyhow::bail!(
-                    "CAS objects directory disappeared during install: {}",
-                    objects_dir.display()
-                );
-            }
-            let stored_hash = if current_is_symlink {
-                let target = std::str::from_utf8(&file.content)
-                    .context("invalid symlink target in package payload")?;
-                engine.cas().store_symlink(target)?
-            } else {
-                engine.cas().store(&file.content)?
-            };
-            if stored_hash != *hash {
-                anyhow::bail!(
-                    "CAS hash mismatch for {}: manifest {} != stored {}",
-                    file.path,
-                    hash,
-                    stored_hash
-                );
-            }
-        }
-
-        files_deployed += 1;
-    }
-
-    println!("Deployed {} files to {}", files_deployed, root);
-
-    // Step 8: Register in database with changeset tracking
-    println!("Updating database...");
-    std::io::stdout().flush()?;
-    if let Some(delay) = test_hold_ms("CONARY_TEST_HOLD_AFTER_DB_UPDATE_MS") {
-        std::thread::sleep(delay);
-    }
     let is_upgrade = !existing.is_empty();
     let mut applied_changeset_id = 0_i64;
-    conary_core::db::transaction(&mut conn, |tx| {
+
+    let install_result = (|| -> Result<()> {
+        // Step 7: Deploy files to filesystem and store in CAS
+        println!("Deploying files to filesystem...");
+        std::fs::create_dir_all(&objects_dir)?;
+        let mut files_deployed = 0;
+        let mut created_symlinks = HashSet::new();
+
+        for file in &extracted_files {
+            let relative_path = sanitize_package_relative_path(&file.path)?;
+            let dest_path = root_path.join(&relative_path);
+            let current_is_symlink = is_symlink_mode(file.mode);
+            let (effective_mode, stripped_special_bits) = deployed_mode(file.mode);
+
+            ensure_no_symlink_ancestor(
+                root_path,
+                &relative_path,
+                &created_symlinks,
+                !current_is_symlink,
+            )?;
+
+            // Create parent directories
+            if let Some(parent) = dest_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+
+            if current_is_symlink {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::symlink;
+
+                    let target = std::str::from_utf8(&file.content)
+                        .context("invalid symlink target in package payload")?;
+                    symlink(target, &dest_path)?;
+                    created_symlinks.insert(relative_path.clone());
+                }
+                #[cfg(not(unix))]
+                {
+                    anyhow::bail!("symlink payloads are not supported on this platform");
+                }
+            } else {
+                std::fs::write(&dest_path, &file.content)?;
+            }
+
+            // Set permissions
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if !current_is_symlink {
+                    std::fs::set_permissions(
+                        &dest_path,
+                        std::fs::Permissions::from_mode(effective_mode as u32),
+                    )?;
+                }
+            }
+
+            if stripped_special_bits {
+                println!("Warning: stripped setuid/setgid bits from {}", file.path);
+            }
+
+            // Store in CAS for rollback support
+            if let Some(ref hash) = file.sha256
+                && hash.len() == 64
+            {
+                if let Some(delay) = test_hold_ms("CONARY_TEST_HOLD_BEFORE_CAS_WRITE_MS") {
+                    std::thread::sleep(delay);
+                }
+                if !objects_dir.exists() {
+                    anyhow::bail!(
+                        "CAS objects directory disappeared during install: {}",
+                        objects_dir.display()
+                    );
+                }
+                let stored_hash = if current_is_symlink {
+                    let target = std::str::from_utf8(&file.content)
+                        .context("invalid symlink target in package payload")?;
+                    engine.cas().store_symlink(target)?
+                } else {
+                    engine.cas().store(&file.content)?
+                };
+                if stored_hash != *hash {
+                    anyhow::bail!(
+                        "CAS hash mismatch for {}: manifest {} != stored {}",
+                        file.path,
+                        hash,
+                        stored_hash
+                    );
+                }
+            }
+
+            files_deployed += 1;
+        }
+
+        println!("Deployed {} files to {}", files_deployed, root);
+
+        // Step 8: Register in database with changeset tracking
+        println!("Updating database...");
+        std::io::stdout().flush()?;
+        if let Some(delay) = test_hold_ms("CONARY_TEST_HOLD_AFTER_DB_UPDATE_MS") {
+            std::thread::sleep(delay);
+        }
+        conary_core::db::transaction(&mut conn, |tx| {
         // Create changeset for history and rollback support
         let description = if is_upgrade {
             format!(
@@ -879,72 +891,86 @@ pub async fn cmd_ccs_install(
         changeset.update_status(tx, ChangesetStatus::Applied)?;
 
         Ok(())
-    })?;
+        })?;
 
-    // Step 9: Execute post-hooks (including post_install script)
-    // Note: the DB transaction is already committed at this point (changeset
-    // status = Applied).  If post-hooks fail the package is installed but hooks
-    // did not complete -- log a warning with the changeset ID so the operator
-    // can identify and investigate the partially-configured state.
-    if !hooks.systemd.is_empty()
-        || !hooks.tmpfiles.is_empty()
-        || !hooks.sysctl.is_empty()
-        || !hooks.alternatives.is_empty()
-    {
-        let mut non_script_hooks = hooks.clone();
-        non_script_hooks.post_install = None;
-        println!("Executing post-install hooks...");
-        if let Err(e) = hook_executor.execute_post_hooks(&non_script_hooks) {
-            warn!(
-                changeset_id = applied_changeset_id,
-                package = ccs_pkg.name(),
-                version = ccs_pkg.version(),
-                "Post-install hook failed after DB commit (package is installed, hooks incomplete): {}",
-                e
-            );
-            anyhow::bail!(
-                "Post-install hook failed for {} {} (changeset {:?}): {}",
+        // Step 9: Execute post-hooks (including post_install script)
+        // Note: the DB transaction is already committed at this point (changeset
+        // status = Applied).  If post-hooks fail the package is installed but hooks
+        // did not complete -- log a warning with the changeset ID so the operator
+        // can identify and investigate the partially-configured state.
+        if !hooks.systemd.is_empty()
+            || !hooks.tmpfiles.is_empty()
+            || !hooks.sysctl.is_empty()
+            || !hooks.alternatives.is_empty()
+        {
+            let mut non_script_hooks = hooks.clone();
+            non_script_hooks.post_install = None;
+            println!("Executing post-install hooks...");
+            if let Err(e) = hook_executor.execute_post_hooks(&non_script_hooks) {
+                warn!(
+                    changeset_id = applied_changeset_id,
+                    package = ccs_pkg.name(),
+                    version = ccs_pkg.version(),
+                    "Post-install hook failed after DB commit (package is installed, hooks incomplete): {}",
+                    e
+                );
+                anyhow::bail!(
+                    "Post-install hook failed for {} {} (changeset {:?}): {}",
+                    ccs_pkg.name(),
+                    ccs_pkg.version(),
+                    applied_changeset_id,
+                    e
+                );
+            }
+        }
+
+        if let Some(ref hook) = hooks.post_install {
+            println!("Executing post-install hooks...");
+            let scriptlet = Scriptlet {
+                phase: ScriptletPhase::PostInstall,
+                interpreter: "/bin/sh".to_string(),
+                content: hook.script.clone(),
+                flags: None,
+            };
+            let sandbox_mode = match sandbox {
+                crate::commands::SandboxMode::None => conary_core::scriptlet::SandboxMode::None,
+                crate::commands::SandboxMode::Auto => conary_core::scriptlet::SandboxMode::Auto,
+                crate::commands::SandboxMode::Always => conary_core::scriptlet::SandboxMode::Always,
+            };
+            let executor = ScriptletExecutor::new(
+                Path::new(root),
                 ccs_pkg.name(),
                 ccs_pkg.version(),
-                applied_changeset_id,
-                e
-            );
-        }
-    }
-
-    if let Some(ref hook) = hooks.post_install {
-        println!("Executing post-install hooks...");
-        let scriptlet = Scriptlet {
-            phase: ScriptletPhase::PostInstall,
-            interpreter: "/bin/sh".to_string(),
-            content: hook.script.clone(),
-            flags: None,
-        };
-        let sandbox_mode = match sandbox {
-            crate::commands::SandboxMode::None => conary_core::scriptlet::SandboxMode::None,
-            crate::commands::SandboxMode::Auto => conary_core::scriptlet::SandboxMode::Auto,
-            crate::commands::SandboxMode::Always => conary_core::scriptlet::SandboxMode::Always,
-        };
-        let executor = ScriptletExecutor::new(
-            Path::new(root),
-            ccs_pkg.name(),
-            ccs_pkg.version(),
-            ScriptletPackageFormat::Rpm,
-        )
-        .with_sandbox_mode(sandbox_mode);
-        if let Err(error) = executor.execute(&scriptlet, &ExecutionMode::Install) {
-            warn!(
-                changeset_id = applied_changeset_id,
-                package = ccs_pkg.name(),
-                version = ccs_pkg.version(),
-                "Post-install script failed after DB commit (package is installed, script incomplete): {}",
-                error
-            );
-            if matches!(sandbox, crate::commands::SandboxMode::Always) {
-                anyhow::bail!("{}", sandbox_failure_message(&hook.script, &error));
+                ScriptletPackageFormat::Rpm,
+            )
+            .with_sandbox_mode(sandbox_mode);
+            if let Err(error) = executor.execute(&scriptlet, &ExecutionMode::Install) {
+                warn!(
+                    changeset_id = applied_changeset_id,
+                    package = ccs_pkg.name(),
+                    version = ccs_pkg.version(),
+                    "Post-install script failed after DB commit (package is installed, script incomplete): {}",
+                    error
+                );
+                if matches!(sandbox, crate::commands::SandboxMode::Always) {
+                    anyhow::bail!("{}", sandbox_failure_message(&hook.script, &error));
+                }
+                return Err(error.into());
             }
-            return Err(error.into());
         }
+
+        Ok(())
+    })();
+
+    if let Err(error) = install_result {
+        if pre_hooks_ran && let Err(revert_err) = hook_executor.revert_pre_hooks() {
+            warn!(
+                "Failed to revert pre-install hooks after install failure: {}",
+                revert_err
+            );
+        }
+        engine.release_lock();
+        return Err(error);
     }
 
     println!();
@@ -1293,5 +1319,97 @@ mod tests {
             "unexpected error: {err:#}"
         );
         assert!(!outside_root.join("cron.d/persist").exists());
+    }
+
+    #[tokio::test]
+    async fn ccs_install_reverts_pre_hook_directories_when_deploy_fails() {
+        use conary_core::ccs::builder::write_ccs_package;
+        use conary_core::ccs::{
+            BuildResult, CcsManifest, ComponentData, FileEntry, FileType,
+        };
+        use conary_core::ccs::manifest::DirectoryHook;
+        use conary_core::hash;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let outside_root = temp_dir.path().join("outside");
+        let package_path = temp_dir.path().join("revert-pre-hooks.ccs");
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+
+        std::fs::create_dir_all(&install_root).unwrap();
+        std::fs::create_dir_all(&outside_root).unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+
+        let file_content = b"blocked".to_vec();
+        let file_hash = hash::sha256(&file_content);
+
+        let files = vec![FileEntry {
+            path: "/usr/lib/link/cron.d/persist".to_string(),
+            hash: file_hash.clone(),
+            size: file_content.len() as u64,
+            mode: 0o100644,
+            component: "runtime".to_string(),
+            file_type: FileType::Regular,
+            target: None,
+            chunks: None,
+        }];
+
+        let mut manifest = CcsManifest::new_minimal("revert-pre-hooks", "1.0.0");
+        manifest.hooks.directories.push(DirectoryHook {
+            path: "/var/lib/revert-pre-hooks".to_string(),
+            mode: "0755".to_string(),
+            owner: "root".to_string(),
+            group: "root".to_string(),
+            cleanup: None,
+        });
+
+        let result = BuildResult {
+            manifest,
+            components: HashMap::from([(
+                "runtime".to_string(),
+                ComponentData {
+                    name: "runtime".to_string(),
+                    files: files.clone(),
+                    hash: "runtime".to_string(),
+                    size: file_content.len() as u64,
+                },
+            )]),
+            files,
+            blobs: HashMap::from([(file_hash, file_content)]),
+            total_size: 7,
+            chunked: false,
+            chunk_stats: None,
+        };
+        write_ccs_package(&result, &package_path).unwrap();
+        std::fs::create_dir_all(install_root.join("usr/lib")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside_root, install_root.join("usr/lib/link")).unwrap();
+
+        let err = super::cmd_ccs_install(
+            package_path.to_str().unwrap(),
+            db_path_str,
+            install_root.to_str().unwrap(),
+            false,
+            true,
+            None,
+            None,
+            crate::commands::SandboxMode::None,
+            true,
+            false,
+            false,
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("path traversal") || err.to_string().contains("symlink"),
+            "unexpected error: {err:#}"
+        );
+        assert!(
+            !install_root.join("var/lib/revert-pre-hooks").exists(),
+            "pre-hook directory should be reverted on failure"
+        );
     }
 }

@@ -7,9 +7,20 @@
 
 use super::HookExecutor;
 use anyhow::{Context, Result};
+use crate::filesystem::path::sanitize_path;
 use std::fs;
 use std::process::Command;
 use tracing::debug;
+
+pub(crate) fn validate_tmpfiles_entry_type(entry_type: &str) -> Result<()> {
+    match entry_type {
+        "d" | "D" | "e" | "v" | "q" | "Q" => Ok(()),
+        _ => Err(anyhow::anyhow!(
+            "unsupported tmpfiles entry type '{}'",
+            entry_type
+        )),
+    }
+}
 
 impl HookExecutor {
     /// Apply a tmpfiles entry
@@ -18,6 +29,9 @@ impl HookExecutor {
     /// When root != "/", writes the config to /etc/tmpfiles.d/ in the target
     /// so it will be applied on first boot.
     pub(super) fn apply_tmpfile(&self, entry: &crate::ccs::manifest::TmpfilesHook) -> Result<()> {
+        validate_tmpfiles_entry_type(&entry.entry_type)?;
+        sanitize_path(&entry.path)?;
+
         // Create the config line
         let config = format!(
             "{} {} {} {} {}\n",
@@ -109,5 +123,25 @@ mod tests {
 
         assert_eq!(hash1, hash2);
         assert_ne!(hash1, hash3);
+    }
+
+    #[test]
+    fn test_validate_tmpfiles_entry_type_accepts_safe_types() {
+        for entry_type in ["d", "D", "e", "v", "q", "Q"] {
+            assert!(
+                validate_tmpfiles_entry_type(entry_type).is_ok(),
+                "expected {entry_type} to be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_tmpfiles_entry_type_rejects_unsafe_types() {
+        for entry_type in ["f", "L", "C", "w", "x", ""] {
+            assert!(
+                validate_tmpfiles_entry_type(entry_type).is_err(),
+                "expected {entry_type:?} to be rejected"
+            );
+        }
     }
 }

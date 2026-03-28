@@ -5,7 +5,12 @@
 //! parsing from TOML format.
 
 use crate::capability::CapabilityDeclaration;
+use crate::ccs::hooks::{
+    is_denied_sysctl_key, is_safe_unit_name, validate_shell, validate_tmpfiles_entry_type,
+    validate_username,
+};
 use crate::ccs::policy::BuildPolicyConfig;
+use crate::filesystem::path::sanitize_path;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -97,6 +102,100 @@ impl CcsManifest {
         if self.package.version.is_empty() {
             return Err(ManifestError::MissingField("package.version".to_string()));
         }
+
+        for user in &self.hooks.users {
+            validate_username(&user.name).map_err(|error| {
+                ManifestError::Invalid(format!("invalid hooks.users name '{}': {}", user.name, error))
+            })?;
+            if !user.system {
+                return Err(ManifestError::Invalid(format!(
+                    "hooks.users '{}' must be a system user",
+                    user.name
+                )));
+            }
+            if let Some(group) = &user.group {
+                validate_username(group).map_err(|error| {
+                    ManifestError::Invalid(format!(
+                        "invalid hooks.users group '{}': {}",
+                        group, error
+                    ))
+                })?;
+            }
+            if let Some(shell) = &user.shell {
+                validate_shell(shell).map_err(|error| {
+                    ManifestError::Invalid(format!(
+                        "invalid hooks.users shell '{}': {}",
+                        shell, error
+                    ))
+                })?;
+            }
+            if let Some(home) = &user.home {
+                sanitize_path(home).map_err(|error| {
+                    ManifestError::Invalid(format!(
+                        "invalid hooks.users home '{}': {}",
+                        home, error
+                    ))
+                })?;
+            }
+        }
+
+        for group in &self.hooks.groups {
+            validate_username(&group.name).map_err(|error| {
+                ManifestError::Invalid(format!(
+                    "invalid hooks.groups name '{}': {}",
+                    group.name, error
+                ))
+            })?;
+            if !group.system {
+                return Err(ManifestError::Invalid(format!(
+                    "hooks.groups '{}' must be a system group",
+                    group.name
+                )));
+            }
+        }
+
+        for dir in &self.hooks.directories {
+            sanitize_path(&dir.path).map_err(|error| {
+                ManifestError::Invalid(format!(
+                    "invalid hooks.directories path '{}': {}",
+                    dir.path, error
+                ))
+            })?;
+        }
+
+        for entry in &self.hooks.tmpfiles {
+            validate_tmpfiles_entry_type(&entry.entry_type).map_err(|error| {
+                ManifestError::Invalid(format!(
+                    "invalid hooks.tmpfiles entry type '{}': {}",
+                    entry.entry_type, error
+                ))
+            })?;
+            sanitize_path(&entry.path).map_err(|error| {
+                ManifestError::Invalid(format!(
+                    "invalid hooks.tmpfiles path '{}': {}",
+                    entry.path, error
+                ))
+            })?;
+        }
+
+        for entry in &self.hooks.sysctl {
+            if is_denied_sysctl_key(&entry.key) {
+                return Err(ManifestError::Invalid(format!(
+                    "hooks.sysctl key '{}' is denied for security reasons",
+                    entry.key
+                )));
+            }
+        }
+
+        for unit in &self.hooks.systemd {
+            if !is_safe_unit_name(&unit.unit) {
+                return Err(ManifestError::Invalid(format!(
+                    "hooks.systemd unit '{}' is unsafe",
+                    unit.unit
+                )));
+            }
+        }
+
         Ok(())
     }
 
@@ -966,5 +1065,80 @@ description = "No redirects"
 "#;
         let manifest = CcsManifest::parse(toml).unwrap();
         assert!(manifest.redirects.is_empty());
+    }
+
+    #[test]
+    fn test_manifest_rejects_non_system_user_hooks() {
+        let toml = r#"
+[package]
+name = "test"
+version = "1.0.0"
+description = "test"
+
+[[hooks.users]]
+name = "daemon"
+system = false
+"#;
+
+        let err = CcsManifest::parse(toml).unwrap_err();
+        assert!(err.to_string().contains("system user"));
+    }
+
+    #[test]
+    fn test_manifest_rejects_unsafe_tmpfiles_entries() {
+        let toml = r#"
+[package]
+name = "test"
+version = "1.0.0"
+description = "test"
+
+[[hooks.tmpfiles]]
+entry_type = "L"
+path = "../etc/shadow"
+mode = "0755"
+owner = "root"
+group = "root"
+"#;
+
+        let err = CcsManifest::parse(toml).unwrap_err();
+        assert!(
+            err.to_string().contains("tmpfiles")
+                || err.to_string().contains("path")
+                || err.to_string().contains("entry")
+        );
+    }
+
+    #[test]
+    fn test_manifest_rejects_denied_sysctl_keys() {
+        let toml = r#"
+[package]
+name = "test"
+version = "1.0.0"
+description = "test"
+
+[[hooks.sysctl]]
+key = "kernel.modules_disabled"
+value = "0"
+"#;
+
+        let err = CcsManifest::parse(toml).unwrap_err();
+        assert!(err.to_string().contains("sysctl"));
+    }
+
+    #[test]
+    fn test_manifest_rejects_unsafe_systemd_unit_names() {
+        let toml = r#"
+[package]
+name = "test"
+version = "1.0.0"
+description = "test"
+
+[[hooks.systemd]]
+unit = "../evil.service"
+enable = true
+"#;
+
+        let err = CcsManifest::parse(toml).unwrap_err();
+        assert!(err.to_string().contains("systemd"));
     }
 }

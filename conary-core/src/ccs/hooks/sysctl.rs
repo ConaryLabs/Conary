@@ -12,7 +12,7 @@ use std::process::Command;
 use tracing::{debug, info};
 
 /// Validate sysctl key contains only safe characters
-fn validate_sysctl_key(key: &str) -> Result<()> {
+pub(crate) fn validate_sysctl_key(key: &str) -> Result<()> {
     if key.is_empty() {
         return Err(anyhow::anyhow!("Sysctl key cannot be empty"));
     }
@@ -20,13 +20,37 @@ fn validate_sysctl_key(key: &str) -> Result<()> {
     if !key
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '/' | '_' | '-'))
-    {
+        {
+            return Err(anyhow::anyhow!(
+                "Sysctl key contains invalid characters: {}",
+                key
+            ));
+        }
+    if is_denied_sysctl_key(key) {
         return Err(anyhow::anyhow!(
-            "Sysctl key contains invalid characters: {}",
+            "Sysctl key is denied for security reasons: {}",
             key
         ));
     }
     Ok(())
+}
+
+pub(crate) fn is_denied_sysctl_key(key: &str) -> bool {
+    matches!(
+        key.replace('/', ".").as_str(),
+        "kernel.randomize_va_space"
+            | "kernel.kptr_restrict"
+            | "kernel.modules_disabled"
+            | "kernel.dmesg_restrict"
+            | "kernel.perf_event_paranoid"
+            | "kernel.yama.ptrace_scope"
+            | "kernel.unprivileged_bpf_disabled"
+            | "kernel.unprivileged_userns_clone"
+            | "fs.protected_hardlinks"
+            | "fs.protected_symlinks"
+            | "fs.protected_regular"
+            | "fs.protected_fifos"
+    )
 }
 
 /// Validate sysctl value contains no newline characters
@@ -147,5 +171,13 @@ mod tests {
         assert!(validate_sysctl_value("value\nnewline").is_err());
         assert!(validate_sysctl_value("value\rreturn").is_err());
         assert!(validate_sysctl_value("1\n2").is_err());
+    }
+
+    #[test]
+    fn test_denied_sysctl_keys() {
+        assert!(is_denied_sysctl_key("kernel.randomize_va_space"));
+        assert!(is_denied_sysctl_key("kernel.kptr_restrict"));
+        assert!(is_denied_sysctl_key("kernel.modules_disabled"));
+        assert!(!is_denied_sysctl_key("net.ipv4.ip_forward"));
     }
 }
