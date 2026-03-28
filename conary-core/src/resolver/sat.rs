@@ -7,6 +7,7 @@
 
 use resolvo::{ConditionalRequirement, Problem, Solver, UnsolvableOrCancelled};
 use rusqlite::Connection;
+use std::time::{Duration, Instant};
 
 use crate::error::{Error, Result};
 use crate::repository::versioning::repo_version_satisfies;
@@ -14,6 +15,26 @@ use crate::version::{RpmVersion, VersionConstraint};
 
 use super::provider::ConaryProvider;
 use super::provider::types::ConaryConstraint;
+
+const MAX_LOADED_NAMES: usize = 50_000;
+const TRANSITIVE_LOAD_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn check_transitive_loading_limits(elapsed: Duration, loaded_names: usize) -> Result<()> {
+    if loaded_names > MAX_LOADED_NAMES {
+        return Err(Error::InitError(format!(
+            "Dependency resolution discovered too many dependency names ({loaded_names} > {MAX_LOADED_NAMES})"
+        )));
+    }
+
+    if elapsed > TRANSITIVE_LOAD_TIMEOUT {
+        return Err(Error::InitError(format!(
+            "Dependency resolution timed out while loading transitive dependencies after {:?}",
+            elapsed
+        )));
+    }
+
+    Ok(())
+}
 
 /// Source of a resolved package.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,8 +94,10 @@ pub fn solve_install(
     let mut loaded_names: std::collections::HashSet<String> =
         requests.iter().map(|(n, _)| n.clone()).collect();
     let mut to_load: Vec<String> = loaded_names.iter().cloned().collect();
+    let load_start = Instant::now();
 
     while !to_load.is_empty() {
+        check_transitive_loading_limits(load_start.elapsed(), loaded_names.len())?;
         provider.load_repo_packages_for_names(&to_load)?;
 
         // Discover new dependency names that we haven't loaded yet
@@ -93,6 +116,7 @@ pub fn solve_install(
             .filter(|n| loaded_names.insert(n.clone()))
             .collect();
         new_names.extend(equiv_names);
+        check_transitive_loading_limits(load_start.elapsed(), loaded_names.len())?;
 
         to_load = new_names;
     }
@@ -337,6 +361,26 @@ mod tests {
         db::init(&db_path).unwrap();
         let conn = db::open(&db_path).unwrap();
         (temp_dir, conn)
+    }
+
+    #[test]
+    fn test_transitive_loading_limit_rejects_excessive_name_count() {
+        let err = check_transitive_loading_limits(
+            std::time::Duration::from_secs(0),
+            MAX_LOADED_NAMES + 1,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("too many dependency names"));
+    }
+
+    #[test]
+    fn test_transitive_loading_limit_rejects_timeout() {
+        let err = check_transitive_loading_limits(
+            TRANSITIVE_LOAD_TIMEOUT + std::time::Duration::from_secs(1),
+            1,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("timed out"));
     }
 
     /// Helper: insert a trove and its dependencies into the DB
