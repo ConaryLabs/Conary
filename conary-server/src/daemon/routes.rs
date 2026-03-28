@@ -14,7 +14,7 @@ use crate::daemon::{DaemonError, DaemonEvent, DaemonJob, DaemonState, JobStatus}
 use axum::{
     Router,
     extract::{Extension, Path, Query, Request, State},
-    http::{Method, StatusCode},
+    http::StatusCode,
     middleware,
     response::{
         IntoResponse, Json, Response,
@@ -153,8 +153,7 @@ async fn run_db_query<T: Send + 'static>(
 /// Check authorization for a mutating action.
 ///
 /// Extracts `PeerCredentials` from the request extension (injected per-connection
-/// in `run_daemon`). Unix socket connections get credentials via `SO_PEERCRED`;
-/// TCP connections have no credentials and are restricted to read-only access.
+/// in `run_daemon`). Unix socket connections get credentials via `SO_PEERCRED`.
 ///
 /// Returns `Ok(())` if the action is authorized, or an `ApiError` with 403 Forbidden.
 fn require_auth(
@@ -190,24 +189,47 @@ fn require_auth(
     }
 }
 
+/// Require that a daemon API request comes from root or the daemon's own UID.
+fn require_socket_identity(creds: &Option<PeerCredentials>) -> Result<(), ApiError> {
+    let daemon_uid = nix::unistd::geteuid().as_raw();
+
+    match creds {
+        Some(creds) if creds.matches_daemon_identity(daemon_uid) => Ok(()),
+        Some(creds) => {
+            tracing::warn!(
+                uid = creds.uid,
+                gid = creds.gid,
+                pid = creds.pid,
+                daemon_uid,
+                "Daemon API request denied: peer does not match daemon identity"
+            );
+            Err(ApiError(Box::new(DaemonError::forbidden(&format!(
+                "Daemon API requires root or daemon uid {}; got uid={}",
+                daemon_uid, creds.uid
+            )))))
+        }
+        None => {
+            tracing::warn!("Daemon API request denied: no peer credentials");
+            Err(ApiError(Box::new(DaemonError::forbidden(
+                "Daemon API requires a Unix socket connection with peer credentials",
+            ))))
+        }
+    }
+}
+
 /// Auth gate middleware for defense-in-depth
 ///
-/// Rejects POST/PUT/DELETE requests without valid credentials at the router level.
-/// Uses `Action::Install` (requires root/admin/polkit) so that a new mutating
-/// endpoint missing its own `require_auth()` call is still protected.
-/// Individual handlers still check their specific action permissions.
+/// Rejects all `/v1` daemon API requests unless the Unix socket peer is root or
+/// the daemon's own service UID. Individual handlers still check their specific
+/// action permissions.
 async fn auth_gate_middleware(
     State(state): State<SharedState>,
     Extension(creds): Extension<Option<PeerCredentials>>,
     request: Request,
     next: middleware::Next,
 ) -> Result<Response, ApiError> {
-    if matches!(
-        *request.method(),
-        Method::POST | Method::PUT | Method::DELETE
-    ) {
-        require_auth(&state.auth_checker, &creds, Action::Install)?;
-    }
+    let _ = state;
+    require_socket_identity(&creds)?;
     Ok(next.run(request).await)
 }
 
@@ -2812,14 +2834,13 @@ mod tests {
         assert_eq!(json["status"], 403);
     }
 
-    // -- Auth gate middleware: GET passes without auth -------------------------
+    // -- Auth gate middleware: GET without auth = 403 -------------------------
 
     #[tokio::test]
-    async fn test_auth_gate_allows_get_without_credentials() {
+    async fn test_auth_gate_blocks_get_without_credentials() {
         let (state, _dir) = create_test_state();
         let app = test_router(state, None);
 
-        // GET requests should pass through the middleware even without credentials
         let request = axum::http::Request::builder()
             .method("GET")
             .uri("/v1/packages")
@@ -2830,8 +2851,37 @@ mod tests {
 
         assert_eq!(
             response.status(),
-            StatusCode::OK,
-            "GET without credentials should pass through auth gate middleware"
+            StatusCode::FORBIDDEN,
+            "GET without credentials should be blocked by auth gate middleware"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_auth_gate_blocks_get_for_non_daemon_user() {
+        let (state, _dir) = create_test_state();
+        let daemon_uid = nix::unistd::geteuid().as_raw();
+        let unauthorized_uid = if daemon_uid == 42_424 { 42_425 } else { 42_424 };
+        let app = test_router(
+            state,
+            Some(PeerCredentials {
+                pid: 2000,
+                uid: unauthorized_uid,
+                gid: unauthorized_uid,
+            }),
+        );
+
+        let request = axum::http::Request::builder()
+            .method("GET")
+            .uri("/v1/packages")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(
+            response.status(),
+            StatusCode::FORBIDDEN,
+            "GET from a non-root, non-daemon uid should be blocked"
         );
     }
 }
