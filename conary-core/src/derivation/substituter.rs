@@ -136,6 +136,24 @@ fn record_health(health_map: &mut HashMap<String, PeerHealth>, endpoint: &str, s
     }
 }
 
+fn store_fetched_object(
+    cas: &CasStore,
+    expected_hash: &str,
+    bytes: &[u8],
+) -> Result<(), SubstituterError> {
+    let stored_hash = cas
+        .store(bytes)
+        .map_err(|e| SubstituterError::Io(e.to_string()))?;
+    if stored_hash != expected_hash {
+        return Err(SubstituterError::Io(format!(
+            "hash mismatch while storing fetched object: expected {}, got {}",
+            expected_hash, stored_hash
+        )));
+    }
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Main type
 // ---------------------------------------------------------------------------
@@ -334,8 +352,7 @@ impl DerivationSubstituter {
 
             let byte_count = bytes.len() as u64;
 
-            cas.store(&bytes)
-                .map_err(|e| SubstituterError::Io(e.to_string()))?;
+            store_fetched_object(cas, &file.hash, &bytes)?;
 
             report.objects_fetched += 1;
             report.bytes_transferred += byte_count;
@@ -438,6 +455,8 @@ impl DerivationSubstituter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::filesystem::CasStore;
+    use tempfile::TempDir;
 
     #[test]
     fn peer_health_backoff() {
@@ -484,5 +503,14 @@ mod tests {
         crate::db::schema::migrate(&conn).unwrap();
         let result = DerivationSubstituter::from_db(&conn);
         assert!(matches!(result, Err(SubstituterError::NoPeers)));
+    }
+
+    #[test]
+    fn store_fetched_object_rejects_hash_mismatch() {
+        let temp_dir = TempDir::new().unwrap();
+        let cas = CasStore::new(temp_dir.path()).unwrap();
+
+        let err = super::store_fetched_object(&cas, &"a".repeat(64), b"wrong-bytes").unwrap_err();
+        assert!(matches!(err, SubstituterError::Io(message) if message.contains("hash mismatch")));
     }
 }

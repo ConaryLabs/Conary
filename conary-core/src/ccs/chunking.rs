@@ -241,7 +241,13 @@ impl ChunkStore {
     /// Retrieve a chunk by hash
     pub fn get_chunk(&self, hash: &[u8; 32]) -> Result<Vec<u8>> {
         let path = self.chunk_path(hash);
-        std::fs::read(&path).with_context(|| format!("Failed to read chunk: {}", path.display()))
+        let data = std::fs::read(&path)
+            .with_context(|| format!("Failed to read chunk: {}", path.display()))?;
+        let expected_hash = hex::encode(hash);
+        crate::hash::verify_sha256(&data, &expected_hash).map_err(|error| {
+            anyhow::anyhow!("chunk hash mismatch for {}: {}", path.display(), error)
+        })?;
+        Ok(data)
     }
 
     /// Store all chunks from a chunked file, returning count of new chunks
@@ -658,6 +664,25 @@ mod tests {
         assert_eq!(stats2.new_chunks, 0);
         assert!(stats2.existing_chunks > 0);
         assert!((stats2.dedup_ratio() - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_get_chunk_rejects_corrupted_data() {
+        let temp_dir = TempDir::new().unwrap();
+        let store = ChunkStore::new(temp_dir.path()).unwrap();
+        let chunk = Chunk {
+            hash: crate::hash::sha256_bytes(b"expected"),
+            offset: 0,
+            length: 8,
+            data: b"expected".to_vec(),
+        };
+
+        let chunk_path = store.chunk_path(&chunk.hash);
+        std::fs::create_dir_all(chunk_path.parent().unwrap()).unwrap();
+        std::fs::write(&chunk_path, b"corrupted").unwrap();
+
+        let err = store.get_chunk(&chunk.hash).unwrap_err();
+        assert!(err.to_string().contains("hash"));
     }
 
     /// Test CDC with the conary binary itself (run with --ignored)

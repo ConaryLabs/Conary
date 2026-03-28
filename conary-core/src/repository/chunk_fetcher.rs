@@ -454,6 +454,8 @@ impl ChunkFetcher for LocalCacheFetcher {
             .await
             .map_err(|e| Error::IoError(format!("Failed to read cached chunk {}: {e}", hash)))?;
 
+        Self::verify_hash(hash, &data)?;
+
         debug!("Cache hit: {}", hash);
         Ok(data)
     }
@@ -742,5 +744,19 @@ mod tests {
 
         // Should fail for non-existent chunk
         assert!(composite.fetch("nonexistent").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_local_cache_fetch_rejects_corrupted_chunk() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cache = LocalCacheFetcher::new(temp_dir.path());
+        let expected_hash = sha256(b"expected chunk");
+        cache
+            .store(&expected_hash, b"corrupted chunk")
+            .await
+            .unwrap();
+
+        let err = cache.fetch(&expected_hash).await.unwrap_err();
+        assert!(matches!(err, Error::ChecksumMismatch { .. }));
     }
 }
