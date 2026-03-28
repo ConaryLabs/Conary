@@ -25,6 +25,7 @@ use axum::{
 use conary_core::db::models::{Changeset, DependencyEntry, Trove};
 use futures::stream::{self, Stream};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -163,6 +164,19 @@ fn require_auth(
 ) -> Result<(), ApiError> {
     match creds {
         Some(creds) => {
+            if !creds.matches_current_process_identity() {
+                tracing::warn!(
+                    uid = creds.uid,
+                    gid = creds.gid,
+                    pid = creds.pid,
+                    action = ?action,
+                    "Authorization denied: stale peer credentials"
+                );
+                return Err(ApiError(Box::new(DaemonError::forbidden(
+                    "Peer credentials are no longer valid for the current process",
+                ))));
+            }
+
             if checker.is_allowed(creds, action) {
                 Ok(())
             } else {
@@ -194,6 +208,18 @@ fn require_socket_identity(creds: &Option<PeerCredentials>) -> Result<(), ApiErr
     let daemon_uid = nix::unistd::geteuid().as_raw();
 
     match creds {
+        Some(creds) if !creds.matches_current_process_identity() => {
+            tracing::warn!(
+                uid = creds.uid,
+                gid = creds.gid,
+                pid = creds.pid,
+                daemon_uid,
+                "Daemon API request denied: peer credentials no longer match live process identity"
+            );
+            Err(ApiError(Box::new(DaemonError::forbidden(
+                "Daemon API requires live peer credentials from the current process",
+            ))))
+        }
         Some(creds) if creds.matches_daemon_identity(daemon_uid) => Ok(()),
         Some(creds) => {
             tracing::warn!(
@@ -229,8 +255,69 @@ async fn auth_gate_middleware(
     next: middleware::Next,
 ) -> Result<Response, ApiError> {
     let _ = state;
+    tracing::trace!(
+        method = %request.method(),
+        path = %request.uri().path(),
+        "Checking daemon auth gate"
+    );
     require_socket_identity(&creds)?;
     Ok(next.run(request).await)
+}
+
+fn job_visible_to_requester(
+    creds: &Option<PeerCredentials>,
+    requested_by_uid: Option<u32>,
+) -> bool {
+    match creds {
+        Some(creds) if creds.is_root() => true,
+        Some(creds) => requested_by_uid == Some(creds.uid),
+        None => false,
+    }
+}
+
+fn ensure_job_visible(
+    creds: &Option<PeerCredentials>,
+    job: &DaemonJob,
+    requested_id: &str,
+) -> Result<(), ApiError> {
+    if job_visible_to_requester(creds, job.requested_by_uid) {
+        Ok(())
+    } else {
+        tracing::warn!(
+            requested_job_id = requested_id,
+            requested_by_uid = job.requested_by_uid,
+            caller_uid = creds.as_ref().map(|creds| creds.uid),
+            "Daemon transaction access denied: job owned by a different user"
+        );
+        Err(not_found_error("transaction", requested_id))
+    }
+}
+
+fn event_visible_to_requester(
+    state: &SharedState,
+    creds: &Option<PeerCredentials>,
+    cache: &mut HashMap<String, bool>,
+    event: &DaemonEvent,
+) -> bool {
+    if creds.as_ref().is_some_and(PeerCredentials::is_root) {
+        return true;
+    }
+
+    let Some(job_id) = event.job_id() else {
+        return false;
+    };
+
+    if let Some(visible) = cache.get(job_id) {
+        return *visible;
+    }
+
+    let visible = state
+        .open_db()
+        .ok()
+        .and_then(|conn| DaemonJob::find_by_id(&conn, job_id).ok().flatten())
+        .is_some_and(|job| job_visible_to_requester(creds, job.requested_by_uid));
+    cache.insert(job_id.to_string(), visible);
+    visible
 }
 
 // =============================================================================
@@ -721,6 +808,7 @@ conary_sse_connections {}
 /// Lists transactions (jobs) with optional filtering by status.
 async fn list_transactions_handler(
     State(state): State<SharedState>,
+    Extension(creds): Extension<Option<PeerCredentials>>,
     Query(params): Query<TransactionListQuery>,
 ) -> ApiResult<Json<Vec<TransactionSummary>>> {
     let limit = params.limit.map(|n| n.min(1000));
@@ -741,7 +829,11 @@ async fn list_transactions_handler(
     })
     .await?;
 
-    let summaries: Vec<TransactionSummary> = jobs.iter().map(TransactionSummary::from).collect();
+    let summaries: Vec<TransactionSummary> = jobs
+        .iter()
+        .filter(|job| job_visible_to_requester(&creds, job.requested_by_uid))
+        .map(TransactionSummary::from)
+        .collect();
     Ok(Json(summaries))
 }
 
@@ -923,6 +1015,7 @@ fn determine_job_kind(operations: &[TransactionOperation]) -> crate::daemon::Job
 /// Returns full details of a transaction including its spec, result, and error.
 async fn get_transaction_handler(
     State(state): State<SharedState>,
+    Extension(creds): Extension<Option<PeerCredentials>>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<TransactionDetails>> {
     // First check if it's in the queue
@@ -932,6 +1025,7 @@ async fn get_transaction_handler(
     let job = run_db_query(&state, move |conn| DaemonJob::find_by_id(conn, &job_id)).await?;
 
     let job = job.ok_or_else(|| not_found_error("transaction", &id))?;
+    ensure_job_visible(&creds, &job, &id)?;
     Ok(Json(TransactionDetails::from_job(&job, queue_position)))
 }
 
@@ -993,6 +1087,7 @@ async fn cancel_transaction_handler(
 /// - End when the job completes, fails, or is cancelled
 async fn transaction_stream_handler(
     State(state): State<SharedState>,
+    Extension(creds): Extension<Option<PeerCredentials>>,
     Path(id): Path<String>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
     let job_id = id.clone();
@@ -1010,6 +1105,7 @@ async fn transaction_stream_handler(
         Some(j) => j,
         None => return Err(not_found_error("transaction", &id)),
     };
+    ensure_job_visible(&creds, &job, &id)?;
 
     // Track SSE connection (guard decrements on drop when stream ends)
     state
@@ -1662,6 +1758,7 @@ async fn gc_handler(
 /// - Stream all daemon events until the client disconnects
 async fn events_handler(
     State(state): State<SharedState>,
+    Extension(creds): Extension<Option<PeerCredentials>>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     // Track SSE connection (guard decrements on drop when stream ends)
     state
@@ -1676,10 +1773,15 @@ async fn events_handler(
     let rx = state.subscribe();
 
     // Create a stream from the broadcast receiver
-    let event_stream = BroadcastStream::new(rx).filter_map(|result| {
+    let mut visibility_cache = HashMap::new();
+    let event_stream = BroadcastStream::new(rx).filter_map(move |result| {
         // Filter out lagged messages and convert to SSE events
         match result {
             Ok(event) => {
+                if !event_visible_to_requester(&state, &creds, &mut visibility_cache, &event) {
+                    return None;
+                }
+
                 // Serialize the event to JSON
                 match serde_json::to_string(&event) {
                     Ok(json) => Some(Ok(Event::default()
@@ -2364,6 +2466,127 @@ mod tests {
         assert_eq!(json2.as_array().unwrap().len(), 0);
     }
 
+    #[tokio::test]
+    async fn test_handler_list_transactions_filters_by_requesting_uid() {
+        let (state, _dir) = create_test_state();
+        let daemon_uid = nix::unistd::geteuid().as_raw();
+        let other_uid = if daemon_uid == 42_424 { 42_425 } else { 42_424 };
+
+        let visible_job = DaemonJob::new(
+            crate::daemon::JobKind::Enhance,
+            serde_json::json!({"batch_size": 5}),
+        )
+        .with_uid(daemon_uid);
+        let hidden_job = DaemonJob::new(
+            crate::daemon::JobKind::Enhance,
+            serde_json::json!({"batch_size": 7}),
+        )
+        .with_uid(other_uid);
+
+        {
+            let conn = state.open_db().unwrap();
+            visible_job.insert(&conn).unwrap();
+            hidden_job.insert(&conn).unwrap();
+        }
+
+        let app = test_router(
+            state,
+            Some(PeerCredentials {
+                pid: std::process::id(),
+                uid: daemon_uid,
+                gid: daemon_uid,
+            }),
+        );
+
+        let request = axum::http::Request::builder()
+            .uri("/v1/transactions")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let json = body_json(response).await;
+        assert!(json.is_array());
+        assert_eq!(json.as_array().unwrap().len(), 1);
+        assert_eq!(json[0]["id"], visible_job.id);
+    }
+
+    #[tokio::test]
+    async fn test_handler_get_transaction_hides_foreign_job() {
+        let (state, _dir) = create_test_state();
+        let daemon_uid = nix::unistd::geteuid().as_raw();
+        let other_uid = if daemon_uid == 42_424 { 42_425 } else { 42_424 };
+
+        let hidden_job = DaemonJob::new(
+            crate::daemon::JobKind::Enhance,
+            serde_json::json!({"batch_size": 7}),
+        )
+        .with_uid(other_uid);
+        let hidden_job_id = hidden_job.id.clone();
+
+        {
+            let conn = state.open_db().unwrap();
+            hidden_job.insert(&conn).unwrap();
+        }
+
+        let app = test_router(
+            state,
+            Some(PeerCredentials {
+                pid: std::process::id(),
+                uid: daemon_uid,
+                gid: daemon_uid,
+            }),
+        );
+
+        let request = axum::http::Request::builder()
+            .uri(format!("/v1/transactions/{}", hidden_job_id))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_handler_transaction_stream_hides_foreign_job() {
+        let (state, _dir) = create_test_state();
+        let daemon_uid = nix::unistd::geteuid().as_raw();
+        let other_uid = if daemon_uid == 42_424 { 42_425 } else { 42_424 };
+
+        let hidden_job = DaemonJob::new(
+            crate::daemon::JobKind::Enhance,
+            serde_json::json!({"batch_size": 7}),
+        )
+        .with_uid(other_uid);
+        let hidden_job_id = hidden_job.id.clone();
+
+        {
+            let conn = state.open_db().unwrap();
+            hidden_job.insert(&conn).unwrap();
+        }
+
+        let app = test_router(
+            state,
+            Some(PeerCredentials {
+                pid: std::process::id(),
+                uid: daemon_uid,
+                gid: daemon_uid,
+            }),
+        );
+
+        let request = axum::http::Request::builder()
+            .uri(format!("/v1/transactions/{}/stream", hidden_job_id))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
     // -- DELETE /v1/transactions/:id (404) ------------------------------------
 
     #[tokio::test]
@@ -2883,5 +3106,87 @@ mod tests {
             StatusCode::FORBIDDEN,
             "GET from a non-root, non-daemon uid should be blocked"
         );
+    }
+
+    #[tokio::test]
+    async fn test_auth_gate_revalidates_live_peer_identity() {
+        let (state, _dir) = create_test_state();
+        let daemon_uid = nix::unistd::geteuid().as_raw();
+        let app = test_router(
+            state,
+            Some(PeerCredentials {
+                pid: u32::MAX,
+                uid: daemon_uid,
+                gid: daemon_uid,
+            }),
+        );
+
+        let request = axum::http::Request::builder()
+            .method("GET")
+            .uri("/v1/packages")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(
+            response.status(),
+            StatusCode::FORBIDDEN,
+            "GET with stale peer credentials should be blocked"
+        );
+    }
+
+    #[test]
+    fn test_event_visibility_filters_by_requesting_uid() {
+        let (state, _dir) = create_test_state();
+        let daemon_uid = nix::unistd::geteuid().as_raw();
+        let other_uid = if daemon_uid == 42_424 { 42_425 } else { 42_424 };
+
+        let visible_job = DaemonJob::new(
+            crate::daemon::JobKind::Enhance,
+            serde_json::json!({"batch_size": 5}),
+        )
+        .with_uid(daemon_uid);
+        let hidden_job = DaemonJob::new(
+            crate::daemon::JobKind::Enhance,
+            serde_json::json!({"batch_size": 7}),
+        )
+        .with_uid(other_uid);
+
+        {
+            let conn = state.open_db().unwrap();
+            visible_job.insert(&conn).unwrap();
+            hidden_job.insert(&conn).unwrap();
+        }
+
+        let creds = Some(PeerCredentials {
+            pid: std::process::id(),
+            uid: daemon_uid,
+            gid: daemon_uid,
+        });
+        let mut cache = HashMap::new();
+
+        assert!(event_visible_to_requester(
+            &state,
+            &creds,
+            &mut cache,
+            &DaemonEvent::JobStarted {
+                job_id: visible_job.id.clone(),
+            }
+        ));
+        assert!(!event_visible_to_requester(
+            &state,
+            &creds,
+            &mut cache,
+            &DaemonEvent::JobStarted {
+                job_id: hidden_job.id.clone(),
+            }
+        ));
+        assert!(!event_visible_to_requester(
+            &state,
+            &creds,
+            &mut cache,
+            &DaemonEvent::StateCreated { state_number: 99 }
+        ));
     }
 }
