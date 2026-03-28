@@ -10,8 +10,9 @@ use conary_core::db::models::ScriptletEntry;
 use conary_core::scriptlet::{
     ExecutionMode, PackageFormat as ScriptletPackageFormat, SandboxMode, ScriptletExecutor,
 };
+use conary_core::transaction::{TransactionConfig, TransactionEngine};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::{info, warn};
 
@@ -109,6 +110,10 @@ pub async fn cmd_remove(
         ));
     }
 
+    let mut engine =
+        TransactionEngine::new(TransactionConfig::from_paths(PathBuf::from(root), db_path.into()))?;
+    engine.begin()?;
+
     // Check if package is adopted from system PM
     if trove.install_source.is_adopted() && !purge_files {
         // Remove from Conary tracking only -- don't touch files on disk
@@ -143,6 +148,7 @@ pub async fn cmd_remove(
             remove_changeset_id,
             &format!("Remove tracking for {}", trove.name),
         )?;
+        engine.release_lock();
         return Ok(());
     }
 
@@ -308,6 +314,7 @@ pub async fn cmd_remove(
         Some(prev_etc),
         std::path::Path::new("/conary"),
     )?;
+    engine.release_lock();
 
     // Execute post-remove scriptlet (best effort - warn on failure, don't abort)
     if !no_scripts && !stored_scriptlets.is_empty() {
