@@ -119,6 +119,8 @@ impl SandboxMode {
 /// Default timeout for scriptlet execution (60 seconds)
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 static SECCOMP_WARN_OVERRIDE: AtomicBool = AtomicBool::new(false);
+const LIVE_SANDBOX_PROTECTED_ETC_FILES: [&str; 3] =
+    ["/etc/passwd", "/etc/shadow", "/etc/sudoers"];
 
 /// Package format types for argument handling
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -344,20 +346,17 @@ impl ScriptletExecutor {
         // NOTE: This sandbox mode provides namespace isolation (PID, mount,
         // network) but NOT full write isolation for /var and /etc. The
         // container runtime does not create tmpfs overlays, so these must
-        // be writable for scriptlets that update ldconfig, systemd state,
-        // etc. True isolation requires the target-root chroot path
-        // (execute_in_target) or a future overlay-backed sandbox.
+        // remain writable for scriptlets that update ldconfig, systemd
+        // state, etc. A small set of critical account-management files is
+        // rebound read-only after the writable /etc mount. True isolation
+        // still requires the target-root chroot path (execute_in_target)
+        // or a future overlay-backed sandbox.
         //
         // TODO: Add tmpfs overlay support to the container runtime so
         // sandbox_live can capture scriptlet writes without mutating the
         // host. Until then, this mode provides process/network isolation
         // only, not filesystem isolation for /var and /etc.
-        let mut config = ContainerConfig::default();
-        config.timeout = self.timeout;
-        config.bind_mounts.push(BindMount::writable("/var", "/var"));
-        config.bind_mounts.push(BindMount::writable("/etc", "/etc"));
-
-        let mut sandbox = Sandbox::new(config);
+        let mut sandbox = Sandbox::new(self.live_sandbox_config());
         let (code, stdout, stderr) = sandbox.execute(interpreter, content, args, env)?;
 
         log_script_output(phase, &stdout, &stderr);
@@ -371,6 +370,26 @@ impl ScriptletExecutor {
                 phase, code
             )))
         }
+    }
+
+    fn live_sandbox_config(&self) -> ContainerConfig {
+        let mut config = ContainerConfig::default();
+        config.timeout = self.timeout;
+        config.bind_mounts.retain(|mount| {
+            !LIVE_SANDBOX_PROTECTED_ETC_FILES
+                .iter()
+                .any(|protected| mount.target == Path::new(protected))
+        });
+        config.bind_mounts.push(BindMount::writable("/var", "/var"));
+        config.bind_mounts.push(BindMount::writable("/etc", "/etc"));
+
+        for protected in LIVE_SANDBOX_PROTECTED_ETC_FILES {
+            config
+                .bind_mounts
+                .push(BindMount::readonly(protected, protected));
+        }
+
+        config
     }
 
     /// Execute scriptlet inside a target root using chroot/container
@@ -1122,6 +1141,36 @@ mod tests {
             result.is_ok(),
             "direct scriptlet execution should not inherit host environment variables: {result:?}"
         );
+    }
+
+    #[test]
+    fn test_live_sandbox_config_rebinds_critical_etc_files_readonly() {
+        let executor =
+            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm);
+
+        let config = executor.live_sandbox_config();
+        let etc_index = config
+            .bind_mounts
+            .iter()
+            .position(|mount| mount.target == Path::new("/etc") && mount.writable)
+            .expect("writable /etc bind mount missing");
+
+        for protected in ["/etc/passwd", "/etc/shadow", "/etc/sudoers"] {
+            let mount_index = config
+                .bind_mounts
+                .iter()
+                .position(|mount| mount.target == Path::new(protected))
+                .unwrap_or_else(|| panic!("missing protected mount for {protected}"));
+            let mount = &config.bind_mounts[mount_index];
+            assert!(
+                !mount.writable,
+                "{protected} should be rebound read-only inside the live sandbox"
+            );
+            assert!(
+                mount_index > etc_index,
+                "{protected} should be mounted after writable /etc so it is not shadowed"
+            );
+        }
     }
 
     #[test]
