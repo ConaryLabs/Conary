@@ -58,6 +58,7 @@ pub struct AddPeerRequest {
     pub endpoint: String,
     pub tier: Option<String>,
     pub node_name: Option<String>,
+    pub tls_fingerprint: Option<String>,
 }
 
 /// Health status for a peer.
@@ -114,6 +115,7 @@ pub async fn add_peer(
         endpoint: body.endpoint,
         tier: body.tier,
         node_name: body.node_name,
+        tls_fingerprint: body.tls_fingerprint,
     };
 
     match admin_service::add_peer(&state, input).await {
@@ -326,7 +328,8 @@ mod tests {
         let add_body = serde_json::json!({
             "endpoint": "https://peer1.example.com:7891",
             "tier": "leaf",
-            "node_name": "peer1"
+            "node_name": "peer1",
+            "tls_fingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         });
         let resp = app
             .oneshot(
@@ -403,5 +406,31 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_add_https_peer_requires_tls_fingerprint() {
+        let (app, _) = test_app().await;
+        let token = "test-admin-token-12345";
+
+        let add_body = serde_json::json!({
+            "endpoint": "https://peer2.example.com:7891",
+            "tier": "leaf",
+            "node_name": "peer2"
+        });
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/admin/federation/peers")
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(add_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }

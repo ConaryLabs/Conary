@@ -243,8 +243,10 @@ async fn resolve_upstream(config: &ProxyConfig) -> Result<Option<String>> {
             .or_else(|| peers.first());
 
         if let Some(peer) = best_peer {
-            let federated_peer = peer.to_peer()?;
-            let url = federated_peer.endpoint.trim_end_matches('/').to_string();
+            let url = peer
+                .endpoint_with_secure_transport(peer.tier == PeerTier::RegionHub)?
+                .trim_end_matches('/')
+                .to_string();
             info!(
                 "[remi-lite] Discovered upstream: {} (tier: {}, hostname: {})",
                 url, peer.tier, peer.hostname

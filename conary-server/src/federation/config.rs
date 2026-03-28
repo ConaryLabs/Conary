@@ -2,6 +2,7 @@
 //! Federation configuration types
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Peer tier in the federation hierarchy
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -175,6 +176,7 @@ fn extract_port_with_default(url: &str) -> Option<String> {
 /// tier = "leaf"
 /// region_hubs = ["https://remi.conary.io"]  # Behind Cloudflare, port 443
 /// cell_hubs = ["http://rack-cache.local:7891"]
+/// peer_tls_fingerprints = { "https://remi.conary.io" = "0123abcd..." }
 /// prefer_cell = true
 /// rendezvous_k = 3
 /// circuit_threshold = 5
@@ -273,6 +275,11 @@ pub struct FederationConfig {
     #[serde(default)]
     pub tier_allowlists: TierAllowlists,
 
+    /// Pinned TLS certificate fingerprints for HTTPS federation peers,
+    /// keyed by exact endpoint URL.
+    #[serde(default)]
+    pub peer_tls_fingerprints: HashMap<String, String>,
+
     /// Listen port for this node (if acting as hub)
     #[serde(default = "default_listen_port")]
     pub listen_port: u16,
@@ -357,6 +364,7 @@ impl Default for FederationConfig {
             mtls_ca_path: None,
             allowed_peers: None,
             tier_allowlists: TierAllowlists::default(),
+            peer_tls_fingerprints: HashMap::new(),
             listen_port: default_listen_port(),
             max_cell_size: default_max_cell_size(),
             upstream: None,
@@ -378,6 +386,7 @@ mod tests {
         assert_eq!(config.rendezvous_k, 3);
         assert_eq!(config.circuit_threshold, 5);
         assert_eq!(config.max_chunk_size, 512 * 1024);
+        assert!(config.peer_tls_fingerprints.is_empty());
     }
 
     #[test]

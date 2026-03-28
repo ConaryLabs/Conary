@@ -8,7 +8,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Unique peer identifier (SHA-256 of endpoint URL)
+/// Unique peer identifier.
+///
+/// HTTP peers use a SHA-256 of the endpoint URL. HTTPS peers use the pinned
+/// TLS certificate fingerprint so identity remains bound to the certificate
+/// rather than DNS for the hostname.
 pub type PeerId = String;
 
 /// A federation peer
@@ -31,14 +35,38 @@ pub struct Peer {
 }
 
 impl Peer {
-    /// Create a peer from an endpoint URL
-    pub fn from_endpoint(endpoint: &str, tier: PeerTier) -> Result<Self> {
-        // Validate URL
-        let _url = url::Url::parse(endpoint)
+    /// Create a peer from an endpoint URL and optional pinned TLS fingerprint.
+    pub fn from_endpoint_with_fingerprint(
+        endpoint: &str,
+        tier: PeerTier,
+        tls_fingerprint: Option<&str>,
+    ) -> Result<Self> {
+        let url = url::Url::parse(endpoint)
             .map_err(|e| Error::ParseError(format!("Invalid peer URL '{}': {}", endpoint, e)))?;
 
-        // Generate ID from endpoint hash
-        let id = conary_core::hash::sha256(endpoint.as_bytes());
+        let id = match url.scheme() {
+            "https" => normalize_tls_fingerprint(tls_fingerprint.ok_or_else(|| {
+                Error::ConfigError(format!(
+                    "HTTPS federation peer '{}' requires a pinned tls_fingerprint",
+                    endpoint
+                ))
+            })?)?,
+            "http" => {
+                if tls_fingerprint.is_some() {
+                    return Err(Error::ConfigError(format!(
+                        "HTTP federation peer '{}' cannot use a tls_fingerprint",
+                        endpoint
+                    )));
+                }
+                conary_core::hash::sha256(endpoint.as_bytes())
+            }
+            other => {
+                return Err(Error::ParseError(format!(
+                    "Invalid peer URL '{}': unsupported scheme '{}'",
+                    endpoint, other
+                )));
+            }
+        };
         let now = Utc::now();
 
         Ok(Self {
@@ -52,6 +80,11 @@ impl Peer {
         })
     }
 
+    /// Create a peer from an endpoint URL
+    pub fn from_endpoint(endpoint: &str, tier: PeerTier) -> Result<Self> {
+        Self::from_endpoint_with_fingerprint(endpoint, tier, None)
+    }
+
     /// Create a peer with a custom name
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
@@ -62,6 +95,23 @@ impl Peer {
     pub fn touch(&mut self) {
         self.last_seen = Utc::now();
     }
+}
+
+fn normalize_tls_fingerprint(raw: &str) -> Result<String> {
+    let fingerprint = raw.trim();
+    let fingerprint = fingerprint
+        .strip_prefix("sha256:")
+        .unwrap_or(fingerprint)
+        .to_ascii_lowercase();
+
+    if fingerprint.len() != 64 || !fingerprint.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err(Error::ConfigError(format!(
+            "Invalid TLS fingerprint '{}': expected 64 hex characters",
+            raw
+        )));
+    }
+
+    Ok(fingerprint)
 }
 
 /// Performance and reliability score for a peer
@@ -195,7 +245,12 @@ mod tests {
 
     #[test]
     fn test_peer_from_endpoint() {
-        let peer = Peer::from_endpoint("https://remi.conary.io:7891", PeerTier::RegionHub).unwrap();
+        let peer = Peer::from_endpoint_with_fingerprint(
+            "https://remi.conary.io:7891",
+            PeerTier::RegionHub,
+            Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+        )
+        .unwrap();
 
         assert_eq!(peer.endpoint, "https://remi.conary.io:7891");
         assert_eq!(peer.tier, PeerTier::RegionHub);
@@ -206,6 +261,26 @@ mod tests {
     #[test]
     fn test_peer_invalid_url() {
         let result = Peer::from_endpoint("not-a-url", PeerTier::Leaf);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_https_peer_requires_pinned_fingerprint() {
+        let result = Peer::from_endpoint("https://remi.conary.io:7891", PeerTier::RegionHub);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("requires a pinned tls_fingerprint"));
+    }
+
+    #[test]
+    fn test_http_peer_rejects_tls_fingerprint() {
+        let result = Peer::from_endpoint_with_fingerprint(
+            "http://peer1:7891",
+            PeerTier::CellHub,
+            Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+        );
         assert!(result.is_err());
     }
 
@@ -246,7 +321,12 @@ mod tests {
 
         let peer1 = Peer::from_endpoint("http://peer1:7891", PeerTier::CellHub).unwrap();
         let peer2 = Peer::from_endpoint("http://peer2:7891", PeerTier::CellHub).unwrap();
-        let peer3 = Peer::from_endpoint("https://region:7891", PeerTier::RegionHub).unwrap();
+        let peer3 = Peer::from_endpoint_with_fingerprint(
+            "https://region:7891",
+            PeerTier::RegionHub,
+            Some("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"),
+        )
+        .unwrap();
 
         registry.add(peer1.clone());
         registry.add(peer2.clone());

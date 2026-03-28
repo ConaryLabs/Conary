@@ -85,6 +85,13 @@ pub struct Federation {
 }
 
 impl Federation {
+    fn tls_fingerprint_for_endpoint<'a>(
+        config: &'a FederationConfig,
+        endpoint: &str,
+    ) -> Option<&'a str> {
+        config.peer_tls_fingerprints.get(endpoint).map(String::as_str)
+    }
+
     /// Whether any peer allowlist is configured.
     fn has_peer_allowlist(config: &FederationConfig) -> bool {
         config.allowed_peers.is_some() || config.tier_allowlists.has_any()
@@ -120,29 +127,47 @@ impl Federation {
 
         // Add configured cell hubs (filtered by allowlists)
         for endpoint in &config.cell_hubs {
-            if let Ok(peer) = Peer::from_endpoint(endpoint, PeerTier::CellHub) {
-                if Self::is_peer_allowed(&config, &peer) {
-                    peer_registry.add(peer);
-                } else {
-                    warn!(
-                        "[federation] Configured cell hub {} rejected by allowlist",
-                        endpoint
-                    );
-                }
+            let peer = Peer::from_endpoint_with_fingerprint(
+                endpoint,
+                PeerTier::CellHub,
+                Self::tls_fingerprint_for_endpoint(&config, endpoint),
+            )
+            .map_err(|e| {
+                Error::InitError(format!(
+                    "Invalid federation cell hub '{}': {}",
+                    endpoint, e
+                ))
+            })?;
+            if Self::is_peer_allowed(&config, &peer) {
+                peer_registry.add(peer);
+            } else {
+                warn!(
+                    "[federation] Configured cell hub {} rejected by allowlist",
+                    endpoint
+                );
             }
         }
 
         // Add configured region hubs (filtered by allowlists)
         for endpoint in &config.region_hubs {
-            if let Ok(peer) = Peer::from_endpoint(endpoint, PeerTier::RegionHub) {
-                if Self::is_peer_allowed(&config, &peer) {
-                    peer_registry.add(peer);
-                } else {
-                    warn!(
-                        "[federation] Configured region hub {} rejected by allowlist",
-                        endpoint
-                    );
-                }
+            let peer = Peer::from_endpoint_with_fingerprint(
+                endpoint,
+                PeerTier::RegionHub,
+                Self::tls_fingerprint_for_endpoint(&config, endpoint),
+            )
+            .map_err(|e| {
+                Error::InitError(format!(
+                    "Invalid federation region hub '{}': {}",
+                    endpoint, e
+                ))
+            })?;
+            if Self::is_peer_allowed(&config, &peer) {
+                peer_registry.add(peer);
+            } else {
+                warn!(
+                    "[federation] Configured region hub {} rejected by allowlist",
+                    endpoint
+                );
             }
         }
 
@@ -242,7 +267,13 @@ impl Federation {
             )));
         }
 
-        let peer = discovered.to_peer_with_secure_transport(require_authenticated_transport)?;
+        let endpoint = discovered.endpoint_with_secure_transport(require_authenticated_transport)?;
+        let mut peer = Peer::from_endpoint_with_fingerprint(
+            &endpoint,
+            discovered.tier,
+            Self::tls_fingerprint_for_endpoint(config, &endpoint),
+        )?;
+        peer.name = Some(discovered.instance_name.clone());
         if !Self::is_peer_allowed(config, &peer) {
             return Err(Error::Federation(format!(
                 "mDNS peer {} rejected by allowlist: {}",
@@ -949,10 +980,22 @@ mod tests {
 
     #[test]
     fn test_prepare_discovered_peer_requires_https_when_using_mtls_without_allowlist() {
-        let config = FederationConfig::default();
+        let mut config = FederationConfig::default();
+        config.peer_tls_fingerprints.insert(
+            "https://192.168.1.100:7891".to_string(),
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
+        );
         let peer = Federation::prepare_discovered_peer(&config, true, &discovered_peer())
             .expect("mTLS-backed discovered peer should be accepted");
 
         assert_eq!(peer.endpoint, "https://192.168.1.100:7891");
+    }
+
+    #[test]
+    fn test_prepare_discovered_peer_rejects_https_without_pinned_fingerprint() {
+        let config = FederationConfig::default();
+        let result = Federation::prepare_discovered_peer(&config, true, &discovered_peer());
+
+        assert!(matches!(result, Err(Error::ConfigError(_))));
     }
 }

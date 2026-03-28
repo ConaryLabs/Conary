@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use crate::server::ServerState;
 use crate::server::auth::{generate_token, hash_token, validate_scopes};
 use crate::server::test_db;
+use crate::federation::{Peer, PeerTier};
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -218,6 +219,7 @@ pub struct AddPeerInput {
     pub endpoint: String,
     pub tier: Option<String>,
     pub node_name: Option<String>,
+    pub tls_fingerprint: Option<String>,
 }
 
 /// List all federation peers.
@@ -234,8 +236,9 @@ pub async fn list_peers(
 
 /// Add a federation peer.  Returns the generated peer ID on success.
 ///
-/// Validates the endpoint URL and tier, generates an ID from the URL hash,
-/// and inserts via the `federation_peer` model.
+/// Validates the endpoint URL and tier, derives the peer ID, and inserts via
+/// the `federation_peer` model. HTTPS peers must include a pinned TLS
+/// certificate fingerprint so the stored peer ID is certificate-bound.
 pub async fn add_peer(
     state: &Arc<RwLock<ServerState>>,
     input: AddPeerInput,
@@ -257,7 +260,18 @@ pub async fn add_peer(
         ));
     }
 
-    let peer_id = conary_core::hash::sha256(endpoint.as_bytes());
+    let peer_tier = match tier.as_str() {
+        "cell_hub" => PeerTier::CellHub,
+        "region_hub" => PeerTier::RegionHub,
+        _ => PeerTier::Leaf,
+    };
+    let peer = Peer::from_endpoint_with_fingerprint(
+        &endpoint,
+        peer_tier,
+        input.tls_fingerprint.as_deref(),
+    )
+    .map_err(ServiceError::from)?;
+    let peer_id = peer.id.clone();
     let node_name = input.node_name;
     let db = db_path(state).await;
 

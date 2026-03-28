@@ -264,6 +264,10 @@ mod tests {
     use super::*;
     use crate::federation::config::PeerTier;
 
+    fn https_peer(host: &str, fingerprint: &str) -> Peer {
+        Peer::from_endpoint_with_fingerprint(host, PeerTier::RegionHub, Some(fingerprint)).unwrap()
+    }
+
     fn make_peers(n: usize) -> Vec<Peer> {
         (0..n)
             .map(|i| {
@@ -381,8 +385,14 @@ mod tests {
             Peer::from_endpoint("http://cell1:7891", PeerTier::CellHub).unwrap(),
             Peer::from_endpoint("http://cell2:7891", PeerTier::CellHub).unwrap(),
             Peer::from_endpoint("http://cell3:7891", PeerTier::CellHub).unwrap(),
-            Peer::from_endpoint("https://region1:7891", PeerTier::RegionHub).unwrap(),
-            Peer::from_endpoint("https://region2:7891", PeerTier::RegionHub).unwrap(),
+            https_peer(
+                "https://region1:7891",
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            ),
+            https_peer(
+                "https://region2:7891",
+                "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+            ),
             Peer::from_endpoint("http://leaf1:7891", PeerTier::Leaf).unwrap(),
             Peer::from_endpoint("http://leaf2:7891", PeerTier::Leaf).unwrap(),
         ]
@@ -604,9 +614,18 @@ mod tests {
 
         // Create region hubs with subdomains
         let peers = vec![
-            Peer::from_endpoint("https://west.conary.io:7891", PeerTier::RegionHub).unwrap(),
-            Peer::from_endpoint("https://east.conary.io:7891", PeerTier::RegionHub).unwrap(),
-            Peer::from_endpoint("https://other.domain.io:7891", PeerTier::RegionHub).unwrap(),
+            https_peer(
+                "https://west.conary.io:7891",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ),
+            https_peer(
+                "https://east.conary.io:7891",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            ),
+            https_peer(
+                "https://other.domain.io:7891",
+                "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            ),
         ];
 
         // Allow *.conary.io

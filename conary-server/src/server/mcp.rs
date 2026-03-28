@@ -135,12 +135,15 @@ pub struct AddPeerParams {
     /// Peer tier: "leaf", "cell_hub", or "region_hub". Defaults to "leaf".
     #[serde(default)]
     pub tier: Option<String>,
+    /// Pinned SHA-256 TLS certificate fingerprint for HTTPS peers.
+    #[serde(default)]
+    pub tls_fingerprint: Option<String>,
 }
 
 /// Parameters for operations on a specific peer.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct PeerIdParams {
-    /// SHA-256 hash ID of the peer.
+    /// Peer ID (endpoint hash for HTTP peers, TLS fingerprint for HTTPS peers).
     pub peer_id: String,
 }
 
@@ -519,10 +522,11 @@ impl RemiMcpServer {
 
     /// Add a federation peer by endpoint URL.
     ///
-    /// The peer ID is derived from the SHA-256 hash of the endpoint.
+    /// HTTPS peers require a pinned TLS certificate fingerprint, which becomes
+    /// the peer ID. HTTP peers use a hash of the endpoint.
     /// Returns an error if the peer already exists.
     #[tool(
-        description = "Add a federation peer by endpoint URL. Peer ID is derived from SHA-256 of the endpoint. Returns an error if the peer already exists."
+        description = "Add a federation peer by endpoint URL. HTTPS peers require a pinned TLS certificate fingerprint, which becomes the peer ID. HTTP peers use a SHA-256 hash of the endpoint. Returns an error if the peer already exists."
     )]
     async fn add_peer(
         &self,
@@ -532,6 +536,7 @@ impl RemiMcpServer {
             endpoint: params.endpoint,
             tier: params.tier,
             node_name: None,
+            tls_fingerprint: params.tls_fingerprint,
         };
 
         let (peer_id, peer) = admin_service::add_peer(&self.state, input)
@@ -547,9 +552,9 @@ impl RemiMcpServer {
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
-    /// Delete a federation peer by its SHA-256 hash ID.
+    /// Delete a federation peer by its peer ID.
     #[tool(
-        description = "Delete a federation peer by its SHA-256 hash ID. Returns success or error if not found."
+        description = "Delete a federation peer by its peer ID. Returns success or error if not found."
     )]
     async fn delete_peer(
         &self,
