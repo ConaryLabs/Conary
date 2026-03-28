@@ -88,13 +88,11 @@ pub struct DiscoveredPeer {
 }
 
 impl DiscoveredPeer {
-    /// Convert to a federation Peer
-    pub fn to_peer(&self) -> Result<Peer> {
-        self.to_peer_with_secure_transport(false)
-    }
-
-    /// Convert to a federation Peer, optionally forcing authenticated HTTPS transport.
-    pub fn to_peer_with_secure_transport(&self, require_secure_transport: bool) -> Result<Peer> {
+    /// Build the candidate endpoint URL for this discovered peer.
+    pub fn endpoint_with_secure_transport(
+        &self,
+        require_secure_transport: bool,
+    ) -> Result<String> {
         // Prefer IPv4 addresses for simplicity, fall back to IPv6
         let addr = self
             .addresses
@@ -111,7 +109,18 @@ impl DiscoveredPeer {
         } else {
             "http"
         };
-        let endpoint = format!("{}://{}:{}", scheme, addr, self.port);
+
+        Ok(format!("{}://{}:{}", scheme, addr, self.port))
+    }
+
+    /// Convert to a federation Peer
+    pub fn to_peer(&self) -> Result<Peer> {
+        self.to_peer_with_secure_transport(false)
+    }
+
+    /// Convert to a federation Peer, optionally forcing authenticated HTTPS transport.
+    pub fn to_peer_with_secure_transport(&self, require_secure_transport: bool) -> Result<Peer> {
+        let endpoint = self.endpoint_with_secure_transport(require_secure_transport)?;
         let mut peer = Peer::from_endpoint(&endpoint, self.tier)?;
         peer.name = Some(self.instance_name.clone());
 
@@ -547,8 +556,8 @@ mod tests {
             properties: HashMap::new(),
         };
 
-        let peer = discovered.to_peer_with_secure_transport(true).unwrap();
-        assert_eq!(peer.endpoint, "https://192.168.1.100:7891");
+        let endpoint = discovered.endpoint_with_secure_transport(true).unwrap();
+        assert_eq!(endpoint, "https://192.168.1.100:7891");
     }
 
     #[test]
