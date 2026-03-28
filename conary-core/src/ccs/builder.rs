@@ -137,6 +137,12 @@ pub struct CcsBuilder {
     chunker: Option<Chunker>,
 }
 
+fn is_suspicious_component_executable(component: &str, mode: u32, file_type: FileType) -> bool {
+    file_type == FileType::Regular
+        && mode & 0o111 != 0
+        && matches!(component, "doc" | "config" | "data")
+}
+
 impl CcsBuilder {
     /// Create a new builder
     pub fn new(manifest: CcsManifest, source_dir: &Path) -> Self {
@@ -237,6 +243,14 @@ impl CcsBuilder {
             } else {
                 content
             };
+
+            if is_suspicious_component_executable(&entry.component, entry.mode, entry.file_type) {
+                tracing::warn!(
+                    "Suspicious executable file {} classified into '{}' component",
+                    entry.path,
+                    entry.component
+                );
+            }
 
             // Phase 3: Store content (chunked or whole)
             if self.use_chunking && self.should_chunk(&entry, &final_content) {
@@ -1000,5 +1014,31 @@ mod tests {
             assert_eq!(symlink.file_type, FileType::Symlink);
             assert_eq!(symlink.target, Some("libfoo.so.1.0.0".to_string()));
         }
+    }
+
+    #[test]
+    fn test_suspicious_executable_component_audit_targets_doc_config_and_data() {
+        for component in ["doc", "config", "data"] {
+            assert!(
+                is_suspicious_component_executable(component, 0o755, FileType::Regular),
+                "{component} executables should be flagged as suspicious"
+            );
+        }
+
+        assert!(!is_suspicious_component_executable(
+            "runtime",
+            0o755,
+            FileType::Regular
+        ));
+        assert!(!is_suspicious_component_executable(
+            "doc",
+            0o644,
+            FileType::Regular
+        ));
+        assert!(!is_suspicious_component_executable(
+            "doc",
+            0o755,
+            FileType::Symlink
+        ));
     }
 }

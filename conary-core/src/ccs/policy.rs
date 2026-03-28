@@ -44,7 +44,7 @@ pub struct PolicyContext<'a> {
     /// Source path of the file on disk
     pub source_path: &'a Path,
     /// File entry metadata
-    pub entry: &'a FileEntry,
+    pub entry: &'a mut FileEntry,
     /// File content bytes
     pub content: &'a [u8],
     /// All policies configuration
@@ -63,7 +63,7 @@ pub trait BuildPolicy: Send + Sync {
     /// - `Replace(bytes)`: Replace content with new bytes
     /// - `Skip`: Remove from package
     /// - `Reject(msg)`: Fail the entire build
-    fn apply(&self, ctx: &PolicyContext) -> Result<PolicyAction>;
+    fn apply(&self, ctx: &mut PolicyContext) -> Result<PolicyAction>;
 }
 
 /// Policy chain - applies policies in sequence
@@ -87,6 +87,9 @@ impl PolicyChain {
         if !config.reject_paths.is_empty() {
             chain.add(Box::new(DenyPathsPolicy::new(&config.reject_paths)?));
         }
+
+        // Always strip setuid/setgid bits from packaged files.
+        chain.add(Box::new(StripSetuidPolicy::new()));
 
         // Add NormalizeTimestamps if configured
         if config.normalize_timestamps {
@@ -137,14 +140,14 @@ impl PolicyChain {
         let mut was_replaced = false;
 
         for policy in &self.policies {
-            let ctx = PolicyContext {
+            let mut ctx = PolicyContext {
                 source_path,
                 entry,
                 content: &current_content,
                 config,
             };
 
-            match policy.apply(&ctx)? {
+            match policy.apply(&mut ctx)? {
                 PolicyAction::Keep => {
                     // Continue to next policy
                 }
@@ -237,7 +240,7 @@ impl BuildPolicy for DenyPathsPolicy {
         "DenyPaths"
     }
 
-    fn apply(&self, ctx: &PolicyContext) -> Result<PolicyAction> {
+    fn apply(&self, ctx: &mut PolicyContext) -> Result<PolicyAction> {
         for (pattern, pattern_str) in self.patterns.iter().zip(self.pattern_strings.iter()) {
             if pattern.matches(&ctx.entry.path) {
                 return Ok(PolicyAction::Reject(format!(
@@ -283,10 +286,31 @@ impl BuildPolicy for NormalizeTimestampsPolicy {
         "NormalizeTimestamps"
     }
 
-    fn apply(&self, _ctx: &PolicyContext) -> Result<PolicyAction> {
+    fn apply(&self, _ctx: &mut PolicyContext) -> Result<PolicyAction> {
         // Timestamp normalization doesn't modify file content
         // It's applied at the tar archive level when writing the package
         // We just return Keep here and the builder handles mtime normalization
+        Ok(PolicyAction::Keep)
+    }
+}
+
+/// Policy to strip setuid/setgid bits from packaged files
+#[derive(Default)]
+pub struct StripSetuidPolicy;
+
+impl StripSetuidPolicy {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl BuildPolicy for StripSetuidPolicy {
+    fn name(&self) -> &str {
+        "StripSetuid"
+    }
+
+    fn apply(&self, ctx: &mut PolicyContext) -> Result<PolicyAction> {
+        ctx.entry.mode &= !0o6000;
         Ok(PolicyAction::Keep)
     }
 }
@@ -316,7 +340,7 @@ impl BuildPolicy for StripBinariesPolicy {
         "StripBinaries"
     }
 
-    fn apply(&self, ctx: &PolicyContext) -> Result<PolicyAction> {
+    fn apply(&self, ctx: &mut PolicyContext) -> Result<PolicyAction> {
         // Only process ELF files that are executable or shared libraries
         if !Self::is_elf(ctx.content) {
             return Ok(PolicyAction::Keep);
@@ -528,7 +552,7 @@ impl BuildPolicy for FixShebangsPolicy {
         "FixShebangs"
     }
 
-    fn apply(&self, ctx: &PolicyContext) -> Result<PolicyAction> {
+    fn apply(&self, ctx: &mut PolicyContext) -> Result<PolicyAction> {
         let Some(shebang_bytes) = Self::extract_shebang(ctx.content) else {
             return Ok(PolicyAction::Keep);
         };
@@ -587,7 +611,7 @@ impl BuildPolicy for CompressManpagesPolicy {
         "CompressManpages"
     }
 
-    fn apply(&self, ctx: &PolicyContext) -> Result<PolicyAction> {
+    fn apply(&self, ctx: &mut PolicyContext) -> Result<PolicyAction> {
         // Only process man pages
         if !Self::is_manpage(&ctx.entry.path) {
             return Ok(PolicyAction::Keep);
@@ -639,36 +663,36 @@ mod tests {
             DenyPathsPolicy::new(&["/home/*".to_string(), "/tmp/build*".to_string()]).unwrap();
 
         // Should reject /home/user/file
-        let entry = make_entry("/home/user/file", 0o644);
-        let ctx = PolicyContext {
+        let mut entry = make_entry("/home/user/file", 0o644);
+        let mut ctx = PolicyContext {
             source_path: Path::new("/src/home/user/file"),
-            entry: &entry,
+            entry: &mut entry,
             content: b"test",
             config: &BuildPolicyConfig::default(),
         };
-        let result = policy.apply(&ctx).unwrap();
+        let result = policy.apply(&mut ctx).unwrap();
         assert!(matches!(result, PolicyAction::Reject(_)));
 
         // Should reject /tmp/build123
-        let entry = make_entry("/tmp/build123", 0o644);
-        let ctx = PolicyContext {
+        let mut entry = make_entry("/tmp/build123", 0o644);
+        let mut ctx = PolicyContext {
             source_path: Path::new("/src/tmp/build123"),
-            entry: &entry,
+            entry: &mut entry,
             content: b"test",
             config: &BuildPolicyConfig::default(),
         };
-        let result = policy.apply(&ctx).unwrap();
+        let result = policy.apply(&mut ctx).unwrap();
         assert!(matches!(result, PolicyAction::Reject(_)));
 
         // Should allow /usr/bin/myapp
-        let entry = make_entry("/usr/bin/myapp", 0o755);
-        let ctx = PolicyContext {
+        let mut entry = make_entry("/usr/bin/myapp", 0o755);
+        let mut ctx = PolicyContext {
             source_path: Path::new("/src/usr/bin/myapp"),
-            entry: &entry,
+            entry: &mut entry,
             content: b"test",
             config: &BuildPolicyConfig::default(),
         };
-        let result = policy.apply(&ctx).unwrap();
+        let result = policy.apply(&mut ctx).unwrap();
         assert!(matches!(result, PolicyAction::Keep));
     }
 
@@ -682,15 +706,15 @@ mod tests {
         let policy = FixShebangsPolicy::new(replacements);
 
         // Should fix python shebang
-        let entry = make_entry("/usr/bin/script.py", 0o755);
+        let mut entry = make_entry("/usr/bin/script.py", 0o755);
         let content = b"#!/usr/bin/env python\nprint('hello')";
-        let ctx = PolicyContext {
+        let mut ctx = PolicyContext {
             source_path: Path::new("/src/usr/bin/script.py"),
-            entry: &entry,
+            entry: &mut entry,
             content,
             config: &BuildPolicyConfig::default(),
         };
-        let result = policy.apply(&ctx).unwrap();
+        let result = policy.apply(&mut ctx).unwrap();
         if let PolicyAction::Replace(new_content) = result {
             assert!(new_content.starts_with(b"#!/usr/bin/python3"));
         } else {
@@ -699,13 +723,13 @@ mod tests {
 
         // Should keep bash shebang unchanged
         let content = b"#!/bin/bash\necho hello";
-        let ctx = PolicyContext {
+        let mut ctx = PolicyContext {
             source_path: Path::new("/src/usr/bin/script.sh"),
-            entry: &entry,
+            entry: &mut entry,
             content,
             config: &BuildPolicyConfig::default(),
         };
-        let result = policy.apply(&ctx).unwrap();
+        let result = policy.apply(&mut ctx).unwrap();
         assert!(matches!(result, PolicyAction::Keep));
     }
 
@@ -714,15 +738,15 @@ mod tests {
         let policy = CompressManpagesPolicy::new();
 
         // Should compress man page
-        let entry = make_entry("/usr/share/man/man1/myapp.1", 0o644);
+        let mut entry = make_entry("/usr/share/man/man1/myapp.1", 0o644);
         let content = b".TH MYAPP 1\n.SH NAME\nmyapp - test application";
-        let ctx = PolicyContext {
+        let mut ctx = PolicyContext {
             source_path: Path::new("/src/usr/share/man/man1/myapp.1"),
-            entry: &entry,
+            entry: &mut entry,
             content,
             config: &BuildPolicyConfig::default(),
         };
-        let result = policy.apply(&ctx).unwrap();
+        let result = policy.apply(&mut ctx).unwrap();
         if let PolicyAction::Replace(new_content) = result {
             // Should be gzipped (magic bytes)
             assert_eq!(new_content[0], 0x1f);
@@ -732,14 +756,14 @@ mod tests {
         }
 
         // Should skip non-man files
-        let entry = make_entry("/usr/bin/myapp", 0o755);
-        let ctx = PolicyContext {
+        let mut entry = make_entry("/usr/bin/myapp", 0o755);
+        let mut ctx = PolicyContext {
             source_path: Path::new("/src/usr/bin/myapp"),
-            entry: &entry,
+            entry: &mut entry,
             content: b"test",
             config: &BuildPolicyConfig::default(),
         };
-        let result = policy.apply(&ctx).unwrap();
+        let result = policy.apply(&mut ctx).unwrap();
         assert!(matches!(result, PolicyAction::Keep));
     }
 
@@ -773,10 +797,10 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_policy_chain() {
+    fn test_default_policy_chain_includes_setuid_stripping() {
         let config = BuildPolicyConfig::default();
         let chain = PolicyChain::from_config(&config).unwrap();
-        assert!(chain.is_empty());
+        assert!(!chain.is_empty());
     }
 
     #[test]
@@ -907,15 +931,31 @@ mod tests {
         let policy = StripBinariesPolicy::new();
 
         // Non-ELF file should be kept unchanged
-        let entry = make_entry("/usr/bin/script", 0o755);
+        let mut entry = make_entry("/usr/bin/script", 0o755);
         let content = b"#!/bin/bash\necho hello";
-        let ctx = PolicyContext {
+        let mut ctx = PolicyContext {
             source_path: Path::new("/src/usr/bin/script"),
-            entry: &entry,
+            entry: &mut entry,
             content,
             config: &BuildPolicyConfig::default(),
         };
-        let result = policy.apply(&ctx).unwrap();
+        let result = policy.apply(&mut ctx).unwrap();
         assert!(matches!(result, PolicyAction::Keep));
+    }
+
+    #[test]
+    fn test_strip_setuid_policy_masks_setuid_and_setgid_bits() {
+        let policy = StripSetuidPolicy::new();
+        let mut entry = make_entry("/usr/bin/helper", 0o6755);
+        let mut ctx = PolicyContext {
+            source_path: Path::new("/src/usr/bin/helper"),
+            entry: &mut entry,
+            content: b"#!/bin/sh\necho hi",
+            config: &BuildPolicyConfig::default(),
+        };
+
+        let result = policy.apply(&mut ctx).unwrap();
+        assert!(matches!(result, PolicyAction::Keep));
+        assert_eq!(ctx.entry.mode, 0o755);
     }
 }
