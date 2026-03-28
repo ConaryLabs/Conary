@@ -61,7 +61,7 @@ impl DebPackage {
     /// Create a decompressor for tar data using magic byte detection
     fn create_tar_decoder<'a>(tar_data: &'a [u8]) -> Result<Box<dyn Read + 'a>> {
         let format = CompressionFormat::from_magic_bytes(tar_data);
-        compression::create_decoder(tar_data, format)
+        compression::create_decoder_limited(tar_data, format, compression::MAX_DECOMPRESS_SIZE)
             .map_err(|e| Error::InitError(format!("Failed to create decoder: {}", e)))
     }
 
@@ -158,7 +158,11 @@ impl DebPackage {
         let mut archive = ar::Archive::new(file);
         let mut control_data: Option<Vec<u8>> = None;
         let mut data_data: Option<Vec<u8>> = None;
+        let mut entries_seen = 0usize;
         while let Some(entry) = archive.next_entry() {
+            entries_seen += 1;
+            compression::check_archive_entry_limit(entries_seen, "DEB archive")
+                .map_err(|e| Error::InitError(format!("Failed to read DEB archive: {}", e)))?;
             let mut entry =
                 entry.map_err(|e| Error::InitError(format!("Failed to read AR entry: {}", e)))?;
             let entry_name = String::from_utf8_lossy(entry.header().identifier()).to_string();
@@ -207,11 +211,15 @@ impl DebPackage {
         let reader = Self::create_tar_decoder(control_data)?;
         let mut archive = Archive::new(reader);
         let mut contents = ControlTarContents::default();
+        let mut entries_seen = 0usize;
 
         for entry in archive
             .entries()
             .map_err(|e| Error::InitError(format!("Failed to read control.tar: {}", e)))?
         {
+            entries_seen += 1;
+            compression::check_archive_entry_limit(entries_seen, "DEB control.tar")
+                .map_err(|e| Error::InitError(format!("Failed to read control.tar: {}", e)))?;
             let mut entry =
                 entry.map_err(|e| Error::InitError(format!("Failed to read entry: {}", e)))?;
             let entry_path = entry
@@ -287,10 +295,14 @@ impl DebPackage {
         let reader = Self::create_tar_decoder(data_tar_data)?;
         let mut archive = Archive::new(reader);
         let mut files = Vec::new();
+        let mut entries_seen = 0usize;
         for entry in archive
             .entries()
             .map_err(|e| Error::InitError(format!("Failed to read data.tar: {}", e)))?
         {
+            entries_seen += 1;
+            compression::check_archive_entry_limit(entries_seen, "DEB data.tar")
+                .map_err(|e| Error::InitError(format!("Failed to read data.tar: {}", e)))?;
             let entry =
                 entry.map_err(|e| Error::InitError(format!("Failed to read entry: {}", e)))?;
             let entry_type = entry.header().entry_type();
@@ -482,11 +494,15 @@ impl PackageFormat for DebPackage {
         let reader = Self::create_tar_decoder(&self.data_tar_cache)?;
         let mut archive = Archive::new(reader);
         let mut extracted_files = Vec::new();
+        let mut entries_seen = 0usize;
 
         for entry in archive
             .entries()
             .map_err(|e| Error::InitError(format!("Failed to read data.tar: {}", e)))?
         {
+            entries_seen += 1;
+            compression::check_archive_entry_limit(entries_seen, "DEB data.tar")
+                .map_err(|e| Error::InitError(format!("Failed to read data.tar: {}", e)))?;
             let mut entry =
                 entry.map_err(|e| Error::InitError(format!("Failed to read entry: {}", e)))?;
 
