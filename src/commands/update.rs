@@ -32,6 +32,26 @@ fn read_delta_result_from_cas(
         .with_context(|| format!("failed to retrieve verified delta result from CAS: {hash}"))
 }
 
+fn mark_pending_changeset_rolled_back(
+    conn: &mut rusqlite::Connection,
+    changeset_id: i64,
+) -> Result<bool> {
+    use conary_core::db::models::{Changeset, ChangesetStatus};
+
+    Ok(conary_core::db::transaction(conn, |tx| {
+        let Some(mut changeset) = Changeset::find_by_id(tx, changeset_id)? else {
+            return Ok(false);
+        };
+
+        if changeset.status != ChangesetStatus::Pending {
+            return Ok(false);
+        }
+
+        changeset.update_status(tx, ChangesetStatus::RolledBack)?;
+        Ok(true)
+    })?)
+}
+
 fn source_policy_update_context(
     pin: Option<&DistroPin>,
     affinities: &[SystemAffinity],
@@ -533,96 +553,112 @@ pub async fn cmd_update(
         changeset.insert(tx)
     })?;
 
-    // Phase 2: Download and apply deltas (sequential - requires CAS access)
-    for (trove, repo_pkg, delta_info) in delta_updates {
-        println!("\nUpdating {} (delta)...", trove.name);
+    let update_result: Result<()> = async {
+        // Phase 2: Download and apply deltas (sequential - requires CAS access)
+        for (trove, repo_pkg, delta_info) in delta_updates {
+            println!("\nUpdating {} (delta)...", trove.name);
 
-        match repository::download_delta(
-            &repository::DeltaInfo {
-                from_version: delta_info.from_version.clone(),
-                from_hash: delta_info.from_hash.clone(),
-                delta_url: delta_info.delta_url.clone(),
-                delta_size: delta_info.delta_size,
-                delta_checksum: delta_info.delta_checksum.clone(),
-                compression_ratio: delta_info.compression_ratio,
-            },
-            &trove.name,
-            &repo_pkg.version,
-            &temp_dir,
-        )
-        .await
-        {
-            Ok(actual_delta_path) => {
-                let applier = DeltaApplier::new(&objects_dir)?;
-                match applier.apply_delta(
-                    &delta_info.from_hash,
-                    &actual_delta_path,
-                    &delta_info.to_hash,
-                ) {
-                    Ok(new_hash) => {
-                        println!("  [OK] Delta applied to CAS");
-                        let delta_saved = (repo_pkg.size - delta_info.delta_size).max(0);
-                        // Delta reconstructed the new package in CAS.  Retrieve
-                        // it and feed through the normal install pipeline so all
-                        // DB metadata (files, deps, provides, history) and the
-                        // live generation transition correctly -- without a
-                        // redundant network download.
-                        let cas = conary_core::filesystem::CasStore::new(&objects_dir)?;
-                        let mut delta_installed = false;
-                        match read_delta_result_from_cas(&cas, &new_hash) {
-                            Ok(content) => {
-                                let pkg_file = temp_dir
-                                    .join(format!("{}-{}.ccs", trove.name, repo_pkg.version));
-                                if let Err(e) = std::fs::write(&pkg_file, &content) {
-                                    warn!(
-                                        "  Failed to write delta result for {}: {}",
-                                        trove.name, e
-                                    );
-                                } else {
-                                    let path_str = pkg_file.to_string_lossy().to_string();
-                                    match cmd_install(
-                                        &path_str,
-                                        super::InstallOptions {
-                                            db_path,
-                                            root,
-                                            sandbox_mode,
-                                            dep_mode: Some(dep_mode),
-                                            yes,
-                                            ..Default::default()
-                                        },
-                                    )
-                                    .await
-                                    {
-                                        Ok(()) => {
-                                            delta_installed = true;
-                                            println!(
-                                                "  [OK] {} {} -> {}",
-                                                trove.name, trove.version, repo_pkg.version
-                                            );
+            match repository::download_delta(
+                &repository::DeltaInfo {
+                    from_version: delta_info.from_version.clone(),
+                    from_hash: delta_info.from_hash.clone(),
+                    delta_url: delta_info.delta_url.clone(),
+                    delta_size: delta_info.delta_size,
+                    delta_checksum: delta_info.delta_checksum.clone(),
+                    compression_ratio: delta_info.compression_ratio,
+                },
+                &trove.name,
+                &repo_pkg.version,
+                &temp_dir,
+            )
+            .await
+            {
+                Ok(actual_delta_path) => {
+                    let applier = DeltaApplier::new(&objects_dir)?;
+                    match applier.apply_delta(
+                        &delta_info.from_hash,
+                        &actual_delta_path,
+                        &delta_info.to_hash,
+                    ) {
+                        Ok(new_hash) => {
+                            println!("  [OK] Delta applied to CAS");
+                            let delta_saved = (repo_pkg.size - delta_info.delta_size).max(0);
+                            // Delta reconstructed the new package in CAS. Retrieve
+                            // it and feed through the normal install pipeline so all
+                            // DB metadata (files, deps, provides, history) and the
+                            // live generation transition correctly -- without a
+                            // redundant network download.
+                            let cas = conary_core::filesystem::CasStore::new(&objects_dir)?;
+                            let mut delta_installed = false;
+                            match read_delta_result_from_cas(&cas, &new_hash) {
+                                Ok(content) => {
+                                    let pkg_file = temp_dir
+                                        .join(format!("{}-{}.ccs", trove.name, repo_pkg.version));
+                                    if let Err(e) = std::fs::write(&pkg_file, &content) {
+                                        warn!(
+                                            "  Failed to write delta result for {}: {}",
+                                            trove.name, e
+                                        );
+                                    } else {
+                                        let path_str = pkg_file.to_string_lossy().to_string();
+                                        match cmd_install(
+                                            &path_str,
+                                            super::InstallOptions {
+                                                db_path,
+                                                root,
+                                                sandbox_mode,
+                                                dep_mode: Some(dep_mode),
+                                                yes,
+                                                ..Default::default()
+                                            },
+                                        )
+                                        .await
+                                        {
+                                            Ok(()) => {
+                                                delta_installed = true;
+                                                println!(
+                                                    "  [OK] {} {} -> {}",
+                                                    trove.name, trove.version, repo_pkg.version
+                                                );
+                                            }
+                                            Err(e) => {
+                                                warn!(
+                                                    "  Delta install failed for {}: {}",
+                                                    trove.name, e
+                                                );
+                                            }
                                         }
-                                        Err(e) => {
-                                            warn!(
-                                                "  Delta install failed for {}: {}",
-                                                trove.name, e
-                                            );
-                                        }
+                                        let _ = std::fs::remove_file(&pkg_file);
                                     }
-                                    let _ = std::fs::remove_file(&pkg_file);
+                                }
+                                Err(e) => {
+                                    warn!("  Failed to retrieve delta result from CAS: {}", e);
                                 }
                             }
-                            Err(e) => {
-                                warn!("  Failed to retrieve delta result from CAS: {}", e);
+                            if delta_installed {
+                                // Only count success after the full install pipeline
+                                // completes -- not just after apply_delta().
+                                deltas_applied += 1;
+                                total_bytes_saved += delta_saved;
+                            } else {
+                                // Fall back to full download
+                                delta_failures += 1;
+                                had_failures = true;
+                                if let Ok(Some(repo)) =
+                                    Repository::find_by_id(&conn, repo_pkg.repository_id)
+                                {
+                                    full_updates.push((trove, repo_pkg, repo));
+                                }
                             }
                         }
-                        if delta_installed {
-                            // Only count success after the full install pipeline
-                            // completes -- not just after apply_delta().
-                            deltas_applied += 1;
-                            total_bytes_saved += delta_saved;
-                        } else {
-                            // Fall back to full download
+                        Err(e) => {
+                            warn!(
+                                "  Delta application failed: {}, will download full package",
+                                e
+                            );
                             delta_failures += 1;
                             had_failures = true;
+                            // Get repository for fallback download
                             if let Ok(Some(repo)) =
                                 Repository::find_by_id(&conn, repo_pkg.repository_id)
                             {
@@ -630,170 +666,171 @@ pub async fn cmd_update(
                             }
                         }
                     }
-                    Err(e) => {
-                        warn!(
-                            "  Delta application failed: {}, will download full package",
-                            e
-                        );
-                        delta_failures += 1;
-                        had_failures = true;
-                        // Get repository for fallback download
-                        if let Ok(Some(repo)) =
-                            Repository::find_by_id(&conn, repo_pkg.repository_id)
-                        {
-                            full_updates.push((trove, repo_pkg, repo));
-                        }
-                    }
+                    let _ = std::fs::remove_file(&actual_delta_path);
                 }
-                let _ = std::fs::remove_file(&actual_delta_path);
-            }
-            Err(e) => {
-                warn!("  Delta download failed: {}, will download full package", e);
-                delta_failures += 1;
-                had_failures = true;
-                // Get repository for fallback download
-                if let Ok(Some(repo)) = Repository::find_by_id(&conn, repo_pkg.repository_id) {
-                    full_updates.push((trove, repo_pkg, repo));
+                Err(e) => {
+                    warn!("  Delta download failed: {}, will download full package", e);
+                    delta_failures += 1;
+                    had_failures = true;
+                    // Get repository for fallback download
+                    if let Ok(Some(repo)) = Repository::find_by_id(&conn, repo_pkg.repository_id) {
+                        full_updates.push((trove, repo_pkg, repo));
+                    }
                 }
             }
         }
-    }
 
-    // Phase 3 & 4: Resolve and install full packages using unified resolution
-    // This respects per-repo routing strategies (remi, binary, etc.)
-    if !full_updates.is_empty() {
-        let total_to_install = full_updates.len() as u64;
-        let mut progress = UpdateProgress::new(total_to_install);
+        // Phase 3 & 4: Resolve and install full packages using unified resolution
+        // This respects per-repo routing strategies (remi, binary, etc.)
+        if !full_updates.is_empty() {
+            let total_to_install = full_updates.len() as u64;
+            let mut progress = UpdateProgress::new(total_to_install);
 
-        progress.set_status("Resolving and downloading packages...");
+            progress.set_status("Resolving and downloading packages...");
 
-        // Process packages sequentially (resolution requires DB access)
-        for (trove, repo_pkg, repo) in full_updates {
-            info!("Resolving {} from {}", trove.name, repo.name);
-            progress.set_phase(&trove.name, UpdatePhase::DownloadingFull);
+            // Process packages sequentially (resolution requires DB access)
+            for (trove, repo_pkg, repo) in full_updates {
+                info!("Resolving {} from {}", trove.name, repo.name);
+                progress.set_phase(&trove.name, UpdatePhase::DownloadingFull);
 
-            // Build resolution options
-            let options = ResolutionOptions {
-                version: Some(repo_pkg.version.clone()),
-                repository: Some(repo.name.clone()),
-                architecture: repo_pkg.architecture.clone(),
-                output_dir: Some(temp_dir.clone()),
-                gpg_options: if repo.gpg_check {
-                    Some(DownloadOptions {
-                        gpg_check: true,
-                        gpg_strict: repo.gpg_strict,
-                        keyring_dir: keyring_dir.clone(),
-                        repository_name: repo.name.clone(),
-                    })
-                } else {
-                    None
-                },
-                skip_cas: false,
-                policy: None,
-                is_root: false,
-                primary_flavor: None,
-            };
+                // Build resolution options
+                let options = ResolutionOptions {
+                    version: Some(repo_pkg.version.clone()),
+                    repository: Some(repo.name.clone()),
+                    architecture: repo_pkg.architecture.clone(),
+                    output_dir: Some(temp_dir.clone()),
+                    gpg_options: if repo.gpg_check {
+                        Some(DownloadOptions {
+                            gpg_check: true,
+                            gpg_strict: repo.gpg_strict,
+                            keyring_dir: keyring_dir.clone(),
+                            repository_name: repo.name.clone(),
+                        })
+                    } else {
+                        None
+                    },
+                    skip_cas: false,
+                    policy: None,
+                    is_root: false,
+                    primary_flavor: None,
+                };
 
-            // Use unified resolver - respects remi/binary/recipe strategies
-            let source = match resolve_package(&conn, &trove.name, &options).await {
-                Ok(source) => source,
-                Err(e) => {
-                    progress.fail_package(&trove.name, &e.to_string());
-                    warn!("Failed to resolve {}: {}", trove.name, e);
-                    had_failures = true;
-                    continue;
-                }
-            };
-
-            // Get path from source
-            let pkg_path = match &source {
-                PackageSource::Binary { path, .. } => path.clone(),
-                PackageSource::Ccs { path, .. } => path.clone(),
-                PackageSource::Delta { delta_path, .. } => delta_path.clone(),
-                PackageSource::LocalCas { hash } => {
-                    // Check if this is an "already installed" marker
-                    if hash.starts_with("installed:") {
-                        info!("{} is already at the latest version (skipping)", trove.name);
-                        progress.complete_package(&trove.name);
+                // Use unified resolver - respects remi/binary/recipe strategies
+                let source = match resolve_package(&conn, &trove.name, &options).await {
+                    Ok(source) => source,
+                    Err(e) => {
+                        progress.fail_package(&trove.name, &e.to_string());
+                        warn!("Failed to resolve {}: {}", trove.name, e);
+                        had_failures = true;
                         continue;
                     }
-                    // Future: handle actual CAS content hashes
-                    progress.fail_package(&trove.name, "LocalCas not yet supported");
+                };
+
+                // Get path from source
+                let pkg_path = match &source {
+                    PackageSource::Binary { path, .. } => path.clone(),
+                    PackageSource::Ccs { path, .. } => path.clone(),
+                    PackageSource::Delta { delta_path, .. } => delta_path.clone(),
+                    PackageSource::LocalCas { hash } => {
+                        // Check if this is an "already installed" marker
+                        if hash.starts_with("installed:") {
+                            info!("{} is already at the latest version (skipping)", trove.name);
+                            progress.complete_package(&trove.name);
+                            continue;
+                        }
+                        // Future: handle actual CAS content hashes
+                        progress.fail_package(&trove.name, "LocalCas not yet supported");
+                        had_failures = true;
+                        warn!(
+                            "LocalCas resolution not yet implemented for {}: {}",
+                            trove.name, hash
+                        );
+                        continue;
+                    }
+                };
+
+                progress.set_phase(&trove.name, UpdatePhase::Installing);
+
+                let path_str = pkg_path.to_string_lossy().to_string();
+
+                if let Err(e) = cmd_install(
+                    &path_str,
+                    super::InstallOptions {
+                        db_path,
+                        root,
+                        sandbox_mode,
+                        dep_mode: Some(dep_mode),
+                        yes,
+                        ..Default::default()
+                    },
+                )
+                .await
+                {
+                    progress.fail_package(&trove.name, &e.to_string());
+                    warn!("  Package installation failed: {}", e);
                     had_failures = true;
-                    warn!(
-                        "LocalCas resolution not yet implemented for {}: {}",
-                        trove.name, hash
-                    );
+                    let _ = std::fs::remove_file(&pkg_path);
                     continue;
                 }
-            };
 
-            progress.set_phase(&trove.name, UpdatePhase::Installing);
-
-            let path_str = pkg_path.to_string_lossy().to_string();
-
-            if let Err(e) = cmd_install(
-                &path_str,
-                super::InstallOptions {
-                    db_path,
-                    root,
-                    sandbox_mode,
-                    dep_mode: Some(dep_mode),
-                    yes,
-                    ..Default::default()
-                },
-            )
-            .await
-            {
-                progress.fail_package(&trove.name, &e.to_string());
-                warn!("  Package installation failed: {}", e);
-                had_failures = true;
+                full_downloads += 1;
+                progress.complete_package(&trove.name);
                 let _ = std::fs::remove_file(&pkg_path);
-                continue;
             }
 
-            full_downloads += 1;
-            progress.complete_package(&trove.name);
-            let _ = std::fs::remove_file(&pkg_path);
+            progress.finish(&format!(
+                "Updated {} package(s)",
+                deltas_applied + full_downloads
+            ));
         }
 
-        progress.finish(&format!(
-            "Updated {} package(s)",
-            deltas_applied + full_downloads
-        ));
-    }
+        conary_core::db::transaction(&mut conn, |tx| {
+            let mut stats = DeltaStats::new(changeset_id);
+            stats.total_bytes_saved = total_bytes_saved;
+            stats.deltas_applied = deltas_applied;
+            stats.full_downloads = full_downloads;
+            stats.delta_failures = delta_failures;
+            stats.insert(tx)?;
 
-    conary_core::db::transaction(&mut conn, |tx| {
-        let mut stats = DeltaStats::new(changeset_id);
-        stats.total_bytes_saved = total_bytes_saved;
-        stats.deltas_applied = deltas_applied;
-        stats.full_downloads = full_downloads;
-        stats.delta_failures = delta_failures;
-        stats.insert(tx)?;
+            let mut changeset = conary_core::db::models::Changeset::find_by_id(tx, changeset_id)?
+                .ok_or_else(|| conary_core::Error::NotFound("Changeset not found".to_string()))?;
+            if deltas_applied > 0 || full_downloads > 0 {
+                changeset.update_status(tx, conary_core::db::models::ChangesetStatus::Applied)?;
+            } else if had_failures {
+                changeset
+                    .update_status(tx, conary_core::db::models::ChangesetStatus::RolledBack)?;
+            } else {
+                changeset.update_status(tx, conary_core::db::models::ChangesetStatus::Applied)?;
+            }
 
-        let mut changeset = conary_core::db::models::Changeset::find_by_id(tx, changeset_id)?
-            .ok_or_else(|| conary_core::Error::NotFound("Changeset not found".to_string()))?;
-        if deltas_applied > 0 || full_downloads > 0 {
-            changeset.update_status(tx, conary_core::db::models::ChangesetStatus::Applied)?;
-        } else if had_failures {
-            changeset.update_status(tx, conary_core::db::models::ChangesetStatus::RolledBack)?;
-        } else {
-            changeset.update_status(tx, conary_core::db::models::ChangesetStatus::Applied)?;
+            Ok(())
+        })?;
+
+        println!("\n=== Update Summary ===");
+        println!("Delta updates: {}", deltas_applied);
+        println!("Full downloads: {}", full_downloads);
+        println!("Delta failures: {}", delta_failures);
+        if total_bytes_saved > 0 {
+            let saved_mb = total_bytes_saved as f64 / 1_048_576.0;
+            println!("Bandwidth saved: {:.2} MB", saved_mb);
         }
 
         Ok(())
-    })?;
-
-    println!("\n=== Update Summary ===");
-    println!("Delta updates: {}", deltas_applied);
-    println!("Full downloads: {}", full_downloads);
-    println!("Delta failures: {}", delta_failures);
-    if total_bytes_saved > 0 {
-        let saved_mb = total_bytes_saved as f64 / 1_048_576.0;
-        println!("Bandwidth saved: {:.2} MB", saved_mb);
     }
+    .await;
 
-    Ok(())
+    match update_result {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            if let Err(cleanup_err) = mark_pending_changeset_rolled_back(&mut conn, changeset_id) {
+                warn!(
+                    "Failed to mark abandoned update changeset {} as rolled back: {}",
+                    changeset_id, cleanup_err
+                );
+            }
+            Err(err)
+        }
+    }
 }
 
 /// Show delta update statistics
@@ -1226,5 +1263,50 @@ mod tests {
         std::fs::write(&corrupted_path, b"corrupted-bytes").unwrap();
 
         assert!(read_delta_result_from_cas(&cas, &expected_hash).is_err());
+    }
+
+    #[test]
+    fn mark_pending_changeset_rolled_back_updates_pending_rows() {
+        let (_temp, db_path) = create_test_db();
+        let mut conn = rusqlite::Connection::open(&db_path).unwrap();
+        let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
+            let mut changeset = conary_core::db::models::Changeset::new("test update".to_string());
+            changeset.insert(tx)
+        })
+        .unwrap();
+
+        assert!(mark_pending_changeset_rolled_back(&mut conn, changeset_id).unwrap());
+
+        let changeset = conary_core::db::models::Changeset::find_by_id(&conn, changeset_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            changeset.status,
+            conary_core::db::models::ChangesetStatus::RolledBack
+        );
+    }
+
+    #[test]
+    fn mark_pending_changeset_rolled_back_leaves_applied_rows_alone() {
+        let (_temp, db_path) = create_test_db();
+        let mut conn = rusqlite::Connection::open(&db_path).unwrap();
+        let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
+            let mut changeset =
+                conary_core::db::models::Changeset::new("applied update".to_string());
+            let id = changeset.insert(tx)?;
+            changeset.update_status(tx, conary_core::db::models::ChangesetStatus::Applied)?;
+            Ok::<_, conary_core::Error>(id)
+        })
+        .unwrap();
+
+        assert!(!mark_pending_changeset_rolled_back(&mut conn, changeset_id).unwrap());
+
+        let changeset = conary_core::db::models::Changeset::find_by_id(&conn, changeset_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            changeset.status,
+            conary_core::db::models::ChangesetStatus::Applied
+        );
     }
 }

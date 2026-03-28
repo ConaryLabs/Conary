@@ -223,6 +223,7 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Resu
 
     // Otherwise, this is a fresh install - remove the installed packages
     let files_to_rollback = std::cell::RefCell::new(Vec::new());
+    let removed_messages = std::cell::RefCell::new(Vec::new());
 
     conary_core::db::transaction(&mut conn, |tx| {
         // Read file history inside the transaction to ensure consistency (TOCTOU)
@@ -327,7 +328,9 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Resu
         for trove in &troves {
             if let Some(trove_id) = trove.id {
                 conary_core::db::models::Trove::delete(tx, trove_id)?;
-                println!("Removed {} version {}", trove.name, trove.version);
+                removed_messages
+                    .borrow_mut()
+                    .push(format!("Removed {} version {}", trove.name, trove.version));
             }
         }
 
@@ -344,6 +347,7 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Resu
     .inspect_err(|_| clear_claim(&conn))?;
 
     let files_to_rollback = files_to_rollback.into_inner();
+    let removed_messages = removed_messages.into_inner();
 
     // Composefs-native: rebuild EROFS image from updated DB state and remount
     let _gen_num = crate::commands::composefs_ops::rebuild_and_mount(
@@ -353,6 +357,9 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Resu
         std::path::Path::new("/conary"),
     )?;
 
+    for message in &removed_messages {
+        println!("{message}");
+    }
     println!(
         "Rollback complete. Changeset {} has been reversed.",
         changeset_id
@@ -489,6 +496,7 @@ fn rollback_upgrade(
 
     // Collect new version's files for filesystem cleanup
     let files_to_remove = std::cell::RefCell::new(Vec::new());
+    let removed_messages = std::cell::RefCell::new(Vec::new());
 
     conary_core::db::transaction(conn, |tx| {
         // Find and remove the new trove installed by this changeset
@@ -510,7 +518,9 @@ fn rollback_upgrade(
 
             // Delete from DB
             conary_core::db::models::Trove::delete(tx, *trove_id)?;
-            println!("  Removed new version {}", version);
+            removed_messages
+                .borrow_mut()
+                .push(format!("  Removed new version {}", version));
         }
 
         // Create rollback changeset
@@ -579,6 +589,7 @@ fn rollback_upgrade(
 
     // Composefs-native: rebuild EROFS image from DB state and remount
     let _files_to_remove = files_to_remove.into_inner();
+    let removed_messages = removed_messages.into_inner();
     let _gen_num = crate::commands::composefs_ops::rebuild_and_mount(
         conn,
         &format!("Rollback upgrade of {}", snapshot.name),
@@ -586,6 +597,9 @@ fn rollback_upgrade(
         std::path::Path::new("/conary"),
     )?;
 
+    for message in &removed_messages {
+        println!("{message}");
+    }
     println!(
         "Rollback complete. Changeset {} has been reversed.",
         changeset_id
