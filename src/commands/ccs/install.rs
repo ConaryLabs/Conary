@@ -59,6 +59,27 @@ fn test_hold_ms(var_name: &str) -> Option<Duration> {
         .map(Duration::from_millis)
 }
 
+fn note_changeset_post_hooks_failed(
+    conn: &rusqlite::Connection,
+    changeset_id: i64,
+    warning: &str,
+) {
+    if let Err(error) = conn.execute(
+        "UPDATE changesets
+         SET description = description || ' [post-hooks failed]'
+         WHERE id = ?1 AND description NOT LIKE '%[post-hooks failed]%'",
+        [changeset_id],
+    ) {
+        warn!(
+            changeset_id,
+            "Failed to annotate changeset after post-install hook failure: {}",
+            error
+        );
+    } else {
+        warn!(changeset_id, "Annotated applied changeset with post-hook failure: {}", warning);
+    }
+}
+
 pub(super) fn sanitize_package_relative_path(path: &str) -> Result<PathBuf> {
     let candidate = path.strip_prefix('/').unwrap_or(path);
     let mut normalized = PathBuf::new();
@@ -146,27 +167,6 @@ fn ensure_no_symlink_ancestor(
     }
 
     Ok(())
-}
-
-fn sandbox_failure_message(script: &str, error: &dyn std::fmt::Display) -> String {
-    if script.contains("/proc/self/environ") {
-        return format!("sandbox blocked /proc/self/environ access: {error}");
-    }
-    if script.contains("curl ")
-        || script.contains("wget ")
-        || script.contains("/dev/tcp/")
-        || script.contains("/dev/udp/")
-    {
-        return format!("sandbox blocked network access: {error}");
-    }
-    if script.contains(">/tmp/")
-        || script.contains("> /tmp/")
-        || script.contains(">/etc/")
-        || script.contains("> /etc/")
-    {
-        return format!("sandbox denied write outside policy: {error}");
-    }
-    format!("sandbox blocked script execution: {error}")
 }
 
 fn installed_versions_satisfying_constraint(
@@ -597,12 +597,13 @@ pub async fn cmd_ccs_install(
     let is_upgrade = !existing.is_empty();
     let mut applied_changeset_id = 0_i64;
 
-    let install_result = (|| -> Result<()> {
+    let install_result = (|| -> Result<Vec<String>> {
         // Step 7: Deploy files to filesystem and store in CAS
         println!("Deploying files to filesystem...");
         std::fs::create_dir_all(&objects_dir)?;
         let mut files_deployed = 0;
         let mut created_symlinks = HashSet::new();
+        let mut post_commit_warnings = Vec::new();
 
         for file in &extracted_files {
             let relative_path = sanitize_package_relative_path(&file.path)?;
@@ -907,6 +908,12 @@ pub async fn cmd_ccs_install(
             non_script_hooks.post_install = None;
             println!("Executing post-install hooks...");
             if let Err(e) = hook_executor.execute_post_hooks(&non_script_hooks) {
+                let warning = format!(
+                    "Post-install hook failed for {} {} after commit: {}",
+                    ccs_pkg.name(),
+                    ccs_pkg.version(),
+                    e
+                );
                 warn!(
                     changeset_id = applied_changeset_id,
                     package = ccs_pkg.name(),
@@ -914,13 +921,9 @@ pub async fn cmd_ccs_install(
                     "Post-install hook failed after DB commit (package is installed, hooks incomplete): {}",
                     e
                 );
-                anyhow::bail!(
-                    "Post-install hook failed for {} {} (changeset {:?}): {}",
-                    ccs_pkg.name(),
-                    ccs_pkg.version(),
-                    applied_changeset_id,
-                    e
-                );
+                note_changeset_post_hooks_failed(&conn, applied_changeset_id, &warning);
+                eprintln!("WARNING: {warning}");
+                post_commit_warnings.push(warning);
             }
         }
 
@@ -945,6 +948,12 @@ pub async fn cmd_ccs_install(
             )
             .with_sandbox_mode(sandbox_mode);
             if let Err(error) = executor.execute(&scriptlet, &ExecutionMode::Install) {
+                let warning = format!(
+                    "Post-install script failed for {} {} after commit: {}",
+                    ccs_pkg.name(),
+                    ccs_pkg.version(),
+                    error
+                );
                 warn!(
                     changeset_id = applied_changeset_id,
                     package = ccs_pkg.name(),
@@ -952,33 +961,46 @@ pub async fn cmd_ccs_install(
                     "Post-install script failed after DB commit (package is installed, script incomplete): {}",
                     error
                 );
-                if matches!(sandbox, crate::commands::SandboxMode::Always) {
-                    anyhow::bail!("{}", sandbox_failure_message(&hook.script, &error));
-                }
-                return Err(error.into());
+                note_changeset_post_hooks_failed(&conn, applied_changeset_id, &warning);
+                eprintln!("WARNING: {warning}");
+                post_commit_warnings.push(warning);
             }
         }
 
-        Ok(())
+        Ok(post_commit_warnings)
     })();
 
-    if let Err(error) = install_result {
-        if pre_hooks_ran && let Err(revert_err) = hook_executor.revert_pre_hooks() {
-            warn!(
-                "Failed to revert pre-install hooks after install failure: {}",
-                revert_err
-            );
+    let post_commit_warnings = match install_result {
+        Ok(post_commit_warnings) => post_commit_warnings,
+        Err(error) => {
+            if pre_hooks_ran && let Err(revert_err) = hook_executor.revert_pre_hooks() {
+                warn!(
+                    "Failed to revert pre-install hooks after install failure: {}",
+                    revert_err
+                );
+            }
+            engine.release_lock();
+            return Err(error);
         }
-        engine.release_lock();
-        return Err(error);
-    }
+    };
 
     println!();
-    println!(
-        "Successfully installed {} v{}",
-        ccs_pkg.name(),
-        ccs_pkg.version()
-    );
+    if post_commit_warnings.is_empty() {
+        println!(
+            "Successfully installed {} v{}",
+            ccs_pkg.name(),
+            ccs_pkg.version()
+        );
+    } else {
+        println!(
+            "Installed {} v{} with warnings",
+            ccs_pkg.name(),
+            ccs_pkg.version()
+        );
+        for warning in &post_commit_warnings {
+            println!("  - {warning}");
+        }
+    }
 
     engine.release_lock();
     Ok(())

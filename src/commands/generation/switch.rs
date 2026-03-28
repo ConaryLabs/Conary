@@ -135,6 +135,9 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
 
     info!("Switched to generation {gen_number} (composefs)");
     println!("Switched to generation {gen_number}. Reboot recommended for full consistency.");
+    println!(
+        "Generation switches remount filesystems only; they do not run removal scriptlets or undo persistent side effects from removed package versions."
+    );
 
     Ok(())
 }
