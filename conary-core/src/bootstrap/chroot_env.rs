@@ -5,9 +5,78 @@
 //! Manages the virtual kernel filesystem mounts required by LFS Chapters 7-8.
 //! Uses a mount tracking vector for safe partial teardown on error or panic.
 
+use nix::sys::signal::{Signal, kill};
+use nix::unistd::Pid;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
+use std::time::Duration;
 use tracing::{info, warn};
+
+const DEVTMPFS_OPTS: &str = "mode=0755,nosuid";
+const DEVPTS_OPTS: &str = "gid=5,mode=0620";
+const CHROOT_KILL_GRACE_PERIOD: Duration = Duration::from_millis(100);
+
+#[derive(Debug, Clone, Copy)]
+struct DeviceNodeSpec {
+    name: &'static str,
+    major: u32,
+    minor: u32,
+    mode: u32,
+}
+
+const MINIMAL_DEV_NODES: [DeviceNodeSpec; 6] = [
+    DeviceNodeSpec {
+        name: "null",
+        major: 1,
+        minor: 3,
+        mode: 0o666,
+    },
+    DeviceNodeSpec {
+        name: "zero",
+        major: 1,
+        minor: 5,
+        mode: 0o666,
+    },
+    DeviceNodeSpec {
+        name: "random",
+        major: 1,
+        minor: 8,
+        mode: 0o666,
+    },
+    DeviceNodeSpec {
+        name: "urandom",
+        major: 1,
+        minor: 9,
+        mode: 0o666,
+    },
+    DeviceNodeSpec {
+        name: "tty",
+        major: 5,
+        minor: 0,
+        mode: 0o666,
+    },
+    DeviceNodeSpec {
+        name: "full",
+        major: 1,
+        minor: 7,
+        mode: 0o666,
+    },
+];
+
+fn minimal_dev_nodes() -> &'static [DeviceNodeSpec] {
+    &MINIMAL_DEV_NODES
+}
+
+fn path_is_within_chroot(candidate: &Path, chroot_root: &Path) -> bool {
+    candidate == chroot_root || candidate.starts_with(chroot_root)
+}
+
+fn umount_attempts(mount_point: &Path) -> Vec<Vec<String>> {
+    let mount = mount_point.to_string_lossy().into_owned();
+    vec![vec![mount.clone()], vec!["--lazy".to_string(), mount]]
+}
 
 /// Manages chroot mount lifecycle for LFS bootstrap builds.
 ///
@@ -70,8 +139,9 @@ impl ChrootEnv {
         }
 
         // Mount virtual kernel filesystems
-        self.mount_bind("/dev", &lfs.join("dev"))?;
-        self.mount_fs("devpts", &lfs.join("dev/pts"), "devpts", "gid=5,mode=0620")?;
+        self.mount_fs("devtmpfs", &lfs.join("dev"), "devtmpfs", DEVTMPFS_OPTS)?;
+        self.create_minimal_dev_nodes(&lfs.join("dev"))?;
+        self.mount_fs("devpts", &lfs.join("dev/pts"), "devpts", DEVPTS_OPTS)?;
         self.mount_fs("proc", &lfs.join("proc"), "proc", "")?;
         self.mount_fs("sysfs", &lfs.join("sys"), "sysfs", "")?;
         self.mount_fs("tmpfs", &lfs.join("run"), "tmpfs", "")?;
@@ -80,21 +150,8 @@ impl ChrootEnv {
         Ok(())
     }
 
-    fn mount_bind(&mut self, src: &str, dest: &Path) -> anyhow::Result<()> {
-        std::fs::create_dir_all(dest)?;
-        let status = Command::new("mount")
-            .args(["--bind", src, &dest.to_string_lossy()])
-            .status()?;
-        if status.success() {
-            self.mounted.push(dest.to_path_buf());
-            Ok(())
-        } else {
-            anyhow::bail!("mount --bind {} {} failed", src, dest.display());
-        }
-    }
-
     fn mount_fs(&mut self, dev: &str, dest: &Path, fstype: &str, opts: &str) -> anyhow::Result<()> {
-        std::fs::create_dir_all(dest)?;
+        fs::create_dir_all(dest)?;
         let mut cmd = Command::new("mount");
         cmd.arg("-t").arg(fstype);
         if !opts.is_empty() {
@@ -111,21 +168,118 @@ impl ChrootEnv {
         }
     }
 
+    fn create_minimal_dev_nodes(&self, dev_root: &Path) -> anyhow::Result<()> {
+        for node in minimal_dev_nodes() {
+            let node_path = dev_root.join(node.name);
+            if node_path.exists() {
+                continue;
+            }
+
+            let mode = format!("{:o}", node.mode);
+            let major = node.major.to_string();
+            let minor = node.minor.to_string();
+            let status = Command::new("mknod")
+                .args([
+                    "-m",
+                    &mode,
+                    node_path.to_string_lossy().as_ref(),
+                    "c",
+                    &major,
+                    &minor,
+                ])
+                .status()?;
+
+            if !status.success() {
+                anyhow::bail!("mknod {} failed", node_path.display());
+            }
+        }
+
+        Ok(())
+    }
+
+    fn processes_in_chroot(&self, chroot_root: &Path) -> Vec<Pid> {
+        let mut pids = Vec::new();
+        let Ok(entries) = fs::read_dir("/proc") else {
+            return pids;
+        };
+
+        for entry in entries.flatten() {
+            let pid_text = entry.file_name();
+            let Some(pid_text) = pid_text.to_str() else {
+                continue;
+            };
+            let Ok(raw_pid) = pid_text.parse::<i32>() else {
+                continue;
+            };
+            if raw_pid == std::process::id() as i32 {
+                continue;
+            }
+
+            let Ok(root_link) = fs::read_link(entry.path().join("root")) else {
+                continue;
+            };
+            if path_is_within_chroot(&root_link, chroot_root) {
+                pids.push(Pid::from_raw(raw_pid));
+            }
+        }
+
+        pids
+    }
+
+    fn kill_processes_in_chroot(&self) {
+        let chroot_root = fs::canonicalize(&self.lfs_root).unwrap_or_else(|_| self.lfs_root.clone());
+        let initial_pids = self.processes_in_chroot(&chroot_root);
+        if initial_pids.is_empty() {
+            return;
+        }
+
+        for pid in &initial_pids {
+            if let Err(error) = kill(*pid, Signal::SIGTERM) {
+                warn!("Failed to terminate PID {} in chroot: {}", pid, error);
+            }
+        }
+
+        thread::sleep(CHROOT_KILL_GRACE_PERIOD);
+
+        for pid in self.processes_in_chroot(&chroot_root) {
+            if let Err(error) = kill(pid, Signal::SIGKILL) {
+                warn!("Failed to SIGKILL PID {} in chroot: {}", pid, error);
+            }
+        }
+    }
+
+    fn unmount_one(&self, mount_point: &Path) -> anyhow::Result<()> {
+        let attempts = umount_attempts(mount_point);
+        for (index, args) in attempts.iter().enumerate() {
+            let status = Command::new("umount").args(args).status()?;
+            if status.success() {
+                return Ok(());
+            }
+
+            if index == 0 {
+                warn!(
+                    "umount {} exited with {}; retrying lazy detach",
+                    mount_point.display(),
+                    status
+                );
+            } else {
+                anyhow::bail!("umount {} exited with {}", mount_point.display(), status);
+            }
+        }
+
+        Ok(())
+    }
+
     /// Unmount all tracked mounts in reverse order. Best-effort: errors are logged.
     pub fn teardown(&mut self) {
+        self.kill_processes_in_chroot();
         while let Some(mount_point) = self.mounted.pop() {
-            let result = Command::new("umount")
-                .args(["--lazy", &mount_point.to_string_lossy()])
-                .status();
-            match result {
-                Ok(status) if status.success() => {
+            match self.unmount_one(&mount_point) {
+                Ok(()) => {
                     info!("Unmounted {}", mount_point.display());
                 }
-                Ok(status) => {
-                    warn!("umount {} exited with {}", mount_point.display(), status);
-                }
                 Err(e) => {
-                    warn!("Failed to run umount for {}: {}", mount_point.display(), e);
+                    warn!("Failed to unmount {}: {}", mount_point.display(), e);
                 }
             }
         }
@@ -147,6 +301,7 @@ impl Drop for ChrootEnv {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
 
     #[test]
     fn test_chroot_env_creates_directories() {
@@ -177,5 +332,36 @@ mod tests {
         // No mounts succeeded, teardown should not panic
         env.teardown();
         env.teardown(); // Second call should be safe
+    }
+
+    #[test]
+    fn test_minimal_dev_nodes_match_expected_device_set() {
+        let nodes = minimal_dev_nodes();
+        let names: BTreeSet<_> = nodes.iter().map(|node| node.name).collect();
+        assert_eq!(
+            names,
+            BTreeSet::from(["full", "null", "random", "tty", "urandom", "zero"])
+        );
+        assert_eq!(nodes.len(), 6);
+    }
+
+    #[test]
+    fn test_path_is_within_chroot_respects_component_boundaries() {
+        let root = Path::new("/tmp/lfs");
+        assert!(path_is_within_chroot(Path::new("/tmp/lfs"), root));
+        assert!(path_is_within_chroot(Path::new("/tmp/lfs/usr/bin"), root));
+        assert!(!path_is_within_chroot(Path::new("/tmp/lfs-other"), root));
+        assert!(!path_is_within_chroot(Path::new("/tmp/other"), root));
+    }
+
+    #[test]
+    fn test_umount_attempts_try_nonlazy_before_lazy() {
+        let attempts = umount_attempts(Path::new("/tmp/lfs/dev"));
+        assert_eq!(attempts.len(), 2);
+        assert_eq!(attempts[0], vec!["/tmp/lfs/dev".to_string()]);
+        assert_eq!(
+            attempts[1],
+            vec!["--lazy".to_string(), "/tmp/lfs/dev".to_string()]
+        );
     }
 }
