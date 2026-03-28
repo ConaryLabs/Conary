@@ -334,10 +334,18 @@ fn verify_signature(
     // no trust anchors, so a self-signed package must NOT be accepted as Valid.
     if !policy.trusted_keys.contains(&sig.public_key) {
         if policy.allow_unsigned {
-            warnings.push(format!(
-                "Signature valid but key not in trusted list: {:?}",
-                sig.key_id
-            ));
+            if policy.trusted_keys.is_empty() {
+                warnings.push(
+                    "Signature is cryptographically valid, but no trusted CCS keys are configured; \
+                     self-signed packages remain untrusted"
+                        .to_string(),
+                );
+            } else {
+                warnings.push(format!(
+                    "Signature valid but key not in trusted list: {:?}",
+                    sig.key_id
+                ));
+            }
             return Ok(SignatureStatus::Untrusted {
                 key_id: sig.key_id.clone(),
             });
@@ -710,6 +718,13 @@ mod tests {
             matches!(status, SignatureStatus::Untrusted { .. }),
             "Expected Untrusted when trusted_keys is empty, got {:?}",
             status
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("no trusted CCS keys are configured")),
+            "Expected explicit trust-anchor warning, got {:?}",
+            warnings
         );
     }
 
