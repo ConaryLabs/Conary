@@ -7,11 +7,83 @@
 //! are persisted to the database in a single transaction.
 
 use rusqlite::Connection;
+use std::collections::BTreeSet;
 
 use crate::Result;
 use crate::canonical::discovery::{DistroPackage, run_discovery};
 use crate::canonical::rules::RulesEngine;
 use crate::db::models::{CanonicalPackage, PackageImplementation};
+use crate::error::Error;
+
+const KNOWN_CANONICAL_ALIAS_PAIRS: &[(&str, &str)] =
+    &[("firefox", "iceweasel"), ("mysql", "mariadb")];
+
+fn normalized_mapping_name(name: &str) -> String {
+    let stripped = crate::canonical::discovery::strip_distro_affixes(&name.to_ascii_lowercase());
+    let trimmed = stripped.trim_end_matches(|c: char| c.is_ascii_digit());
+    trimmed
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string()
+}
+
+fn mapping_tokens(name: &str) -> BTreeSet<String> {
+    name.split('-')
+        .filter(|token| token.len() >= 3)
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn is_known_alias_pair(left: &str, right: &str) -> bool {
+    KNOWN_CANONICAL_ALIAS_PAIRS
+        .iter()
+        .any(|(a, b)| (left == *a && right == *b) || (left == *b && right == *a))
+}
+
+pub(crate) fn mapping_names_are_reasonable(
+    canonical_name: &str,
+    implementation_name: &str,
+) -> bool {
+    let canonical = normalized_mapping_name(canonical_name);
+    let implementation = normalized_mapping_name(implementation_name);
+
+    if canonical.is_empty() || implementation.is_empty() {
+        return false;
+    }
+
+    if canonical == implementation || is_known_alias_pair(&canonical, &implementation) {
+        return true;
+    }
+
+    if canonical.len() >= 3 && implementation.contains(&canonical) {
+        return true;
+    }
+
+    if implementation.len() >= 3 && canonical.contains(&implementation) {
+        return true;
+    }
+
+    let canonical_tokens = mapping_tokens(&canonical);
+    let implementation_tokens = mapping_tokens(&implementation);
+    !canonical_tokens.is_disjoint(&implementation_tokens)
+}
+
+pub(crate) fn validate_canonical_mapping<'a>(
+    canonical_name: &str,
+    implementation_names: impl IntoIterator<Item = &'a str>,
+) -> Result<()> {
+    for implementation_name in implementation_names {
+        if !mapping_names_are_reasonable(canonical_name, implementation_name) {
+            return Err(Error::TrustError(format!(
+                "Suspicious canonical mapping rejected: '{implementation_name}' -> '{canonical_name}'"
+            )));
+        }
+    }
+
+    Ok(())
+}
 
 /// Package metadata from a repository sync, used as input to canonical mapping.
 #[derive(Debug, Clone)]
@@ -51,6 +123,8 @@ pub fn ingest_canonical_mappings(
         let resolved = rules.and_then(|engine| engine.resolve(&pkg.name, repo_id.as_deref()));
 
         if let Some(canonical_name) = resolved {
+            validate_canonical_mapping(&canonical_name, std::iter::once(pkg.name.as_str()))?;
+
             // Determine kind from rules if available.
             let kind = rules
                 .and_then(|engine| engine.get_kind(&canonical_name))
@@ -96,6 +170,14 @@ pub fn ingest_canonical_mappings(
         let discoveries = run_discovery(&distro_packages);
 
         for mapping in &discoveries {
+            validate_canonical_mapping(
+                &mapping.canonical_name,
+                mapping
+                    .implementations
+                    .iter()
+                    .map(|(_distro, distro_name)| distro_name.as_str()),
+            )?;
+
             let mut canonical =
                 CanonicalPackage::new(mapping.canonical_name.clone(), "package".to_string());
             let id = canonical.insert_or_ignore(&tx)?;
@@ -284,5 +366,43 @@ mod tests {
         // No 800.renames-and-merges subdir exists
         let count = ingest_repology_rules(&conn, temp_dir.path()).unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_mapping_names_are_reasonable_for_known_aliases() {
+        assert!(mapping_names_are_reasonable("apache-httpd", "httpd"));
+        assert!(mapping_names_are_reasonable("apache-httpd", "apache2"));
+        assert!(mapping_names_are_reasonable("openssl", "libssl3"));
+        assert!(mapping_names_are_reasonable("firefox", "iceweasel"));
+    }
+
+    #[test]
+    fn test_mapping_names_are_reasonable_rejects_unrelated_redirect() {
+        assert!(!mapping_names_are_reasonable(
+            "openssl",
+            "totally-malicious-package"
+        ));
+    }
+
+    #[test]
+    fn test_ingest_canonical_mappings_rejects_suspicious_redirect_rule() {
+        let (_temp, conn) = create_test_db();
+
+        let packages = vec![RepoPackageInfo {
+            name: "totally-malicious-package".into(),
+            distro: "fedora-41".into(),
+            provides: vec![],
+            files: vec![],
+        }];
+
+        let rules_yaml = "rules:\n  - setname: openssl\n    name: totally-malicious-package\n    repo: fedora_41\n";
+        let parsed = rules::parse_rules(rules_yaml).unwrap();
+        let engine = rules::RulesEngine::new(parsed).unwrap();
+
+        let err = ingest_canonical_mappings(&conn, &packages, Some(&engine)).unwrap_err();
+        assert!(
+            err.to_string().contains("Suspicious canonical mapping"),
+            "unexpected error: {err}"
+        );
     }
 }
