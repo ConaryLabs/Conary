@@ -5,7 +5,7 @@ use super::install::DepMode;
 use super::open_db;
 use super::progress::{UpdatePhase, UpdateProgress};
 use super::{SandboxMode, cmd_install};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use conary_core::db::models::{
     DeltaStats, DistroPin, PackageDelta, Repository, RepositoryPackage, SystemAffinity, Trove,
 };
@@ -22,6 +22,15 @@ use conary_core::repository::{
 use std::cmp::Ordering;
 use std::path::Path;
 use tracing::{debug, info, warn};
+
+fn read_delta_result_from_cas(
+    cas: &conary_core::filesystem::CasStore,
+    hash: &str,
+) -> Result<Vec<u8>> {
+    cas.retrieve(hash)
+        .map_err(anyhow::Error::from)
+        .with_context(|| format!("failed to retrieve verified delta result from CAS: {hash}"))
+}
 
 fn source_policy_update_context(
     pin: Option<&DistroPin>,
@@ -545,7 +554,11 @@ pub async fn cmd_update(
         {
             Ok(actual_delta_path) => {
                 let applier = DeltaApplier::new(&objects_dir)?;
-                match applier.apply_delta(&delta_info.from_hash, &actual_delta_path, &delta_info.to_hash) {
+                match applier.apply_delta(
+                    &delta_info.from_hash,
+                    &actual_delta_path,
+                    &delta_info.to_hash,
+                ) {
                     Ok(new_hash) => {
                         println!("  [OK] Delta applied to CAS");
                         let delta_saved = (repo_pkg.size - delta_info.delta_size).max(0);
@@ -556,7 +569,7 @@ pub async fn cmd_update(
                         // redundant network download.
                         let cas = conary_core::filesystem::CasStore::new(&objects_dir)?;
                         let mut delta_installed = false;
-                        match cas.retrieve_unchecked(&new_hash) {
+                        match read_delta_result_from_cas(&cas, &new_hash) {
                             Ok(content) => {
                                 let pkg_file = temp_dir
                                     .join(format!("{}-{}.ccs", trove.name, repo_pkg.version));
@@ -1007,6 +1020,7 @@ mod tests {
     use super::super::test_helpers::{create_test_db, seed_mixed_replatform_fixture};
     use super::*;
     use conary_core::db::models::{DistroPin, InstallSource, Repository, Trove, TroveType};
+    use conary_core::filesystem::{CasStore, object_path};
     use conary_core::model::ReplatformBlockedReason;
 
     #[test]
@@ -1200,5 +1214,17 @@ mod tests {
         assert!(rendered.contains("Replatform vim"));
         assert!(rendered.contains("Replatform zsh"));
         assert!(rendered.contains("+1 more"));
+    }
+
+    #[test]
+    fn delta_result_uses_verified_cas_retrieval() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cas = CasStore::new(temp_dir.path()).unwrap();
+        let expected_hash = conary_core::hash::sha256(b"expected-bytes");
+        let corrupted_path = object_path(temp_dir.path(), &expected_hash);
+        std::fs::create_dir_all(corrupted_path.parent().unwrap()).unwrap();
+        std::fs::write(&corrupted_path, b"corrupted-bytes").unwrap();
+
+        assert!(read_delta_result_from_cas(&cas, &expected_hash).is_err());
     }
 }
