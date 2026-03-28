@@ -15,6 +15,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::warn;
+use url::Url;
 
 /// Trusted Ed25519 public keys for verifying self-update signatures (hex-encoded).
 /// Real key will be added when release signing is enabled.
@@ -135,6 +136,26 @@ pub fn set_update_channel(conn: &Connection, url: &str) -> Result<()> {
     settings::set(conn, SETTINGS_KEY_UPDATE_CHANNEL, url)
 }
 
+/// Ensure update metadata cannot redirect downloads to a different origin.
+pub fn validate_download_origin(channel_url: &str, download_url: &str) -> Result<()> {
+    let channel = Url::parse(channel_url)
+        .map_err(|e| Error::ParseError(format!("Invalid update channel URL: {e}")))?;
+    let download = Url::parse(download_url)
+        .map_err(|e| Error::ParseError(format!("Invalid update download URL: {e}")))?;
+
+    let same_origin = channel.scheme() == download.scheme()
+        && channel.host_str() == download.host_str()
+        && channel.port_or_known_default() == download.port_or_known_default();
+
+    if !same_origin {
+        return Err(Error::DownloadError(format!(
+            "Update download URL origin mismatch: {download_url} does not match channel {channel_url}"
+        )));
+    }
+
+    Ok(())
+}
+
 /// Compare two semver version strings. Returns true if `remote` is newer than `current`.
 ///
 /// Handles pre-release versions per SemVer rules:
@@ -249,6 +270,7 @@ pub async fn check_for_update(
         .json()
         .await
         .map_err(|e| Error::ParseError(format!("Invalid update response: {e}")))?;
+    validate_download_origin(channel_url, &info.download_url)?;
 
     if is_newer(current_version, &info.version) {
         Ok(VersionCheckResult::UpdateAvailable {
@@ -591,6 +613,35 @@ mod tests {
         set_update_channel(&conn, "https://internal.example.com/conary").unwrap();
         let channel = get_update_channel(&conn).unwrap();
         assert_eq!(channel, "https://internal.example.com/conary");
+    }
+
+    #[test]
+    fn test_validate_download_origin_accepts_same_origin() {
+        validate_download_origin(
+            "https://packages.conary.io/v1/ccs/conary",
+            "https://packages.conary.io/releases/conary-0.7.0.ccs",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_validate_download_origin_rejects_different_host() {
+        let err = validate_download_origin(
+            "https://packages.conary.io/v1/ccs/conary",
+            "https://evil.example/releases/conary-0.7.0.ccs",
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("origin mismatch"));
+    }
+
+    #[test]
+    fn test_validate_download_origin_rejects_different_scheme() {
+        let err = validate_download_origin(
+            "https://packages.conary.io/v1/ccs/conary",
+            "http://packages.conary.io/releases/conary-0.7.0.ccs",
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("origin mismatch"));
     }
 
     #[test]
