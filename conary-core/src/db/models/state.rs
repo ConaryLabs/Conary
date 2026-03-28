@@ -16,12 +16,13 @@ pub struct SystemState {
     pub changeset_id: Option<i64>,
     pub is_active: bool,
     pub package_count: i64,
+    pub base_generation: Option<i64>,
 }
 
 impl SystemState {
     /// Column list for SELECT queries.
     const COLUMNS: &'static str = "id, state_number, summary, description, created_at, \
-         changeset_id, is_active, package_count";
+         changeset_id, is_active, package_count, base_generation";
 
     /// Create a new system state
     pub fn new(state_number: i64, summary: String) -> Self {
@@ -34,21 +35,24 @@ impl SystemState {
             changeset_id: None,
             is_active: false,
             package_count: 0,
+            base_generation: None,
         }
     }
 
     /// Insert this state into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
-            "INSERT INTO system_states (state_number, summary, description, changeset_id, is_active, package_count)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO system_states (
+                 state_number, summary, description, changeset_id, is_active, package_count, base_generation
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 self.state_number,
                 &self.summary,
                 &self.description,
                 self.changeset_id,
                 self.is_active as i32,
-                self.package_count
+                self.package_count,
+                self.base_generation
             ],
         )?;
 
@@ -219,6 +223,7 @@ impl SystemState {
             changeset_id: row.get(5)?,
             is_active: is_active_int != 0,
             package_count: row.get(7)?,
+            base_generation: row.get(8)?,
         })
     }
 }
@@ -409,6 +414,7 @@ impl<'a> StateEngine<'a> {
         changeset_id: Option<i64>,
     ) -> Result<SystemState> {
         let tx = self.conn.unchecked_transaction()?;
+        let base_generation = SystemState::get_active(&tx)?.map(|state| state.state_number);
 
         // Count current packages
         let package_count: i64 = tx.query_row(
@@ -422,6 +428,7 @@ impl<'a> StateEngine<'a> {
         state.description = description.map(String::from);
         state.changeset_id = changeset_id;
         state.package_count = package_count;
+        state.base_generation = base_generation;
         let state_id = state.insert(&tx)?;
 
         // Populate with current packages
@@ -547,6 +554,7 @@ mod tests {
         assert_eq!(found.state_number, 1);
         assert_eq!(found.summary, "Test state");
         assert_eq!(found.package_count, 5);
+        assert_eq!(found.base_generation, None);
     }
 
     #[test]
@@ -706,9 +714,31 @@ mod tests {
         assert_eq!(state.state_number, 0); // First state after clearing
         assert_eq!(state.package_count, 1);
         assert!(state.is_active);
+        assert_eq!(state.base_generation, None);
 
         let members = state.get_members(&conn).unwrap();
         assert_eq!(members.len(), 1);
         assert_eq!(members[0].trove_name, "test-pkg");
+    }
+
+    #[test]
+    fn test_create_snapshot_tracks_base_generation() {
+        let (_temp, conn) = create_test_db();
+
+        conn.execute("DELETE FROM system_states", []).unwrap();
+        conn.execute("DELETE FROM troves", []).unwrap();
+        conn.execute(
+            "INSERT INTO troves (name, version, type, architecture, install_reason)
+             VALUES ('pkg-a', '1.0', 'package', 'x86_64', 'explicit')",
+            [],
+        )
+        .unwrap();
+
+        let engine = StateEngine::new(&conn);
+        let first = engine.create_snapshot("Baseline", None, None).unwrap();
+        let second = engine.create_snapshot("Upgrade", None, None).unwrap();
+
+        assert_eq!(first.base_generation, None);
+        assert_eq!(second.base_generation, Some(first.state_number));
     }
 }

@@ -390,7 +390,8 @@ impl TransactionEngine {
     fn mount_and_link(&self, gen_num: i64) -> Result<()> {
         let gen_dir = self.config.generations_dir.join(gen_num.to_string());
 
-        crate::generation::mount::mount_generation(&crate::generation::mount::MountOptions {
+        let _mount_outcome =
+            crate::generation::mount::mount_generation(&crate::generation::mount::MountOptions {
             image_path: gen_dir.join(EROFS_IMAGE_NAME),
             basedir: self.config.objects_dir.clone(),
             mount_point: self.config.mount_point.clone(),

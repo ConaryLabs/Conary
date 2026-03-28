@@ -6,6 +6,8 @@
 //! inspect generation metadata without depending on the CLI crate.
 
 use crate::error::Result;
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use ed25519_dalek::{Signature, Signer, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -17,9 +19,13 @@ pub const GENERATION_FORMAT: &str = "composefs";
 
 /// Name of the metadata JSON file within a generation directory.
 pub const GENERATION_METADATA_FILE: &str = ".conary-gen.json";
+/// Name of the detached signature for generation metadata.
+pub const GENERATION_METADATA_SIGNATURE_FILE: &str = ".conary-gen.sig";
 
 /// Name of the marker file used while a generation is still being built.
 pub const GENERATION_PENDING_MARKER: &str = ".conary-gen.pending";
+const GENERATION_METADATA_SIGNING_KEY_FILE: &str = "generation-metadata.private";
+const GENERATION_METADATA_PUBLIC_KEY_FILE: &str = "generation-metadata.public";
 
 /// Directories excluded from generation trees.
 ///
@@ -69,6 +75,14 @@ pub struct GenerationMetadata {
     pub summary: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct GenerationMetadataSignature {
+    algorithm: String,
+    signature: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    key_id: Option<String>,
+}
+
 impl GenerationMetadata {
     /// Write metadata to the generation metadata file inside the given generation directory.
     ///
@@ -76,6 +90,12 @@ impl GenerationMetadata {
     /// power loss cannot leave a truncated metadata file next to a valid
     /// `root.erofs`.
     pub fn write_to(&self, gen_dir: &Path) -> Result<()> {
+        let (signing_key_path, _) = generation_metadata_key_paths();
+        let signing_key = signing_key_path.exists().then_some(signing_key_path.as_path());
+        self.write_to_with_key_paths(gen_dir, signing_key)
+    }
+
+    fn write_to_with_key_paths(&self, gen_dir: &Path, signing_key_path: Option<&Path>) -> Result<()> {
         use std::io::Write;
 
         let path = gen_dir.join(GENERATION_METADATA_FILE);
@@ -90,6 +110,16 @@ impl GenerationMetadata {
 
         std::fs::rename(&tmp_path, &path)?;
 
+        let signature_path = gen_dir.join(GENERATION_METADATA_SIGNATURE_FILE);
+        match signing_key_path {
+            Some(key_path) => write_generation_metadata_signature(self, key_path, &signature_path)?,
+            None => {
+                if signature_path.exists() {
+                    std::fs::remove_file(&signature_path)?;
+                }
+            }
+        }
+
         // fsync the parent directory to persist the rename.
         if let Ok(dir) = std::fs::File::open(gen_dir) {
             let _ = dir.sync_all();
@@ -100,6 +130,17 @@ impl GenerationMetadata {
 
     /// Read metadata from the generation metadata file inside the given generation directory.
     pub fn read_from(gen_dir: &Path) -> Result<Self> {
+        let (signing_key_path, public_key_path) = generation_metadata_key_paths();
+        let signing_key = signing_key_path.exists().then_some(signing_key_path.as_path());
+        let public_key = public_key_path.exists().then_some(public_key_path.as_path());
+        Self::read_from_with_key_paths(gen_dir, public_key, signing_key)
+    }
+
+    fn read_from_with_key_paths(
+        gen_dir: &Path,
+        public_key_path: Option<&Path>,
+        signing_key_path: Option<&Path>,
+    ) -> Result<Self> {
         if is_generation_pending(gen_dir) {
             return Err(crate::error::Error::NotFound(format!(
                 "generation at {} is still pending and has not committed metadata yet",
@@ -110,7 +151,138 @@ impl GenerationMetadata {
         let path = gen_dir.join(GENERATION_METADATA_FILE);
         let json = std::fs::read_to_string(path)?;
         let metadata: Self = serde_json::from_str(&json)?;
+        verify_generation_metadata_signature(&metadata, gen_dir, public_key_path, signing_key_path)?;
         Ok(metadata)
+    }
+}
+
+fn generation_metadata_key_paths() -> (PathBuf, PathBuf) {
+    let keyring_dir = crate::db::paths::keyring_dir("/var/lib/conary/conary.db");
+    (
+        keyring_dir.join(GENERATION_METADATA_SIGNING_KEY_FILE),
+        keyring_dir.join(GENERATION_METADATA_PUBLIC_KEY_FILE),
+    )
+}
+
+fn canonical_metadata_bytes(metadata: &GenerationMetadata) -> Result<Vec<u8>> {
+    crate::json::canonical_json(metadata).map_err(|e| {
+        crate::error::Error::ParseError(format!(
+            "Failed to canonicalize generation metadata: {e}"
+        ))
+    })
+}
+
+fn load_generation_verifying_key(
+    public_key_path: Option<&Path>,
+    signing_key_path: Option<&Path>,
+) -> Result<Option<VerifyingKey>> {
+    if let Some(path) = public_key_path {
+        let public_key_b64 = crate::ccs::signing::load_public_key(path)?;
+        let public_key_bytes = BASE64.decode(public_key_b64).map_err(|e| {
+            crate::error::Error::ParseError(format!(
+                "Invalid base64 in generation metadata public key {}: {e}",
+                path.display()
+            ))
+        })?;
+        let public_key: [u8; 32] = public_key_bytes.try_into().map_err(|_| {
+            crate::error::Error::ParseError(format!(
+                "Invalid generation metadata public key length in {}",
+                path.display()
+            ))
+        })?;
+        return VerifyingKey::from_bytes(&public_key).map(Some).map_err(|e| {
+            crate::error::Error::ParseError(format!(
+                "Invalid generation metadata public key {}: {e}",
+                path.display()
+            ))
+        });
+    }
+
+    if let Some(path) = signing_key_path {
+        let keypair = crate::ccs::signing::SigningKeyPair::load_from_file(path)?;
+        return Ok(Some(keypair.verifying_key()));
+    }
+
+    Ok(None)
+}
+
+fn write_generation_metadata_signature(
+    metadata: &GenerationMetadata,
+    signing_key_path: &Path,
+    signature_path: &Path,
+) -> Result<()> {
+    use std::io::Write;
+
+    let keypair = crate::ccs::signing::SigningKeyPair::load_from_file(signing_key_path)?;
+    let canonical = canonical_metadata_bytes(metadata)?;
+    let signature = keypair.signing_key().sign(&canonical);
+    let signature_doc = GenerationMetadataSignature {
+        algorithm: "ed25519".to_string(),
+        signature: BASE64.encode(signature.to_bytes()),
+        key_id: keypair.key_id().map(ToOwned::to_owned),
+    };
+
+    let tmp_path = signature_path.with_extension("sig.tmp");
+    let json = serde_json::to_string_pretty(&signature_doc)?;
+    let mut file = std::fs::File::create(&tmp_path)?;
+    file.write_all(json.as_bytes())?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(&tmp_path, signature_path)?;
+    Ok(())
+}
+
+fn verify_generation_metadata_signature(
+    metadata: &GenerationMetadata,
+    gen_dir: &Path,
+    public_key_path: Option<&Path>,
+    signing_key_path: Option<&Path>,
+) -> Result<()> {
+    let signature_path = gen_dir.join(GENERATION_METADATA_SIGNATURE_FILE);
+    let verifying_key = load_generation_verifying_key(public_key_path, signing_key_path)?;
+
+    match (signature_path.exists(), verifying_key) {
+        (false, None) => Ok(()),
+        (false, Some(_)) => Err(crate::error::Error::TrustError(format!(
+            "Generation metadata at {} is unsigned despite a configured verification key",
+            gen_dir.display()
+        ))),
+        (true, None) => Err(crate::error::Error::TrustError(format!(
+            "Generation metadata at {} has a signature but no verification key is configured",
+            gen_dir.display()
+        ))),
+        (true, Some(verifying_key)) => {
+            let sig_json = std::fs::read_to_string(&signature_path)?;
+            let signature_doc: GenerationMetadataSignature = serde_json::from_str(&sig_json)?;
+            if signature_doc.algorithm != "ed25519" {
+                return Err(crate::error::Error::TrustError(format!(
+                    "Unsupported generation metadata signature algorithm '{}'",
+                    signature_doc.algorithm
+                )));
+            }
+
+            let sig_bytes = BASE64.decode(signature_doc.signature).map_err(|e| {
+                crate::error::Error::ParseError(format!(
+                    "Invalid base64 in generation metadata signature {}: {e}",
+                    signature_path.display()
+                ))
+            })?;
+            let signature = Signature::from_slice(&sig_bytes).map_err(|e| {
+                crate::error::Error::ParseError(format!(
+                    "Invalid generation metadata signature {}: {e}",
+                    signature_path.display()
+                ))
+            })?;
+            let canonical = canonical_metadata_bytes(metadata)?;
+            verifying_key
+                .verify_strict(&canonical, &signature)
+                .map_err(|e| {
+                    crate::error::Error::TrustError(format!(
+                        "Generation metadata signature verification failed for {}: {e}",
+                        gen_dir.display()
+                    ))
+                })
+        }
     }
 }
 
@@ -225,6 +397,7 @@ pub fn is_excluded(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ccs::signing::SigningKeyPair;
     use tempfile::TempDir;
 
     #[test]
@@ -243,8 +416,8 @@ mod tests {
             summary: "installed vim".to_string(),
         };
 
-        metadata.write_to(tmp.path()).unwrap();
-        let loaded = GenerationMetadata::read_from(tmp.path()).unwrap();
+        metadata.write_to_with_key_paths(tmp.path(), None).unwrap();
+        let loaded = GenerationMetadata::read_from_with_key_paths(tmp.path(), None, None).unwrap();
 
         assert_eq!(loaded.generation, 42);
         assert_eq!(loaded.format, GENERATION_FORMAT);
@@ -274,7 +447,7 @@ mod tests {
             summary: "baseline".to_string(),
         };
 
-        metadata.write_to(tmp.path()).unwrap();
+        metadata.write_to_with_key_paths(tmp.path(), None).unwrap();
 
         // Verify the JSON does not contain erofs_verity_digest when None
         let json = std::fs::read_to_string(tmp.path().join(GENERATION_METADATA_FILE)).unwrap();
@@ -283,7 +456,7 @@ mod tests {
             "erofs_verity_digest=None should be skipped in serialization"
         );
 
-        let loaded = GenerationMetadata::read_from(tmp.path()).unwrap();
+        let loaded = GenerationMetadata::read_from_with_key_paths(tmp.path(), None, None).unwrap();
         assert_eq!(loaded.erofs_verity_digest, None);
     }
 
@@ -300,7 +473,7 @@ mod tests {
         }"#;
         std::fs::write(tmp.path().join(GENERATION_METADATA_FILE), old_json).unwrap();
 
-        let loaded = GenerationMetadata::read_from(tmp.path()).unwrap();
+        let loaded = GenerationMetadata::read_from_with_key_paths(tmp.path(), None, None).unwrap();
         assert_eq!(loaded.generation, 10);
         assert_eq!(loaded.format, ""); // serde(default) gives empty string
         assert_eq!(loaded.erofs_size, None);
@@ -331,6 +504,109 @@ mod tests {
 
         let err = GenerationMetadata::read_from(tmp.path()).unwrap_err();
         assert!(err.to_string().contains("still pending"));
+    }
+
+    fn generate_test_metadata_keys(dir: &TempDir) -> (PathBuf, PathBuf) {
+        let private_path = dir.path().join("generation-metadata.private");
+        let public_path = dir.path().join("generation-metadata.public");
+        let keypair = SigningKeyPair::generate().with_key_id("test-generation-key");
+        keypair
+            .save_to_files(&private_path, &public_path)
+            .unwrap();
+        (private_path, public_path)
+    }
+
+    #[test]
+    fn test_metadata_signature_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        let key_dir = TempDir::new().unwrap();
+        let (private_key, public_key) = generate_test_metadata_keys(&key_dir);
+        let metadata = GenerationMetadata {
+            generation: 12,
+            format: GENERATION_FORMAT.to_string(),
+            erofs_size: Some(2048),
+            cas_objects_referenced: Some(9),
+            fsverity_enabled: true,
+            erofs_verity_digest: Some("abcd".to_string()),
+            created_at: "2026-03-27T12:00:00Z".to_string(),
+            package_count: 3,
+            kernel_version: Some("6.13.0".to_string()),
+            summary: "signed".to_string(),
+        };
+
+        metadata
+            .write_to_with_key_paths(tmp.path(), Some(&private_key))
+            .unwrap();
+        let loaded =
+            GenerationMetadata::read_from_with_key_paths(tmp.path(), Some(&public_key), None)
+                .unwrap();
+
+        assert_eq!(loaded.summary, "signed");
+        assert!(tmp.path().join(GENERATION_METADATA_SIGNATURE_FILE).exists());
+    }
+
+    #[test]
+    fn test_metadata_signature_rejects_tampering() {
+        let tmp = TempDir::new().unwrap();
+        let key_dir = TempDir::new().unwrap();
+        let (private_key, public_key) = generate_test_metadata_keys(&key_dir);
+        let metadata = GenerationMetadata {
+            generation: 5,
+            format: GENERATION_FORMAT.to_string(),
+            erofs_size: Some(10),
+            cas_objects_referenced: Some(2),
+            fsverity_enabled: false,
+            erofs_verity_digest: None,
+            created_at: "2026-03-27T12:00:00Z".to_string(),
+            package_count: 1,
+            kernel_version: None,
+            summary: "original".to_string(),
+        };
+
+        metadata
+            .write_to_with_key_paths(tmp.path(), Some(&private_key))
+            .unwrap();
+
+        let tampered = GenerationMetadata {
+            summary: "tampered".to_string(),
+            ..metadata.clone()
+        };
+        std::fs::write(
+            tmp.path().join(GENERATION_METADATA_FILE),
+            serde_json::to_string_pretty(&tampered).unwrap(),
+        )
+        .unwrap();
+
+        let err =
+            GenerationMetadata::read_from_with_key_paths(tmp.path(), Some(&public_key), None)
+                .unwrap_err();
+        assert!(err.to_string().contains("signature verification failed"));
+    }
+
+    #[test]
+    fn test_metadata_requires_signature_when_verification_key_present() {
+        let tmp = TempDir::new().unwrap();
+        let key_dir = TempDir::new().unwrap();
+        let (_private_key, public_key) = generate_test_metadata_keys(&key_dir);
+        let metadata = GenerationMetadata {
+            generation: 8,
+            format: GENERATION_FORMAT.to_string(),
+            erofs_size: Some(128),
+            cas_objects_referenced: Some(4),
+            fsverity_enabled: false,
+            erofs_verity_digest: None,
+            created_at: "2026-03-27T12:00:00Z".to_string(),
+            package_count: 2,
+            kernel_version: None,
+            summary: "unsigned".to_string(),
+        };
+
+        metadata.write_to_with_key_paths(tmp.path(), None).unwrap();
+
+        let err =
+            GenerationMetadata::read_from_with_key_paths(tmp.path(), Some(&public_key), None)
+                .unwrap_err();
+        assert!(err.to_string().contains("unsigned"));
     }
 
     #[test]

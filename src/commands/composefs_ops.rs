@@ -19,6 +19,7 @@ use tracing::{debug, info, warn};
 
 use conary_core::db::models::FileEntry;
 use conary_core::generation::etc_merge::{self, MergeAction};
+use conary_core::generation::mount::{GenerationMountOutcome, verity_downgrade_warning};
 
 /// Collect a `HashMap<relative_path, sha256_hash>` for all /etc files in the DB.
 ///
@@ -73,6 +74,31 @@ fn collect_etc_files_for_state(
     Ok(map)
 }
 
+fn current_base_generation_for_merge(
+    conn: &Connection,
+    current_gen: i64,
+) -> anyhow::Result<Option<i64>> {
+    if current_gen <= 0 {
+        return Ok(None);
+    }
+
+    let state = conary_core::db::models::SystemState::find_by_number(conn, current_gen)
+        .map_err(|e| anyhow::anyhow!("Failed to load system state {current_gen}: {e}"))?;
+    Ok(state.and_then(|state| state.base_generation))
+}
+
+fn emit_verity_downgrade_warning(
+    gen_num: i64,
+    requested_verity: bool,
+    mount_outcome: GenerationMountOutcome,
+    image_path: &Path,
+) {
+    if let Some(message) = verity_downgrade_warning(requested_verity, mount_outcome, image_path) {
+        warn!(generation = gen_num, "{message}");
+        eprintln!("Warning: {message}");
+    }
+}
+
 /// Rebuild the EROFS generation from current DB state and mount it.
 ///
 /// This is the composefs-native "apply" step that follows every DB mutation
@@ -106,31 +132,26 @@ pub fn rebuild_and_mount(
 ) -> anyhow::Result<i64> {
 
     // Record the currently active generation before building the new one.
-    // This is written to etc-state/{N}/.base-gen so that the merge logic
-    // can identify the correct reference point even after rollback.
+    // The state snapshot for the new generation stores this as its
+    // database-backed /etc merge base.
     let current_gen = conary_core::generation::mount::current_generation(conary_root)
         .unwrap_or(None)
         .unwrap_or(0);
 
     // Step 1: Determine the correct "previous" /etc state.
     // - If a pre-captured snapshot was provided (install/remove callers), use it.
-    // - Otherwise, check if the currently active generation has a .base-gen marker.
-    //   If so, that tells us which generation was active when the current upper dir
-    //   was created -- we should use THAT generation's DB state as the base.
+    // - Otherwise, check the active generation's recorded base_generation
+    //   in system_states. That tells us which generation was active when the
+    //   current upper dir was created -- we should use THAT generation's DB
+    //   state as the base.
     //   This handles the rollback case correctly.
     // - Final fallback: read from current DB state (for init/first-run).
     let prev_etc = match prev_etc_snapshot {
         Some(snapshot) => snapshot,
         None => {
-            // Try to read .base-gen from the current generation's upper dir
-            let active_upper = conary_root.join(format!("etc-state/{current_gen}"));
-            let base_gen_file = active_upper.join(".base-gen");
-            if let Ok(content) = std::fs::read_to_string(&base_gen_file)
-                && let Ok(base_num) = content.trim().parse::<i64>()
-                && base_num > 0
-            {
+            if let Some(base_num) = current_base_generation_for_merge(conn, current_gen)? {
                 debug!(
-                    "Using base generation {} from .base-gen for /etc merge",
+                    "Using base generation {} from system_states for /etc merge",
                     base_num
                 );
                 // Query /etc files from the base generation's state snapshot.
@@ -188,11 +209,6 @@ pub fn rebuild_and_mount(
     // they do not bleed across generation switches.
     let upper_dir = conary_root.join(format!("etc-state/{gen_num}"));
     std::fs::create_dir_all(&upper_dir)?;
-
-    // Record which generation was active when this upper directory was created.
-    // The merge logic reads this to find the correct base after rollback,
-    // instead of assuming the numerically previous generation is always correct.
-    std::fs::write(upper_dir.join(".base-gen"), current_gen.to_string())?;
 
     info!(
         "Built generation {gen_num} ({} bytes, {} CAS objects)",
@@ -275,18 +291,25 @@ pub fn rebuild_and_mount(
 
     // Step 6: Mount the new generation at the staging point.
     let staging_mount = conary_root.join("mnt");
-    conary_core::generation::mount::mount_generation(
+    let requested_verity = build_result.erofs_verity_digest.is_some();
+    let mount_outcome = conary_core::generation::mount::mount_generation(
         &conary_core::generation::mount::MountOptions {
-            image_path: build_result.image_path,
+            image_path: build_result.image_path.clone(),
             basedir: conary_root.join("objects"),
             mount_point: staging_mount.clone(),
-            verity: false,
-            digest: None,
+            verity: requested_verity,
+            digest: build_result.erofs_verity_digest.clone(),
             upperdir: None,
             workdir: None,
         },
     )
     .map_err(|e| anyhow::anyhow!("Failed to mount generation {gen_num}: {e}"))?;
+    emit_verity_downgrade_warning(
+        gen_num,
+        requested_verity,
+        mount_outcome,
+        &build_result.image_path,
+    );
 
     // Step 7: Set up /etc overlay -- lower from staging, target at live /etc.
     let etc_work = conary_root.join(format!("etc-state/{gen_num}-work"));
@@ -304,4 +327,35 @@ pub fn rebuild_and_mount(
 
     info!("Generation {gen_num} mounted and active");
     Ok(gen_num)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::test_helpers::create_test_db;
+    use conary_core::db::models::SystemState;
+
+    #[test]
+    fn current_base_generation_for_merge_reads_db_column() {
+        let (_temp, db_path) = create_test_db();
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+
+        let mut state = SystemState::new(3, "gen3".to_string());
+        state.base_generation = Some(2);
+        state.insert(&conn).unwrap();
+
+        assert_eq!(current_base_generation_for_merge(&conn, 3).unwrap(), Some(2));
+        assert_eq!(current_base_generation_for_merge(&conn, 99).unwrap(), None);
+    }
+
+    #[test]
+    fn verity_warning_text_is_backed_by_mount_helper() {
+        let warning = verity_downgrade_warning(
+            true,
+            GenerationMountOutcome::ComposefsPlain,
+            Path::new("/conary/generations/7/root.erofs"),
+        )
+        .unwrap();
+        assert!(warning.contains("downgraded"));
+    }
 }

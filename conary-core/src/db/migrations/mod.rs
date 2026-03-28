@@ -8,7 +8,7 @@
 //! Range files:
 //! - v1_v20: Migrations 1-20 (core tables, repos, components, labels)
 //! - v21_v40: Migrations 21-40 (config, security, federation, derived packages)
-//! - v41_current: Migrations 41-57 (collections, TUF, canonical, derivations)
+//! - v41_current: Migrations 41-64 (collections, TUF, canonical, derivations)
 
 mod v1_v20;
 mod v21_v40;
