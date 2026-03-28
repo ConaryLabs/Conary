@@ -180,6 +180,15 @@ impl FederationManifest {
             )));
         }
 
+        if policy.trusted_keys.is_empty() && !policy.allow_unsigned {
+            return Err(ManifestError::UntrustedKey(
+                signature
+                    .key_id
+                    .clone()
+                    .unwrap_or_else(|| signature.public_key.clone()),
+            ));
+        }
+
         // Check if public key is trusted
         if !policy.trusted_keys.is_empty() && !policy.trusted_keys.contains(&signature.public_key) {
             return Err(ManifestError::UntrustedKey(
@@ -412,6 +421,21 @@ mod tests {
 
         // Verify with different key
         let policy = ManifestTrustPolicy::strict(vec![other_keypair.public_key_base64()]);
+        let result = signed.verify(&policy);
+        assert!(matches!(result, Err(ManifestError::UntrustedKey(_))));
+    }
+
+    #[test]
+    fn test_empty_trusted_keys_rejects_signed_manifest_when_unsigned_not_allowed() {
+        let keypair = SigningKeyPair::generate().with_key_id("attacker-key");
+
+        let manifest = ManifestBuilder::new("package")
+            .add_chunk("chunk1", 100)
+            .build();
+
+        let signed = manifest.sign(&keypair);
+        let policy = ManifestTrustPolicy::strict(Vec::new());
+
         let result = signed.verify(&policy);
         assert!(matches!(result, Err(ManifestError::UntrustedKey(_))));
     }
