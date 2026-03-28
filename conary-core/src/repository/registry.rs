@@ -5,6 +5,7 @@
 //! Provides centralized detection and creation of repository parsers.
 
 use crate::error::{Error, Result};
+use crate::repository::gpg::MetadataSignatureVerifier;
 use crate::repository::parsers::{self, PackageMetadata, RepositoryParser};
 
 /// Enum wrapper for concrete parser types to avoid dyn dispatch (async-incompatible).
@@ -119,6 +120,7 @@ pub fn create_parser(
     format: RepositoryFormat,
     repo_name: &str,
     _repo_url: &str,
+    metadata_signature_verifier: Option<MetadataSignatureVerifier>,
 ) -> Result<AnyParser> {
     match format {
         RepositoryFormat::Arch => {
@@ -127,7 +129,10 @@ pub fn create_parser(
             } else {
                 "core".to_string()
             };
-            Ok(AnyParser::Arch(parsers::arch::ArchParser::new(name)))
+            Ok(AnyParser::Arch(
+                parsers::arch::ArchParser::new(name)
+                    .with_metadata_signature_verifier(metadata_signature_verifier),
+            ))
         }
         RepositoryFormat::Debian => {
             let distribution = if let Some(suffix) = repo_name.strip_prefix("ubuntu-") {
@@ -143,11 +148,15 @@ pub fn create_parser(
                 distribution,
                 "main".to_string(),
                 arch,
-            )))
+            )
+            .with_metadata_signature_verifier(metadata_signature_verifier)))
         }
         RepositoryFormat::Fedora => {
             let arch = detect_system_arch();
-            Ok(AnyParser::Fedora(parsers::fedora::FedoraParser::new(arch)))
+            Ok(AnyParser::Fedora(
+                parsers::fedora::FedoraParser::new(arch)
+                    .with_metadata_signature_verifier(metadata_signature_verifier),
+            ))
         }
         RepositoryFormat::Json => Err(Error::ParseError(
             "JSON format has no native parser".to_string(),

@@ -53,7 +53,9 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
     repo.enabled = !opts.disabled;
     repo.priority = opts.priority;
     repo.gpg_check = !opts.no_gpg_check;
-    repo.gpg_strict = opts.gpg_strict;
+    if opts.gpg_strict {
+        repo.gpg_strict = true;
+    }
     repo.gpg_key_url = gpg_key.clone();
     repo.default_strategy = opts.default_strategy;
     repo.default_strategy_endpoint = opts.remi_endpoint;
@@ -82,9 +84,15 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
     println!("  Enabled: {}", repo.enabled);
     println!("  Priority: {}", repo.priority);
     println!("  GPG Check: {}", repo.gpg_check);
-    if repo.gpg_strict {
-        println!("  GPG Strict: true (missing signatures will fail)");
-    }
+    println!(
+        "  GPG Strict: {}{}",
+        repo.gpg_strict,
+        if repo.gpg_strict {
+            " (missing signatures will fail)"
+        } else {
+            " (non-strict mode weakens signature enforcement)"
+        }
+    );
 
     // Show default strategy if configured
     if let Some(ref strategy) = repo.default_strategy {

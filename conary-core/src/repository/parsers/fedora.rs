@@ -7,6 +7,7 @@
 
 use super::common::{self, MAX_PACKAGE_SIZE};
 use super::{ChecksumType, Dependency, PackageMetadata, RepositoryParser};
+use crate::compression::decompress_auto;
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
 use crate::repository::dependency_model::{
@@ -14,6 +15,7 @@ use crate::repository::dependency_model::{
     RepositoryProvide, RepositoryRequirementClause, RepositoryRequirementGroup,
     RepositoryRequirementKind,
 };
+use crate::repository::gpg::MetadataSignatureVerifier;
 use crate::repository::versioning::VersionScheme;
 use quick_xml::Reader;
 use quick_xml::events::Event;
@@ -24,6 +26,7 @@ use tracing::{debug, info};
 pub struct FedoraParser {
     /// Repository architecture (e.g., "x86_64", "aarch64")
     architecture: String,
+    metadata_signature_verifier: Option<MetadataSignatureVerifier>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -39,7 +42,18 @@ impl FedoraParser {
 
     /// Create a new Fedora/RPM parser
     pub fn new(architecture: String) -> Self {
-        Self { architecture }
+        Self {
+            architecture,
+            metadata_signature_verifier: None,
+        }
+    }
+
+    pub fn with_metadata_signature_verifier(
+        mut self,
+        metadata_signature_verifier: Option<MetadataSignatureVerifier>,
+    ) -> Self {
+        self.metadata_signature_verifier = metadata_signature_verifier;
+        self
     }
 
     /// Download repomd.xml and find primary.xml location
@@ -51,6 +65,11 @@ impl FedoraParser {
 
         let client = RepositoryClient::new()?;
         let xml_bytes = client.download_to_bytes(&repomd_url).await?;
+        if let Some(verifier) = &self.metadata_signature_verifier {
+            verifier
+                .verify_metadata_bytes(&repomd_url, &xml_bytes, "repomd.xml")
+                .await?;
+        }
         let xml_content = String::from_utf8(xml_bytes)
             .map_err(|e| Error::ParseError(format!("Invalid UTF-8 in repomd.xml: {}", e)))?;
 
@@ -117,7 +136,16 @@ impl FedoraParser {
         debug!("Downloading primary.xml from: {}", primary_url);
 
         let client = RepositoryClient::new()?;
-        let content = client.fetch_and_decompress_string(&primary_url).await?;
+        let raw_bytes = client.download_to_bytes(&primary_url).await?;
+        if let Some(verifier) = &self.metadata_signature_verifier {
+            verifier
+                .verify_metadata_bytes(&primary_url, &raw_bytes, "primary.xml")
+                .await?;
+        }
+        let decompressed = decompress_auto(&raw_bytes)
+            .map_err(|error| Error::ParseError(format!("Failed to decompress {}: {}", primary_url, error)))?;
+        let content = String::from_utf8(decompressed)
+            .map_err(|error| Error::ParseError(format!("Invalid UTF-8 in primary.xml: {}", error)))?;
 
         debug!("Decompressed primary.xml: {} bytes", content.len());
         Ok(content)

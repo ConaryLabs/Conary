@@ -7,12 +7,14 @@
 
 use super::common::{self, MAX_PACKAGE_SIZE};
 use super::{ChecksumType, Dependency, PackageMetadata, RepositoryParser};
+use crate::compression::decompress_auto;
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
 use crate::repository::dependency_model::{
     RepositoryCapabilityKind, RepositoryDependencyFlavor, RepositoryProvide,
     RepositoryRequirementClause, RepositoryRequirementGroup, RepositoryRequirementKind,
 };
+use crate::repository::gpg::MetadataSignatureVerifier;
 use crate::repository::versioning::VersionScheme;
 use serde::Deserialize;
 use tracing::{debug, info};
@@ -25,6 +27,7 @@ pub struct DebianParser {
     component: String,
     /// Architecture (e.g., "amd64", "arm64")
     architecture: String,
+    metadata_signature_verifier: Option<MetadataSignatureVerifier>,
 }
 
 impl DebianParser {
@@ -34,7 +37,16 @@ impl DebianParser {
             distribution,
             component,
             architecture,
+            metadata_signature_verifier: None,
         }
+    }
+
+    pub fn with_metadata_signature_verifier(
+        mut self,
+        metadata_signature_verifier: Option<MetadataSignatureVerifier>,
+    ) -> Self {
+        self.metadata_signature_verifier = metadata_signature_verifier;
+        self
     }
 
     /// Download and decompress the Packages file
@@ -52,7 +64,16 @@ impl DebianParser {
         debug!("Downloading Debian Packages file from: {}", packages_url);
 
         let client = RepositoryClient::new()?;
-        let content = client.fetch_and_decompress_string(&packages_url).await?;
+        let raw_bytes = client.download_to_bytes(&packages_url).await?;
+        if let Some(verifier) = &self.metadata_signature_verifier {
+            verifier
+                .verify_metadata_bytes(&packages_url, &raw_bytes, "debian Packages.gz")
+                .await?;
+        }
+        let decompressed = decompress_auto(&raw_bytes)
+            .map_err(|error| Error::ParseError(format!("Failed to decompress {}: {}", packages_url, error)))?;
+        let content = String::from_utf8(decompressed)
+            .map_err(|error| Error::ParseError(format!("Invalid UTF-8 in Packages.gz: {}", error)))?;
 
         debug!("Decompressed Packages file: {} bytes", content.len());
         Ok(content)

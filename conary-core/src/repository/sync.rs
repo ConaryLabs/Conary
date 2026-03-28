@@ -18,12 +18,12 @@ use crate::repository::parsers::{DependencyType, PackageMetadata};
 use crate::repository::versioning::VersionScheme;
 use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, warn};
 
 use super::client::RepositoryClient;
-use super::gpg::GpgVerifier;
+use super::gpg::{GpgVerifier, MetadataSignatureVerifier};
 use super::registry::{self, RepositoryFormat};
 
 /// Get current timestamp as ISO 8601 string
@@ -100,7 +100,21 @@ async fn sync_repository_native(
     );
 
     // Create and use parser from registry
-    let parser = registry::create_parser(format, &repo.name, &repo.url)?;
+    let metadata_signature_verifier = if repo.gpg_check {
+        Some(MetadataSignatureVerifier::new(
+            keyring_dir_for_connection(conn)?,
+            repo.name.clone(),
+            true,
+        ))
+    } else {
+        None
+    };
+    let parser = registry::create_parser(
+        format,
+        &repo.name,
+        &repo.url,
+        metadata_signature_verifier,
+    )?;
     let packages = parser.sync_metadata(&repo.url).await?;
 
     let repo_id = repo
@@ -190,6 +204,22 @@ async fn sync_repository_native(
         count, repo.name
     );
     Ok(count)
+}
+
+fn keyring_dir_for_connection(conn: &Connection) -> Result<PathBuf> {
+    let mut stmt = conn.prepare("PRAGMA database_list")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+    })?;
+
+    for row in rows {
+        let (name, file) = row?;
+        if name == "main" && !file.is_empty() {
+            return Ok(crate::db::paths::keyring_dir(&file));
+        }
+    }
+
+    Ok(crate::db::paths::keyring_dir("/var/lib/conary/conary.db"))
 }
 
 /// A single synced package row with all its normalized capability data.
