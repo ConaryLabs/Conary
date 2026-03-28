@@ -59,6 +59,8 @@ cargo build --release
 
 The project is a Cargo workspace with 4 crates: `conary` (CLI), `conary-core` (library), `conary-server` (Remi + conaryd), and `conary-test` (test infrastructure). EROFS support uses `composefs-rs` directly in `conary-core`.
 
+Current workspace note: the root `server` feature belongs to the `conary` crate, not `conary-server`. Use `cargo test --features server` when you want the root workspace with server-enabled integration, and `cargo test -p conary-server` when you want unit tests inside the server crate itself. This split works, but it is easy to misread; if the workspace layout is reorganized later, preserving a simpler “one obvious test command per subsystem” flow would help a lot.
+
 ## Running Tests
 
 ```bash
