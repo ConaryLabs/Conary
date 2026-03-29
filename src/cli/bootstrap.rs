@@ -315,3 +315,27 @@ pub enum BootstrapCommands {
         skip_verify: bool,
     },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::BootstrapCommands;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct BootstrapCli {
+        #[command(subcommand)]
+        command: BootstrapCommands,
+    }
+
+    #[test]
+    fn cli_accepts_bootstrap_cross_tools_name() {
+        let parsed =
+            BootstrapCli::try_parse_from(["bootstrap", "cross-tools"]).expect("parse cross-tools");
+        assert!(matches!(parsed.command, BootstrapCommands::CrossTools { .. }));
+    }
+
+    #[test]
+    fn cli_rejects_legacy_stage0_name() {
+        assert!(BootstrapCli::try_parse_from(["bootstrap", "stage0"]).is_err());
+    }
+}
