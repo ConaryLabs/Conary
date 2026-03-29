@@ -54,6 +54,46 @@ impl Default for TimeoutConfig {
 /// package metadata for capability-aware dependency resolution.
 const MAX_BYTES_RESPONSE_SIZE: u64 = 256 * 1024 * 1024;
 
+fn append_limited_chunk(
+    body: &mut Vec<u8>,
+    total: &mut u64,
+    chunk: &[u8],
+    limit: u64,
+    url: &str,
+) -> Result<()> {
+    *total += chunk.len() as u64;
+    if *total > limit {
+        return Err(Error::DownloadError(format!(
+            "Response body too large ({} bytes, max {}): {}",
+            *total, limit, url
+        )));
+    }
+    body.extend_from_slice(chunk);
+    Ok(())
+}
+
+async fn read_response_bytes_with_limit(
+    mut response: reqwest::Response,
+    limit: u64,
+    url: &str,
+) -> Result<Vec<u8>> {
+    if let Some(content_length) = response.content_length()
+        && content_length > limit
+    {
+        return Err(Error::DownloadError(format!(
+            "Response too large ({} bytes, max {}): {}",
+            content_length, limit, url
+        )));
+    }
+
+    let mut body = Vec::new();
+    let mut total = 0u64;
+    while let Some(chunk) = response.chunk().await.download_context(url)? {
+        append_limited_chunk(&mut body, &mut total, &chunk, limit, url)?;
+    }
+    Ok(body)
+}
+
 /// Validate that a URL uses an allowed scheme (HTTP or HTTPS only).
 ///
 /// Rejects file://, gopher://, and other non-HTTP schemes to prevent SSRF.
@@ -212,30 +252,12 @@ impl RepositoryClient {
                         )));
                     }
 
-                    // Route through bounded download to enforce the 256 MB
-                    // size cap, then deserialize from the bounded bytes.
-                    // Using response.json() directly would buffer unbounded.
-                    if let Some(content_length) = response.content_length()
-                        && content_length > MAX_BYTES_RESPONSE_SIZE
-                    {
-                        return Err(Error::DownloadError(format!(
-                            "Metadata response too large ({} bytes, max {}): {}",
-                            content_length, MAX_BYTES_RESPONSE_SIZE, metadata_url
-                        )));
-                    }
-
-                    let bytes = response.bytes().await.map_err(|e| {
-                        Error::DownloadError(format!("Failed to read metadata response: {e}"))
-                    })?;
-
-                    if bytes.len() as u64 > MAX_BYTES_RESPONSE_SIZE {
-                        return Err(Error::DownloadError(format!(
-                            "Metadata response body too large ({} bytes, max {}): {}",
-                            bytes.len(),
-                            MAX_BYTES_RESPONSE_SIZE,
-                            metadata_url
-                        )));
-                    }
+                    // Route through bounded streaming download to enforce the
+                    // size cap on actual bytes received instead of trusting
+                    // Content-Length.
+                    let bytes =
+                        read_response_bytes_with_limit(response, MAX_BYTES_RESPONSE_SIZE, &metadata_url)
+                            .await?;
 
                     let metadata: RepositoryMetadata =
                         serde_json::from_slice(&bytes).map_err(|e| {
@@ -287,28 +309,7 @@ impl RepositoryClient {
             )));
         }
 
-        // Check Content-Length if available to reject oversized responses early
-        if let Some(content_length) = response.content_length()
-            && content_length > MAX_BYTES_RESPONSE_SIZE
-        {
-            return Err(Error::DownloadError(format!(
-                "Response too large ({} bytes, max {}): {}",
-                content_length, MAX_BYTES_RESPONSE_SIZE, url
-            )));
-        }
-
-        let bytes = response.bytes().await.download_context(url)?;
-
-        if bytes.len() as u64 > MAX_BYTES_RESPONSE_SIZE {
-            return Err(Error::DownloadError(format!(
-                "Response body too large ({} bytes, max {}): {}",
-                bytes.len(),
-                MAX_BYTES_RESPONSE_SIZE,
-                url
-            )));
-        }
-
-        Ok(bytes.to_vec())
+        read_response_bytes_with_limit(response, MAX_BYTES_RESPONSE_SIZE, url).await
     }
 
     /// Fetch and decompress data from a URL
@@ -684,5 +685,13 @@ mod tests {
 
         assert_eq!(client.retry_policy.max_attempts, 5);
         assert_eq!(client.retry_policy.base_delay, Duration::from_millis(500));
+    }
+
+    #[test]
+    fn test_append_limited_chunk_rejects_excessive_total() {
+        let mut body = Vec::new();
+        let mut total = 0;
+        append_limited_chunk(&mut body, &mut total, &[1, 2, 3], 2, "https://example.test")
+            .expect_err("chunk should be rejected once it exceeds the limit");
     }
 }

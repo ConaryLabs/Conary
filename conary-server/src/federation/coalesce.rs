@@ -15,6 +15,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::broadcast;
 use tracing::debug;
 
+const MAX_INFLIGHT_REQUESTS: usize = 2048;
+
 /// Cached result from a coalesced request
 #[derive(Clone)]
 enum CachedResult {
@@ -90,6 +92,12 @@ impl RequestCoalescer {
                 }
             }
             Entry::Vacant(e) => {
+                if self.inflight.len() >= MAX_INFLIGHT_REQUESTS {
+                    return Err(Error::DownloadError(format!(
+                        "Too many in-flight federation requests (max {})",
+                        MAX_INFLIGHT_REQUESTS
+                    )));
+                }
                 // We are the leader - create broadcast channel and register
                 let (tx, _rx) = broadcast::channel::<CachedResult>(1);
                 e.insert(tx.clone());
@@ -124,6 +132,12 @@ impl RequestCoalescer {
                         }
                     }
                     dashmap::mapref::entry::Entry::Vacant(e) => {
+                        if self.inflight.len() >= MAX_INFLIGHT_REQUESTS {
+                            return Err(Error::DownloadError(format!(
+                                "Too many in-flight federation requests (max {})",
+                                MAX_INFLIGHT_REQUESTS
+                            )));
+                        }
                         let (tx, _rx) = broadcast::channel::<CachedResult>(1);
                         e.insert(tx.clone());
                         tx
@@ -271,5 +285,20 @@ mod tests {
 
         // After completion, should be cleaned up
         assert_eq!(coalescer.inflight_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_rejects_new_requests_when_inflight_cap_reached() {
+        let coalescer = RequestCoalescer::new();
+        for n in 0..MAX_INFLIGHT_REQUESTS {
+            let (tx, _rx) = broadcast::channel(1);
+            coalescer.inflight.insert(format!("hash-{n}"), tx);
+        }
+
+        let err = coalescer
+            .coalesce("overflow", || async { Ok(vec![1, 2, 3]) })
+            .await
+            .expect_err("new requests should be rejected once the in-flight map is full");
+        assert!(err.to_string().contains("Too many in-flight federation requests"));
     }
 }

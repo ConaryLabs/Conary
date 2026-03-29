@@ -7,7 +7,8 @@ use anyhow::Result;
 use conary_core::db::paths::objects_dir;
 use conary_core::self_update::{
     LatestVersionInfo, VersionCheckResult, apply_update, check_for_update,
-    download_update_with_progress, extract_binary, get_update_channel, validate_download_origin,
+    download_update_with_progress, extract_binary, fetch_latest_version_info,
+    get_update_channel,
 };
 
 fn check_update_signature(
@@ -128,18 +129,10 @@ pub async fn cmd_self_update(
             ..
         } => (download_url.clone(), sha256.clone(), latest.clone()),
         VersionCheckResult::UpToDate { .. } => {
-            // --force path: re-fetch latest info using the same timeout as the normal path
-            let client = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .map_err(|e| anyhow::anyhow!("Failed to build HTTP client: {e}"))?;
-            let info: LatestVersionInfo = client
-                .get(format!("{channel_url}/latest"))
-                .send()
-                .await?
-                .json()
-                .await?;
-            validate_download_origin(&channel_url, &info.download_url)?;
+            // --force path: re-fetch latest info using the same bounded metadata path
+            let info: LatestVersionInfo =
+                fetch_latest_version_info(&channel_url, &format!("conary/{current_version}"))
+                    .await?;
             check_update_signature(&info.sha256, &info.signature, no_verify)?;
             (info.download_url, info.sha256, info.version)
         }

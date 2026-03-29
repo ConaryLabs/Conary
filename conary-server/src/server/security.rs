@@ -37,6 +37,32 @@ struct RateBucket {
     last_update: Instant,
 }
 
+fn evict_rate_limit_entries(
+    buckets: &mut HashMap<String, RateBucket>,
+    ip: &str,
+    now: Instant,
+    max_buckets: usize,
+) {
+    if buckets.len() < max_buckets || buckets.contains_key(ip) {
+        return;
+    }
+
+    let max_idle = Duration::from_secs(60);
+    buckets.retain(|_, bucket| now.duration_since(bucket.last_update) < max_idle);
+
+    if buckets.len() < max_buckets || buckets.contains_key(ip) {
+        return;
+    }
+
+    if let Some(oldest_key) = buckets
+        .iter()
+        .min_by_key(|(_, bucket)| bucket.last_update)
+        .map(|(key, _)| key.clone())
+    {
+        buckets.remove(&oldest_key);
+    }
+}
+
 impl RateLimiter {
     pub fn new(rps: u32, burst: u32) -> Self {
         Self {
@@ -54,11 +80,7 @@ impl RateLimiter {
         let mut buckets = self.buckets.write().await;
         let now = Instant::now();
 
-        // Evict stale entries when at capacity
-        if buckets.len() >= RATE_LIMITER_MAX_BUCKETS && !buckets.contains_key(ip) {
-            let max_idle = Duration::from_secs(60);
-            buckets.retain(|_, bucket| now.duration_since(bucket.last_update) < max_idle);
-        }
+        evict_rate_limit_entries(&mut buckets, ip, now, RATE_LIMITER_MAX_BUCKETS);
 
         let bucket = buckets.entry(ip.to_string()).or_insert_with(|| RateBucket {
             tokens: self.burst as f64,
@@ -288,5 +310,31 @@ mod tests {
         // Should be cleaned up
         let bans = ban_list.bans.read().await;
         assert!(bans.is_empty());
+    }
+
+    #[test]
+    fn test_rate_limiter_eviction_evicts_oldest_when_capacity_remains_full() {
+        let now = Instant::now();
+        let mut buckets = HashMap::new();
+        buckets.insert(
+            "oldest".to_string(),
+            RateBucket {
+                tokens: 1.0,
+                last_update: now - Duration::from_secs(5),
+            },
+        );
+        buckets.insert(
+            "newer".to_string(),
+            RateBucket {
+                tokens: 1.0,
+                last_update: now - Duration::from_secs(1),
+            },
+        );
+
+        evict_rate_limit_entries(&mut buckets, "incoming", now, 2);
+
+        assert_eq!(buckets.len(), 1);
+        assert!(!buckets.contains_key("oldest"));
+        assert!(buckets.contains_key("newer"));
     }
 }

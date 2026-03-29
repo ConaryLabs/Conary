@@ -89,6 +89,9 @@ pub fn verify_update_signature(
 /// Default update channel URL
 pub const DEFAULT_UPDATE_CHANNEL: &str = "https://packages.conary.io/v1/ccs/conary";
 
+/// Maximum size of the `/latest` JSON response before deserialization (1 MiB).
+const MAX_SELF_UPDATE_METADATA_SIZE: usize = 1024 * 1024;
+
 /// Settings key for the update channel override
 const SETTINGS_KEY_UPDATE_CHANNEL: &str = "update-channel";
 
@@ -150,6 +153,87 @@ pub fn validate_download_origin(channel_url: &str, download_url: &str) -> Result
     }
 
     Ok(())
+}
+
+fn parse_latest_version_info_bytes(bytes: &[u8]) -> Result<LatestVersionInfo> {
+    if bytes.len() > MAX_SELF_UPDATE_METADATA_SIZE {
+        return Err(Error::ParseError(format!(
+            "Update response too large ({} bytes, max {} bytes)",
+            bytes.len(),
+            MAX_SELF_UPDATE_METADATA_SIZE
+        )));
+    }
+
+    serde_json::from_slice(bytes)
+        .map_err(|e| Error::ParseError(format!("Invalid update response: {e}")))
+}
+
+async fn read_limited_response_bytes(
+    mut response: reqwest::Response,
+    limit: usize,
+    context: &str,
+) -> Result<Vec<u8>> {
+    if let Some(content_length) = response.content_length()
+        && content_length > limit as u64
+    {
+        return Err(Error::ParseError(format!(
+            "{context} too large ({} bytes, max {} bytes)",
+            content_length, limit
+        )));
+    }
+
+    let mut bytes = Vec::new();
+    let mut total = 0usize;
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| Error::IoError(format!("Failed to read {context}: {e}")))?
+    {
+        total += chunk.len();
+        if total > limit {
+            return Err(Error::ParseError(format!(
+                "{context} too large ({} bytes, max {} bytes)",
+                total, limit
+            )));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+
+    Ok(bytes)
+}
+
+pub async fn fetch_latest_version_info(
+    channel_url: &str,
+    user_agent: &str,
+) -> Result<LatestVersionInfo> {
+    use std::time::Duration;
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| Error::IoError(format!("Failed to create HTTP client: {e}")))?;
+
+    let url = format!("{channel_url}/latest");
+    let response = client
+        .get(&url)
+        .header("User-Agent", user_agent)
+        .send()
+        .await
+        .map_err(|e| Error::IoError(format!("Failed to check for updates: {e}")))?;
+
+    if !response.status().is_success() {
+        return Err(Error::IoError(format!(
+            "Update check failed: HTTP {}",
+            response.status()
+        )));
+    }
+
+    let bytes =
+        read_limited_response_bytes(response, MAX_SELF_UPDATE_METADATA_SIZE, "update response")
+            .await?;
+    let info = parse_latest_version_info_bytes(&bytes)?;
+    validate_download_origin(channel_url, &info.download_url)?;
+    Ok(info)
 }
 
 /// Compare two semver version strings. Returns true if `remote` is newer than `current`.
@@ -240,33 +324,8 @@ pub async fn check_for_update(
     channel_url: &str,
     current_version: &str,
 ) -> Result<VersionCheckResult> {
-    use std::time::Duration;
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|e| Error::IoError(format!("Failed to create HTTP client: {e}")))?;
-
-    let url = format!("{channel_url}/latest");
-    let response = client
-        .get(&url)
-        .header("User-Agent", format!("conary/{current_version}"))
-        .send()
-        .await
-        .map_err(|e| Error::IoError(format!("Failed to check for updates: {e}")))?;
-
-    if !response.status().is_success() {
-        return Err(Error::IoError(format!(
-            "Update check failed: HTTP {}",
-            response.status()
-        )));
-    }
-
-    let info: LatestVersionInfo = response
-        .json()
-        .await
-        .map_err(|e| Error::ParseError(format!("Invalid update response: {e}")))?;
-    validate_download_origin(channel_url, &info.download_url)?;
+    let info =
+        fetch_latest_version_info(channel_url, &format!("conary/{current_version}")).await?;
 
     if is_newer(current_version, &info.version) {
         Ok(VersionCheckResult::UpdateAvailable {
@@ -638,6 +697,13 @@ mod tests {
         )
         .unwrap_err();
         assert!(format!("{err}").contains("origin mismatch"));
+    }
+
+    #[test]
+    fn test_parse_latest_version_info_rejects_large_response() {
+        let oversized = vec![b'{' ; MAX_SELF_UPDATE_METADATA_SIZE + 1];
+        let err = parse_latest_version_info_bytes(&oversized).unwrap_err();
+        assert!(err.to_string().contains("too large"));
     }
 
     #[test]
