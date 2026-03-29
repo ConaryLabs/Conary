@@ -147,8 +147,8 @@ pub enum CcsCommands {
         #[arg(long, value_delimiter = ',')]
         components: Option<Vec<String>>,
 
-        /// Sandbox mode for hooks: auto, always, never (default: never)
-        #[arg(long, value_enum, default_value_t = crate::cli::CliSandboxMode::Never)]
+        /// Sandbox mode for hooks: auto, always, never (default: always)
+        #[arg(long, value_enum, default_value_t = crate::cli::CliSandboxMode::Always)]
         sandbox: crate::cli::CliSandboxMode,
 
         /// Skip dependency checking

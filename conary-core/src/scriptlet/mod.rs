@@ -97,10 +97,10 @@ fn check_scriptlet_status(phase: &str, status: ExitStatus, context: &str) -> Res
 pub enum SandboxMode {
     /// No sandboxing - direct execution
     None,
-    /// Automatic - sandbox based on script risk analysis (default)
-    #[default]
+    /// Automatic - sandbox based on script risk analysis
     Auto,
     /// Always sandbox all scripts
+    #[default]
     Always,
 }
 
@@ -373,7 +373,7 @@ impl ScriptletExecutor {
     }
 
     fn live_sandbox_config(&self) -> ContainerConfig {
-        let mut config = ContainerConfig::default();
+        let mut config = ContainerConfig::default().for_untrusted();
         config.timeout = self.timeout;
         config.bind_mounts.retain(|mount| {
             !LIVE_SANDBOX_PROTECTED_ETC_FILES
@@ -975,8 +975,8 @@ mod tests {
     }
 
     #[test]
-    fn test_sandbox_mode_default_is_auto() {
-        assert_eq!(SandboxMode::default(), SandboxMode::Auto);
+    fn test_sandbox_mode_default_is_always() {
+        assert_eq!(SandboxMode::default(), SandboxMode::Always);
     }
 
     #[test]
@@ -1006,10 +1006,10 @@ mod tests {
     }
 
     #[test]
-    fn test_executor_default_sandbox_is_auto() {
+    fn test_executor_default_sandbox_is_always() {
         let executor =
             ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm);
-        assert_eq!(executor.sandbox_mode, SandboxMode::Auto);
+        assert_eq!(executor.sandbox_mode, SandboxMode::Always);
     }
 
     #[test]

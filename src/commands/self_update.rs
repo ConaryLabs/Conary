@@ -4,12 +4,27 @@
 
 use super::open_db;
 use anyhow::Result;
+use conary_core::db::models::settings;
 use conary_core::db::paths::objects_dir;
 use conary_core::self_update::{
     LatestVersionInfo, VersionCheckResult, apply_update, check_for_update,
     download_update_with_progress, extract_binary, fetch_latest_version_info,
     get_update_channel,
 };
+use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+const NO_VERIFY_AUDIT_KEY: &str = "self-update.no-verify-audit";
+const MAX_NO_VERIFY_AUDIT_EVENTS: usize = 20;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct NoVerifyAuditEvent {
+    timestamp_unix: u64,
+    channel_url: String,
+    current_version: String,
+    target_version: String,
+}
 
 fn check_update_signature(
     sha256: &str,
@@ -58,6 +73,46 @@ fn check_update_signature(
     Ok(())
 }
 
+fn record_no_verify_audit_event(
+    conn: &Connection,
+    have_trusted_keys: bool,
+    channel_url: &str,
+    current_version: &str,
+    target_version: &str,
+) -> Result<()> {
+    if !have_trusted_keys {
+        return Ok(());
+    }
+
+    let mut events = settings::get(conn, NO_VERIFY_AUDIT_KEY)?
+        .and_then(|value| serde_json::from_str::<Vec<NoVerifyAuditEvent>>(&value).ok())
+        .unwrap_or_default();
+
+    let timestamp_unix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| anyhow::anyhow!("System clock before Unix epoch: {e}"))?
+        .as_secs();
+
+    events.push(NoVerifyAuditEvent {
+        timestamp_unix,
+        channel_url: channel_url.to_string(),
+        current_version: current_version.to_string(),
+        target_version: target_version.to_string(),
+    });
+
+    if events.len() > MAX_NO_VERIFY_AUDIT_EVENTS {
+        let drop_count = events.len() - MAX_NO_VERIFY_AUDIT_EVENTS;
+        events.drain(0..drop_count);
+    }
+
+    settings::set(conn, NO_VERIFY_AUDIT_KEY, &serde_json::to_string(&events)?)?;
+    eprintln!(
+        "Warning: --no-verify bypassed update signature verification even though trusted keys are configured. Event recorded in {}.",
+        NO_VERIFY_AUDIT_KEY
+    );
+    Ok(())
+}
+
 pub async fn cmd_self_update(
     db_path: &str,
     check: bool,
@@ -68,6 +123,7 @@ pub async fn cmd_self_update(
     let current_version = env!("CARGO_PKG_VERSION");
     let conn = open_db(db_path)?;
     let channel_url = get_update_channel(&conn)?;
+    let have_trusted_keys = !conary_core::self_update::TRUSTED_UPDATE_KEYS.is_empty();
 
     println!("Current version: {current_version}");
     println!("Update channel: {channel_url}");
@@ -138,6 +194,16 @@ pub async fn cmd_self_update(
         }
     };
 
+    if no_verify {
+        record_no_verify_audit_event(
+            &conn,
+            have_trusted_keys,
+            &channel_url,
+            current_version,
+            &expected_version,
+        )?;
+    }
+
     // Determine target binary path (the currently running binary)
     let target_path = std::env::current_exe()
         .map_err(|e| anyhow::anyhow!("Cannot determine current binary path: {e}"))?;
@@ -173,4 +239,39 @@ pub async fn cmd_self_update(
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{NO_VERIFY_AUDIT_KEY, record_no_verify_audit_event};
+    use conary_core::db::models::settings;
+    use conary_core::db::schema;
+    use rusqlite::Connection;
+
+    fn create_test_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        schema::migrate(&conn).unwrap();
+        conn
+    }
+
+    #[test]
+    fn record_no_verify_audit_event_persists_when_trusted_keys_exist() {
+        let conn = create_test_db();
+
+        record_no_verify_audit_event(
+            &conn,
+            true,
+            "https://packages.conary.io/v1/ccs/conary",
+            "0.7.0",
+            "0.8.0",
+        )
+        .unwrap();
+
+        let value = settings::get(&conn, NO_VERIFY_AUDIT_KEY)
+            .unwrap()
+            .expect("audit record should be written");
+        assert!(value.contains("\"current_version\":\"0.7.0\""));
+        assert!(value.contains("\"target_version\":\"0.8.0\""));
+    }
 }

@@ -355,12 +355,28 @@ fn cas_gc(db_path: &str, surviving_gen_numbers: &[i64]) -> Result<()> {
 /// Returns `None` if no `conary.generation=N` parameter is present.
 fn booted_generation() -> Option<i64> {
     let cmdline = std::fs::read_to_string("/proc/cmdline").ok()?;
-    cmdline
+    booted_generation_from_cmdline(&cmdline, Path::new("/conary"))
+}
+
+fn booted_generation_from_cmdline(cmdline: &str, conary_root: &Path) -> Option<i64> {
+    let generation: i64 = cmdline
         .split_whitespace()
         .find(|p| p.starts_with("conary.generation="))?
         .strip_prefix("conary.generation=")?
         .parse()
-        .ok()
+        .ok()?;
+
+    let generation_dir = conary_root.join("generations").join(generation.to_string());
+    if generation_dir.is_dir() {
+        Some(generation)
+    } else {
+        warn!(
+            "Ignoring booted generation {} because {} does not exist",
+            generation,
+            generation_dir.display()
+        );
+        None
+    }
 }
 
 /// Read GC root entries from the database.
@@ -725,8 +741,9 @@ pub fn cmd_generation_recover(db_path: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_side_effect_reasons, etc_state_paths, load_gc_roots, parse_gc_root_setting,
-        remove_generation_etc_state, removed_members_for_side_effect_warning,
+        booted_generation_from_cmdline, classify_side_effect_reasons, etc_state_paths,
+        load_gc_roots, parse_gc_root_setting, remove_generation_etc_state,
+        removed_members_for_side_effect_warning,
     };
     use conary_core::db::models::settings;
     use conary_core::db::schema;
@@ -828,5 +845,28 @@ mod tests {
 
         settings::set(&conn, "generation.gc_roots", "[7,5]").unwrap();
         assert_eq!(load_gc_roots(&conn).unwrap(), vec![5, 7]);
+    }
+
+    #[test]
+    fn booted_generation_ignores_missing_generation_directory() {
+        let temp_dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(temp_dir.path().join("generations")).unwrap();
+
+        assert_eq!(
+            booted_generation_from_cmdline("quiet conary.generation=7", temp_dir.path()),
+            None
+        );
+    }
+
+    #[test]
+    fn booted_generation_accepts_existing_generation_directory() {
+        let temp_dir = TempDir::new().unwrap();
+        let gen_dir = temp_dir.path().join("generations/7");
+        std::fs::create_dir_all(&gen_dir).unwrap();
+
+        assert_eq!(
+            booted_generation_from_cmdline("quiet conary.generation=7", temp_dir.path()),
+            Some(7)
+        );
     }
 }

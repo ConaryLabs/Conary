@@ -125,11 +125,17 @@ pub fn safe_join(root: impl AsRef<Path>, path: impl AsRef<Path>) -> Result<PathB
     let root = root.as_ref();
     let sanitized = sanitize_path(path.as_ref())?;
     let joined = root.join(&sanitized);
+    let canonical_root = root.canonicalize().map_err(|e| {
+        Error::PathTraversal(format!(
+            "Failed to canonicalize root {}: {}",
+            root.display(),
+            e
+        ))
+    })?;
 
     // Defense in depth: verify the result is under root.
     // First try canonicalize (works when the full path exists).
-    if let (Ok(canonical_root), Ok(canonical_joined)) = (root.canonicalize(), joined.canonicalize())
-    {
+    if let Ok(canonical_joined) = joined.canonicalize() {
         if !canonical_joined.starts_with(&canonical_root) {
             return Err(Error::PathTraversal(format!(
                 "Path {} escapes root {}",
@@ -145,13 +151,6 @@ pub fn safe_join(root: impl AsRef<Path>, path: impl AsRef<Path>) -> Result<PathB
     // can plant a symlink inside root so that the joined path resolves
     // outside root once the caller creates the file.
     //
-    // If the root itself doesn't exist, we can't do symlink checks but
-    // sanitize_path already rejected traversal components.
-    let canonical_root = match root.canonicalize() {
-        Ok(cr) => cr,
-        Err(_) => return Ok(joined),
-    };
-
     let mut check = root.to_path_buf();
     for component in sanitized.components() {
         check.push(component);
@@ -317,6 +316,16 @@ mod tests {
         let root = PathBuf::from("/tmp/test");
         assert!(safe_join(&root, "../etc/passwd").is_err());
         assert!(safe_join(&root, "usr/../../etc/passwd").is_err());
+    }
+
+    #[test]
+    fn test_safe_join_rejects_uncanonicalizable_root() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let missing_root = temp_dir.path().join("missing-root");
+
+        let err = safe_join(&missing_root, "usr/bin/foo")
+            .expect_err("missing roots should fail closed instead of silently passing");
+        assert!(err.to_string().contains("canonical"));
     }
 
     #[test]

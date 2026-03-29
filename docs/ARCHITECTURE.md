@@ -391,6 +391,12 @@ kernel 6.16.1). All recipes carry SHA-256 checksums enforced at
 build time (`--skip-verify` to override). All stages run in
 sandboxed containers via `ContainerConfig::pristine_for_bootstrap()`.
 
+Bootstrap trust has a TOFU boundary: the first trusted TUF root metadata and
+bootstrap source manifests must arrive through an authenticated out-of-band
+channel or another operator-controlled path. `--skip-verify` is only an
+explicit bootstrap escape hatch and does not establish repository trust by
+itself.
+
 Supports x86_64, aarch64, and riscv64 targets. Dry-run mode
 (`--dry-run`) validates the full pipeline without building.
 

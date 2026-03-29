@@ -13,6 +13,16 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use tracing::info;
 
+fn skip_verify_warning_message() -> &'static str {
+    "WARNING: UNSAFE bootstrap mode enabled via --skip-verify. placeholder source checksums will be accepted, so only use this during an authenticated bootstrap flow where you independently trust the source tarballs."
+}
+
+fn print_skip_verify_warning(skip_verify: bool) {
+    if skip_verify {
+        eprintln!("{}", skip_verify_warning_message());
+    }
+}
+
 /// Initialize bootstrap environment
 pub async fn cmd_bootstrap_init(work_dir: &str, target: &str, jobs: Option<usize>) -> Result<()> {
     println!("Initializing bootstrap environment...");
@@ -402,6 +412,7 @@ pub async fn cmd_bootstrap_cross_tools(
 ) -> Result<()> {
     println!("Building Phase 1: Cross-Toolchain (LFS Ch5)...");
     println!("  Work directory: {}", work_dir);
+    print_skip_verify_warning(skip_verify);
 
     let mut config = BootstrapConfig::new()
         .with_verbose(verbose)
@@ -442,6 +453,7 @@ pub async fn cmd_bootstrap_temp_tools(
 ) -> Result<()> {
     println!("Building Phase 2: Temporary Tools (LFS Ch6-7)...");
     println!("  Work directory: {}", work_dir);
+    print_skip_verify_warning(skip_verify);
 
     let mut config = BootstrapConfig::new()
         .with_verbose(verbose)
@@ -479,6 +491,7 @@ pub async fn cmd_bootstrap_system(
 ) -> Result<()> {
     println!("Building Phase 3: Final System (LFS Ch8)...");
     println!("  Work directory: {}", work_dir);
+    print_skip_verify_warning(skip_verify);
 
     let mut config = BootstrapConfig::new()
         .with_verbose(verbose)
@@ -546,6 +559,7 @@ pub async fn cmd_bootstrap_tier2(
 ) -> Result<()> {
     println!("Building Phase 6: Tier-2 Packages (BLFS + Conary)...");
     println!("  Work directory: {}", work_dir);
+    print_skip_verify_warning(skip_verify);
 
     let mut config = BootstrapConfig::new()
         .with_verbose(verbose)
@@ -570,6 +584,19 @@ pub async fn cmd_bootstrap_tier2(
     println!("  The system is now self-hosting.");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::skip_verify_warning_message;
+
+    #[test]
+    fn skip_verify_warning_message_is_prominent() {
+        let warning = skip_verify_warning_message();
+        assert!(warning.contains("UNSAFE"));
+        assert!(warning.contains("--skip-verify"));
+        assert!(warning.contains("placeholder"));
+    }
 }
 
 /// Package cross-tools output as a derivation seed
