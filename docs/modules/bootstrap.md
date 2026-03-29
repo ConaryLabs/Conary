@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-03-24
-revision: 1
-summary: Rewrite to match refactored 6-phase bootstrap module (LFS 13 aligned)
+last_updated: 2026-03-28
+revision: 2
+summary: Document the current bootstrap command surface and its six-phase pipeline
 ---
 
 # Bootstrap Module (conary-core/src/bootstrap/)
@@ -114,5 +114,23 @@ can be booted directly or used as the foundation for a Conary-managed
 system.
 
 Supports x86_64, aarch64, and riscv64 targets.
+
+## Canonical CLI
+
+The active user-facing bootstrap commands are:
+
+```bash
+conary bootstrap init --target x86_64
+conary bootstrap cross-tools
+conary bootstrap temp-tools
+conary bootstrap system
+conary bootstrap config
+conary bootstrap image --format qcow2
+conary bootstrap tier2
+conary bootstrap run conaryos.toml --seed ./seed
+```
+
+Older phase-style bootstrap names are no longer the public CLI and should not
+appear in active docs or tests.
 
 See also: [docs/ARCHITECTURE.md](/docs/ARCHITECTURE.md).

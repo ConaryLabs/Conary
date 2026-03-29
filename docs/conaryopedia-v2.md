@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-03-28
-revision: 9
-summary: Refresh schema, federation trust, and security implementation references
+revision: 10
+summary: Refresh command examples and feature-maturity notes after the feature-claims sweep
 ---
 
 # Conaryopedia v2
@@ -3875,11 +3875,11 @@ The audit workflow:
 
 ### CLI Commands
 
-- `conary capability audit <package>` -- shows what enforcement would be applied; compares declared vs. inferred capabilities and reports discrepancies
-- `conary capability audit --all` -- scan every installed package
+- `conary capability list` -- show installed packages with or without declarations
+- `conary capability show <package>` -- print the stored declaration for an installed package
+- `conary capability validate <path/to/ccs.toml>` -- validate declaration syntax in a manifest
 - `conary capability run <package> -- <command>` -- enforces capability restrictions (landlock + seccomp) while running `<command>`
-- `conary capability enforce <package> -- <command>` -- alias for `capability run`
-- `--permissive` flag -- audit/log mode; violations are logged but not blocked (uses `EnforcementMode::Audit` instead of `EnforcementMode::Enforce`)
+- `conary capability run <package> --audit -- <command>` -- audit/log mode; violations are logged but not blocked
 
 ## 7.6 Container Sandboxing
 
@@ -3981,7 +3981,7 @@ fork()
     SIGKILL on timeout                        // Force-kill hung scripts
 ```
 
-The capability enforcement policy (section 7.3) integrates with the container: if `config.capability_policy` is set, Landlock and seccomp filters are applied inside the container after namespace setup but before script execution. This provides defense-in-depth: namespaces isolate the environment, Landlock restricts filesystem access within the container, and seccomp limits available syscalls.
+The runtime capability policy (section 7.3) integrates with the container: if `config.capability_policy` is set, Landlock and seccomp filters are applied inside the container after namespace setup but before script execution. This provides defense-in-depth: namespaces isolate the environment, Landlock restricts filesystem access within the container, and seccomp limits available syscalls.
 
 ### Fallback Behavior
 
@@ -4400,7 +4400,7 @@ Layer 5: Script Analysis
   Hermetic builds block all network access during compilation.
 ```
 
-No single layer is sufficient. A compromised repository (layer 1 bypassed) still faces capability enforcement (layer 4). A package with overly broad capabilities (layer 3 insufficient) is still constrained by seccomp filters (layer 4) and its provenance is still traceable (layer 2). A malicious scriptlet (layer 5 missed) is still sandboxed in a container with resource limits.
+No single layer is sufficient. A compromised repository (layer 1 bypassed) still faces runtime capability restrictions (layer 4). A package with overly broad capabilities (layer 3 insufficient) is still constrained by seccomp filters (layer 4) and its provenance is still traceable (layer 2). A malicious scriptlet (layer 5 missed) is still sandboxed in a container with resource limits.
 
 ---
 
@@ -5283,11 +5283,13 @@ In `Advisory` mode, the AI analyzes the situation and explains its reasoning, bu
 ```bash
 conary automation status           # Show pending suggestions
 conary automation check            # Run all detection checks
-conary automation apply <id>       # Apply a specific suggestion
-conary automation apply --all      # Apply all safe suggestions
-conary automation dismiss <id>     # Dismiss a suggestion
-conary automation history          # Show past actions
+conary automation apply --dry-run --yes   # Preview pending safe actions
+conary automation configure --show        # Show effective defaults / current file path
 ```
+
+`automation history`, background daemon mode, and persisting configuration
+changes are still preview-only surfaces and currently return explicit
+"not yet implemented" guidance rather than mutating state.
 
 ### 8.7 Transaction Engine: Composefs-Native Operations
 

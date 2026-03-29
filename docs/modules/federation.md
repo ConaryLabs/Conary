@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-03-28
-revision: 1
-summary: Document current federation trust controls, peer identity, and discovery rules
+revision: 2
+summary: Document current federation trust controls, peer identity, discovery rules, and CLI peer management
 ---
 
 # Federation Module (conary-server/src/federation/)
@@ -91,5 +91,19 @@ It extends the ChunkFetcher trait used by the Remi server, adding a
 peer layer between local CAS and upstream origin. Manifests reuse
 the CCS Ed25519 signing infrastructure, while peer admission layers on
 allowlists, TLS pinning, and optional mDNS discovery.
+
+## CLI Notes
+
+The local CLI peer-management path now follows the same identity rule as the
+server admin API:
+
+```bash
+conary federation add-peer https://peer.example:7891 \
+  --tier cell_hub \
+  --tls-fingerprint 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+```
+
+HTTPS peers require `--tls-fingerprint`; HTTP peers cannot use one and remain
+appropriate only for explicitly trusted LAN scopes.
 
 See also: [docs/ARCHITECTURE.md](/docs/ARCHITECTURE.md).

@@ -9,6 +9,7 @@ cargo test                               # Default workspace tests
 cargo test --features server             # Full workspace verification, including server paths
 cargo build -p conary-test               # Test infrastructure crate
 cargo test -p conary-test                # Test engine unit tests
+cargo run -p conary-test -- list         # Manifest sanity / suite inventory
 cargo clippy -- -D warnings              # Lint
 cargo clippy --features server -- -D warnings
 cargo fmt --check                        # Format check
@@ -61,7 +62,7 @@ Scopes are optional: `feat(resolver): add SAT backtracking`.
 - **Generation**: Immutable EROFS image + composefs mount representing a system state
 - **conary-test**: Test infrastructure -- declarative TOML engine, container management (bollard), HTTP API, MCP (23 tools)
 
-Database schema is currently **v64** (`conary-core/src/db/schema.rs`). Keep docs aligned with code instead of copying old schema, migration, or test-count claims forward.
+Database schema is currently **v65** (`conary-core/src/db/schema.rs`). Keep docs aligned with code instead of copying old schema, migration, or test-count claims forward.
 
 ## Tool Selection
 

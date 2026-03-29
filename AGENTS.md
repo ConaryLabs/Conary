@@ -16,7 +16,7 @@ Conary is a Rust workspace. The CLI lives in `src/` (`src/commands/`, `src/cli/`
 Use standard Rust formatting (`cargo fmt`) and keep Clippy clean. Indentation is 4 spaces. Follow Rust naming conventions: `snake_case` for functions/modules, `CamelCase` for types, `SCREAMING_SNAKE_CASE` for constants. Keep modules focused by subsystem. This repository expects each Rust source file to begin with a path comment such as `// conary-core/src/...`.
 
 ## Testing Guidelines
-Prefer small unit tests near the code they cover and integration tests in `tests/` for end-to-end flows. Name tests descriptively, for example `test_prepare_discovered_peer_rejects_https_without_pinned_fingerprint`. When touching server code, always rerun with `--features server`. Security and transaction changes should include regression coverage.
+Prefer small unit tests near the code they cover and integration tests in `tests/` for end-to-end flows. Name tests descriptively, for example `test_prepare_discovered_peer_rejects_https_without_pinned_fingerprint`. When touching server code, always rerun with `--features server`. When editing Remi phase manifests, run `cargo run -p conary-test -- list` to catch parse drift early. Security and transaction changes should include regression coverage.
 
 ## Commit & Pull Request Guidelines
 Recent history uses conventional-style prefixes such as `fix:`, `security:`, and `docs:`. Keep commit subjects short and imperative, e.g. `security(federation): pin https peer identity`. PRs should explain the problem, summarize the fix, list verification commands run, and link the relevant issue/plan entry. Include logs or API examples when behavior changes are not obvious from the diff.
