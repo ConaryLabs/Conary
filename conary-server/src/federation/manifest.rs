@@ -22,7 +22,7 @@
 //!
 //! // Sign it
 //! let keypair = SigningKeyPair::load_from_file(&key_path)?;
-//! let signed = manifest.sign(&keypair);
+//! let signed = manifest.sign(&keypair)?;
 //!
 //! // Verify it
 //! let trust_policy = ManifestTrustPolicy::strict(vec![public_key]);
@@ -138,21 +138,14 @@ impl FederationManifest {
     }
 
     /// Sign the manifest with the given key pair
-    ///
-    /// # Panics
-    ///
-    /// Panics if the manifest cannot be serialized to canonical bytes, which
-    /// should never happen for well-formed manifests.
-    pub fn sign(&self, keypair: &SigningKeyPair) -> Self {
-        let canonical = self
-            .canonical_bytes()
-            .expect("well-formed manifest should serialize");
+    pub fn sign(&self, keypair: &SigningKeyPair) -> Result<Self, ManifestError> {
+        let canonical = self.canonical_bytes()?;
         let signature = keypair.sign(&canonical);
 
-        Self {
+        Ok(Self {
             signature: Some(signature),
             ..self.clone()
-        }
+        })
     }
 
     /// Check if the manifest is signed
@@ -375,7 +368,7 @@ mod tests {
             .build();
 
         // Sign
-        let signed = manifest.sign(&keypair);
+        let signed = manifest.sign(&keypair).unwrap();
         assert!(signed.is_signed());
 
         // Verify with trusted key
@@ -417,7 +410,7 @@ mod tests {
             .add_chunk("chunk1", 100)
             .build();
 
-        let signed = manifest.sign(&keypair);
+        let signed = manifest.sign(&keypair).unwrap();
 
         // Verify with different key
         let policy = ManifestTrustPolicy::strict(vec![other_keypair.public_key_base64()]);
@@ -433,7 +426,7 @@ mod tests {
             .add_chunk("chunk1", 100)
             .build();
 
-        let signed = manifest.sign(&keypair);
+        let signed = manifest.sign(&keypair).unwrap();
         let policy = ManifestTrustPolicy::strict(Vec::new());
 
         let result = signed.verify(&policy);
@@ -448,7 +441,7 @@ mod tests {
             .add_chunk("chunk1", 100)
             .build();
 
-        let mut signed = manifest.sign(&keypair);
+        let mut signed = manifest.sign(&keypair).unwrap();
 
         // Tamper with the manifest
         signed.chunks[0].hash = "tampered_hash".to_string();
@@ -469,7 +462,7 @@ mod tests {
             .metadata("version", "1.0.0")
             .build();
 
-        let signed = manifest.sign(&keypair);
+        let signed = manifest.sign(&keypair).unwrap();
 
         // Serialize to JSON
         let json = signed.to_json().unwrap();

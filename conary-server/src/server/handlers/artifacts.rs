@@ -137,7 +137,8 @@ mod tests {
             chunk_dir,
             cache_dir,
             ..Default::default()
-        })));
+        })
+        .expect("test server state")));
         let app = Router::new()
             .route(
                 "/test-fixtures/{*path}",
@@ -194,7 +195,8 @@ mod tests {
             chunk_dir,
             cache_dir,
             ..Default::default()
-        })));
+        })
+        .expect("test server state")));
         let app = Router::new()
             .route(
                 "/test-artifacts/{*path}",

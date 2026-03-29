@@ -18,11 +18,12 @@ use std::collections::{HashMap, HashSet};
 use resolvo::{
     ConditionalRequirement, NameId, SolvableId, StringId, VersionSetId, VersionSetUnionId,
 };
+use tracing::error;
 
 use crate::db::models::{
     DependencyEntry, ProvideEntry, RepositoryProvide, Trove, generate_capability_variations,
 };
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::repository::versioning::VersionScheme;
 use crate::resolver::identity::PackageIdentity;
 use crate::resolver::provides_index::ProvidesIndex;
@@ -125,6 +126,24 @@ impl<'db> ConaryProvider<'db> {
         u32::try_from(len).map_err(|_| {
             crate::error::Error::PoolOverflow(format!(
                 "{pool_name} pool exceeds u32::MAX entries ({len})"
+            ))
+        })
+    }
+
+    fn solvable_id_from_index(&self, index: usize, context: &str) -> Option<SolvableId> {
+        match u32::try_from(index) {
+            Ok(index) => Some(SolvableId(index)),
+            Err(_) => {
+                error!("resolver solvable pool overflow while {context}: index={index}");
+                None
+            }
+        }
+    }
+
+    fn removal_deps_index(&self, index: usize) -> Result<u32> {
+        u32::try_from(index).map_err(|_| {
+            Error::ResolutionError(format!(
+                "resolver solvable pool overflow while indexing removal dependencies: {index}"
             ))
         })
     }
@@ -636,9 +655,7 @@ impl<'db> ConaryProvider<'db> {
             .map(|indices| {
                 indices
                     .iter()
-                    .map(|&i| {
-                        SolvableId(u32::try_from(i).expect("resolver solvable pool overflow"))
-                    })
+                    .filter_map(|&i| self.solvable_id_from_index(i, "collecting candidates by name"))
                     .collect()
             })
             .unwrap_or_default()
@@ -654,7 +671,7 @@ impl<'db> ConaryProvider<'db> {
                     .iter()
                     .any(|(provided, _version)| provided == capability)
             })
-            .map(|(i, _)| SolvableId(u32::try_from(i).expect("resolver solvable pool overflow")))
+            .filter_map(|(i, _)| self.solvable_id_from_index(i, "collecting capability providers"))
             .collect()
     }
 
@@ -665,7 +682,7 @@ impl<'db> ConaryProvider<'db> {
             indices
                 .iter()
                 .find(|&&i| self.solvables[i].installed_trove_id.is_some())
-                .map(|&i| SolvableId(u32::try_from(i).expect("resolver solvable pool overflow")))
+                .and_then(|&i| self.solvable_id_from_index(i, "selecting installed solvable"))
         })
     }
 
@@ -729,7 +746,7 @@ impl<'db> ConaryProvider<'db> {
                 .map(|d| dep_entry_to_solver_dep(d, solvable.version_scheme))
                 .collect();
 
-            let sid_index = u32::try_from(idx).expect("resolver solvable pool overflow");
+            let sid_index = self.removal_deps_index(idx)?;
             self.removal_deps.insert(sid_index, dep_list);
         }
 
@@ -1126,6 +1143,29 @@ mod tests {
 
         assert_eq!(candidates.len(), 2);
         assert_eq!(favored, Some(installed));
+    }
+
+    #[test]
+    fn test_solvable_id_from_index_overflow_returns_none() {
+        let (_dir, conn) = setup_test_db();
+        let provider = ConaryProvider::new(&conn);
+
+        assert!(
+            provider
+                .solvable_id_from_index(usize::MAX, "test overflow")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_removal_deps_index_overflow_returns_error() {
+        let (_dir, conn) = setup_test_db();
+        let provider = ConaryProvider::new(&conn);
+
+        let err = provider
+            .removal_deps_index(usize::MAX)
+            .expect_err("overflow should become an error instead of panicking");
+        assert!(err.to_string().contains("solvable"));
     }
 
     #[test]

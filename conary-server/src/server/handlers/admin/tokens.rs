@@ -199,7 +199,9 @@ mod tests {
             cache_dir: db_path.parent().unwrap().join("cache"),
             ..Default::default()
         };
-        let state2 = Arc::new(RwLock::new(crate::server::ServerState::new(config2)));
+        let state2 = Arc::new(RwLock::new(
+            crate::server::ServerState::new(config2).expect("test server state"),
+        ));
         let app2 = crate::server::routes::create_external_admin_router(state2, None);
 
         // DELETE /v1/admin/tokens/:id

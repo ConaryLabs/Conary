@@ -45,8 +45,10 @@ use nix::sys::signal::{Signal, kill};
 use nix::sys::wait::{WaitStatus, waitpid};
 use nix::unistd::{ForkResult, Gid, Pid, Uid, fork};
 use regex::RegexSet;
+use std::ffi::{CStr, CString};
 use std::fs::{self, File};
 use std::io::{Read, Write};
+use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -528,7 +530,7 @@ impl Sandbox {
         // Fork and execute in isolated namespaces
         let start = Instant::now();
 
-        match unsafe { fork() } {
+        match fork_process() {
             Ok(ForkResult::Parent { child }) => {
                 // Parent: close write ends of pipes (dropping OwnedFd closes them)
                 drop(stdout_write_fd);
@@ -567,10 +569,20 @@ impl Sandbox {
                 drop(userns_ack_write_fd);
 
                 // Redirect stdout and stderr to pipe write ends
-                use std::os::fd::FromRawFd;
-                // SAFETY: fd 1 (stdout) and fd 2 (stderr) are valid in a forked child
-                let mut stdout_target = unsafe { std::os::fd::OwnedFd::from_raw_fd(1) };
-                let mut stderr_target = unsafe { std::os::fd::OwnedFd::from_raw_fd(2) };
+                let mut stdout_target = match adopt_raw_fd(1) {
+                    Ok(fd) => fd,
+                    Err(err) => {
+                        eprintln!("{err}");
+                        std::process::exit(127);
+                    }
+                };
+                let mut stderr_target = match adopt_raw_fd(2) {
+                    Ok(fd) => fd,
+                    Err(err) => {
+                        eprintln!("{err}");
+                        std::process::exit(127);
+                    }
+                };
                 let _ = nix::unistd::dup2(&stdout_write_fd, &mut stdout_target);
                 let _ = nix::unistd::dup2(&stderr_write_fd, &mut stderr_target);
                 // Prevent OwnedFd from closing stdout/stderr when dropped
@@ -844,12 +856,10 @@ impl Sandbox {
         // Set hostname in UTS namespace
         if self.config.isolate_uts && !self.config.hostname.is_empty() {
             // Use libc directly for sethostname
-            let hostname = std::ffi::CString::new(self.config.hostname.as_str())
+            let hostname = CString::new(self.config.hostname.as_str())
                 .map_err(|e| Error::ScriptletError(format!("Invalid hostname: {}", e)))?;
-            unsafe {
-                if libc::sethostname(hostname.as_ptr(), self.config.hostname.len()) != 0 {
-                    warn!("sethostname failed");
-                }
+            if let Err(err) = sethostname_syscall(&hostname, self.config.hostname.len()) {
+                warn!("sethostname failed: {err}");
             }
         }
 
@@ -1022,19 +1032,13 @@ impl Sandbox {
     }
 
     fn chroot_into(&self, root: &Path) -> Result<()> {
-        unsafe {
-            let root_string = root.to_string_lossy().into_owned();
-            let root_cstr = std::ffi::CString::new(root_string)
-                .map_err(|e| Error::ScriptletError(format!("Invalid root path: {}", e)))?;
-            if libc::chroot(root_cstr.as_ptr()) != 0 {
-                return Err(Error::ScriptletError("chroot failed".to_string()));
-            }
-            if libc::chdir(c"/".as_ptr()) != 0 {
-                return Err(Error::ScriptletError(
-                    "chdir after chroot failed".to_string(),
-                ));
-            }
-        }
+        let root_string = root.to_string_lossy().into_owned();
+        let root_cstr = CString::new(root_string)
+            .map_err(|e| Error::ScriptletError(format!("Invalid root path: {}", e)))?;
+        chroot_syscall(&root_cstr)
+            .map_err(|e| Error::ScriptletError(format!("chroot failed: {e}")))?;
+        chdir_syscall(c"/")
+            .map_err(|e| Error::ScriptletError(format!("chdir after chroot failed: {e}")))?;
 
         Ok(())
     }
@@ -1096,11 +1100,56 @@ fn set_rlimit(resource: libc::__rlimit_resource_t, value: u64, name: &str) {
             rlim_cur: value,
             rlim_max: value,
         };
-        unsafe {
-            if libc::setrlimit(resource, &limit) != 0 {
-                warn!("setrlimit {} failed", name);
-            }
+        if let Err(err) = set_rlimit_syscall(resource, &limit) {
+            warn!("setrlimit {} failed: {}", name, err);
         }
+    }
+}
+
+fn fork_process() -> nix::Result<ForkResult> {
+    unsafe { fork() }
+}
+
+fn adopt_raw_fd(raw_fd: RawFd) -> Result<OwnedFd> {
+    if raw_fd < 0 {
+        return Err(Error::ScriptletError(format!("invalid stdio fd: {raw_fd}")));
+    }
+
+    Ok(unsafe { OwnedFd::from_raw_fd(raw_fd) })
+}
+
+fn sethostname_syscall(hostname: &CStr, len: usize) -> std::io::Result<()> {
+    if unsafe { libc::sethostname(hostname.as_ptr(), len) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+fn chroot_syscall(root: &CStr) -> std::io::Result<()> {
+    if unsafe { libc::chroot(root.as_ptr()) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+fn chdir_syscall(path: &CStr) -> std::io::Result<()> {
+    if unsafe { libc::chdir(path.as_ptr()) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+fn set_rlimit_syscall(
+    resource: libc::__rlimit_resource_t,
+    limit: &libc::rlimit,
+) -> std::io::Result<()> {
+    if unsafe { libc::setrlimit(resource, limit) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
     }
 }
 
@@ -1351,6 +1400,7 @@ pub fn isolation_available() -> bool {
 mod tests {
     use super::*;
     use crate::capability::enforcement::{EnforcementMode, EnforcementPolicy};
+    use std::os::fd::IntoRawFd;
 
     #[test]
     fn test_script_analysis_safe() {
@@ -1686,5 +1736,60 @@ fi
             .filter(|m| m.target.to_string_lossy().contains("resolv.conf"))
             .count();
         assert_eq!(resolv_count, 1);
+    }
+
+    #[test]
+    fn test_fork_process_returns_child_that_can_exit_cleanly() {
+        match fork_process().expect("fork should return an error instead of panicking") {
+            ForkResult::Parent { child } => {
+                let status = waitpid(child, None).expect("parent should be able to wait for child");
+                assert!(matches!(status, WaitStatus::Exited(_, 0)));
+            }
+            ForkResult::Child => std::process::exit(0),
+        }
+    }
+
+    #[test]
+    fn test_adopt_raw_fd_rejects_negative_fd() {
+        let err = adopt_raw_fd(-1).expect_err("negative fds should be rejected");
+        assert!(err.to_string().contains("invalid stdio fd"));
+    }
+
+    #[test]
+    fn test_adopt_raw_fd_accepts_valid_fd() {
+        let (read_fd, write_fd) = nix::unistd::pipe().expect("pipe");
+        let raw_fd = write_fd.into_raw_fd();
+        let adopted = adopt_raw_fd(raw_fd).expect("valid pipe fd should be adoptable");
+        drop(adopted);
+        drop(read_fd);
+    }
+
+    #[test]
+    fn test_sethostname_syscall_rejects_overlong_hostnames() {
+        let long_name = "a".repeat(256);
+        let long_name = std::ffi::CString::new(long_name).expect("hostname");
+        assert!(sethostname_syscall(&long_name, 256).is_err());
+    }
+
+    #[test]
+    fn test_chroot_syscall_rejects_missing_paths() {
+        let missing = std::ffi::CString::new("/definitely/missing/conary-root").expect("path");
+        assert!(chroot_syscall(&missing).is_err());
+    }
+
+    #[test]
+    fn test_chdir_syscall_rejects_missing_paths() {
+        let missing = std::ffi::CString::new("/definitely/missing/conary-dir").expect("path");
+        assert!(chdir_syscall(&missing).is_err());
+    }
+
+    #[test]
+    fn test_set_rlimit_syscall_rejects_invalid_resource() {
+        let limit = libc::rlimit {
+            rlim_cur: 1,
+            rlim_max: 1,
+        };
+        let invalid_resource = libc::__rlimit_resource_t::MAX;
+        assert!(set_rlimit_syscall(invalid_resource, &limit).is_err());
     }
 }
