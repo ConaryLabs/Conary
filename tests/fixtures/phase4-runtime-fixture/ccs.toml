@@ -1,0 +1,27 @@
+[package]
+name = "phase4-runtime-fixture"
+version = "1.0.0"
+description = "Phase 4 runtime fixture for config, label, trigger, and shell coverage"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["phase4-runtime-fixture"]
+binaries = ["/usr/bin/phase4-runtime-fixture"]
+
+[requires]
+capabilities = []
+packages = []
+
+[components]
+default = ["runtime"]
+
+[config]
+files = ["/etc/phase4-runtime-fixture/app.conf"]
+noreplace = true
+
+[hooks]

@@ -13,6 +13,15 @@ phase = 4
 [[suite.setup]]
 conary = "system init"
 
+[[suite.setup]]
+run = "rm -rf /tmp/phase4-runtime-fixture-output && mkdir -p /tmp/phase4-runtime-fixture-output && ${CONARY_BIN} ccs build /opt/remi-tests/fixtures/phase4-runtime-fixture --output /tmp/phase4-runtime-fixture-output --source /opt/remi-tests/fixtures/phase4-runtime-fixture/stage"
+
+[[suite.setup]]
+run = "CCS_FILE=$(ls /tmp/phase4-runtime-fixture-output/*.ccs | head -1) && ${CONARY_BIN} ccs install \"$CCS_FILE\" --allow-unsigned --sandbox never --reinstall --db-path ${DB_PATH}"
+
+[suite.setup.assert]
+exit_code = 0
+
 # --------------------------------------------------------------------------
 # T160: Config list
 # --------------------------------------------------------------------------
@@ -20,15 +29,15 @@ conary = "system init"
 [[test]]
 id = "T160"
 name = "config_list"
-description = "Verify config list runs without crashing"
+description = "List tracked config files for the runtime fixture"
 timeout = 30
 
 [[test.step]]
-conary = "config list"
+conary = "config list --all"
 
 [test.step.assert]
 exit_code = 0
-stdout_not_contains = "panic"
+stdout_contains = "/etc/phase4-runtime-fixture/app.conf"
 
 # --------------------------------------------------------------------------
 # T161: Config check
@@ -37,7 +46,7 @@ stdout_not_contains = "panic"
 [[test]]
 id = "T161"
 name = "config_check"
-description = "Verify config check returns exit 0 with no modified files"
+description = "Verify config check reports the fixture config file as pristine"
 timeout = 30
 
 [[test.step]]
@@ -45,77 +54,97 @@ conary = "config check"
 
 [test.step.assert]
 exit_code = 0
-stdout_not_contains = "panic"
+stdout_contains_all = ["Pristine: 1", "Modified: 0", "Missing:  0"]
 
 # --------------------------------------------------------------------------
-# T162: Config diff (untracked file -- graceful error)
+# T162: Config diff
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T162"
 name = "config_diff"
-description = "Verify config diff on an untracked file returns a meaningful error"
+description = "Modify a tracked config file and verify config diff shows the change"
 timeout = 30
 
-# /etc/hostname is not tracked by any package, so this must fail gracefully
 [[test.step]]
-conary = "config diff /etc/hostname"
+run = "printf 'mode = \"tuned\"\\nmessage = \"hello from phase4 runtime fixture\"\\n' > /etc/phase4-runtime-fixture/app.conf"
 
 [test.step.assert]
-exit_code_not = 0
-stderr_contains = "not tracked"
+exit_code = 0
+
+[[test.step]]
+conary = "config diff /etc/phase4-runtime-fixture/app.conf"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["--- /etc/phase4-runtime-fixture/app.conf (package version)", "-mode = \"stock\"", "+mode = \"tuned\""]
 
 # --------------------------------------------------------------------------
-# T163: Config backup (untracked file -- graceful error)
+# T163: Config backup
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T163"
 name = "config_backup"
-description = "Verify config backup on an untracked file returns a meaningful error"
+description = "Back up the modified tracked config file"
 timeout = 30
+depends_on = ["T162"]
 
-# /etc/hostname is not tracked by any package, so backup must fail gracefully
 [[test.step]]
-conary = "config backup /etc/hostname"
+conary = "config backup /etc/phase4-runtime-fixture/app.conf"
 
 [test.step.assert]
-exit_code_not = 0
-stderr_contains = "not tracked"
+exit_code = 0
+stdout_contains = "Backed up: /etc/phase4-runtime-fixture/app.conf"
 
 # --------------------------------------------------------------------------
-# T164: Config backups (untracked file -- graceful error)
+# T164: Config backups
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T164"
 name = "config_backups"
-description = "Verify config backups on an untracked file returns a meaningful error"
+description = "List backups for the tracked config file"
 timeout = 30
+depends_on = ["T163"]
 
 [[test.step]]
-conary = "config backups /etc/hostname"
+conary = "config backups /etc/phase4-runtime-fixture/app.conf"
 
 [test.step.assert]
-exit_code_not = 0
-stderr_contains = "not tracked"
+exit_code = 0
+stdout_contains_all = ["Backups for /etc/phase4-runtime-fixture/app.conf", "manual"]
 
 # --------------------------------------------------------------------------
-# T165: Config restore (untracked file -- graceful error)
+# T165: Config restore
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T165"
 name = "config_restore"
-description = "Verify config restore on an untracked file returns a meaningful error"
+description = "Restore the tracked config file from the latest backup"
 timeout = 30
+depends_on = ["T164"]
 
 [[test.step]]
-conary = "config restore /etc/hostname"
+run = "printf 'mode = \"broken\"\\nmessage = \"needs restore\"\\n' > /etc/phase4-runtime-fixture/app.conf"
 
 [test.step.assert]
-exit_code_not = 0
-stderr_contains = "not tracked"
+exit_code = 0
+
+[[test.step]]
+conary = "config restore /etc/phase4-runtime-fixture/app.conf"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "Restored: /etc/phase4-runtime-fixture/app.conf"
+
+[[test.step]]
+run = "grep -q 'mode = \"tuned\"' /etc/phase4-runtime-fixture/app.conf && echo restored-config"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "restored-config"
 
 # --------------------------------------------------------------------------
 # T166: Distro list

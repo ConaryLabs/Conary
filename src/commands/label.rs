@@ -18,7 +18,7 @@ pub async fn cmd_label_list(db_path: &str, verbose: bool) -> Result<()> {
 
     if labels.is_empty() {
         println!("No labels defined.");
-        println!("\nUse 'conary label-add <label>' to add a label.");
+        println!("\nUse 'conary query label add <label>' to add a label.");
         return Ok(());
     }
 
@@ -167,7 +167,7 @@ pub async fn cmd_label_path(
         let label = conary_core::db::models::LabelEntry::find_by_string(&conn, label_str)?
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "Label '{}' not found. Add it first with 'conary label-add'.",
+                    "Label '{}' not found. Add it first with 'conary query label add'.",
                     label_str
                 )
             })?;
@@ -196,7 +196,7 @@ pub async fn cmd_label_path(
 
     if path_entries.is_empty() {
         println!("Label path is empty.");
-        println!("\nUse 'conary label-path --add <label>' to add labels to the path.");
+        println!("\nUse 'conary query label path --add <label>' to add labels to the path.");
         return Ok(());
     }
 

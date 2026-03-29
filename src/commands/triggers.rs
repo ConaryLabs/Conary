@@ -171,7 +171,7 @@ pub async fn cmd_trigger_remove(name: &str, db_path: &str) -> Result<()> {
 
     if trigger.builtin {
         return Err(anyhow::anyhow!(
-            "Cannot remove built-in trigger '{}'. Use 'conary trigger-disable {}' instead.",
+            "Cannot remove built-in trigger '{}'. Use 'conary system trigger disable {}' instead.",
             name,
             name
         ));
