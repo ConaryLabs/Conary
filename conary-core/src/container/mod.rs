@@ -196,6 +196,13 @@ impl Default for ContainerConfig {
 }
 
 impl ContainerConfig {
+    fn enforce_untrusted_limit(current: u64, maximum: u64) -> u64 {
+        match current {
+            0 => maximum,
+            value => value.min(maximum),
+        }
+    }
+
     /// Create a minimal config with just timeout (no namespace isolation)
     pub fn minimal(timeout: Duration) -> Self {
         Self {
@@ -215,6 +222,26 @@ impl ContainerConfig {
             capability_policy: None,
             owned_temp_dirs: Vec::new(),
         }
+    }
+
+    /// Clamp a config to the minimum isolation required for untrusted code.
+    pub fn for_untrusted(mut self) -> Self {
+        self.isolate_pid = true;
+        self.isolate_uts = true;
+        self.isolate_ipc = true;
+        self.isolate_mount = true;
+        self.isolate_network = true;
+        self.memory_limit = Self::enforce_untrusted_limit(self.memory_limit, DEFAULT_MEMORY_LIMIT);
+        self.cpu_time_limit =
+            Self::enforce_untrusted_limit(self.cpu_time_limit, DEFAULT_CPU_TIME_LIMIT);
+        self.file_size_limit =
+            Self::enforce_untrusted_limit(self.file_size_limit, DEFAULT_FILE_SIZE_LIMIT);
+        self.nproc_limit = Self::enforce_untrusted_limit(self.nproc_limit, DEFAULT_NPROC_LIMIT);
+        if self.hostname.is_empty() {
+            self.hostname = "conary-sandbox".to_string();
+        }
+        self.deny_network();
+        self
     }
 
     /// Create a strict config with maximum isolation
@@ -1630,6 +1657,21 @@ mod tests {
         let config = ContainerConfig::minimal(Duration::from_secs(30));
         // Minimal should have NO network isolation (no isolation at all)
         assert!(!config.isolate_network);
+    }
+
+    #[test]
+    fn test_for_untrusted_enforces_minimum_isolation_levels() {
+        let config = ContainerConfig::minimal(Duration::from_secs(300)).for_untrusted();
+
+        assert!(config.isolate_pid);
+        assert!(config.isolate_uts);
+        assert!(config.isolate_ipc);
+        assert!(config.isolate_mount);
+        assert!(config.isolate_network);
+        assert_eq!(config.memory_limit, DEFAULT_MEMORY_LIMIT);
+        assert_eq!(config.cpu_time_limit, DEFAULT_CPU_TIME_LIMIT);
+        assert_eq!(config.file_size_limit, DEFAULT_FILE_SIZE_LIMIT);
+        assert_eq!(config.nproc_limit, DEFAULT_NPROC_LIMIT);
     }
 
     #[test]

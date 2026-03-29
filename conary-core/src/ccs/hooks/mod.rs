@@ -390,7 +390,7 @@ impl HookExecutor {
 
         info!("Running {} script: {}", label, script);
 
-        let mut config = ContainerConfig::default();
+        let mut config = ContainerConfig::default().for_untrusted();
         let mut env_vars = vec![("CONARY_HOOK_LABEL".to_string(), label.to_string())];
         let mut target_script_path = None;
 

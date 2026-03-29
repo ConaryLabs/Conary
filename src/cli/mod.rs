@@ -177,10 +177,10 @@ pub enum Commands {
         #[arg(long)]
         no_scripts: bool,
 
-        /// Scriptlet isolation: auto, always, never (default: never).
+        /// Scriptlet isolation: auto, always, never (default: always).
         /// Provides PID/network namespace isolation; /etc and /var remain
         /// writable on live root. Use target-root installs for full isolation
-        #[arg(long, value_enum, default_value_t = CliSandboxMode::Never)]
+        #[arg(long, value_enum, default_value_t = CliSandboxMode::Always)]
         sandbox: CliSandboxMode,
 
         /// Allow downgrading to an older version
@@ -242,10 +242,10 @@ pub enum Commands {
         #[arg(long)]
         no_scripts: bool,
 
-        /// Scriptlet isolation: auto, always, never (default: never).
+        /// Scriptlet isolation: auto, always, never (default: always).
         /// Provides PID/network namespace isolation; /etc and /var remain
         /// writable on live root. Use target-root installs for full isolation
-        #[arg(long, value_enum, default_value_t = CliSandboxMode::Never)]
+        #[arg(long, value_enum, default_value_t = CliSandboxMode::Always)]
         sandbox: CliSandboxMode,
 
         /// Delete adopted package files from disk (default: DB-only removal)
@@ -265,10 +265,10 @@ pub enum Commands {
         #[arg(long)]
         security: bool,
 
-        /// Scriptlet isolation: auto, always, never (default: never).
+        /// Scriptlet isolation: auto, always, never (default: always).
         /// Provides PID/network namespace isolation; /etc and /var remain
         /// writable on live root. Use target-root installs for full isolation
-        #[arg(long, value_enum, default_value_t = CliSandboxMode::Never)]
+        #[arg(long, value_enum, default_value_t = CliSandboxMode::Always)]
         sandbox: CliSandboxMode,
 
         /// How to handle dependencies: satisfy (default), adopt, takeover
@@ -331,10 +331,10 @@ pub enum Commands {
         #[arg(long)]
         no_scripts: bool,
 
-        /// Scriptlet isolation: auto, always, never (default: never).
+        /// Scriptlet isolation: auto, always, never (default: always).
         /// Provides PID/network namespace isolation; /etc and /var remain
         /// writable on live root. Use target-root installs for full isolation
-        #[arg(long, value_enum, default_value_t = CliSandboxMode::Never)]
+        #[arg(long, value_enum, default_value_t = CliSandboxMode::Always)]
         sandbox: CliSandboxMode,
     },
 
@@ -711,12 +711,34 @@ pub enum Commands {
 
 #[cfg(test)]
 mod tests {
-    use super::Cli;
+    use super::{Cli, CliSandboxMode, Commands};
     use clap::Parser;
 
     #[test]
     fn cli_accepts_seccomp_warn_flag() {
         Cli::try_parse_from(["conary", "--seccomp-warn", "list"])
             .expect("--seccomp-warn should parse as a global CLI flag");
+    }
+
+    #[test]
+    fn install_defaults_to_always_sandbox() {
+        let cli = Cli::try_parse_from(["conary", "install", "bash"]).unwrap();
+        match cli.command {
+            Some(Commands::Install { sandbox, .. }) => {
+                assert_eq!(sandbox, CliSandboxMode::Always);
+            }
+            _ => panic!("expected install command"),
+        }
+    }
+
+    #[test]
+    fn update_defaults_to_always_sandbox() {
+        let cli = Cli::try_parse_from(["conary", "update"]).unwrap();
+        match cli.command {
+            Some(Commands::Update { sandbox, .. }) => {
+                assert_eq!(sandbox, CliSandboxMode::Always);
+            }
+            _ => panic!("expected update command"),
+        }
     }
 }

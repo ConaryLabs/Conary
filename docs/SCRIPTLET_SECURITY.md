@@ -48,8 +48,8 @@ pub enum SandboxMode {
 ```
 
 Configure via CLI or environment:
-- `--sandbox=auto` - Risk-based sandboxing (default)
-- `--sandbox=always` - Maximum security, sandbox all scripts
+- `--sandbox=always` - Maximum security, sandbox all scripts (default)
+- `--sandbox=auto` - Risk-based sandboxing for selectively relaxing the default
 - `--sandbox=never` - Legacy behavior, no sandboxing
 
 ### 3. Container Isolation
@@ -171,7 +171,7 @@ Full namespace isolation requires root privileges. When running as non-root:
 4. Handle errors gracefully (set -e)
 
 ### For System Administrators
-1. Use `--sandbox=auto` for packages from untrusted sources
+1. Keep the default `--sandbox=always` for packages from untrusted sources
 2. Review scriptlets before installing unknown packages: `conary query --scripts <package>`
 3. Monitor `/var/log/conary.log` for scriptlet warnings
 4. Consider `--sandbox=always` for high-security environments
