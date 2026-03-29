@@ -257,12 +257,18 @@ pub async fn cmd_provenance_diff(
                         ("DNA", "Provenance chain", &prov1.dna_hash, &prov2.dna_hash),
                     ];
 
+                    let mut found_difference = false;
                     for (tag, label, old, new) in diffs {
                         if old != new {
+                            found_difference = true;
                             println!("[{}] {} changed", tag, label);
                             println!("  - {}", old.as_deref().unwrap_or("none"));
                             println!("  + {}", new.as_deref().unwrap_or("none"));
                         }
+                    }
+
+                    if !found_difference {
+                        println!("[OK] No provenance differences found.");
                     }
                 }
             }

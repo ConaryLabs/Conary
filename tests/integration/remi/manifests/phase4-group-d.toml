@@ -151,17 +151,16 @@ stdout_not_contains = "panic"
 [[test]]
 id = "T226"
 name = "provenance_diff"
-description = "Compare provenance between two packages (may fail if only one version exists)"
+description = "Compare a package's provenance against itself and report a clean match"
 timeout = 30
 group = "D"
 
-# diff requires two name@version arguments; use the same package with a
-# made-up version to exercise the code path.  Non-zero exit is acceptable
-# (the second version likely does not exist), but no panic.
 [[test.step]]
-run = "${CONARY_BIN} provenance diff ${FIXTURE_PKG_NAME}@1.0.0 ${FIXTURE_PKG_NAME}@2.0.0 --db-path ${DB_PATH} 2>&1; true"
+conary = "provenance diff ${FIXTURE_PKG_NAME} ${FIXTURE_PKG_NAME}"
 
 [test.step.assert]
+exit_code = 0
+stdout_contains = "[OK] No provenance differences found."
 stdout_not_contains = "panic"
 
 # ==========================================================================
@@ -388,29 +387,36 @@ run = "${CONARY_BIN} trust key-gen root --output /tmp/tuf-test-keys 2>&1"
 
 [test.step.assert]
 exit_code = 0
+stdout_contains = "Generated root key pair:"
 stdout_not_contains = "panic"
+
+[[test.step]]
+file_exists = "/tmp/tuf-test-keys/root.private"
+
+[[test.step]]
+file_exists = "/tmp/tuf-test-keys/root.public"
 
 # Cleanup
 [[test.step]]
 run = "rm -rf /tmp/tuf-test-keys"
 
 # --------------------------------------------------------------------------
-# T232: Trust init (requires root.json -- expected failure)
+# T232: Trust init
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T232"
 name = "trust_init"
-description = "Initialize TUF for a repo (expected failure without root.json)"
+description = "Bootstrap TUF for the configured repository using a signed test root"
 timeout = 30
 group = "D"
 
-# init requires --root pointing to a valid root.json, so this will fail
-# gracefully.  We just verify no panic.
 [[test.step]]
-run = "${CONARY_BIN} trust init ${REPO_NAME} --root /nonexistent/root.json --db-path ${DB_PATH} 2>&1; true"
+conary = "trust init ${REPO_NAME} --root /opt/remi-tests/fixtures/trust/root.json"
 
 [test.step.assert]
+exit_code = 0
+stdout_contains = "TUF initialized for repository: ${REPO_NAME}"
 stdout_not_contains = "panic"
 
 # --------------------------------------------------------------------------
@@ -420,51 +426,56 @@ stdout_not_contains = "panic"
 [[test]]
 id = "T233"
 name = "trust_status"
-description = "Check TUF status for a repo (likely not configured)"
+description = "Show stored TUF root metadata after bootstrap"
 timeout = 30
 group = "D"
+depends_on = ["T232"]
 
-# status may exit non-zero if TUF is not set up; that is expected.
 [[test.step]]
-run = "${CONARY_BIN} trust status ${REPO_NAME} --db-path ${DB_PATH} 2>&1; true"
+conary = "trust status ${REPO_NAME}"
 
 [test.step.assert]
+exit_code = 0
+stdout_contains_all = ["TUF enabled: yes", "Trusted keys: 1"]
 stdout_not_contains = "panic"
 
 # --------------------------------------------------------------------------
-# T234: Trust enable
+# T234: Trust disable --force
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T234"
-name = "trust_enable"
-description = "Enable TUF for a repo (may fail without initial bootstrap)"
+name = "trust_disable"
+description = "Disable TUF for the repository with an explicit force flag"
 timeout = 30
 group = "D"
+depends_on = ["T233"]
 
-# enable may fail if TUF has not been initialized; verify no panic.
 [[test.step]]
-run = "${CONARY_BIN} trust enable ${REPO_NAME} --db-path ${DB_PATH} 2>&1; true"
+conary = "trust disable ${REPO_NAME} --force"
 
 [test.step.assert]
-stdout_not_contains = "panic"
+exit_code = 0
+stdout_contains = "TUF verification disabled for: ${REPO_NAME}"
 
 # --------------------------------------------------------------------------
-# T235: Trust disable --force
+# T235: Trust enable
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T235"
-name = "trust_disable"
-description = "Disable TUF for a repo with --force"
+name = "trust_enable"
+description = "Re-enable TUF verification after bootstrap metadata is stored"
 timeout = 30
 group = "D"
+depends_on = ["T234"]
 
 [[test.step]]
-run = "${CONARY_BIN} trust disable ${REPO_NAME} --force --db-path ${DB_PATH} 2>&1; true"
+conary = "trust enable ${REPO_NAME}"
 
 [test.step.assert]
-stdout_not_contains = "panic"
+exit_code = 0
+stdout_contains = "TUF verification enabled for: ${REPO_NAME}"
 
 # ==========================================================================
 # SYSTEM OPERATIONS (T236-T245)
@@ -677,6 +688,7 @@ conary = "federation status"
 
 [test.step.assert]
 exit_code = 0
+stdout_contains = "Federation Status"
 stdout_not_contains = "panic"
 
 # --------------------------------------------------------------------------
@@ -695,6 +707,7 @@ conary = "federation peers"
 
 [test.step.assert]
 exit_code = 0
+stdout_contains = "Total:"
 stdout_not_contains = "panic"
 
 # --------------------------------------------------------------------------
@@ -713,6 +726,7 @@ conary = "federation stats"
 
 [test.step.assert]
 exit_code = 0
+stdout_contains = "DATE"
 stdout_not_contains = "panic"
 
 # --------------------------------------------------------------------------
@@ -731,6 +745,7 @@ conary = "federation test"
 
 [test.step.assert]
 exit_code = 0
+stdout_contains = "No peers to test"
 stdout_not_contains = "panic"
 
 # --------------------------------------------------------------------------
@@ -740,18 +755,17 @@ stdout_not_contains = "panic"
 [[test]]
 id = "T250"
 name = "federation_add_remove_peer"
-description = "Add a test peer and then remove it"
+description = "Add a pinned HTTPS peer, exercise peer health checks, then remove it"
 timeout = 30
 group = "D"
 
-# Add a fake peer
 [[test.step]]
-conary = "federation add-peer https://example.com:7891 --name test-peer"
+conary = "federation add-peer https://example.com:7891 --name test-peer --tls-fingerprint 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 [test.step.assert]
 exit_code = 0
+stdout_contains = "[OK] Added peer: https://example.com:7891"
 
-# Verify the peer appears in the list
 [[test.step]]
 conary = "federation peers"
 
@@ -759,12 +773,19 @@ conary = "federation peers"
 exit_code = 0
 stdout_contains = "example.com"
 
-# Remove the peer
+[[test.step]]
+conary = "federation test --peer https://example.com:7891 --timeout 100"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["Results:", "failed"]
+
 [[test.step]]
 conary = "federation remove-peer https://example.com:7891"
 
 [test.step.assert]
 exit_code = 0
+stdout_contains = "[OK] Removed peer: https://example.com:7891"
 
 # Verify the peer is gone
 [[test.step]]
@@ -793,6 +814,7 @@ conary = "automation status"
 
 [test.step.assert]
 exit_code = 0
+stdout_contains = "=== Automation Status ==="
 stdout_not_contains = "panic"
 
 # --------------------------------------------------------------------------
@@ -802,15 +824,16 @@ stdout_not_contains = "panic"
 [[test]]
 id = "T252"
 name = "automation_check"
-description = "Check for pending automation actions"
+description = "Run automation detection and report how many actionable items exist"
 timeout = 60
 group = "D"
 
 [[test.step]]
-conary = "automation check --quiet"
+conary = "automation check"
 
 [test.step.assert]
 exit_code = 0
+stdout_contains = "Found "
 stdout_not_contains = "panic"
 
 # --------------------------------------------------------------------------
@@ -829,6 +852,7 @@ conary = "automation configure --show"
 
 [test.step.assert]
 exit_code = 0
+stdout_contains_all = ["=== Automation Configuration ===", "Configuration file:"]
 stdout_not_contains = "panic"
 
 # --------------------------------------------------------------------------
@@ -838,16 +862,15 @@ stdout_not_contains = "panic"
 [[test]]
 id = "T254"
 name = "automation_history"
-description = "Show automation history"
+description = "Explain that automation history is not implemented until actions are recorded"
 timeout = 30
 group = "D"
 
 [[test.step]]
-conary = "automation history"
+run = "${CONARY_BIN} automation history --db-path ${DB_PATH} 2>&1; true"
 
 [test.step.assert]
-exit_code = 0
-stdout_not_contains = "panic"
+stdout_contains_all = ["automation history is not yet implemented", "conary automation apply"]
 
 # --------------------------------------------------------------------------
 # T255: Automation apply --dry-run

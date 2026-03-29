@@ -3,8 +3,9 @@
 
 use super::format_bytes;
 use super::open_db;
-use anyhow::Result;
+use anyhow::{Result, bail};
 use tracing::info;
+use url::Url;
 
 /// Show federation status
 pub async fn cmd_federation_status(db_path: &str, verbose: bool) -> Result<()> {
@@ -232,14 +233,9 @@ pub async fn cmd_federation_add_peer(
     db_path: &str,
     tier: &str,
     name: Option<&str>,
+    tls_fingerprint: Option<&str>,
 ) -> Result<()> {
-    // Validate URL format (basic check)
-    if !url.starts_with("http://") && !url.starts_with("https://") {
-        anyhow::bail!(
-            "Invalid peer URL: {}. Must start with http:// or https://",
-            url
-        );
-    }
+    let (peer_id, _scheme) = peer_identity(url, tls_fingerprint)?;
 
     // Validate tier
     let tier_lower = tier.to_lowercase();
@@ -249,13 +245,10 @@ pub async fn cmd_federation_add_peer(
 
     let conn = open_db(db_path)?;
 
-    // Generate peer ID
-    let id = conary_core::hash::sha256(url.as_bytes());
-
     conn.execute(
         "INSERT INTO federation_peers (id, endpoint, node_name, tier)
          VALUES (?1, ?2, ?3, ?4)",
-        rusqlite::params![id, url, name, tier_lower],
+        rusqlite::params![peer_id, url, name, tier_lower],
     )?;
 
     info!("Added federation peer: {} [{}]", url, tier_lower);
@@ -597,4 +590,112 @@ fn truncate(s: &str, max_len: usize) -> String {
         .last()
         .unwrap_or(0);
     format!("{}...", &s[..end])
+}
+
+fn peer_identity(url: &str, tls_fingerprint: Option<&str>) -> Result<(String, String)> {
+    let parsed = Url::parse(url)
+        .map_err(|e| anyhow::anyhow!("Invalid peer URL '{}': {}", url, e))?;
+    let scheme = parsed.scheme();
+    if scheme != "http" && scheme != "https" {
+        bail!(
+            "Invalid peer URL: {}. Must start with http:// or https://",
+            url
+        );
+    }
+
+    let peer_id = match scheme {
+        "https" => normalize_tls_fingerprint(tls_fingerprint.ok_or_else(|| {
+            anyhow::anyhow!(
+                "HTTPS federation peer '{}' requires --tls-fingerprint",
+                url
+            )
+        })?)?,
+        "http" => {
+            if tls_fingerprint.is_some() {
+                bail!(
+                    "HTTP federation peer '{}' cannot use --tls-fingerprint",
+                    url
+                );
+            }
+            conary_core::hash::sha256(url.as_bytes())
+        }
+        _ => unreachable!(),
+    };
+
+    Ok((peer_id, scheme.to_string()))
+}
+
+fn normalize_tls_fingerprint(raw: &str) -> Result<String> {
+    let fingerprint = raw.trim();
+    let fingerprint = fingerprint
+        .strip_prefix("sha256:")
+        .unwrap_or(fingerprint)
+        .to_ascii_lowercase();
+
+    if fingerprint.len() != 64 || !fingerprint.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        bail!(
+            "Invalid TLS fingerprint '{}': expected 64 hex characters",
+            raw
+        );
+    }
+
+    Ok(fingerprint)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{normalize_tls_fingerprint, peer_identity};
+
+    #[test]
+    fn https_peer_requires_pinned_fingerprint() {
+        let error = peer_identity("https://example.com:7891", None).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("requires --tls-fingerprint"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn https_peer_uses_fingerprint_as_identity() {
+        let (peer_id, scheme) = peer_identity(
+            "https://example.com:7891",
+            Some("sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+        )
+        .unwrap();
+
+        assert_eq!(scheme, "https");
+        assert_eq!(
+            peer_id,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        );
+    }
+
+    #[test]
+    fn http_peer_rejects_tls_fingerprint() {
+        let error = peer_identity(
+            "http://example.local:7891",
+            Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("cannot use --tls-fingerprint"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn normalize_tls_fingerprint_accepts_sha256_prefix() {
+        let normalized = normalize_tls_fingerprint(
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .unwrap();
+        assert_eq!(
+            normalized,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        );
+    }
 }
