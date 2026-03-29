@@ -69,15 +69,15 @@ conary install nginx
 | System takeover | No | No | No | Yes (alpha) |
 | Bootstrap from scratch | No | No | Yes | Yes (alpha) |
 | Multi-format (RPM + DEB + Arch) | No | No | No | Yes |
-| Derived packages | No | No | Yes (overlays) | Yes (experimental) |
+| Derived packages | No | No | Yes (overlays) | Yes |
 | Component model (install :devel only) | No | Split packages | No | Automatic |
 | Declarative system state | No | No | Yes (flake.nix) | Yes (system.toml) |
 | Content-addressable storage | No | No | Yes | Yes |
 | Hermetic builds | No | No | Yes | Yes (experimental) |
-| Dev shells | No | No | Yes | Yes (experimental) |
+| Dev shells | No | No | Yes | Yes |
 | OCI container export | No | No | Yes | Yes (experimental) |
-| Capability enforcement (landlock/seccomp) | No | No | No | Yes (experimental) |
-| Scriptlet sandboxing | No | No | N/A | Yes (experimental) |
+| Capability enforcement (landlock/seccomp) | No | No | No | Yes |
+| Scriptlet sandboxing | No | No | N/A | Yes |
 | Single binary, no daemon required | Yes | Yes | No | Yes |
 | Mature ecosystem | Yes | Yes | Yes | No (early) |
 | Package count | 60K+ | 15K+ | 100K+ | Via conversion |
@@ -228,22 +228,22 @@ conary install openssl:devel      # Headers and libs for building
 
 ### Bootstrap System
 
-Build a complete Conary-managed Linux system from scratch. The pipeline runs Stage 0 (cross-compilation toolchain), Stage 1 (self-hosted toolchain), optional Stage 2 (extended toolchain), BaseSystem (core packages with per-package checkpointing), optional Conary stage (self-hosting), and Image (bootable disk via systemd-repart). RecipeGraph handles dependency ordering across all stages. Targets x86_64, aarch64, and riscv64. Aligned with LFS 13 (binutils 2.46.0, gcc 15.2.0, glibc 2.43, kernel 6.19.8).
+Build a complete Conary-managed Linux system from scratch. The current public command surface is `cross-tools`, `temp-tools`, `system`, `config`, `image`, and optional `tier2`, with `bootstrap run` available for manifest-driven derivation pipelines. Targets x86_64, aarch64, and riscv64.
 
 ```bash
 conary bootstrap init --target x86_64
 conary bootstrap check              # Verify prerequisites
 conary bootstrap dry-run            # Validate pipeline without building
-conary bootstrap stage0             # Cross-compilation toolchain
-conary bootstrap stage1             # Self-hosted toolchain
-conary bootstrap stage2             # Extended toolchain (optional)
-conary bootstrap base               # Core system packages
-conary bootstrap conary             # Build Conary itself (optional)
+conary bootstrap cross-tools        # Cross-compilation toolchain
+conary bootstrap temp-tools         # Temporary/self-hosted tools
+conary bootstrap system             # Core system packages
+conary bootstrap config             # System configuration
+conary bootstrap tier2              # BLFS + Conary self-hosting (optional)
 conary bootstrap image --format raw # Bootable disk image (systemd-repart)
 conary bootstrap status             # Progress report
 conary bootstrap resume             # Resume from last checkpoint
-conary bootstrap base --skip-verify # Skip checksum enforcement
-conary bootstrap image --skip-stage2 --skip-conary  # Minimal image
+conary bootstrap system --skip-verify   # Skip checksum enforcement
+conary bootstrap run conaryos.toml --seed ./seed    # Manifest-driven derivation pipeline
 ```
 
 ### Derived Packages
@@ -307,7 +307,8 @@ Group packages into named sets for bulk operations.
 ```bash
 conary collection create web-stack --members nginx,postgresql,redis
 conary install @web-stack
-conary update-group web-stack    # Update all members atomically
+conary collection show web-stack
+conary collection add web-stack haproxy
 ```
 
 </details>
@@ -343,8 +344,9 @@ conary install pkg --sandbox=never    # Trust the scripts
 Packages declare their runtime capabilities. Landlock restricts filesystem access; seccomp-bpf restricts syscalls.
 
 ```bash
-conary capability audit nginx         # Show declared capabilities
-conary capability enforce nginx       # Apply restrictions
+conary capability list                # Packages with/without declarations
+conary capability show nginx          # Show declared restrictions
+conary capability run nginx -- /usr/sbin/nginx -t
 ```
 
 #### Install-Time Policy
@@ -481,7 +483,7 @@ Distributed chunk sharing across Conary nodes for bandwidth savings. Federation 
 ```bash
 conary federation status              # Overview
 conary federation peers               # List peers
-conary federation add-peer URL --tier cell_hub
+conary federation add-peer URL --tier cell_hub --tls-fingerprint SHA256HEX
 conary federation scan                # mDNS discovery (requires allowlist or authenticated transport)
 conary federation stats --days 7      # Bandwidth savings report
 ```
@@ -528,7 +530,7 @@ cargo build --profile fast-release   # Faster compile, still optimized
 
 ## Project Status
 
-**Version 0.7.0** -- The project has a working end-to-end stack: multi-format installs, atomic changesets, immutable generations, takeover/bootstrap flows, Remi conversion and serving, federation, and capability enforcement. Recent work has focused on tightening trust defaults, transaction atomicity, daemon/server auth, scriptlet isolation, and integrity verification across retrieval and generation paths.
+**Version 0.7.0** -- The project has a working end-to-end stack: multi-format installs, atomic changesets, immutable generations, takeover/bootstrap flows, Remi conversion and serving, federation, and capability-restricted runtime execution. Recent work has focused on tightening trust defaults, transaction atomicity, daemon/server auth, scriptlet isolation, and integrity verification across retrieval and generation paths.
 
 See [ROADMAP.md](ROADMAP.md) for what we're building next.
 

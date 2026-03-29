@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-03-28
-revision: 6
-summary: Refresh CCS conversion and install notes after security hardening
+revision: 7
+summary: Refresh CCS conversion, runtime helper, and selective-component install notes
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -91,6 +91,18 @@ conary ccs install package.ccs --dry-run     # Preview without applying
 The `--reinstall` flag forces reinstallation even when the same version is
 already present. This is useful for repairing corrupted files or re-running
 hooks without bumping the version.
+
+CCS also exposes two package-scoped runtime helpers that are positively covered
+in Phase 4:
+
+```bash
+conary ccs shell package-name          # Interactive environment with package contents
+conary ccs run package-name -- cmd     # One-shot execution under that environment
+conary ccs install package.ccs --components runtime,config
+```
+
+Selective component installs persist only the requested components and skip
+runtime hooks when a purely non-runtime slice is installed.
 
 See also: [docs/specs/ccs-format-v1.md](/docs/specs/ccs-format-v1.md),
 [docs/ARCHITECTURE.md](/docs/ARCHITECTURE.md).
