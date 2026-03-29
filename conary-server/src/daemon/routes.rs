@@ -36,6 +36,7 @@ use tokio_stream::StreamExt;
 use tokio_stream::wrappers::BroadcastStream;
 
 const DAEMON_BODY_LIMIT_BYTES: usize = 2 * 1024 * 1024;
+const MAX_DAEMON_SSE_CONNECTIONS: u64 = 64;
 const INTERNAL_ERROR_DETAIL: &str = "An internal daemon error occurred";
 
 /// Shared daemon state type
@@ -60,7 +61,6 @@ impl Drop for SseConnectionGuard {
 pub struct HealthResponse {
     pub status: &'static str,
     pub version: &'static str,
-    pub pid: u32,
     pub uptime_secs: u64,
 }
 
@@ -69,7 +69,6 @@ pub struct HealthResponse {
 pub struct VersionResponse {
     pub version: &'static str,
     pub api_version: &'static str,
-    pub schema_version: i32,
     pub build_date: Option<&'static str>,
     pub git_commit: Option<&'static str>,
 }
@@ -129,6 +128,33 @@ fn internal_error_with(context: &str, error: impl Display) -> DaemonError {
 
 fn internal_api_error(context: &str, error: impl Display) -> ApiError {
     ApiError(Box::new(internal_error_with(context, error)))
+}
+
+fn acquire_sse_connection(state: &SharedState) -> Result<SseConnectionGuard, ApiError> {
+    let result = state.metrics.sse_connections.fetch_update(
+        Ordering::AcqRel,
+        Ordering::Relaxed,
+        |current| {
+            if current < MAX_DAEMON_SSE_CONNECTIONS {
+                Some(current + 1)
+            } else {
+                None
+            }
+        },
+    );
+
+    if result.is_err() {
+        return Err(ApiError(Box::new(DaemonError::new(
+            "too_many_connections",
+            "Too Many Connections",
+            503,
+            "Too many concurrent SSE connections",
+        ))));
+    }
+
+    Ok(SseConnectionGuard {
+        metrics: state.clone(),
+    })
 }
 
 fn action_for_job_kind(kind: crate::daemon::JobKind) -> Action {
@@ -747,7 +773,6 @@ async fn health_handler(State(state): State<SharedState>) -> Json<HealthResponse
     Json(HealthResponse {
         status: "healthy",
         version: env!("CARGO_PKG_VERSION"),
-        pid: std::process::id(),
         uptime_secs,
     })
 }
@@ -761,7 +786,6 @@ async fn version_handler(State(_state): State<SharedState>) -> Json<VersionRespo
     Json(VersionResponse {
         version: env!("CARGO_PKG_VERSION"),
         api_version: "1.0",
-        schema_version: conary_core::db::schema::SCHEMA_VERSION,
         build_date: option_env!("BUILD_DATE"),
         git_commit: option_env!("GIT_COMMIT"),
     })
@@ -1051,6 +1075,13 @@ async fn cancel_transaction_handler(
     require_auth(&state.auth_checker, &creds, Action::CancelJob)?;
 
     let job_id = id.clone();
+    let lookup_id = job_id.clone();
+    let job = run_db_query(&state, move |conn| DaemonJob::find_by_id(conn, &lookup_id)).await?;
+    let job = match job {
+        Some(job) => job,
+        None => return Err(not_found_error("transaction", &id)),
+    };
+    ensure_job_visible(&creds, &job, &id)?;
 
     // Try to cancel in the in-memory queue (for running jobs, sets cancel token)
     let queue_cancelled = state.cancel_job(&job_id).await;
@@ -1115,13 +1146,7 @@ async fn transaction_stream_handler(
     ensure_job_visible(&creds, &job, &id)?;
 
     // Track SSE connection (guard decrements on drop when stream ends)
-    state
-        .metrics
-        .sse_connections
-        .fetch_add(1, Ordering::Relaxed);
-    let _guard = SseConnectionGuard {
-        metrics: state.clone(),
-    };
+    let _guard = acquire_sse_connection(&state)?;
 
     // Helper: build an SSE event from a DaemonEvent
     fn daemon_event_to_sse(event: &DaemonEvent) -> Option<Result<Event, Infallible>> {
@@ -1764,15 +1789,9 @@ async fn gc_handler(
 async fn events_handler(
     State(state): State<SharedState>,
     Extension(creds): Extension<Option<PeerCredentials>>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
     // Track SSE connection (guard decrements on drop when stream ends)
-    state
-        .metrics
-        .sse_connections
-        .fetch_add(1, Ordering::Relaxed);
-    let _guard = SseConnectionGuard {
-        metrics: state.clone(),
-    };
+    let _guard = acquire_sse_connection(&state)?;
 
     // Subscribe to the event broadcast channel
     let rx = state.subscribe();
@@ -1822,11 +1841,11 @@ async fn events_handler(
     let stream = connected_event.chain(event_stream).chain(guard_stream);
 
     // Return SSE response with keepalive
-    Sse::new(stream).keep_alive(
+    Ok(Sse::new(stream).keep_alive(
         KeepAlive::new()
             .interval(Duration::from_secs(30))
             .text("keepalive"),
-    )
+    ))
 }
 
 #[cfg(test)]
@@ -1847,13 +1866,12 @@ mod tests {
         let resp = HealthResponse {
             status: "healthy",
             version: "0.2.0",
-            pid: 1234,
             uptime_secs: 100,
         };
 
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("healthy"));
-        assert!(json.contains("1234"));
+        assert!(!json.contains("pid"));
     }
 
     #[test]
@@ -1861,14 +1879,13 @@ mod tests {
         let resp = VersionResponse {
             version: "0.2.0",
             api_version: "1.0",
-            schema_version: 35,
             build_date: None,
             git_commit: None,
         };
 
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("0.2.0"));
-        assert!(json.contains("35"));
+        assert!(!json.contains("schema_version"));
     }
 
     #[test]
@@ -2034,8 +2051,8 @@ mod tests {
         let json = body_json(response).await;
         assert_eq!(json["status"], "healthy");
         assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
-        assert!(json["pid"].is_number());
         assert!(json["uptime_secs"].is_number());
+        assert!(json.get("pid").is_none());
     }
 
     // -- GET /v1/version ------------------------------------------------------
@@ -2057,7 +2074,7 @@ mod tests {
         let json = body_json(response).await;
         assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(json["api_version"], "1.0");
-        assert!(json["schema_version"].is_number());
+        assert!(json.get("schema_version").is_none());
     }
 
     #[tokio::test]
@@ -2683,6 +2700,60 @@ mod tests {
         let response = app.oneshot(request).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_handler_cancel_transaction_hides_foreign_job() {
+        let (state, _dir) = create_test_state();
+        let daemon_uid = nix::unistd::geteuid().as_raw();
+        let other_uid = if daemon_uid == 42_424 { 42_425 } else { 42_424 };
+
+        let hidden_job = DaemonJob::new(
+            crate::daemon::JobKind::Enhance,
+            serde_json::json!({"batch_size": 7}),
+        )
+        .with_uid(other_uid);
+        let hidden_job_id = hidden_job.id.clone();
+
+        {
+            let conn = state.open_db().unwrap();
+            hidden_job.insert(&conn).unwrap();
+        }
+
+        let app = test_router(
+            state,
+            Some(PeerCredentials {
+                pid: std::process::id(),
+                uid: daemon_uid,
+                gid: daemon_uid,
+            }),
+        );
+
+        let request = axum::http::Request::builder()
+            .method("DELETE")
+            .uri(format!("/v1/transactions/{}", hidden_job_id))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_handler_events_rejects_when_sse_limit_reached() {
+        let (state, _dir) = create_test_state();
+        state.metrics.sse_connections.store(64, Ordering::Relaxed);
+        let app = test_router(state, current_process_creds());
+
+        let request = axum::http::Request::builder()
+            .uri("/v1/events")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     // -- POST /v1/packages/install (valid) ------------------------------------
