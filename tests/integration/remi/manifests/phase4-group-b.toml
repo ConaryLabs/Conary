@@ -387,18 +387,17 @@ stdout_not_contains = "panic"
 [[test]]
 id = "T193"
 name = "derive_build"
-description = "Build the derived package (may fail if parent trove not in DB)"
+description = "Build the derived package and record a persisted artifact"
 timeout = 120
 group = "B"
 depends_on = ["T191"]
 
-# derive build looks up the parent trove by name; if the install recorded a
-# different canonical name the lookup fails with "not installed". Accept
-# either success or a graceful error.
 [[test.step]]
 conary = "derive build test-derived"
 
 [test.step.assert]
+exit_code = 0
+stdout_contains = "Artifact: cas://"
 stdout_not_contains = "panic"
 
 # --------------------------------------------------------------------------
@@ -407,17 +406,25 @@ stdout_not_contains = "panic"
 
 [[test]]
 id = "T194"
-name = "derive_stale"
-description = "Check for stale derived packages"
-timeout = 30
+name = "derive_stale_after_parent_upgrade"
+description = "Upgrade the parent package and verify the derived build becomes stale"
+timeout = 120
 group = "B"
-depends_on = ["T191"]
+depends_on = ["T193"]
+
+[[test.step]]
+conary = "ccs install ${FIXTURE_V2_CCS} --allow-unsigned --sandbox never --reinstall"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
 
 [[test.step]]
 conary = "derive stale"
 
 [test.step.assert]
 exit_code = 0
+stdout_contains = "test-derived <- ${FIXTURE_PKG_NAME}"
 stdout_not_contains = "panic"
 
 # --------------------------------------------------------------------------

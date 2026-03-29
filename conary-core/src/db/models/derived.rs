@@ -407,6 +407,24 @@ impl DerivedPackage {
         Ok(count)
     }
 
+    /// Mark derived packages as stale only when a parent was truly upgraded.
+    pub fn mark_stale_if_parent_changed(
+        conn: &Connection,
+        parent_name: &str,
+        old_version: Option<&str>,
+        new_version: &str,
+    ) -> Result<usize> {
+        let Some(old_version) = old_version else {
+            return Ok(0);
+        };
+
+        if old_version == new_version {
+            return Ok(0);
+        }
+
+        Self::mark_stale(conn, parent_name)
+    }
+
     /// Delete a derived package
     pub fn delete(conn: &Connection, id: i64) -> Result<()> {
         conn.execute("DELETE FROM derived_packages WHERE id = ?1", [id])?;

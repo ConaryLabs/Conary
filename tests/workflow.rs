@@ -295,3 +295,128 @@ fn test_derive_build_cli_surfaces_persisted_artifact() {
     assert!(stdout.contains("Artifact: cas://"));
     assert!(stdout.contains("Parent Version: 1.24.0"));
 }
+
+#[test]
+fn test_parent_upgrade_marks_built_derived_package_stale_via_install_cli() {
+    use conary_core::ccs::builder::write_ccs_package;
+    use conary_core::ccs::{
+        BuildResult, CcsManifest, ComponentData, FileEntry as CcsFileEntry, FileType,
+    };
+    use conary_core::db::models::{DerivedOverride, DerivedPackage, DerivedStatus, VersionPolicy};
+    use conary_core::derived::{build_from_definition, persist_build_artifact};
+    use conary_core::filesystem::CasStore;
+    use conary_core::hash;
+    use std::collections::HashMap;
+    use std::process::Command;
+
+    let install_temp = tempfile::tempdir().unwrap();
+    let install_root = install_temp.path().join("root");
+    std::fs::create_dir_all(&install_root).unwrap();
+
+    let (_db_temp_dir, db_path) = common::setup_command_test_db();
+    let conn = db::open(&db_path).unwrap();
+    let objects_dir = conary_core::db::paths::objects_dir(&db_path);
+    let cas = CasStore::new(&objects_dir).unwrap();
+
+    let mut derived = DerivedPackage::new("nginx-derived".to_string(), "nginx".to_string());
+    derived.version_policy = VersionPolicy::Suffix("+corp".to_string());
+    let derived_id = derived.insert(&conn).unwrap();
+
+    let override_content = b"user nginx;\nworker_processes auto;\n".to_vec();
+    let override_hash = cas.store(&override_content).unwrap();
+    let mut override_entry = DerivedOverride::new_replace(
+        derived_id,
+        "/etc/nginx/nginx.conf".to_string(),
+        override_hash,
+    );
+    override_entry.insert(&conn).unwrap();
+
+    let build_result = build_from_definition(&conn, &derived, &cas).unwrap();
+    persist_build_artifact(&conn, &mut derived, &build_result, &cas).unwrap();
+
+    let binary_content = b"#!/bin/sh\necho upgraded nginx\n".to_vec();
+    let binary_hash = hash::sha256(&binary_content);
+    let config_content = b"worker_processes 4;\n".to_vec();
+    let config_hash = hash::sha256(&config_content);
+    let files = vec![
+        CcsFileEntry {
+            path: "/usr/sbin/nginx".to_string(),
+            hash: binary_hash.clone(),
+            size: binary_content.len() as u64,
+            mode: 0o100755,
+            component: "runtime".to_string(),
+            file_type: FileType::Regular,
+            target: None,
+            chunks: None,
+        },
+        CcsFileEntry {
+            path: "/etc/nginx/nginx.conf".to_string(),
+            hash: config_hash.clone(),
+            size: config_content.len() as u64,
+            mode: 0o100644,
+            component: "runtime".to_string(),
+            file_type: FileType::Regular,
+            target: None,
+            chunks: None,
+        },
+    ];
+    let package_path = install_temp.path().join("nginx-1.25.0.ccs");
+    let result = BuildResult {
+        manifest: CcsManifest::new_minimal("nginx", "1.25.0"),
+        components: HashMap::from([(
+            "runtime".to_string(),
+            ComponentData {
+                name: "runtime".to_string(),
+                files: files.clone(),
+                hash: "runtime-component".to_string(),
+                size: (binary_content.len() + config_content.len()) as u64,
+            },
+        )]),
+        files,
+        blobs: HashMap::from([
+            (binary_hash, binary_content),
+            (config_hash, config_content),
+        ]),
+        total_size: 0,
+        chunked: false,
+        chunk_stats: None,
+    };
+    write_ccs_package(&result, &package_path).unwrap();
+
+    let install_output = Command::new(env!("CARGO_BIN_EXE_conary"))
+        .arg("install")
+        .arg(package_path.to_str().unwrap())
+        .arg("--db-path")
+        .arg(&db_path)
+        .arg("--root")
+        .arg(install_root.to_str().unwrap())
+        .arg("--sandbox")
+        .arg("never")
+        .arg("--yes")
+        .output()
+        .unwrap();
+
+    assert!(
+        install_output.status.success(),
+        "install failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&install_output.stdout),
+        String::from_utf8_lossy(&install_output.stderr)
+    );
+
+    let derived_after = DerivedPackage::find_by_name(&conn, "nginx-derived")
+        .unwrap()
+        .unwrap();
+    assert_eq!(derived_after.status, DerivedStatus::Stale);
+
+    let stale_output = Command::new(env!("CARGO_BIN_EXE_conary"))
+        .arg("derive")
+        .arg("stale")
+        .arg("--db-path")
+        .arg(&db_path)
+        .output()
+        .unwrap();
+
+    assert!(stale_output.status.success());
+    let stdout = String::from_utf8_lossy(&stale_output.stdout);
+    assert!(stdout.contains("nginx-derived <- nginx"));
+}

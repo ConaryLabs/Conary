@@ -792,6 +792,75 @@ fn test_derive_build_records_installable_artifact_metadata() {
     assert_eq!(artifact["files"]["/etc/nginx/nginx.conf"]["hash"], override_hash);
 }
 
+/// Test stale propagation helper only fires on real parent version changes
+#[test]
+fn test_mark_stale_if_parent_version_changes_only_marks_real_upgrades() {
+    use conary_core::db::models::{DerivedOverride, DerivedPackage, DerivedStatus, VersionPolicy};
+    use conary_core::derived::{build_from_definition, persist_build_artifact};
+    use conary_core::filesystem::CasStore;
+
+    let (_temp_dir, db_path) = common::setup_command_test_db();
+    let conn = db::open(&db_path).unwrap();
+
+    let objects_dir = conary_core::db::paths::objects_dir(&db_path);
+    let cas = CasStore::new(&objects_dir).unwrap();
+
+    let mut derived = DerivedPackage::new("nginx-stale-check".to_string(), "nginx".to_string());
+    derived.version_policy = VersionPolicy::Suffix("+stale".to_string());
+    let derived_id = derived.insert(&conn).unwrap();
+
+    let override_content = b"worker_processes 2;\n".to_vec();
+    let override_hash = cas.store(&override_content).unwrap();
+
+    let mut override_entry = DerivedOverride::new_replace(
+        derived_id,
+        "/etc/nginx/nginx.conf".to_string(),
+        override_hash,
+    );
+    override_entry.insert(&conn).unwrap();
+
+    let build_result = build_from_definition(&conn, &derived, &cas).unwrap();
+    persist_build_artifact(&conn, &mut derived, &build_result, &cas).unwrap();
+
+    assert_eq!(
+        DerivedPackage::mark_stale_if_parent_changed(&conn, "nginx", None, "1.25.0").unwrap(),
+        0
+    );
+    assert_eq!(
+        DerivedPackage::find_by_name(&conn, "nginx-stale-check")
+            .unwrap()
+            .unwrap()
+            .status,
+        DerivedStatus::Built
+    );
+
+    assert_eq!(
+        DerivedPackage::mark_stale_if_parent_changed(&conn, "nginx", Some("1.24.0"), "1.24.0")
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        DerivedPackage::find_by_name(&conn, "nginx-stale-check")
+            .unwrap()
+            .unwrap()
+            .status,
+        DerivedStatus::Built
+    );
+
+    assert_eq!(
+        DerivedPackage::mark_stale_if_parent_changed(&conn, "nginx", Some("1.24.0"), "1.25.0")
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        DerivedPackage::find_by_name(&conn, "nginx-stale-check")
+            .unwrap()
+            .unwrap()
+            .status,
+        DerivedStatus::Stale
+    );
+}
+
 /// Test version policy computation
 #[test]
 fn test_derived_version_policy() {

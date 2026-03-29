@@ -905,6 +905,15 @@ pub async fn cmd_ccs_install(
             Ok(())
         })?;
 
+        if is_upgrade {
+            super::super::install::mark_upgraded_parent_deriveds_stale(
+                &conn,
+                ccs_pkg.name(),
+                Some(existing[0].version.as_str()),
+                ccs_pkg.version(),
+            );
+        }
+
         // Step 9: Execute post-hooks (including post_install script)
         // Note: the DB transaction is already committed at this point (changeset
         // status = Applied).  If post-hooks fail the package is installed but hooks
