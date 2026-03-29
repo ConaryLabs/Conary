@@ -1191,7 +1191,12 @@ async fn transaction_stream_handler(
             JobStatus::Cancelled => DaemonEvent::JobCancelled {
                 job_id: job.id.clone(),
             },
-            _ => unreachable!(),
+            JobStatus::Queued | JobStatus::Running => DaemonEvent::JobFailed {
+                job_id: job.id.clone(),
+                error: DaemonError::internal(
+                    "Non-terminal job status reached terminal event synthesis",
+                ),
+            },
         };
 
         futures::future::Either::Left(stream::once(async move {

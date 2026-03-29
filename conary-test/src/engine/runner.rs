@@ -558,17 +558,6 @@ impl TestRunner {
         }
     }
 
-    /// Replace `${VAR}` patterns in a string with values from the variable map.
-    #[cfg(test)]
-    fn substitute_vars(&self, input: &str) -> String {
-        variables::expand_variables(input, &self.vars)
-    }
-
-    #[cfg(test)]
-    fn expand_qemu_boot(&self, config: &QemuBoot) -> QemuBoot {
-        variables::expand_qemu_boot(config, &self.vars)
-    }
-
     fn expand_assertion(&self, assertion: &Assertion) -> Assertion {
         variables::expand_assertion(assertion, &self.vars)
     }
@@ -1178,19 +1167,19 @@ mod tests {
         );
         runner.load_manifest_vars(&manifest);
 
-        let expanded = runner.substitute_vars("curl ${REMI_ENDPOINT}/health");
+        let expanded = variables::expand_variables("curl ${REMI_ENDPOINT}/health", &runner.vars);
         assert_eq!(expanded, "curl https://packages.conary.io/health");
 
-        let expanded2 = runner.substitute_vars("${CONARY_BIN} --db-path ${DB_PATH}");
+        let expanded2 = variables::expand_variables("${CONARY_BIN} --db-path ${DB_PATH}", &runner.vars);
         assert_eq!(
             expanded2,
             "/usr/local/bin/conary --db-path /tmp/conary-test.db"
         );
 
-        let expanded3 = runner.substitute_vars("conary install ${PKG}");
+        let expanded3 = variables::expand_variables("conary install ${PKG}", &runner.vars);
         assert_eq!(expanded3, "conary install tree");
 
-        let fixture_v1 = runner.substitute_vars("${FIXTURE_V1_CCS}");
+        let fixture_v1 = variables::expand_variables("${FIXTURE_V1_CCS}", &runner.vars);
         assert_eq!(
             fixture_v1,
             "/opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs"
@@ -1347,14 +1336,14 @@ mod tests {
         );
         runner.load_manifest_vars(&manifest);
 
-        let expanded = runner.expand_qemu_boot(&QemuBoot {
+        let expanded = variables::expand_qemu_boot(&QemuBoot {
             image: "${IMG}".to_string(),
             memory_mb: 1024,
             timeout_seconds: 120,
             ssh_port: 2222,
             commands: vec!["echo ${IMG}".to_string()],
             expect_output: vec!["${IMG}".to_string()],
-        });
+        }, &runner.vars);
 
         assert_eq!(expanded.image, "minimal-boot-v1");
         assert_eq!(expanded.commands, vec!["echo minimal-boot-v1"]);

@@ -124,7 +124,11 @@ pub async fn cmd_sync_hook_install(remove: bool) -> Result<()> {
                 fs::write(paths.script, PACMAN_HOOK_CONTENT)?;
                 info!("Installed pacman hook at {}", paths.script);
             }
-            _ => unreachable!(),
+            SystemPackageManager::Unknown => {
+                return Err(anyhow::anyhow!(
+                    "Cannot install sync hooks for unsupported package manager"
+                ));
+            }
         }
 
         println!("Installed Conary sync hook for {}.", pkg_mgr.display_name());
