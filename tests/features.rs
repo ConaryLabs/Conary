@@ -732,6 +732,66 @@ fn test_derived_package_status() {
     assert_eq!(stale[0].name, "nginx-status-test");
 }
 
+/// Test that derived builds persist concrete artifact metadata
+#[test]
+fn test_derive_build_records_installable_artifact_metadata() {
+    use conary_core::db::models::{DerivedOverride, DerivedPackage, VersionPolicy};
+    use conary_core::derived::{build_from_definition, persist_build_artifact};
+    use conary_core::filesystem::CasStore;
+
+    let (_temp_dir, db_path) = common::setup_command_test_db();
+    let conn = db::open(&db_path).unwrap();
+
+    let objects_dir = conary_core::db::paths::objects_dir(&db_path);
+    let cas = CasStore::new(&objects_dir).unwrap();
+
+    let mut derived = DerivedPackage::new("nginx-custom".to_string(), "nginx".to_string());
+    derived.version_policy = VersionPolicy::Suffix("+custom".to_string());
+    let derived_id = derived.insert(&conn).unwrap();
+
+    let override_content = b"user nginx;\nworker_processes auto;\n".to_vec();
+    let override_hash = cas.store(&override_content).unwrap();
+
+    let mut override_entry = DerivedOverride::new_replace(
+        derived_id,
+        "/etc/nginx/nginx.conf".to_string(),
+        override_hash.clone(),
+    );
+    override_entry.permissions = Some(0o640);
+    override_entry.insert(&conn).unwrap();
+
+    let build_result = build_from_definition(&conn, &derived, &cas).unwrap();
+    let build_meta = persist_build_artifact(&conn, &mut derived, &build_result, &cas).unwrap();
+
+    assert_eq!(build_meta.version, "1.24.0+custom");
+    assert_eq!(build_meta.parent_version, "1.24.0");
+    assert_eq!(build_meta.artifact_path, format!("cas://{}", build_meta.artifact_hash));
+    assert!(cas.exists(&build_meta.artifact_hash));
+
+    let stored = DerivedPackage::find_by_name(&conn, "nginx-custom")
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.status.as_str(), "built");
+    assert_eq!(stored.last_built_version.as_deref(), Some("1.24.0+custom"));
+    assert_eq!(stored.last_built_parent_version.as_deref(), Some("1.24.0"));
+    assert_eq!(
+        stored.build_artifact_hash.as_deref(),
+        Some(build_meta.artifact_hash.as_str())
+    );
+    assert_eq!(
+        stored.build_artifact_path.as_deref(),
+        Some(build_meta.artifact_path.as_str())
+    );
+
+    let artifact_json = cas.retrieve(&build_meta.artifact_hash).unwrap();
+    let artifact: serde_json::Value = serde_json::from_slice(&artifact_json).unwrap();
+    assert_eq!(artifact["name"], "nginx-custom");
+    assert_eq!(artifact["version"], "1.24.0+custom");
+    assert_eq!(artifact["parent_name"], "nginx");
+    assert_eq!(artifact["parent_version"], "1.24.0");
+    assert_eq!(artifact["files"]["/etc/nginx/nginx.conf"]["hash"], override_hash);
+}
+
 /// Test version policy computation
 #[test]
 fn test_derived_version_policy() {

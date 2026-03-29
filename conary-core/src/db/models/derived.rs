@@ -106,6 +106,16 @@ pub struct DerivedPackage {
     pub status: DerivedStatus,
     /// Built trove ID (when status = Built)
     pub built_trove_id: Option<i64>,
+    /// Last successfully built derived version
+    pub last_built_version: Option<String>,
+    /// Parent version used for the last successful build
+    pub last_built_parent_version: Option<String>,
+    /// CAS hash of the persisted build artifact manifest
+    pub build_artifact_hash: Option<String>,
+    /// Stable artifact reference surfaced to users (for now, a CAS URI)
+    pub build_artifact_path: Option<String>,
+    /// Size of the persisted build artifact manifest in bytes
+    pub build_artifact_size: Option<i64>,
     /// Model file this came from (None if created via CLI)
     pub model_source: Option<String>,
     /// Error message if status = Error
@@ -120,8 +130,9 @@ impl DerivedPackage {
     /// Column list for SELECT queries.
     const COLUMNS: &'static str = "id, name, parent_trove_id, parent_name, parent_version, \
          version_policy, version_suffix, specific_version, \
-         description, status, built_trove_id, model_source, \
-         error_message, created_at, updated_at";
+         description, status, built_trove_id, last_built_version, \
+         last_built_parent_version, build_artifact_hash, build_artifact_path, \
+         build_artifact_size, model_source, error_message, created_at, updated_at";
 
     /// Create a new derived package definition
     pub fn new(name: String, parent_name: String) -> Self {
@@ -135,6 +146,11 @@ impl DerivedPackage {
             description: None,
             status: DerivedStatus::Pending,
             built_trove_id: None,
+            last_built_version: None,
+            last_built_parent_version: None,
+            build_artifact_hash: None,
+            build_artifact_path: None,
+            build_artifact_size: None,
             model_source: None,
             error_message: None,
             created_at: None,
@@ -150,8 +166,10 @@ impl DerivedPackage {
             "INSERT INTO derived_packages (
                 name, parent_trove_id, parent_name, parent_version,
                 version_policy, version_suffix, specific_version,
-                description, status, built_trove_id, model_source, error_message
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                description, status, built_trove_id, last_built_version,
+                last_built_parent_version, build_artifact_hash, build_artifact_path,
+                build_artifact_size, model_source, error_message
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             params![
                 &self.name,
                 &self.parent_trove_id,
@@ -163,6 +181,11 @@ impl DerivedPackage {
                 &self.description,
                 self.status.as_str(),
                 &self.built_trove_id,
+                &self.last_built_version,
+                &self.last_built_parent_version,
+                &self.build_artifact_hash,
+                &self.build_artifact_path,
+                &self.build_artifact_size,
                 &self.model_source,
                 &self.error_message,
             ],
@@ -186,8 +209,11 @@ impl DerivedPackage {
                 parent_trove_id = ?1, parent_name = ?2, parent_version = ?3,
                 version_policy = ?4, version_suffix = ?5, specific_version = ?6,
                 description = ?7, status = ?8, built_trove_id = ?9,
-                model_source = ?10, error_message = ?11, updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?12",
+                last_built_version = ?10, last_built_parent_version = ?11,
+                build_artifact_hash = ?12, build_artifact_path = ?13,
+                build_artifact_size = ?14, model_source = ?15, error_message = ?16,
+                updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?17",
             params![
                 &self.parent_trove_id,
                 &self.parent_name,
@@ -198,6 +224,11 @@ impl DerivedPackage {
                 &self.description,
                 self.status.as_str(),
                 &self.built_trove_id,
+                &self.last_built_version,
+                &self.last_built_parent_version,
+                &self.build_artifact_hash,
+                &self.build_artifact_path,
+                &self.build_artifact_size,
                 &self.model_source,
                 &self.error_message,
                 id,
@@ -301,6 +332,53 @@ impl DerivedPackage {
         Ok(())
     }
 
+    /// Record a successful build artifact for this derived package.
+    pub fn record_build_artifact(
+        &mut self,
+        conn: &Connection,
+        version: &str,
+        parent_version: &str,
+        artifact_hash: &str,
+        artifact_path: &str,
+        artifact_size: i64,
+    ) -> Result<()> {
+        let id = self.id.ok_or_else(|| {
+            crate::error::Error::MissingId(
+                "Cannot record build artifact without ID".to_string(),
+            )
+        })?;
+
+        conn.execute(
+            "UPDATE derived_packages
+             SET status = 'built',
+                 last_built_version = ?1,
+                 last_built_parent_version = ?2,
+                 build_artifact_hash = ?3,
+                 build_artifact_path = ?4,
+                 build_artifact_size = ?5,
+                 error_message = NULL,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?6",
+            params![
+                version,
+                parent_version,
+                artifact_hash,
+                artifact_path,
+                artifact_size,
+                id
+            ],
+        )?;
+
+        self.status = DerivedStatus::Built;
+        self.last_built_version = Some(version.to_string());
+        self.last_built_parent_version = Some(parent_version.to_string());
+        self.build_artifact_hash = Some(artifact_hash.to_string());
+        self.build_artifact_path = Some(artifact_path.to_string());
+        self.build_artifact_size = Some(artifact_size);
+        self.error_message = None;
+        Ok(())
+    }
+
     /// Mark as error with message
     pub fn mark_error(&mut self, conn: &Connection, message: &str) -> Result<()> {
         let id = self.id.ok_or_else(|| {
@@ -372,10 +450,15 @@ impl DerivedPackage {
             description: row.get(8)?,
             status: DerivedStatus::parse(&status_str),
             built_trove_id: row.get(10)?,
-            model_source: row.get(11)?,
-            error_message: row.get(12)?,
-            created_at: row.get(13)?,
-            updated_at: row.get(14)?,
+            last_built_version: row.get(11)?,
+            last_built_parent_version: row.get(12)?,
+            build_artifact_hash: row.get(13)?,
+            build_artifact_path: row.get(14)?,
+            build_artifact_size: row.get(15)?,
+            model_source: row.get(16)?,
+            error_message: row.get(17)?,
+            created_at: row.get(18)?,
+            updated_at: row.get(19)?,
         })
     }
 }

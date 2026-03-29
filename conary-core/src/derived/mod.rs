@@ -26,5 +26,6 @@
 mod builder;
 
 pub use builder::{
-    DerivedBuilder, DerivedResult, DerivedSpec, build_from_definition, store_in_cas,
+    DerivedBuilder, DerivedResult, DerivedSpec, PersistedDerivedArtifact,
+    build_from_definition, persist_build_artifact, store_in_cas,
 };

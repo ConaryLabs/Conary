@@ -14,9 +14,9 @@ use conary_core::db::models::{
     CollectionMember, RemoteCollection, Repository, SystemAffinity, Trove, TroveType,
 };
 use conary_core::db::models::{
-    DerivedOverride, DerivedPackage, DerivedPatch, DerivedStatus, DistroPin, VersionPolicy,
+    DerivedOverride, DerivedPackage, DerivedPatch, DistroPin, VersionPolicy,
 };
-use conary_core::derived::build_from_definition;
+use conary_core::derived::{build_from_definition, persist_build_artifact};
 use conary_core::filesystem::CasStore;
 use conary_core::hash::sha256;
 use conary_core::model::parser::SystemModel;
@@ -439,13 +439,14 @@ fn build_derived_package(conn: &Connection, name: &str, cas: &CasStore) -> Resul
 
     match result {
         Ok(build_result) => {
+            let build_meta = persist_build_artifact(conn, &mut derived, &build_result, cas)?;
             println!(
-                "  Built '{}': {} files, {} patches applied",
+                "  Built '{}': {} files, {} patches applied ({})",
                 name,
                 build_result.files.len(),
-                build_result.patches_applied.len()
+                build_result.patches_applied.len(),
+                build_meta.artifact_path
             );
-            derived.set_status(conn, DerivedStatus::Built)?;
             Ok(())
         }
         Err(e) => {

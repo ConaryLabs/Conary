@@ -93,6 +93,22 @@ pub async fn cmd_derive_show(name: &str, db_path: &str) -> Result<()> {
     if let Some(msg) = &derived.error_message {
         println!("Error Message: {}", msg);
     }
+    if let Some(version) = &derived.last_built_version {
+        println!("\nLast Successful Build:");
+        println!("  Version: {}", version);
+        if let Some(parent_version) = &derived.last_built_parent_version {
+            println!("  Parent Version: {}", parent_version);
+        }
+        if let Some(artifact_path) = &derived.build_artifact_path {
+            println!("  Artifact: {}", artifact_path);
+        }
+        if let Some(artifact_hash) = &derived.build_artifact_hash {
+            println!("  Artifact Hash: {}", artifact_hash);
+        }
+        if let Some(artifact_size) = derived.build_artifact_size {
+            println!("  Artifact Size: {} bytes", artifact_size);
+        }
+    }
 
     if let Some(desc) = &derived.description {
         println!("Description: {}", desc);
@@ -322,9 +338,16 @@ pub async fn cmd_derive_build(name: &str, db_path: &str) -> Result<()> {
     let result = conary_core::derived::build_from_definition(&conn, &derived, &cas);
 
     match result {
-        Ok(build_result) => {
+        Ok(build_result) => match conary_core::derived::persist_build_artifact(
+            &conn,
+            &mut derived,
+            &build_result,
+            &cas,
+        ) {
+            Ok(build_meta) => {
             println!("Build successful:");
-            println!("  Version: {}", build_result.version);
+            println!("  Version: {}", build_meta.version);
+            println!("  Parent Version: {}", build_meta.parent_version);
             println!("  Files: {}", build_result.files.len());
             println!("  Patches applied: {}", build_result.patches_applied.len());
             println!(
@@ -332,12 +355,19 @@ pub async fn cmd_derive_build(name: &str, db_path: &str) -> Result<()> {
                 build_result.files_overridden.len()
             );
             println!("  Files removed: {}", build_result.files_removed.len());
-
-            // Mark as built (for now, without actually creating the trove)
-            // In a full implementation, we would create the trove and install the files
-            derived.set_status(&conn, DerivedStatus::Built)?;
-            println!("\nDerived package '{}' is ready.", name);
-        }
+                println!("  Artifact: {}", build_meta.artifact_path);
+                println!("  Artifact Size: {} bytes", build_meta.artifact_size);
+                println!("\nDerived package '{}' is ready.", name);
+            }
+            Err(e) => {
+                let error_msg = e.to_string();
+                derived.mark_error(&conn, &error_msg)?;
+                return Err(anyhow::anyhow!(
+                    "Build output persistence failed: {}",
+                    error_msg
+                ));
+            }
+        },
         Err(e) => {
             let error_msg: String = e.to_string();
             derived.mark_error(&conn, &error_msg)?;

@@ -248,3 +248,50 @@ fn test_rollback_tracking() {
     // Keep temp_dir alive
     drop(temp_dir);
 }
+
+#[test]
+fn test_derive_build_cli_surfaces_persisted_artifact() {
+    use conary_core::db::models::{DerivedOverride, DerivedPackage, VersionPolicy};
+    use conary_core::filesystem::CasStore;
+    use std::process::Command;
+
+    let (_temp_dir, db_path) = common::setup_command_test_db();
+    let conn = db::open(&db_path).unwrap();
+
+    let objects_dir = conary_core::db::paths::objects_dir(&db_path);
+    let cas = CasStore::new(&objects_dir).unwrap();
+
+    let mut derived = DerivedPackage::new("nginx-cli-derived".to_string(), "nginx".to_string());
+    derived.version_policy = VersionPolicy::Suffix("+cli".to_string());
+    let derived_id = derived.insert(&conn).unwrap();
+
+    let override_content = b"events {}\nhttp { server_tokens off; }\n".to_vec();
+    let override_hash = cas.store(&override_content).unwrap();
+
+    let mut override_entry = DerivedOverride::new_replace(
+        derived_id,
+        "/etc/nginx/nginx.conf".to_string(),
+        override_hash,
+    );
+    override_entry.insert(&conn).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_conary"))
+        .arg("derive")
+        .arg("build")
+        .arg("nginx-cli-derived")
+        .arg("--db-path")
+        .arg(&db_path)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "derive build failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Artifact: cas://"));
+    assert!(stdout.contains("Parent Version: 1.24.0"));
+}
