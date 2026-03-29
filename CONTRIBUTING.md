@@ -67,6 +67,9 @@ Current workspace note: the root `server` feature belongs to the `conary` crate,
 # All library + integration tests
 cargo test
 
+# Full workspace verification, including server-enabled paths
+cargo test --features server
+
 # Run a specific test module
 cargo test --test database
 
@@ -77,18 +80,27 @@ cargo test --lib
 cargo test --test '*'
 ```
 
-All tests must pass before submitting a PR. The CI pipeline runs:
+All tests must pass before submitting a PR. At minimum, run the verification path that matches the code you touched:
 
-1. `cargo fmt -- --check` -- formatting
-2. `cargo clippy --all-targets --all-features -- -D warnings` -- lints
-3. `cargo test --verbose` -- all tests
+1. `cargo fmt --check` -- formatting
+2. `cargo clippy -- -D warnings` -- default lint gate
+3. `cargo test` -- default workspace tests
+4. `cargo clippy --features server -- -D warnings` -- when touching server/daemon/federation code
+5. `cargo test --features server` -- when touching server/daemon/federation code
 
 Run these locally before pushing to save CI round-trips:
 
 ```bash
-cargo fmt
-cargo clippy --all-targets --all-features -- -D warnings
+cargo fmt --check
+cargo clippy -- -D warnings
 cargo test
+```
+
+If your change touches `conary-server`, daemon code, federation, or shared types used behind the root `server` feature, also run:
+
+```bash
+cargo clippy --features server -- -D warnings
+cargo test --features server
 ```
 
 ## Code Style
@@ -184,7 +196,7 @@ The project is a Cargo workspace with 4 crates:
 |--------|---------|
 | `src/server/` | Remi on-demand CCS conversion proxy |
 | `src/daemon/` | conaryd REST API, SSE events, job queue, systemd integration |
-| `src/federation/` | CAS federation -- peer discovery, chunk routing, mTLS, mDNS |
+| `src/federation/` | CAS federation -- peer discovery, chunk routing, allowlists, TLS pinning |
 
 **`conary-test`** -- Declarative test infrastructure (TOML manifests, container management)
 
@@ -209,10 +221,12 @@ The project is a Cargo workspace with 4 crates:
 
 4. **Run CI checks locally** before pushing:
    ```bash
-   cargo fmt
-   cargo clippy --all-targets --all-features -- -D warnings
+   cargo fmt --check
+   cargo clippy -- -D warnings
    cargo test
    ```
+
+   Add the `--features server` clippy/test pair when your change touches server-enabled code.
 
 5. **Write a clear PR description** explaining what changed and why. If it addresses an issue, reference it (e.g., "Fixes #42").
 
@@ -248,6 +262,12 @@ Conary has a few core design principles that inform how contributions should be 
 - **Feature-gated compilation**: Server and daemon functionality live in the `conary-server` crate, enabled via `--features server` to keep the default binary lean.
 
 Before proposing significant architectural changes, please open an issue to discuss the approach. This helps avoid wasted effort and ensures alignment with the project direction.
+
+## Documentation Hygiene
+
+- Treat active docs as current-state references, not historical logs.
+- Move completed review prompts/specs/plans into the appropriate `archive/` subtree instead of keeping them in active paths.
+- When editing files under `docs/`, update YAML frontmatter (`last_updated`, `revision`, `summary`) unless the file is intentionally exempt.
 
 ## Getting Help
 

@@ -6,7 +6,7 @@
 
 **Website:** [conary.io](https://conary.io) | **Packages:** [packages.conary.io](https://packages.conary.io) | **Discussions:** [GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions)
 
-A cross-distribution Linux system manager with immutable generations, atomic transactions, content-addressable storage, and a declarative system model. 219K+ lines of Rust, 2,100+ unit tests and 278 integration tests, one tool for every distro.
+A cross-distribution Linux system manager with immutable generations, atomic transactions, content-addressable storage, and a declarative system model. Conary installs native RPM/DEB/Arch packages, builds and installs CCS packages, and layers a declarative system workflow on top.
 
 Inspired by the [original Conary](https://en.wikipedia.org/wiki/Conary_(package_manager)) from rPath, which pioneered concepts like troves, changesets, flavors, and components that were ahead of their time. This project carries those ideas forward with a modern implementation.
 
@@ -47,7 +47,7 @@ conary model apply    # Make it so
 conary model check    # Drift detection (CI/CD friendly, uses exit codes)
 ```
 
-**68,000+ packages on day one.** Remi, the on-demand conversion proxy at [packages.conary.io](https://packages.conary.io), transparently converts upstream RPM/DEB/Arch packages into CCS format. No upstream changes required -- every package from Fedora, Arch, and Ubuntu is available immediately.
+**Cross-distro package access on day one.** Remi, the on-demand conversion proxy at [packages.conary.io](https://packages.conary.io), transparently converts upstream RPM/DEB/Arch packages into CCS format. No upstream changes are required to start using Conary against the supported upstream repositories.
 
 ```bash
 conary repo add remi https://packages.conary.io
@@ -55,7 +55,7 @@ conary repo sync
 conary install nginx
 ```
 
-**219K+ lines of Rust, 2,100+ unit tests, 278 integration tests, database schema v57.** This is not a prototype.
+**Current focus: hardening and developer experience.** The core install, rollback, generation, bootstrap, and server paths are in place; the project is now spending more time on verification, operational polish, and documentation than on first-pass scaffolding.
 
 ---
 
@@ -439,13 +439,13 @@ For a detailed architecture overview, see [docs/ARCHITECTURE.md](docs/ARCHITECTU
 
 ## Remi Server
 
-Conary includes an on-demand CCS conversion proxy called Remi. It converts legacy packages (RPM, DEB, Arch) to CCS format on the fly, serves chunks via content-addressable storage, and provides a sparse index for efficient client sync. This is how Conary delivers 68,000+ packages on day one without requiring any upstream changes.
+Conary includes an on-demand CCS conversion proxy called Remi. It converts legacy packages (RPM, DEB, Arch) to CCS format on the fly, serves chunks via content-addressable storage, and provides a sparse index for efficient client sync without requiring upstream package authors to republish in CCS first.
 
 A public instance runs at **[packages.conary.io](https://packages.conary.io)**.
 
-Features: Bloom filter acceleration, batch endpoints, pull-through caching, full-text search (Tantivy), TUF supply chain trust, and Prometheus metrics.
+Features: Bloom filter acceleration, batch endpoints, pull-through caching, full-text search (Tantivy), repository metadata verification, and Prometheus metrics.
 
-- **Admin API** on `:8082` with bearer token auth -- token management, CI proxy, test data persistence, MCP endpoint for LLM agents (23 remi-admin tools + 23 conary-test tools)
+- **Admin API** on `:8082` with bearer token auth -- token management, CI proxy, test data persistence, and MCP endpoints for infrastructure automation
 
 ```bash
 # Build with server support
@@ -475,13 +475,13 @@ See the [Conaryopedia](docs/conaryopedia-v2.md) for the full REST endpoint list.
 
 ## CAS Federation
 
-Distributed chunk sharing across Conary nodes for bandwidth savings. Nodes discover peers via mDNS on the LAN and form a hierarchy (leaf -> cell hub -> region hub) for efficient chunk distribution.
+Distributed chunk sharing across Conary nodes for bandwidth savings. Federation supports hierarchical peer routing, optional mDNS discovery for trusted LANs, tier allowlists, and pinned TLS identities for HTTPS peers.
 
 ```bash
 conary federation status              # Overview
 conary federation peers               # List peers
 conary federation add-peer URL --tier cell_hub
-conary federation scan                # mDNS LAN discovery
+conary federation scan                # mDNS discovery (requires allowlist or authenticated transport)
 conary federation stats --days 7      # Bandwidth savings report
 ```
 
@@ -489,7 +489,7 @@ conary federation stats --days 7      # Bandwidth savings report
 
 ## Test Infrastructure
 
-278 integration tests across 4 phases, executed by the `conary-test` Rust engine:
+The `conary-test` Rust engine runs container-backed integration suites against real distros and a live Remi deployment:
 
 ```bash
 cargo run -p conary-test -- run --suite phase1-core --distro fedora43 --phase 1
@@ -498,7 +498,7 @@ cargo run -p conary-test -- logs T42  # Retrieve test logs
 ```
 
 - TOML manifest-based tests with per-step logging
-- 23 MCP tools for agent-driven testing and deployment
+- MCP-backed test and deployment operations for automation
 - Results streamed to Remi for persistent storage
 
 ---
@@ -511,7 +511,9 @@ Requires Rust 1.94+ (edition 2024). The project is a Cargo workspace with 4 crat
 cargo build                          # Client only (default)
 cargo build --features server        # With Remi server + conaryd daemon
 cargo test                           # Run all tests
+cargo test --features server         # Full workspace verification, including server paths
 cargo clippy -- -D warnings          # Lint check
+cargo clippy --features server -- -D warnings
 ```
 
 Release builds use LTO and single codegen unit for maximum optimization:
@@ -525,7 +527,7 @@ cargo build --profile fast-release   # Faster compile, still optimized
 
 ## Project Status
 
-**Version 0.7.0** -- Core architecture is complete and tested. The codebase has 219,000+ lines of Rust with 2,100+ unit tests and 278 integration tests across 3 distros (schema v57). System generations (EROFS + composefs) are functional with limited production testing. System takeover, the bootstrap pipeline (31 packages from source, qcow2 image generation), and cross-distro repository capability resolution are implemented. Capability enforcement includes `conary capability audit` and `conary capability enforce` with a three-tier policy engine (allowed/prompt/denied). The CAS-layered derivation engine (bootstrap v2) supports provenance tracking, trust levels (0-4), and verification commands. A production Remi server is running at packages.conary.io with an external admin API (bearer token auth, rate limiting, audit logging, 47 MCP tools for LLM agent integration).
+**Version 0.7.0** -- The project has a working end-to-end stack: multi-format installs, atomic changesets, immutable generations, takeover/bootstrap flows, Remi conversion and serving, federation, and capability enforcement. Recent work has focused on tightening trust defaults, transaction atomicity, daemon/server auth, scriptlet isolation, and integrity verification across retrieval and generation paths.
 
 See [ROADMAP.md](ROADMAP.md) for what we're building next.
 
@@ -533,12 +535,12 @@ See [ROADMAP.md](ROADMAP.md) for what we're building next.
 
 ## What's Next
 
-The next milestone is **Phase 3: Developer Experience** -- see [ROADMAP.md](ROADMAP.md) for the full plan. Near-term priorities:
+The next milestone is the current **developer-experience and validation** push -- see [ROADMAP.md](ROADMAP.md) for the full plan. Near-term priorities:
 
-- Shell integration (direnv-style dev environments)
-- Recipe system hardening and hermetic build improvements
-- Developer tooling: `conary why`, better error messages, shell completions
-- Federation peer discovery and chunk routing
+- Shell integration and smoother day-to-day developer workflows
+- Bootstrap and takeover validation on real systems
+- Better operational docs, release hygiene, and contributor onboarding
+- Continued hardening around trust, federation, and rollback behavior
 
 ---
 

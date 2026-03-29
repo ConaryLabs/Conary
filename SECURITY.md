@@ -50,13 +50,16 @@ Only the latest release receives security updates. We recommend always running t
 Conary is a system-level package manager that executes with elevated privileges. Security is a core design concern, not an afterthought. Key security features include:
 
 - **Ed25519 package signatures** -- cryptographic verification of package authenticity
-- **Linux namespace isolation** -- scriptlets run in sandboxed mount, PID, IPC, UTS, and network namespaces
+- **Signed repository metadata** -- remote metadata is verified before install planning
+- **Self-update signature verification** -- downloaded update artifacts are verified before replacement
+- **Linux namespace isolation** -- scriptlets run in sandboxed mount, PID, IPC, UTS, network, and user namespaces where supported
 - **Landlock filesystem restrictions** -- kernel-enforced limits on which paths scriptlets can access
 - **Seccomp-BPF syscall filtering** -- restrict which system calls scriptlets can make
 - **TUF trust metadata** -- repository metadata follows The Update Framework for supply chain integrity
 - **Content-addressable storage** -- files stored by cryptographic hash, preventing tampering
 - **Atomic transactions** -- journaled changesets prevent partial installs from leaving the system in a broken state
 - **Peer credential authentication** -- daemon API uses SO_PEERCRED to verify caller identity
+- **Pinned federation peer identity** -- HTTPS federation peers are bound to pinned TLS certificate fingerprints
 - **Rate limiting and CORS** -- server endpoints are protected against abuse
 
 ## Scope

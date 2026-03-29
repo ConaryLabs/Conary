@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-03-24
-revision: 6
-summary: Fix schema v57, 4 crates, 57 migrations, update bootstrap stage names
+last_updated: 2026-03-28
+revision: 7
+summary: Refresh schema, security, and current workspace references after round 3 remediation
 ---
 
 # Conary Architecture
@@ -42,7 +42,7 @@ Update   SBOM    Diff   Switch      Base/Image
      +------+------+        | (src/      |
      |  Database   |        |  repository|
      | (src/db/)   |        |  /)        |
-     |  SQLite v57 |        +------+-----+
+     |  SQLite v64 |        +------+-----+
      +------+------+               |
             |               +------+------+
      +------+------+        | Remi Server |
@@ -108,8 +108,8 @@ conary-core/             Core library crate
 +-- src/
     +-- lib.rs           Public API surface
     +-- db/              Database layer
-    |   +-- schema.rs    Schema v57, migration dispatcher
-    |   +-- migrations/  57 migration functions (v1_v20.rs, v21_v40.rs, v41_current.rs)
+    |   +-- schema.rs    Schema v64, migration dispatcher
+    |   +-- migrations/  64 migration functions (v1_v20.rs, v21_v40.rs, v41_current.rs)
     |   +-- models/      ORM-style model structs
     +-- transaction/     Composefs-native transaction engine
     |   +-- mod.rs       TransactionEngine, state machine (resolve/fetch/commit/build/mount)
@@ -400,7 +400,7 @@ itself.
 Supports x86_64, aarch64, and riscv64 targets. Dry-run mode
 (`--dry-run`) validates the full pipeline without building.
 
-## Database Schema (v57)
+## Database Schema (v64)
 
 All state lives in SQLite. No config files for runtime state. Key tables:
 

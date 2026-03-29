@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-03-15
-revision: 5
-summary: Add install section with --reinstall flag documentation
+last_updated: 2026-03-28
+revision: 6
+summary: Refresh CCS conversion and install notes after security hardening
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -57,8 +57,9 @@ All operations respect a target_root parameter for bootstrap/container use.
 Hook types: User, Group, Directory, Systemd, Tmpfiles, Sysctl, Alternatives.
 
 **convert/** -- Legacy (RPM/DEB/Arch) to CCS conversion. Extracts declarative
-hooks from scriptlets, runs original scripts as-is (assumed idempotent).
-Tracks conversion fidelity (High/Medium/Low) via FidelityReport.
+hooks from scriptlets where possible and preserves remaining scripts for
+sandboxed execution when they cannot be safely captured. Tracks conversion
+fidelity (High/Medium/Low) via `FidelityReport`.
 
 **enhancement/** -- Post-conversion enrichment via trait-based plugins.
 Adds capabilities, provenance, and subpackage relationships that the
@@ -90,12 +91,6 @@ conary ccs install package.ccs --dry-run     # Preview without applying
 The `--reinstall` flag forces reinstallation even when the same version is
 already present. This is useful for repairing corrupted files or re-running
 hooks without bumping the version.
-
-## Phase 3 Follow-Ups
-
-Phase 3 implementation follow-ups, coverage gaps, and rollout workarounds now
-live in [PHASE3_ADVERSARIAL_FOLLOWUPS.md](/home/peter/Conary/PHASE3_ADVERSARIAL_FOLLOWUPS.md)
-at the project root so this module doc can stay focused on CCS itself.
 
 See also: [docs/specs/ccs-format-v1.md](/docs/specs/ccs-format-v1.md),
 [docs/ARCHITECTURE.md](/docs/ARCHITECTURE.md).
