@@ -254,31 +254,31 @@ stdout_not_contains = "panic"
 stdout_contains_any = ["Graph resolved", "Bootstrap plan", "dry-run", "Usage: conary bootstrap dry-run"]
 
 # --------------------------------------------------------------------------
-# T137: Bootstrap stage0 artifacts
+# T137: Bootstrap cross-tools artifacts
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T137"
-name = "bootstrap_stage0_artifacts_valid"
-description = "Bootstrap stage0 should produce output artifacts and valid ELF binaries when it succeeds"
+name = "bootstrap_cross_tools_artifacts_valid"
+description = "Bootstrap cross-tools should produce output artifacts and valid ELF binaries when it succeeds"
 timeout = 300
 group = "L"
 
 [[test.step]]
-run = "${CONARY_BIN} bootstrap stage0 --work-dir /tmp/conary-lifecycle-bootstrap 2>&1 || true"
+run = "${CONARY_BIN} bootstrap cross-tools --work-dir /tmp/conary-lifecycle-bootstrap --lfs-root /tmp/conary-lifecycle-bootstrap/lfs 2>&1 || true"
 
 [test.step.assert]
 stdout_not_contains = "panic"
 
 [[test.step]]
-run = "if [ -d /tmp/conary-lifecycle-bootstrap/stage0 ]; then find /tmp/conary-lifecycle-bootstrap/stage0 -type f | head -5; else echo 'no stage0 dir'; fi"
+run = "if [ -d /tmp/conary-lifecycle-bootstrap/lfs/tools ]; then find /tmp/conary-lifecycle-bootstrap/lfs/tools -type f | head -5; else echo 'no cross-tools dir'; fi"
 
 [test.step.assert]
 stdout_not_contains = "panic"
-stdout_contains_any_if_success = ["stage0", "/tmp/conary-lifecycle-bootstrap", "no stage0 dir"]
+stdout_contains_any_if_success = ["tools", "/tmp/conary-lifecycle-bootstrap", "no cross-tools dir"]
 
 [[test.step]]
-run = "EXEC=$(find /tmp/conary-lifecycle-bootstrap/stage0 -type f -executable 2>/dev/null | head -1); if [ -n \"$EXEC\" ]; then file \"$EXEC\"; else echo 'no stage0 executables'; fi"
+run = "EXEC=$(find /tmp/conary-lifecycle-bootstrap/lfs/tools -type f -executable 2>/dev/null | head -1); if [ -n \"$EXEC\" ]; then file \"$EXEC\"; else echo 'no cross-tools executables'; fi"
 
 [test.step.assert]
-stdout_contains_any_if_success = ["ELF", "executable", "no stage0 executables"]
+stdout_contains_any_if_success = ["ELF", "executable", "no cross-tools executables"]

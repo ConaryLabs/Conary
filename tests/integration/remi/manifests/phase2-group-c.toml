@@ -33,52 +33,52 @@ stdout_not_contains = "panic"
 stdout_contains_if_success = "Graph resolved"
 
 # --------------------------------------------------------------------------
-# T59: Stage 0
+# T59: Cross-tools
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T59"
-name = "bootstrap_stage0"
-description = "Run bootstrap stage0 and verify no panic"
+name = "bootstrap_cross_tools"
+description = "Run bootstrap cross-tools and verify the canonical command does not panic"
 timeout = 300
 group = "C"
 
 [[test.step]]
-conary = "bootstrap stage0 --work-dir /tmp/conary-bootstrap-test"
+conary = "bootstrap cross-tools --work-dir /tmp/conary-bootstrap-test --lfs-root /tmp/conary-bootstrap-test/lfs"
 
 [test.step.assert]
 stdout_not_contains = "panic"
 
 # --------------------------------------------------------------------------
-# T60: Stage 0 output
+# T60: Cross-tools output
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T60"
-name = "bootstrap_stage0_output"
-description = "Verify stage0 output directory exists (informational)"
+name = "bootstrap_cross_tools_output"
+description = "Verify the cross-tools output directory exists (informational)"
 timeout = 10
 group = "C"
 
-# Just list the stage0 directory -- informational, no strict assertion
+# Just list the cross-tools directory -- informational, no strict assertion
 [[test.step]]
-run = "ls /tmp/conary-bootstrap-test/stage0 2>/dev/null || echo 'stage0 dir does not exist'"
+run = "ls /tmp/conary-bootstrap-test/lfs/tools 2>/dev/null || echo 'cross-tools dir does not exist'"
 
 # --------------------------------------------------------------------------
-# T61: Stage 1 starts
+# T61: Temp-tools starts
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T61"
-name = "bootstrap_stage1_starts"
-description = "Verify bootstrap stage1 starts without panicking (timeout acceptable)"
+name = "bootstrap_temp_tools_starts"
+description = "Verify bootstrap temp-tools starts without panicking (timeout acceptable)"
 timeout = 60
 group = "C"
 
-# Stage1 may timeout (expected behavior -- proof of life that it started).
+# temp-tools may timeout (expected behavior -- proof of life that it started).
 # Use timeout command to limit execution; exit 124 from timeout is acceptable.
 [[test.step]]
-run = "timeout 30 ${CONARY_BIN} --db-path ${DB_PATH} bootstrap stage1 --work-dir /tmp/conary-bootstrap-test 2>&1 || true"
+run = "timeout 30 ${CONARY_BIN} --db-path ${DB_PATH} bootstrap temp-tools --work-dir /tmp/conary-bootstrap-test --lfs-root /tmp/conary-bootstrap-test/lfs 2>&1 || true"
 
 [test.step.assert]
 stdout_not_contains = "panic"
