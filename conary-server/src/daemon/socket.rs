@@ -72,6 +72,7 @@ impl SocketManager {
         // Ensure parent directory exists
         if let Some(parent) = self.config.unix_path.parent() {
             std::fs::create_dir_all(parent)?;
+            validate_socket_parent_dir(parent)?;
         }
 
         // Bind Unix socket
@@ -233,6 +234,34 @@ pub fn get_peer_credentials(
 /// Create an Arc wrapper for shared socket state
 pub type SharedSocketManager = Arc<SocketManager>;
 
+fn validate_socket_parent_dir(path: &Path) -> Result<()> {
+    let metadata = std::fs::metadata(path).map_err(|e| {
+        conary_core::Error::IoError(format!(
+            "Failed to inspect socket parent directory {}: {}",
+            path.display(),
+            e
+        ))
+    })?;
+
+    if !metadata.is_dir() {
+        return Err(conary_core::Error::IoError(format!(
+            "Socket parent path is not a directory: {}",
+            path.display()
+        )));
+    }
+
+    let mode = metadata.permissions().mode() & 0o777;
+    if mode & 0o022 != 0 {
+        return Err(conary_core::Error::ConfigError(format!(
+            "Socket parent directory {} has unsafe permissions {:o}; group/other write access is not allowed",
+            path.display(),
+            mode
+        )));
+    }
+
+    Ok(())
+}
+
 fn with_process_umask<T>(mask: libc::mode_t, f: impl FnOnce() -> T) -> T {
     struct UmaskGuard {
         previous: libc::mode_t,
@@ -355,5 +384,15 @@ mod tests {
     fn test_lookup_group_gid_ignores_invalid_fallback_names() {
         let gid = lookup_group_gid("definitely-missing-conary-group", &["bad\0group"]).unwrap();
         assert!(gid.is_none());
+    }
+
+    #[test]
+    fn test_validate_socket_parent_dir_rejects_world_writable_directory() {
+        let temp_dir = TempDir::new().unwrap();
+        std::fs::set_permissions(temp_dir.path(), std::fs::Permissions::from_mode(0o777)).unwrap();
+
+        let err = validate_socket_parent_dir(temp_dir.path())
+            .expect_err("world-writable socket parents should be rejected");
+        assert!(err.to_string().contains("unsafe permissions"));
     }
 }
