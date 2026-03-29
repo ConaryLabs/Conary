@@ -1583,8 +1583,8 @@ async fn run() -> Result<()> {
                 package,
                 command,
                 db,
-                permissive,
-            } => commands::cmd_capability_run(&db.db_path, &package, &command, permissive).await,
+                audit,
+            } => commands::cmd_capability_run(&db.db_path, &package, &command, audit).await,
         },
 
         // =====================================================================

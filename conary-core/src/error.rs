@@ -136,3 +136,9 @@ pub enum Error {
 
 /// Result type alias using Conary's Error type
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl From<crate::capability::CapabilityError> for Error {
+    fn from(value: crate::capability::CapabilityError) -> Self {
+        Self::Capability(value.to_string())
+    }
+}

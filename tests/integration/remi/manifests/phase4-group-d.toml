@@ -175,15 +175,23 @@ stdout_not_contains = "panic"
 [[test]]
 id = "T227"
 name = "capability_list"
-description = "List capability declarations for all installed packages"
-timeout = 30
+description = "Install a capability-declared package and list capability declarations"
+timeout = 120
 group = "D"
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/cap-net-raw/output/cap-net-raw.ccs --allow-unsigned --allow-capabilities --sandbox never --reinstall"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "panic"
 
 [[test.step]]
 conary = "capability list"
 
 [test.step.assert]
 exit_code = 0
+stdout_contains = "cap-net-raw"
 stdout_not_contains = "panic"
 
 # --------------------------------------------------------------------------
@@ -193,15 +201,37 @@ stdout_not_contains = "panic"
 [[test]]
 id = "T228"
 name = "capability_show"
-description = "Show capabilities for an installed package"
+description = "Show the stored capability declaration for an installed package"
 timeout = 30
 group = "D"
+depends_on = ["T227"]
 
 [[test.step]]
-conary = "capability show ${FIXTURE_PKG_NAME}"
+conary = "capability show cap-net-raw"
 
 [test.step.assert]
 exit_code = 0
+stdout_contains = "Schema Version: 1"
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T228b: Capability run
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T228b"
+name = "capability_run"
+description = "Run a command under the package's declared capability envelope"
+timeout = 30
+group = "D"
+depends_on = ["T228"]
+
+[[test.step]]
+conary = "capability run cap-net-raw -- /bin/echo capability-ok"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "capability-ok"
 stdout_not_contains = "panic"
 
 # --------------------------------------------------------------------------
@@ -252,6 +282,7 @@ name = "capability_list_missing"
 description = "Show packages with undeclared capabilities"
 timeout = 30
 group = "D"
+depends_on = ["T227"]
 
 [[test.step]]
 conary = "capability list --missing"

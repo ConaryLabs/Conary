@@ -11,10 +11,41 @@ use conary_core::capability::enforcement::{
     seccomp_enforce,
 };
 use conary_core::capability::{
-    CapabilityDeclaration, list_packages_with_capabilities, load_capabilities_by_name,
+    CapabilityDeclaration, SyscallCapabilities, list_packages_with_capabilities,
+    load_capabilities_by_name,
 };
 use conary_core::ccs::manifest::CcsManifest;
 use conary_core::container::{ContainerConfig, Sandbox};
+
+const CAPABILITY_RUN_LAUNCHER_SYSCALLS: &[&str] = &[
+    "read",
+    "write",
+    "close",
+    "mmap",
+    "mprotect",
+    "munmap",
+    "brk",
+    "pread64",
+    "openat",
+    "newfstatat",
+    "access",
+    "execve",
+    "exit",
+    "exit_group",
+    "arch_prctl",
+    "rt_sigaction",
+    "rt_sigprocmask",
+    "futex",
+    "set_tid_address",
+    "set_robust_list",
+    "getcwd",
+    "readlink",
+    "prlimit64",
+    "clock_gettime",
+    "madvise",
+    "getrandom",
+    "rseq",
+];
 
 /// Show declared capabilities for a package
 pub async fn cmd_capability_show(db_path: &str, package: &str, format: &str) -> Result<()> {
@@ -425,12 +456,12 @@ pub async fn cmd_capability_audit(
 /// Loads the package's declared capabilities, builds an enforcement policy,
 /// creates a sandboxed environment, and executes the command with restrictions.
 ///
-/// `permissive` maps to audit mode (log but don't block), otherwise enforce mode.
+/// `audit` logs violations without blocking them. Otherwise enforce mode blocks.
 pub async fn cmd_capability_run(
     db_path: &str,
     package: &str,
     command: &[String],
-    permissive: bool,
+    audit: bool,
 ) -> Result<()> {
     if command.is_empty() {
         anyhow::bail!("No command specified. Usage: conary capability run <package> -- <command>");
@@ -451,27 +482,13 @@ pub async fn cmd_capability_run(
         }
     };
 
-    let mode = if permissive {
+    let mode = if audit {
         EnforcementMode::Audit
     } else {
         EnforcementMode::Enforce
     };
 
-    // Build enforcement policy from capabilities
-    let policy = EnforcementPolicy {
-        mode,
-        filesystem: if caps.filesystem.is_empty() {
-            None
-        } else {
-            Some(caps.filesystem.clone())
-        },
-        syscalls: if caps.syscalls.is_empty() {
-            None
-        } else {
-            Some(caps.syscalls.clone())
-        },
-        network_isolation: caps.network.none,
-    };
+    let policy = build_enforcement_policy(&caps, mode);
 
     // Build container config with enforcement
     let mut config = ContainerConfig::default();
@@ -497,11 +514,11 @@ pub async fn cmd_capability_run(
     }
     println!();
 
-    // Build the script to execute: run the command directly
-    let script_content = build_exec_script(command);
-
     let mut sandbox = Sandbox::new(config);
-    let (exit_code, stdout, stderr) = sandbox.execute("/bin/sh", &script_content, &[], &[])?;
+    let (program, args) = command
+        .split_first()
+        .expect("empty command should be rejected earlier");
+    let (exit_code, stdout, stderr) = sandbox.execute_command(program, args, &[])?;
 
     // Print output
     if !stdout.is_empty() {
@@ -518,20 +535,34 @@ pub async fn cmd_capability_run(
     Ok(())
 }
 
-/// Build a shell script that execs the given command
-fn build_exec_script(command: &[String]) -> String {
-    let mut script = String::from("#!/bin/sh\nexec");
-    for arg in command {
-        // Shell-escape arguments
-        if arg.contains(' ') || arg.contains('\'') || arg.contains('"') || arg.contains('\\') {
-            script.push_str(&format!(" '{}'", arg.replace('\'', "'\\''")));
+fn build_enforcement_policy(
+    caps: &CapabilityDeclaration,
+    mode: EnforcementMode,
+) -> EnforcementPolicy {
+    EnforcementPolicy {
+        mode,
+        filesystem: if caps.filesystem.is_empty() {
+            None
         } else {
-            script.push(' ');
-            script.push_str(arg);
+            Some(caps.filesystem.clone())
+        },
+        syscalls: if caps.syscalls.is_empty() {
+            None
+        } else {
+            Some(with_runtime_launcher_syscalls(&caps.syscalls))
+        },
+        network_isolation: caps.network.none,
+    }
+}
+
+fn with_runtime_launcher_syscalls(syscalls: &SyscallCapabilities) -> SyscallCapabilities {
+    let mut merged = syscalls.clone();
+    for syscall in CAPABILITY_RUN_LAUNCHER_SYSCALLS {
+        if !merged.allow.iter().any(|existing| existing == syscall) {
+            merged.allow.push((*syscall).to_string());
         }
     }
-    script.push('\n');
-    script
+    merged
 }
 
 #[cfg(test)]
@@ -559,5 +590,52 @@ mod tests {
     fn test_display_capabilities_toml() {
         let caps = CapabilityDeclaration::default();
         display_capabilities(&caps, "test-pkg", "toml").unwrap();
+    }
+
+    #[test]
+    fn test_build_enforcement_policy_uses_declared_restrictions() {
+        let mut caps = CapabilityDeclaration::default();
+        caps.network.none = true;
+        caps.filesystem.read.push("/etc/test".to_string());
+        caps.syscalls.profile = Some("scriptlet".to_string());
+
+        let policy = build_enforcement_policy(&caps, EnforcementMode::Enforce);
+
+        assert_eq!(policy.mode, EnforcementMode::Enforce);
+        assert!(policy.network_isolation);
+        assert_eq!(
+            policy
+                .filesystem
+                .as_ref()
+                .expect("filesystem policy should be present")
+                .read,
+            vec!["/etc/test".to_string()]
+        );
+        assert_eq!(
+            policy
+                .syscalls
+                .as_ref()
+                .expect("syscall policy should be present")
+                .profile
+                .as_deref(),
+            Some("scriptlet")
+        );
+    }
+
+    #[test]
+    fn test_build_enforcement_policy_adds_runtime_launcher_baseline() {
+        let mut caps = CapabilityDeclaration::default();
+        caps.syscalls.allow.push("socket".to_string());
+
+        let policy = build_enforcement_policy(&caps, EnforcementMode::Enforce);
+        let syscalls = policy
+            .syscalls
+            .as_ref()
+            .expect("syscall policy should be present");
+
+        assert!(syscalls.allow.contains(&"socket".to_string()));
+        assert!(syscalls.allow.contains(&"execve".to_string()));
+        assert!(syscalls.allow.contains(&"prlimit64".to_string()));
+        assert!(syscalls.allow.contains(&"clock_gettime".to_string()));
     }
 }

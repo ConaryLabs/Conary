@@ -39,7 +39,7 @@
 
 use crate::capability::enforcement::{self, EnforcementMode, EnforcementPolicy};
 use crate::error::{Error, Result};
-use nix::mount::{MsFlags, mount};
+use nix::mount::{MntFlags, MsFlags, mount, umount2};
 use nix::sched::{CloneFlags, unshare};
 use nix::sys::signal::{Signal, kill};
 use nix::sys::wait::{WaitStatus, waitpid};
@@ -50,6 +50,7 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, LazyLock};
@@ -526,6 +527,44 @@ impl Sandbox {
         }
     }
 
+    /// Execute a command directly in the sandbox without a shell wrapper.
+    ///
+    /// This is important for seccomp-enforced flows where spawning an
+    /// intermediate shell can require extra syscalls that the declared
+    /// capability profile does not permit.
+    pub fn execute_command(
+        &mut self,
+        program: &str,
+        args: &[String],
+        env: &[(&str, &str)],
+    ) -> Result<(i32, String, String)> {
+        let can_isolate = isolation_available();
+
+        if can_isolate && self.config.isolate_mount {
+            self.execute_isolated_command(program, args, env)
+        } else {
+            if self.config.isolate_network || self.config.is_pristine() {
+                return Err(Error::ScriptletError(
+                    "Hermetic build requires namespace isolation, but it is not available on this system. \
+                     (Root privileges or unprivileged user namespaces required)".to_string()
+                ));
+            }
+
+            if Uid::effective().is_root() {
+                return Err(Error::ScriptletError(
+                    "Namespace isolation unavailable while running as root \
+                     — refusing to execute scriptlet without sandboxing"
+                        .to_string(),
+                ));
+            }
+
+            if self.config.isolate_mount {
+                warn!("Namespace isolation not available, falling back to resource limits only");
+            }
+            self.execute_limited_command(program, args, env)
+        }
+    }
+
     /// Execute with full namespace isolation (requires root)
     fn execute_isolated(
         &mut self,
@@ -622,7 +661,7 @@ impl Sandbox {
                 let result = self.child_setup_and_execute(
                     root_dir.path(),
                     interpreter,
-                    &script_path,
+                    Some(&script_path),
                     args,
                     env,
                     Some(UserNamespaceSync {
@@ -632,6 +671,115 @@ impl Sandbox {
                 );
 
                 // Exit with appropriate code
+                match result {
+                    Ok(code) => std::process::exit(code),
+                    Err(err) => {
+                        eprintln!("{err}");
+                        std::process::exit(127);
+                    }
+                }
+            }
+            Err(e) => {
+                drop(stdout_read_fd);
+                drop(stdout_write_fd);
+                drop(stderr_read_fd);
+                drop(stderr_write_fd);
+                drop(userns_request_read_fd);
+                drop(userns_request_write_fd);
+                drop(userns_ack_read_fd);
+                drop(userns_ack_write_fd);
+                Err(Error::ScriptletError(format!("Fork failed: {}", e)))
+            }
+        }
+    }
+
+    fn execute_isolated_command(
+        &mut self,
+        program: &str,
+        args: &[String],
+        env: &[(&str, &str)],
+    ) -> Result<(i32, String, String)> {
+        let root_dir = TempDir::new()?;
+        self.setup_container_fs(root_dir.path())?;
+        prepare_user_namespace_root(root_dir.path())?;
+
+        let (stdout_read_fd, stdout_write_fd) = nix::unistd::pipe()
+            .map_err(|e| Error::ScriptletError(format!("Failed to create stdout pipe: {e}")))?;
+        let (stderr_read_fd, stderr_write_fd) = nix::unistd::pipe()
+            .map_err(|e| Error::ScriptletError(format!("Failed to create stderr pipe: {e}")))?;
+        let (userns_request_read_fd, userns_request_write_fd) = nix::unistd::pipe()
+            .map_err(|e| Error::ScriptletError(format!("Failed to create userns pipe: {e}")))?;
+        let (userns_ack_read_fd, userns_ack_write_fd) = nix::unistd::pipe()
+            .map_err(|e| Error::ScriptletError(format!("Failed to create userns ack pipe: {e}")))?;
+
+        let start = Instant::now();
+
+        match fork_process() {
+            Ok(ForkResult::Parent { child }) => {
+                drop(stdout_write_fd);
+                drop(stderr_write_fd);
+                drop(userns_request_write_fd);
+                drop(userns_ack_read_fd);
+
+                self.complete_user_namespace_handshake(
+                    child,
+                    &userns_request_read_fd,
+                    &userns_ack_write_fd,
+                )?;
+                drop(userns_request_read_fd);
+                drop(userns_ack_write_fd);
+
+                let (code, _, _) = self.wait_for_child(child, start)?;
+
+                let mut stdout_str = String::new();
+                let mut stdout_file = std::fs::File::from(stdout_read_fd);
+                let _ = stdout_file.read_to_string(&mut stdout_str);
+
+                let mut stderr_str = String::new();
+                let mut stderr_file = std::fs::File::from(stderr_read_fd);
+                let _ = stderr_file.read_to_string(&mut stderr_str);
+
+                Ok((code, stdout_str, stderr_str))
+            }
+            Ok(ForkResult::Child) => {
+                drop(stdout_read_fd);
+                drop(stderr_read_fd);
+                drop(userns_request_read_fd);
+                drop(userns_ack_write_fd);
+
+                let mut stdout_target = match adopt_raw_fd(1) {
+                    Ok(fd) => fd,
+                    Err(err) => {
+                        eprintln!("{err}");
+                        std::process::exit(127);
+                    }
+                };
+                let mut stderr_target = match adopt_raw_fd(2) {
+                    Ok(fd) => fd,
+                    Err(err) => {
+                        eprintln!("{err}");
+                        std::process::exit(127);
+                    }
+                };
+                let _ = nix::unistd::dup2(&stdout_write_fd, &mut stdout_target);
+                let _ = nix::unistd::dup2(&stderr_write_fd, &mut stderr_target);
+                std::mem::forget(stdout_target);
+                std::mem::forget(stderr_target);
+                drop(stdout_write_fd);
+                drop(stderr_write_fd);
+
+                let result = self.child_setup_and_execute(
+                    root_dir.path(),
+                    program,
+                    None,
+                    args,
+                    env,
+                    Some(UserNamespaceSync {
+                        request_fd: userns_request_write_fd,
+                        ack_fd: userns_ack_read_fd,
+                    }),
+                );
+
                 match result {
                     Ok(code) => std::process::exit(code),
                     Err(err) => {
@@ -702,6 +850,63 @@ impl Sandbox {
         match child.wait_timeout(self.config.timeout)? {
             Some(status) => {
                 // Read stdout/stderr directly from pipes (don't call wait again)
+                let mut stdout_str = String::new();
+                let mut stderr_str = String::new();
+                if let Some(mut stdout) = child.stdout.take() {
+                    let _ = stdout.read_to_string(&mut stdout_str);
+                }
+                if let Some(mut stderr) = child.stderr.take() {
+                    let _ = stderr.read_to_string(&mut stderr_str);
+                }
+                let code = status.code().unwrap_or(-1);
+                Ok((code, stdout_str, stderr_str))
+            }
+            None => {
+                let _ = child.kill();
+                Err(Error::ScriptletError(format!(
+                    "Script timed out after {:?}",
+                    self.config.timeout
+                )))
+            }
+        }
+    }
+
+    fn execute_limited_command(
+        &self,
+        program: &str,
+        args: &[String],
+        env: &[(&str, &str)],
+    ) -> Result<(i32, String, String)> {
+        self.apply_resource_limits()?;
+
+        let mut cmd = Command::new(program);
+        cmd.args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .env_clear()
+            .env("HOME", "/root")
+            .env("TERM", "dumb")
+            .env("LANG", "C.UTF-8")
+            .env("SHELL", "/bin/sh");
+
+        let has_custom_path = env.iter().any(|(k, _)| *k == "PATH");
+        if !has_custom_path {
+            cmd.env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin");
+        }
+
+        for (key, value) in env {
+            cmd.env(*key, *value);
+        }
+
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| Error::ScriptletError(format!("Failed to spawn: {}", e)))?;
+
+        use wait_timeout::ChildExt;
+
+        match child.wait_timeout(self.config.timeout)? {
+            Some(status) => {
                 let mut stdout_str = String::new();
                 let mut stderr_str = String::new();
                 if let Some(mut stdout) = child.stdout.take() {
@@ -828,15 +1033,16 @@ impl Sandbox {
         &self,
         root: &Path,
         interpreter: &str,
-        script_path: &Path,
+        script_path: Option<&Path>,
         args: &[String],
         env: &[(&str, &str)],
         userns_sync: Option<UserNamespaceSync>,
     ) -> Result<i32> {
-        let script_in_container = script_path
-            .strip_prefix(root)
-            .map(|relative| Path::new("/").join(relative))
-            .unwrap_or_else(|_| script_path.to_path_buf());
+        let script_in_container = script_path.map(|path| {
+            path.strip_prefix(root)
+                .map(|relative| Path::new("/").join(relative))
+                .unwrap_or_else(|_| path.to_path_buf())
+        });
         let namespace_flags: &[(bool, CloneFlags)] = &[
             (self.config.isolate_pid, CloneFlags::CLONE_NEWPID),
             (self.config.isolate_uts, CloneFlags::CLONE_NEWUTS),
@@ -930,8 +1136,10 @@ impl Sandbox {
 
         // Execute the script
         let mut cmd = Command::new(interpreter);
-        cmd.arg(&script_in_container)
-            .args(args)
+        if let Some(script_in_container) = script_in_container.as_ref() {
+            cmd.arg(script_in_container);
+        }
+        cmd.args(args)
             .stdin(Stdio::null())
             .env_clear()
             .env("HOME", "/root")
@@ -950,11 +1158,8 @@ impl Sandbox {
             cmd.env(*key, *value);
         }
 
-        let status = cmd
-            .status()
-            .map_err(|e| Error::ScriptletError(format!("Exec failed: {}", e)))?;
-
-        Ok(status.code().unwrap_or(-1))
+        let error = cmd.exec();
+        Err(Error::ScriptletError(format!("Exec failed: {error}")))
     }
 
     /// Set up mount namespace with bind mounts
@@ -1001,6 +1206,11 @@ impl Sandbox {
                     None,
                 )
             {
+                if bm.target == Path::new("/etc/resolv.conf")
+                    && self.try_fallback_readonly_copy(&bm.source, &target)?
+                {
+                    continue;
+                }
                 self.handle_readonly_remount_failure(&target, error)?;
             }
         }
@@ -1042,6 +1252,35 @@ impl Sandbox {
             .capability_policy
             .as_ref()
             .is_some_and(|policy| policy.mode == EnforcementMode::Enforce)
+    }
+
+    fn try_fallback_readonly_copy(&self, source: &Path, target: &Path) -> Result<bool> {
+        match umount2(target, MntFlags::MNT_DETACH) {
+            Ok(()) | Err(nix::errno::Errno::EINVAL) => {}
+            Err(error) => {
+                return Err(Error::ScriptletError(format!(
+                    "failed to detach bind mount for {}: {error}",
+                    target.display()
+                )));
+            }
+        }
+
+        fs::copy(source, target).map_err(|error| {
+            Error::ScriptletError(format!(
+                "failed to copy {} into sandbox: {error}",
+                source.display()
+            ))
+        })?;
+
+        let mut perms = fs::metadata(target)?.permissions();
+        perms.set_mode(0o444);
+        fs::set_permissions(target, perms)?;
+
+        warn!(
+            "Falling back to copied read-only {} inside sandbox",
+            target.display()
+        );
+        Ok(true)
     }
 
     fn handle_readonly_remount_failure(
@@ -1225,14 +1464,19 @@ fn configure_user_namespace_root_mapping_for_pid(
 }
 
 fn prepare_user_namespace_entrypoint(root: &Path, script_path: &Path) -> Result<()> {
-    let mut root_perms = fs::metadata(root)?.permissions();
-    root_perms.set_mode(root_perms.mode() | 0o011);
-    fs::set_permissions(root, root_perms)?;
+    prepare_user_namespace_root(root)?;
 
     let mut script_perms = fs::metadata(script_path)?.permissions();
     script_perms.set_mode(script_perms.mode() | 0o055);
     fs::set_permissions(script_path, script_perms)?;
 
+    Ok(())
+}
+
+fn prepare_user_namespace_root(root: &Path) -> Result<()> {
+    let mut root_perms = fs::metadata(root)?.permissions();
+    root_perms.set_mode(root_perms.mode() | 0o011);
+    fs::set_permissions(root, root_perms)?;
     Ok(())
 }
 
@@ -1495,6 +1739,34 @@ mod tests {
                 .handle_readonly_remount_failure(Path::new("/etc/passwd"), nix::errno::Errno::EPERM)
                 .is_ok(),
             "warn mode should log and continue on read-only remount errors"
+        );
+    }
+
+    #[test]
+    fn test_resolv_conf_remount_failure_falls_back_to_readonly_copy() {
+        let sandbox = Sandbox::new(ContainerConfig::minimal(Duration::from_secs(30)));
+        let temp_dir = TempDir::new().expect("temp dir");
+        let source = temp_dir.path().join("resolv.conf.source");
+        let target = temp_dir.path().join("resolv.conf.target");
+
+        fs::write(&source, "nameserver 1.1.1.1\n").expect("write source");
+        fs::write(&target, "").expect("seed target");
+
+        let copied = sandbox
+            .try_fallback_readonly_copy(&source, &target)
+            .expect("copy fallback should succeed for local test path");
+        assert!(copied);
+        assert_eq!(
+            fs::read_to_string(&target).expect("read copied target"),
+            "nameserver 1.1.1.1\n"
+        );
+        assert_eq!(
+            fs::metadata(&target)
+                .expect("target metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o444
         );
     }
 

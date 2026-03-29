@@ -279,6 +279,7 @@ fn syscall_name_to_number(name: &str) -> Option<i64> {
         "mprotect" => libc::SYS_mprotect,
         "munmap" => libc::SYS_munmap,
         "brk" => libc::SYS_brk,
+        "madvise" => libc::SYS_madvise,
 
         // Signals
         "rt_sigaction" | "sigaction" => libc::SYS_rt_sigaction,
@@ -300,6 +301,7 @@ fn syscall_name_to_number(name: &str) -> Option<i64> {
         "geteuid" => libc::SYS_geteuid,
         "getegid" => libc::SYS_getegid,
         "prctl" => libc::SYS_prctl,
+        "prlimit64" => libc::SYS_prlimit64,
         "arch_prctl" => libc::SYS_arch_prctl,
         "set_tid_address" => libc::SYS_set_tid_address,
         "set_robust_list" => libc::SYS_set_robust_list,
@@ -307,6 +309,8 @@ fn syscall_name_to_number(name: &str) -> Option<i64> {
         "setsid" => libc::SYS_setsid,
         "umask" => libc::SYS_umask,
         "clone3" => libc::SYS_clone3,
+        "clock_gettime" => libc::SYS_clock_gettime,
+        "getcwd" => libc::SYS_getcwd,
 
         // Networking
         "socket" => libc::SYS_socket,
@@ -409,6 +413,7 @@ fn syscall_name_to_number(name: &str) -> Option<i64> {
         "mprotect" => libc::SYS_mprotect,
         "munmap" => libc::SYS_munmap,
         "brk" => libc::SYS_brk,
+        "madvise" => libc::SYS_madvise,
 
         // Signals
         "rt_sigaction" | "sigaction" => libc::SYS_rt_sigaction,
@@ -431,11 +436,14 @@ fn syscall_name_to_number(name: &str) -> Option<i64> {
         "geteuid" => libc::SYS_geteuid,
         "getegid" => libc::SYS_getegid,
         "prctl" => libc::SYS_prctl,
+        "prlimit64" => libc::SYS_prlimit64,
         "set_tid_address" => libc::SYS_set_tid_address,
         "set_robust_list" => libc::SYS_set_robust_list,
         "futex" => libc::SYS_futex,
         "setsid" => libc::SYS_setsid,
         "umask" => libc::SYS_umask,
+        "clock_gettime" => libc::SYS_clock_gettime,
+        "getcwd" => libc::SYS_getcwd,
 
         // Networking
         "socket" => libc::SYS_socket,
