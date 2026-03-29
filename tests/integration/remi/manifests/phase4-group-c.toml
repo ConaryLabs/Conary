@@ -438,6 +438,96 @@ conary = "query label list"
 exit_code = 0
 stdout_not_contains = "panic"
 
+# --------------------------------------------------------------------------
+# T215a: query label add
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T215a"
+name = "query_label_add"
+description = "Add two labels that can be linked and delegated"
+timeout = 30
+group = "C"
+depends_on = ["T215"]
+
+[[test.step]]
+conary = "query label add ${REPO_NAME}@qa:stable --description phase4-stable"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "Added label: ${REPO_NAME}@qa:stable"
+
+[[test.step]]
+conary = "query label add ${REPO_NAME}@qa:edge --description phase4-edge"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "Added label: ${REPO_NAME}@qa:edge"
+
+# --------------------------------------------------------------------------
+# T215b: query label set + show
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T215b"
+name = "query_label_show"
+description = "Assign a label to the installed fixture package and show it"
+timeout = 30
+group = "C"
+depends_on = ["T215a"]
+
+[[test.step]]
+conary = "query label set ${FIXTURE_PKG_NAME} ${REPO_NAME}@qa:stable"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "Set label for ${FIXTURE_PKG_NAME}"
+
+[[test.step]]
+conary = "query label show ${FIXTURE_PKG_NAME}"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "${REPO_NAME}@qa:stable"
+
+# --------------------------------------------------------------------------
+# T215c: query label link
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T215c"
+name = "query_label_link"
+description = "Link a label to the test repository"
+timeout = 30
+group = "C"
+depends_on = ["T215a"]
+
+[[test.step]]
+conary = "query label link ${REPO_NAME}@qa:stable ${REPO_NAME}"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "Linked label '${REPO_NAME}@qa:stable' to repository '${REPO_NAME}'"
+
+# --------------------------------------------------------------------------
+# T215d: query label delegate
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T215d"
+name = "query_label_delegate"
+description = "Delegate one label to another"
+timeout = 30
+group = "C"
+depends_on = ["T215a"]
+
+[[test.step]]
+conary = "query label delegate ${REPO_NAME}@qa:stable ${REPO_NAME}@qa:edge"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "Label '${REPO_NAME}@qa:stable' now delegates to '${REPO_NAME}@qa:edge'"
+
 # ==========================================================================
 #  REPO ENABLE/DISABLE/KEYS (T216-T220)
 # ==========================================================================

@@ -291,6 +291,80 @@ conary = "capability list --missing"
 exit_code = 0
 stdout_not_contains = "panic"
 
+# --------------------------------------------------------------------------
+# T230a: system trigger disable
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T230a"
+name = "system_trigger_disable"
+description = "Disable the built-in ldconfig trigger"
+timeout = 30
+group = "D"
+
+[[test.step]]
+conary = "system trigger disable ldconfig"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "Disabled trigger: ldconfig"
+
+# --------------------------------------------------------------------------
+# T230b: system trigger enable
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T230b"
+name = "system_trigger_enable"
+description = "Re-enable the built-in ldconfig trigger"
+timeout = 30
+group = "D"
+depends_on = ["T230a"]
+
+[[test.step]]
+conary = "system trigger enable ldconfig"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "Enabled trigger: ldconfig"
+
+# --------------------------------------------------------------------------
+# T230c: system trigger add
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T230c"
+name = "system_trigger_add"
+description = "Add a custom trigger"
+timeout = 30
+group = "D"
+
+[[test.step]]
+conary = "system trigger add phase4-runtime-trigger --pattern /etc/phase4-runtime-fixture/*.conf --handler /bin/true --description phase4-trigger"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "Created trigger: phase4-runtime-trigger"
+
+# --------------------------------------------------------------------------
+# T230d: system trigger remove
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T230d"
+name = "system_trigger_remove"
+description = "Remove a custom trigger"
+timeout = 30
+group = "D"
+depends_on = ["T230c"]
+
+[[test.step]]
+conary = "system trigger remove phase4-runtime-trigger"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "Removed trigger: phase4-runtime-trigger"
+
 # ==========================================================================
 # TRUST (T231-T235)
 # ==========================================================================
