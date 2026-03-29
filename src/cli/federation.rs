@@ -46,6 +46,10 @@ pub enum FederationCommands {
         /// Human-friendly name for the peer
         #[arg(long)]
         name: Option<String>,
+
+        /// Pinned SHA-256 TLS certificate fingerprint for HTTPS peers
+        #[arg(long)]
+        tls_fingerprint: Option<String>,
     },
 
     /// Remove a peer

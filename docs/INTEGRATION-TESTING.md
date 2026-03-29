@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-03-21
-revision: 5
-summary: Add Phase 4 feature validation tests (T160-T249, 5 groups)
+last_updated: 2026-03-28
+revision: 6
+summary: Clarify what Phase 4 proves versus which flows remain intentionally preview-only
 ---
 
 # Integration Testing
@@ -110,15 +110,28 @@ Adversarial and stress tests.
 
 ### Phase 4: Feature Validation (Groups A-E)
 
-Validates every documented CLI command works correctly.
+Validates the active, user-facing command surface and checks that claimed
+features still match the current binary. Where a flow is intentionally
+preview-only or not yet implemented, the manifest asserts that it fails
+cleanly with an explicit message rather than pretending it is production-ready.
 
 | Group | Tests | Category |
 |-------|-------|----------|
 | A | T160-T176 | Config, distro, canonical, groups, registry |
 | B | T177-T195 | Label, model, collection, derive |
-| C | T196-T213 | CCS, bootstrap, cache, automation |
-| D | T214-T229 | Trust, federation, provenance, capability |
+| C | T196-T213 | CCS, bootstrap, cache, query, repo management |
+| D | T221-T255 | Provenance, capability, trust, system ops, federation, automation |
 | E | T230-T249 | Cross-distro compatibility |
+
+Phase 4 is intentionally mixed:
+
+- Positive-path coverage proves real flows such as tracked-config backup/restore,
+  label mutation, trigger mutation, `ccs shell`, `ccs run`, selective CCS
+  component installs, native local RPM/DEB/Arch installs, TUF bootstrap with a
+  signed test root, provenance diff, and pinned-fingerprint federation peers.
+- Preview-only flows are still exercised, but the assertions check for the
+  expected explanatory output. Current examples are automation history and
+  persisting automation configuration changes.
 
 ## QEMU Boot Tests
 

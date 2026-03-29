@@ -1651,7 +1651,17 @@ async fn run() -> Result<()> {
                 db,
                 tier,
                 name,
-            } => commands::cmd_federation_add_peer(&url, &db.db_path, &tier, name.as_deref()).await,
+                tls_fingerprint,
+            } => {
+                commands::cmd_federation_add_peer(
+                    &url,
+                    &db.db_path,
+                    &tier,
+                    name.as_deref(),
+                    tls_fingerprint.as_deref(),
+                )
+                .await
+            }
             cli::FederationCommands::RemovePeer { peer, db } => {
                 commands::cmd_federation_remove_peer(&peer, &db.db_path).await
             }
