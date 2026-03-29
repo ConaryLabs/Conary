@@ -18,7 +18,7 @@ capabilities = []
 packages = []
 
 [components]
-default = ["runtime"]
+default = ["runtime", "config"]
 
 [config]
 files = ["/etc/phase4-runtime-fixture/app.conf"]

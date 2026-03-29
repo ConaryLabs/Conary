@@ -8,8 +8,9 @@
 use super::super::open_db;
 use anyhow::{Context, Result};
 use conary_core::ccs::{CcsPackage, HookExecutor, TrustPolicy, verify};
+use conary_core::components::{ComponentType, should_run_scriptlets};
 use conary_core::db::models::generate_capability_variations;
-use conary_core::db::models::{Changeset, ChangesetStatus};
+use conary_core::db::models::{Changeset, ChangesetStatus, Component as DbComponent};
 use conary_core::dependencies::{DependencyClass, LanguageDepDetector};
 use conary_core::packages::traits::PackageFormat;
 use conary_core::packages::traits::{Scriptlet, ScriptletPhase};
@@ -23,7 +24,7 @@ use conary_core::transaction::{TransactionConfig, TransactionEngine};
 use rusqlite::params;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component as PathComponent, Path, PathBuf};
 use std::time::Duration;
 use tracing::warn;
 
@@ -91,12 +92,12 @@ pub(super) fn sanitize_package_relative_path(path: &str) -> Result<PathBuf> {
 
     for component in Path::new(candidate).components() {
         match component {
-            Component::CurDir => {}
-            Component::Normal(part) => normalized.push(part),
-            Component::ParentDir => {
+            PathComponent::CurDir => {}
+            PathComponent::Normal(part) => normalized.push(part),
+            PathComponent::ParentDir => {
                 anyhow::bail!("path traversal detected in package path: {path}")
             }
-            Component::RootDir | Component::Prefix(_) => {
+            PathComponent::RootDir | PathComponent::Prefix(_) => {
                 anyhow::bail!("invalid package path component in {path}")
             }
         }
@@ -317,6 +318,94 @@ fn parse_version_scheme(raw: Option<&str>) -> Option<VersionScheme> {
     }
 }
 
+#[derive(Debug, Clone)]
+struct SelectedCcsComponents {
+    names: Vec<String>,
+    recognized_types: Vec<ComponentType>,
+}
+
+fn sorted_available_component_names(ccs_pkg: &CcsPackage) -> Vec<String> {
+    let mut names: Vec<String> = ccs_pkg.components().keys().cloned().collect();
+    names.sort();
+    names
+}
+
+fn select_ccs_components(
+    ccs_pkg: &CcsPackage,
+    requested: Option<Vec<String>>,
+) -> Result<SelectedCcsComponents> {
+    let available = sorted_available_component_names(ccs_pkg);
+    if available.is_empty() {
+        anyhow::bail!("Package {} does not contain any installable components", ccs_pkg.name());
+    }
+
+    let names = if let Some(requested_components) = requested {
+        let mut selected = Vec::new();
+        let mut select_all = false;
+
+        for raw in requested_components {
+            let component = raw.trim().to_ascii_lowercase();
+            if component.is_empty() {
+                continue;
+            }
+
+            if component == "all" {
+                select_all = true;
+                break;
+            }
+
+            if !available.iter().any(|available_name| available_name == &component) {
+                anyhow::bail!(
+                    "Unknown component '{}'. Available components: {}",
+                    raw,
+                    available.join(", ")
+                );
+            }
+
+            if !selected.iter().any(|name| name == &component) {
+                selected.push(component);
+            }
+        }
+
+        if select_all {
+            available.clone()
+        } else if selected.is_empty() {
+            anyhow::bail!(
+                "No components selected. Available components: {}",
+                available.join(", ")
+            );
+        } else {
+            selected
+        }
+    } else {
+        let mut defaults = Vec::new();
+        for component in &ccs_pkg.manifest().components.default {
+            let normalized = component.trim().to_ascii_lowercase();
+            if available.iter().any(|available_name| available_name == &normalized)
+                && !defaults.iter().any(|name| name == &normalized)
+            {
+                defaults.push(normalized);
+            }
+        }
+
+        if defaults.is_empty() {
+            available.clone()
+        } else {
+            defaults
+        }
+    };
+
+    let recognized_types = names
+        .iter()
+        .filter_map(|name| ComponentType::parse(name))
+        .collect();
+
+    Ok(SelectedCcsComponents {
+        names,
+        recognized_types,
+    })
+}
+
 fn repo_constraint_set_satisfied(scheme: VersionScheme, version: &str, raw: &str) -> Result<bool> {
     for part in split_constraint_parts(raw) {
         let constraint = parse_repo_constraint(scheme, part)
@@ -354,7 +443,7 @@ pub async fn cmd_ccs_install(
     dry_run: bool,
     allow_unsigned: bool,
     policy: Option<String>,
-    _components: Option<Vec<String>>,
+    components: Option<Vec<String>>,
     sandbox: crate::commands::SandboxMode,
     no_deps: bool,
     reinstall: bool,
@@ -427,6 +516,12 @@ pub async fn cmd_ccs_install(
         ccs_pkg.name(),
         ccs_pkg.version(),
         ccs_pkg.files().len()
+    );
+
+    let selected_components = select_ccs_components(&ccs_pkg, components)?;
+    println!(
+        "Installing components: {}",
+        selected_components.names.join(", ")
     );
 
     if let Some(ref cap_decl) = ccs_pkg.manifest().capabilities {
@@ -540,12 +635,22 @@ pub async fn cmd_ccs_install(
 
     if dry_run {
         println!();
-        println!("[DRY RUN] Would install {} files:", ccs_pkg.files().len());
-        for file in ccs_pkg.files().iter().take(10) {
+        let selected_component_set: HashSet<&str> = selected_components
+            .names
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let selected_files: Vec<_> = ccs_pkg
+            .file_entries()
+            .iter()
+            .filter(|file| selected_component_set.contains(file.component.as_str()))
+            .collect();
+        println!("[DRY RUN] Would install {} files:", selected_files.len());
+        for file in selected_files.iter().take(10) {
             println!("  {}", file.path);
         }
-        if ccs_pkg.files().len() > 10 {
-            println!("  ... and {} more", ccs_pkg.files().len() - 10);
+        if selected_files.len() > 10 {
+            println!("  ... and {} more", selected_files.len() - 10);
         }
         return Ok(());
     }
@@ -558,7 +663,36 @@ pub async fn cmd_ccs_install(
 
     // Step 5: Extract file contents
     println!("Extracting files...");
-    let extracted_files = ccs_pkg.extract_file_contents()?;
+    let selected_component_set: HashSet<&str> = selected_components
+        .names
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let selected_file_entries: Vec<_> = ccs_pkg
+        .file_entries()
+        .iter()
+        .filter(|file| selected_component_set.contains(file.component.as_str()))
+        .cloned()
+        .collect();
+    let selected_paths: HashSet<&str> = selected_file_entries
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect();
+    let file_components: HashMap<String, String> = selected_file_entries
+        .iter()
+        .map(|file| (file.path.clone(), file.component.clone()))
+        .collect();
+    let extracted_files: Vec<_> = ccs_pkg
+        .extract_file_contents()?
+        .into_iter()
+        .filter(|file| selected_paths.contains(file.path.as_str()))
+        .collect();
+    if extracted_files.is_empty() {
+        anyhow::bail!(
+            "No files matched the selected components: {}",
+            selected_components.names.join(", ")
+        );
+    }
     println!("Extracted {} files", extracted_files.len());
     let mut seen_paths: HashMap<PathBuf, bool> = HashMap::new();
     for file in &extracted_files {
@@ -587,9 +721,26 @@ pub async fn cmd_ccs_install(
     // Step 6: Execute pre-hooks
     let mut hook_executor = HookExecutor::new(Path::new(root));
     let hooks = &ccs_pkg.manifest().hooks;
+    let should_run_component_hooks = should_run_scriptlets(&selected_components.recognized_types);
+    let has_hooks = !hooks.users.is_empty()
+        || !hooks.groups.is_empty()
+        || !hooks.directories.is_empty()
+        || !hooks.systemd.is_empty()
+        || !hooks.tmpfiles.is_empty()
+        || !hooks.sysctl.is_empty()
+        || !hooks.alternatives.is_empty()
+        || hooks.post_install.is_some();
+    if has_hooks && !should_run_component_hooks {
+        println!(
+            "Skipping install hooks for non-runtime component selection: {}",
+            selected_components.names.join(", ")
+        );
+    }
 
     let mut pre_hooks_ran = false;
-    if !hooks.users.is_empty() || !hooks.groups.is_empty() || !hooks.directories.is_empty() {
+    if should_run_component_hooks
+        && (!hooks.users.is_empty() || !hooks.groups.is_empty() || !hooks.directories.is_empty())
+    {
         println!("Executing pre-install hooks...");
         pre_hooks_ran = true;
         if let Err(e) = hook_executor.execute_pre_hooks(hooks) {
@@ -773,6 +924,14 @@ pub async fn cmd_ccs_install(
                 conary_core::capability::store_capabilities(tx, trove_id, capabilities)?;
             }
 
+            let mut component_ids: HashMap<String, i64> = HashMap::new();
+            for component_name in &selected_components.names {
+                let mut component = DbComponent::new(trove_id, component_name.clone());
+                component.description = Some(format!("{component_name} files"));
+                let component_id = component.insert(tx)?;
+                component_ids.insert(component_name.clone(), component_id);
+            }
+
             // Register files, store in CAS index, and record history for rollback
             for file in &extracted_files {
                 let hash = file.sha256.clone().unwrap_or_default();
@@ -783,6 +942,10 @@ pub async fn cmd_ccs_install(
                     deployed_mode(file.mode).0,
                     trove_id,
                 );
+                file_entry.component_id = file_components
+                    .get(&file.path)
+                    .and_then(|component_name| component_ids.get(component_name))
+                    .copied();
                 file_entry.symlink_target = file.symlink_target.clone();
                 file_entry.insert_or_replace(tx)?;
 
@@ -923,10 +1086,11 @@ pub async fn cmd_ccs_install(
         // status = Applied).  If post-hooks fail the package is installed but hooks
         // did not complete -- log a warning with the changeset ID so the operator
         // can identify and investigate the partially-configured state.
-        if !hooks.systemd.is_empty()
-            || !hooks.tmpfiles.is_empty()
-            || !hooks.sysctl.is_empty()
-            || !hooks.alternatives.is_empty()
+        if should_run_component_hooks
+            && (!hooks.systemd.is_empty()
+                || !hooks.tmpfiles.is_empty()
+                || !hooks.sysctl.is_empty()
+                || !hooks.alternatives.is_empty())
         {
             let mut non_script_hooks = hooks.clone();
             non_script_hooks.post_install = None;
@@ -963,7 +1127,9 @@ pub async fn cmd_ccs_install(
             }
         }
 
-        if let Some(ref hook) = hooks.post_install {
+        if should_run_component_hooks
+            && let Some(ref hook) = hooks.post_install
+        {
             println!("Executing post-install hooks...");
             let scriptlet = Scriptlet {
                 phase: ScriptletPhase::PostInstall,
@@ -1548,6 +1714,111 @@ mod tests {
         assert!(
             !install_root.join("var/lib/revert-pre-hooks").exists(),
             "pre-hook directory should be reverted on failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn ccs_install_skips_post_install_hook_for_devel_only_component_selection() {
+        use conary_core::ccs::builder::write_ccs_package;
+        use conary_core::ccs::manifest::ScriptHook;
+        use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
+        use conary_core::hash;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let package_path = temp_dir.path().join("devel-only.ccs");
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+        let hook_marker = install_root.join("var/lib/devel-only/post-install-ran");
+
+        std::fs::create_dir_all(&install_root).unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+
+        let runtime_content = b"#!/bin/sh\necho runtime\n".to_vec();
+        let runtime_hash = hash::sha256(&runtime_content);
+        let devel_content = b"#pragma once\n".to_vec();
+        let devel_hash = hash::sha256(&devel_content);
+
+        let runtime_file = FileEntry {
+            path: "/usr/bin/devel-only".to_string(),
+            hash: runtime_hash.clone(),
+            size: runtime_content.len() as u64,
+            mode: 0o100755,
+            component: "runtime".to_string(),
+            file_type: FileType::Regular,
+            target: None,
+            chunks: None,
+        };
+        let devel_file = FileEntry {
+            path: "/usr/include/devel-only/api.h".to_string(),
+            hash: devel_hash.clone(),
+            size: devel_content.len() as u64,
+            mode: 0o100644,
+            component: "devel".to_string(),
+            file_type: FileType::Regular,
+            target: None,
+            chunks: None,
+        };
+
+        let mut manifest = CcsManifest::new_minimal("devel-only", "1.0.0");
+        manifest.hooks.post_install = Some(ScriptHook {
+            script: format!(
+                "mkdir -p '{}' && touch '{}'",
+                hook_marker.parent().unwrap().display(),
+                hook_marker.display()
+            ),
+        });
+
+        let result = BuildResult {
+            manifest,
+            components: HashMap::from([
+                (
+                    "runtime".to_string(),
+                    ComponentData {
+                        name: "runtime".to_string(),
+                        files: vec![runtime_file.clone()],
+                        hash: "runtime".to_string(),
+                        size: runtime_content.len() as u64,
+                    },
+                ),
+                (
+                    "devel".to_string(),
+                    ComponentData {
+                        name: "devel".to_string(),
+                        files: vec![devel_file.clone()],
+                        hash: "devel".to_string(),
+                        size: devel_content.len() as u64,
+                    },
+                ),
+            ]),
+            files: vec![runtime_file, devel_file],
+            blobs: HashMap::from([(runtime_hash, runtime_content), (devel_hash, devel_content)]),
+            total_size: 0,
+            chunked: false,
+            chunk_stats: None,
+        };
+        write_ccs_package(&result, &package_path).unwrap();
+
+        super::cmd_ccs_install(
+            package_path.to_str().unwrap(),
+            db_path_str,
+            install_root.to_str().unwrap(),
+            false,
+            true,
+            None,
+            Some(vec!["devel".to_string()]),
+            crate::commands::SandboxMode::None,
+            true,
+            false,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            !hook_marker.exists(),
+            "post-install hook should be skipped when only :devel is installed"
         );
     }
 }
