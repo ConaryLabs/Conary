@@ -879,7 +879,9 @@ mod tests {
     #[tokio::test]
     async fn test_mcp_server_info() {
         let config = crate::server::ServerConfig::default();
-        let state = Arc::new(RwLock::new(crate::server::ServerState::new(config)));
+        let state = Arc::new(RwLock::new(
+            crate::server::ServerState::new(config).expect("test server state"),
+        ));
         let server = RemiMcpServer::new(state);
 
         let info = server.get_info();

@@ -397,7 +397,9 @@ impl Federation {
             self.mdns = Some(Mutex::new(mdns));
         }
 
-        let mdns_guard = self.mdns.as_ref().unwrap();
+        let mdns_guard = self.mdns.as_ref().ok_or_else(|| {
+            Error::Federation("mDNS manager was not initialized after creation".into())
+        })?;
         let mut mdns = mdns_guard
             .lock()
             .map_err(|e| Error::Federation(format!("Failed to lock mDNS manager: {e}")))?;

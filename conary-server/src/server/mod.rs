@@ -61,7 +61,7 @@ pub use routes::{create_admin_router, create_external_admin_router, create_route
 pub use search::SearchEngine;
 pub use security::BanList;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use dashmap::DashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -232,7 +232,7 @@ pub struct ServerState {
 }
 
 impl ServerState {
-    pub fn new(config: ServerConfig) -> Self {
+    pub fn new(config: ServerConfig) -> Result<Self> {
         Self::with_options(config, None, Duration::from_secs(15 * 60))
     }
 
@@ -253,7 +253,7 @@ impl ServerState {
         config: ServerConfig,
         trusted_proxy_header: Option<String>,
         negative_cache_ttl: Duration,
-    ) -> Self {
+    ) -> Result<Self> {
         let job_manager = JobManager::new(config.max_concurrent_conversions);
         let chunk_cache = ChunkCache::new(
             config.chunk_dir.clone(),
@@ -283,18 +283,14 @@ impl ServerState {
         };
 
         // Create HTTP client for upstream fetches
-        let http_client = reqwest::Client::builder()
-            .timeout(config.upstream_timeout)
-            .user_agent("conary-remi/0.1")
-            .build()
-            .expect("Failed to create HTTP client");
+        let http_client = build_http_client(config.upstream_timeout, "conary-remi/0.1")?;
 
         let metrics = Arc::new(ServerMetrics::new());
         let ban_list = Arc::new(BanList::new(config.ban_duration_secs, config.ban_threshold));
         let negative_cache = Arc::new(NegativeCache::new(negative_cache_ttl));
         let (admin_events, _) = tokio::sync::broadcast::channel(1024);
 
-        Self {
+        Ok(Self {
             config,
             job_manager,
             chunk_cache,
@@ -320,8 +316,16 @@ impl ServerState {
                     .unwrap_or_else(|_| "/conary/test-data.db".to_string()),
             ),
             canonical_config: crate::server::config::CanonicalSection::default(),
-        }
+        })
     }
+}
+
+fn build_http_client(timeout: Duration, user_agent: &str) -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .user_agent(user_agent)
+        .build()
+        .context("Failed to create HTTP client")
 }
 
 /// Start the Remi server from a configuration file
@@ -379,7 +383,7 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
         server_config.clone(),
         trusted_proxy_header,
         negative_cache_ttl,
-    )));
+    )?));
 
     // Set canonical config on state
     {
@@ -716,7 +720,7 @@ pub async fn run_server(config: ServerConfig) -> Result<()> {
         conary_core::db::init(&config.db_path)?;
     }
 
-    let state = Arc::new(RwLock::new(ServerState::new(config.clone())));
+    let state = Arc::new(RwLock::new(ServerState::new(config.clone())?));
 
     // Initialize search engine if a search index dir is available
     {
@@ -822,7 +826,7 @@ async fn initialize_bloom_filter(state: Arc<RwLock<ServerState>>) -> Result<()> 
 
 #[cfg(test)]
 mod tests {
-    use super::ensure_admin_bootstrap_token;
+    use super::{build_http_client, ensure_admin_bootstrap_token};
 
     fn test_db_path() -> std::path::PathBuf {
         let tmp = tempfile::tempdir().expect("create tempdir");
@@ -869,5 +873,12 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM admin_tokens", [], |row| row.get(0))
             .expect("count tokens");
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn build_http_client_rejects_invalid_user_agent() {
+        let err = build_http_client(std::time::Duration::from_secs(30), "bad\0agent")
+            .expect_err("invalid user agent should be surfaced as an error");
+        assert!(err.to_string().contains("HTTP client"));
     }
 }

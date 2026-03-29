@@ -100,7 +100,9 @@ pub(crate) mod test_helpers {
         std::fs::create_dir_all(&config.chunk_dir).unwrap();
         std::fs::create_dir_all(&config.cache_dir).unwrap();
 
-        let state = Arc::new(RwLock::new(crate::server::ServerState::new(config)));
+        let state = Arc::new(RwLock::new(
+            crate::server::ServerState::new(config).expect("test server state"),
+        ));
 
         // Build the external admin router (includes auth middleware)
         let app = crate::server::routes::create_external_admin_router(state, None);
@@ -131,9 +133,9 @@ pub(crate) mod test_helpers {
             cache_dir: db_path.parent().unwrap().join("cache"),
             ..Default::default()
         };
-        let state = Arc::new(tokio::sync::RwLock::new(crate::server::ServerState::new(
-            config,
-        )));
+        let state = Arc::new(tokio::sync::RwLock::new(
+            crate::server::ServerState::new(config).expect("test server state"),
+        ));
         crate::server::routes::create_external_admin_router(state, None)
     }
 }
