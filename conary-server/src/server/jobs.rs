@@ -15,6 +15,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 
+const QUEUE_CAPACITY_MULTIPLIER: usize = 2;
+
 /// Unique job identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct JobId(u64);
@@ -129,13 +131,10 @@ impl JobManager {
             return Ok(existing_id);
         }
 
-        // Check queue capacity (allow 2x max_concurrent pending jobs)
-        let pending_count = self
-            .jobs
-            .values()
-            .filter(|j| matches!(j.status, JobStatus::Pending))
-            .count();
-        if pending_count >= self.max_concurrent * 2 {
+        // Check queue capacity against the total tracked jobs, not just pending jobs.
+        // Completed jobs remain in memory until TTL cleanup, so bounding only the
+        // pending set still allows unbounded memory growth under churn.
+        if self.jobs.len() >= self.max_concurrent * QUEUE_CAPACITY_MULTIPLIER {
             return Err("Conversion queue full");
         }
 
@@ -260,4 +259,46 @@ pub struct JobStats {
     pub completed: usize,
     pub failed: usize,
     pub total: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_job_rejects_when_total_tracked_jobs_hit_capacity() {
+        let mut manager = JobManager::new(2);
+
+        for n in 0..4 {
+            manager
+                .create_job(
+                    format!("key-{n}"),
+                    "arch".into(),
+                    format!("pkg-{n}"),
+                    None,
+                )
+                .expect("capacity should allow initial jobs");
+        }
+
+        let err = manager
+            .create_job("overflow".into(), "arch".into(), "pkg-overflow".into(), None)
+            .expect_err("total tracked jobs should be capped");
+        assert_eq!(err, "Conversion queue full");
+    }
+
+    #[test]
+    fn create_job_still_deduplicates_existing_keys_at_capacity() {
+        let mut manager = JobManager::new(1);
+        let existing = manager
+            .create_job("shared".into(), "arch".into(), "pkg".into(), None)
+            .expect("first job");
+        manager
+            .create_job("other".into(), "arch".into(), "pkg2".into(), None)
+            .expect("fill capacity");
+
+        let deduped = manager
+            .create_job("shared".into(), "arch".into(), "pkg".into(), None)
+            .expect("existing keys should still deduplicate");
+        assert_eq!(deduped, existing);
+    }
 }

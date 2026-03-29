@@ -29,8 +29,8 @@ const CONTROL_TAR_NAMES: &[&str] = &[
 
 const DATA_TAR_NAMES: &[&str] = &["data.tar.gz", "data.tar.xz", "data.tar.zst", "data.tar"];
 
-/// Maximum size for a single AR member within a DEB archive (2 GB)
-const MAX_DEB_MEMBER_SIZE: u64 = 2 * 1024 * 1024 * 1024;
+/// Maximum size for a single AR member within a DEB archive (16 MiB)
+const MAX_DEB_MEMBER_SIZE: u64 = 16 * 1024 * 1024;
 
 /// Results of single-pass control tarball extraction
 #[derive(Default)]
