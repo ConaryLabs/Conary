@@ -1,3 +1,9 @@
+---
+last_updated: 2026-03-28
+revision: 1
+summary: Document current federation trust controls, peer identity, and discovery rules
+---
+
 # Federation Module (conary-server/src/federation/)
 
 Peer-to-peer CAS chunk distribution. Enables LAN caching, multi-tier
@@ -17,7 +23,7 @@ FederatedChunkFetcher.fetch(chunk_hash)
         |
   For each peer (tier priority order):
         +-- CircuitBreaker check -- skip if open
-        +-- Fetch chunk via HTTP (mTLS for WAN, plain for LAN)
+        +-- Fetch chunk via LAN HTTP or HTTPS with pinned TLS identity
         +-- Record success/failure -> update PeerScore (EWMA)
         +-- On failure: increment circuit breaker counter
         |
@@ -32,9 +38,9 @@ FederatedChunkFetcher.fetch(chunk_hash)
 
 | Type | File | Purpose |
 |------|------|---------|
-| `Federation` | mod.rs | Main coordinator -- routing, coalescing, circuit breakers, mTLS |
+| `Federation` | mod.rs | Main coordinator -- routing, coalescing, circuit breakers, trust checks |
 | `FederatedChunkFetcher` | mod.rs | ChunkFetcher trait impl: local cache, federation, fallback |
-| `Peer` | peer.rs | Federation node (endpoint, tier, score, timestamps) |
+| `Peer` | peer.rs | Federation node (endpoint, tier, certificate-bound identity, score) |
 | `PeerScore` | peer.rs | EWMA latency, success rate, bandwidth, failure count |
 | `PeerRegistry` | peer.rs | HashMap-based peer collection with tier filtering |
 | `PeerTier` | config.rs | RegionHub (WAN/mTLS), CellHub (LAN), Leaf |
@@ -54,6 +60,13 @@ Rendezvous (highest random weight) hashing deterministically maps each
 chunk to K peers. No global state or coordination needed -- any node
 computes the same peer list for the same chunk hash. Peers are partitioned
 by tier before selection, so LAN cell hubs are always tried first.
+
+## Trust Model
+
+- **HTTPS peers** use a pinned SHA-256 TLS certificate fingerprint as their `PeerId`
+- **HTTP peers** use a hash of the endpoint URL and are intended for trusted LAN scopes
+- **mDNS-discovered peers** are only admitted when an allowlist is configured or authenticated transport is available
+- **Chunk manifests** are signed and fetched chunks are hash-verified before use
 
 ## Circuit Breakers
 
@@ -76,6 +89,7 @@ during fleet-wide simultaneous updates.
 Federation is server-side (feature-gated behind `--features server`).
 It extends the ChunkFetcher trait used by the Remi server, adding a
 peer layer between local CAS and upstream origin. Manifests reuse
-the CCS Ed25519 signing infrastructure.
+the CCS Ed25519 signing infrastructure, while peer admission layers on
+allowlists, TLS pinning, and optional mDNS discovery.
 
 See also: [docs/ARCHITECTURE.md](/docs/ARCHITECTURE.md).

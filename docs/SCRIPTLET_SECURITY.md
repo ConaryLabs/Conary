@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-03-24
-revision: 1
-summary: Fix SandboxMode default (Auto not None), correct scriptlet_entry.rs file path
+last_updated: 2026-03-28
+revision: 2
+summary: Refresh sandbox defaults, enforcement paths, and current isolation behavior
 ---
 
 # Scriptlet Security Model
@@ -41,8 +41,8 @@ Scriptlet execution supports three sandbox modes:
 ```rust
 pub enum SandboxMode {
     None,    // Direct execution, no sandboxing
+    Auto,    // Sandbox based on script risk analysis
     #[default]
-    Auto,    // Sandbox based on script risk analysis (default)
     Always,  // Always sandbox all scripts
 }
 ```
@@ -61,6 +61,8 @@ When sandboxing is enabled, scripts run in a lightweight Linux container with:
 - **UTS namespace**: Isolated hostname (`conary-sandbox`)
 - **IPC namespace**: Isolated System V IPC and POSIX message queues
 - **Mount namespace**: Isolated filesystem view
+- **Network namespace**: Hermetic execution blocks outbound network access
+- **User namespace**: Privilege isolation is used when the host/kernel supports it
 
 #### Filesystem Isolation
 - **chroot**: Script sees only the container root
@@ -107,6 +109,9 @@ Even without sandboxing, these protections are always enforced:
 cmd.stdin(Stdio::null())  // CRITICAL: Prevent stdin hangs
 ```
 Scripts cannot read from stdin, preventing interactive prompts that would hang the package manager.
+
+#### Environment Filtering
+Direct execution paths clear the inherited environment and repopulate only the minimal variables Conary needs (`PATH`, `HOME`, `LANG`, scriptlet context variables). This reduces ambient secret leakage and makes direct execution closer to the sandboxed environment.
 
 #### Non-Root Install Safety
 ```rust
@@ -178,7 +183,7 @@ Full namespace isolation requires root privileges. When running as non-root:
 
 ### For Repository Operators
 1. Scan packages for dangerous patterns before publishing
-2. Sign packages with GPG
+2. Sign packages and repository metadata with the configured trust roots
 3. Use separate repositories for trusted vs. community packages
 
 ## Implementation Files
@@ -194,9 +199,9 @@ Full namespace isolation requires root privileges. When running as non-root:
 
 The following features, originally planned as future enhancements, are now implemented:
 
-- **seccomp-BPF syscall filtering** -- See `src/capability/enforcement/seccomp.rs`
+- **seccomp-BPF syscall filtering** -- See `conary-core/src/capability/enforcement/seccomp_enforce.rs`
 - **Network namespace isolation** -- `CLONE_NEWNET` blocks all network access in hermetic builds
-- **Landlock filesystem enforcement** -- Kernel-enforced path restrictions via `src/capability/enforcement/landlock.rs`
+- **Landlock filesystem enforcement** -- Kernel-enforced path restrictions via `conary-core/src/capability/enforcement/landlock_enforce.rs`
 - **Capability declarations** -- Packages declare network, filesystem, and syscall requirements
 
 ## Future Enhancements

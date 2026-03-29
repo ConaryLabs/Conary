@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-03-24
-revision: 8
-summary: Update takeover section to reflect system takeover progressive pipeline
+last_updated: 2026-03-28
+revision: 9
+summary: Refresh schema, federation trust, and security implementation references
 ---
 
 # Conaryopedia v2
@@ -423,7 +423,7 @@ Before Conary can manage packages, its database must be initialized:
 conary system init
 ```
 
-This creates the SQLite database at `/var/lib/conary/conary.db` and sets up all tables (currently schema v57). The database is the single source of truth for all package state -- there are no configuration files for runtime state.
+This creates the SQLite database at `/var/lib/conary/conary.db` and sets up all tables (currently schema v64). The database is the single source of truth for all package state -- there are no configuration files for runtime state.
 
 You can specify an alternate database path with `-d`:
 
@@ -3147,10 +3147,10 @@ The `FederatedIndexCache` uses `RwLock<HashMap<String, (Instant, SparseIndexEntr
 
 ## 6.20 Remi Lite (Zero-Config LAN Proxy)
 
-For CI environments, air-gapped networks, or fleet deployments, `conary remi-proxy` provides a single-command caching proxy:
+For CI environments, air-gapped networks, or fleet deployments, `conary remi-proxy` provides a lightweight caching proxy:
 
 ```bash
-conary remi-proxy                                # Auto-discover upstream via mDNS
+conary remi-proxy                                # Discover upstream via mDNS on a trusted LAN
 conary remi-proxy --upstream https://remi.example.com
 conary remi-proxy --offline --cache-dir /mnt/usb  # Air-gapped mode
 ```
@@ -3170,9 +3170,9 @@ pub struct ProxyConfig {
 
 **Zero-config startup sequence**:
 
-1. Scan for upstream Remi instances via mDNS (`_conary-cas._tcp.local`)
+1. Scan for upstream Remi instances via mDNS (`_conary-cas._tcp.local`) when discovery is enabled
 2. If found, configure as a caching proxy to the discovered instance
-3. Advertise itself on the LAN via mDNS so other Conary clients auto-discover it
+3. Advertise itself on the LAN via mDNS so other Conary clients can discover it
 4. Start serving with pull-through chunk caching
 
 **Routes** (subset of full Remi):
@@ -3684,7 +3684,7 @@ pub fn apply_landlock_rules(
 
 ### Seccomp-BPF Syscall Enforcement
 
-Seccomp (`src/capability/enforcement/seccomp_enforce.rs`) filters system calls at the kernel level using BPF programs. Conary uses the `seccompiler` crate to build allowlist filters.
+Seccomp (`conary-core/src/capability/enforcement/seccomp_enforce.rs`) filters system calls at the kernel level using BPF programs. Conary uses the `seccompiler` crate to build allowlist filters.
 
 ```rust
 pub fn apply_seccomp_filter(
@@ -4614,7 +4614,7 @@ Chunk requests bubble up the hierarchy: leaf -> cell -> region -> upstream Remi 
 
 Two mechanisms:
 
-**mDNS** (LAN): Nodes advertise `_conary-cas._tcp.local` via multicast DNS. Automatic, zero-config. Cell hubs respond with their chunk count as metadata.
+**mDNS** (LAN): Nodes advertise `_conary-cas._tcp.local` via multicast DNS. Discovery is intended for trusted LANs and discovered peers are only admitted when Conary has an allowlist or authenticated transport configuration to bind them to trust policy.
 
 ```rust
 // Periodic mDNS scan discovers LAN peers
@@ -4679,9 +4679,9 @@ The breaker trips after consecutive failures exceed a threshold. The cooldown pe
 
 #### Security
 
-**mTLS**: Region hubs require mutual TLS for WAN traffic. Each hub has a certificate signed by a shared CA. Cell-to-cell traffic within a LAN can use plain HTTP.
+**Peer identity**: HTTPS peers require a pinned SHA-256 TLS certificate fingerprint, which becomes the peer ID. HTTP peers remain useful for explicitly trusted LAN scopes.
 
-**Chunk verification**: Every chunk fetched from a peer is verified against its SHA-256 hash before use. A peer cannot serve tampered content -- the chunk hash in the request IS the expected hash.
+**Chunk verification**: Every chunk fetched from a peer is verified against its SHA-256 hash before use. A peer cannot serve tampered content -- the chunk hash in the request is the expected hash.
 
 **Signed manifests**: A chunk manifest (list of hashes for a package) is signed with Ed25519. The signature prevents a peer from adding or removing chunks from a manifest.
 
