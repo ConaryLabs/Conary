@@ -11,7 +11,8 @@ use crate::error::{Error, Result};
 use crate::filesystem::CasStore;
 use crate::hash;
 use rusqlite::Connection;
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use tempfile::TempDir;
 use tracing::{debug, info, warn};
@@ -111,6 +112,35 @@ pub struct DerivedFile {
     pub permissions: u32,
     /// Whether this file was modified from the parent
     pub modified: bool,
+}
+
+/// Persisted build metadata returned after recording an artifact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersistedDerivedArtifact {
+    pub version: String,
+    pub parent_version: String,
+    pub artifact_hash: String,
+    pub artifact_path: String,
+    pub artifact_size: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DerivedArtifactManifest {
+    format: String,
+    name: String,
+    version: String,
+    parent_name: String,
+    parent_version: String,
+    total_size: u64,
+    files: BTreeMap<String, DerivedArtifactFile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DerivedArtifactFile {
+    hash: String,
+    size: u64,
+    permissions: u32,
+    modified: bool,
 }
 
 /// Derived package builder
@@ -528,13 +558,70 @@ pub fn build_from_definition(
 }
 
 /// Store derived package result content in CAS
-pub fn store_in_cas(result: &DerivedResult, cas: &mut CasStore) -> Result<()> {
+pub fn store_in_cas(result: &DerivedResult, cas: &CasStore) -> Result<()> {
     for (hash, content) in &result.blobs {
         if !cas.exists(hash) {
             cas.store(content)?;
         }
     }
     Ok(())
+}
+
+/// Persist a concrete CAS-backed build artifact for a derived build.
+pub fn persist_build_artifact(
+    conn: &Connection,
+    derived: &mut DerivedPackage,
+    result: &DerivedResult,
+    cas: &CasStore,
+) -> Result<PersistedDerivedArtifact> {
+    store_in_cas(result, cas)?;
+
+    let artifact = DerivedArtifactManifest {
+        format: "conary-derived-v1".to_string(),
+        name: result.name.clone(),
+        version: result.version.clone(),
+        parent_name: result.parent_name.clone(),
+        parent_version: result.parent_version.clone(),
+        total_size: result.total_size,
+        files: result
+            .files
+            .iter()
+            .map(|(path, file)| {
+                (
+                    path.clone(),
+                    DerivedArtifactFile {
+                        hash: file.hash.clone(),
+                        size: file.size,
+                        permissions: file.permissions,
+                        modified: file.modified,
+                    },
+                )
+            })
+            .collect(),
+    };
+
+    let artifact_bytes = serde_json::to_vec_pretty(&artifact)
+        .map_err(|e| Error::InitError(format!("Failed to serialize derived artifact: {e}")))?;
+    let artifact_hash = cas.store(&artifact_bytes)?;
+    let artifact_path = format!("cas://{artifact_hash}");
+    let artifact_size = artifact_bytes.len() as i64;
+
+    derived.record_build_artifact(
+        conn,
+        &result.version,
+        &result.parent_version,
+        &artifact_hash,
+        &artifact_path,
+        artifact_size,
+    )?;
+
+    Ok(PersistedDerivedArtifact {
+        version: result.version.clone(),
+        parent_version: result.parent_version.clone(),
+        artifact_hash,
+        artifact_path,
+        artifact_size,
+    })
 }
 
 /// Validate that an override target path is safe

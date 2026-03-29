@@ -885,6 +885,27 @@ pub fn migrate_v64(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 65: Persist derived build artifact metadata
+pub fn migrate_v65(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 65");
+
+    conn.execute_batch(
+        "
+        ALTER TABLE derived_packages ADD COLUMN last_built_version TEXT;
+        ALTER TABLE derived_packages ADD COLUMN last_built_parent_version TEXT;
+        ALTER TABLE derived_packages ADD COLUMN build_artifact_hash TEXT;
+        ALTER TABLE derived_packages ADD COLUMN build_artifact_path TEXT;
+        ALTER TABLE derived_packages ADD COLUMN build_artifact_size INTEGER;
+        CREATE INDEX idx_derived_packages_artifact_hash
+            ON derived_packages(build_artifact_hash)
+            WHERE build_artifact_hash IS NOT NULL;
+        ",
+    )?;
+
+    info!("Schema version 65 applied successfully (derived build artifact metadata)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
