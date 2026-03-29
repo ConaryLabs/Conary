@@ -430,6 +430,17 @@ impl<'a> BatchInstaller<'a> {
             }
         };
 
+        for pkg in &packages {
+            if let Some(old_trove) = pkg.old_trove.as_ref() {
+                super::mark_upgraded_parent_deriveds_stale(
+                    &conn,
+                    &pkg.name,
+                    Some(old_trove.version.as_str()),
+                    &pkg.version,
+                );
+            }
+        }
+
         // Phase 7: Run post-install scriptlets in topological order
         // Also run old package removal scriptlets for upgrades
         if !self.no_scripts {

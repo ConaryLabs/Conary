@@ -44,7 +44,7 @@ use conary_core::components::{
     ComponentClassifier, ComponentType, parse_component_spec, should_run_scriptlets,
 };
 use conary_core::db::models::{
-    Changeset, ChangesetStatus, Component, ProvideEntry, ScriptletEntry,
+    Changeset, ChangesetStatus, Component, DerivedPackage, ProvideEntry, ScriptletEntry,
 };
 use conary_core::db::paths::keyring_dir;
 use conary_core::dependencies::{DependencyClass, LanguageDepDetector};
@@ -151,6 +151,33 @@ pub(super) fn run_triggers(
             Err(e) => {
                 warn!("Trigger execution failed: {}", e);
             }
+        }
+    }
+}
+
+pub(super) fn mark_upgraded_parent_deriveds_stale(
+    conn: &rusqlite::Connection,
+    parent_name: &str,
+    old_version: Option<&str>,
+    new_version: &str,
+) {
+    match DerivedPackage::mark_stale_if_parent_changed(conn, parent_name, old_version, new_version)
+    {
+        Ok(count) if count > 0 => {
+            info!(
+                "Marked {} derived package(s) stale after {} changed from {} to {}",
+                count,
+                parent_name,
+                old_version.unwrap_or("unknown"),
+                new_version
+            );
+        }
+        Ok(_) => {}
+        Err(e) => {
+            warn!(
+                "Failed to mark derived packages stale for upgraded parent {}: {}",
+                parent_name, e
+            );
         }
     }
 }
@@ -1645,6 +1672,10 @@ fn execute_install_transaction(
             return Err(anyhow::anyhow!("Database transaction failed: {}", e));
         }
     };
+
+    if let Some(old_trove) = ctx.old_trove_to_upgrade {
+        mark_upgraded_parent_deriveds_stale(conn, pkg.name(), Some(&old_trove.version), pkg.version());
+    }
 
     // Composefs-native: build EROFS image from DB state and mount new generation.
     // Pass the pre-captured prev_etc so the three-way merge sees the correct base.
