@@ -275,11 +275,13 @@ impl TransactionEngine {
     /// This replaces the old journal-based roll-forward/roll-back recovery.
     pub fn recover(&self, conn: &Connection) -> Result<()> {
         use crate::generation::mount::current_generation;
+        let mut saw_current_generation = false;
 
         // ------------------------------------------------------------------
         // Step 1: try the current symlink if the EROFS image is valid
         // ------------------------------------------------------------------
         if let Ok(Some(current_num)) = current_generation(&self.config.root) {
+            saw_current_generation = true;
             let image_path = self
                 .config
                 .generations_dir
@@ -357,6 +359,13 @@ impl TransactionEngine {
                 }
             }
         } else {
+            if !saw_current_generation && !generations_dir_has_entries(&self.config.generations_dir)
+            {
+                tracing::debug!(
+                    "Recovery: no active generation recorded and no generation images exist yet"
+                );
+                return Ok(());
+            }
             tracing::warn!("Recovery: no active generation in DB, trying step 3");
         }
 
@@ -454,6 +463,13 @@ impl TransactionEngine {
 
         None
     }
+}
+
+fn generations_dir_has_entries(path: &Path) -> bool {
+    std::fs::read_dir(path)
+        .ok()
+        .and_then(|mut entries| entries.next())
+        .is_some()
 }
 
 impl Drop for TransactionEngine {
