@@ -182,6 +182,7 @@ pub enum EnforcementError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capability::SyscallCapabilities;
 
     #[test]
     fn test_enforcement_mode_display() {
@@ -229,5 +230,46 @@ mod tests {
     fn test_enforcement_mode_equality() {
         assert_eq!(EnforcementMode::Enforce, EnforcementMode::Enforce);
         assert_ne!(EnforcementMode::Enforce, EnforcementMode::Audit);
+    }
+
+    #[test]
+    fn test_apply_enforcement_warns_on_seccomp_setup_failure() {
+        let policy = EnforcementPolicy {
+            mode: EnforcementMode::Warn,
+            filesystem: None,
+            syscalls: Some(SyscallCapabilities {
+                allow: Vec::new(),
+                deny: Vec::new(),
+                profile: Some("definitely-invalid-profile".to_string()),
+            }),
+            network_isolation: false,
+        };
+
+        let report = apply_enforcement(&policy).expect("warn mode should not fail closed");
+        assert!(!report.seccomp_applied);
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning.category == "seccomp"
+                    && warning.message.contains("Unknown syscall profile"))
+        );
+    }
+
+    #[test]
+    fn test_apply_enforcement_enforce_mode_propagates_seccomp_failure() {
+        let policy = EnforcementPolicy {
+            mode: EnforcementMode::Enforce,
+            filesystem: None,
+            syscalls: Some(SyscallCapabilities {
+                allow: Vec::new(),
+                deny: Vec::new(),
+                profile: Some("definitely-invalid-profile".to_string()),
+            }),
+            network_isolation: false,
+        };
+
+        let error = apply_enforcement(&policy).expect_err("enforce mode should fail closed");
+        assert!(error.to_string().contains("Unknown syscall profile"));
     }
 }
