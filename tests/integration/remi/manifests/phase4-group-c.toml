@@ -21,7 +21,7 @@ phase = 4
 [[test]]
 id = "T196"
 name = "setup_and_ccs_init"
-description = "Setup: init DB, add repo, install fixture, then initialize a CCS project directory"
+description = "Setup: init DB, add repo, install fixtures, then initialize a CCS project directory"
 timeout = 120
 group = "C"
 fatal = true
@@ -56,6 +56,19 @@ exit_code = 0
 # Setup: install fixture CCS (always available, no distro repo needed)
 [[test.step]]
 conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --reinstall"
+
+[test.step.assert]
+exit_code = 0
+
+# Setup: build and install the local phase-4 runtime fixture for shell/run coverage
+[[test.step]]
+run = "rm -rf /tmp/phase4-runtime-fixture-output && mkdir -p /tmp/phase4-runtime-fixture-output && ${CONARY_BIN} ccs build /opt/remi-tests/fixtures/phase4-runtime-fixture --output /tmp/phase4-runtime-fixture-output --source /opt/remi-tests/fixtures/phase4-runtime-fixture/stage"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "CCS_FILE=$(ls /tmp/phase4-runtime-fixture-output/*.ccs | head -1) && ${CONARY_BIN} ccs install \"$CCS_FILE\" --allow-unsigned --sandbox never --reinstall --db-path ${DB_PATH}"
 
 [test.step.assert]
 exit_code = 0
@@ -233,6 +246,50 @@ run = "rm -rf /tmp/oci-export && ${CONARY_BIN} ccs export ${FIXTURE_PKG_NAME} --
 
 [test.step.assert]
 stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T204a: CCS shell
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T204a"
+name = "ccs_shell"
+description = "Run a non-interactive ephemeral shell and verify package content is available"
+timeout = 60
+group = "C"
+depends_on = ["T196"]
+
+[[test.step]]
+run = "printf '#!/bin/sh\nset -eu\ntest -x \"$CONARY_ENV_ROOT/usr/bin/phase4-runtime-fixture\"\ntest -f \"$CONARY_ENV_ROOT/etc/phase4-runtime-fixture/app.conf\"\n\"$CONARY_ENV_ROOT/usr/bin/phase4-runtime-fixture\"\n' > /tmp/phase4-shell-check.sh && chmod +x /tmp/phase4-shell-check.sh"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "${CONARY_BIN} ccs shell phase4-runtime-fixture --db-path ${DB_PATH} --shell /tmp/phase4-shell-check.sh"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "phase4-runtime-fixture"
+
+# --------------------------------------------------------------------------
+# T204b: CCS run
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T204b"
+name = "ccs_run"
+description = "Run a command from an installed package in an ephemeral environment"
+timeout = 60
+group = "C"
+depends_on = ["T196"]
+
+[[test.step]]
+run = "${CONARY_BIN} ccs run phase4-runtime-fixture --db-path ${DB_PATH} -- phase4-runtime-fixture"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "phase4-runtime-fixture"
 
 # ==========================================================================
 #  QUERY COMMANDS (T205-T215)
@@ -666,4 +723,4 @@ group = "C"
 depends_on = ["T204"]
 
 [[test.step]]
-run = "rm -rf /tmp/test-ccs /tmp/test-ccs-output /tmp/signed.ccs /tmp/test-key /tmp/test-key.pub /tmp/oci-export /tmp/test-gpg.key"
+run = "rm -rf /tmp/test-ccs /tmp/test-ccs-output /tmp/phase4-runtime-fixture-output /tmp/phase4-shell-check.sh /tmp/signed.ccs /tmp/test-key /tmp/test-key.pub /tmp/oci-export /tmp/test-gpg.key"

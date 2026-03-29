@@ -441,3 +441,153 @@ fn test_component_listing() {
     assert!(comp_names.contains(&"runtime"));
     assert!(comp_names.contains(&"config"));
 }
+
+#[test]
+fn test_ccs_install_components_only_installs_requested_component() {
+    use conary_core::ccs::builder::write_ccs_package;
+    use conary_core::ccs::{
+        BuildResult, CcsManifest, ComponentData, FileEntry as CcsFileEntry, FileType,
+    };
+    use conary_core::db::models::{Component, FileEntry, Trove};
+    use conary_core::hash;
+    use std::collections::HashMap;
+    use std::process::Command;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let install_root = temp_dir.path().join("root");
+    let db_path = temp_dir.path().join("conary.db");
+    let package_path = temp_dir.path().join("component-fixture.ccs");
+
+    std::fs::create_dir_all(&install_root).unwrap();
+    conary_core::db::init(db_path.to_str().unwrap()).unwrap();
+
+    let runtime_content = b"#!/bin/sh\necho runtime\n".to_vec();
+    let runtime_hash = hash::sha256(&runtime_content);
+    let config_content = b"mode = \"runtime\"\n".to_vec();
+    let config_hash = hash::sha256(&config_content);
+    let devel_content = b"#pragma once\n".to_vec();
+    let devel_hash = hash::sha256(&devel_content);
+
+    let runtime_file = CcsFileEntry {
+        path: "/usr/bin/component-fixture".to_string(),
+        hash: runtime_hash.clone(),
+        size: runtime_content.len() as u64,
+        mode: 0o100755,
+        component: "runtime".to_string(),
+        file_type: FileType::Regular,
+        target: None,
+        chunks: None,
+    };
+    let config_file = CcsFileEntry {
+        path: "/etc/component-fixture/app.conf".to_string(),
+        hash: config_hash.clone(),
+        size: config_content.len() as u64,
+        mode: 0o100644,
+        component: "config".to_string(),
+        file_type: FileType::Regular,
+        target: None,
+        chunks: None,
+    };
+    let devel_file = CcsFileEntry {
+        path: "/usr/include/component-fixture/api.h".to_string(),
+        hash: devel_hash.clone(),
+        size: devel_content.len() as u64,
+        mode: 0o100644,
+        component: "devel".to_string(),
+        file_type: FileType::Regular,
+        target: None,
+        chunks: None,
+    };
+
+    let mut manifest = CcsManifest::new_minimal("component-fixture", "1.0.0");
+    manifest.components.default = vec!["runtime".to_string(), "config".to_string()];
+    manifest.config.files = vec!["/etc/component-fixture/app.conf".to_string()];
+
+    let result = BuildResult {
+        manifest,
+        components: HashMap::from([
+            (
+                "runtime".to_string(),
+                ComponentData {
+                    name: "runtime".to_string(),
+                    files: vec![runtime_file.clone()],
+                    hash: "runtime-component".to_string(),
+                    size: runtime_content.len() as u64,
+                },
+            ),
+            (
+                "config".to_string(),
+                ComponentData {
+                    name: "config".to_string(),
+                    files: vec![config_file.clone()],
+                    hash: "config-component".to_string(),
+                    size: config_content.len() as u64,
+                },
+            ),
+            (
+                "devel".to_string(),
+                ComponentData {
+                    name: "devel".to_string(),
+                    files: vec![devel_file.clone()],
+                    hash: "devel-component".to_string(),
+                    size: devel_content.len() as u64,
+                },
+            ),
+        ]),
+        files: vec![runtime_file, config_file, devel_file],
+        blobs: HashMap::from([
+            (runtime_hash, runtime_content),
+            (config_hash, config_content),
+            (devel_hash, devel_content),
+        ]),
+        total_size: 0,
+        chunked: false,
+        chunk_stats: None,
+    };
+    write_ccs_package(&result, &package_path).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_conary"))
+        .arg("ccs")
+        .arg("install")
+        .arg(package_path.to_str().unwrap())
+        .arg("--components")
+        .arg("devel")
+        .arg("--allow-unsigned")
+        .arg("--sandbox")
+        .arg("never")
+        .arg("--db-path")
+        .arg(db_path.to_str().unwrap())
+        .arg("--root")
+        .arg(install_root.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "ccs install failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let conn = db::open(db_path.to_str().unwrap()).unwrap();
+    let trove = Trove::find_by_name(&conn, "component-fixture")
+        .unwrap()
+        .pop()
+        .unwrap();
+    let trove_id = trove.id.unwrap();
+
+    let components = Component::find_by_trove(&conn, trove_id).unwrap();
+    assert_eq!(components.len(), 1, "expected only the requested component");
+    assert_eq!(components[0].name, "devel");
+
+    let files = FileEntry::find_by_trove(&conn, trove_id).unwrap();
+    let file_paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
+    assert_eq!(file_paths.len(), 1, "expected only one installed file");
+    assert!(file_paths.contains(&"/usr/include/component-fixture/api.h"));
+    assert!(!file_paths.contains(&"/usr/bin/component-fixture"));
+    assert!(!file_paths.contains(&"/etc/component-fixture/app.conf"));
+
+    assert!(install_root.join("usr/include/component-fixture/api.h").exists());
+    assert!(!install_root.join("usr/bin/component-fixture").exists());
+    assert!(!install_root.join("etc/component-fixture/app.conf").exists());
+}
