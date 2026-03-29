@@ -420,3 +420,77 @@ fn test_parent_upgrade_marks_built_derived_package_stale_via_install_cli() {
     let stdout = String::from_utf8_lossy(&stale_output.stdout);
     assert!(stdout.contains("nginx-derived <- nginx"));
 }
+
+#[test]
+fn test_capability_run_uses_installed_package_declaration() {
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let install_root = temp_dir.path().join("root");
+    std::fs::create_dir_all(&install_root).unwrap();
+
+    let db_path = temp_dir.path().join("capability.db");
+    conary_core::db::init(db_path.to_str().unwrap()).unwrap();
+
+    let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/adversarial/malicious/cap-net-raw/output/cap-net-raw.ccs");
+
+    let install_output = Command::new(env!("CARGO_BIN_EXE_conary"))
+        .arg("ccs")
+        .arg("install")
+        .arg(fixture_path)
+        .arg("--allow-unsigned")
+        .arg("--allow-capabilities")
+        .arg("--sandbox")
+        .arg("never")
+        .arg("--reinstall")
+        .arg("--db-path")
+        .arg(db_path.to_str().unwrap())
+        .arg("--root")
+        .arg(install_root.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert!(
+        install_output.status.success(),
+        "capability fixture install failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&install_output.stdout),
+        String::from_utf8_lossy(&install_output.stderr)
+    );
+
+    let show_output = Command::new(env!("CARGO_BIN_EXE_conary"))
+        .arg("capability")
+        .arg("show")
+        .arg("cap-net-raw")
+        .arg("--db-path")
+        .arg(db_path.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert!(show_output.status.success());
+    let show_stdout = String::from_utf8_lossy(&show_output.stdout);
+    assert!(show_stdout.contains("Capability Declaration for: cap-net-raw"));
+    assert!(show_stdout.contains("Schema Version: 1"));
+
+    let run_output = Command::new(env!("CARGO_BIN_EXE_conary"))
+        .arg("capability")
+        .arg("run")
+        .arg("cap-net-raw")
+        .arg("--db-path")
+        .arg(db_path.to_str().unwrap())
+        .arg("--")
+        .arg("/bin/echo")
+        .arg("capability-ok")
+        .output()
+        .unwrap();
+
+    assert!(
+        run_output.status.success(),
+        "capability run failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&run_output.stdout),
+        String::from_utf8_lossy(&run_output.stderr)
+    );
+    let run_stdout = String::from_utf8_lossy(&run_output.stdout);
+    assert!(run_stdout.contains("capability-ok"));
+}

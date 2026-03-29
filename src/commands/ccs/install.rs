@@ -769,6 +769,10 @@ pub async fn cmd_ccs_install(
             trove.installed_by_changeset_id = Some(changeset_id);
             let trove_id = trove.insert(tx)?;
 
+            if let Some(capabilities) = ccs_pkg.manifest().capabilities.as_ref() {
+                conary_core::capability::store_capabilities(tx, trove_id, capabilities)?;
+            }
+
             // Register files, store in CAS index, and record history for rollback
             for file in &extracted_files {
                 let hash = file.sha256.clone().unwrap_or_default();

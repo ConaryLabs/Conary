@@ -104,8 +104,6 @@ pub enum CapabilityCommands {
     ///
     /// Applies the declared capabilities as restrictions using
     /// landlock (filesystem) and seccomp (syscalls).
-    /// NOTE: This is a Phase 3 feature, currently unimplemented.
-    #[command(hide = true)]
     Run {
         /// Package whose capabilities to enforce
         package: String,
@@ -117,8 +115,8 @@ pub enum CapabilityCommands {
         #[command(flatten)]
         db: DbArgs,
 
-        /// Allow violations instead of blocking (audit mode)
+        /// Log violations instead of blocking them
         #[arg(long)]
-        permissive: bool,
+        audit: bool,
     },
 }
