@@ -31,6 +31,8 @@ distro_specific_name = "dnf"
 replatform_target = "arch"
 replatform_repo = "arch-remi"
 replatform_remi_distro = "arch"
+local_native_target = "rpm"
+local_native_glob = "*.rpm"
 
 [distro_overrides.arch]
 distro_repo = "arch-remi"
@@ -44,6 +46,8 @@ distro_specific_name = "pacman"
 replatform_target = "fedora43"
 replatform_repo = "fedora-remi"
 replatform_remi_distro = "fedora"
+local_native_target = "arch"
+local_native_glob = "*.pkg.tar.zst"
 
 [distro_overrides.ubuntu-noble]
 distro_repo = "ubuntu-remi"
@@ -57,6 +61,8 @@ distro_specific_name = "apt"
 replatform_target = "arch"
 replatform_repo = "arch-remi"
 replatform_remi_distro = "arch"
+local_native_target = "deb"
+local_native_glob = "*.deb"
 
 # --------------------------------------------------------------------------
 # T230: CCS fixture installs on any distro
@@ -139,6 +145,60 @@ stdout_not_contains = "conary-test-fixture"
 
 [[test.step]]
 file_not_exists = "/usr/share/conary-test/hello.txt"
+
+# --------------------------------------------------------------------------
+# T232a: Build a local native fixture in the host distro format
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T232a"
+name = "native_local_fixture_build"
+description = "Build a local native fixture in the current distro format"
+timeout = 60
+group = "E"
+
+[[test.step]]
+run = "rm -rf /tmp/phase4-native-output && CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/build-native-fixtures.sh ${local_native_target} /tmp/phase4-native-output /opt/remi-tests/fixtures/phase4-runtime-fixture"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# T232b: Install a local native package file
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T232b"
+name = "native_local_file_install"
+description = "Install a local native package file generated for the current distro format"
+timeout = 120
+group = "E"
+depends_on = ["T232a"]
+
+[[test.step]]
+run = "PKG_FILE=$(ls /tmp/phase4-native-output/${local_native_glob} | head -1) && ${CONARY_BIN} install \"$PKG_FILE\" --db-path ${DB_PATH} --no-deps --yes --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "list phase4-runtime-fixture --info"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["phase4-runtime-fixture", "1.0.0"]
+
+[[test.step]]
+file_exists = "/usr/bin/phase4-runtime-fixture"
+
+[[test.step]]
+conary = "remove phase4-runtime-fixture --no-scripts"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+file_not_exists = "/usr/bin/phase4-runtime-fixture"
 
 # --------------------------------------------------------------------------
 # T233: Canonical name resolves to distro-native package

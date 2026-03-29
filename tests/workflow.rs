@@ -494,3 +494,50 @@ fn test_capability_run_uses_installed_package_declaration() {
     let run_stdout = String::from_utf8_lossy(&run_output.stdout);
     assert!(run_stdout.contains("capability-ok"));
 }
+
+#[test]
+fn test_local_native_fixture_builder_generates_all_supported_formats() {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    fn find_generated_package(output_dir: &Path, extension: &str) -> PathBuf {
+        fs::read_dir(output_dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .find(|path| path.to_string_lossy().ends_with(extension))
+            .unwrap_or_else(|| panic!("no generated package with extension {extension}"))
+    }
+
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_dir = repo_root.join("tests/fixtures/phase4-runtime-fixture");
+    let build_script = repo_root.join("tests/fixtures/native/build-native-fixtures.sh");
+    let temp_dir = tempfile::tempdir().unwrap();
+    let native_output_root = temp_dir.path().join("native-output");
+
+    for (target, extension) in [("rpm", ".rpm"), ("deb", ".deb"), ("arch", ".pkg.tar.zst")] {
+        let output_dir = native_output_root.join(target);
+        std::fs::create_dir_all(&output_dir).unwrap();
+
+        let build_output = Command::new("bash")
+            .arg(&build_script)
+            .arg(target)
+            .arg(&output_dir)
+            .arg(&fixture_dir)
+            .env("CONARY_BIN", env!("CARGO_BIN_EXE_conary"))
+            .output()
+            .unwrap();
+
+        assert!(
+            build_output.status.success(),
+            "native fixture build failed for {target}:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&build_output.stdout),
+            String::from_utf8_lossy(&build_output.stderr)
+        );
+
+        let package_path = find_generated_package(&output_dir, extension);
+        let file_name = package_path.file_name().unwrap().to_string_lossy();
+        assert!(file_name.contains("phase4-runtime-fixture"));
+        assert!(file_name.contains("1.0.0"));
+    }
+}

@@ -142,12 +142,13 @@ conary system generation info 2      # Detailed info about generation 2
 
 ### System Takeover
 
-Convert an existing Linux installation into a Conary-managed system. Takeover scans installed packages (RPM, DEB, or Arch), adopts them into Conary's database, optionally converts them to CCS via Remi, and builds an initial generation. This is how you adopt Conary on a running system without reinstalling.
+Convert an existing Linux installation into a Conary-managed system. The stable adoption path today is `conary system adopt --system --full`, which bulk-imports packages into Conary with CAS backing. The progressive `system takeover` pipeline is available behind `--up-to cas|owned|generation`, but full boot-integrated takeover should still be treated as alpha and best-effort on real machines.
 
 ```bash
-conary system takeover --dry-run     # Preview what would happen
-conary system takeover               # Full system adoption
-conary system takeover --skip-conversion  # Adopt without CCS conversion
+conary system adopt --system --full  # Bulk adoption with CAS backing
+conary system takeover --dry-run     # Preview the takeover plan
+conary system takeover --up-to cas   # Adopt + CAS-back packages (PM untouched)
+conary system takeover --up-to owned # Remove non-blocked packages from the system PM
 ```
 
 ### Atomic Transactions
