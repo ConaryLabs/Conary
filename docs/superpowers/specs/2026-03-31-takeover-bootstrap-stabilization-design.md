@@ -178,6 +178,25 @@ Each record needs:
 - produced artifacts
 - failure or warning details
 
+### Record Locations
+
+The operation record home must be concrete so later planning does not invent
+paths ad hoc.
+
+- takeover records live under `db_dir(db_path)/takeover/operations/`
+- bootstrap records live under `<work_dir>/operations/`
+- each operation writes one JSON file named `<operation-id>.json`
+
+Examples:
+
+- default takeover path:
+  `/var/lib/conary/takeover/operations/<operation-id>.json`
+- default bootstrap path:
+  `/var/lib/conary/bootstrap/operations/<operation-id>.json`
+
+The record must include the canonical paths to any generated artifacts so later
+commands do not have to rediscover them from convention alone.
+
 ### Takeover Components
 
 Keep the existing takeover helpers responsible for real mutations, but stop
@@ -193,6 +212,11 @@ New takeover state should capture:
 - generated generation number
 - boot entry outcome
 - whether activation is pending
+
+Stable activation after takeover should use the existing generation-switch
+surface, not a second implicit phase hidden inside takeover itself. A completed
+takeover therefore records the generated generation number explicitly so the
+operator can run `conary system generation switch <N>` as a separate step.
 
 ### Bootstrap Components
 
@@ -212,6 +236,11 @@ Bootstrap operation state should capture:
 
 This makes later comparison commands deterministic and inspectable.
 
+For the first supported milestone, bootstrap comparison commands operate on
+completed `bootstrap run` workdirs, not on seed paths alone. Seed paths remain
+important validation inputs, but a completed run record is the source of truth
+for where the derivation DB and generated outputs live.
+
 ## Data Flow
 
 ### Takeover Flow
@@ -230,7 +259,8 @@ state to resume or inspect without recomputing the entire takeover plan.
 1. Verify and load each seed.
 2. Run the manifest pipeline in isolated work and output directories.
 3. Persist seed ID, profile hash, derivation DB path, and generation outputs.
-4. Compare runs through the derivation index by `build_env_hash`.
+4. Compare completed run records through the derivation index by
+   `build_env_hash`.
 5. Report convergence and seed differences from persisted facts.
 
 ### Reporting Rule
@@ -254,22 +284,54 @@ Planned behavior:
   - generation build succeeded
   - boot entry outcome is known and recorded
 - the command ends in a ready-to-activate state
-- activation can remain a later explicit action, not an automatic side effect
+- activation is a later explicit action via
+  `conary system generation switch <N>`, using the recorded generation number
+
+This is an intentional semantic change to the `generation` level. In the stable
+path, `generation` now means "build and prepare the generation for activation"
+rather than "build and immediately live-switch." The old automatic switch
+behavior is not preserved behind a compatibility flag in this milestone.
 
 ### `conary bootstrap run`
 
 Keep `bootstrap run` as the manifest-driven executor, but record enough
 operation metadata for subsequent inspection and comparison.
 
+Required recorded fields for later commands:
+
+- seed ID used for the run
+- derivation DB path
+- output directory
+- generation directory
+- profile hash
+- whether the run completed successfully
+- selected `--up-to` / `--only` filters
+
+The run record is the lookup anchor for later convergence checks.
+
 ### `conary bootstrap verify-convergence`
 
-Implement this by loading recorded build outputs for two seeds and comparing
-package `output_hash` values through the derivation index using
-`build_env_hash`.
+Implement this by loading recorded build outputs for two completed
+`bootstrap run` workdirs and comparing package `output_hash` values through the
+derivation index using `build_env_hash`.
+
+Planned command contract:
+
+- `--run-a <work-dir-a>`
+- `--run-b <work-dir-b>`
+- optional `--seed-a <seed-dir>` and `--seed-b <seed-dir>` to verify that the
+  recorded seed IDs match the expected seed artifacts
+- `--diff` for per-package mismatch details
+
+This is a narrow CLI expansion from the current seed-only shape, and it is
+intentional: seed paths alone do not identify the derivation database needed
+for convergence comparison.
 
 Behavior:
 
 - fail clearly if the runs are not comparable
+- fail if either run record is missing or incomplete
+- fail if the intersection of built packages is empty
 - succeed only when the comparison set is explicit
 - report matched, mismatched, and skipped counts
 - optionally print per-package diffs when requested
@@ -280,10 +342,16 @@ Implement this as an input-side inspection tool rather than a semantic proof.
 
 Behavior:
 
-- compare seed metadata such as `seed_id`, source, target triple, and origin
-  distro/version
-- report content and metadata differences between the two seed directories
+- compare parsed `seed.toml` metadata such as `seed_id`, source, target
+  triple, and origin distro/version
+- recompute and compare the actual `seed.erofs` hash for each input
+- report top-level artifact inventory differences such as presence or absence
+  of `seed.erofs`, `seed.toml`, and optional `cas/`
 - help explain why convergence may or may not be expected
+
+Non-goal for this milestone:
+
+- no mounted or unpacked recursive filesystem diff of the EROFS contents
 
 ## Safety Model
 
@@ -332,7 +400,7 @@ Add CLI-level coverage for:
 - takeover dry-run and persisted plan artifacts
 - takeover phase completion and ready-to-activate status
 - bootstrap run metadata persistence
-- verify-convergence success and mismatch cases
+- verify-convergence success, mismatch, and missing-run cases
 - diff-seeds descriptive output
 
 ### Multi-PM Coverage
