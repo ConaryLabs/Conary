@@ -1426,10 +1426,15 @@ async fn run() -> Result<()> {
             }
 
             cli::BootstrapCommands::VerifyConvergence {
+                run_a,
+                run_b,
                 seed_a,
                 seed_b,
                 diff,
-            } => commands::cmd_bootstrap_verify_convergence(&seed_a, &seed_b, diff).await,
+            } => {
+                let _ = (seed_a, seed_b);
+                commands::cmd_bootstrap_verify_convergence(&run_a, &run_b, diff).await
+            }
 
             cli::BootstrapCommands::DiffSeeds { path_a, path_b } => {
                 commands::cmd_bootstrap_diff_seeds(&path_a, &path_b).await

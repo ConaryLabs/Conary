@@ -17,7 +17,7 @@ pub enum TakeoverLevel {
     Cas,
     /// CAS + remove from system PM
     Owned,
-    /// CAS + PM removal + build generation + boot + live switch
+    /// CAS + PM removal + build generation + boot entry, then stop ready to activate
     #[default]
     Generation,
 }
