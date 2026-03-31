@@ -15,6 +15,9 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use tracing::info;
 
+use self::state::{BootstrapLatestPointer, BootstrapRunRecord};
+use crate::commands::operation_records::new_operation_id;
+
 fn skip_verify_warning_message() -> &'static str {
     "WARNING: UNSAFE bootstrap mode enabled via --skip-verify. placeholder source checksums will be accepted, so only use this during an authenticated bootstrap flow where you independently trust the source tarballs."
 }
@@ -590,7 +593,12 @@ pub async fn cmd_bootstrap_tier2(
 
 #[cfg(test)]
 mod tests {
-    use super::skip_verify_warning_message;
+    use std::path::PathBuf;
+
+    use super::{
+        BootstrapLatestPointer, BootstrapRunOptions, BootstrapRunRecord,
+        finish_bootstrap_run_success, skip_verify_warning_message, start_bootstrap_run_record,
+    };
 
     #[test]
     fn skip_verify_warning_message_is_prominent() {
@@ -598,6 +606,76 @@ mod tests {
         assert!(warning.contains("UNSAFE"));
         assert!(warning.contains("--skip-verify"));
         assert!(warning.contains("placeholder"));
+    }
+
+    #[test]
+    fn test_bootstrap_run_writes_success_record_with_output_paths() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let manifest_path = temp.path().join("system.toml");
+        let recipe_dir = temp.path().join("recipes");
+        std::fs::create_dir_all(&recipe_dir).expect("recipe dir");
+        std::fs::write(
+            &manifest_path,
+            "[system]\nname = 'test'\ntarget = 'x86_64-conary-linux-gnu'\n",
+        )
+        .expect("manifest");
+
+        let only = vec!["bash".to_string(), "coreutils".to_string()];
+        let opts = BootstrapRunOptions {
+            manifest: manifest_path.to_str().expect("manifest path"),
+            work_dir: temp.path().to_str().expect("work dir"),
+            seed: "/tmp/seed",
+            recipe_dir: recipe_dir.to_str().expect("recipe dir"),
+            up_to: Some("system"),
+            only: Some(&only),
+            cascade: true,
+            keep_logs: false,
+            shell_on_failure: false,
+            verbose: false,
+            no_substituters: false,
+            publish: false,
+        };
+
+        let mut record = start_bootstrap_run_record(&opts, &manifest_path, &recipe_dir, "seed-abc")
+            .expect("start record");
+        let generation_dir = record.output_dir.join("generations").join("1");
+        std::fs::create_dir_all(&generation_dir).expect("generation dir");
+
+        finish_bootstrap_run_success(&mut record, &generation_dir, "profile-xyz")
+            .expect("finish record");
+
+        let loaded = BootstrapRunRecord::load(&record.path()).expect("load record");
+        let latest = BootstrapLatestPointer::load(&BootstrapLatestPointer::path_for(temp.path()))
+            .expect("load latest");
+
+        assert_eq!(loaded.manifest_path, manifest_path);
+        assert_eq!(loaded.recipe_dir, recipe_dir);
+        assert_eq!(loaded.seed_id, "seed-abc");
+        assert_eq!(loaded.up_to.as_deref(), Some("system"));
+        assert_eq!(loaded.only, only);
+        assert!(loaded.cascade);
+        assert_eq!(
+            loaded.derivation_db_path,
+            loaded.operation_dir().join("derivations.db")
+        );
+        assert_eq!(loaded.output_dir, loaded.operation_dir().join("output"));
+        assert_eq!(loaded.generation_dir, Some(generation_dir.clone()));
+        assert_eq!(loaded.profile_hash.as_deref(), Some("profile-xyz"));
+        assert!(loaded.completed_successfully);
+        assert_eq!(latest.operation_id, loaded.id);
+        assert_eq!(latest.record_path, loaded.path());
+        assert_eq!(
+            std::fs::read_link(loaded.output_dir.join("current")).expect("run current link"),
+            PathBuf::from("generations").join("1")
+        );
+        assert_eq!(
+            std::fs::read_link(temp.path().join("output/current")).expect("top current link"),
+            PathBuf::from("..")
+                .join("operations")
+                .join(&loaded.id)
+                .join("output")
+                .join("current")
+        );
     }
 }
 
@@ -768,6 +846,107 @@ fn load_recipes(
     Ok(recipes)
 }
 
+fn start_bootstrap_run_record(
+    opts: &BootstrapRunOptions<'_>,
+    manifest_path: &Path,
+    recipe_dir: &Path,
+    seed_id: &str,
+) -> Result<BootstrapRunRecord> {
+    let work_dir = PathBuf::from(opts.work_dir);
+    std::fs::create_dir_all(&work_dir)?;
+
+    let mut record = BootstrapRunRecord::started(
+        new_operation_id("bootstrap-run"),
+        work_dir,
+        manifest_path.to_path_buf(),
+        recipe_dir.to_path_buf(),
+        seed_id.to_string(),
+    );
+    record.up_to = opts.up_to.map(str::to_owned);
+    record.only = opts.only.map(|only| only.to_vec()).unwrap_or_default();
+    record.cascade = opts.cascade;
+
+    std::fs::create_dir_all(record.operation_dir())?;
+    record.save()?;
+
+    Ok(record)
+}
+
+fn link_bootstrap_run_outputs(record: &BootstrapRunRecord) -> Result<()> {
+    std::fs::create_dir_all(&record.output_dir)?;
+    let run_current_link = record.output_dir.join("current");
+    let _ = std::fs::remove_file(&run_current_link);
+    std::os::unix::fs::symlink("generations/1", &run_current_link)?;
+
+    let top_output_dir = record.work_dir.join("output");
+    std::fs::create_dir_all(&top_output_dir)?;
+    let top_current_link = top_output_dir.join("current");
+    let _ = std::fs::remove_file(&top_current_link);
+    let relative_target = PathBuf::from("..")
+        .join("operations")
+        .join(&record.id)
+        .join("output")
+        .join("current");
+    std::os::unix::fs::symlink(relative_target, &top_current_link)?;
+    Ok(())
+}
+
+fn finish_bootstrap_run_success(
+    record: &mut BootstrapRunRecord,
+    generation_dir: &Path,
+    profile_hash: &str,
+) -> Result<()> {
+    record.generation_dir = Some(generation_dir.to_path_buf());
+    record.profile_hash = Some(profile_hash.to_string());
+    record.completed_successfully = true;
+    record.failure_reason = None;
+    record.save()?;
+    BootstrapLatestPointer::new(record.id.clone(), record.path())
+        .save(&BootstrapLatestPointer::path_for(&record.work_dir))?;
+    link_bootstrap_run_outputs(record)?;
+    Ok(())
+}
+
+fn finish_bootstrap_run_failure(
+    record: &mut BootstrapRunRecord,
+    error: &anyhow::Error,
+) -> Result<()> {
+    record.completed_successfully = false;
+    record.failure_reason = Some(error.to_string());
+    record.save()
+}
+
+fn load_completed_bootstrap_run_record(work_dir: &Path) -> Result<BootstrapRunRecord> {
+    let pointer_path = BootstrapLatestPointer::path_for(work_dir);
+    let latest = BootstrapLatestPointer::load(&pointer_path).with_context(|| {
+        format!(
+            "Failed to load bootstrap latest pointer from {}",
+            pointer_path.display()
+        )
+    })?;
+    let record = BootstrapRunRecord::load(&latest.record_path).with_context(|| {
+        format!(
+            "Failed to load bootstrap run record from {}",
+            latest.record_path.display()
+        )
+    })?;
+    if record.id != latest.operation_id {
+        anyhow::bail!(
+            "Bootstrap latest pointer {} does not match record id {}",
+            latest.operation_id,
+            record.id
+        );
+    }
+    if !record.completed_successfully {
+        anyhow::bail!(
+            "Bootstrap run {} in {} did not complete successfully",
+            record.id,
+            work_dir.display()
+        );
+    }
+    Ok(record)
+}
+
 /// Options for the `bootstrap run` command.
 pub struct BootstrapRunOptions<'a> {
     /// Path to system manifest TOML.
@@ -897,166 +1076,173 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
         println!("After --up-to {up_to}: {} packages", build_steps.len());
     }
 
-    // 5. Open DB
-    let work_dir = PathBuf::from(opts.work_dir);
-    std::fs::create_dir_all(&work_dir)?;
-    let db_path = work_dir.join("derivations.db");
-    let conn = Connection::open(&db_path).context("Failed to open derivation database")?;
-    migrate(&conn).context("Failed to run database migrations")?;
+    let mut record =
+        start_bootstrap_run_record(&opts, &manifest_path, &recipe_dir, seed.build_env_hash())?;
+    let op_dir = record.operation_dir();
+    let output_dir = record.output_dir.clone();
 
-    // 6. Create CAS and executor
-    let cas_dir = work_dir.join("output").join("objects");
-    std::fs::create_dir_all(&cas_dir)?;
-    let cas = CasStore::new(&cas_dir).context("Failed to create CAS store")?;
+    let run_result: Result<(PathBuf, String)> = async {
+        // 5. Open DB
+        let conn = Connection::open(&record.derivation_db_path)
+            .context("Failed to open derivation database")?;
+        migrate(&conn).context("Failed to run database migrations")?;
 
-    let executor_config = ExecutorConfig {
-        log_dir: Some(work_dir.join("logs")),
-        keep_logs: opts.keep_logs,
-        shell_on_failure: opts.shell_on_failure,
-    };
-    let executor = DerivationExecutor::new(cas, cas_dir.clone(), executor_config);
+        // 6. Create CAS and executor
+        let cas_dir = output_dir.join("objects");
+        std::fs::create_dir_all(&cas_dir)?;
+        let cas = CasStore::new(&cas_dir).context("Failed to create CAS store")?;
 
-    // 7. Create pipeline
-    let pipeline_config = PipelineConfig {
-        cas_dir: cas_dir.clone(),
-        work_dir: work_dir.join("pipeline"),
-        target_triple: manifest.system.target.clone(),
-        jobs: std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4),
-        log_dir: Some(work_dir.join("logs")),
-        keep_logs: opts.keep_logs,
-        shell_on_failure: opts.shell_on_failure,
-        only_packages: opts.only.map(|s| s.to_vec()),
-        cascade: opts.cascade,
-        substituter_sources: if opts.no_substituters {
-            vec![]
+        let executor_config = ExecutorConfig {
+            log_dir: Some(op_dir.join("logs")),
+            keep_logs: opts.keep_logs,
+            shell_on_failure: opts.shell_on_failure,
+        };
+        let executor = DerivationExecutor::new(cas, cas_dir.clone(), executor_config);
+
+        // 7. Create pipeline
+        let pipeline_config = PipelineConfig {
+            cas_dir: cas_dir.clone(),
+            work_dir: op_dir.join("pipeline"),
+            target_triple: manifest.system.target.clone(),
+            jobs: std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4),
+            log_dir: Some(op_dir.join("logs")),
+            keep_logs: opts.keep_logs,
+            shell_on_failure: opts.shell_on_failure,
+            only_packages: opts.only.map(|s| s.to_vec()),
+            cascade: opts.cascade,
+            substituter_sources: if opts.no_substituters {
+                vec![]
+            } else {
+                manifest
+                    .substituters
+                    .as_ref()
+                    .map(|s| s.sources.clone())
+                    .unwrap_or_default()
+            },
+            publish_endpoint: if opts.publish {
+                Some("https://packages.conary.io".to_string())
+            } else {
+                None
+            },
+            publish_token: None,
+        };
+
+        std::fs::create_dir_all(&pipeline_config.work_dir)?;
+        let pipeline = Pipeline::new(pipeline_config, executor);
+
+        // 8. Execute pipeline
+        println!("\nStarting derivation pipeline...\n");
+        let profile = pipeline
+            .execute(&seed, &recipes, &build_steps, &conn, |event| match event {
+                PipelineEvent::StageStarted {
+                    name,
+                    package_count,
+                } => {
+                    println!("[{name}] Stage started ({package_count} packages)");
+                }
+                PipelineEvent::PackageBuilding { name, stage } => {
+                    println!("[{stage}] Building {name}...");
+                }
+                PipelineEvent::PackageCached { name } => {
+                    println!("  [cached] {name}");
+                }
+                PipelineEvent::PackageBuilt {
+                    name,
+                    duration_secs,
+                } => {
+                    println!("  [built] {name} in {duration_secs}s");
+                }
+                PipelineEvent::PackageFailed { name, error } => {
+                    println!("  [FAILED] {name}: {error}");
+                }
+                PipelineEvent::SubstituterHit {
+                    name,
+                    peer,
+                    objects_fetched,
+                } => {
+                    println!("  [substituted] {name} from {peer} ({objects_fetched} objects)");
+                }
+                PipelineEvent::BuildLogWritten { package, path } => {
+                    println!("  [log] {package}: {}", path.display());
+                }
+                PipelineEvent::StageCompleted { name } => {
+                    println!("[{name}] Stage completed\n");
+                }
+                PipelineEvent::PipelineCompleted {
+                    total_packages,
+                    cached,
+                    built,
+                } => {
+                    println!(
+                        "[COMPLETE] {total_packages} packages processed ({built} built, {cached} cached)"
+                    );
+                }
+            })
+            .await?;
+
+        // 9. Write generation output
+        let gen_dir = output_dir.join("generations").join("1");
+        std::fs::create_dir_all(&gen_dir)?;
+
+        let compose_erofs = op_dir.join("pipeline").join("compose").join("root.erofs");
+        let stage_erofs = profile.stages.last().map(|stage| {
+            op_dir
+                .join("pipeline")
+                .join(format!("stage-{}", stage.name))
+                .join("root.erofs")
+        });
+        let erofs_source = if compose_erofs.exists() {
+            Some(compose_erofs)
         } else {
-            manifest
-                .substituters
-                .as_ref()
-                .map(|s| s.sources.clone())
-                .unwrap_or_default()
-        },
-        publish_endpoint: if opts.publish {
-            Some("https://packages.conary.io".to_string())
+            stage_erofs.filter(|p| p.exists())
+        };
+        if let Some(src) = erofs_source {
+            let dest = gen_dir.join("root.erofs");
+            std::fs::copy(&src, &dest)?;
+            println!("Generation 1 EROFS: {}", dest.display());
         } else {
-            None
-        },
-        publish_token: None,
-    };
+            tracing::warn!(
+                "No EROFS image found in pipeline output -- generation may be incomplete"
+            );
+        }
 
-    std::fs::create_dir_all(&pipeline_config.work_dir)?;
-    let pipeline = Pipeline::new(pipeline_config, executor);
+        let gen_meta = serde_json::json!({
+            "generation": 1,
+            "system_name": manifest.system.name,
+            "target": manifest.system.target,
+            "packages": profile.stages.iter()
+                .flat_map(|s| s.derivations.iter())
+                .map(|d| format!("{}-{}", d.package, d.version))
+                .collect::<Vec<_>>(),
+            "profile_hash": profile.profile.profile_hash,
+        });
+        std::fs::write(
+            gen_dir.join(".conary-gen.json"),
+            serde_json::to_string_pretty(&gen_meta)?,
+        )?;
 
-    // 8. Execute pipeline
-    println!("\nStarting derivation pipeline...\n");
-    let profile = pipeline
-        .execute(&seed, &recipes, &build_steps, &conn, |event| match event {
-            PipelineEvent::StageStarted {
-                name,
-                package_count,
-            } => {
-                println!("[{name}] Stage started ({package_count} packages)");
-            }
-            PipelineEvent::PackageBuilding { name, stage } => {
-                println!("[{stage}] Building {name}...");
-            }
-            PipelineEvent::PackageCached { name } => {
-                println!("  [cached] {name}");
-            }
-            PipelineEvent::PackageBuilt {
-                name,
-                duration_secs,
-            } => {
-                println!("  [built] {name} in {duration_secs}s");
-            }
-            PipelineEvent::PackageFailed { name, error } => {
-                println!("  [FAILED] {name}: {error}");
-            }
-            PipelineEvent::SubstituterHit {
-                name,
-                peer,
-                objects_fetched,
-            } => {
-                println!("  [substituted] {name} from {peer} ({objects_fetched} objects)");
-            }
-            PipelineEvent::BuildLogWritten { package, path } => {
-                println!("  [log] {package}: {}", path.display());
-            }
-            PipelineEvent::StageCompleted { name } => {
-                println!("[{name}] Stage completed\n");
-            }
-            PipelineEvent::PipelineCompleted {
-                total_packages,
-                cached,
-                built,
-            } => {
-                println!(
-                    "[COMPLETE] {total_packages} packages processed ({built} built, {cached} cached)"
-                );
-            }
-        })
-        .await?;
+        let profile_hash = profile.profile.profile_hash.clone();
+        let profile_toml = toml::to_string_pretty(&profile)?;
+        std::fs::write(gen_dir.join("profile.toml"), &profile_toml)?;
 
-    // 9. Write generation output
-    let output_dir = work_dir.join("output");
-    let gen_dir = output_dir.join("generations").join("1");
-    std::fs::create_dir_all(&gen_dir)?;
-
-    // The pipeline's final stage already composed an EROFS image.
-    // Find it in the pipeline work dir and copy to generation output.
-    // The pipeline composes the final EROFS into pipeline/compose/root.erofs.
-    // Fall back to the last stage directory if compose output is missing.
-    let compose_erofs = work_dir.join("pipeline").join("compose").join("root.erofs");
-    let stage_erofs = profile.stages.last().map(|stage| {
-        work_dir
-            .join("pipeline")
-            .join(format!("stage-{}", stage.name))
-            .join("root.erofs")
-    });
-    let erofs_source = if compose_erofs.exists() {
-        Some(compose_erofs)
-    } else {
-        stage_erofs.filter(|p| p.exists())
-    };
-    if let Some(src) = erofs_source {
-        let dest = gen_dir.join("root.erofs");
-        std::fs::copy(&src, &dest)?;
-        println!("Generation 1 EROFS: {}", dest.display());
-    } else {
-        tracing::warn!("No EROFS image found in pipeline output -- generation may be incomplete");
+        Ok((gen_dir, profile_hash))
     }
+    .await;
 
-    // Write generation metadata
-    let gen_meta = serde_json::json!({
-        "generation": 1,
-        "system_name": manifest.system.name,
-        "target": manifest.system.target,
-        "packages": profile.stages.iter()
-            .flat_map(|s| s.derivations.iter())
-            .map(|d| format!("{}-{}", d.package, d.version))
-            .collect::<Vec<_>>(),
-        "profile_hash": profile.profile.profile_hash,
-    });
-    std::fs::write(
-        gen_dir.join(".conary-gen.json"),
-        serde_json::to_string_pretty(&gen_meta)?,
-    )?;
-
-    // Write profile for image step
-    let profile_toml = toml::to_string_pretty(&profile)?;
-    std::fs::write(gen_dir.join("profile.toml"), &profile_toml)?;
-
-    // Symlink current -> generations/1
-    let current_link = output_dir.join("current");
-    let _ = std::fs::remove_file(&current_link);
-    std::os::unix::fs::symlink("generations/1", &current_link)?;
-
-    println!("\nOutput: {}", output_dir.display());
-    println!("Profile hash: {}", profile.profile.profile_hash);
-
-    Ok(())
+    match run_result {
+        Ok((gen_dir, profile_hash)) => {
+            finish_bootstrap_run_success(&mut record, &gen_dir, &profile_hash)?;
+            println!("\nOutput: {}", output_dir.display());
+            println!("Profile hash: {profile_hash}");
+            Ok(())
+        }
+        Err(error) => {
+            finish_bootstrap_run_failure(&mut record, &error)?;
+            Err(error)
+        }
+    }
 }
 
 /// Create a seed from the currently adopted system filesystem
@@ -1082,19 +1268,151 @@ pub async fn cmd_bootstrap_seed_adopted(
 
 /// Verify convergence between builds from two different seeds
 pub async fn cmd_bootstrap_verify_convergence(
-    _seed_a: &str,
-    _seed_b: &str,
-    _diff: bool,
+    run_a: &str,
+    run_b: &str,
+    seed_a: Option<&str>,
+    seed_b: Option<&str>,
+    diff: bool,
 ) -> Result<()> {
-    println!(
-        "[NOT YET IMPLEMENTED] bootstrap verify-convergence is planned but not yet available."
-    );
+    use conary_core::derivation::{Seed, compare_build_sets, load_build_set};
+    use rusqlite::Connection;
+
+    let record_a = load_completed_bootstrap_run_record(Path::new(run_a))?;
+    let record_b = load_completed_bootstrap_run_record(Path::new(run_b))?;
+
+    if let Some(seed_path) = seed_a {
+        let seed = Seed::load_local(Path::new(seed_path))
+            .map_err(|error| anyhow::anyhow!("Failed to load seed A: {error}"))?;
+        if seed.build_env_hash() != record_a.seed_id {
+            anyhow::bail!(
+                "Seed A hash {} does not match run A seed {}",
+                seed.build_env_hash(),
+                record_a.seed_id
+            );
+        }
+    }
+    if let Some(seed_path) = seed_b {
+        let seed = Seed::load_local(Path::new(seed_path))
+            .map_err(|error| anyhow::anyhow!("Failed to load seed B: {error}"))?;
+        if seed.build_env_hash() != record_b.seed_id {
+            anyhow::bail!(
+                "Seed B hash {} does not match run B seed {}",
+                seed.build_env_hash(),
+                record_b.seed_id
+            );
+        }
+    }
+
+    let conn_a = Connection::open(&record_a.derivation_db_path)
+        .with_context(|| format!("Failed to open {}", record_a.derivation_db_path.display()))?;
+    let conn_b = Connection::open(&record_b.derivation_db_path)
+        .with_context(|| format!("Failed to open {}", record_b.derivation_db_path.display()))?;
+
+    let builds_a = load_build_set(&conn_a, &record_a.seed_id)
+        .map_err(|error| anyhow::anyhow!("Failed to load build set A: {error}"))?;
+    let builds_b = load_build_set(&conn_b, &record_b.seed_id)
+        .map_err(|error| anyhow::anyhow!("Failed to load build set B: {error}"))?;
+    let report = compare_build_sets(builds_a, builds_b);
+
+    if report.total() == 0 {
+        anyhow::bail!(
+            "No comparable packages found between {} and {}",
+            run_a,
+            run_b
+        );
+    }
+
+    println!("Compared {} packages", report.total());
+    println!("Matched: {}", report.matched());
+    println!("Mismatched: {}", report.mismatched());
+    println!("Skipped: {}", report.skipped_total());
+    println!("Only in run A: {}", report.only_in_a().len());
+    println!("Only in run B: {}", report.only_in_b().len());
+
+    if diff {
+        if !report.mismatches().is_empty() {
+            println!("\nMismatched packages:");
+            for mismatch in report.mismatches() {
+                println!(
+                    "  {}: {} != {}",
+                    mismatch.package, mismatch.hash_a, mismatch.hash_b
+                );
+            }
+        }
+        if !report.only_in_a().is_empty() {
+            println!("\nOnly in run A:");
+            for package in report.only_in_a() {
+                println!("  {package}");
+            }
+        }
+        if !report.only_in_b().is_empty() {
+            println!("\nOnly in run B:");
+            for package in report.only_in_b() {
+                println!("  {package}");
+            }
+        }
+    }
+
+    if report.mismatched() > 0 {
+        anyhow::bail!(
+            "Convergence verification failed with {} mismatched packages",
+            report.mismatched()
+        );
+    }
+
+    println!("[COMPLETE] All compared packages converged.");
     Ok(())
 }
 
 /// Diff two seed EROFS images
-pub async fn cmd_bootstrap_diff_seeds(_path_a: &str, _path_b: &str) -> Result<()> {
-    println!("[NOT YET IMPLEMENTED] bootstrap diff-seeds is planned but not yet available.");
+pub async fn cmd_bootstrap_diff_seeds(path_a: &str, path_b: &str) -> Result<()> {
+    let report = conary_core::derivation::diff_seed_dirs(Path::new(path_a), Path::new(path_b))
+        .map_err(|error| anyhow::anyhow!("Failed to diff seeds: {error}"))?;
+
+    println!("Seed A: {path_a}");
+    println!("Seed B: {path_b}");
+
+    match (&report.erofs_hash_a, &report.erofs_hash_b) {
+        (Some(hash_a), Some(hash_b)) => {
+            println!("EROFS hash A: {hash_a}");
+            println!("EROFS hash B: {hash_b}");
+        }
+        (Some(hash_a), None) => {
+            println!("EROFS hash A: {hash_a}");
+            println!("EROFS hash B: <missing>");
+        }
+        (None, Some(hash_b)) => {
+            println!("EROFS hash A: <missing>");
+            println!("EROFS hash B: {hash_b}");
+        }
+        (None, None) => {
+            println!("EROFS hash A: <missing>");
+            println!("EROFS hash B: <missing>");
+        }
+    }
+
+    if report.metadata_differences.is_empty()
+        && report.artifact_differences.is_empty()
+        && report.erofs_hash_a == report.erofs_hash_b
+    {
+        println!("[COMPLETE] No metadata, artifact, or hash differences found.");
+        return Ok(());
+    }
+
+    if !report.metadata_differences.is_empty() {
+        println!("\nMetadata differences:");
+        for line in &report.metadata_differences {
+            println!("  {line}");
+        }
+    }
+
+    if !report.artifact_differences.is_empty() {
+        println!("\nArtifact differences:");
+        for line in &report.artifact_differences {
+            println!("  {line}");
+        }
+    }
+
     Ok(())
 }
 

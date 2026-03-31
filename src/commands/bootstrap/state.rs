@@ -24,6 +24,7 @@ pub struct BootstrapRunRecord {
     pub generation_dir: Option<PathBuf>,
     pub profile_hash: Option<String>,
     pub completed_successfully: bool,
+    pub failure_reason: Option<String>,
 }
 
 impl BootstrapRunRecord {
@@ -50,12 +51,18 @@ impl BootstrapRunRecord {
             generation_dir: None,
             profile_hash: None,
             completed_successfully: false,
+            failure_reason: None,
         }
     }
 
     #[must_use]
     pub fn path(&self) -> PathBuf {
         bootstrap_operations_dir(&self.work_dir).join(format!("{}.json", self.id))
+    }
+
+    #[must_use]
+    pub fn operation_dir(&self) -> PathBuf {
+        bootstrap_operations_dir(&self.work_dir).join(&self.id)
     }
 
     pub fn save(&self) -> Result<()> {
@@ -89,6 +96,11 @@ impl BootstrapLatestPointer {
     pub fn load(path: &Path) -> Result<Self> {
         load_json_record(path)
     }
+
+    #[must_use]
+    pub fn path_for(work_dir: &Path) -> PathBuf {
+        bootstrap_operations_dir(work_dir).join("latest.json")
+    }
 }
 
 #[cfg(test)]
@@ -114,8 +126,7 @@ mod tests {
             PathBuf::from("/tmp/recipes"),
             "seed-abc".into(),
         );
-        record.derivation_db_path =
-            PathBuf::from("/tmp/work/operations/op-123/derivations.db");
+        record.derivation_db_path = PathBuf::from("/tmp/work/operations/op-123/derivations.db");
         record.output_dir = PathBuf::from("/tmp/work/operations/op-123/output");
         record.completed_successfully = true;
         let loaded = round_trip_record(&record).expect("round trip");

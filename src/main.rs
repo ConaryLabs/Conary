@@ -30,9 +30,7 @@ async fn main() {
             match core_err {
                 conary_core::Error::DatabaseNotFound(_) => {
                     eprintln!("Error: Database not initialized.");
-                    eprintln!(
-                        "Run 'conary system init' to set up the package database."
-                    );
+                    eprintln!("Run 'conary system init' to set up the package database.");
                 }
                 conary_core::Error::NotFound(detail) => {
                     eprintln!("Error: {detail}");
@@ -51,9 +49,7 @@ async fn main() {
             }
         } else {
             // Fallback: print the full error chain safely
-            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                format!("{err:#}")
-            })) {
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| format!("{err:#}"))) {
                 Ok(msg) => eprintln!("Error: {msg}"),
                 Err(_) => eprintln!("Error: {err}"),
             }
@@ -1432,8 +1428,14 @@ async fn run() -> Result<()> {
                 seed_b,
                 diff,
             } => {
-                let _ = (seed_a, seed_b);
-                commands::cmd_bootstrap_verify_convergence(&run_a, &run_b, diff).await
+                commands::cmd_bootstrap_verify_convergence(
+                    &run_a,
+                    &run_b,
+                    seed_a.as_deref(),
+                    seed_b.as_deref(),
+                    diff,
+                )
+                .await
             }
 
             cli::BootstrapCommands::DiffSeeds { path_a, path_b } => {
