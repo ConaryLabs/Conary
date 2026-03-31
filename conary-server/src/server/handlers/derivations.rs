@@ -12,7 +12,9 @@
 //! - POST /v1/derivations/probe            -- batch existence check (public)
 
 use crate::server::ServerState;
-use crate::server::handlers::{cas_object_path, is_valid_path_param, require_admin_token};
+use crate::server::handlers::{
+    cas_object_path, is_valid_path_param, open_handler_db, require_admin_token,
+};
 use axum::{
     Json,
     body::Body,
@@ -74,7 +76,7 @@ pub async fn get_derivation(
     let cas_hash = match tokio::task::spawn_blocking({
         let id = derivation_id.clone();
         move || -> anyhow::Result<Option<String>> {
-            let conn = conary_core::db::open(&db_path)?;
+            let conn = open_handler_db(&db_path)?;
             let result = conn.query_row(
                 "SELECT manifest_cas_hash FROM derivation_cache WHERE derivation_id = ?1",
                 rusqlite::params![id],
@@ -146,7 +148,7 @@ pub async fn head_derivation(
     };
 
     match tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = open_handler_db(&db_path)?;
         let result = conn.query_row(
             "SELECT 1 FROM derivation_cache WHERE derivation_id = ?1",
             rusqlite::params![derivation_id],
@@ -282,7 +284,7 @@ pub async fn put_derivation(
     let hash = cas_hash.clone();
 
     match tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = open_handler_db(&db_path)?;
         conn.execute(
             "INSERT INTO derivation_cache (derivation_id, manifest_cas_hash, package_name, package_version)
              VALUES (?1, ?2, ?3, ?4)
@@ -360,7 +362,7 @@ pub async fn probe_derivations(
     };
 
     match tokio::task::spawn_blocking(move || -> anyhow::Result<HashMap<String, bool>> {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = open_handler_db(&db_path)?;
 
         // Build a result map, defaulting everything to false
         let mut result: HashMap<String, bool> = ids.iter().cloned().map(|id| (id, false)).collect();

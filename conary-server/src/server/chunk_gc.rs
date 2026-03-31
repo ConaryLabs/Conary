@@ -155,7 +155,7 @@ pub async fn run_chunk_gc(
     // rusqlite::Connection is !Send and can't cross await points.
     let db_path_owned = db_path.to_path_buf();
     let referenced = tokio::task::spawn_blocking(move || -> Result<HashSet<String>> {
-        let conn = conary_core::db::open(&db_path_owned)?;
+        let conn = crate::server::open_runtime_db(&db_path_owned)?;
         build_referenced_set(&conn)
     })
     .await
@@ -205,7 +205,7 @@ pub async fn run_chunk_gc(
 
     let orphans_after_grace: Vec<String> =
         tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
-            let conn = conary_core::db::open(&db_path_grace)?;
+            let conn = crate::server::open_runtime_db(&db_path_grace)?;
             let cutoff = chrono::Utc::now() - chrono::Duration::seconds(grace as i64);
             let cutoff_str = cutoff.format("%Y-%m-%d %H:%M:%S").to_string();
 
@@ -327,7 +327,7 @@ pub async fn run_chunk_gc(
     let db_path_cleanup = db_path.to_path_buf();
     let deleted_hashes = orphans_after_grace.clone();
     tokio::task::spawn_blocking(move || -> Result<()> {
-        let conn = conary_core::db::open(&db_path_cleanup)?;
+        let conn = crate::server::open_runtime_db(&db_path_cleanup)?;
         for hash in &deleted_hashes {
             if let Err(e) = conary_core::db::models::ChunkAccess::delete(&conn, hash) {
                 tracing::warn!("Failed to delete chunk_access row for {}: {}", hash, e);

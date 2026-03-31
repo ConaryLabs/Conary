@@ -52,7 +52,7 @@ pub async fn fetch_repology_data(db_path: &Path, batch_size: usize) -> Result<us
     // Write to cache in a blocking task (SQLite is sync)
     let db = db_path.to_path_buf();
     let count = tokio::task::spawn_blocking(move || -> Result<usize> {
-        let conn = conary_core::db::open(&db)?;
+        let conn = crate::server::open_runtime_db(&db)?;
         conary_core::canonical::repology::cache_projects_to_db(&conn, &all_projects)
             .map_err(Into::into)
     })
@@ -113,7 +113,7 @@ async fn fetch_ubuntu_appstream(client: &reqwest::Client, db_path: &Path) -> Res
 
     let db = db_path.to_path_buf();
     let count = tokio::task::spawn_blocking(move || -> Result<usize> {
-        let conn = conary_core::db::open(&db)?;
+        let conn = crate::server::open_runtime_db(&db)?;
         conary_core::canonical::appstream::cache_components_to_db(
             &conn,
             &components,

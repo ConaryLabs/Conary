@@ -79,7 +79,7 @@ async fn ensure_admin_bootstrap_token(
     let source_name = source_name.to_string();
     let source_description = source_description.to_string();
     tokio::task::spawn_blocking(move || -> Result<()> {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = open_runtime_db(&db_path)?;
         if conary_core::db::models::admin_token::find_by_hash(&conn, &hash)?.is_none() {
             conary_core::db::models::admin_token::create(&conn, &source_name, &hash, "admin")?;
             tracing::info!("  Admin token created from {}", source_description);
@@ -326,6 +326,17 @@ fn build_http_client(timeout: Duration, user_agent: &str) -> Result<reqwest::Cli
         .user_agent(user_agent)
         .build()
         .context("Failed to create HTTP client")
+}
+
+/// Open a database connection for the already-initialized server runtime.
+///
+/// Server startup calls [`ensure_database_ready`] before background tasks or
+/// hot request paths begin using SQLite, so those paths can skip re-running
+/// migrations on every connection open.
+pub(crate) fn open_runtime_db(
+    path: impl AsRef<std::path::Path>,
+) -> conary_core::Result<rusqlite::Connection> {
+    conary_core::db::open_fast(path)
 }
 
 fn ensure_database_ready(db_path: &std::path::Path) -> Result<()> {
@@ -836,7 +847,9 @@ async fn initialize_bloom_filter(state: Arc<RwLock<ServerState>>) -> Result<()> 
 
 #[cfg(test)]
 mod tests {
-    use super::{build_http_client, ensure_admin_bootstrap_token};
+    use super::{
+        build_http_client, ensure_admin_bootstrap_token, ensure_database_ready, open_runtime_db,
+    };
 
     fn test_db_path() -> std::path::PathBuf {
         let tmp = tempfile::tempdir().expect("create tempdir");
@@ -883,6 +896,30 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM admin_tokens", [], |row| row.get(0))
             .expect("count tokens");
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn open_runtime_db_requires_existing_ready_database() {
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        let db_path = tmp.path().join("missing.db");
+
+        let err = open_runtime_db(&db_path).expect_err("missing db should not auto-initialize");
+        assert!(
+            err.to_string().contains("Database not found"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn ensure_database_ready_allows_runtime_db_fast_path() {
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        let db_path = tmp.path().join("conary.db");
+
+        ensure_database_ready(&db_path).expect("prepare db");
+        let conn = open_runtime_db(&db_path).expect("open prepared db");
+
+        let version = conary_core::db::schema::get_schema_version(&conn).expect("schema version");
+        assert_eq!(version, conary_core::db::schema::SCHEMA_VERSION);
     }
 
     #[test]

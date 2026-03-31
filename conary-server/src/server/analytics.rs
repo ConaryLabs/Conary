@@ -99,7 +99,7 @@ impl AnalyticsRecorder {
 
         // Write to DB on blocking thread
         tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open(&db_path)?;
+            let conn = crate::server::open_runtime_db(&db_path)?;
             DownloadStat::insert_batch(&conn, &stats)?;
             Ok::<_, anyhow::Error>(())
         })
@@ -114,7 +114,7 @@ impl AnalyticsRecorder {
         let db_path = self.db_path.clone();
 
         tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open(&db_path)?;
+            let conn = crate::server::open_runtime_db(&db_path)?;
             let updated = DownloadCount::refresh_aggregates(&conn)?;
             tracing::debug!("Refreshed {} download count aggregates", updated);
             Ok::<_, anyhow::Error>(())

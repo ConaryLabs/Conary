@@ -86,7 +86,7 @@ pub fn bump_map_version(conn: &Connection) -> Result<u64> {
 ///
 /// Returns the total count of newly created canonical package entries.
 pub fn rebuild_canonical_map(db_path: &Path, config: &CanonicalSection) -> Result<u64> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = crate::server::open_runtime_db(db_path)?;
     let rules_dir = Path::new(&config.rules_dir);
     let mut total_new: u64 = 0;
 

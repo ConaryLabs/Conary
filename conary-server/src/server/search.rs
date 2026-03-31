@@ -216,7 +216,7 @@ impl SearchEngine {
 
     /// Rebuild the entire search index from the database
     pub fn rebuild_from_db(&self, db_path: &Path) -> Result<usize> {
-        let conn = conary_core::db::open(db_path)?;
+        let conn = crate::server::open_runtime_db(db_path)?;
 
         let mut writer = self
             .index

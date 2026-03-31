@@ -13,7 +13,9 @@
 //! - GET  /v1/seeds/latest?target=  -- fetch most-recent seed for a target (public)
 
 use crate::server::ServerState;
-use crate::server::handlers::{cas_object_path, is_valid_path_param, require_admin_token};
+use crate::server::handlers::{
+    cas_object_path, is_valid_path_param, open_handler_db, require_admin_token,
+};
 use axum::{
     body::Body,
     extract::{Path, Query, Request, State},
@@ -168,7 +170,7 @@ pub async fn put_seed(
         .unwrap_or_else(|_| "[]".to_owned());
 
     match tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = open_handler_db(&db_path)?;
         conn.execute(
             "INSERT INTO seeds (seed_id, target_triple, source, builder, packages_json, verified_by_json, image_cas_hash)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
@@ -237,7 +239,7 @@ pub async fn get_seed(
     let row = match tokio::task::spawn_blocking({
         let id = seed_id.clone();
         move || -> anyhow::Result<Option<SeedRow>> {
-            let conn = conary_core::db::open(&db_path)?;
+            let conn = open_handler_db(&db_path)?;
             let result = conn.query_row(
                 "SELECT seed_id, target_triple, builder, source, packages_json, verified_by_json, image_cas_hash
                  FROM seeds WHERE seed_id = ?1",
@@ -347,7 +349,7 @@ pub async fn get_seed_image(
     let cas_hash = match tokio::task::spawn_blocking({
         let id = seed_id.clone();
         move || -> anyhow::Result<Option<String>> {
-            let conn = conary_core::db::open(&db_path)?;
+            let conn = open_handler_db(&db_path)?;
             let result = conn.query_row(
                 "SELECT image_cas_hash FROM seeds WHERE seed_id = ?1",
                 rusqlite::params![id],
@@ -433,7 +435,7 @@ pub async fn list_seeds(
     let target = params.target.clone();
 
     match tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<SeedListItem>> {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = open_handler_db(&db_path)?;
         query_seeds(&conn, target.as_deref(), None)
     })
     .await
@@ -476,7 +478,7 @@ pub async fn get_latest_seed(
     let target = params.target.clone();
 
     match tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<SeedListItem>> {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = open_handler_db(&db_path)?;
         query_seeds(&conn, target.as_deref(), Some(1))
     })
     .await
