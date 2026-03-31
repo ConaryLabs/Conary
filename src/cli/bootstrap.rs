@@ -271,12 +271,18 @@ pub enum BootstrapCommands {
     /// Verify convergence between builds from two different seeds
     #[command(name = "verify-convergence")]
     VerifyConvergence {
-        /// Path to first seed directory
+        /// Path to first completed bootstrap run work directory
         #[arg(long)]
-        seed_a: String,
-        /// Path to second seed directory
+        run_a: String,
+        /// Path to second completed bootstrap run work directory
         #[arg(long)]
-        seed_b: String,
+        run_b: String,
+        /// Optional path to first seed directory for recorded-seed verification
+        #[arg(long)]
+        seed_a: Option<String>,
+        /// Optional path to second seed directory for recorded-seed verification
+        #[arg(long)]
+        seed_b: Option<String>,
         /// Show per-file diff for mismatches
         #[arg(long)]
         diff: bool,
@@ -337,5 +343,38 @@ mod tests {
     #[test]
     fn cli_rejects_legacy_stage0_name() {
         assert!(BootstrapCli::try_parse_from(["bootstrap", "stage0"]).is_err());
+    }
+
+    #[test]
+    fn cli_accepts_verify_convergence_run_workdirs() {
+        let parsed = BootstrapCli::try_parse_from([
+            "bootstrap",
+            "verify-convergence",
+            "--run-a",
+            "/tmp/run-a",
+            "--run-b",
+            "/tmp/run-b",
+        ])
+        .expect("parse verify-convergence");
+
+        assert!(matches!(
+            parsed.command,
+            BootstrapCommands::VerifyConvergence { .. }
+        ));
+    }
+
+    #[test]
+    fn cli_rejects_verify_convergence_without_run_dirs() {
+        assert!(
+            BootstrapCli::try_parse_from([
+                "bootstrap",
+                "verify-convergence",
+                "--seed-a",
+                "/tmp/seed-a",
+                "--seed-b",
+                "/tmp/seed-b",
+            ])
+            .is_err()
+        );
     }
 }
