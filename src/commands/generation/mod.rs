@@ -11,3 +11,4 @@ pub mod composefs;
 pub mod metadata;
 pub mod switch;
 pub mod takeover;
+pub mod takeover_state;
