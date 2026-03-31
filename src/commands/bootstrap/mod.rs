@@ -4,6 +4,8 @@
 //!
 //! Commands for bootstrapping a complete Conary system from scratch.
 
+pub mod state;
+
 use anyhow::{Context, Result};
 use conary_core::bootstrap::{
     Bootstrap, BootstrapConfig, BootstrapStage, ImageBuilder, ImageFormat, ImageSize, ImageTools,

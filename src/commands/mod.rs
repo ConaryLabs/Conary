@@ -24,6 +24,7 @@ pub mod groups;
 mod install;
 mod label;
 mod model;
+mod operation_records;
 mod package_parsing;
 mod profile;
 pub mod progress;
