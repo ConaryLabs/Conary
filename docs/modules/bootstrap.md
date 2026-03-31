@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-03-28
-revision: 2
-summary: Document the current bootstrap command surface and its six-phase pipeline
+last_updated: 2026-03-31
+revision: 3
+summary: Document the current bootstrap command surface, manifest pipeline artifacts, and comparison commands
 ---
 
 # Bootstrap Module (conary-core/src/bootstrap/)
@@ -128,9 +128,55 @@ conary bootstrap config
 conary bootstrap image --format qcow2
 conary bootstrap tier2
 conary bootstrap run conaryos.toml --seed ./seed
+conary bootstrap verify-convergence --run-a ./bootstrap-a --run-b ./bootstrap-b
+conary bootstrap diff-seeds ./seed-a ./seed-b
 ```
 
 Older phase-style bootstrap names are no longer the public CLI and should not
 appear in active docs or tests.
+
+## Manifest Pipeline Artifacts
+
+`conary bootstrap run` now writes operation-scoped artifacts under:
+
+```text
+<work_dir>/
+  operations/
+    latest.json
+    <op-id>.json
+    <op-id>/
+      derivations.db
+      logs/
+      pipeline/
+      output/
+        generations/1/
+        current -> generations/1
+  output/
+    current -> ../operations/<op-id>/output/current
+```
+
+The per-run record stores the manifest path, recipe directory, seed ID,
+requested filters (`--up-to`, `--only`, `--cascade`), the operation-scoped
+derivation database path, output path, generation path, profile hash, and
+success/failure state. `operations/latest.json` points at the most recent
+completed run record for later inspection and comparison.
+
+## Comparison Commands
+
+`conary bootstrap verify-convergence` compares two completed bootstrap run
+workdirs, not raw seed paths. Each workdir is resolved through
+`<work_dir>/operations/latest.json`, and the command opens the recorded
+`derivations.db` for that completed run. Optional `--seed-a` and `--seed-b`
+arguments verify that the provided seed directories match the run record’s
+stored seed ID before comparing outputs.
+
+`conary bootstrap diff-seeds` is intentionally narrow in this milestone. It
+compares:
+
+- `seed.toml` metadata fields
+- `seed.erofs` content hashes
+- top-level artifact presence (`seed.toml`, `seed.erofs`, `cas/`)
+
+It does not mount or recursively diff EROFS contents.
 
 See also: [docs/ARCHITECTURE.md](/docs/ARCHITECTURE.md).
