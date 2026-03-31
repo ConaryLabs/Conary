@@ -89,7 +89,10 @@ impl Federation {
         config: &'a FederationConfig,
         endpoint: &str,
     ) -> Option<&'a str> {
-        config.peer_tls_fingerprints.get(endpoint).map(String::as_str)
+        config
+            .peer_tls_fingerprints
+            .get(endpoint)
+            .map(String::as_str)
     }
 
     /// Whether any peer allowlist is configured.
@@ -133,10 +136,7 @@ impl Federation {
                 Self::tls_fingerprint_for_endpoint(&config, endpoint),
             )
             .map_err(|e| {
-                Error::InitError(format!(
-                    "Invalid federation cell hub '{}': {}",
-                    endpoint, e
-                ))
+                Error::InitError(format!("Invalid federation cell hub '{}': {}", endpoint, e))
             })?;
             if Self::is_peer_allowed(&config, &peer) {
                 peer_registry.add(peer);
@@ -267,7 +267,8 @@ impl Federation {
             )));
         }
 
-        let endpoint = discovered.endpoint_with_secure_transport(require_authenticated_transport)?;
+        let endpoint =
+            discovered.endpoint_with_secure_transport(require_authenticated_transport)?;
         let mut peer = Peer::from_endpoint_with_fingerprint(
             &endpoint,
             discovered.tier,
@@ -299,9 +300,10 @@ impl Federation {
         }
 
         match peer.tier {
-            PeerTier::RegionHub if self.config.require_mtls_wan => Err(Error::Federation(
-                format!("mTLS required for region hub {} but not configured", peer.endpoint),
-            )),
+            PeerTier::RegionHub if self.config.require_mtls_wan => Err(Error::Federation(format!(
+                "mTLS required for region hub {} but not configured",
+                peer.endpoint
+            ))),
             PeerTier::RegionHub | PeerTier::CellHub | PeerTier::Leaf => Ok(&self.lan_client),
         }
     }

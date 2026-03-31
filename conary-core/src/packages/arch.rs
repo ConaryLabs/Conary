@@ -54,8 +54,9 @@ impl ArchPackage {
             .map_err(|e| Error::InitError(format!("Failed to open package file: {}", e)))?;
 
         let format = Self::detect_compression(path)?;
-        let reader = compression::create_decoder_limited(file, format, compression::MAX_DECOMPRESS_SIZE)
-            .map_err(|e| Error::InitError(format!("Failed to create decoder: {}", e)))?;
+        let reader =
+            compression::create_decoder_limited(file, format, compression::MAX_DECOMPRESS_SIZE)
+                .map_err(|e| Error::InitError(format!("Failed to create decoder: {}", e)))?;
 
         Ok(Archive::new(reader))
     }

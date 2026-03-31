@@ -447,16 +447,8 @@ fn removed_members_for_side_effect_warning(
 
 fn has_user_group_side_effect(script: &str) -> bool {
     [
-        "useradd",
-        "usermod",
-        "userdel",
-        "adduser",
-        "deluser",
-        "groupadd",
-        "groupmod",
-        "groupdel",
-        "addgroup",
-        "delgroup",
+        "useradd", "usermod", "userdel", "adduser", "deluser", "groupadd", "groupmod", "groupdel",
+        "addgroup", "delgroup",
     ]
     .iter()
     .any(|needle| script.contains(needle))
@@ -474,12 +466,11 @@ fn classify_side_effect_reasons<'a>(
 
     let mut reasons = Vec::new();
 
-    let has_user_group_state = file_paths
+    let has_user_group_state = file_paths.iter().any(|path| {
+        path.starts_with("/usr/lib/sysusers.d/") || path.starts_with("/etc/sysusers.d/")
+    }) || lowercased_scripts
         .iter()
-        .any(|path| path.starts_with("/usr/lib/sysusers.d/") || path.starts_with("/etc/sysusers.d/"))
-        || lowercased_scripts
-            .iter()
-            .any(|script| has_user_group_side_effect(script));
+        .any(|script| has_user_group_side_effect(script));
     if has_user_group_state {
         reasons.push("users/groups");
     }
@@ -536,7 +527,9 @@ fn find_side_effect_package_warning(
     let scriptlets = conary_core::db::models::ScriptletEntry::find_by_trove(conn, trove_id)?;
     let reasons = classify_side_effect_reasons(
         files.iter().map(|file| file.path.as_str()),
-        scriptlets.iter().map(|scriptlet| scriptlet.content.as_str()),
+        scriptlets
+            .iter()
+            .map(|scriptlet| scriptlet.content.as_str()),
     );
 
     if reasons.is_empty() {
@@ -746,8 +739,8 @@ mod tests {
         removed_members_for_side_effect_warning,
     };
     use conary_core::db::models::settings;
-    use conary_core::db::schema;
     use conary_core::db::models::{StateDiff, StateMember};
+    use conary_core::db::schema;
     use rusqlite::Connection;
     use tempfile::TempDir;
 
@@ -771,7 +764,11 @@ mod tests {
                 "/etc/cron.d/example",
                 "/usr/lib/sysusers.d/example.conf",
             ],
-            ["groupadd example", "systemctl preset example.service", "crontab -r"],
+            [
+                "groupadd example",
+                "systemctl preset example.service",
+                "crontab -r",
+            ],
         );
 
         assert_eq!(reasons, vec!["users/groups", "systemd units", "cron jobs"]);

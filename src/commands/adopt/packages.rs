@@ -227,7 +227,10 @@ pub async fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result
             progress.set_phase(&pkg_name, AdoptPhase::Inserting);
             let total_inserts = files_with_hashes.len()
                 + deps.iter().filter(|dep| !dep.name.is_empty()).count()
-                + provides.iter().filter(|provide| !provide.is_empty()).count();
+                + provides
+                    .iter()
+                    .filter(|provide| !provide.is_empty())
+                    .count();
             let mut insert_failures = 0usize;
 
             for (

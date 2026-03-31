@@ -78,9 +78,7 @@ impl RemiMcpServer {
 /// corrected arguments.  5xx and network errors are `internal_error`. (fix 10.8)
 fn forgejo_err_to_mcp(e: crate::server::forgejo::ForgejoError) -> McpError {
     match e.status {
-        Some(code) if (400..500).contains(&code) => {
-            McpError::invalid_params(e.message, None)
-        }
+        Some(code) if (400..500).contains(&code) => McpError::invalid_params(e.message, None),
         _ => McpError::internal_error(e.message, None),
     }
 }

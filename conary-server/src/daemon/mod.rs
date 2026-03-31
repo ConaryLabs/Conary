@@ -674,9 +674,7 @@ async fn job_executor_loop(state: Arc<DaemonState>) {
                 })
                 .await
                 {
-                    tracing::error!(
-                        "Failed to persist Completed status for job {log_id}: {e}"
-                    );
+                    tracing::error!("Failed to persist Completed status for job {log_id}: {e}");
                 }
 
                 state.metrics.jobs_completed.fetch_add(1, Ordering::Relaxed);
@@ -699,9 +697,7 @@ async fn job_executor_loop(state: Arc<DaemonState>) {
                 })
                 .await
                 {
-                    tracing::error!(
-                        "Failed to persist Failed status for job {log_id}: {e}"
-                    );
+                    tracing::error!("Failed to persist Failed status for job {log_id}: {e}");
                 }
 
                 state.metrics.jobs_failed.fetch_add(1, Ordering::Relaxed);

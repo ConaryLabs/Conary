@@ -299,6 +299,9 @@ mod tests {
             .coalesce("overflow", || async { Ok(vec![1, 2, 3]) })
             .await
             .expect_err("new requests should be rejected once the in-flight map is full");
-        assert!(err.to_string().contains("Too many in-flight federation requests"));
+        assert!(
+            err.to_string()
+                .contains("Too many in-flight federation requests")
+        );
     }
 }

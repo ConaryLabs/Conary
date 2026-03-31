@@ -89,10 +89,7 @@ pub struct DiscoveredPeer {
 
 impl DiscoveredPeer {
     /// Build the candidate endpoint URL for this discovered peer.
-    pub fn endpoint_with_secure_transport(
-        &self,
-        require_secure_transport: bool,
-    ) -> Result<String> {
+    pub fn endpoint_with_secure_transport(&self, require_secure_transport: bool) -> Result<String> {
         // Prefer IPv4 addresses for simplicity, fall back to IPv6
         let addr = self
             .addresses

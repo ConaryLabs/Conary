@@ -591,94 +591,6 @@ pub async fn cmd_bootstrap_tier2(
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-
-    use super::{
-        BootstrapLatestPointer, BootstrapRunOptions, BootstrapRunRecord,
-        finish_bootstrap_run_success, skip_verify_warning_message, start_bootstrap_run_record,
-    };
-
-    #[test]
-    fn skip_verify_warning_message_is_prominent() {
-        let warning = skip_verify_warning_message();
-        assert!(warning.contains("UNSAFE"));
-        assert!(warning.contains("--skip-verify"));
-        assert!(warning.contains("placeholder"));
-    }
-
-    #[test]
-    fn test_bootstrap_run_writes_success_record_with_output_paths() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let manifest_path = temp.path().join("system.toml");
-        let recipe_dir = temp.path().join("recipes");
-        std::fs::create_dir_all(&recipe_dir).expect("recipe dir");
-        std::fs::write(
-            &manifest_path,
-            "[system]\nname = 'test'\ntarget = 'x86_64-conary-linux-gnu'\n",
-        )
-        .expect("manifest");
-
-        let only = vec!["bash".to_string(), "coreutils".to_string()];
-        let opts = BootstrapRunOptions {
-            manifest: manifest_path.to_str().expect("manifest path"),
-            work_dir: temp.path().to_str().expect("work dir"),
-            seed: "/tmp/seed",
-            recipe_dir: recipe_dir.to_str().expect("recipe dir"),
-            up_to: Some("system"),
-            only: Some(&only),
-            cascade: true,
-            keep_logs: false,
-            shell_on_failure: false,
-            verbose: false,
-            no_substituters: false,
-            publish: false,
-        };
-
-        let mut record = start_bootstrap_run_record(&opts, &manifest_path, &recipe_dir, "seed-abc")
-            .expect("start record");
-        let generation_dir = record.output_dir.join("generations").join("1");
-        std::fs::create_dir_all(&generation_dir).expect("generation dir");
-
-        finish_bootstrap_run_success(&mut record, &generation_dir, "profile-xyz")
-            .expect("finish record");
-
-        let loaded = BootstrapRunRecord::load(&record.path()).expect("load record");
-        let latest = BootstrapLatestPointer::load(&BootstrapLatestPointer::path_for(temp.path()))
-            .expect("load latest");
-
-        assert_eq!(loaded.manifest_path, manifest_path);
-        assert_eq!(loaded.recipe_dir, recipe_dir);
-        assert_eq!(loaded.seed_id, "seed-abc");
-        assert_eq!(loaded.up_to.as_deref(), Some("system"));
-        assert_eq!(loaded.only, only);
-        assert!(loaded.cascade);
-        assert_eq!(
-            loaded.derivation_db_path,
-            loaded.operation_dir().join("derivations.db")
-        );
-        assert_eq!(loaded.output_dir, loaded.operation_dir().join("output"));
-        assert_eq!(loaded.generation_dir, Some(generation_dir.clone()));
-        assert_eq!(loaded.profile_hash.as_deref(), Some("profile-xyz"));
-        assert!(loaded.completed_successfully);
-        assert_eq!(latest.operation_id, loaded.id);
-        assert_eq!(latest.record_path, loaded.path());
-        assert_eq!(
-            std::fs::read_link(loaded.output_dir.join("current")).expect("run current link"),
-            PathBuf::from("generations").join("1")
-        );
-        assert_eq!(
-            std::fs::read_link(temp.path().join("output/current")).expect("top current link"),
-            PathBuf::from("..")
-                .join("operations")
-                .join(&loaded.id)
-                .join("output")
-                .join("current")
-        );
-    }
-}
-
 /// Package cross-tools output as a derivation seed
 pub async fn cmd_bootstrap_seed(from: &str, output: &str, target: &str) -> Result<()> {
     use conary_core::derivation::compose::erofs_image_hash;
@@ -1478,4 +1390,92 @@ pub async fn cmd_bootstrap_clean(
     println!("\n[OK] Clean complete.");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::{
+        BootstrapLatestPointer, BootstrapRunOptions, BootstrapRunRecord,
+        finish_bootstrap_run_success, skip_verify_warning_message, start_bootstrap_run_record,
+    };
+
+    #[test]
+    fn skip_verify_warning_message_is_prominent() {
+        let warning = skip_verify_warning_message();
+        assert!(warning.contains("UNSAFE"));
+        assert!(warning.contains("--skip-verify"));
+        assert!(warning.contains("placeholder"));
+    }
+
+    #[test]
+    fn test_bootstrap_run_writes_success_record_with_output_paths() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let manifest_path = temp.path().join("system.toml");
+        let recipe_dir = temp.path().join("recipes");
+        std::fs::create_dir_all(&recipe_dir).expect("recipe dir");
+        std::fs::write(
+            &manifest_path,
+            "[system]\nname = 'test'\ntarget = 'x86_64-conary-linux-gnu'\n",
+        )
+        .expect("manifest");
+
+        let only = vec!["bash".to_string(), "coreutils".to_string()];
+        let opts = BootstrapRunOptions {
+            manifest: manifest_path.to_str().expect("manifest path"),
+            work_dir: temp.path().to_str().expect("work dir"),
+            seed: "/tmp/seed",
+            recipe_dir: recipe_dir.to_str().expect("recipe dir"),
+            up_to: Some("system"),
+            only: Some(&only),
+            cascade: true,
+            keep_logs: false,
+            shell_on_failure: false,
+            verbose: false,
+            no_substituters: false,
+            publish: false,
+        };
+
+        let mut record = start_bootstrap_run_record(&opts, &manifest_path, &recipe_dir, "seed-abc")
+            .expect("start record");
+        let generation_dir = record.output_dir.join("generations").join("1");
+        std::fs::create_dir_all(&generation_dir).expect("generation dir");
+
+        finish_bootstrap_run_success(&mut record, &generation_dir, "profile-xyz")
+            .expect("finish record");
+
+        let loaded = BootstrapRunRecord::load(&record.path()).expect("load record");
+        let latest = BootstrapLatestPointer::load(&BootstrapLatestPointer::path_for(temp.path()))
+            .expect("load latest");
+
+        assert_eq!(loaded.manifest_path, manifest_path);
+        assert_eq!(loaded.recipe_dir, recipe_dir);
+        assert_eq!(loaded.seed_id, "seed-abc");
+        assert_eq!(loaded.up_to.as_deref(), Some("system"));
+        assert_eq!(loaded.only, only);
+        assert!(loaded.cascade);
+        assert_eq!(
+            loaded.derivation_db_path,
+            loaded.operation_dir().join("derivations.db")
+        );
+        assert_eq!(loaded.output_dir, loaded.operation_dir().join("output"));
+        assert_eq!(loaded.generation_dir, Some(generation_dir.clone()));
+        assert_eq!(loaded.profile_hash.as_deref(), Some("profile-xyz"));
+        assert!(loaded.completed_successfully);
+        assert_eq!(latest.operation_id, loaded.id);
+        assert_eq!(latest.record_path, loaded.path());
+        assert_eq!(
+            std::fs::read_link(loaded.output_dir.join("current")).expect("run current link"),
+            PathBuf::from("generations").join("1")
+        );
+        assert_eq!(
+            std::fs::read_link(temp.path().join("output/current")).expect("top current link"),
+            PathBuf::from("..")
+                .join("operations")
+                .join(&loaded.id)
+                .join("output")
+                .join("current")
+        );
+    }
 }

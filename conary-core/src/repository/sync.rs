@@ -109,12 +109,8 @@ async fn sync_repository_native(
     } else {
         None
     };
-    let parser = registry::create_parser(
-        format,
-        &repo.name,
-        &repo.url,
-        metadata_signature_verifier,
-    )?;
+    let parser =
+        registry::create_parser(format, &repo.name, &repo.url, metadata_signature_verifier)?;
     let packages = parser.sync_metadata(&repo.url).await?;
 
     let repo_id = repo

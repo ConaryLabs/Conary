@@ -117,7 +117,9 @@ fn read_ccs_archive_with_limits<R: Read>(
             if let Ok(bin) = BinaryManifest::from_cbor(&content) {
                 binary_manifest = Some(bin);
             } else {
-                warn!("Failed to parse CBOR MANIFEST entry; falling back to MANIFEST.toml if present");
+                warn!(
+                    "Failed to parse CBOR MANIFEST entry; falling back to MANIFEST.toml if present"
+                );
             }
         }
         // ── MANIFEST.toml ────────────────────────────────────────────

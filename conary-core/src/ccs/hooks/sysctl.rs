@@ -20,12 +20,12 @@ pub(crate) fn validate_sysctl_key(key: &str) -> Result<()> {
     if !key
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '/' | '_' | '-'))
-        {
-            return Err(anyhow::anyhow!(
-                "Sysctl key contains invalid characters: {}",
-                key
-            ));
-        }
+    {
+        return Err(anyhow::anyhow!(
+            "Sysctl key contains invalid characters: {}",
+            key
+        ));
+    }
     if is_denied_sysctl_key(key) {
         return Err(anyhow::anyhow!(
             "Sysctl key is denied for security reasons: {}",

@@ -132,13 +132,15 @@ mod tests {
         std::fs::create_dir_all(fixture_path.parent().unwrap()).unwrap();
         std::fs::write(&fixture_path, b"fixture-bytes").unwrap();
 
-        let state = Arc::new(RwLock::new(ServerState::new(ServerConfig {
-            db_path: storage_root.join("metadata/conary.db"),
-            chunk_dir,
-            cache_dir,
-            ..Default::default()
-        })
-        .expect("test server state")));
+        let state = Arc::new(RwLock::new(
+            ServerState::new(ServerConfig {
+                db_path: storage_root.join("metadata/conary.db"),
+                chunk_dir,
+                cache_dir,
+                ..Default::default()
+            })
+            .expect("test server state"),
+        ));
         let app = Router::new()
             .route(
                 "/test-fixtures/{*path}",
@@ -190,13 +192,15 @@ mod tests {
         std::fs::create_dir_all(&chunk_dir).unwrap();
         std::fs::create_dir_all(&cache_dir).unwrap();
 
-        let state = Arc::new(RwLock::new(ServerState::new(ServerConfig {
-            db_path: storage_root.join("metadata/conary.db"),
-            chunk_dir,
-            cache_dir,
-            ..Default::default()
-        })
-        .expect("test server state")));
+        let state = Arc::new(RwLock::new(
+            ServerState::new(ServerConfig {
+                db_path: storage_root.join("metadata/conary.db"),
+                chunk_dir,
+                cache_dir,
+                ..Default::default()
+            })
+            .expect("test server state"),
+        ));
         let app = Router::new()
             .route(
                 "/test-artifacts/{*path}",

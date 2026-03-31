@@ -105,7 +105,10 @@ impl CcsManifest {
 
         for user in &self.hooks.users {
             validate_username(&user.name).map_err(|error| {
-                ManifestError::Invalid(format!("invalid hooks.users name '{}': {}", user.name, error))
+                ManifestError::Invalid(format!(
+                    "invalid hooks.users name '{}': {}",
+                    user.name, error
+                ))
             })?;
             if !user.system {
                 return Err(ManifestError::Invalid(format!(

@@ -765,7 +765,10 @@ fn test_derive_build_records_installable_artifact_metadata() {
 
     assert_eq!(build_meta.version, "1.24.0+custom");
     assert_eq!(build_meta.parent_version, "1.24.0");
-    assert_eq!(build_meta.artifact_path, format!("cas://{}", build_meta.artifact_hash));
+    assert_eq!(
+        build_meta.artifact_path,
+        format!("cas://{}", build_meta.artifact_hash)
+    );
     assert!(cas.exists(&build_meta.artifact_hash));
 
     let stored = DerivedPackage::find_by_name(&conn, "nginx-custom")
@@ -789,7 +792,10 @@ fn test_derive_build_records_installable_artifact_metadata() {
     assert_eq!(artifact["version"], "1.24.0+custom");
     assert_eq!(artifact["parent_name"], "nginx");
     assert_eq!(artifact["parent_version"], "1.24.0");
-    assert_eq!(artifact["files"]["/etc/nginx/nginx.conf"]["hash"], override_hash);
+    assert_eq!(
+        artifact["files"]["/etc/nginx/nginx.conf"]["hash"],
+        override_hash
+    );
 }
 
 /// Test stale propagation helper only fires on real parent version changes

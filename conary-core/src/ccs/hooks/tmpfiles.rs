@@ -6,8 +6,8 @@
 //! live root (using systemd-tmpfiles) and target root (writing config files).
 
 use super::HookExecutor;
-use anyhow::{Context, Result};
 use crate::filesystem::path::sanitize_path;
+use anyhow::{Context, Result};
 use std::fs;
 use std::process::Command;
 use tracing::debug;

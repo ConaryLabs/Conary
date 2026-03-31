@@ -1494,9 +1494,8 @@ fn signal_parent_user_namespace_ready(
     })?;
 
     let mut ack = [0_u8; 1];
-    let bytes_read = nix::unistd::read(&sync.ack_fd, &mut ack).map_err(|e| {
-        Error::ScriptletError(format!("User namespace handshake ack failed: {e}"))
-    })?;
+    let bytes_read = nix::unistd::read(&sync.ack_fd, &mut ack)
+        .map_err(|e| Error::ScriptletError(format!("User namespace handshake ack failed: {e}")))?;
     if bytes_read != 1 || ack[0] != b'O' {
         return Err(Error::ScriptletError(
             "User namespace handshake was not acknowledged".to_string(),

@@ -1170,7 +1170,8 @@ mod tests {
         let expanded = variables::expand_variables("curl ${REMI_ENDPOINT}/health", &runner.vars);
         assert_eq!(expanded, "curl https://packages.conary.io/health");
 
-        let expanded2 = variables::expand_variables("${CONARY_BIN} --db-path ${DB_PATH}", &runner.vars);
+        let expanded2 =
+            variables::expand_variables("${CONARY_BIN} --db-path ${DB_PATH}", &runner.vars);
         assert_eq!(
             expanded2,
             "/usr/local/bin/conary --db-path /tmp/conary-test.db"
@@ -1336,14 +1337,17 @@ mod tests {
         );
         runner.load_manifest_vars(&manifest);
 
-        let expanded = variables::expand_qemu_boot(&QemuBoot {
-            image: "${IMG}".to_string(),
-            memory_mb: 1024,
-            timeout_seconds: 120,
-            ssh_port: 2222,
-            commands: vec!["echo ${IMG}".to_string()],
-            expect_output: vec!["${IMG}".to_string()],
-        }, &runner.vars);
+        let expanded = variables::expand_qemu_boot(
+            &QemuBoot {
+                image: "${IMG}".to_string(),
+                memory_mb: 1024,
+                timeout_seconds: 120,
+                ssh_port: 2222,
+                commands: vec!["echo ${IMG}".to_string()],
+                expect_output: vec!["${IMG}".to_string()],
+            },
+            &runner.vars,
+        );
 
         assert_eq!(expanded.image, "minimal-boot-v1");
         assert_eq!(expanded.commands, vec!["echo minimal-boot-v1"]);

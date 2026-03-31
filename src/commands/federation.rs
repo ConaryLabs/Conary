@@ -593,8 +593,8 @@ fn truncate(s: &str, max_len: usize) -> String {
 }
 
 fn peer_identity(url: &str, tls_fingerprint: Option<&str>) -> Result<(String, String)> {
-    let parsed = Url::parse(url)
-        .map_err(|e| anyhow::anyhow!("Invalid peer URL '{}': {}", url, e))?;
+    let parsed =
+        Url::parse(url).map_err(|e| anyhow::anyhow!("Invalid peer URL '{}': {}", url, e))?;
     let scheme = parsed.scheme();
     if scheme != "http" && scheme != "https" {
         bail!(
@@ -605,10 +605,7 @@ fn peer_identity(url: &str, tls_fingerprint: Option<&str>) -> Result<(String, St
 
     let peer_id = match scheme {
         "https" => normalize_tls_fingerprint(tls_fingerprint.ok_or_else(|| {
-            anyhow::anyhow!(
-                "HTTPS federation peer '{}' requires --tls-fingerprint",
-                url
-            )
+            anyhow::anyhow!("HTTPS federation peer '{}' requires --tls-fingerprint", url)
         })?)?,
         "http" => {
             if tls_fingerprint.is_some() {
@@ -650,9 +647,7 @@ mod tests {
     fn https_peer_requires_pinned_fingerprint() {
         let error = peer_identity("https://example.com:7891", None).unwrap_err();
         assert!(
-            error
-                .to_string()
-                .contains("requires --tls-fingerprint"),
+            error.to_string().contains("requires --tls-fingerprint"),
             "{error}"
         );
     }
@@ -680,9 +675,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            error
-                .to_string()
-                .contains("cannot use --tls-fingerprint"),
+            error.to_string().contains("cannot use --tls-fingerprint"),
             "{error}"
         );
     }

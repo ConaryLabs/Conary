@@ -91,11 +91,17 @@ impl GenerationMetadata {
     /// `root.erofs`.
     pub fn write_to(&self, gen_dir: &Path) -> Result<()> {
         let (signing_key_path, _) = generation_metadata_key_paths();
-        let signing_key = signing_key_path.exists().then_some(signing_key_path.as_path());
+        let signing_key = signing_key_path
+            .exists()
+            .then_some(signing_key_path.as_path());
         self.write_to_with_key_paths(gen_dir, signing_key)
     }
 
-    fn write_to_with_key_paths(&self, gen_dir: &Path, signing_key_path: Option<&Path>) -> Result<()> {
+    fn write_to_with_key_paths(
+        &self,
+        gen_dir: &Path,
+        signing_key_path: Option<&Path>,
+    ) -> Result<()> {
         use std::io::Write;
 
         let path = gen_dir.join(GENERATION_METADATA_FILE);
@@ -131,8 +137,12 @@ impl GenerationMetadata {
     /// Read metadata from the generation metadata file inside the given generation directory.
     pub fn read_from(gen_dir: &Path) -> Result<Self> {
         let (signing_key_path, public_key_path) = generation_metadata_key_paths();
-        let signing_key = signing_key_path.exists().then_some(signing_key_path.as_path());
-        let public_key = public_key_path.exists().then_some(public_key_path.as_path());
+        let signing_key = signing_key_path
+            .exists()
+            .then_some(signing_key_path.as_path());
+        let public_key = public_key_path
+            .exists()
+            .then_some(public_key_path.as_path());
         Self::read_from_with_key_paths(gen_dir, public_key, signing_key)
     }
 
@@ -151,7 +161,12 @@ impl GenerationMetadata {
         let path = gen_dir.join(GENERATION_METADATA_FILE);
         let json = std::fs::read_to_string(path)?;
         let metadata: Self = serde_json::from_str(&json)?;
-        verify_generation_metadata_signature(&metadata, gen_dir, public_key_path, signing_key_path)?;
+        verify_generation_metadata_signature(
+            &metadata,
+            gen_dir,
+            public_key_path,
+            signing_key_path,
+        )?;
         Ok(metadata)
     }
 }
@@ -166,9 +181,7 @@ fn generation_metadata_key_paths() -> (PathBuf, PathBuf) {
 
 fn canonical_metadata_bytes(metadata: &GenerationMetadata) -> Result<Vec<u8>> {
     crate::json::canonical_json(metadata).map_err(|e| {
-        crate::error::Error::ParseError(format!(
-            "Failed to canonicalize generation metadata: {e}"
-        ))
+        crate::error::Error::ParseError(format!("Failed to canonicalize generation metadata: {e}"))
     })
 }
 
@@ -190,12 +203,14 @@ fn load_generation_verifying_key(
                 path.display()
             ))
         })?;
-        return VerifyingKey::from_bytes(&public_key).map(Some).map_err(|e| {
-            crate::error::Error::ParseError(format!(
-                "Invalid generation metadata public key {}: {e}",
-                path.display()
-            ))
-        });
+        return VerifyingKey::from_bytes(&public_key)
+            .map(Some)
+            .map_err(|e| {
+                crate::error::Error::ParseError(format!(
+                    "Invalid generation metadata public key {}: {e}",
+                    path.display()
+                ))
+            });
     }
 
     if let Some(path) = signing_key_path {
@@ -510,9 +525,7 @@ mod tests {
         let private_path = dir.path().join("generation-metadata.private");
         let public_path = dir.path().join("generation-metadata.public");
         let keypair = SigningKeyPair::generate().with_key_id("test-generation-key");
-        keypair
-            .save_to_files(&private_path, &public_path)
-            .unwrap();
+        keypair.save_to_files(&private_path, &public_path).unwrap();
         (private_path, public_path)
     }
 
@@ -577,9 +590,8 @@ mod tests {
         )
         .unwrap();
 
-        let err =
-            GenerationMetadata::read_from_with_key_paths(tmp.path(), Some(&public_key), None)
-                .unwrap_err();
+        let err = GenerationMetadata::read_from_with_key_paths(tmp.path(), Some(&public_key), None)
+            .unwrap_err();
         assert!(err.to_string().contains("signature verification failed"));
     }
 
@@ -603,9 +615,8 @@ mod tests {
 
         metadata.write_to_with_key_paths(tmp.path(), None).unwrap();
 
-        let err =
-            GenerationMetadata::read_from_with_key_paths(tmp.path(), Some(&public_key), None)
-                .unwrap_err();
+        let err = GenerationMetadata::read_from_with_key_paths(tmp.path(), Some(&public_key), None)
+            .unwrap_err();
         assert!(err.to_string().contains("unsigned"));
     }
 

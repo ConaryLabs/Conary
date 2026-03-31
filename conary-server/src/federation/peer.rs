@@ -268,10 +268,12 @@ mod tests {
     fn test_https_peer_requires_pinned_fingerprint() {
         let result = Peer::from_endpoint("https://remi.conary.io:7891", PeerTier::RegionHub);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("requires a pinned tls_fingerprint"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("requires a pinned tls_fingerprint")
+        );
     }
 
     #[test]

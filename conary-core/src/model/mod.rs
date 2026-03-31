@@ -92,9 +92,9 @@ pub use state::{InstalledPackage, SystemState, capture_current_state, snapshot_t
 
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
-use tracing::warn;
 use std::path::Path;
 use thiserror::Error;
+use tracing::warn;
 
 /// Default path for the system model file
 pub const DEFAULT_MODEL_PATH: &str = "/etc/conary/system.toml";

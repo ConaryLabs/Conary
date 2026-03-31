@@ -132,9 +132,8 @@ impl FederationManifest {
             metadata: &self.metadata,
         };
 
-        conary_core::json::canonical_json(&canonical).map_err(|e| {
-            ManifestError::InvalidData(format!("canonical serialization failed: {e}"))
-        })
+        conary_core::json::canonical_json(&canonical)
+            .map_err(|e| ManifestError::InvalidData(format!("canonical serialization failed: {e}")))
     }
 
     /// Sign the manifest with the given key pair

@@ -255,9 +255,12 @@ impl RepositoryClient {
                     // Route through bounded streaming download to enforce the
                     // size cap on actual bytes received instead of trusting
                     // Content-Length.
-                    let bytes =
-                        read_response_bytes_with_limit(response, MAX_BYTES_RESPONSE_SIZE, &metadata_url)
-                            .await?;
+                    let bytes = read_response_bytes_with_limit(
+                        response,
+                        MAX_BYTES_RESPONSE_SIZE,
+                        &metadata_url,
+                    )
+                    .await?;
 
                     let metadata: RepositoryMetadata =
                         serde_json::from_slice(&bytes).map_err(|e| {

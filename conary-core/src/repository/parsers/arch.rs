@@ -60,8 +60,9 @@ impl ArchParser {
                 .verify_metadata_bytes(&db_url, &raw_bytes, "arch database")
                 .await?;
         }
-        decompress_auto(&raw_bytes)
-            .map_err(|error| Error::ParseError(format!("Failed to decompress {}: {}", db_url, error)))
+        decompress_auto(&raw_bytes).map_err(|error| {
+            Error::ParseError(format!("Failed to decompress {}: {}", db_url, error))
+        })
     }
 
     /// Parse a desc file from the tarball

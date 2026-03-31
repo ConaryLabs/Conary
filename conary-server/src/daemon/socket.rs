@@ -372,11 +372,7 @@ mod tests {
                 .unwrap();
         });
 
-        let mode = std::fs::metadata(&file_path)
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777;
+        let mode = std::fs::metadata(&file_path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
     }
 
