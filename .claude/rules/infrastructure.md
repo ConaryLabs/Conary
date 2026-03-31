@@ -66,6 +66,76 @@ Two servers, one CI system.
 | `scripts/rebuild-remi.sh` | Pull, build, restart Remi server (runs on Remi) |
 | `scripts/deploy-forge.sh` | Rsync source to Forge for testing |
 
+## Manual Source Deploys
+
+Use this when you want the latest source running on Forge or Remi without doing a tagged release.
+
+Prefer the MCP deployment tools when they are available in-session:
+- Forge: `deploy_source`, `rebuild_binary`, `restart_service`, `deploy_status`
+- Remi: `ci_dispatch` / other admin tools when they cover the change you need
+
+If MCP is unavailable, the current fallback playbook is manual rsync plus rebuild.
+
+### Forge source deploy
+
+Sync the local checkout to Forge:
+
+```bash
+./scripts/deploy-forge.sh
+```
+
+Then rebuild both binaries and restart the `conary-test` user service:
+
+```bash
+ssh peter@forge.conarylabs.com '
+  set -euo pipefail
+  cd ~/Conary
+  cargo build -p conary-test
+  cargo build
+  systemctl --user restart conary-test
+  sleep 2
+  systemctl --user is-active conary-test
+  curl -fsS http://127.0.0.1:9090/v1/health
+'
+```
+
+Notes:
+- This is a source refresh, not a release publish.
+- Rsyncing over Forge's mirrored git checkout can leave `~/Conary` dirty. That is acceptable for ad hoc service refreshes.
+
+### Remi source deploy
+
+Remi uses `/root/conary-src/` as an rsync'd source tree. Sync the local checkout:
+
+```bash
+rsync -az --delete \
+  --exclude target/ \
+  --exclude '.git/' \
+  --exclude '.worktrees/' \
+  /home/peter/Conary/ remi:/root/conary-src/
+```
+
+Then build and replace the live binary:
+
+```bash
+ssh remi '
+  set -euo pipefail
+  if [ -f /root/.cargo/env ]; then . /root/.cargo/env; fi
+  cd /root/conary-src
+  cargo build --release --features server
+  systemctl stop remi
+  install -m 755 target/release/conary /usr/local/bin/conary
+  systemctl start remi
+  sleep 3
+  systemctl is-active remi
+  curl -fsS http://127.0.0.1:8081/health
+'
+```
+
+Important:
+- Do not copy over `/usr/local/bin/conary` while `remi.service` is still running the old binary; that can fail with `Text file busy`.
+- This updates the live server binary only. Public release artifacts still require the tagged release flow below.
+
 ## Release Pipeline
 
 End-to-end flow: `release.sh` bumps versions and tags, GitHub Actions builds and deploys.
