@@ -64,33 +64,7 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     // Apply migrations in order, each wrapped in a transaction for atomicity
     for version in (current_version + 1)..=SCHEMA_VERSION {
         info!("Applying migration to version {}", version);
-
-        if migration_requires_foreign_keys_disabled(version) {
-            conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
-        }
-
-        let tx = conn.unchecked_transaction()?;
-        match apply_migration(&tx, version).and_then(|()| set_schema_version(&tx, version)) {
-            Ok(()) => tx.commit()?,
-            Err(e) => {
-                drop(tx); // rollback on drop
-                if migration_requires_foreign_keys_disabled(version) {
-                    let _ = conn.execute_batch("PRAGMA foreign_keys = ON;");
-                }
-                return Err(e);
-            }
-        };
-
-        if migration_requires_foreign_keys_disabled(version) {
-            conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-            let mut stmt = conn.prepare("PRAGMA foreign_key_check")?;
-            if stmt.exists([])? {
-                return Err(crate::error::Error::InitError(format!(
-                    "Foreign key check failed after migration version {}",
-                    version
-                )));
-            }
-        }
+        apply_migration_version(conn, version)?;
     }
 
     info!(
@@ -102,6 +76,49 @@ pub fn migrate(conn: &Connection) -> Result<()> {
 
 fn migration_requires_foreign_keys_disabled(version: i32) -> bool {
     version == 63
+}
+
+fn apply_migration_version(conn: &Connection, version: i32) -> Result<()> {
+    if migration_requires_foreign_keys_disabled(version) {
+        conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
+    }
+
+    let tx = conn.unchecked_transaction()?;
+    let result = apply_migration(&tx, version).and_then(|()| set_schema_version(&tx, version));
+
+    match result {
+        Ok(()) => tx.commit()?,
+        Err(e) => {
+            drop(tx); // rollback on drop
+            if migration_requires_foreign_keys_disabled(version) {
+                let _ = conn.execute_batch("PRAGMA foreign_keys = ON;");
+            }
+
+            let observed_version = get_schema_version(conn)?;
+            if observed_version >= version {
+                info!(
+                    "Migration version {} was already committed by another connection",
+                    version
+                );
+                return Ok(());
+            }
+
+            return Err(e);
+        }
+    };
+
+    if migration_requires_foreign_keys_disabled(version) {
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+        let mut stmt = conn.prepare("PRAGMA foreign_key_check")?;
+        if stmt.exists([])? {
+            return Err(crate::error::Error::InitError(format!(
+                "Foreign key check failed after migration version {}",
+                version
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 /// Apply a specific migration version
@@ -190,6 +207,18 @@ mod tests {
         (temp_file, conn)
     }
 
+    fn create_test_db_at_version(version: i32) -> (NamedTempFile, Connection) {
+        let (temp_file, conn) = create_test_db();
+        init_schema_version(&conn).unwrap();
+
+        for current in 1..=version {
+            apply_migration(&conn, current).unwrap();
+            set_schema_version(&conn, current).unwrap();
+        }
+
+        (temp_file, conn)
+    }
+
     #[test]
     fn test_schema_version_tracking() {
         let (_temp, conn) = create_test_db();
@@ -264,6 +293,38 @@ mod tests {
             )
             .unwrap();
         assert_eq!(status, "post_hooks_failed");
+    }
+
+    #[test]
+    fn test_apply_migration_version_handles_concurrent_completion() {
+        let (temp_file, conn_a) = create_test_db_at_version(64);
+        let conn_b = Connection::open(temp_file.path()).unwrap();
+
+        let stale_version = get_schema_version(&conn_a).unwrap();
+        assert_eq!(stale_version, 64);
+
+        apply_migration_version(&conn_b, 65).unwrap();
+        apply_migration_version(&conn_a, 65).unwrap();
+
+        let version_a = get_schema_version(&conn_a).unwrap();
+        let version_b = get_schema_version(&conn_b).unwrap();
+        assert_eq!(version_a, 65);
+        assert_eq!(version_b, 65);
+
+        let mut stmt = conn_a
+            .prepare("PRAGMA table_info(derived_packages)")
+            .unwrap();
+        let columns: Vec<String> = stmt
+            .query_map([], |row| row.get(1))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert!(columns.contains(&"last_built_version".to_string()));
+        assert!(columns.contains(&"last_built_parent_version".to_string()));
+        assert!(columns.contains(&"build_artifact_hash".to_string()));
+        assert!(columns.contains(&"build_artifact_path".to_string()));
+        assert!(columns.contains(&"build_artifact_size".to_string()));
     }
 
     #[test]

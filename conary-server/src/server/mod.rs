@@ -328,6 +328,18 @@ fn build_http_client(timeout: Duration, user_agent: &str) -> Result<reqwest::Cli
         .context("Failed to create HTTP client")
 }
 
+fn ensure_database_ready(db_path: &std::path::Path) -> Result<()> {
+    if !db_path.exists() {
+        tracing::info!("Initializing database at {:?}", db_path);
+        conary_core::db::init(db_path)?;
+        return Ok(());
+    }
+
+    tracing::info!("Checking database schema at {:?}", db_path);
+    let _conn = conary_core::db::open(db_path)?;
+    Ok(())
+}
+
 /// Start the Remi server from a configuration file
 pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
     let server_config = remi_config.to_server_config()?;
@@ -373,11 +385,10 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
         }
     }
 
-    // Initialize the database if it doesn't exist
-    if !server_config.db_path.exists() {
-        tracing::info!("Initializing database at {:?}", server_config.db_path);
-        conary_core::db::init(&server_config.db_path)?;
-    }
+    // Migrate the database before any background tasks start opening their own
+    // connections. This avoids startup races when multiple components touch an
+    // older schema concurrently.
+    ensure_database_ready(&server_config.db_path)?;
 
     let state = Arc::new(RwLock::new(ServerState::with_options(
         server_config.clone(),
@@ -714,11 +725,10 @@ pub async fn run_server(config: ServerConfig) -> Result<()> {
         );
     }
 
-    // Initialize the database if it doesn't exist
-    if !config.db_path.exists() {
-        tracing::info!("Initializing database at {:?}", config.db_path);
-        conary_core::db::init(&config.db_path)?;
-    }
+    // Migrate the database before any background tasks start opening their own
+    // connections. This avoids startup races when multiple components touch an
+    // older schema concurrently.
+    ensure_database_ready(&config.db_path)?;
 
     let state = Arc::new(RwLock::new(ServerState::new(config.clone())?));
 
