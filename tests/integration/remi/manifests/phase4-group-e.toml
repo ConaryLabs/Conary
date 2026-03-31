@@ -640,3 +640,56 @@ conary = "distro remove"
 
 [test.step.assert]
 exit_code = 0
+
+# --------------------------------------------------------------------------
+# T250: Takeover dry-run records a resumable plan on every supported PM
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T250"
+name = "takeover_dry_run_cross_distro"
+description = "Takeover dry-run writes a planning record and reports the ready-to-activate generation contract"
+timeout = 180
+group = "E"
+depends_on = ["T249"]
+
+[[test.step]]
+conary = "system takeover --dry-run"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["[DRY RUN] System Takeover Plan", "Stop ready to activate          : yes"]
+
+[[test.step]]
+run = "OP_FILE=$(find \"$(dirname \"${DB_PATH}\")/takeover/operations\" -name '*.json' | sort | tail -1); test -n \"$OP_FILE\" && grep -q '\"status\": \"Planning\"' \"$OP_FILE\" && grep -q '\"requested_level\": \"generation\"' \"$OP_FILE\" && echo takeover-dry-run-record"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "takeover-dry-run-record"
+
+# --------------------------------------------------------------------------
+# T251: Takeover owned path works across RPM, dpkg, and pacman
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T251"
+name = "takeover_owned_cross_distro"
+description = "Takeover ownership path completes across supported package managers without requiring activation"
+timeout = 300
+group = "E"
+depends_on = ["T250"]
+fatal = true
+
+[[test.step]]
+conary = "system takeover --up-to owned --yes"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["[COMPLETE] Phase 2 (Owned) finished.", "Conary now owns all non-blocked packages."]
+
+[[test.step]]
+run = "OP_FILE=$(find \"$(dirname \"${DB_PATH}\")/takeover/operations\" -name '*.json' | sort | tail -1); grep -q '\"requested_level\": \"owned\"' \"$OP_FILE\" && grep -q '\"status\": \"Incomplete\"' \"$OP_FILE\" && grep -q '\"completed_phases\": \\[' \"$OP_FILE\" && grep -q '\"Cas\"' \"$OP_FILE\" && grep -q '\"Owned\"' \"$OP_FILE\" && echo takeover-owned-record"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "takeover-owned-record"
