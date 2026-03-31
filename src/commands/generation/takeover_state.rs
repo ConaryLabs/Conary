@@ -114,10 +114,6 @@ impl TakeoverRecord {
         write_json_record(&self.path(db_path), self)
     }
 
-    pub fn load(path: &std::path::Path) -> Result<Self> {
-        load_json_record(path)
-    }
-
     pub fn load_latest_incomplete(db_path: &str) -> Result<Option<Self>> {
         let dir = takeover_operations_dir(db_path);
         if !dir.exists() {
@@ -222,11 +218,6 @@ impl TakeoverRecord {
 
     pub fn record_pm_removal_failures(&mut self, failures: Vec<String>) {
         self.pm_removal_failures.extend(failures);
-        self.touch();
-    }
-
-    pub fn push_warning(&mut self, warning: impl Into<String>) {
-        self.warnings.push(warning.into());
         self.touch();
     }
 

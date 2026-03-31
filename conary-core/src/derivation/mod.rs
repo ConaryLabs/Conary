@@ -23,6 +23,7 @@ pub mod pipeline;
 pub mod profile;
 pub mod recipe_hash;
 pub mod seed;
+pub mod seed_diff;
 pub mod substituter;
 #[cfg(test)]
 pub(crate) mod test_helpers;
@@ -30,7 +31,9 @@ pub(crate) mod test_helpers;
 pub use build_order::{BuildOrderError, BuildStep, Stage, compute_build_order};
 pub use capture::{CaptureError, capture_output};
 pub use compose::{ComposeError, compose_erofs, compose_file_entries, erofs_image_hash};
-pub use convergence::{ConvergenceReport, PackageComparison, compare_seed_builds};
+pub use convergence::{
+    ConvergenceReport, PackageComparison, compare_build_sets, compare_seed_builds, load_build_set,
+};
 pub use environment::{BuildEnvironment, EnvironmentError, MutableEnvironment};
 pub use executor::{DerivationExecutor, ExecutionResult, ExecutorError};
 pub use id::{DerivationError, DerivationId, DerivationInputs, SourceDerivationId};
@@ -44,3 +47,4 @@ pub use profile::{
 };
 pub use recipe_hash::{build_script_hash, expand_variables, source_hash};
 pub use seed::{Seed, SeedError, SeedMetadata, SeedSource, SeedValidation};
+pub use seed_diff::{SeedDiffReport, diff_seed_dirs};

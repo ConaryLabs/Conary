@@ -1,18 +1,10 @@
 // src/commands/operation_records.rs
 
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct OperationEnvelope<T> {
-    pub id: String,
-    pub kind: String,
-    pub started_at: String,
-    pub finished_at: Option<String>,
-    pub payload: T,
-}
+use serde::{Serialize, de::DeserializeOwned};
 
 pub fn write_json_record<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     if let Some(parent) = path.parent() {
@@ -36,6 +28,16 @@ pub fn takeover_operations_dir(db_path: &str) -> PathBuf {
 
 pub fn bootstrap_operations_dir(work_dir: &Path) -> PathBuf {
     work_dir.join("operations")
+}
+
+#[must_use]
+pub fn new_operation_id(prefix: &str) -> String {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let pid = std::process::id();
+    format!("{prefix}-{millis}-{pid}")
 }
 
 #[cfg(test)]

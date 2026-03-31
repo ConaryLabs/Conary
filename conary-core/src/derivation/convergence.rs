@@ -35,13 +35,26 @@ impl PackageComparison {
 #[derive(Debug)]
 pub struct ConvergenceReport {
     comparisons: Vec<PackageComparison>,
+    only_in_a: Vec<String>,
+    only_in_b: Vec<String>,
+    skipped_total: usize,
 }
 
 impl ConvergenceReport {
     /// Build a report from a pre-computed list of per-package comparisons.
     #[must_use]
-    pub fn from_comparisons(comparisons: Vec<PackageComparison>) -> Self {
-        Self { comparisons }
+    pub fn from_comparisons(
+        comparisons: Vec<PackageComparison>,
+        only_in_a: Vec<String>,
+        only_in_b: Vec<String>,
+    ) -> Self {
+        let skipped_total = only_in_a.len() + only_in_b.len();
+        Self {
+            comparisons,
+            only_in_a,
+            only_in_b,
+            skipped_total,
+        }
     }
 
     /// Total number of compared packages.
@@ -90,13 +103,31 @@ impl ConvergenceReport {
     pub fn comparisons(&self) -> &[PackageComparison] {
         &self.comparisons
     }
+
+    /// Packages present only in build set A.
+    #[must_use]
+    pub fn only_in_a(&self) -> &[String] {
+        &self.only_in_a
+    }
+
+    /// Packages present only in build set B.
+    #[must_use]
+    pub fn only_in_b(&self) -> &[String] {
+        &self.only_in_b
+    }
+
+    /// Number of skipped packages that did not have counterparts across both runs.
+    #[must_use]
+    pub fn skipped_total(&self) -> usize {
+        self.skipped_total
+    }
 }
 
 /// Query `derivation_index` for all builds produced by a given seed.
 ///
 /// The seed is identified by `build_env_hash`, which is set to the seed's
 /// SHA-256 hash at build time.
-fn builds_for_seed(conn: &Connection, seed_id: &str) -> Result<HashMap<String, String>> {
+pub fn load_build_set(conn: &Connection, seed_id: &str) -> Result<HashMap<String, String>> {
     let mut stmt = conn.prepare_cached(
         "SELECT package_name, output_hash
          FROM derivation_index
@@ -119,6 +150,41 @@ fn builds_for_seed(conn: &Connection, seed_id: &str) -> Result<HashMap<String, S
     Ok(map)
 }
 
+/// Compare two explicit build sets and report overlaps, mismatches, and skipped packages.
+#[must_use]
+pub fn compare_build_sets(
+    builds_a: HashMap<String, String>,
+    builds_b: HashMap<String, String>,
+) -> ConvergenceReport {
+    let mut only_in_a: Vec<String> = builds_a
+        .keys()
+        .filter(|pkg| !builds_b.contains_key(*pkg))
+        .cloned()
+        .collect();
+    let mut only_in_b: Vec<String> = builds_b
+        .keys()
+        .filter(|pkg| !builds_a.contains_key(*pkg))
+        .cloned()
+        .collect();
+
+    let mut comparisons: Vec<PackageComparison> = builds_a
+        .iter()
+        .filter_map(|(pkg, hash_a)| {
+            builds_b.get(pkg).map(|hash_b| PackageComparison {
+                package: pkg.clone(),
+                hash_a: hash_a.clone(),
+                hash_b: hash_b.clone(),
+            })
+        })
+        .collect();
+
+    only_in_a.sort();
+    only_in_b.sort();
+    comparisons.sort_by(|a, b| a.package.cmp(&b.package));
+
+    ConvergenceReport::from_comparisons(comparisons, only_in_a, only_in_b)
+}
+
 /// Compare output hashes from two seeds using the derivation index.
 ///
 /// Identifies builds from each seed via `build_env_hash`. Only packages that
@@ -132,24 +198,9 @@ pub fn compare_seed_builds(
     seed_a_id: &str,
     seed_b_id: &str,
 ) -> Result<ConvergenceReport> {
-    let builds_a = builds_for_seed(conn, seed_a_id)?;
-    let builds_b = builds_for_seed(conn, seed_b_id)?;
-
-    let mut comparisons: Vec<PackageComparison> = builds_a
-        .iter()
-        .filter_map(|(pkg, hash_a)| {
-            builds_b.get(pkg).map(|hash_b| PackageComparison {
-                package: pkg.clone(),
-                hash_a: hash_a.clone(),
-                hash_b: hash_b.clone(),
-            })
-        })
-        .collect();
-
-    // Stable ordering for deterministic reports / test assertions.
-    comparisons.sort_by(|a, b| a.package.cmp(&b.package));
-
-    Ok(ConvergenceReport::from_comparisons(comparisons))
+    let builds_a = load_build_set(conn, seed_a_id)?;
+    let builds_b = load_build_set(conn, seed_b_id)?;
+    Ok(compare_build_sets(builds_a, builds_b))
 }
 
 #[cfg(test)]
@@ -199,7 +250,7 @@ mod tests {
                 hash_b: "bbb".into(),
             },
         ];
-        let report = ConvergenceReport::from_comparisons(comparisons);
+        let report = ConvergenceReport::from_comparisons(comparisons, vec![], vec![]);
         assert!(report.is_fully_converged());
         assert_eq!(report.convergence_pct(), 100.0);
         assert_eq!(report.matched(), 2);
@@ -220,7 +271,7 @@ mod tests {
                 hash_b: "ccc".into(),
             },
         ];
-        let report = ConvergenceReport::from_comparisons(comparisons);
+        let report = ConvergenceReport::from_comparisons(comparisons, vec![], vec![]);
         assert!(!report.is_fully_converged());
         assert_eq!(report.matched(), 1);
         assert_eq!(report.mismatched(), 1);
@@ -230,9 +281,38 @@ mod tests {
 
     #[test]
     fn test_empty_convergence() {
-        let report = ConvergenceReport::from_comparisons(vec![]);
+        let report = ConvergenceReport::from_comparisons(vec![], vec![], vec![]);
         assert!(report.is_fully_converged());
         assert_eq!(report.convergence_pct(), 100.0);
+    }
+
+    #[test]
+    fn compare_build_sets_reports_only_in_a_and_only_in_b() {
+        let report = compare_build_sets(
+            HashMap::from([
+                ("bash".to_string(), "aaa".to_string()),
+                ("grep".to_string(), "bbb".to_string()),
+            ]),
+            HashMap::from([
+                ("bash".to_string(), "aaa".to_string()),
+                ("sed".to_string(), "ccc".to_string()),
+            ]),
+        );
+
+        assert_eq!(report.matched(), 1);
+        assert_eq!(report.only_in_a(), ["grep"]);
+        assert_eq!(report.only_in_b(), ["sed"]);
+        assert_eq!(report.skipped_total(), 2);
+    }
+
+    #[test]
+    fn compare_build_sets_diff_lists_mismatched_packages() {
+        let report = compare_build_sets(
+            HashMap::from([("bash".to_string(), "aaa".to_string())]),
+            HashMap::from([("bash".to_string(), "bbb".to_string())]),
+        );
+
+        assert_eq!(report.mismatches()[0].package, "bash");
     }
 
     #[test]
