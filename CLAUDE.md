@@ -53,6 +53,11 @@ Scopes are optional: `feat(resolver): add SAT backtracking`.
 
 **Publish:** Push a `v*` tag to trigger `.github/workflows/release.yml`, which builds CCS + native packages (RPM/DEB/Arch) in parallel containers and deploys to Remi. Forgejo's `release.yaml` automatically verifies the release landed. See `.claude/rules/infrastructure.md` for details.
 
+**Manual source deploys (non-release):**
+- Forge: `./scripts/deploy-forge.sh`, then on Forge run `cd ~/Conary && cargo build -p conary-test && cargo build && systemctl --user restart conary-test && curl -fsS http://127.0.0.1:9090/v1/health`
+- Remi: `rsync -az --delete --exclude target/ --exclude '.git/' --exclude '.worktrees/' /home/peter/Conary/ remi:/root/conary-src/`, then on Remi run `cd /root/conary-src && cargo build --release --features server && systemctl stop remi && install -m 755 target/release/conary /usr/local/bin/conary && systemctl start remi && curl -fsS http://127.0.0.1:8081/health`
+- Prefer the `remi-admin` / `conary-test` MCP deployment tools when they are available in-session; use the manual SSH/rsync path as the fallback playbook.
+
 ## Architecture Glossary
 
 - **Trove**: Core unit (package, component, collection)
