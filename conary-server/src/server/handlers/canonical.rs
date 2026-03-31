@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use super::run_blocking;
+use super::{open_handler_db, run_blocking};
 
 /// Canonical package lookup response
 #[derive(Debug, Serialize)]
@@ -54,7 +54,7 @@ pub async fn canonical_lookup(
     let db_path = state.read().await.config.db_path.clone();
 
     let result = run_blocking("canonical lookup", move || {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = open_handler_db(&db_path)?;
 
         use conary_core::db::models::{CanonicalPackage, PackageImplementation};
 
@@ -110,7 +110,7 @@ pub async fn canonical_search(
     let db_path = state.read().await.config.db_path.clone();
 
     let items = run_blocking("canonical search", move || {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = open_handler_db(&db_path)?;
 
         use conary_core::db::models::CanonicalPackage;
 
@@ -139,7 +139,7 @@ pub async fn groups_list(
     let db_path = state.read().await.config.db_path.clone();
 
     let items = run_blocking("groups list", move || {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = open_handler_db(&db_path)?;
 
         use conary_core::db::models::CanonicalPackage;
 
@@ -187,7 +187,7 @@ pub async fn canonical_map(
     let db_path = state.read().await.config.db_path.clone();
 
     let response = run_blocking("canonical_map", move || {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = open_handler_db(&db_path)?;
 
         let version: u32 = conary_core::db::models::get_metadata(
             &conn,

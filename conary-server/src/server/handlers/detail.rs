@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use super::run_blocking;
+use super::{open_handler_db, run_blocking};
 
 /// Full package detail response
 #[derive(Debug, Serialize)]
@@ -242,7 +242,7 @@ fn query_package_detail(
     distro: &str,
     name: &str,
 ) -> anyhow::Result<Option<PackageDetail>> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_handler_db(db_path)?;
 
     let repo_ids = resolve_all_repo_ids(&conn, distro)?;
     if repo_ids.is_empty() {
@@ -329,7 +329,7 @@ fn query_versions(
     distro: &str,
     name: &str,
 ) -> anyhow::Result<Vec<VersionSummary>> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_handler_db(db_path)?;
     query_versions_internal(&conn, distro, name)
 }
 
@@ -380,7 +380,7 @@ fn query_dependencies(
     distro: &str,
     name: &str,
 ) -> anyhow::Result<Vec<String>> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_handler_db(db_path)?;
 
     let repo_ids = resolve_all_repo_ids(&conn, distro)?;
     if repo_ids.is_empty() {
@@ -413,7 +413,7 @@ fn query_reverse_dependencies(
     distro: &str,
     name: &str,
 ) -> anyhow::Result<Vec<String>> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_handler_db(db_path)?;
 
     let repo_ids = resolve_all_repo_ids(&conn, distro)?;
     if repo_ids.is_empty() {
@@ -451,7 +451,7 @@ fn query_popular(
     distro: Option<&str>,
     limit: usize,
 ) -> anyhow::Result<Vec<PackageSummary>> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_handler_db(db_path)?;
 
     if let Some(distro) = distro {
         let counts = DownloadCount::popular(&conn, distro, limit)?;
@@ -501,7 +501,7 @@ fn query_recent(
     distro: Option<&str>,
     limit: usize,
 ) -> anyhow::Result<Vec<PackageSummary>> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_handler_db(db_path)?;
 
     if let Some(distro) = distro {
         let repo_ids = resolve_all_repo_ids(&conn, distro)?;
@@ -586,7 +586,7 @@ fn query_recent(
 }
 
 fn query_overview(db_path: &std::path::Path) -> anyhow::Result<OverviewStats> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_handler_db(db_path)?;
 
     // Total packages across all repos
     let total_packages: i64 = conn.query_row(

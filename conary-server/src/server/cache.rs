@@ -98,7 +98,7 @@ impl ChunkCache {
 
         // Run DB operation in blocking task since rusqlite is sync
         tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open(&db_path)?;
+            let conn = crate::server::open_runtime_db(&db_path)?;
             ChunkAccess::record_access(&conn, &hash)?;
             Ok::<_, anyhow::Error>(())
         })
@@ -134,7 +134,7 @@ impl ChunkCache {
         let size = data.len() as i64;
 
         tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open(&db_path)?;
+            let conn = crate::server::open_runtime_db(&db_path)?;
             let chunk = ChunkAccess::new(hash_owned, size);
             chunk.upsert(&conn)?;
             Ok::<_, anyhow::Error>(())
@@ -155,7 +155,7 @@ impl ChunkCache {
         let hashes = hashes.to_vec();
 
         tokio::task::spawn_blocking(move || {
-            if let Ok(conn) = conary_core::db::open(&db_path) {
+            if let Ok(conn) = crate::server::open_runtime_db(&db_path) {
                 let _ = ChunkAccess::protect_chunks(&conn, &hashes);
             }
         })
@@ -169,7 +169,7 @@ impl ChunkCache {
         let hashes = hashes.to_vec();
 
         tokio::task::spawn_blocking(move || {
-            if let Ok(conn) = conary_core::db::open(&db_path) {
+            if let Ok(conn) = crate::server::open_runtime_db(&db_path) {
                 let _ = ChunkAccess::unprotect_chunks(&conn, &hashes);
             }
         })
@@ -182,7 +182,7 @@ impl ChunkCache {
         let db_path = self.db_path.clone();
 
         let stats = tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open(&db_path)?;
+            let conn = crate::server::open_runtime_db(&db_path)?;
             ChunkAccess::get_stats(&conn)
         })
         .await??;
@@ -228,7 +228,7 @@ impl ChunkCache {
         let self_clone = self.clone();
 
         tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open(&db_path)?;
+            let conn = crate::server::open_runtime_db(&db_path)?;
 
             let mut freed = 0u64;
             let mut evicted = 0usize;

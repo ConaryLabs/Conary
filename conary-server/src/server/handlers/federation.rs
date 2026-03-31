@@ -11,7 +11,7 @@ use serde::Serialize;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use super::run_blocking;
+use super::{open_handler_db, run_blocking};
 
 #[derive(Serialize)]
 struct DirectoryPeer {
@@ -29,7 +29,7 @@ pub async fn directory(
     let db_path = state.read().await.config.db_path.clone();
 
     let peers = run_blocking("federation directory", move || {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = open_handler_db(&db_path)?;
         let mut stmt = conn.prepare(
             "SELECT id, endpoint, tier FROM federation_peers
              WHERE is_enabled = 1

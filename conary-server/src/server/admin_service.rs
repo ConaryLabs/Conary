@@ -20,10 +20,10 @@ use conary_core::db::models::audit_log::AuditEntry;
 use conary_core::db::models::federation_peer::FederationPeer;
 use serde::{Deserialize, Serialize};
 
+use crate::federation::{Peer, PeerTier};
 use crate::server::ServerState;
 use crate::server::auth::{generate_token, hash_token, validate_scopes};
 use crate::server::test_db;
-use crate::federation::{Peer, PeerTier};
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -161,11 +161,10 @@ async fn validate_external_url(url_str: &str) -> Result<(), ServiceError> {
     let port = parsed
         .port()
         .unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
-    let resolved_addrs: Vec<std::net::SocketAddr> =
-        tokio::net::lookup_host((host, port))
-            .await
-            .map_err(|e| ServiceError::BadRequest(format!("Failed to resolve '{host}': {e}")))?
-            .collect();
+    let resolved_addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|e| ServiceError::BadRequest(format!("Failed to resolve '{host}': {e}")))?
+        .collect();
 
     if resolved_addrs.is_empty() {
         return Err(ServiceError::BadRequest(format!(
@@ -754,7 +753,7 @@ pub async fn refresh_repositories(
         let db_path = db_path(state).await;
         let canonical_cfg = state.read().await.canonical_config.clone();
         blocking(move || {
-            let conn = conary_core::db::open(&db_path)?;
+            let conn = crate::server::open_runtime_db(&db_path)?;
             if crate::server::canonical_job::should_rebuild(
                 &conn,
                 canonical_cfg.rebuild_cooldown_minutes,

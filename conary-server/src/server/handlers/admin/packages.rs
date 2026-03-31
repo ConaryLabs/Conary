@@ -63,7 +63,7 @@ async fn atomic_replace_record(
     final_ccs_path: String,
 ) -> anyhow::Result<Option<conary_core::db::models::ConvertedPackage>> {
     tokio::task::spawn_blocking(move || {
-        let mut conn = conary_core::db::open(&db_path)?;
+        let mut conn = crate::server::open_runtime_db(&db_path)?;
         conary_core::db::transaction(&mut conn, |tx| {
             // Find existing record (if any) before deleting
             let existing = conary_core::db::models::ConvertedPackage::find_by_package_identity(
@@ -318,7 +318,7 @@ pub async fn upload_package(
         let version_for_update = package_version.clone();
         let fp = final_path_str.clone();
         let update_ok = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            let conn = conary_core::db::open(&db_path_for_update)?;
+            let conn = crate::server::open_runtime_db(&db_path_for_update)?;
             conn.execute(
                 "UPDATE converted_packages SET ccs_path = ?1 \
                  WHERE distro = ?2 AND package_name = ?3 AND package_version = ?4",
@@ -332,7 +332,10 @@ pub async fn upload_package(
             serving_path = final_path_str;
         } else {
             // UPDATE failed -- try to rename back so DB (staged path) stays valid.
-            if tokio::fs::rename(&final_ccs_path, &staged_path).await.is_ok() {
+            if tokio::fs::rename(&final_ccs_path, &staged_path)
+                .await
+                .is_ok()
+            {
                 // Rename-back succeeded: file is at staged_path, DB points there.
                 tracing::warn!("DB path update failed; reverted rename, serving from staged path");
                 serving_path = staged_path_str.clone();
@@ -340,7 +343,9 @@ pub async fn upload_package(
                 // Rename-back also failed: file is at final_ccs_path, DB points
                 // at staged_path (which no longer exists). Force-update DB to
                 // final_ccs_path as a last resort.
-                tracing::error!("DB update failed AND rename-back failed; forcing DB to final path");
+                tracing::error!(
+                    "DB update failed AND rename-back failed; forcing DB to final path"
+                );
                 let final_str = final_ccs_path.to_string_lossy().to_string();
                 let db2 = db_path.clone();
                 let d2 = distro.clone();
@@ -348,13 +353,18 @@ pub async fn upload_package(
                 let v2 = package_version.clone();
                 let fs2 = final_str.clone();
                 let repair_ok = tokio::task::spawn_blocking(move || -> bool {
-                    let Ok(conn) = conary_core::db::open(&db2) else { return false };
+                    let Ok(conn) = crate::server::open_runtime_db(&db2) else {
+                        return false;
+                    };
                     conn.execute(
                         "UPDATE converted_packages SET ccs_path = ?1 \
                          WHERE distro = ?2 AND package_name = ?3 AND package_version = ?4",
                         rusqlite::params![fs2, d2, n2, v2],
-                    ).is_ok()
-                }).await.unwrap_or(false);
+                    )
+                    .is_ok()
+                })
+                .await
+                .unwrap_or(false);
 
                 if repair_ok {
                     serving_path = final_str;
@@ -363,7 +373,9 @@ pub async fn upload_package(
                     // path, we cannot fix it. Return 500 rather than lying.
                     tracing::error!(
                         "All DB repair attempts failed for {}/{}/{}; row is inconsistent",
-                        distro, package_name, package_version
+                        distro,
+                        package_name,
+                        package_version
                     );
                     return json_error(
                         500,

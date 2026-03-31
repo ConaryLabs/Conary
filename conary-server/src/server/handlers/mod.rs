@@ -64,6 +64,17 @@ pub(crate) fn is_valid_hex_hash(s: &str) -> bool {
     s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// Open a database connection for request-time handler work.
+///
+/// Remi server startup ensures schema readiness before requests are served, so
+/// handler hot paths can use the runtime fast path instead of re-running
+/// migrations on each connection open.
+pub(crate) fn open_handler_db(
+    path: impl AsRef<std::path::Path>,
+) -> conary_core::Result<Connection> {
+    crate::server::open_runtime_db(path)
+}
+
 /// Check whether the request carries a valid bearer token with admin scope.
 ///
 /// Replicates the core of `auth_middleware` inline so that GET/HEAD on the
@@ -91,7 +102,7 @@ pub(crate) async fn require_admin_token(
     let db_path = db_path.to_path_buf();
 
     let valid = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
-        let conn = conary_core::db::open(&db_path)?;
+        let conn = open_handler_db(&db_path)?;
         let result = conn.query_row(
             "SELECT scopes FROM admin_tokens WHERE token_hash = ?1",
             rusqlite::params![token_hash],
@@ -274,6 +285,30 @@ pub fn find_repositories_for_distro(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn open_handler_db_requires_existing_ready_database() {
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        let db_path = tmp.path().join("missing.db");
+
+        let err = open_handler_db(&db_path).expect_err("missing db should not auto-initialize");
+        assert!(
+            err.to_string().contains("Database not found"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn open_handler_db_opens_initialized_database() {
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        let db_path = tmp.path().join("conary.db");
+
+        conary_core::db::init(&db_path).expect("initialize db");
+        let conn = open_handler_db(&db_path).expect("open initialized db");
+
+        let version = conary_core::db::schema::get_schema_version(&conn).expect("schema version");
+        assert_eq!(version, conary_core::db::schema::SCHEMA_VERSION);
+    }
 
     #[test]
     fn test_human_bytes_bytes() {

@@ -22,6 +22,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::warn;
 
+use super::open_handler_db;
+
 /// GET /v1/{distro}/tuf/timestamp.json
 pub async fn get_timestamp(
     State(state): State<Arc<RwLock<ServerState>>>,
@@ -161,7 +163,7 @@ async fn get_tuf_metadata(
 // --- Database query functions (run on blocking threads) ---
 
 fn query_latest_root(db_path: &std::path::Path, distro: &str) -> anyhow::Result<Option<String>> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_handler_db(db_path)?;
     Ok(conn
         .query_row(
             "SELECT tr.signed_metadata FROM tuf_roots tr
@@ -179,7 +181,7 @@ fn query_versioned_root(
     distro: &str,
     version: i64,
 ) -> anyhow::Result<Option<String>> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_handler_db(db_path)?;
     Ok(conn
         .query_row(
             "SELECT tr.signed_metadata FROM tuf_roots tr
@@ -196,7 +198,7 @@ fn query_tuf_role_metadata(
     distro: &str,
     role: &str,
 ) -> anyhow::Result<Option<String>> {
-    let conn = conary_core::db::open(db_path)?;
+    let conn = open_handler_db(db_path)?;
     Ok(conn
         .query_row(
             "SELECT tm.signed_metadata FROM tuf_metadata tm
