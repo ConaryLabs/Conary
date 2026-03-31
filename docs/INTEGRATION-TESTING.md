@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-03-28
-revision: 6
-summary: Clarify what Phase 4 proves versus which flows remain intentionally preview-only
+last_updated: 2026-03-31
+revision: 7
+summary: Clarify what the manifest suites prove, plus the command-level bootstrap workflow tests
 ---
 
 # Integration Testing
@@ -92,7 +92,7 @@ Requires test fixture packages published to Remi.
 | Group | Range | Category |
 |-------|-------|----------|
 | A | T38-T50 | Deep install flow (fixture packages, update, rollback, orphans, pin) |
-| B | T51-T57 | Generation lifecycle (build, list, switch, rollback, GC, takeover) |
+| B | T51-T57 | Generation lifecycle (build, list, switch, rollback, GC, ready-to-activate takeover) |
 | C | T58-T61 | Bootstrap pipeline (dry-run, stage 0) |
 | D | T62-T66 | Recipe & build (cook, PKGBUILD convert, hermetic build) |
 | E | T67-T71 | Remi client (sparse index, chunk fetch, OCI manifests) |
@@ -121,17 +121,25 @@ cleanly with an explicit message rather than pretending it is production-ready.
 | B | T177-T195 | Label, model, collection, derive |
 | C | T196-T213 | CCS, bootstrap, cache, query, repo management |
 | D | T221-T255 | Provenance, capability, trust, system ops, federation, automation |
-| E | T230-T249 | Cross-distro compatibility |
+| E | T230-T251 | Cross-distro compatibility |
 
 Phase 4 is intentionally mixed:
 
 - Positive-path coverage proves real flows such as tracked-config backup/restore,
   label mutation, trigger mutation, `ccs shell`, `ccs run`, selective CCS
   component installs, native local RPM/DEB/Arch installs, TUF bootstrap with a
-  signed test root, provenance diff, and pinned-fingerprint federation peers.
+  signed test root, provenance diff, pinned-fingerprint federation peers,
+  ready-to-activate takeover, and the cross-distro takeover ownership ladder.
 - Preview-only flows are still exercised, but the assertions check for the
   expected explanatory output. Current examples are automation history and
   persisting automation configuration changes.
+
+In addition to the container-backed suites, `tests/bootstrap_workflow.rs`
+exercises the `conary` binary directly for manifest-run record loading,
+`bootstrap verify-convergence`, and `bootstrap diff-seeds` using synthetic
+completed-run metadata. Those tests do not replace the container suites, but
+they do keep the command contracts green even when a container runtime is not
+available.
 
 ## QEMU Boot Tests
 

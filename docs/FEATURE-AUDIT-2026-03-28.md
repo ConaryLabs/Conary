@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-03-28
-revision: 1
+last_updated: 2026-03-31
+revision: 2
 summary: Track whether active feature claims are implemented, command-aligned, and positively covered
 ---
 
@@ -29,8 +29,8 @@ Status labels:
 | Federation peer management | `working` | unit tests + Phase 4 Group D | HTTPS peers now require `--tls-fingerprint`; peer list, status, stats, test, add, and remove are covered. |
 | Declarative system model | `working` | `tests/features.rs`, Phase 4 Groups A/B/E | Diff, apply, snapshot, and replatform planning are all exercised. |
 | System generations | `working` | generation tests + Phase 2/3 coverage | Includes build, list, switch, rollback, GC, verity, and pending-build protection. |
-| Takeover | `alpha` | dry-run and bounded pipeline coverage | `system adopt --system --full` is the stable path; full takeover remains best-effort on real machines. |
-| Bootstrap pipeline | `alpha` | command-surface and phase coverage | Canonical commands are `cross-tools`, `temp-tools`, `system`, `config`, `tier2`, and `image`. |
+| Takeover | `partial` | unit tests + Phase 2/4 manifest coverage | `generation` now stops ready to activate and uses `conary system generation switch <N>` for activation; real-machine proof still matters more than optimistic wording. |
+| Bootstrap pipeline | `partial` | command tests + `tests/bootstrap_workflow.rs` | Manifest-driven runs now persist operation records, `verify-convergence` is run-workdir based, and `diff-seeds` reports metadata/hash/top-level artifact differences. |
 | Federation mDNS discovery | `partial` | server-side tests | Discovery is gated by allowlists or authenticated transport and remains a server-oriented path. |
 | Automation status / check / config preview | `partial` | Phase 4 Group D | Status and preview flows work, but persistence is intentionally limited. |
 | Automation history / persistent configure / daemon background mode | `partial` | explicit “not yet implemented” outputs | Keep docs narrow until those paths gain real storage and lifecycle support. |
@@ -40,7 +40,8 @@ Status labels:
 - Do not add new public examples for removed or nonexistent commands such as
   the old phase-style bootstrap names, the legacy group-update spelling, or the
   retired capability-enforcement alias.
-- Keep takeover and bootstrap wording explicitly alpha until the real-machine
-  success rate is good enough to prove with positive integration coverage.
+- Keep takeover and bootstrap wording narrow and operationally specific.
+  Avoid blanket “stable everywhere” claims until the real-machine proof set is
+  consistently green.
 - Treat automation configuration persistence and history as preview-only until
   they have backing storage and passing happy-path tests.

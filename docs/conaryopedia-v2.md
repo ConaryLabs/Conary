@@ -668,12 +668,13 @@ For full Conary management, you can **take over** packages from the system packa
 ```bash
 conary system takeover --up-to cas        # Adopt + CAS-back all packages (PM untouched)
 conary system takeover --up-to owned      # CAS + remove from system PM database
-conary system takeover                    # Full takeover: CAS + PM removal + generation + boot
+conary system takeover                    # Default: build generation + boot entry, then stop ready to activate
 conary system takeover --dry-run          # Preview what would happen
 conary system takeover --yes              # Skip confirmation
+conary system generation switch 1         # Activate a prepared takeover generation
 ```
 
-The pipeline is progressive: each level includes all previous levels. After the `owned` level, the system package manager will no longer track those packages. The `generation` level (default) also builds an EROFS generation and live-switches to it.
+The pipeline is progressive: each level includes all previous levels. After the `owned` level, the system package manager will no longer track those packages. The `generation` level (default) builds an EROFS generation and boot entry, then stops ready to activate. Activation is an explicit follow-up via `conary system generation switch <N>`.
 
 #### Sync Hooks
 
@@ -4583,7 +4584,8 @@ conary bootstrap tier2                   # Phase 6: BLFS + self-hosting
 conary bootstrap seed --from /path       # Package phase output as seed
 conary bootstrap seed --from-adopted     # Adopt current system as seed
 conary bootstrap run conaryos.toml --seed /path  # Derivation pipeline
-conary bootstrap verify-convergence      # Compare builds from two seeds
+conary bootstrap verify-convergence --run-a ./bootstrap-a --run-b ./bootstrap-b
+conary bootstrap diff-seeds ./seed-a ./seed-b
 conary bootstrap dry-run                 # Validate pipeline without building
 conary bootstrap status                  # Show current progress
 conary bootstrap resume                  # Resume from last checkpoint

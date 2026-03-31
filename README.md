@@ -66,8 +66,8 @@ conary install nginx
 | Immutable generations | No | No | Yes (generations) | Yes (EROFS + composefs) |
 | Atomic transactions | No | No | Yes | Yes |
 | Rollback to any state | No | No | Yes (generations) | Yes (snapshots + generations) |
-| System takeover | No | No | No | Yes (alpha) |
-| Bootstrap from scratch | No | No | Yes | Yes (alpha) |
+| System takeover | No | No | No | Yes (partial) |
+| Bootstrap from scratch | No | No | Yes | Yes (partial) |
 | Multi-format (RPM + DEB + Arch) | No | No | No | Yes |
 | Derived packages | No | No | Yes (overlays) | Yes |
 | Component model (install :devel only) | No | Split packages | No | Automatic |
@@ -142,13 +142,15 @@ conary system generation info 2      # Detailed info about generation 2
 
 ### System Takeover
 
-Convert an existing Linux installation into a Conary-managed system. The stable adoption path today is `conary system adopt --system --full`, which bulk-imports packages into Conary with CAS backing. The progressive `system takeover` pipeline is available behind `--up-to cas|owned|generation`, but full boot-integrated takeover should still be treated as alpha and best-effort on real machines.
+Convert an existing Linux installation into a Conary-managed system. The stable adoption path today is `conary system adopt --system --full`, which bulk-imports packages into Conary with CAS backing. The progressive `system takeover` pipeline now supports `--up-to cas|owned|generation`; the `generation` level builds a bootable generation and boot entry, then stops ready to activate instead of switching live automatically.
 
 ```bash
 conary system adopt --system --full  # Bulk adoption with CAS backing
 conary system takeover --dry-run     # Preview the takeover plan
 conary system takeover --up-to cas   # Adopt + CAS-back packages (PM untouched)
 conary system takeover --up-to owned # Remove non-blocked packages from the system PM
+conary system takeover --up-to generation --yes
+conary system generation switch 1    # Activate the prepared generation explicitly
 ```
 
 ### Atomic Transactions
@@ -228,7 +230,7 @@ conary install openssl:devel      # Headers and libs for building
 
 ### Bootstrap System
 
-Build a complete Conary-managed Linux system from scratch. The current public command surface is `cross-tools`, `temp-tools`, `system`, `config`, `image`, and optional `tier2`, with `bootstrap run` available for manifest-driven derivation pipelines. Targets x86_64, aarch64, and riscv64.
+Build a complete Conary-managed Linux system from scratch. The current public command surface is `cross-tools`, `temp-tools`, `system`, `config`, `image`, and optional `tier2`, with `bootstrap run` available for manifest-driven derivation pipelines. Completed manifest-driven runs now persist operation-scoped artifacts under `<work_dir>/operations/<op-id>/`, and the comparison commands operate on those completed run workdirs. Targets x86_64, aarch64, and riscv64.
 
 ```bash
 conary bootstrap init --target x86_64
@@ -244,6 +246,8 @@ conary bootstrap status             # Progress report
 conary bootstrap resume             # Resume from last checkpoint
 conary bootstrap system --skip-verify   # Skip checksum enforcement
 conary bootstrap run conaryos.toml --seed ./seed    # Manifest-driven derivation pipeline
+conary bootstrap verify-convergence --run-a ./bootstrap-a --run-b ./bootstrap-b
+conary bootstrap diff-seeds ./seed-a ./seed-b
 ```
 
 ### Derived Packages
