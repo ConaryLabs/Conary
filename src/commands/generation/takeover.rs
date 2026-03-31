@@ -6,13 +6,15 @@
 //!
 //! * **cas**        -- Adopt + CAS-back all packages (PM untouched)
 //! * **owned**      -- CAS + remove from system PM database
-//! * **generation** -- CAS + PM removal + build generation + boot + live switch
+//! * **generation** -- CAS + PM removal + build generation + boot entry + ready to activate
 
 use super::super::open_db;
-use super::boot::write_boot_entry;
+use super::boot::{detect_bootloader, write_boot_entry};
 use super::builder::build_generation;
 use super::metadata::generations_dir;
-use super::switch::switch_live;
+use super::takeover_state::{
+    BootEntryOutcome, TakeoverInventory, TakeoverPhase, TakeoverRecord, TakeoverStatus,
+};
 use crate::cli::TakeoverLevel;
 use crate::commands::adopt::{FileInfoTuple, compute_file_hash};
 use crate::commands::install::is_package_blocked;
@@ -48,6 +50,12 @@ pub struct TakeoverPlan {
     pub blocked: Vec<String>,
     /// Total packages the system PM reports
     pub total_system_packages: usize,
+}
+
+#[derive(Debug, Default)]
+struct OwnershipTransferReport {
+    query_failures: Vec<String>,
+    pm_removal_failures: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -137,7 +145,7 @@ pub fn plan_takeover(conn: &rusqlite::Connection) -> Result<TakeoverPlan> {
 /// 2. **Owned**      -- Everything in Cas, then remove non-blocked packages
 ///    from the system PM database (files stay on disk, Conary owns them).
 /// 3. **Generation** -- Everything in Owned, then build an EROFS generation,
-///    write a boot entry, and live-switch.
+///    write a boot entry, and stop ready to activate.
 pub async fn cmd_system_takeover(
     db_path: &str,
     level: TakeoverLevel,
@@ -177,10 +185,25 @@ pub async fn cmd_system_takeover(
 
     // -- Plan -----------------------------------------------------------------
     let pm = SystemPackageManager::detect();
+    let bootloader = detect_bootloader();
     let mut plan = {
         let conn = open_db(db_path)?;
         plan_takeover(&conn)?
     };
+    let mut record = TakeoverRecord::load_latest_incomplete(db_path)?.unwrap_or_else(|| {
+        TakeoverRecord::planned(
+            db_path,
+            takeover_level_name(level),
+            takeover_inventory_from_plan(&plan),
+            pm.display_name(),
+            bootloader_name(bootloader),
+        )
+    });
+    record.requested_level = takeover_level_name(level).to_string();
+    record.inventory = takeover_inventory_from_plan(&plan);
+    record.discovered_package_manager = pm.display_name().to_string();
+    record.discovered_bootloader = bootloader_name(bootloader).to_string();
+    record.save(db_path)?;
 
     // Print inventory summary
     println!("System inventory:");
@@ -244,6 +267,8 @@ pub async fn cmd_system_takeover(
     // =========================================================================
     println!();
     println!("[Phase 1] CAS-backing all packages ...");
+    record.start_phase(TakeoverPhase::Cas);
+    record.save(db_path)?;
 
     // 1a. Adopt un-tracked packages (bulk, with CAS)
     if plan.not_tracked.is_empty() {
@@ -253,7 +278,13 @@ pub async fn cmd_system_takeover(
             "  Adopting {} un-tracked packages ...",
             plan.not_tracked.len()
         );
-        crate::commands::cmd_adopt_system(db_path, true, false, None, None, false).await?;
+        if let Err(error) =
+            crate::commands::cmd_adopt_system(db_path, true, false, None, None, false).await
+        {
+            record.mark_failed(format!("CAS adoption phase failed: {error}"));
+            record.save(db_path)?;
+            return Err(error);
+        }
         info!("Bulk adoption complete");
 
         // Only add packages to Phase 2 removal if they were actually adopted.
@@ -276,11 +307,18 @@ pub async fn cmd_system_takeover(
             .cloned()
             .cloned()
             .collect();
-        let failed = eligible.len() - newly_adopted.len();
-        if failed > 0 {
+        let failed_adoptions: Vec<String> = eligible
+            .iter()
+            .filter(|p| !now_tracked.contains(p.as_str()))
+            .cloned()
+            .cloned()
+            .collect();
+        if !failed_adoptions.is_empty() {
             println!(
-                "  [WARN] {failed} packages failed adoption and will not be removed from system PM"
+                "  [WARN] {} packages failed adoption and will not be removed from system PM",
+                failed_adoptions.len()
             );
+            record.record_adoption_failures(failed_adoptions);
         }
         plan.needs_pm_removal.extend(newly_adopted);
     }
@@ -293,11 +331,18 @@ pub async fn cmd_system_takeover(
             "  Upgrading {} track-only packages to CAS ...",
             plan.needs_cas_upgrade.len()
         );
-        upgrade_to_cas_backed(db_path, &plan.needs_cas_upgrade, &pm)?;
+        let cas_upgrade_failures = upgrade_to_cas_backed(db_path, &plan.needs_cas_upgrade, &pm)?;
+        if !cas_upgrade_failures.is_empty() {
+            record.record_cas_upgrade_failures(cas_upgrade_failures);
+        }
         info!("CAS upgrade complete");
     }
+    record.finish_phase(TakeoverPhase::Cas);
+    record.save(db_path)?;
 
     if matches!(level, TakeoverLevel::Cas) {
+        record.mark_incomplete("Takeover stopped at the requested CAS phase.");
+        record.save(db_path)?;
         println!();
         println!("[COMPLETE] Phase 1 (CAS) finished.");
         println!("All system packages are now adopted and CAS-backed.");
@@ -305,7 +350,9 @@ pub async fn cmd_system_takeover(
         println!();
         println!("Next steps:");
         println!("  conary system takeover --up-to owned   - Remove packages from system PM");
-        println!("  conary system takeover --up-to generation - Full takeover with generation");
+        println!(
+            "  conary system takeover --up-to generation - Build generation and prepare activation"
+        );
         return Ok(());
     }
 
@@ -314,52 +361,107 @@ pub async fn cmd_system_takeover(
     // =========================================================================
     println!();
     println!("[Phase 2] Taking ownership (removing from system PM) ...");
+    record.start_phase(TakeoverPhase::Owned);
+    record.save(db_path)?;
 
     if plan.needs_pm_removal.is_empty() {
         info!("No packages need PM removal");
     } else {
-        take_ownership(db_path, &plan.needs_pm_removal, pm)?;
+        let ownership_report = take_ownership(db_path, &plan.needs_pm_removal, pm)?;
+        if !ownership_report.query_failures.is_empty() {
+            record.record_ownership_query_failures(ownership_report.query_failures);
+        }
+        if !ownership_report.pm_removal_failures.is_empty() {
+            record.record_pm_removal_failures(ownership_report.pm_removal_failures);
+        }
         info!("Ownership transfer complete");
     }
+    record.finish_phase(TakeoverPhase::Owned);
+    record.save(db_path)?;
 
     if matches!(level, TakeoverLevel::Owned) {
+        record.mark_incomplete("Takeover stopped at the requested ownership phase.");
+        record.save(db_path)?;
         println!();
         println!("[COMPLETE] Phase 2 (Owned) finished.");
         println!("Conary now owns all non-blocked packages. System PM records removed.");
         println!();
         println!("Next steps:");
-        println!("  conary system takeover --up-to generation - Build generation and switch");
+        println!(
+            "  conary system takeover --up-to generation - Build generation and prepare activation"
+        );
         return Ok(());
     }
 
     // =========================================================================
-    // Phase 3: Generation (build + boot + switch)
+    // Phase 3: Generation (build + boot entry + ready to activate)
     // =========================================================================
     println!();
     println!("[Phase 3] Building generation ...");
+    record.start_phase(TakeoverPhase::Generation);
+    record.save(db_path)?;
 
     let conn = open_db(db_path).context("Failed to open database for generation build")?;
-    let gen_number = build_generation(&conn, db_path, "System takeover -- initial generation")?;
+    let gen_number = match build_generation(&conn, db_path, "System takeover -- initial generation")
+    {
+        Ok(number) => number,
+        Err(error) => {
+            record.mark_failed(format!("Generation build failed: {error}"));
+            record.save(db_path)?;
+            return Err(error);
+        }
+    };
     info!("Built generation {gen_number}");
 
     println!("  Writing boot entry ...");
-    if let Err(e) = write_boot_entry(gen_number) {
-        warn!("Failed to write boot entry: {e}");
-        println!("[WARN] Could not write boot entry: {e}");
-        println!("       You may need to configure your bootloader manually.");
-    }
-
-    println!("  Switching to generation {gen_number} ...");
-    switch_live(gen_number)?;
-    info!("Live switch to generation {gen_number} complete");
+    let boot_entry_outcome = match write_boot_entry(gen_number) {
+        Ok(()) => BootEntryOutcome::Written,
+        Err(error) => {
+            warn!("Failed to write boot entry: {error}");
+            println!("[WARN] Could not write boot entry: {error}");
+            println!("       You may need to configure your bootloader manually.");
+            BootEntryOutcome::Failed(error.to_string())
+        }
+    };
+    record.finish_generation(gen_number, boot_entry_outcome);
+    record.save(db_path)?;
 
     println!();
-    println!("[COMPLETE] System takeover finished (generation {gen_number}).");
+    match record.status {
+        TakeoverStatus::ReadyToActivate => {
+            println!(
+                "[COMPLETE] System takeover built generation {gen_number} and is ready to activate."
+            );
+            println!("Next step:");
+            println!("  conary system generation switch {gen_number}");
+        }
+        TakeoverStatus::CompletedWithWarnings => {
+            println!(
+                "[WARN] System takeover built generation {gen_number}, but boot integration needs manual follow-up."
+            );
+            println!("After bootloader follow-up, activate with:");
+            println!("  conary system generation switch {gen_number}");
+        }
+        TakeoverStatus::Incomplete => {
+            println!(
+                "[WARN] System takeover built generation {gen_number}, but the operation is incomplete."
+            );
+            println!(
+                "Inspect the recorded failures, then rerun takeover or activate manually if appropriate:"
+            );
+            println!("  conary system generation switch {gen_number}");
+        }
+        _ => {
+            println!(
+                "[COMPLETE] System takeover finished generation preparation for {gen_number}."
+            );
+        }
+    }
     println!();
     println!("Next steps:");
-    println!("  conary generation list       - View generations");
-    println!("  conary generation info {gen_number}    - Inspect this generation");
-    println!("  conary verify                - Verify system integrity");
+    println!("  conary system generation list       - View generations");
+    println!("  conary system generation info {gen_number}    - Inspect this generation");
+    println!("  conary verify                      - Verify system integrity");
 
     Ok(())
 }
@@ -374,7 +476,7 @@ fn upgrade_to_cas_backed(
     db_path: &str,
     packages: &[String],
     pm: &SystemPackageManager,
-) -> Result<()> {
+) -> Result<Vec<String>> {
     let cas = CasStore::new(objects_dir(db_path))?;
 
     // Pre-fetch file lists and perform CAS writes (hardlinks) OUTSIDE the
@@ -386,11 +488,13 @@ fn upgrade_to_cas_backed(
     }
 
     let mut entries: Vec<CasUpgradeEntry> = Vec::with_capacity(packages.len());
+    let mut skipped = Vec::new();
     for name in packages {
         let files = match query_package_files(*pm, name) {
             Ok(f) => f,
             Err(e) => {
                 warn!("Skipping CAS upgrade for '{name}': {e}");
+                skipped.push(name.clone());
                 continue;
             }
         };
@@ -458,12 +562,16 @@ fn upgrade_to_cas_backed(
         Ok(())
     })?;
 
-    Ok(())
+    Ok(skipped)
 }
 
 /// Take ownership of packages: mark as `Taken` in the DB, then remove from
 /// the system PM database. DB commit happens BEFORE PM removal for safety.
-fn take_ownership(db_path: &str, packages: &[String], pm: SystemPackageManager) -> Result<()> {
+fn take_ownership(
+    db_path: &str,
+    packages: &[String],
+    pm: SystemPackageManager,
+) -> Result<OwnershipTransferReport> {
     let cas = CasStore::new(objects_dir(db_path))?;
 
     // Pre-capture file lists and perform CAS writes OUTSIDE the transaction.
@@ -475,6 +583,7 @@ fn take_ownership(db_path: &str, packages: &[String], pm: SystemPackageManager) 
     }
 
     let mut entries: Vec<OwnershipEntry> = Vec::with_capacity(packages.len());
+    let mut report = OwnershipTransferReport::default();
     for name in packages {
         match query_package_files(pm, name) {
             Ok(files) => {
@@ -501,6 +610,7 @@ fn take_ownership(db_path: &str, packages: &[String], pm: SystemPackageManager) 
             }
             Err(e) => {
                 warn!("Skipping ownership transfer for '{name}': {e}");
+                report.query_failures.push(name.clone());
             }
         }
     }
@@ -579,7 +689,8 @@ fn take_ownership(db_path: &str, packages: &[String], pm: SystemPackageManager) 
         }
     }
 
-    Ok(())
+    report.pm_removal_failures = failed;
+    Ok(report)
 }
 
 // ---------------------------------------------------------------------------
@@ -632,7 +743,35 @@ fn print_dry_run(plan: &TakeoverPlan, pm: &SystemPackageManager, level: Takeover
         println!("Level: generation");
         println!("  Build EROFS generation          : yes");
         println!("  Write boot entry                : yes");
-        println!("  Live switch                     : yes");
+        println!("  Stop ready to activate          : yes");
+    }
+}
+
+fn takeover_inventory_from_plan(plan: &TakeoverPlan) -> TakeoverInventory {
+    TakeoverInventory {
+        already_cas_backed: plan.already_cas_backed.clone(),
+        needs_cas_upgrade: plan.needs_cas_upgrade.clone(),
+        not_tracked: plan.not_tracked.clone(),
+        already_owned: plan.already_owned.clone(),
+        needs_pm_removal: plan.needs_pm_removal.clone(),
+        blocked: plan.blocked.clone(),
+        total_system_packages: plan.total_system_packages,
+    }
+}
+
+fn takeover_level_name(level: TakeoverLevel) -> &'static str {
+    match level {
+        TakeoverLevel::Cas => "cas",
+        TakeoverLevel::Owned => "owned",
+        TakeoverLevel::Generation => "generation",
+    }
+}
+
+fn bootloader_name(bootloader: super::boot::BootLoader) -> &'static str {
+    match bootloader {
+        super::boot::BootLoader::Bls => "bls",
+        super::boot::BootLoader::Grub => "grub",
+        super::boot::BootLoader::None => "none",
     }
 }
 
