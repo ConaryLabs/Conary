@@ -119,8 +119,7 @@ impl SandboxMode {
 /// Default timeout for scriptlet execution (60 seconds)
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 static SECCOMP_WARN_OVERRIDE: AtomicBool = AtomicBool::new(false);
-const LIVE_SANDBOX_PROTECTED_ETC_FILES: [&str; 3] =
-    ["/etc/passwd", "/etc/shadow", "/etc/sudoers"];
+const LIVE_SANDBOX_PROTECTED_ETC_FILES: [&str; 3] = ["/etc/passwd", "/etc/shadow", "/etc/sudoers"];
 
 /// Package format types for argument handling
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -498,9 +497,7 @@ impl ScriptletExecutor {
                     chroot_mount_private_flags(),
                     None,
                 )
-                .map_err(|e| {
-                    std::io::Error::other(format!("mount --make-rprivate failed: {e}"))
-                })?;
+                .map_err(|e| std::io::Error::other(format!("mount --make-rprivate failed: {e}")))?;
 
                 // 2. chroot into the target root
                 nix::unistd::chroot(&root).map_err(|e| {

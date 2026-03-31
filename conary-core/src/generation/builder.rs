@@ -367,8 +367,8 @@ pub fn build_erofs_image(
     // Build the EROFS image
     let image_bytes = mkfs_erofs(&fs);
     let image_size = image_bytes.len() as u64;
-    let erofs_verity_digest = composefs::fsverity::compute_verity::<Sha256HashValue>(&image_bytes)
-        .to_hex();
+    let erofs_verity_digest =
+        composefs::fsverity::compute_verity::<Sha256HashValue>(&image_bytes).to_hex();
 
     // Write EROFS image atomically: temp file -> fsync -> rename -> fsync parent.
     // This prevents partial writes from surviving a crash during recovery.
@@ -515,9 +515,7 @@ pub fn build_generation_from_db(
         })?;
     use fs2::FileExt as _;
     lock_file.lock_exclusive().map_err(|e| {
-        crate::error::Error::IoError(format!(
-            "Failed to acquire generation build lock: {e}"
-        ))
+        crate::error::Error::IoError(format!("Failed to acquire generation build lock: {e}"))
     })?;
     // RAII guard: lock is released when this drops.
     let _gen_lock = lock_file;

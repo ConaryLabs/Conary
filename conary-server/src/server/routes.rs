@@ -569,7 +569,9 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
     ));
 
     // Add body size limit (16MB max for all requests)
-    app = app.layer(axum::extract::DefaultBodyLimit::max(request_body_limit_bytes()));
+    app = app.layer(axum::extract::DefaultBodyLimit::max(
+        request_body_limit_bytes(),
+    ));
 
     // Add audit logging if enabled
     if config.enable_audit_log {
@@ -1189,12 +1191,7 @@ mod tests {
         let (app, _db_path) = crate::server::handlers::admin::test_helpers::test_app().await;
 
         let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/mcp")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::builder().uri("/mcp").body(Body::empty()).unwrap())
             .await
             .unwrap();
 
@@ -1213,8 +1210,7 @@ mod tests {
         let token = "test-ci-token-54321";
         let hash = crate::server::auth::hash_token(token);
         let conn = rusqlite::Connection::open(&db_path).unwrap();
-        conary_core::db::models::admin_token::create(&conn, "test-ci", &hash, "ci:read")
-            .unwrap();
+        conary_core::db::models::admin_token::create(&conn, "test-ci", &hash, "ci:read").unwrap();
         drop(conn);
 
         let app = crate::server::handlers::admin::test_helpers::rebuild_app(&db_path);

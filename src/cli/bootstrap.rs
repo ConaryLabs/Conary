@@ -337,7 +337,10 @@ mod tests {
     fn cli_accepts_bootstrap_cross_tools_name() {
         let parsed =
             BootstrapCli::try_parse_from(["bootstrap", "cross-tools"]).expect("parse cross-tools");
-        assert!(matches!(parsed.command, BootstrapCommands::CrossTools { .. }));
+        assert!(matches!(
+            parsed.command,
+            BootstrapCommands::CrossTools { .. }
+        ));
     }
 
     #[test]

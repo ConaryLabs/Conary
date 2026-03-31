@@ -793,7 +793,9 @@ pub async fn cmd_update(
             stats.insert(tx)?;
 
             let mut changeset = conary_core::db::models::Changeset::find_by_id(tx, changeset_id)?
-                .ok_or_else(|| conary_core::Error::NotFound("Changeset not found".to_string()))?;
+                .ok_or_else(|| {
+                conary_core::Error::NotFound("Changeset not found".to_string())
+            })?;
             if deltas_applied > 0 || full_downloads > 0 {
                 changeset.update_status(tx, conary_core::db::models::ChangesetStatus::Applied)?;
             } else if had_failures {

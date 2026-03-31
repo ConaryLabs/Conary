@@ -191,20 +191,19 @@ impl DependencyProvider for ConaryProvider<'_> {
         // If the package is pinned (troves.pinned = 1), lock the solver to
         // the installed version so the SAT solver cannot choose a different
         // version.  This implements G3: respect per-package version pins.
-        let locked = if crate::db::models::Trove::is_pinned_by_name(self.conn, name_str)
-            .unwrap_or(false)
-        {
-            // Find the installed solvable whose name matches and is pinned
-            candidates
-                .iter()
-                .find(|&&sid| {
-                    let pkg = &self.solvables[sid.0 as usize];
-                    pkg.name == *name_str && pkg.installed_trove_id.is_some()
-                })
-                .copied()
-        } else {
-            None
-        };
+        let locked =
+            if crate::db::models::Trove::is_pinned_by_name(self.conn, name_str).unwrap_or(false) {
+                // Find the installed solvable whose name matches and is pinned
+                candidates
+                    .iter()
+                    .find(|&&sid| {
+                        let pkg = &self.solvables[sid.0 as usize];
+                        pkg.name == *name_str && pkg.installed_trove_id.is_some()
+                    })
+                    .copied()
+            } else {
+                None
+            };
 
         Some(Candidates {
             candidates,

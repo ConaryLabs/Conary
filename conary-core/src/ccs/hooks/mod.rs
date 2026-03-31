@@ -28,8 +28,8 @@ mod tmpfiles;
 mod user_group;
 
 // Re-export helper functions that may be useful externally
-pub(crate) use systemd::is_safe_unit_name;
 pub(crate) use sysctl::is_denied_sysctl_key;
+pub(crate) use systemd::is_safe_unit_name;
 pub use systemd::{compute_relative_unit_path, parse_systemd_install_section};
 pub use tmpfiles::hash_string;
 pub(crate) use tmpfiles::validate_tmpfiles_entry_type;
@@ -440,7 +440,12 @@ impl HookExecutor {
                 if stderr.is_empty() {
                     anyhow::bail!("{} script failed with exit code {}", label, code);
                 }
-                anyhow::bail!("{} script failed with exit code {}: {}", label, code, stderr);
+                anyhow::bail!(
+                    "{} script failed with exit code {}: {}",
+                    label,
+                    code,
+                    stderr
+                );
             }
             Err(e) => anyhow::bail!("{} script failed to execute in sandbox: {}", label, e),
         }

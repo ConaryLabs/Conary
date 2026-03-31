@@ -345,16 +345,16 @@ pub async fn cmd_derive_build(name: &str, db_path: &str) -> Result<()> {
             &cas,
         ) {
             Ok(build_meta) => {
-            println!("Build successful:");
-            println!("  Version: {}", build_meta.version);
-            println!("  Parent Version: {}", build_meta.parent_version);
-            println!("  Files: {}", build_result.files.len());
-            println!("  Patches applied: {}", build_result.patches_applied.len());
-            println!(
-                "  Files overridden: {}",
-                build_result.files_overridden.len()
-            );
-            println!("  Files removed: {}", build_result.files_removed.len());
+                println!("Build successful:");
+                println!("  Version: {}", build_meta.version);
+                println!("  Parent Version: {}", build_meta.parent_version);
+                println!("  Files: {}", build_result.files.len());
+                println!("  Patches applied: {}", build_result.patches_applied.len());
+                println!(
+                    "  Files overridden: {}",
+                    build_result.files_overridden.len()
+                );
+                println!("  Files removed: {}", build_result.files_removed.len());
                 println!("  Artifact: {}", build_meta.artifact_path);
                 println!("  Artifact Size: {} bytes", build_meta.artifact_size);
                 println!("\nDerived package '{}' is ready.", name);

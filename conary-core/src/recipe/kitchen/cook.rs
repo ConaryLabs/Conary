@@ -24,7 +24,9 @@ fn is_dangerous_build_env_var(key: &str) -> bool {
     DANGEROUS_BUILD_ENV_VARS.contains(&key)
 }
 
-fn filtered_build_env<'a>(env: &'a [(&'a str, String)]) -> impl Iterator<Item = (&'a str, &'a str)> {
+fn filtered_build_env<'a>(
+    env: &'a [(&'a str, String)],
+) -> impl Iterator<Item = (&'a str, &'a str)> {
     env.iter()
         .filter(|(key, _)| !is_dangerous_build_env_var(key))
         .map(|(key, value)| (*key, value.as_str()))
@@ -567,8 +569,10 @@ impl<'a> Cook<'a> {
             let chroot_workdir = workdir.strip_prefix(sysroot).unwrap_or(workdir);
 
             // Build env string for chroot (env -i clears host env)
-            let env_args =
-                chroot_env_args(env, self.recipe.build.jobs.unwrap_or(self.kitchen.config.jobs));
+            let env_args = chroot_env_args(
+                env,
+                self.recipe.build.jobs.unwrap_or(self.kitchen.config.jobs),
+            );
 
             // Shell-escape the chroot workdir to prevent injection from
             // paths with spaces or special characters, matching the

@@ -383,9 +383,10 @@ impl OperationQueue {
         // Dedup: if an identical idempotency key is already queued, reuse it.
         if let Some(ref key) = job.idempotency_key {
             let queue = self.queue.lock().await;
-            if let Some(existing) = queue.iter().find(|qj| {
-                qj.job.idempotency_key.as_deref() == Some(key.as_str())
-            }) {
+            if let Some(existing) = queue
+                .iter()
+                .find(|qj| qj.job.idempotency_key.as_deref() == Some(key.as_str()))
+            {
                 return existing.cancel_token.clone();
             }
         }

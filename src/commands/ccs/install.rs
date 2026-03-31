@@ -336,7 +336,10 @@ fn select_ccs_components(
 ) -> Result<SelectedCcsComponents> {
     let available = sorted_available_component_names(ccs_pkg);
     if available.is_empty() {
-        anyhow::bail!("Package {} does not contain any installable components", ccs_pkg.name());
+        anyhow::bail!(
+            "Package {} does not contain any installable components",
+            ccs_pkg.name()
+        );
     }
 
     let names = if let Some(requested_components) = requested {
@@ -354,7 +357,10 @@ fn select_ccs_components(
                 break;
             }
 
-            if !available.iter().any(|available_name| available_name == &component) {
+            if !available
+                .iter()
+                .any(|available_name| available_name == &component)
+            {
                 anyhow::bail!(
                     "Unknown component '{}'. Available components: {}",
                     raw,
@@ -381,7 +387,9 @@ fn select_ccs_components(
         let mut defaults = Vec::new();
         for component in &ccs_pkg.manifest().components.default {
             let normalized = component.trim().to_ascii_lowercase();
-            if available.iter().any(|available_name| available_name == &normalized)
+            if available
+                .iter()
+                .any(|available_name| available_name == &normalized)
                 && !defaults.iter().any(|name| name == &normalized)
             {
                 defaults.push(normalized);
@@ -1127,9 +1135,7 @@ pub async fn cmd_ccs_install(
             }
         }
 
-        if should_run_component_hooks
-            && let Some(ref hook) = hooks.post_install
-        {
+        if should_run_component_hooks && let Some(ref hook) = hooks.post_install {
             println!("Executing post-install hooks...");
             let scriptlet = Scriptlet {
                 phase: ScriptletPhase::PostInstall,

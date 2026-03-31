@@ -144,10 +144,7 @@ impl Seed {
         // Check for a missing image explicitly before attempting to hash it.
         // This avoids relying on error message string matching for NotFound detection.
         if !image_path.exists() {
-            return Err(SeedError::MissingImage(format!(
-                "{}",
-                image_path.display()
-            )));
+            return Err(SeedError::MissingImage(format!("{}", image_path.display())));
         }
 
         let actual_hash = erofs_image_hash(&image_path)

@@ -655,7 +655,9 @@ impl<'db> ConaryProvider<'db> {
             .map(|indices| {
                 indices
                     .iter()
-                    .filter_map(|&i| self.solvable_id_from_index(i, "collecting candidates by name"))
+                    .filter_map(|&i| {
+                        self.solvable_id_from_index(i, "collecting candidates by name")
+                    })
                     .collect()
             })
             .unwrap_or_default()

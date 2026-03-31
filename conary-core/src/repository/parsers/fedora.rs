@@ -142,10 +142,12 @@ impl FedoraParser {
                 .verify_metadata_bytes(&primary_url, &raw_bytes, "primary.xml")
                 .await?;
         }
-        let decompressed = decompress_auto(&raw_bytes)
-            .map_err(|error| Error::ParseError(format!("Failed to decompress {}: {}", primary_url, error)))?;
-        let content = String::from_utf8(decompressed)
-            .map_err(|error| Error::ParseError(format!("Invalid UTF-8 in primary.xml: {}", error)))?;
+        let decompressed = decompress_auto(&raw_bytes).map_err(|error| {
+            Error::ParseError(format!("Failed to decompress {}: {}", primary_url, error))
+        })?;
+        let content = String::from_utf8(decompressed).map_err(|error| {
+            Error::ParseError(format!("Invalid UTF-8 in primary.xml: {}", error))
+        })?;
 
         debug!("Decompressed primary.xml: {} bytes", content.len());
         Ok(content)
@@ -1050,7 +1052,10 @@ mod tests {
 
         // `(foo if bar)` should remain conditional (not decomposed)
         let conditional = &pkg.requirements[1];
-        assert_eq!(conditional.behavior, ConditionalRequirementBehavior::Conditional);
+        assert_eq!(
+            conditional.behavior,
+            ConditionalRequirementBehavior::Conditional
+        );
         assert_eq!(conditional.alternatives.len(), 1);
         assert_eq!(conditional.alternatives[0].name, "(foo if bar)");
 

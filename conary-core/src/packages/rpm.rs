@@ -357,7 +357,7 @@ impl PackageFormat for RpmPackage {
         let cursor = std::io::Cursor::new(payload);
         let decoder =
             compression::create_decoder_limited(cursor, format, compression::MAX_DECOMPRESS_SIZE)
-            .map_err(|e| Error::InitError(format!("Failed to create decoder: {}", e)))?;
+                .map_err(|e| Error::InitError(format!("Failed to create decoder: {}", e)))?;
 
         // Map paths to metadata for O(1) lookup
         let file_map: HashMap<&str, &PackageFile> = self

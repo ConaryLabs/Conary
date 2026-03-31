@@ -195,8 +195,12 @@ pub async fn cmd_restore_all(db_path: &str, _root: &str, dry_run: bool) -> Resul
         );
     } else {
         // Composefs-native: rebuild EROFS from DB state
-        let gen_num =
-            crate::commands::composefs_ops::rebuild_and_mount(&conn, "Restore all packages", None, std::path::Path::new("/conary"))?;
+        let gen_num = crate::commands::composefs_ops::rebuild_and_mount(
+            &conn,
+            "Restore all packages",
+            None,
+            std::path::Path::new("/conary"),
+        )?;
         println!("\nComposefs-native restore (generation {}):", gen_num);
         println!("  Packages checked: {}", packages_checked);
         println!("  Files in CAS:     {}", total_available);

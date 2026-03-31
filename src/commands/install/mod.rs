@@ -304,12 +304,16 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
     // name `nginx` and component `devel` before canonical resolution.
     // Without this, `resolve_canonical_name("nginx:devel")` looks for a
     // canonical package literally named "nginx:devel" and fails.
-    let (base_name_for_canonical, early_component) =
-        parse_component_spec(package).map_or_else(|| (package.to_string(), None), |(b, c)| (b, Some(c)));
+    let (base_name_for_canonical, early_component) = parse_component_spec(package)
+        .map_or_else(|| (package.to_string(), None), |(b, c)| (b, Some(c)));
 
     let policy = build_resolution_policy(&conn, from_distro.as_deref(), repo.as_deref())?;
-    let resolved_name =
-        resolve_canonical_name(&conn, &base_name_for_canonical, from_distro.as_deref(), &policy)?;
+    let resolved_name = resolve_canonical_name(
+        &conn,
+        &base_name_for_canonical,
+        from_distro.as_deref(),
+        &policy,
+    )?;
     // If canonical resolution found a mapping, re-attach any component suffix
     // so downstream `parse_component_and_validate` sees the full spec.
     let resolved_package: String = match (&resolved_name, &early_component) {
@@ -1674,7 +1678,12 @@ fn execute_install_transaction(
     };
 
     if let Some(old_trove) = ctx.old_trove_to_upgrade {
-        mark_upgraded_parent_deriveds_stale(conn, pkg.name(), Some(&old_trove.version), pkg.version());
+        mark_upgraded_parent_deriveds_stale(
+            conn,
+            pkg.name(),
+            Some(&old_trove.version),
+            pkg.version(),
+        );
     }
 
     // Composefs-native: build EROFS image from DB state and mount new generation.

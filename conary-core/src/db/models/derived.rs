@@ -343,9 +343,7 @@ impl DerivedPackage {
         artifact_size: i64,
     ) -> Result<()> {
         let id = self.id.ok_or_else(|| {
-            crate::error::Error::MissingId(
-                "Cannot record build artifact without ID".to_string(),
-            )
+            crate::error::Error::MissingId("Cannot record build artifact without ID".to_string())
         })?;
 
         conn.execute(

@@ -154,15 +154,15 @@ impl<R: Read> CpioReader<R> {
             ));
         }
 
-        self.total_content_size = self
-            .total_content_size
-            .checked_add(filesize)
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "CPIO cumulative content size overflow",
-                )
-            })?;
+        self.total_content_size =
+            self.total_content_size
+                .checked_add(filesize)
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "CPIO cumulative content size overflow",
+                    )
+                })?;
         if self.total_content_size > self.max_total_content_size {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -273,7 +273,10 @@ mod tests {
 
     fn append_entry(data: &mut Vec<u8>, name: &str, content: &[u8]) {
         let namesize = name.len() + 1;
-        let header = make_header(&format!("{namesize:08X}"), &format!("{:08X}", content.len()));
+        let header = make_header(
+            &format!("{namesize:08X}"),
+            &format!("{:08X}", content.len()),
+        );
         data.extend_from_slice(&header);
         data.extend_from_slice(name.as_bytes());
         data.push(0);

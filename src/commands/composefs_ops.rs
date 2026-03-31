@@ -50,20 +50,24 @@ fn collect_etc_files_for_state(
     // Join on (name, version, architecture) to avoid cross-product in
     // multilib states where multiple troves share the same name+version
     // but differ by architecture.
-    let mut stmt = conn.prepare(
-        "SELECT DISTINCT f.path, f.sha256_hash FROM files f \
+    let mut stmt = conn
+        .prepare(
+            "SELECT DISTINCT f.path, f.sha256_hash FROM files f \
          JOIN troves t ON f.trove_id = t.id \
          JOIN state_members sm ON sm.trove_name = t.name \
              AND sm.trove_version = t.version \
              AND (sm.architecture IS NULL OR t.architecture IS NULL \
                   OR sm.architecture = t.architecture) \
          JOIN system_states ss ON sm.state_id = ss.id \
-         WHERE ss.state_number = ?1 AND f.path LIKE '/etc/%'"
-    ).map_err(|e| anyhow::anyhow!("Failed to prepare state /etc query: {e}"))?;
+         WHERE ss.state_number = ?1 AND f.path LIKE '/etc/%'",
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to prepare state /etc query: {e}"))?;
 
-    let rows = stmt.query_map([state_number], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    }).map_err(|e| anyhow::anyhow!("Failed to query state /etc files: {e}"))?;
+    let rows = stmt
+        .query_map([state_number], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|e| anyhow::anyhow!("Failed to query state /etc files: {e}"))?;
 
     let mut map = HashMap::new();
     for row in rows {
@@ -130,7 +134,6 @@ pub fn rebuild_and_mount(
     prev_etc_snapshot: Option<HashMap<String, String>>,
     conary_root: &Path,
 ) -> anyhow::Result<i64> {
-
     // Record the currently active generation before building the new one.
     // The state snapshot for the new generation stores this as its
     // database-backed /etc merge base.
@@ -187,7 +190,10 @@ pub fn rebuild_and_mount(
                         base_etc
                     } else {
                         // Troves were cascade-deleted. Fall back to current DB.
-                        debug!("Base generation {} troves deleted, falling back to current DB", base_num);
+                        debug!(
+                            "Base generation {} troves deleted, falling back to current DB",
+                            base_num
+                        );
                         collect_etc_files(conn)?
                     }
                 } else {
@@ -344,7 +350,10 @@ mod tests {
         state.base_generation = Some(2);
         state.insert(&conn).unwrap();
 
-        assert_eq!(current_base_generation_for_merge(&conn, 3).unwrap(), Some(2));
+        assert_eq!(
+            current_base_generation_for_merge(&conn, 3).unwrap(),
+            Some(2)
+        );
         assert_eq!(current_base_generation_for_merge(&conn, 99).unwrap(), None);
     }
 

@@ -227,7 +227,8 @@ impl ChrootEnv {
     }
 
     fn kill_processes_in_chroot(&self) {
-        let chroot_root = fs::canonicalize(&self.lfs_root).unwrap_or_else(|_| self.lfs_root.clone());
+        let chroot_root =
+            fs::canonicalize(&self.lfs_root).unwrap_or_else(|_| self.lfs_root.clone());
         let initial_pids = self.processes_in_chroot(&chroot_root);
         if initial_pids.is_empty() {
             return;

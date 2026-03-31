@@ -271,17 +271,17 @@ mod tests {
 
         for n in 0..4 {
             manager
-                .create_job(
-                    format!("key-{n}"),
-                    "arch".into(),
-                    format!("pkg-{n}"),
-                    None,
-                )
+                .create_job(format!("key-{n}"), "arch".into(), format!("pkg-{n}"), None)
                 .expect("capacity should allow initial jobs");
         }
 
         let err = manager
-            .create_job("overflow".into(), "arch".into(), "pkg-overflow".into(), None)
+            .create_job(
+                "overflow".into(),
+                "arch".into(),
+                "pkg-overflow".into(),
+                None,
+            )
             .expect_err("total tracked jobs should be capped");
         assert_eq!(err, "Conversion queue full");
     }

@@ -25,9 +25,7 @@ fn find_collection_id_core(conn: &Connection, name: &str) -> conary_core::Result
     let trove = troves
         .iter()
         .find(|t| t.trove_type == conary_core::db::models::TroveType::Collection)
-        .ok_or_else(|| {
-            conary_core::Error::NotFound(format!("Collection '{}' not found", name))
-        })?;
+        .ok_or_else(|| conary_core::Error::NotFound(format!("Collection '{}' not found", name)))?;
     trove
         .id
         .ok_or_else(|| conary_core::Error::NotFound("Collection has no ID".to_string()))

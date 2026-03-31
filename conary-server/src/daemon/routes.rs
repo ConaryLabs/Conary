@@ -12,8 +12,8 @@
 use crate::daemon::auth::{Action, AuthChecker, PeerCredentials};
 use crate::daemon::{DaemonError, DaemonEvent, DaemonJob, DaemonState, JobStatus};
 use axum::{
-    extract::DefaultBodyLimit,
     Router,
+    extract::DefaultBodyLimit,
     extract::{Extension, Path, Query, Request, State},
     http::StatusCode,
     middleware,
@@ -950,9 +950,8 @@ async fn create_transaction_handler(
     }
 
     // Create the job
-    let spec = serde_json::to_value(&request.operations).map_err(|e| {
-        internal_api_error("Failed to serialize daemon transaction request", e)
-    })?;
+    let spec = serde_json::to_value(&request.operations)
+        .map_err(|e| internal_api_error("Failed to serialize daemon transaction request", e))?;
 
     let mut job = DaemonJob::new(job_kind, spec);
     if let Some(key) = idempotency_key {
@@ -1566,9 +1565,8 @@ async fn enhance_handler(
         }
     }
 
-    let job_spec = serde_json::to_value(&spec).map_err(|e| {
-        internal_api_error("Failed to serialize daemon enhancement request", e)
-    })?;
+    let job_spec = serde_json::to_value(&spec)
+        .map_err(|e| internal_api_error("Failed to serialize daemon enhancement request", e))?;
 
     let mut job = DaemonJob::new(crate::daemon::JobKind::Enhance, job_spec);
     if let Some(key) = idempotency_key {

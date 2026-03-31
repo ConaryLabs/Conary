@@ -400,9 +400,10 @@ impl RemiClient {
             manifest.name
         );
 
-        let total_size = manifest.chunks.iter().try_fold(0u64, |acc, chunk| {
-            check_total_chunk_bytes(acc, chunk.size)
-        })?;
+        let total_size = manifest
+            .chunks
+            .iter()
+            .try_fold(0u64, |acc, chunk| check_total_chunk_bytes(acc, chunk.size))?;
         let mut downloaded: u64 = 0;
 
         if let Some(pb) = progress {
@@ -1065,11 +1066,7 @@ mod tests {
 
     #[test]
     fn test_chunk_byte_limit_rejects_excessive_total() {
-        let err = check_total_chunk_bytes(
-            MAX_TOTAL_CHUNK_BYTES - 4,
-            8,
-        )
-        .unwrap_err();
+        let err = check_total_chunk_bytes(MAX_TOTAL_CHUNK_BYTES - 4, 8).unwrap_err();
         assert!(err.to_string().contains("chunk bytes"));
     }
 

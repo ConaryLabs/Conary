@@ -28,10 +28,7 @@ pub enum CompressionError {
     DecompressionBomb { format: &'static str, limit: u64 },
 
     #[error("Archive {archive} exceeds {limit} entries (possible archive bomb)")]
-    ArchiveEntryLimit {
-        archive: &'static str,
-        limit: usize,
-    },
+    ArchiveEntryLimit { archive: &'static str, limit: usize },
 
     #[error("Unsupported compression format: {0}")]
     UnsupportedFormat(String),

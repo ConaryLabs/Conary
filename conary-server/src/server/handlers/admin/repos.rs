@@ -149,12 +149,8 @@ pub async fn create_repo(
             drop(guard);
             (StatusCode::CREATED, Json(RepoResponse::from(repo))).into_response()
         }
-        Err(admin_service::ServiceError::BadRequest(msg)) => {
-            json_error(400, &msg, "BAD_REQUEST")
-        }
-        Err(admin_service::ServiceError::Conflict(msg)) => {
-            json_error(409, &msg, "CONFLICT")
-        }
+        Err(admin_service::ServiceError::BadRequest(msg)) => json_error(400, &msg, "BAD_REQUEST"),
+        Err(admin_service::ServiceError::Conflict(msg)) => json_error(409, &msg, "CONFLICT"),
         Err(e) => {
             tracing::error!("Failed to create repo: {e}");
             json_error(500, "Failed to create repository", "INTERNAL_ERROR")
@@ -244,12 +240,8 @@ pub async fn update_repo(
             Json(RepoResponse::from(repo)).into_response()
         }
         Ok(None) => json_error(404, "Repository not found", "NOT_FOUND"),
-        Err(admin_service::ServiceError::BadRequest(msg)) => {
-            json_error(400, &msg, "BAD_REQUEST")
-        }
-        Err(admin_service::ServiceError::Conflict(msg)) => {
-            json_error(409, &msg, "CONFLICT")
-        }
+        Err(admin_service::ServiceError::BadRequest(msg)) => json_error(400, &msg, "BAD_REQUEST"),
+        Err(admin_service::ServiceError::Conflict(msg)) => json_error(409, &msg, "CONFLICT"),
         Err(e) => {
             tracing::error!("Failed to update repo: {e}");
             json_error(500, "Failed to update repository", "INTERNAL_ERROR")

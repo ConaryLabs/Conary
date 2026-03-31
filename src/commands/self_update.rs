@@ -8,8 +8,7 @@ use conary_core::db::models::settings;
 use conary_core::db::paths::objects_dir;
 use conary_core::self_update::{
     LatestVersionInfo, VersionCheckResult, apply_update, check_for_update,
-    download_update_with_progress, extract_binary, fetch_latest_version_info,
-    get_update_channel,
+    download_update_with_progress, extract_binary, fetch_latest_version_info, get_update_channel,
 };
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -26,11 +25,7 @@ struct NoVerifyAuditEvent {
     target_version: String,
 }
 
-fn check_update_signature(
-    sha256: &str,
-    signature: &Option<String>,
-    no_verify: bool,
-) -> Result<()> {
+fn check_update_signature(sha256: &str, signature: &Option<String>, no_verify: bool) -> Result<()> {
     // --no-verify explicitly bypasses all signature checks
     if no_verify {
         eprintln!("Warning: --no-verify specified, skipping signature verification.");

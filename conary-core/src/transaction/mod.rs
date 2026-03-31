@@ -401,14 +401,14 @@ impl TransactionEngine {
 
         let _mount_outcome =
             crate::generation::mount::mount_generation(&crate::generation::mount::MountOptions {
-            image_path: gen_dir.join(EROFS_IMAGE_NAME),
-            basedir: self.config.objects_dir.clone(),
-            mount_point: self.config.mount_point.clone(),
-            verity: false,
-            digest: None,
-            upperdir: None,
-            workdir: None,
-        })?;
+                image_path: gen_dir.join(EROFS_IMAGE_NAME),
+                basedir: self.config.objects_dir.clone(),
+                mount_point: self.config.mount_point.clone(),
+                verity: false,
+                digest: None,
+                upperdir: None,
+                workdir: None,
+            })?;
 
         crate::generation::mount::update_current_symlink(&self.config.root, gen_num)?;
 

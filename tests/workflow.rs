@@ -373,10 +373,7 @@ fn test_parent_upgrade_marks_built_derived_package_stale_via_install_cli() {
             },
         )]),
         files,
-        blobs: HashMap::from([
-            (binary_hash, binary_content),
-            (config_hash, config_content),
-        ]),
+        blobs: HashMap::from([(binary_hash, binary_content), (config_hash, config_content)]),
         total_size: 0,
         chunked: false,
         chunk_stats: None,

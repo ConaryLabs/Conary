@@ -408,15 +408,16 @@ impl CcsBuilder {
     fn scan_source_files(&self) -> Result<Vec<PathBuf>> {
         let mut files = Vec::new();
 
-        for entry in WalkDir::new(&self.source_dir).into_iter().filter_map(|e| {
-            match e {
+        for entry in WalkDir::new(&self.source_dir)
+            .into_iter()
+            .filter_map(|e| match e {
                 Ok(entry) => Some(entry),
                 Err(err) => {
                     tracing::warn!("WalkDir error scanning source directory: {err}");
                     None
                 }
-            }
-        }) {
+            })
+        {
             let path = entry.path();
             let metadata = entry.metadata()?;
 

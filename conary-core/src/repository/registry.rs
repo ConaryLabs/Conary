@@ -144,12 +144,10 @@ pub fn create_parser(
             };
 
             let arch = arch_to_debian(&detect_system_arch());
-            Ok(AnyParser::Debian(parsers::debian::DebianParser::new(
-                distribution,
-                "main".to_string(),
-                arch,
-            )
-            .with_metadata_signature_verifier(metadata_signature_verifier)))
+            Ok(AnyParser::Debian(
+                parsers::debian::DebianParser::new(distribution, "main".to_string(), arch)
+                    .with_metadata_signature_verifier(metadata_signature_verifier),
+            ))
         }
         RepositoryFormat::Fedora => {
             let arch = detect_system_arch();

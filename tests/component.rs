@@ -587,7 +587,11 @@ fn test_ccs_install_components_only_installs_requested_component() {
     assert!(!file_paths.contains(&"/usr/bin/component-fixture"));
     assert!(!file_paths.contains(&"/etc/component-fixture/app.conf"));
 
-    assert!(install_root.join("usr/include/component-fixture/api.h").exists());
+    assert!(
+        install_root
+            .join("usr/include/component-fixture/api.h")
+            .exists()
+    );
     assert!(!install_root.join("usr/bin/component-fixture").exists());
     assert!(!install_root.join("etc/component-fixture/app.conf").exists());
 }

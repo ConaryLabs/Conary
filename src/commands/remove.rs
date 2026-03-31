@@ -110,8 +110,10 @@ pub async fn cmd_remove(
         ));
     }
 
-    let mut engine =
-        TransactionEngine::new(TransactionConfig::from_paths(PathBuf::from(root), db_path.into()))?;
+    let mut engine = TransactionEngine::new(TransactionConfig::from_paths(
+        PathBuf::from(root),
+        db_path.into(),
+    ))?;
     engine.begin()?;
 
     // Check if package is adopted from system PM

@@ -70,10 +70,12 @@ impl DebianParser {
                 .verify_metadata_bytes(&packages_url, &raw_bytes, "debian Packages.gz")
                 .await?;
         }
-        let decompressed = decompress_auto(&raw_bytes)
-            .map_err(|error| Error::ParseError(format!("Failed to decompress {}: {}", packages_url, error)))?;
-        let content = String::from_utf8(decompressed)
-            .map_err(|error| Error::ParseError(format!("Invalid UTF-8 in Packages.gz: {}", error)))?;
+        let decompressed = decompress_auto(&raw_bytes).map_err(|error| {
+            Error::ParseError(format!("Failed to decompress {}: {}", packages_url, error))
+        })?;
+        let content = String::from_utf8(decompressed).map_err(|error| {
+            Error::ParseError(format!("Invalid UTF-8 in Packages.gz: {}", error))
+        })?;
 
         debug!("Decompressed Packages file: {} bytes", content.len());
         Ok(content)

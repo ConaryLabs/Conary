@@ -324,8 +324,7 @@ pub async fn check_for_update(
     channel_url: &str,
     current_version: &str,
 ) -> Result<VersionCheckResult> {
-    let info =
-        fetch_latest_version_info(channel_url, &format!("conary/{current_version}")).await?;
+    let info = fetch_latest_version_info(channel_url, &format!("conary/{current_version}")).await?;
 
     if is_newer(current_version, &info.version) {
         Ok(VersionCheckResult::UpdateAvailable {
@@ -701,7 +700,7 @@ mod tests {
 
     #[test]
     fn test_parse_latest_version_info_rejects_large_response() {
-        let oversized = vec![b'{' ; MAX_SELF_UPDATE_METADATA_SIZE + 1];
+        let oversized = vec![b'{'; MAX_SELF_UPDATE_METADATA_SIZE + 1];
         let err = parse_latest_version_info_bytes(&oversized).unwrap_err();
         assert!(err.to_string().contains("too large"));
     }
