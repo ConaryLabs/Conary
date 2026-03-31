@@ -157,14 +157,29 @@ exit_code = 0
 
 [[test]]
 id = "T57"
-name = "system_takeover_full"
-description = "Full system takeover (non-zero exit acceptable, verify no panic)"
+name = "system_takeover_generation_ready_to_activate"
+description = "System takeover builds a generation, records the result, and stops ready to activate"
 timeout = 300
 group = "B"
+fatal = true
 
 [[test.step]]
-conary = "system takeover --skip-conversion --yes"
+conary = "system takeover --up-to generation --yes"
 
 [test.step.assert]
-# Non-zero exit is acceptable; just verify no panic
-stdout_not_contains = "panic"
+exit_code = 0
+stdout_contains_all = ["ready to activate", "conary system generation switch"]
+
+[[test.step]]
+run = "OP_DIR=$(dirname \"${DB_PATH}\")/takeover/operations; test -n \"$(find \"$OP_DIR\" -name '*.json' -print -quit)\" && echo takeover-record-present"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "takeover-record-present"
+
+[[test.step]]
+run = "OP_FILE=$(find \"$(dirname \"${DB_PATH}\")/takeover/operations\" -name '*.json' | sort | tail -1); grep -q '\"status\": \"ReadyToActivate\"' \"$OP_FILE\" && grep -q '\"activation_pending\": true' \"$OP_FILE\" && echo takeover-ready-record"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "takeover-ready-record"
