@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-04-01
-revision: 1
+revision: 2
 summary: Reset the workspace around product-owned app crates, package-local features, and smaller shared boundaries
 ---
 
@@ -377,6 +377,13 @@ If created, it should stay small and transport-agnostic:
 
 It should not become a generic dumping ground for unrelated service code.
 
+Create this crate only if all of the following are true:
+
+- at least two app packages still depend on the helpers after ownership cleanup
+- the helpers are transport-agnostic and not product policy
+- moving them into `conary-core` would make `conary-core` less domain-focused
+- duplicating them in app crates would create meaningful maintenance friction
+
 ## Feature Model
 
 ### Root Workspace
@@ -403,8 +410,10 @@ Keep only truly local optional features.
 
 Current candidates:
 
-- `composefs-rs`: likely valid to keep if alternate build/test environments
-  still matter
+- `composefs-rs`: keep only if there is still a real supported mode where core
+  must build without the composefs-backed implementation or where benches/tests
+  intentionally exercise both backends; otherwise remove the feature and make
+  the chosen implementation unconditional
 - `mcp`: likely remove from `conary-core`; replace with an optional small
   support crate if the sharing is still real
 - `server`: remove; server-specific code should either become unconditional
@@ -491,6 +500,9 @@ product story even if some internals are still temporarily awkward.
 - update architecture docs
 - update build, test, and CI commands
 - normalize developer workflows around package-owned commands
+- update non-Cargo release and packaging surfaces that assume the old layout,
+  including shell completions, manpage generation, packaging scripts, deploy
+  helpers, and any path-sensitive release automation
 
 ## Verification Strategy
 
