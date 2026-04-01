@@ -9,7 +9,7 @@ license = "GPL-3.0-or-later"
 description = "Test infrastructure for Conary — declarative TOML test engine with container management, HTTP API, and MCP interface"
 
 [dependencies]
-conary-core = { path = "../conary-core", features = ["mcp"] }
+conary-core = { path = "../../crates/conary-core", features = ["mcp"] }
 
 # Workspace shared
 anyhow.workspace = true
