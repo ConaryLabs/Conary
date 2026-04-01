@@ -267,7 +267,9 @@ pub fn remi_unavailable(err: &str) -> StructuredError {
         "remi_unavailable",
         format!("Remi server unreachable: {err}"),
     )
-    .with_hint("Check REMI_ENDPOINT and REMI_ADMIN_TOKEN environment variables")
+    .with_hint(
+        "Check REMI_ENDPOINT for public access and REMI_ADMIN_ENDPOINT/REMI_ADMIN_TOKEN for admin API access",
+    )
 }
 
 // ---------------------------------------------------------------------------

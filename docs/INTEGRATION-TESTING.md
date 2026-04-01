@@ -192,6 +192,14 @@ Override any config value via environment variables:
 | `RESULTS_DIR` | `[paths] results_dir` |
 | `DISTRO` | Which `[distros.*]` section to use |
 
+For admin-backed operations such as result streaming, log queries, and fixture
+publishing, also set:
+
+| Variable | Purpose |
+|----------|---------|
+| `REMI_ADMIN_ENDPOINT` | Base URL for the Remi admin REST API |
+| `REMI_ADMIN_TOKEN` | Bearer token for the Remi admin API |
+
 ## Results
 
 Test results are written as JSON to `tests/integration/remi/results/<distro>.json`:

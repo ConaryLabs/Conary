@@ -306,6 +306,47 @@ pub struct PushStepData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
+    use std::sync::{LazyLock, Mutex, MutexGuard};
+
+    static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    struct EnvVarGuard {
+        _lock: MutexGuard<'static, ()>,
+        admin_token: Option<OsString>,
+        admin_endpoint: Option<OsString>,
+        legacy_endpoint: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn new() -> Self {
+            Self {
+                _lock: ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner()),
+                admin_token: std::env::var_os("REMI_ADMIN_TOKEN"),
+                admin_endpoint: std::env::var_os("REMI_ADMIN_ENDPOINT"),
+                legacy_endpoint: std::env::var_os("REMI_ENDPOINT"),
+            }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.admin_token {
+                    Some(value) => std::env::set_var("REMI_ADMIN_TOKEN", value),
+                    None => std::env::remove_var("REMI_ADMIN_TOKEN"),
+                }
+                match &self.admin_endpoint {
+                    Some(value) => std::env::set_var("REMI_ADMIN_ENDPOINT", value),
+                    None => std::env::remove_var("REMI_ADMIN_ENDPOINT"),
+                }
+                match &self.legacy_endpoint {
+                    Some(value) => std::env::set_var("REMI_ENDPOINT", value),
+                    None => std::env::remove_var("REMI_ENDPOINT"),
+                }
+            }
+        }
+    }
 
     #[test]
     fn new_trims_trailing_slash() {
@@ -321,9 +362,8 @@ mod tests {
 
     #[test]
     fn from_env_requires_token() {
+        let _env_guard = EnvVarGuard::new();
         // Clear the env var to ensure it is not set.
-        // SAFETY: this test is single-threaded; no other thread reads
-        // REMI_ADMIN_TOKEN concurrently.
         unsafe {
             std::env::remove_var("REMI_ADMIN_TOKEN");
             std::env::remove_var("REMI_ADMIN_ENDPOINT");
@@ -335,8 +375,7 @@ mod tests {
 
     #[test]
     fn from_env_requires_admin_endpoint() {
-        // SAFETY: this test is single-threaded; no other thread reads
-        // REMI_ADMIN_TOKEN or REMI_ADMIN_ENDPOINT concurrently.
+        let _env_guard = EnvVarGuard::new();
         unsafe {
             std::env::set_var("REMI_ADMIN_TOKEN", "tok");
             std::env::remove_var("REMI_ADMIN_ENDPOINT");
@@ -354,8 +393,7 @@ mod tests {
 
     #[test]
     fn from_env_uses_admin_endpoint() {
-        // SAFETY: this test is single-threaded; no other thread reads
-        // REMI_ADMIN_TOKEN or REMI_ADMIN_ENDPOINT concurrently.
+        let _env_guard = EnvVarGuard::new();
         unsafe {
             std::env::set_var("REMI_ADMIN_TOKEN", "tok");
             std::env::set_var("REMI_ADMIN_ENDPOINT", "https://admin.example.com/");

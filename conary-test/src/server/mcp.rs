@@ -1029,7 +1029,8 @@ impl TestMcpServer {
             })?;
         let client = self.state.remi_client.as_ref().ok_or_else(|| {
             McpError::internal_error(
-                "Remi client is not configured (REMI_ADMIN_TOKEN not set)".to_string(),
+                "Remi client is not configured (REMI_ADMIN_TOKEN or REMI_ADMIN_ENDPOINT not set)"
+                    .to_string(),
                 None,
             )
         })?;
