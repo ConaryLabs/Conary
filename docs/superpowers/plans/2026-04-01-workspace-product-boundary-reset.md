@@ -4,7 +4,7 @@
 
 **Goal:** Reset the Conary repository into a virtual workspace with product-owned app crates (`conary`, `remi`, `conaryd`, `conary-test`) and a reduced shared core crate, while keeping all shipped binaries working and making build/test/release flows match the new package graph.
 
-**Architecture:** Do the reset in one decisive branch, but in ordered phases: first make the workspace graph honest, then remove cross-package feature indirection, then clean up the ownership leaks exposed by the move, and only then update tooling, packaging, and docs. Favor product boundaries over compatibility shims, and only add a new support crate if a shared helper remains genuinely shared after the ownership cleanup.
+**Architecture:** Do the reset in one decisive branch, but in ordered phases: first make the workspace graph honest, then remove cross-package feature indirection, then clean up the ownership leaks exposed by the move, and only then update tooling, packaging, and docs. Favor product boundaries over compatibility shims, and prefer keeping tiny shared helper surfaces in an existing crate unless the ownership cleanup proves they deserve a dedicated support crate.
 
 **Tech Stack:** Rust 2024 workspace, Cargo resolver 3, Clap, Axum, Tokio, existing `conary-core` shared library, GitHub Actions workflows, shell release/packaging scripts, approved spec at `docs/superpowers/specs/2026-04-01-workspace-product-boundary-reset-design.md`.
 
@@ -38,10 +38,10 @@
 - `crates/conary-mcp/Cargo.toml`: create only if the explicit decision task proves it is necessary
 - `crates/conary-mcp/src/lib.rs`: create only if the explicit decision task proves it is necessary
 - `apps/conary/src/cli/system.rs`: rehome or delete service-launch surfaces that no longer belong to `conary`
-- `apps/conary/src/cli/federation.rs`: rehome or delete server-only scan surface
+- `apps/conary/src/cli/federation.rs`: keep the client-side scan surface and drop only the old cross-package feature gating around it
 - `apps/conary/src/cli/trust.rs`: re-evaluate server-gated trust-admin operations
 - `apps/conary/src/commands/system.rs`: remove feature-gated server launch hooks and keep only package-manager responsibilities
-- `apps/conary/src/commands/federation.rs`: keep client-side federation admin flows or move server-only scanning
+- `apps/conary/src/commands/federation.rs`: keep client-side federation admin flows, including LAN peer discovery, while extracting only the reusable discovery helper if needed
 - `apps/conary/src/commands/trust.rs`: keep shared trust ops or move service-specific admin flows
 - `apps/remi/src/server/routes.rs`: split by responsibility while moving into the Remi app crate
 - `apps/conaryd/src/daemon/routes.rs`: split by responsibility while moving into the daemon app crate
@@ -277,6 +277,18 @@ Use this rule:
 - keep `polkit` only on `conaryd` unless a real compile path proves Remi also
   needs it
 
+Start from these initial dependency buckets, then confirm with compile errors
+instead of guessing:
+- Remi-owned first pass: `filetime`, `async-stream`, `dashmap`, `governor`,
+  `parking_lot`, `mdns-sd`, `flume`, `rust-s3`, `tantivy`, `rmcp`,
+  `tower-http`
+- conaryd-owned first pass: `sd-notify`, `hyper`, `hyper-util`,
+  `http-body-util`, `zbus`
+- shared app deps likely to remain in both manifests: `axum`, `tower`,
+  `tokio`, `tokio-stream`, `clap`, `tracing-subscriber`, `anyhow`, `tracing`,
+  `serde`, `serde_json`, `chrono`, `url`, and any direct `conary-core`/DB/HTTP
+  imports still used by both trees
+
 Make this explicit in the new manifests:
 
 ```toml
@@ -410,6 +422,8 @@ git commit -m "refactor(workspace): split remi and conaryd into separate apps"
 - Modify: `apps/remi/src/bin/remi.rs`
 - Modify: `apps/remi/src/lib.rs`
 - Modify: `apps/conaryd/src/bin/conaryd.rs`
+- Modify: `.github/workflows/ci.yml`
+- Modify: `.claude/hooks/post-edit-clippy.sh`
 - Delete: `conary-server/`
 
 - [ ] **Step 1: Audit every existing `#[cfg(feature = \"server\")]` surface and classify its owner**
@@ -433,7 +447,9 @@ Minimum expected moves:
 - `Commands::Daemon` -> `conaryd`
 - `Commands::RemiProxy` -> `remi`
 - `SystemCommands::IndexGen` / `Prewarm` -> `remi`
-- `FederationCommands::Scan` -> `remi`
+- `FederationCommands::Scan` stays in `conary` as a client-side federation
+  discovery/admin concern; extract only the reusable mDNS discovery helper if
+  the current implementation still depends on Remi-owned code
 - `TrustCommands::SignTargets` / `RotateKey` -> `remi`, while shared signing
   helpers stay in `crates/conary-core`
 
@@ -442,8 +458,12 @@ Minimum expected moves:
 Run:
 - `cargo build -p conary --verbose`
 
-Expected: it still depends on the old cross-package feature model and will
-break once the feature and old package paths are removed
+Expected:
+- it still depends on the old cross-package feature model and will break once
+  the feature and old package paths are removed
+- current server compilation already works through `conary-server`'s own
+  unconditional dependency on `conary-core/server`; this task is removing CLI
+  indirection, not inventing server crate viability from scratch
 
 - [ ] **Step 3: Remove the cross-package feature indirection**
 
@@ -486,6 +506,9 @@ In the same step:
 - remove `conary-server` from the root workspace members
 - delete the temporary `conary-server` shim package created in Chunk 1
 - ensure `apps/conary/Cargo.toml` no longer references the shim package at all
+- update `.github/workflows/ci.yml` and `.claude/hooks/post-edit-clippy.sh`
+  in the same commit so the tree does not keep obvious references to the
+  deleted `conary-server` package or root `--features server` commands
 
 - [ ] **Step 5: Run verification**
 
@@ -494,17 +517,20 @@ Run:
 - `cargo build -p remi --verbose`
 - `cargo build -p conaryd --verbose`
 - `cargo metadata --no-deps --format-version 1`
+- `rg -n 'conary-server|--features server' .github/workflows/ci.yml .claude/hooks/post-edit-clippy.sh`
 - `cargo test -p conary --lib --no-run`
 
 Expected:
 - `conary` builds without any `server` feature
 - `remi` and `conaryd` own their startup flows directly
 - `cargo metadata` no longer lists `conary-server` as a workspace member
+- the minimal CI/hook surfaces no longer reference `conary-server` or the old
+  root `server` feature
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add Cargo.toml apps/conary apps/remi apps/conaryd conary-server
+git add Cargo.toml apps/conary apps/remi apps/conaryd conary-server .github/workflows/ci.yml .claude/hooks/post-edit-clippy.sh
 git commit -m "refactor(cli): remove cross-package server feature wiring"
 ```
 
@@ -514,6 +540,7 @@ git commit -m "refactor(cli): remove cross-package server feature wiring"
 - Modify: `crates/conary-core/Cargo.toml`
 - Modify: `crates/conary-core/src/lib.rs`
 - Modify: `apps/remi/Cargo.toml`
+- Modify: `apps/conaryd/Cargo.toml`
 - Modify: `apps/conary-test/Cargo.toml`
 - Optional Create: `crates/conary-mcp/Cargo.toml`
 - Optional Create: `crates/conary-mcp/src/lib.rs`
@@ -570,9 +597,17 @@ Current-state reminder: `apps/conary-test` currently depends on
 - if only one app still needs the helpers after ownership cleanup, inline them
   into the owning app and delete the shared `mcp` feature from core
 
-Current evidence points toward creating `crates/conary-mcp`, because
-`apps/remi` and `apps/conary-test` both consume the same MCP helper surface
-today. Only skip that crate if the ownership cleanup eliminates one caller.
+Current evidence says the genuinely shared MCP surface is tiny today
+(`to_json_text`, `server_info`, and a small amount of validation/boilerplate).
+That should drive the outcome toward one of these two paths:
+- if multiple apps still share those helpers after ownership cleanup, create a
+  very small `crates/conary-mcp` and move them there
+- if only one app still needs them, inline them into the owning app
+
+Do not treat the small helper size as justification for leaving app-facing MCP
+helpers in `crates/conary-core`. Keeping them in core is the exception, and it
+must be justified explicitly by a clearly domain-focused boundary that does not
+blur app ownership again.
 
 Do not move product policy or service wiring into `crates/conary-mcp`.
 
@@ -591,7 +626,7 @@ no stale daemon assumptions about the removed core feature wiring
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/conary-core apps/remi apps/conary-test
+git add crates/conary-core apps/remi apps/conaryd apps/conary-test
 git commit -m "refactor(core): simplify core features and shared helpers"
 ```
 
@@ -609,7 +644,25 @@ explicitly before committing.
 - Modify: `apps/conaryd/src/daemon/routes.rs`
 - Create: `apps/conaryd/src/daemon/routes/`
 
-- [ ] **Step 1: Capture baseline file sizes**
+- [ ] **Step 1: Identify natural split points before moving code**
+
+For `apps/conaryd/src/daemon/routes.rs`, map the current handlers into likely
+families before creating files. Start with candidates such as:
+- `routes/jobs.rs`
+- `routes/query.rs`
+- `routes/transactions.rs`
+- `routes/system.rs`
+- `routes/events.rs`
+- `routes/auth.rs`
+
+For `apps/remi/src/server/routes.rs`, confirm whether the natural split is
+actually `public`, `admin`, and `mcp`, or whether another ownership boundary
+fits the current code better.
+
+Do not start moving handlers until the grouping is written down in task notes
+and matches the current call graph.
+
+- [ ] **Step 2: Capture baseline file sizes**
 
 Run:
 
@@ -622,7 +675,7 @@ wc -l apps/conary/src/main.rs \
 Expected: the current files are large enough that ownership is hard to read as
 one unit
 
-- [ ] **Step 2: Split `conary` entrypoint from dispatch**
+- [ ] **Step 3: Split `conary` entrypoint from dispatch**
 
 Target shape:
 
@@ -652,8 +705,10 @@ Preserve behavior while splitting:
 - move startup and tracing initialization into `app.rs`
 - move the large command match and dispatch logic into `dispatch.rs`
 - do not silently rewrite command behavior while performing the structural split
+- treat this as a first-pass structural extraction; deeper command-family
+  cleanup can happen later once the package ownership reset is finished
 
-- [ ] **Step 3: Split Remi and daemon route mega-files by responsibility**
+- [ ] **Step 4: Split Remi and daemon route mega-files by responsibility**
 
 For `apps/remi/src/server/routes.rs`, split into modules such as:
 - `routes/public.rs`
@@ -666,7 +721,7 @@ that already move together in code review and testing.
 Do not split mechanically by line count. Split by ownership and router
 responsibility.
 
-- [ ] **Step 4: Run verification**
+- [ ] **Step 5: Run verification**
 
 Run:
 - `cargo build -p conary --verbose`
@@ -677,7 +732,7 @@ Run:
 
 Expected: PASS with smaller, more obviously owned entrypoint/router files
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add apps/conary apps/remi apps/conaryd
@@ -752,6 +807,14 @@ new product model. At minimum:
 - `remi`
 - `conaryd`
 - `conary-test`
+
+Redesign the release grouping logic, not just the paths:
+- replace the old `server` group in `TAG_PREFIX`, `PATH_SCOPES`, and the
+  version-bump case statement
+- decide explicitly whether `remi` and `conaryd` get independent version tracks
+  or a shared service-release policy
+- update path scopes from `src/`, `conary-server/`, and `conary-test/` to the
+  new `apps/` and `crates/` layout
 
 In packaging files, update build invocations and manifest paths to the new
 workspace layout without changing the shipped binary names.
