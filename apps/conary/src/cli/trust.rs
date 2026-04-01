@@ -75,42 +75,4 @@ pub enum TrustCommands {
         db: DbArgs,
     },
 
-    /// Sign targets metadata (server-side)
-    #[cfg(feature = "server")]
-    SignTargets {
-        /// Repository name
-        repo: String,
-
-        /// Path to signing key
-        #[arg(long)]
-        key: String,
-
-        #[command(flatten)]
-        db: DbArgs,
-    },
-
-    /// Rotate a TUF role key
-    #[cfg(feature = "server")]
-    RotateKey {
-        /// Role to rotate (root, targets, snapshot, timestamp)
-        role: String,
-
-        /// Path to old key file
-        #[arg(long)]
-        old_key: String,
-
-        /// Path to new key file
-        #[arg(long)]
-        new_key: String,
-
-        /// Path to root key file (for signing the new root)
-        #[arg(long)]
-        root_key: String,
-
-        /// Repository name
-        repo: String,
-
-        #[command(flatten)]
-        db: DbArgs,
-    },
 }

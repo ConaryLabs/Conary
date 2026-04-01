@@ -5,7 +5,6 @@ members = [
     "apps/conaryd",
     "apps/conary-test",
     "crates/conary-core",
-    "conary-server",
 ]
 resolver = "3"
 
@@ -83,13 +82,14 @@ futures = "0.3"
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 rand = "0.9"
 
-# Web framework (shared between conary-server and conary-test)
+# Web framework
 axum = "0.8"
 tower = "0.5"
 tower-http = "0.6"
 tokio-stream = "0.1"
+mdns-sd = "0.18"
 
-# MCP (shared between conary-server and conary-test)
+# MCP
 rmcp = "1.1"
 schemars = "1.0"
 

@@ -1,11 +1,9 @@
-// src/commands/trust.rs
+// apps/conary/src/commands/trust.rs
 
 //! TUF trust management command implementations
 
 use super::open_db;
 use anyhow::{Context, Result, anyhow};
-#[cfg(feature = "server")]
-use conary_core::ccs::signing::SigningKeyPair;
 use conary_core::db::models::Repository;
 use conary_core::trust::ceremony;
 use conary_core::trust::client::TufClient;
@@ -218,71 +216,6 @@ pub async fn cmd_trust_verify(repo_name: &str, db_path: &str) -> Result<()> {
             anyhow::bail!("TUF verification failed: {e}");
         }
     }
-
-    Ok(())
-}
-
-/// Sign targets metadata (server-side operation)
-#[cfg(feature = "server")]
-pub async fn cmd_trust_sign_targets(repo_name: &str, key_path: &str, db_path: &str) -> Result<()> {
-    let conn = open_db(db_path)?;
-    let (_repo, _repo_id) = get_repo_with_id(&conn, repo_name)?;
-
-    let _key = SigningKeyPair::load_from_file(Path::new(key_path))
-        .with_context(|| format!("Failed to load signing key: {key_path}"))?;
-
-    // TODO: Read packages from repository and generate targets
-    println!(
-        "Targets signing for server-side use - implementation pending full server integration"
-    );
-
-    Ok(())
-}
-
-/// Rotate a TUF role key (server-side operation)
-#[cfg(feature = "server")]
-pub async fn cmd_trust_rotate_key(
-    role: &str,
-    old_key_path: &str,
-    new_key_path: &str,
-    root_key_path: &str,
-    repo_name: &str,
-    db_path: &str,
-) -> Result<()> {
-    let conn = open_db(db_path)?;
-    let (repo, repo_id) = get_repo_with_id(&conn, repo_name)?;
-
-    let old_key = SigningKeyPair::load_from_file(Path::new(old_key_path))
-        .with_context(|| format!("Failed to load old key: {old_key_path}"))?;
-    let new_key = SigningKeyPair::load_from_file(Path::new(new_key_path))
-        .with_context(|| format!("Failed to load new key: {new_key_path}"))?;
-    let root_key = SigningKeyPair::load_from_file(Path::new(root_key_path))
-        .with_context(|| format!("Failed to load root key: {root_key_path}"))?;
-
-    // Load current root
-    let client = TufClient::new(repo_id, &repo.url, repo.tuf_root_url.as_deref())?;
-
-    // Read current root from DB
-    let root_json: String = conn.query_row(
-        "SELECT signed_metadata FROM tuf_roots WHERE repository_id = ?1 ORDER BY version DESC LIMIT 1",
-        params![repo_id],
-        |row| row.get(0),
-    )?;
-
-    let current_root: conary_core::trust::Signed<conary_core::trust::RootMetadata> =
-        serde_json::from_str(&root_json)?;
-
-    let new_root = ceremony::rotate_key(&current_root, role, &old_key, &new_key, &root_key, 365)?;
-
-    // Bootstrap the new root
-    let new_root_json = serde_json::to_vec(&new_root)?;
-    client.bootstrap(&conn, &new_root_json)?;
-
-    let (new_key_id, _) =
-        conary_core::trust::signing_keypair_to_tuf_key(&new_key).map_err(|e| anyhow!("{}", e))?;
-    println!("Key rotation complete for role: {role}");
-    println!("New root version: {}", new_root.signed.version);
-    println!("New key ID: {new_key_id}");
 
     Ok(())
 }

@@ -39,14 +39,14 @@ jobs:
       - name: Run clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Build client (no server)
-        run: cargo build --verbose
+      - name: Build conary
+        run: cargo build -p conary --verbose
 
-      - name: Build server crate
-        run: cargo build -p conary-server --verbose
+      - name: Build remi
+        run: cargo build -p remi --verbose
 
-      - name: Build with server feature
-        run: cargo build --features server --verbose
+      - name: Build conaryd
+        run: cargo build -p conaryd --verbose
 
       - name: Run tests
         run: cargo test --workspace --verbose
@@ -75,4 +75,3 @@ jobs:
           --ignore RUSTSEC-2024-0447
           --ignore RUSTSEC-2023-0071
           --ignore RUSTSEC-2025-0136
-

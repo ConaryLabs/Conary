@@ -106,7 +106,6 @@ pub use provenance::{
 pub use recipe_audit::cmd_recipe_audit;
 pub use remove::{cmd_autoremove, cmd_remove};
 // cmd_scripts is defined in this module, no need to re-export from submodule
-#[cfg(feature = "server")]
 pub use federation::cmd_federation_scan;
 pub use federation::{
     cmd_federation_add_peer, cmd_federation_enable_peer, cmd_federation_peers,
@@ -132,8 +131,6 @@ pub use state::{
     cmd_state_show,
 };
 pub use system::{cmd_gc, cmd_init, cmd_rollback, cmd_verify};
-#[cfg(feature = "server")]
-pub use system::{cmd_index_gen, cmd_prewarm};
 pub use triggers::{
     cmd_trigger_add, cmd_trigger_disable, cmd_trigger_enable, cmd_trigger_list, cmd_trigger_remove,
     cmd_trigger_run, cmd_trigger_show,
@@ -142,8 +139,6 @@ pub use trust::{
     cmd_trust_disable, cmd_trust_enable, cmd_trust_init, cmd_trust_key_gen, cmd_trust_status,
     cmd_trust_verify,
 };
-#[cfg(feature = "server")]
-pub use trust::{cmd_trust_rotate_key, cmd_trust_sign_targets};
 pub use update::{
     cmd_delta_stats, cmd_list_pinned, cmd_pin, cmd_unpin, cmd_update, cmd_update_group,
 };

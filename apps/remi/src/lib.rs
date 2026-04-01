@@ -3,3 +3,4 @@
 
 pub mod federation;
 pub mod server;
+pub mod trust;

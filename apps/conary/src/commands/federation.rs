@@ -448,9 +448,8 @@ pub async fn cmd_federation_test(db_path: &str, peer: Option<&str>, timeout: u64
 }
 
 /// Scan for peers on the local network using mDNS
-#[cfg(feature = "server")]
 pub async fn cmd_federation_scan(db_path: &str, duration_secs: u64, add_peers: bool) -> Result<()> {
-    use conary_server::federation::{MdnsDiscovery, PeerTier};
+    use conary_core::federation_discovery::MdnsDiscovery;
     use std::time::Duration;
 
     println!("Scanning for Conary CAS peers on the local network...");
@@ -482,17 +481,11 @@ pub async fn cmd_federation_scan(db_path: &str, duration_secs: u64, add_peers: b
             .map(|a| format!("{}:{}", a, peer.port))
             .unwrap_or_else(|| "unknown".to_string());
 
-        let tier_str = match peer.tier {
-            PeerTier::RegionHub => "region_hub",
-            PeerTier::CellHub => "cell_hub",
-            PeerTier::Leaf => "leaf",
-        };
-
         println!(
             "{:<20} {:<30} {:<12} {:<8}",
             truncate(&peer.instance_name, 20),
             truncate(&addr, 30),
-            tier_str,
+            peer.tier,
             &peer.version
         );
     }
@@ -505,30 +498,29 @@ pub async fn cmd_federation_scan(db_path: &str, duration_secs: u64, add_peers: b
         let mut added = 0;
 
         for discovered in &peers {
-            if let Ok(peer) = discovered.to_peer() {
+            if let Ok(endpoint) = discovered.endpoint_with_secure_transport(false) {
                 // Check if peer already exists
                 let exists: bool = conn
                     .query_row(
                         "SELECT 1 FROM federation_peers WHERE endpoint = ?1",
-                        [&peer.endpoint],
+                        [&endpoint],
                         |_| Ok(true),
                     )
                     .unwrap_or(false);
 
                 if !exists {
-                    let tier_str = match discovered.tier {
-                        PeerTier::RegionHub => "region_hub",
-                        PeerTier::CellHub => "cell_hub",
-                        PeerTier::Leaf => "leaf",
-                    };
-
                     conn.execute(
                         "INSERT INTO federation_peers (id, endpoint, node_name, tier)
                          VALUES (?1, ?2, ?3, ?4)",
-                        rusqlite::params![peer.id, peer.endpoint, peer.name, tier_str],
+                        rusqlite::params![
+                            &discovered.id,
+                            &endpoint,
+                            &discovered.instance_name,
+                            discovered.tier.to_string()
+                        ],
                     )?;
 
-                    println!("[OK] Added peer: {}", peer.endpoint);
+                    println!("[OK] Added peer: {}", endpoint);
                     added += 1;
                 }
             }
