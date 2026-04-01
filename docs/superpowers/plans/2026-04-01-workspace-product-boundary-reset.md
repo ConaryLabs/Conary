@@ -57,11 +57,13 @@
 - `packaging/arch/PKGBUILD`: update workspace/build paths
 - `packaging/ccs/build.sh`, `packaging/ccs/ccs.toml`, `packaging/ccs/stage/**`: update artifact generation assumptions if paths change
 - `README.md`: update package-specific build/run commands
+- `CONTRIBUTING.md`: update contributor workflow docs and remove old `--features server` guidance
 - `site/src/routes/**`: update checked-in site pages if they mention the old workspace graph or old Cargo commands
 - `docs/ARCHITECTURE.md`: rewrite around the new package graph
 - `docs/INTEGRATION-TESTING.md`: update `conary-test` paths and commands after relocation
 - `docs/conaryopedia-v2.md`: update long-form repo and command explanations that LLMs and humans use for orientation
 - `CLAUDE.md` and `AGENTS.md`: update contributor guidance if package paths/commands change
+- `.github/PULL_REQUEST_TEMPLATE.md`: remove old `--features server` expectations from the PR checklist
 - `docs/superpowers/specs/2026-04-01-workspace-product-boundary-reset-design.md`: approved spec reference; keep implementation aligned with it
 
 ## Chunk 1: Workspace Graph Reset
@@ -156,11 +158,14 @@ before the server split.
 Run:
 - `cargo metadata --no-deps --format-version 1`
 - `cargo build -p conary --verbose`
+- `cargo check -p conary --all-targets`
 - `cargo test -p conary workflow -- --nocapture`
 
 Expected:
 - `cargo metadata` succeeds with the root manifest acting as a virtual workspace
 - `cargo build -p conary` passes from `apps/conary`
+- `cargo check -p conary --all-targets` catches path/module drift across build
+  targets before later tasks stack on top
 - the selected `conary` integration test target runs from `apps/conary/tests`
 
 - [ ] **Step 6: Commit**
@@ -225,6 +230,8 @@ Update path dependencies:
 Run:
 - `cargo build -p conary-core --verbose`
 - `cargo build -p conary-test --verbose`
+- `cargo check -p conary-core --all-targets`
+- `cargo check -p conary-test --all-targets`
 - `cargo test -p conary-core --lib --no-run`
 - `cargo test -p conary-test --lib --no-run`
 
@@ -452,6 +459,14 @@ Minimum expected moves:
   the current implementation still depends on Remi-owned code
 - `TrustCommands::SignTargets` / `RotateKey` -> `remi`, while shared signing
   helpers stay in `crates/conary-core`
+
+Before editing CLI ownership, make an explicit call on the current
+`cmd_federation_scan` dependency on `conary_server::federation::MdnsDiscovery`:
+- preferred: extract the minimal reusable discovery helper so `conary` keeps a
+  client-side `scan` command without depending on an app-owned crate
+- acceptable fallback: wrap the reusable discovery surface behind a small,
+  client-friendly shared API
+- do not solve this by making `conary` depend directly on `apps/remi`
 
 - [ ] **Step 2: Capture the red state**
 
@@ -747,15 +762,19 @@ git commit -m "refactor(apps): split oversized dispatch and route modules"
 - Modify: `apps/conary/build.rs`
 - Modify: `.github/workflows/ci.yml`
 - Modify: `.github/workflows/release.yml`
+- Modify: `.github/PULL_REQUEST_TEMPLATE.md`
 - Modify: `scripts/release.sh`
 - Modify: `scripts/sign-release.sh`
 - Modify: `scripts/rebuild-remi.sh`
 - Modify: `scripts/bootstrap-remi.sh`
 - Modify: `scripts/deploy-forge.sh`
 - Modify: `packaging/rpm/conary.spec`
+- Modify: `packaging/rpm/build.sh`
 - Modify: `packaging/deb/debian/control`
 - Modify: `packaging/deb/debian/rules`
+- Modify: `packaging/deb/build.sh`
 - Modify: `packaging/arch/PKGBUILD`
+- Modify: `packaging/arch/build.sh`
 - Modify: `packaging/ccs/build.sh`
 
 - [ ] **Step 1: Capture the red state**
@@ -763,9 +782,14 @@ git commit -m "refactor(apps): split oversized dispatch and route modules"
 Run:
 - `cargo build -p conary --verbose`
 - `bash -n scripts/release.sh`
+- `bash -n scripts/rebuild-remi.sh`
+- `bash -n packaging/rpm/build.sh`
+- `bash -n packaging/deb/build.sh`
+- `bash -n packaging/arch/build.sh`
 - `bash -n packaging/ccs/build.sh`
 - `sed -n '1,260p' scripts/release.sh`
 - `sed -n '1,260p' .github/workflows/ci.yml`
+- `sed -n '1,200p' .github/PULL_REQUEST_TEMPLATE.md`
 - `rg -n 'conary-server|--features server|cargo build --verbose|cargo build -p conary-server' .github/workflows scripts packaging`
 
 Expected: stale commands and package paths are still present
@@ -781,6 +805,9 @@ Preferred end state:
 - generated manpages and shell completions reflect the real current CLI
 
 Do not keep a shadow CLI definition in the build script.
+Because `apps/conary/build.rs` moves below the repo root, make the output path
+resolution derive from `CARGO_MANIFEST_DIR` instead of assuming the old root
+layout.
 
 - [ ] **Step 3: Update CI and release workflows**
 
@@ -799,6 +826,9 @@ Explicitly remove or replace old CI commands such as:
 - `cargo build -p conary-server`
 - `cargo test -p conary-server`
 
+Also update `.github/PULL_REQUEST_TEMPLATE.md` so it no longer asks authors to
+check a stale “Tested with --features server” box.
+
 - [ ] **Step 4: Update release grouping and packaging scripts**
 
 In `scripts/release.sh`, replace the old `conary/server/test` grouping with the
@@ -815,6 +845,13 @@ Redesign the release grouping logic, not just the paths:
   or a shared service-release policy
 - update path scopes from `src/`, `conary-server/`, and `conary-test/` to the
   new `apps/` and `crates/` layout
+
+For `scripts/rebuild-remi.sh`, update the build/copy/restart flow to target the
+actual Remi binary:
+- build with `cargo build --release -p remi`
+- copy `target/release/remi`
+- verify the service unit or deployment path still points at the correct
+  executable name
 
 In packaging files, update build invocations and manifest paths to the new
 workspace layout without changing the shipped binary names.
@@ -844,11 +881,13 @@ git commit -m "refactor(tooling): align release and packaging with new workspace
 
 **Files:**
 - Modify: `README.md`
+- Modify: `CONTRIBUTING.md`
 - Modify: `docs/ARCHITECTURE.md`
 - Modify: `docs/INTEGRATION-TESTING.md`
 - Modify: `docs/conaryopedia-v2.md`
 - Modify: `CLAUDE.md`
 - Modify: `AGENTS.md`
+- Modify: `.github/PULL_REQUEST_TEMPLATE.md`
 - Modify: `.claude/rules/**`
 - Modify: `.claude/agents/**`
 - Modify: `.claude/hooks/post-edit-clippy.sh`
@@ -879,6 +918,8 @@ Specifically update:
 - `AGENTS.md`
 - `CLAUDE.md`
 - `docs/conaryopedia-v2.md`
+- `CONTRIBUTING.md`
+- `.github/PULL_REQUEST_TEMPLATE.md`
 - `.claude/rules/**`
 - `.claude/agents/**`
 - `.claude/hooks/post-edit-clippy.sh`
@@ -896,6 +937,14 @@ paths and starts editing the wrong crate.
 Also update checked-in site source pages in `site/src/routes/**` if they teach
 the old package graph or old Cargo commands. Do not spend time editing
 generated `site/build/**` output or local-only `.worktrees/**` copies.
+
+Include an explicit old-to-new command map where it helps contributors:
+- old: `cargo build -p conary-server`
+- new: `cargo build -p remi && cargo build -p conaryd`
+- old: `cargo build --features server`
+- new: `cargo build -p remi && cargo build -p conaryd`
+- old: `cargo test --features server`
+- new: `cargo test -p remi && cargo test -p conaryd`
 
 - [ ] **Step 3: Run the structural verification matrix**
 
@@ -938,7 +987,7 @@ product surface
 - [ ] **Step 6: Commit**
 
 ```bash
-git add README.md docs/ARCHITECTURE.md docs/INTEGRATION-TESTING.md docs/conaryopedia-v2.md CLAUDE.md AGENTS.md .claude site/src/routes
+git add README.md CONTRIBUTING.md docs/ARCHITECTURE.md docs/INTEGRATION-TESTING.md docs/conaryopedia-v2.md CLAUDE.md AGENTS.md .github/PULL_REQUEST_TEMPLATE.md .claude site/src/routes
 git commit -m "docs: update workspace architecture and commands"
 ```
 
@@ -957,3 +1006,7 @@ git commit -m "docs: update workspace architecture and commands"
 - If a command surface currently exists only because the old `conary` root app
   could start Remi or the daemon in-process, prefer moving that surface to the
   owning binary instead of preserving it in `conary`.
+- This reset intentionally breaks old launcher surfaces such as
+  `conary remi`, `conary daemon`, and `conary system server`. If a temporary
+  user-facing bridge is warranted, prefer explicit error/help text or release
+  notes over silently keeping the old ownership model alive.
