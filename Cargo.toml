@@ -1,5 +1,5 @@
 [workspace]
-members = ["apps/conary", "conary-core", "conary-server", "conary-test"]
+members = ["apps/conary", "apps/conary-test", "conary-server", "crates/conary-core"]
 resolver = "3"
 
 [workspace.dependencies]

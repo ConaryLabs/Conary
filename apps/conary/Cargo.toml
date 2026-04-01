@@ -19,7 +19,7 @@ experimental = []
 
 [dependencies]
 # Core library
-conary-core = { path = "../../conary-core" }
+conary-core = { path = "../../crates/conary-core" }
 
 # CLI
 clap = { workspace = true, features = ["cargo"] }
