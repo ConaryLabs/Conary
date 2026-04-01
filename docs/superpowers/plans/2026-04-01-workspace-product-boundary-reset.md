@@ -47,6 +47,9 @@
 - `apps/conaryd/src/daemon/routes.rs`: split by responsibility while moving into the daemon app crate
 - `.github/workflows/ci.yml`: update package-specific build/test commands
 - `.github/workflows/release.yml`: update package-specific release builds and artifact expectations
+- `.claude/rules/**`: update agent-facing architecture/build guidance that still describes `conary-server` and `--features server`
+- `.claude/agents/**`: update packaged agent playbooks that still teach the old workspace layout
+- `.claude/hooks/post-edit-clippy.sh`: replace stale `cargo clippy --features server` assumptions
 - `scripts/release.sh`: update release grouping from the old root/server/test model to the new product model
 - `scripts/sign-release.sh`, `scripts/rebuild-remi.sh`, `scripts/bootstrap-remi.sh`, `scripts/deploy-forge.sh`: update path/package assumptions if they rely on the old layout
 - `packaging/rpm/conary.spec`: update build paths and package commands
@@ -54,6 +57,7 @@
 - `packaging/arch/PKGBUILD`: update workspace/build paths
 - `packaging/ccs/build.sh`, `packaging/ccs/ccs.toml`, `packaging/ccs/stage/**`: update artifact generation assumptions if paths change
 - `README.md`: update package-specific build/run commands
+- `site/src/routes/**`: update checked-in site pages if they mention the old workspace graph or old Cargo commands
 - `docs/ARCHITECTURE.md`: rewrite around the new package graph
 - `docs/INTEGRATION-TESTING.md`: update `conary-test` paths and commands after relocation
 - `docs/conaryopedia-v2.md`: update long-form repo and command explanations that LLMs and humans use for orientation
@@ -236,6 +240,7 @@ git commit -m "refactor(workspace): relocate shared core and test harness"
 ### Task 3: Split `conary-server` Into `remi` And `conaryd`
 
 **Files:**
+- Modify: `Cargo.toml`
 - Create: `apps/remi/Cargo.toml`
 - Create: `apps/remi/src/lib.rs`
 - Create: `apps/conaryd/Cargo.toml`
@@ -253,8 +258,12 @@ git commit -m "refactor(workspace): relocate shared core and test harness"
 Run:
 - `cargo build -p remi --verbose`
 - `cargo build -p conaryd --verbose`
+- `cargo tree -p conary-server -e normal`
 
-Expected: both commands fail because the packages do not exist yet
+Expected:
+- the new packages do not exist yet, so the package-specific builds fail
+- `cargo tree` shows the current monolithic `conary-server` dependency graph
+  that must be split between `apps/remi` and `apps/conaryd`
 
 - [ ] **Step 2: Create the new app package skeletons**
 
@@ -267,6 +276,26 @@ Use this rule:
 - put daemon-only lifecycle/socket dependencies in `apps/conaryd/Cargo.toml`
 - keep `polkit` only on `conaryd` unless a real compile path proves Remi also
   needs it
+
+Make this explicit in the new manifests:
+
+```toml
+# apps/remi/Cargo.toml
+[[bin]]
+name = "remi"
+path = "src/bin/remi.rs"
+
+# apps/conaryd/Cargo.toml
+[features]
+default = []
+polkit = ["dep:zbus"]
+
+[[bin]]
+name = "conaryd"
+path = "src/bin/conaryd.rs"
+```
+
+Do not carry a `polkit` feature into `apps/remi`.
 
 - [ ] **Step 3: Move the source trees**
 
@@ -334,18 +363,26 @@ pub use remi::server;
 This shim must be deleted in Chunk 2 once `apps/conary` no longer depends on
 the old `server` feature model.
 
+The shim is library-only compatibility for one chunk. It does not preserve
+`cargo run -p conary-server --bin remi` or `--bin conaryd` as stable commands;
+those product binaries now live in `apps/remi` and `apps/conaryd`.
+
 - [ ] **Step 5: Run package verification**
 
 Run:
 - `cargo build -p remi --verbose`
 - `cargo build -p conaryd --verbose`
+- `cargo build -p conaryd --features polkit --verbose`
 - `cargo build -p conary --features server --verbose`
+- `cargo build -p conary --features "server polkit" --verbose`
 - `cargo test -p remi --lib --no-run`
 - `cargo test -p conaryd --lib --no-run`
 
 Expected:
 - `remi` and `conaryd` build from their new packages
 - `conary --features server` still resolves through the temporary shim
+- the temporary `polkit` relay works through both `apps/conaryd` and the
+  one-chunk `conary-server` shim
 
 - [ ] **Step 6: Commit**
 
@@ -381,7 +418,7 @@ Run:
 
 ```bash
 rg -n 'cfg\\(feature = "server"\\)|feature = "server"|dep:conary-server|conary-core/server' \
-  Cargo.toml apps/conary crates/conary-core apps/remi apps/conaryd conary-server
+  .
 ```
 
 Classify each hit into one of three buckets in the commit message notes or
@@ -397,6 +434,8 @@ Minimum expected moves:
 - `Commands::RemiProxy` -> `remi`
 - `SystemCommands::IndexGen` / `Prewarm` -> `remi`
 - `FederationCommands::Scan` -> `remi`
+- `TrustCommands::SignTargets` / `RotateKey` -> `remi`, while shared signing
+  helpers stay in `crates/conary-core`
 
 - [ ] **Step 2: Capture the red state**
 
@@ -427,11 +466,21 @@ In `apps/conary/src/main.rs` and related CLI modules:
 - remove `#[cfg(feature = "server")]` dispatch branches that launched services
 - add or extend direct CLI entrypoints in `apps/remi/src/bin/remi.rs` and
   `apps/conaryd/src/bin/conaryd.rs`
+- delete the `Commands::Daemon`, `Commands::Remi`, and `Commands::RemiProxy`
+  variants from `apps/conary/src/cli/mod.rs`
+- delete `TrustCommands::SignTargets` and `TrustCommands::RotateKey` from
+  `apps/conary/src/cli/trust.rs` and rehome their owned CLI/admin surface to
+  `apps/remi`
 - keep `conary` focused on the package-manager UX and any explicitly approved
   remote-admin client flows
 
 Do not leave dead feature-gated variants in clap enums after removing the
 feature.
+
+Make the owning binaries self-contained:
+- `apps/remi/src/bin/remi.rs` must own Remi CLI parsing directly
+- `apps/conaryd/src/bin/conaryd.rs` must own daemon CLI parsing directly
+- do not leave either binary depending on `apps/conary` clap enums
 
 In the same step:
 - remove `conary-server` from the root workspace members
@@ -475,7 +524,7 @@ Run:
 
 ```bash
 rg -n 'cfg\\(feature = "server"\\)|cfg\\(feature = "mcp"\\)|composefs-rs|conary_core::mcp' \
-  crates/conary-core apps/remi apps/conary-test apps/conary
+  crates/conary-core apps/remi apps/conaryd apps/conary-test apps/conary
 ```
 
 Use the spec decision rules explicitly:
@@ -500,6 +549,31 @@ Implement the chosen manifest changes:
 - if `crates/conary-mcp` is needed, move only the transport-agnostic helpers:
   `server_info`, JSON/text formatting helpers, and similar utility code
 
+Choose one of these target shapes explicitly after the audit:
+
+```toml
+# Preferred if no supported dual-mode toggle remains:
+[features]
+default = []
+
+# Only if the audit proves a real supported dual-mode need:
+[features]
+default = ["composefs-rs"]
+composefs-rs = ["dep:composefs"]
+```
+
+Current-state reminder: `apps/conary-test` currently depends on
+`conary-core/mcp`. Resolve that dependency explicitly in this task:
+- if both `apps/remi` and `apps/conary-test` still need the same
+  transport-agnostic MCP helpers, create `crates/conary-mcp` and repoint both
+  apps to it
+- if only one app still needs the helpers after ownership cleanup, inline them
+  into the owning app and delete the shared `mcp` feature from core
+
+Current evidence points toward creating `crates/conary-mcp`, because
+`apps/remi` and `apps/conary-test` both consume the same MCP helper surface
+today. Only skip that crate if the ownership cleanup eliminates one caller.
+
 Do not move product policy or service wiring into `crates/conary-mcp`.
 
 - [ ] **Step 4: Run verification**
@@ -508,9 +582,11 @@ Run:
 - `cargo build -p conary-core --verbose`
 - `cargo test -p conary-core --lib --no-run`
 - `cargo build -p remi --verbose`
+- `cargo build -p conaryd --verbose`
 - `cargo build -p conary-test --verbose`
 
-Expected: PASS with no remaining conceptual need for `conary-core/server`
+Expected: PASS with no remaining conceptual need for `conary-core/server`, and
+no stale daemon assumptions about the removed core feature wiring
 
 - [ ] **Step 5: Commit**
 
@@ -572,6 +648,11 @@ pub async fn dispatch(cli: Cli) -> anyhow::Result<()> { /* match commands */ }
 Keep `main.rs` tiny. Do not let the new `app.rs` become another 2,000-line
 god file.
 
+Preserve behavior while splitting:
+- move startup and tracing initialization into `app.rs`
+- move the large command match and dispatch logic into `dispatch.rs`
+- do not silently rewrite command behavior while performing the structural split
+
 - [ ] **Step 3: Split Remi and daemon route mega-files by responsibility**
 
 For `apps/remi/src/server/routes.rs`, split into modules such as:
@@ -628,6 +709,8 @@ Run:
 - `cargo build -p conary --verbose`
 - `bash -n scripts/release.sh`
 - `bash -n packaging/ccs/build.sh`
+- `sed -n '1,260p' scripts/release.sh`
+- `sed -n '1,260p' .github/workflows/ci.yml`
 - `rg -n 'conary-server|--features server|cargo build --verbose|cargo build -p conary-server' .github/workflows scripts packaging`
 
 Expected: stale commands and package paths are still present
@@ -654,6 +737,12 @@ Make the workflows use package-owned commands, for example:
 
 Remove workflow logic that depends on the old root `server` feature or the old
 `conary-server` package name.
+
+Explicitly remove or replace old CI commands such as:
+- `cargo build --features server`
+- `cargo test --features server`
+- `cargo build -p conary-server`
+- `cargo test -p conary-server`
 
 - [ ] **Step 4: Update release grouping and packaging scripts**
 
@@ -697,6 +786,10 @@ git commit -m "refactor(tooling): align release and packaging with new workspace
 - Modify: `docs/conaryopedia-v2.md`
 - Modify: `CLAUDE.md`
 - Modify: `AGENTS.md`
+- Modify: `.claude/rules/**`
+- Modify: `.claude/agents/**`
+- Modify: `.claude/hooks/post-edit-clippy.sh`
+- Modify: `site/src/routes/**`
 
 - [ ] **Step 1: Update the docs to the new package graph**
 
@@ -711,12 +804,21 @@ Make the docs consistently describe:
 Remove instructions that tell contributors to use the old root `server`
 feature or the old `conary-server` package name.
 
+Call out the replacement explicitly wherever it used to appear:
+- old: `cargo build --features server`
+- new: `cargo build -p remi && cargo build -p conaryd`
+- old: `cargo test --features server`
+- new: `cargo test -p remi && cargo test -p conaryd`
+
 - [ ] **Step 2: Update LLM-facing orientation docs before the first post-refactor run**
 
 Specifically update:
 - `AGENTS.md`
 - `CLAUDE.md`
 - `docs/conaryopedia-v2.md`
+- `.claude/rules/**`
+- `.claude/agents/**`
+- `.claude/hooks/post-edit-clippy.sh`
 
 Make sure they reflect:
 - the new workspace layout
@@ -727,6 +829,10 @@ Make sure they reflect:
 
 Do not leave a stale “first fire-up” experience where an LLM reads old package
 paths and starts editing the wrong crate.
+
+Also update checked-in site source pages in `site/src/routes/**` if they teach
+the old package graph or old Cargo commands. Do not spend time editing
+generated `site/build/**` output or local-only `.worktrees/**` copies.
 
 - [ ] **Step 3: Run the structural verification matrix**
 
@@ -769,7 +875,7 @@ product surface
 - [ ] **Step 6: Commit**
 
 ```bash
-git add README.md docs/ARCHITECTURE.md docs/INTEGRATION-TESTING.md docs/conaryopedia-v2.md CLAUDE.md AGENTS.md
+git add README.md docs/ARCHITECTURE.md docs/INTEGRATION-TESTING.md docs/conaryopedia-v2.md CLAUDE.md AGENTS.md .claude site/src/routes
 git commit -m "docs: update workspace architecture and commands"
 ```
 
