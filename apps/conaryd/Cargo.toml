@@ -1,0 +1,54 @@
+[package]
+name = "conaryd"
+version = "0.5.0"
+edition = "2024"
+rust-version = "1.94"
+authors = ["Conary Contributors"]
+description = "Conary system daemon"
+license = "MIT OR Apache-2.0"
+
+[features]
+default = []
+polkit = ["dep:zbus"]
+
+[dependencies]
+conary-core = { path = "../../crates/conary-core", features = ["server"] }
+
+# Web framework
+axum.workspace = true
+tokio.workspace = true
+tokio-stream = { workspace = true, features = ["sync"] }
+tower.workspace = true
+
+# Daemon dependencies
+sd-notify = "0.5"
+hyper = { version = "1.4", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "server", "server-auto", "service"] }
+http-body-util = "0.1"
+
+# PolicyKit (optional)
+zbus = { version = "5.0", optional = true }
+
+# CLI parsing (for binary entry points)
+clap.workspace = true
+tracing-subscriber.workspace = true
+
+# Shared deps needed directly by daemon code
+anyhow.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+futures.workspace = true
+rusqlite.workspace = true
+thiserror.workspace = true
+tempfile.workspace = true
+fs2.workspace = true
+nix.workspace = true
+libc.workspace = true
+log.workspace = true
+uuid.workspace = true
+
+[[bin]]
+name = "conaryd"
+path = "src/bin/conaryd.rs"
