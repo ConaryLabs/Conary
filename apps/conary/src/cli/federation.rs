@@ -104,7 +104,6 @@ pub enum FederationCommands {
     },
 
     /// Scan for peers on the local network using mDNS
-    #[cfg(feature = "server")]
     Scan {
         #[command(flatten)]
         db: DbArgs,

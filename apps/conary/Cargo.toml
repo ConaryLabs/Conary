@@ -12,8 +12,6 @@ categories = ["command-line-utilities"]
 
 [features]
 default = []
-server = ["dep:conary-server", "conary-core/server"]
-polkit = ["conary-server/polkit"]
 # Experimental features not ready for production use (AI commands, etc.)
 experimental = []
 
@@ -61,9 +59,6 @@ x509-cert.workspace = true
 # Used in commands/ccs/signing.rs for CCS package building
 tar.workspace = true
 flate2.workspace = true
-
-# Server crate (feature-gated)
-conary-server = { path = "../../conary-server", optional = true }
 
 # Async runtime (needed by main.rs)
 tokio.workspace = true

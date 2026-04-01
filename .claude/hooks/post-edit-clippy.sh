@@ -9,7 +9,7 @@ FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
 [[ "$FILE_PATH" != *.rs ]] && exit 0
 
 # Run clippy, capture output
-CLIPPY_OUTPUT=$(cargo clippy --features server -- -D warnings 2>&1)
+CLIPPY_OUTPUT=$(cargo clippy --workspace --all-targets -- -D warnings 2>&1)
 CLIPPY_EXIT=$?
 
 if [ $CLIPPY_EXIT -ne 0 ]; then

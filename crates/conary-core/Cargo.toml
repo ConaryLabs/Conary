@@ -117,6 +117,8 @@ tokio.workspace = true
 
 # URL parsing for peer endpoints
 url.workspace = true
+mdns-sd.workspace = true
+flume = "0.11"
 
 # Diff output
 diffy = "0.4.2"

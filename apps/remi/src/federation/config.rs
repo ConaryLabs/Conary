@@ -4,28 +4,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Peer tier in the federation hierarchy
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum PeerTier {
-    /// WAN hub, requires mTLS
-    RegionHub,
-    /// Site-local cache (rack-level)
-    CellHub,
-    /// Individual node (default)
-    #[default]
-    Leaf,
-}
-
-impl std::fmt::Display for PeerTier {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PeerTier::RegionHub => write!(f, "region_hub"),
-            PeerTier::CellHub => write!(f, "cell_hub"),
-            PeerTier::Leaf => write!(f, "leaf"),
-        }
-    }
-}
+pub use conary_core::federation_discovery::PeerTier;
 
 /// Per-tier allowlists for restricting which peers can participate
 ///

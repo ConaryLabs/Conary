@@ -20,6 +20,7 @@ pub mod derivation;
 pub mod derived;
 mod error;
 pub mod filesystem;
+pub mod federation_discovery;
 pub mod flavor;
 pub mod generation;
 pub mod hash;
