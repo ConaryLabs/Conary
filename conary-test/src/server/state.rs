@@ -52,7 +52,7 @@ pub struct AppState {
     /// Limits concurrent test run execution to prevent resource exhaustion.
     pub run_semaphore: Arc<tokio::sync::Semaphore>,
     /// Optional HTTP client for streaming test results to the Remi admin API.
-    /// `None` when `REMI_ADMIN_TOKEN` is not set in the environment.
+    /// `None` when `REMI_ADMIN_TOKEN` or `REMI_ADMIN_ENDPOINT` is not set.
     pub remi_client: Option<Arc<RemiClient>>,
     /// Optional write-ahead log for buffering results when Remi is unreachable.
     /// `None` when the WAL database cannot be opened.

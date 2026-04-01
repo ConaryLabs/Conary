@@ -14,7 +14,7 @@ pub async fn openapi_spec() -> Response {
             "contact": { "name": "Conary Labs" }
         },
         "servers": [
-            { "url": "https://packages.conary.io:8082", "description": "Production" }
+            { "url": "/", "description": "Current admin API origin (direct admin listener or reverse-proxied public endpoint)" }
         ],
         "security": [{ "bearerAuth": [] }],
         "components": {
