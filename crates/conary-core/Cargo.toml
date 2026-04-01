@@ -9,8 +9,6 @@ license = "MIT OR Apache-2.0"
 
 [features]
 default = ["composefs-rs"]
-server = ["dep:async-trait", "dep:futures"]
-mcp = ["dep:rmcp"]
 composefs-rs = ["dep:composefs"]
 
 [dependencies]
@@ -136,12 +134,9 @@ dirs = "6.0.0"
 landlock = "0.4"
 seccompiler = "0.5"
 
-# Server-gated deps (async chunk fetcher)
-async-trait = { workspace = true, optional = true }
-futures = { workspace = true, optional = true }
-
-# MCP helpers (optional, feature-gated)
-rmcp = { workspace = true, features = ["server"], optional = true }
+# Async repository helpers
+async-trait.workspace = true
+futures.workspace = true
 
 # composefs-rs: EROFS image builder for composefs (optional, feature-gated)
 composefs = { version = "0.3", default-features = false, optional = true }

@@ -12,7 +12,7 @@ default = []
 polkit = ["dep:zbus"]
 
 [dependencies]
-conary-core = { path = "../../crates/conary-core", features = ["server"] }
+conary-core = { path = "../../crates/conary-core" }
 
 # Web framework
 axum.workspace = true

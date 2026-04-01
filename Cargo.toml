@@ -4,6 +4,7 @@ members = [
     "apps/remi",
     "apps/conaryd",
     "apps/conary-test",
+    "crates/conary-mcp",
     "crates/conary-core",
 ]
 resolver = "3"

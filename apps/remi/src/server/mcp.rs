@@ -15,7 +15,7 @@ use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use conary_core::mcp::{to_json_text, validate_path_param};
+use conary_mcp::{server_info, to_json_text, validate_path_param};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     handler::server::tool::{ToolCallContext, ToolRouter},
@@ -833,7 +833,7 @@ impl RemiMcpServer {
 
 impl ServerHandler for RemiMcpServer {
     fn get_info(&self) -> ServerInfo {
-        conary_core::mcp::server_info(
+        server_info(
             "remi-mcp",
             env!("CARGO_PKG_VERSION"),
             "Remi MCP server -- manage CI workflows, inspect runs, \

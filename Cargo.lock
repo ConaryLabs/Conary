@@ -1160,7 +1160,6 @@ dependencies = [
  "reqwest 0.13.1",
  "resolvo",
  "rfc822-like",
- "rmcp",
  "rpm",
  "rusqlite",
  "rustls-pki-types",
@@ -1192,6 +1191,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "conary-mcp"
+version = "0.7.0"
+dependencies = [
+ "rmcp",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "conary-test"
 version = "0.3.0"
 dependencies = [
@@ -1204,6 +1212,7 @@ dependencies = [
  "chrono",
  "clap",
  "conary-core",
+ "conary-mcp",
  "dashmap",
  "futures",
  "hex",
@@ -4909,6 +4918,7 @@ dependencies = [
  "chrono",
  "clap",
  "conary-core",
+ "conary-mcp",
  "dashmap",
  "ed25519-dalek",
  "filetime",

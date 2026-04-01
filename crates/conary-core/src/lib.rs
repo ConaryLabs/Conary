@@ -1,9 +1,9 @@
-// conary-core/src/lib.rs
+// crates/conary-core/src/lib.rs
 
 //! Conary Core Library
 //!
 //! Shared types, database, package parsing, and filesystem operations
-//! used by both the CLI client and the Remi server.
+//! used by the Conary workspace apps.
 
 pub mod automation;
 pub mod bootstrap;
@@ -26,8 +26,6 @@ pub mod generation;
 pub mod hash;
 pub mod json;
 pub mod label;
-#[cfg(feature = "mcp")]
-pub mod mcp;
 pub mod model;
 pub mod packages;
 pub mod progress;

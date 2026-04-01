@@ -1,8 +1,7 @@
-// conary-core/src/mcp/mod.rs
+// crates/conary-mcp/src/lib.rs
 //! Shared MCP (Model Context Protocol) helpers.
 //!
-//! Utility functions used by both `conary-server` and `conary-test` MCP
-//! server implementations.  Feature-gated behind `mcp`.
+//! Utility functions used by multiple workspace MCP server implementations.
 
 use std::fmt::Display;
 

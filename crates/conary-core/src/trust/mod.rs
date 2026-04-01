@@ -1,4 +1,4 @@
-// conary-core/src/trust/mod.rs
+// crates/conary-core/src/trust/mod.rs
 
 //! TUF (The Update Framework) supply chain trust
 //!
@@ -11,7 +11,6 @@
 
 pub mod ceremony;
 pub mod client;
-#[cfg(feature = "server")]
 pub mod generate;
 pub mod keys;
 pub mod metadata;
