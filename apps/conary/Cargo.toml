@@ -1,0 +1,76 @@
+[package]
+name = "conary"
+version = "0.7.0"
+edition = "2024"
+rust-version = "1.94"
+authors = ["Conary Contributors"]
+description = "Modern package manager with atomic operations, rollback, and delta updates"
+repository = "https://github.com/ConaryLabs/Conary"
+license = "MIT OR Apache-2.0"
+keywords = ["package-manager", "rpm", "deb", "system"]
+categories = ["command-line-utilities"]
+
+[features]
+default = []
+server = ["dep:conary-server", "conary-core/server"]
+polkit = ["conary-server/polkit"]
+# Experimental features not ready for production use (AI commands, etc.)
+experimental = []
+
+[dependencies]
+# Core library
+conary-core = { path = "../../conary-core" }
+
+# CLI
+clap = { workspace = true, features = ["cargo"] }
+clap_complete = "4.5"
+
+# Logging (needed directly by main.rs and commands/)
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+
+# Direct imports in commands/
+thiserror.workspace = true
+rusqlite.workspace = true
+sha2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+rayon.workspace = true
+indicatif.workspace = true
+tempfile.workspace = true
+uuid.workspace = true
+base64.workspace = true
+toml.workspace = true
+hex.workspace = true
+pem.workspace = true
+reqwest.workspace = true
+url.workspace = true
+walkdir.workspace = true
+glob.workspace = true
+libc.workspace = true
+
+# Sigstore verification (used directly in commands/ccs/signing.rs)
+sigstore.workspace = true
+const-oid.workspace = true
+rustls-pki-types.workspace = true
+webpki.workspace = true
+x509-cert.workspace = true
+
+# Used in commands/ccs/signing.rs for CCS package building
+tar.workspace = true
+flate2.workspace = true
+
+# Server crate (feature-gated)
+conary-server = { path = "../../conary-server", optional = true }
+
+# Async runtime (needed by main.rs)
+tokio.workspace = true
+
+# Used directly in commands/
+nix.workspace = true
+
+[build-dependencies]
+clap = { workspace = true, features = ["cargo"] }
+clap_mangen = "0.2"
