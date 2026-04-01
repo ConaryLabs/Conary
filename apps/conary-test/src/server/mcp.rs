@@ -10,7 +10,7 @@
 use std::future::Future;
 
 use chrono::Utc;
-use conary_core::mcp::to_json_text;
+use conary_mcp::{server_info, to_json_text};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     handler::server::tool::{ToolCallContext, ToolRouter},
@@ -1096,7 +1096,7 @@ impl TestMcpServer {
 
 impl ServerHandler for TestMcpServer {
     fn get_info(&self) -> ServerInfo {
-        conary_core::mcp::server_info(
+        server_info(
             "conary-test-mcp",
             env!("CARGO_PKG_VERSION"),
             "Conary test infrastructure MCP server -- list test suites, \

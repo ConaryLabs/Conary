@@ -1,4 +1,4 @@
-// conary-core/src/repository/mod.rs
+// crates/conary-core/src/repository/mod.rs
 
 //! Repository management and package downloading
 //!
@@ -33,7 +33,6 @@ pub mod resolution_policy;
 pub mod selector;
 pub mod versioning;
 
-#[cfg(feature = "server")]
 pub mod chunk_fetcher;
 
 // Re-export main types and functions
@@ -56,7 +55,6 @@ pub use mirror_health::{MirrorHealth, MirrorHealthTracker};
 pub use mirror_selector::{MirrorSelector, MirrorStrategy};
 pub use parsers::{ChecksumType, Dependency, DependencyType, RepositoryParser};
 pub use registry::{RepositoryFormat, create_parser, detect_repository_format};
-#[cfg(feature = "server")]
 pub use remi::AsyncRemiClient;
 pub use remi::{PackageManifest, RemiClient};
 pub use resolution::{
@@ -69,7 +67,6 @@ pub use sync::{
     current_timestamp, maybe_fetch_gpg_key, needs_sync, parse_timestamp, sync_repository,
 };
 
-#[cfg(feature = "server")]
 pub use chunk_fetcher::{
     ChunkData, ChunkFetcher, ChunkFetcherBuilder, CompositeChunkFetcher, HttpChunkFetcher,
     LocalCacheFetcher,

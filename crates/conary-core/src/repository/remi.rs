@@ -1,4 +1,4 @@
-// conary-core/src/repository/remi.rs
+// crates/conary-core/src/repository/remi.rs
 
 //! Remi client for fetching CCS packages from conversion proxies
 //!
@@ -25,9 +25,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-#[cfg(feature = "server")]
 use crate::repository::chunk_fetcher::{ChunkFetcher, ChunkFetcherBuilder, CompositeChunkFetcher};
-#[cfg(feature = "server")]
 use std::sync::Arc;
 
 /// Default timeout for initial request (30 seconds)
@@ -716,14 +714,12 @@ impl RemiClient {
 /// let chunks = client.download_chunks(&manifest).await?;
 /// client.assemble_package(&manifest, &chunks, Path::new("nginx.ccs"))?;
 /// ```
-#[cfg(feature = "server")]
 pub struct AsyncRemiClient {
     http_client: reqwest::Client,
     core: RemiClientCore,
     chunk_fetcher: Arc<CompositeChunkFetcher>,
 }
 
-#[cfg(feature = "server")]
 impl AsyncRemiClient {
     /// Create a new async Remi client
     ///
@@ -1070,7 +1066,6 @@ mod tests {
         assert!(err.to_string().contains("chunk bytes"));
     }
 
-    #[cfg(feature = "server")]
     mod async_tests {
         use super::*;
 

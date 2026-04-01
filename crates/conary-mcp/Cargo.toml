@@ -1,0 +1,13 @@
+[package]
+name = "conary-mcp"
+version = "0.7.0"
+edition = "2024"
+rust-version = "1.94"
+authors = ["Conary Contributors"]
+description = "Shared transport-agnostic MCP helpers for Conary workspace apps"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rmcp = { workspace = true, features = ["server"] }
+serde.workspace = true
+serde_json.workspace = true
