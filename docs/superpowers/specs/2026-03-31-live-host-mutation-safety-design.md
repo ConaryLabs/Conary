@@ -271,6 +271,11 @@ command can mutate the active host and may:
 - execute package install or remove scriptlets
 - change native package-manager ownership state
 
+The message should also explain why this safeguard exists right now: Conary is
+still early software, the host-mutation paths have not yet earned a
+"safe-by-default on the live machine" posture, and the project is therefore
+requiring an explicit opt-in before touching a real host.
+
 For commands in the "currently live even with root arguments" class, the
 message should explicitly say that `--root` is not sufficient isolation for
 this command yet because the implementation still routes into live generation
@@ -280,6 +285,15 @@ The message should end with a direct action:
 
 - rerun with `--allow-live-system-mutation` only if you intend to modify the
   real machine
+
+Representative warning language should read more like:
+
+> This command can mutate the active host. Conary is still early software, and
+> host-mutation paths such as generation rebuilds, `/usr` remounts, `/etc`
+> overlay changes, scriptlet execution, and takeover ownership changes are
+> therefore gated behind an explicit acknowledgment. Rerun with
+> `--allow-live-system-mutation` only if you intend to modify this real
+> machine.
 
 ### Dispatch Points
 
