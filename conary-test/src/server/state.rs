@@ -80,7 +80,9 @@ impl AppState {
                 Some(Arc::new(client))
             }
             Err(_) => {
-                tracing::debug!("Remi client not configured (REMI_ADMIN_TOKEN not set)");
+                tracing::debug!(
+                    "Remi client not configured (REMI_ADMIN_TOKEN or REMI_ADMIN_ENDPOINT not set)"
+                );
                 None
             }
         };

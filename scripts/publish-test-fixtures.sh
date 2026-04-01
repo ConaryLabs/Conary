@@ -7,9 +7,15 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FIXTURE_DIR="$PROJECT_ROOT/tests/fixtures/conary-test-fixture"
 ADVERSARIAL_DIR="$PROJECT_ROOT/tests/fixtures/adversarial"
 REMI_ENDPOINT="${REMI_ENDPOINT:-https://packages.conary.io}"
-REMI_ADMIN_ENDPOINT="${REMI_ADMIN_ENDPOINT:-${REMI_ENDPOINT%/}:8082}"
+REMI_ADMIN_ENDPOINT="${REMI_ADMIN_ENDPOINT:-}"
 REMI_ADMIN_TOKEN="${REMI_ADMIN_TOKEN:-}"
 CONARY_BIN="${CONARY_BIN:-$PROJECT_ROOT/target/debug/conary}"
+
+if [ -z "$REMI_ADMIN_ENDPOINT" ]; then
+    echo "FATAL: REMI_ADMIN_ENDPOINT is required for admin uploads." >&2
+    echo "Set it to a direct admin origin or SSH tunnel base URL; do not rely on ${REMI_ENDPOINT%/}:8082 behind the Cloudflare proxy." >&2
+    exit 1
+fi
 
 publish_phase2_fixtures() {
     bash "$FIXTURE_DIR/build-all.sh"

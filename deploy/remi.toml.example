@@ -129,6 +129,20 @@ enabled = true
 # Path to the built web frontend (SvelteKit adapter-static output)
 root = "/conary/web"
 
+[admin]
+# External admin origin listener. When fronted by a local reverse proxy,
+# keep this on loopback and publish only the paths you intend to expose
+# publicly (for example, /mcp on the standard HTTPS hostname).
+enabled = true
+external_bind = "127.0.0.1:8082"
+
+# Optional Forgejo integration for CI proxy endpoints
+# forgejo_url = "https://forge.conarylabs.com"
+
+# Optional bootstrap token. Prefer REMI_ADMIN_TOKEN in the service
+# environment for initial provisioning.
+# bootstrap_token = "change-me"
+
 [federation]
 # CAS federation for peer-to-peer chunk sharing
 # Not needed for single-server deployments
