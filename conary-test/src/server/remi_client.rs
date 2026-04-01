@@ -2,16 +2,13 @@
 //! HTTP client for pushing test results to the Remi admin API.
 //!
 //! Configured via environment variables:
-//! - `REMI_ENDPOINT` -- base URL (default: `https://packages.conary.io:8082`)
+//! - `REMI_ADMIN_ENDPOINT` -- base URL for the admin REST API
 //! - `REMI_ADMIN_TOKEN` -- bearer token for the admin API
 
 use anyhow::{Context, Result, bail};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-
-/// Default base URL for the Remi admin API.
-const DEFAULT_ENDPOINT: &str = "https://packages.conary.io:8082";
 
 /// HTTP request timeout.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -33,13 +30,13 @@ pub struct RemiClient {
 impl RemiClient {
     /// Construct a `RemiClient` from environment variables.
     ///
-    /// Reads `REMI_ENDPOINT` (optional, defaults to `https://packages.conary.io:8082`)
-    /// and `REMI_ADMIN_TOKEN` (required).
+    /// Reads `REMI_ADMIN_ENDPOINT` and `REMI_ADMIN_TOKEN`.
     pub fn from_env() -> Result<Self> {
-        let base_url =
-            std::env::var("REMI_ENDPOINT").unwrap_or_else(|_| DEFAULT_ENDPOINT.to_string());
         let token = std::env::var("REMI_ADMIN_TOKEN")
             .context("REMI_ADMIN_TOKEN environment variable is required")?;
+        let base_url = std::env::var("REMI_ADMIN_ENDPOINT").context(
+            "REMI_ADMIN_ENDPOINT environment variable is required for Remi admin API access",
+        )?;
         Ok(Self::new(base_url, token))
     }
 
@@ -329,10 +326,43 @@ mod tests {
         // REMI_ADMIN_TOKEN concurrently.
         unsafe {
             std::env::remove_var("REMI_ADMIN_TOKEN");
+            std::env::remove_var("REMI_ADMIN_ENDPOINT");
         }
         let result = RemiClient::from_env();
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("REMI_ADMIN_TOKEN"),);
+    }
+
+    #[test]
+    fn from_env_requires_admin_endpoint() {
+        // SAFETY: this test is single-threaded; no other thread reads
+        // REMI_ADMIN_TOKEN or REMI_ADMIN_ENDPOINT concurrently.
+        unsafe {
+            std::env::set_var("REMI_ADMIN_TOKEN", "tok");
+            std::env::remove_var("REMI_ADMIN_ENDPOINT");
+            std::env::remove_var("REMI_ENDPOINT");
+        }
+        let result = RemiClient::from_env();
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("REMI_ADMIN_ENDPOINT")
+        );
+    }
+
+    #[test]
+    fn from_env_uses_admin_endpoint() {
+        // SAFETY: this test is single-threaded; no other thread reads
+        // REMI_ADMIN_TOKEN or REMI_ADMIN_ENDPOINT concurrently.
+        unsafe {
+            std::env::set_var("REMI_ADMIN_TOKEN", "tok");
+            std::env::set_var("REMI_ADMIN_ENDPOINT", "https://admin.example.com/");
+            std::env::remove_var("REMI_ENDPOINT");
+        }
+        let client = RemiClient::from_env().unwrap();
+        assert_eq!(client.base_url, "https://admin.example.com");
     }
 
     #[test]

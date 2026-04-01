@@ -82,7 +82,7 @@ Two MCP servers are configured for direct infrastructure interaction:
 
 | Server | Endpoint | Purpose |
 |--------|----------|---------|
-| **remi-admin** | `packages.conary.io:8082/mcp` | Remi production server management |
+| **remi-admin** | `https://packages.conary.io/mcp` | Remi production server management |
 | **conary-test** | `forge.conarylabs.com:9090/mcp` | Test infrastructure on Forge |
 
 **remi-admin** tools: CI workflows (`ci_dispatch`, `ci_list_runs`, `ci_get_run`, `ci_get_logs`), mirror sync, token management, repo inspection, federation peers, audit log, test data (`test_list_runs`, `test_get_run`, `test_get_test`, `test_get_logs`, `test_health`), canonical mapping (`canonical_rebuild`), chunk GC (`chunk_gc`).

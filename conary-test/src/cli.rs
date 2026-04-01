@@ -766,7 +766,7 @@ async fn cmd_logs(
     // Logs require the Remi client since there is no local server state
     // available from the CLI process.
     let client = conary_test::server::remi_client::RemiClient::from_env()
-        .context("logs command requires REMI_ADMIN_TOKEN to be set")?;
+        .context("logs command requires REMI_ADMIN_TOKEN and REMI_ADMIN_ENDPOINT to be set")?;
 
     let rid = run_id.context("--run is required for the logs command")?;
 
@@ -844,7 +844,10 @@ async fn cmd_health(json: bool) -> Result<()> {
         }
         Err(_) => {
             // No Remi client -- show local status only.
-            println!("{}Local status{} (REMI_ADMIN_TOKEN not set)", BOLD, RESET);
+            println!(
+                "{}Local status{} (REMI_ADMIN_TOKEN or REMI_ADMIN_ENDPOINT not set)",
+                BOLD, RESET
+            );
             cmd_deploy_status(json).await?;
         }
     }

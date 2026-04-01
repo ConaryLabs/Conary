@@ -452,7 +452,8 @@ A public instance runs at **[packages.conary.io](https://packages.conary.io)**.
 
 Features: Bloom filter acceleration, batch endpoints, pull-through caching, full-text search (Tantivy), repository metadata verification, and Prometheus metrics.
 
-- **Admin API** on `:8082` with bearer token auth -- token management, CI proxy, test data persistence, and MCP endpoints for infrastructure automation
+- **Authenticated MCP endpoint** at [`https://packages.conary.io/mcp`](https://packages.conary.io/mcp) for production automation
+- **Admin origin listener** on `:8082` for bearer-authenticated REST operations behind the reverse proxy
 
 ```bash
 # Build with server support

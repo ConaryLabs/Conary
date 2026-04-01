@@ -152,6 +152,8 @@ Environment variables override values from `tests/integration/remi/config.toml`:
 | `CONARY_TEST_CONFIG` | Path to global config TOML |
 | `CONARY_TEST_MANIFESTS` | Path to manifest directory |
 | `REMI_ENDPOINT` | Remi server endpoint URL |
+| `REMI_ADMIN_ENDPOINT` | Remi admin REST base URL for result streaming and log queries |
+| `REMI_ADMIN_TOKEN` | Bearer token for the Remi admin API |
 | `DB_PATH` | SQLite database path |
 | `CONARY_BIN` | Path to conary binary |
 | `RESULTS_DIR` | Directory for JSON result output |

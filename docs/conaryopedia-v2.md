@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-03-28
-revision: 10
-summary: Refresh command examples and feature-maturity notes after the feature-claims sweep
+last_updated: 2026-03-31
+revision: 11
+summary: Clarify Remi admin-origin versus proxied public MCP deployment details
 ---
 
 # Conaryopedia v2
@@ -2337,7 +2337,7 @@ src/server/
 Remi runs two Axum HTTP servers concurrently:
 
 - **Public API** (default `0.0.0.0:8080`): Chunk serving, package metadata, sparse index, search, OCI, federation, health checks, Prometheus metrics.
-- **Admin API** (default `127.0.0.1:8081` internal + `0.0.0.0:8082` external): Internal routes (conversion triggers, cache management, Bloom filter rebuild) on localhost-only :8081 without auth. External routes (token management, CI proxy, federation config, SSE events, MCP endpoint with 23 tools) on :8082 with bearer token auth, per-IP rate limiting, and audit logging.
+- **Admin API** (default `127.0.0.1:8081` internal + `0.0.0.0:8082` external origin): Internal routes (conversion triggers, cache management, Bloom filter rebuild) stay on localhost-only :8081 without auth. External admin routes (token management, CI proxy, federation config, SSE events, test-data APIs) live on the admin origin listener with bearer token auth, per-IP rate limiting, and audit logging. In production behind the reverse proxy, the authenticated MCP surface is exposed on standard HTTPS at `https://packages.conary.io/mcp` instead of asking clients to connect to `:8082` directly.
 
 Both servers share a single `ServerState` behind `Arc<RwLock<>>`:
 
@@ -2440,6 +2440,10 @@ max_concurrent = 4
 enabled = true
 bucket = "conary-chunks"
 write_through = true
+
+[admin]
+enabled = true
+external_bind = "127.0.0.1:8082"  # Reverse proxy publishes /mcp on the public hostname
 
 [security]
 rate_limit = true
@@ -3317,9 +3321,13 @@ The frontend is served as a SPA with `ServeDir` + `ServeFile` fallback to `index
 | PUT | `/v1/admin/models/:name` | Publish model collection |
 | POST | `/v1/admin/tuf/refresh-timestamp` | Refresh TUF timestamp |
 
-### External Admin API (port 8082)
+### External Admin API (origin port 8082)
 
 Authenticated via bearer tokens. Rate-limited per IP (read 60/min, write 10/min, auth-fail 5/min). All requests audit-logged.
+
+In a proxied deployment, treat `:8082` as the admin origin listener. The public
+Cloudflare-facing MCP entry point is `https://packages.conary.io/mcp`; REST
+admin routes are only public if you explicitly proxy them.
 
 | Method | Path | Purpose | Scope |
 |--------|------|---------|-------|
@@ -3345,7 +3353,7 @@ Authenticated via bearer tokens. Rate-limited per IP (read 60/min, write 10/min,
 | GET | `/v1/admin/audit` | Query audit log | admin |
 | DELETE | `/v1/admin/audit` | Purge old audit entries | admin |
 | GET | `/v1/admin/openapi.json` | OpenAPI 3.1 spec | (no auth) |
-| GET/POST | `/mcp` | MCP endpoint (23 tools) | admin |
+| GET/POST | `/mcp` | MCP endpoint (23 tools, proxied publicly at `https://packages.conary.io/mcp`) | admin |
 | POST | `/v1/admin/test-runs` | Create a test run | admin |
 | GET | `/v1/admin/test-runs` | List runs (cursor pagination) | admin |
 | GET | `/v1/admin/test-runs/{id}` | Get run with results | admin |
@@ -3360,7 +3368,7 @@ Authenticated via bearer tokens. Rate-limited per IP (read 60/min, write 10/min,
 
 Remi persists test run data in a separate SQLite database (`/conary/test-data.db`), independent from the main package database. This enables test result persistence, per-step logging, and aggregate health dashboards.
 
-**Endpoints** (on :8082, bearer auth required):
+**Endpoints** (on the admin origin listener, bearer auth required):
 
 | Method | Path | Purpose |
 |--------|------|---------|

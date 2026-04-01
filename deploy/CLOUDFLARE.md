@@ -24,6 +24,29 @@ If using IPv6 (recommended on Hetzner):
 |------|------------|-----------------|-------|------|
 | AAAA | packages   | YOUR_IPV6_ADDR  | Yes   | Auto |
 
+### Admin and MCP proxying
+
+When `packages.conary.io` is orange-cloud proxied, do not expect the public
+hostname to expose arbitrary origin ports such as `:8082`.
+
+- Keep the Remi admin origin listener on loopback or another non-public bind.
+- Publish the authenticated MCP surface on the standard HTTPS hostname, for
+  example `https://packages.conary.io/mcp`.
+- Expose REST admin routes on the public hostname only if you explicitly proxy
+  them; otherwise reach them through a direct origin URL or an SSH tunnel.
+
+Minimal nginx example:
+
+```nginx
+location /mcp {
+    proxy_pass http://127.0.0.1:8082/mcp;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
 ## 2. SSL/TLS
 
 Under SSL/TLS settings:
@@ -159,9 +182,9 @@ The index updates when new packages are converted, so keep TTL short.
 - **Edge TTL**: Override - 30 seconds
 - **Browser TTL**: Override - 15 seconds
 
-### Rule 6: No Cache for Admin/Mutations
+### Rule 6: No Cache for Admin/MCP/Mutations
 
-- **When**: URI path starts with `/v1/admin/` OR HTTP method is POST
+- **When**: URI path starts with `/v1/admin/` OR URI path equals `/mcp` OR HTTP method is POST
 - **Cache eligibility**: Bypass cache
 
 ## 5. Transform Rules
