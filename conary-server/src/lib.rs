@@ -1,7 +1,6 @@
 // conary-server/src/lib.rs
-//! Remi package server, federation, and conaryd daemon.
-#![recursion_limit = "256"]
+//! Temporary compatibility shim for the split remi and conaryd app crates.
 
-pub mod daemon;
-pub mod federation;
-pub mod server;
+pub use conaryd::daemon;
+pub use remi::federation;
+pub use remi::server;

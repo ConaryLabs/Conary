@@ -1,0 +1,81 @@
+[package]
+name = "remi"
+version = "0.5.0"
+edition = "2024"
+rust-version = "1.94"
+authors = ["Conary Contributors"]
+description = "Remi package server for Conary"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+conary-core = { path = "../../crates/conary-core", features = ["server", "mcp"] }
+
+# Web framework
+axum.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tokio-util = { version = "0.7", features = ["io"] }
+tower-http = { workspace = true, features = ["fs", "cors", "compression-gzip"] }
+tower.workspace = true
+
+# Server utilities
+filetime = "0.2"
+async-trait.workspace = true
+futures.workspace = true
+async-stream = "0.3"
+dashmap = "6.0"
+governor = "0.10"
+parking_lot = "0.12"
+
+# Service discovery
+mdns-sd = "0.18"
+flume = "0.11"
+
+# Object storage
+rust-s3 = { version = "0.37", default-features = false, features = ["tokio-rustls-tls"] }
+
+# Full-text search
+tantivy = "0.25"
+
+# CLI parsing (for binary entry points)
+clap.workspace = true
+tracing-subscriber.workspace = true
+
+# MCP (Model Context Protocol)
+rmcp = { workspace = true, features = ["server", "macros", "transport-streamable-http-server"] }
+schemars.workspace = true
+
+# Shared deps needed directly by server code
+anyhow.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+url.workspace = true
+
+# Deps used directly by server and federation modules
+rusqlite.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+reqwest.workspace = true
+base64.workspace = true
+ed25519-dalek.workspace = true
+fs2.workspace = true
+nix.workspace = true
+libc.workspace = true
+log.workspace = true
+rand.workspace = true
+regex.workspace = true
+toml.workspace = true
+uuid.workspace = true
+walkdir.workspace = true
+hex.workspace = true
+flate2.workspace = true
+
+[dev-dependencies]
+tar.workspace = true
+
+[[bin]]
+name = "remi"
+path = "src/bin/remi.rs"
