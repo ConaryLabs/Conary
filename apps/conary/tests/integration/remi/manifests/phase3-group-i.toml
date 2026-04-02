@@ -20,7 +20,7 @@ timeout = 30
 group = "I"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/path-traversal/output/path-traversal-malicious.ccs --allow-unsigned"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/path-traversal/output/path-traversal-malicious.ccs --allow-unsigned --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code_not = 0
@@ -41,7 +41,7 @@ timeout = 30
 group = "I"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/symlink-attack/output/symlink-attack-malicious.ccs --allow-unsigned"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/symlink-attack/output/symlink-attack-malicious.ccs --allow-unsigned --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code_not = 0
@@ -62,7 +62,7 @@ timeout = 30
 group = "I"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/setuid/output/adversarial-setuid-1.0.0.ccs --allow-unsigned"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/setuid/output/adversarial-setuid-1.0.0.ccs --allow-unsigned --allow-live-system-mutation"
 
 [test.step.assert]
 stdout_contains_any_if_success = ["stripped", "Warning"]
@@ -85,7 +85,7 @@ timeout = 30
 group = "I"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/proc-environ/output/proc-environ.ccs --allow-unsigned --sandbox always"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/proc-environ/output/proc-environ.ccs --allow-unsigned --sandbox always --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code_not = 0
@@ -106,7 +106,7 @@ group = "I"
 network_isolated = true
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/hostile-scriptlet/output/adversarial-hostile-scriptlet-1.0.0.ccs --allow-unsigned --sandbox always"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/hostile-scriptlet/output/adversarial-hostile-scriptlet-1.0.0.ccs --allow-unsigned --sandbox always --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code_not = 0
@@ -127,7 +127,7 @@ timeout = 30
 group = "I"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/outside-root-write/output/outside-root-write.ccs --allow-unsigned --sandbox always"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/outside-root-write/output/outside-root-write.ccs --allow-unsigned --sandbox always --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code_not = 0
@@ -148,7 +148,7 @@ timeout = 30
 group = "I"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/expired-signature/output/expired-signature.ccs --policy /opt/remi-tests/fixtures/adversarial/malicious/expired-signature/trust-policy.toml"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/expired-signature/output/expired-signature.ccs --policy /opt/remi-tests/fixtures/adversarial/malicious/expired-signature/trust-policy.toml --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code_not = 0
@@ -166,7 +166,7 @@ timeout = 30
 group = "I"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/cap-net-raw/output/cap-net-raw.ccs --allow-unsigned"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/cap-net-raw/output/cap-net-raw.ccs --allow-unsigned --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code_not = 0
@@ -184,7 +184,7 @@ timeout = 30
 group = "I"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/capability-overflow/output/capability-overflow.ccs --allow-unsigned"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/capability-overflow/output/capability-overflow.ccs --allow-unsigned --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code_not = 0
@@ -206,7 +206,7 @@ memory_limit_mb = 512
 network_isolated = false
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/decompression-bomb/output/decompression-bomb.ccs --allow-unsigned"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/decompression-bomb/output/decompression-bomb.ccs --allow-unsigned --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code_not = 0

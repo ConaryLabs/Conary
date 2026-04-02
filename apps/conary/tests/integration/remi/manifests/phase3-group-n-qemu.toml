@@ -37,7 +37,7 @@ timeout_seconds = 240
 ssh_port = 2230
 commands = [
     "conary repo sync fedora-remi --force",
-    "conary install kernel --repo fedora-remi --yes --sandbox never",
+    "conary install kernel --repo fedora-remi --yes --sandbox never --allow-live-system-mutation",
     "ls /boot/vmlinuz* /boot/init* 2>/dev/null | wc -l",
     "find /lib/modules /usr/lib/modules -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l",
     "echo kernel-deploy-ok",
@@ -69,8 +69,8 @@ timeout_seconds = 180
 ssh_port = 2231
 commands = [
     "conary repo sync fedora-remi --force",
-    "conary install kernel --repo fedora-remi --yes --sandbox never",
-    "conary system generation build",
+    "conary install kernel --repo fedora-remi --yes --sandbox never --allow-live-system-mutation",
+    "conary system generation build --allow-live-system-mutation",
     "find /boot/loader/entries -maxdepth 1 -name '*.conf' 2>/dev/null || true",
     "echo bls-check-done",
 ]
@@ -101,9 +101,9 @@ timeout_seconds = 180
 ssh_port = 2232
 commands = [
     "conary repo sync fedora-remi --force",
-    "conary install kernel --repo fedora-remi --yes --sandbox never",
-    "conary system generation build",
-    "conary system generation rollback 2>&1 || true",
+    "conary install kernel --repo fedora-remi --yes --sandbox never --allow-live-system-mutation",
+    "conary system generation build --allow-live-system-mutation",
+    "conary system generation rollback --allow-live-system-mutation 2>&1 || true",
     "find /boot/loader/entries -maxdepth 1 -name '*.conf' 2>/dev/null | sort || true",
     "echo rollback-check-done",
 ]
@@ -134,8 +134,8 @@ timeout_seconds = 240
 ssh_port = 2233
 commands = [
     "conary repo sync fedora-remi --force",
-    "conary install kernel --repo fedora-remi --yes --sandbox never",
-    "conary install grub2 --repo fedora-remi --yes --sandbox never",
+    "conary install kernel --repo fedora-remi --yes --sandbox never --allow-live-system-mutation",
+    "conary install grub2 --repo fedora-remi --yes --sandbox never --allow-live-system-mutation",
     "ls /etc/grub.d /boot/grub /boot/grub2 /boot/loader 2>/dev/null || true",
     "echo bootloader-config-ok",
 ]

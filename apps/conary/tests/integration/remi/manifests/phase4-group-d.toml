@@ -52,7 +52,7 @@ exit_code = 0
 
 # Setup: install fixture CCS (always available, no distro repo needed)
 [[test.step]]
-conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --reinstall"
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-live-system-mutation --allow-unsigned --sandbox never --reinstall"
 
 [test.step.assert]
 exit_code = 0
@@ -179,7 +179,7 @@ timeout = 120
 group = "D"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/cap-net-raw/output/cap-net-raw.ccs --allow-unsigned --allow-capabilities --sandbox never --reinstall"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/cap-net-raw/output/cap-net-raw.ccs --allow-live-system-mutation --allow-unsigned --allow-capabilities --sandbox never --reinstall"
 
 [test.step.assert]
 exit_code = 0
@@ -552,6 +552,37 @@ conary = "system restore ${FIXTURE_PKG_NAME} --dry-run"
 [test.step.assert]
 exit_code = 0
 stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T239b: System restore non-dry-run
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T239b"
+name = "system_restore_non_dry_run"
+description = "Restore package files from CAS with live mutation explicitly allowed"
+timeout = 180
+group = "D"
+
+[[test.step]]
+run = "printf '#!/bin/sh\\necho broken-phase4-runtime\\n' > /usr/bin/phase4-runtime-fixture && chmod +x /usr/bin/phase4-runtime-fixture"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "system restore ${FIXTURE_PKG_NAME} --allow-live-system-mutation"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_any = ["Restore complete", "generation"]
+
+[[test.step]]
+run = "/usr/bin/phase4-runtime-fixture"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "phase4-runtime-fixture"
 
 # --------------------------------------------------------------------------
 # T240: System trigger list

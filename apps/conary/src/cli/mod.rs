@@ -140,6 +140,10 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub seccomp_warn: bool,
 
+    /// Acknowledge that this command may mutate the active host.
+    #[arg(long, global = true)]
+    pub allow_live_system_mutation: bool,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -655,5 +659,20 @@ mod tests {
             }
             _ => panic!("expected update command"),
         }
+    }
+
+    #[test]
+    fn cli_accepts_allow_live_system_mutation_as_global_flag() {
+        let cli = Cli::try_parse_from([
+            "conary",
+            "--allow-live-system-mutation",
+            "system",
+            "generation",
+            "switch",
+            "7",
+        ])
+        .expect("global live-mutation flag should parse before nested commands");
+
+        assert!(cli.allow_live_system_mutation);
     }
 }

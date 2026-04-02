@@ -17,7 +17,7 @@ conary = "system init"
 run = "rm -rf /tmp/phase4-runtime-fixture-output && mkdir -p /tmp/phase4-runtime-fixture-output && ${CONARY_BIN} ccs build /opt/remi-tests/fixtures/phase4-runtime-fixture --output /tmp/phase4-runtime-fixture-output --source /opt/remi-tests/fixtures/phase4-runtime-fixture/stage"
 
 [[suite.setup]]
-run = "CCS_FILE=$(ls /tmp/phase4-runtime-fixture-output/*.ccs | head -1) && ${CONARY_BIN} ccs install \"$CCS_FILE\" --allow-unsigned --sandbox never --reinstall --db-path ${DB_PATH}"
+run = "CCS_FILE=$(ls /tmp/phase4-runtime-fixture-output/*.ccs | head -1) && ${CONARY_BIN} ccs install --allow-live-system-mutation \"$CCS_FILE\" --allow-unsigned --sandbox never --reinstall --db-path ${DB_PATH}"
 
 [suite.setup.assert]
 exit_code = 0

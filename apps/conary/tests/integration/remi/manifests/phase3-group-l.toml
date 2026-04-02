@@ -122,25 +122,25 @@ group = "L"
 fatal = true
 
 [[test.step]]
-run = "${CONARY_BIN} system generation build"
+run = "${CONARY_BIN} system generation build --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-run = "${CONARY_BIN} system generation build"
+run = "${CONARY_BIN} system generation build --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-run = "${CONARY_BIN} system generation build"
+run = "${CONARY_BIN} system generation build --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-run = "GENS=$(${CONARY_BIN} system generation list | grep -oP '^\\s*\\K\\d+' | tail -3 | tr '\n' ' '); for g in $GENS; do ${CONARY_BIN} system generation info $g; ${CONARY_BIN} system generation switch $g || true; done"
+run = "GENS=$(${CONARY_BIN} system generation list | grep -oP '^\\s*\\K\\d+' | tail -3 | tr '\n' ' '); for g in $GENS; do ${CONARY_BIN} system generation info $g; ${CONARY_BIN} system generation switch $g --allow-live-system-mutation || true; done"
 
 [test.step.assert]
 stdout_contains = "Packages"
@@ -158,13 +158,13 @@ timeout = 300
 group = "L"
 
 [[test.step]]
-run = "for _ in 1 2 3 4 5; do ${CONARY_BIN} system generation build >/tmp/t132-build.log 2>&1 || exit 1; done"
+run = "for _ in 1 2 3 4 5; do ${CONARY_BIN} system generation build --allow-live-system-mutation >/tmp/t132-build.log 2>&1 || exit 1; done"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-run = "${CONARY_BIN} system generation gc --keep 2"
+run = "${CONARY_BIN} system generation gc --keep 2 --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
@@ -187,10 +187,55 @@ timeout = 120
 group = "L"
 
 [[test.step]]
-run = "${CONARY_BIN} system generation rollback 2>&1 || true"
+run = "${CONARY_BIN} system generation rollback --allow-live-system-mutation 2>&1 || true"
 
 [test.step.assert]
 stdout_contains_any = ["Generation", "rollback", "permission", "Operation not permitted", "No active generation"]
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T133b: Generation recover via current symlink
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T133b"
+name = "generation_recover_from_current_symlink"
+description = "Generation recover completes cleanly when the synthetic root DB matches the existing /conary current symlink"
+timeout = 180
+group = "L"
+
+[[test.step]]
+run = "mkdir -p /conary && cp ${DB_PATH} /conary/conary.db && umount /conary/mnt 2>/dev/null || true && ${CONARY_BIN} system generation recover --db-path /conary/conary.db --allow-live-system-mutation 2>&1"
+
+[test.step.assert]
+stdout_contains = "Recovery complete."
+stdout_not_contains = "panic"
+
+# --------------------------------------------------------------------------
+# T133c: Generation recover fallback
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T133c"
+name = "generation_recover_falls_back_cleanly"
+description = "Generation recover falls back cleanly when the DB has no active state but another intact generation exists"
+timeout = 180
+group = "L"
+
+[[test.step]]
+run = """mkdir -p /conary && \
+cp ${DB_PATH} /conary/conary.db && \
+CUR=$(readlink /conary/current | awk -F/ '{print $2}') && \
+test -n "$CUR" && \
+mv "/conary/generations/$CUR/root.erofs" "/conary/generations/$CUR/root.erofs.bak" && \
+sqlite3 /conary/conary.db 'UPDATE system_states SET is_active = 0;' && \
+OUTPUT=$(${CONARY_BIN} system generation recover --db-path /conary/conary.db --allow-live-system-mutation 2>&1 || true) && \
+mv "/conary/generations/$CUR/root.erofs.bak" "/conary/generations/$CUR/root.erofs" && \
+echo "$OUTPUT"
+"""
+
+[test.step.assert]
+stdout_contains_any = ["Recovery complete.", "recover", "generation"]
 stdout_not_contains = "panic"
 
 # --------------------------------------------------------------------------
@@ -211,7 +256,7 @@ run = "META=$(find /var/lib/conary -path '*/generations/*/metadata*' -type f 2>/
 exit_code = 0
 
 [[test.step]]
-run = "GEN=$(${CONARY_BIN} system generation list 2>/dev/null | grep -oP '^\\s*\\K\\d+' | tail -1); ${CONARY_BIN} system generation switch ${GEN:-0} 2>&1 || true"
+run = "GEN=$(${CONARY_BIN} system generation list 2>/dev/null | grep -oP '^\\s*\\K\\d+' | tail -1); ${CONARY_BIN} system generation switch --allow-live-system-mutation ${GEN:-0} 2>&1 || true"
 
 [test.step.assert]
 stdout_contains_any = ["metadata", "corrupt", "invalid", "permission", "composefs mount command failed"]
@@ -229,7 +274,7 @@ timeout = 120
 group = "L"
 
 [[test.step]]
-run = "(sqlite3 ${DB_PATH} 'BEGIN EXCLUSIVE; SELECT 1; .timeout 5000' >/tmp/t135-db.log 2>&1 &) ; LOCK_PID=$!; sleep 1; OUTPUT=$(${CONARY_BIN} system generation build 2>&1 || true); kill $LOCK_PID 2>/dev/null || true; echo \"$OUTPUT\""
+run = "(sqlite3 ${DB_PATH} 'BEGIN EXCLUSIVE; SELECT 1; .timeout 5000' >/tmp/t135-db.log 2>&1 &) ; LOCK_PID=$!; sleep 1; OUTPUT=$(${CONARY_BIN} system generation build --allow-live-system-mutation 2>&1 || true); kill $LOCK_PID 2>/dev/null || true; echo \"$OUTPUT\""
 
 [test.step.assert]
 stdout_contains_any = ["locked", "database", "built", "Generation"]

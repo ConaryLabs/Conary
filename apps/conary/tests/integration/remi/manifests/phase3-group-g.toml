@@ -44,7 +44,7 @@ timeout = 30
 group = "G"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/corrupted/bad-checksum/output/bad-checksum-corrupted.ccs --allow-unsigned"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/corrupted/bad-checksum/output/bad-checksum-corrupted.ccs --allow-unsigned --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code_not = 0
@@ -62,7 +62,7 @@ timeout = 30
 group = "G"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/corrupted/truncated/output/truncated-corrupted.ccs --allow-unsigned"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/corrupted/truncated/output/truncated-corrupted.ccs --allow-unsigned --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code_not = 0
@@ -80,7 +80,7 @@ timeout = 30
 group = "G"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/corrupted/tampered/output/tampered-corrupted.ccs --allow-unsigned"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/corrupted/tampered/output/tampered-corrupted.ccs --allow-unsigned --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code_not = 0
@@ -129,7 +129,7 @@ timeout = 30
 group = "G"
 
 [[test.step]]
-conary = "install ${NATIVE_CORRUPTED_PKG} --yes --sandbox never"
+conary = "install ${NATIVE_CORRUPTED_PKG} --yes --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code_not = 0
@@ -147,7 +147,7 @@ timeout = 120
 group = "G"
 
 [[test.step]]
-run = "if ! test -f /usr/share/conary-test/hello.txt; then ${CONARY_BIN} ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH}; fi"
+run = "if ! test -f /usr/share/conary-test/hello.txt; then ${CONARY_BIN} ccs install --allow-live-system-mutation /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH}; fi"
 
 [test.step.assert]
 exit_code = 0
@@ -171,7 +171,7 @@ timeout = 120
 group = "G"
 
 [[test.step]]
-run = "if ! test -f /usr/share/conary-test/hello.txt; then ${CONARY_BIN} ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH}; fi"
+run = "if ! test -f /usr/share/conary-test/hello.txt; then ${CONARY_BIN} ccs install --allow-live-system-mutation /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH}; fi"
 
 [test.step.assert]
 exit_code = 0
@@ -201,7 +201,7 @@ timeout = 30
 group = "G"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/corrupted/size-lie/output/size-lie-corrupted.ccs --allow-unsigned"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/corrupted/size-lie/output/size-lie-corrupted.ccs --allow-unsigned --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code_not = 0
@@ -237,7 +237,7 @@ timeout = 30
 group = "G"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs"
+conary = "ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code_not = 0

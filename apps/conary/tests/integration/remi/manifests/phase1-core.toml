@@ -158,7 +158,7 @@ timeout = 300
 depends_on = ["T04"]
 
 [[test.step]]
-conary = "install ${TEST_PACKAGE_1} --no-scripts --no-deps --sandbox never"
+conary = "install ${TEST_PACKAGE_1} --no-scripts --no-deps --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
@@ -210,7 +210,7 @@ timeout = 30
 depends_on = ["T04"]
 
 [[test.step]]
-conary = "install zzz-nonexistent-pkg-12345 --no-scripts --no-deps --sandbox never"
+conary = "install zzz-nonexistent-pkg-12345 --no-scripts --no-deps --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code_not = 0

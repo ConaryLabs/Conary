@@ -4,12 +4,34 @@
 use anyhow::Result;
 use clap::CommandFactory;
 use clap_complete::generate;
+use std::borrow::Cow;
 use std::io;
 
 use crate::cli::{self, Cli, Commands};
 use crate::commands;
+use crate::live_host_safety::{
+    LiveMutationClass, LiveMutationRequest, require_live_system_mutation_ack,
+};
+
+fn require_live_mutation(
+    allow_live_system_mutation: bool,
+    command_label: Cow<'static, str>,
+    class: LiveMutationClass,
+    dry_run: bool,
+) -> Result<()> {
+    require_live_system_mutation_ack(
+        allow_live_system_mutation,
+        &LiveMutationRequest {
+            command_label,
+            class,
+            dry_run,
+        },
+    )
+}
 
 pub async fn dispatch(cli: Cli) -> Result<()> {
+    let allow_live_system_mutation = cli.allow_live_system_mutation;
+
     match cli.command {
         // =====================================================================
         // Primary Commands (Hoisted to Root)
@@ -36,6 +58,12 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
 
             // Smart dispatch: @name installs a collection
             if package.starts_with('@') {
+                require_live_mutation(
+                    allow_live_system_mutation,
+                    Cow::Borrowed("conary install @collection"),
+                    LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
+                    dry_run,
+                )?;
                 let name = package.trim_start_matches('@');
                 commands::cmd_collection_install(
                     name,
@@ -47,6 +75,12 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 )
                 .await
             } else {
+                require_live_mutation(
+                    allow_live_system_mutation,
+                    Cow::Borrowed("conary install"),
+                    LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
+                    dry_run,
+                )?;
                 commands::cmd_install(
                     &package,
                     commands::InstallOptions {
@@ -80,6 +114,12 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             sandbox,
             purge_files,
         }) => {
+            require_live_mutation(
+                allow_live_system_mutation,
+                Cow::Borrowed("conary remove"),
+                LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
+                false,
+            )?;
             commands::cmd_remove(
                 &package_name,
                 &common.db.db_path,
@@ -105,6 +145,12 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             if let Some(ref pkg) = package
                 && pkg.starts_with('@')
             {
+                require_live_mutation(
+                    allow_live_system_mutation,
+                    Cow::Borrowed("conary update @collection"),
+                    LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
+                    false,
+                )?;
                 let name = pkg.trim_start_matches('@');
                 return commands::cmd_update_group(
                     name,
@@ -117,6 +163,12 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 )
                 .await;
             }
+            require_live_mutation(
+                allow_live_system_mutation,
+                Cow::Borrowed("conary update"),
+                LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
+                false,
+            )?;
             commands::cmd_update(
                 package,
                 &common.db.db_path,
@@ -159,6 +211,12 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             no_scripts,
             sandbox,
         }) => {
+            require_live_mutation(
+                allow_live_system_mutation,
+                Cow::Borrowed("conary autoremove"),
+                LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
+                dry_run,
+            )?;
             commands::cmd_autoremove(
                 &common.db.db_path,
                 &common.root,
@@ -246,6 +304,12 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 force,
                 dry_run,
             } => {
+                require_live_mutation(
+                    allow_live_system_mutation,
+                    Cow::Borrowed("conary system restore"),
+                    LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
+                    dry_run,
+                )?;
                 if package == "all" {
                     commands::cmd_restore_all(&common.db.db_path, &common.root, dry_run).await
                 } else {
@@ -353,7 +417,15 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 cli::StateCommands::Rollback {
                     changeset_id,
                     common,
-                } => commands::cmd_rollback(changeset_id, &common.db.db_path, &common.root).await,
+                } => {
+                    require_live_mutation(
+                        allow_live_system_mutation,
+                        Cow::Borrowed("conary system state rollback"),
+                        LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
+                        false,
+                    )?;
+                    commands::cmd_rollback(changeset_id, &common.db.db_path, &common.root).await
+                }
             },
 
             // Nested: system generation
@@ -362,21 +434,51 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                     commands::generation::commands::cmd_generation_list().await
                 }
                 cli::GenerationCommands::Build { summary, db } => {
+                    require_live_mutation(
+                        allow_live_system_mutation,
+                        Cow::Borrowed("conary system generation build"),
+                        LiveMutationClass::AlwaysLive,
+                        false,
+                    )?;
                     commands::generation::commands::cmd_generation_build(&db.db_path, &summary)
                 }
                 cli::GenerationCommands::Switch { number, reboot } => {
+                    require_live_mutation(
+                        allow_live_system_mutation,
+                        Cow::Borrowed("conary system generation switch"),
+                        LiveMutationClass::AlwaysLive,
+                        false,
+                    )?;
                     commands::generation::commands::cmd_generation_switch(number, reboot)
                 }
                 cli::GenerationCommands::Rollback => {
+                    require_live_mutation(
+                        allow_live_system_mutation,
+                        Cow::Borrowed("conary system generation rollback"),
+                        LiveMutationClass::AlwaysLive,
+                        false,
+                    )?;
                     commands::generation::commands::cmd_generation_rollback()
                 }
                 cli::GenerationCommands::Gc { keep, db } => {
+                    require_live_mutation(
+                        allow_live_system_mutation,
+                        Cow::Borrowed("conary system generation gc"),
+                        LiveMutationClass::AlwaysLive,
+                        false,
+                    )?;
                     commands::generation::commands::cmd_generation_gc(keep, &db.db_path).await
                 }
                 cli::GenerationCommands::Info { number } => {
                     commands::generation::commands::cmd_generation_info(number).await
                 }
                 cli::GenerationCommands::Recover { db } => {
+                    require_live_mutation(
+                        allow_live_system_mutation,
+                        Cow::Borrowed("conary system generation recover"),
+                        LiveMutationClass::AlwaysLive,
+                        false,
+                    )?;
                     commands::generation::commands::cmd_generation_recover(&db.db_path)
                 }
             },
@@ -388,6 +490,12 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 dry_run,
                 db,
             } => {
+                require_live_mutation(
+                    allow_live_system_mutation,
+                    Cow::Borrowed("conary system takeover"),
+                    LiveMutationClass::AlwaysLive,
+                    dry_run,
+                )?;
                 commands::generation::takeover::cmd_system_takeover(
                     &db.db_path,
                     up_to,
@@ -846,6 +954,12 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 allow_capabilities,
                 capability_policy,
             } => {
+                require_live_mutation(
+                    allow_live_system_mutation,
+                    Cow::Borrowed("conary ccs install"),
+                    LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
+                    dry_run,
+                )?;
                 commands::ccs::cmd_ccs_install(
                     &package,
                     &common.db.db_path,

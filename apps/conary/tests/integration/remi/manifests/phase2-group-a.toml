@@ -26,7 +26,7 @@ group = "A"
 fatal = true
 
 [[test.step]]
-conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never"
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
@@ -117,7 +117,7 @@ depends_on = ["T42"]
 fatal = true
 
 [[test.step]]
-conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never"
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
@@ -136,7 +136,7 @@ depends_on = ["T43"]
 fatal = true
 
 [[test.step]]
-conary = "ccs install ${FIXTURE_V2_CCS} --allow-unsigned --sandbox never"
+conary = "ccs install ${FIXTURE_V2_CCS} --allow-unsigned --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
