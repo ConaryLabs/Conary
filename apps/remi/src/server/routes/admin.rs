@@ -71,27 +71,6 @@ pub fn create_external_admin_router(
             "/v1/admin/packages/{distro}",
             post(admin_handlers::upload_package),
         )
-        .route(
-            "/v1/admin/ci/workflows",
-            get(admin_handlers::ci_list_workflows),
-        )
-        .route(
-            "/v1/admin/ci/workflows/{name}/runs",
-            get(admin_handlers::ci_list_runs),
-        )
-        .route("/v1/admin/ci/runs/{id}", get(admin_handlers::ci_get_run))
-        .route(
-            "/v1/admin/ci/runs/{id}/logs",
-            get(admin_handlers::ci_get_logs),
-        )
-        .route(
-            "/v1/admin/ci/workflows/{name}/dispatch",
-            post(admin_handlers::ci_dispatch),
-        )
-        .route(
-            "/v1/admin/ci/mirror-sync",
-            post(admin_handlers::ci_mirror_sync),
-        )
         .route("/v1/admin/repos", get(admin_handlers::list_repos))
         .route("/v1/admin/repos", post(admin_handlers::create_repo))
         .route("/v1/admin/repos/{name}", get(admin_handlers::get_repo))
