@@ -6,24 +6,25 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
 usage() {
-    echo "Usage: $0 [conary|server|test|all] [--dry-run]"
+    echo "Usage: $0 [conary|remi|conaryd|conary-test|all] [--dry-run]"
     echo ""
     echo "Analyze conventional commits since last tag and bump versions."
-    echo "  conary   - conary CLI + conary-core (src/, conary-core/)"
-    echo "  server   - conary-server (conary-server/)"
-    echo "  test     - conary-test (conary-test/)"
-    echo "  all      - all groups"
+    echo "  conary       - conary CLI + conary-core + packaging"
+    echo "  remi         - Remi service app"
+    echo "  conaryd      - daemon service app"
+    echo "  conary-test  - conary-test harness"
+    echo "  all          - all groups"
     echo "  --dry-run  Show what would happen without making changes"
     exit 1
 }
 
 DRY_RUN=false
-RELEASE_RELEASE_GROUPS=()
+RELEASE_GROUPS=()
 
 for arg in "$@"; do
     case "$arg" in
         --dry-run) DRY_RUN=true ;;
-        conary|server|test|all) RELEASE_GROUPS+=("$arg") ;;
+        conary|remi|conaryd|conary-test|all) RELEASE_GROUPS+=("$arg") ;;
         *) usage ;;
     esac
 done
@@ -31,19 +32,21 @@ done
 [[ ${#RELEASE_GROUPS[@]} -eq 0 ]] && usage
 
 if [[ " ${RELEASE_GROUPS[*]} " == *" all "* ]]; then
-    RELEASE_GROUPS=(conary server test)
+    RELEASE_GROUPS=(conary remi conaryd conary-test)
 fi
 
 declare -A TAG_PREFIX=(
     [conary]="v"
-    [server]="server-v"
-    [test]="test-v"
+    [remi]="remi-v"
+    [conaryd]="conaryd-v"
+    [conary-test]="test-v"
 )
 
 declare -A PATH_SCOPES=(
-    [conary]="src/ conary-core/"
-    [server]="conary-server/"
-    [test]="conary-test/"
+    [conary]="apps/conary/ crates/conary-core/ packaging/ .github/workflows/release.yml scripts/sign-release.sh"
+    [remi]="apps/remi/ scripts/rebuild-remi.sh scripts/bootstrap-remi.sh"
+    [conaryd]="apps/conaryd/"
+    [conary-test]="apps/conary-test/"
 )
 
 latest_tag() {
@@ -216,7 +219,7 @@ for group in "${RELEASE_GROUPS[@]}"; do
 
     local_tag=$(latest_tag "$group")
     if [[ -z "$local_tag" ]]; then
-        local_tag="v0.1.0"
+        local_tag="${TAG_PREFIX[$group]}0.1.0"
         current_version="0.1.0"
     else
         current_version=$(version_from_tag "$local_tag" "$group")
@@ -239,7 +242,7 @@ for group in "${RELEASE_GROUPS[@]}"; do
     echo "  Tag: ${new_tag}"
 
     if [[ "$DRY_RUN" == "true" ]]; then
-        echo "  [DRY RUN] Would update Cargo.toml files and create tag ${new_tag}"
+        echo "  [DRY RUN] Would update Cargo manifests and create tag ${new_tag}"
         echo ""
         generate_changelog "$group" "$local_tag" "$new_version"
         continue
@@ -247,20 +250,24 @@ for group in "${RELEASE_GROUPS[@]}"; do
 
     case "$group" in
         conary)
-            update_cargo_version "Cargo.toml" "$new_version"
-            update_cargo_version "conary-core/Cargo.toml" "$new_version"
-            echo "  Updated Cargo.toml and conary-core/Cargo.toml"
+            update_cargo_version "apps/conary/Cargo.toml" "$new_version"
+            update_cargo_version "crates/conary-core/Cargo.toml" "$new_version"
+            echo "  Updated apps/conary/Cargo.toml and crates/conary-core/Cargo.toml"
 
             # Update distro packaging versions
             update_packaging_versions "$new_version"
             ;;
-        server)
-            update_cargo_version "conary-server/Cargo.toml" "$new_version"
-            echo "  Updated conary-server/Cargo.toml"
+        remi)
+            update_cargo_version "apps/remi/Cargo.toml" "$new_version"
+            echo "  Updated apps/remi/Cargo.toml"
             ;;
-        test)
-            update_cargo_version "conary-test/Cargo.toml" "$new_version"
-            echo "  Updated conary-test/Cargo.toml"
+        conaryd)
+            update_cargo_version "apps/conaryd/Cargo.toml" "$new_version"
+            echo "  Updated apps/conaryd/Cargo.toml"
+            ;;
+        conary-test)
+            update_cargo_version "apps/conary-test/Cargo.toml" "$new_version"
+            echo "  Updated apps/conary-test/Cargo.toml"
             ;;
     esac
 

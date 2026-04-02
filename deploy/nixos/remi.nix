@@ -23,7 +23,7 @@ in {
       default = pkgs.callPackage ./conary.nix { };
       defaultText = lib.literalExpression "pkgs.callPackage ./conary.nix { }";
       description = ''
-        The Conary package to use. Must be built with `--features server`.
+        The package to use for the Remi service. It must provide the `remi` binary.
       '';
     };
 
@@ -151,7 +151,7 @@ in {
         '';
       in ''
         ${loadR2}
-        exec ${cfg.package}/bin/conary remi --config ${cfg.configFile}
+        exec ${cfg.package}/bin/remi --config ${cfg.configFile}
       '';
 
       serviceConfig = {

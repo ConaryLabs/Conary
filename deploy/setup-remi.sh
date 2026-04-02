@@ -132,14 +132,23 @@ fi
 # Binary Installation
 # =============================================================================
 
-log "Installing Conary binary..."
+log "Installing Conary and Remi binaries..."
 if [[ -f target/release/conary ]]; then
     cp target/release/conary /usr/local/bin/
     chmod 755 /usr/local/bin/conary
 elif [[ -f /usr/local/bin/conary ]]; then
     warn "Using existing /usr/local/bin/conary"
 else
-    warn "No binary found. Build with: cargo build --release --features server"
+    warn "No conary binary found. Build with: cargo build --release -p conary"
+fi
+
+if [[ -f target/release/remi ]]; then
+    cp target/release/remi /usr/local/bin/
+    chmod 755 /usr/local/bin/remi
+elif [[ -f /usr/local/bin/remi ]]; then
+    warn "Using existing /usr/local/bin/remi"
+else
+    warn "No remi binary found. Build with: cargo build --release -p remi"
 fi
 
 # =============================================================================
@@ -148,7 +157,6 @@ fi
 
 log "Installing systemd services..."
 cp systemd/remi.service /etc/systemd/system/
-cp systemd/remi-builder.service /etc/systemd/system/
 systemctl daemon-reload
 
 # =============================================================================
@@ -191,7 +199,3 @@ if $USE_ZFS; then
     log "ZFS Datasets:"
     zfs list -r conary
 fi
-log ""
-log "To enable the builder service:"
-log "  Edit /etc/conary/remi.toml and set [builder] enabled = true"
-log "  systemctl enable --now remi-builder"

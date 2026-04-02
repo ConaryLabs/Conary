@@ -274,7 +274,7 @@ impl RemiClient {
 /// Data for pushing a test result to Remi.
 ///
 /// Matches the `PushTestResultData` type on the Remi server side
-/// (see `conary-server/src/server/admin_service.rs`).
+/// (see `apps/remi/src/server/admin_service.rs`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PushResultData {
     pub test_id: String,
@@ -321,7 +321,9 @@ mod tests {
     impl EnvVarGuard {
         fn new() -> Self {
             Self {
-                _lock: ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner()),
+                _lock: ENV_LOCK
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()),
                 admin_token: std::env::var_os("REMI_ADMIN_TOKEN"),
                 admin_endpoint: std::env::var_os("REMI_ADMIN_ENDPOINT"),
                 legacy_endpoint: std::env::var_os("REMI_ENDPOINT"),

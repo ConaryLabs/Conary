@@ -10,8 +10,6 @@ use tokio::time::Instant;
 use tracing::{debug, info, warn};
 
 use crate::config::distro::GlobalConfig;
-#[cfg(test)]
-use crate::config::manifest::QemuBoot;
 use crate::config::manifest::{Assertion, ResourceConstraints, TestDef, TestManifest};
 use crate::container::backend::{ContainerBackend, ContainerConfig, ContainerId, ExecResult};
 use crate::engine::assertions::evaluate_assertion;

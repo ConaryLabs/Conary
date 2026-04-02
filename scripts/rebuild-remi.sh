@@ -23,8 +23,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-BINARY_SRC="target/release/conary"
-BINARY_DST="/usr/local/bin/conary"
+BINARY_SRC="target/release/remi"
+BINARY_DST="/usr/local/bin/remi"
 
 echo "=== Remi rebuild started at $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 
@@ -40,9 +40,9 @@ fi
 echo "[2/5] Fetching dependencies..."
 cargo fetch --quiet
 
-# Step 3: Build release with server features
+# Step 3: Build the Remi app
 echo "[3/5] Building release (this may take a few minutes)..."
-cargo build --release --features server
+cargo build --release -p remi
 
 # Step 4: Stop service, copy binary, start service
 echo "[4/5] Restarting remi service..."

@@ -68,4 +68,6 @@ nix.workspace = true
 
 [build-dependencies]
 clap = { workspace = true, features = ["cargo"] }
+clap_complete = "4.5"
 clap_mangen = "0.2"
+conary-core = { path = "../../crates/conary-core" }

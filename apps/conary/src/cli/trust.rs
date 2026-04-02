@@ -74,5 +74,4 @@ pub enum TrustCommands {
         #[command(flatten)]
         db: DbArgs,
     },
-
 }

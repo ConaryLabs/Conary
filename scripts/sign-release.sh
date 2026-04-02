@@ -28,7 +28,11 @@ fi
 SIGN_BIN="./target/release/examples/sign_hash"
 if [ ! -f "$SIGN_BIN" ]; then
     echo "Building sign_hash helper..."
-    cargo build --example sign_hash -p conary-core --release --quiet
+    cargo build \
+        --example sign_hash \
+        --manifest-path ./crates/conary-core/Cargo.toml \
+        --release \
+        --quiet
 fi
 
 echo "Signing $CCS_FILE..."

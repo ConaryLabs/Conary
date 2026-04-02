@@ -12,7 +12,7 @@ Brief description of what this PR does.
 - [ ] `cargo clippy -- -D warnings` clean
 - [ ] `cargo fmt -- --check` clean
 - [ ] New tests added for new functionality
-- [ ] Tested with `--features server` (if server or daemon changes)
+- [ ] Tested affected packages directly (for example `cargo build -p remi` and `cargo build -p conaryd`)
 
 ## Related Issues
 

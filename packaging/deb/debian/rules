@@ -23,7 +23,7 @@ override_dh_auto_install:
 	install -Dpm 0755 target/release/conary debian/conary/usr/bin/conary
 
 	# Man page
-	install -Dpm 0644 man/conary.1 debian/conary/usr/share/man/man1/conary.1
+	install -Dpm 0644 apps/conary/man/conary.1 debian/conary/usr/share/man/man1/conary.1
 
 	# Shell completions
 	install -d debian/conary/usr/share/bash-completion/completions

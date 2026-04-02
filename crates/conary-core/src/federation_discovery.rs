@@ -578,7 +578,10 @@ mod tests {
     #[test]
     fn test_peer_tier_from_string() {
         assert_eq!("cell_hub".parse::<PeerTier>().unwrap(), PeerTier::CellHub);
-        assert_eq!("region_hub".parse::<PeerTier>().unwrap(), PeerTier::RegionHub);
+        assert_eq!(
+            "region_hub".parse::<PeerTier>().unwrap(),
+            PeerTier::RegionHub
+        );
         assert!("invalid".parse::<PeerTier>().is_err());
     }
 

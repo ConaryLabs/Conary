@@ -34,6 +34,7 @@ echo "Sync complete."
 
 if [[ "$DO_BUILD" == true ]]; then
     echo "Building on Forge..."
-    ssh "$FORGE_HOST" "cd ${FORGE_DEST} && cargo build"
+    ssh "$FORGE_HOST" \
+        "cd ${FORGE_DEST} && cargo build -p conary -p remi -p conaryd -p conary-test"
     echo "Build complete."
 fi
