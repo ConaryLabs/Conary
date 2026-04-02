@@ -108,18 +108,24 @@ pub fn sanitize_path(path: impl AsRef<Path>) -> Result<PathBuf> {
 ///
 /// ```
 /// use conary_core::filesystem::path::safe_join;
-/// use std::path::{Path, PathBuf};
 ///
-/// let root = Path::new("/var/conary");
+/// let root = std::env::temp_dir().join(format!(
+///     "conary-safe-join-doc-{}",
+///     std::process::id()
+/// ));
+/// let _ = std::fs::remove_dir_all(&root);
+/// std::fs::create_dir_all(&root).unwrap();
 ///
 /// // Normal paths work
 /// assert_eq!(
-///     safe_join(root, "/usr/bin/foo").unwrap(),
-///     PathBuf::from("/var/conary/usr/bin/foo")
+///     safe_join(&root, "/usr/bin/foo").unwrap(),
+///     root.join("usr/bin/foo")
 /// );
 ///
 /// // Traversal attempts are rejected
-/// assert!(safe_join(root, "../etc/passwd").is_err());
+/// assert!(safe_join(&root, "../etc/passwd").is_err());
+///
+/// std::fs::remove_dir_all(&root).unwrap();
 /// ```
 pub fn safe_join(root: impl AsRef<Path>, path: impl AsRef<Path>) -> Result<PathBuf> {
     let root = root.as_ref();
@@ -304,10 +310,10 @@ mod tests {
 
     #[test]
     fn test_safe_join_normal() {
-        let root = PathBuf::from("/tmp/test");
+        let root = tempfile::tempdir().unwrap();
         assert_eq!(
-            safe_join(&root, "usr/bin/foo").unwrap(),
-            PathBuf::from("/tmp/test/usr/bin/foo")
+            safe_join(root.path(), "usr/bin/foo").unwrap(),
+            root.path().join("usr/bin/foo")
         );
     }
 

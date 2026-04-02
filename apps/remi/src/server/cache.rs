@@ -391,6 +391,10 @@ mod tests {
     use conary_core::db::schema;
     use tempfile::NamedTempFile;
 
+    fn test_hash(data: &[u8]) -> String {
+        conary_core::hash::sha256(data)
+    }
+
     fn create_test_db() -> NamedTempFile {
         let temp_file = NamedTempFile::new().unwrap();
         let conn = rusqlite::Connection::open(temp_file.path()).unwrap();
@@ -410,10 +414,10 @@ mod tests {
             db_file.path().to_path_buf(),
         );
 
-        let hash = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
         let data = b"test chunk data";
+        let hash = test_hash(data);
 
-        cache.store_chunk(hash, data).await.unwrap();
+        cache.store_chunk(&hash, data).await.unwrap();
 
         let stats = cache.stats().await.unwrap();
         assert_eq!(stats.chunk_count, 1);
@@ -431,10 +435,10 @@ mod tests {
             db_file.path().to_path_buf(),
         );
 
-        let hash = "aa11bb22cc33dd44ee55ff6677889900aabbccddeeff00112233445566778899";
         let data = b"hello world chunk content";
+        let hash = test_hash(data);
 
-        let stored_path = cache.store_chunk(hash, data).await.unwrap();
+        let stored_path = cache.store_chunk(&hash, data).await.unwrap();
 
         // Verify the file exists at the returned path
         assert!(stored_path.exists());
@@ -455,14 +459,15 @@ mod tests {
             db_file.path().to_path_buf(),
         );
 
-        let hash = "1122334455667788990011223344556677889900aabbccddeeff001122334455";
+        let data = b"chunk data";
+        let hash = test_hash(data);
 
         // Before storing - cache miss
-        assert!(!cache.has_chunk(hash).await);
+        assert!(!cache.has_chunk(&hash).await);
 
         // After storing - cache hit
-        cache.store_chunk(hash, b"chunk data").await.unwrap();
-        assert!(cache.has_chunk(hash).await);
+        cache.store_chunk(&hash, data).await.unwrap();
+        assert!(cache.has_chunk(&hash).await);
     }
 
     #[test]
@@ -511,25 +516,19 @@ mod tests {
         );
 
         // Store three chunks of different sizes
+        let chunk_a = vec![0u8; 1000];
+        let chunk_b = vec![0u8; 2000];
+        let chunk_c = vec![0u8; 3000];
         cache
-            .store_chunk(
-                "aaaa000000000000000000000000000000000000000000000000000000000001",
-                &[0u8; 1000],
-            )
+            .store_chunk(&test_hash(&chunk_a), &chunk_a)
             .await
             .unwrap();
         cache
-            .store_chunk(
-                "bbbb000000000000000000000000000000000000000000000000000000000002",
-                &[0u8; 2000],
-            )
+            .store_chunk(&test_hash(&chunk_b), &chunk_b)
             .await
             .unwrap();
         cache
-            .store_chunk(
-                "cccc000000000000000000000000000000000000000000000000000000000003",
-                &[0u8; 3000],
-            )
+            .store_chunk(&test_hash(&chunk_c), &chunk_c)
             .await
             .unwrap();
 
@@ -551,11 +550,9 @@ mod tests {
         );
 
         // Store 5000 bytes => 50% usage
+        let data = vec![0u8; 5000];
         cache
-            .store_chunk(
-                "dd00000000000000000000000000000000000000000000000000000000000001",
-                &[0u8; 5000],
-            )
+            .store_chunk(&test_hash(&data), &data)
             .await
             .unwrap();
 
@@ -591,8 +588,9 @@ mod tests {
             db_file.path().to_path_buf(),
         );
 
-        let hash = "ee00000000000000000000000000000000000000000000000000000000000001";
-        cache.store_chunk(hash, b"protected data").await.unwrap();
+        let data = b"protected data";
+        let hash = test_hash(data);
+        cache.store_chunk(&hash, data).await.unwrap();
 
         // Protect the chunk
         cache.protect_chunks(&[hash.to_string()]).await;
@@ -619,16 +617,17 @@ mod tests {
             db_file.path().to_path_buf(),
         );
 
-        let hash = "ff00000000000000000000000000000000000000000000000000000000000001";
-        cache.store_chunk(hash, b"access test").await.unwrap();
+        let data = b"access test";
+        let hash = test_hash(data);
+        cache.store_chunk(&hash, data).await.unwrap();
 
         // Record additional accesses
-        cache.record_access(hash).await.unwrap();
-        cache.record_access(hash).await.unwrap();
+        cache.record_access(&hash).await.unwrap();
+        cache.record_access(&hash).await.unwrap();
 
         // Verify via DB directly (access_count should be 3: 1 from store + 2 from record_access)
         let conn = rusqlite::Connection::open(db_file.path()).unwrap();
-        let found = ChunkAccess::find_by_hash(&conn, hash).unwrap().unwrap();
+        let found = ChunkAccess::find_by_hash(&conn, &hash).unwrap().unwrap();
         assert_eq!(found.access_count, 3);
     }
 
@@ -644,11 +643,9 @@ mod tests {
         );
 
         // Store a small chunk - well within limits
+        let data = b"small chunk";
         cache
-            .store_chunk(
-                "1100000000000000000000000000000000000000000000000000000000000001",
-                b"small chunk",
-            )
+            .store_chunk(&test_hash(data), data)
             .await
             .unwrap();
 
@@ -670,25 +667,19 @@ mod tests {
         );
 
         // Store chunks totaling more than 500 bytes
+        let chunk_a = vec![0u8; 200];
+        let chunk_b = vec![1u8; 200];
+        let chunk_c = vec![2u8; 200];
         cache
-            .store_chunk(
-                "2200000000000000000000000000000000000000000000000000000000000001",
-                &[0u8; 200],
-            )
+            .store_chunk(&test_hash(&chunk_a), &chunk_a)
             .await
             .unwrap();
         cache
-            .store_chunk(
-                "3300000000000000000000000000000000000000000000000000000000000002",
-                &[0u8; 200],
-            )
+            .store_chunk(&test_hash(&chunk_b), &chunk_b)
             .await
             .unwrap();
         cache
-            .store_chunk(
-                "4400000000000000000000000000000000000000000000000000000000000003",
-                &[0u8; 200],
-            )
+            .store_chunk(&test_hash(&chunk_c), &chunk_c)
             .await
             .unwrap();
 
@@ -710,11 +701,13 @@ mod tests {
             db_file.path().to_path_buf(),
         );
 
-        let hash1 = "5500000000000000000000000000000000000000000000000000000000000001";
-        let hash2 = "6600000000000000000000000000000000000000000000000000000000000002";
+        let chunk_a = vec![0u8; 200];
+        let chunk_b = vec![1u8; 200];
+        let hash1 = test_hash(&chunk_a);
+        let hash2 = test_hash(&chunk_b);
 
-        cache.store_chunk(hash1, &[0u8; 200]).await.unwrap();
-        cache.store_chunk(hash2, &[0u8; 200]).await.unwrap();
+        cache.store_chunk(&hash1, &chunk_a).await.unwrap();
+        cache.store_chunk(&hash2, &chunk_b).await.unwrap();
 
         // Protect one chunk
         cache.protect_chunks(&[hash1.to_string()]).await;
@@ -723,7 +716,7 @@ mod tests {
         let _result = cache.run_eviction().await.unwrap();
 
         // The protected chunk should still exist
-        assert!(cache.has_chunk(hash1).await);
+        assert!(cache.has_chunk(&hash1).await);
     }
 
     #[tokio::test]
@@ -737,20 +730,20 @@ mod tests {
             db_file.path().to_path_buf(),
         );
 
-        let hash = "7700000000000000000000000000000000000000000000000000000000000001";
         let data = b"atomic write test data";
+        let hash = test_hash(data);
 
-        cache.store_chunk(hash, data).await.unwrap();
+        cache.store_chunk(&hash, data).await.unwrap();
 
         // Verify no .tmp file is left behind (atomic rename should clean up)
-        let chunk_path = cache.chunk_path(hash);
+        let chunk_path = cache.chunk_path(&hash);
         let tmp_path = chunk_path.with_extension("tmp");
         assert!(!tmp_path.exists());
         assert!(chunk_path.exists());
     }
 
     #[tokio::test]
-    async fn test_store_overwrite_existing_chunk() {
+    async fn test_store_chunk_rejects_hash_mismatch() {
         let db_file = create_test_db();
         let temp_dir = tempfile::TempDir::new().unwrap();
         let cache = ChunkCache::new(
@@ -760,16 +753,18 @@ mod tests {
             db_file.path().to_path_buf(),
         );
 
-        let hash = "8800000000000000000000000000000000000000000000000000000000000001";
+        let original = b"first version";
+        let hash = test_hash(original);
 
-        // Store same hash twice with different data (content-addressed should overwrite)
-        cache.store_chunk(hash, b"first version").await.unwrap();
-        cache.store_chunk(hash, b"second version").await.unwrap();
+        cache.store_chunk(&hash, original).await.unwrap();
 
-        // Read back - should have the second version
-        let chunk_path = cache.chunk_path(hash);
+        let err = cache.store_chunk(&hash, b"second version").await.unwrap_err();
+        assert!(err.to_string().contains("chunk hash mismatch"));
+
+        // The original chunk should remain unchanged.
+        let chunk_path = cache.chunk_path(&hash);
         let content = tokio::fs::read(&chunk_path).await.unwrap();
-        assert_eq!(content, b"second version");
+        assert_eq!(content, original);
     }
 
     #[tokio::test]

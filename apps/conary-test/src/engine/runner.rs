@@ -1271,6 +1271,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_runner_qemu_boot_step_skips_when_tooling_missing() {
+        struct MissingToolsReset;
+
+        impl Drop for MissingToolsReset {
+            fn drop(&mut self) {
+                crate::engine::qemu::set_missing_tools_override_for_tests(None);
+            }
+        }
+
         let backend = MockBackend::new(Vec::new());
         let manifest = make_manifest(vec![TestDef {
             id: "T156".to_string(),
@@ -1308,6 +1316,11 @@ mod tests {
         manifest
             .distro_overrides
             .insert("fedora43".to_string(), overrides);
+
+        crate::engine::qemu::set_missing_tools_override_for_tests(Some(vec![
+            "qemu-system-x86_64".to_string(),
+        ]));
+        let _reset = MissingToolsReset;
 
         let suite = runner
             .run(&manifest, &backend, &"ctr-1".to_string(), None)

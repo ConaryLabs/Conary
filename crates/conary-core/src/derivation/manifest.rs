@@ -301,9 +301,13 @@ include = ["glibc"]
     #[test]
     fn parse_conaryos_manifest() {
         let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let path = manifest_dir.parent().unwrap().join("conaryos.toml");
+        let path = manifest_dir
+            .ancestors()
+            .map(|dir| dir.join("conaryos.toml"))
+            .find(|candidate| candidate.exists())
+            .expect("conaryos.toml not found from crate manifest ancestors");
         let content =
-            std::fs::read_to_string(&path).expect("conaryos.toml not found at workspace root");
+            std::fs::read_to_string(&path).expect("conaryos.toml not readable from workspace");
         let manifest = SystemManifest::parse(&content).expect("conaryos.toml should parse");
         assert_eq!(manifest.system.name, "conaryos-base");
         assert_eq!(manifest.system.target, "x86_64-conary-linux-gnu");

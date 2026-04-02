@@ -77,6 +77,20 @@ pub fn live_cas_hashes(
 /// Uses `CasStore::iter_objects()` to walk the two-level objects directory
 /// and deletes any object whose hash is not in `live_hashes`.
 pub fn gc_cas_objects(objects_dir: &Path, live_hashes: &HashSet<String>) -> crate::Result<GcStats> {
+    gc_cas_objects_at(
+        objects_dir,
+        live_hashes,
+        SystemTime::now(),
+        GC_RECENT_OBJECT_GRACE_PERIOD,
+    )
+}
+
+fn gc_cas_objects_at(
+    objects_dir: &Path,
+    live_hashes: &HashSet<String>,
+    now: SystemTime,
+    grace_period: Duration,
+) -> crate::Result<GcStats> {
     let mut stats = GcStats::default();
 
     if !objects_dir.exists() {
@@ -91,7 +105,7 @@ pub fn gc_cas_objects(objects_dir: &Path, live_hashes: &HashSet<String>) -> crat
         stats.objects_checked += 1;
 
         if !live_hashes.contains(&hash) {
-            if should_skip_recent_object(&path, SystemTime::now(), GC_RECENT_OBJECT_GRACE_PERIOD) {
+            if should_skip_recent_object(&path, now, grace_period) {
                 debug!("Skipping recent CAS object during GC grace period: {hash}");
                 continue;
             }
@@ -390,7 +404,13 @@ mod tests {
 
         let live_hashes: HashSet<String> = [live_hash.to_string()].into_iter().collect();
 
-        let stats = gc_cas_objects(&objects_dir, &live_hashes).unwrap();
+        let stats = gc_cas_objects_at(
+            &objects_dir,
+            &live_hashes,
+            SystemTime::now() + GC_RECENT_OBJECT_GRACE_PERIOD + Duration::from_secs(1),
+            GC_RECENT_OBJECT_GRACE_PERIOD,
+        )
+        .unwrap();
 
         assert_eq!(stats.objects_checked, 2);
         assert_eq!(stats.objects_removed, 1);
@@ -425,7 +445,13 @@ mod tests {
                 .into_iter()
                 .collect();
 
-        let stats = gc_cas_objects(&objects_dir, &live_hashes).unwrap();
+        let stats = gc_cas_objects_at(
+            &objects_dir,
+            &live_hashes,
+            SystemTime::now() + GC_RECENT_OBJECT_GRACE_PERIOD + Duration::from_secs(1),
+            GC_RECENT_OBJECT_GRACE_PERIOD,
+        )
+        .unwrap();
 
         assert_eq!(stats.objects_checked, 3);
         assert_eq!(stats.objects_removed, 0, "No objects should be removed");
@@ -470,7 +496,13 @@ mod tests {
         create_cas_object(&objects_dir, dead_hash, b"dead");
 
         let live_hashes = HashSet::new();
-        let stats = gc_cas_objects(&objects_dir, &live_hashes).unwrap();
+        let stats = gc_cas_objects_at(
+            &objects_dir,
+            &live_hashes,
+            SystemTime::now() + GC_RECENT_OBJECT_GRACE_PERIOD + Duration::from_secs(1),
+            GC_RECENT_OBJECT_GRACE_PERIOD,
+        )
+        .unwrap();
 
         // Only the real object should be checked and removed
         assert_eq!(stats.objects_checked, 1);
