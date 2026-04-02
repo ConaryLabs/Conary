@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-04-01
-revision: 8
+last_updated: 2026-04-02
+revision: 9
 summary: Align integration-testing guidance with the virtual workspace package layout
 ---
 
@@ -48,7 +48,7 @@ Every MCP tool has a CLI equivalent for human use:
 | `conary-test run --suite <name> --distro <distro> --phase <N>` | Execute a test suite |
 | `conary-test deploy source [--ref <git-ref>]` | Deploy source and rebuild |
 | `conary-test deploy restart` | Restart the test service |
-| `conary-test deploy status` | Show version, uptime, WAL pending |
+| `conary-test deploy status` | Show commit-aware deploy status, uptime, WAL pending |
 | `conary-test fixtures build [--groups all]` | Build test fixture CCS packages |
 | `conary-test fixtures publish` | Publish fixtures to Remi |
 | `conary-test logs <test-id> [--run <id>] [--step <N>]` | Retrieve test logs |
@@ -244,20 +244,17 @@ Test results are streamed to Remi's admin API as each test completes. If Remi is
 
 ## CI Integration
 
-Tests run automatically on the Forge server (`forge.conarylabs.com`):
+Trusted integration validation now belongs to GitHub Actions, with Forge used
+as execution capacity rather than as an independent control plane.
 
-| Workflow | Trigger | Tests |
-|----------|---------|-------|
-| `ci.yaml` | Every push to main | Build + unit tests + clippy |
-| `integration.yaml` | Every push to main | Phase 1, all 3 distros |
-| `e2e.yaml` | Daily + manual | Phase 1 + Phase 2 + Phase 3, all 3 distros |
-| `remi-health.yaml` | Every 6 hours | Remi endpoint health |
+| Workflow | Trigger | Purpose |
+|----------|---------|---------|
+| `merge-validation` | Every push to `main` + manual dispatch | Trusted on-merge smoke validation for `conary`, `remi`, `conaryd`, and `conary-test` |
+| `scheduled-ops` | Nightly/scheduled + manual dispatch | Deep validation, health checks, and scheduled operational audits |
 
-Trigger manually via Forgejo API:
-```bash
-curl -X POST "http://forge.conarylabs.com:3000/api/v1/repos/peter/Conary/actions/workflows/e2e.yaml/dispatches" \
-  -H "Authorization: token $TOKEN" \
-  -d '{"ref":"main"}'
+`conary-test deploy status` is internal infrastructure state, not a product
+release identity. Operators should read it as commit/ref/build provenance for
+the harness that is currently running on Forge.
 ```
 
 ## Adding Tests
