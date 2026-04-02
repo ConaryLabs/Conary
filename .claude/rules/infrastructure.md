@@ -59,7 +59,7 @@ Two servers, one CI system.
 |--------|---------|
 | `scripts/remi-health.sh --smoke` | Quick Remi check (5 endpoints) |
 | `scripts/remi-health.sh --full` | Comprehensive Remi check (includes conversion) |
-| `scripts/release.sh [conary\|server\|test\|all]` | Auto-version bump from conventional commits |
+| `scripts/release.sh [conary\|remi\|conaryd\|conary-test\|all]` | Auto-version bump from conventional commits |
 | `deploy/setup-forge.sh` | Install Forgejo + Runner on Forge |
 | `deploy/deploy-sites.sh` | Deploy web content to Remi |
 | `scripts/publish-test-fixtures.sh` | Publish test fixture CCS packages to Remi |
@@ -122,9 +122,9 @@ ssh remi '
   set -euo pipefail
   if [ -f /root/.cargo/env ]; then . /root/.cargo/env; fi
   cd /root/conary-src
-  cargo build --release --features server
+  cargo build --release -p remi
   systemctl stop remi
-  install -m 755 target/release/conary /usr/local/bin/conary
+  install -m 755 target/release/remi /usr/local/bin/remi
   systemctl start remi
   sleep 3
   systemctl is-active remi
@@ -133,7 +133,7 @@ ssh remi '
 ```
 
 Important:
-- Do not copy over `/usr/local/bin/conary` while `remi.service` is still running the old binary; that can fail with `Text file busy`.
+- Do not copy over `/usr/local/bin/remi` while `remi.service` is still running the old binary; that can fail with `Text file busy`.
 - This updates the live server binary only. Public release artifacts still require the tagged release flow below.
 
 ## Release Pipeline
@@ -157,8 +157,8 @@ End-to-end flow: `release.sh` bumps versions and tags, GitHub Actions builds and
 
 | File | Field |
 |------|-------|
-| `Cargo.toml` | `version` |
-| `conary-core/Cargo.toml` | `version` |
+| `apps/conary/Cargo.toml` | `version` |
+| `crates/conary-core/Cargo.toml` | `version` |
 | `Cargo.lock` | regenerated via `cargo generate-lockfile` |
 | `packaging/rpm/conary.spec` | `Version:` |
 | `packaging/arch/PKGBUILD` | `pkgver=` |
@@ -183,10 +183,11 @@ End-to-end flow: `release.sh` bumps versions and tags, GitHub Actions builds and
 
 ## Version Groups
 
-Three independent version tracks with tag prefixes:
+Four independent version tracks with tag prefixes:
 
-| Group | Tag prefix | Crates | Cargo.toml locations |
-|-------|-----------|--------|---------------------|
-| conary | `v` | conary + conary-core | `Cargo.toml`, `conary-core/Cargo.toml` |
-| server | `server-v` | conary-server | `conary-server/Cargo.toml` |
-| test | `test-v` | conary-test | `conary-test/Cargo.toml` |
+| Group | Tag prefix | Packages | Cargo.toml locations |
+|-------|-----------|----------|---------------------|
+| conary | `v` | conary + conary-core | `apps/conary/Cargo.toml`, `crates/conary-core/Cargo.toml` |
+| remi | `remi-v` | remi | `apps/remi/Cargo.toml` |
+| conaryd | `conaryd-v` | conaryd | `apps/conaryd/Cargo.toml` |
+| conary-test | `test-v` | conary-test | `apps/conary-test/Cargo.toml` |

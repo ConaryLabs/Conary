@@ -3,15 +3,16 @@
 ## Build & Test
 
 ```bash
-cargo build                              # Client-only (default, use for dev)
-cargo build --features server            # With Remi server + conaryd daemon
-cargo test                               # Default workspace tests
-cargo test --features server             # Full workspace verification, including server paths
+cargo build -p conary                    # Package-manager CLI
+cargo build -p remi                      # Remi service
+cargo build -p conaryd                   # conaryd daemon
 cargo build -p conary-test               # Test infrastructure crate
+cargo test -p conary                     # CLI tests
+cargo test -p remi                       # Remi tests
+cargo test -p conaryd                    # conaryd tests
 cargo test -p conary-test                # Test engine unit tests
 cargo run -p conary-test -- list         # Manifest sanity / suite inventory
-cargo clippy -- -D warnings              # Lint
-cargo clippy --features server -- -D warnings
+cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check                        # Format check
 ```
 
@@ -49,13 +50,14 @@ Add `!` after the type for breaking changes: `feat!: remove legacy API`.
 
 Scopes are optional: `feat(resolver): add SAT backtracking`.
 
-**Release:** Run `./scripts/release.sh [conary|server|test|all]` to auto-bump versions, update CHANGELOG.md, and tag. Use `--dry-run` to preview.
+**Release:** Run `./scripts/release.sh [conary|remi|conaryd|conary-test|all]` to auto-bump versions, update CHANGELOG.md, and tag. Use `--dry-run` to preview.
 
 **Publish:** Push a `v*` tag to trigger `.github/workflows/release.yml`, which builds CCS + native packages (RPM/DEB/Arch) in parallel containers and deploys to Remi. Forgejo's `release.yaml` automatically verifies the release landed. See `.claude/rules/infrastructure.md` for details.
 
 **Manual source deploys (non-release):**
 - Forge: `./scripts/deploy-forge.sh`, then on Forge run `cd ~/Conary && cargo build -p conary-test && cargo build && systemctl --user restart conary-test && curl -fsS http://127.0.0.1:9090/v1/health`
-- Remi: `rsync -az --delete --exclude target/ --exclude '.git/' --exclude '.worktrees/' /home/peter/Conary/ remi:/root/conary-src/`, then on Remi run `cd /root/conary-src && cargo build --release --features server && systemctl stop remi && install -m 755 target/release/conary /usr/local/bin/conary && systemctl start remi && curl -fsS http://127.0.0.1:8081/health`
+- Forge: `./scripts/deploy-forge.sh --build`, which now builds `conary`, `remi`, `conaryd`, and `conary-test` explicitly on Forge after syncing
+- Remi: `rsync -az --delete --exclude target/ --exclude '.git/' --exclude '.worktrees/' /home/peter/Conary/ remi:/root/conary-src/`, then on Remi run `cd /root/conary-src && cargo build --release -p remi && systemctl stop remi && install -m 755 target/release/remi /usr/local/bin/remi && systemctl start remi && curl -fsS http://127.0.0.1:8081/health`
 - Prefer the `remi-admin` / `conary-test` MCP deployment tools when they are available in-session; use the manual SSH/rsync path as the fallback playbook.
 
 ## Architecture Glossary

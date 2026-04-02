@@ -1,11 +1,13 @@
 ---
 paths:
-  - "conary-server/**"
+  - "apps/remi/**"
+  - "apps/conaryd/**"
 ---
 
-# Server Crate (conary-server)
+# Service Apps (remi + conaryd)
 
-Requires `--features server` to build. Contains three major subsystems:
+Build the owning app crates directly with `cargo build -p remi` and
+`cargo build -p conaryd`. Together they contain three major subsystems:
 Remi (CCS package server), federation (cross-machine CAS sharing), and
 conaryd (local daemon with REST API).
 
@@ -60,22 +62,22 @@ conaryd (local daemon with REST API).
 - CLI checks for running daemon via `should_forward_to_daemon()`
 
 ## Gotchas
-- `AsyncRemiClient` in conary-core is feature-gated, not in conary-server
-- `chunk_fetcher` module in conary-core is also feature-gated
+- `AsyncRemiClient` still lives in `conary-core`, not in the service crates
+- `chunk_fetcher` in `conary-core` is shared repository infrastructure used by service-owned retrieval flows
 - Server uses axum framework with tokio async runtime
 - `lite.rs` provides a lightweight proxy mode (`ProxyConfig`, `run_proxy`)
 - `prewarm.rs` pre-populates cache on startup
 
 ## Files
-- `server/` -- Remi server (routes, handlers, bloom, cache, conversion, jobs, self-update)
-- `server/auth.rs` -- bearer token auth middleware, token hashing/generation, scope validation
-- `server/mcp.rs` -- MCP server (rmcp) exposing admin tools for LLM agents
-- `server/rate_limit.rs` -- per-IP rate limiting middleware (governor) for external admin API
-- `server/audit.rs` -- audit logging middleware with action derivation for external admin API
-- `server/admin_service.rs` -- shared service layer (tokens, repos, federation, audit) used by handlers + MCP
-- `server/forgejo.rs` -- shared Forgejo/CI client module (get, post, get_text)
-- `server/routes.rs` -- axum router construction (internal :8081 + external :8082)
-- `server/handlers/admin/` -- admin API handlers split into: tokens.rs, ci.rs, repos.rs, federation.rs, audit.rs, events.rs, artifacts.rs, packages.rs, test_data.rs
-- `server/handlers/openapi.rs` -- hand-written OpenAPI 3.1 spec for admin API
-- `federation/` -- CAS federation (router, circuit breaker, coalescer, mDNS, peer)
-- `daemon/` -- conaryd (routes, auth, client, enhance, jobs, lock, socket, systemd)
+- `apps/remi/src/server/` -- Remi server (routes, handlers, bloom, cache, conversion, jobs, self-update)
+- `apps/remi/src/server/auth.rs` -- bearer token auth middleware, token hashing/generation, scope validation
+- `apps/remi/src/server/mcp.rs` -- MCP server (rmcp) exposing admin tools for LLM agents
+- `apps/remi/src/server/rate_limit.rs` -- per-IP rate limiting middleware (governor) for external admin API
+- `apps/remi/src/server/audit.rs` -- audit logging middleware with action derivation for external admin API
+- `apps/remi/src/server/admin_service.rs` -- shared service layer (tokens, repos, federation, audit) used by handlers + MCP
+- `apps/remi/src/server/forgejo.rs` -- shared Forgejo/CI client module (get, post, get_text)
+- `apps/remi/src/server/routes.rs` -- axum router construction (internal :8081 + external :8082)
+- `apps/remi/src/server/handlers/admin/` -- admin API handlers split into: tokens.rs, ci.rs, repos.rs, federation.rs, audit.rs, events.rs, artifacts.rs, packages.rs, test_data.rs
+- `apps/remi/src/server/handlers/openapi.rs` -- hand-written OpenAPI 3.1 spec for admin API
+- `apps/remi/src/federation/` -- CAS federation (router, circuit breaker, coalescer, mDNS, peer)
+- `apps/conaryd/src/daemon/` -- conaryd (routes, auth, client, enhance, jobs, lock, socket, systemd)

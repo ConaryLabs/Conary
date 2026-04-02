@@ -4,7 +4,7 @@ revision: 2
 summary: Document current federation trust controls, peer identity, discovery rules, and CLI peer management
 ---
 
-# Federation Module (conary-server/src/federation/)
+# Federation Module (apps/remi/src/federation/)
 
 Peer-to-peer CAS chunk distribution. Enables LAN caching, multi-tier
 routing, and resilient chunk fetching across Conary nodes.
@@ -86,8 +86,8 @@ during fleet-wide simultaneous updates.
 
 ## Architecture Context
 
-Federation is server-side (feature-gated behind `--features server`).
-It extends the ChunkFetcher trait used by the Remi server, adding a
+Federation is Remi-owned server functionality.
+It extends the ChunkFetcher trait used by the Remi app, adding a
 peer layer between local CAS and upstream origin. Manifests reuse
 the CCS Ed25519 signing infrastructure, while peer admission layers on
 allowlists, TLS pinning, and optional mDNS discovery.

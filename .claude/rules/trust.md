@@ -35,7 +35,7 @@ Ed25519 signatures and versioned metadata with expiration.
 - `verify.rs` does signature verification, rollback/freeze/consistency checks
 - `client.rs` handles TUF client update flow (fetch, verify, store)
 - `keys.rs` has `canonical_json()` for deterministic serialization before signing
-- `generate.rs` is feature-gated behind `--features server` (server-side metadata generation)
+- `generate.rs` is consumed by the Remi trust/admin flow in `apps/remi`
 - Key IDs are SHA-256 of canonical JSON of the public key
 
 ## Files
@@ -45,4 +45,4 @@ Ed25519 signatures and versioned metadata with expiration.
 - `client.rs` -- TUF client update protocol
 - `keys.rs` -- `canonical_json()`, `compute_key_id()`, `sign_tuf_metadata()`
 - `metadata.rs` -- all TUF metadata structs (`RootMetadata`, `Signed`, `TufKey`, etc.)
-- `generate.rs` -- server-side metadata generation (feature-gated)
+- `generate.rs` -- metadata generation used by Remi-owned trust flows

@@ -48,9 +48,9 @@ Each worker subagent gets:
 ## Integration Verification
 
 After all workers complete:
-1. `cargo build` (and `cargo build --features server` if server files were touched)
-2. `cargo clippy -- -D warnings`
-3. `cargo test`
+1. `cargo build -p conary` (plus `cargo build -p remi` / `cargo build -p conaryd` when service files were touched)
+2. `cargo clippy --workspace --all-targets -- -D warnings`
+3. `cargo test -p conary`
 4. Fix any cross-agent integration issues (missing imports, type mismatches in shared files)
 5. Report final status
 
@@ -73,4 +73,4 @@ Produce:
 - Tests: in-file `#[cfg(test)] mod tests`
 - No emojis, no unwrap in production code
 - Debug builds only (`cargo build`, never `--release`)
-- 4-crate workspace: conary, conary-core, conary-server, conary-test
+- Virtual workspace: apps/conary, apps/remi, apps/conaryd, apps/conary-test, crates/conary-core

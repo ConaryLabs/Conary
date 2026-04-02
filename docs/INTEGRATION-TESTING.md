@@ -1,19 +1,23 @@
 ---
-last_updated: 2026-03-31
-revision: 7
-summary: Clarify what the manifest suites prove, plus the command-level bootstrap workflow tests
+last_updated: 2026-04-01
+revision: 8
+summary: Align integration-testing guidance with the virtual workspace package layout
 ---
 
 # Integration Testing
 
 Conary uses Podman containers to run integration tests on real Linux distributions. Tests exercise the full install/remove/update/adopt/generation lifecycle against a live Remi server.
 
+Run these commands from the repository root, which is now a virtual Cargo
+workspace. The product entrypoints live under `apps/`, with the shared package
+domain in `crates/conary-core`.
+
 ## Prerequisites
 
 - **Podman** (rootless works, but tests run as root inside containers)
 - **Network access** to `packages.conary.io` (Remi server)
-- A built conary binary (`cargo build`)
-- The conary-test crate (`cargo build -p conary-test`)
+- A built conary binary (`cargo build -p conary`)
+- The conary-test app crate (`cargo build -p conary-test`)
 
 ## Running Tests
 

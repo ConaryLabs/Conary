@@ -104,7 +104,7 @@ conary/                  Root crate -- CLI binary
         +-- derived.rs   Derived package creation
         +-- adopt/       System adoption
 
-conary-core/             Core library crate
+crates/conary-core/      Core library crate
 +-- src/
     +-- lib.rs           Public API surface
     +-- db/              Database layer
@@ -199,7 +199,7 @@ conary-core/             Core library crate
     +-- version/         Version parsing and comparison
     +-- hash.rs          Multi-algorithm hashing (SHA-256, XXH128)
 
-conary-test/             Declarative test infrastructure (TOML manifests, container management)
+apps/conary-test/        Declarative test infrastructure (TOML manifests, container management)
 +-- src/
     +-- config/          TOML manifest and distro config parsing
     +-- engine/          Test suite, runner, assertions
@@ -208,7 +208,7 @@ conary-test/             Declarative test infrastructure (TOML manifests, contai
     +-- server/          Axum HTTP API, MCP server (rmcp)
     +-- cli.rs           Binary entrypoint
 
-conary-server/           Remi server + conaryd (feature-gated: --features server)
+apps/remi/               Remi server + federation
 +-- src/
     +-- server/          Remi server
     |   +-- routes.rs    Public + admin Axum routers
@@ -222,13 +222,6 @@ conary-server/           Remi server + conaryd (feature-gated: --features server
     |   +-- federated_index.rs Merged sparse index from upstream peers
     |   +-- delta_manifests.rs Pre-computed version deltas
     |   +-- prewarm.rs   Background package pre-conversion
-    +-- daemon/          conaryd local daemon
-    |   +-- routes.rs    REST API endpoints
-    |   +-- jobs.rs      Priority job queue with SQLite persistence
-    |   +-- client.rs    CLI forwarding client with SSE
-    |   +-- socket.rs    Unix socket + TCP listener
-    |   +-- auth.rs      SO_PEERCRED peer authentication
-    |   +-- systemd.rs   Socket activation and watchdog
     +-- federation/      CAS peer-to-peer distribution
     |   +-- peer.rs      Peer registry and scoring
     |   +-- router.rs    Hierarchical chunk routing
@@ -236,9 +229,18 @@ conary-server/           Remi server + conaryd (feature-gated: --features server
     |   +-- circuit.rs   Circuit breaker for failing peers
     |   +-- coalesce.rs  Request deduplication
     |   +-- mdns.rs      LAN peer discovery
-    +-- bin/
-        +-- remi.rs      Remi server binary entry point
-        +-- conaryd.rs   conaryd daemon binary entry point
+    +-- bin/remi.rs      Remi server binary entry point
+
+apps/conaryd/            conaryd local daemon
++-- src/
+    +-- daemon/          conaryd local daemon
+    |   +-- routes.rs    REST API endpoints
+    |   +-- jobs.rs      Priority job queue with SQLite persistence
+    |   +-- client.rs    CLI forwarding client with SSE
+    |   +-- socket.rs    Unix socket + TCP listener
+    |   +-- auth.rs      SO_PEERCRED peer authentication
+    |   +-- systemd.rs   Socket activation and watchdog
+    +-- bin/conaryd.rs   conaryd binary entry point
 ```
 
 ## Data Flow: Package Installation
@@ -454,19 +456,17 @@ Federation / Daemon:
   daemon_jobs                           conaryd job queue
 ```
 
-## Feature Gates
+## Package Graph
 
-The codebase uses Cargo feature flags to keep the client binary lean:
+The root manifest is now a virtual workspace. Build the owning crate directly:
 
-| Feature  | Effect                                       | Binaries           |
-|----------|----------------------------------------------|--------------------|
-| (none)   | Client CLI only                              | `conary`           |
-| server   | Links `conary-server` crate                  | `conary` + `remi` + `conaryd` |
-| polkit   | PolicyKit auth in conaryd (requires `server`) | `conaryd`          |
-
-Build examples:
-- `cargo build` -- client only
-- `cargo build --features server` -- with Remi server + conaryd daemon
+| Package | Purpose | Typical command |
+|---------|---------|-----------------|
+| `conary` | Package-manager CLI | `cargo build -p conary` |
+| `remi` | Remi conversion/proxy service | `cargo build -p remi` |
+| `conaryd` | Local daemon | `cargo build -p conaryd` |
+| `conary-test` | Test harness | `cargo build -p conary-test` |
+| `conary-core` | Shared library | `cargo build -p conary-core` |
 
 ## Key Design Decisions
 

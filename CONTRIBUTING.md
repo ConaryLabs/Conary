@@ -47,28 +47,30 @@ git remote add upstream https://github.com/ConaryLabs/Conary.git
 ## Building from Source
 
 ```bash
-# Debug build (default, fast compilation)
-cargo build
-
-# With Remi server + conaryd daemon
-cargo build --features server
+# Debug builds
+cargo build -p conary
+cargo build -p remi
+cargo build -p conaryd
 
 # Release build (optimized, slower to compile)
-cargo build --release
+cargo build -p conary --release
 ```
 
-The project is a Cargo workspace with 4 crates: `conary` (CLI), `conary-core` (library), `conary-server` (Remi + conaryd), and `conary-test` (test infrastructure). EROFS support uses `composefs-rs` directly in `conary-core`.
-
-Current workspace note: the root `server` feature belongs to the `conary` crate, not `conary-server`. Use `cargo test --features server` when you want the root workspace with server-enabled integration, and `cargo test -p conary-server` when you want unit tests inside the server crate itself. This split works, but it is easy to misread; if the workspace layout is reorganized later, preserving a simpler “one obvious test command per subsystem” flow would help a lot.
+The project root is a virtual Cargo workspace with four app crates and one shared library crate: `apps/conary`, `apps/remi`, `apps/conaryd`, `apps/conary-test`, and `crates/conary-core`. EROFS support uses `composefs-rs` directly in `crates/conary-core`.
 
 ## Running Tests
 
 ```bash
-# All library + integration tests
-cargo test
+# CLI + core
+cargo test -p conary
+cargo test -p conary-core
 
-# Full workspace verification, including server-enabled paths
-cargo test --features server
+# Service-owned code
+cargo test -p remi
+cargo test -p conaryd
+
+# Test harness
+cargo test -p conary-test
 
 # Run a specific test module
 cargo test --test database
@@ -83,24 +85,24 @@ cargo test --test '*'
 All tests must pass before submitting a PR. At minimum, run the verification path that matches the code you touched:
 
 1. `cargo fmt --check` -- formatting
-2. `cargo clippy -- -D warnings` -- default lint gate
-3. `cargo test` -- default workspace tests
-4. `cargo clippy --features server -- -D warnings` -- when touching server/daemon/federation code
-5. `cargo test --features server` -- when touching server/daemon/federation code
+2. `cargo clippy --workspace --all-targets -- -D warnings` -- workspace lint gate
+3. `cargo test -p conary` -- CLI tests
+4. `cargo test -p remi` -- when touching Remi/server/federation code
+5. `cargo test -p conaryd` -- when touching daemon code
 
 Run these locally before pushing to save CI round-trips:
 
 ```bash
 cargo fmt --check
-cargo clippy -- -D warnings
-cargo test
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test -p conary
 ```
 
-If your change touches `conary-server`, daemon code, federation, or shared types used behind the root `server` feature, also run:
+If your change touches Remi, daemon code, federation, or service-owned shared types, also run:
 
 ```bash
-cargo clippy --features server -- -D warnings
-cargo test --features server
+cargo test -p remi
+cargo test -p conaryd
 ```
 
 ## Code Style
@@ -122,7 +124,7 @@ cargo test --features server
 - Use `thiserror` for library/module error types
 - Use `anyhow` for application-level error propagation
 - Minimize `.unwrap()` in production code paths -- prefer `?` or explicit error handling
-- Feature-gate optional functionality: server and daemon code behind `--features server`
+- Keep ownership explicit: service and daemon code live in `apps/remi` and `apps/conaryd`, not behind a root feature flag
 
 ### Commit Messages
 
@@ -147,16 +149,16 @@ Use the imperative mood in the subject line (e.g., "add sparse index support" no
 
 ## Module Overview
 
-The project is a Cargo workspace with 4 crates:
+The project is a virtual Cargo workspace with four app crates and one shared library crate:
 
-**`conary`** (root) -- CLI binary
+**`apps/conary`** -- CLI binary
 
 | Module | Purpose |
 |--------|---------|
 | `src/cli/` | CLI definitions and argument parsing |
 | `src/commands/` | Command implementations |
 
-**`conary-core`** -- Core library
+**`crates/conary-core`** -- Core library
 
 | Module | Purpose |
 |--------|---------|
@@ -190,15 +192,20 @@ The project is a Cargo workspace with 4 crates:
 | `src/mcp/` | MCP tool definitions for LLM integration |
 | `src/hash.rs` | Multi-algorithm hashing (SHA-256, XXH128) |
 
-**`conary-server`** -- Remi server + conaryd daemon (feature-gated: `--features server`)
+**`apps/remi`** -- Remi server + federation service
 
 | Module | Purpose |
 |--------|---------|
 | `src/server/` | Remi on-demand CCS conversion proxy |
-| `src/daemon/` | conaryd REST API, SSE events, job queue, systemd integration |
 | `src/federation/` | CAS federation -- peer discovery, chunk routing, allowlists, TLS pinning |
 
-**`conary-test`** -- Declarative test infrastructure (TOML manifests, container management)
+**`apps/conaryd`** -- conaryd daemon
+
+| Module | Purpose |
+|--------|---------|
+| `src/daemon/` | conaryd REST API, SSE events, job queue, systemd integration |
+
+**`apps/conary-test`** -- Declarative test infrastructure (TOML manifests, container management)
 
 | Module | Purpose |
 |--------|---------|
@@ -226,7 +233,7 @@ The project is a Cargo workspace with 4 crates:
    cargo test
    ```
 
-   Add the `--features server` clippy/test pair when your change touches server-enabled code.
+   Add the `cargo test -p remi` and `cargo test -p conaryd` pair when your change touches service-owned code.
 
 5. **Write a clear PR description** explaining what changed and why. If it addresses an issue, reference it (e.g., "Fixes #42").
 
@@ -259,7 +266,7 @@ Conary has a few core design principles that inform how contributions should be 
 - **Database-first**: SQLite is the single source of truth for all package state. Do not introduce config files, caches outside the database, or in-memory-only state for data that should persist.
 - **Content-addressable storage**: Files are stored by hash, enabling deduplication and efficient delta updates.
 - **Atomic transactions**: Package operations use journaled changesets for crash safety. Partial installs should never leave the system in a broken state.
-- **Feature-gated compilation**: Server and daemon functionality live in the `conary-server` crate, enabled via `--features server` to keep the default binary lean.
+- **Package-owned service surfaces**: Remi and conaryd live in their own app crates and should be built and tested directly with `cargo build -p remi`, `cargo build -p conaryd`, `cargo test -p remi`, and `cargo test -p conaryd`.
 
 Before proposing significant architectural changes, please open an issue to discuss the approach. This helps avoid wasted effort and ensures alignment with the project direction.
 
