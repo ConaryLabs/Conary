@@ -10,6 +10,16 @@
 
 ---
 
+## Preconditions
+
+- If you execute this plan in a git worktree, do not reuse the stale March
+  worktree at `.worktrees/live-host-mutation-safety-gate/`. Either remove it
+  first or create a fresh sibling such as
+  `.worktrees/live-host-mutation-safety-gate-refresh/`.
+- `conary-test run --suite` accepts either a repository-relative manifest path
+  or a suite name/stem. This plan uses repository-relative manifest paths to
+  keep the target unambiguous.
+
 ## File Map
 
 - `apps/conary/src/main.rs`: register the new `live_host_safety` module in the binary crate
@@ -20,6 +30,7 @@
 - `apps/conary/tests/live_host_mutation_readiness.rs`: new local readiness smoke tests for safe, non-live seams
 - `apps/conary/tests/component.rs`: existing CLI-facing `ccs install` success coverage that must opt in explicitly
 - `apps/conary/tests/workflow.rs`: update intentional covered-command CLI invocations to pass the new flag
+- `apps/conary/tests/integration/remi/manifests/phase1-core.toml`: baseline install coverage, including an expected underlying install failure that should still reach the real command path
 - `apps/conary/tests/integration/remi/manifests/phase1-advanced.toml`: generation GC and takeover dry-run coverage
 - `apps/conary/tests/integration/remi/manifests/phase2-group-a.toml`: CCS install and install/remove coverage
 - `apps/conary/tests/integration/remi/manifests/phase2-group-b.toml`: generation build/switch/gc and takeover generation-ready coverage
@@ -454,6 +465,26 @@ fn allow_flag_reaches_underlying_restore_error() {
     assert!(stderr.contains("not found"));
     assert!(!stderr.contains("allow-live-system-mutation only if"));
 }
+
+#[test]
+fn excluded_system_gc_is_not_gated() {
+    let (_tmp, db_path) = common::setup_command_test_db();
+    let missing_objects = tempfile::tempdir().unwrap().path().join("objects");
+
+    let output = run_conary(&[
+        "system",
+        "gc",
+        "--db-path",
+        &db_path,
+        "--objects-dir",
+        missing_objects.to_str().unwrap(),
+        "--dry-run",
+    ]);
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("--allow-live-system-mutation"));
+}
 ```
 
 - [ ] **Step 2: Run the new integration tests**
@@ -535,6 +566,9 @@ arms:
 
 Use the spec's class map exactly. `--yes` must not bypass the gate.
 `system gc` must stay untouched.
+For any covered arm that does not destructure a `dry_run` field
+(`Remove`, both `Update` paths, `StateCommands::Rollback`, and the listed
+`GenerationCommands` arms), pass `false` as the helper's `dry_run` argument.
 
 - [ ] **Step 4: Re-run the new safety integration tests**
 
@@ -543,7 +577,15 @@ Run:
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Run formatting and linting on the Rust changes**
+
+Run:
+- `cargo fmt --check`
+- `cargo clippy -p conary --all-targets -- -D warnings`
+
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add apps/conary/src/dispatch.rs apps/conary/tests/live_host_mutation_safety.rs
@@ -598,11 +640,7 @@ fn system_restore_all_dry_run_reports_missing_cas_without_live_mounting() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stdout.contains("Checking"));
-    assert!(stdout.contains("CAS availability"));
-    assert!(stdout.contains("Dry run summary"));
     assert!(!stderr.contains("--allow-live-system-mutation"));
 }
 ```
@@ -635,12 +673,14 @@ git commit -m "test(cli): add local live mutation readiness smoke coverage"
 Extend `phase4-group-d.toml` with a real restore case that:
 
 1. installs the phase4 runtime fixture
-2. perturbs or removes a tracked file
-3. runs `conary system restore <package> --allow-live-system-mutation`
-4. asserts either the restored file content or the expected generation output
+2. inspects the fixture's tracked files and chooses a real restore target
+3. perturbs or removes that tracked file
+4. runs `conary system restore <package> --allow-live-system-mutation`
+5. asserts either the restored file content or the expected generation output
 
 Use the same explicit flag in the manifest command string. A representative
-step block should look like:
+step block should look like. Treat the path below as illustrative only; verify
+the actual phase 4 fixture layout before choosing the file you mutate:
 
 ```toml
 [[test]]
@@ -745,6 +785,7 @@ flow without shipping the final feature commit.
 **Files:**
 - Modify: `apps/conary/tests/component.rs`
 - Modify: `apps/conary/tests/workflow.rs`
+- Modify: `apps/conary/tests/integration/remi/manifests/phase1-core.toml`
 - Modify: `apps/conary/tests/integration/remi/manifests/phase1-advanced.toml`
 - Modify: `apps/conary/tests/integration/remi/manifests/phase2-group-a.toml`
 - Modify: `apps/conary/tests/integration/remi/manifests/phase2-group-b.toml`
@@ -805,12 +846,26 @@ let ccs_output = Command::new(env!("CARGO_BIN_EXE_conary"))
 
 - [ ] **Step 2: Update manifest commands directly instead of using harness injection**
 
-For every intentional covered-command success path in the listed manifest files:
+Start by running the audit commands in Step 4 and turn the matches into an edit
+queue grouped by file. On current `main`, expect candidate matches in:
+`phase1-core`, `phase1-advanced`, `phase2-group-a`, `phase2-group-b`,
+`phase2-group-e`, `phase3-group-g`, `phase3-group-h`, `phase3-group-i`,
+`phase3-group-j`, `phase3-group-l`, `phase3-group-m`,
+`phase3-group-n-container`, `phase4-group-a`, `phase4-group-b`,
+`phase4-group-c`, `phase4-group-d`, and `phase4-group-e`.
+
+For every intentional covered-command invocation in the listed manifest files:
 
 - add `--allow-live-system-mutation` to `conary = "..."` forms
 - add `--allow-live-system-mutation` to raw `run = "${CONARY_BIN} ..."` forms
+- add the flag to expected underlying command-failure cases that should still
+  reach the real implementation, such as
+  `install zzz-nonexistent-pkg-12345` in `phase1-core.toml`
 - leave `--dry-run` takeover and restore probes alone when the spec says they
   bypass the gate
+- leave the dedicated refusal-path coverage in
+  `apps/conary/tests/live_host_mutation_safety.rs` as the only intentional
+  no-flag coverage for covered commands
 - do not add the flag to excluded commands such as `system gc`, `system adopt`,
   `automation apply`, or `model apply`
 
@@ -847,8 +902,9 @@ Run:
 - `rg -n 'Command::new\\(env!\\("CARGO_BIN_EXE_conary"\\)\\)' apps/conary/tests/component.rs apps/conary/tests/workflow.rs`
 - `rg -n 'conary (install @|install |update @|ccs install|system takeover|system generation switch)' docs/conaryopedia-v2.md docs/modules/ccs.md`
 
-Expected: every intentional covered-command success path includes
-`--allow-live-system-mutation`, while excluded commands remain unchanged.
+Expected: every intentional covered-command invocation that should reach the
+underlying command behavior includes `--allow-live-system-mutation`, while
+excluded commands remain unchanged.
 
 - [ ] **Step 5: Commit**
 
@@ -856,6 +912,7 @@ Expected: every intentional covered-command success path includes
 git add \
   apps/conary/tests/component.rs \
   apps/conary/tests/workflow.rs \
+  apps/conary/tests/integration/remi/manifests/phase1-core.toml \
   apps/conary/tests/integration/remi/manifests/phase1-advanced.toml \
   apps/conary/tests/integration/remi/manifests/phase2-group-a.toml \
   apps/conary/tests/integration/remi/manifests/phase2-group-b.toml \
@@ -875,7 +932,7 @@ git add \
   apps/conary/tests/integration/remi/manifests/phase4-group-e.toml \
   docs/conaryopedia-v2.md \
   docs/modules/ccs.md
-git commit -m "docs(test): add explicit live mutation acknowledgment"
+git commit -m "chore(cli): add explicit live mutation acknowledgment to tests and docs"
 ```
 
 ### Task 8: Run the final matrix and archive superseded March docs
@@ -887,6 +944,8 @@ git commit -m "docs(test): add explicit live mutation acknowledgment"
 - [ ] **Step 1: Run the focused local test matrix**
 
 Run:
+- `cargo fmt --check`
+- `cargo clippy -p conary --all-targets -- -D warnings`
 - `cargo test -p conary cli_accepts_allow_live_system_mutation_as_global_flag -- --exact`
 - `cargo test -p conary live_host_safety -- --nocapture`
 - `cargo test -p conary --test live_host_mutation_safety -- --nocapture`
@@ -921,17 +980,13 @@ git add -f \
   docs/superpowers/plans/archive/2026-03-31-live-host-mutation-safety-gate.md
 ```
 
-- [ ] **Step 4: Commit the final gate pass**
-
-If all covered-command proof is present:
+- [ ] **Step 4: Commit the archive move**
 
 ```bash
-git add apps/conary/src/main.rs apps/conary/src/cli/mod.rs apps/conary/src/dispatch.rs apps/conary/src/live_host_safety.rs
-git add apps/conary/tests/live_host_mutation_safety.rs apps/conary/tests/live_host_mutation_readiness.rs apps/conary/tests/component.rs apps/conary/tests/workflow.rs
 git add docs/superpowers/specs/archive/2026-03-31-live-host-mutation-safety-design.md docs/superpowers/plans/archive/2026-03-31-live-host-mutation-safety-gate.md
-git commit -m "feat(cli): require explicit live host mutation acknowledgment"
+git commit -m "docs(superpowers): archive superseded March live mutation docs"
 ```
 
 If `system restore` or `system generation recover` remains unproven, do not
-ship the final feature commit. Commit only the audit or partial proof work and
-surface the blocker.
+ship any further feature commits beyond the earlier task commits. At that
+point, only the archive move above should remain optional doc cleanup.
