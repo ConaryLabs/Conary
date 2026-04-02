@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/block-sensitive.sh",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/dev/claude-block-sensitive.sh",
             "statusMessage": "Checking for sensitive files"
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/post-edit-clippy.sh",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/dev/claude-check-workspace-clippy.sh",
             "timeout": 120,
             "statusMessage": "Running clippy"
           }
