@@ -13,7 +13,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-VERSION=$(grep '^version' "$REPO_ROOT/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+VERSION=$(grep '^version' "$REPO_ROOT/apps/conary/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
 NAME="conary"
 
 echo "Building $NAME $VERSION CCS package"
@@ -22,7 +22,7 @@ echo "Building $NAME $VERSION CCS package"
 RELEASE_BIN="$REPO_ROOT/target/release/$NAME"
 if [ ! -f "$RELEASE_BIN" ]; then
     echo "[1/4] Building release binary..."
-    cargo build --release -p conary --manifest-path "$REPO_ROOT/Cargo.toml"
+    cargo build --release --manifest-path "$REPO_ROOT/apps/conary/Cargo.toml"
 else
     echo "[1/4] Using existing release binary: $RELEASE_BIN"
 fi
@@ -36,7 +36,7 @@ rm -rf "$STAGE"
 install -Dpm 0755 "$RELEASE_BIN" "$STAGE/usr/bin/$NAME"
 
 # Man page
-install -Dpm 0644 "$REPO_ROOT/man/$NAME.1" "$STAGE/usr/share/man/man1/$NAME.1"
+install -Dpm 0644 "$REPO_ROOT/apps/conary/man/$NAME.1" "$STAGE/usr/share/man/man1/$NAME.1"
 
 # Shell completions
 install -d "$STAGE/usr/share/bash-completion/completions"

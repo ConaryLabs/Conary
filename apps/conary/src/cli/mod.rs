@@ -622,7 +622,6 @@ pub enum Commands {
         db: String,
         // NOTE: OCI is the only supported export format. No format flag is needed.
     },
-
 }
 
 #[cfg(test)]

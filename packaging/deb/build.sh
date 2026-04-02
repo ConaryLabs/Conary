@@ -12,7 +12,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-VERSION=$(grep '^version' "$REPO_ROOT/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+VERSION=$(grep '^version' "$REPO_ROOT/apps/conary/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
 NAME="conary"
 
 USE_PODMAN=false

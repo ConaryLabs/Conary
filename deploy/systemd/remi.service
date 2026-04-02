@@ -18,7 +18,7 @@ User=conary
 Group=conary
 
 # Main process
-ExecStart=/usr/local/bin/conary remi --config /etc/conary/remi.toml
+ExecStart=/usr/local/bin/remi --config /etc/conary/remi.toml
 Restart=on-failure
 RestartSec=5s
 

@@ -8,9 +8,9 @@
 //! # Usage
 //!
 //! ```text
-//! conary remi-proxy                                    # Start with auto-discovery
-//! conary remi-proxy --upstream https://remi.example.com
-//! conary remi-proxy --offline --cache-dir /mnt/usb     # Air-gapped mode
+//! remi proxy                                          # Start with auto-discovery
+//! remi proxy --upstream https://remi.example.com
+//! remi proxy --offline --cache-dir /mnt/usb           # Air-gapped mode
 //! ```
 //!
 //! # Architecture

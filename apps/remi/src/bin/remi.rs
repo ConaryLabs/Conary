@@ -280,8 +280,7 @@ fn run_server_command(args: ServeArgs) -> Result<()> {
         }
     }
 
-    tokio::runtime::Runtime::new()?
-        .block_on(run_server_from_config(&remi_config))
+    tokio::runtime::Runtime::new()?.block_on(run_server_from_config(&remi_config))
 }
 
 fn run_proxy_command(args: ProxyArgs) -> Result<()> {

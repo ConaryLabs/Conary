@@ -1,6 +1,9 @@
 # .github/workflows/release.yml
 #
-# Build native packages and publish a release on v* tag push.
+# Build native packages and publish a release on v* tag push for the
+# `conary` CLI package. `remi`, `conaryd`, and `conary-test` use their own
+# version tracks in `scripts/release.sh` and do not publish distro artifacts
+# from this workflow.
 # Builds RPM (Fedora 43), DEB (Ubuntu Noble), Arch, and CCS packages,
 # creates a GitHub Release with all artifacts, and deploys to Remi.
 
@@ -49,7 +52,7 @@ jobs:
           retention-days: 5
 
       - name: Build signing helper
-        run: cargo build --example sign_hash -p conary-core --release
+        run: cargo build --example sign_hash --manifest-path crates/conary-core/Cargo.toml --release
 
       - name: Upload signing helper
         uses: actions/upload-artifact@v4

@@ -47,7 +47,7 @@ cargo build --release --locked -p conary
 install -Dpm 0755 target/release/%{crate} %{buildroot}%{_bindir}/%{crate}
 
 # Man page
-install -Dpm 0644 man/%{crate}.1 %{buildroot}%{_mandir}/man1/%{crate}.1
+install -Dpm 0644 apps/conary/man/%{crate}.1 %{buildroot}%{_mandir}/man1/%{crate}.1
 
 # Shell completions
 install -d %{buildroot}%{_datadir}/bash-completion/completions

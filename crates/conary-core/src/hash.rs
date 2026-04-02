@@ -206,7 +206,7 @@ impl Hasher {
     pub fn new(algorithm: HashAlgorithm) -> Self {
         let state = match algorithm {
             HashAlgorithm::Sha256 => HasherState::Sha256(Box::new(Sha256::new())),
-            HashAlgorithm::Xxh128 => HasherState::Xxh128(Box::new(Xxh3Default::new())),
+            HashAlgorithm::Xxh128 => HasherState::Xxh128(Box::default()),
             HashAlgorithm::Md5 => HasherState::Md5(Box::new(Md5::new())),
         };
         Self { algorithm, state }

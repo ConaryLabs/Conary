@@ -963,7 +963,7 @@ pub async fn cmd_gc(
 }
 
 /// Local-only chunk GC for the CLI. The full async version with R2 support
-/// is in conary-server/src/server/chunk_gc.rs.
+/// lives in apps/remi/src/server/chunk_gc.rs.
 ///
 /// Scans the CAS objects directory for chunk files that are not referenced by
 /// any converted package (`chunk_hashes_json`) or protected in `chunk_access`.

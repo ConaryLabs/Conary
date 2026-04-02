@@ -98,7 +98,7 @@ build_conary_if_needed() {
     fi
 
     log_step "Building conary from source"
-    (cd "$PROJECT_DIR" && cargo build)
+    (cd "$PROJECT_DIR" && cargo build -p conary)
     if [ ! -x "$CONARY_BIN" ]; then
         log_error "Build succeeded but binary not found at $CONARY_BIN"
         return 1

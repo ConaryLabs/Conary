@@ -5,8 +5,8 @@ use anyhow::{Context, Result, anyhow};
 use conary_core::ccs::signing::SigningKeyPair;
 use conary_core::db;
 use conary_core::db::models::Repository;
-use conary_core::trust::Signed;
 use conary_core::trust::RootMetadata;
+use conary_core::trust::Signed;
 use conary_core::trust::ceremony;
 use conary_core::trust::client::TufClient;
 use rusqlite::{Connection, params};
@@ -19,9 +19,7 @@ fn open_db(path: &str) -> Result<Connection> {
 fn get_repo_with_id(conn: &Connection, repo_name: &str) -> Result<(Repository, i64)> {
     let repo = Repository::find_by_name(conn, repo_name)?
         .ok_or_else(|| anyhow!("Repository not found: {repo_name}"))?;
-    let repo_id = repo
-        .id
-        .ok_or_else(|| anyhow!("Repository has no ID"))?;
+    let repo_id = repo.id.ok_or_else(|| anyhow!("Repository has no ID"))?;
     Ok((repo, repo_id))
 }
 
@@ -32,9 +30,7 @@ pub fn sign_targets(repo_name: &str, key_path: &str, db_path: &str) -> Result<()
     let _key = SigningKeyPair::load_from_file(Path::new(key_path))
         .with_context(|| format!("Failed to load signing key: {key_path}"))?;
 
-    println!(
-        "Targets signing for Remi-owned repository admin is pending full server integration"
-    );
+    println!("Targets signing for Remi-owned repository admin is pending full server integration");
 
     Ok(())
 }

@@ -48,8 +48,23 @@ jobs:
       - name: Build conaryd
         run: cargo build -p conaryd --verbose
 
-      - name: Run tests
-        run: cargo test --workspace --verbose
+      - name: Build conary-test
+        run: cargo build -p conary-test --verbose
+
+      - name: Test conary
+        run: cargo test -p conary --verbose
+
+      - name: Test conary-core
+        run: cargo test -p conary-core --verbose
+
+      - name: Test remi
+        run: cargo test -p remi --verbose
+
+      - name: Test conaryd
+        run: cargo test -p conaryd --verbose
+
+      - name: Test conary-test
+        run: cargo test -p conary-test --verbose
 
       - name: Run doc tests
         run: cargo test --doc --workspace --verbose
