@@ -2,8 +2,9 @@
 //! MCP (Model Context Protocol) server for LLM agent integration.
 //!
 //! Exposes Remi admin operations as MCP tools so that LLM agents (Claude,
-//! etc.) can inspect CI status, trigger workflows, manage tokens, and
-//! force mirror syncs through a standardised protocol.
+//! etc.) can manage tokens, repositories, federation peers, audit data,
+//! test harness state, chunk garbage collection, and canonical mappings
+//! through a standardised protocol.
 //!
 //! The MCP endpoint is mounted on the external admin router at `/mcp` and
 //! sits behind the same Bearer-token auth middleware as other admin endpoints.
@@ -15,7 +16,7 @@ use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use conary_mcp::{server_info, to_json_text, validate_path_param};
+use conary_mcp::{server_info, to_json_text};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     handler::server::tool::{ToolCallContext, ToolRouter},
@@ -29,7 +30,6 @@ use serde::Deserialize;
 
 use crate::server::ServerState;
 use crate::server::admin_service::{self, AddPeerInput, ServiceError};
-use crate::server::forgejo::FORGEJO_REPO_PATH;
 
 /// Map a [`ServiceError`] to the appropriate [`McpError`] variant.
 ///
@@ -68,38 +68,8 @@ impl RemiMcpServer {
 }
 
 // ---------------------------------------------------------------------------
-// Forgejo proxy helpers (map ForgejoError -> McpError)
-// ---------------------------------------------------------------------------
-
-/// Map a [`crate::server::forgejo::ForgejoError`] to an MCP error.
-///
-/// 4xx responses from Forgejo indicate bad input (invalid workflow name, bad
-/// run ID, etc.) and map to `invalid_params` so callers know to retry with
-/// corrected arguments.  5xx and network errors are `internal_error`. (fix 10.8)
-fn forgejo_err_to_mcp(e: crate::server::forgejo::ForgejoError) -> McpError {
-    match e.status {
-        Some(code) if (400..500).contains(&code) => McpError::invalid_params(e.message, None),
-        _ => McpError::internal_error(e.message, None),
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Parameter structs for tools that accept arguments
 // ---------------------------------------------------------------------------
-
-/// Parameters for tools that accept a workflow filename.
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct WorkflowParams {
-    /// Workflow filename, e.g. "ci.yaml".
-    pub workflow: String,
-}
-
-/// Parameters for tools that accept a CI run ID.
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct RunIdParams {
-    /// Numeric CI run ID.
-    pub run_id: i64,
-}
 
 /// Parameters for creating an admin API token.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -237,111 +207,6 @@ impl RemiMcpServer {
     /// List all CI/CD workflows configured in the Forgejo repository.
     ///
     /// Returns workflow names and filenames. Use the filename (e.g.
-    /// `ci.yaml`) with the `ci_list_runs` and `ci_dispatch` tools.
-    #[tool(
-        description = "List all CI/CD workflows. Returns workflow names and filenames. Use the filename (e.g. 'ci.yaml') with ci_list_runs and ci_dispatch."
-    )]
-    async fn ci_list_workflows(&self) -> Result<CallToolResult, McpError> {
-        let text = crate::server::forgejo::get(
-            &self.state,
-            &format!("{FORGEJO_REPO_PATH}/actions/workflows"),
-        )
-        .await
-        .map_err(forgejo_err_to_mcp)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
-    }
-
-    /// List recent CI runs for a specific workflow.
-    #[tool(
-        description = "List recent CI runs for a workflow. The 'workflow' param is the filename, e.g. 'ci.yaml'."
-    )]
-    async fn ci_list_runs(
-        &self,
-        Parameters(params): Parameters<WorkflowParams>,
-    ) -> Result<CallToolResult, McpError> {
-        validate_path_param(&params.workflow, "workflow")?;
-        let text = crate::server::forgejo::get(
-            &self.state,
-            &format!(
-                "{FORGEJO_REPO_PATH}/actions/workflows/{}/runs",
-                params.workflow
-            ),
-        )
-        .await
-        .map_err(forgejo_err_to_mcp)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
-    }
-
-    /// Get details for a specific CI run including job statuses.
-    #[tool(description = "Get details for a specific CI run including job statuses.")]
-    async fn ci_get_run(
-        &self,
-        Parameters(params): Parameters<RunIdParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let text = crate::server::forgejo::get(
-            &self.state,
-            &format!("{FORGEJO_REPO_PATH}/actions/runs/{}", params.run_id),
-        )
-        .await
-        .map_err(forgejo_err_to_mcp)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
-    }
-
-    /// Get raw log output for a CI run.  Can be large.
-    #[tool(description = "Get raw log output for a CI run. Can be large.")]
-    async fn ci_get_logs(
-        &self,
-        Parameters(params): Parameters<RunIdParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let text = crate::server::forgejo::get(
-            &self.state,
-            &format!("{FORGEJO_REPO_PATH}/actions/runs/{}/logs", params.run_id),
-        )
-        .await
-        .map_err(forgejo_err_to_mcp)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
-    }
-
-    /// Trigger a new CI workflow run on the main branch.
-    ///
-    /// **Not idempotent** -- every call queues a new run.
-    #[tool(
-        description = "Trigger a new CI workflow run on main. NOT idempotent -- every call queues a new run."
-    )]
-    async fn ci_dispatch(
-        &self,
-        Parameters(params): Parameters<WorkflowParams>,
-    ) -> Result<CallToolResult, McpError> {
-        validate_path_param(&params.workflow, "workflow")?;
-        let body = serde_json::json!({"ref": "main"});
-        let text = crate::server::forgejo::post(
-            &self.state,
-            &format!(
-                "{FORGEJO_REPO_PATH}/actions/workflows/{}/dispatches",
-                params.workflow
-            ),
-            Some(&body),
-        )
-        .await
-        .map_err(forgejo_err_to_mcp)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
-    }
-
-    /// Force an immediate GitHub mirror sync.
-    ///
-    /// Without this, the mirror polls every 10 minutes.
-    #[tool(description = "Force GitHub mirror sync. Normally the mirror polls every 10 minutes.")]
-    async fn ci_mirror_sync(&self) -> Result<CallToolResult, McpError> {
-        let text = crate::server::forgejo::post(
-            &self.state,
-            &format!("{FORGEJO_REPO_PATH}/mirror-sync"),
-            None,
-        )
-        .await
-        .map_err(forgejo_err_to_mcp)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
-    }
-
     // -----------------------------------------------------------------------
     // Token management (delegates to admin_service)
     // -----------------------------------------------------------------------
@@ -836,11 +701,10 @@ impl ServerHandler for RemiMcpServer {
         server_info(
             "remi-mcp",
             env!("CARGO_PKG_VERSION"),
-            "Remi MCP server -- manage CI workflows, inspect runs, \
-             trigger builds, sync mirrors, manage admin tokens, \
-             list/inspect repositories, manage federation peers, \
-             query/purge the admin audit log, and inspect test \
-             run data and health.",
+            "Remi MCP server -- manage admin tokens, list and inspect \
+             repositories, manage federation peers, query and purge \
+             the admin audit log, inspect test run data and health, \
+             garbage collect chunks, and maintain canonical mappings.",
         )
     }
 
@@ -892,6 +756,30 @@ mod tests {
         // Build the tool router directly to inspect registered tools
         let router = RemiMcpServer::tool_router();
         let tools = router.list_all();
-        assert_eq!(tools.len(), 24, "Expected 24 MCP tools");
+        assert_eq!(tools.len(), 18, "Expected 18 MCP tools");
+    }
+
+    #[test]
+    fn test_mcp_tool_list_excludes_legacy_ci_bridge_tools() {
+        let router = RemiMcpServer::tool_router();
+        let tool_names: Vec<String> = router
+            .list_all()
+            .into_iter()
+            .map(|tool| tool.name.to_string())
+            .collect();
+
+        for forbidden in [
+            "ci_list_workflows",
+            "ci_list_runs",
+            "ci_get_run",
+            "ci_get_logs",
+            "ci_dispatch",
+            "ci_mirror_sync",
+        ] {
+            assert!(
+                !tool_names.iter().any(|name| name == forbidden),
+                "legacy Forgejo MCP tool should be absent: {forbidden}"
+            );
+        }
     }
 }
