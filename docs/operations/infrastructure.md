@@ -60,7 +60,9 @@ old process. That can fail with `Text file busy`.
 ## Contributor Notes
 
 - Prefer the tracked docs for stable roles and workflows, and keep local-only
-  access details in `docs/operations/LOCAL_ACCESS.md`
+  access details in `docs/operations/LOCAL_ACCESS.md`, using
+  [`docs/operations/LOCAL_ACCESS.example.md`](LOCAL_ACCESS.example.md) as the
+  starting template
 - For suite layout, phase selection, and manifest-run behavior, use
-  `docs/INTEGRATION-TESTING.md`
-- For legacy historical context, use `docs/llms/archive/claude-era-notes.md`
+  [`docs/INTEGRATION-TESTING.md`](../INTEGRATION-TESTING.md)
+- For legacy historical context, use [`docs/llms/archive/claude-era-notes.md`](../llms/archive/claude-era-notes.md)
