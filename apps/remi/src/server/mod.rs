@@ -28,7 +28,6 @@ pub mod config;
 mod conversion;
 pub mod delta_manifests;
 pub mod federated_index;
-pub mod forgejo;
 mod handlers;
 mod index_gen;
 mod jobs;
@@ -170,7 +169,7 @@ impl Default for ServerConfig {
 /// Event broadcast from admin operations (e.g., CI triggers, token changes)
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct AdminEvent {
-    /// Event type identifier (e.g., "token.created", "ci.triggered")
+    /// Event type identifier (e.g., "token.created")
     pub event_type: String,
     /// Event payload
     pub data: serde_json::Value,
@@ -184,7 +183,7 @@ pub struct AdminEvent {
 /// - `CacheState` (chunk_cache, bloom_filter, negative_cache)
 /// - `ConversionState` (conversion_service, job_manager)
 /// - `FederationState` (federated_config, federated_cache)
-/// - `AdminState` (forgejo_url, forgejo_token, admin_events, test_db_path)
+/// - `AdminState` (admin_events, test_db_path)
 // TODO: Decompose ServerState into focused sub-structs to improve readability.
 pub struct ServerState {
     pub config: ServerConfig,
@@ -219,10 +218,6 @@ pub struct ServerState {
     /// Key is chunk hash; value is a broadcast sender that waiters subscribe to.
     /// When the first fetch completes, all waiters are notified.
     pub inflight_fetches: Arc<DashMap<String, tokio::sync::broadcast::Sender<()>>>,
-    /// Forgejo instance URL for CI proxy (from config)
-    pub forgejo_url: Option<String>,
-    /// Forgejo API token for CI proxy (from config)
-    pub forgejo_token: Option<String>,
     /// Broadcast channel for admin events (SSE stream)
     pub admin_events: tokio::sync::broadcast::Sender<AdminEvent>,
     /// Path to the separate test data database (test_db module)
@@ -308,8 +303,6 @@ impl ServerState {
             federated_config: None,
             federated_cache: None,
             inflight_fetches: Arc::new(DashMap::new()),
-            forgejo_url: None,
-            forgejo_token: None,
             admin_events,
             test_db_path: Some(
                 std::env::var("CONARY_TEST_DB_PATH")
@@ -616,13 +609,6 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
     let external_admin_listener = if remi_config.admin.enabled {
         let bind = remi_config.external_admin_bind_addr()?;
 
-        // Set forgejo config on state
-        {
-            let mut state_w = state.write().await;
-            state_w.forgejo_url = remi_config.admin.forgejo_url.clone();
-            state_w.forgejo_token = remi_config.admin.forgejo_token.clone();
-        }
-
         // Initialize admin rate limiters. Read the trusted proxy header back
         // from state (the original was moved into ServerState earlier).
         let proxy_header_for_limiters = state.read().await.trusted_proxy_header.clone();
@@ -927,5 +913,20 @@ mod tests {
         let err = build_http_client(std::time::Duration::from_secs(30), "bad\0agent")
             .expect_err("invalid user agent should be surfaced as an error");
         assert!(err.to_string().contains("HTTP client"));
+    }
+
+    #[test]
+    fn test_server_state_drops_forgejo_config_fields() {
+        let source = include_str!("mod.rs");
+        let forgejo_url_field = ["pub forgejo_", "url:"].concat();
+        let forgejo_token_field = ["pub forgejo_", "token:"].concat();
+        assert!(
+            !source.contains(&forgejo_url_field),
+            "server state should not retain forgejo_url"
+        );
+        assert!(
+            !source.contains(&forgejo_token_field),
+            "server state should not retain forgejo_token"
+        );
     }
 }
