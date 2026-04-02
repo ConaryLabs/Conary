@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-04-01
-revision: 3
+revision: 4
 summary: Refresh the live-host mutation safety gate around the current apps/conary dispatch seams and verified command readiness
 ---
 
@@ -288,10 +288,6 @@ pub fn require_live_system_mutation_ack(
 enters the actual command implementation, it constructs a
 `LiveMutationRequest` and asks the helper whether to proceed.
 
-The helper should also own a tiny retirement seam such as
-`live_mutation_ack_enforced() -> bool` so removing the feature later is a
-one-file change rather than a repo-wide unwind.
-
 ### Mutation Classes
 
 The March design's two classes still make sense and should be kept:
@@ -309,6 +305,26 @@ paths.
 
 For this slice, both classes require the acknowledgment whenever `dry_run` is
 false.
+
+The command-to-class mapping should be explicit:
+
+- `AlwaysLive`
+  - `conary system generation build`
+  - `conary system generation gc`
+  - `conary system generation switch`
+  - `conary system generation rollback`
+  - `conary system generation recover`
+  - `conary system takeover`
+- `CurrentlyLiveEvenWithRootArguments`
+  - `conary install`
+  - `conary install @collection`
+  - `conary remove`
+  - `conary update`
+  - `conary update @collection`
+  - `conary autoremove`
+  - `conary ccs install`
+  - `conary system restore`
+  - `conary system state rollback`
 
 ### Dispatch Ownership
 
@@ -418,6 +434,8 @@ that runs the built `conary` binary and verifies:
 - representative dry-run commands succeed without the flag
 - at least one wrapper entrypoint is tested so the message matches the intended
   user-facing command label
+- at least one covered command gets past the gate when
+  `--allow-live-system-mutation` is present
 - unaffected read-only commands remain unaffected
 
 The March branch never actually landed this layer; the refreshed design should
@@ -428,45 +446,62 @@ make it explicit rather than assuming it exists.
 The implementation plan should reuse existing coverage first, then add narrow
 smoke or disposable-host coverage where the evidence is thin.
 
+Manifest-backed evidence only counts when it is exercised through the actual
+test harness, not when a TOML file merely exists on disk. For this repository,
+that means a passing `conary-test` run such as:
+
+`cargo run -p conary-test -- run --distro <distro> --phase <phase> --suite <manifest path>`
+
+or the equivalent maintained CI/service entrypoint that executes the same suite
+and assertions.
+
+Local readiness evidence should likewise be named as concrete test commands,
+for example `cargo test -p conary --test workflow`.
+
+The acceptance bar is: each covered command family must have at least one
+passing automated proof source that exercises the real CLI behavior or an
+explicitly relevant unit/integration seam. A manifest file path by itself is
+not enough.
+
 Expected current readiness anchors include:
 
 - `install` / `remove` / `update` / `autoremove`
-  - `apps/conary/tests/workflow.rs`
-  - `apps/conary/tests/batch_install.rs`
-  - `apps/conary/tests/integration/remi/manifests/phase1-advanced.toml`
-  - `apps/conary/tests/integration/remi/manifests/phase2-group-a.toml`
-  - `apps/conary/tests/integration/remi/manifests/phase3-group-j.toml`
-  - `apps/conary/tests/integration/remi/manifests/phase3-group-m.toml`
-  - `apps/conary/tests/integration/remi/manifests/phase4-group-e.toml`
+  - `cargo test -p conary --test workflow`
+  - `cargo test -p conary --test batch_install`
+  - `cargo run -p conary-test -- run --distro <distro> --phase 1 --suite apps/conary/tests/integration/remi/manifests/phase1-advanced.toml`
+  - `cargo run -p conary-test -- run --distro <distro> --phase 2 --suite apps/conary/tests/integration/remi/manifests/phase2-group-a.toml`
+  - `cargo run -p conary-test -- run --distro <distro> --phase 3 --suite apps/conary/tests/integration/remi/manifests/phase3-group-j.toml`
+  - `cargo run -p conary-test -- run --distro <distro> --phase 3 --suite apps/conary/tests/integration/remi/manifests/phase3-group-m.toml`
+  - `cargo run -p conary-test -- run --distro <distro> --phase 4 --suite apps/conary/tests/integration/remi/manifests/phase4-group-e.toml`
 - `ccs install`
-  - `apps/conary/tests/component.rs`
-  - `apps/conary/tests/integration/remi/manifests/phase2-group-a.toml`
-  - `apps/conary/tests/integration/remi/manifests/phase4-group-d.toml`
-  - `apps/conary/tests/integration/remi/manifests/phase4-group-e.toml`
+  - `cargo test -p conary --test component`
+  - `cargo run -p conary-test -- run --distro <distro> --phase 2 --suite apps/conary/tests/integration/remi/manifests/phase2-group-a.toml`
+  - `cargo run -p conary-test -- run --distro <distro> --phase 4 --suite apps/conary/tests/integration/remi/manifests/phase4-group-d.toml`
+  - `cargo run -p conary-test -- run --distro <distro> --phase 4 --suite apps/conary/tests/integration/remi/manifests/phase4-group-e.toml`
 - `system restore`
-  - a local readiness smoke test for dry-run behavior
+  - a named local readiness smoke test under `apps/conary/tests/`
   - current `main` only clearly shows dry-run evidence in
-    `apps/conary/tests/integration/remi/manifests/phase4-group-d.toml`
+    `cargo run -p conary-test -- run --distro <distro> --phase 4 --suite apps/conary/tests/integration/remi/manifests/phase4-group-d.toml`
   - the implementation must add meaningful non-dry-run disposable-host
     coverage before `system restore` is considered ready
   - if that evidence cannot be added honestly, the command stays blocked as a
     readiness issue instead of being waved through by the gate
 - `system state rollback`
-  - `apps/conary/tests/workflow.rs`
-  - `apps/conary/tests/integration/remi/manifests/phase3-group-h.toml`
+  - `cargo test -p conary --test workflow`
+  - `cargo run -p conary-test -- run --distro <distro> --phase 3 --suite apps/conary/tests/integration/remi/manifests/phase3-group-h.toml`
 - `system generation build`
-  - `apps/conary/tests/integration/remi/manifests/phase2-group-b.toml`
-  - `apps/conary/tests/integration/remi/manifests/phase3-group-h.toml`
-  - `apps/conary/tests/integration/remi/manifests/phase3-group-l.toml`
-  - `apps/conary/tests/integration/remi/manifests/phase4-group-e.toml`
+  - `cargo run -p conary-test -- run --distro <distro> --phase 2 --suite apps/conary/tests/integration/remi/manifests/phase2-group-b.toml`
+  - `cargo run -p conary-test -- run --distro <distro> --phase 3 --suite apps/conary/tests/integration/remi/manifests/phase3-group-h.toml`
+  - `cargo run -p conary-test -- run --distro <distro> --phase 3 --suite apps/conary/tests/integration/remi/manifests/phase3-group-l.toml`
+  - `cargo run -p conary-test -- run --distro <distro> --phase 4 --suite apps/conary/tests/integration/remi/manifests/phase4-group-e.toml`
 - `system generation gc`
-  - `apps/conary/tests/integration/remi/manifests/phase1-advanced.toml`
-  - `apps/conary/tests/integration/remi/manifests/phase2-group-b.toml`
-  - `apps/conary/tests/integration/remi/manifests/phase3-group-l.toml`
+  - `cargo run -p conary-test -- run --distro <distro> --phase 1 --suite apps/conary/tests/integration/remi/manifests/phase1-advanced.toml`
+  - `cargo run -p conary-test -- run --distro <distro> --phase 2 --suite apps/conary/tests/integration/remi/manifests/phase2-group-b.toml`
+  - `cargo run -p conary-test -- run --distro <distro> --phase 3 --suite apps/conary/tests/integration/remi/manifests/phase3-group-l.toml`
 - `system generation switch` / `rollback`
-  - `apps/conary/tests/integration/remi/manifests/phase2-group-b.toml`
-  - `apps/conary/tests/integration/remi/manifests/phase3-group-h.toml`
-  - `apps/conary/tests/integration/remi/manifests/phase3-group-l.toml`
+  - `cargo run -p conary-test -- run --distro <distro> --phase 2 --suite apps/conary/tests/integration/remi/manifests/phase2-group-b.toml`
+  - `cargo run -p conary-test -- run --distro <distro> --phase 3 --suite apps/conary/tests/integration/remi/manifests/phase3-group-h.toml`
+  - `cargo run -p conary-test -- run --distro <distro> --phase 3 --suite apps/conary/tests/integration/remi/manifests/phase3-group-l.toml`
 - `system generation recover`
   - no current readiness evidence is obvious in `main`
   - the implementation must add coverage that exercises at least one successful
@@ -474,8 +509,8 @@ Expected current readiness anchors include:
     CLI contract
   - if that cannot be provided honestly, it becomes a blocker
 - `system takeover`
-  - `apps/conary/tests/integration/remi/manifests/phase2-group-b.toml`
-  - `apps/conary/tests/integration/remi/manifests/phase4-group-e.toml`
+  - `cargo run -p conary-test -- run --distro <distro> --phase 2 --suite apps/conary/tests/integration/remi/manifests/phase2-group-b.toml`
+  - `cargo run -p conary-test -- run --distro <distro> --phase 4 --suite apps/conary/tests/integration/remi/manifests/phase4-group-e.toml`
   - embedded unit tests in
     `apps/conary/src/commands/generation/takeover.rs` and
     `apps/conary/src/commands/generation/takeover_state.rs` can support the
