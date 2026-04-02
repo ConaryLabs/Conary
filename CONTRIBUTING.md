@@ -44,6 +44,18 @@ cd Conary
 git remote add upstream https://github.com/ConaryLabs/Conary.git
 ```
 
+### Using Coding Assistants
+
+If you work with an LLM coding tool, start with:
+
+1. `AGENTS.md`
+2. `docs/llms/README.md`
+3. `docs/INTEGRATION-TESTING.md` when validation spans `conary-test`
+4. `docs/operations/infrastructure.md` for MCP, deploy, and host workflow notes
+
+Tool-specific files such as `CLAUDE.md` are compatibility shims. Prefer the
+linked canonical docs over copied instructions or stale local lore.
+
 ## Building from Source
 
 ```bash
