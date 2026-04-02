@@ -4,7 +4,7 @@
 
 **Goal:** Migrate Conary to a GitHub-only CI/CD control plane, align release tracks with the three real products (`conary`, `remi`, `conaryd`), keep `conary-test` as internal validation infrastructure, retire Forgejo workflows and Remi's Forgejo bridge code, and land the five-lane automation model from the approved topology spec.
 
-**Architecture:** Keep GitHub Actions as the only orchestrator. Use GitHub-hosted runners for the untrusted `pr-gate`, one restricted self-hosted GitHub runner on Forge for the first trusted-lane rollout, and protected GitHub environments for deployment. Migrate in four chunks: taxonomy/docs and Forge host setup, GitHub workflow lane replacement, Remi/Forgejo control-plane removal, then hardening and rollout verification. Keep `cargo test` as the initial Rust test runner during the migration; revisit `cargo-nextest` only after the lane split is green.
+**Architecture:** Keep GitHub Actions as the only orchestrator. Use GitHub-hosted runners for the untrusted `pr-gate`, one restricted self-hosted GitHub runner on Forge for the first trusted-lane rollout, and protected GitHub environments for deployment. Migrate in four chunks: taxonomy/docs and Forge host setup, GitHub workflow lane replacement, Remi/Forgejo control-plane removal, then hardening and rollout verification. Deployment becomes explicit, protected, and serialized; the legacy main-push Remi auto-deploy path is intentionally removed during this migration. Keep `cargo test` as the initial Rust test runner during the migration; revisit `cargo-nextest` only after the lane split is green.
 
 **Tech Stack:** GitHub Actions YAML, GitHub self-hosted runners, Rust 2024 workspace, Axum admin/MCP surfaces in `apps/remi`, shell scripts under `scripts/` and `deploy/`, Markdown docs under `docs/`.
 
@@ -17,9 +17,13 @@
   - GitHub Actions workflow edits
   - GitHub protected environments
   - GitHub self-hosted runner registration
+  - GitHub branch protection required-check updates
 - Use one restricted Forge-hosted GitHub runner for the first rollout with a
   label such as `forge-trusted`. Add a pool later only if queueing data proves
   it is needed.
+- If the repository is ever public, or if fork PR policy changes, keep the
+  `forge-trusted` runner workflow-restricted so untrusted fork PRs cannot target
+  it.
 - Keep branch-level validation easy to debug: every new workflow in this plan
   should support `workflow_dispatch` before it becomes the only automatic path.
 - The approved topology spec is
@@ -69,6 +73,8 @@
 - `conary` remains the only public artifact-release line by default.
 - `remi` and `conaryd` become tagged service-build and deploy lines without
   public GitHub asset bundles in the first pass.
+- deployment is explicit, protected, and serialized; the legacy Remi
+  auto-deploy-on-merge path is intentionally removed
 - Forge remains a host, not a control plane.
 
 ## Chunk 1: Taxonomy And Forge Host Setup
@@ -114,13 +120,16 @@ declare -A TAG_PREFIX=(
 
 declare -A PATH_SCOPES=(
   [conary]="apps/conary/ crates/conary-core/ packaging/ .github/workflows/release-build.yml .github/workflows/deploy-and-verify.yml scripts/sign-release.sh"
-  [remi]="apps/remi/ deploy/systemd/remi.service scripts/rebuild-remi.sh"
+  [remi]="apps/remi/ deploy/systemd/remi.service scripts/rebuild-remi.sh scripts/bootstrap-remi.sh"
   [conaryd]="apps/conaryd/"
 )
 ```
 
 Also update the `all` expansion and the usage banner so `conary-test` is no
 longer presented as a valid release target.
+
+The workflow paths under the `conary` scope are created in Task 5; it is
+acceptable for this task to reference them before they exist in the branch.
 
 - [ ] **Step 3: Update the tracked docs to reflect the new taxonomy**
 
@@ -192,8 +201,13 @@ responsibility:
 
 - install Podman and Rust prerequisites if missing
 - install or update the GitHub Actions runner binary
-- register one restricted runner against the Conary GitHub repository or org
+- fetch an ephemeral registration token with `gh api
+  repos/<owner>/<repo>/actions/runners/registration-token` or the equivalent
+  org-scoped GitHub API call, then register one restricted runner against the
+  Conary repository or org
 - assign a label such as `forge-trusted`
+- restrict the runner to the trusted workflows from this plan so `pr-gate` and
+  fork PR traffic cannot target it
 - write a checked-in systemd unit from
   `deploy/systemd/github-actions-runner.service`
 
@@ -216,7 +230,9 @@ WantedBy=multi-user.target
 ```
 
 Do not keep Forgejo installation, mirroring, or Forgejo runner registration in
-this script.
+this script. Do not stop the existing `forgejo.service` or
+`forgejo-runner.service` yet; decommission them in Task 9 only after the GitHub
+runner lane has been verified.
 
 - [ ] **Step 3: Rewrite `deploy/FORGE.md` around the new GitHub-runner role**
 
@@ -307,6 +323,10 @@ runs:
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 ```
 
+Use this composite action only in GitHub-hosted jobs. Trusted jobs running on
+`forge-trusted` should do a plain checkout and rely on their preinstalled Rust
+toolchain instead of cache-heavy shared setup.
+
 - [ ] **Step 3: Create `.github/workflows/pr-gate.yml`**
 
 The first-pass workflow should be branch-testable and merge-safe:
@@ -336,6 +356,10 @@ Add jobs for:
 - `doctests`
 - `dependency-review` using GitHub's dependency review action
 
+Give each job a stable `name:` matching the intended required check name:
+`fmt`, `clippy`, `workspace-tests`, `conary-test-crate`, `doctests`, and
+`dependency-review`.
+
 Do not include `push` triggers, `develop`, or `cargo audit`.
 
 - [ ] **Step 4: Remove the old workflow file once parity exists**
@@ -343,7 +367,24 @@ Do not include `push` triggers, `develop`, or `cargo audit`.
 Delete `.github/workflows/ci.yml` after `pr-gate.yml` exists and carries the
 merge-blocking responsibilities.
 
-- [ ] **Step 5: Verify the new PR gate locally and in GitHub**
+- [ ] **Step 5: Update GitHub branch protection required checks during cutover**
+
+Update the repository branch protection rules so they require the new
+`pr-gate` checks and no longer wait on the retired `ci.yml` job names.
+
+Specifically:
+
+- remove old required checks such as `Test` and `Security Audit` only after the
+  new workflow has emitted green checks on the branch
+- add the new required checks `fmt`, `clippy`, `workspace-tests`,
+  `conary-test-crate`, `doctests`, and `dependency-review`
+- do not leave a merge window where neither the old nor new checks are
+  required
+
+Use the GitHub web UI or `gh api` if you already manage branch protection as
+code.
+
+- [ ] **Step 6: Verify the new PR gate locally and in GitHub**
 
 Run locally:
 
@@ -366,10 +407,11 @@ Expected:
 - `pr-gate.yml` contains only `pull_request` and `workflow_dispatch`
 - the manual dispatch run completes successfully on GitHub
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add .github/actions/setup-rust-workspace/action.yml .github/workflows/pr-gate.yml .github/workflows/ci.yml
+git add .github/actions/setup-rust-workspace/action.yml .github/workflows/pr-gate.yml
+git add -A .github/workflows/ci.yml
 git commit -m "ci: add pr-gate workflow"
 ```
 
@@ -391,13 +433,17 @@ git commit -m "ci: add pr-gate workflow"
 Run:
 
 ```bash
+sed -n '1,220p' .forgejo/workflows/ci.yaml
 sed -n '1,220p' .forgejo/workflows/integration.yaml
 sed -n '1,220p' .forgejo/workflows/e2e.yaml
 sed -n '1,200p' .forgejo/workflows/remi-health.yaml
 ```
 
-Expected: trusted validation still lives in Forgejo workflow files instead of
-GitHub Actions.
+Expected:
+
+- trusted validation still lives in Forgejo workflow files instead of GitHub
+  Actions
+- `.forgejo/workflows/ci.yaml` still auto-deploys Remi on `main` pushes
 
 - [ ] **Step 2: Create `.github/workflows/merge-validation.yml`**
 
@@ -426,6 +472,8 @@ The first trusted smoke job should:
 - run `./scripts/remi-health.sh --smoke`
 
 Keep this lane intentionally small. Do not migrate the whole E2E matrix here.
+This lane intentionally stops at validation and does not deploy Remi on `main`
+pushes.
 
 - [ ] **Step 3: Create `.github/workflows/scheduled-ops.yml`**
 
@@ -450,9 +498,18 @@ Delete:
 .forgejo/workflows/remi-health.yaml
 ```
 
+Stage the directory removal explicitly with `git rm -r .forgejo/workflows`
+instead of relying on empty-directory disappearance as an implicit side effect.
+
 Then update `docs/INTEGRATION-TESTING.md` so the CI Integration section points
 at the new GitHub workflow names and no longer mentions manual Forgejo API
 dispatch.
+
+Call out in the docs and rollout notes that removing `.forgejo/workflows/ci.yaml`
+intentionally retires the old auto-deploy-Remi-on-merge behavior. Going
+forward, Remi deploys happen only through `deploy-and-verify.yml` via manual
+dispatch or successful `remi-v*` release builds. Do not merge this branch until
+Task 5 adds that replacement path.
 
 - [ ] **Step 5: Verify the trusted-lane replacements**
 
@@ -477,14 +534,16 @@ gh run list --workflow scheduled-ops.yml --limit 1
 
 Expected:
 
-- Forgejo workflow files are gone
+- Forgejo workflow files are gone and `.forgejo/workflows/` has been explicitly
+  removed from the tree
 - both GitHub workflows are dispatchable
 - the GitHub UI or `gh run list` shows them as the new trusted validation lanes
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add .github/workflows/merge-validation.yml .github/workflows/scheduled-ops.yml .forgejo/workflows docs/INTEGRATION-TESTING.md
+git add .github/workflows/merge-validation.yml .github/workflows/scheduled-ops.yml docs/INTEGRATION-TESTING.md
+git add -A .forgejo/workflows
 git commit -m "ci: migrate trusted validation lanes to GitHub"
 ```
 
@@ -505,13 +564,20 @@ Run:
 
 ```bash
 sed -n '1,280p' .github/workflows/release.yml
-sed -n '1,200p' .forgejo/workflows/release.yaml
+if test -f .forgejo/workflows/release.yaml; then
+  sed -n '1,200p' .forgejo/workflows/release.yaml
+else
+  git show HEAD~1:.forgejo/workflows/release.yaml | sed -n '1,200p'
+fi
 ```
 
 Expected:
 
 - build, GitHub release creation, and Remi deployment are still fused together
 - a separate Forgejo workflow is still doing release landing verification
+
+If Task 4 is not the immediate parent commit, use any pre-Task-4 revision that
+still contains `.forgejo/workflows/release.yaml`.
 
 - [ ] **Step 2: Create `.github/workflows/release-build.yml`**
 
@@ -537,6 +603,9 @@ Implement product-specific jobs:
 
 - `conary`: existing RPM/DEB/Arch/CCS packaging matrix plus GitHub release
   asset publication
+- `conary`: carry forward the current `sign_hash` helper build and CCS signing
+  flow, with `RELEASE_SIGNING_KEY` treated as a required release secret for the
+  signing step
 - `remi`: `cargo build -p remi --release`, upload retained workflow artifact,
   write build provenance summary
 - `conaryd`: `cargo build -p conaryd --release`, upload retained workflow
@@ -571,6 +640,9 @@ concurrency:
   cancel-in-progress: false
 ```
 
+The single `deploy-and-verify` concurrency group intentionally serializes all
+product deployments as the safer first rollout.
+
 Implement first-pass deployment logic:
 
 - `conary`: download release-build artifacts, deploy to Remi, verify
@@ -581,6 +653,11 @@ Implement first-pass deployment logic:
 
 Add a branch-testable `dry_run` path so staging validation does not require a
 real tagged production deploy.
+
+This workflow intentionally replaces the legacy Remi auto-deploy-on-merge path.
+Going forward, operators deploy Remi by pushing a `remi-v*` tag that feeds this
+workflow from `release-build`, or by running `gh workflow run
+deploy-and-verify.yml` manually.
 
 - [ ] **Step 4: Remove the old coupled release workflows**
 
@@ -621,7 +698,8 @@ Expected:
 - [ ] **Step 6: Commit**
 
 ```bash
-git add .github/workflows/release-build.yml .github/workflows/deploy-and-verify.yml .github/workflows/release.yml .forgejo/workflows/release.yaml scripts/release.sh
+git add .github/workflows/release-build.yml .github/workflows/deploy-and-verify.yml scripts/release.sh
+git add -A .github/workflows/release.yml .forgejo/workflows/release.yaml
 git commit -m "ci: split release build from deployment"
 ```
 
@@ -706,7 +784,8 @@ Expected:
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/remi/src/server/auth.rs apps/remi/src/server/routes/admin.rs apps/remi/src/server/routes.rs apps/remi/src/server/handlers/admin/mod.rs apps/remi/src/server/handlers/admin/tokens.rs apps/remi/src/server/handlers/admin/repos.rs apps/remi/src/server/handlers/openapi.rs apps/remi/src/server/audit.rs apps/remi/src/server/handlers/admin/ci.rs
+git add apps/remi/src/server/auth.rs apps/remi/src/server/routes/admin.rs apps/remi/src/server/routes.rs apps/remi/src/server/handlers/admin/mod.rs apps/remi/src/server/handlers/admin/tokens.rs apps/remi/src/server/handlers/admin/repos.rs apps/remi/src/server/handlers/openapi.rs apps/remi/src/server/audit.rs
+git add -A apps/remi/src/server/handlers/admin/ci.rs
 git commit -m "refactor(remi): remove Forgejo admin CI surface"
 ```
 
@@ -776,7 +855,8 @@ Expected:
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/remi/src/server/config.rs apps/remi/src/server/mod.rs apps/remi/src/server/mcp.rs apps/remi/src/server/forgejo.rs
+git add apps/remi/src/server/config.rs apps/remi/src/server/mod.rs apps/remi/src/server/mcp.rs
+git add -A apps/remi/src/server/forgejo.rs
 git commit -m "refactor(remi): remove Forgejo control-plane bridge"
 ```
 
@@ -874,6 +954,7 @@ gh workflow run pr-gate.yml --ref <branch-name>
 gh workflow run merge-validation.yml --ref <branch-name>
 gh workflow run scheduled-ops.yml --ref <branch-name>
 gh workflow run release-build.yml --ref <branch-name> -f product=conary -f tag_name=test-v0.0.0 -f dry_run=true
+gh workflow run deploy-and-verify.yml --ref <branch-name> -f product=conary -f source_run=<release-build-run-id> -f environment=staging -f dry_run=true
 gh run list --limit 10
 ```
 
@@ -883,7 +964,23 @@ Expected:
 - the branch-safe manual dispatches succeed
 - there are no active Forgejo workflows left to run
 
-- [ ] **Step 3: Run the final structural grep checks**
+- [ ] **Step 3: Decommission the legacy Forgejo services on Forge**
+
+After the new GitHub workflows have been dispatch-tested successfully, stop and
+disable the retired services on Forge:
+
+```bash
+ssh forge 'sudo systemctl disable --now forgejo forgejo-runner || true'
+ssh forge 'systemctl is-enabled forgejo forgejo-runner || true'
+ssh forge 'systemctl is-active github-actions-runner || true'
+```
+
+Expected:
+
+- `forgejo` and `forgejo-runner` are disabled or missing
+- `github-actions-runner` remains active
+
+- [ ] **Step 4: Run the final structural grep checks**
 
 Run:
 
@@ -902,14 +999,14 @@ Expected:
 - `develop`, `Forgejo`, `ci:read`, and `ci:trigger` appear only in deliberate
   historical/archive references, not active implementation paths
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add docs/operations/infrastructure.md docs/INTEGRATION-TESTING.md deploy/FORGE.md
 git commit -m "docs(ci): finalize GitHub control-plane migration"
 ```
 
-- [ ] **Step 5: Tag the migration as complete in the execution notes**
+- [ ] **Step 6: Tag the migration as complete in the execution notes**
 
 Write a short execution summary in the final PR description or execution log:
 
@@ -930,6 +1027,7 @@ Write a short execution summary in the final PR description or execution log:
 - `gh workflow run scheduled-ops.yml --ref <branch-name>`
 - `gh workflow run release-build.yml --ref <branch-name> -f product=conary -f tag_name=test-v0.0.0 -f dry_run=true`
 - `gh workflow run deploy-and-verify.yml --ref <branch-name> -f product=conary -f source_run=<release-build-run-id> -f environment=staging -f dry_run=true`
+- `ssh forge 'sudo systemctl disable --now forgejo forgejo-runner || true'`
 
 ## Notes For The Implementer
 
