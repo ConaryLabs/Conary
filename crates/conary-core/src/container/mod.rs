@@ -1989,10 +1989,9 @@ mod tests {
         config.add_bind_mount(BindMount::writable("/etc/passwd", "/host-passwd"));
         let mut sandbox = Sandbox::new(config);
 
-        let (code, stdout, stderr) = sandbox
-            .execute(
-                "/bin/sh",
-                r#"#!/bin/sh
+        let (code, stdout, stderr) = match sandbox.execute(
+            "/bin/sh",
+            r#"#!/bin/sh
 printf 'uid=%s\n' "$(id -u)"
 if [ -w /host-passwd ]; then
     echo host-write-access
@@ -2000,10 +1999,25 @@ else
     echo host-write-blocked
 fi
 "#,
-                &[],
-                &[],
-            )
-            .expect("sandbox execution should succeed");
+            &[],
+            &[],
+        ) {
+            Ok(result) => result,
+            Err(err)
+                if err
+                    .to_string()
+                    .contains("mount --make-rprivate failed: EACCES")
+                    || err
+                        .to_string()
+                        .contains("mount --make-rprivate failed: EPERM") =>
+            {
+                eprintln!(
+                    "skipping sandbox root identity assertion on a host without mount namespace privileges"
+                );
+                return;
+            }
+            Err(err) => panic!("sandbox execution should succeed: {err}"),
+        };
 
         assert_eq!(code, 0, "stderr: {stderr}");
         assert!(stdout.contains("uid=0"), "stdout: {stdout}");
