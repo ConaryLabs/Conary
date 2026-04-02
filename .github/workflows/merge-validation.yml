@@ -24,7 +24,7 @@ jobs:
     env:
       SMOKE_DISTRO: ${{ github.event.inputs.smoke_distro || 'fedora43' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Build trusted-lane binaries
         run: cargo build -p conary -p remi -p conaryd -p conary-test --verbose
       - name: Run conary-test smoke subset

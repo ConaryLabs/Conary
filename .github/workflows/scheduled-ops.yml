@@ -28,7 +28,7 @@ jobs:
     if: ${{ github.event_name != 'schedule' || github.event.schedule == '0 */6 * * *' }}
     runs-on: [self-hosted, forge-trusted]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Full Remi health check
         run: ./scripts/remi-health.sh --full
 
@@ -37,8 +37,8 @@ jobs:
     if: ${{ github.event_name != 'schedule' || github.event.schedule == '0 */6 * * *' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - name: Install cargo-audit
         run: cargo install cargo-audit
       - name: Run security audit
@@ -57,7 +57,7 @@ jobs:
       matrix:
         distro: [fedora43, ubuntu-noble, arch]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Build deep-validation binaries
         run: cargo build -p conary -p conary-test --verbose
       - name: Run Phase 1 suites
@@ -84,7 +84,7 @@ jobs:
           cargo run -p conary-test -- run --suite phase3-group-n-container --distro "${{ matrix.distro }}" --phase 3
       - name: Upload deep-validation results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: deep-validation-results-${{ matrix.distro }}
           path: tests/integration/remi/results/${{ matrix.distro }}.json
@@ -94,7 +94,7 @@ jobs:
     if: ${{ (github.event_name == 'schedule' && github.event.schedule == '30 6 * * *') || (github.event_name == 'workflow_dispatch' && github.event.inputs.run_qemu == 'true') }}
     runs-on: [self-hosted, forge-trusted]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Build QEMU validation binaries
         run: cargo build -p conary -p conary-test --verbose
       - name: Run Group N QEMU tests
