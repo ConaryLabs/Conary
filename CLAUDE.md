@@ -1,115 +1,19 @@
 # CLAUDE.md
 
-## Build & Test
+Conary's canonical assistant guidance lives in `AGENTS.md`.
 
-```bash
-cargo build -p conary                    # Package-manager CLI
-cargo build -p remi                      # Remi service
-cargo build -p conaryd                   # conaryd daemon
-cargo build -p conary-test               # Test infrastructure crate
-cargo test -p conary                     # CLI tests
-cargo test -p remi                       # Remi tests
-cargo test -p conaryd                    # conaryd tests
-cargo test -p conary-test                # Test engine unit tests
-cargo run -p conary-test -- list         # Manifest sanity / suite inventory
-cargo clippy --workspace --all-targets -- -D warnings
-cargo fmt --check                        # Format check
-```
+Start with:
 
-IMPORTANT: Use debug builds for dev work, never `--release` unless deploying.
+1. `AGENTS.md`
+2. `docs/llms/README.md`
+3. The linked canonical docs for architecture, testing, and operations
 
-## Core Principles
+This file is intentionally thin. It exists only as a compatibility shim for
+tools that still look for `CLAUDE.md`.
 
-**Database-First**: All state lives in SQLite. No config files for runtime state.
+Do not treat this file as a second source of truth. If a rule, command, or
+workflow matters for the repository as a whole, it belongs in `AGENTS.md` or a
+linked canonical doc instead.
 
-**File Headers**: Every Rust source file starts with its path as a comment:
-```rust
-// src/main.rs
-```
-
-**No Emojis**: Use text markers: `[COMPLETE]`, `[IN PROGRESS]`, `[FAILED]`.
-
-**Rust Standards**: Edition 2024, Rust 1.94, `thiserror` for errors, clippy-clean (pedantic encouraged), tests in same file as code.
-
-## Commit Convention
-
-Use [Conventional Commits](https://www.conventionalcommits.org/). Every commit message MUST start with a type prefix:
-
-| Prefix | When to use | Version bump |
-|--------|-------------|-------------|
-| `feat:` | New feature or capability | Minor |
-| `fix:` | Bug fix | Patch |
-| `docs:` | Documentation only | None |
-| `refactor:` | Code restructure, no behavior change | None |
-| `test:` | Test additions or changes | None |
-| `chore:` | Build, tooling, dependencies | None |
-| `security:` | Security fix | Patch |
-| `perf:` | Performance improvement | Patch |
-
-Add `!` after the type for breaking changes: `feat!: remove legacy API`.
-
-Scopes are optional: `feat(resolver): add SAT backtracking`.
-
-**Release:** Run `./scripts/release.sh [conary|remi|conaryd|conary-test|all]` to auto-bump versions, update CHANGELOG.md, and tag. Use `--dry-run` to preview.
-
-**Publish:** Push a `v*` tag to trigger `.github/workflows/release.yml`, which builds CCS + native packages (RPM/DEB/Arch) in parallel containers and deploys to Remi. Forgejo's `release.yaml` automatically verifies the release landed. See `.claude/rules/infrastructure.md` for details.
-
-**Manual source deploys (non-release):**
-- Forge: `./scripts/deploy-forge.sh`, then on Forge run `cd ~/Conary && cargo build -p conary-test && cargo build && systemctl --user restart conary-test && curl -fsS http://127.0.0.1:9090/v1/health`
-- Forge: `./scripts/deploy-forge.sh --build`, which now builds `conary`, `remi`, `conaryd`, and `conary-test` explicitly on Forge after syncing
-- Remi: `rsync -az --delete --exclude target/ --exclude '.git/' --exclude '.worktrees/' /home/peter/Conary/ remi:/root/conary-src/`, then on Remi run `cd /root/conary-src && cargo build --release -p remi && systemctl stop remi && install -m 755 target/release/remi /usr/local/bin/remi && systemctl start remi && curl -fsS http://127.0.0.1:8081/health`
-- Prefer the `remi-admin` / `conary-test` MCP deployment tools when they are available in-session; use the manual SSH/rsync path as the fallback playbook.
-
-## Architecture Glossary
-
-- **Trove**: Core unit (package, component, collection)
-- **Changeset**: Atomic transaction (install/remove/rollback)
-- **Flavor**: Build variations (arch, features)
-- **CAS**: Content-addressable storage for files
-- **Generation**: Immutable EROFS image + composefs mount representing a system state
-- **conary-test**: Test infrastructure -- declarative TOML engine, container management (bollard), HTTP API, MCP (23 tools)
-
-Database schema is currently **v65** (`conary-core/src/db/schema.rs`). Keep docs aligned with code instead of copying old schema, migration, or test-count claims forward.
-
-## Tool Selection
-
-- Context7 (`resolve-library-id` then `query-docs`) for external library APIs
-- Use Grep/Glob for code searches, exact filenames, or pattern matching
-
-See `.claude/rules/` for detailed tool selection guides, architecture reference, and infrastructure/CI docs.
-
-## MCP Servers
-
-Two MCP servers are configured for direct infrastructure interaction:
-
-| Server | Endpoint | Purpose |
-|--------|----------|---------|
-| **remi-admin** | `https://packages.conary.io/mcp` | Remi production server management |
-| **conary-test** | `forge.conarylabs.com:9090/mcp` | Test infrastructure on Forge |
-
-**remi-admin** tools: CI workflows (`ci_dispatch`, `ci_list_runs`, `ci_get_run`, `ci_get_logs`), mirror sync, token management, repo inspection, federation peers, audit log, test data (`test_list_runs`, `test_get_run`, `test_get_test`, `test_get_logs`, `test_health`), canonical mapping (`canonical_rebuild`), chunk GC (`chunk_gc`).
-
-**conary-test** tools: Start/monitor test runs (`start_run`, `get_run`, `list_runs`), inspect results (`get_test`, `get_test_logs`), rerun failures (`rerun_test`), manage images (`build_image`, `list_images`, `prune_images`, `image_info`), cleanup containers, reload manifests, deployment ops (`deploy_source`, `rebuild_binary`, `restart_service`, `deploy_status`, `build_fixtures`, `publish_fixtures`, `flush_pending`).
-
-Use these MCP tools instead of SSH/curl for infrastructure operations. After a service restart on Forge, the MCP session goes stale -- restart Claude Code to reconnect.
-
-## Doc Versioning
-
-When modifying files in `docs/`, add or update YAML frontmatter with `last_updated` (today's date), `revision` (increment on meaningful updates, start at 1), and `summary` (one line). Excluded: ROADMAP.md, CHANGELOG.md, CONTRIBUTING.md, `docs/plans/`.
-
-Completed work prompts/specs should live under archive subdirectories rather than the active documentation tree.
-
-## Agents
-
-Six composable agents, dispatched by `portage`:
-
-| Agent | Role | Invoke |
-|-------|------|--------|
-| **portage** | Task dispatcher -- classifies and orchestrates | "Use portage to [task]" |
-| **lintian** | Code reviewer (read-only, has memory) | "Use lintian to review [scope]" |
-| **emerge** | Parallel implementer | "Use emerge to fix [findings]" |
-| **valgrind** | Debugger (has memory) | "Use valgrind to debug [issue]" |
-| **autopkgtest** | QA/test hardener | "Use autopkgtest on [scope]" |
-| **sbuild** | Release verifier | "Use sbuild to prep release" |
-
-For most tasks, just describe what you need and let portage pick the pipeline.
+Keep tool-specific local notes in ignored local files such as `CLAUDE.local.md`
+or `docs/operations/LOCAL_ACCESS.md`, not in tracked assistant guidance.
