@@ -40,6 +40,7 @@ CLAUDE.local.md
 
 # Generated man pages (built by build.rs via clap_mangen)
 /man/
+/apps/conary/man/
 
 # Web frontend build artifacts
 web/node_modules/
