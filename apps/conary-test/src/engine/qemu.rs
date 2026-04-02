@@ -184,6 +184,15 @@ fn append_command_output(
 }
 
 async fn missing_tools<const N: usize>(tools: [&str; N]) -> Result<Vec<String>> {
+    #[cfg(test)]
+    if let Some(override_tools) = test_missing_tools_override()
+        .lock()
+        .unwrap()
+        .clone()
+    {
+        return Ok(override_tools);
+    }
+
     let mut missing = Vec::new();
     for tool in tools {
         let status = Command::new("sh")
@@ -371,6 +380,19 @@ async fn stop_qemu(mut child: Child) -> Result<std::process::Output> {
 fn shell_quote(input: &str) -> String {
     let escaped = input.replace('\'', r#"'\''"#);
     format!("'{escaped}'")
+}
+
+#[cfg(test)]
+fn test_missing_tools_override() -> &'static std::sync::Mutex<Option<Vec<String>>> {
+    use std::sync::{Mutex, OnceLock};
+
+    static OVERRIDE: OnceLock<Mutex<Option<Vec<String>>>> = OnceLock::new();
+    OVERRIDE.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(test)]
+pub(crate) fn set_missing_tools_override_for_tests(tools: Option<Vec<String>>) {
+    *test_missing_tools_override().lock().unwrap() = tools;
 }
 
 #[cfg(test)]

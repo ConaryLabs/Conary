@@ -727,11 +727,12 @@ mod tests {
 
     #[test]
     fn test_require_auth_admin_group_allowed() {
-        let checker = AuthChecker::new();
+        let trusted_gid = 42_424;
+        let checker = AuthChecker::new().add_trusted_gid(trusted_gid);
         let creds = Some(PeerCredentials {
-            pid: 1000,
-            uid: 1000,
-            gid: 10, // wheel
+            pid: std::process::id(),
+            uid: nix::unistd::geteuid().as_raw(),
+            gid: trusted_gid,
         });
         assert!(require_auth(&checker, &creds, Action::Install).is_ok());
         assert!(require_auth(&checker, &creds, Action::Remove).is_ok());
@@ -881,7 +882,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_version_returns_info() {
         let (state, _dir) = create_test_state();
-        let app = test_router(state, None);
+        let app = test_router(state, current_process_creds());
 
         let request = axum::http::Request::builder()
             .uri("/v1/version")
@@ -946,7 +947,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_metrics_returns_prometheus_format() {
         let (state, _dir) = create_test_state();
-        let app = test_router(state, None);
+        let app = test_router(state, current_process_creds());
 
         let request = axum::http::Request::builder()
             .uri("/v1/metrics")
@@ -968,7 +969,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_list_packages_empty_db() {
         let (state, _dir) = create_test_state();
-        let app = test_router(state, None);
+        let app = test_router(state, current_process_creds());
 
         let request = axum::http::Request::builder()
             .uri("/v1/packages")
@@ -989,7 +990,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_get_package_not_found() {
         let (state, _dir) = create_test_state();
-        let app = test_router(state, None);
+        let app = test_router(state, current_process_creds());
 
         let request = axum::http::Request::builder()
             .uri("/v1/packages/nonexistent-pkg")
@@ -1010,7 +1011,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_get_package_files_not_found() {
         let (state, _dir) = create_test_state();
-        let app = test_router(state, None);
+        let app = test_router(state, current_process_creds());
 
         let request = axum::http::Request::builder()
             .uri("/v1/packages/nonexistent-pkg/files")
@@ -1027,7 +1028,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_search_empty_results() {
         let (state, _dir) = create_test_state();
-        let app = test_router(state, None);
+        let app = test_router(state, current_process_creds());
 
         let request = axum::http::Request::builder()
             .uri("/v1/search?q=nonexistent")
@@ -1048,7 +1049,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_search_no_query_param() {
         let (state, _dir) = create_test_state();
-        let app = test_router(state, None);
+        let app = test_router(state, current_process_creds());
 
         let request = axum::http::Request::builder()
             .uri("/v1/search")
@@ -1069,7 +1070,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_list_transactions_empty() {
         let (state, _dir) = create_test_state();
-        let app = test_router(state, None);
+        let app = test_router(state, current_process_creds());
 
         let request = axum::http::Request::builder()
             .uri("/v1/transactions")
@@ -1090,7 +1091,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_get_transaction_not_found() {
         let (state, _dir) = create_test_state();
-        let app = test_router(state, None);
+        let app = test_router(state, current_process_creds());
 
         let request = axum::http::Request::builder()
             .uri("/v1/transactions/nonexistent-job-id")
@@ -1708,7 +1709,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_depends_not_found() {
         let (state, _dir) = create_test_state();
-        let app = test_router(state, None);
+        let app = test_router(state, current_process_creds());
 
         let request = axum::http::Request::builder()
             .uri("/v1/depends/nonexistent-pkg")
@@ -1725,7 +1726,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_rdepends_empty() {
         let (state, _dir) = create_test_state();
-        let app = test_router(state, None);
+        let app = test_router(state, current_process_creds());
 
         let request = axum::http::Request::builder()
             .uri("/v1/rdepends/nonexistent-pkg")
@@ -1747,7 +1748,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_history_empty() {
         let (state, _dir) = create_test_state();
-        let app = test_router(state, None);
+        let app = test_router(state, current_process_creds());
 
         let request = axum::http::Request::builder()
             .uri("/v1/history")
@@ -1768,7 +1769,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_list_states_empty() {
         let (state, _dir) = create_test_state();
-        let app = test_router(state, None);
+        let app = test_router(state, current_process_creds());
 
         let request = axum::http::Request::builder()
             .uri("/v1/system/states")

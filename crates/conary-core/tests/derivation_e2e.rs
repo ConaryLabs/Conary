@@ -22,15 +22,15 @@ use tempfile::TempDir;
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Find the workspace root by walking up from the manifest dir.
+/// Find the workspace root by walking up from the crate manifest dir.
 ///
-/// Integration tests run with cwd set to the workspace root, so recipe paths
-/// like `recipes/system/zlib.toml` resolve directly. This helper returns a
-/// `Path` to the workspace root for clarity.
+/// The crate now lives under `crates/conary-core`, so the workspace root is no
+/// longer the manifest dir's direct parent.
 fn workspace_root() -> &'static Path {
-    // `CARGO_MANIFEST_DIR` points to `conary-core/`; parent is workspace root.
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    Path::new(manifest_dir).parent().unwrap()
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .find(|dir| dir.join("recipes/system/zlib.toml").is_file())
+        .expect("workspace root not found from crate manifest ancestors")
 }
 
 fn setup_test_db() -> (TempDir, Connection) {

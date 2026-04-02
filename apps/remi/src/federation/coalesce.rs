@@ -66,6 +66,8 @@ impl RequestCoalescer {
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<Vec<u8>>>,
     {
+        let inflight_at_capacity = self.inflight.len() >= MAX_INFLIGHT_REQUESTS;
+
         // Use DashMap's entry API for atomic check-then-insert to avoid a race
         // where two tasks both see no in-flight request and both start fetches.
         use dashmap::mapref::entry::Entry;
@@ -92,7 +94,9 @@ impl RequestCoalescer {
                 }
             }
             Entry::Vacant(e) => {
-                if self.inflight.len() >= MAX_INFLIGHT_REQUESTS {
+                // Check capacity before entering the shard lock to avoid
+                // deadlocking on DashMap::len() while holding a VacantEntry.
+                if inflight_at_capacity {
                     return Err(Error::DownloadError(format!(
                         "Too many in-flight federation requests (max {})",
                         MAX_INFLIGHT_REQUESTS
@@ -112,6 +116,8 @@ impl RequestCoalescer {
         let tx = match rx {
             Some(tx) => tx,
             None => {
+                let inflight_at_capacity = self.inflight.len() >= MAX_INFLIGHT_REQUESTS;
+
                 // Re-enter through the entry API for proper coalescing
                 match self.inflight.entry(hash.to_string()) {
                     dashmap::mapref::entry::Entry::Occupied(e) => {
@@ -132,7 +138,7 @@ impl RequestCoalescer {
                         }
                     }
                     dashmap::mapref::entry::Entry::Vacant(e) => {
-                        if self.inflight.len() >= MAX_INFLIGHT_REQUESTS {
+                        if inflight_at_capacity {
                             return Err(Error::DownloadError(format!(
                                 "Too many in-flight federation requests (max {})",
                                 MAX_INFLIGHT_REQUESTS
