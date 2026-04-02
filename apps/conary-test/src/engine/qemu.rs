@@ -185,11 +185,7 @@ fn append_command_output(
 
 async fn missing_tools<const N: usize>(tools: [&str; N]) -> Result<Vec<String>> {
     #[cfg(test)]
-    if let Some(override_tools) = test_missing_tools_override()
-        .lock()
-        .unwrap()
-        .clone()
-    {
+    if let Some(override_tools) = test_missing_tools_override().lock().unwrap().clone() {
         return Ok(override_tools);
     }
 

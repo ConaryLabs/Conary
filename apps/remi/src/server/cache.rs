@@ -551,10 +551,7 @@ mod tests {
 
         // Store 5000 bytes => 50% usage
         let data = vec![0u8; 5000];
-        cache
-            .store_chunk(&test_hash(&data), &data)
-            .await
-            .unwrap();
+        cache.store_chunk(&test_hash(&data), &data).await.unwrap();
 
         let stats = cache.stats().await.unwrap();
         assert_eq!(stats.max_bytes, max_bytes);
@@ -644,10 +641,7 @@ mod tests {
 
         // Store a small chunk - well within limits
         let data = b"small chunk";
-        cache
-            .store_chunk(&test_hash(data), data)
-            .await
-            .unwrap();
+        cache.store_chunk(&test_hash(data), data).await.unwrap();
 
         let result = cache.run_eviction().await.unwrap();
         assert_eq!(result.chunks_evicted, 0);
@@ -758,7 +752,10 @@ mod tests {
 
         cache.store_chunk(&hash, original).await.unwrap();
 
-        let err = cache.store_chunk(&hash, b"second version").await.unwrap_err();
+        let err = cache
+            .store_chunk(&hash, b"second version")
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("chunk hash mismatch"));
 
         // The original chunk should remain unchanged.
