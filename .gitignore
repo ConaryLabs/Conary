@@ -24,6 +24,7 @@ Thumbs.db
 CLAUDE.local.md
 .claude/settings.local.json
 .claude/*.local.md
+docs/operations/LOCAL_ACCESS.md
 
 # Bootstrap build artifacts
 /bootstrap/
