@@ -31,7 +31,7 @@ SERVICE_TEMPLATE="${SCRIPT_DIR}/systemd/github-actions-runner.service"
 RUNNER_USER="${FORGE_RUNNER_USER:-peter}"
 RUNNER_HOME="${FORGE_RUNNER_HOME:-/home/${RUNNER_USER}/actions-runner}"
 RUNNER_WORKDIR="${FORGE_RUNNER_WORKDIR:-${RUNNER_HOME}/_work}"
-RUNNER_VERSION="${GITHUB_RUNNER_VERSION:-2.328.0}"
+RUNNER_VERSION="${GITHUB_RUNNER_VERSION:-2.333.1}"
 RUNNER_NAME="${GITHUB_RUNNER_NAME:-forge-trusted-1}"
 RUNNER_LABELS="${GITHUB_RUNNER_LABELS:-forge-trusted}"
 RUNNER_ARCH="${GITHUB_RUNNER_ARCH:-x64}"
@@ -39,6 +39,7 @@ RUNNER_SCOPE="${GITHUB_RUNNER_SCOPE:-repo}"
 GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-ConaryLabs/Conary}"
 GITHUB_OWNER="${GITHUB_OWNER:-${GITHUB_REPOSITORY%%/*}}"
 GITHUB_RUNNER_GROUP="${GITHUB_RUNNER_GROUP:-}"
+REGISTRATION_TOKEN="${GITHUB_RUNNER_REGISTRATION_TOKEN:-}"
 RUNNER_URL_BASE="https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}"
 RUNNER_TARBALL="actions-runner-linux-${RUNNER_ARCH}-${RUNNER_VERSION}.tar.gz"
 RUNNER_DOWNLOAD_URL="${RUNNER_URL_BASE}/${RUNNER_TARBALL}"
@@ -53,6 +54,11 @@ runner_shell() {
 }
 
 registration_token() {
+    if [[ -n "$REGISTRATION_TOKEN" ]]; then
+        printf '%s\n' "$REGISTRATION_TOKEN"
+        return
+    fi
+
     if [[ "$RUNNER_SCOPE" == "org" ]]; then
         runner_shell "gh api -X POST orgs/${GITHUB_OWNER}/actions/runners/registration-token --jq .token"
     else
@@ -102,7 +108,9 @@ configure_runner() {
     local token url config_args
 
     require_cmd systemctl
-    require_cmd gh
+    if [[ -z "$REGISTRATION_TOKEN" ]]; then
+        require_cmd gh
+    fi
 
     if systemctl is-active --quiet github-actions-runner; then
         log "Stopping existing runner service before reconfiguration..."
@@ -149,7 +157,11 @@ verify_setup() {
     log "Verifying runner host setup..."
     runner_shell "command -v cargo >/dev/null 2>&1"
     runner_shell "command -v podman >/dev/null 2>&1"
-    runner_shell "gh auth status >/dev/null 2>&1"
+    if [[ -z "$REGISTRATION_TOKEN" ]]; then
+        runner_shell "gh auth status >/dev/null 2>&1"
+    else
+        warn "Skipped persistent gh auth verification because a one-time registration token was supplied."
+    fi
     systemctl is-active --quiet github-actions-runner || error "github-actions-runner service is not active"
 
     log ""
