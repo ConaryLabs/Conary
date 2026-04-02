@@ -1,22 +1,27 @@
 ---
 last_updated: 2026-04-02
-revision: 1
-summary: Reframe Conary CI/CD around product-aware release tracks, trusted validation lanes, and internal harness infrastructure
+revision: 3
+summary: Reframe Conary CI/CD around a GitHub-only long-term control plane, product-aware release tracks, and internal harness infrastructure
 ---
 
 # Conary CI/CD Topology Design
 
 ## Summary
 
-This design reframes Conary CI/CD around the project as it exists today:
+This design reframes Conary CI/CD around the project as it exists today while
+also defining the target steady state:
 
 - three release-track apps: `conary`, `remi`, `conaryd`
 - one internal validation service: `conary-test`
 - shared workspace components: `conary-core`, `conary-mcp`, packaging assets,
   and deploy scripts
 
-The core decision is to stop treating the repository like a single product and
-to stop treating `conary-test` like a peer release-track app.
+The core decisions are:
+
+- stop treating the repository like a single product
+- stop treating `conary-test` like a peer release-track app
+- make GitHub the only long-term CI/CD control plane
+- deprecate and remove Forgejo from the target topology
 
 The recommended topology uses five explicit automation lanes:
 
@@ -49,6 +54,9 @@ Today:
   [`docs/INTEGRATION-TESTING.md`](../../INTEGRATION-TESTING.md) describe a
   deeper trusted-validation and operational story involving Forge,
   `conary-test`, and Remi
+- the repository still contains active Forgejo workflows under
+  [`.forgejo/workflows/`](../../../.forgejo/workflows/) and Remi-side Forgejo
+  proxy code that reflect an older parallel control-plane story
 
 That produces three kinds of confusion:
 
@@ -66,6 +74,7 @@ The problem is that the pieces no longer tell one clean story together.
 ## Goals
 
 - Make the CI/CD topology match the current workspace and product boundaries.
+- Make GitHub Actions the only long-term CI/CD control plane.
 - Treat `conary`, `remi`, and `conaryd` as the only release-track apps.
 - Treat `conary-test` as trusted internal validation infrastructure rather than
   a public release-track product.
@@ -74,6 +83,7 @@ The problem is that the pieces no longer tell one clean story together.
 - Give deeper `conary-test` validation a clear home without forcing it into
   every pull request.
 - Make deployment and post-deploy verification explicit rather than implicit.
+- Remove Forgejo from the target-state architecture and active operator story.
 - Align the design with current GitHub Actions security and deployment
   practices as of 2026-04-02.
 
@@ -118,6 +128,24 @@ Current automation has a split personality:
 This is already close to a multi-lane architecture, but it is not named or
 documented that way yet.
 
+### Legacy Control-Plane Drift
+
+The repository currently has two control-plane stories:
+
+- GitHub Actions under [`.github/workflows/`](../../../.github/workflows/)
+- Forgejo workflows under [`.forgejo/workflows/`](../../../.forgejo/workflows/)
+  plus Remi-side Forgejo proxy surfaces
+
+Those paths overlap in purpose:
+
+- Forgejo `ci.yaml` and `integration.yaml` run trusted validation on Forge
+- Forgejo `release.yaml` verifies that a GitHub-built release landed on Remi
+- Forgejo `remi-health.yaml` and `e2e.yaml` cover scheduled health and deep
+  validation
+
+That overlap is useful historical context, but it should not survive as the
+long-term topology. The target state should have one orchestrator, not two.
+
 ### Release-Track Drift
 
 `scripts/release.sh` still exposes four release groups:
@@ -129,6 +157,14 @@ documented that way yet.
 
 But only the `conary` tag family currently maps to the GitHub artifact release
 workflow. That mismatch creates avoidable cognitive drift.
+
+### Branch Drift
+
+Current GitHub CI still triggers on both `main` and `develop`, but the current
+repository branch state only shows `main` as the active long-lived branch.
+
+The design therefore assumes `main` is the only active long-lived branch unless
+project governance explicitly restores a `develop` branch later.
 
 ## Approach Options
 
@@ -191,9 +227,11 @@ Choose Option 2.
 Conary should adopt a split-lane GitHub-first topology:
 
 - GitHub Actions is the primary orchestration and visibility surface
+- GitHub Actions is the only long-term control plane
 - ordinary pull-request checks stay GitHub-hosted and unprivileged
 - Forge and `conary-test` remain important, but only in trusted validation and
   operational lanes
+- Forgejo is transitional legacy and should be removed from the target state
 - deployment is explicit and protected rather than bundled into generic CI
 
 This is the best fit for both the codebase structure and the project's current
@@ -329,6 +367,36 @@ Typical responsibilities:
 - fixture freshness or drift checks
 - certificate, secret, or environment drift monitoring as needed
 
+### Control Plane And Forge Execution
+
+GitHub Actions should be the only long-term orchestrator.
+
+Forge may continue to exist as trusted execution capacity, but not as an
+independent workflow control plane.
+
+The long-term execution model should be:
+
+- GitHub-hosted runners for `pr-gate`
+- a restricted GitHub self-hosted runner group on Forge for trusted lanes such
+  as `merge-validation` and `scheduled-ops`
+- protected GitHub environments for deployment lanes
+
+This assumes the repository and runner configuration prevent untrusted fork PRs
+from ever reaching trusted Forge-hosted runners, whether by repository privacy,
+runner-group restrictions, or equivalent workflow restrictions.
+
+That means:
+
+- ordinary pull requests never run on Forge-hosted runners
+- trusted `main`, schedule, and manual workflows may target Forge-hosted GitHub
+  runners
+- `.forgejo/workflows/*` are retired once their GitHub equivalents exist
+
+The current rsync-plus-SSH flow in
+[`scripts/deploy-forge.sh`](../../../scripts/deploy-forge.sh) remains a valid
+manual or transitional path during migration, but it is not the desired
+long-term control-plane mechanism.
+
 ### Trust Boundaries
 
 The design should make trust boundaries obvious instead of implicit.
@@ -374,6 +442,9 @@ Every PR should get fast, merge-blocking validation:
 - doctests
 - dependency review
 
+The PR gate should prefer dependency review for newly introduced dependency
+changes rather than making `cargo audit` a routine merge blocker.
+
 For Rust test execution, `cargo-nextest` is a good fit for CI-oriented unit and
 integration test runs, with doctests remaining separate.
 
@@ -384,9 +455,18 @@ more realistic than the PR gate but still fast enough to run routinely.
 
 This is the correct home for:
 
-- a small `conary-test` smoke set
-- a preferred primary distro path
+- a small `conary-test` smoke set on every push to `main`
+- a preferred primary distro path, with Fedora 43 as the default merge-time
+  smoke target unless a stronger reason appears
 - service-specific smoke when `remi` or `conaryd` paths change materially
+
+The recommended default cadence is:
+
+- every push to `main`: one trusted smoke subset plus lightweight service smoke
+- nightly or manual: broader cross-distro and deeper harness coverage
+
+This keeps lane 2 routine and useful without turning it into a full daily E2E
+matrix on every merge.
 
 #### Nightly Or Manual Deep Depth
 
@@ -399,6 +479,10 @@ Broader coverage belongs in scheduled or manual validation lanes:
 
 This avoids turning every pull request into a full-system certification event.
 
+`cargo audit` belongs here or in a dedicated manual security workflow, not in
+the ordinary PR gate. Accepted advisory exceptions should remain explicit and
+reviewable.
+
 ### Release Tracks And Tags
 
 Tag families should map directly to release-track apps.
@@ -408,6 +492,18 @@ Tag families should map directly to release-track apps.
 - `conaryd-v*` for `conaryd`
 
 `conary-test` should not have a release tag family.
+
+Release representation should differ by product responsibility:
+
+- `conary` should continue to publish GitHub release assets because it produces
+  user-consumed package artifacts and self-update payloads
+- `remi` and `conaryd` should be release-track services represented by tagged
+  GitHub builds, deployment provenance, and deploy records rather than public
+  GitHub asset bundles by default
+
+If the project later wants packaged service artifacts for `remi` or `conaryd`,
+that can be added as an explicit follow-on decision. It is not required for
+this topology.
 
 Shared crates such as `conary-core` and `conary-mcp` should ride along with the
 released app that consumes them. They are implementation components, not
@@ -424,6 +520,14 @@ Its operational identity should be:
 - source ref or branch
 - build timestamp
 - clean or dirty workspace state if relevant
+
+Its Cargo manifest version may remain for normal Rust packaging and build
+metadata, but it should become informational rather than a promoted release
+identity.
+
+During migration, status surfaces such as `conary-test deploy status` should
+continue to report the Cargo version but should give commit/ref provenance
+higher operational weight.
 
 If maintainers want occasional milestone tags for the harness, those may exist
 as historical markers, but they should not define the everyday CI/CD story.
@@ -467,14 +571,17 @@ right fit.
 - stop describing `conary-test` as a release-track product
 - update operations docs to use the release-track-app vs internal-infra model
 - define the five-lane topology in one canonical doc
+- state explicitly that `main` is the active long-lived branch and remove stale
+  `develop` assumptions unless the branch is intentionally restored
 
 ### Stage 2: Release Alignment
 
 - update `scripts/release.sh` so the normal release groups match the chosen
   product taxonomy
 - align GitHub release triggers with the three release-track apps
-- decide whether `remi` and `conaryd` need GitHub release assets, service-only
-  tagged builds, or another explicit release representation
+- keep `conary` as the only public artifact-release line by default
+- represent `remi` and `conaryd` as tagged service-build and deploy lines in
+  GitHub rather than introducing public asset bundles automatically
 
 ### Stage 3: Workflow Split
 
@@ -482,13 +589,24 @@ right fit.
 - split build from deploy in the current `release.yml` path
 - give trusted `conary-test` validation its own lane instead of hiding it in
   generic CI language
+- retire the active role of `.forgejo/workflows/*` by replacing each live need
+  with a GitHub Actions lane or scheduled workflow
+- remove Remi-side Forgejo proxy and admin/MCP integration code once GitHub is
+  the only remaining workflow control plane
+- remove stale push-to-`main` behavior from the PR gate lane so merge-time
+  validation clearly owns trusted push execution
+- factor obvious repeated workflow setup into reusable GitHub automation,
+  starting with Rust/toolchain/bootstrap setup for release and validation jobs
 
 ### Stage 4: Operational Hardening
 
 - add protected deployment environments
 - add deployment concurrency
 - add post-deploy verification and scheduled operational checks
-- add artifact provenance improvements where supported and appropriate
+- pin third-party actions to commit SHAs
+- add artifact provenance improvements such as attestations and SBOM generation
+  where supported and appropriate
+- move `cargo audit` into scheduled or manually invoked trusted security lanes
 
 ## Success Criteria
 
@@ -496,30 +614,39 @@ This design is successful when:
 
 - a new maintainer can explain the automation model in a few sentences
 - the repository has exactly three normal release-track app lines
+- the repository uses GitHub as the only active workflow control plane
+- no active CI/CD design docs depend on `.forgejo/workflows/*`
 - `conary-test` is clearly documented and operated as internal validation
   infrastructure
 - ordinary PR workflows cannot reach Forge or production systems
 - production deployment is explicit, protected, and serialized
 - required merge checks remain fast, stable, and understandable
+- the primary GitHub workflow entrypoints map cleanly to the five named lanes,
+  with reusable helper workflows allowed underneath
+- stale `develop` workflow triggers are removed unless the branch is explicitly
+  restored by project choice
 
 ## Open Questions
 
 The topology is settled, but a few implementation questions should be answered
 in the follow-on plan:
 
-- Should `remi` and `conaryd` publish GitHub release assets, or should their
-  release track be represented only through tagged service builds and deploy
-  records?
-- Should `merge-validation` run on every `main` push, or should some portions
-  be operator-invoked when high-cost infrastructure is constrained?
 - Should workspace test execution stay on `cargo test` first, or should the
   project adopt `cargo-nextest` for the main CI lane now?
+- Should the initial GitHub-on-Forge trusted runner setup be one runner or a
+  small labeled pool?
 
 ## References
 
 - [`.github/workflows/ci.yml`](../../../.github/workflows/ci.yml)
 - [`.github/workflows/release.yml`](../../../.github/workflows/release.yml)
+- [`.forgejo/workflows/ci.yaml`](../../../.forgejo/workflows/ci.yaml)
+- [`.forgejo/workflows/integration.yaml`](../../../.forgejo/workflows/integration.yaml)
+- [`.forgejo/workflows/e2e.yaml`](../../../.forgejo/workflows/e2e.yaml)
+- [`.forgejo/workflows/release.yaml`](../../../.forgejo/workflows/release.yaml)
+- [`.forgejo/workflows/remi-health.yaml`](../../../.forgejo/workflows/remi-health.yaml)
 - [`scripts/release.sh`](../../../scripts/release.sh)
+- [`scripts/deploy-forge.sh`](../../../scripts/deploy-forge.sh)
 - [`Cargo.toml`](../../../Cargo.toml)
 - [`docs/operations/infrastructure.md`](../../operations/infrastructure.md)
 - [`docs/INTEGRATION-TESTING.md`](../../INTEGRATION-TESTING.md)
