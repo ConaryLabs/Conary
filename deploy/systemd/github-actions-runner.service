@@ -1,0 +1,14 @@
+[Unit]
+Description=GitHub Actions Runner (Conary Forge)
+After=network.target
+
+[Service]
+User=__RUNNER_USER__
+WorkingDirectory=__RUNNER_HOME__
+ExecStart=__RUNNER_HOME__/run.sh
+Restart=always
+RestartSec=5
+Environment=PATH=/home/__RUNNER_USER__/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+[Install]
+WantedBy=multi-user.target

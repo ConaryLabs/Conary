@@ -1,6 +1,7 @@
 # Forge Server Setup
 
-Forge (`forge.conarylabs.com`) runs Forgejo for CI/CD with a native Forgejo Runner.
+Forge (`forge.conarylabs.com`) is the trusted GitHub Actions runner host for
+Conary validation and test-harness operations.
 
 ## Server Details
 
@@ -8,76 +9,68 @@ Forge (`forge.conarylabs.com`) runs Forgejo for CI/CD with a native Forgejo Runn
 - **OS:** Fedora 43
 - **RAM:** 8GB
 - **Disk:** 151GB
-- **Software:** Rust 1.94, Podman 5.7, Forgejo 14.0.2, Forgejo Runner 12.7.1
+- **Role:** self-hosted GitHub Actions runner plus local `conary-test` execution
 
 ## Quick Setup
 
 ```bash
-# On forge server (full automated install):
-sudo FORGE_ADMIN_PASS='YourPassword' bash /home/peter/Conary/deploy/setup-forge.sh
+# On Forge, authenticate GitHub CLI as a repository admin:
+gh auth login --hostname github.com
 
-# Then mirror the GitHub repo:
-TOKEN=$(curl -s -X POST http://localhost:3000/api/v1/users/peter/tokens \
-  -u 'peter:YourPassword' -H 'Content-Type: application/json' \
-  -d '{"name":"setup","scopes":["all"]}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["sha1"])')
+# Then install or refresh the runner host:
+sudo bash /home/peter/Conary/deploy/setup-forge.sh
 
-curl -X POST http://localhost:3000/api/v1/repos/migrate \
-  -H "Authorization: token $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"clone_addr":"https://github.com/ConaryLabs/Conary.git","repo_name":"Conary","repo_owner":"peter","service":"git","mirror":true,"mirror_interval":"10m"}'
+# Confirm the runner service:
+systemctl status github-actions-runner --no-pager
+gh auth status
 ```
 
-See `deploy/setup-forge.sh` for detailed steps.
+`deploy/setup-forge.sh` installs Podman, ensures the Rust toolchain is present
+for the runner user, downloads the GitHub Actions runner binaries, registers a
+single trusted runner, and installs the checked-in systemd unit from
+`deploy/systemd/github-actions-runner.service`.
 
-## CI Workflows
+## Runner Role
 
-| Workflow | Trigger | Duration | What it does |
-|----------|---------|----------|-------------|
-| `ci.yaml` | Push to main | ~5 min | cargo build, test, clippy, Remi smoke |
-| `integration.yaml` | Push to main | ~15 min | 38-test Phase 1 suite on Fedora/Ubuntu/Arch via Podman |
-| `e2e.yaml` | Daily 06:00 UTC, manual | ~20-30 min | 3-distro Phase 1+2+3 deep E2E |
-| `release.yaml` | Push `v*` tag | ~3 min | Verify release landed on Remi (waits for GH Actions) |
-| `remi-health.yaml` | Every 6 hours | ~60s | Full Remi endpoint verification |
+- The first rollout uses one runner with the custom label `forge-trusted`.
+- Trusted lanes such as `merge-validation` and `scheduled-ops` should target
+  this host explicitly.
+- `pr-gate` stays on GitHub-hosted runners.
+- No separate source-control or CI service is part of the target setup.
 
-## Runner
-
-The Forgejo Runner runs natively on the host (not in a container) with label `linux-native`. It has direct access to:
-- Rust toolchain for cargo build/test/clippy
-- Podman for integration test containers
-- Network for Remi health checks
-
-## Manual Test Commands
+## Manual Validation Commands
 
 ```bash
-# Run integration tests locally (on Forge):
+# Run integration smoke checks locally on Forge:
 cargo run -p conary-test -- run --suite phase1-core --distro fedora43 --phase 1
 cargo run -p conary-test -- run --suite phase1-advanced --distro fedora43 --phase 1
 
-# Run Remi health check:
-./scripts/remi-health.sh --smoke   # Quick (~5s)
-./scripts/remi-health.sh --full    # Comprehensive (~60s)
+# Run Remi health checks:
+./scripts/remi-health.sh --smoke
+./scripts/remi-health.sh --full
 ```
 
 ## Troubleshooting
 
-**Forgejo won't start:**
+**Runner service is unhealthy:**
 ```bash
-journalctl -u forgejo -f
+journalctl -u github-actions-runner -f
+systemctl status github-actions-runner --no-pager
 ```
 
-**Runner not picking up jobs:**
+**GitHub authentication is missing or expired:**
 ```bash
-journalctl -u forgejo-runner -f
-cat /var/lib/forgejo-runner/.runner  # Check registration
-cat /var/lib/forgejo-runner/config.yaml  # Verify labels: ["linux-native:host"]
+sudo -u peter -H gh auth status
+sudo -u peter -H gh auth login --hostname github.com
 ```
 
-**Integration tests fail to build container:**
+**Local validation tools are missing:**
 ```bash
-podman system prune -a  # Clean stale images
+sudo -u peter -H bash -lc 'cargo --version && podman --version'
+```
+
+**Container builds fail locally:**
+```bash
+podman system prune -a
 podman build -f tests/integration/remi/containers/Containerfile.fedora43 tests/integration/remi/
-```
-
-**Remi health check fails:**
-```bash
-curl -v https://packages.conary.io/health  # Check connectivity
 ```
