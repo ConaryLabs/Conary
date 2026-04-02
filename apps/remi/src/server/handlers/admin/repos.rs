@@ -511,27 +511,32 @@ mod tests {
     async fn test_repo_scope_enforcement() {
         let (app, db_path) = test_app().await;
 
-        // Create a token with only ci:read scope
-        let ci_token = "ci-read-only-token-67890";
-        let hash = crate::server::auth::hash_token(ci_token);
+        // Create a token with only repos:read scope
+        let repo_reader_token = "repo-read-only-token-67890";
+        let hash = crate::server::auth::hash_token(repo_reader_token);
         {
             let conn = rusqlite::Connection::open(&db_path).unwrap();
-            conary_core::db::models::admin_token::create(&conn, "ci-reader", &hash, "ci:read")
-                .unwrap();
+            conary_core::db::models::admin_token::create(
+                &conn,
+                "repo-reader",
+                &hash,
+                "repos:read",
+            )
+            .unwrap();
         }
 
-        // GET /v1/admin/repos with ci:read scope should be 403
+        // GET /v1/admin/repos with repos:read scope should be allowed
         let resp = app
             .oneshot(
                 axum::http::Request::builder()
                     .uri("/v1/admin/repos")
-                    .header("Authorization", format!("Bearer {ci_token}"))
+                    .header("Authorization", format!("Bearer {repo_reader_token}"))
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[tokio::test]

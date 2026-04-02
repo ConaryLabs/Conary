@@ -490,10 +490,10 @@ mod tests {
     #[tokio::test]
     async fn test_mcp_route_rejects_non_admin_scope() {
         let (_app, db_path) = crate::server::handlers::admin::test_helpers::test_app().await;
-        let token = "test-ci-token-54321";
+        let token = "test-repo-reader-token-54321";
         let hash = crate::server::auth::hash_token(token);
         let conn = rusqlite::Connection::open(&db_path).unwrap();
-        conary_core::db::models::admin_token::create(&conn, "test-ci", &hash, "ci:read").unwrap();
+        conary_core::db::models::admin_token::create(&conn, "test-repo-reader", &hash, "repos:read").unwrap();
         drop(conn);
 
         let app = crate::server::handlers::admin::test_helpers::rebuild_app(&db_path);

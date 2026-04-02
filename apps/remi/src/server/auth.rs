@@ -73,8 +73,6 @@ impl TokenScopes {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Scope {
     Admin,
-    CiRead,
-    CiTrigger,
     ReposRead,
     ReposWrite,
     FederationRead,
@@ -85,8 +83,6 @@ impl Scope {
     /// All valid scope variants.
     pub const ALL: &[Scope] = &[
         Scope::Admin,
-        Scope::CiRead,
-        Scope::CiTrigger,
         Scope::ReposRead,
         Scope::ReposWrite,
         Scope::FederationRead,
@@ -97,8 +93,6 @@ impl Scope {
     pub fn as_str(self) -> &'static str {
         match self {
             Scope::Admin => "admin",
-            Scope::CiRead => "ci:read",
-            Scope::CiTrigger => "ci:trigger",
             Scope::ReposRead => "repos:read",
             Scope::ReposWrite => "repos:write",
             Scope::FederationRead => "federation:read",
@@ -110,8 +104,6 @@ impl Scope {
     pub fn parse(s: &str) -> Option<Scope> {
         match s {
             "admin" => Some(Scope::Admin),
-            "ci:read" => Some(Scope::CiRead),
-            "ci:trigger" => Some(Scope::CiTrigger),
             "repos:read" => Some(Scope::ReposRead),
             "repos:write" => Some(Scope::ReposWrite),
             "federation:read" => Some(Scope::FederationRead),
@@ -349,15 +341,15 @@ mod tests {
     fn test_token_scopes_admin_grants_all() {
         let scopes = TokenScopes("admin".to_string());
         assert!(scopes.has_scope(Scope::ReposWrite));
-        assert!(scopes.has_scope(Scope::CiRead));
+        assert!(scopes.has_scope(Scope::ReposRead));
         assert!(scopes.has_scope(Scope::FederationRead));
     }
 
     #[test]
     fn test_token_scopes_specific() {
-        let scopes = TokenScopes("ci:read,ci:trigger".to_string());
-        assert!(scopes.has_scope(Scope::CiRead));
-        assert!(scopes.has_scope(Scope::CiTrigger));
+        let scopes = TokenScopes("repos:read,federation:read".to_string());
+        assert!(scopes.has_scope(Scope::ReposRead));
+        assert!(scopes.has_scope(Scope::FederationRead));
         assert!(!scopes.has_scope(Scope::ReposWrite));
     }
 
@@ -384,8 +376,14 @@ mod tests {
     #[test]
     fn test_validate_scopes_valid() {
         assert!(validate_scopes("admin").is_ok());
-        assert!(validate_scopes("ci:read,ci:trigger").is_ok());
         assert!(validate_scopes("repos:read, repos:write").is_ok());
+        assert!(validate_scopes("federation:read").is_ok());
+    }
+
+    #[test]
+    fn test_validate_scopes_ci_scopes_rejected() {
+        assert!(validate_scopes("ci:read").is_err());
+        assert!(validate_scopes("ci:trigger").is_err());
     }
 
     #[test]
@@ -406,6 +404,6 @@ mod tests {
         // Leading comma
         assert!(validate_scopes(",admin").is_err());
         // Doubled comma
-        assert!(validate_scopes("admin,,ci:read").is_err());
+        assert!(validate_scopes("admin,,repos:read").is_err());
     }
 }
