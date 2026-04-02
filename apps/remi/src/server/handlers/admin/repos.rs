@@ -516,13 +516,8 @@ mod tests {
         let hash = crate::server::auth::hash_token(repo_reader_token);
         {
             let conn = rusqlite::Connection::open(&db_path).unwrap();
-            conary_core::db::models::admin_token::create(
-                &conn,
-                "repo-reader",
-                &hash,
-                "repos:read",
-            )
-            .unwrap();
+            conary_core::db::models::admin_token::create(&conn, "repo-reader", &hash, "repos:read")
+                .unwrap();
         }
 
         // GET /v1/admin/repos with repos:read scope should be allowed
