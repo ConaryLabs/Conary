@@ -113,13 +113,40 @@ impl Drop for CleanupGuard {
     }
 }
 
+#[cfg(test)]
+fn stdin_is_terminal_override() -> &'static std::sync::Mutex<Option<bool>> {
+    use std::sync::{Mutex, OnceLock};
+
+    static OVERRIDE: OnceLock<Mutex<Option<bool>>> = OnceLock::new();
+    OVERRIDE.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(test)]
+fn set_stdin_is_terminal_override_for_tests(is_terminal: Option<bool>) {
+    *stdin_is_terminal_override()
+        .lock()
+        .expect("stdin terminal override lock poisoned") = is_terminal;
+}
+
+fn stdin_is_terminal() -> bool {
+    use std::io::IsTerminal;
+
+    #[cfg(test)]
+    if let Some(is_terminal) = *stdin_is_terminal_override()
+        .lock()
+        .expect("stdin terminal override lock poisoned")
+    {
+        return is_terminal;
+    }
+
+    std::io::stdin().is_terminal()
+}
+
 /// Spawn an interactive debug shell in the build environment.
 ///
 /// Only spawns if stdin is a tty. Returns when the user exits the shell.
 fn spawn_debug_shell(destdir: &Path, sysroot: &Path, recipe: &Recipe) {
-    use std::io::IsTerminal;
-
-    if !std::io::stdin().is_terminal() {
+    if !stdin_is_terminal() {
         tracing::warn!("--shell-on-failure: no tty detected, skipping shell");
         return;
     }
@@ -516,6 +543,21 @@ mod tests {
     use crate::derivation::test_helpers::helpers::test_cas;
     use tempfile::TempDir;
 
+    struct StdinTerminalOverrideGuard;
+
+    impl StdinTerminalOverrideGuard {
+        fn non_tty() -> Self {
+            set_stdin_is_terminal_override_for_tests(Some(false));
+            Self
+        }
+    }
+
+    impl Drop for StdinTerminalOverrideGuard {
+        fn drop(&mut self) {
+            set_stdin_is_terminal_override_for_tests(None);
+        }
+    }
+
     /// Create a minimal recipe for testing via TOML deserialization.
     fn test_recipe(name: &str, version: &str) -> Recipe {
         let toml_str = format!(
@@ -790,9 +832,10 @@ install = "make install"
 
     #[test]
     fn shell_on_failure_does_not_hang_without_tty() {
-        // In CI/tests, stdin is not a tty.
+        // Force the non-interactive path even when the test runner has a tty.
         // Verify that with shell_on_failure=true, execute() still returns
         // the build error without blocking.
+        let _stdin_guard = StdinTerminalOverrideGuard::non_tty();
         let tmp = TempDir::new().unwrap();
         let cas = test_cas(tmp.path());
         let conn = setup_db();
