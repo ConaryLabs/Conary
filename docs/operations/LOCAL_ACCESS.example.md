@@ -29,6 +29,7 @@ untracked.
 ## Credential Storage Locations
 
 - Where credentials live locally
+- Prefer an ignored env file such as `docs/operations/LOCAL_SECRETS.env` for literal values
 - How they are loaded
 - Rotation reminders
 - Any credentials that should be migrated out of legacy assistant config files

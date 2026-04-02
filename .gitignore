@@ -27,6 +27,7 @@ CLAUDE.local.md
 
 # Local operator notes
 docs/operations/LOCAL_ACCESS.md
+docs/operations/LOCAL_SECRETS.env
 
 # Bootstrap build artifacts
 /bootstrap/
