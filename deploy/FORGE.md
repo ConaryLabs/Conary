@@ -14,21 +14,26 @@ Conary validation and test-harness operations.
 ## Quick Setup
 
 ```bash
-# On Forge, authenticate GitHub CLI as a repository admin:
-gh auth login --hostname github.com
+# From an admin workstation, mint a short-lived registration token:
+gh api -X POST repos/ConaryLabs/Conary/actions/runners/registration-token --jq .token
 
-# Then install or refresh the runner host:
-sudo bash /home/peter/Conary/deploy/setup-forge.sh
+# Copy the token to Forge only for the setup run:
+export GITHUB_RUNNER_REGISTRATION_TOKEN="<token>"
+
+# Then install or refresh the runner host on Forge:
+sudo -E bash /home/peter/Conary/deploy/setup-forge.sh
 
 # Confirm the runner service:
 systemctl status github-actions-runner --no-pager
-gh auth status
 ```
 
 `deploy/setup-forge.sh` installs Podman, ensures the Rust toolchain is present
 for the runner user, downloads the GitHub Actions runner binaries, registers a
 single trusted runner, and installs the checked-in systemd unit from
 `deploy/systemd/github-actions-runner.service`.
+
+If you prefer a persistent GitHub CLI login on Forge, the script still supports
+that path when `GITHUB_RUNNER_REGISTRATION_TOKEN` is not provided.
 
 ## Runner Role
 
@@ -62,6 +67,12 @@ systemctl status github-actions-runner --no-pager
 ```bash
 sudo -u peter -H gh auth status
 sudo -u peter -H gh auth login --hostname github.com
+```
+
+**Runner registration without persistent `gh` auth:**
+```bash
+export GITHUB_RUNNER_REGISTRATION_TOKEN="$(gh api -X POST repos/ConaryLabs/Conary/actions/runners/registration-token --jq .token)"
+ssh peter@forge.conarylabs.com 'sudo -E bash /home/peter/Conary/deploy/setup-forge.sh'
 ```
 
 **Local validation tools are missing:**
