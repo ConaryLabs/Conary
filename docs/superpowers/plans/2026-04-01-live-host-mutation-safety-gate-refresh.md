@@ -48,6 +48,8 @@
 - `AlwaysLive`
   - `conary system generation build`
   - `conary system generation gc`
+    because it deletes generation directories, `etc-state` overlays, and BLS
+    boot entries before running CAS cleanup
   - `conary system generation switch`
   - `conary system generation rollback`
   - `conary system generation recover`
@@ -68,6 +70,10 @@
 - Treat `cargo test -p conary --test ...` and helper unit tests as supporting seam coverage, not as sole readiness proof for mutating commands.
 - Treat `cargo run -p conary-test -- run --distro fedora43 --phase ... --suite ...` as the primary disposable-host proof where the repo already has manifest coverage.
 - Update manifests and docs directly; do not hide the new flag behind `conary-test` harness injection.
+- Keep `system generation gc` in scope even though plain `system gc` stays
+  excluded: generation GC deletes generation artifacts, `etc-state`
+  directories, and boot-loader entries, so it mutates generation state rather
+  than only pruning detached CAS objects.
 - Keep refusal-path tests focused on the durable contract:
   - command-specific refusal text
   - normal `app.rs` error-path reporting
@@ -367,7 +373,7 @@ fn install_refuses_without_live_mutation_flag() {
 
     let output = run_conary(&[
         "install",
-        "bash",
+        "nginx",
         "--db-path",
         &db_path,
         "--root",
@@ -445,7 +451,7 @@ fn allow_flag_reaches_underlying_restore_error() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("missing-package"));
+    assert!(stderr.contains("not found"));
     assert!(!stderr.contains("allow-live-system-mutation only if"));
 }
 ```
@@ -520,6 +526,7 @@ arms:
 - `StateCommands::Rollback` -> label `conary system state rollback`
 - `GenerationCommands::Build` -> label `conary system generation build`
 - `GenerationCommands::Gc` -> label `conary system generation gc`
+  because it removes generation directories, overlay state, and BLS entries
 - `GenerationCommands::Switch` -> label `conary system generation switch`
 - `GenerationCommands::Rollback` -> label `conary system generation rollback`
 - `GenerationCommands::Recover` -> label `conary system generation recover`
@@ -617,7 +624,7 @@ git add apps/conary/tests/live_host_mutation_readiness.rs
 git commit -m "test(cli): add local live mutation readiness smoke coverage"
 ```
 
-### Task 6: Add missing disposable-host proof for `system restore` and audit `generation recover`
+### Task 6: Add missing disposable-host proof for `system restore` and make `generation recover` pass or block the feature
 
 **Files:**
 - Modify: `apps/conary/tests/integration/remi/manifests/phase4-group-d.toml`
@@ -661,7 +668,23 @@ Run:
 
 Expected: PASS with the new restore case included.
 
-- [ ] **Step 3: Add one successful and one clean failure/fallback recover case**
+- [ ] **Step 3: Audit whether the harness can exercise honest recover scenarios**
+
+Before writing any recover manifest case, inspect
+`apps/conary/src/commands/generation/commands.rs` and verify the disposable-host
+harness can actually satisfy the command's prerequisites:
+
+- a database whose parent directory is the synthetic Conary root used by recover
+- a usable `<root>/current` generation reference plus generation directories
+- at least one recoverable or intentionally broken generation image/state
+- a staging mount path under that root without depending on the developer's
+  real `/conary`
+
+Only continue if you can describe one successful recovery path and one clean
+failure-or-fallback path that exercise the documented CLI behavior rather than
+argument parsing or unrelated setup errors.
+
+- [ ] **Step 4: If the audit passes, add one successful and one clean failure/fallback recover case**
 
 Extend `phase3-group-l.toml` so `system generation recover` gets:
 
@@ -669,7 +692,8 @@ Extend `phase3-group-l.toml` so `system generation recover` gets:
 - one scenario that fails or falls back cleanly without panic
 
 Keep the assertions tied to the CLI contract, not internal implementation
-details. A representative failure-path step should look like:
+details. Do not count missing-db, missing-directory, or parser-only failures as
+readiness evidence. A representative failure-path step should look like:
 
 ```toml
 [[test]]
@@ -687,19 +711,21 @@ stdout_contains_any = ["Recovery complete.", "recover", "generation", "failed"]
 stdout_not_contains = "panic"
 ```
 
-If you cannot automate both scenarios honestly in the disposable-host harness,
-stop here and surface `system generation recover` as a blocker instead of
-pretending the coverage exists.
+If the audit or manifest work shows the harness cannot automate both scenarios
+honestly, stop here and surface `system generation recover` as a blocker
+instead of pretending the coverage exists.
 
-- [ ] **Step 4: Run the targeted phase 3 lifecycle suite**
+- [ ] **Step 5: Run the targeted phase 3 lifecycle suite or stop with a blocker**
 
 Run:
 - `cargo run -p conary-test -- run --distro fedora43 --phase 3 --suite apps/conary/tests/integration/remi/manifests/phase3-group-l.toml`
 
-Expected: PASS, or explicit blocker documentation for recover if honest
-coverage is still not achievable.
+Expected:
+- PASS if both recover scenarios were added honestly
+- otherwise stop the feature work at this point and hand back a blocker report
+  that names the missing recover-harness prerequisite(s)
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 If both restore and recover evidence land:
 
@@ -708,8 +734,9 @@ git add apps/conary/tests/integration/remi/manifests/phase4-group-d.toml apps/co
 git commit -m "test(cli): expand live mutation readiness evidence"
 ```
 
-If `generation recover` remains a blocker, commit only the restore work and
-the audit notes you needed to add, then stop the implementation flow.
+If `generation recover` remains a blocker, commit only the restore work plus
+any recover-audit notes/tests that were useful, then stop the implementation
+flow without shipping the final feature commit.
 
 ## Chunk 4: Flag Injection In Existing Suites, Docs, And Final Verification
 
