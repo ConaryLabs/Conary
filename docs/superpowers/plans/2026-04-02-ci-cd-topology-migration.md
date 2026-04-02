@@ -423,6 +423,7 @@ git commit -m "ci: add pr-gate workflow"
 - Delete: `.forgejo/workflows/ci.yaml`
 - Delete: `.forgejo/workflows/integration.yaml`
 - Delete: `.forgejo/workflows/e2e.yaml`
+- Delete: `.forgejo/workflows/release.yaml`
 - Delete: `.forgejo/workflows/remi-health.yaml`
 - Modify: `docs/INTEGRATION-TESTING.md`
 - Test: `.github/workflows/merge-validation.yml`
@@ -495,6 +496,7 @@ Delete:
 .forgejo/workflows/ci.yaml
 .forgejo/workflows/integration.yaml
 .forgejo/workflows/e2e.yaml
+.forgejo/workflows/release.yaml
 .forgejo/workflows/remi-health.yaml
 ```
 
@@ -519,6 +521,7 @@ Run locally:
 test ! -f .forgejo/workflows/ci.yaml
 test ! -f .forgejo/workflows/integration.yaml
 test ! -f .forgejo/workflows/e2e.yaml
+test ! -f .forgejo/workflows/release.yaml
 test ! -f .forgejo/workflows/remi-health.yaml
 git diff --check
 ```
@@ -553,7 +556,6 @@ git commit -m "ci: migrate trusted validation lanes to GitHub"
 - Create: `.github/workflows/release-build.yml`
 - Create: `.github/workflows/deploy-and-verify.yml`
 - Delete: `.github/workflows/release.yml`
-- Delete: `.forgejo/workflows/release.yaml`
 - Modify: `scripts/release.sh`
 - Test: `.github/workflows/release-build.yml`
 - Test: `.github/workflows/deploy-and-verify.yml`
@@ -665,7 +667,6 @@ Delete:
 
 ```text
 .github/workflows/release.yml
-.forgejo/workflows/release.yaml
 ```
 
 Update `scripts/release.sh` path scopes if the workflow filenames changed.
@@ -677,7 +678,6 @@ Run locally:
 ```bash
 git diff --check
 test ! -f .github/workflows/release.yml
-test ! -f .forgejo/workflows/release.yaml
 ```
 
 Then push the branch and run branch-safe dispatches:
@@ -699,7 +699,7 @@ Expected:
 
 ```bash
 git add .github/workflows/release-build.yml .github/workflows/deploy-and-verify.yml scripts/release.sh
-git add -A .github/workflows/release.yml .forgejo/workflows/release.yaml
+git add -A .github/workflows/release.yml
 git commit -m "ci: split release build from deployment"
 ```
 
