@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-04-01
-revision: 4
+revision: 6
 summary: Refresh the live-host mutation safety gate around the current apps/conary dispatch seams and verified command readiness
 ---
 
@@ -16,6 +16,9 @@ The gate remains a fail-closed CLI acknowledgment:
 It applies to the Conary command families that can mutate the active host's
 package, generation, activation, or Conary-managed live filesystem state
 outside a dry-run path.
+
+For the covered commands, this is an intentional CLI breaking change rather
+than a deprecation-mode warning.
 
 The important change from the March draft is not the product decision. The
 important change is the grounding:
@@ -69,6 +72,7 @@ So the current need is twofold:
 
 ## Non-Goals
 
+- Providing a soft deprecation period for the covered live-mutation commands.
 - Making current `--root` or root-like arguments truly isolated.
 - Refactoring composefs, generation, activation, or state-root plumbing in this
   slice.
@@ -239,6 +243,8 @@ The design should explicitly exclude:
   real mutating operation
 - read-only/admin commands such as search, query, verify, repo, state list,
   state show, state diff, generation list, and generation info
+- storage-maintenance paths such as `system gc`, which prune CAS state but do
+  not change the active package, generation, or activation view
 - broader host-write paths such as `system adopt` and `config restore`
 - adjacent config-management surfaces such as `config backup` and `config check`
 
@@ -287,6 +293,10 @@ pub fn require_live_system_mutation_ack(
 `dispatch::dispatch(cli)` owns the callsites. Before each covered dispatch arm
 enters the actual command implementation, it constructs a
 `LiveMutationRequest` and asks the helper whether to proceed.
+
+The gate is orthogonal to behavioral confirmation flags. Options such as
+`--yes` may skip command-local prompts, but they do not satisfy or bypass
+`--allow-live-system-mutation`.
 
 ### Mutation Classes
 
@@ -431,6 +441,7 @@ Add a dedicated CLI-facing integration test file under `apps/conary/tests/`
 that runs the built `conary` binary and verifies:
 
 - representative covered commands refuse without the flag
+- refusals exit nonzero through the normal `app.rs` error-reporting path
 - representative dry-run commands succeed without the flag
 - at least one wrapper entrypoint is tested so the message matches the intended
   user-facing command label
@@ -463,44 +474,75 @@ passing automated proof source that exercises the real CLI behavior or an
 explicitly relevant unit/integration seam. A manifest file path by itself is
 not enough.
 
+For covered mutating commands, disposable-host or CLI-facing proof is the
+primary readiness evidence wherever the repository already has a harness for
+it. Local unit or integration tests are supporting seam evidence; they help
+show internal correctness, but they do not by themselves replace CLI-facing
+proof for the mutating command surface.
+
 Expected current readiness anchors include:
 
 - `install` / `remove` / `update` / `autoremove`
-  - `cargo test -p conary --test workflow`
-  - `cargo test -p conary --test batch_install`
+  - supporting local seam coverage:
+    `cargo test -p conary --test workflow`
+  - supporting local seam coverage:
+    `cargo test -p conary --test batch_install`
+  - primary disposable-host coverage:
   - `cargo run -p conary-test -- run --distro <distro> --phase 1 --suite apps/conary/tests/integration/remi/manifests/phase1-advanced.toml`
+  - primary disposable-host coverage:
   - `cargo run -p conary-test -- run --distro <distro> --phase 2 --suite apps/conary/tests/integration/remi/manifests/phase2-group-a.toml`
+  - primary disposable-host coverage:
   - `cargo run -p conary-test -- run --distro <distro> --phase 3 --suite apps/conary/tests/integration/remi/manifests/phase3-group-j.toml`
+  - primary disposable-host coverage:
   - `cargo run -p conary-test -- run --distro <distro> --phase 3 --suite apps/conary/tests/integration/remi/manifests/phase3-group-m.toml`
+  - primary disposable-host coverage:
   - `cargo run -p conary-test -- run --distro <distro> --phase 4 --suite apps/conary/tests/integration/remi/manifests/phase4-group-e.toml`
 - `ccs install`
-  - `cargo test -p conary --test component`
+  - supporting local seam coverage:
+    `cargo test -p conary --test component`
+  - primary disposable-host coverage:
   - `cargo run -p conary-test -- run --distro <distro> --phase 2 --suite apps/conary/tests/integration/remi/manifests/phase2-group-a.toml`
+  - primary disposable-host coverage:
   - `cargo run -p conary-test -- run --distro <distro> --phase 4 --suite apps/conary/tests/integration/remi/manifests/phase4-group-d.toml`
+  - primary disposable-host coverage:
   - `cargo run -p conary-test -- run --distro <distro> --phase 4 --suite apps/conary/tests/integration/remi/manifests/phase4-group-e.toml`
 - `system restore`
-  - a named local readiness smoke test under `apps/conary/tests/`
+  - supporting local seam coverage:
+    a named local readiness smoke test under `apps/conary/tests/`
   - current `main` only clearly shows dry-run evidence in
+    primary disposable-host coverage:
     `cargo run -p conary-test -- run --distro <distro> --phase 4 --suite apps/conary/tests/integration/remi/manifests/phase4-group-d.toml`
   - the implementation must add meaningful non-dry-run disposable-host
     coverage before `system restore` is considered ready
   - if that evidence cannot be added honestly, the command stays blocked as a
     readiness issue instead of being waved through by the gate
 - `system state rollback`
-  - `cargo test -p conary --test workflow`
+  - supporting local seam coverage:
+    `cargo test -p conary --test workflow`
+  - primary disposable-host coverage:
   - `cargo run -p conary-test -- run --distro <distro> --phase 3 --suite apps/conary/tests/integration/remi/manifests/phase3-group-h.toml`
 - `system generation build`
+  - primary disposable-host coverage:
   - `cargo run -p conary-test -- run --distro <distro> --phase 2 --suite apps/conary/tests/integration/remi/manifests/phase2-group-b.toml`
+  - primary disposable-host coverage:
   - `cargo run -p conary-test -- run --distro <distro> --phase 3 --suite apps/conary/tests/integration/remi/manifests/phase3-group-h.toml`
+  - primary disposable-host coverage:
   - `cargo run -p conary-test -- run --distro <distro> --phase 3 --suite apps/conary/tests/integration/remi/manifests/phase3-group-l.toml`
+  - primary disposable-host coverage:
   - `cargo run -p conary-test -- run --distro <distro> --phase 4 --suite apps/conary/tests/integration/remi/manifests/phase4-group-e.toml`
 - `system generation gc`
+  - primary disposable-host coverage:
   - `cargo run -p conary-test -- run --distro <distro> --phase 1 --suite apps/conary/tests/integration/remi/manifests/phase1-advanced.toml`
+  - primary disposable-host coverage:
   - `cargo run -p conary-test -- run --distro <distro> --phase 2 --suite apps/conary/tests/integration/remi/manifests/phase2-group-b.toml`
+  - primary disposable-host coverage:
   - `cargo run -p conary-test -- run --distro <distro> --phase 3 --suite apps/conary/tests/integration/remi/manifests/phase3-group-l.toml`
 - `system generation switch` / `rollback`
+  - primary disposable-host coverage:
   - `cargo run -p conary-test -- run --distro <distro> --phase 2 --suite apps/conary/tests/integration/remi/manifests/phase2-group-b.toml`
+  - primary disposable-host coverage:
   - `cargo run -p conary-test -- run --distro <distro> --phase 3 --suite apps/conary/tests/integration/remi/manifests/phase3-group-h.toml`
+  - primary disposable-host coverage:
   - `cargo run -p conary-test -- run --distro <distro> --phase 3 --suite apps/conary/tests/integration/remi/manifests/phase3-group-l.toml`
 - `system generation recover`
   - no current readiness evidence is obvious in `main`
@@ -509,9 +551,12 @@ Expected current readiness anchors include:
     CLI contract
   - if that cannot be provided honestly, it becomes a blocker
 - `system takeover`
+  - primary disposable-host coverage:
   - `cargo run -p conary-test -- run --distro <distro> --phase 2 --suite apps/conary/tests/integration/remi/manifests/phase2-group-b.toml`
+  - primary disposable-host coverage:
   - `cargo run -p conary-test -- run --distro <distro> --phase 4 --suite apps/conary/tests/integration/remi/manifests/phase4-group-e.toml`
-  - embedded unit tests in
+  - supporting unit coverage:
+    embedded unit tests in
     `apps/conary/src/commands/generation/takeover.rs` and
     `apps/conary/src/commands/generation/takeover_state.rs` can support the
     behavior picture, but disposable-host coverage is the primary readiness
