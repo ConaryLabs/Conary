@@ -1,0 +1,101 @@
+name: scheduled-ops
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+    - cron: '30 6 * * *'
+  workflow_dispatch:
+    inputs:
+      run_deep_validation:
+        description: Run the nightly deep-validation matrix.
+        required: false
+        default: "false"
+      run_qemu:
+        description: Run the QEMU validation job.
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  health:
+    name: health
+    if: ${{ github.event_name != 'schedule' || github.event.schedule == '0 */6 * * *' }}
+    runs-on: [self-hosted, forge-trusted]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Full Remi health check
+        run: ./scripts/remi-health.sh --full
+
+  audit:
+    name: audit
+    if: ${{ github.event_name != 'schedule' || github.event.schedule == '0 */6 * * *' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+      - name: Run security audit
+        run: >
+          cargo audit
+          --ignore RUSTSEC-2024-0447
+          --ignore RUSTSEC-2023-0071
+          --ignore RUSTSEC-2025-0136
+
+  deep-validation:
+    name: deep-validation (${{ matrix.distro }})
+    if: ${{ (github.event_name == 'schedule' && github.event.schedule == '30 6 * * *') || (github.event_name == 'workflow_dispatch' && github.event.inputs.run_deep_validation == 'true') }}
+    runs-on: [self-hosted, forge-trusted]
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [fedora43, ubuntu-noble, arch]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build deep-validation binaries
+        run: cargo build -p conary -p conary-test --verbose
+      - name: Run Phase 1 suites
+        run: |
+          cargo run -p conary-test -- run --suite phase1-core --distro "${{ matrix.distro }}" --phase 1
+          cargo run -p conary-test -- run --suite phase1-advanced --distro "${{ matrix.distro }}" --phase 1
+      - name: Run Phase 2 suites
+        run: |
+          cargo run -p conary-test -- run --suite phase2-group-a --distro "${{ matrix.distro }}" --phase 2
+          cargo run -p conary-test -- run --suite phase2-group-b --distro "${{ matrix.distro }}" --phase 2
+          cargo run -p conary-test -- run --suite phase2-group-c --distro "${{ matrix.distro }}" --phase 2
+          cargo run -p conary-test -- run --suite phase2-group-d --distro "${{ matrix.distro }}" --phase 2
+          cargo run -p conary-test -- run --suite phase2-group-e --distro "${{ matrix.distro }}" --phase 2
+          cargo run -p conary-test -- run --suite phase2-group-f --distro "${{ matrix.distro }}" --phase 2
+      - name: Run Phase 3 suites
+        run: |
+          cargo run -p conary-test -- run --suite phase3-group-g --distro "${{ matrix.distro }}" --phase 3
+          cargo run -p conary-test -- run --suite phase3-group-h --distro "${{ matrix.distro }}" --phase 3
+          cargo run -p conary-test -- run --suite phase3-group-i --distro "${{ matrix.distro }}" --phase 3
+          cargo run -p conary-test -- run --suite phase3-group-j --distro "${{ matrix.distro }}" --phase 3
+          cargo run -p conary-test -- run --suite phase3-group-k --distro "${{ matrix.distro }}" --phase 3
+          cargo run -p conary-test -- run --suite phase3-group-l --distro "${{ matrix.distro }}" --phase 3
+          cargo run -p conary-test -- run --suite phase3-group-m --distro "${{ matrix.distro }}" --phase 3
+          cargo run -p conary-test -- run --suite phase3-group-n-container --distro "${{ matrix.distro }}" --phase 3
+      - name: Upload deep-validation results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deep-validation-results-${{ matrix.distro }}
+          path: tests/integration/remi/results/${{ matrix.distro }}.json
+
+  qemu:
+    name: qemu
+    if: ${{ (github.event_name == 'schedule' && github.event.schedule == '30 6 * * *') || (github.event_name == 'workflow_dispatch' && github.event.inputs.run_qemu == 'true') }}
+    runs-on: [self-hosted, forge-trusted]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build QEMU validation binaries
+        run: cargo build -p conary -p conary-test --verbose
+      - name: Run Group N QEMU tests
+        run: cargo run -p conary-test -- run --distro fedora43 --suite tests/integration/remi/manifests/phase3-group-n-qemu.toml
