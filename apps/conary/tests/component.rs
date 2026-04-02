@@ -547,6 +547,7 @@ fn test_ccs_install_components_only_installs_requested_component() {
     write_ccs_package(&result, &package_path).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_conary"))
+        .arg("--allow-live-system-mutation")
         .arg("ccs")
         .arg("install")
         .arg(package_path.to_str().unwrap())

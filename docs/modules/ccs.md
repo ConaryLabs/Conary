@@ -83,8 +83,8 @@ signatures, evaluates capability policy, deploys files to CAS, and runs
 declarative hooks.
 
 ```bash
-conary ccs install package.ccs               # Standard install
-conary ccs install package.ccs --reinstall   # Reinstall same version (replaces files in CAS)
+conary ccs install package.ccs --allow-live-system-mutation               # Standard install
+conary ccs install package.ccs --allow-live-system-mutation --reinstall   # Reinstall same version (replaces files in CAS)
 conary ccs install package.ccs --dry-run     # Preview without applying
 ```
 
@@ -98,7 +98,7 @@ in Phase 4:
 ```bash
 conary ccs shell package-name          # Interactive environment with package contents
 conary ccs run package-name -- cmd     # One-shot execution under that environment
-conary ccs install package.ccs --components runtime,config
+conary ccs install package.ccs --allow-live-system-mutation --components runtime,config
 ```
 
 Selective component installs persist only the requested components and skip

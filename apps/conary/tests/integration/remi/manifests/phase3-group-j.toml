@@ -24,7 +24,7 @@ timeout = 30
 group = "J"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-circular-a-v1/output/dep-circular-a-1.0.0.ccs --allow-unsigned --sandbox never"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-circular-a-v1/output/dep-circular-a-1.0.0.ccs --allow-unsigned --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code_not = 0
@@ -45,13 +45,13 @@ group = "J"
 memory_limit_mb = 512
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-base-v2/output/dep-base-2.0.0.ccs --allow-unsigned --sandbox never"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-base-v2/output/dep-base-2.0.0.ccs --allow-unsigned --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-liba-v1/output/dep-liba-1.0.0.ccs --allow-unsigned --sandbox never"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-liba-v1/output/dep-liba-1.0.0.ccs --allow-unsigned --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code_not = 0
@@ -69,25 +69,25 @@ timeout = 60
 group = "J"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-base-v1/output/dep-base-1.0.0.ccs --allow-unsigned --sandbox never"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-base-v1/output/dep-base-1.0.0.ccs --allow-unsigned --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-liba-v1/output/dep-liba-1.0.0.ccs --allow-unsigned --sandbox never"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-liba-v1/output/dep-liba-1.0.0.ccs --allow-unsigned --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-libb-v1/output/dep-libb-1.0.0.ccs --allow-unsigned --sandbox never"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-libb-v1/output/dep-libb-1.0.0.ccs --allow-unsigned --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-app-v1/output/dep-app-1.0.0.ccs --allow-unsigned --sandbox never"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-app-v1/output/dep-app-1.0.0.ccs --allow-unsigned --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
@@ -114,31 +114,31 @@ group = "J"
 memory_limit_mb = 512
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-base-v1/output/dep-base-1.0.0.ccs --allow-unsigned --sandbox never"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-base-v1/output/dep-base-1.0.0.ccs --allow-unsigned --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-liba-v1/output/dep-liba-1.0.0.ccs --allow-unsigned --sandbox never"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-liba-v1/output/dep-liba-1.0.0.ccs --allow-unsigned --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-libb-v1/output/dep-libb-1.0.0.ccs --allow-unsigned --sandbox never"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-libb-v1/output/dep-libb-1.0.0.ccs --allow-unsigned --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-app-v1/output/dep-app-1.0.0.ccs --allow-unsigned --sandbox never"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-app-v1/output/dep-app-1.0.0.ccs --allow-unsigned --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-liba-v2/output/dep-liba-2.0.0.ccs --allow-unsigned --sandbox never"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-liba-v2/output/dep-liba-2.0.0.ccs --allow-unsigned --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code_not = 0
@@ -170,13 +170,13 @@ timeout = 30
 group = "J"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-virtual-provider-v1/output/dep-virtual-provider-1.0.0.ccs --allow-unsigned --sandbox never"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-virtual-provider-v1/output/dep-virtual-provider-1.0.0.ccs --allow-unsigned --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-virtual-consumer-v1/output/dep-virtual-consumer-1.0.0.ccs --allow-unsigned --sandbox never"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-virtual-consumer-v1/output/dep-virtual-consumer-1.0.0.ccs --allow-unsigned --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
@@ -206,7 +206,7 @@ conary = "remove dep-app --no-scripts"
 exit_code = 0
 
 [[test.step]]
-conary = "autoremove --no-scripts"
+conary = "autoremove --no-scripts --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
@@ -233,13 +233,13 @@ group = "J"
 memory_limit_mb = 512
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-base-v1/output/dep-base-1.0.0.ccs --allow-unsigned --sandbox never"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-base-v1/output/dep-base-1.0.0.ccs --allow-unsigned --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-liba-v1/output/dep-liba-1.0.0.ccs --allow-unsigned --sandbox never"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-liba-v1/output/dep-liba-1.0.0.ccs --allow-unsigned --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
@@ -266,19 +266,19 @@ group = "J"
 memory_limit_mb = 512
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-or-a-v1/output/dep-or-a-1.0.0.ccs --allow-unsigned --sandbox never"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-or-a-v1/output/dep-or-a-1.0.0.ccs --allow-unsigned --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-or-b-v1/output/dep-or-b-1.0.0.ccs --allow-unsigned --sandbox never"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-or-b-v1/output/dep-or-b-1.0.0.ccs --allow-unsigned --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-or-consumer-v1/output/dep-or-consumer-1.0.0.ccs --allow-unsigned --sandbox never"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-or-consumer-v1/output/dep-or-consumer-1.0.0.ccs --allow-unsigned --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
@@ -290,7 +290,7 @@ conary = "remove dep-or-a --no-scripts"
 exit_code = 0
 
 [[test.step]]
-conary = "autoremove --no-scripts"
+conary = "autoremove --no-scripts --allow-live-system-mutation"
 
 [test.step.assert]
 stdout_not_contains = "panic"
@@ -342,13 +342,13 @@ group = "J"
 memory_limit_mb = 512
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-or-b-v1/output/dep-or-b-1.0.0.ccs --allow-unsigned --sandbox never"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-or-b-v1/output/dep-or-b-1.0.0.ccs --allow-unsigned --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-or-consumer-v1/output/dep-or-consumer-1.0.0.ccs --allow-unsigned --sandbox never"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-or-consumer-v1/output/dep-or-consumer-1.0.0.ccs --allow-unsigned --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
@@ -372,7 +372,7 @@ timeout = 30
 group = "J"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-unresolvable-v1/output/dep-unresolvable-1.0.0.ccs --allow-unsigned --sandbox never"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-unresolvable-v1/output/dep-unresolvable-1.0.0.ccs --allow-unsigned --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code_not = 0

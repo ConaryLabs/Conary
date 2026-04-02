@@ -381,6 +381,7 @@ fn test_parent_upgrade_marks_built_derived_package_stale_via_install_cli() {
     write_ccs_package(&result, &package_path).unwrap();
 
     let install_output = Command::new(env!("CARGO_BIN_EXE_conary"))
+        .arg("--allow-live-system-mutation")
         .arg("install")
         .arg(package_path.to_str().unwrap())
         .arg("--db-path")
@@ -434,6 +435,7 @@ fn test_capability_run_uses_installed_package_declaration() {
         .join("tests/fixtures/adversarial/malicious/cap-net-raw/output/cap-net-raw.ccs");
 
     let install_output = Command::new(env!("CARGO_BIN_EXE_conary"))
+        .arg("--allow-live-system-mutation")
         .arg("ccs")
         .arg("install")
         .arg(fixture_path)

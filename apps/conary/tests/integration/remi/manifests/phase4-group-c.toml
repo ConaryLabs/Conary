@@ -55,7 +55,7 @@ exit_code = 0
 
 # Setup: install fixture CCS (always available, no distro repo needed)
 [[test.step]]
-conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --reinstall"
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --reinstall --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
@@ -68,7 +68,7 @@ run = "rm -rf /tmp/phase4-runtime-fixture-output && mkdir -p /tmp/phase4-runtime
 exit_code = 0
 
 [[test.step]]
-run = "CCS_FILE=$(ls /tmp/phase4-runtime-fixture-output/*.ccs | head -1) && ${CONARY_BIN} ccs install \"$CCS_FILE\" --allow-unsigned --sandbox never --reinstall --db-path ${DB_PATH}"
+run = "CCS_FILE=$(ls /tmp/phase4-runtime-fixture-output/*.ccs | head -1) && ${CONARY_BIN} ccs install --allow-live-system-mutation \"$CCS_FILE\" --allow-unsigned --sandbox never --reinstall --db-path ${DB_PATH}"
 
 [test.step.assert]
 exit_code = 0

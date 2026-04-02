@@ -36,7 +36,7 @@ exit_code = 0
 run = "${CONARY_BIN} repo remove arch-core --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-extra --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-multilib --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove fedora-43 --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove ubuntu-noble --db-path ${DB_PATH} 2>/dev/null; true"
 
 [[test.step]]
-conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --reinstall"
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --reinstall --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
@@ -413,7 +413,7 @@ group = "B"
 depends_on = ["T193"]
 
 [[test.step]]
-conary = "ccs install ${FIXTURE_V2_CCS} --allow-unsigned --sandbox never --reinstall"
+conary = "ccs install ${FIXTURE_V2_CCS} --allow-unsigned --sandbox never --reinstall --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0

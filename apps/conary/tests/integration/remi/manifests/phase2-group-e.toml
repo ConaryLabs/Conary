@@ -47,7 +47,7 @@ exit_code = 0
 
 # Install the fixture package via Remi
 [[test.step]]
-conary = "install ${FIXTURE_PKG_NAME} --dep-mode takeover --yes --sandbox never"
+conary = "install ${FIXTURE_PKG_NAME} --dep-mode takeover --yes --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0

@@ -108,7 +108,7 @@ A changeset records:
 #### How Changesets Work
 
 ```
-1. User runs: conary install nginx
+1. User runs: conary install nginx --allow-live-system-mutation
 2. Conary creates a changeset (status: pending)
 3. Files are staged to a temporary directory
 4. The database transaction begins
@@ -144,12 +144,12 @@ A **component** is a functional subdivision of a package. When Conary installs a
 | `:debuginfo` | Debug symbols (`.debug` files, build-id indexed) | No |
 | `:test` | Test suites and test data | No |
 
-**Default components** (`:runtime`, `:lib`, `:config`) are installed when you run `conary install nginx`. Non-default components must be explicitly requested.
+**Default components** (`:runtime`, `:lib`, `:config`) are installed when you run `conary install nginx --allow-live-system-mutation`. Non-default components must be explicitly requested.
 
 ```bash
-conary install nginx              # Installs :runtime, :lib, :config
-conary install nginx:devel        # Just the development headers
-conary install nginx:all          # Everything
+conary install nginx --allow-live-system-mutation              # Installs :runtime, :lib, :config
+conary install nginx:devel --allow-live-system-mutation        # Just the development headers
+conary install nginx:all --allow-live-system-mutation          # Everything
 ```
 
 Components are addressable troves in their own right. They have their own dependency relationships -- for example, `openssl:devel` depends on `openssl:lib` but not on `openssl:runtime`.
@@ -397,7 +397,7 @@ A **collection** (called a "group" in original Conary) is a named set of package
 
 ```bash
 conary collection create web-stack --members nginx,postgresql,redis
-conary install @web-stack          # Install all members
+conary install @web-stack --allow-live-system-mutation          # Install all members
 conary collection show web-stack   # List members
 ```
 
@@ -437,18 +437,18 @@ The `install` command accepts three types of targets:
 
 | Target Type | Example | Description |
 |-------------|---------|-------------|
-| Package name | `conary install nginx` | Resolved from configured repositories |
-| File path | `conary install ./nginx-1.24.0.rpm` | Local RPM, DEB, Arch, or CCS file |
-| Collection | `conary install @web-stack` | All members of a collection |
+| Package name | `conary install nginx --allow-live-system-mutation` | Resolved from configured repositories |
+| File path | `conary install ./nginx-1.24.0.rpm --allow-live-system-mutation` | Local RPM, DEB, Arch, or CCS file |
+| Collection | `conary install @web-stack --allow-live-system-mutation` | All members of a collection |
 
 #### Basic Installation
 
 ```bash
-conary install nginx                     # From repository
-conary install nginx --version 1.24.0    # Specific version
-conary install nginx --repo fedora-43    # From specific repository
-conary install ./package.rpm             # Local file
-conary install @web-stack                # Collection
+conary install nginx --allow-live-system-mutation                     # From repository
+conary install nginx --version 1.24.0 --allow-live-system-mutation    # Specific version
+conary install nginx --repo fedora-43 --allow-live-system-mutation    # From specific repository
+conary install ./package.rpm --allow-live-system-mutation             # Local file
+conary install @web-stack --allow-live-system-mutation                # Collection
 ```
 
 #### Component Installation
@@ -456,9 +456,9 @@ conary install @web-stack                # Collection
 Components follow the `package:component` syntax from Chapter 1:
 
 ```bash
-conary install nginx              # Default components (:runtime, :lib, :config)
-conary install nginx:devel        # Just development headers
-conary install nginx:all          # Everything including docs and debuginfo
+conary install nginx --allow-live-system-mutation              # Default components (:runtime, :lib, :config)
+conary install nginx:devel --allow-live-system-mutation        # Just development headers
+conary install nginx:all --allow-live-system-mutation          # Everything including docs and debuginfo
 ```
 
 #### Installation Flags
@@ -478,7 +478,7 @@ conary install nginx:all          # Everything including docs and debuginfo
 When installing a legacy package (RPM/DEB/Arch), you can convert it to CCS format in-flight:
 
 ```bash
-conary install nginx --convert-to-ccs
+conary install nginx --convert-to-ccs --allow-live-system-mutation
 ```
 
 This enables CAS deduplication, component selection, and atomic transactions for the installed package. Scriptlets are automatically captured and converted to declarative hooks. Use `--no-capture` to disable scriptlet capture (the scriptlets will run imperatively at install time instead).
@@ -520,9 +520,9 @@ Removal respects dependencies: if other packages depend on the one being removed
 
 ```bash
 conary update                    # Update all packages
-conary update nginx              # Update just nginx
-conary update @web-stack         # Update all members of a collection
-conary update --security         # Only security updates (critical/important)
+conary update nginx --allow-live-system-mutation              # Update just nginx
+conary update @web-stack --allow-live-system-mutation         # Update all members of a collection
+conary update --security --allow-live-system-mutation         # Only security updates (critical/important)
 ```
 
 The update command checks configured repositories for newer versions of installed packages. When no package is specified, all installed packages are checked.
@@ -666,15 +666,16 @@ conary system adopt --convert --no-chunking  # Skip CDC chunking
 For full Conary management, you can **take over** packages from the system package manager using the progressive pipeline:
 
 ```bash
-conary system takeover --up-to cas        # Adopt + CAS-back all packages (PM untouched)
-conary system takeover --up-to owned      # CAS + remove from system PM database
-conary system takeover                    # Default: build generation + boot entry, then stop ready to activate
+conary system takeover --up-to cas --allow-live-system-mutation        # Adopt + CAS-back all packages (PM untouched)
+conary system takeover --up-to owned --allow-live-system-mutation      # CAS + remove from system PM database
+conary system takeover --allow-live-system-mutation                    # Default: build generation + boot entry, then stop ready to activate
 conary system takeover --dry-run          # Preview what would happen
-conary system takeover --yes              # Skip confirmation
-conary system generation switch 1         # Activate a prepared takeover generation
+conary system takeover --yes --allow-live-system-mutation              # Skip confirmation after explicit acknowledgment
+conary system generation switch 1 --allow-live-system-mutation         # Activate a prepared takeover generation
 ```
 
-The pipeline is progressive: each level includes all previous levels. After the `owned` level, the system package manager will no longer track those packages. The `generation` level (default) builds an EROFS generation and boot entry, then stops ready to activate. Activation is an explicit follow-up via `conary system generation switch <N>`.
+The pipeline is progressive: each level includes all previous levels. After the `owned` level, the system package manager will no longer track those packages. The `generation` level (default) builds an EROFS generation and boot entry, then stops ready to activate. Activation is an explicit follow-up via `conary system generation switch <N> --allow-live-system-mutation`.
+`--yes` skips interactive prompts, but it does not replace `--allow-live-system-mutation`.
 
 #### Sync Hooks
 
@@ -1691,10 +1692,10 @@ Policies are applied in sequence. Each policy can:
 ### 4.5 Installing CCS Packages
 
 ```bash
-conary ccs install ./myapp-1.2.3.ccs
-conary ccs install ./myapp-1.2.3.ccs --components runtime,lib
-conary ccs install ./myapp-1.2.3.ccs --allow-unsigned
-conary ccs install ./myapp-1.2.3.ccs --policy trust.toml
+conary ccs install ./myapp-1.2.3.ccs --allow-live-system-mutation
+conary ccs install ./myapp-1.2.3.ccs --allow-live-system-mutation --components runtime,lib
+conary ccs install ./myapp-1.2.3.ccs --allow-live-system-mutation --allow-unsigned
+conary ccs install ./myapp-1.2.3.ccs --allow-live-system-mutation --policy trust.toml
 conary ccs install ./myapp-1.2.3.ccs --dry-run
 ```
 
@@ -3803,8 +3804,8 @@ network, filesystem, and syscall fields via `infer_linux_capabilities()`:
 - Syscalls like `ptrace`, `mount`, `mknod` -> corresponding capabilities
 
 **CLI flags:**
-- `conary ccs install pkg.ccs --allow-capabilities` -- approve prompted capabilities
-- `conary ccs install pkg.ccs --capability-policy /path/to/policy.toml` -- custom policy
+- `conary ccs install pkg.ccs --allow-live-system-mutation --allow-capabilities` -- approve prompted capabilities
+- `conary ccs install pkg.ccs --allow-live-system-mutation --capability-policy /path/to/policy.toml` -- custom policy
 
 **Custom policy file** (`/etc/conary/capability-policy.toml`):
 

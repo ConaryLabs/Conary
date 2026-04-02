@@ -78,7 +78,7 @@ group = "E"
 fatal = true
 
 [[test.step]]
-run = "${CONARY_BIN} ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH}"
+run = "${CONARY_BIN} ccs install --allow-live-system-mutation /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH}"
 
 [test.step.assert]
 exit_code = 0
@@ -107,7 +107,7 @@ group = "E"
 depends_on = ["T230"]
 
 [[test.step]]
-run = "${CONARY_BIN} ccs install /opt/remi-tests/fixtures/conary-test-fixture/v2/output/conary-test-fixture-2.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH}"
+run = "${CONARY_BIN} ccs install --allow-live-system-mutation /opt/remi-tests/fixtures/conary-test-fixture/v2/output/conary-test-fixture-2.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH}"
 
 [test.step.assert]
 exit_code = 0
@@ -176,7 +176,7 @@ group = "E"
 depends_on = ["T232a"]
 
 [[test.step]]
-run = "PKG_FILE=$(ls /tmp/phase4-native-output/${local_native_glob} | head -1) && ${CONARY_BIN} install \"$PKG_FILE\" --db-path ${DB_PATH} --no-deps --yes --sandbox never"
+run = "PKG_FILE=$(ls /tmp/phase4-native-output/${local_native_glob} | head -1) && ${CONARY_BIN} install --allow-live-system-mutation \"$PKG_FILE\" --db-path ${DB_PATH} --no-deps --yes --sandbox never"
 
 [test.step.assert]
 exit_code = 0
@@ -280,7 +280,7 @@ group = "E"
 depends_on = ["T235"]
 
 [[test.step]]
-conary = "install tree --repo ${distro_repo} --no-deps --yes --sandbox never"
+conary = "install tree --repo ${distro_repo} --no-deps --yes --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
@@ -344,7 +344,7 @@ depends_on = ["T236"]
 
 # Install a CCS package alongside the native one
 [[test.step]]
-run = "${CONARY_BIN} ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH}"
+run = "${CONARY_BIN} ccs install --allow-live-system-mutation /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH}"
 
 [test.step.assert]
 exit_code = 0
@@ -403,14 +403,14 @@ depends_on = ["T236"]
 
 # Reinstall CCS fixture
 [[test.step]]
-run = "${CONARY_BIN} ccs install /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH}"
+run = "${CONARY_BIN} ccs install --allow-live-system-mutation /opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs --allow-unsigned --sandbox never --db-path ${DB_PATH}"
 
 [test.step.assert]
 exit_code = 0
 
 # Generation build should handle mixed sources
 [[test.step]]
-run = "${CONARY_BIN} system generation build 2>&1"
+run = "${CONARY_BIN} system generation build --allow-live-system-mutation 2>&1"
 
 [test.step.assert]
 exit_code = 0
@@ -485,7 +485,7 @@ exit_code = 0
 
 # Install a package from the current distro
 [[test.step]]
-conary = "install tree --repo ${distro_repo} --no-deps --yes --sandbox never"
+conary = "install tree --repo ${distro_repo} --no-deps --yes --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
@@ -629,7 +629,7 @@ exit_code = 0
 
 # Attempt install from the non-pinned distro repo should be blocked or warned
 [[test.step]]
-run = "${CONARY_BIN} install tree --repo ${distro_repo} --no-deps --yes --sandbox never --db-path ${DB_PATH} 2>&1; echo EXIT:$?"
+run = "${CONARY_BIN} install --allow-live-system-mutation tree --repo ${distro_repo} --no-deps --yes --sandbox never --db-path ${DB_PATH} 2>&1; echo EXIT:$?"
 
 [test.step.assert]
 exit_code = 0
@@ -681,7 +681,7 @@ depends_on = ["T250"]
 fatal = true
 
 [[test.step]]
-conary = "system takeover --up-to owned --yes"
+conary = "system takeover --up-to owned --yes --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0

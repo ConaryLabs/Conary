@@ -24,7 +24,7 @@ timeout = 300
 group = "N"
 
 [[test.step]]
-run = "${CONARY_BIN} system generation build && ${CONARY_BIN} system generation build"
+run = "${CONARY_BIN} system generation build --allow-live-system-mutation && ${CONARY_BIN} system generation build --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
