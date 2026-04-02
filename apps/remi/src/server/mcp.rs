@@ -204,9 +204,6 @@ pub struct ChunkGcParams {
 
 #[tool_router]
 impl RemiMcpServer {
-    /// List all CI/CD workflows configured in the Forgejo repository.
-    ///
-    /// Returns workflow names and filenames. Use the filename (e.g.
     // -----------------------------------------------------------------------
     // Token management (delegates to admin_service)
     // -----------------------------------------------------------------------
