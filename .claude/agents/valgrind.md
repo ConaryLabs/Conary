@@ -41,7 +41,7 @@ If you haven't completed Phase 1, you cannot propose fixes. Symptom fixes are fa
 - Run `cargo test` to find failing tests
 - Check `git log --oneline -20` for recent changes to affected files
 - Trace error paths through thiserror variant chains
-- For server bugs: check handler chain in `conary-server/src/server/handlers/`
+- For Remi server bugs: check handler chain in `apps/remi/src/server/handlers/`
 - **Multi-component systems**: before proposing fixes, add diagnostic logging at each component boundary. Run once to gather evidence showing WHERE it breaks. THEN analyze.
 - **Trace data flow backward**: where does the bad value originate? What called this with the bad value? Keep tracing up until you find the source. Fix at source, not at symptom.
 

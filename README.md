@@ -456,11 +456,11 @@ Features: Bloom filter acceleration, batch endpoints, pull-through caching, full
 - **Admin origin listener** on `:8082` for bearer-authenticated REST operations behind the reverse proxy
 
 ```bash
-# Build with server support
-cargo build --features server
+# Build the owning service crate
+cargo build -p remi
 
 # Run the server
-conary remi --bind 0.0.0.0:8080
+cargo run -p remi -- --bind 0.0.0.0:8080
 ```
 
 ---
@@ -470,11 +470,11 @@ conary remi --bind 0.0.0.0:8080
 A local daemon that provides a REST API for package operations over a Unix socket, with SSE event streaming for real-time progress. Integrates with systemd for socket activation and watchdog support.
 
 ```bash
-# Build with server + daemon support
-cargo build --features server
+# Build the daemon crate
+cargo build -p conaryd
 
 # Run the daemon
-conary daemon
+cargo run -p conaryd -- --foreground
 ```
 
 See the [Conaryopedia](docs/conaryopedia-v2.md) for the full REST endpoint list.
@@ -513,15 +513,15 @@ cargo run -p conary-test -- logs T42  # Retrieve test logs
 
 ## Building
 
-Requires Rust 1.94+ (edition 2024). The project is a Cargo workspace with 4 crates: `conary` (CLI), `conary-core` (library), `conary-server` (Remi + conaryd), and `conary-test` (test infrastructure).
+Requires Rust 1.94+ (edition 2024). The project root is a virtual Cargo workspace with four app crates and one shared library crate: `apps/conary` (CLI), `apps/remi` (Remi), `apps/conaryd` (daemon), `apps/conary-test` (test infrastructure), and `crates/conary-core` (shared library).
 
 ```bash
-cargo build                          # Client only (default)
-cargo build --features server        # With Remi server + conaryd daemon
-cargo test                           # Run all tests
-cargo test --features server         # Full workspace verification, including server paths
-cargo clippy -- -D warnings          # Lint check
-cargo clippy --features server -- -D warnings
+cargo build -p conary                              # CLI
+cargo build -p remi && cargo build -p conaryd      # Service binaries
+cargo test -p conary                               # CLI tests
+cargo test -p remi && cargo test -p conaryd        # Service tests
+cargo build -p conary-test                         # Test harness
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 Release builds use LTO and single codegen unit for maximum optimization:

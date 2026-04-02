@@ -14,7 +14,7 @@ for CCS chunk operations.
 - `RepositoryParser` -- trait for format-specific metadata parsers (Arch, Debian)
 - `MirrorHealthTracker` / `MirrorHealth` -- per-mirror latency and error tracking
 - `MirrorSelector` / `MirrorStrategy` -- intelligent mirror selection
-- `RemiClient` / `AsyncRemiClient` -- client for Remi CCS server (async variant feature-gated)
+- `RemiClient` / `AsyncRemiClient` -- client for the Remi CCS server
 - `PackageResolver` / `PackageSource` -- resolution with `ResolutionOptions`
 - `SubstituterChain` -- binary substituter pipeline
 - `RepositoryDependencyFlavor` -- dependency flavor annotation (from `dependency_model.rs`)
@@ -39,12 +39,12 @@ for CCS chunk operations.
 - `validate_url_scheme()` rejects non-HTTP(S) URLs (SSRF prevention)
 - `RetryPolicy` defaults: 3 retries, 1s base delay, 30s max, 0.25 jitter
 - All downloads stream in chunks -- never buffer entire response in memory
-- `chunk_fetcher` module is feature-gated behind `--features server`
+- `chunk_fetcher` is shared repository infrastructure used by service and retrieval code
 
 ## Gotchas
 - `parsers/` contains format-specific metadata parsers (arch.rs, debian.rs, fedora.rs), not package parsers
 - Normalized provides/requirements tables replace JSON blob scanning for dependency resolution
-- `remi.rs` has both sync `RemiClient` and async `AsyncRemiClient` (server feature only)
+- `remi.rs` has both sync `RemiClient` and async `AsyncRemiClient`
 - `registry.rs` handles format detection and parser creation
 - `metalink.rs` parses both XML metalink files and HTTP metalink headers
 
@@ -69,6 +69,6 @@ for CCS chunk operations.
 - `metadata.rs` -- repository metadata types
 - `dependencies.rs` -- dependency fetching
 - `substituter.rs` -- binary substituter implementation (`SubstituterChain`)
-- `chunk_fetcher.rs` -- chunk fetching (feature-gated behind `--features server`)
+- `chunk_fetcher.rs` -- chunk fetching support shared across repository consumers
 - `registry.rs` -- format detection and parser creation
 - `metalink.rs` -- metalink XML and HTTP header parsing

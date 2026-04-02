@@ -83,8 +83,8 @@ A structured list that `emerge` can consume directly as tasks.
 - Clippy-clean (pedantic encouraged)
 - No emojis -- use `[COMPLETE]`, `[FAILED]`, etc.
 - `unwrap()` / `expect()` only in tests and infallible cases
-- Server code behind `--features server` gate
-- Shared server helpers in `conary-server/src/server/handlers/mod.rs`
+- Service code lives in `apps/remi` and `apps/conaryd`
+- Shared Remi server helpers live in `apps/remi/src/server/handlers/mod.rs`
 
 ## After Review
 

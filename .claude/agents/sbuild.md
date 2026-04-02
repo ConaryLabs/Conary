@@ -21,7 +21,7 @@ actual diff. You are the reason releases ship clean.
 ## Release Process
 
 ### 1. Version Validation
-- Check `Cargo.toml` version across all 4 crates (conary, conary-core, conary-server, conary-test)
+- Check version fields across the end-state packages (`apps/conary`, `crates/conary-core`, `apps/remi`, `apps/conaryd`, `apps/conary-test`)
 - Analyze all commits since last tag: `git log $(git describe --tags --abbrev=0)..HEAD --oneline`
 - Categorize: breaking changes (major), new features (minor), fixes (patch)
 - Verify version bump matches change severity
@@ -32,12 +32,14 @@ actual diff. You are the reason releases ship clean.
 
 Run every combination:
 ```
-cargo build                                    # debug client
-cargo build --features server                  # debug with server
-cargo clippy -- -D warnings                    # lint client
-cargo clippy --features server -- -D warnings  # lint server
-cargo test                                     # test client
-cargo test --features server                   # test everything
+cargo build -p conary                          # debug client
+cargo build -p remi                            # debug Remi
+cargo build -p conaryd                         # debug daemon
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test -p conary
+cargo test -p remi
+cargo test -p conaryd
+cargo test -p conary-test
 ```
 
 Every single one must pass. No exceptions. No "it's just a warning."
@@ -50,7 +52,7 @@ Every single one must pass. No exceptions. No "it's just a warning."
 - Verify no changelog entries are fabricated
 
 ### 4. Pre-Ship Checklist
-- [ ] All tests pass (both with and without `--features server`)
+- [ ] All package-owned test targets pass
 - [ ] Clippy clean (both feature configurations)
 - [ ] Version correct and consistent across all Cargo.toml files
 - [ ] CHANGELOG.md updated with categorized entries
@@ -64,7 +66,7 @@ Every single one must pass. No exceptions. No "it's just a warning."
 ```
 ## RELEASE REPORT
 ### Version: [X.Y.Z]
-### Build Matrix: [PASS/FAIL per combination]
+### Build Matrix: [PASS/FAIL per package]
 ### Test Results: [pass/fail/ignored counts]
 ### Clippy: [CLEAN or list of warnings]
 ### Changelog: [WRITTEN / needs review]

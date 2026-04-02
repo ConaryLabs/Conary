@@ -60,11 +60,12 @@ Before launching agents, identify the scope:
 - Narrow the scope to specific modules/directories
 - Include the scope in every agent's spawn prompt
 
-The codebase has 4 crates:
-- `conary` (root) -- CLI binary, `src/commands/`
-- `conary-core` -- core library, 25+ modules
-- `conary-server` -- Remi server + conaryd daemon (feature-gated: `--features server`)
-- `conary-test` -- test infrastructure (TOML manifests, containers, HTTP/MCP server)
+The codebase has four app crates plus one shared library crate:
+- `apps/conary` -- CLI binary, `src/commands/`
+- `crates/conary-core` -- core library, 25+ modules
+- `apps/remi` -- Remi server + federation
+- `apps/conaryd` -- conaryd daemon
+- `apps/conary-test` -- test infrastructure (TOML manifests, containers, HTTP/MCP server)
 
 ## Orchestration Rules
 
@@ -100,8 +101,8 @@ Skip gates if the user said "run hands-off" or "just do it."
 
 ## Conary Project Context
 
-- Rust 2024, Rust 1.94, 4-crate workspace
-- Build: `cargo build` (default), `cargo build --features server` (full)
+- Rust 2024, Rust 1.94, virtual workspace with app-owned packages
+- Build: `cargo build -p conary`, `cargo build -p remi`, `cargo build -p conaryd`
 - Test: `cargo test` (~266 unit tests, 278 integration tests via conary-test)
 - Lint: `cargo clippy -- -D warnings`
 - Conventions: database-first, file headers (`// path/to/file.rs`), thiserror, no emojis

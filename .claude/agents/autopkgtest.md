@@ -72,5 +72,5 @@ After writing tests:
 - Integration tests in `tests/` directory
 - Use `tempfile::tempdir()` for filesystem isolation
 - Use `:memory:` SQLite for database tests
-- Server tests may need `--features server`
+- Service tests usually mean `cargo test -p remi` and `cargo test -p conaryd`
 - No emojis in test names or output

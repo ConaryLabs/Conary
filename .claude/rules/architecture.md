@@ -2,7 +2,7 @@
 
 ## Workspace Structure
 
-4-crate workspace: `conary` (CLI), `conary-core` (library), `conary-server` (Remi + conaryd), `conary-test` (test infrastructure). Feature gate: `--features server` enables `conary-server`. EROFS support uses `composefs-rs` directly in `conary-core`.
+Virtual workspace: `apps/conary` (CLI), `apps/remi` (Remi), `apps/conaryd` (daemon), `apps/conary-test` (test infrastructure), and `crates/conary-core` (shared library). EROFS support uses `composefs-rs` directly in `conary-core`.
 
 ## Key Modules
 
@@ -53,23 +53,23 @@
 | `src/mcp/` | MCP tool definitions for LLM integration |
 | `src/model/replatform.rs` | Source policy replatform and convergence planning |
 
-### conary-server -- Remi + conaryd (feature-gated: `--features server`)
+### remi + conaryd -- service-owned app crates
 
 | Module | Purpose |
 |--------|---------|
-| `src/server/` | Remi server (feature-gated: `--features server`) |
-| `src/server/auth.rs` | Admin API auth -- token hashing, Scope enum, bearer extraction, middleware |
-| `src/server/admin_service.rs` | Shared service layer for admin ops (tokens, repos, federation, audit) |
-| `src/server/forgejo.rs` | Shared Forgejo/CI client (get, post, get_text helpers) |
-| `src/server/mcp.rs` | MCP server endpoint -- LLM tool integration via rmcp |
-| `src/server/rate_limit.rs` | Per-IP rate limiting middleware (governor, token buckets) |
-| `src/server/audit.rs` | Audit logging middleware with action derivation |
-| `src/server/routes.rs` | Axum router construction (internal :8081 + external :8082) |
-| `src/server/handlers/admin/` | Admin API handlers -- tokens, ci, repos, federation, audit, events, artifacts, packages, test_data |
-| `src/server/handlers/openapi.rs` | OpenAPI 3.1 spec endpoint for admin API |
-| `src/server/handlers/self_update.rs` | Self-update endpoints (`/v1/ccs/conary/latest`, `/versions`, `/download`) |
-| `src/federation/` | CAS federation - peer discovery, chunk routing, mTLS |
-| `src/daemon/` | conaryd daemon - REST API, SSE events, job queue, systemd |
+| `apps/remi/src/server/` | Remi server |
+| `apps/remi/src/server/auth.rs` | Admin API auth -- token hashing, Scope enum, bearer extraction, middleware |
+| `apps/remi/src/server/admin_service.rs` | Shared service layer for admin ops (tokens, repos, federation, audit) |
+| `apps/remi/src/server/forgejo.rs` | Shared Forgejo/CI client (get, post, get_text helpers) |
+| `apps/remi/src/server/mcp.rs` | MCP server endpoint -- LLM tool integration via rmcp |
+| `apps/remi/src/server/rate_limit.rs` | Per-IP rate limiting middleware (governor, token buckets) |
+| `apps/remi/src/server/audit.rs` | Audit logging middleware with action derivation |
+| `apps/remi/src/server/routes.rs` | Axum router construction (internal :8081 + external :8082) |
+| `apps/remi/src/server/handlers/admin/` | Admin API handlers -- tokens, ci, repos, federation, audit, events, artifacts, packages, test_data |
+| `apps/remi/src/server/handlers/openapi.rs` | OpenAPI 3.1 spec endpoint for admin API |
+| `apps/remi/src/server/handlers/self_update.rs` | Self-update endpoints (`/v1/ccs/conary/latest`, `/versions`, `/download`) |
+| `apps/remi/src/federation/` | CAS federation - peer discovery, chunk routing, mTLS |
+| `apps/conaryd/src/daemon/` | conaryd daemon - REST API, SSE events, job queue, systemd |
 
 ### conary-test -- Test infrastructure
 

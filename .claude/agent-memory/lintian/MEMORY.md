@@ -2,7 +2,7 @@
 
 ## Codebase Patterns
 
-### Server handlers (conary-server/src/server/handlers/)
+### Remi handlers (apps/remi/src/server/handlers/)
 - Handler pattern: scope check -> param validation -> get db_path -> spawn_blocking -> match Result<Result<T>>
 - `admin_service.rs` shared by HTTP handlers and MCP tools
 - Three routers: public (:8080), internal admin (:8081), external admin (:8082 auth+rate-limit+audit)
@@ -10,7 +10,7 @@
 ### conary-test crate (test infrastructure)
 - Declarative TOML manifests + Podman containers via bollard + MCP server (23 tools)
 - ContainerBackend trait: BollardBackend (real), MockBackend (test), NullBackend (QEMU-only)
-- Service layer (service.rs) shared by HTTP handlers and MCP tools (same pattern as conary-server)
+- Service layer (service.rs) shared by HTTP handlers and MCP tools (same pattern as Remi admin_service)
 
 ### CLI / Daemon / Federation / Derivation / CCS / Trust
 - Tests in same file as code, `tempfile` for FS, `:memory:` SQLite for DB

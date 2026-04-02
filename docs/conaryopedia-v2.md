@@ -2301,10 +2301,10 @@ The `Kitchen::sources_cached()` method checks whether all sources (main archive,
 
 Remi is Conary's server-side component: an HTTP server that converts legacy Linux packages (RPM, DEB, Arch) into CCS format on demand, stores the results as content-addressed chunks, and serves them to clients through a CDN-friendly API. Where a traditional mirror network replicates entire repositories, Remi converts only what clients actually request, then caches the results indefinitely since chunks are immutable. The name is short for "repository middleware."
 
-Feature-gated behind `--features server`, Remi adds roughly 20 submodules to the binary. A production instance runs at `packages.conary.io` on a Hetzner dedicated server (12 cores, 64 GB RAM, 2x 1 TB NVMe) behind Cloudflare.
+Remi now lives in its own `apps/remi` crate rather than riding behind a root server feature toggle. A production instance runs at `packages.conary.io` on a Hetzner dedicated server (12 cores, 64 GB RAM, 2x 1 TB NVMe) behind Cloudflare.
 
 ```
-src/server/
+apps/remi/src/server/
   mod.rs              ServerConfig, ServerState, run_server_from_config()
   config.rs           RemiConfig TOML parser (11 sections)
   routes.rs           Axum router: public + admin, middleware stack
@@ -2342,7 +2342,7 @@ Remi runs two Axum HTTP servers concurrently:
 Both servers share a single `ServerState` behind `Arc<RwLock<>>`:
 
 ```rust
-// src/server/mod.rs
+// apps/remi/src/server/mod.rs
 pub struct ServerState {
     pub config: ServerConfig,
     pub job_manager: JobManager,
@@ -2384,7 +2384,7 @@ The `run_server_from_config()` startup sequence:
 Remi uses a single TOML file (typically `/etc/conary/remi.toml`) parsed into `RemiConfig`:
 
 ```rust
-// src/server/config.rs
+// apps/remi/src/server/config.rs
 pub struct RemiConfig {
     pub server: ServerSection,      // bind, admin_bind, workers, metrics, audit_log
     pub storage: StorageSection,    // root, eviction_threshold, max_cache_size
@@ -2506,7 +2506,7 @@ Client: GET /v1/fedora/packages/nginx
         8. Update job status to Ready
 ```
 
-The `ConversionService` (`src/server/conversion.rs`) orchestrates this pipeline:
+The `ConversionService` (`apps/remi/src/server/conversion.rs`) orchestrates this pipeline:
 
 ```rust
 pub struct ConversionService {
@@ -2540,7 +2540,7 @@ Every chunk is stored by its SHA-256 hash in a two-level directory structure:
     23456789abcdef...
 ```
 
-The `ChunkCache` (`src/server/cache.rs`) manages this store:
+The `ChunkCache` (`apps/remi/src/server/cache.rs`) manages this store:
 
 ```rust
 pub struct ChunkCache {
@@ -2601,7 +2601,7 @@ The eviction loop also cleans up completed conversion jobs older than 1 hour fro
 Chunks are content-addressed, meaning any 64-character hex string is a valid-looking request. An attacker could flood the server with requests for non-existent chunks, forcing disk I/O for each one. The Bloom filter eliminates this:
 
 ```rust
-// src/server/bloom.rs
+// apps/remi/src/server/bloom.rs
 pub struct ChunkBloomFilter {
     bits: Vec<AtomicU64>,      // Bit array using atomic u64 words
     num_bits: usize,           // ~9.6 million for 1M chunks at 1% FP
@@ -2651,7 +2651,7 @@ When Remi operates as a caching proxy (with `upstream_url` configured), a chunk 
 **Request coalescing** uses a `DashMap` of broadcast channels:
 
 ```rust
-// src/server/handlers/chunks.rs
+// apps/remi/src/server/handlers/chunks.rs
 pub inflight_fetches: Arc<DashMap<String, broadcast::Sender<()>>>,
 
 async fn pull_through_fetch(state: &ServerState, hash: &str) -> Result<Vec<u8>> {
@@ -2687,7 +2687,7 @@ The `InflightGuard` ensures cleanup on both success and failure (including panic
 
 ## 6.8 Chunk Serving Endpoints
 
-The chunk handler (`src/server/handlers/chunks.rs`) provides five endpoints:
+The chunk handler (`apps/remi/src/server/handlers/chunks.rs`) provides five endpoints:
 
 **HEAD /v1/chunks/:hash** -- Existence check. Bloom filter -> disk check. Returns 200 (with `Content-Length`) or 404. Used by clients to determine which chunks they already have.
 
@@ -2731,7 +2731,7 @@ Server: 307 Temporary Redirect
 Client: GET (follows redirect, served from R2 CDN edge)
 ```
 
-The `R2Store` (`src/server/r2.rs`) wraps the AWS S3 SDK, configured with the R2-specific endpoint:
+The `R2Store` (`apps/remi/src/server/r2.rs`) wraps the AWS S3 SDK, configured with the R2-specific endpoint:
 
 ```rust
 pub struct R2Config {
@@ -2809,7 +2809,7 @@ When **federated index** is enabled, the sparse entry builder merges local data 
 Remi embeds a Tantivy search engine for package discovery:
 
 ```rust
-// src/server/search.rs
+// apps/remi/src/server/search.rs
 pub struct SearchEngine {
     index: tantivy::Index,
     reader: IndexReader,
@@ -2861,7 +2861,7 @@ GET  /v2/conary/{distro}/{name}/tags/list        -> version tags
 
 **Name mapping**: CCS package -> OCI repository `conary/{distro}/{name}`. CCS version -> OCI tag. CCS chunks -> OCI layers. The custom media type is `application/vnd.conary.package.v1`.
 
-**Manifest generation** (`src/server/handlers/oci.rs`):
+**Manifest generation** (`apps/remi/src/server/handlers/oci.rs`):
 
 ```rust
 fn build_manifest(package: &ConvertedPackage) -> OciManifest {
@@ -2899,7 +2899,7 @@ fn build_manifest(package: &ConvertedPackage) -> OciManifest {
 
 ### Rate Limiting
 
-Token bucket algorithm per IP address (`src/server/security.rs`):
+Token bucket algorithm per IP address (`apps/remi/src/server/security.rs`):
 
 ```rust
 pub struct RateLimiter {
@@ -2959,7 +2959,7 @@ Applied in this order (outermost first):
 Caches "not found" responses to avoid repeatedly probing upstream for packages that don't exist:
 
 ```rust
-// src/server/negative_cache.rs
+// apps/remi/src/server/negative_cache.rs
 pub struct NegativeCache {
     entries: RwLock<HashMap<String, NegativeEntry>>,
     ttl: Duration,    // Default: 15 minutes
@@ -2977,7 +2977,7 @@ A background cleanup task runs every 5 minutes, removing expired entries. The ad
 
 ## 6.15 Job Management
 
-The `JobManager` (`src/server/jobs.rs`) tracks conversion jobs with concurrency control:
+The `JobManager` (`apps/remi/src/server/jobs.rs`) tracks conversion jobs with concurrency control:
 
 ```rust
 pub struct JobManager {
@@ -3003,7 +3003,7 @@ pub enum JobStatus {
 
 ### Download Analytics
 
-The `AnalyticsRecorder` (`src/server/analytics.rs`) buffers download events in memory and flushes to the database in batches:
+The `AnalyticsRecorder` (`apps/remi/src/server/analytics.rs`) buffers download events in memory and flushes to the database in batches:
 
 ```rust
 pub struct AnalyticsRecorder {
@@ -3017,7 +3017,7 @@ Events are recorded after each successful package download (not chunk downloads 
 
 ### Prometheus Metrics
 
-The `ServerMetrics` (`src/server/metrics.rs`) uses atomic counters for lock-free recording:
+The `ServerMetrics` (`apps/remi/src/server/metrics.rs`) uses atomic counters for lock-free recording:
 
 ```rust
 pub struct ServerMetrics {
@@ -3052,7 +3052,7 @@ The admin metrics endpoint also includes negative cache stats, job queue status,
 
 ## 6.17 Delta Manifests
 
-For packages with multiple versions, Remi pre-computes chunk-level diffs (`src/server/delta_manifests.rs`):
+For packages with multiple versions, Remi pre-computes chunk-level diffs (`apps/remi/src/server/delta_manifests.rs`):
 
 ```rust
 pub struct DeltaManifest {
@@ -3112,7 +3112,7 @@ This ensures the most-requested packages are always ready for instant delivery, 
 When multiple Remi instances serve different distributions (one for Fedora, one for Arch), a single client-facing instance can merge their sparse indices:
 
 ```rust
-// src/server/federated_index.rs
+// apps/remi/src/server/federated_index.rs
 pub struct FederatedIndexConfig {
     pub upstream_urls: Vec<String>,  // Peer Remi instances
     pub timeout: Duration,           // 10 seconds default
@@ -3152,16 +3152,16 @@ The `FederatedIndexCache` uses `RwLock<HashMap<String, (Instant, SparseIndexEntr
 
 ## 6.20 Remi Lite (Zero-Config LAN Proxy)
 
-For CI environments, air-gapped networks, or fleet deployments, `conary remi-proxy` provides a lightweight caching proxy:
+For CI environments, air-gapped networks, or fleet deployments, `remi proxy` provides a lightweight caching proxy:
 
 ```bash
-conary remi-proxy                                # Discover upstream via mDNS on a trusted LAN
-conary remi-proxy --upstream https://remi.example.com
-conary remi-proxy --offline --cache-dir /mnt/usb  # Air-gapped mode
+remi proxy                                      # Discover upstream via mDNS on a trusted LAN
+remi proxy --upstream https://remi.example.com
+remi proxy --offline --cache-dir /mnt/usb         # Air-gapped mode
 ```
 
 ```rust
-// src/server/lite.rs
+// apps/remi/src/server/lite.rs
 pub struct ProxyConfig {
     pub port: u16,                    // Default: 7891
     pub upstream: Option<String>,     // Explicit upstream URL
@@ -3192,7 +3192,7 @@ pub struct ProxyConfig {
 
 ## 6.21 Index Generation and Signing
 
-The `generate_indices()` function (`src/server/index_gen.rs`) produces per-distro JSON repository indices:
+The `generate_indices()` function (`apps/remi/src/server/index_gen.rs`) produces per-distro JSON repository indices:
 
 ```rust
 pub struct RepositoryIndex {
@@ -4324,7 +4324,7 @@ For development or small repositories, `create_initial_root_single_key()` uses o
 
 ### Server-Side TUF
 
-The Remi server serves TUF metadata via HTTP endpoints (`src/server/handlers/tuf.rs`):
+The Remi server serves TUF metadata via HTTP endpoints (`apps/remi/src/server/handlers/tuf.rs`):
 
 ```
 GET /v1/:distro/tuf/timestamp.json
@@ -4347,7 +4347,7 @@ conary trust enable     -- Enable TUF verification for a repository
 conary trust disable    -- Disable TUF verification (requires --force)
 conary trust status     -- Show metadata versions, expiry, key count
 conary trust verify     -- Run full TUF update cycle
-conary trust sign-targets -- Sign new targets (server-side, feature-gated)
+remi trust sign-targets -- Sign new targets (Remi-owned admin flow)
 conary trust rotate-key -- Rotate a role's key with old+new+root keys
 ```
 
