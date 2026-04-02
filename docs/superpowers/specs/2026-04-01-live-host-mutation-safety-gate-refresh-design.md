@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-04-01
-revision: 1
+revision: 2
 summary: Refresh the live-host mutation safety gate around the current apps/conary dispatch seams and verified command readiness
 ---
 
@@ -198,6 +198,9 @@ This is intentionally narrower than "every command that can write a host file"
 and intentionally broader than "only commands that call the generation switch
 subcommand directly."
 
+In particular, "generation state" includes creating and deleting generation
+artifacts, not only switching the active generation.
+
 ### Covered Command Families
 
 The covered set on current `main` is:
@@ -212,6 +215,8 @@ The covered set on current `main` is:
 - `conary system generation switch`
 - `conary system generation rollback`
 - `conary system generation recover`
+- `conary system generation build`
+- `conary system generation gc`
 - `conary system takeover`
 
 Wrapper entrypoints must be covered at the command the operator actually typed,
@@ -230,8 +235,9 @@ The design should explicitly exclude:
 - `system state revert`, because the non-dry-run path is not implemented as a
   real mutating operation
 - read-only/admin commands such as search, query, verify, repo, state list,
-  state show, and state diff
+  state show, state diff, generation list, and generation info
 - broader host-write paths such as `system adopt` and `config restore`
+- adjacent config-management surfaces such as `config backup` and `config check`
 
 These exclusions are design choices, not oversights. They keep this slice
 focused on dangerous Conary-managed live mutation while leaving room for a
@@ -417,24 +423,42 @@ Expected current readiness anchors include:
 - `install` / `remove` / `update` / `autoremove`
   - `apps/conary/tests/workflow.rs`
   - `apps/conary/tests/batch_install.rs`
-  - relevant Remi manifests under `apps/conary/tests/integration/remi/manifests/`
+  - `apps/conary/tests/integration/remi/manifests/phase1-advanced.toml`
+  - `apps/conary/tests/integration/remi/manifests/phase2-group-a.toml`
+  - `apps/conary/tests/integration/remi/manifests/phase3-group-j.toml`
+  - `apps/conary/tests/integration/remi/manifests/phase3-group-m.toml`
+  - `apps/conary/tests/integration/remi/manifests/phase4-group-e.toml`
 - `ccs install`
   - `apps/conary/tests/component.rs`
-  - existing Remi manifests that exercise CCS install
+  - `apps/conary/tests/integration/remi/manifests/phase2-group-a.toml`
+  - `apps/conary/tests/integration/remi/manifests/phase4-group-d.toml`
+  - `apps/conary/tests/integration/remi/manifests/phase4-group-e.toml`
 - `system restore`
   - a local readiness smoke test for dry-run behavior
-  - disposable-host evidence such as the existing phase 4 restore coverage
+  - current `main` only clearly shows dry-run evidence in
+    `apps/conary/tests/integration/remi/manifests/phase4-group-d.toml`
+  - the implementation must add meaningful non-dry-run disposable-host
+    coverage before `system restore` is considered ready
+  - if that evidence cannot be added honestly, the command stays blocked as a
+    readiness issue instead of being waved through by the gate
 - `system state rollback`
-  - existing rollback-focused local coverage
-  - additional narrow tests if the current evidence is not strong enough
-- `system generation switch` / `rollback`
-  - existing disposable-host generation manifests
+  - `apps/conary/tests/workflow.rs`
+  - `apps/conary/tests/integration/remi/manifests/phase3-group-h.toml`
+- `system generation build` / `gc` / `switch` / `rollback`
+  - `apps/conary/tests/integration/remi/manifests/phase1-advanced.toml`
+  - `apps/conary/tests/integration/remi/manifests/phase2-group-b.toml`
+  - `apps/conary/tests/integration/remi/manifests/phase3-group-h.toml`
+  - `apps/conary/tests/integration/remi/manifests/phase3-group-l.toml`
+  - `apps/conary/tests/integration/remi/manifests/phase4-group-e.toml`
 - `system generation recover`
   - new meaningful coverage if none exists today
   - if that cannot be provided honestly, it becomes a blocker
 - `system takeover`
-  - unit tests in takeover and takeover-state code
-  - existing disposable-host takeover coverage
+  - `apps/conary/src/commands/generation/takeover.rs`
+  - `apps/conary/src/commands/generation/takeover_state.rs`
+  - `apps/conary/tests/integration/remi/manifests/phase1-advanced.toml`
+  - `apps/conary/tests/integration/remi/manifests/phase2-group-b.toml`
+  - `apps/conary/tests/integration/remi/manifests/phase4-group-e.toml`
 
 If a covered command family is obviously broken, insufficiently wired, or only
 "covered" by a planning path, the correct result is to stop and surface it as a
