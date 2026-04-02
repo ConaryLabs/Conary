@@ -69,11 +69,11 @@ summary: Stable subsystem pointers and durable assistant-facing guidance for the
 
 ## Prefer Existing Deep Dives
 
-- `docs/modules/federation.md` for federation background
-- `docs/modules/ccs.md` for CCS format and conversion context
-- `docs/modules/bootstrap.md` for bootstrap and stage flows
-- `docs/modules/recipe.md` for recipe/build-system behavior
-- `docs/modules/query.md` for query-oriented CLI flows
+- [`docs/modules/federation.md`](../modules/federation.md) for federation background
+- [`docs/modules/ccs.md`](../modules/ccs.md) for CCS format and conversion context
+- [`docs/modules/bootstrap.md`](../modules/bootstrap.md) for bootstrap and stage flows
+- [`docs/modules/recipe.md`](../modules/recipe.md) for recipe/build-system behavior
+- [`docs/modules/query.md`](../modules/query.md) for query-oriented CLI flows
 
 ## Freshness Notes
 

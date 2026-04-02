@@ -36,10 +36,10 @@ tool-specific structure that other assistants could not reuse directly.
 
 The durable pieces moved into:
 
-- `AGENTS.md` for the repo contract
-- `docs/llms/README.md` and `docs/llms/subsystem-map.md` for vendor-neutral assistant guidance
-- `docs/operations/infrastructure.md` for non-secret operations notes
-- `docs/operations/LOCAL_ACCESS.md` for ignored machine-specific details
+- [`AGENTS.md`](../../../AGENTS.md) for the repo contract
+- [`docs/llms/README.md`](../README.md) and [`docs/llms/subsystem-map.md`](../subsystem-map.md) for vendor-neutral assistant guidance
+- [`docs/operations/infrastructure.md`](../../operations/infrastructure.md) for non-secret operations notes
+- [`docs/operations/LOCAL_ACCESS.example.md`](../../operations/LOCAL_ACCESS.example.md) as the tracked template for the ignored `docs/operations/LOCAL_ACCESS.md` local note
 
 The remaining Claude-specific artifacts are compatibility shims or explicit
 tool-coupled helpers rather than the repository's source of truth.
