@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-04-01
-revision: 2
+revision: 3
 summary: Refresh the live-host mutation safety gate around the current apps/conary dispatch seams and verified command readiness
 ---
 
@@ -225,8 +225,11 @@ not only at the lower helper:
 - `conary install @collection`
 - `conary update @collection`
 
-The refusal should therefore name the user-facing entrypoint rather than an
+The refusal should therefore name a user-facing command label rather than an
 internal helper such as `cmd_collection_install` or `cmd_update_group`.
+For wrapper cases, a stable label such as `conary install @collection` or
+`conary update @collection` is sufficient; the helper does not need to replay
+the exact original argv string.
 
 ### Explicit Exclusions
 
@@ -270,7 +273,7 @@ pub enum LiveMutationClass {
 }
 
 pub struct LiveMutationRequest {
-    pub command_name: &'static str,
+    pub command_label: std::borrow::Cow<'static, str>,
     pub class: LiveMutationClass,
     pub dry_run: bool,
 }
@@ -332,6 +335,13 @@ would do without first opting into live host mutation.
 Dry-run bypass must apply only where the command already has a real dry-run
 mode. It must not be used to blur the distinction between planning-only
 commands and genuinely mutating commands.
+
+This bypass is specifically about avoiding live package, generation,
+activation, or filesystem-view mutation. It is not a blanket promise that a
+dry-run can never emit planning or audit state to disk. For example, takeover
+dry-run may still record resumable planning state while remaining outside the
+acknowledgment gate because it does not apply live ownership or activation
+changes.
 
 ### Warning Text
 
@@ -406,8 +416,8 @@ that runs the built `conary` binary and verifies:
 
 - representative covered commands refuse without the flag
 - representative dry-run commands succeed without the flag
-- at least one wrapper entrypoint is tested so the message matches the command
-  the operator typed
+- at least one wrapper entrypoint is tested so the message matches the intended
+  user-facing command label
 - unaffected read-only commands remain unaffected
 
 The March branch never actually landed this layer; the refreshed design should
@@ -444,21 +454,33 @@ Expected current readiness anchors include:
 - `system state rollback`
   - `apps/conary/tests/workflow.rs`
   - `apps/conary/tests/integration/remi/manifests/phase3-group-h.toml`
-- `system generation build` / `gc` / `switch` / `rollback`
-  - `apps/conary/tests/integration/remi/manifests/phase1-advanced.toml`
+- `system generation build`
   - `apps/conary/tests/integration/remi/manifests/phase2-group-b.toml`
   - `apps/conary/tests/integration/remi/manifests/phase3-group-h.toml`
   - `apps/conary/tests/integration/remi/manifests/phase3-group-l.toml`
   - `apps/conary/tests/integration/remi/manifests/phase4-group-e.toml`
-- `system generation recover`
-  - new meaningful coverage if none exists today
-  - if that cannot be provided honestly, it becomes a blocker
-- `system takeover`
-  - `apps/conary/src/commands/generation/takeover.rs`
-  - `apps/conary/src/commands/generation/takeover_state.rs`
+- `system generation gc`
   - `apps/conary/tests/integration/remi/manifests/phase1-advanced.toml`
   - `apps/conary/tests/integration/remi/manifests/phase2-group-b.toml`
+  - `apps/conary/tests/integration/remi/manifests/phase3-group-l.toml`
+- `system generation switch` / `rollback`
+  - `apps/conary/tests/integration/remi/manifests/phase2-group-b.toml`
+  - `apps/conary/tests/integration/remi/manifests/phase3-group-h.toml`
+  - `apps/conary/tests/integration/remi/manifests/phase3-group-l.toml`
+- `system generation recover`
+  - no current readiness evidence is obvious in `main`
+  - the implementation must add coverage that exercises at least one successful
+    recovery path and one clean failure-or-fallback path from the documented
+    CLI contract
+  - if that cannot be provided honestly, it becomes a blocker
+- `system takeover`
+  - `apps/conary/tests/integration/remi/manifests/phase2-group-b.toml`
   - `apps/conary/tests/integration/remi/manifests/phase4-group-e.toml`
+  - embedded unit tests in
+    `apps/conary/src/commands/generation/takeover.rs` and
+    `apps/conary/src/commands/generation/takeover_state.rs` can support the
+    behavior picture, but disposable-host coverage is the primary readiness
+    evidence
 
 If a covered command family is obviously broken, insufficiently wired, or only
 "covered" by a planning path, the correct result is to stop and surface it as a
