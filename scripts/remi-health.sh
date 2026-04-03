@@ -6,7 +6,7 @@
 #
 # Modes:
 #   --smoke   Quick health + metadata check (~5s)
-#   --full    All endpoints + test conversion (~60s)
+#   --full    All endpoints + package metadata/conversion probe (~60s)
 set -euo pipefail
 
 ENDPOINT="${REMI_ENDPOINT:-https://packages.conary.io}"
@@ -83,14 +83,14 @@ if [[ "$MODE" == "full" ]]; then
     check "OCI catalog" "$ENDPOINT/v2/_catalog"
 
     echo ""
-    echo "=== Conversion (async) ==="
+    echo "=== Package Metadata / Conversion ==="
     conv_code=$(curl -sf -o /dev/null -w '%{http_code}' --max-time 30 \
-        -X POST "$ENDPOINT/v1/convert/fedora/curl" 2>/dev/null || echo "000")
+        "$ENDPOINT/v1/fedora/packages/curl" 2>/dev/null || echo "000")
     if [[ "$conv_code" == "200" ]] || [[ "$conv_code" == "202" ]]; then
-        printf "  [PASS] %-40s %s\n" "conversion submit" "$conv_code"
+        printf "  [PASS] %-40s %s\n" "package metadata / conversion" "$conv_code"
         PASS=$((PASS + 1))
     else
-        printf "  [FAIL] %-40s %s (expected 200 or 202)\n" "conversion submit" "$conv_code"
+        printf "  [FAIL] %-40s %s (expected 200 or 202)\n" "package metadata / conversion" "$conv_code"
         FAIL=$((FAIL + 1))
     fi
 fi
