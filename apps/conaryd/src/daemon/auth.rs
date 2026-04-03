@@ -520,6 +520,19 @@ impl AuditLogger {
 mod tests {
     use super::*;
 
+    fn synthetic_non_daemon_user() -> PeerCredentials {
+        let daemon_uid = nix::unistd::geteuid().as_raw();
+        let synthetic_uid = if daemon_uid == 42_424 { 42_425 } else { 42_424 };
+
+        PeerCredentials {
+            // Use the current PID so supplementary-group checks fail closed on
+            // UID mismatch instead of depending on some unrelated live process.
+            pid: std::process::id(),
+            uid: synthetic_uid,
+            gid: synthetic_uid,
+        }
+    }
+
     #[test]
     fn test_peer_credentials_is_root() {
         let root = PeerCredentials {
@@ -707,11 +720,7 @@ mod tests {
     #[test]
     fn test_auth_checker_regular_user() {
         let checker = AuthChecker::new();
-        let user = PeerCredentials {
-            pid: 1000,
-            uid: 1000,
-            gid: 1000,
-        };
+        let user = synthetic_non_daemon_user();
 
         // Read-only allowed
         assert_eq!(checker.check(&user, Action::Query), Permission::ReadOnly);
@@ -723,11 +732,7 @@ mod tests {
     #[test]
     fn test_auth_checker_disabled_polkit() {
         let checker = AuthChecker::new().disable_polkit();
-        let user = PeerCredentials {
-            pid: 1000,
-            uid: 1000,
-            gid: 1000,
-        };
+        let user = synthetic_non_daemon_user();
 
         // Without PolicyKit requirement, all authenticated users get full access
         assert_eq!(checker.check(&user, Action::Install), Permission::Full);
