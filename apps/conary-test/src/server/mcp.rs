@@ -914,14 +914,16 @@ impl TestMcpServer {
 
     /// Build test fixtures (CCS packages for integration tests).
     ///
-    /// Runs the appropriate `build-*.sh` script from `tests/fixtures/adversarial/`.
+    /// Runs the appropriate `build-*.sh` script from the workspace fixture tree.
     #[tool(description = "Build test fixtures (CCS packages for integration tests).")]
     async fn build_fixtures(
         &self,
         Parameters(params): Parameters<BuildFixturesParams>,
     ) -> Result<CallToolResult, McpError> {
         let dir = project_dir()?;
-        let fixture_dir = format!("{dir}/tests/fixtures/adversarial");
+        let fixture_dir = crate::paths::fixtures_root()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .join("adversarial");
 
         let group = params.groups.as_deref().unwrap_or("all");
         let script = match group {
@@ -941,8 +943,9 @@ impl TestMcpServer {
             }
         };
 
-        let script_path = format!("{fixture_dir}/{script}");
-        let (code, stdout, stderr) = run_command("bash", &[&script_path], Some(&dir)).await?;
+        let script_path = fixture_dir.join(script);
+        let script = script_path.display().to_string();
+        let (code, stdout, stderr) = run_command("bash", &[&script], Some(&dir)).await?;
 
         let output =
             format_command_output(&format!("build-fixtures ({group})"), code, &stdout, &stderr);

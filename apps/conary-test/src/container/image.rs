@@ -123,7 +123,7 @@ fn stage_build_context(containerfile: &Path, distro: &str) -> Result<StagedBuild
     )
     .context("failed to copy integration config.toml")?;
 
-    let fixtures_src = project_root.join("tests/fixtures");
+    let fixtures_src = crate::paths::resolve_fixtures_root_for(&project_root);
     if fixtures_src.is_dir() {
         copy_dir_filtered(&fixtures_src, &root.join("fixtures"), &[])?;
     } else {

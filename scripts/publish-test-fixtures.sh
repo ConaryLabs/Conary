@@ -4,8 +4,8 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-FIXTURE_DIR="$PROJECT_ROOT/tests/fixtures/conary-test-fixture"
-ADVERSARIAL_DIR="$PROJECT_ROOT/tests/fixtures/adversarial"
+FIXTURE_DIR="$PROJECT_ROOT/apps/conary/tests/fixtures/conary-test-fixture"
+ADVERSARIAL_DIR="$PROJECT_ROOT/apps/conary/tests/fixtures/adversarial"
 REMI_ENDPOINT="${REMI_ENDPOINT:-https://packages.conary.io}"
 REMI_ADMIN_ENDPOINT="${REMI_ADMIN_ENDPOINT:-}"
 REMI_ADMIN_TOKEN="${REMI_ADMIN_TOKEN:-}"

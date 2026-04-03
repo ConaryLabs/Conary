@@ -3,6 +3,7 @@
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use conary_test::engine::container_setup::initialize_container_state;
+use conary_test::paths;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -204,27 +205,28 @@ enum ManifestCommands {
 
 /// Load global config from `$CONARY_TEST_CONFIG` or default path.
 fn load_config() -> Result<conary_test::config::distro::GlobalConfig> {
-    let path = std::env::var("CONARY_TEST_CONFIG")
-        .unwrap_or_else(|_| "tests/integration/remi/config.toml".into());
-    conary_test::config::load_global_config(Path::new(&path))
+    let path = std::env::var_os("CONARY_TEST_CONFIG")
+        .map(PathBuf::from)
+        .unwrap_or(paths::default_config_path()?);
+    conary_test::config::load_global_config(&path)
 }
 
 /// Return manifest directory from `$CONARY_TEST_MANIFESTS` or default.
-fn manifest_dir() -> String {
-    std::env::var("CONARY_TEST_MANIFESTS")
-        .unwrap_or_else(|_| "tests/integration/remi/manifests".into())
+fn manifest_dir() -> Result<PathBuf> {
+    Ok(std::env::var_os("CONARY_TEST_MANIFESTS")
+        .map(PathBuf::from)
+        .unwrap_or(paths::default_manifest_dir()?))
 }
 
 /// Discover manifests matching a requested phase.
 fn manifests_for_phase(phase: u32) -> Result<Vec<PathBuf>> {
-    let dir = manifest_dir();
-    let dir_path = Path::new(&dir);
+    let dir_path = manifest_dir()?;
     if !dir_path.is_dir() {
         bail!("manifest directory not found: {}", dir_path.display());
     }
 
     let mut manifests = Vec::new();
-    for entry in std::fs::read_dir(dir_path)? {
+    for entry in std::fs::read_dir(&dir_path)? {
         let entry = entry?;
         let path = entry.path();
         if path.extension().is_none_or(|ext| ext != "toml") {
@@ -262,23 +264,23 @@ fn containerfile_path(
     let default_name = format!("Containerfile.{distro}");
     let filename = dc.containerfile.as_deref().unwrap_or(&default_name);
 
-    let path = PathBuf::from("tests/integration/remi/containers").join(filename);
+    let path = paths::default_container_dir()?.join(filename);
     if !path.exists() {
         bail!("containerfile not found: {}", path.display());
     }
     Ok(path)
 }
 
-fn host_results_dir() -> PathBuf {
-    let path = std::env::var("CONARY_TEST_RESULTS_DIR")
+fn host_results_dir() -> Result<PathBuf> {
+    let path = std::env::var_os("CONARY_TEST_RESULTS_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("tests/integration/remi/results"));
+        .unwrap_or(paths::default_results_dir()?);
     if path.is_absolute() {
-        path
+        Ok(path)
     } else {
-        std::env::current_dir()
+        Ok(std::env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
-            .join(path)
+            .join(path))
     }
 }
 
@@ -287,25 +289,7 @@ fn host_results_dir() -> PathBuf {
 /// Checks `CONARY_PROJECT_DIR` env var first, then walks up from the current
 /// executable until a directory containing `Cargo.toml` is found.
 fn project_dir() -> Result<String> {
-    if let Ok(dir) = std::env::var("CONARY_PROJECT_DIR") {
-        return Ok(dir);
-    }
-
-    if let Ok(exe) = std::env::current_exe() {
-        let mut path = exe.as_path();
-        while let Some(parent) = path.parent() {
-            if parent.join("Cargo.toml").exists()
-                && let Some(s) = parent.to_str()
-            {
-                return Ok(s.to_string());
-            }
-            path = parent;
-        }
-    }
-
-    std::env::current_dir()
-        .map(|p| p.to_string_lossy().to_string())
-        .context("cannot determine project directory")
+    Ok(paths::project_dir()?.to_string_lossy().to_string())
 }
 
 /// Run a shell command and return (exit_code, stdout, stderr).
@@ -377,7 +361,7 @@ fn run_single_distro(
 ) -> Result<bool> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
-        let host_results_dir = host_results_dir();
+        let host_results_dir = host_results_dir()?;
         std::fs::create_dir_all(&host_results_dir).ok();
 
         let manifest_paths = match suite_path {
@@ -387,8 +371,8 @@ fn run_single_distro(
                 let resolved = if path.exists() {
                     path
                 } else {
-                    let dir = manifest_dir();
-                    let with_ext = Path::new(&dir).join(format!("{p}.toml"));
+                    let dir = manifest_dir()?;
+                    let with_ext = dir.join(format!("{p}.toml"));
                     if with_ext.exists() {
                         with_ext
                     } else {
@@ -709,7 +693,7 @@ async fn cmd_deploy_status(json: bool) -> Result<()> {
 
 async fn cmd_fixtures_build(groups: &str, json: bool) -> Result<()> {
     let dir = project_dir()?;
-    let fixture_dir = format!("{dir}/tests/fixtures/adversarial");
+    let fixture_dir = paths::fixtures_root()?.join("adversarial");
 
     let script = match groups {
         "all" => "build-all.sh",
@@ -723,8 +707,9 @@ async fn cmd_fixtures_build(groups: &str, json: bool) -> Result<()> {
         ),
     };
 
-    let script_path = format!("{fixture_dir}/{script}");
-    let (code, stdout, stderr) = run_command("bash", &[&script_path], Some(&dir)).await?;
+    let script_path = fixture_dir.join(script);
+    let script = script_path.display().to_string();
+    let (code, stdout, stderr) = run_command("bash", &[&script], Some(&dir)).await?;
     print_step(
         &format!("build-fixtures ({groups})"),
         code,
@@ -1015,8 +1000,8 @@ async fn cmd_images_info(image: &str, json: bool) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 fn cmd_manifests_reload(json: bool) -> Result<()> {
-    let dir = manifest_dir();
-    let dir_path = Path::new(&dir);
+    let dir = manifest_dir()?;
+    let dir_path = dir.as_path();
 
     if !dir_path.is_dir() {
         bail!("manifest directory not found: {}", dir_path.display());
@@ -1045,13 +1030,13 @@ fn cmd_manifests_reload(json: bool) -> Result<()> {
             "{}",
             serde_json::json!({
                 "status": "reloaded",
-                "manifest_dir": dir,
+                "manifest_dir": dir.display().to_string(),
                 "manifests_found": suites.len(),
                 "suites": suites,
             })
         );
     } else {
-        println!("Reloaded manifests from {dir}");
+        println!("Reloaded manifests from {}", dir.display());
         println!();
         println!("{:<30} {:<8} TESTS", "NAME", "PHASE");
         println!("{}", "-".repeat(50));
@@ -1130,7 +1115,7 @@ fn main() -> Result<()> {
             let config = load_config()?;
             let state = conary_test::server::AppState::with_max_concurrent(
                 config,
-                manifest_dir(),
+                manifest_dir()?.display().to_string(),
                 max_concurrent,
             );
             tracing::info!(%port, max_concurrent, "Starting server");
@@ -1139,11 +1124,11 @@ fn main() -> Result<()> {
         }
 
         Commands::List => {
-            let dir = manifest_dir();
-            let dir_path = Path::new(&dir);
+            let dir = manifest_dir()?;
+            let dir_path = dir.as_path();
 
             if !dir_path.is_dir() {
-                tracing::warn!(path = %dir, "Manifest directory not found");
+                tracing::warn!(path = %dir.display(), "Manifest directory not found");
                 return Ok(());
             }
 
@@ -1154,7 +1139,7 @@ fn main() -> Result<()> {
             entries.sort_by_key(|e| e.file_name());
 
             if entries.is_empty() {
-                println!("No test manifests found in {dir}");
+                println!("No test manifests found in {}", dir.display());
                 return Ok(());
             }
 
@@ -1296,5 +1281,54 @@ fn main() -> Result<()> {
         Commands::Manifests { command } => match command {
             ManifestCommands::Reload => cmd_manifests_reload(json),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
+
+    fn cwd_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn default_manifest_dir_exists_under_workspace_root() {
+        let root = PathBuf::from(project_dir().expect("project dir"));
+        let manifests = manifest_dir().expect("manifest dir");
+        assert!(
+            manifests.is_dir(),
+            "expected default manifest dir to exist at {}",
+            manifests.display()
+        );
+        assert!(
+            manifests.starts_with(&root),
+            "expected manifest dir {} to live under {}",
+            manifests.display(),
+            root.display()
+        );
+    }
+
+    #[test]
+    fn load_config_succeeds_from_workspace_root() {
+        let _guard = cwd_lock().lock().expect("cwd lock");
+        let original = std::env::current_dir().expect("current dir");
+        let root = PathBuf::from(project_dir().expect("project dir"));
+        assert!(
+            std::env::var_os("CONARY_TEST_CONFIG").is_none(),
+            "this test expects CONARY_TEST_CONFIG to be unset"
+        );
+        std::env::set_current_dir(&root).expect("set workspace root");
+        let result = load_config();
+        std::env::set_current_dir(original).expect("restore current dir");
+
+        assert!(
+            result.is_ok(),
+            "expected load_config() to work from {}, got {result:?}",
+            root.display()
+        );
     }
 }
