@@ -430,7 +430,7 @@ pub async fn upload_package(
 
 #[cfg(test)]
 mod tests {
-    use crate::server::handlers::admin::test_helpers::test_app;
+    use crate::server::handlers::admin::test_helpers::{rebuild_app, test_app};
     use axum::body::Body;
     use axum::http::{Method, Request, StatusCode};
     use flate2::Compression;
@@ -524,7 +524,8 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::CREATED);
 
-        let response = app
+        let app2 = rebuild_app(&db_path);
+        let response = app2
             .oneshot(
                 Request::builder()
                     .method(Method::POST)
