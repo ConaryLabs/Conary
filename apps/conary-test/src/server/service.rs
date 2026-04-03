@@ -258,9 +258,7 @@ async fn execute_run(
     // Create and start the container.
     let backend = BollardBackend::new()?;
     let results_dir = state.config.paths.results_dir.clone();
-    let host_results_dir = std::env::current_dir()
-        .unwrap_or_default()
-        .join("tests/integration/remi/results");
+    let host_results_dir = crate::paths::default_results_dir()?;
     std::fs::create_dir_all(&host_results_dir).ok();
 
     let container_config = ContainerConfig {
@@ -726,8 +724,7 @@ pub async fn build_image(state: &AppState, distro: &str) -> crate::error::Result
         .get(distro)
         .ok_or_else(|| ConaryTestError::Config(format!("unknown distro: {distro}")))?;
     let filename = dc.containerfile.as_deref().unwrap_or(&default_name);
-    let containerfile =
-        std::path::PathBuf::from("tests/integration/remi/containers").join(filename);
+    let containerfile = crate::paths::default_container_dir()?.join(filename);
 
     crate::container::build_distro_image(&backend, &containerfile, distro)
         .await
