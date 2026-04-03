@@ -203,7 +203,7 @@
 					builds its own package universe from scratch with custom derivations. Conary works with
 					existing upstream packages -- the same RPMs, DEBs, and Arch packages you already know --
 					and converts them transparently via Remi, the conversion proxy. This means Conary gets
-					access to 68,000+ packages on day one without requiring maintainers to write Nix
+					access to tens of thousands of upstream packages on day one without requiring maintainers to write Nix
 					expressions.
 				</p>
 				<p>

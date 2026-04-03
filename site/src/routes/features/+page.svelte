@@ -27,12 +27,12 @@
 					without rebooting. Every generation is a complete, verified filesystem snapshot.
 				</p>
 				<div class="feature-code">
-					<code>conary generation build --summary "Post-update"</code>
-					<code>conary generation list</code>
-					<code>conary generation switch 2</code>
-					<code>conary generation rollback</code>
-					<code>conary generation gc --keep 3</code>
-					<code>conary generation info 2</code>
+					<code>conary system generation build --summary "Post-update"</code>
+					<code>conary system generation list</code>
+					<code>conary system generation switch 2</code>
+					<code>conary system generation rollback</code>
+					<code>conary system generation gc --keep 3</code>
+					<code>conary system generation info 2</code>
 				</div>
 				<p class="feature-note">Requires Linux 6.2+ with composefs support.</p>
 			</div>
@@ -53,23 +53,21 @@
 			<div class="feature-card">
 				<h3>Bootstrap</h3>
 				<p>
-					Build a complete Conary-managed system from scratch using a staged pipeline.
-					Stage 0 cross-compiles the toolchain, Stage 1 builds a self-hosted compiler,
-					optional Stage 2 eliminates host contamination, BaseSystem assembles core
-					userspace with per-package checkpointing, and Image produces bootable media
-					via systemd-repart (rootless, fallback to sfdisk/mkfs). Based on LFS 13
-					with GCC 15.2.0. Outputs EROFS images + CAS store + SQLite DB. Supports
-					x86_64, aarch64, and riscv64 targets. Dry-run mode validates the full
-					pipeline without writing anything.
+					Build a complete Conary-managed system from scratch using the current
+					cross-tools, temp-tools, system, config, image, and optional tier2 stages.
+					systemd-repart handles rootless image creation when available, with a
+					fallback to sfdisk/mkfs. Outputs include EROFS images, CAS state, and
+					SQLite metadata. Supports x86_64, aarch64, and riscv64 targets, and
+					dry-run mode validates the pipeline without building.
 				</p>
 				<div class="feature-code">
 					<code>conary bootstrap init --target x86_64</code>
 					<code>conary bootstrap check</code>
-					<code>conary bootstrap stage0</code>
-					<code>conary bootstrap stage1</code>
-					<code>conary bootstrap stage2</code>
-					<code>conary bootstrap base</code>
-					<code>conary bootstrap conary</code>
+					<code>conary bootstrap cross-tools</code>
+					<code>conary bootstrap temp-tools</code>
+					<code>conary bootstrap system</code>
+					<code>conary bootstrap config</code>
+					<code>conary bootstrap tier2</code>
 					<code>conary bootstrap image --format qcow2</code>
 					<code>conary bootstrap dry-run</code>
 					<code>conary bootstrap status</code>
@@ -85,10 +83,10 @@
 					integrity via fs-verity on every file read.
 				</p>
 				<div class="feature-code">
-					<code>conary generation rollback</code>
-					<code>conary generation switch 2</code>
-					<code>conary generation list</code>
-					<code>conary generation gc --keep 3</code>
+					<code>conary system generation rollback</code>
+					<code>conary system generation switch 2</code>
+					<code>conary system generation list</code>
+					<code>conary system generation gc --keep 3</code>
 				</div>
 			</div>
 
@@ -220,7 +218,7 @@
 					Temporary environments without permanent installation, similar to nix shell.
 				</p>
 				<div class="feature-code">
-					<code>conary ccs shell python,nodejs</code>
+					<code>conary ccs shell python nodejs</code>
 					<code>conary ccs run gcc -- make</code>
 				</div>
 			</div>
@@ -233,7 +231,7 @@
 				</p>
 				<div class="feature-code">
 					<code>conary export --output ./my-image</code>
-					<code>conary ccs export nginx --format oci</code>
+					<code>conary ccs export ./package.ccs --output ./package.oci</code>
 				</div>
 			</div>
 
@@ -300,7 +298,8 @@
 					Sigstore integration for signing and verification.
 				</p>
 				<div class="feature-code">
-					<code>conary provenance sbom nginx</code>
+					<code>conary provenance show nginx</code>
+					<code>conary provenance export nginx --format spdx</code>
 				</div>
 			</div>
 
@@ -320,8 +319,8 @@
 					restrictions and seccomp-BPF for syscall filtering.
 				</p>
 				<div class="feature-code">
-					<code>conary capability audit nginx</code>
-					<code>conary capability enforce nginx</code>
+					<code>conary capability show nginx</code>
+					<code>conary capability run nginx -- /usr/sbin/nginx -t</code>
 				</div>
 			</div>
 

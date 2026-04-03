@@ -13,6 +13,7 @@ summary: Stable subsystem pointers and durable assistant-facing guidance for the
 - `apps/remi/`: Remi package service, admin surface, MCP server, and federation
 - `apps/conaryd/`: local daemon, socket auth, job queue, and REST/SSE routes
 - `apps/conary-test/`: declarative integration-test engine, HTTP API, and MCP server
+- `crates/conary-mcp/`: shared transport-agnostic MCP helpers used by workspace apps
 
 ## Look Here First
 
