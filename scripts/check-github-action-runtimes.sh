@@ -17,10 +17,14 @@ require_ref() {
   rg -q "$pattern" "$file" || fail "$description missing in $file"
 }
 
-require_forced_node24() {
+forbid_ref() {
   local file="$1"
-  rg -q 'FORCE_JAVASCRIPT_ACTIONS_TO_NODE24:\s*"?true"?' "$file" \
-    || fail "FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true missing in $file"
+  local pattern="$2"
+  local description="$3"
+
+  if rg -q "$pattern" "$file"; then
+    fail "$description unexpectedly present in $file"
+  fi
 }
 
 require_ref .github/workflows/pr-gate.yml \
@@ -49,14 +53,24 @@ require_ref .github/workflows/scheduled-ops.yml \
   'actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f' \
   'Node 24 upload-artifact pin'
 
-require_ref .github/workflows/pr-gate.yml \
-  'actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48' \
-  'dependency-review-action pin'
-require_ref .github/workflows/release-build.yml \
-  'softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe' \
-  'action-gh-release pin'
+forbid_ref .github/workflows/pr-gate.yml \
+  'actions/dependency-review-action@' \
+  'dependency-review-action'
+forbid_ref .github/workflows/release-build.yml \
+  'softprops/action-gh-release@' \
+  'softprops action-gh-release'
+forbid_ref .github/workflows/pr-gate.yml \
+  'FORCE_JAVASCRIPT_ACTIONS_TO_NODE24:\s*"?true"?' \
+  'forced Node 24 workflow override'
+forbid_ref .github/workflows/release-build.yml \
+  'FORCE_JAVASCRIPT_ACTIONS_TO_NODE24:\s*"?true"?' \
+  'forced Node 24 workflow override'
 
-require_forced_node24 .github/workflows/pr-gate.yml
-require_forced_node24 .github/workflows/release-build.yml
+require_ref .github/workflows/pr-gate.yml \
+  'dependency-graph/compare/' \
+  'custom dependency review API call'
+require_ref .github/workflows/release-build.yml \
+  'gh release create' \
+  'CLI GitHub release publication'
 
 echo "GitHub Actions runtime pins look Node 24-ready."

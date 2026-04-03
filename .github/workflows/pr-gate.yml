@@ -15,7 +15,6 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   RUST_BACKTRACE: 1
 
 jobs:
@@ -82,6 +81,45 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Dependency review
-        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4
-        with:
-          fail-on-severity: moderate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            base_ref="${{ github.event.pull_request.base.sha }}"
+            head_ref="${{ github.event.pull_request.head.sha }}"
+          else
+            base_ref="main"
+            head_ref="${GITHUB_SHA}"
+          fi
+
+          report=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            "repos/${GITHUB_REPOSITORY}/dependency-graph/compare/${base_ref}...${head_ref}")
+
+          violations=$(jq '
+            [
+              .[]
+              | select(.change_type != "removed")
+              | . as $dep
+              | [ .vulnerabilities[]?.severity | ascii_downcase ] as $severities
+              | select(any($severities[]?; . == "moderate" or . == "high" or . == "critical"))
+              | {
+                  manifest,
+                  ecosystem,
+                  name,
+                  version,
+                  severities: $severities
+                }
+            ]
+          ' <<<"$report")
+
+          if [[ "$(jq 'length' <<<"$violations")" != "0" ]]; then
+            echo "Dependency review found vulnerable dependency changes:" >&2
+            jq -r '.[] | "- \(.manifest): \(.name)@\(.version) [\(.severities | join(", "))]"' <<<"$violations" >&2
+            exit 1
+          fi
+
+          echo "Dependency review found no moderate-or-higher vulnerable dependency changes."

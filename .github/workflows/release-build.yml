@@ -21,7 +21,6 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   prepare:
@@ -279,11 +278,18 @@ jobs:
           retention-days: 5
       - name: Create GitHub Release
         if: ${{ needs.prepare.outputs.dry_run != 'true' }}
-        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2
-        with:
-          tag_name: ${{ needs.prepare.outputs.tag_name }}
-          generate_release_notes: true
-          files: release-packages/*
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release upload "$TAG_NAME" release-packages/* --clobber
+          else
+            gh release create "$TAG_NAME" release-packages/* --generate-notes --verify-tag
+          fi
 
   build-remi:
     name: build-remi
