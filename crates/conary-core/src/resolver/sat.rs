@@ -5,16 +5,15 @@
 //! Provides `solve_install` and `solve_removal` functions that use the CDCL SAT
 //! solver to find optimal package installation plans with backtracking support.
 
-use resolvo::{ConditionalRequirement, Problem, Solver, UnsolvableOrCancelled};
+mod install;
+mod removal;
+
+use resolvo::{Problem, Solver, UnsolvableOrCancelled};
 use rusqlite::Connection;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::error::{Error, Result};
-use crate::repository::versioning::repo_version_satisfies;
-use crate::version::{RpmVersion, VersionConstraint};
-
-use super::provider::ConaryProvider;
-use super::provider::types::ConaryConstraint;
+use crate::version::VersionConstraint;
 
 const MAX_LOADED_NAMES: usize = 50_000;
 const TRANSITIVE_LOAD_TIMEOUT: Duration = Duration::from_secs(30);
@@ -78,85 +77,18 @@ pub fn solve_install(
         });
     }
 
-    let mut provider = ConaryProvider::new(conn);
-
-    // Load all installed packages as solvables
-    provider.load_installed_packages()?;
-
-    // Build the provides index for O(1) capability-to-provider lookups.
-    provider.build_provides_index()?;
-
-    // Pre-load canonical equivalents for cross-distro fallback (O(1) lookups).
-    provider.load_canonical_index()?;
-
-    // Load repo packages transitively to fixed point: keep discovering new
-    // dependency names and loading their repo candidates until no new names appear.
-    let mut loaded_names: std::collections::HashSet<String> =
-        requests.iter().map(|(n, _)| n.clone()).collect();
-    let mut to_load: Vec<String> = loaded_names.iter().cloned().collect();
-    let load_start = Instant::now();
-
-    while !to_load.is_empty() {
-        check_transitive_loading_limits(load_start.elapsed(), loaded_names.len())?;
-        provider.load_repo_packages_for_names(&to_load)?;
-
-        // Discover new dependency names that we haven't loaded yet
-        // (only allocates strings for names not already in loaded_names)
-        let mut new_names: Vec<String> = provider
-            .new_dependency_names(&loaded_names)
-            .into_iter()
-            .filter(|n| loaded_names.insert(n.clone()))
-            .collect();
-
-        // Also load canonical equivalents of any new names so the solver
-        // has candidates available when the fallback fires.
-        let equiv_names: Vec<String> = new_names
-            .iter()
-            .flat_map(|n| provider.canonical_equivalents(n).iter().cloned())
-            .filter(|n| loaded_names.insert(n.clone()))
-            .collect();
-        new_names.extend(equiv_names);
-        check_transitive_loading_limits(load_start.elapsed(), loaded_names.len())?;
-
-        to_load = new_names;
-    }
-
-    // Intern version sets for all dependencies so get_dependencies can find them
-    provider.intern_all_dependency_version_sets()?;
-
-    // Build the problem: each request becomes a requirement
-    let mut requirements = Vec::new();
-    for (name, constraint) in requests {
-        let name_id = provider.intern_name(name)?;
-        let vs_id = provider.intern_version_set(name_id, constraint.clone())?;
-        requirements.push(ConditionalRequirement::from(vs_id));
-    }
+    let mut provider = install::build_provider_for_install(conn, requests)?;
+    let requirements = install::build_requirements(&mut provider, requests)?;
 
     let problem = Problem::new().requirements(requirements);
 
     // Solve
     let mut solver = Solver::new(provider);
     match solver.solve(problem) {
-        Ok(solvable_ids) => {
-            let provider = solver.provider();
-            let mut install_order = Vec::new();
-            for sid in &solvable_ids {
-                let pkg = provider.get_solvable(*sid);
-                install_order.push(SatPackage {
-                    name: pkg.name.clone(),
-                    version: pkg.version.clone(),
-                    source: if pkg.installed_trove_id.is_some() {
-                        SatSource::Installed
-                    } else {
-                        SatSource::Repository
-                    },
-                });
-            }
-            Ok(SatResolution {
-                install_order,
-                conflict_message: None,
-            })
-        }
+        Ok(solvable_ids) => Ok(SatResolution {
+            install_order: install::collect_install_order(solver.provider(), &solvable_ids),
+            conflict_message: None,
+        }),
         Err(UnsolvableOrCancelled::Unsolvable(conflict)) => {
             let message = conflict.display_user_friendly(&solver).to_string();
             Ok(SatResolution {
@@ -170,42 +102,6 @@ pub fn solve_install(
     }
 }
 
-/// Check whether a provider's version satisfies a dependency constraint.
-///
-/// When the provider has no version, only `Any` constraints are satisfied.
-/// Otherwise, the version is parsed according to the constraint's scheme and
-/// checked against the constraint.
-fn provider_version_satisfies_constraint(
-    constraint: &ConaryConstraint,
-    provider_version: Option<&str>,
-) -> bool {
-    match constraint {
-        ConaryConstraint::Legacy(VersionConstraint::Any) => true,
-        ConaryConstraint::Legacy(vc) => {
-            let Some(ver_str) = provider_version else {
-                return false;
-            };
-            RpmVersion::parse(ver_str)
-                .map(|v| vc.satisfies(&v))
-                .unwrap_or(false)
-        }
-        ConaryConstraint::Repository {
-            constraint: crate::repository::versioning::RepoVersionConstraint::Any,
-            ..
-        } => true,
-        ConaryConstraint::Repository {
-            scheme,
-            constraint: repo_constraint,
-            ..
-        } => {
-            let Some(ver_str) = provider_version else {
-                return false;
-            };
-            repo_version_satisfies(*scheme, ver_str, repo_constraint)
-        }
-    }
-}
-
 /// Check what packages would break if the given packages are removed.
 ///
 /// Returns the names of packages whose dependencies would be unsatisfied.
@@ -216,134 +112,8 @@ fn provider_version_satisfies_constraint(
 /// The analysis iterates to a fixed point: breaking one package may cause
 /// others to lose a provider, so we re-evaluate until no new breakage is found.
 pub fn solve_removal(conn: &Connection, to_remove: &[String]) -> Result<Vec<String>> {
-    let mut provider = ConaryProvider::new(conn);
-
-    // Load installed packages
-    provider.load_installed_packages()?;
-
-    // Intern version sets for dependencies
-    provider.intern_all_dependency_version_sets()?;
-
-    // Build provides index and unfiltered deps for removal analysis
-    provider.load_removal_data()?;
-
-    let mut gone_set: std::collections::HashSet<String> = to_remove.iter().cloned().collect();
-
-    let solvable_count = provider.solvable_count();
-
-    // Helper closure: check if a single (dep_name, constraint) alternative
-    // is satisfiable by any installed package that is NOT in `gone_set`.
-    let alternative_satisfiable = |dep_name: &str,
-                                   constraint: &super::provider::ConaryConstraint,
-                                   gone: &std::collections::HashSet<String>|
-     -> bool {
-        // 1. Check provides index -- verify the remaining provider's version
-        //    satisfies the constraint.
-        let providers = provider.find_providers(dep_name);
-        if !providers.is_empty() {
-            let any_remaining = providers.iter().any(|(trove_id, prov_version)| {
-                let not_gone = provider
-                    .trove_name(*trove_id)
-                    .is_some_and(|name| !gone.contains(name));
-                if !not_gone {
-                    return false;
-                }
-                provider_version_satisfies_constraint(constraint, prov_version.as_deref())
-            });
-            if any_remaining {
-                return true;
-            }
-        }
-        // 2. Fallback: check by package name among loaded solvables.
-        let name_match = (0..solvable_count).any(|j| {
-            let alt_sid = resolvo::SolvableId(j as u32);
-            let alt = provider.get_solvable(alt_sid);
-            alt.installed_trove_id.is_some()
-                && alt.name == dep_name
-                && !gone.contains(&alt.name)
-                && super::provider::constraint_matches_package(
-                    constraint,
-                    &alt.version,
-                    alt.version_scheme,
-                )
-        });
-        if name_match {
-            return true;
-        }
-        // 3. If no provider and no name match among tracked packages, this dep
-        //    is satisfied by the base system (libc.so.6, ld-linux, etc.) or
-        //    another untracked capability. Only flag as broken if we had a
-        //    provider that was in the removal set.
-        let was_provided_by_removed = providers.iter().any(|(trove_id, _)| {
-            provider
-                .trove_name(*trove_id)
-                .is_some_and(|name| gone.contains(name))
-        });
-        // Also check if any going-away solvable matches by name
-        let name_was_removed = (0..solvable_count).any(|j| {
-            let alt_sid = resolvo::SolvableId(j as u32);
-            let alt = provider.get_solvable(alt_sid);
-            alt.installed_trove_id.is_some() && alt.name == dep_name && gone.contains(&alt.name)
-        });
-        // If neither -- the dep is untracked, assume base system satisfies it
-        !was_provided_by_removed && !name_was_removed
-    };
-
-    // Helper closure: check if a SolverDep clause is satisfiable.
-    // For Single deps, one alternative must be satisfiable.
-    // For OrGroup deps, at least one alternative must be satisfiable.
-    let clause_satisfiable =
-        |dep: &super::provider::SolverDep, gone: &std::collections::HashSet<String>| -> bool {
-            match dep {
-                super::provider::SolverDep::Single(name, constraint) => {
-                    alternative_satisfiable(name, constraint, gone)
-                }
-                super::provider::SolverDep::OrGroup(alts) => alts
-                    .iter()
-                    .any(|(name, constraint)| alternative_satisfiable(name, constraint, gone)),
-            }
-        };
-
-    // Iterate to fixed point: each round may discover new broken packages
-    // whose removal breaks further dependents.
-    let mut breaking_set: std::collections::HashSet<String> = std::collections::HashSet::new();
-    loop {
-        let mut changed = false;
-
-        for i in 0..solvable_count {
-            let sid = resolvo::SolvableId(i as u32);
-            let pkg = provider.get_solvable(sid);
-
-            // Skip non-installed, already-gone, and already-broken packages
-            if pkg.installed_trove_id.is_none()
-                || gone_set.contains(&pkg.name)
-                || breaking_set.contains(&pkg.name)
-            {
-                continue;
-            }
-
-            if let Some(deps) = provider.get_removal_dependency_list(sid) {
-                let any_broken = deps.iter().any(|dep| !clause_satisfiable(dep, &gone_set));
-
-                if any_broken {
-                    breaking_set.insert(pkg.name.clone());
-                    // A broken package is effectively gone for subsequent
-                    // dependency checks -- its provides are unreliable.
-                    gone_set.insert(pkg.name.clone());
-                    changed = true;
-                }
-            }
-        }
-
-        if !changed {
-            break;
-        }
-    }
-
-    let mut breaking: Vec<String> = breaking_set.into_iter().collect();
-    breaking.sort();
-
-    Ok(breaking)
+    let provider = removal::build_provider_for_removal(conn)?;
+    Ok(removal::find_breaking_packages(&provider, to_remove))
 }
 
 #[cfg(test)]
