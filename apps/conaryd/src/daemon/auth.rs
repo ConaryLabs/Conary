@@ -350,6 +350,11 @@ impl AuthChecker {
             return Permission::Full;
         }
 
+        // The daemon service identity is trusted to operate its own API.
+        if creds.matches_daemon_identity(nix::unistd::geteuid().as_raw()) {
+            return Permission::Full;
+        }
+
         // Check trusted GIDs (primary + supplementary)
         if creds.has_any_gid(&self.trusted_gids) {
             return Permission::Full;
@@ -660,6 +665,27 @@ mod tests {
         assert_eq!(checker.check(&root, Action::Query), Permission::Full);
         assert_eq!(checker.check(&root, Action::Install), Permission::Full);
         assert_eq!(checker.check(&root, Action::Remove), Permission::Full);
+    }
+
+    #[test]
+    fn test_auth_checker_daemon_identity() {
+        let checker = AuthChecker::new();
+        let daemon_uid = nix::unistd::geteuid().as_raw();
+        let daemon_user = PeerCredentials {
+            pid: std::process::id(),
+            uid: daemon_uid,
+            gid: daemon_uid,
+        };
+
+        assert_eq!(checker.check(&daemon_user, Action::Query), Permission::Full);
+        assert_eq!(
+            checker.check(&daemon_user, Action::Install),
+            Permission::Full
+        );
+        assert_eq!(
+            checker.check(&daemon_user, Action::CancelJob),
+            Permission::Full
+        );
     }
 
     #[test]

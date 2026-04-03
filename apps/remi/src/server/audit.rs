@@ -29,12 +29,6 @@ pub fn derive_action(method: &str, path: &str) -> String {
     // Map known path patterns to semantic actions
     let resource = if rest.starts_with("tokens") {
         "token"
-    } else if rest.starts_with("ci/mirror-sync") {
-        "ci.mirror_sync"
-    } else if rest.starts_with("ci/workflows") && rest.contains("/dispatch") {
-        "ci.dispatch"
-    } else if rest.starts_with("ci/") {
-        "ci"
     } else if rest.starts_with("repos") {
         if rest.contains("/sync") {
             "repo.sync"
@@ -254,14 +248,17 @@ mod tests {
 
     #[test]
     fn test_derive_action_ci() {
-        assert_eq!(derive_action("GET", "/v1/admin/ci/workflows"), "ci.read");
+        assert_eq!(
+            derive_action("GET", "/v1/admin/ci/workflows"),
+            "unknown.read"
+        );
         assert_eq!(
             derive_action("POST", "/v1/admin/ci/workflows/ci.yaml/dispatch"),
-            "ci.dispatch"
+            "unknown.create"
         );
         assert_eq!(
             derive_action("POST", "/v1/admin/ci/mirror-sync"),
-            "ci.mirror_sync"
+            "unknown.create"
         );
     }
 

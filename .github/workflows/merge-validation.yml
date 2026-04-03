@@ -1,0 +1,33 @@
+name: merge-validation
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      smoke_distro:
+        description: Distro for the smoke validation run.
+        required: false
+        default: fedora43
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  smoke:
+    name: smoke
+    runs-on: [self-hosted, forge-trusted]
+    env:
+      SMOKE_DISTRO: ${{ github.event.inputs.smoke_distro || 'fedora43' }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Build trusted-lane binaries
+        run: cargo build -p conary -p remi -p conaryd -p conary-test --verbose
+      - name: Run conary-test smoke subset
+        run: cargo run -p conary-test -- run --suite phase1-core --distro "${SMOKE_DISTRO}" --phase 1
+      - name: Run Remi smoke health check
+        run: ./scripts/remi-health.sh --smoke

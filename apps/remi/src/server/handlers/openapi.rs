@@ -9,7 +9,7 @@ pub async fn openapi_spec() -> Response {
         "openapi": "3.1.0",
         "info": {
             "title": "Remi Admin API",
-            "description": "Administration API for the Remi package server. Manage CI/CD pipelines, admin tokens, and monitor server operations. Designed for human and LLM agent consumption.",
+            "description": "Administration API for the Remi package server. Manage admin tokens, repositories, federation settings, and test-harness operations. Designed for human and LLM agent consumption.",
             "version": env!("CARGO_PKG_VERSION"),
             "contact": { "name": "Conary Labs" }
         },
@@ -57,7 +57,7 @@ pub async fn openapi_spec() -> Response {
                             "required": ["name"],
                             "properties": {
                                 "name": { "type": "string", "description": "Label for this token (1-128 chars)" },
-                                "scopes": { "type": "string", "description": "Comma-separated scopes. Default: 'admin'. Options: admin, ci:read, ci:trigger, repos:read, repos:write, federation:read, federation:write" }
+                                "scopes": { "type": "string", "description": "Comma-separated scopes. Default: 'admin'. Options: admin, repos:read, repos:write, federation:read, federation:write" }
                             }
                         }}}
                     },
@@ -72,64 +72,6 @@ pub async fn openapi_spec() -> Response {
                     "tags": ["tokens"],
                     "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
                     "responses": { "204": { "description": "Deleted" }, "404": { "description": "Not found" } }
-                }
-            },
-            "/v1/admin/ci/workflows": {
-                "get": {
-                    "operationId": "ciListWorkflows",
-                    "summary": "List CI workflows",
-                    "description": "Returns all CI/CD workflows. Use the workflow filename (e.g., 'ci.yaml') with other CI endpoints. Requires ci:read scope.",
-                    "tags": ["ci"],
-                    "responses": { "200": { "description": "Workflow list" }, "502": { "description": "Forgejo error" } }
-                }
-            },
-            "/v1/admin/ci/workflows/{name}/runs": {
-                "get": {
-                    "operationId": "ciListRuns",
-                    "summary": "List CI runs for a workflow",
-                    "description": "Returns recent runs for a workflow. Requires ci:read scope.",
-                    "tags": ["ci"],
-                    "parameters": [{ "name": "name", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Workflow filename (e.g., ci.yaml, integration.yaml, e2e.yaml)" }],
-                    "responses": { "200": { "description": "Run list" }, "502": { "description": "Forgejo error" } }
-                }
-            },
-            "/v1/admin/ci/runs/{id}": {
-                "get": {
-                    "operationId": "ciGetRun",
-                    "summary": "Get CI run details",
-                    "description": "Full details for a run including job statuses. Requires ci:read scope.",
-                    "tags": ["ci"],
-                    "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
-                    "responses": { "200": { "description": "Run details" }, "502": { "description": "Forgejo error" } }
-                }
-            },
-            "/v1/admin/ci/runs/{id}/logs": {
-                "get": {
-                    "operationId": "ciGetLogs",
-                    "summary": "Get CI run logs",
-                    "description": "Raw log output as plain text. Can be large. Requires ci:read scope.",
-                    "tags": ["ci"],
-                    "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
-                    "responses": { "200": { "description": "Plain text logs" }, "502": { "description": "Forgejo error" } }
-                }
-            },
-            "/v1/admin/ci/workflows/{name}/dispatch": {
-                "post": {
-                    "operationId": "ciDispatch",
-                    "summary": "Trigger a CI workflow",
-                    "description": "Dispatches a new run on main branch. NOT idempotent. Requires ci:trigger scope.",
-                    "tags": ["ci"],
-                    "parameters": [{ "name": "name", "in": "path", "required": true, "schema": { "type": "string" } }],
-                    "responses": { "200": { "description": "Dispatched" }, "502": { "description": "Forgejo error" } }
-                }
-            },
-            "/v1/admin/ci/mirror-sync": {
-                "post": {
-                    "operationId": "ciMirrorSync",
-                    "summary": "Force GitHub mirror sync",
-                    "description": "Triggers immediate GitHub mirror sync instead of waiting for 10-minute poll. Requires ci:trigger scope.",
-                    "tags": ["ci"],
-                    "responses": { "200": { "description": "Sync triggered" }, "502": { "description": "Forgejo error" } }
                 }
             },
             "/v1/admin/events": {
@@ -427,5 +369,15 @@ mod tests {
     async fn test_openapi_spec_returns_valid_json() {
         let resp = openapi_spec().await;
         assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let json_text = String::from_utf8(body.to_vec()).unwrap();
+
+        serde_json::from_str::<serde_json::Value>(&json_text).unwrap();
+        assert!(!json_text.contains("/v1/admin/ci/workflows"));
+        assert!(!json_text.contains("ci:read"));
+        assert!(!json_text.contains("ci:trigger"));
     }
 }

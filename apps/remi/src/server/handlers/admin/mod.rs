@@ -3,7 +3,6 @@
 
 mod artifacts;
 mod audit;
-mod ci;
 mod events;
 mod federation;
 mod packages;
@@ -13,7 +12,6 @@ mod tokens;
 
 pub use artifacts::*;
 pub use audit::*;
-pub use ci::*;
 pub use events::*;
 pub use federation::*;
 pub use packages::*;

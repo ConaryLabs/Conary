@@ -168,7 +168,7 @@ mod tests {
         let (app, db_path) = test_app().await;
 
         // POST /v1/admin/tokens to create a new token
-        let create_body = serde_json::json!({"name": "new-token", "scopes": "ci:read"});
+        let create_body = serde_json::json!({"name": "new-token", "scopes": "repos:read"});
         let resp = app
             .oneshot(
                 axum::http::Request::builder()
@@ -189,7 +189,7 @@ mod tests {
             .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(body["name"], "new-token");
-        assert_eq!(body["scopes"], "ci:read");
+        assert_eq!(body["scopes"], "repos:read");
         let token_id = body["id"].as_i64().expect("id should be an integer");
 
         // Build a fresh router (oneshot consumes the app)
@@ -227,10 +227,10 @@ mod tests {
 
     #[test]
     fn test_create_token_request_deserialize() {
-        let json = r#"{"name": "ci-key", "scopes": "ci:read,ci:trigger"}"#;
+        let json = r#"{"name": "repo-key", "scopes": "repos:read,repos:write"}"#;
         let req: CreateTokenRequest = serde_json::from_str(json).unwrap();
-        assert_eq!(req.name, "ci-key");
-        assert_eq!(req.scopes.unwrap(), "ci:read,ci:trigger");
+        assert_eq!(req.name, "repo-key");
+        assert_eq!(req.scopes.unwrap(), "repos:read,repos:write");
     }
 
     #[test]
@@ -249,7 +249,7 @@ mod tests {
 
     #[test]
     fn test_check_scope_insufficient() {
-        let scopes = Some(axum::Extension(TokenScopes("ci:read".to_string())));
+        let scopes = Some(axum::Extension(TokenScopes("repos:read".to_string())));
         let resp = check_scope(&scopes, Scope::Admin).unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
