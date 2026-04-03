@@ -22,6 +22,7 @@ jobs:
     name: smoke
     runs-on: [self-hosted, forge-trusted]
     env:
+      DOCKER_HOST: unix:///run/user/1000/podman/podman.sock
       SMOKE_DISTRO: ${{ github.event.inputs.smoke_distro || 'fedora43' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
