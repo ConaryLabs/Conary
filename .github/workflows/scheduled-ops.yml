@@ -27,6 +27,8 @@ jobs:
     name: health
     if: ${{ github.event_name != 'schedule' || github.event.schedule == '0 */6 * * *' }}
     runs-on: [self-hosted, forge-trusted]
+    env:
+      DOCKER_HOST: unix:///run/user/1000/podman/podman.sock
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Full Remi health check
@@ -52,6 +54,8 @@ jobs:
     name: deep-validation (${{ matrix.distro }})
     if: ${{ (github.event_name == 'schedule' && github.event.schedule == '30 6 * * *') || (github.event_name == 'workflow_dispatch' && github.event.inputs.run_deep_validation == 'true') }}
     runs-on: [self-hosted, forge-trusted]
+    env:
+      DOCKER_HOST: unix:///run/user/1000/podman/podman.sock
     strategy:
       fail-fast: false
       matrix:
@@ -93,6 +97,8 @@ jobs:
     name: qemu
     if: ${{ (github.event_name == 'schedule' && github.event.schedule == '30 6 * * *') || (github.event_name == 'workflow_dispatch' && github.event.inputs.run_qemu == 'true') }}
     runs-on: [self-hosted, forge-trusted]
+    env:
+      DOCKER_HOST: unix:///run/user/1000/podman/podman.sock
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Build QEMU validation binaries
