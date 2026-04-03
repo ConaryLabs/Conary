@@ -43,6 +43,9 @@ require_ref .github/workflows/scheduled-ops.yml \
 require_ref .github/workflows/release-build.yml \
   'actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7' \
   'Node 24 cache pin'
+require_ref .github/actions/setup-rust-workspace/action.yml \
+  'actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7' \
+  'Node 24 setup action cache pin'
 require_ref .github/workflows/release-build.yml \
   'actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f' \
   'Node 24 upload-artifact pin'
