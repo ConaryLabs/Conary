@@ -830,9 +830,9 @@ When GPG checking is enabled, every package from the repository is verified agai
 Repositories can specify how packages are resolved:
 
 ```bash
-conary repo add remi-fed https://packages.conary.io \
+conary repo add remi-fed https://remi.conary.io \
     --default-strategy remi \
-    --remi-endpoint https://packages.conary.io \
+    --remi-endpoint https://remi.conary.io \
     --remi-distro fedora
 ```
 
@@ -985,7 +985,7 @@ conary self-update --force      # Reinstall even if same version
 conary self-update --version X  # Install specific version
 ```
 
-The update channel defaults to `https://packages.conary.io/v1/ccs/conary` but can be overridden:
+The update channel defaults to `https://remi.conary.io/v1/ccs/conary` but can be overridden:
 
 ```bash
 conary system update-channel get          # Show current channel
@@ -2302,7 +2302,7 @@ The `Kitchen::sources_cached()` method checks whether all sources (main archive,
 
 Remi is Conary's server-side component: an HTTP server that converts legacy Linux packages (RPM, DEB, Arch) into CCS format on demand, stores the results as content-addressed chunks, and serves them to clients through a CDN-friendly API. Where a traditional mirror network replicates entire repositories, Remi converts only what clients actually request, then caches the results indefinitely since chunks are immutable. The name is short for "repository middleware."
 
-Remi now lives in its own `apps/remi` crate rather than riding behind a root server feature toggle. A production instance runs at `packages.conary.io` on a Hetzner dedicated server (12 cores, 64 GB RAM, 2x 1 TB NVMe) behind Cloudflare.
+Remi now lives in its own `apps/remi` crate rather than riding behind a root server feature toggle. A production instance runs at `remi.conary.io` on a Hetzner dedicated server (12 cores, 64 GB RAM, 2x 1 TB NVMe) behind Cloudflare.
 
 ```
 apps/remi/src/server/
@@ -2338,7 +2338,7 @@ apps/remi/src/server/
 Remi runs two Axum HTTP servers concurrently:
 
 - **Public API** (default `0.0.0.0:8080`): Chunk serving, package metadata, sparse index, search, OCI, federation, health checks, Prometheus metrics.
-- **Admin API** (default `127.0.0.1:8081` internal + `0.0.0.0:8082` external origin): Internal routes (conversion triggers, cache management, Bloom filter rebuild) stay on localhost-only :8081 without auth. External admin routes (token management, CI proxy, federation config, SSE events, test-data APIs) live on the admin origin listener with bearer token auth, per-IP rate limiting, and audit logging. In production behind the reverse proxy, the authenticated MCP surface is exposed on standard HTTPS at `https://packages.conary.io/mcp` instead of asking clients to connect to `:8082` directly.
+- **Admin API** (default `127.0.0.1:8081` internal + `0.0.0.0:8082` external origin): Internal routes (conversion triggers, cache management, Bloom filter rebuild) stay on localhost-only :8081 without auth. External admin routes (token management, CI proxy, federation config, SSE events, test-data APIs) live on the admin origin listener with bearer token auth, per-IP rate limiting, and audit logging. In production behind the reverse proxy, the authenticated MCP surface is exposed on standard HTTPS at `https://remi.conary.io/mcp` instead of asking clients to connect to `:8082` directly.
 
 Both servers share a single `ServerState` behind `Arc<RwLock<>>`:
 
@@ -3214,9 +3214,9 @@ Index generation scans both the `converted_packages` table and the chunk store d
 
 ### Cloudflare Setup
 
-The production deployment at `packages.conary.io` uses Cloudflare for DNS, CDN caching, DDoS protection, and R2 storage. The full setup is documented in `deploy/CLOUDFLARE.md`:
+The production deployment at `remi.conary.io` uses Cloudflare for DNS, CDN caching, DDoS protection, and R2 storage. The full setup is documented in `deploy/CLOUDFLARE.md`:
 
-1. **DNS**: A/AAAA records for `packages.conary.io` with orange cloud (proxy) enabled
+1. **DNS**: A/AAAA records for `remi.conary.io` with orange cloud (proxy) enabled
 2. **SSL/TLS**: Full (strict) encryption mode, TLS 1.2 minimum, Cloudflare Origin Certificate
 3. **R2 bucket**: `conary-chunks` with API token scoped to that bucket
 4. **Cache rules**: Immutable chunks cached forever, metadata cached briefly, admin bypassed
@@ -3327,7 +3327,7 @@ The frontend is served as a SPA with `ServeDir` + `ServeFile` fallback to `index
 Authenticated via bearer tokens. Rate-limited per IP (read 60/min, write 10/min, auth-fail 5/min). All requests audit-logged.
 
 In a proxied deployment, treat `:8082` as the admin origin listener. The public
-Cloudflare-facing MCP entry point is `https://packages.conary.io/mcp`; REST
+Cloudflare-facing MCP entry point is `https://remi.conary.io/mcp`; REST
 admin routes are only public if you explicitly proxy them.
 
 | Method | Path | Purpose | Scope |
@@ -3354,7 +3354,7 @@ admin routes are only public if you explicitly proxy them.
 | GET | `/v1/admin/audit` | Query audit log | admin |
 | DELETE | `/v1/admin/audit` | Purge old audit entries | admin |
 | GET | `/v1/admin/openapi.json` | OpenAPI 3.1 spec | (no auth) |
-| GET/POST | `/mcp` | MCP endpoint (23 tools, proxied publicly at `https://packages.conary.io/mcp`) | admin |
+| GET/POST | `/mcp` | MCP endpoint (23 tools, proxied publicly at `https://remi.conary.io/mcp`) | admin |
 | POST | `/v1/admin/test-runs` | Create a test run | admin |
 | GET | `/v1/admin/test-runs` | List runs (cursor pagination) | admin |
 | GET | `/v1/admin/test-runs/{id}` | Get run with results | admin |
@@ -4841,11 +4841,11 @@ postgresql = "~16"          # Stay on major version 16
 
 [[collections]]
 name = "monitoring"
-url = "https://packages.conary.io/collections/monitoring.toml"
+url = "https://remi.conary.io/collections/monitoring.toml"
 
 [[collections]]
 name = "hardened-base"
-url = "https://packages.conary.io/collections/hardened-base.toml"
+url = "https://remi.conary.io/collections/hardened-base.toml"
 
 [automation]
 security_updates = "auto"    # Apply security patches automatically

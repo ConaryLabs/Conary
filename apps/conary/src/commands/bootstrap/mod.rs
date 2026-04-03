@@ -1034,7 +1034,7 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
                     .unwrap_or_default()
             },
             publish_endpoint: if opts.publish {
-                Some("https://packages.conary.io".to_string())
+                Some("https://remi.conary.io".to_string())
             } else {
                 None
             },

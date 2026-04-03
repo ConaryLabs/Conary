@@ -131,7 +131,7 @@ conary = "repo sync"
     fn test_parse_global_config() {
         let toml = r#"
 [remi]
-endpoint = "https://packages.conary.io"
+endpoint = "https://remi.conary.io"
 
 [paths]
 db = "/tmp/conary-test.db"
@@ -163,7 +163,7 @@ version = "1.0.0"
 ccs_file = "conary-test-fixture-1.0.0.ccs"
 "#;
         let config: GlobalConfig = toml::from_str(toml).unwrap();
-        assert_eq!(config.remi.endpoint, "https://packages.conary.io");
+        assert_eq!(config.remi.endpoint, "https://remi.conary.io");
         assert_eq!(config.paths.db, "/tmp/conary-test.db");
         assert_eq!(config.setup.remove_default_repos, &["fedora", "updates"]);
         assert_eq!(config.distros.len(), 2);
@@ -500,7 +500,7 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
             let a72 = t72.step[0].assert.as_ref().unwrap();
             let all72 = a72.stdout_contains_all.as_ref().unwrap();
             assert_eq!(all72.len(), 2);
-            assert!(all72.contains(&"packages.conary.io".to_string()));
+            assert!(all72.contains(&"remi.conary.io".to_string()));
             assert!(all72.contains(&"(default)".to_string()));
 
             // Verify T73 sets custom channel and checks for it

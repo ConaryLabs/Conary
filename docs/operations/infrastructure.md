@@ -8,7 +8,7 @@ summary: Non-secret infrastructure, MCP, and deployment guidance for Conary cont
 
 ## Host Roles
 
-- Remi is the production package service behind `https://packages.conary.io`.
+- Remi is the production package service behind `https://remi.conary.io`.
 - Forge is the trusted GitHub runner host used for `conary-test` validation,
   test-harness service work, and source-sync validation.
 - Sensitive usernames, credentials, or workstation-only shortcuts belong in the
@@ -26,9 +26,12 @@ task or when you are debugging the underlying service path itself.
 
 ## Safe Public And Admin Endpoints
 
-- Public package service: `https://packages.conary.io`
-- Remi admin API and MCP surface: `https://packages.conary.io:8082`
-- Remi OpenAPI spec: `https://packages.conary.io:8082/v1/admin/openapi.json`
+- Public package service: `https://remi.conary.io`
+- Public authenticated MCP endpoint: `https://remi.conary.io/mcp`
+- Remi admin origin API: `https://localhost:8082` via SSH tunnel or direct
+  origin access
+- Remi OpenAPI spec: `https://localhost:8082/v1/admin/openapi.json` via SSH
+  tunnel or direct origin access
 - Forge-local `conary-test` health endpoint: `http://127.0.0.1:9090/v1/health`
 
 ## Source Deploy Patterns
@@ -45,6 +48,13 @@ task or when you are debugging the underlying service path itself.
 - Exclude `target/`, `.git/`, and `.worktrees/`
 - Build `remi`, stop the service before replacing the live binary, then restart
   and verify the local health endpoint
+- The public frontends currently share the Remi host but deploy as two separate
+  static sites:
+  `conary.io` syncs to `/conary/site/`, while `remi.conary.io` syncs to
+  `/conary/web/`
+- The package frontend is the one wired into Remi's tracked config via
+  `[web].root = "/conary/web"`; the main site remains a separate static root on
+  the same host
 
 Do not overwrite the live Remi binary while `remi.service` is still running the
 old process. That can fail with `Text file busy`.

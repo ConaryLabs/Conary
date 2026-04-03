@@ -1,11 +1,11 @@
 # Cloudflare Setup for Conary Remi
 
-This document covers the Cloudflare configuration for `packages.conary.io`, including DNS, R2, caching, and security.
+This document covers the Cloudflare configuration for `remi.conary.io`, including DNS, R2, caching, and security.
 
 ## Prerequisites
 
 - A Cloudflare account (Free plan works, Pro recommended for advanced WAF rules)
-- The `packages.conary.io` domain managed by Cloudflare DNS
+- The `remi.conary.io` domain managed by Cloudflare DNS
 - A running Remi server (see `deploy/setup-remi.sh` or `deploy/nixos/remi.nix`)
 
 ## 1. DNS Setup
@@ -14,7 +14,7 @@ Create an A record pointing to your Hetzner server:
 
 | Type | Name       | Content         | Proxy | TTL  |
 |------|------------|-----------------|-------|------|
-| A    | packages   | YOUR_SERVER_IP  | Yes   | Auto |
+| A    | remi       | YOUR_SERVER_IP  | Yes   | Auto |
 
 The orange cloud (proxy) must be enabled for caching and DDoS protection to work.
 
@@ -22,16 +22,20 @@ If using IPv6 (recommended on Hetzner):
 
 | Type | Name       | Content         | Proxy | TTL  |
 |------|------------|-----------------|-------|------|
-| AAAA | packages   | YOUR_IPV6_ADDR  | Yes   | Auto |
+| AAAA | remi       | YOUR_IPV6_ADDR  | Yes   | Auto |
+
+If you are preserving `packages.conary.io` as a legacy alias, keep matching
+proxied `packages` records as well and redirect or otherwise treat them as a
+compatibility hostname rather than the canonical public endpoint.
 
 ### Admin and MCP proxying
 
-When `packages.conary.io` is orange-cloud proxied, do not expect the public
+When `remi.conary.io` is orange-cloud proxied, do not expect the public
 hostname to expose arbitrary origin ports such as `:8082`.
 
 - Keep the Remi admin origin listener on loopback or another non-public bind.
 - Publish the authenticated MCP surface on the standard HTTPS hostname, for
-  example `https://packages.conary.io/mcp`.
+  example `https://remi.conary.io/mcp`.
 - Expose REST admin routes on the public hostname only if you explicitly proxy
   them; otherwise reach them through a direct origin URL or an SSH tunnel.
 
@@ -64,7 +68,7 @@ For the origin certificate (on the Remi server):
 # Save to /etc/conary/ssl/origin.pem and /etc/conary/ssl/origin-key.pem
 
 # Option B: Let's Encrypt (if you need direct access without Cloudflare)
-certbot certonly --standalone -d packages.conary.io
+certbot certonly --standalone -d remi.conary.io
 ```
 
 ## 3. R2 Bucket Setup
@@ -260,12 +264,12 @@ If using Page Rules instead of Cache Rules:
 
 | URL Pattern                          | Setting              | Value        |
 |--------------------------------------|----------------------|--------------|
-| `packages.conary.io/v1/chunks/*`    | Cache Level          | Cache Everything |
+| `remi.conary.io/v1/chunks/*`    | Cache Level          | Cache Everything |
 |                                      | Edge Cache TTL       | 1 month      |
 |                                      | Browser Cache TTL    | 1 year       |
-| `packages.conary.io/v1/index/*`     | Cache Level          | Cache Everything |
+| `remi.conary.io/v1/index/*`     | Cache Level          | Cache Everything |
 |                                      | Edge Cache TTL       | 1 minute     |
-| `packages.conary.io/v1/admin/*`     | Cache Level          | Bypass       |
+| `remi.conary.io/v1/admin/*`     | Cache Level          | Bypass       |
 
 Note: Page Rules are being deprecated in favor of Cache Rules. Use Cache Rules (Section 4) for new deployments.
 
@@ -303,7 +307,7 @@ cloudflare_ips_file = "/etc/conary/cloudflare-ips.txt"
 ### Origin Health
 
 - Set up a **Health Check** (under Traffic > Health Checks):
-  - URL: `https://packages.conary.io/health`
+  - URL: `https://remi.conary.io/health`
   - Interval: 60 seconds
   - Expected status: 200
   - Expected body contains: `"status":"ok"`
@@ -321,8 +325,8 @@ Configure alerts under **Notifications**:
 
 After completing setup, verify:
 
-1. `curl -I https://packages.conary.io/health` returns 200
-2. `curl -I https://packages.conary.io/v1/chunks/HASH` returns `cf-cache-status: HIT` on second request
-3. `curl -I https://packages.conary.io/v1/index/fedora/43/x86_64` returns short-TTL cache headers
+1. `curl -I https://remi.conary.io/health` returns 200
+2. `curl -I https://remi.conary.io/v1/chunks/HASH` returns `cf-cache-status: HIT` on second request
+3. `curl -I https://remi.conary.io/v1/index/fedora/43/x86_64` returns short-TTL cache headers
 4. R2 dashboard shows objects being written (if write-through is enabled)
 5. WAF dashboard shows no false positives on legitimate traffic

@@ -166,7 +166,7 @@ rate_limit_rps = 200
 rate_limit_burst = 400
 
 # CORS allowed origins (empty = same-origin only for chunk endpoints)
-# cors_origins = ["https://packages.conary.io"]
+# cors_origins = ["https://remi.conary.io"]
 
 # Trusted proxy header for real client IP extraction
 # Required when behind Cloudflare or other reverse proxy

@@ -669,7 +669,7 @@ mod tests {
 
         GlobalConfig {
             remi: RemiConfig {
-                endpoint: "https://packages.conary.io".to_string(),
+                endpoint: "https://remi.conary.io".to_string(),
             },
             paths: PathsConfig {
                 db: "/tmp/conary-test.db".to_string(),
@@ -1166,7 +1166,7 @@ mod tests {
         runner.load_manifest_vars(&manifest);
 
         let expanded = variables::expand_variables("curl ${REMI_ENDPOINT}/health", &runner.vars);
-        assert_eq!(expanded, "curl https://packages.conary.io/health");
+        assert_eq!(expanded, "curl https://remi.conary.io/health");
 
         let expanded2 =
             variables::expand_variables("${CONARY_BIN} --db-path ${DB_PATH}", &runner.vars);

@@ -3,13 +3,16 @@
 #
 # Deploy the two SvelteKit frontends to the Remi server.
 #
-#   site/  -> conary.io       -> /conary/site on remi
-#   web/   -> packages.conary.io -> /conary/web  on remi
+# Both frontends currently live on the same Remi host, but they remain split as
+# separate build outputs and deploy roots:
+#   site/  -> conary.io          -> /conary/site on remi
+#   web/   -> remi.conary.io -> /conary/web  on remi
 #
 # Usage:
 #   ./deploy/deploy-sites.sh          # Deploy both
 #   ./deploy/deploy-sites.sh site     # Deploy conary.io only
-#   ./deploy/deploy-sites.sh packages # Deploy packages.conary.io only
+#   ./deploy/deploy-sites.sh packages # Deploy remi.conary.io only
+#                                     # (`packages` is a historical subcommand name)
 
 set -euo pipefail
 
@@ -25,11 +28,11 @@ deploy_site() {
 }
 
 deploy_packages() {
-    echo "[packages] Building packages.conary.io from web/..."
+    echo "[packages] Building remi.conary.io from web/..."
     (cd "$REPO_ROOT/web" && npm run build)
     echo "[packages] Deploying to $REMI_HOST:/conary/web/"
     rsync -avz --delete "$REPO_ROOT/web/build/" "$REMI_HOST:/conary/web/"
-    echo "[packages] packages.conary.io deployed."
+    echo "[packages] remi.conary.io deployed."
 }
 
 case "${1:-both}" in

@@ -1422,7 +1422,7 @@ mod tests {
 
     #[test]
     fn test_validate_host_allows_public() {
-        assert!(ConversionService::validate_host("packages.conary.io").is_ok());
+        assert!(ConversionService::validate_host("remi.conary.io").is_ok());
         assert!(ConversionService::validate_host("github.com").is_ok());
         assert!(ConversionService::validate_host("example.com").is_ok());
     }
