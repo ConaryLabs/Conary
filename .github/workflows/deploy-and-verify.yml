@@ -59,6 +59,7 @@ jobs:
       - name: Download source artifacts
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           SOURCE_RUN: ${{ steps.source.outputs.source_run }}
         run: gh run download "$SOURCE_RUN" --dir source-artifacts
       - name: Read release metadata
@@ -103,7 +104,9 @@ jobs:
       - name: Download source artifacts
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh run download "${{ needs.resolve.outputs.source_run }}" --dir source-artifacts
+          GH_REPO: ${{ github.repository }}
+          SOURCE_RUN: ${{ needs.resolve.outputs.source_run }}
+        run: gh run download "$SOURCE_RUN" --dir source-artifacts
       - name: Verify or deploy conary artifacts
         env:
           DRY_RUN: ${{ needs.resolve.outputs.dry_run }}
@@ -171,7 +174,9 @@ jobs:
       - name: Download source artifacts
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh run download "${{ needs.resolve.outputs.source_run }}" --dir source-artifacts
+          GH_REPO: ${{ github.repository }}
+          SOURCE_RUN: ${{ needs.resolve.outputs.source_run }}
+        run: gh run download "$SOURCE_RUN" --dir source-artifacts
       - name: Verify or deploy remi bundle
         env:
           DRY_RUN: ${{ needs.resolve.outputs.dry_run }}
@@ -225,7 +230,9 @@ jobs:
       - name: Download source artifacts
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh run download "${{ needs.resolve.outputs.source_run }}" --dir source-artifacts
+          GH_REPO: ${{ github.repository }}
+          SOURCE_RUN: ${{ needs.resolve.outputs.source_run }}
+        run: gh run download "$SOURCE_RUN" --dir source-artifacts
       - name: Verify or deploy conaryd bundle
         env:
           DRY_RUN: ${{ needs.resolve.outputs.dry_run }}
