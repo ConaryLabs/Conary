@@ -10,7 +10,7 @@
 #   DISTRO         - select which [distros.*] section to use
 
 [remi]
-endpoint = "https://packages.conary.io"
+endpoint = "https://remi.conary.io"
 
 [paths]
 db = "/var/lib/conary/conary.db"

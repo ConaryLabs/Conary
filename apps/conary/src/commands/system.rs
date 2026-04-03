@@ -27,11 +27,11 @@ pub async fn cmd_init(db_path: &str) -> Result<()> {
     conary_core::db::transaction(&mut conn, |tx| {
         let mut remi_repo = conary_core::db::models::Repository::new(
             "remi".to_string(),
-            "https://packages.conary.io".to_string(),
+            "https://remi.conary.io".to_string(),
         );
         remi_repo.priority = 110;
         remi_repo.default_strategy = Some("remi".to_string());
-        remi_repo.default_strategy_endpoint = Some("https://packages.conary.io".to_string());
+        remi_repo.default_strategy_endpoint = Some("https://remi.conary.io".to_string());
         remi_repo.default_strategy_distro = Some("fedora".to_string());
         match remi_repo.insert(tx) {
             Ok(_) => messages.push("  Added: remi (Conary Remi (CCS))".to_string()),
@@ -1134,11 +1134,11 @@ mod tests {
         let repo = conary_core::db::models::Repository::find_by_name(&conn, "remi")
             .unwrap()
             .unwrap();
-        assert_eq!(repo.url, "https://packages.conary.io");
+        assert_eq!(repo.url, "https://remi.conary.io");
         assert_eq!(repo.default_strategy.as_deref(), Some("remi"));
         assert_eq!(
             repo.default_strategy_endpoint.as_deref(),
-            Some("https://packages.conary.io")
+            Some("https://remi.conary.io")
         );
         assert_eq!(repo.default_strategy_distro.as_deref(), Some("fedora"));
     }

@@ -13,7 +13,7 @@ use tokio::time::{Instant, sleep};
 use crate::config::manifest::QemuBoot;
 use crate::container::backend::ExecResult;
 
-const DEFAULT_ARTIFACT_BASE_URL: &str = "https://packages.conary.io/test-artifacts";
+const DEFAULT_ARTIFACT_BASE_URL: &str = "https://remi.conary.io/test-artifacts";
 
 /// Well-known filename for the conaryOS test SSH private key.
 const TEST_SSH_KEY_NAME: &str = "conaryos-test-key";
@@ -408,7 +408,7 @@ mod tests {
     fn test_image_download_url_uses_default_base() {
         assert_eq!(
             image_download_url("minimal-boot-v1"),
-            "https://packages.conary.io/test-artifacts/minimal-boot-v1.qcow2"
+            "https://remi.conary.io/test-artifacts/minimal-boot-v1.qcow2"
         );
         assert_eq!(
             image_download_url("https://example.com/custom.qcow2"),

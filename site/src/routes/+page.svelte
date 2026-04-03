@@ -16,11 +16,11 @@
 			Every install produces an EROFS image mounted via composefs.
 			Kernel-enforced integrity on every file read. Instant rollback by remounting a previous generation.
 			Install RPM, DEB, and Arch packages with the same tool.
-			68,000+ packages available today.
+			Tens of thousands of upstream packages are available through Remi conversion.
 		</p>
 		<div class="hero-actions animate-in" style="--stagger: 5">
 			<a href="/install" class="btn btn-primary">Get Started</a>
-			<a href="https://packages.conary.io" class="btn btn-outline">Browse Packages</a>
+			<a href="https://remi.conary.io" class="btn btn-outline">Browse Packages</a>
 		</div>
 	</div>
 </section>
@@ -29,23 +29,23 @@
 <section class="stats-ribbon animate-in" style="--stagger: 7">
 	<div class="container stats-inner">
 		<div class="stat">
-			<span class="stat-value">68k+</span>
-			<span class="stat-label">Packages</span>
-		</div>
-		<div class="stat-divider" aria-hidden="true"></div>
-		<div class="stat">
 			<span class="stat-value">3</span>
 			<span class="stat-label">Distributions</span>
 		</div>
 		<div class="stat-divider" aria-hidden="true"></div>
 		<div class="stat">
-			<span class="stat-value">2,800+</span>
-			<span class="stat-label">Tests</span>
+			<span class="stat-value">6</span>
+			<span class="stat-label">Workspace Members</span>
 		</div>
 		<div class="stat-divider" aria-hidden="true"></div>
 		<div class="stat">
-			<span class="stat-value">219K+</span>
-			<span class="stat-label">Lines of Rust</span>
+			<span class="stat-value">DB-First</span>
+			<span class="stat-label">Runtime State</span>
+		</div>
+		<div class="stat-divider" aria-hidden="true"></div>
+		<div class="stat">
+			<span class="stat-value">TUF + CAS</span>
+			<span class="stat-label">Trust + Storage</span>
 		</div>
 	</div>
 </section>
@@ -155,7 +155,7 @@
 				<div class="terminal-line t-blank"></div>
 				<div class="terminal-line">
 					<span class="t-prompt">$</span>
-					<span class="t-cmd">conary generation list</span>
+					<span class="t-cmd">conary system generation list</span>
 				</div>
 				<div class="terminal-line t-output">  4  [active]  142 packages  847 MB  Added nginx</div>
 				<div class="terminal-line t-output">  3            141 packages  832 MB  System update</div>
@@ -163,7 +163,7 @@
 				<div class="terminal-line t-blank"></div>
 				<div class="terminal-line">
 					<span class="t-prompt">$</span>
-					<span class="t-cmd">conary generation rollback</span>
+					<span class="t-cmd">conary system generation rollback</span>
 				</div>
 				<div class="terminal-line t-output t-success">Switched to generation 3. Instant.</div>
 			</div>
@@ -517,9 +517,6 @@
 	.t-output { color: var(--color-text-secondary); padding-left: 1.375rem; }
 	.t-success { color: var(--color-success); }
 	.t-blank { height: 0.5rem; }
-	.t-pkg { color: var(--color-accent); display: inline-block; min-width: 10ch; }
-	.t-ver { color: var(--color-text-muted); display: inline-block; min-width: 8ch; }
-	.t-desc { color: var(--color-text-secondary); }
 
 	.comparison-teaser {
 		padding: 5rem 0;

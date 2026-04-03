@@ -16,7 +16,7 @@ phase = 2
 [[test]]
 id = "T72"
 name = "update_channel_get_default"
-description = "Verify default update channel points to packages.conary.io"
+description = "Verify default update channel points to remi.conary.io"
 timeout = 10
 group = "F"
 
@@ -25,7 +25,7 @@ conary = "system update-channel get"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["packages.conary.io", "(default)"]
+stdout_contains_all = ["remi.conary.io", "(default)"]
 
 # --------------------------------------------------------------------------
 # T73: Update channel set
@@ -80,7 +80,7 @@ conary = "system update-channel get"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["packages.conary.io", "(default)"]
+stdout_contains_all = ["remi.conary.io", "(default)"]
 
 # --------------------------------------------------------------------------
 # T75: Self-update check (graceful failure)

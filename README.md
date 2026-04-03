@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![v0.7.0](https://img.shields.io/badge/version-0.7.0-orange.svg)](CHANGELOG.md)
 
-**Website:** [conary.io](https://conary.io) | **Packages:** [packages.conary.io](https://packages.conary.io) | **Discussions:** [GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions)
+**Website:** [conary.io](https://conary.io) | **Packages:** [remi.conary.io](https://remi.conary.io) | **Discussions:** [GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions)
 
 A cross-distribution Linux system manager with immutable generations, atomic transactions, content-addressable storage, and a declarative system model. Conary installs native RPM/DEB/Arch packages, builds and installs CCS packages, and layers a declarative system workflow on top.
 
@@ -28,7 +28,7 @@ conary system generation rollback
 ```bash
 conary install nginx postgresql redis
 conary system state list
-conary system state rollback 5
+conary system state revert 5
 ```
 
 **Format-agnostic.** RPM, DEB, Arch packages, and Conary's native CCS format are all first-class. One tool handles them all.
@@ -47,10 +47,10 @@ conary model apply    # Make it so
 conary model check    # Drift detection (CI/CD friendly, uses exit codes)
 ```
 
-**Cross-distro package access on day one.** Remi, the on-demand conversion proxy at [packages.conary.io](https://packages.conary.io), transparently converts upstream RPM/DEB/Arch packages into CCS format. No upstream changes are required to start using Conary against the supported upstream repositories.
+**Cross-distro package access on day one.** Remi, the on-demand conversion proxy at [remi.conary.io](https://remi.conary.io), transparently converts upstream RPM/DEB/Arch packages into CCS format. No upstream changes are required to start using Conary against the supported upstream repositories.
 
 ```bash
-conary repo add remi https://packages.conary.io
+conary repo add remi https://remi.conary.io
 conary repo sync
 conary install nginx
 ```
@@ -100,7 +100,7 @@ cargo build
 conary system init
 
 # Add the Remi package server (Fedora, Arch, Ubuntu, Debian)
-conary repo add remi https://packages.conary.io
+conary repo add remi https://remi.conary.io
 conary repo sync
 
 # Install a package
@@ -113,7 +113,7 @@ conary query depends nginx       # Show dependencies
 conary query whatprovides libc.so.6
 
 # Adopt packages already on the system
-conary system adopt --system     # Track everything installed by RPM/APT
+conary system adopt --system     # Track everything installed by the native package manager
 
 # Build a generation from current system state
 conary system generation build --summary "Initial setup"
@@ -161,7 +161,7 @@ Every operation produces a changeset. It applies completely or not at all. The f
 conary install nginx postgresql redis
 conary system state list          # See all system snapshots
 conary system state diff 5 8      # Compare two snapshots
-conary system state rollback 5    # Revert to snapshot 5
+conary system state revert 5      # Revert to snapshot 5
 ```
 
 ### Multi-Format Support
@@ -189,7 +189,7 @@ openssl = "3.0.*"
 
 [[collections]]
 name = "base-server"
-url = "https://packages.conary.io/collections/base-server.toml"
+url = "https://remi.conary.io/collections/base-server.toml"
 ```
 
 ```bash
@@ -216,7 +216,7 @@ SAT-based resolver (via [resolvo](https://github.com/prefix-dev/resolvo)) with t
 conary query depends nginx          # Forward dependencies
 conary query rdepends openssl       # Reverse dependencies
 conary query whatprovides libc.so.6 # Capability lookup
-conary deptree nginx                # Full dependency tree
+conary query deptree nginx          # Full dependency tree
 ```
 
 ### Component Model
@@ -273,7 +273,7 @@ conary ccs install package.ccs       # Install a CCS package
 conary ccs install package.ccs --reinstall    # Reinstall same version
 conary ccs sign package.ccs          # Ed25519 signatures
 conary ccs verify package.ccs        # Verify integrity
-conary ccs export package --format oci  # Export to container image
+conary ccs export package.ccs --output ./package.oci  # Export to container image
 ```
 
 </details>
@@ -297,7 +297,7 @@ conary cook --fetch-only nginx.recipe.toml   # Pre-fetch for offline build
 Temporary environments without permanent installation -- similar to `nix shell`.
 
 ```bash
-conary ccs shell python,nodejs   # Spawn a shell with packages available
+conary ccs shell python nodejs   # Spawn a shell with packages available
 conary ccs run gcc -- make       # One-shot command execution
 ```
 
@@ -448,11 +448,11 @@ For a detailed architecture overview, see [docs/ARCHITECTURE.md](docs/ARCHITECTU
 
 Conary includes an on-demand CCS conversion proxy called Remi. It converts legacy packages (RPM, DEB, Arch) to CCS format on the fly, serves chunks via content-addressable storage, and provides a sparse index for efficient client sync without requiring upstream package authors to republish in CCS first.
 
-A public instance runs at **[packages.conary.io](https://packages.conary.io)**.
+A public instance runs at **[remi.conary.io](https://remi.conary.io)**.
 
 Features: Bloom filter acceleration, batch endpoints, pull-through caching, full-text search (Tantivy), repository metadata verification, and Prometheus metrics.
 
-- **Authenticated MCP endpoint** at [`https://packages.conary.io/mcp`](https://packages.conary.io/mcp) for production automation
+- **Authenticated MCP endpoint** at [`https://remi.conary.io/mcp`](https://remi.conary.io/mcp) for production automation
 - **Admin origin listener** on `:8082` for bearer-authenticated REST operations behind the reverse proxy
 
 ```bash
@@ -513,7 +513,11 @@ cargo run -p conary-test -- logs T42  # Retrieve test logs
 
 ## Building
 
-Requires Rust 1.94+ (edition 2024). The project root is a virtual Cargo workspace with four app crates and one shared library crate: `apps/conary` (CLI), `apps/remi` (Remi), `apps/conaryd` (daemon), `apps/conary-test` (test infrastructure), and `crates/conary-core` (shared library).
+Requires Rust 1.94+ (edition 2024). The project root is a virtual Cargo
+workspace with six members: `apps/conary` (CLI), `apps/remi` (Remi),
+`apps/conaryd` (daemon), `apps/conary-test` (test infrastructure),
+`crates/conary-core` (shared library), and `crates/conary-mcp` (shared MCP
+helpers).
 
 ```bash
 cargo build -p conary                              # CLI

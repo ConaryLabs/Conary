@@ -257,7 +257,7 @@ mod tests {
         record_no_verify_audit_event(
             &conn,
             true,
-            "https://packages.conary.io/v1/ccs/conary",
+            "https://remi.conary.io/v1/ccs/conary",
             "0.7.0",
             "0.8.0",
         )

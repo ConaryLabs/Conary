@@ -465,7 +465,7 @@ depends_on = ["T242"]
 
 # Add the replatform target repo with Remi strategy (may already exist, ignore errors)
 [[test.step]]
-run = "${CONARY_BIN} repo add ${replatform_repo} https://packages.conary.io --default-strategy remi --remi-endpoint https://packages.conary.io --remi-distro ${replatform_remi_distro} --no-gpg-check --db-path ${DB_PATH} 2>&1; true"
+run = "${CONARY_BIN} repo add ${replatform_repo} https://remi.conary.io --default-strategy remi --remi-endpoint https://remi.conary.io --remi-distro ${replatform_remi_distro} --no-gpg-check --db-path ${DB_PATH} 2>&1; true"
 
 [test.step.assert]
 exit_code = 0

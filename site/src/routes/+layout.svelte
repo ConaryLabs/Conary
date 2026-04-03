@@ -34,7 +34,7 @@
 						</li>
 					{/each}
 					<li>
-						<a href="https://packages.conary.io" class="nav-external">Packages</a>
+						<a href="https://remi.conary.io" class="nav-external">Packages</a>
 					</li>
 				</ul>
 			</nav>
@@ -53,7 +53,7 @@
 				<a href="/install">Install</a>
 				<a href="/compare">Compare</a>
 				<a href="/about">About</a>
-				<a href="https://packages.conary.io">Packages</a>
+				<a href="https://remi.conary.io">Packages</a>
 				<a href="https://github.com/ConaryLabs/Conary" target="_blank" rel="noopener noreferrer">GitHub</a>
 			</div>
 			<div class="footer-bottom">

@@ -1259,7 +1259,7 @@ mod tests {
 
         let row = remi_sync_row(
             7,
-            "https://packages.conary.io".to_string(),
+            "https://remi.conary.io".to_string(),
             "fedora".to_string(),
             entry,
             "x86_64",

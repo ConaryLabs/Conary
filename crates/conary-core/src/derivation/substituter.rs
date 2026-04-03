@@ -51,7 +51,7 @@ pub enum SubstituterError {
 
 /// A remote peer that may hold pre-built derivation outputs.
 pub struct SubstituterPeer {
-    /// Base URL of the remote Remi server (e.g. `https://packages.conary.io`).
+    /// Base URL of the remote Remi server (e.g. `https://remi.conary.io`).
     pub endpoint: String,
     /// Lower value = higher priority (peers are tried in ascending order).
     pub priority: u32,

@@ -87,7 +87,7 @@ pub fn verify_update_signature(
 }
 
 /// Default update channel URL
-pub const DEFAULT_UPDATE_CHANNEL: &str = "https://packages.conary.io/v1/ccs/conary";
+pub const DEFAULT_UPDATE_CHANNEL: &str = "https://remi.conary.io/v1/ccs/conary";
 
 /// Maximum size of the `/latest` JSON response before deserialization (1 MiB).
 const MAX_SELF_UPDATE_METADATA_SIZE: usize = 1024 * 1024;
@@ -672,8 +672,8 @@ mod tests {
     #[test]
     fn test_validate_download_origin_accepts_same_origin() {
         validate_download_origin(
-            "https://packages.conary.io/v1/ccs/conary",
-            "https://packages.conary.io/releases/conary-0.7.0.ccs",
+            "https://remi.conary.io/v1/ccs/conary",
+            "https://remi.conary.io/releases/conary-0.7.0.ccs",
         )
         .unwrap();
     }
@@ -681,7 +681,7 @@ mod tests {
     #[test]
     fn test_validate_download_origin_rejects_different_host() {
         let err = validate_download_origin(
-            "https://packages.conary.io/v1/ccs/conary",
+            "https://remi.conary.io/v1/ccs/conary",
             "https://evil.example/releases/conary-0.7.0.ccs",
         )
         .unwrap_err();
@@ -691,8 +691,8 @@ mod tests {
     #[test]
     fn test_validate_download_origin_rejects_different_scheme() {
         let err = validate_download_origin(
-            "https://packages.conary.io/v1/ccs/conary",
-            "http://packages.conary.io/releases/conary-0.7.0.ccs",
+            "https://remi.conary.io/v1/ccs/conary",
+            "http://remi.conary.io/releases/conary-0.7.0.ccs",
         )
         .unwrap_err();
         assert!(format!("{err}").contains("origin mismatch"));

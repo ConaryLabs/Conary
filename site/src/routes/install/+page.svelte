@@ -71,7 +71,7 @@
 					<div class="terminal-line t-blank"></div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
-						<span class="t-cmd">conary repo add remi https://packages.conary.io</span>
+						<span class="t-cmd">conary repo add remi https://remi.conary.io</span>
 					</div>
 					<div class="terminal-line t-output t-success">Repository added.</div>
 					<div class="terminal-line t-blank"></div>
@@ -80,7 +80,7 @@
 						<span class="t-cmd">conary repo sync</span>
 					</div>
 					<div class="terminal-line t-output">Syncing metadata from 1 repository...</div>
-					<div class="terminal-line t-output t-success">Sync complete. 68,421 packages available.</div>
+					<div class="terminal-line t-output t-success">Sync complete. Tens of thousands of packages available.</div>
 					<div class="terminal-line t-blank"></div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
@@ -164,22 +164,12 @@
 		font-weight: 300;
 	}
 
-	.install-hint {
-		font-size: 0.8125rem;
-		color: var(--color-text-muted);
-		margin: 1rem 0 0.75rem;
-	}
-
 	.terminal {
 		background: var(--color-code-bg);
 		border: 1px solid var(--color-border);
 		border-radius: var(--radius-lg);
 		overflow: hidden;
 		box-shadow: var(--shadow-lg);
-	}
-
-	.terminal.compact {
-		box-shadow: none;
 	}
 
 	.terminal-header {
@@ -211,10 +201,6 @@
 		font-family: var(--font-mono);
 		font-size: 0.8125rem;
 		line-height: 1.8;
-	}
-
-	.terminal.compact .terminal-body {
-		padding: 0.875rem 1.25rem;
 	}
 
 	.terminal-line { white-space: nowrap; overflow: hidden; }
@@ -258,19 +244,6 @@
 		color: var(--color-text-muted);
 		margin-top: 0.75rem;
 		margin-bottom: 0;
-	}
-
-	.coming-soon .distro-card {
-		opacity: 0.5;
-	}
-
-	.soon-tag {
-		font-size: 0.6875rem;
-		font-weight: 500;
-		color: var(--color-text-muted);
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
-		margin-left: 0.5rem;
 	}
 
 	@media (max-width: 768px) {

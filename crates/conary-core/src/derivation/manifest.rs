@@ -147,7 +147,7 @@ name = "conaryos-minimal"
 target = "x86_64-conary-linux-gnu"
 
 [seed]
-source = "https://packages.conary.io/seeds/stage0-x86_64.erofs"
+source = "https://remi.conary.io/seeds/stage0-x86_64.erofs"
 
 [packages]
 include = ["glibc", "coreutils", "bash"]
@@ -188,7 +188,7 @@ erofs_digest = true
         assert_eq!(manifest.system.target, "x86_64-conary-linux-gnu");
         assert_eq!(
             manifest.seed.source,
-            "https://packages.conary.io/seeds/stage0-x86_64.erofs"
+            "https://remi.conary.io/seeds/stage0-x86_64.erofs"
         );
         assert_eq!(
             manifest.packages.include,

@@ -202,7 +202,7 @@ mod tests {
 
         GlobalConfig {
             remi: RemiConfig {
-                endpoint: "https://packages.conary.io".to_string(),
+                endpoint: "https://remi.conary.io".to_string(),
             },
             paths: PathsConfig {
                 db: "/tmp/conary-test.db".to_string(),
@@ -276,7 +276,7 @@ mod tests {
         let config = test_config();
         let vars = build_variables(&config, "fedora43");
 
-        assert_eq!(vars["REMI_ENDPOINT"], "https://packages.conary.io");
+        assert_eq!(vars["REMI_ENDPOINT"], "https://remi.conary.io");
         assert_eq!(vars["DB_PATH"], "/tmp/conary-test.db");
         assert_eq!(vars["CONARY_BIN"], "/usr/local/bin/conary");
         assert_eq!(vars["REMI_DISTRO"], "fedora-43");
@@ -307,7 +307,7 @@ mod tests {
         let vars = build_variables(&config, "unknown-distro");
 
         // Core fields still present.
-        assert_eq!(vars["REMI_ENDPOINT"], "https://packages.conary.io");
+        assert_eq!(vars["REMI_ENDPOINT"], "https://remi.conary.io");
         // Distro-specific fields absent.
         assert!(!vars.contains_key("REMI_DISTRO"));
         assert!(!vars.contains_key("TEST_PACKAGE_1"));

@@ -15,7 +15,7 @@ domain in `crates/conary-core`.
 ## Prerequisites
 
 - **Podman** (rootless works, but tests run as root inside containers)
-- **Network access** to `packages.conary.io` (Remi server)
+- **Network access** to `remi.conary.io` (Remi server)
 - A built conary binary (`cargo build -p conary`)
 - The conary-test app crate (`cargo build -p conary-test`)
 
@@ -160,7 +160,7 @@ commands = ["uname -r", "ls /boot/vmlinuz*"]
 expect_output = ["vmlinuz"]
 ```
 
-QEMU images are downloaded from `https://packages.conary.io/test-artifacts/` and cached locally. Tests gracefully skip when QEMU tools are unavailable.
+QEMU images are downloaded from `https://remi.conary.io/test-artifacts/` and cached locally. Tests gracefully skip when QEMU tools are unavailable.
 
 ## Configuration
 
@@ -168,7 +168,7 @@ All test parameters live in `tests/integration/remi/config.toml`:
 
 ```toml
 [remi]
-endpoint = "https://packages.conary.io"
+endpoint = "https://remi.conary.io"
 
 [paths]
 db = "/var/lib/conary/conary.db"
@@ -211,7 +211,7 @@ Test results are written as JSON to `tests/integration/remi/results/<distro>.jso
 ```json
 {
   "distro": "fedora43",
-  "endpoint": "https://packages.conary.io",
+  "endpoint": "https://remi.conary.io",
   "total": 37,
   "passed": 37,
   "failed": 0,
@@ -275,7 +275,7 @@ the harness that is currently running on Forge.
 Fixed in commit 942c4b2. If seen again, check that `batch_insert()` doesn't nest transactions.
 
 **"unexpected argument '--db-path'":**
-The subcommand doesn't accept `--db-path`. Check `src/cli/` to see which subcommands have `DbArgs`.
+The subcommand doesn't accept `--db-path`. Check `apps/conary/src/cli/` to see which subcommands have `DbArgs`.
 
 **Phase 2 tests fail with "package not found":**
 Test fixture packages need to be published to Remi first:

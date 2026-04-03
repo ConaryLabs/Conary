@@ -155,7 +155,7 @@ jobs:
       - name: Verify self-update endpoint
         if: ${{ needs.resolve.outputs.dry_run != 'true' }}
         run: |
-          response=$(curl -sf "https://packages.conary.io/v1/ccs/conary/latest" 2>/dev/null) || response=""
+          response=$(curl -sf "https://remi.conary.io/v1/ccs/conary/latest" 2>/dev/null) || response=""
           if echo "$response" | grep -q "${{ needs.resolve.outputs.version }}"; then
             echo "[OK] Self-update API reports version ${{ needs.resolve.outputs.version }}"
           else
@@ -218,7 +218,7 @@ jobs:
           REMOTE_EOF
       - name: Verify remi health
         if: ${{ needs.resolve.outputs.dry_run != 'true' }}
-        run: curl -fsS https://packages.conary.io/health >/dev/null
+        run: curl -fsS https://remi.conary.io/health >/dev/null
 
   deploy-conaryd:
     name: deploy-conaryd
