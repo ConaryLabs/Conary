@@ -1,4 +1,4 @@
-# Query Module (src/commands/query/)
+# Query Module (apps/conary/src/commands/query/)
 
 Package, file, dependency, and repository queries against the local SQLite
 database. Includes SBOM generation in CycloneDX format.
@@ -8,9 +8,9 @@ database. Includes SBOM generation in CycloneDX format.
 ```
 conary query <subcommand> [args]
         |
-  cli/query.rs -- Clap definition (QueryCommands enum)
+  apps/conary/src/cli/query.rs -- Clap definition (QueryCommands enum)
         |
-  commands/query/mod.rs -- Dispatch to handler
+  apps/conary/src/commands/query/mod.rs -- Dispatch to handler
         |
   +-- depends / rdepends    -> dependency.rs   (DependencyEntry table)
   +-- deptree               -> deptree.rs      (recursive traversal, cycle detection)
@@ -74,6 +74,6 @@ Output to stdout or file via `--output`.
 The query module is read-only -- it never modifies the database. All queries
 run against the local SQLite instance populated by install/remove/sync
 operations. Repository queries (`repquery`) hit the `repository_packages`
-table, which is refreshed by `conary sync`.
+table, which is refreshed by `conary repo sync`.
 
 See also: [docs/ARCHITECTURE.md](/docs/ARCHITECTURE.md).

@@ -12,12 +12,16 @@
 		autofocus?: boolean;
 	} = $props();
 
-	let query = $state(value);
+	let query = $state('');
 	let suggestions: string[] = $state([]);
 	let showSuggestions = $state(false);
 	let selectedIndex = $state(-1);
 	let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 	let inputEl: HTMLInputElement | undefined = $state();
+
+	$effect(() => {
+		query = value;
+	});
 
 	function debounce(fn: () => void, ms: number) {
 		clearTimeout(debounceTimer);

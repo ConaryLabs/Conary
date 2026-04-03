@@ -68,7 +68,10 @@ cargo build -p conaryd
 cargo build -p conary --release
 ```
 
-The project root is a virtual Cargo workspace with four app crates and one shared library crate: `apps/conary`, `apps/remi`, `apps/conaryd`, `apps/conary-test`, and `crates/conary-core`. EROFS support uses `composefs-rs` directly in `crates/conary-core`.
+The project root is a virtual Cargo workspace with six members:
+`apps/conary`, `apps/remi`, `apps/conaryd`, `apps/conary-test`,
+`crates/conary-core`, and `crates/conary-mcp`. EROFS support uses
+`composefs-rs` directly in `crates/conary-core`.
 
 ## Running Tests
 
@@ -121,9 +124,9 @@ cargo test -p conaryd
 
 ### General Conventions
 
-- **File headers**: Every Rust source file starts with its path as a comment:
+- **File headers**: Every Rust source file starts with its repo-relative path as a comment:
   ```rust
-  // src/module/file.rs
+  // apps/conary/src/commands/example.rs
   ```
 - **Database-first**: All runtime state lives in SQLite. No config files (INI, TOML, YAML, JSON) for runtime state.
 - **No emojis**: Use text markers like `[COMPLETE]`, `[IN PROGRESS]`, `[FAILED]` in output and documentation.
@@ -161,71 +164,79 @@ Use the imperative mood in the subject line (e.g., "add sparse index support" no
 
 ## Module Overview
 
-The project is a virtual Cargo workspace with four app crates and one shared library crate:
+The project is a virtual Cargo workspace with six members: four app crates and
+two shared crates.
 
 **`apps/conary`** -- CLI binary
 
 | Module | Purpose |
 |--------|---------|
-| `src/cli/` | CLI definitions and argument parsing |
-| `src/commands/` | Command implementations |
+| `apps/conary/src/cli/` | CLI definitions and argument parsing |
+| `apps/conary/src/app.rs` | Startup/bootstrap wiring |
+| `apps/conary/src/dispatch.rs` | Top-level command routing |
+| `apps/conary/src/commands/` | Command implementations |
 
 **`crates/conary-core`** -- Core library
 
 | Module | Purpose |
 |--------|---------|
-| `src/db/` | SQLite schema, models, and migrations |
-| `src/packages/` | RPM/DEB/Arch package parsers (unified via `common.rs` `PackageMetadata`) |
-| `src/compression/` | Unified decompression (Gzip, Xz, Zstd) with format detection |
-| `src/repository/` | Remote repository metadata sync |
-| `src/resolver/` | SAT-based dependency graph resolution |
-| `src/filesystem/` | Content-addressable storage and file deployment |
-| `src/delta/` | Binary delta updates |
-| `src/version/` | Version parsing and constraint matching |
-| `src/container/` | Scriptlet sandboxing via Linux namespace isolation |
-| `src/trigger/` | Post-install trigger system |
-| `src/scriptlet/` | Scriptlet execution with cross-distro support |
-| `src/label.rs` | Package provenance labels |
-| `src/flavor/` | Build variation specifications |
-| `src/components/` | Component classification |
-| `src/transaction/` | Crash-safe atomic operations with journal-based recovery |
-| `src/model/` | System Model -- declarative OS state |
-| `src/ccs/` | CCS native package format (builder, policy engine, OCI export) |
-| `src/recipe/` | Recipe system for building packages from source |
-| `src/capability/` | Capability declarations -- audit, enforcement, inference |
-| `src/provenance/` | Package DNA and full provenance tracking |
-| `src/automation/` | Automated maintenance (security updates, orphan cleanup) |
-| `src/bootstrap/` | Bootstrap a complete Conary system from scratch |
-| `src/generation/` | EROFS generation building, composefs mounting, CAS GC |
-| `src/derivation/` | CAS-layered derivation engine for bootstrap |
-| `src/trust/` | TUF supply chain trust |
-| `src/canonical/` | Cross-distro canonical name mapping (AppStream, Repology) |
-| `src/self_update.rs` | Self-update version checking, download, atomic replacement |
-| `src/mcp/` | MCP tool definitions for LLM integration |
-| `src/hash.rs` | Multi-algorithm hashing (SHA-256, XXH128) |
+| `crates/conary-core/src/db/` | SQLite schema, models, and migrations |
+| `crates/conary-core/src/packages/` | RPM/DEB/Arch package parsers unified through `PackageMetadata` |
+| `crates/conary-core/src/compression/` | Unified decompression (Gzip, Xz, Zstd) with format detection |
+| `crates/conary-core/src/repository/` | Remote repository metadata sync, mirror logic, and Remi client |
+| `crates/conary-core/src/resolver/` | SAT-based dependency graph resolution |
+| `crates/conary-core/src/filesystem/` | Content-addressable storage and file deployment |
+| `crates/conary-core/src/delta/` | Binary delta updates |
+| `crates/conary-core/src/version/` | Version parsing and constraint matching |
+| `crates/conary-core/src/container/` | Scriptlet sandboxing via Linux namespace isolation |
+| `crates/conary-core/src/trigger/` | Post-install trigger system |
+| `crates/conary-core/src/scriptlet/` | Scriptlet execution with cross-distro support |
+| `crates/conary-core/src/label.rs` | Package provenance labels |
+| `crates/conary-core/src/flavor/` | Build variation specifications |
+| `crates/conary-core/src/components/` | Component classification |
+| `crates/conary-core/src/transaction/` | Composefs-native transaction pipeline and conflict preflight |
+| `crates/conary-core/src/model/` | System Model and remote include handling |
+| `crates/conary-core/src/ccs/` | CCS native package format (builder, policy engine, OCI export) |
+| `crates/conary-core/src/recipe/` | Recipe system for building packages from source |
+| `crates/conary-core/src/capability/` | Capability declarations, enforcement, and inference |
+| `crates/conary-core/src/provenance/` | Package DNA and provenance tracking |
+| `crates/conary-core/src/automation/` | Automated maintenance (security updates, orphan cleanup) |
+| `crates/conary-core/src/bootstrap/` | Bootstrap a complete Conary system from scratch |
+| `crates/conary-core/src/generation/` | EROFS generation building, composefs mounting, CAS GC |
+| `crates/conary-core/src/derivation/` | CAS-layered derivation engine for bootstrap |
+| `crates/conary-core/src/trust/` | TUF supply chain trust |
+| `crates/conary-core/src/canonical/` | Cross-distro canonical name mapping (AppStream, Repology) |
+| `crates/conary-core/src/self_update.rs` | Self-update version checking, download, atomic replacement |
+| `crates/conary-core/src/hash.rs` | Multi-algorithm hashing (SHA-256, XXH128) |
+
+**`crates/conary-mcp`** -- Shared transport-agnostic MCP helpers
+
+| Module | Purpose |
+|--------|---------|
+| `crates/conary-mcp/src/lib.rs` | MCP server plumbing shared across workspace apps |
 
 **`apps/remi`** -- Remi server + federation service
 
 | Module | Purpose |
 |--------|---------|
-| `src/server/` | Remi on-demand CCS conversion proxy |
-| `src/federation/` | CAS federation -- peer discovery, chunk routing, allowlists, TLS pinning |
+| `apps/remi/src/server/` | Remi on-demand CCS conversion proxy, search, admin API, and MCP server |
+| `apps/remi/src/federation/` | CAS federation -- peer discovery, chunk routing, allowlists, TLS pinning |
 
 **`apps/conaryd`** -- conaryd daemon
 
 | Module | Purpose |
 |--------|---------|
-| `src/daemon/` | conaryd REST API, SSE events, job queue, systemd integration |
+| `apps/conaryd/src/daemon/` | conaryd REST API, SSE events, job queue, and systemd integration |
 
 **`apps/conary-test`** -- Declarative test infrastructure (TOML manifests, container management)
 
 | Module | Purpose |
 |--------|---------|
-| `src/config/` | TOML manifest and distro config parsing |
-| `src/engine/` | Test suite, runner, assertions |
-| `src/container/` | ContainerBackend trait, bollard implementation |
-| `src/report/` | JSON output, SSE event streaming |
-| `src/server/` | Axum HTTP API, MCP server (rmcp) |
+| `apps/conary-test/src/config/` | TOML manifest and distro config parsing |
+| `apps/conary-test/src/engine/` | Test suite, runner, assertions |
+| `apps/conary-test/src/container/` | ContainerBackend trait and container lifecycle |
+| `apps/conary-test/src/report/` | JSON output and SSE event streaming |
+| `apps/conary-test/src/server/` | Axum HTTP API and MCP server (rmcp) |
 
 ## Pull Request Process
 

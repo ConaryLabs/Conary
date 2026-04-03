@@ -111,7 +111,7 @@
 			<div class="tech-list">
 				<div class="tech-item">
 					<span class="tech-label">Language</span>
-					<span class="tech-value">Rust (Edition 2024), 4-crate workspace</span>
+					<span class="tech-value">Rust (Edition 2024), 6-member Cargo workspace</span>
 				</div>
 				<div class="tech-item">
 					<span class="tech-label">Filesystem</span>
@@ -119,7 +119,7 @@
 				</div>
 				<div class="tech-item">
 					<span class="tech-label">Database</span>
-					<span class="tech-value">SQLite (57 migrations, 69 tables)</span>
+					<span class="tech-value">SQLite (schema version 65, DB-first runtime state)</span>
 				</div>
 				<div class="tech-item">
 					<span class="tech-label">Hashing</span>
@@ -144,7 +144,7 @@
 			<h2>Contributing</h2>
 			<p>
 				Conary is open source and welcomes contributions. The codebase is well-structured
-				with 2,800+ tests (unit + integration across 3 distros), comprehensive CI (clippy, test,
+				with thousands of tests across unit, integration, and harness coverage, comprehensive CI (clippy, test,
 				and release workflows), and good-first-issue labels for newcomers.
 			</p>
 			<div class="about-links">

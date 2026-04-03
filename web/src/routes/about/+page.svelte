@@ -75,7 +75,7 @@
 		<p>View package details:</p>
 		<div class="terminal-block">
 			<span class="terminal-prompt">$</span>
-			<code>conary info nginx</code>
+			<code>conary query repquery nginx --info</code>
 		</div>
 
 		<h2>Package Index</h2>

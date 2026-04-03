@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-03-28
-revision: 7
-summary: Refresh schema, security, and current workspace references after round 3 remediation
+last_updated: 2026-04-02
+revision: 8
+summary: Refresh workspace layout, public CLI paths, and schema guidance after the docs alignment sweep
 ---
 
 # Conary Architecture
@@ -13,44 +13,28 @@ and the data flow for core operations.
 ## System Overview
 
 ```
-                              CLI (src/cli/, src/main.rs)
-                                        |
-                    +-------------------+-------------------+
-                    |                   |                   |
-              Commands            Daemon Client        Cook Command
-          (src/commands/)       (src/daemon/client)  (src/commands/cook.rs)
-                    |                   |                   |
-  +--------+-------+------+-----------+  +--+------+     +-----+-----+
-  |        |       |      |           |  | conaryd |     |  Kitchen   |
-  |        |       |      |           |  | daemon  |     |(src/recipe)|
-  |        |       |      |           |  +---------+     +-----------+
-  |        |       |      |           |
-Install  Query   Model  Generation  Bootstrap
-Remove   Search  Apply  Build       Stage0/1
-Update   SBOM    Diff   Switch      Base/Image
-  |        |       |      |           |
-  +--------+-------+------+-----------+
-           |                     |
-    +------+------+        +-----+------+
-     | Transaction |        |  Resolver  |
-     |   Engine    |        | (src/      |
-     | (src/       |        |  resolver/)|
-     |  transaction|        +------------+
-     |  /)         |               |
-     +------+------+        +-----+------+
-            |               | Repository |
-     +------+------+        | (src/      |
-     |  Database   |        |  repository|
-     | (src/db/)   |        |  /)        |
-     |  SQLite v64 |        +------+-----+
-     +------+------+               |
-            |               +------+------+
-     +------+------+        | Remi Server |
-     | Filesystem  |        | (--features |
-     | CAS + VFS   |        |  server)    |
-     | (src/       |        +-------------+
-     |  filesystem)|
-     +-------------+
+apps/conary/ (CLI)
+  cli/ + app.rs + dispatch.rs
+      |
+      +-- install / update / remove
+      +-- repo / query / model / ccs / collection
+      +-- system generation / state / takeover
+      +-- bootstrap / provenance / capability / federation
+      |
+      v
+crates/conary-core/
+  repository --> resolver --> transaction --> generation / filesystem --> db
+      |               |             |                |                  |
+      |               |             |                +-- composefs/EROFS
+      |               |             +-- CAS + SQLite commit lifecycle
+      |               +-- SAT resolution + routing policy
+      +-- remote metadata, Remi client, mirrors, substituters
+
+Supporting workspace members
+  apps/remi/         public/admin package service, search, federation, MCP
+  apps/conaryd/      local daemon, auth, job queue, REST/SSE routes
+  apps/conary-test/  integration harness, HTTP API, MCP, container runners
+  crates/conary-mcp/ shared transport-agnostic MCP helpers
 ```
 
 ## Core Concepts
@@ -89,27 +73,23 @@ can be flagged as stale when the parent updates.
 
 ## Module Map
 
-The project is a Cargo workspace with 4 crates:
+The project is a virtual Cargo workspace with 6 members:
 
 ```
-conary/                  Root crate -- CLI binary
+apps/conary/             CLI binary
 +-- src/
-    +-- main.rs          Entry point, CLI dispatch
+    +-- main.rs          Thin entrypoint
+    +-- app.rs           Bootstrap and top-level app wiring
+    +-- dispatch.rs      Command routing and live-host safety gates
     +-- cli/             Clap command definitions
-    +-- commands/        Command implementations
-        +-- install/     Install pipeline (resolve, prepare, execute)
-        +-- model.rs     System model operations
-        +-- trust.rs     TUF trust management
-        +-- cook.rs      Recipe cooking
-        +-- derived.rs   Derived package creation
-        +-- adopt/       System adoption
+    +-- commands/        Command implementations (install, repo, query, model, ccs, bootstrap, system)
 
 crates/conary-core/      Core library crate
 +-- src/
     +-- lib.rs           Public API surface
     +-- db/              Database layer
-    |   +-- schema.rs    Schema v64, migration dispatcher
-    |   +-- migrations/  64 migration functions (v1_v20.rs, v21_v40.rs, v41_current.rs)
+    |   +-- schema.rs    Schema v65, migration dispatcher
+    |   +-- migrations/  Migration functions grouped into v1_v20.rs, v21_v40.rs, v41_current.rs
     |   +-- models/      ORM-style model structs
     +-- transaction/     Composefs-native transaction engine
     |   +-- mod.rs       TransactionEngine, state machine (resolve/fetch/commit/build/mount)
@@ -168,8 +148,9 @@ crates/conary-core/      Core library crate
     |   +-- signing.rs   Ed25519 collection signing
     |   +-- replatform.rs Cross-distro system replatforming
     +-- recipe/          Source-based package building
-    |   +-- kitchen/     Build environment (cook, fetch, provenance)
+    |   +-- format.rs    Recipe format types and build-stage definitions
     |   +-- parser.rs    TOML recipe parser
+    |   +-- kitchen/     Build environment (cook, fetch, provenance)
     |   +-- graph.rs     Multi-recipe build ordering
     |   +-- cache.rs     Build artifact cache
     |   +-- pkgbuild.rs  Arch PKGBUILD converter
@@ -192,10 +173,13 @@ crates/conary-core/      Core library crate
     +-- bootstrap/       System bootstrap from scratch
     +-- automation/      Automated maintenance (security, orphans)
     +-- container/       Namespace isolation for scriptlets
+    +-- dependencies/    Language/package dependency analysis helpers
+    +-- derived/         Derived package metadata and build support
     +-- trigger/         Post-install trigger system
     +-- components/      File-to-component classification
     +-- compression/     Unified decompression (gzip, xz, zstd)
     +-- delta/           Binary delta generation and application
+    +-- self_update.rs   Self-update support
     +-- version/         Version parsing and comparison
     +-- hash.rs          Multi-algorithm hashing (SHA-256, XXH128)
 
@@ -241,6 +225,10 @@ apps/conaryd/            conaryd local daemon
     |   +-- auth.rs      SO_PEERCRED peer authentication
     |   +-- systemd.rs   Socket activation and watchdog
     +-- bin/conaryd.rs   conaryd binary entry point
+
+crates/conary-mcp/       Shared MCP helpers
++-- src/
+    +-- lib.rs           Transport-agnostic MCP primitives reused by workspace apps
 ```
 
 ## Data Flow: Package Installation
@@ -287,21 +275,21 @@ When a client requests a package from the Remi server:
 ```
 Client                        Remi Server
   |                               |
-  |  GET /v1/fedora43/            |
-  |      packages/nginx --------->|
-  |                               |-- Check conversion cache
-  |                               |   (converted_packages table)
+  |  GET /v1/packages/            |
+  |      fedora/nginx ----------->|
+  |                               |-- Check converted package cache
+  |                               |   and conversion job state
   |                               |
   |  200 OK (chunks, version) <---|  [if cached]
   |                               |
   |  202 Accepted + job_id <------|  [if not cached]
   |                               |-- Fetch upstream RPM
-  |  GET /v1/jobs/:id ----------->|-- Parse + convert to CCS
+  |  GET /v1/jobs/{id} ---------->|-- Parse + convert to CCS
   |  200 {status: "converting"}<--|-- Store chunks in CAS
-  |  ...polling...                |-- Record in conversion DB
+  |  ...polling...                |-- Record conversion result in SQLite
   |  200 {status: "complete"} <---|
   |                               |
-  |  GET /v1/chunks/:hash ------->|-- Bloom filter check
+  |  GET /v1/chunks/{hash} ------>|-- Bloom filter check
   |  200 <chunk bytes> <----------|-- Read from local CAS
   |                               |   or redirect to R2 presigned URL
   |  (repeat for each chunk)      |
@@ -317,7 +305,7 @@ generations using EROFS images and Linux composefs.
 ```
 Current System State
        |
-  conary generation build
+  conary system generation build
        |
   +----+----+
   | Snapshot |-- Capture all installed troves from SQLite
@@ -344,7 +332,7 @@ Current System State
 4. **Rollback**: Switch back to any previous generation
 5. **GC**: Remove old generations, keeping N most recent
 
-### Generation Module (conary-core/src/generation/)
+### Generation Module (`crates/conary-core/src/generation/`)
 
 The primary builder for composefs generations. Uses the composefs-rs crate
 (v0.3.0) to produce EROFS images from the current DB state. Submodules:
@@ -402,59 +390,21 @@ itself.
 Supports x86_64, aarch64, and riscv64 targets. Dry-run mode
 (`--dry-run`) validates the full pipeline without building.
 
-## Database Schema (v64)
+## Database Schema (v65)
 
-All state lives in SQLite. No config files for runtime state. Key tables:
+All runtime state lives in SQLite, and migrations are dispatched from
+`crates/conary-core/src/db/schema.rs`.
 
-```
-Core:
-  troves              Installed packages (name, version, flavor, label, pin, reason)
-  changesets          Transaction history (install/remove/update, rollback data)
-  files               File entries per trove (path, hash, perms, component)
-  dependencies        Package dependencies with typed kinds
-  provides            Package capability declarations
+The stable table families are:
 
-Components:
-  components          Component entries (:runtime, :lib, :devel, :doc, etc.)
-  component_dependencies / component_provides
+- Installed state: troves, changesets, files, components, dependencies, and provides
+- Repository and resolution state: repositories, synced package metadata, capability inputs, labels, and canonical mapping data
+- System state and configuration: state snapshots, config tracking, triggers, redirects, and settings
+- Security and provenance: TUF metadata, provenance records, admin tokens, and audit data
+- Service and federation state: conversion/cache/download analytics, federation peers, and test-run persistence
 
-Repository:
-  repositories        Configured repos (URL, priority, TUF, default strategy)
-  repository_packages Available packages from synced metadata
-  repository_provides Cross-distro capability provides (kind, capability, version)
-  repository_requirements Cross-distro capability requirements (kind, capability, version_constraint)
-  repository_requirement_groups OR-alternative requirement groups
-  labels / label_path Package provenance and search order
-  mirror_health       Per-mirror latency/throughput/health scores
-
-Security:
-  tuf_roots / tuf_keys / tuf_metadata / tuf_targets   TUF trust chain
-  capabilities / capability_audits                     Capability enforcement
-
-Provenance:
-  provenance_sources / builds / signatures / content / verifications
-
-State:
-  system_states / state_members    System state snapshots
-  config_files / config_backups    Configuration tracking
-  triggers / trigger_dependencies  Post-install trigger DAG
-  settings                         Key-value configuration store
-
-Server (Remi):
-  converted_packages / subpackage_relationships   Conversion tracking
-  chunk_access                                    LRU cache tracking
-  download_stats / download_counts                Analytics
-  delta_manifests                                 Pre-computed version deltas
-
-Admin API:
-  admin_tokens                                    Bearer token auth (name, hash, scopes)
-  admin_audit_log                                 Request audit trail (action, IP, timing)
-  remote_collections                              Cached remote model includes
-
-Federation / Daemon:
-  federation_peers / federation_stats   CAS federation
-  daemon_jobs                           conaryd job queue
-```
+When exact table names or counts matter, inspect `crates/conary-core/src/db/models/`
+and the active migration functions instead of relying on this overview.
 
 ## Package Graph
 
@@ -467,6 +417,7 @@ The root manifest is now a virtual workspace. Build the owning crate directly:
 | `conaryd` | Local daemon | `cargo build -p conaryd` |
 | `conary-test` | Test harness | `cargo build -p conary-test` |
 | `conary-core` | Shared library | `cargo build -p conary-core` |
+| `conary-mcp` | Shared MCP helpers | `cargo build -p conary-mcp` |
 
 ## Key Design Decisions
 
