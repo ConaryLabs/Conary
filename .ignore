@@ -1,0 +1,15 @@
+# Search hygiene for generated/vendor content.
+# Keep this focused on high-noise paths that are not useful in normal codebase sweeps.
+/target/
+/web/node_modules/
+/web/.svelte-kit/
+/web/build/
+/site/node_modules/
+/site/.svelte-kit/
+/site/build/
+/bootstrap/
+/sysroot/
+/stage0/
+/stage1/
+/stage2/
+/vendor/

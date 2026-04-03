@@ -1,0 +1,4 @@
+# Frontend-generated files that are not useful in normal repo searches.
+/node_modules/
+/.svelte-kit/
+/build/
