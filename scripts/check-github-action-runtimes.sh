@@ -14,7 +14,7 @@ require_ref() {
   local pattern="$2"
   local description="$3"
 
-  rg -q "$pattern" "$file" || fail "$description missing in $file"
+  grep -Eq "$pattern" "$file" || fail "$description missing in $file"
 }
 
 forbid_ref() {
@@ -22,7 +22,7 @@ forbid_ref() {
   local pattern="$2"
   local description="$3"
 
-  if rg -q "$pattern" "$file"; then
+  if grep -Eq "$pattern" "$file"; then
     fail "$description unexpectedly present in $file"
   fi
 }
@@ -63,10 +63,10 @@ forbid_ref .github/workflows/release-build.yml \
   'softprops/action-gh-release@' \
   'softprops action-gh-release'
 forbid_ref .github/workflows/pr-gate.yml \
-  'FORCE_JAVASCRIPT_ACTIONS_TO_NODE24:\s*"?true"?' \
+  'FORCE_JAVASCRIPT_ACTIONS_TO_NODE24:[[:space:]]*"?true"?' \
   'forced Node 24 workflow override'
 forbid_ref .github/workflows/release-build.yml \
-  'FORCE_JAVASCRIPT_ACTIONS_TO_NODE24:\s*"?true"?' \
+  'FORCE_JAVASCRIPT_ACTIONS_TO_NODE24:[[:space:]]*"?true"?' \
   'forced Node 24 workflow override'
 
 require_ref .github/workflows/pr-gate.yml \
