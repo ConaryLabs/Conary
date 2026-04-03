@@ -717,6 +717,176 @@ async fn job_executor_loop(state: Arc<DaemonState>) {
     }
 }
 
+fn log_systemd_runtime(systemd_manager: &SystemdManager) {
+    if !systemd_manager.is_systemd() {
+        return;
+    }
+
+    log::info!("Running under systemd supervision");
+    if systemd::is_socket_activated() {
+        log::info!(
+            "Socket activation detected, {} FDs passed",
+            systemd::listen_fds_count()
+        );
+    }
+}
+
+async fn reenqueue_startup_jobs(state: &Arc<DaemonState>) {
+    let db_path = state.config.db_path.clone();
+    match tokio::task::spawn_blocking(move || {
+        let conn = conary_core::db::open_fast(&db_path)?;
+        conn.execute(
+            "UPDATE daemon_jobs SET status = 'queued', started_at = NULL
+             WHERE status = 'running'",
+            [],
+        )?;
+        jobs::DaemonJob::list_by_status(&conn, JobStatus::Queued, None)
+    })
+    .await
+    {
+        Ok(Ok(queued_jobs)) => {
+            if !queued_jobs.is_empty() {
+                log::info!(
+                    "Re-enqueueing {} job(s) left over from previous daemon run",
+                    queued_jobs.len()
+                );
+                for job in queued_jobs {
+                    state.queue.enqueue(job, jobs::JobPriority::Normal).await;
+                }
+            }
+        }
+        Ok(Err(e)) => {
+            log::warn!("Failed to query stuck jobs on startup: {}", e);
+        }
+        Err(e) => {
+            log::warn!("Startup job scan task panicked: {}", e);
+        }
+    }
+}
+
+async fn acquire_unix_listener(
+    config: &DaemonConfig,
+) -> Result<(Option<socket::SocketManager>, tokio::net::UnixListener)> {
+    if systemd::is_socket_activated() {
+        let fds = systemd::listen_fds();
+        if fds.is_empty() {
+            return Err(conary_core::Error::IoError(
+                "Socket activation detected but no file descriptors received".to_string(),
+            ));
+        }
+
+        use std::os::unix::io::FromRawFd;
+
+        let std_listener = unsafe { std::os::unix::net::UnixListener::from_raw_fd(fds[0]) };
+        std_listener.set_nonblocking(true).map_err(|e| {
+            conary_core::Error::IoError(format!(
+                "Failed to set socket-activated FD non-blocking: {e}"
+            ))
+        })?;
+        let listener = tokio::net::UnixListener::from_std(std_listener).map_err(|e| {
+            conary_core::Error::IoError(format!("Failed to adopt socket-activated listener: {e}"))
+        })?;
+        log::info!("Adopted systemd socket-activated listener (FD {})", fds[0]);
+        return Ok((None, listener));
+    }
+
+    let socket_config = socket::SocketConfig {
+        unix_path: config.socket_path.clone(),
+        unix_mode: config.socket_mode,
+        unix_group: config.socket_group.clone(),
+        enable_tcp: config.enable_tcp,
+        tcp_bind: config.tcp_bind.clone(),
+    };
+
+    let mut mgr = socket::SocketManager::new(socket_config);
+    mgr.bind().await?;
+
+    let listener = mgr.take_unix_listener().ok_or_else(|| {
+        conary_core::Error::IoError(
+            "Unix listener not bound - check socket configuration".to_string(),
+        )
+    })?;
+    Ok((Some(mgr), listener))
+}
+
+async fn serve_unix_connection(
+    app: axum::Router,
+    stream: tokio::net::UnixStream,
+    peer_creds: Option<PeerCredentials>,
+    active_connections: Arc<std::sync::atomic::AtomicU64>,
+) {
+    use hyper::server::conn::http1;
+    use hyper_util::rt::TokioIo;
+    use hyper_util::service::TowerToHyperService;
+
+    let io = TokioIo::new(stream);
+    let service = TowerToHyperService::new(app.layer(axum::Extension(peer_creds)));
+    if let Err(err) = http1::Builder::new().serve_connection(io, service).await {
+        log::warn!("Error serving connection: {:?}", err);
+    }
+    active_connections.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+async fn accept_connections(
+    unix_listener: tokio::net::UnixListener,
+    app: axum::Router,
+    systemd_manager: &mut SystemdManager,
+    active_connections: Arc<std::sync::atomic::AtomicU64>,
+    tick_interval: std::time::Duration,
+) {
+    loop {
+        match tokio::time::timeout(tick_interval, unix_listener.accept()).await {
+            Ok(Ok((stream, _addr))) => {
+                systemd_manager.activity();
+
+                let peer_creds = socket::get_peer_credentials(&stream);
+                let conns = active_connections.clone();
+                conns.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+                let app = app.clone();
+                tokio::spawn(async move {
+                    serve_unix_connection(app, stream, peer_creds, conns).await;
+                });
+            }
+            Ok(Err(e)) => {
+                log::error!("Failed to accept connection: {}", e);
+            }
+            Err(_) => {
+                systemd_manager.watchdog_tick();
+
+                if systemd_manager.is_idle_expired()
+                    && active_connections.load(std::sync::atomic::Ordering::Relaxed) == 0
+                {
+                    log::info!("Idle timeout expired, shutting down");
+                    break;
+                }
+            }
+        }
+    }
+}
+
+async fn drain_active_connections(
+    active_connections: &Arc<std::sync::atomic::AtomicU64>,
+    timeout: std::time::Duration,
+) {
+    let drain_deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let conn_count = active_connections.load(std::sync::atomic::Ordering::Relaxed);
+        if conn_count == 0 {
+            log::info!("All connections drained");
+            break;
+        }
+        if tokio::time::Instant::now() >= drain_deadline {
+            log::warn!(
+                "Drain timeout: {} connections still active, forcing shutdown",
+                conn_count
+            );
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
 /// Run the daemon
 ///
 /// This is the main entry point for the daemon. It:
@@ -732,9 +902,6 @@ async fn job_executor_loop(state: Arc<DaemonState>) {
 /// # Returns
 /// * `Result<()>` - Ok if daemon shut down cleanly
 pub async fn run_daemon(config: DaemonConfig) -> Result<()> {
-    use hyper::server::conn::http1;
-    use hyper_util::rt::TokioIo;
-    use hyper_util::service::TowerToHyperService;
     use std::sync::atomic::AtomicU64;
     use std::time::Duration;
 
@@ -743,16 +910,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<()> {
     // Create systemd manager
     let idle_timeout = config.idle_timeout_secs.map(Duration::from_secs);
     let mut systemd_manager = SystemdManager::new(idle_timeout);
-
-    if systemd_manager.is_systemd() {
-        log::info!("Running under systemd supervision");
-        if systemd::is_socket_activated() {
-            log::info!(
-                "Socket activation detected, {} FDs passed",
-                systemd::listen_fds_count()
-            );
-        }
-    }
+    log_systemd_runtime(&systemd_manager);
 
     // Acquire system lock
     let system_lock = SystemLock::try_acquire(&config.lock_path)?.ok_or_else(|| {
@@ -770,85 +928,14 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<()> {
     // daemon run (e.g. after a crash or SIGKILL).  Jobs that were 'running'
     // are reset to 'queued' first, since we cannot resume mid-execution.
     // (Gemini fix: re-enqueue stuck jobs on startup)
-    {
-        let db_path = state.config.db_path.clone();
-        match tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open_fast(&db_path)?;
-            // Reset any jobs stuck in 'running' (interrupted by previous crash)
-            conn.execute(
-                "UPDATE daemon_jobs SET status = 'queued', started_at = NULL
-                 WHERE status = 'running'",
-                [],
-            )?;
-            jobs::DaemonJob::list_by_status(&conn, JobStatus::Queued, None)
-        })
-        .await
-        {
-            Ok(Ok(queued_jobs)) => {
-                if !queued_jobs.is_empty() {
-                    log::info!(
-                        "Re-enqueueing {} job(s) left over from previous daemon run",
-                        queued_jobs.len()
-                    );
-                    for job in queued_jobs {
-                        state.queue.enqueue(job, jobs::JobPriority::Normal).await;
-                    }
-                }
-            }
-            Ok(Err(e)) => {
-                log::warn!("Failed to query stuck jobs on startup: {}", e);
-            }
-            Err(e) => {
-                log::warn!("Startup job scan task panicked: {}", e);
-            }
-        }
-    }
+    reenqueue_startup_jobs(&state).await;
 
     // Build router
     let app = routes::build_router(state.clone());
 
     // Acquire a Unix listener -- either from systemd socket activation or
     // by binding a fresh socket ourselves.
-    let (_socket_manager, unix_listener) = if systemd::is_socket_activated() {
-        let fds = systemd::listen_fds();
-        if fds.is_empty() {
-            return Err(conary_core::Error::IoError(
-                "Socket activation detected but no file descriptors received".to_string(),
-            ));
-        }
-
-        // Adopt the first passed FD (FD 3) as our Unix listener.
-        use std::os::unix::io::FromRawFd;
-        let std_listener = unsafe { std::os::unix::net::UnixListener::from_raw_fd(fds[0]) };
-        std_listener.set_nonblocking(true).map_err(|e| {
-            conary_core::Error::IoError(format!(
-                "Failed to set socket-activated FD non-blocking: {e}"
-            ))
-        })?;
-        let listener = tokio::net::UnixListener::from_std(std_listener).map_err(|e| {
-            conary_core::Error::IoError(format!("Failed to adopt socket-activated listener: {e}"))
-        })?;
-        log::info!("Adopted systemd socket-activated listener (FD {})", fds[0]);
-        (None, listener)
-    } else {
-        let socket_config = socket::SocketConfig {
-            unix_path: config.socket_path.clone(),
-            unix_mode: config.socket_mode,
-            unix_group: config.socket_group.clone(),
-            enable_tcp: config.enable_tcp,
-            tcp_bind: config.tcp_bind.clone(),
-        };
-
-        let mut mgr = socket::SocketManager::new(socket_config);
-        mgr.bind().await?;
-
-        let listener = mgr.take_unix_listener().ok_or_else(|| {
-            conary_core::Error::IoError(
-                "Unix listener not bound - check socket configuration".to_string(),
-            )
-        })?;
-        (Some(mgr), listener)
-    };
+    let (_socket_manager, unix_listener) = acquire_unix_listener(&config).await?;
 
     // Notify systemd we're ready
     systemd_manager.notify_ready(Some("conaryd ready for connections"));
@@ -874,57 +961,13 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<()> {
     // Accept connections with watchdog and idle timeout support
     tokio::select! {
         // Main accept loop
-        _ = async {
-            loop {
-                // Use timeout on accept for periodic housekeeping
-                match tokio::time::timeout(tick_interval, unix_listener.accept()).await {
-                    Ok(Ok((stream, _addr))) => {
-                        // Record activity for idle tracking
-                        systemd_manager.activity();
-
-                        // Extract peer credentials from Unix socket (SO_PEERCRED)
-                        let peer_creds = socket::get_peer_credentials(&stream);
-
-                        // Increment connection counter
-                        let conns = active_connections.clone();
-                        conns.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
-                        // Add peer credentials as a request extension for this connection
-                        let app = app.clone().layer(axum::Extension(peer_creds));
-                        tokio::spawn(async move {
-                            let io = TokioIo::new(stream);
-                            // Convert tower service to hyper service
-                            let service = TowerToHyperService::new(app);
-                            if let Err(err) = http1::Builder::new()
-                                .serve_connection(io, service)
-                                .await
-                            {
-                                log::warn!("Error serving connection: {:?}", err);
-                            }
-                            // Decrement connection counter
-                            conns.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-                        });
-                    }
-                    Ok(Err(e)) => {
-                        log::error!("Failed to accept connection: {}", e);
-                    }
-                    Err(_) => {
-                        // Timeout - perform housekeeping
-                        // Send watchdog ping if due
-                        systemd_manager.watchdog_tick();
-
-                        // Check idle timeout
-                        if systemd_manager.is_idle_expired() {
-                            let conn_count = active_connections.load(std::sync::atomic::Ordering::Relaxed);
-                            if conn_count == 0 {
-                                log::info!("Idle timeout expired, shutting down");
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        } => {}
+        _ = accept_connections(
+            unix_listener,
+            app,
+            &mut systemd_manager,
+            active_connections.clone(),
+            tick_interval,
+        ) => {}
         // Shutdown signal
         _ = shutdown => {
             log::info!("Received shutdown signal");
@@ -936,22 +979,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<()> {
     log::info!("Daemon shutting down");
 
     // Graceful drain: wait for in-flight connections to finish (max 10s)
-    let drain_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let conn_count = active_connections.load(std::sync::atomic::Ordering::Relaxed);
-        if conn_count == 0 {
-            log::info!("All connections drained");
-            break;
-        }
-        if tokio::time::Instant::now() >= drain_deadline {
-            log::warn!(
-                "Drain timeout: {} connections still active, forcing shutdown",
-                conn_count
-            );
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    drain_active_connections(&active_connections, Duration::from_secs(10)).await;
 
     // Cleanup handled by Drop implementations
     Ok(())
