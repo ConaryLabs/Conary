@@ -136,9 +136,6 @@ root = "/conary/web"
 enabled = true
 external_bind = "127.0.0.1:8082"
 
-# Optional Forgejo integration for CI proxy endpoints
-# forgejo_url = "https://forge.conarylabs.com"
-
 # Optional bootstrap token. Prefer REMI_ADMIN_TOKEN in the service
 # environment for initial provisioning.
 # bootstrap_token = "change-me"
