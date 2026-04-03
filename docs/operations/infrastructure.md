@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-04-02
-revision: 1
+revision: 2
 summary: Non-secret infrastructure, MCP, and deployment guidance for Conary contributors and coding assistants
 ---
 
@@ -9,8 +9,8 @@ summary: Non-secret infrastructure, MCP, and deployment guidance for Conary cont
 ## Host Roles
 
 - Remi is the production package service behind `https://packages.conary.io`.
-- Forge is the CI and integration-test host used for `conary-test` service work
-  and source-sync validation.
+- Forge is the trusted GitHub runner host used for `conary-test` validation,
+  test-harness service work, and source-sync validation.
 - Sensitive usernames, credentials, or workstation-only shortcuts belong in the
   ignored `docs/operations/LOCAL_ACCESS.md`, not in tracked docs.
 
@@ -51,11 +51,14 @@ old process. That can fail with `Text file busy`.
 
 ## Release Flow
 
-- Run `./scripts/release.sh [conary|remi|conaryd|conary-test|all]` to bump
-  versions, update changelog state, and create tags
+- GitHub Actions is the only long-term CI/CD control plane.
+- Run `./scripts/release.sh [conary|remi|conaryd|all]` to bump versions,
+  update changelog state, and create tags
 - Push the relevant tags to trigger the GitHub release pipeline
-- GitHub Actions builds the release artifacts and deploys them to Remi
-- Forge-side release checks verify that the new release landed correctly
+- GitHub Actions builds release artifacts in `release-build` and performs
+  protected deployment and verification in `deploy-and-verify`
+- Release verification is a GitHub workflow concern, not a Forgejo or
+  Forge-hosted control-plane concern
 
 ## Contributor Notes
 

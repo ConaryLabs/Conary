@@ -484,11 +484,20 @@ fn test_capability_run_uses_installed_package_declaration() {
         .output()
         .unwrap();
 
+    let run_stderr = String::from_utf8_lossy(&run_output.stderr);
+    if !run_output.status.success()
+        && (run_stderr.contains("mount --make-rprivate failed: EACCES")
+            || run_stderr.contains("mount --make-rprivate failed: EPERM"))
+    {
+        eprintln!("skipping capability run assertion on a host without mount namespace privileges");
+        return;
+    }
+
     assert!(
         run_output.status.success(),
         "capability run failed:\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&run_output.stdout),
-        String::from_utf8_lossy(&run_output.stderr)
+        run_stderr
     );
     let run_stdout = String::from_utf8_lossy(&run_output.stdout);
     assert!(run_stdout.contains("capability-ok"));

@@ -552,6 +552,7 @@ pub struct WebSection {
 
 /// External admin API configuration
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AdminSection {
     /// External admin API bind address
     #[serde(default = "default_external_admin_bind")]
@@ -560,14 +561,6 @@ pub struct AdminSection {
     /// Enable external admin API
     #[serde(default)]
     pub enabled: bool,
-
-    /// Forgejo instance URL for CI proxy
-    #[serde(default)]
-    pub forgejo_url: Option<String>,
-
-    /// Forgejo API token
-    #[serde(default)]
-    pub forgejo_token: Option<String>,
 
     /// Bootstrap token (can also be set via REMI_ADMIN_TOKEN env var)
     #[serde(default)]
@@ -595,8 +588,6 @@ impl Default for AdminSection {
         Self {
             external_bind: default_external_admin_bind(),
             enabled: false,
-            forgejo_url: None,
-            forgejo_token: None,
             bootstrap_token: None,
             rate_limit_read_rpm: default_admin_read_rpm(),
             rate_limit_write_rpm: default_admin_write_rpm(),
@@ -1003,6 +994,29 @@ bootstrap_token = "bootstrap-token"
             config.admin.bootstrap_token.as_deref(),
             Some("bootstrap-token")
         );
+    }
+
+    #[test]
+    fn test_admin_section_rejects_legacy_forgejo_fields() {
+        let toml_str = r#"
+[server]
+bind = "0.0.0.0:8080"
+admin_bind = "127.0.0.1:8081"
+
+[storage]
+root = "/conary"
+
+[admin]
+enabled = true
+external_bind = "0.0.0.0:8082"
+forgejo_url = "https://forgejo.example"
+forgejo_token = "secret"
+"#;
+
+        let err = toml::from_str::<RemiConfig>(toml_str)
+            .expect_err("legacy forgejo admin keys should be rejected");
+        let message = err.to_string();
+        assert!(message.contains("forgejo_url") || message.contains("forgejo_token"));
     }
 
     #[test]

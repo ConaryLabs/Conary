@@ -6,13 +6,12 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
 usage() {
-    echo "Usage: $0 [conary|remi|conaryd|conary-test|all] [--dry-run]"
+    echo "Usage: $0 [conary|remi|conaryd|all] [--dry-run]"
     echo ""
     echo "Analyze conventional commits since last tag and bump versions."
     echo "  conary       - conary CLI + conary-core + packaging"
     echo "  remi         - Remi service app"
     echo "  conaryd      - daemon service app"
-    echo "  conary-test  - conary-test harness"
     echo "  all          - all groups"
     echo "  --dry-run  Show what would happen without making changes"
     exit 1
@@ -24,7 +23,7 @@ RELEASE_GROUPS=()
 for arg in "$@"; do
     case "$arg" in
         --dry-run) DRY_RUN=true ;;
-        conary|remi|conaryd|conary-test|all) RELEASE_GROUPS+=("$arg") ;;
+        conary|remi|conaryd|all) RELEASE_GROUPS+=("$arg") ;;
         *) usage ;;
     esac
 done
@@ -32,21 +31,19 @@ done
 [[ ${#RELEASE_GROUPS[@]} -eq 0 ]] && usage
 
 if [[ " ${RELEASE_GROUPS[*]} " == *" all "* ]]; then
-    RELEASE_GROUPS=(conary remi conaryd conary-test)
+    RELEASE_GROUPS=(conary remi conaryd)
 fi
 
 declare -A TAG_PREFIX=(
     [conary]="v"
     [remi]="remi-v"
     [conaryd]="conaryd-v"
-    [conary-test]="test-v"
 )
 
 declare -A PATH_SCOPES=(
-    [conary]="apps/conary/ crates/conary-core/ packaging/ .github/workflows/release.yml scripts/sign-release.sh"
-    [remi]="apps/remi/ scripts/rebuild-remi.sh scripts/bootstrap-remi.sh"
+    [conary]="apps/conary/ crates/conary-core/ packaging/ .github/workflows/release-build.yml .github/workflows/deploy-and-verify.yml scripts/sign-release.sh"
+    [remi]="apps/remi/ deploy/systemd/remi.service scripts/rebuild-remi.sh scripts/bootstrap-remi.sh"
     [conaryd]="apps/conaryd/"
-    [conary-test]="apps/conary-test/"
 )
 
 latest_tag() {
@@ -264,10 +261,6 @@ for group in "${RELEASE_GROUPS[@]}"; do
         conaryd)
             update_cargo_version "apps/conaryd/Cargo.toml" "$new_version"
             echo "  Updated apps/conaryd/Cargo.toml"
-            ;;
-        conary-test)
-            update_cargo_version "apps/conary-test/Cargo.toml" "$new_version"
-            echo "  Updated apps/conary-test/Cargo.toml"
             ;;
     esac
 
