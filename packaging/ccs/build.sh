@@ -18,14 +18,10 @@ NAME="conary"
 
 echo "Building $NAME $VERSION CCS package"
 
-# --- Build release binary if needed ---
+# --- Build release binary ---
 RELEASE_BIN="$REPO_ROOT/target/release/$NAME"
-if [ ! -f "$RELEASE_BIN" ]; then
-    echo "[1/4] Building release binary..."
-    cargo build --release --manifest-path "$REPO_ROOT/apps/conary/Cargo.toml"
-else
-    echo "[1/4] Using existing release binary: $RELEASE_BIN"
-fi
+echo "[1/4] Building release binary..."
+cargo build --release --manifest-path "$REPO_ROOT/apps/conary/Cargo.toml"
 
 # --- Stage files in install layout ---
 echo "[2/4] Staging files..."
