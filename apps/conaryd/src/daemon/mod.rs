@@ -29,11 +29,13 @@
 //! # Module Structure
 //!
 //! - `lock` - System-wide exclusive lock
-//! - `handlers` - HTTP request handlers
-//! - `socket` - Unix socket listener (TODO)
-//! - `auth` - Peer credentials and PolicyKit (TODO)
-//! - `events` - SSE event streaming (TODO)
-//! - `client` - Client for CLI forwarding (TODO)
+//! - `routes` - Axum router plus transaction, package, system, and SSE endpoints
+//! - `socket` - Unix socket listener and socket-file lifecycle management
+//! - `auth` - Peer credentials, policy checks, and audit logging
+//! - `jobs` - Queued daemon job types and prioritization
+//! - `enhance` - Background package enhancement workflows
+//! - `client` - Unix-socket client used by the CLI for daemon forwarding
+//! - `systemd` - Socket activation, idle shutdown, and watchdog integration
 
 pub mod auth;
 pub mod client;
