@@ -23,16 +23,33 @@ fn find_project_root(start: &Path) -> Result<PathBuf> {
     let mut candidate = start
         .canonicalize()
         .context("failed to canonicalize path when locating project root")?;
+    let mut first_manifest_root = None;
 
     loop {
-        if candidate.join("Cargo.toml").is_file() {
-            return Ok(candidate);
+        let manifest = candidate.join("Cargo.toml");
+        if manifest.is_file() {
+            if fs::read_to_string(&manifest)
+                .with_context(|| format!("failed to read {}", manifest.display()))?
+                .contains("[workspace]")
+            {
+                return Ok(candidate);
+            }
+
+            if first_manifest_root.is_none() {
+                first_manifest_root = Some(candidate.clone());
+            }
         }
 
         if !candidate.pop() {
-            bail!("failed to locate project root from {}", start.display());
+            break;
         }
     }
+
+    if let Some(root) = first_manifest_root {
+        return Ok(root);
+    }
+
+    bail!("failed to locate project root from {}", start.display());
 }
 
 fn copy_dir_filtered(src: &Path, dst: &Path, skip_names: &[&str]) -> Result<()> {
@@ -123,7 +140,7 @@ fn stage_build_context(containerfile: &Path, distro: &str) -> Result<StagedBuild
     )
     .context("failed to copy integration config.toml")?;
 
-    let fixtures_src = project_root.join("tests/fixtures");
+    let fixtures_src = crate::paths::resolve_fixtures_root_for(&project_root);
     if fixtures_src.is_dir() {
         copy_dir_filtered(&fixtures_src, &root.join("fixtures"), &[])?;
     } else {
@@ -181,8 +198,9 @@ pub async fn build_distro_image(
 
 #[cfg(test)]
 mod tests {
-    use super::stage_build_context;
+    use super::{find_project_root, stage_build_context};
     use std::fs;
+    use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -254,5 +272,34 @@ mod tests {
 
         drop(staged);
         fs::remove_dir_all(project_root).expect("cleanup project root");
+    }
+
+    #[test]
+    fn find_project_root_prefers_workspace_root_over_nested_package() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let workspace_root =
+            std::env::temp_dir().join(format!("conary-test-workspace-root-{unique}"));
+        let integration_root = workspace_root.join("apps/conary/tests/integration/remi");
+
+        fs::create_dir_all(integration_root.join("containers")).expect("create integration tree");
+        fs::write(
+            workspace_root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"apps/conary\"]\n",
+        )
+        .expect("write workspace cargo");
+        fs::create_dir_all(workspace_root.join("apps/conary")).expect("create nested app");
+        fs::write(
+            workspace_root.join("apps/conary/Cargo.toml"),
+            "[package]\nname = \"conary\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .expect("write nested package cargo");
+
+        let found = find_project_root(Path::new(&integration_root)).expect("find project root");
+        assert_eq!(found, workspace_root);
+
+        fs::remove_dir_all(workspace_root).expect("cleanup workspace root");
     }
 }
