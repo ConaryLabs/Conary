@@ -5,17 +5,24 @@
 //! Checks Remi for newer versions and handles downloading, verifying,
 //! and atomically replacing the running binary.
 
+mod download;
+mod versioning;
+
 use crate::db::models::settings;
 use crate::error::{Error, Result};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use ed25519_dalek::{Signature, VerifyingKey};
 use rusqlite::Connection;
-use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::warn;
-use url::Url;
+
+pub use download::{download_update, download_update_with_progress};
+pub use versioning::{
+    LatestVersionInfo, VersionCheckResult, check_for_update, fetch_latest_version_info, is_newer,
+    validate_download_origin,
+};
 
 /// Trusted Ed25519 public keys for verifying self-update signatures (hex-encoded).
 /// Real key will be added when release signing is enabled.
@@ -89,38 +96,8 @@ pub fn verify_update_signature(
 /// Default update channel URL
 pub const DEFAULT_UPDATE_CHANNEL: &str = "https://remi.conary.io/v1/ccs/conary";
 
-/// Maximum size of the `/latest` JSON response before deserialization (1 MiB).
-const MAX_SELF_UPDATE_METADATA_SIZE: usize = 1024 * 1024;
-
 /// Settings key for the update channel override
 const SETTINGS_KEY_UPDATE_CHANNEL: &str = "update-channel";
-
-/// Response from the /latest endpoint
-#[derive(Debug, Clone, Deserialize)]
-pub struct LatestVersionInfo {
-    pub version: String,
-    pub download_url: String,
-    pub sha256: String,
-    pub size: u64,
-    #[serde(default)]
-    pub signature: Option<String>,
-}
-
-/// Result of a version check
-#[derive(Debug, Clone, PartialEq)]
-pub enum VersionCheckResult {
-    /// A newer version is available
-    UpdateAvailable {
-        current: String,
-        latest: String,
-        download_url: String,
-        sha256: String,
-        size: u64,
-        signature: Option<String>,
-    },
-    /// Already at the latest version
-    UpToDate { version: String },
-}
 
 /// Get the update channel URL from settings or fall back to default
 pub fn get_update_channel(conn: &Connection) -> Result<String> {
@@ -133,346 +110,6 @@ pub fn get_update_channel(conn: &Connection) -> Result<String> {
 /// Set a custom update channel URL
 pub fn set_update_channel(conn: &Connection, url: &str) -> Result<()> {
     settings::set(conn, SETTINGS_KEY_UPDATE_CHANNEL, url)
-}
-
-/// Ensure update metadata cannot redirect downloads to a different origin.
-pub fn validate_download_origin(channel_url: &str, download_url: &str) -> Result<()> {
-    let channel = Url::parse(channel_url)
-        .map_err(|e| Error::ParseError(format!("Invalid update channel URL: {e}")))?;
-    let download = Url::parse(download_url)
-        .map_err(|e| Error::ParseError(format!("Invalid update download URL: {e}")))?;
-
-    let same_origin = channel.scheme() == download.scheme()
-        && channel.host_str() == download.host_str()
-        && channel.port_or_known_default() == download.port_or_known_default();
-
-    if !same_origin {
-        return Err(Error::DownloadError(format!(
-            "Update download URL origin mismatch: {download_url} does not match channel {channel_url}"
-        )));
-    }
-
-    Ok(())
-}
-
-fn parse_latest_version_info_bytes(bytes: &[u8]) -> Result<LatestVersionInfo> {
-    if bytes.len() > MAX_SELF_UPDATE_METADATA_SIZE {
-        return Err(Error::ParseError(format!(
-            "Update response too large ({} bytes, max {} bytes)",
-            bytes.len(),
-            MAX_SELF_UPDATE_METADATA_SIZE
-        )));
-    }
-
-    serde_json::from_slice(bytes)
-        .map_err(|e| Error::ParseError(format!("Invalid update response: {e}")))
-}
-
-async fn read_limited_response_bytes(
-    mut response: reqwest::Response,
-    limit: usize,
-    context: &str,
-) -> Result<Vec<u8>> {
-    if let Some(content_length) = response.content_length()
-        && content_length > limit as u64
-    {
-        return Err(Error::ParseError(format!(
-            "{context} too large ({} bytes, max {} bytes)",
-            content_length, limit
-        )));
-    }
-
-    let mut bytes = Vec::new();
-    let mut total = 0usize;
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|e| Error::IoError(format!("Failed to read {context}: {e}")))?
-    {
-        total += chunk.len();
-        if total > limit {
-            return Err(Error::ParseError(format!(
-                "{context} too large ({} bytes, max {} bytes)",
-                total, limit
-            )));
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-
-    Ok(bytes)
-}
-
-pub async fn fetch_latest_version_info(
-    channel_url: &str,
-    user_agent: &str,
-) -> Result<LatestVersionInfo> {
-    use std::time::Duration;
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|e| Error::IoError(format!("Failed to create HTTP client: {e}")))?;
-
-    let url = format!("{channel_url}/latest");
-    let response = client
-        .get(&url)
-        .header("User-Agent", user_agent)
-        .send()
-        .await
-        .map_err(|e| Error::IoError(format!("Failed to check for updates: {e}")))?;
-
-    if !response.status().is_success() {
-        return Err(Error::IoError(format!(
-            "Update check failed: HTTP {}",
-            response.status()
-        )));
-    }
-
-    let bytes =
-        read_limited_response_bytes(response, MAX_SELF_UPDATE_METADATA_SIZE, "update response")
-            .await?;
-    let info = parse_latest_version_info_bytes(&bytes)?;
-    validate_download_origin(channel_url, &info.download_url)?;
-    Ok(info)
-}
-
-/// Compare two semver version strings. Returns true if `remote` is newer than `current`.
-///
-/// Handles pre-release versions per SemVer rules:
-/// - A pre-release version (e.g., `1.0.0-alpha.1`) is always older than its
-///   release counterpart (`1.0.0`).
-/// - Pre-release identifiers are compared left-to-right: numeric identifiers
-///   are compared as integers, alphanumeric identifiers are compared
-///   lexicographically, and numeric identifiers always sort before
-///   alphanumeric ones.
-pub fn is_newer(current: &str, remote: &str) -> bool {
-    let parse = |v: &str| -> ((u64, u64, u64), Option<Vec<String>>) {
-        // Split off pre-release suffix from the patch component
-        let parts: Vec<&str> = v.split('.').collect();
-        let major = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
-        let minor = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-
-        let patch_str = parts.get(2).copied().unwrap_or("0");
-        let (patch_num, prerelease) = if let Some(dash_pos) = patch_str.find('-') {
-            let patch = patch_str[..dash_pos].parse().unwrap_or(0);
-            // Collect all pre-release identifiers (patch remainder + any further dot-separated parts)
-            let mut pre_parts: Vec<String> = patch_str[dash_pos + 1..]
-                .split('.')
-                .map(String::from)
-                .collect();
-            // Include any additional dot-separated parts beyond the third component
-            for part in parts.iter().skip(3) {
-                pre_parts.push(part.to_string());
-            }
-            (patch, Some(pre_parts))
-        } else {
-            let patch = patch_str.parse().unwrap_or(0);
-            (patch, None)
-        };
-
-        ((major, minor, patch_num), prerelease)
-    };
-
-    let (remote_ver, remote_pre) = parse(remote);
-    let (current_ver, current_pre) = parse(current);
-
-    match remote_ver.cmp(&current_ver) {
-        std::cmp::Ordering::Greater => true,
-        std::cmp::Ordering::Less => false,
-        std::cmp::Ordering::Equal => {
-            // Same version number: compare pre-release
-            match (&current_pre, &remote_pre) {
-                // Both releases (no pre-release) => not newer
-                (None, None) => false,
-                // Remote is a release, current is pre-release => remote is newer
-                (Some(_), None) => true,
-                // Remote is pre-release, current is release => remote is older
-                (None, Some(_)) => false,
-                // Both pre-release: compare identifiers
-                (Some(cur), Some(rem)) => {
-                    compare_prerelease(rem, cur) == std::cmp::Ordering::Greater
-                }
-            }
-        }
-    }
-}
-
-/// Compare pre-release identifier lists per SemVer 2.0 rules.
-fn compare_prerelease(a: &[String], b: &[String]) -> std::cmp::Ordering {
-    for (ai, bi) in a.iter().zip(b.iter()) {
-        let a_num = ai.parse::<u64>();
-        let b_num = bi.parse::<u64>();
-        let ord = match (a_num, b_num) {
-            // Both numeric: compare as integers
-            (Ok(an), Ok(bn)) => an.cmp(&bn),
-            // Numeric sorts before alphanumeric
-            (Ok(_), Err(_)) => std::cmp::Ordering::Less,
-            (Err(_), Ok(_)) => std::cmp::Ordering::Greater,
-            // Both alphanumeric: lexicographic
-            (Err(_), Err(_)) => ai.cmp(bi),
-        };
-        if ord != std::cmp::Ordering::Equal {
-            return ord;
-        }
-    }
-    // Fewer identifiers => lower precedence
-    a.len().cmp(&b.len())
-}
-
-/// Check for available updates by querying the update channel
-pub async fn check_for_update(
-    channel_url: &str,
-    current_version: &str,
-) -> Result<VersionCheckResult> {
-    let info = fetch_latest_version_info(channel_url, &format!("conary/{current_version}")).await?;
-
-    if is_newer(current_version, &info.version) {
-        Ok(VersionCheckResult::UpdateAvailable {
-            current: current_version.to_string(),
-            latest: info.version,
-            download_url: info.download_url,
-            sha256: info.sha256,
-            size: info.size,
-            signature: info.signature,
-        })
-    } else {
-        Ok(VersionCheckResult::UpToDate {
-            version: current_version.to_string(),
-        })
-    }
-}
-
-/// Download timeout for update packages (5 minutes)
-const UPDATE_DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
-
-/// Stream an HTTP response to disk while hashing and verifying the checksum.
-///
-/// Shared implementation for `download_update` and `download_update_with_progress`.
-/// If `progress` is `Some`, each chunk advances the progress bar.
-async fn stream_update_to_disk(
-    mut response: reqwest::Response,
-    dest_path: &Path,
-    expected_sha256: &str,
-    progress: Option<&indicatif::ProgressBar>,
-) -> Result<()> {
-    use crate::hash::{HashAlgorithm, Hasher};
-    use std::io::Write;
-
-    let mut file = fs::File::create(dest_path)
-        .map_err(|e| Error::IoError(format!("Failed to create output file: {e}")))?;
-    let mut hasher = Hasher::new(HashAlgorithm::Sha256);
-
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|e| Error::DownloadError(format!("Failed to read download stream: {e}")))?
-    {
-        hasher.update(&chunk);
-        file.write_all(&chunk)
-            .map_err(|e| Error::IoError(format!("Failed to write downloaded data: {e}")))?;
-        if let Some(pb) = progress {
-            pb.inc(chunk.len() as u64);
-        }
-    }
-    file.flush()
-        .map_err(|e| Error::IoError(format!("Failed to flush download file: {e}")))?;
-
-    if let Some(pb) = progress {
-        pb.finish_and_clear();
-    }
-
-    let actual_hash = hasher.finalize().value;
-    if actual_hash != expected_sha256 {
-        fs::remove_file(dest_path).ok();
-        return Err(Error::ChecksumMismatch {
-            expected: expected_sha256.to_string(),
-            actual: actual_hash,
-        });
-    }
-
-    Ok(())
-}
-
-/// Send the update download request and check the HTTP status.
-///
-/// Returns the response on success, or an appropriate error.
-async fn send_update_request(download_url: &str) -> Result<reqwest::Response> {
-    let client = reqwest::Client::builder()
-        .timeout(UPDATE_DOWNLOAD_TIMEOUT)
-        .build()
-        .map_err(|e| Error::IoError(format!("Failed to create HTTP client: {e}")))?;
-
-    let response = client
-        .get(download_url)
-        .send()
-        .await
-        .map_err(|e| Error::DownloadError(format!("Failed to download update: {e}")))?;
-
-    if !response.status().is_success() {
-        return Err(Error::DownloadError(format!(
-            "Download failed: HTTP {}",
-            response.status()
-        )));
-    }
-
-    Ok(response)
-}
-
-/// Download the CCS package to a temp directory and return the path
-///
-/// Streams the download through a SHA-256 hasher while writing to disk,
-/// avoiding a second full read of the file for verification.
-pub async fn download_update(
-    download_url: &str,
-    expected_sha256: &str,
-    dest_dir: &Path,
-) -> Result<PathBuf> {
-    let dest_path = dest_dir.join("conary-update.ccs");
-    let response = send_update_request(download_url).await?;
-    stream_update_to_disk(response, &dest_path, expected_sha256, None).await?;
-    Ok(dest_path)
-}
-
-/// Download the CCS package with a visual progress bar
-///
-/// Like [`download_update`] but displays download progress via `indicatif`.
-/// If `content_length` is provided, shows a determinate bar; otherwise a spinner.
-pub async fn download_update_with_progress(
-    download_url: &str,
-    expected_sha256: &str,
-    dest_dir: &Path,
-    content_length: Option<u64>,
-) -> Result<PathBuf> {
-    use indicatif::{ProgressBar, ProgressStyle};
-
-    let dest_path = dest_dir.join("conary-update.ccs");
-    let response = send_update_request(download_url).await?;
-
-    // Use content-length from response header if not provided, fall back to spinner
-    let total = content_length.or_else(|| response.content_length());
-
-    let pb = if let Some(size) = total {
-        let bar = ProgressBar::new(size);
-        bar.set_style(
-            ProgressStyle::default_bar()
-                .template("  Downloading [{bar:40.green/dim}] {bytes}/{total_bytes}")
-                .expect("Invalid progress bar template")
-                .progress_chars("##-"),
-        );
-        bar
-    } else {
-        let spinner = ProgressBar::new_spinner();
-        spinner.set_style(
-            ProgressStyle::default_spinner()
-                .template("  {spinner:.cyan} Downloading... {bytes}")
-                .expect("Invalid spinner template"),
-        );
-        spinner.enable_steady_tick(std::time::Duration::from_millis(100));
-        spinner
-    };
-
-    stream_update_to_disk(response, &dest_path, expected_sha256, Some(&pb)).await?;
-    Ok(dest_path)
 }
 
 /// Extract the conary binary from a CCS package to a temp file
@@ -616,37 +253,6 @@ pub fn verify_binary(binary_path: &Path, expected_version: &str) -> Result<()> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_is_newer() {
-        assert!(is_newer("0.1.0", "0.2.0"));
-        assert!(is_newer("0.1.0", "0.1.1"));
-        assert!(is_newer("0.1.0", "1.0.0"));
-        assert!(!is_newer("0.2.0", "0.1.0"));
-        assert!(!is_newer("0.1.0", "0.1.0"));
-        assert!(!is_newer("1.0.0", "0.9.9"));
-    }
-
-    #[test]
-    fn test_is_newer_edge_cases() {
-        assert!(!is_newer("1.0.0", "1.0.0"));
-        assert!(is_newer("0.99.99", "1.0.0"));
-        assert!(is_newer("1", "2"));
-        assert!(is_newer("1.0", "1.1"));
-    }
-
-    #[test]
-    fn test_is_newer_prerelease() {
-        // Pre-release is older than release
-        assert!(!is_newer("1.0.0", "1.0.0-alpha.1"));
-        assert!(is_newer("1.0.0-alpha.1", "1.0.0"));
-        // Pre-release ordering
-        assert!(is_newer("1.0.0-alpha.1", "1.0.0-alpha.2"));
-        assert!(is_newer("1.0.0-alpha.1", "1.0.0-beta.1"));
-        assert!(!is_newer("1.0.0-beta.1", "1.0.0-alpha.1"));
-        // Same pre-release is not newer
-        assert!(!is_newer("1.0.0-alpha.1", "1.0.0-alpha.1"));
-    }
-
     fn create_test_db() -> rusqlite::Connection {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
@@ -667,73 +273,6 @@ mod tests {
         set_update_channel(&conn, "https://internal.example.com/conary").unwrap();
         let channel = get_update_channel(&conn).unwrap();
         assert_eq!(channel, "https://internal.example.com/conary");
-    }
-
-    #[test]
-    fn test_validate_download_origin_accepts_same_origin() {
-        validate_download_origin(
-            "https://remi.conary.io/v1/ccs/conary",
-            "https://remi.conary.io/releases/conary-0.7.0.ccs",
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn test_validate_download_origin_rejects_different_host() {
-        let err = validate_download_origin(
-            "https://remi.conary.io/v1/ccs/conary",
-            "https://evil.example/releases/conary-0.7.0.ccs",
-        )
-        .unwrap_err();
-        assert!(format!("{err}").contains("origin mismatch"));
-    }
-
-    #[test]
-    fn test_validate_download_origin_rejects_different_scheme() {
-        let err = validate_download_origin(
-            "https://remi.conary.io/v1/ccs/conary",
-            "http://remi.conary.io/releases/conary-0.7.0.ccs",
-        )
-        .unwrap_err();
-        assert!(format!("{err}").contains("origin mismatch"));
-    }
-
-    #[test]
-    fn test_parse_latest_version_info_rejects_large_response() {
-        let oversized = vec![b'{'; MAX_SELF_UPDATE_METADATA_SIZE + 1];
-        let err = parse_latest_version_info_bytes(&oversized).unwrap_err();
-        assert!(err.to_string().contains("too large"));
-    }
-
-    #[test]
-    fn test_version_check_result_variants() {
-        let up_to_date = VersionCheckResult::UpToDate {
-            version: "0.1.0".to_string(),
-        };
-        assert_eq!(
-            up_to_date,
-            VersionCheckResult::UpToDate {
-                version: "0.1.0".to_string()
-            }
-        );
-
-        let update = VersionCheckResult::UpdateAvailable {
-            current: "0.1.0".to_string(),
-            latest: "0.2.0".to_string(),
-            download_url: "https://example.com/conary-0.2.0.ccs".to_string(),
-            sha256: "abc123".to_string(),
-            size: 12_000_000,
-            signature: None,
-        };
-        match &update {
-            VersionCheckResult::UpdateAvailable {
-                current, latest, ..
-            } => {
-                assert_eq!(current, "0.1.0");
-                assert_eq!(latest, "0.2.0");
-            }
-            _ => panic!("Expected UpdateAvailable"),
-        }
     }
 
     #[test]
@@ -762,16 +301,6 @@ mod tests {
     fn test_verify_binary_nonexistent() {
         let result = verify_binary(Path::new("/nonexistent/binary"), "1.0.0");
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_is_newer_major_minor_patch() {
-        // Major version takes priority
-        assert!(is_newer("1.9.9", "2.0.0"));
-        assert!(!is_newer("2.0.0", "1.9.9"));
-        // Minor version takes priority over patch
-        assert!(is_newer("1.0.9", "1.1.0"));
-        assert!(!is_newer("1.1.0", "1.0.9"));
     }
 
     #[test]
