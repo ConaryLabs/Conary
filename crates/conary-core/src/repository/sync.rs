@@ -5,9 +5,7 @@
 //! Functions for synchronizing repository metadata from remote sources,
 //! including native format support for Arch, Debian, and Fedora repositories.
 
-use crate::db::models::{
-    PackageDelta, Repository, RepositoryPackage,
-};
+use crate::db::models::{PackageDelta, Repository, RepositoryPackage};
 use crate::error::{Error, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::{Path, PathBuf};
@@ -21,9 +19,9 @@ use native::{
     SyncedPackageRow, convert_requirement_groups, distro_flavor_to_db,
     normalized_repository_capabilities, persist_native_sync_rows, version_scheme_to_db,
 };
-use remi::{fetch_and_persist_canonical_map, sync_repository_remi};
 #[cfg(test)]
 use remi::{CanonicalMapResponse, RemiPackageEntry, remi_sync_row};
+use remi::{fetch_and_persist_canonical_map, sync_repository_remi};
 
 mod native;
 mod remi;
