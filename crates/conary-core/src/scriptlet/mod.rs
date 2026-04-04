@@ -26,8 +26,8 @@
 //! The target root must have a working shell and interpreter for scriptlets
 //! to execute successfully.
 
-use crate::container::{BindMount, ContainerConfig, Sandbox, ScriptRisk, analyze_script};
 use crate::capability::enforcement::EnforcementMode;
+use crate::container::{BindMount, ContainerConfig, Sandbox, ScriptRisk, analyze_script};
 use crate::db::models::ScriptletEntry;
 use crate::error::{Error, Result};
 use crate::packages::traits::{Scriptlet, ScriptletPhase};
