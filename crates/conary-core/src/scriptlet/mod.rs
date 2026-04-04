@@ -26,71 +26,25 @@
 //! The target root must have a working shell and interpreter for scriptlets
 //! to execute successfully.
 
-use crate::capability::enforcement::EnforcementMode;
 use crate::container::{BindMount, ContainerConfig, Sandbox, ScriptRisk, analyze_script};
+use crate::capability::enforcement::EnforcementMode;
 use crate::db::models::ScriptletEntry;
 use crate::error::{Error, Result};
 use crate::packages::traits::{Scriptlet, ScriptletPhase};
+use runtime::{
+    apply_sanitized_command_env, build_scriptlet_seccomp, chroot_mount_private_flags,
+    chroot_namespace_flags, current_seccomp_mode, log_script_output, wait_and_capture,
+    write_executable_script,
+};
 use std::fs;
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::process::{Command, Stdio};
 use std::time::Duration;
 use tempfile::TempDir;
 use tracing::{debug, info, warn};
-use wait_timeout::ChildExt;
 
-/// Write script content to a file and set it executable (mode 0o700).
-///
-/// Delegates to [`crate::container::write_executable_script`].
-fn write_executable_script(path: &Path, content: &str) -> Result<()> {
-    crate::container::write_executable_script(path, content)
-}
-
-fn apply_sanitized_command_env(cmd: &mut Command, env: &[(&str, &str)]) {
-    cmd.env_clear()
-        .env("HOME", "/root")
-        .env("TERM", "dumb")
-        .env("LANG", "C.UTF-8")
-        .env("SHELL", "/bin/sh");
-
-    if !env.iter().any(|(key, _)| *key == "PATH") {
-        cmd.env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin");
-    }
-
-    for (key, value) in env {
-        cmd.env(*key, *value);
-    }
-}
-
-/// Log captured stdout/stderr lines with a phase prefix.
-fn log_script_output(phase: &str, stdout: &str, stderr: &str) {
-    if !stdout.is_empty() {
-        for line in stdout.lines() {
-            info!("[{}] {}", phase, line);
-        }
-    }
-    if !stderr.is_empty() {
-        for line in stderr.lines() {
-            warn!("[{}] {}", phase, line);
-        }
-    }
-}
-
-/// Check an exit status from a scriptlet and return an appropriate error.
-fn check_scriptlet_status(phase: &str, status: ExitStatus, context: &str) -> Result<()> {
-    if status.success() {
-        info!("{} scriptlet completed successfully{}", phase, context);
-        Ok(())
-    } else {
-        let code = status.code().unwrap_or(-1);
-        Err(Error::ScriptletError(format!(
-            "{} scriptlet failed with exit code {}{}",
-            phase, code, context
-        )))
-    }
-}
+mod runtime;
 
 /// Sandbox mode for scriptlet execution
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -118,7 +72,6 @@ impl SandboxMode {
 
 /// Default timeout for scriptlet execution (60 seconds)
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
-static SECCOMP_WARN_OVERRIDE: AtomicBool = AtomicBool::new(false);
 const LIVE_SANDBOX_PROTECTED_ETC_FILES: [&str; 3] = ["/etc/passwd", "/etc/shadow", "/etc/sudoers"];
 
 /// Package format types for argument handling
@@ -686,76 +639,7 @@ impl ScriptletExecutor {
 }
 
 pub fn set_seccomp_warn_override(enabled: bool) {
-    SECCOMP_WARN_OVERRIDE.store(enabled, Ordering::Relaxed);
-}
-
-fn current_seccomp_mode() -> EnforcementMode {
-    if SECCOMP_WARN_OVERRIDE.load(Ordering::Relaxed) {
-        EnforcementMode::Warn
-    } else {
-        EnforcementMode::Enforce
-    }
-}
-
-fn chroot_namespace_flags() -> nix::sched::CloneFlags {
-    nix::sched::CloneFlags::CLONE_NEWNS
-}
-
-fn chroot_mount_private_flags() -> nix::mount::MsFlags {
-    nix::mount::MsFlags::MS_PRIVATE | nix::mount::MsFlags::MS_REC
-}
-
-/// Wait for a child process to exit (with timeout), capture its stdout/stderr,
-/// log the output, and check the exit status.
-///
-/// Takes the stdout/stderr pipe handles before waiting so that draining them
-/// after the child exits is safe and cannot race with a double-wait (ECHILD).
-///
-/// # Arguments
-/// * `child`   – spawned process with `Stdio::piped()` stdout and stderr
-/// * `timeout` – maximum time to wait before killing the child
-/// * `phase`   – scriptlet phase name used in log/error messages
-/// * `context` – optional context suffix appended to log/error messages
-///   (e.g. `" (chroot: /target, seccomp: enabled)"`); pass `""` for none
-fn wait_and_capture(
-    child: &mut std::process::Child,
-    timeout: Duration,
-    phase: &str,
-    context: &str,
-) -> Result<()> {
-    // Take handles before waiting — after wait_timeout reaps the child the
-    // pipes reach EOF, so read_to_end returns immediately.  Avoids the
-    // double-wait (ECHILD) that wait_with_output would cause.
-    let mut stdout_handle = child.stdout.take();
-    let mut stderr_handle = child.stderr.take();
-
-    match child.wait_timeout(timeout)? {
-        Some(status) => {
-            let mut stdout_bytes = Vec::new();
-            let mut stderr_bytes = Vec::new();
-            if let Some(ref mut out) = stdout_handle {
-                let _ = std::io::Read::read_to_end(out, &mut stdout_bytes);
-            }
-            if let Some(ref mut err) = stderr_handle {
-                let _ = std::io::Read::read_to_end(err, &mut stderr_bytes);
-            }
-            log_script_output(
-                phase,
-                &String::from_utf8_lossy(&stdout_bytes),
-                &String::from_utf8_lossy(&stderr_bytes),
-            );
-            check_scriptlet_status(phase, status, context)
-        }
-        None => {
-            let _ = child.kill();
-            Err(Error::ScriptletError(format!(
-                "{} scriptlet timed out after {} seconds{}",
-                phase,
-                timeout.as_secs(),
-                context
-            )))
-        }
-    }
+    runtime::set_seccomp_warn_override(enabled);
 }
 
 /// Convert ScriptletPhase to string for database storage
@@ -779,39 +663,10 @@ pub fn phase_from_string(s: &str) -> Option<ScriptletPhase> {
     }
 }
 
-/// Build a seccomp BPF filter for scriptlet execution
-///
-/// Uses the Scriptlet profile with the given enforcement mode.
-/// Returns `None` if seccomp is not supported on this kernel.
-fn build_scriptlet_seccomp(mode: EnforcementMode) -> Option<seccompiler::BpfProgram> {
-    use crate::capability::SyscallCapabilities;
-    use crate::capability::enforcement::seccomp_enforce;
-
-    if !seccomp_enforce::check_seccomp_support() {
-        return None;
-    }
-
-    let caps = SyscallCapabilities {
-        profile: Some("scriptlet".to_string()),
-        allow: Vec::new(),
-        deny: Vec::new(),
-    };
-
-    match seccomp_enforce::build_seccomp_filter(&caps, mode) {
-        Ok(bpf) => {
-            info!("Built seccomp filter for scriptlet execution ({mode} mode)");
-            Some(bpf)
-        }
-        Err(e) => {
-            warn!("Failed to build scriptlet seccomp filter: {e}");
-            None
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capability::enforcement::EnforcementMode;
     use std::sync::{LazyLock, Mutex};
 
     static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
