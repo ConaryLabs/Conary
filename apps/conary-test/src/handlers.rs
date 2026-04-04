@@ -478,7 +478,10 @@ pub(super) fn cmd_manifests_reload(json: bool) -> Result<()> {
             println!("{name:<30} {phase:<8} {count}");
         }
         println!();
-        println!("{} manifests found", color(&suites.len().to_string(), GREEN));
+        println!(
+            "{} manifests found",
+            color(&suites.len().to_string(), GREEN)
+        );
     }
 
     Ok(())
