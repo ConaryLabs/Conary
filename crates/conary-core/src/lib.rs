@@ -10,6 +10,7 @@ pub mod bootstrap;
 pub mod canonical;
 pub mod capability;
 pub mod ccs;
+mod child_wait;
 pub mod components;
 pub mod compression;
 pub mod container;
