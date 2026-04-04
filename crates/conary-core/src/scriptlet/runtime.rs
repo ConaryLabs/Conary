@@ -1,6 +1,7 @@
 // conary-core/src/scriptlet/runtime.rs
 
 use crate::capability::enforcement::EnforcementMode;
+use crate::child_wait::wait_with_output;
 use crate::error::{Error, Result};
 use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
@@ -8,7 +9,6 @@ use std::process::{Command, ExitStatus};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tracing::{info, warn};
-use wait_timeout::ChildExt;
 
 static SECCOMP_WARN_OVERRIDE: AtomicBool = AtomicBool::new(false);
 
@@ -94,41 +94,34 @@ pub(super) fn wait_and_capture(
     phase: &str,
     context: &str,
 ) -> Result<()> {
-    let mut stdout_handle = child.stdout.take();
-    let mut stderr_handle = child.stderr.take();
+    let outcome = wait_with_output(child, timeout)?;
+    let stdout = String::from_utf8_lossy(&outcome.stdout);
+    let stderr = String::from_utf8_lossy(&outcome.stderr);
 
-    match child.wait_timeout(timeout)? {
-        Some(status) => {
-            let mut stdout_bytes = Vec::new();
-            let mut stderr_bytes = Vec::new();
-            if let Some(ref mut out) = stdout_handle {
-                let _ = std::io::Read::read_to_end(out, &mut stdout_bytes);
-            }
-            if let Some(ref mut err) = stderr_handle {
-                let _ = std::io::Read::read_to_end(err, &mut stderr_bytes);
-            }
-            log_script_output(
-                phase,
-                &String::from_utf8_lossy(&stdout_bytes),
-                &String::from_utf8_lossy(&stderr_bytes),
-            );
-            check_scriptlet_status(phase, status, context)
-        }
-        None => {
-            let _ = child.kill();
-            let status = child.wait().ok();
-            let signal = status.and_then(|status| ExitStatusExt::signal(&status));
-            let suffix = signal
-                .map(|sig| format!(" (killed with signal {sig})"))
-                .unwrap_or_default();
-            Err(Error::ScriptletError(format!(
-                "{} scriptlet timed out after {} seconds{}{}",
-                phase,
-                timeout.as_secs(),
-                context,
-                suffix
-            )))
-        }
+    log_script_output(phase, &stdout, &stderr);
+
+    if outcome.timed_out {
+        let signal = outcome
+            .status
+            .and_then(|status| ExitStatusExt::signal(&status));
+        let suffix = signal
+            .map(|sig| format!(" (killed with signal {sig})"))
+            .unwrap_or_default();
+        Err(Error::ScriptletError(format!(
+            "{} scriptlet timed out after {} seconds{}{}",
+            phase,
+            timeout.as_secs(),
+            context,
+            suffix
+        )))
+    } else {
+        check_scriptlet_status(
+            phase,
+            outcome
+                .status
+                .expect("child wait helper must return a status when not timed out"),
+            context,
+        )
     }
 }
 
