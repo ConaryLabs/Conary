@@ -20,6 +20,7 @@
 //! inside a chroot rooted at the target path. This allows triggers to run
 //! correctly during bootstrap or container image creation.
 
+use crate::child_wait::wait_with_output;
 use crate::db::models::{ChangesetTrigger, Trigger, TriggerEngine};
 use crate::error::{Error, Result};
 use rusqlite::Connection;
@@ -27,7 +28,6 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 use tracing::{debug, info, warn};
-use wait_timeout::ChildExt;
 
 /// Default timeout for trigger execution (30 seconds)
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -288,84 +288,63 @@ impl<'a> TriggerExecutor<'a> {
         cmd: &str,
         chroot_path: Option<&Path>,
     ) -> Result<Option<String>> {
-        match child.wait_timeout(self.timeout)? {
-            Some(status) => {
-                // Process already exited; read buffered output without
-                // calling wait_with_output (which would double-wait).
-                let stdout_bytes = child
-                    .stdout
-                    .take()
-                    .map(|mut s| {
-                        let mut buf = Vec::new();
-                        std::io::Read::read_to_end(&mut s, &mut buf).ok();
-                        buf
-                    })
-                    .unwrap_or_default();
-                let stderr_bytes = child
-                    .stderr
-                    .take()
-                    .map(|mut s| {
-                        let mut buf = Vec::new();
-                        std::io::Read::read_to_end(&mut s, &mut buf).ok();
-                        buf
-                    })
-                    .unwrap_or_default();
-                let stdout = String::from_utf8_lossy(&stdout_bytes);
-                let stderr = String::from_utf8_lossy(&stderr_bytes);
+        let outcome = wait_with_output(&mut child, self.timeout)?;
+        let stdout = String::from_utf8_lossy(&outcome.stdout);
+        let stderr = String::from_utf8_lossy(&outcome.stderr);
 
-                // Log output
-                if !stdout.is_empty() {
-                    for line in stdout.lines() {
-                        debug!("[{}] {}", trigger_name, line);
-                    }
-                }
-                if !stderr.is_empty() {
-                    for line in stderr.lines() {
-                        warn!("[{}] {}", trigger_name, line);
-                    }
-                }
-
-                if status.success() {
-                    let combined = format!("{}{}", stdout, stderr);
-                    Ok(if combined.is_empty() {
-                        None
-                    } else {
-                        Some(combined)
-                    })
-                } else {
-                    let code = status.code().unwrap_or(-1);
-                    let context = match chroot_path {
-                        Some(root) => format!(
-                            "Handler '{}' failed with exit code {} (chroot: {}): {}",
-                            cmd,
-                            code,
-                            root.display(),
-                            stderr.trim()
-                        ),
-                        None => format!(
-                            "Handler '{}' failed with exit code {}: {}",
-                            cmd,
-                            code,
-                            stderr.trim()
-                        ),
-                    };
-                    Err(Error::TriggerError(context))
-                }
+        if !stdout.is_empty() {
+            for line in stdout.lines() {
+                debug!("[{}] {}", trigger_name, line);
             }
-            None => {
-                // Timeout - kill the process
-                let _ = child.kill();
+        }
+        if !stderr.is_empty() {
+            for line in stderr.lines() {
+                warn!("[{}] {}", trigger_name, line);
+            }
+        }
+
+        if outcome.timed_out {
+            let context = match chroot_path {
+                Some(root) => format!(
+                    "Handler '{}' timed out after {} seconds (chroot: {})",
+                    cmd,
+                    self.timeout.as_secs(),
+                    root.display()
+                ),
+                None => format!(
+                    "Handler '{}' timed out after {} seconds",
+                    cmd,
+                    self.timeout.as_secs()
+                ),
+            };
+            Err(Error::TriggerError(context))
+        } else {
+            let status = outcome
+                .status
+                .expect("child wait helper must return a status when not timed out");
+
+            if status.success() {
+                let combined = format!("{}{}", stdout, stderr);
+                Ok(if combined.is_empty() {
+                    None
+                } else {
+                    Some(combined)
+                })
+            } else {
+                let code = status.code().unwrap_or(-1);
                 let context = match chroot_path {
                     Some(root) => format!(
-                        "Handler '{}' timed out after {} seconds (chroot: {})",
+                        "Handler '{}' failed with exit code {} (chroot: {}): {}",
                         cmd,
-                        self.timeout.as_secs(),
-                        root.display()
+                        code,
+                        root.display(),
+                        stderr.trim()
                     ),
                     None => format!(
-                        "Handler '{}' timed out after {} seconds",
+                        "Handler '{}' failed with exit code {}: {}",
                         cmd,
-                        self.timeout.as_secs()
+                        code,
+                        stderr.trim()
                     ),
                 };
                 Err(Error::TriggerError(context))
