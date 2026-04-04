@@ -44,20 +44,29 @@ use nix::mount::{MntFlags, MsFlags, mount, umount2};
 use nix::sched::{CloneFlags, unshare};
 use nix::sys::signal::{Signal, kill};
 use nix::sys::wait::{WaitStatus, waitpid};
-use nix::unistd::{ForkResult, Gid, Pid, Uid, fork};
-use regex::RegexSet;
-use std::ffi::{CStr, CString};
+use nix::unistd::{ForkResult, Gid, Pid, Uid};
+use std::ffi::CString;
 use std::fs::{self, File};
 use std::io::{Read, Write};
-use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use tracing::{debug, warn};
+
+mod analysis;
+mod namespaces;
+
+pub use analysis::{ScriptAnalysis, ScriptRisk, analyze_script};
+use namespaces::{
+    UserNamespaceSync, adopt_raw_fd, chdir_syscall, chroot_syscall,
+    configure_user_namespace_root_mapping_for_pid, fork_process, prepare_user_namespace_entrypoint,
+    prepare_user_namespace_root, sandbox_host_gid, sandbox_host_uid, sandbox_namespace_flags,
+    set_rlimit_syscall, sethostname_syscall, signal_parent_user_namespace_ready,
+};
 
 /// Default resource limits for sandboxed execution
 pub const DEFAULT_MEMORY_LIMIT: u64 = 512 * 1024 * 1024; // 512 MB
@@ -65,44 +74,6 @@ pub const DEFAULT_CPU_TIME_LIMIT: u64 = 60; // 60 seconds CPU time
 pub const DEFAULT_FILE_SIZE_LIMIT: u64 = 100 * 1024 * 1024; // 100 MB max file size
 pub const DEFAULT_NPROC_LIMIT: u64 = 1024; // Max 1024 processes
 const HOST_NOBODY_ID: u32 = 65_534;
-
-/// Severity levels for dangerous script detection
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ScriptRisk {
-    /// Safe - no risky patterns detected
-    Safe,
-    /// Low risk - minor concerns
-    Low,
-    /// Medium risk - should probably sandbox
-    Medium,
-    /// High risk - definitely sandbox
-    High,
-    /// Critical - extremely dangerous patterns
-    Critical,
-}
-
-impl ScriptRisk {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ScriptRisk::Safe => "safe",
-            ScriptRisk::Low => "low",
-            ScriptRisk::Medium => "medium",
-            ScriptRisk::High => "high",
-            ScriptRisk::Critical => "critical",
-        }
-    }
-}
-
-/// Result of analyzing a script for dangerous patterns
-#[derive(Debug)]
-pub struct ScriptAnalysis {
-    /// Overall risk level
-    pub risk: ScriptRisk,
-    /// Dangerous patterns found
-    pub patterns: Vec<String>,
-    /// Recommendations
-    pub recommendations: Vec<String>,
-}
 
 /// Paths to bind-mount into the container (read-only by default)
 #[derive(Debug, Clone)]
@@ -462,11 +433,6 @@ pub fn write_executable_script(path: &Path, content: &str) -> Result<()> {
 /// Container sandbox for executing scriptlets
 pub struct Sandbox {
     config: ContainerConfig,
-}
-
-struct UserNamespaceSync {
-    request_fd: std::os::fd::OwnedFd,
-    ack_fd: std::os::fd::OwnedFd,
 }
 
 impl Sandbox {
@@ -1361,278 +1327,6 @@ fn set_rlimit(resource: libc::__rlimit_resource_t, value: u64, name: &str) {
     }
 }
 
-fn fork_process() -> nix::Result<ForkResult> {
-    unsafe { fork() }
-}
-
-fn adopt_raw_fd(raw_fd: RawFd) -> Result<OwnedFd> {
-    if raw_fd < 0 {
-        return Err(Error::ScriptletError(format!("invalid stdio fd: {raw_fd}")));
-    }
-
-    Ok(unsafe { OwnedFd::from_raw_fd(raw_fd) })
-}
-
-fn sethostname_syscall(hostname: &CStr, len: usize) -> std::io::Result<()> {
-    if unsafe { libc::sethostname(hostname.as_ptr(), len) } == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
-}
-
-fn chroot_syscall(root: &CStr) -> std::io::Result<()> {
-    if unsafe { libc::chroot(root.as_ptr()) } == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
-}
-
-fn chdir_syscall(path: &CStr) -> std::io::Result<()> {
-    if unsafe { libc::chdir(path.as_ptr()) } == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
-}
-
-fn set_rlimit_syscall(
-    resource: libc::__rlimit_resource_t,
-    limit: &libc::rlimit,
-) -> std::io::Result<()> {
-    if unsafe { libc::setrlimit(resource, limit) } == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
-}
-
-fn sandbox_namespace_flags(flags: CloneFlags) -> CloneFlags {
-    if flags.is_empty() {
-        flags
-    } else {
-        flags | CloneFlags::CLONE_NEWUSER
-    }
-}
-
-fn sandbox_host_uid(euid: u32) -> u32 {
-    if euid == 0 { HOST_NOBODY_ID } else { euid }
-}
-
-fn sandbox_host_gid(egid: u32) -> u32 {
-    if egid == 0 { HOST_NOBODY_ID } else { egid }
-}
-
-fn namespace_map_contents(host_id: u32) -> String {
-    format!("0 {host_id} 1\n")
-}
-
-fn write_namespace_map(path: &str, contents: &str) -> Result<()> {
-    fs::write(path, contents)
-        .map_err(|e| Error::ScriptletError(format!("Failed to write {path}: {e}")))?;
-    Ok(())
-}
-
-fn configure_user_namespace_root_mapping_for_pid(
-    pid: Pid,
-    host_uid: u32,
-    host_gid: u32,
-) -> Result<()> {
-    let proc_root = format!("/proc/{}", pid.as_raw());
-    write_namespace_map(&format!("{proc_root}/setgroups"), "deny")?;
-    write_namespace_map(
-        &format!("{proc_root}/uid_map"),
-        &namespace_map_contents(host_uid),
-    )?;
-    write_namespace_map(
-        &format!("{proc_root}/gid_map"),
-        &namespace_map_contents(host_gid),
-    )?;
-    Ok(())
-}
-
-fn prepare_user_namespace_entrypoint(root: &Path, script_path: &Path) -> Result<()> {
-    prepare_user_namespace_root(root)?;
-
-    let mut script_perms = fs::metadata(script_path)?.permissions();
-    script_perms.set_mode(script_perms.mode() | 0o055);
-    fs::set_permissions(script_path, script_perms)?;
-
-    Ok(())
-}
-
-fn prepare_user_namespace_root(root: &Path) -> Result<()> {
-    let mut root_perms = fs::metadata(root)?.permissions();
-    root_perms.set_mode(root_perms.mode() | 0o011);
-    fs::set_permissions(root, root_perms)?;
-    Ok(())
-}
-
-fn signal_parent_user_namespace_ready(
-    sync: Option<&UserNamespaceSync>,
-    user_namespace_enabled: bool,
-) -> Result<()> {
-    let Some(sync) = sync else {
-        return Ok(());
-    };
-
-    let message = if user_namespace_enabled { b"U" } else { b"N" };
-    nix::unistd::write(&sync.request_fd, message).map_err(|e| {
-        Error::ScriptletError(format!("User namespace handshake request failed: {e}"))
-    })?;
-
-    let mut ack = [0_u8; 1];
-    let bytes_read = nix::unistd::read(&sync.ack_fd, &mut ack)
-        .map_err(|e| Error::ScriptletError(format!("User namespace handshake ack failed: {e}")))?;
-    if bytes_read != 1 || ack[0] != b'O' {
-        return Err(Error::ScriptletError(
-            "User namespace handshake was not acknowledged".to_string(),
-        ));
-    }
-
-    Ok(())
-}
-
-/// Dangerous patterns: (regex, risk level, human description).
-///
-/// All patterns are case-insensitive compiled regexes. Each entry maps to one
-/// danger category. Patterns that previously used ad-hoc `.*` splitting are now
-/// proper regex; special characters (`|`, `*`, `(`, `)`, `{`, `}`, `+`) that
-/// should be treated as literals are escaped with `\`.
-const DANGEROUS_PATTERNS: &[(&str, ScriptRisk, &str)] = &[
-    // Critical - remote code execution
-    // Matches: curl <url> | sh  (pipe literal must be escaped)
-    (
-        r"curl.*\|.*sh",
-        ScriptRisk::Critical,
-        "Downloads and executes remote code",
-    ),
-    // Matches: wget <url> | sh
-    (
-        r"wget.*\|.*sh",
-        ScriptRisk::Critical,
-        "Downloads and executes remote code",
-    ),
-    // Matches: eval followed by anything to end of line
-    (r"eval.*$", ScriptRisk::Critical, "Dynamic code execution"),
-    // High - system modification
-    (r"rm -rf /", ScriptRisk::High, "Recursive deletion of root"),
-    // `*` after `/` is a glob in shell but a regex quantifier -- escape it
-    (
-        r"rm -rf /\*",
-        ScriptRisk::High,
-        "Recursive deletion of root contents",
-    ),
-    (r"mkfs", ScriptRisk::High, "Filesystem formatting"),
-    (
-        r"dd if=.* of=/dev/",
-        ScriptRisk::High,
-        "Direct device write",
-    ),
-    // Fork bomb: all special chars must be escaped for literal match
-    (r":\(\)\{ :\|:& \};:", ScriptRisk::High, "Fork bomb"),
-    // Medium - privilege escalation or persistence
-    (
-        r"chmod.*4[0-7][0-7][0-7]",
-        ScriptRisk::Medium,
-        "Setuid bit manipulation",
-    ),
-    // `+` is a regex quantifier -- escape for literal `u+s`
-    (
-        r"chmod.*u\+s",
-        ScriptRisk::Medium,
-        "Setuid bit manipulation",
-    ),
-    ("crontab", ScriptRisk::Medium, "Cron job modification"),
-    ("/etc/shadow", ScriptRisk::Medium, "Password file access"),
-    (
-        "/etc/sudoers",
-        ScriptRisk::Medium,
-        "Sudo configuration access",
-    ),
-    (
-        r"ssh.*authorized_keys",
-        ScriptRisk::Medium,
-        "SSH key manipulation",
-    ),
-    // Low - potentially suspicious
-    (
-        r"nc ",
-        ScriptRisk::Low,
-        "Netcat usage (network backdoor potential)",
-    ),
-    (
-        r"ncat ",
-        ScriptRisk::Low,
-        "Ncat usage (network backdoor potential)",
-    ),
-    (
-        r"/dev/tcp/",
-        ScriptRisk::Low,
-        "Bash TCP device (network comms)",
-    ),
-    (
-        r"/dev/udp/",
-        ScriptRisk::Low,
-        "Bash UDP device (network comms)",
-    ),
-    (
-        r"base64.*-d",
-        ScriptRisk::Low,
-        "Base64 decoding (obfuscation)",
-    ),
-];
-
-/// Compiled `RegexSet` for all dangerous-pattern regexes (case-insensitive).
-///
-/// Built once at program startup via `LazyLock`. The index into the set
-/// corresponds 1-to-1 with the index into `DANGEROUS_PATTERNS`.
-static DANGEROUS_REGEX_SET: LazyLock<RegexSet> = LazyLock::new(|| {
-    let patterns: Vec<&str> = DANGEROUS_PATTERNS.iter().map(|(p, _, _)| *p).collect();
-    RegexSet::new(&patterns).expect("DANGEROUS_PATTERNS contains an invalid regex")
-});
-
-/// Analyze a script for dangerous patterns
-pub fn analyze_script(content: &str) -> ScriptAnalysis {
-    let mut patterns = Vec::new();
-    let mut recommendations = Vec::new();
-    let mut max_risk = ScriptRisk::Safe;
-
-    // RegexSet::matches() returns the indices of all matching patterns in one pass.
-    let matches = DANGEROUS_REGEX_SET.matches(content);
-    for idx in matches.iter() {
-        let (_, risk, description) = &DANGEROUS_PATTERNS[idx];
-        patterns.push(format!("{} ({})", description, risk.as_str()));
-        if *risk > max_risk {
-            max_risk = *risk;
-        }
-    }
-
-    // Generate recommendations
-    match max_risk {
-        ScriptRisk::Safe => {
-            recommendations.push("Script appears safe for execution".to_string());
-        }
-        ScriptRisk::Low => {
-            recommendations.push("Consider sandboxing if running untrusted package".to_string());
-        }
-        ScriptRisk::Medium => {
-            recommendations.push("Sandboxed execution recommended".to_string());
-        }
-        ScriptRisk::High | ScriptRisk::Critical => {
-            recommendations.push("MUST sandbox this script".to_string());
-            recommendations.push("Review script contents before execution".to_string());
-        }
-    }
-
-    ScriptAnalysis {
-        risk: max_risk,
-        patterns,
-        recommendations,
-    }
-}
-
 /// Check if namespace isolation is available
 pub fn isolation_available() -> bool {
     // Check if we're root
@@ -1657,6 +1351,7 @@ pub fn isolation_available() -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::namespaces::namespace_map_contents;
     use super::*;
     use crate::capability::enforcement::{EnforcementMode, EnforcementPolicy};
     use std::os::fd::IntoRawFd;
