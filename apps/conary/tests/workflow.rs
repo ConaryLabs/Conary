@@ -485,11 +485,17 @@ fn test_capability_run_uses_installed_package_declaration() {
         .unwrap();
 
     let run_stderr = String::from_utf8_lossy(&run_output.stderr);
+    let missing_mount_privilege =
+        run_stderr.contains("mount --make-rprivate failed: EACCES")
+            || run_stderr.contains("mount --make-rprivate failed: EPERM");
+    let missing_readonly_remount_privilege = run_stderr.contains("read-only remount failed")
+        && (run_stderr.contains("EACCES") || run_stderr.contains("EPERM"));
     if !run_output.status.success()
-        && (run_stderr.contains("mount --make-rprivate failed: EACCES")
-            || run_stderr.contains("mount --make-rprivate failed: EPERM"))
+        && (missing_mount_privilege || missing_readonly_remount_privilege)
     {
-        eprintln!("skipping capability run assertion on a host without mount namespace privileges");
+        eprintln!(
+            "skipping capability run assertion on a host without the mount privileges required for capability sandboxing"
+        );
         return;
     }
 
