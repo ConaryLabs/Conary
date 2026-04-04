@@ -38,6 +38,7 @@
 //! Based on concepts from Aeryn OS / Serpent OS container isolation.
 
 use crate::capability::enforcement::{self, EnforcementMode, EnforcementPolicy};
+use crate::child_wait::wait_with_output;
 use crate::error::{Error, Result};
 use nix::mount::{MntFlags, MsFlags, mount, umount2};
 use nix::sched::{CloneFlags, unshare};
@@ -844,30 +845,23 @@ impl Sandbox {
             .spawn()
             .map_err(|e| Error::ScriptletError(format!("Failed to spawn: {}", e)))?;
 
-        // Wait with timeout using wait-timeout
-        use wait_timeout::ChildExt;
-
-        match child.wait_timeout(self.config.timeout)? {
-            Some(status) => {
-                // Read stdout/stderr directly from pipes (don't call wait again)
-                let mut stdout_str = String::new();
-                let mut stderr_str = String::new();
-                if let Some(mut stdout) = child.stdout.take() {
-                    let _ = stdout.read_to_string(&mut stdout_str);
-                }
-                if let Some(mut stderr) = child.stderr.take() {
-                    let _ = stderr.read_to_string(&mut stderr_str);
-                }
-                let code = status.code().unwrap_or(-1);
-                Ok((code, stdout_str, stderr_str))
-            }
-            None => {
-                let _ = child.kill();
-                Err(Error::ScriptletError(format!(
-                    "Script timed out after {:?}",
-                    self.config.timeout
-                )))
-            }
+        let outcome = wait_with_output(&mut child, self.config.timeout)?;
+        if outcome.timed_out {
+            Err(Error::ScriptletError(format!(
+                "Script timed out after {:?}",
+                self.config.timeout
+            )))
+        } else {
+            let code = outcome
+                .status
+                .expect("child wait helper must return a status when not timed out")
+                .code()
+                .unwrap_or(-1);
+            Ok((
+                code,
+                String::from_utf8_lossy(&outcome.stdout).into_owned(),
+                String::from_utf8_lossy(&outcome.stderr).into_owned(),
+            ))
         }
     }
 
@@ -903,28 +897,23 @@ impl Sandbox {
             .spawn()
             .map_err(|e| Error::ScriptletError(format!("Failed to spawn: {}", e)))?;
 
-        use wait_timeout::ChildExt;
-
-        match child.wait_timeout(self.config.timeout)? {
-            Some(status) => {
-                let mut stdout_str = String::new();
-                let mut stderr_str = String::new();
-                if let Some(mut stdout) = child.stdout.take() {
-                    let _ = stdout.read_to_string(&mut stdout_str);
-                }
-                if let Some(mut stderr) = child.stderr.take() {
-                    let _ = stderr.read_to_string(&mut stderr_str);
-                }
-                let code = status.code().unwrap_or(-1);
-                Ok((code, stdout_str, stderr_str))
-            }
-            None => {
-                let _ = child.kill();
-                Err(Error::ScriptletError(format!(
-                    "Script timed out after {:?}",
-                    self.config.timeout
-                )))
-            }
+        let outcome = wait_with_output(&mut child, self.config.timeout)?;
+        if outcome.timed_out {
+            Err(Error::ScriptletError(format!(
+                "Script timed out after {:?}",
+                self.config.timeout
+            )))
+        } else {
+            let code = outcome
+                .status
+                .expect("child wait helper must return a status when not timed out")
+                .code()
+                .unwrap_or(-1);
+            Ok((
+                code,
+                String::from_utf8_lossy(&outcome.stdout).into_owned(),
+                String::from_utf8_lossy(&outcome.stderr).into_owned(),
+            ))
         }
     }
 
