@@ -52,6 +52,7 @@ mod scriptlet_entry;
 mod state;
 mod subpackage;
 mod trigger;
+mod trigger_engine;
 mod trove;
 
 pub mod admin_token;
@@ -89,7 +90,8 @@ pub use resolution::{CacheTier, PackageResolution, PrimaryStrategy, ResolutionSt
 pub use scriptlet_entry::ScriptletEntry;
 pub use state::{RestorePlan, StateDiff, StateEngine, StateMember, SystemState};
 pub use subpackage::{RelatedPackages, SubpackageRelationship, show_subpackage_guidance};
-pub use trigger::{ChangesetTrigger, Trigger, TriggerDependency, TriggerEngine, TriggerStatus};
+pub use trigger::{ChangesetTrigger, Trigger, TriggerDependency, TriggerStatus};
+pub use trigger_engine::TriggerEngine;
 pub use trove::{InstallReason, InstallSource, Trove, TroveType};
 
 /// Format a byte count as a human-readable size string.
