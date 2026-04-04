@@ -710,13 +710,9 @@ mod tests {
     }
 
     #[test]
-    fn test_require_auth_root_allowed() {
+    fn test_require_auth_current_process_allowed() {
         let checker = AuthChecker::new();
-        let creds = Some(PeerCredentials {
-            pid: 1,
-            uid: 0,
-            gid: 0,
-        });
+        let creds = current_process_creds();
         assert!(require_auth(&checker, &creds, Action::Install).is_ok());
         assert!(require_auth(&checker, &creds, Action::Remove).is_ok());
         assert!(require_auth(&checker, &creds, Action::Update).is_ok());
@@ -1117,11 +1113,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_create_transaction_valid() {
         let (state, _dir) = create_test_state();
-        let root_creds = Some(PeerCredentials {
-            pid: 1,
-            uid: 0,
-            gid: 0,
-        });
+        let root_creds = current_process_creds();
         let app = test_router(state, root_creds);
 
         // Install/remove/update are not yet executable by the daemon --
@@ -1160,11 +1152,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_create_transaction_empty_operations() {
         let (state, _dir) = create_test_state();
-        let root_creds = Some(PeerCredentials {
-            pid: 1,
-            uid: 0,
-            gid: 0,
-        });
+        let root_creds = current_process_creds();
         let app = test_router(state, root_creds);
 
         let body = serde_json::json!({
@@ -1192,11 +1180,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_create_transaction_invalid_json() {
         let (state, _dir) = create_test_state();
-        let root_creds = Some(PeerCredentials {
-            pid: 1,
-            uid: 0,
-            gid: 0,
-        });
+        let root_creds = current_process_creds();
         let app = test_router(state, root_creds);
 
         let request = axum::http::Request::builder()
@@ -1249,11 +1233,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_create_transaction_idempotency() {
         let (state, _dir) = create_test_state();
-        let root_creds = Some(PeerCredentials {
-            pid: 1,
-            uid: 0,
-            gid: 0,
-        });
+        let root_creds = current_process_creds();
 
         // Unsupported kinds are rejected before enqueueing, so both calls
         // should consistently return 400.
@@ -1297,17 +1277,14 @@ mod tests {
     #[tokio::test]
     async fn test_handler_get_transaction_after_creation() {
         let (state, _dir) = create_test_state();
-        let root_creds = Some(PeerCredentials {
-            pid: 1,
-            uid: 0,
-            gid: 0,
-        });
+        let root_creds = current_process_creds();
 
         // Insert a job directly (transaction API rejects unsupported kinds)
         let job = DaemonJob::new(
             crate::daemon::JobKind::Enhance,
             serde_json::json!({"batch_size": 5}),
-        );
+        )
+        .with_uid(nix::unistd::geteuid().as_raw());
         let job_id = job.id.clone();
         {
             let conn = state.open_db().unwrap();
@@ -1334,17 +1311,14 @@ mod tests {
     #[tokio::test]
     async fn test_handler_list_transactions_with_status_filter() {
         let (state, _dir) = create_test_state();
-        let root_creds = Some(PeerCredentials {
-            pid: 1,
-            uid: 0,
-            gid: 0,
-        });
+        let root_creds = current_process_creds();
 
         // Insert a job directly (transaction API rejects unsupported kinds)
         let job = DaemonJob::new(
             crate::daemon::JobKind::Enhance,
             serde_json::json!({"batch_size": 5}),
-        );
+        )
+        .with_uid(nix::unistd::geteuid().as_raw());
         {
             let conn = state.open_db().unwrap();
             job.insert(&conn).unwrap();
@@ -1506,11 +1480,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_cancel_transaction_not_found() {
         let (state, _dir) = create_test_state();
-        let root_creds = Some(PeerCredentials {
-            pid: 1,
-            uid: 0,
-            gid: 0,
-        });
+        let root_creds = current_process_creds();
         let app = test_router(state, root_creds);
 
         let request = axum::http::Request::builder()
@@ -1583,11 +1553,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_install_packages_creates_transaction() {
         let (state, _dir) = create_test_state();
-        let root_creds = Some(PeerCredentials {
-            pid: 1,
-            uid: 0,
-            gid: 0,
-        });
+        let root_creds = current_process_creds();
         let app = test_router(state, root_creds);
 
         // Install kind is not yet supported -- rejected at API boundary
@@ -1620,11 +1586,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_install_packages_empty_list() {
         let (state, _dir) = create_test_state();
-        let root_creds = Some(PeerCredentials {
-            pid: 1,
-            uid: 0,
-            gid: 0,
-        });
+        let root_creds = current_process_creds();
         let app = test_router(state, root_creds);
 
         let body = serde_json::json!({
@@ -1652,11 +1614,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_remove_packages_empty_list() {
         let (state, _dir) = create_test_state();
-        let root_creds = Some(PeerCredentials {
-            pid: 1,
-            uid: 0,
-            gid: 0,
-        });
+        let root_creds = current_process_creds();
         let app = test_router(state, root_creds);
 
         let body = serde_json::json!({
@@ -1680,11 +1638,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_update_packages_empty_list_allowed() {
         let (state, _dir) = create_test_state();
-        let root_creds = Some(PeerCredentials {
-            pid: 1,
-            uid: 0,
-            gid: 0,
-        });
+        let root_creds = current_process_creds();
         let app = test_router(state, root_creds);
 
         // Update kind is not yet supported -- rejected at API boundary
@@ -1789,11 +1743,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_rollback_not_implemented() {
         let (state, _dir) = create_test_state();
-        let root_creds = Some(PeerCredentials {
-            pid: 1,
-            uid: 0,
-            gid: 0,
-        });
+        let root_creds = current_process_creds();
         let app = test_router(state, root_creds);
 
         let request = axum::http::Request::builder()
@@ -1815,11 +1765,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_verify_not_implemented() {
         let (state, _dir) = create_test_state();
-        let root_creds = Some(PeerCredentials {
-            pid: 1,
-            uid: 0,
-            gid: 0,
-        });
+        let root_creds = current_process_creds();
         let app = test_router(state, root_creds);
 
         let request = axum::http::Request::builder()
@@ -1841,11 +1787,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_gc_not_implemented() {
         let (state, _dir) = create_test_state();
-        let root_creds = Some(PeerCredentials {
-            pid: 1,
-            uid: 0,
-            gid: 0,
-        });
+        let root_creds = current_process_creds();
         let app = test_router(state, root_creds);
 
         let request = axum::http::Request::builder()
@@ -1893,11 +1835,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_dry_run_valid() {
         let (state, _dir) = create_test_state();
-        let root_creds = Some(PeerCredentials {
-            pid: 1,
-            uid: 0,
-            gid: 0,
-        });
+        let root_creds = current_process_creds();
         let app = test_router(state, root_creds);
 
         let body = serde_json::json!({
@@ -1935,11 +1873,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_dry_run_empty_operations() {
         let (state, _dir) = create_test_state();
-        let root_creds = Some(PeerCredentials {
-            pid: 1,
-            uid: 0,
-            gid: 0,
-        });
+        let root_creds = current_process_creds();
         let app = test_router(state, root_creds);
 
         let body = serde_json::json!({
