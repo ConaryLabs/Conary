@@ -83,7 +83,11 @@ pub(super) fn persist_native_sync_rows(
         let group_id = group.id.ok_or_else(|| {
             Error::InitError("Inserted requirement group missing generated ID".to_string())
         })?;
-        grouped_clauses.extend(clauses.into_iter().map(|clause| clause.with_group(group_id)));
+        grouped_clauses.extend(
+            clauses
+                .into_iter()
+                .map(|clause| clause.with_group(group_id)),
+        );
     }
     RepositoryRequirement::batch_insert(&tx, &grouped_clauses)?;
 

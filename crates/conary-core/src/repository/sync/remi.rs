@@ -95,23 +95,16 @@ pub(super) fn remi_sync_row(
     }
 
     let mut provides = vec![self_provide];
-    provides.extend(
-        extract_extra_metadata_provides(&metadata)
-            .into_iter()
-            .map(|(capability, version, raw)| {
-                let mut provide = RepositoryProvide::new(
-                    0,
-                    capability,
-                    version,
-                    "package".to_string(),
-                    Some(raw),
-                );
-                if let Some(ref scheme) = scheme_str {
-                    provide = provide.with_version_scheme(scheme.clone());
-                }
-                provide
-            }),
-    );
+    provides.extend(extract_extra_metadata_provides(&metadata).into_iter().map(
+        |(capability, version, raw)| {
+            let mut provide =
+                RepositoryProvide::new(0, capability, version, "package".to_string(), Some(raw));
+            if let Some(ref scheme) = scheme_str {
+                provide = provide.with_version_scheme(scheme.clone());
+            }
+            provide
+        },
+    ));
 
     let requirements = entry
         .dependencies
@@ -239,8 +232,9 @@ pub(super) async fn fetch_and_persist_canonical_map(
     let client = RepositoryClient::new()?;
     let bytes = client.download_to_bytes(&url).await?;
 
-    let map: CanonicalMapResponse = serde_json::from_slice(&bytes)
-        .map_err(|error| Error::ParseError(format!("Failed to parse canonical map from {url}: {error}")))?;
+    let map: CanonicalMapResponse = serde_json::from_slice(&bytes).map_err(|error| {
+        Error::ParseError(format!("Failed to parse canonical map from {url}: {error}"))
+    })?;
 
     let tx = conn.unchecked_transaction()?;
     let mut count = 0u64;
