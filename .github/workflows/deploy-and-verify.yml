@@ -94,10 +94,31 @@ jobs:
           echo "source_run=${SOURCE_RUN}" >> "$GITHUB_OUTPUT"
           echo "environment=${TARGET_ENVIRONMENT}" >> "$GITHUB_OUTPUT"
 
+  verify-conary:
+    name: verify-conary
+    needs: resolve
+    if: ${{ needs.resolve.outputs.product == 'conary' && github.event_name == 'workflow_dispatch' && needs.resolve.outputs.dry_run == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download source artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE_RUN: ${{ needs.resolve.outputs.source_run }}
+        run: gh run download "$SOURCE_RUN" --dir source-artifacts
+      - name: Verify conary artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_dir=$(find source-artifacts -type d -name release-bundle -print -quit)
+          [[ -n "$release_dir" ]] || { echo "release-bundle artifact missing" >&2; exit 1; }
+          echo "[DRY RUN] Conary artifacts ready for deployment:"
+          find "$release_dir" -maxdepth 1 -type f -printf '  %f\n' | sort
+
   deploy-conary:
     name: deploy-conary
     needs: resolve
-    if: ${{ needs.resolve.outputs.product == 'conary' && (github.event_name == 'workflow_dispatch' || needs.resolve.outputs.dry_run != 'true') }}
+    if: ${{ needs.resolve.outputs.product == 'conary' && needs.resolve.outputs.dry_run != 'true' }}
     runs-on: ubuntu-latest
     environment: ${{ needs.resolve.outputs.environment }}
     steps:
@@ -107,9 +128,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
           SOURCE_RUN: ${{ needs.resolve.outputs.source_run }}
         run: gh run download "$SOURCE_RUN" --dir source-artifacts
-      - name: Verify or deploy conary artifacts
+      - name: Deploy conary artifacts
         env:
-          DRY_RUN: ${{ needs.resolve.outputs.dry_run }}
           VERSION: ${{ needs.resolve.outputs.version }}
           REMI_SSH_KEY: ${{ secrets.REMI_SSH_KEY }}
           REMI_SSH_TARGET: ${{ secrets.REMI_SSH_TARGET }}
@@ -118,13 +138,6 @@ jobs:
           set -euo pipefail
           release_dir=$(find source-artifacts -type d -name release-bundle -print -quit)
           [[ -n "$release_dir" ]] || { echo "release-bundle artifact missing" >&2; exit 1; }
-
-          if [[ "$DRY_RUN" == "true" ]]; then
-            echo "[DRY RUN] Conary artifacts ready for deployment:"
-            find "$release_dir" -maxdepth 1 -type f -printf '  %f\n' | sort
-            exit 0
-          fi
-
           [[ -n "${REMI_SSH_KEY:-}" ]] || { echo "REMI_SSH_KEY is required" >&2; exit 1; }
 
           target="${REMI_SSH_TARGET:-root@ssh.conary.io}"
@@ -153,7 +166,6 @@ jobs:
             ln -sfn "$VERSION" /conary/releases/latest
           REMOTE_EOF
       - name: Verify self-update endpoint
-        if: ${{ needs.resolve.outputs.dry_run != 'true' }}
         run: |
           response=$(curl -sf "https://remi.conary.io/v1/ccs/conary/latest" 2>/dev/null) || response=""
           if echo "$response" | grep -q "${{ needs.resolve.outputs.version }}"; then
@@ -164,10 +176,32 @@ jobs:
             exit 1
           fi
 
+  verify-remi:
+    name: verify-remi
+    needs: resolve
+    if: ${{ needs.resolve.outputs.product == 'remi' && github.event_name == 'workflow_dispatch' && needs.resolve.outputs.dry_run == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download source artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE_RUN: ${{ needs.resolve.outputs.source_run }}
+        run: gh run download "$SOURCE_RUN" --dir source-artifacts
+      - name: Verify remi bundle
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle=$(find source-artifacts -name "remi-${VERSION}-linux-x64.tar.gz" -print -quit)
+          [[ -n "$bundle" ]] || { echo "remi bundle missing" >&2; exit 1; }
+          echo "[DRY RUN] remi bundle ready: $bundle"
+
   deploy-remi:
     name: deploy-remi
     needs: resolve
-    if: ${{ needs.resolve.outputs.product == 'remi' && (github.event_name == 'workflow_dispatch' || needs.resolve.outputs.dry_run != 'true') }}
+    if: ${{ needs.resolve.outputs.product == 'remi' && needs.resolve.outputs.dry_run != 'true' }}
     runs-on: ubuntu-latest
     environment: ${{ needs.resolve.outputs.environment }}
     steps:
@@ -177,9 +211,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
           SOURCE_RUN: ${{ needs.resolve.outputs.source_run }}
         run: gh run download "$SOURCE_RUN" --dir source-artifacts
-      - name: Verify or deploy remi bundle
+      - name: Deploy remi bundle
         env:
-          DRY_RUN: ${{ needs.resolve.outputs.dry_run }}
           VERSION: ${{ needs.resolve.outputs.version }}
           REMI_SSH_KEY: ${{ secrets.REMI_SSH_KEY }}
           REMI_SSH_TARGET: ${{ secrets.REMI_SSH_TARGET }}
@@ -188,13 +221,8 @@ jobs:
           set -euo pipefail
           bundle=$(find source-artifacts -name "remi-${VERSION}-linux-x64.tar.gz" -print -quit)
           [[ -n "$bundle" ]] || { echo "remi bundle missing" >&2; exit 1; }
-
-          if [[ "$DRY_RUN" == "true" ]]; then
-            echo "[DRY RUN] remi bundle ready: $bundle"
-            exit 0
-          fi
-
           [[ -n "${REMI_SSH_KEY:-}" ]] || { echo "REMI_SSH_KEY is required" >&2; exit 1; }
+
           target="${REMI_SSH_TARGET:-root@ssh.conary.io}"
           mkdir -p ~/.ssh
           echo "$REMI_SSH_KEY" > ~/.ssh/remi_key
@@ -217,13 +245,34 @@ jobs:
             curl -fsS http://localhost:8081/health >/dev/null
           REMOTE_EOF
       - name: Verify remi health
-        if: ${{ needs.resolve.outputs.dry_run != 'true' }}
         run: curl -fsS https://remi.conary.io/health >/dev/null
+
+  verify-conaryd:
+    name: verify-conaryd
+    needs: resolve
+    if: ${{ needs.resolve.outputs.product == 'conaryd' && github.event_name == 'workflow_dispatch' && needs.resolve.outputs.dry_run == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download source artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE_RUN: ${{ needs.resolve.outputs.source_run }}
+        run: gh run download "$SOURCE_RUN" --dir source-artifacts
+      - name: Verify conaryd bundle
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle=$(find source-artifacts -name "conaryd-${VERSION}-linux-x64.tar.gz" -print -quit)
+          [[ -n "$bundle" ]] || { echo "conaryd bundle missing" >&2; exit 1; }
+          echo "[DRY RUN] conaryd bundle ready: $bundle"
 
   deploy-conaryd:
     name: deploy-conaryd
     needs: resolve
-    if: ${{ needs.resolve.outputs.product == 'conaryd' && (github.event_name == 'workflow_dispatch' || needs.resolve.outputs.dry_run != 'true') }}
+    if: ${{ needs.resolve.outputs.product == 'conaryd' && needs.resolve.outputs.dry_run != 'true' }}
     runs-on: ubuntu-latest
     environment: ${{ needs.resolve.outputs.environment }}
     steps:
@@ -233,9 +282,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
           SOURCE_RUN: ${{ needs.resolve.outputs.source_run }}
         run: gh run download "$SOURCE_RUN" --dir source-artifacts
-      - name: Verify or deploy conaryd bundle
+      - name: Deploy conaryd bundle
         env:
-          DRY_RUN: ${{ needs.resolve.outputs.dry_run }}
           VERSION: ${{ needs.resolve.outputs.version }}
           CONARYD_SSH_KEY: ${{ secrets.CONARYD_SSH_KEY }}
           CONARYD_SSH_TARGET: ${{ secrets.CONARYD_SSH_TARGET }}
@@ -245,12 +293,6 @@ jobs:
           set -euo pipefail
           bundle=$(find source-artifacts -name "conaryd-${VERSION}-linux-x64.tar.gz" -print -quit)
           [[ -n "$bundle" ]] || { echo "conaryd bundle missing" >&2; exit 1; }
-
-          if [[ "$DRY_RUN" == "true" ]]; then
-            echo "[DRY RUN] conaryd bundle ready: $bundle"
-            exit 0
-          fi
-
           [[ -n "${CONARYD_SSH_KEY:-}" ]] || { echo "CONARYD_SSH_KEY is required" >&2; exit 1; }
           [[ -n "${CONARYD_SSH_TARGET:-}" ]] || { echo "CONARYD_SSH_TARGET is required" >&2; exit 1; }
           [[ -n "${CONARYD_VERIFY_URL:-}" ]] || { echo "CONARYD_VERIFY_URL is required" >&2; exit 1; }
@@ -274,5 +316,4 @@ jobs:
             systemctl start conaryd
           REMOTE_EOF
       - name: Verify conaryd endpoint
-        if: ${{ needs.resolve.outputs.dry_run != 'true' }}
         run: curl -fsS "${{ secrets.CONARYD_VERIFY_URL }}" >/dev/null
