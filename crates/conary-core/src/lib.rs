@@ -42,45 +42,27 @@ pub mod trust;
 pub mod util;
 pub mod version;
 
-pub use automation::{
-    ActionDecision, ActionStatus, AiSuggestion, AutomationManager, AutomationSummary, PendingAction,
-};
+pub use automation::{AiSuggestion, AutomationManager, AutomationSummary, PendingAction};
 pub use bootstrap::{
     Bootstrap, BootstrapConfig, BootstrapStage, Prerequisites, StageManager, TargetArch, Toolchain,
     ToolchainKind,
 };
-pub use capability::enforcement::{
-    EnforcementError, EnforcementMode, EnforcementPolicy, EnforcementReport, EnforcementSupport,
-    EnforcementWarning,
-};
-pub use capability::{
-    CapabilityDeclaration, CapabilityError, FilesystemCapabilities, NetworkCapabilities,
-    SyscallCapabilities, SyscallProfile,
-};
+pub use capability::enforcement::{EnforcementMode, EnforcementPolicy};
+pub use capability::{CapabilityDeclaration, SyscallCapabilities};
 pub use components::{ComponentClassifier, ComponentType};
 pub use dependencies::{DependencyClass, LanguageDep, LanguageDepDetector};
 pub use error::{Error, Result};
-pub use flavor::{ArchSpec, FlavorItem, FlavorOp, FlavorSpec, SystemFlavor};
-pub use hash::{Hash, HashAlgorithm, Hasher};
-pub use label::{Label, LabelParseError, LabelPath};
+pub use flavor::ArchSpec;
+pub use hash::{Hash, Hasher};
+pub use label::Label;
 pub use model::parser::{
-    AiAssistConfig, AiAssistMode, AiFeature, AutomationCategory, AutomationConfig, AutomationMode,
-    FederationConfig, FederationTier, RepairAutomation, RollbackTrigger, SecurityAutomation,
+    AiAssistMode, AutomationCategory, AutomationConfig, AutomationMode, FederationConfig,
 };
 pub use model::{
-    ApplyOptions, DEFAULT_MODEL_PATH, DiffAction, ModelConfig, ModelDiff, ModelError, SystemModel,
-    SystemState, compute_diff, compute_diff_with_includes_offline, load_model, model_exists,
-    snapshot_to_model,
+    ApplyOptions, DEFAULT_MODEL_PATH, DiffAction, ModelDiff, SystemModel, SystemState,
+    compute_diff, compute_diff_with_includes_offline, load_model, model_exists, snapshot_to_model,
 };
-pub use progress::{
-    CallbackProgress, LogProgress, MultiProgress, ProgressEvent, ProgressStyle, ProgressTracker,
-    SilentProgress,
-};
-pub use provenance::{
-    BuildDependency, BuildProvenance, ComponentHash, ContentProvenance, DnaHash, HostAttestation,
-    PackageDna, PatchInfo, Provenance, ReproducibilityInfo, Signature, SignatureProvenance,
-    SignatureScope, SourceProvenance, TransparencyLog,
-};
-pub use recipe::{Cook, CookResult, Kitchen, KitchenConfig, Recipe};
-pub use transaction::{TransactionConfig, TransactionEngine, TransactionPlan, TransactionState};
-pub use trust::TrustError;
+pub use progress::{MultiProgress, ProgressStyle};
+pub use provenance::{Provenance, Signature};
+pub use recipe::{Cook, Kitchen, KitchenConfig, Recipe};
+pub use transaction::{TransactionConfig, TransactionEngine};

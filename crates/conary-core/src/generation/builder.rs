@@ -235,7 +235,7 @@ pub fn build_generation_from_db(
 /// Unlike [`build_generation_from_db`], this does NOT create a new system state
 /// snapshot. It only rebuilds the EROFS image and metadata for the specified
 /// generation number, using the current DB package state.
-pub fn rebuild_generation_image(
+pub(crate) fn rebuild_generation_image(
     conn: &rusqlite::Connection,
     generations_root: &Path,
     gen_number: i64,

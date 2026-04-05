@@ -406,7 +406,10 @@ pub fn is_overlay_mount(path: &Path) -> crate::Result<bool> {
 /// `/proc/mounts` contains the expected EROFS image path. This prevents
 /// recovery from short-circuiting when a stale or unrelated generation is
 /// mounted at the same mount point.
-pub fn is_generation_mounted(mount_point: &Path, expected_image: &Path) -> crate::Result<bool> {
+pub(crate) fn is_generation_mounted(
+    mount_point: &Path,
+    expected_image: &Path,
+) -> crate::Result<bool> {
     let mounts = std::fs::read_to_string("/proc/mounts")
         .map_err(|e| Error::IoError(format!("Failed to read /proc/mounts: {e}")))?;
 
