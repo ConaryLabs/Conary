@@ -23,7 +23,7 @@ pub const GENERATION_METADATA_FILE: &str = ".conary-gen.json";
 pub const GENERATION_METADATA_SIGNATURE_FILE: &str = ".conary-gen.sig";
 
 /// Name of the marker file used while a generation is still being built.
-pub const GENERATION_PENDING_MARKER: &str = ".conary-gen.pending";
+const GENERATION_PENDING_MARKER: &str = ".conary-gen.pending";
 const GENERATION_METADATA_SIGNING_KEY_FILE: &str = "generation-metadata.private";
 const GENERATION_METADATA_PUBLIC_KEY_FILE: &str = "generation-metadata.public";
 
@@ -373,7 +373,7 @@ pub fn gc_roots_dir() -> PathBuf {
 ///
 /// Falls back to `None` if the file cannot be read (e.g. in tests or containers
 /// without a mounted procfs).
-pub fn running_kernel_version() -> Option<String> {
+pub(crate) fn running_kernel_version() -> Option<String> {
     std::fs::read_to_string("/proc/sys/kernel/osrelease")
         .ok()
         .map(|s| s.trim().to_string())
