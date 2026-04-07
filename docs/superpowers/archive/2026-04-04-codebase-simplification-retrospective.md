@@ -14,9 +14,9 @@ The cleanup/simplification rollout is complete on `main` at `92b1a5d3`.
 - Phase 2 landed a conservative cross-chunk pass that trimmed unused
   `conary-core` root re-exports and narrowed a small set of helper visibilities.
 - The rollout docs and Phase 2 notes are preserved in:
-  - `docs/superpowers/specs/2026-04-03-codebase-simplification-design.md`
-  - `docs/superpowers/plans/2026-04-03-codebase-simplification.md`
-  - `docs/superpowers/specs/2026-04-04-codebase-simplification-phase2-kickoff.md`
+- `docs/superpowers/specs/archive/2026-04-03-codebase-simplification-design.md`
+- `docs/superpowers/plans/archive/2026-04-03-codebase-simplification.md`
+- `docs/superpowers/specs/archive/2026-04-04-codebase-simplification-phase2-kickoff.md`
   - `docs/superpowers/specs/cross-crate-duplication-findings.md`
 
 ## What Worked
