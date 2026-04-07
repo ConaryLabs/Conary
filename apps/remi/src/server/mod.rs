@@ -90,7 +90,7 @@ async fn ensure_admin_bootstrap_token(
 }
 
 /// Server configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ServerConfig {
     /// Address to bind to
     pub bind_addr: SocketAddr,

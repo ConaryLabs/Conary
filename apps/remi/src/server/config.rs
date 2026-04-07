@@ -949,6 +949,40 @@ mod tests {
     }
 
     #[test]
+    fn test_default_remi_config_to_server_config_regression() {
+        let runtime = RemiConfig::default().to_server_config().unwrap();
+
+        assert_eq!(runtime.bind_addr, "0.0.0.0:8080".parse().unwrap());
+        assert_eq!(runtime.db_path, PathBuf::from("/conary/metadata/conary.db"));
+        assert_eq!(runtime.chunk_dir, PathBuf::from("/conary/chunks"));
+        assert_eq!(runtime.cache_dir, PathBuf::from("/conary/cache"));
+        assert_eq!(runtime.max_concurrent_conversions, 4);
+        assert_eq!(runtime.cache_max_bytes, 700 * 1024 * 1024 * 1024);
+        assert_eq!(runtime.chunk_ttl_days, 30);
+        assert!(runtime.enable_bloom_filter);
+        assert_eq!(runtime.bloom_expected_chunks, 1_000_000);
+        assert_eq!(runtime.upstream_url, None);
+        assert_eq!(runtime.upstream_timeout, Duration::from_secs(30));
+        assert!(runtime.enable_rate_limit);
+        assert_eq!(runtime.rate_limit_rps, 100);
+        assert_eq!(runtime.rate_limit_burst, 200);
+        assert!(runtime.cors_allowed_origins.is_empty());
+        assert!(runtime.enable_audit_log);
+        assert_eq!(runtime.ban_threshold, 10);
+        assert_eq!(runtime.ban_duration_secs, 300);
+        assert_eq!(runtime.web_root, None);
+    }
+
+    #[test]
+    #[ignore = "enable in Task 3 after ServerConfig::default() delegates to RemiConfig"]
+    fn test_server_config_default_matches_default_remi_config() {
+        let from_remi = RemiConfig::default().to_server_config().unwrap();
+        let from_server = ServerConfig::default();
+
+        assert_eq!(from_server, from_remi);
+    }
+
+    #[test]
     fn test_parse_toml() {
         let toml_str = r#"
 [server]
