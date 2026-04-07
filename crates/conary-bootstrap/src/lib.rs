@@ -39,7 +39,10 @@ mod tests {
 
     #[test]
     fn test_finish_returns_zero_on_success() {
-        assert_eq!(finish(Ok(()), |_| panic!("reporter should not run"), 101), 0);
+        assert_eq!(
+            finish(Ok(()), |_| panic!("reporter should not run"), 101),
+            0
+        );
     }
 
     #[test]

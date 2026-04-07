@@ -85,7 +85,10 @@ mod tests {
     #[test]
     fn test_render_error_lines_for_generic_anyhow_error() {
         let err = anyhow::anyhow!("plain failure");
-        assert_eq!(render_error_lines(&err), vec!["Error: plain failure".to_string()]);
+        assert_eq!(
+            render_error_lines(&err),
+            vec!["Error: plain failure".to_string()]
+        );
     }
 
     #[test]
