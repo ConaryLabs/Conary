@@ -14,11 +14,11 @@ use std::path::PathBuf;
 #[command(name = "conaryd", version, about)]
 struct Args {
     /// Database path
-    #[arg(long, default_value = "/conary/db/conary.db")]
+    #[arg(long, default_value = DaemonConfig::DEFAULT_DB_PATH)]
     db: String,
 
     /// Unix socket path
-    #[arg(long, default_value = "/run/conary/conaryd.sock")]
+    #[arg(long, default_value = DaemonConfig::DEFAULT_SOCKET_PATH)]
     socket: String,
 
     /// Optional TCP bind address (e.g., 127.0.0.1:7890)
@@ -56,4 +56,17 @@ fn main() -> Result<()> {
                 .await
                 .map_err(|e| anyhow::anyhow!("{}", e))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_args_defaults_match_canonical_daemon_defaults() {
+        let args = Args::parse_from(["conaryd"]);
+        assert_eq!(args.db, DaemonConfig::DEFAULT_DB_PATH);
+        assert_eq!(args.socket, DaemonConfig::DEFAULT_SOCKET_PATH);
+        assert_eq!(args.tcp, None);
+    }
 }

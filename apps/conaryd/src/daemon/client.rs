@@ -105,7 +105,7 @@ impl DaemonClient {
     /// Create a new client with default socket path
     pub fn new() -> Self {
         Self {
-            socket_path: DaemonConfig::default().socket_path,
+            socket_path: DaemonConfig::default_socket_path(),
             timeout: Duration::from_secs(30),
         }
     }
@@ -527,12 +527,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_client_creation() {
+    fn test_client_creation_uses_dedicated_daemon_socket_default() {
         let client = DaemonClient::new();
-        assert_eq!(
-            client.socket_path,
-            PathBuf::from("/run/conary/conaryd.sock")
-        );
+        assert_eq!(client.socket_path, DaemonConfig::default_socket_path());
     }
 
     #[test]

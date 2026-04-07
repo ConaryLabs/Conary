@@ -55,6 +55,8 @@ use tokio::sync::broadcast;
 
 pub use auth::{Action, AuditEntry, AuditLogger, AuthChecker, PeerCredentials, Permission};
 pub use client::{DaemonClient, should_forward_to_daemon, try_connect};
+/// Shared operation kind, re-exported for daemon job terminology.
+pub use conary_core::OperationKind as JobKind;
 pub use enhance::{
     EnhanceJobResult, EnhanceJobSpec, EnhancedPackageResult, enhancement_background_worker,
     execute_enhance_job,
@@ -95,15 +97,34 @@ pub struct DaemonConfig {
     pub idle_timeout_secs: Option<u64>,
 }
 
+impl DaemonConfig {
+    pub const DEFAULT_SOCKET_PATH: &'static str = "/run/conary/conaryd.sock";
+    pub const DEFAULT_SOCKET_MODE: u32 = 0o660;
+    pub const DEFAULT_TCP_BIND: &'static str = "127.0.0.1:7890";
+    pub const DEFAULT_DB_PATH: &'static str = "/var/lib/conary/conary.db";
+
+    pub fn default_socket_path() -> PathBuf {
+        PathBuf::from(Self::DEFAULT_SOCKET_PATH)
+    }
+
+    pub fn default_db_path() -> PathBuf {
+        PathBuf::from(Self::DEFAULT_DB_PATH)
+    }
+
+    pub fn default_tcp_bind() -> String {
+        Self::DEFAULT_TCP_BIND.to_string()
+    }
+}
+
 impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
-            socket_path: PathBuf::from("/run/conary/conaryd.sock"),
-            socket_mode: 0o660,
+            socket_path: Self::default_socket_path(),
+            socket_mode: Self::DEFAULT_SOCKET_MODE,
             socket_group: None, // Will try wheel, then sudo
             enable_tcp: false,
-            tcp_bind: Some("127.0.0.1:7890".to_string()),
-            db_path: PathBuf::from("/var/lib/conary/conary.db"),
+            tcp_bind: Some(Self::default_tcp_bind()),
+            db_path: Self::default_db_path(),
             root: PathBuf::from("/"),
             lock_path: PathBuf::from(SystemLock::DEFAULT_PATH),
             max_concurrent_reads: 8,
@@ -169,44 +190,6 @@ impl JobStatus {
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
-        }
-    }
-}
-
-/// Job kind (type of operation)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum JobKind {
-    /// Install packages
-    Install,
-    /// Remove packages
-    Remove,
-    /// Update packages
-    Update,
-    /// Dry run (plan without executing)
-    DryRun,
-    /// System rollback
-    Rollback,
-    /// System verification
-    Verify,
-    /// Garbage collection
-    GarbageCollect,
-    /// Enhance converted packages (background capability inference)
-    Enhance,
-}
-
-impl JobKind {
-    /// Return the snake_case string representation (matches serde)
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Install => "install",
-            Self::Remove => "remove",
-            Self::Update => "update",
-            Self::DryRun => "dry_run",
-            Self::Rollback => "rollback",
-            Self::Verify => "verify",
-            Self::GarbageCollect => "garbage_collect",
-            Self::Enhance => "enhance",
         }
     }
 }
@@ -990,14 +973,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_default_config() {
+    fn test_default_config_uses_canonical_daemon_defaults() {
         let config = DaemonConfig::default();
 
+        assert_eq!(config.db_path, PathBuf::from(DaemonConfig::DEFAULT_DB_PATH));
         assert_eq!(
             config.socket_path,
-            PathBuf::from("/run/conary/conaryd.sock")
+            PathBuf::from(DaemonConfig::DEFAULT_SOCKET_PATH)
         );
-        assert_eq!(config.socket_mode, 0o660);
+        assert_eq!(config.lock_path, PathBuf::from(SystemLock::DEFAULT_PATH));
+        assert_eq!(config.socket_mode, DaemonConfig::DEFAULT_SOCKET_MODE);
+        assert_eq!(
+            config.tcp_bind.as_deref(),
+            Some(DaemonConfig::DEFAULT_TCP_BIND)
+        );
         assert!(!config.enable_tcp);
     }
 
