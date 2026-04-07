@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-03-31
-revision: 11
-summary: Clarify Remi admin-origin versus proxied public MCP deployment details
+last_updated: 2026-04-07
+revision: 12
+summary: Refresh daemon and database reference details while preserving the current deployment guidance
 ---
 
 # Conaryopedia v2
@@ -423,7 +423,7 @@ Before Conary can manage packages, its database must be initialized:
 conary system init
 ```
 
-This creates the SQLite database at `/var/lib/conary/conary.db` and sets up all tables (currently schema v64). The database is the single source of truth for all package state -- there are no configuration files for runtime state.
+This creates the SQLite database at `/var/lib/conary/conary.db` and sets up all tables (currently schema v65). The database is the single source of truth for all package state -- there are no configuration files for runtime state.
 
 You can specify an alternate database path with `-d`:
 

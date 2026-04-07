@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-03-28
-revision: 2
+last_updated: 2026-04-07
+revision: 3
 summary: Document current federation trust controls, peer identity, discovery rules, and CLI peer management
 ---
 
