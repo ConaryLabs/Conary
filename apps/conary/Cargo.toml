@@ -17,13 +17,14 @@ experimental = []
 
 [dependencies]
 # Core library
+conary-bootstrap = { path = "../../crates/conary-bootstrap" }
 conary-core = { path = "../../crates/conary-core" }
 
 # CLI
 clap = { workspace = true, features = ["cargo"] }
 clap_complete = "4.5"
 
-# Logging (needed directly by main.rs and commands/)
+# Logging (needed directly by commands/)
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
