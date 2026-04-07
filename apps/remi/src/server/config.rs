@@ -728,40 +728,55 @@ impl RemiConfig {
         Ok(())
     }
 
+    fn cache_max_bytes(&self) -> Result<u64> {
+        if let Some(ref size_str) = self.storage.max_cache_size {
+            parse_size(size_str)
+        } else {
+            Ok(700 * 1024 * 1024 * 1024)
+        }
+    }
+
+    fn chunk_ttl_days(&self) -> u32 {
+        30
+    }
+
+    fn enable_bloom_filter(&self) -> bool {
+        true
+    }
+
+    fn bloom_expected_chunks(&self) -> usize {
+        1_000_000
+    }
+
+    fn upstream_timeout(&self) -> Duration {
+        Duration::from_secs(30)
+    }
+
+    fn ban_duration_secs(&self) -> Result<u64> {
+        Ok(parse_duration(&self.security.ban_duration)?.as_secs())
+    }
+
     /// Convert to the internal ServerConfig structure
     pub fn to_server_config(&self) -> Result<ServerConfig> {
-        let bind_addr = self.server.bind.parse()?;
-
-        // Parse cache max size
-        let cache_max_bytes = if let Some(ref size_str) = self.storage.max_cache_size {
-            parse_size(size_str)?
-        } else {
-            // Default: 90% of storage threshold applied to 1TB
-            700 * 1024 * 1024 * 1024 // 700GB
-        };
-
-        // Parse ban duration
-        let ban_duration_secs = parse_duration(&self.security.ban_duration)?.as_secs();
-
         Ok(ServerConfig {
-            bind_addr,
+            bind_addr: self.server.bind.parse()?,
             db_path: self.storage.root.join("metadata/conary.db"),
             chunk_dir: self.storage.root.join("chunks"),
             cache_dir: self.storage.root.join("cache"),
             max_concurrent_conversions: self.conversion.max_concurrent,
-            cache_max_bytes,
-            chunk_ttl_days: 30, // Could make configurable
-            enable_bloom_filter: true,
-            bloom_expected_chunks: 1_000_000,
+            cache_max_bytes: self.cache_max_bytes()?,
+            chunk_ttl_days: self.chunk_ttl_days(),
+            enable_bloom_filter: self.enable_bloom_filter(),
+            bloom_expected_chunks: self.bloom_expected_chunks(),
             upstream_url: self.get_primary_upstream_url(),
-            upstream_timeout: Duration::from_secs(30),
+            upstream_timeout: self.upstream_timeout(),
             enable_rate_limit: self.security.rate_limit,
             rate_limit_rps: self.security.rate_limit_rps,
             rate_limit_burst: self.security.rate_limit_burst,
             cors_allowed_origins: self.security.cors_origins.clone(),
             enable_audit_log: self.server.audit_log,
             ban_threshold: self.security.ban_threshold,
-            ban_duration_secs,
+            ban_duration_secs: self.ban_duration_secs()?,
             web_root: self.web_root().map(Path::to_path_buf),
         })
     }
@@ -971,6 +986,38 @@ mod tests {
         assert_eq!(runtime.ban_threshold, 10);
         assert_eq!(runtime.ban_duration_secs, 300);
         assert_eq!(runtime.web_root, None);
+    }
+
+    #[test]
+    fn test_to_server_config_uses_storage_max_cache_override() {
+        let mut config = RemiConfig::default();
+        config.storage.max_cache_size = Some("1TB".to_string());
+
+        let runtime = config.to_server_config().unwrap();
+
+        assert_eq!(runtime.cache_max_bytes, 1024 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_to_server_config_preserves_security_mapping() {
+        let mut config = RemiConfig::default();
+        config.security.rate_limit = false;
+        config.security.rate_limit_rps = 12;
+        config.security.rate_limit_burst = 34;
+        config.security.cors_origins = vec!["https://example.com".to_string()];
+        config.server.audit_log = false;
+        config.security.ban_threshold = 56;
+        config.security.ban_duration = "15m".to_string();
+
+        let runtime = config.to_server_config().unwrap();
+
+        assert!(!runtime.enable_rate_limit);
+        assert_eq!(runtime.rate_limit_rps, 12);
+        assert_eq!(runtime.rate_limit_burst, 34);
+        assert_eq!(runtime.cors_allowed_origins, vec!["https://example.com"]);
+        assert!(!runtime.enable_audit_log);
+        assert_eq!(runtime.ban_threshold, 56);
+        assert_eq!(runtime.ban_duration_secs, 15 * 60);
     }
 
     #[test]
