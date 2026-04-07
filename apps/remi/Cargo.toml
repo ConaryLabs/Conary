@@ -8,6 +8,7 @@ description = "Remi package server for Conary"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+conary-bootstrap = { path = "../../crates/conary-bootstrap" }
 conary-core = { path = "../../crates/conary-core" }
 conary-mcp = { path = "../../crates/conary-mcp" }
 
