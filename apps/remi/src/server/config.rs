@@ -1021,7 +1021,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "enable in Task 3 after ServerConfig::default() delegates to RemiConfig"]
     fn test_server_config_default_matches_default_remi_config() {
         let from_remi = RemiConfig::default().to_server_config().unwrap();
         let from_server = ServerConfig::default();
