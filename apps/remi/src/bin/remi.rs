@@ -198,22 +198,30 @@ struct TrustRotateKeyArgs {
     db: String,
 }
 
-fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+fn main() {
+    conary_bootstrap::init_tracing();
 
     let cli = Cli::parse();
-    match cli.command {
+    let result = match cli.command {
         Some(Command::Proxy(args)) => run_proxy_command(args),
         Some(Command::IndexGen(args)) => run_index_gen_command(args),
         Some(Command::Prewarm(args)) => run_prewarm_command(args),
         Some(Command::Trust { command }) => run_trust_command(command),
         None => run_server_command(cli.serve),
+    };
+
+    let code = finish_main(result);
+    if code != 0 {
+        std::process::exit(code);
     }
+}
+
+fn report_top_level_error(err: &anyhow::Error) {
+    eprintln!("Error: {err:?}");
+}
+
+fn finish_main(result: anyhow::Result<()>) -> i32 {
+    conary_bootstrap::finish(result, report_top_level_error, 101)
 }
 
 fn run_server_command(args: ServeArgs) -> Result<()> {
@@ -258,7 +266,7 @@ fn run_server_command(args: ServeArgs) -> Result<()> {
         }
     }
 
-    tokio::runtime::Runtime::new()?.block_on(run_server_from_config(&remi_config))
+    conary_bootstrap::run_with_runtime(|| run_server_from_config(&remi_config))
 }
 
 fn load_remi_config(args: &ServeArgs, default_paths: &[PathBuf]) -> Result<RemiConfig> {
@@ -306,7 +314,7 @@ fn run_proxy_command(args: ProxyArgs) -> Result<()> {
     }
     std::fs::create_dir_all(&config.cache_dir)?;
 
-    tokio::runtime::Runtime::new()?.block_on(run_proxy(config))
+    conary_bootstrap::run_with_runtime(move || run_proxy(config))
 }
 
 fn run_index_gen_command(args: IndexGenArgs) -> Result<()> {
@@ -391,6 +399,16 @@ fn run_trust_command(command: TrustCommand) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_finish_main_returns_zero_on_success() {
+        assert_eq!(finish_main(Ok(())), 0);
+    }
+
+    #[test]
+    fn test_finish_main_preserves_101_on_top_level_failure() {
+        assert_eq!(finish_main(Err(anyhow::anyhow!("boom"))), 101);
+    }
 
     fn write_config(path: &std::path::Path, bind: &str, admin_bind: &str, storage_root: &str) {
         let config = format!(
