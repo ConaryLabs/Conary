@@ -140,29 +140,9 @@ pub struct ServerConfig {
 
 impl Default for ServerConfig {
     fn default() -> Self {
-        Self {
-            bind_addr: "0.0.0.0:8080".parse().unwrap(),
-            db_path: PathBuf::from("/var/lib/conary/conary.db"),
-            chunk_dir: PathBuf::from("/var/lib/conary/data/chunks"),
-            cache_dir: PathBuf::from("/var/lib/conary/data/cache"),
-            max_concurrent_conversions: 4,
-            cache_max_bytes: 700 * 1024 * 1024 * 1024, // 700GB
-            chunk_ttl_days: 30,
-            // Phase 0 defaults
-            enable_bloom_filter: true,
-            bloom_expected_chunks: 1_000_000,
-            upstream_url: None,
-            upstream_timeout: Duration::from_secs(30),
-            enable_rate_limit: true,
-            rate_limit_rps: 100,
-            rate_limit_burst: 200,
-            // Security defaults
-            cors_allowed_origins: Vec::new(), // Empty = same-origin only for chunks
-            enable_audit_log: true,
-            ban_threshold: 10,
-            ban_duration_secs: 300, // 5 minutes
-            web_root: None,
-        }
+        crate::server::config::RemiConfig::default()
+            .to_server_config()
+            .expect("default RemiConfig should always produce ServerConfig")
     }
 }
 
