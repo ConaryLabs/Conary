@@ -223,34 +223,12 @@ fn run_server_command(args: ServeArgs) -> Result<()> {
         && args.storage.is_none()
         && args.config.is_none();
 
-    let mut remi_config = if let Some(config_path) = args.config {
-        RemiConfig::load(&PathBuf::from(&config_path))?
-    } else {
-        let default_paths = [
-            PathBuf::from("/etc/conary/remi.toml"),
-            PathBuf::from("remi.toml"),
-        ];
-
-        let mut found_config = None;
-        for path in &default_paths {
-            if path.exists() {
-                println!("Using config: {}", path.display());
-                found_config = Some(RemiConfig::load(path)?);
-                break;
-            }
-        }
-        found_config.unwrap_or_else(RemiConfig::new)
-    };
-
-    if let Some(bind_addr) = args.bind {
-        remi_config.server.bind = bind_addr;
-    }
-    if let Some(admin_addr) = args.admin_bind {
-        remi_config.server.admin_bind = admin_addr;
-    }
-    if let Some(storage_path) = args.storage {
-        remi_config.storage.root = PathBuf::from(storage_path);
-    }
+    let default_paths = [
+        PathBuf::from("/etc/conary/remi.toml"),
+        PathBuf::from("remi.toml"),
+    ];
+    let mut remi_config = load_remi_config(&args, &default_paths)?;
+    apply_serve_overrides(&mut remi_config, &args);
 
     if let Err(err) = remi_config.validate() {
         eprintln!("Configuration error: {err}");
@@ -281,6 +259,33 @@ fn run_server_command(args: ServeArgs) -> Result<()> {
     }
 
     tokio::runtime::Runtime::new()?.block_on(run_server_from_config(&remi_config))
+}
+
+fn load_remi_config(args: &ServeArgs, default_paths: &[PathBuf]) -> Result<RemiConfig> {
+    if let Some(config_path) = args.config.as_ref() {
+        return RemiConfig::load(&PathBuf::from(config_path));
+    }
+
+    for path in default_paths {
+        if path.exists() {
+            println!("Using config: {}", path.display());
+            return RemiConfig::load(path);
+        }
+    }
+
+    Ok(RemiConfig::new())
+}
+
+fn apply_serve_overrides(config: &mut RemiConfig, args: &ServeArgs) {
+    if let Some(bind_addr) = args.bind.as_ref() {
+        config.server.bind = bind_addr.clone();
+    }
+    if let Some(admin_addr) = args.admin_bind.as_ref() {
+        config.server.admin_bind = admin_addr.clone();
+    }
+    if let Some(storage_path) = args.storage.as_ref() {
+        config.storage.root = PathBuf::from(storage_path);
+    }
 }
 
 fn run_proxy_command(args: ProxyArgs) -> Result<()> {
@@ -380,5 +385,82 @@ fn run_trust_command(command: TrustCommand) -> Result<()> {
             &args.repo,
             &args.db,
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_config(path: &std::path::Path, bind: &str, admin_bind: &str, storage_root: &str) {
+        let config = format!(
+            r#"
+[server]
+bind = "{bind}"
+admin_bind = "{admin_bind}"
+
+[storage]
+root = "{storage_root}"
+"#
+        );
+        std::fs::write(path, config).unwrap();
+    }
+
+    #[test]
+    fn test_load_remi_config_prefers_explicit_config_path() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let explicit_path = temp_dir.path().join("explicit.toml");
+        let fallback_path = temp_dir.path().join("fallback.toml");
+
+        write_config(&explicit_path, "127.0.0.1:9001", "127.0.0.1:9002", "/explicit");
+        write_config(&fallback_path, "127.0.0.1:9101", "127.0.0.1:9102", "/fallback");
+
+        let args = ServeArgs {
+            config: Some(explicit_path.display().to_string()),
+            ..ServeArgs::default()
+        };
+
+        let config = load_remi_config(&args, &[fallback_path]).unwrap();
+
+        assert_eq!(config.server.bind, "127.0.0.1:9001");
+        assert_eq!(config.server.admin_bind, "127.0.0.1:9002");
+        assert_eq!(config.storage.root, PathBuf::from("/explicit"));
+    }
+
+    #[test]
+    fn test_load_remi_config_uses_first_existing_default_path() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let first_path = temp_dir.path().join("first.toml");
+        let second_path = temp_dir.path().join("second.toml");
+
+        write_config(&first_path, "127.0.0.1:9201", "127.0.0.1:9202", "/first");
+        write_config(&second_path, "127.0.0.1:9301", "127.0.0.1:9302", "/second");
+
+        let config = load_remi_config(&ServeArgs::default(), &[first_path, second_path]).unwrap();
+
+        assert_eq!(config.server.bind, "127.0.0.1:9201");
+        assert_eq!(config.server.admin_bind, "127.0.0.1:9202");
+        assert_eq!(config.storage.root, PathBuf::from("/first"));
+    }
+
+    #[test]
+    fn test_apply_serve_overrides_wins_over_file_values() {
+        let mut config = RemiConfig::default();
+        config.server.bind = "127.0.0.1:9401".to_string();
+        config.server.admin_bind = "127.0.0.1:9402".to_string();
+        config.storage.root = PathBuf::from("/from-config");
+
+        let args = ServeArgs {
+            bind: Some("0.0.0.0:9501".to_string()),
+            admin_bind: Some("127.0.0.1:9502".to_string()),
+            storage: Some("/from-cli".to_string()),
+            ..ServeArgs::default()
+        };
+
+        apply_serve_overrides(&mut config, &args);
+
+        assert_eq!(config.server.bind, "0.0.0.0:9501");
+        assert_eq!(config.server.admin_bind, "127.0.0.1:9502");
+        assert_eq!(config.storage.root, PathBuf::from("/from-cli"));
     }
 }
