@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-04-02
-revision: 1
-summary: Stable subsystem pointers and durable assistant-facing guidance for the Conary workspace
+last_updated: 2026-04-07
+revision: 2
+summary: Stable subsystem pointers and durable assistant-facing guidance for the Conary workspace after the daemon boundary refactor
 ---
 
 # Assistant Subsystem Map
@@ -13,6 +13,7 @@ summary: Stable subsystem pointers and durable assistant-facing guidance for the
 - `apps/remi/`: Remi package service, admin surface, MCP server, and federation
 - `apps/conaryd/`: local daemon, socket auth, job queue, and REST/SSE routes
 - `apps/conary-test/`: declarative integration-test engine, HTTP API, and MCP server
+- `crates/conary-bootstrap/`: shared tracing, runtime, and error-exit helpers for workspace apps
 - `crates/conary-mcp/`: shared transport-agnostic MCP helpers used by workspace apps
 
 ## Look Here First
@@ -40,6 +41,10 @@ summary: Stable subsystem pointers and durable assistant-facing guidance for the
   `crates/conary-core/src/trust/verify.rs`,
   `crates/conary-core/src/trust/client.rs`, and
   `crates/conary-core/src/trust/keys.rs`
+- Shared operation vocabulary and daemon-boundary ownership:
+  `crates/conary-core/src/operations.rs`,
+  `apps/conaryd/src/daemon/mod.rs`, and
+  `apps/conaryd/src/daemon/routes/transactions.rs`
 - Remi admin and MCP flows:
   `apps/remi/src/server/admin_service.rs`,
   `apps/remi/src/server/mcp.rs`, and
@@ -49,6 +54,7 @@ summary: Stable subsystem pointers and durable assistant-facing guidance for the
   `apps/conary-test/src/server/mcp.rs`, and
   `apps/conary-test/src/engine/`
 - conaryd daemon routes and auth boundaries:
+  `apps/conaryd/src/daemon/mod.rs`,
   `apps/conaryd/src/daemon/routes/`,
   `apps/conaryd/src/daemon/auth.rs`, and
   `apps/conaryd/src/daemon/jobs.rs`
@@ -60,6 +66,9 @@ summary: Stable subsystem pointers and durable assistant-facing guidance for the
 - Resolution is SAT-only. The active install/remove entry points live in
   `resolver/sat.rs`; do not assume an older graph-based resolver still owns the
   workflow.
+- Keep transport-agnostic naming in `conary-core` and daemon-only execution or
+  request policy in `conaryd`; the shared `OperationKind` / daemon `JobKind`
+  split is intentional.
 - Remi and `conary-test` both share service-layer patterns between HTTP
   handlers and MCP tools. Look for `admin_service.rs` and `server/service.rs`
   before duplicating business logic in handlers.

@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-04-02
-revision: 8
-summary: Refresh workspace layout, public CLI paths, and schema guidance after the docs alignment sweep
+last_updated: 2026-04-07
+revision: 9
+summary: Refresh workspace layout for shared operation vocabulary, canonical daemon defaults, and current service boundaries
 ---
 
 # Conary Architecture
@@ -73,7 +73,7 @@ can be flagged as stale when the parent updates.
 
 ## Module Map
 
-The project is a virtual Cargo workspace with 6 members:
+The project is a virtual Cargo workspace with 7 members:
 
 ```
 apps/conary/             CLI binary
@@ -87,6 +87,7 @@ apps/conary/             CLI binary
 crates/conary-core/      Core library crate
 +-- src/
     +-- lib.rs           Public API surface
+    +-- operations.rs    Shared operation vocabulary across CLI and daemon boundaries
     +-- db/              Database layer
     |   +-- schema.rs    Schema v65, migration dispatcher
     |   +-- migrations/  Migration functions grouped into v1_v20.rs, v21_v40.rs, v41_current.rs
@@ -183,6 +184,10 @@ crates/conary-core/      Core library crate
     +-- version/         Version parsing and comparison
     +-- hash.rs          Multi-algorithm hashing (SHA-256, XXH128)
 
+crates/conary-bootstrap/ Shared app bootstrap helpers
++-- src/
+    +-- lib.rs           Tracing init, Tokio runtime entry, and shared finish helpers
+
 apps/conary-test/        Declarative test infrastructure (TOML manifests, container management)
 +-- src/
     +-- config/          TOML manifest and distro config parsing
@@ -218,10 +223,11 @@ apps/remi/               Remi server + federation
 apps/conaryd/            conaryd local daemon
 +-- src/
     +-- daemon/          conaryd local daemon
+    |   +-- mod.rs       Daemon config defaults, runtime wiring, and JobKind re-export
     |   +-- routes.rs    REST API endpoints
     |   +-- jobs.rs      Priority job queue with SQLite persistence
     |   +-- client.rs    CLI forwarding client with SSE
-    |   +-- socket.rs    Unix socket + TCP listener
+    |   +-- socket.rs    Unix socket listener and socket-file lifecycle (TCP currently rejected)
     |   +-- auth.rs      SO_PEERCRED peer authentication
     |   +-- systemd.rs   Socket activation and watchdog
     +-- bin/conaryd.rs   conaryd binary entry point
