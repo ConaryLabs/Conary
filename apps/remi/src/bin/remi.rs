@@ -412,8 +412,18 @@ root = "{storage_root}"
         let explicit_path = temp_dir.path().join("explicit.toml");
         let fallback_path = temp_dir.path().join("fallback.toml");
 
-        write_config(&explicit_path, "127.0.0.1:9001", "127.0.0.1:9002", "/explicit");
-        write_config(&fallback_path, "127.0.0.1:9101", "127.0.0.1:9102", "/fallback");
+        write_config(
+            &explicit_path,
+            "127.0.0.1:9001",
+            "127.0.0.1:9002",
+            "/explicit",
+        );
+        write_config(
+            &fallback_path,
+            "127.0.0.1:9101",
+            "127.0.0.1:9102",
+            "/fallback",
+        );
 
         let args = ServeArgs {
             config: Some(explicit_path.display().to_string()),
