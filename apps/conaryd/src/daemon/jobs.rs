@@ -637,4 +637,53 @@ mod tests {
         assert!(cancelled);
         assert!(queue.is_empty().await);
     }
+
+    #[test]
+    fn test_job_kind_storage_strings_match_shared_operation_kind() {
+        use conary_core::OperationKind;
+
+        let expected_pairs = [
+            (JobKind::Install, OperationKind::Install, "install"),
+            (JobKind::Remove, OperationKind::Remove, "remove"),
+            (JobKind::Update, OperationKind::Update, "update"),
+            (JobKind::DryRun, OperationKind::DryRun, "dry_run"),
+            (JobKind::Rollback, OperationKind::Rollback, "rollback"),
+            (JobKind::Verify, OperationKind::Verify, "verify"),
+            (
+                JobKind::GarbageCollect,
+                OperationKind::GarbageCollect,
+                "garbage_collect",
+            ),
+            (JobKind::Enhance, OperationKind::Enhance, "enhance"),
+        ];
+
+        for (job_kind, operation_kind, expected) in expected_pairs {
+            assert_eq!(job_kind.as_str(), expected);
+            assert_eq!(operation_kind.as_str(), expected);
+        }
+    }
+
+    #[test]
+    fn test_shared_operation_kind_serde_matches_persisted_job_kind_strings() {
+        use conary_core::OperationKind;
+
+        let expected_pairs = [
+            (OperationKind::Install, "\"install\""),
+            (OperationKind::Remove, "\"remove\""),
+            (OperationKind::Update, "\"update\""),
+            (OperationKind::DryRun, "\"dry_run\""),
+            (OperationKind::Rollback, "\"rollback\""),
+            (OperationKind::Verify, "\"verify\""),
+            (OperationKind::GarbageCollect, "\"garbage_collect\""),
+            (OperationKind::Enhance, "\"enhance\""),
+        ];
+
+        for (kind, expected_json) in expected_pairs {
+            assert_eq!(serde_json::to_string(&kind).unwrap(), expected_json);
+            assert_eq!(
+                serde_json::from_str::<OperationKind>(expected_json).unwrap(),
+                kind
+            );
+        }
+    }
 }

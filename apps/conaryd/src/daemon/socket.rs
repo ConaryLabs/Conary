@@ -18,6 +18,8 @@ use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 use tokio::net::{TcpListener, UnixListener};
 
+use crate::daemon::DaemonConfig;
+
 /// Socket configuration
 #[derive(Debug, Clone)]
 pub struct SocketConfig {
@@ -36,11 +38,11 @@ pub struct SocketConfig {
 impl Default for SocketConfig {
     fn default() -> Self {
         Self {
-            unix_path: PathBuf::from("/run/conary/conaryd.sock"),
-            unix_mode: 0o660,
+            unix_path: DaemonConfig::default_socket_path(),
+            unix_mode: DaemonConfig::DEFAULT_SOCKET_MODE,
             unix_group: None,
             enable_tcp: false,
-            tcp_bind: Some("127.0.0.1:7890".to_string()),
+            tcp_bind: Some(DaemonConfig::default_tcp_bind()),
         }
     }
 }
@@ -294,6 +296,7 @@ fn with_process_umask<T>(mask: libc::mode_t, f: impl FnOnce() -> T) -> T {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::DaemonConfig;
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -338,6 +341,20 @@ mod tests {
 
         // Socket file should be cleaned up
         assert!(!socket_path.exists());
+    }
+
+    #[test]
+    fn test_socket_config_default_matches_daemon_defaults() {
+        let socket = SocketConfig::default();
+        assert_eq!(
+            socket.unix_path,
+            PathBuf::from(DaemonConfig::DEFAULT_SOCKET_PATH)
+        );
+        assert_eq!(socket.unix_mode, DaemonConfig::DEFAULT_SOCKET_MODE);
+        assert_eq!(
+            socket.tcp_bind.as_deref(),
+            Some(DaemonConfig::DEFAULT_TCP_BIND)
+        );
     }
 
     #[test]

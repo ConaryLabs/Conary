@@ -28,6 +28,7 @@ pub mod hash;
 pub mod json;
 pub mod label;
 pub mod model;
+pub mod operations;
 pub mod packages;
 pub mod progress;
 pub mod provenance;
@@ -62,6 +63,7 @@ pub use model::{
     ApplyOptions, DEFAULT_MODEL_PATH, DiffAction, ModelDiff, SystemModel, SystemState,
     compute_diff, compute_diff_with_includes_offline, load_model, model_exists, snapshot_to_model,
 };
+pub use operations::OperationKind;
 pub use progress::{MultiProgress, ProgressStyle};
 pub use provenance::{Provenance, Signature};
 pub use recipe::{Cook, Kitchen, KitchenConfig, Recipe};
