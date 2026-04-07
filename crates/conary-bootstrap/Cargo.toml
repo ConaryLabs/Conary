@@ -1,0 +1,13 @@
+[package]
+name = "conary-bootstrap"
+version = "0.7.0"
+edition = "2024"
+rust-version = "1.94"
+authors = ["Conary Contributors"]
+description = "Shared bootstrap helpers for Conary workspace binaries"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+anyhow.workspace = true
+tokio.workspace = true
+tracing-subscriber.workspace = true

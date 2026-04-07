@@ -1120,6 +1120,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "conary-bootstrap"
+version = "0.7.0"
+dependencies = [
+ "anyhow",
+ "tokio",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "conary-core"
 version = "0.7.0"
 dependencies = [
