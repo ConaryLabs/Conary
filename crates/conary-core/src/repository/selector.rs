@@ -11,12 +11,15 @@
 //! - `ResolutionPolicy` filters candidates by request scope and mixing policy
 //! - Canonical expansion surfaces all cross-distro implementations for root requests
 
-use crate::db::models::{Repository, RepositoryPackage};
+use crate::db::models::{RepologyCacheEntry, Repository, RepositoryPackage};
 use crate::error::{Error, Result};
+use crate::repository::LatestSignal;
 use crate::repository::dependency_model::RepositoryDependencyFlavor;
-use crate::repository::resolution_policy::ResolutionPolicy;
+use crate::repository::resolution_policy::{ResolutionPolicy, SelectionMode};
 use crate::repository::versioning::compare_repo_package_versions;
+use chrono::Utc;
 use rusqlite::Connection;
+use std::collections::{HashMap, HashSet};
 use tracing::{debug, info};
 
 /// Options for package selection
@@ -140,9 +143,19 @@ impl PackageSelector {
 
             // Apply resolution policy filter
             if let Some(ref policy) = options.policy {
+                if !candidate_matches_allowed_distros(policy, &pkg, &repo) {
+                    debug!(
+                        "Policy rejected package {} {} from repository {} due to allowlist mismatch",
+                        pkg.name, pkg.version, repo.name
+                    );
+                    continue;
+                }
+
+                let mut policy_without_allowlist = policy.clone();
+                policy_without_allowlist.allowed_distros.clear();
                 let flavor = infer_repo_flavor(&repo);
                 let scheme = flavor_to_scheme(flavor);
-                if !policy.accepts_candidate(
+                if !policy_without_allowlist.accepts_candidate(
                     &repo.name,
                     scheme,
                     package_name,
@@ -164,6 +177,61 @@ impl PackageSelector {
         }
 
         Ok(results)
+    }
+
+    pub fn select_best_with_options(
+        conn: &Connection,
+        mut candidates: Vec<PackageWithRepo>,
+        options: &SelectionOptions,
+    ) -> Result<PackageWithRepo> {
+        if candidates.is_empty() {
+            return Err(Error::NotFound("No matching packages found".to_string()));
+        }
+
+        let latest_positive_keys = latest_positive_keys(conn, &candidates, options)?;
+
+        candidates.sort_by(|a, b| {
+            let a_latest = candidate_latest_key(a)
+                .as_ref()
+                .is_some_and(|key| latest_positive_keys.contains(key));
+            let b_latest = candidate_latest_key(b)
+                .as_ref()
+                .is_some_and(|key| latest_positive_keys.contains(key));
+            if a_latest != b_latest {
+                return b_latest.cmp(&a_latest);
+            }
+
+            match b.repository.priority.cmp(&a.repository.priority) {
+                std::cmp::Ordering::Equal => match compare_repo_package_versions(
+                    &a.package,
+                    &a.repository,
+                    &b.package,
+                    &b.repository,
+                ) {
+                    Some(ord) => ord.reverse(),
+                    None => {
+                        debug!(
+                            "Incomparable version schemes for {} ({}) vs {} ({}); using repo name order",
+                            a.repository.name, a.package.version,
+                            b.repository.name, b.package.version,
+                        );
+                        a.repository.name.cmp(&b.repository.name)
+                    }
+                },
+                ord => ord,
+            }
+        });
+
+        let selected = candidates.into_iter().next().unwrap();
+        info!(
+            "Selected package {} {} from repository {} (priority {})",
+            selected.package.name,
+            selected.package.version,
+            selected.repository.name,
+            selected.repository.priority
+        );
+
+        Ok(selected)
     }
 
     /// Select the best package from a list of candidates
@@ -239,8 +307,80 @@ impl PackageSelector {
             return Err(Error::NotFound(msg));
         }
 
-        Self::select_best(candidates)
+        Self::select_best_with_options(conn, candidates, options)
     }
+}
+
+fn candidate_distro_identifier<'a>(
+    pkg: &'a RepositoryPackage,
+    repo: &'a Repository,
+) -> Option<&'a str> {
+    pkg.distro
+        .as_deref()
+        .or(repo.default_strategy_distro.as_deref())
+}
+
+fn candidate_matches_allowed_distros(
+    policy: &ResolutionPolicy,
+    pkg: &RepositoryPackage,
+    repo: &Repository,
+) -> bool {
+    if policy.allowed_distros.is_empty() {
+        return true;
+    }
+
+    policy.allowed_distros.iter().any(|allowed| {
+        allowed == &repo.name
+            || candidate_distro_identifier(pkg, repo).is_some_and(|distro| allowed == distro)
+    })
+}
+
+fn candidate_latest_key(candidate: &PackageWithRepo) -> Option<(i64, String)> {
+    Some((
+        candidate.package.canonical_id?,
+        candidate_distro_identifier(&candidate.package, &candidate.repository)?.to_string(),
+    ))
+}
+
+fn latest_positive_keys(
+    conn: &Connection,
+    candidates: &[PackageWithRepo],
+    options: &SelectionOptions,
+) -> Result<HashSet<(i64, String)>> {
+    if options.policy.as_ref().map_or(true, |policy| {
+        policy.selection_mode != SelectionMode::Latest
+    }) {
+        return Ok(HashSet::new());
+    }
+
+    let mut distros_by_canonical: HashMap<i64, HashSet<String>> = HashMap::new();
+    for candidate in candidates {
+        let Some((canonical_id, distro)) = candidate_latest_key(candidate) else {
+            continue;
+        };
+        distros_by_canonical
+            .entry(canonical_id)
+            .or_default()
+            .insert(distro);
+    }
+
+    let now = Utc::now();
+    let mut positive = HashSet::new();
+    for (canonical_id, distros) in distros_by_canonical {
+        let distro_list = distros.into_iter().collect::<Vec<_>>();
+        let rows =
+            RepologyCacheEntry::find_for_canonical_and_distros(conn, canonical_id, &distro_list)?;
+        for row in rows {
+            let status = row.status.as_deref().unwrap_or("");
+            let signal =
+                LatestSignal::from_repology(status, row.version.as_deref(), &row.fetched_at, now)?;
+            if signal.is_positive() {
+                positive.insert((canonical_id, row.distro));
+            }
+        }
+    }
+
+    Ok(positive)
 }
 
 /// Normalize an architecture name to a canonical form.
@@ -763,5 +903,156 @@ mod tests {
         let selected = PackageSelector::select_best(candidates).unwrap();
         // "fedora-43" < "ubuntu-noble" alphabetically, so fedora wins
         assert_eq!(selected.repository.name, "fedora-43");
+    }
+
+    #[test]
+    fn select_best_respects_latest_mode_for_cross_distro_exact_name_candidates() {
+        let conn = test_db();
+
+        conn.execute(
+            "INSERT INTO canonical_packages (name, kind) VALUES ('python', 'package')",
+            [],
+        )
+        .unwrap();
+        let canonical_id = conn.last_insert_rowid();
+
+        let mut fedora_repo = Repository::new(
+            "fedora-remi".to_string(),
+            "https://example.invalid".to_string(),
+        );
+        fedora_repo.priority = 20;
+        fedora_repo.default_strategy_distro = Some("fedora".to_string());
+        fedora_repo.insert(&conn).unwrap();
+        let fedora = Repository::find_by_name(&conn, "fedora-remi")
+            .unwrap()
+            .unwrap();
+
+        let mut arch_repo = Repository::new(
+            "arch-core".to_string(),
+            "https://example.invalid".to_string(),
+        );
+        arch_repo.priority = 5;
+        arch_repo.default_strategy_distro = Some("arch".to_string());
+        arch_repo.insert(&conn).unwrap();
+        let arch = Repository::find_by_name(&conn, "arch-core")
+            .unwrap()
+            .unwrap();
+
+        let mut fedora_pkg = RepositoryPackage::new(
+            fedora.id.unwrap(),
+            "python".into(),
+            "3.12.2-1.fc43".into(),
+            "sha256:fedora".into(),
+            1,
+            "https://example.invalid/python-fedora.rpm".into(),
+        );
+        fedora_pkg.canonical_id = Some(canonical_id);
+        fedora_pkg.insert(&conn).unwrap();
+
+        let mut arch_pkg = RepositoryPackage::new(
+            arch.id.unwrap(),
+            "python".into(),
+            "3.13.0-1".into(),
+            "sha256:arch".into(),
+            1,
+            "https://example.invalid/python-arch.pkg.tar.zst".into(),
+        );
+        arch_pkg.canonical_id = Some(canonical_id);
+        arch_pkg.insert(&conn).unwrap();
+
+        crate::db::models::RepologyCacheEntry::insert_or_replace(
+            &conn,
+            &crate::db::models::RepologyCacheEntry {
+                project_name: "python".into(),
+                distro: "fedora".into(),
+                distro_name: "python".into(),
+                version: Some("3.12.2".into()),
+                status: Some("outdated".into()),
+                fetched_at: "2026-04-07T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+        crate::db::models::RepologyCacheEntry::insert_or_replace(
+            &conn,
+            &crate::db::models::RepologyCacheEntry {
+                project_name: "python".into(),
+                distro: "arch".into(),
+                distro_name: "python".into(),
+                version: Some("3.13.0".into()),
+                status: Some("newest".into()),
+                fetched_at: "2026-04-07T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+
+        let selected = PackageSelector::find_best_package(
+            &conn,
+            "python",
+            &SelectionOptions {
+                policy: Some(ResolutionPolicy::new().with_selection_mode(
+                    crate::repository::resolution_policy::SelectionMode::Latest,
+                )),
+                is_root: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(selected.repository.name, "arch-core");
+    }
+
+    #[test]
+    fn search_packages_respects_allowed_distros_by_distro_identifier() {
+        let conn = test_db();
+
+        let mut fedora_repo = Repository::new(
+            "fedora-remi".to_string(),
+            "https://example.invalid".to_string(),
+        );
+        fedora_repo.default_strategy_distro = Some("fedora".to_string());
+        fedora_repo.insert(&conn).unwrap();
+
+        let mut arch_repo = Repository::new(
+            "arch-core".to_string(),
+            "https://example.invalid".to_string(),
+        );
+        arch_repo.default_strategy_distro = Some("arch".to_string());
+        arch_repo.insert(&conn).unwrap();
+
+        let mut fedora_pkg = RepositoryPackage::new(
+            fedora_repo.id.unwrap(),
+            "python".into(),
+            "3.12.2-1.fc43".into(),
+            "sha256:fedora".into(),
+            1,
+            "https://example.invalid/python-fedora.rpm".into(),
+        );
+        fedora_pkg.insert(&conn).unwrap();
+
+        let mut arch_pkg = RepositoryPackage::new(
+            arch_repo.id.unwrap(),
+            "python".into(),
+            "3.13.0-1".into(),
+            "sha256:arch".into(),
+            1,
+            "https://example.invalid/python-arch.pkg.tar.zst".into(),
+        );
+        arch_pkg.insert(&conn).unwrap();
+
+        let candidates = PackageSelector::search_packages(
+            &conn,
+            "python",
+            &SelectionOptions {
+                policy: Some(
+                    ResolutionPolicy::new().with_allowed_distros(vec!["arch".to_string()]),
+                ),
+                is_root: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].repository.name, "arch-core");
     }
 }
