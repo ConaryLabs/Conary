@@ -967,9 +967,10 @@ pub async fn cmd_model_update(model_path: &str, db_path: &str) -> Result<()> {
 mod tests {
     use super::super::test_helpers::{create_test_db, seed_mixed_replatform_fixture};
     use super::*;
-    use conary_core::db::models::DistroPin;
+    use conary_core::db::models::{DistroPin, settings};
     use conary_core::model::ReplatformBlockedReason;
     use conary_core::model::parser::SystemModel;
+    use conary_core::repository::{SETTINGS_KEY_ALLOWED_DISTROS, SETTINGS_KEY_SELECTION_MODE};
     use tempfile::tempdir;
 
     #[test]
@@ -1556,5 +1557,81 @@ strength = "strict"
         let pin = DistroPin::get_current(&conn).unwrap().unwrap();
         assert_eq!(pin.distro, "arch");
         assert_eq!(pin.mixing_policy, "strict");
+    }
+
+    #[tokio::test]
+    async fn test_model_apply_updates_selection_mode_without_package_changes() {
+        let (_temp_file, db_path) = create_test_db();
+        let model_dir = tempdir().unwrap();
+        let model_path = model_dir.path().join("system.toml");
+        std::fs::write(
+            &model_path,
+            r#"
+[model]
+version = 1
+
+[system]
+selection_mode = "latest"
+"#,
+        )
+        .unwrap();
+
+        cmd_model_apply(ApplyOptions {
+            model_path: model_path.to_str().unwrap(),
+            db_path: &db_path,
+            root: "/",
+            dry_run: false,
+            skip_optional: false,
+            strict: false,
+            autoremove: false,
+            offline: true,
+        })
+        .await
+        .unwrap();
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        assert_eq!(
+            settings::get(&conn, SETTINGS_KEY_SELECTION_MODE).unwrap(),
+            Some("latest".to_string())
+        );
+        assert!(DistroPin::get_current(&conn).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_model_apply_updates_allowed_distros_without_package_changes() {
+        let (_temp_file, db_path) = create_test_db();
+        let model_dir = tempdir().unwrap();
+        let model_path = model_dir.path().join("system.toml");
+        std::fs::write(
+            &model_path,
+            r#"
+[model]
+version = 1
+
+[system]
+allowed_distros = ["arch"]
+"#,
+        )
+        .unwrap();
+
+        cmd_model_apply(ApplyOptions {
+            model_path: model_path.to_str().unwrap(),
+            db_path: &db_path,
+            root: "/",
+            dry_run: false,
+            skip_optional: false,
+            strict: false,
+            autoremove: false,
+            offline: true,
+        })
+        .await
+        .unwrap();
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        assert_eq!(
+            settings::get(&conn, SETTINGS_KEY_ALLOWED_DISTROS).unwrap(),
+            Some("[\"arch\"]".to_string())
+        );
+        assert!(DistroPin::get_current(&conn).unwrap().is_none());
     }
 }
