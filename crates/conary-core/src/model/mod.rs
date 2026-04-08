@@ -123,6 +123,9 @@ pub enum ModelError {
     #[error("Pin pattern invalid: {0}")]
     InvalidPinPattern(String),
 
+    #[error("Invalid source policy: {0}")]
+    InvalidSourcePolicy(String),
+
     #[error("Remote fetch failed: {0}")]
     RemoteFetchError(String),
 
