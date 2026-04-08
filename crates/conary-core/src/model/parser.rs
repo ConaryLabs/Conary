@@ -2,6 +2,7 @@
 
 //! Parser for system model TOML files.
 
+use crate::repository::resolution_policy::SelectionMode;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -13,6 +14,25 @@ pub const MODEL_VERSION: u32 = 1;
 
 fn default_source_profile() -> Option<String> {
     Some("balanced/latest-anywhere".to_string())
+}
+
+const DEFAULT_SOURCE_PROFILE: &str = "balanced/latest-anywhere";
+const CONSERVATIVE_POLICY_PROFILE: &str = "conservative/policy-first";
+
+fn selection_mode_from_profile(profile: &str) -> Option<SelectionMode> {
+    match profile {
+        DEFAULT_SOURCE_PROFILE => Some(SelectionMode::Latest),
+        CONSERVATIVE_POLICY_PROFILE => Some(SelectionMode::Policy),
+        _ => None,
+    }
+}
+
+fn selection_mode_from_string(mode: &str) -> Option<SelectionMode> {
+    match mode {
+        "policy" => Some(SelectionMode::Policy),
+        "latest" => Some(SelectionMode::Latest),
+        _ => None,
+    }
 }
 
 /// The main system model configuration
@@ -765,10 +785,14 @@ impl ConvergenceIntent {
 
 /// System-level source policy configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(from = "SystemConfigSerde")]
 pub struct SystemConfig {
     /// Source selection profile (default: balanced/latest-anywhere)
-    #[serde(default = "default_source_profile")]
     pub profile: Option<String>,
+
+    /// Explicit ranking preference override.
+    #[serde(default)]
+    pub selection_mode: Option<String>,
 
     /// Allowed distros for package sourcing
     #[serde(default)]
@@ -790,22 +814,75 @@ pub struct SystemConfig {
     /// Cross-distro mixing policy (e.g., "guarded", "open", "locked")
     #[serde(default)]
     pub mixing: Option<String>,
+
+    /// Whether the profile was explicitly present in the parsed model.
+    #[serde(skip)]
+    profile_explicit: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SystemConfigSerde {
+    #[serde(default)]
+    profile: Option<String>,
+    #[serde(default)]
+    selection_mode: Option<String>,
+    #[serde(default)]
+    allowed_distros: Vec<String>,
+    #[serde(default)]
+    pin: Option<SourcePinConfig>,
+    #[serde(default)]
+    convergence: ConvergenceIntent,
+    #[serde(default)]
+    distro: Option<String>,
+    #[serde(default)]
+    mixing: Option<String>,
+}
+
+impl From<SystemConfigSerde> for SystemConfig {
+    fn from(raw: SystemConfigSerde) -> Self {
+        let profile_explicit = raw.profile.is_some();
+        Self {
+            profile: raw.profile.or_else(default_source_profile),
+            selection_mode: raw.selection_mode,
+            allowed_distros: raw.allowed_distros,
+            pin: raw.pin,
+            convergence: raw.convergence,
+            distro: raw.distro,
+            mixing: raw.mixing,
+            profile_explicit,
+        }
+    }
 }
 
 impl Default for SystemConfig {
     fn default() -> Self {
         Self {
             profile: default_source_profile(),
+            selection_mode: None,
             allowed_distros: Vec::new(),
             pin: None,
             convergence: ConvergenceIntent::default(),
             distro: None,
             mixing: None,
+            profile_explicit: false,
         }
     }
 }
 
 impl SystemConfig {
+    /// Return the effective selection mode, preferring explicit override over
+    /// profile-derived defaults.
+    pub fn effective_selection_mode(&self) -> Option<SelectionMode> {
+        self.selection_mode
+            .as_deref()
+            .and_then(selection_mode_from_string)
+            .or_else(|| {
+                self.profile
+                    .as_deref()
+                    .and_then(selection_mode_from_profile)
+            })
+    }
+
     /// Return the effective source pin, preferring the richer policy shape and
     /// falling back to legacy `distro` / `mixing` fields for compatibility.
     pub fn effective_pin(&self) -> Option<SourcePinConfig> {
@@ -827,10 +904,18 @@ impl SystemConfig {
     /// When this returns `false`, the system is running with default source
     /// policy and the user may benefit from a configuration hint.
     pub fn is_source_policy_configured(&self) -> bool {
+        let profile_is_non_default = self
+            .profile
+            .as_deref()
+            .is_some_and(|profile| profile != DEFAULT_SOURCE_PROFILE);
+
         self.pin.is_some()
             || self.distro.is_some()
             || self.convergence != ConvergenceIntent::TrackOnly
+            || self.selection_mode.is_some()
             || !self.allowed_distros.is_empty()
+            || self.profile_explicit
+            || profile_is_non_default
     }
 }
 
@@ -957,6 +1042,24 @@ impl SystemModel {
             }
         }
 
+        if let Some(profile) = self.system.profile.as_deref()
+            && selection_mode_from_profile(profile).is_none()
+        {
+            return Err(ModelError::InvalidSourcePolicy(format!(
+                "Unknown source profile '{}'",
+                profile
+            )));
+        }
+
+        if let Some(selection_mode) = self.system.selection_mode.as_deref()
+            && selection_mode_from_string(selection_mode).is_none()
+        {
+            return Err(ModelError::InvalidSourcePolicy(format!(
+                "Unknown selection mode '{}'",
+                selection_mode
+            )));
+        }
+
         Ok(())
     }
 
@@ -1032,6 +1135,27 @@ pub fn parse_model_string(content: &str) -> ModelResult<SystemModel> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::repository::resolution_policy::SelectionMode;
+
+    fn minimal_model_toml() -> &'static str {
+        r#"
+[model]
+version = 1
+"#
+    }
+
+    fn model_toml_with_system(system_body: &str) -> String {
+        format!(
+            r#"
+[model]
+version = 1
+
+[system]
+{}
+"#,
+            system_body
+        )
+    }
 
     #[test]
     fn test_empty_model() {
@@ -1646,6 +1770,52 @@ mesa = { from = "fedora-41" }
     fn test_source_policy_default_is_unconfigured() {
         let config = SystemConfig::default();
         assert!(!config.is_source_policy_configured());
+    }
+
+    #[test]
+    fn source_policy_default_profile_maps_to_latest_selection_mode() {
+        let config = SystemConfig::default();
+        assert_eq!(config.effective_selection_mode(), Some(SelectionMode::Latest));
+    }
+
+    #[test]
+    fn source_policy_explicit_selection_mode_overrides_profile_mapping() {
+        let config = SystemConfig {
+            profile: Some("balanced/latest-anywhere".to_string()),
+            selection_mode: Some("policy".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(config.effective_selection_mode(), Some(SelectionMode::Policy));
+    }
+
+    #[test]
+    fn source_policy_non_default_profile_counts_as_configuration() {
+        let config = SystemConfig {
+            profile: Some("conservative/policy-first".to_string()),
+            ..Default::default()
+        };
+        assert!(config.is_source_policy_configured());
+    }
+
+    #[test]
+    fn source_policy_implicit_default_profile_is_not_counted_as_explicit_configuration() {
+        let model = parse_model_string(minimal_model_toml()).unwrap();
+        assert!(!model.system.is_source_policy_configured());
+    }
+
+    #[test]
+    fn source_policy_explicit_default_profile_counts_as_configuration() {
+        let model = parse_model_string(&model_toml_with_system(
+            "profile = \"balanced/latest-anywhere\"",
+        ))
+        .unwrap();
+        assert!(model.system.is_source_policy_configured());
+    }
+
+    #[test]
+    fn source_policy_unknown_profile_is_rejected() {
+        let model = parse_model_string(&model_toml_with_system("profile = \"mystery/not-real\""));
+        assert!(model.is_err());
     }
 
     #[test]
