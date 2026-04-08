@@ -251,6 +251,8 @@ pub struct RepositoryPackage {
     pub distro: Option<String>,
     /// Native version comparison scheme (rpm, debian, arch).
     pub version_scheme: Option<String>,
+    /// Cross-distro canonical identity for this package.
+    pub canonical_id: Option<i64>,
 }
 
 impl RepositoryPackage {
@@ -258,22 +260,22 @@ impl RepositoryPackage {
     const COLUMNS: &'static str = "id, repository_id, name, version, architecture, description, \
          checksum, size, download_url, dependencies, metadata, synced_at, \
          is_security_update, severity, cve_ids, advisory_id, advisory_url, \
-         distro, version_scheme";
+         distro, version_scheme, canonical_id";
 
     /// Column list for SELECT queries with table alias prefix (rp.).
     const COLUMNS_PREFIXED: &'static str = "rp.id, rp.repository_id, rp.name, rp.version, \
          rp.architecture, rp.description, rp.checksum, rp.size, rp.download_url, \
          rp.dependencies, rp.metadata, rp.synced_at, rp.is_security_update, \
          rp.severity, rp.cve_ids, rp.advisory_id, rp.advisory_url, rp.distro, \
-         rp.version_scheme";
+         rp.version_scheme, rp.canonical_id";
 
     /// INSERT SQL shared by `batch_insert` and `batch_insert_with_ids`.
     const BATCH_INSERT_SQL: &'static str = "\
          INSERT INTO repository_packages \
          (repository_id, name, version, architecture, description, checksum, size, \
           download_url, dependencies, metadata, is_security_update, severity, cve_ids, \
-          advisory_id, advisory_url, distro, version_scheme) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)";
+          advisory_id, advisory_url, distro, version_scheme, canonical_id) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)";
 
     /// Create a new RepositoryPackage
     pub fn new(
@@ -304,6 +306,7 @@ impl RepositoryPackage {
             advisory_url: None,
             distro: None,
             version_scheme: None,
+            canonical_id: None,
         }
     }
 
@@ -312,8 +315,8 @@ impl RepositoryPackage {
         conn.execute(
             "INSERT INTO repository_packages
              (repository_id, name, version, architecture, description, checksum, size, download_url, dependencies, metadata,
-              is_security_update, severity, cve_ids, advisory_id, advisory_url, distro, version_scheme)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+              is_security_update, severity, cve_ids, advisory_id, advisory_url, distro, version_scheme, canonical_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
                 &self.repository_id,
                 &self.name,
@@ -332,6 +335,7 @@ impl RepositoryPackage {
                 &self.advisory_url,
                 &self.distro,
                 &self.version_scheme,
+                &self.canonical_id,
             ],
         )?;
 
@@ -540,6 +544,7 @@ impl RepositoryPackage {
             advisory_url: row.get(16)?,
             distro: row.get(17)?,
             version_scheme: row.get(18)?,
+            canonical_id: row.get(19)?,
         })
     }
 
@@ -622,6 +627,7 @@ impl RepositoryPackage {
             &pkg.advisory_url,
             &pkg.distro,
             &pkg.version_scheme,
+            &pkg.canonical_id,
         ])?;
         Ok(())
     }
@@ -691,6 +697,7 @@ mod tests {
             advisory_url: None,
             distro: None,
             version_scheme: None,
+            canonical_id: None,
         };
 
         let deps = pkg.parse_dependency_requests().unwrap();

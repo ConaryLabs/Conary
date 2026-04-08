@@ -22,4 +22,6 @@ pub use conflict::Conflict;
 pub use identity::PackageIdentity;
 pub use plan::{MissingDependency, ResolutionPlan};
 pub use provides_index::ProvidesIndex;
-pub use sat::{SatPackage, SatResolution, SatSource, solve_install, solve_removal};
+pub use sat::{
+    SatPackage, SatResolution, SatSource, solve_install, solve_install_with_policy, solve_removal,
+};
