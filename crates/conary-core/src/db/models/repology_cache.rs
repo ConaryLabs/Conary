@@ -165,9 +165,12 @@ mod tests {
         )
         .unwrap();
 
-        let rows =
-            RepologyCacheEntry::find_for_canonical_and_distros(&conn, canonical_id, &["fedora".into()])
-                .unwrap();
+        let rows = RepologyCacheEntry::find_for_canonical_and_distros(
+            &conn,
+            canonical_id,
+            &["fedora".into()],
+        )
+        .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].distro, "fedora");
     }

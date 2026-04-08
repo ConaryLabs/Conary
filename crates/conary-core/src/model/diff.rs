@@ -554,6 +554,7 @@ pub fn compute_diff(model: &SystemModel, state: &SystemState) -> ModelDiff {
 ///
 /// Both `compute_diff` and `compute_diff_from_resolved` delegate here
 /// after extracting the relevant data from their respective model types.
+#[allow(clippy::too_many_arguments)]
 fn compute_diff_inner(
     install: &[String],
     optionals: &[String],
@@ -605,7 +606,10 @@ fn compute_diff_inner(
         _ => {}
     }
 
-    match (state.allowed_distros.as_slice(), desired_allowed_distros.as_slice()) {
+    match (
+        state.allowed_distros.as_slice(),
+        desired_allowed_distros.as_slice(),
+    ) {
         (current, desired) if current == desired => {}
         (_, []) => diff.add_action(DiffAction::ClearAllowedDistros),
         _ => diff.add_action(DiffAction::SetAllowedDistros {
@@ -1077,10 +1081,11 @@ mod tests {
         let state = SystemState::new();
         let diff = compute_diff(&model, &state);
 
-        assert!(diff
-            .actions
-            .iter()
-            .any(|action| action.description().contains("selection mode")));
+        assert!(
+            diff.actions
+                .iter()
+                .any(|action| action.description().contains("selection mode"))
+        );
     }
 
     #[test]
@@ -1091,10 +1096,11 @@ mod tests {
         let state = SystemState::new();
         let diff = compute_diff(&model, &state);
 
-        assert!(diff
-            .actions
-            .iter()
-            .any(|action| action.description().contains("allowed distros")));
+        assert!(
+            diff.actions
+                .iter()
+                .any(|action| action.description().contains("allowed distros"))
+        );
     }
 
     #[test]

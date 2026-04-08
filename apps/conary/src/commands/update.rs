@@ -476,6 +476,7 @@ pub async fn cmd_list_pinned(db_path: &str) -> Result<()> {
 /// Check for and apply package updates
 ///
 /// If `security_only` is true, only applies security updates (critical/important severity).
+#[allow(clippy::too_many_arguments)]
 pub async fn cmd_update(
     package: Option<String>,
     db_path: &str,
@@ -1141,6 +1142,7 @@ pub async fn cmd_delta_stats(db_path: &str) -> Result<()> {
 /// Updates are applied one package at a time; earlier members remain updated even if
 /// a later one fails.  Returns an error if any member fails to update.
 /// If `security_only` is true, only applies security updates.
+#[allow(clippy::too_many_arguments)]
 pub async fn cmd_update_group(
     name: &str,
     db_path: &str,
