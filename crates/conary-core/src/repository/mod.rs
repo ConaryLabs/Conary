@@ -27,6 +27,7 @@ pub mod substituter;
 mod sync;
 
 pub mod dependency_model;
+pub mod effective_policy;
 pub mod gpg;
 pub mod parsers;
 pub mod resolution_policy;
@@ -40,6 +41,10 @@ pub use client::RepositoryClient;
 pub use dependencies::{
     download_dependencies, resolve_dependencies, resolve_dependencies_transitive,
     resolve_dependencies_transitive_requests, resolve_dependency_requests,
+};
+pub use effective_policy::{
+    EffectiveSourcePolicy, SETTINGS_KEY_ALLOWED_DISTROS, SETTINGS_KEY_SELECTION_MODE,
+    load_effective_policy,
 };
 pub use download::{
     DownloadOptions, DownloadProgress, download_delta, download_package, download_package_verified,
