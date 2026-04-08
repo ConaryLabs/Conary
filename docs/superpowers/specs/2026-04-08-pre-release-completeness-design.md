@@ -92,7 +92,7 @@ call `cmd_install` with `InstallOptions` (same pattern as
 call `cmd_remove`. Collect errors per-package, continue on failure, return
 `(applied_count, error_list)`.
 
-Model apply does NOT use `batch_mode` -- each operation gets its own changeset,
+Model apply does NOT use the inner helpers -- each operation gets its own changeset,
 matching the behavior of `apply_replatform_changes()` which already calls
 `cmd_install` individually. Model apply is not an atomic revert; it's a
 "make the system match the model" operation where partial progress is acceptable.
@@ -166,7 +166,7 @@ This is consistent with RPM, dpkg, and pacman.
 | `apps/conary/src/commands/remove.rs` | Extract `remove_inner()`; add `architecture` parameter; `cmd_remove` becomes thin wrapper |
 | `apps/conary/src/commands/model/apply.rs` | Implement `apply_package_changes()`, fix Update handling |
 | `apps/conary/src/commands/model.rs` | Update call site, wire autoremove |
-| `apps/conary/src/commands/state.rs` | Replace bail with batch-mode execution loop |
+| `apps/conary/src/commands/state.rs` | Replace bail with inner-helper execution loop + TransactionEngine lifecycle |
 
 ### Testing
 
@@ -238,7 +238,7 @@ Rename `execute()` to `plan()`. It returns an `ActionPlan`:
 pub enum PlannedOp {
     Install { package: String, version: Option<String> },
     Remove { package: String },
-    VerifyAndRestore { files: Vec<PathBuf> },
+    Restore { package: String },
 }
 
 pub struct ActionPlan {
