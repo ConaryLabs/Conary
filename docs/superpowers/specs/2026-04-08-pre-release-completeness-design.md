@@ -1,7 +1,7 @@
 # Pre-Release Completeness: Design Spec
 
 **Date:** 2026-04-08  
-**Status:** Approved (rev 2 -- incorporates Codex review fixes)  
+**Status:** Approved (rev 3 -- incorporates second Codex review)  
 **Goal:** Close every stub, dead-end, and misleading exit code in the CLI before
 public announcement. Implementation order is bottom-up: user-facing mutators
 first, then automation, then stubs, then infrastructure.
@@ -35,23 +35,38 @@ to `cmd_model_apply` and `cmd_state_restore` in `dispatch.rs`.
 
 **Files:** `apps/conary/src/dispatch.rs`
 
-### Prerequisite: Batch-Mode Install/Remove
+### Prerequisite: Extract Inner Install/Remove Helpers
 
-`cmd_install` creates its own changeset and state snapshot
-(`install/mod.rs:1789`). `cmd_remove` does the same (`remove.rs:148`). Calling
-them in a loop from `state revert` produces N changesets + N snapshots instead
-of one atomic revert.
+`cmd_install` and `cmd_remove` each own their entire lifecycle: open a DB
+transaction, create a changeset, record file history, call
+`rebuild_and_mount()`, and create a state snapshot. A `batch_mode: bool` flag
+is not sufficient because the transaction boundaries and `rebuild_and_mount()`
+calls are deeply embedded in the function bodies (`install/mod.rs:1518`,
+`remove.rs:239`, `install/mod.rs:1689`, `remove.rs:313`).
 
-Add a `batch_mode: bool` field to `InstallOptions` and a corresponding
-parameter to `cmd_remove`. When `batch_mode` is true:
+**Extract inner helpers:**
 
-- Skip per-operation changeset creation (caller provides the wrapping changeset)
-- Skip per-operation state snapshot (caller creates one final snapshot)
-- All other behavior (dependency resolution, scriptlets, CAS operations)
-  unchanged
+- `install_inner(conn: &Connection, changeset_id: i64, package, opts)` --
+  performs the DB transaction body (trove insert, dependency recording, file
+  history, CAS operations) using the caller's connection and changeset. Skips
+  `rebuild_and_mount()` and state snapshot creation. Returns the trove ID and
+  any scriptlet results.
 
-Default is `false`, preserving existing behavior for interactive
-`conary install` / `conary remove`.
+- `remove_inner(conn: &Connection, changeset_id: i64, package, opts)` --
+  performs the DB transaction body (dependency check, trove delete, file
+  history recording) using the caller's connection and changeset. Skips
+  `rebuild_and_mount()` and state snapshot creation. Returns the removal
+  result.
+
+The existing `cmd_install` and `cmd_remove` become thin wrappers: create
+changeset, call the inner helper, call `rebuild_and_mount()`, create state
+snapshot. No behavioral change for interactive `conary install` / `conary
+remove`.
+
+**Atomicity scope:** DB and generation state are atomic (one changeset, one
+rebuild, one snapshot). Pre-remove scriptlets that partially execute cannot be
+rolled back -- this is consistent with RPM, dpkg, and pacman which also have
+no pre-remove rollback mechanism.
 
 ### Prerequisite: Architecture Selector
 
@@ -60,10 +75,9 @@ does not accept an architecture parameter. `StateMember` carries
 `architecture`, and multi-arch systems have distinct entries like
 `glibc.x86_64` vs `glibc.i686`.
 
-Add `architecture: Option<String>` to `InstallOptions`. Add an `architecture:
-Option<String>` parameter to `cmd_remove`. When set, the resolver and removal
-logic filter to the specified architecture. When `None`, existing behavior is
-preserved.
+Add `architecture: Option<String>` to `InstallOptions` and as a parameter to
+`remove_inner`. When set, the resolver and removal logic filter to the
+specified architecture. When `None`, existing behavior is preserved.
 
 **Files:** `apps/conary/src/commands/install/mod.rs`,
 `apps/conary/src/commands/remove.rs`
@@ -104,35 +118,42 @@ with some failures returns `Ok` but prints a warning with the failure list.
 
 #### Execution strategy
 
-Use repository resolution (call `cmd_install`/`cmd_remove` with
-`batch_mode: true`) rather than direct database manipulation. This preserves
-dependency checking, scriptlet execution, and CAS operations. If a historical
+Use the extracted inner helpers (`install_inner`/`remove_inner`) with a shared
+connection and changeset, plus repository resolution for version lookup. This
+preserves dependency checking, scriptlet execution, and CAS operations while
+giving the caller control over the transaction boundary. If a historical
 package version is no longer in any enabled repository, the user gets an
 explicit error listing what couldn't be restored and why.
 
 #### Implementation (state.rs, replacing bail at line 215)
 
-1. Create a wrapping changeset: `"Revert to state {N}"`.
-2. Execute removals first: `cmd_remove` for each entry in `plan.to_remove`,
-   with `batch_mode: true` and `architecture` from `StateMember`.
-3. Execute installs: `cmd_install` with target version and architecture for
-   each `plan.to_install`, with `batch_mode: true`.
-4. Execute upgrades: `cmd_install` with target version for each
-   `plan.to_upgrade`, with `batch_mode: true`.
-5. Commit the wrapping changeset.
-6. Create one final state snapshot via `StateEngine::create_snapshot()` with
-   summary `"Reverted to state {N}"`.
-7. On partial failure: report what succeeded and what failed. If any removals
-   or installs failed, do not commit the changeset -- roll it back and report
-   the failures. Atomic semantics: all or nothing.
+1. Open a DB transaction and create one wrapping changeset:
+   `"Revert to state {N}"`.
+2. Execute removals first: `remove_inner(conn, changeset_id, ...)` for each
+   entry in `plan.to_remove`, with `architecture` from `StateMember`.
+3. Execute installs: resolve the package from repositories (for version and
+   CAS content), then `install_inner(conn, changeset_id, ...)` for each
+   `plan.to_install`, with target version and architecture.
+4. Execute upgrades: `install_inner(conn, changeset_id, ...)` with target
+   version for each `plan.to_upgrade`.
+5. If all operations succeeded: commit the transaction, call
+   `rebuild_and_mount()` once, create one state snapshot via
+   `StateEngine::create_snapshot()` with summary `"Reverted to state {N}"`.
+6. On any failure: roll back the transaction and report what failed.
+   No `rebuild_and_mount()`, no snapshot. All-or-nothing at the DB/generation
+   level.
+
+**Atomicity scope:** DB state and generation image are atomic. Scriptlet
+side-effects (pre-remove scripts that partially execute) are not rollback-safe.
+This is consistent with RPM, dpkg, and pacman.
 
 ### Files to modify
 
 | File | Change |
 |------|--------|
 | `apps/conary/src/dispatch.rs` | Add `require_live_mutation()` gates for model apply and state revert |
-| `apps/conary/src/commands/install/mod.rs` | Add `batch_mode` and `architecture` to `InstallOptions`; skip changeset/snapshot when batch |
-| `apps/conary/src/commands/remove.rs` | Add `batch_mode` and `architecture` parameters; skip changeset/snapshot when batch |
+| `apps/conary/src/commands/install/mod.rs` | Extract `install_inner()`; add `architecture` to `InstallOptions`; `cmd_install` becomes thin wrapper |
+| `apps/conary/src/commands/remove.rs` | Extract `remove_inner()`; add `architecture` parameter; `cmd_remove` becomes thin wrapper |
 | `apps/conary/src/commands/model/apply.rs` | Implement `apply_package_changes()`, fix Update handling |
 | `apps/conary/src/commands/model.rs` | Update call site, wire autoremove |
 | `apps/conary/src/commands/state.rs` | Replace bail with batch-mode execution loop |
@@ -185,8 +206,8 @@ pub enum ActionPayload {
     UpdatePackage { target_version: String },
     /// Remove packages (names already in PendingAction.packages).
     RemovePackages,
-    /// Verify and restore files from CAS.
-    RepairFiles { paths: Vec<PathBuf> },
+    /// Restore packages with corrupted/missing files from CAS.
+    RepairPackages,
 }
 ```
 
@@ -224,13 +245,50 @@ pub struct ActionPlan {
 | Updates | `UpdatePackage { target_version }` | `PlannedOp::Install` per package with version |
 | MajorUpgrades | `UpdatePackage { target_version }` | `PlannedOp::Install` per package with version |
 | Orphans | `RemovePackages` | `PlannedOp::Remove` per package |
-| Repair | `RepairFiles { paths }` | `PlannedOp::VerifyAndRestore` with paths |
+| Repair | `RepairFiles { paths }` | `PlannedOp::Restore` per package (see below) |
+
+#### MajorUpgrades: wire end-to-end
+
+The `MajorUpgrades` category exists in the planner table but is not wired
+through the CLI surface:
+- CLI category parser (`automation.rs:32`) does not accept `"major_upgrades"`
+- `automation status` hardcodes `major_upgrades: 0`
+- `automation check` never prints MajorUpgrades actions
+- Daemon summary zeroes it out
+
+Wire MajorUpgrades through all CLI paths:
+- Add `"major_upgrades" | "major-upgrades"` to the category parser
+- `automation status` queries the checker for real MajorUpgrades count
+- `automation check` prints MajorUpgrades actions alongside other categories
+- Daemon summary includes MajorUpgrades in its reporting
+
+#### Repair: use existing restore path
+
+The spec's `VerifyAndRestore` should not invent a parallel restore mechanism.
+Conary already has `cmd_restore` (`restore.rs:21`) and `cmd_restore_all`
+(`restore.rs:129`) which verify CAS presence, rebuild EROFS, and remount.
+
+Change `PlannedOp::VerifyAndRestore` to `PlannedOp::Restore`:
+
+```rust
+pub enum PlannedOp {
+    Install { package: String, version: Option<String> },
+    Remove { package: String },
+    Restore { package: String },  // delegates to cmd_restore
+}
+```
+
+The CLI layer dispatches `Restore` to a helper extracted from `cmd_restore`
+(the package-level restore that checks CAS, rebuilds, and remounts). This
+keeps repair tied to Conary's existing restore semantics rather than creating
+a separate verify-and-copy path.
 
 #### CLI-side execution and history logging
 
 The CLI-level `cmd_automation_apply` iterates plans and dispatches to
-`cmd_install`/`cmd_remove`/verify (same crate, no boundary issue). After each
-action's plan is executed, the CLI inserts a row into `automation_history`.
+`cmd_install`/`cmd_remove`/`cmd_restore` helper (same crate, no boundary
+issue). After each action's plan is executed, the CLI inserts a row into
+`automation_history`.
 
 This keeps history logging in the CLI layer where the execution results are
 known, not in the core crate's `plan()` method.
@@ -272,11 +330,19 @@ write back to the model path. This avoids needing a full `save_model()` API in
 core -- `toml_edit` is already a workspace dependency. The write logic lives in
 the CLI crate (`commands/automation.rs`).
 
-#### Automation daemon background mode
+#### Automation daemon: foreground-only, fix help text
 
-Leave as `bail!()` with clear message. Daemonization (double-fork, setsid,
-pidfile management) is a separate concern. The feature works interactively via
-`automation apply` and `automation check`.
+Background daemonization (double-fork, setsid) is not worth implementing when
+the supported deployment model is systemd service management. The current CLI
+help says "Run automation daemon in background" which is misleading.
+
+Change the CLI help text (`cli/automation.rs:112`) to:
+`"Run automation daemon (foreground; use systemd for background)"`
+
+Remove the `--foreground` flag (it becomes the only mode). When `--foreground`
+is absent, print a clear message directing users to systemd instead of bailing
+with a generic error. Or simply remove the flag entirely since foreground is
+the only option.
 
 ### Files to modify
 
@@ -284,9 +350,10 @@ pidfile management) is a separate concern. The feature works interactively via
 |------|--------|
 | `crates/conary-core/src/automation/mod.rs` | Add `ActionPayload` to `PendingAction` |
 | `crates/conary-core/src/automation/action.rs` | Rename `execute()` to `plan()`, return `ActionPlan` |
-| `crates/conary-core/src/automation/check.rs` | Populate typed payloads in action builders |
+| `crates/conary-core/src/automation/check.rs` | Populate typed payloads in action builders; wire MajorUpgrades detection |
 | `crates/conary-core/src/db/schema.rs` | Migration v66: `automation_history` table |
-| `apps/conary/src/commands/automation.rs` | Execute plans via cmd_install/cmd_remove, log history, wire configure |
+| `apps/conary/src/commands/automation.rs` | Execute plans via cmd_install/cmd_remove/restore, log history, wire configure, wire MajorUpgrades status/check, fix daemon help |
+| `apps/conary/src/cli/automation.rs` | Add `major_upgrades` to category parser, fix daemon help text |
 
 ### Testing
 
@@ -370,11 +437,16 @@ Missing piece: recipe loading + dependency resolution glue.
 6. Populate profile stages with real IDs.
 7. Write via `BuildProfile::to_toml()`.
 
-The recipe loading + dependency resolution is ~100-150 lines of new code in a
-shared helper in `crates/conary-core/src/derivation/`. Both `profile generate`
-and `cache populate` consume it.
+The recipe loading logic already exists: `load_recipes()` at
+`apps/conary/src/commands/bootstrap/mod.rs:730` walks recipe subdirectories,
+parses TOML files, and returns a `HashMap<String, Recipe>`. Extract this into
+a shared helper in `crates/conary-core/src/derivation/recipe_loader.rs` so
+both `profile generate` and `cache populate` can consume it without depending
+on the bootstrap command module. The dependency resolution (topological sort
+with stage classification) is the only genuinely new logic (~50-80 lines).
 
 **Files:** `apps/conary/src/commands/profile.rs`,
+`apps/conary/src/commands/bootstrap/mod.rs` (extract `load_recipes`),
 new `crates/conary-core/src/derivation/recipe_loader.rs`
 
 ### `cache populate --sources-only` -- Download Source Tarballs
@@ -551,7 +623,7 @@ become compile errors that point to the places needing cleanup.
 
 | Phase | Description | Key risk | Critical path? |
 |-------|-------------|----------|----------------|
-| 1 | Model apply + state revert | batch_mode and arch additions touch install/remove internals | **Yes** |
+| 1 | Model apply + state revert | Extracting install/remove inner helpers touches core mutation paths | **Yes** |
 | 2 | Automation executor | Typed payloads change `PendingAction` struct | **Yes** |
 | 3 | Stubs + README | Recipe loading helper, self-update server endpoint | **Yes** |
 | 4 | Substituter remote sources | Async conversion, no production callers yet | No |
