@@ -111,7 +111,12 @@ async fn compute_model_diff(
 fn is_source_policy_action(action: &DiffAction) -> bool {
     matches!(
         action,
-        DiffAction::SetSourcePin { .. } | DiffAction::ClearSourcePin
+        DiffAction::SetSourcePin { .. }
+            | DiffAction::ClearSourcePin
+            | DiffAction::SetSelectionMode { .. }
+            | DiffAction::ClearSelectionMode
+            | DiffAction::SetAllowedDistros { .. }
+            | DiffAction::ClearAllowedDistros
     )
 }
 
@@ -1451,6 +1456,8 @@ strength = "strict"
             explicit: HashSet::from(["nginx".to_string()]),
             pinned: HashSet::new(),
             source_pin: None,
+            selection_mode: None,
+            allowed_distros: Vec::new(),
         };
 
         // Fetch the collection from cache
