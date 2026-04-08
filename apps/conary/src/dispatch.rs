@@ -136,6 +136,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             package,
             common,
             security,
+            dry_run,
             sandbox,
             dep_mode,
             yes,
@@ -149,7 +150,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                     allow_live_system_mutation,
                     Cow::Borrowed("conary update @collection"),
                     LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
-                    false,
+                    dry_run,
                 )?;
                 let name = pkg.trim_start_matches('@');
                 return commands::cmd_update_group(
@@ -157,6 +158,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                     &common.db.db_path,
                     &common.root,
                     security,
+                    dry_run,
                     sandbox_mode,
                     dep_mode,
                     yes,
@@ -167,13 +169,14 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 allow_live_system_mutation,
                 Cow::Borrowed("conary update"),
                 LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
-                false,
+                dry_run,
             )?;
             commands::cmd_update(
                 package,
                 &common.db.db_path,
                 &common.root,
                 security,
+                dry_run,
                 sandbox_mode,
                 dep_mode,
                 yes,
