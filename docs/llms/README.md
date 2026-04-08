@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-04-02
-revision: 1
+last_updated: 2026-04-07
+revision: 2
 summary: Vendor-neutral map for coding assistants working in the Conary repository
 ---
 
@@ -29,6 +29,7 @@ root guidance into a manual.
 - [`docs/modules/federation.md`](../modules/federation.md): Remi federation model and trust constraints
 - [`docs/modules/query.md`](../modules/query.md): CLI query surface and related data paths
 - [`docs/modules/recipe.md`](../modules/recipe.md): recipe/build-system background
+- [`docs/modules/source-selection.md`](../modules/source-selection.md): source-policy inputs, runtime mirrors, and replatform/update behavior
 - [`docs/operations/infrastructure.md`](../operations/infrastructure.md): MCP-first operations, deploy, and host notes
 - [`docs/llms/subsystem-map.md`](subsystem-map.md): stable "look here first" pointers distilled from legacy assistant docs
 
