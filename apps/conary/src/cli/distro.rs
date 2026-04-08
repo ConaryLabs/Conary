@@ -38,4 +38,12 @@ pub enum DistroCommands {
         #[command(flatten)]
         db: DbArgs,
     },
+    /// Change source-selection ranking mode
+    SelectionMode {
+        /// New mode: policy, latest
+        mode: String,
+
+        #[command(flatten)]
+        db: DbArgs,
+    },
 }

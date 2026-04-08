@@ -1781,6 +1781,9 @@ async fn dispatch_distro_command(distro_cmd: cli::DistroCommands) -> Result<()> 
         cli::DistroCommands::Mixing { policy, db } => {
             commands::distro::cmd_distro_mixing(&db.db_path, &policy).await
         }
+        cli::DistroCommands::SelectionMode { mode, db } => {
+            commands::distro::cmd_distro_selection_mode(&db.db_path, &mode).await
+        }
     }
 }
 
