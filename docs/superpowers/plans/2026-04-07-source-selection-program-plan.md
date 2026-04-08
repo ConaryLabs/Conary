@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Status:** Executed and merged on 2026-04-07. Keep this document for traceability; do not treat it as pending implementation work.
+
 **Goal:** Build one coherent source-selection subsystem with persistent `selection_mode` and consistent behavior across install, transitive resolution, update, and replatform/model-apply flows.
 
 **Architecture:** Treat `system.profile` as the model-layer preset surface, decompose it into explicit runtime policy state, and teach root resolution, SAT ordering, update, and replatform to consume the same effective policy instead of keeping separate source-selection logic in each path. Use Repology `status == "newest"` as the v1 latest signal, fail closed for explicit version constraints, wire `allowed_distros` into eligibility, and keep all flow-specific behavior behind one persisted effective policy mirror.

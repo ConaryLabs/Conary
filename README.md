@@ -180,22 +180,29 @@ Define desired system state in TOML. Conary computes what needs to change and ap
 
 ```toml
 # /etc/conary/system.toml
-[packages]
-include = ["nginx", "postgresql", "redis"]
+[model]
+version = 1
+install = ["nginx", "postgresql", "redis"]
 exclude = ["sendmail"]
 
-[packages.pinned]
+[pin]
 openssl = "3.0.*"
 
-[[collections]]
-name = "base-server"
-url = "https://remi.conary.io/collections/base-server.toml"
+[system]
+selection_mode = "latest"
+allowed_distros = ["fedora-43", "arch"]
+
+[system.pin]
+distro = "fedora-43"
+strength = "guarded"
 ```
 
 ```bash
 conary model diff     # What needs to change?
 conary model apply    # Make it so
 conary model check    # Drift detection (CI/CD friendly, uses exit codes)
+conary distro info
+conary distro selection-mode latest
 ```
 
 ### Content-Addressable Storage
