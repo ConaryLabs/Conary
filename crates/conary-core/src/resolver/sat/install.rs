@@ -6,6 +6,7 @@ use std::collections::HashSet;
 use std::time::Instant;
 
 use crate::error::Result;
+use crate::repository::resolution_policy::ResolutionPolicy;
 use crate::version::VersionConstraint;
 
 use super::super::provider::ConaryProvider;
@@ -14,8 +15,9 @@ use super::{SatPackage, SatSource, check_transitive_loading_limits};
 pub(super) fn build_provider_for_install<'conn>(
     conn: &'conn Connection,
     requests: &[(String, VersionConstraint)],
+    policy: &ResolutionPolicy,
 ) -> Result<ConaryProvider<'conn>> {
-    let mut provider = ConaryProvider::new(conn);
+    let mut provider = ConaryProvider::new_with_policy(conn, policy.clone());
     provider.load_installed_packages()?;
     provider.build_provides_index()?;
     provider.load_canonical_index()?;

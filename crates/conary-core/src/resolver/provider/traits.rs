@@ -235,6 +235,12 @@ impl DependencyProvider for ConaryProvider<'_> {
                 }
             }
 
+            let a_latest = self.has_positive_latest_signal(pkg_a);
+            let b_latest = self.has_positive_latest_signal(pkg_b);
+            if a_latest != b_latest {
+                return b_latest.cmp(&a_latest);
+            }
+
             // Higher repository priority is preferred
             if pkg_a.repository_priority != pkg_b.repository_priority {
                 return pkg_b.repository_priority.cmp(&pkg_a.repository_priority);
