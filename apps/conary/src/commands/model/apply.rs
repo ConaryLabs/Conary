@@ -4,13 +4,16 @@ use std::path::Path;
 
 use anyhow::{Context, Result, anyhow};
 use conary_core::db::models::{
-    DerivedOverride, DerivedPackage, DerivedPatch, DistroPin, Trove, VersionPolicy,
+    DerivedOverride, DerivedPackage, DerivedPatch, DistroPin, Trove, VersionPolicy, settings,
 };
 use conary_core::derived::{build_from_definition, persist_build_artifact};
 use conary_core::filesystem::CasStore;
 use conary_core::hash::sha256;
 use conary_core::model::parser::SystemModel;
 use conary_core::model::{DiffAction, ModelDerivedPackage};
+use conary_core::repository::{
+    SETTINGS_KEY_ALLOWED_DISTROS, SETTINGS_KEY_SELECTION_MODE, resolution_policy::SelectionMode,
+};
 use rusqlite::Connection;
 use tracing::{debug, info};
 
@@ -27,8 +30,9 @@ pub struct ApplyOptions<'a> {
     pub offline: bool,
 }
 
-/// Apply source-policy actions (`SetSourcePin` / `ClearSourcePin`) from the
-/// filtered action list. Returns the number of changes applied.
+/// Apply source-policy actions from the filtered action list.
+///
+/// Returns the number of changes applied.
 pub(super) fn apply_source_policy_changes(
     conn: &Connection,
     actions: &[&DiffAction],
@@ -47,10 +51,48 @@ pub(super) fn apply_source_policy_changes(
                 println!("Cleared source policy pin");
                 count += 1;
             }
+            DiffAction::SetSelectionMode { mode } => {
+                settings::set(
+                    conn,
+                    SETTINGS_KEY_SELECTION_MODE,
+                    selection_mode_value(*mode),
+                )?;
+                println!(
+                    "Updated source policy selection mode: {}",
+                    selection_mode_value(*mode)
+                );
+                count += 1;
+            }
+            DiffAction::ClearSelectionMode => {
+                settings::delete(conn, SETTINGS_KEY_SELECTION_MODE)?;
+                println!("Cleared source policy selection mode");
+                count += 1;
+            }
+            DiffAction::SetAllowedDistros { distros } => {
+                settings::set(
+                    conn,
+                    SETTINGS_KEY_ALLOWED_DISTROS,
+                    &serde_json::to_string(distros)?,
+                )?;
+                println!("Updated allowed source distros: {}", distros.join(", "));
+                count += 1;
+            }
+            DiffAction::ClearAllowedDistros => {
+                settings::delete(conn, SETTINGS_KEY_ALLOWED_DISTROS)?;
+                println!("Cleared allowed source distros");
+                count += 1;
+            }
             _ => {}
         }
     }
     Ok(count)
+}
+
+fn selection_mode_value(mode: SelectionMode) -> &'static str {
+    match mode {
+        SelectionMode::Policy => "policy",
+        SelectionMode::Latest => "latest",
+    }
 }
 
 /// Apply package install/remove actions. Currently stubs that print a
