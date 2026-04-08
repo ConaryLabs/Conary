@@ -1051,9 +1051,11 @@ mod tests {
         let state = SystemState::new();
         let diff = compute_diff(&model, &state);
 
-        assert!(diff.warnings.iter().any(|warning| {
-            warning.contains("package realignment is still pending")
-        }));
+        assert!(
+            diff.warnings
+                .iter()
+                .any(|warning| { warning.contains("package realignment is still pending") })
+        );
     }
 
     #[test]
@@ -1068,9 +1070,12 @@ mod tests {
         let state = SystemState::new();
         let diff = compute_diff(&model, &state);
 
-        assert!(!diff.warnings.iter().any(|warning| {
-            warning.contains("package realignment is still pending")
-        }));
+        assert!(
+            !diff
+                .warnings
+                .iter()
+                .any(|warning| { warning.contains("package realignment is still pending") })
+        );
     }
 
     #[test]
