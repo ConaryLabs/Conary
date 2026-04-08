@@ -9,10 +9,12 @@ use crate::db::models::{
     RepositoryRequirement, SystemAffinity, Trove,
 };
 use crate::error::Result;
+use crate::repository::load_effective_policy;
+use crate::repository::resolution_policy::RequestScope;
 use crate::repository::selector::{PackageSelector, SelectionOptions};
 use crate::repository::versioning::{
-    RepoVersionConstraint, VersionScheme, compare_repo_package_versions, infer_version_scheme,
-    parse_repo_constraint, repo_version_satisfies,
+    RepoVersionConstraint, VersionScheme, infer_version_scheme, parse_repo_constraint,
+    repo_version_satisfies,
 };
 
 use super::diff::{DiffAction, ReplatformEstimate};
@@ -95,33 +97,24 @@ fn candidate_target_package(
     trove: &Trove,
     target_distro: &str,
 ) -> Result<Option<RepositoryPackage>> {
-    let repo_packages = RepositoryPackage::find_by_name(conn, &trove.name)?;
-    let mut candidates = Vec::new();
+    let mut effective_policy = load_effective_policy(conn, RequestScope::Any)?;
+    effective_policy.resolution.allowed_distros = vec![target_distro.to_string()];
 
-    for repo_pkg in repo_packages {
-        if repo_pkg.architecture != trove.architecture && repo_pkg.architecture.is_some() {
-            continue;
-        }
+    let options = SelectionOptions {
+        architecture: trove.architecture.clone(),
+        policy: Some(effective_policy.resolution),
+        is_root: false,
+        primary_flavor: None,
+        ..SelectionOptions::default()
+    };
 
-        let Some(repo) = Repository::find_by_id(conn, repo_pkg.repository_id)? else {
-            continue;
-        };
-        if repo.default_strategy_distro.as_deref() == Some(target_distro) {
-            candidates.push((repo_pkg, repo));
-        }
+    let candidates = PackageSelector::search_packages(conn, &trove.name, &options)?;
+    if candidates.is_empty() {
+        return Ok(None);
     }
 
-    candidates.sort_by(|(pkg_a, repo_a), (pkg_b, repo_b)| {
-        compare_repo_package_versions(pkg_a, repo_a, pkg_b, repo_b)
-            .map(|ord| ord.reverse())
-            .unwrap_or_else(|| {
-                repo_b
-                    .name
-                    .cmp(&repo_a.name)
-                    .then_with(|| pkg_b.version.cmp(&pkg_a.version))
-            })
-    });
-    Ok(candidates.into_iter().next().map(|(pkg, _)| pkg))
+    let selected = PackageSelector::select_best_with_options(conn, candidates, &options)?;
+    Ok(Some(selected.package))
 }
 
 fn install_route_for_target(
@@ -910,6 +903,88 @@ mod tests {
 
         assert_eq!(snapshot.visible_realignment_candidates, 1);
         assert_eq!(snapshot.visible_realignment_proposals[0].package, "demo");
+        assert_eq!(
+            snapshot.visible_realignment_proposals[0].target_version,
+            "1.0"
+        );
+    }
+
+    #[test]
+    fn test_source_policy_replatform_snapshot_uses_shared_selector_priority_ordering() {
+        let (_temp, conn) = create_test_db();
+
+        let mut fedora_repo = Repository::new(
+            "fedora".to_string(),
+            "https://example.test/fedora".to_string(),
+        );
+        fedora_repo.default_strategy_distro = Some("fedora-43".to_string());
+        let fedora_repo_id = fedora_repo.insert(&conn).unwrap();
+
+        let mut fedora_label = LabelEntry::new(
+            "fedora".to_string(),
+            "f43".to_string(),
+            "stable".to_string(),
+        );
+        fedora_label.repository_id = Some(fedora_repo_id);
+        let fedora_label_id = fedora_label.insert(&conn).unwrap();
+
+        let mut installed = Trove::new_with_source(
+            "demo".to_string(),
+            "0.9".to_string(),
+            TroveType::Package,
+            InstallSource::Repository,
+        );
+        installed.label_id = Some(fedora_label_id);
+        installed.architecture = Some("x86_64".to_string());
+        installed.insert(&conn).unwrap();
+
+        let mut arch_priority_repo = Repository::new(
+            "arch-priority".to_string(),
+            "https://example.test/arch-priority".to_string(),
+        );
+        arch_priority_repo.default_strategy_distro = Some("arch".to_string());
+        arch_priority_repo.priority = 100;
+        let arch_priority_repo_id = arch_priority_repo.insert(&conn).unwrap();
+
+        let mut arch_latest_repo = Repository::new(
+            "arch-latest".to_string(),
+            "https://example.test/arch-latest".to_string(),
+        );
+        arch_latest_repo.default_strategy_distro = Some("arch".to_string());
+        arch_latest_repo.priority = 10;
+        let arch_latest_repo_id = arch_latest_repo.insert(&conn).unwrap();
+
+        let mut priority_pkg = RepositoryPackage::new(
+            arch_priority_repo_id,
+            "demo".to_string(),
+            "1.0".to_string(),
+            "sha256:priority".to_string(),
+            111,
+            "https://example.test/arch-priority/demo-1.0.pkg.tar.zst".to_string(),
+        );
+        priority_pkg.architecture = Some("x86_64".to_string());
+        priority_pkg.insert(&conn).unwrap();
+
+        let mut latest_pkg = RepositoryPackage::new(
+            arch_latest_repo_id,
+            "demo".to_string(),
+            "2.0".to_string(),
+            "sha256:latest".to_string(),
+            222,
+            "https://example.test/arch-latest/demo-2.0.pkg.tar.zst".to_string(),
+        );
+        latest_pkg.architecture = Some("x86_64".to_string());
+        latest_pkg.insert(&conn).unwrap();
+
+        let snapshot = source_policy_replatform_snapshot(&conn, "arch").unwrap();
+
+        assert_eq!(snapshot.visible_realignment_candidates, 1);
+        assert_eq!(
+            snapshot.visible_realignment_proposals[0]
+                .target_repository
+                .as_deref(),
+            Some("arch-priority")
+        );
         assert_eq!(
             snapshot.visible_realignment_proposals[0].target_version,
             "1.0"
