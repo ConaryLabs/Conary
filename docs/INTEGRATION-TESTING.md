@@ -125,18 +125,24 @@ cleanly with an explicit message rather than pretending it is production-ready.
 | B | T177-T195 | Label, model, collection, derive |
 | C | T196-T213 | CCS, bootstrap, cache, query, repo management |
 | D | T221-T255 | Provenance, capability, trust, system ops, federation, automation |
-| E | T230-T251 | Cross-distro compatibility |
+| E | T230-T251 | Cross-distro compatibility overlay: native package parity, distro policy, replatform, and takeover |
 
 Phase 4 is intentionally mixed:
 
 - Positive-path coverage proves real flows such as tracked-config backup/restore,
-  label mutation, trigger mutation, `ccs shell`, `ccs run`, selective CCS
-  component installs, native local RPM/DEB/Arch installs, TUF bootstrap with a
-  signed test root, provenance diff, pinned-fingerprint federation peers,
+  the `conary distro` command family, label mutation, trigger mutation,
+  `ccs shell`, `ccs run`, selective CCS component installs, native local
+  RPM/DEB/Arch installs, TUF bootstrap with a signed test root, provenance
+  diff, pinned-fingerprint federation peers, model-driven replatform apply,
   ready-to-activate takeover, and the cross-distro takeover ownership ladder.
 - Preview-only flows are still exercised, but the assertions check for the
   expected explanatory output. Current examples are automation history and
   persisting automation configuration changes.
+
+Group E is intentionally richer than a simple “portability” smoke test. It
+covers canonical mapping, distro pinning and mixing behavior, source-policy
+replatform planning and apply flows, takeover across distro boundaries, and
+native-format package handling on the host distro.
 
 In addition to the container-backed suites, `tests/bootstrap_workflow.rs`
 exercises the `conary` binary directly for manifest-run record loading,

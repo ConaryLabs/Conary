@@ -520,6 +520,7 @@ Removal respects dependencies: if other packages depend on the one being removed
 
 ```bash
 conary update                    # Update all packages
+conary update --dry-run          # Preview updates and any source switches
 conary update nginx --allow-live-system-mutation              # Update just nginx
 conary update @web-stack --allow-live-system-mutation         # Update all members of a collection
 conary update --security --allow-live-system-mutation         # Only security updates (critical/important)
@@ -528,6 +529,13 @@ conary update --security --allow-live-system-mutation         # Only security up
 The update command checks configured repositories for newer versions of installed packages. When no package is specified, all installed packages are checked.
 
 Security-only updates (`--security`) filter for packages with `critical` or `important` severity advisories, allowing rapid patching without changing other packages.
+
+Update candidate selection now depends on the effective source policy. In
+`policy` mode, Conary stays biased toward the currently installed source. In
+`latest` mode, it may switch to a different allowed source when that source has
+the strongest newest-available signal. Use `conary update --dry-run` to preview
+source switches before applying them. If an update would switch sources,
+Conary requires confirmation unless `--yes` is supplied.
 
 ### 2.5 Searching and Listing
 
@@ -842,6 +850,29 @@ conary repo add remi-fed https://remi.conary.io \
 | `remi` | Convert packages on-the-fly via a Remi server |
 | `legacy` | Same as binary (uses `repository_packages` table) |
 
+#### Source Policy and Distro Selection
+
+Conary also exposes a lightweight source-policy surface for choosing which
+distros or repositories are eligible and how allowed candidates should be
+ranked:
+
+```bash
+conary distro set fedora-43 --mixing guarded
+conary distro mixing permissive
+conary distro selection-mode latest
+conary distro info
+```
+
+- `distro set` establishes the preferred source and mixing policy
+- `mixing` changes eligibility rules for cross-distro dependency resolution
+- `selection-mode` changes ranking among already-allowed candidates
+- `distro info` shows the effective ranking mode and any known source-affinity
+  statistics
+
+In current builds, `selection-mode=latest` means “prefer the newest allowed
+candidate according to the Repology-backed latest signal,” not “ignore
+eligibility and mix everything.”
+
 ### 2.14 Configuration File Management
 
 Conary tracks configuration files (`/etc/*`) separately from other package files. This enables three-way merge during updates and dedicated backup/restore workflows.
@@ -1050,6 +1081,17 @@ kernel = "6.12.*"
 # Optional packages (install if available, no error if missing)
 [optional]
 packages = ["nginx-module-geoip", "redis-sentinel"]
+
+# Source policy and convergence
+[system]
+profile = "balanced/latest-anywhere"
+selection_mode = "latest"
+allowed_distros = ["fedora-43", "arch"]
+convergence = "track-only"
+
+[system.pin]
+distro = "fedora-43"
+strength = "guarded"
 ```
 
 #### Model Sections
@@ -1059,6 +1101,7 @@ packages = ["nginx-module-geoip", "redis-sentinel"]
 | `[model]` | Core config: version, search path, install list, exclude list |
 | `[pin]` | Version constraints for specific packages |
 | `[optional]` | Packages to install if available (soft requirements) |
+| `[system]` | Source policy, convergence intent, and compatibility source pinning |
 | `[[derive]]` | Derived package definitions (customized variants) |
 | `[include]` | Remote model includes (composition from upstream) |
 | `[automation]` | Automated maintenance policies |
@@ -1107,6 +1150,10 @@ The diff engine computes these action types:
 | `MarkDependency` | Explicit package should be marked as dependency |
 | `BuildDerived` | Derived package needs to be built |
 | `RebuildDerived` | Derived package is stale (parent updated) |
+| `SetSourcePin` / `ClearSourcePin` | Persist or clear the effective source pin |
+| `SetSelectionMode` / `ClearSelectionMode` | Persist or clear the source-selection ranking mode |
+| `SetAllowedDistros` / `ClearAllowedDistros` | Persist or clear the runtime allowlist |
+| `ReplatformReplace` | Replace an installed package with a target-distro implementation |
 
 ### 3.3 Apply: Sync System to Model
 
@@ -1122,6 +1169,12 @@ conary model apply --offline               # Use cached remote data only
 Apply performs the diff and then executes all actions as a single atomic changeset. If anything fails, the entire operation rolls back.
 
 The `--strict` flag is important: without it, packages not mentioned in the model are left alone. With `--strict`, any package not in the install list (and not a dependency of something in the list) is removed. This is the "cattle, not pets" mode for managed servers.
+
+When a diff includes source-policy changes, `model apply` persists the policy
+mirror first and then executes any replatform transactions that are already
+executable through the shared install path. Transactions that are blocked by
+missing metadata, unresolved target dependencies, or missing exact-version
+routes remain visible in the rendered plan for later review.
 
 ### 3.4 Check: Drift Detection
 
@@ -4866,20 +4919,31 @@ The `SystemModel` parser reads the TOML and resolves all includes into a flat `R
 
 ```rust
 pub struct SystemModel {
-    pub system: SystemSection,
-    pub packages: PackageSection,
-    pub collections: Vec<CollectionRef>,
+    pub config: ModelConfig,
+    pub pin: HashMap<String, String>,
+    pub optional: OptionalConfig,
+    pub derive: Vec<DerivedPackage>,
+    pub include: IncludeConfig,
     pub automation: AutomationConfig,
-    pub federation: Option<FederationConfig>,
+    pub federation: FederationConfig,
+    pub system: SystemConfig,
+    pub overrides: HashMap<String, PackageOverrideConfig>,
 }
 
 pub struct ResolvedModel {
-    pub packages: BTreeSet<String>,     // All packages (direct + from collections)
-    pub excluded: BTreeSet<String>,     // Explicitly excluded
-    pub pinned: BTreeMap<String, String>, // Version pins
-    pub automation: AutomationConfig,
+    pub install: Vec<String>,              // Final install list
+    pub pins: HashMap<String, String>,     // Merged version pins
+    pub optionals: Vec<String>,            // Soft requirements
+    pub exclude: Vec<String>,              // Explicit excludes
+    pub search: Vec<String>,               // Search path from the local model
+    pub sources: HashMap<String, String>,  // Package -> layer/debug source
+    pub layers: Vec<ModelLayer>,           // Composition precedence
 }
 ```
+
+These snippets are intentionally pedagogical. They show the important shapes
+without reproducing every helper field or serde-specific detail from the real
+implementation.
 
 Resolution follows a layered composition model. Collections are fetched (with Ed25519 signature verification) and merged:
 
@@ -4920,19 +4984,29 @@ The `ModelDiff` computes the difference between the current system state and the
 
 ```rust
 pub enum DiffAction {
-    Install(String),              // Package not installed, model wants it
-    Remove(String),               // Package installed, model excludes it
-    Upgrade(String, String, String), // Version differs (name, current, target)
-    Downgrade(String, String, String),
-    Pin(String, String),          // Add version pin
-    Unpin(String),                // Remove version pin
-    CollectionAdd(String),        // New collection to track
-    CollectionRemove(String),     // Collection no longer referenced
-    ConfigChange(String, String, String), // Config key changed (key, old, new)
+    SetSourcePin { distro: String, strength: Option<String> },
+    ClearSourcePin,
+    SetSelectionMode { mode: SelectionMode },
+    ClearSelectionMode,
+    SetAllowedDistros { distros: Vec<String> },
+    ClearAllowedDistros,
+    ReplatformReplace { package: String, target_distro: String, target_version: String, /* ... */ },
+    Install { package: String, pin: Option<String>, optional: bool },
+    Remove { package: String, current_version: String, architectures: Vec<String> },
+    Update { package: String, current_version: String, target_version: String },
+    Pin { package: String, pattern: String },
+    Unpin { package: String },
+    MarkExplicit { package: String },
+    MarkDependency { package: String },
+    BuildDerived { name: String, parent: String, needs_parent: bool },
+    RebuildDerived { name: String, parent: String },
 }
 ```
 
-Nine action types. The diff is a complete description of what needs to change to reach the desired state. It can be displayed for review or applied automatically.
+The real enum includes source-policy mirror changes and replatform replacement
+actions in addition to the familiar install, remove, pin, and derived-package
+paths. The diff is the complete description of what needs to change to reach
+the desired state and can be displayed for review or applied automatically.
 
 #### System State Capture
 

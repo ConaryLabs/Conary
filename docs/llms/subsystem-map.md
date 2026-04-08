@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-04-07
-revision: 2
-summary: Stable subsystem pointers and durable assistant-facing guidance for the Conary workspace after the daemon boundary refactor
+revision: 3
+summary: Stable subsystem pointers and durable assistant-facing guidance for the Conary workspace after the source-selection and replatform execution refresh
 ---
 
 # Assistant Subsystem Map
@@ -20,6 +20,13 @@ summary: Stable subsystem pointers and durable assistant-facing guidance for the
 
 - Repository sync, remote metadata, chunk retrieval, and Remi client behavior:
   `crates/conary-core/src/repository/`
+- Source selection, runtime policy mirrors, and replatform convergence:
+  `crates/conary-core/src/repository/effective_policy.rs`,
+  `crates/conary-core/src/model/parser.rs`,
+  `crates/conary-core/src/model/replatform.rs`,
+  `apps/conary/src/commands/distro.rs`,
+  `apps/conary/src/commands/update.rs`, and
+  `apps/conary/src/commands/model.rs`
 - Dependency resolution and package candidate ranking:
   `crates/conary-core/src/resolver/sat.rs`,
   `crates/conary-core/src/resolver/provider/`, and
@@ -84,6 +91,7 @@ summary: Stable subsystem pointers and durable assistant-facing guidance for the
 - [`docs/modules/bootstrap.md`](../modules/bootstrap.md) for bootstrap and stage flows
 - [`docs/modules/recipe.md`](../modules/recipe.md) for recipe/build-system behavior
 - [`docs/modules/query.md`](../modules/query.md) for query-oriented CLI flows
+- [`docs/modules/source-selection.md`](../modules/source-selection.md) for source-policy, ranking, and replatform behavior
 
 ## Freshness Notes
 
