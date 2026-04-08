@@ -83,10 +83,10 @@ pub use parser::{
     parse_model_file,
 };
 pub use replatform::{
-    ReplatformBlockedReason, ReplatformExecutionPlan, ReplatformExecutionTransaction,
-    SourcePolicyReplatformSnapshot, VisibleRealignmentCandidates, VisibleRealignmentProposal,
-    planned_replatform_actions, replatform_estimate_from_affinities, replatform_execution_plan,
-    source_policy_replatform_snapshot, visible_realignment_candidates,
+    ReplatformBlockedReason, ReplatformExecutionLeg, ReplatformExecutionPlan,
+    ReplatformExecutionTransaction, SourcePolicyReplatformSnapshot, VisibleRealignmentCandidates,
+    VisibleRealignmentProposal, planned_replatform_actions, replatform_estimate_from_affinities,
+    replatform_execution_plan, source_policy_replatform_snapshot, visible_realignment_candidates,
 };
 pub use state::{InstalledPackage, SystemState, capture_current_state, snapshot_to_model};
 
