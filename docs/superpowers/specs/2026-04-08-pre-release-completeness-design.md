@@ -1,7 +1,7 @@
 # Pre-Release Completeness: Design Spec
 
 **Date:** 2026-04-08  
-**Status:** Approved (rev 3 -- incorporates second Codex review)  
+**Status:** Approved (rev 4 -- incorporates third Codex review)  
 **Goal:** Close every stub, dead-end, and misleading exit code in the CLI before
 public announcement. Implementation order is bottom-up: user-facing mutators
 first, then automation, then stubs, then infrastructure.
@@ -11,8 +11,8 @@ first, then automation, then stubs, then infrastructure.
 ## Phase 1: Model Apply + State Revert
 
 These are the two flagship features shown in the README that don't work.
-They share the same prerequisite work (batch-mode install/remove, live-host
-safety gate) so they belong in the same phase.
+They share the same prerequisite work (extracted inner install/remove helpers,
+live-host safety gate, architecture selector) so they belong in the same phase.
 
 ### Problem
 
@@ -105,8 +105,10 @@ version is how updates work in this codebase.
 
 #### Autoremove step (model.rs:574)
 
-Replace stub with `cmd_autoremove(db_path, root, sandbox_mode).await`. Only
-runs when `opts.autoremove` is true (already gated).
+Replace stub with `cmd_autoremove(db_path, root, dry_run, no_scripts,
+sandbox_mode).await` (matching the real signature at `remove.rs:366`). Only
+runs when `opts.autoremove` is true (already gated). `dry_run` comes from
+`opts.dry_run`, `no_scripts` defaults to `false`.
 
 #### Exit code
 
@@ -127,21 +129,29 @@ explicit error listing what couldn't be restored and why.
 
 #### Implementation (state.rs, replacing bail at line 215)
 
-1. Open a DB transaction and create one wrapping changeset:
+State revert must own the `TransactionEngine` lifecycle that `cmd_install`
+and `cmd_remove` normally own individually. This matches the existing mutation
+model (`install/mod.rs:1460-1479`, `remove.rs:113-117`).
+
+1. Create `TransactionEngine` from `TransactionConfig::from_paths(root, db_path)`.
+2. Call `engine.recover(conn)` to clean up any incomplete transactions from
+   prior crashes.
+3. Call `engine.begin()` to acquire the mutation lock.
+4. Open a DB transaction and create one wrapping changeset:
    `"Revert to state {N}"`.
-2. Execute removals first: `remove_inner(conn, changeset_id, ...)` for each
-   entry in `plan.to_remove`, with `architecture` from `StateMember`.
-3. Execute installs: resolve the package from repositories (for version and
+5. Execute removals: `remove_inner(conn, changeset_id, ...)` for each entry
+   in `plan.to_remove`, with `architecture` from `StateMember`.
+6. Execute installs: resolve the package from repositories (for version and
    CAS content), then `install_inner(conn, changeset_id, ...)` for each
    `plan.to_install`, with target version and architecture.
-4. Execute upgrades: `install_inner(conn, changeset_id, ...)` with target
+7. Execute upgrades: `install_inner(conn, changeset_id, ...)` with target
    version for each `plan.to_upgrade`.
-5. If all operations succeeded: commit the transaction, call
+8. If all operations succeeded: commit the DB transaction, call
    `rebuild_and_mount()` once, create one state snapshot via
    `StateEngine::create_snapshot()` with summary `"Reverted to state {N}"`.
-6. On any failure: roll back the transaction and report what failed.
-   No `rebuild_and_mount()`, no snapshot. All-or-nothing at the DB/generation
-   level.
+9. Call `engine.release_lock()`.
+10. On any failure: roll back the DB transaction, release the lock, and report
+    what failed. No `rebuild_and_mount()`, no snapshot.
 
 **Atomicity scope:** DB state and generation image are atomic. Scriptlet
 side-effects (pre-remove scripts that partially execute) are not rollback-safe.
@@ -207,7 +217,8 @@ pub enum ActionPayload {
     /// Remove packages (names already in PendingAction.packages).
     RemovePackages,
     /// Restore packages with corrupted/missing files from CAS.
-    RepairPackages,
+    /// Package names are in PendingAction.packages (one action per package).
+    RestorePackage,
 }
 ```
 
@@ -245,7 +256,25 @@ pub struct ActionPlan {
 | Updates | `UpdatePackage { target_version }` | `PlannedOp::Install` per package with version |
 | MajorUpgrades | `UpdatePackage { target_version }` | `PlannedOp::Install` per package with version |
 | Orphans | `RemovePackages` | `PlannedOp::Remove` per package |
-| Repair | `RepairFiles { paths }` | `PlannedOp::Restore` per package (see below) |
+| Repair | `RestorePackage` | `PlannedOp::Restore` per package (see below) |
+
+#### Repair: group by package in check.rs
+
+Current code in `check.rs:465-477` detects corrupted files as raw paths and
+emits a single repair action with `package: None`. This doesn't map to the
+package-level `cmd_restore` path.
+
+Change `check_integrity()` to:
+1. Query `files` joined with `troves` (`SELECT t.name, f.path, f.sha256_hash
+   FROM files f JOIN troves t ON f.trove_id = t.id`) so each corrupted file
+   is associated with its owning package.
+2. Group corrupted files by package name.
+3. Emit one `PendingAction` per affected package, with
+   `packages: vec![package_name]`, `payload: ActionPayload::RestorePackage`,
+   and `details` listing the corrupted file paths for display.
+
+This gives the planner one `PlannedOp::Restore { package }` per package, which
+the CLI dispatches to `cmd_restore(package_name, ...)`.
 
 #### MajorUpgrades: wire end-to-end
 
@@ -262,13 +291,10 @@ Wire MajorUpgrades through all CLI paths:
 - `automation check` prints MajorUpgrades actions alongside other categories
 - Daemon summary includes MajorUpgrades in its reporting
 
-#### Repair: use existing restore path
+#### Repair: delegate to existing cmd_restore
 
-The spec's `VerifyAndRestore` should not invent a parallel restore mechanism.
 Conary already has `cmd_restore` (`restore.rs:21`) and `cmd_restore_all`
 (`restore.rs:129`) which verify CAS presence, rebuild EROFS, and remount.
-
-Change `PlannedOp::VerifyAndRestore` to `PlannedOp::Restore`:
 
 ```rust
 pub enum PlannedOp {
@@ -278,10 +304,9 @@ pub enum PlannedOp {
 }
 ```
 
-The CLI layer dispatches `Restore` to a helper extracted from `cmd_restore`
-(the package-level restore that checks CAS, rebuilds, and remounts). This
-keeps repair tied to Conary's existing restore semantics rather than creating
-a separate verify-and-copy path.
+The CLI layer dispatches `PlannedOp::Restore { package }` to
+`cmd_restore(package, db_path, root, force: true, dry_run: false)`. This
+keeps repair tied to Conary's existing restore semantics.
 
 #### CLI-side execution and history logging
 
@@ -336,13 +361,12 @@ Background daemonization (double-fork, setsid) is not worth implementing when
 the supported deployment model is systemd service management. The current CLI
 help says "Run automation daemon in background" which is misleading.
 
-Change the CLI help text (`cli/automation.rs:112`) to:
-`"Run automation daemon (foreground; use systemd for background)"`
-
-Remove the `--foreground` flag (it becomes the only mode). When `--foreground`
-is absent, print a clear message directing users to systemd instead of bailing
-with a generic error. Or simply remove the flag entirely since foreground is
-the only option.
+Concrete change:
+- Change the CLI help text (`cli/automation.rs:112`) to:
+  `"Run automation daemon (use systemd for background operation)"`
+- Remove the `--foreground` flag entirely -- foreground is the only mode.
+- Remove the `if !foreground` bail in `cmd_automation_daemon`
+  (`automation.rs:426-431`).
 
 ### Files to modify
 
