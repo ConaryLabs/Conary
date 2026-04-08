@@ -6,18 +6,27 @@ use crate::commands::replatform_rendering::render_replatform_blocked_reason;
 use crate::commands::{InstallOptions, SandboxMode, cmd_install};
 use anyhow::{Context, Result, anyhow};
 use conary_core::db::models::{
-    DerivedOverride, DerivedPackage, DerivedPatch, DistroPin, Trove, VersionPolicy, settings,
+    DerivedOverride, DerivedPackage, DerivedPatch, DistroPin, Repository, Trove, VersionPolicy,
+    settings,
 };
 use conary_core::derived::{build_from_definition, persist_build_artifact};
 use conary_core::filesystem::CasStore;
 use conary_core::hash::sha256;
 use conary_core::model::parser::SystemModel;
 use conary_core::model::{DiffAction, ModelDerivedPackage, replatform_execution_plan};
+use conary_core::repository::versioning::{VersionScheme, infer_version_scheme};
 use conary_core::repository::{
     SETTINGS_KEY_ALLOWED_DISTROS, SETTINGS_KEY_SELECTION_MODE, resolution_policy::SelectionMode,
 };
 use rusqlite::Connection;
+#[cfg(test)]
+use std::cell::Cell;
 use tracing::{debug, info};
+
+#[cfg(test)]
+thread_local! {
+    static REPLATFORM_METADATA_FAILPOINT: Cell<bool> = const { Cell::new(false) };
+}
 
 /// Options for `cmd_model_apply`, replacing the former 8-argument signature.
 pub struct ApplyOptions<'a> {
@@ -150,13 +159,16 @@ pub(super) async fn apply_replatform_changes(
             continue;
         };
 
+        let current_source = {
+            let conn = rusqlite::Connection::open(db_path)?;
+            find_current_replatform_source(&conn, &transaction)?
+                .or_else(|| transaction.current_distro.clone())
+                .unwrap_or_else(|| "unknown source".to_string())
+        };
+
         let selection_reason = format!(
             "Replatformed from {} to {} by model apply",
-            transaction
-                .current_distro
-                .as_deref()
-                .unwrap_or("unknown source"),
-            transaction.target_distro
+            current_source, transaction.target_distro
         );
 
         match cmd_install(
@@ -183,17 +195,174 @@ pub(super) async fn apply_replatform_changes(
         .await
         {
             Ok(()) => {
-                println!(
-                    "Executed replatform replacement: {} -> {} {}",
-                    transaction.package, transaction.target_distro, transaction.target_version
-                );
-                executed += 1;
+                let conn = rusqlite::Connection::open(db_path)?;
+                match finalize_replatform_provenance(&conn, &transaction, &selection_reason) {
+                    Ok(()) => {
+                        println!(
+                            "Executed replatform replacement: {} -> {} {}",
+                            transaction.package,
+                            transaction.target_distro,
+                            transaction.target_version
+                        );
+                        executed += 1;
+                    }
+                    Err(err) => {
+                        let marker = format!("Replatform partial failure after install: {}", err);
+                        let failure = format!(
+                            "Replatform '{}': failed to finalize replatform metadata: {}",
+                            transaction.package, err
+                        );
+                        if let Err(marker_err) =
+                            mark_replatform_partial_failure(&conn, &transaction, &marker)
+                        {
+                            errors.push(format!(
+                                "{failure}; additionally failed to record partial failure state: {marker_err}"
+                            ));
+                        } else {
+                            errors.push(failure);
+                        }
+                    }
+                }
             }
             Err(err) => errors.push(format!("Replatform '{}': {}", transaction.package, err)),
         }
     }
 
     Ok((executed, errors))
+}
+
+fn finalize_replatform_provenance(
+    conn: &Connection,
+    transaction: &conary_core::model::ReplatformExecutionTransaction,
+    selection_reason: &str,
+) -> Result<()> {
+    maybe_fail_replatform_metadata_for_test()?;
+    let repository_name = transaction
+        .install_repository
+        .as_deref()
+        .ok_or_else(|| anyhow!("missing install repository metadata"))?;
+    let repository = Repository::find_by_name(conn, repository_name)?
+        .ok_or_else(|| anyhow!("missing repository '{repository_name}' for replatform install"))?;
+    let repository_id = repository
+        .id
+        .ok_or_else(|| anyhow!("repository '{repository_name}' missing id"))?;
+    let version_scheme = infer_version_scheme(&repository)
+        .ok_or_else(|| anyhow!("unable to infer version scheme for '{repository_name}'"))?;
+    let installed = find_installed_replatform_trove(conn, transaction)?;
+    let installed_id = installed.id.ok_or_else(|| {
+        anyhow!(
+            "installed replatform trove '{}' missing id",
+            transaction.package
+        )
+    })?;
+
+    Trove::update_replatform_metadata(
+        conn,
+        installed_id,
+        &transaction.target_distro,
+        version_scheme_to_str(version_scheme),
+        repository_id,
+        selection_reason,
+    )?;
+
+    Ok(())
+}
+
+fn find_installed_replatform_trove(
+    conn: &Connection,
+    transaction: &conary_core::model::ReplatformExecutionTransaction,
+) -> Result<Trove> {
+    let matches = Trove::find_by_name(conn, &transaction.package)?
+        .into_iter()
+        .filter(|trove| trove.version == transaction.target_version)
+        .collect::<Vec<_>>();
+
+    if let Some(expected_arch) = transaction.architecture.as_deref()
+        && let Some(installed) = matches.iter().find(|trove| {
+            trove.architecture.as_deref() == Some(expected_arch)
+                || trove.architecture.as_deref().is_none()
+        })
+    {
+        return Ok(installed.clone());
+    }
+
+    match matches.as_slice() {
+        [installed] => Ok(installed.clone()),
+        [] => Err(anyhow!(
+            "installed replatform trove '{}' not found",
+            transaction.package
+        )),
+        _ => Err(anyhow!(
+            "installed replatform trove '{}' is ambiguous after install",
+            transaction.package
+        )),
+    }
+}
+
+fn find_current_replatform_source(
+    conn: &Connection,
+    transaction: &conary_core::model::ReplatformExecutionTransaction,
+) -> Result<Option<String>> {
+    let matches = Trove::find_by_name(conn, &transaction.package)?
+        .into_iter()
+        .filter(|trove| trove.version == transaction.current_version)
+        .collect::<Vec<_>>();
+
+    if let Some(expected_arch) = transaction.current_architecture.as_deref()
+        && let Some(installed) = matches.iter().find(|trove| {
+            trove.architecture.as_deref() == Some(expected_arch)
+                || trove.architecture.as_deref().is_none()
+        })
+    {
+        return Ok(installed.source_distro.clone());
+    }
+
+    Ok(matches
+        .into_iter()
+        .next()
+        .and_then(|trove| trove.source_distro))
+}
+
+fn version_scheme_to_str(scheme: VersionScheme) -> &'static str {
+    match scheme {
+        VersionScheme::Rpm => "rpm",
+        VersionScheme::Debian => "debian",
+        VersionScheme::Arch => "arch",
+    }
+}
+
+fn mark_replatform_partial_failure(
+    conn: &Connection,
+    transaction: &conary_core::model::ReplatformExecutionTransaction,
+    selection_reason: &str,
+) -> Result<()> {
+    let installed = find_installed_replatform_trove(conn, transaction)?;
+    let installed_id = installed.id.ok_or_else(|| {
+        anyhow!(
+            "installed replatform trove '{}' missing id",
+            transaction.package
+        )
+    })?;
+    Trove::update_selection_reason(conn, installed_id, selection_reason)?;
+    Ok(())
+}
+
+#[cfg(test)]
+pub(super) fn set_replatform_metadata_failpoint_for_test(enabled: bool) {
+    REPLATFORM_METADATA_FAILPOINT.with(|failpoint| failpoint.set(enabled));
+}
+
+#[cfg(test)]
+fn maybe_fail_replatform_metadata_for_test() -> Result<()> {
+    if REPLATFORM_METADATA_FAILPOINT.with(Cell::get) {
+        return Err(anyhow!("injected replatform metadata failure"));
+    }
+    Ok(())
+}
+
+#[cfg(not(test))]
+fn maybe_fail_replatform_metadata_for_test() -> Result<()> {
+    Ok(())
 }
 
 /// Apply package install/remove actions. Currently stubs that print a
