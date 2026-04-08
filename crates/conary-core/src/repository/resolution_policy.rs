@@ -61,6 +61,22 @@ pub enum DependencyMixingPolicy {
 }
 
 // ---------------------------------------------------------------------------
+// Selection mode
+// ---------------------------------------------------------------------------
+
+/// How allowed candidates should be ranked once eligibility is established.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SelectionMode {
+    /// Preserve existing ranking behavior.
+    #[default]
+    Policy,
+
+    /// Prefer the newest allowed candidate according to a higher-level signal.
+    Latest,
+}
+
+// ---------------------------------------------------------------------------
 // Policy rule scope
 // ---------------------------------------------------------------------------
 
@@ -125,6 +141,12 @@ pub struct ResolutionPolicy {
     /// How cross-distro dependency mixing is handled.
     pub mixing: DependencyMixingPolicy,
 
+    /// How allowed candidates should be ranked.
+    pub selection_mode: SelectionMode,
+
+    /// Optional allowlist for distro/repository identifiers.
+    pub allowed_distros: Vec<String>,
+
     /// Policy exception rules (evaluated in priority order).
     pub profiles: Vec<SourceSelectionProfile>,
 }
@@ -134,6 +156,8 @@ impl Default for ResolutionPolicy {
         Self {
             request_scope: RequestScope::Any,
             mixing: DependencyMixingPolicy::Strict,
+            selection_mode: SelectionMode::Policy,
+            allowed_distros: Vec::new(),
             profiles: Vec::new(),
         }
     }
@@ -157,6 +181,20 @@ impl ResolutionPolicy {
     #[must_use]
     pub fn with_mixing(mut self, mixing: DependencyMixingPolicy) -> Self {
         self.mixing = mixing;
+        self
+    }
+
+    /// Set the selection mode.
+    #[must_use]
+    pub fn with_selection_mode(mut self, selection_mode: SelectionMode) -> Self {
+        self.selection_mode = selection_mode;
+        self
+    }
+
+    /// Set an explicit allowlist for distro/repository identifiers.
+    #[must_use]
+    pub fn with_allowed_distros(mut self, allowed_distros: Vec<String>) -> Self {
+        self.allowed_distros = allowed_distros;
         self
     }
 
@@ -189,6 +227,15 @@ impl ResolutionPolicy {
         is_root: bool,
         primary_flavor: Option<RepositoryDependencyFlavor>,
     ) -> bool {
+        if !self.allowed_distros.is_empty()
+            && !self
+                .allowed_distros
+                .iter()
+                .any(|allowed| allowed == repository_name)
+        {
+            return false;
+        }
+
         // Step 1: Check request scope (root requests only).
         if is_root {
             match &self.request_scope {
@@ -322,6 +369,26 @@ mod tests {
     // Test helpers: (repo_name, version_scheme) tuples replace CandidateOrigin
     const FEDORA: (&str, VersionScheme) = ("fedora", VersionScheme::Rpm);
     const DEBIAN: (&str, VersionScheme) = ("ubuntu-noble", VersionScheme::Debian);
+
+    #[test]
+    fn resolution_policy_defaults_to_policy_selection_mode() {
+        let policy = ResolutionPolicy::new();
+        assert_eq!(policy.selection_mode, SelectionMode::Policy);
+    }
+
+    #[test]
+    fn resolution_policy_builder_sets_latest_mode() {
+        let policy = ResolutionPolicy::new().with_selection_mode(SelectionMode::Latest);
+        assert_eq!(policy.selection_mode, SelectionMode::Latest);
+    }
+
+    #[test]
+    fn resolution_policy_rejects_candidates_outside_allowed_distros() {
+        let policy = ResolutionPolicy::new().with_allowed_distros(vec!["fedora".to_string()]);
+
+        assert!(policy.accepts_candidate(FEDORA.0, FEDORA.1, "bash", true, None));
+        assert!(!policy.accepts_candidate(DEBIAN.0, DEBIAN.1, "bash", true, None));
+    }
 
     #[test]
     fn default_policy_accepts_anything_without_primary() {

@@ -13,6 +13,7 @@ use rusqlite::Connection;
 use std::time::Duration;
 
 use crate::error::{Error, Result};
+use crate::repository::resolution_policy::ResolutionPolicy;
 use crate::version::VersionConstraint;
 
 const MAX_LOADED_NAMES: usize = 50_000;
@@ -70,6 +71,15 @@ pub fn solve_install(
     conn: &Connection,
     requests: &[(String, VersionConstraint)],
 ) -> Result<SatResolution> {
+    solve_install_with_policy(conn, requests, &ResolutionPolicy::new())
+}
+
+/// Solve an install request using the SAT solver with an explicit source-selection policy.
+pub fn solve_install_with_policy(
+    conn: &Connection,
+    requests: &[(String, VersionConstraint)],
+    policy: &ResolutionPolicy,
+) -> Result<SatResolution> {
     if requests.is_empty() {
         return Ok(SatResolution {
             install_order: Vec::new(),
@@ -77,7 +87,7 @@ pub fn solve_install(
         });
     }
 
-    let mut provider = install::build_provider_for_install(conn, requests)?;
+    let mut provider = install::build_provider_for_install(conn, requests, policy)?;
     let requirements = install::build_requirements(&mut provider, requests)?;
 
     let problem = Problem::new().requirements(requirements);
@@ -1284,5 +1294,93 @@ mod tests {
         assert_eq!(identities.len(), 1);
         // Explicit debian scheme should win over fedora inference
         assert_eq!(identities[0].version_scheme, VersionScheme::Debian);
+    }
+
+    #[test]
+    fn latest_mode_sat_install_prefers_newest_candidate() {
+        let (_dir, conn) = setup_test_db();
+
+        conn.execute(
+            "INSERT INTO canonical_packages (name, kind) VALUES ('python', 'package')",
+            [],
+        )
+        .unwrap();
+        let canonical_id = conn.last_insert_rowid();
+
+        conn.execute(
+            "INSERT INTO repositories (name, url, enabled, priority, default_strategy_distro)
+             VALUES ('fedora-remi', 'https://f.com', 1, 20, 'fedora')",
+            [],
+        )
+        .unwrap();
+        let fedora_repo_id = conn.last_insert_rowid();
+
+        conn.execute(
+            "INSERT INTO repositories (name, url, enabled, priority, default_strategy_distro)
+             VALUES ('arch-core', 'https://a.com', 1, 5, 'arch')",
+            [],
+        )
+        .unwrap();
+        let arch_repo_id = conn.last_insert_rowid();
+
+        conn.execute(
+            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, version_scheme, canonical_id)
+             VALUES (?1, 'python', '3.12.2-1.fc43', 'sha256:fedora', 100, 'https://f.com/python', 'rpm', ?2)",
+            rusqlite::params![fedora_repo_id, canonical_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, version_scheme, canonical_id)
+             VALUES (?1, 'python', '3.13.0-1', 'sha256:arch', 100, 'https://a.com/python', 'arch', ?2)",
+            rusqlite::params![arch_repo_id, canonical_id],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, version_scheme)
+             VALUES (?1, 'libc', '1.0-1', 'sha256:libc', 100, 'https://a.com/libc', 'arch')",
+            [arch_repo_id],
+        )
+        .unwrap();
+
+        crate::db::models::RepologyCacheEntry::insert_or_replace(
+            &conn,
+            &crate::db::models::RepologyCacheEntry {
+                project_name: "python".into(),
+                distro: "fedora".into(),
+                distro_name: "python".into(),
+                version: Some("3.12.2".into()),
+                status: Some("outdated".into()),
+                fetched_at: "2026-04-07T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+        crate::db::models::RepologyCacheEntry::insert_or_replace(
+            &conn,
+            &crate::db::models::RepologyCacheEntry {
+                project_name: "python".into(),
+                distro: "arch".into(),
+                distro_name: "python".into(),
+                version: Some("3.13.0".into()),
+                status: Some("newest".into()),
+                fetched_at: "2026-04-07T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+
+        let resolution = solve_install_with_policy(
+            &conn,
+            &[("python".to_string(), VersionConstraint::Any)],
+            &ResolutionPolicy::new()
+                .with_selection_mode(crate::repository::resolution_policy::SelectionMode::Latest),
+        )
+        .unwrap();
+
+        let python = resolution
+            .install_order
+            .iter()
+            .find(|pkg| pkg.name == "python")
+            .expect("python should be present in SAT install order");
+        assert_eq!(python.version, "3.13.0-1");
     }
 }

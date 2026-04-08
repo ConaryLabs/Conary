@@ -13,6 +13,7 @@ use rusqlite::Connection;
 use super::parser::{SourcePinConfig, SystemModel};
 use super::state::SystemState;
 use super::{ResolvedModel, resolve_includes, resolve_includes_with_options};
+use crate::repository::resolution_policy::SelectionMode;
 
 /// An action to take to reach the desired state
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,6 +26,18 @@ pub enum DiffAction {
 
     /// Clear the effective source pin
     ClearSourcePin,
+
+    /// Set or update the persisted selection mode mirror.
+    SetSelectionMode { mode: SelectionMode },
+
+    /// Clear the persisted selection mode mirror.
+    ClearSelectionMode,
+
+    /// Set or update the persisted allowed-distros mirror.
+    SetAllowedDistros { distros: Vec<String> },
+
+    /// Clear the persisted allowed-distros mirror.
+    ClearAllowedDistros,
 
     /// Replace an installed package with a target-distro implementation during replatforming
     ReplatformReplace {
@@ -131,6 +144,10 @@ impl DiffAction {
         match self {
             DiffAction::SetSourcePin { distro, .. } => distro,
             DiffAction::ClearSourcePin => "<source-policy>",
+            DiffAction::SetSelectionMode { .. } => "<source-policy>",
+            DiffAction::ClearSelectionMode => "<source-policy>",
+            DiffAction::SetAllowedDistros { .. } => "<source-policy>",
+            DiffAction::ClearAllowedDistros => "<source-policy>",
             DiffAction::ReplatformReplace { package, .. } => package,
             DiffAction::Install { package, .. } => package,
             DiffAction::Remove { package, .. } => package,
@@ -162,6 +179,15 @@ impl DiffAction {
                 None => format!("Set source pin to {}", distro),
             },
             DiffAction::ClearSourcePin => "Clear source pin".to_string(),
+            DiffAction::SetSelectionMode { mode } => match mode {
+                SelectionMode::Policy => "Set selection mode to policy".to_string(),
+                SelectionMode::Latest => "Set selection mode to latest".to_string(),
+            },
+            DiffAction::ClearSelectionMode => "Clear selection mode".to_string(),
+            DiffAction::SetAllowedDistros { distros } => {
+                format!("Set allowed distros to {}", distros.join(", "))
+            }
+            DiffAction::ClearAllowedDistros => "Clear allowed distros".to_string(),
             DiffAction::ReplatformReplace {
                 package,
                 current_distro,
@@ -361,7 +387,12 @@ impl ModelDiff {
         self.actions.iter().any(|action| {
             matches!(
                 action,
-                DiffAction::SetSourcePin { .. } | DiffAction::ClearSourcePin
+                DiffAction::SetSourcePin { .. }
+                    | DiffAction::ClearSourcePin
+                    | DiffAction::SetSelectionMode { .. }
+                    | DiffAction::ClearSelectionMode
+                    | DiffAction::SetAllowedDistros { .. }
+                    | DiffAction::ClearAllowedDistros
             )
         })
     }
@@ -389,7 +420,12 @@ impl ModelDiff {
             .filter(|action| {
                 matches!(
                     action,
-                    DiffAction::SetSourcePin { .. } | DiffAction::ClearSourcePin
+                    DiffAction::SetSourcePin { .. }
+                        | DiffAction::ClearSourcePin
+                        | DiffAction::SetSelectionMode { .. }
+                        | DiffAction::ClearSelectionMode
+                        | DiffAction::SetAllowedDistros { .. }
+                        | DiffAction::ClearAllowedDistros
                 )
             })
             .count()
@@ -402,7 +438,12 @@ impl ModelDiff {
                 !action.is_structural()
                     && !matches!(
                         action,
-                        DiffAction::SetSourcePin { .. } | DiffAction::ClearSourcePin
+                        DiffAction::SetSourcePin { .. }
+                            | DiffAction::ClearSourcePin
+                            | DiffAction::SetSelectionMode { .. }
+                            | DiffAction::ClearSelectionMode
+                            | DiffAction::SetAllowedDistros { .. }
+                            | DiffAction::ClearAllowedDistros
                     )
             })
             .count()
@@ -485,6 +526,8 @@ pub fn compute_diff_from_resolved(
         &resolved.pins,
         &original.derive,
         original.system.effective_pin(),
+        original.system.runtime_selection_mode_mirror(),
+        original.system.allowed_distros.clone(),
         state,
     )
 }
@@ -501,6 +544,8 @@ pub fn compute_diff(model: &SystemModel, state: &SystemState) -> ModelDiff {
         &model.pin,
         &model.derive,
         model.system.effective_pin(),
+        model.system.runtime_selection_mode_mirror(),
+        model.system.allowed_distros.clone(),
         state,
     )
 }
@@ -509,6 +554,7 @@ pub fn compute_diff(model: &SystemModel, state: &SystemState) -> ModelDiff {
 ///
 /// Both `compute_diff` and `compute_diff_from_resolved` delegate here
 /// after extracting the relevant data from their respective model types.
+#[allow(clippy::too_many_arguments)]
 fn compute_diff_inner(
     install: &[String],
     optionals: &[String],
@@ -516,6 +562,8 @@ fn compute_diff_inner(
     pins: &std::collections::HashMap<String, String>,
     derive: &[super::parser::DerivedPackage],
     desired_source_pin: Option<SourcePinConfig>,
+    desired_selection_mode: Option<SelectionMode>,
+    desired_allowed_distros: Vec<String>,
     state: &SystemState,
 ) -> ModelDiff {
     let mut diff = ModelDiff::new();
@@ -543,6 +591,30 @@ fn compute_diff_inner(
             diff.add_action(DiffAction::ClearSourcePin);
         }
         _ => {}
+    }
+
+    match (state.selection_mode, desired_selection_mode) {
+        (Some(current), Some(desired)) if current != desired => {
+            diff.add_action(DiffAction::SetSelectionMode { mode: desired });
+        }
+        (None, Some(desired)) => {
+            diff.add_action(DiffAction::SetSelectionMode { mode: desired });
+        }
+        (Some(_), None) => {
+            diff.add_action(DiffAction::ClearSelectionMode);
+        }
+        _ => {}
+    }
+
+    match (
+        state.allowed_distros.as_slice(),
+        desired_allowed_distros.as_slice(),
+    ) {
+        (current, desired) if current == desired => {}
+        (_, []) => diff.add_action(DiffAction::ClearAllowedDistros),
+        _ => diff.add_action(DiffAction::SetAllowedDistros {
+            distros: desired_allowed_distros,
+        }),
     }
 
     // Check what needs to be installed
@@ -999,6 +1071,36 @@ mod tests {
         assert!(!diff.warnings.iter().any(|warning| {
             warning.contains("automatic package convergence planning is still pending")
         }));
+    }
+
+    #[test]
+    fn source_policy_diff_emits_selection_mode_change() {
+        let mut model = SystemModel::new();
+        model.system.selection_mode = Some("latest".to_string());
+
+        let state = SystemState::new();
+        let diff = compute_diff(&model, &state);
+
+        assert!(
+            diff.actions
+                .iter()
+                .any(|action| action.description().contains("selection mode"))
+        );
+    }
+
+    #[test]
+    fn source_policy_diff_emits_allowed_distros_change() {
+        let mut model = SystemModel::new();
+        model.system.allowed_distros = vec!["arch".to_string()];
+
+        let state = SystemState::new();
+        let diff = compute_diff(&model, &state);
+
+        assert!(
+            diff.actions
+                .iter()
+                .any(|action| action.description().contains("allowed distros"))
+        );
     }
 
     #[test]

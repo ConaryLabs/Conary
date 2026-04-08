@@ -247,6 +247,7 @@ fn get_packages_to_convert(
             advisory_url: None,
             distro: None,
             version_scheme: None,
+            canonical_id: None,
         })
     })?;
 

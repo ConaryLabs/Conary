@@ -138,7 +138,7 @@ fn resolve_repo_dependency_by_capability(
         return Ok(None);
     }
 
-    let selected = PackageSelector::select_best(candidates)?;
+    let selected = PackageSelector::select_best_with_options(conn, candidates, options)?;
     Ok(Some((
         selected.package.name.clone(),
         Some(selected.package.version.clone()),
@@ -196,7 +196,7 @@ fn resolve_repo_dependency_by_metadata(
         return Ok(None);
     }
 
-    let selected = PackageSelector::select_best(candidates)?;
+    let selected = PackageSelector::select_best_with_options(conn, candidates, options)?;
     Ok(Some((
         selected.package.name.clone(),
         Some(selected.package.version.clone()),

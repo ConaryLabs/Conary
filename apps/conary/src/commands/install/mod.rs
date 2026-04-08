@@ -307,7 +307,16 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
     let (base_name_for_canonical, early_component) = parse_component_spec(package)
         .map_or_else(|| (package.to_string(), None), |(b, c)| (b, Some(c)));
 
-    let policy = build_resolution_policy(&conn, from_distro.as_deref(), repo.as_deref())?;
+    let effective_source_policy = conary_core::repository::load_effective_policy(
+        &conn,
+        conary_core::repository::resolution_policy::RequestScope::Any,
+    )?;
+    let policy = build_resolution_policy(
+        effective_source_policy.resolution,
+        from_distro.as_deref(),
+        repo.as_deref(),
+    );
+    let primary_flavor = effective_source_policy.primary_flavor;
     let resolved_name = resolve_canonical_name(
         &conn,
         &base_name_for_canonical,
@@ -355,6 +364,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         convert_to_ccs,
         no_capture,
         &policy,
+        primary_flavor,
         &ccs_install_opts,
     )
     .await?
@@ -379,6 +389,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         root,
         sandbox_mode,
         no_scripts,
+        policy: &policy,
     };
     handle_dependencies(&dep_ctx).await?;
 
@@ -470,6 +481,7 @@ struct DepAnalysisContext<'a> {
     root: &'a str,
     sandbox_mode: SandboxMode,
     no_scripts: bool,
+    policy: &'a conary_core::repository::resolution_policy::ResolutionPolicy,
 }
 
 /// Context for scriptlet execution phases.
@@ -516,17 +528,17 @@ struct InstallTransactionResult {
 // Extracted helper functions
 // ---------------------------------------------------------------------------
 
-/// Build the resolution policy from CLI flags (`--from-distro`, `--repo`).
+/// Overlay install-specific request scope from CLI flags onto the effective policy.
 ///
 /// The `--from-distro` flag constrains the root request to a specific distro
 /// flavor; `--repo` constrains to a specific repository.  Both apply to the
 /// root request only (transitive deps are governed by the mixing policy).
 fn build_resolution_policy(
-    conn: &rusqlite::Connection,
+    mut policy: conary_core::repository::resolution_policy::ResolutionPolicy,
     from_distro: Option<&str>,
     repo: Option<&str>,
-) -> Result<conary_core::repository::resolution_policy::ResolutionPolicy> {
-    use conary_core::repository::resolution_policy::{RequestScope, ResolutionPolicy};
+) -> conary_core::repository::resolution_policy::ResolutionPolicy {
+    use conary_core::repository::resolution_policy::RequestScope;
 
     let scope = if let Some(target_distro) = from_distro {
         // Map distro name to the correct flavor for request-scope filtering
@@ -543,24 +555,8 @@ fn build_resolution_policy(
         RequestScope::Any
     };
 
-    // Read mixing policy from distro pin (if set)
-    let mixing = {
-        use conary_core::db::models::DistroPin;
-        use conary_core::repository::resolution_policy::DependencyMixingPolicy;
-        match DistroPin::get_current(conn) {
-            Ok(Some(pin)) => match pin.mixing_policy.as_str() {
-                "strict" => DependencyMixingPolicy::Strict,
-                "guarded" => DependencyMixingPolicy::Guarded,
-                "permissive" => DependencyMixingPolicy::Permissive,
-                _ => DependencyMixingPolicy::Strict,
-            },
-            _ => DependencyMixingPolicy::Strict,
-        }
-    };
-
-    Ok(ResolutionPolicy::new()
-        .with_scope(scope)
-        .with_mixing(mixing))
+    policy.request_scope = scope;
+    policy
 }
 
 /// Resolve the canonical name for a package.
@@ -745,6 +741,7 @@ async fn resolve_and_parse_package(
     convert_to_ccs: bool,
     no_capture: bool,
     policy: &conary_core::repository::resolution_policy::ResolutionPolicy,
+    primary_flavor: Option<conary_core::repository::dependency_model::RepositoryDependencyFlavor>,
     ccs_opts: &CcsInstallParams<'_>,
 ) -> Result<
     Option<(
@@ -762,7 +759,7 @@ async fn resolve_and_parse_package(
     let policy_opts = PolicyOptions {
         policy: Some(policy.clone()),
         is_root: true,
-        primary_flavor: None, // Will be inferred from the pinned distro inside selector
+        primary_flavor,
     };
 
     // Resolve package path (download if needed).
@@ -919,8 +916,9 @@ async fn handle_dependencies(ctx: &DepAnalysisContext<'_>) -> Result<()> {
         .map(|d| (d.name.clone(), d.constraint.clone()))
         .collect();
 
-    let sat_result = conary_core::resolver::solve_install(ctx.conn, &sat_requests)
-        .with_context(|| format!("Failed to resolve dependencies for '{}'", ctx.pkg.name()))?;
+    let sat_result =
+        conary_core::resolver::solve_install_with_policy(ctx.conn, &sat_requests, ctx.policy)
+            .with_context(|| format!("Failed to resolve dependencies for '{}'", ctx.pkg.name()))?;
 
     // If SAT reports a conflict, surface it
     if let Some(ref conflict_msg) = sat_result.conflict_message {

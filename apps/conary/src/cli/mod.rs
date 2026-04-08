@@ -269,6 +269,10 @@ pub enum Commands {
         #[arg(long)]
         security: bool,
 
+        /// Show what would be updated without making changes
+        #[arg(long)]
+        dry_run: bool,
+
         /// Scriptlet isolation: auto, always, never (default: always).
         /// Provides PID/network namespace isolation; /etc and /var remain
         /// writable on live root. Use target-root installs for full isolation
