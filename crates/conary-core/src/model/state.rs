@@ -8,8 +8,10 @@
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
 
-use crate::db::models::DistroPin;
+use crate::db::models::{DistroPin, settings};
 use crate::model::parser::SourcePinConfig;
+use crate::repository::resolution_policy::SelectionMode;
+use crate::repository::{SETTINGS_KEY_ALLOWED_DISTROS, SETTINGS_KEY_SELECTION_MODE};
 
 use super::{ModelError, ModelResult};
 /// Represents the current state of the system
@@ -28,6 +30,12 @@ pub struct SystemState {
 
     /// Effective source pin mirrored from runtime compatibility state.
     pub source_pin: Option<SourcePinConfig>,
+
+    /// Persisted selection mode mirrored from runtime compatibility state.
+    pub selection_mode: Option<SelectionMode>,
+
+    /// Persisted distro allowlist mirrored from runtime compatibility state.
+    pub allowed_distros: Vec<String>,
 }
 
 /// Information about an installed package
@@ -60,6 +68,8 @@ impl SystemState {
             explicit: HashSet::new(),
             pinned: HashSet::new(),
             source_pin: None,
+            selection_mode: None,
+            allowed_distros: Vec::new(),
         }
     }
 
@@ -196,6 +206,28 @@ pub fn capture_current_state(conn: &Connection) -> ModelResult<SystemState> {
         .map_err(|e| ModelError::DatabaseError(e.to_string()))?
         .map(|pin| pin.as_source_pin());
 
+    state.selection_mode = settings::get(conn, SETTINGS_KEY_SELECTION_MODE)
+        .map_err(|e| ModelError::DatabaseError(e.to_string()))?
+        .as_deref()
+        .map(|raw| match raw {
+            "policy" => Ok(SelectionMode::Policy),
+            "latest" => Ok(SelectionMode::Latest),
+            other => Err(ModelError::InvalidSourcePolicy(format!(
+                "Unknown selection mode '{}'",
+                other
+            ))),
+        })
+        .transpose()?;
+
+    state.allowed_distros = settings::get(conn, SETTINGS_KEY_ALLOWED_DISTROS)
+        .map_err(|e| ModelError::DatabaseError(e.to_string()))?
+        .map(|raw| {
+            serde_json::from_str::<Vec<String>>(&raw)
+                .map_err(|e| ModelError::DatabaseError(e.to_string()))
+        })
+        .transpose()?
+        .unwrap_or_default();
+
     Ok(state)
 }
 
@@ -224,6 +256,11 @@ pub fn snapshot_to_model(state: &SystemState) -> super::SystemModel {
     }
 
     model.system.pin = state.source_pin.clone();
+    model.system.selection_mode = state.selection_mode.map(|mode| match mode {
+        SelectionMode::Policy => "policy".to_string(),
+        SelectionMode::Latest => "latest".to_string(),
+    });
+    model.system.allowed_distros = state.allowed_distros.clone();
 
     model
 }
@@ -232,7 +269,9 @@ pub fn snapshot_to_model(state: &SystemState) -> super::SystemModel {
 mod tests {
     use super::*;
     use crate::db::models::DistroPin;
+    use crate::db::models::settings;
     use crate::db::testing::create_test_db;
+    use crate::repository::{SETTINGS_KEY_ALLOWED_DISTROS, SETTINGS_KEY_SELECTION_MODE};
 
     #[test]
     fn test_empty_state() {
@@ -346,5 +385,27 @@ mod tests {
         let effective_pin = model.system.effective_pin().unwrap();
         assert_eq!(effective_pin.distro, "arch");
         assert_eq!(effective_pin.strength.as_deref(), Some("strict"));
+    }
+
+    #[test]
+    fn source_policy_snapshot_includes_selection_mode_from_settings() {
+        let (_temp, conn) = create_test_db();
+        settings::set(&conn, SETTINGS_KEY_SELECTION_MODE, "policy").unwrap();
+
+        let state = capture_current_state(&conn).unwrap();
+        let model = snapshot_to_model(&state);
+
+        assert_eq!(model.system.selection_mode.as_deref(), Some("policy"));
+    }
+
+    #[test]
+    fn source_policy_snapshot_includes_allowed_distros_from_settings() {
+        let (_temp, conn) = create_test_db();
+        settings::set(&conn, SETTINGS_KEY_ALLOWED_DISTROS, "[\"arch\"]").unwrap();
+
+        let state = capture_current_state(&conn).unwrap();
+        let model = snapshot_to_model(&state);
+
+        assert_eq!(model.system.allowed_distros, vec!["arch".to_string()]);
     }
 }

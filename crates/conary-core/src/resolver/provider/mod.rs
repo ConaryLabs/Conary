@@ -15,15 +15,19 @@ pub mod types;
 
 use std::collections::{HashMap, HashSet};
 
+use chrono::Utc;
 use resolvo::{
     ConditionalRequirement, NameId, SolvableId, StringId, VersionSetId, VersionSetUnionId,
 };
 use tracing::error;
 
 use crate::db::models::{
-    DependencyEntry, ProvideEntry, RepositoryProvide, Trove, generate_capability_variations,
+    DependencyEntry, ProvideEntry, RepologyCacheEntry, RepositoryProvide, Trove,
+    generate_capability_variations,
 };
 use crate::error::{Error, Result};
+use crate::repository::LatestSignal;
+use crate::repository::resolution_policy::{ResolutionPolicy, SelectionMode};
 use crate::repository::versioning::VersionScheme;
 use crate::resolver::identity::PackageIdentity;
 use crate::resolver::provides_index::ProvidesIndex;
@@ -92,6 +96,12 @@ pub struct ConaryProvider<'db> {
     /// Built once at resolution start via `build_provides_index()`.
     provides_index: Option<ProvidesIndex>,
 
+    /// Source-selection policy that should influence SAT candidate ordering.
+    policy: ResolutionPolicy,
+
+    /// Cached positive latest-signal keys keyed by canonical_id + distro.
+    latest_positive_keys: HashSet<(i64, String)>,
+
     // --- Data source ---
     pub(super) conn: &'db rusqlite::Connection,
 }
@@ -99,6 +109,11 @@ pub struct ConaryProvider<'db> {
 impl<'db> ConaryProvider<'db> {
     /// Create a new provider backed by the given database connection.
     pub fn new(conn: &'db rusqlite::Connection) -> Self {
+        Self::new_with_policy(conn, ResolutionPolicy::new())
+    }
+
+    /// Create a new provider with an explicit source-selection policy.
+    pub fn new_with_policy(conn: &'db rusqlite::Connection, policy: ResolutionPolicy) -> Self {
         Self {
             names: Vec::new(),
             name_to_id: HashMap::new(),
@@ -116,6 +131,8 @@ impl<'db> ConaryProvider<'db> {
             removal_deps: HashMap::new(),
             canonical_equivalents: HashMap::new(),
             provides_index: None,
+            policy,
+            latest_positive_keys: HashSet::new(),
             conn,
         }
     }
@@ -358,9 +375,13 @@ impl<'db> ConaryProvider<'db> {
                     version_scheme: scheme,
                     repository_id: pkg_with_repo.repository.id.unwrap_or(0),
                     repository_name: pkg_with_repo.repository.name.clone(),
-                    repository_distro: pkg_with_repo.repository.default_strategy_distro.clone(),
+                    repository_distro: pkg_with_repo
+                        .package
+                        .distro
+                        .clone()
+                        .or(pkg_with_repo.repository.default_strategy_distro.clone()),
                     repository_priority: pkg_with_repo.repository.priority,
-                    canonical_id: None,
+                    canonical_id: pkg_with_repo.package.canonical_id,
                     canonical_name: None,
                     installed_trove_id: None,
                     provided_capabilities,
@@ -375,6 +396,8 @@ impl<'db> ConaryProvider<'db> {
                 self.dependencies.insert(solvable_id.0, sub_deps);
             }
         }
+
+        self.refresh_latest_signal_cache()?;
         Ok(())
     }
 
@@ -529,6 +552,22 @@ impl<'db> ConaryProvider<'db> {
     /// Get the solvable package at a given index.
     pub fn get_solvable(&self, id: SolvableId) -> &PackageIdentity {
         &self.solvables[id.0 as usize]
+    }
+
+    pub(super) fn has_positive_latest_signal(&self, pkg: &PackageIdentity) -> bool {
+        if self.policy.selection_mode != SelectionMode::Latest {
+            return false;
+        }
+
+        let Some(canonical_id) = pkg.canonical_id else {
+            return false;
+        };
+        let Some(distro) = pkg.repository_distro.as_ref() else {
+            return false;
+        };
+
+        self.latest_positive_keys
+            .contains(&(canonical_id, distro.clone()))
     }
 
     /// Get the total number of solvables.
@@ -837,6 +876,53 @@ impl<'db> ConaryProvider<'db> {
             .map(Vec::as_slice)
             .unwrap_or(&[])
     }
+
+    fn refresh_latest_signal_cache(&mut self) -> Result<()> {
+        self.latest_positive_keys.clear();
+
+        if self.policy.selection_mode != SelectionMode::Latest {
+            return Ok(());
+        }
+
+        let mut distros_by_canonical: HashMap<i64, HashSet<String>> = HashMap::new();
+        for pkg in &self.solvables {
+            let Some(canonical_id) = pkg.canonical_id else {
+                continue;
+            };
+            let Some(distro) = pkg.repository_distro.as_ref() else {
+                continue;
+            };
+
+            distros_by_canonical
+                .entry(canonical_id)
+                .or_default()
+                .insert(distro.clone());
+        }
+
+        let now = Utc::now();
+        for (canonical_id, distros) in distros_by_canonical {
+            let distro_list = distros.into_iter().collect::<Vec<_>>();
+            let rows = RepologyCacheEntry::find_for_canonical_and_distros(
+                self.conn,
+                canonical_id,
+                &distro_list,
+            )?;
+            for row in rows {
+                let status = row.status.as_deref().unwrap_or("");
+                let signal = LatestSignal::from_repology(
+                    status,
+                    row.version.as_deref(),
+                    &row.fetched_at,
+                    now,
+                )?;
+                if signal.is_positive() {
+                    self.latest_positive_keys.insert((canonical_id, row.distro));
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -844,10 +930,14 @@ mod tests {
     use super::*;
     use crate::db;
     use crate::db::models::{
-        Repository, RepositoryPackage, RepositoryProvide, RepositoryRequirement,
+        CanonicalPackage, RepologyCacheEntry, Repository, RepositoryPackage, RepositoryProvide,
+        RepositoryRequirement,
     };
+    use crate::repository::resolution_policy::{ResolutionPolicy, SelectionMode};
     use crate::repository::versioning::RepoVersionConstraint;
     use crate::version::VersionConstraint;
+    use futures::executor::block_on;
+    use resolvo::{DependencyProvider, SolverCache};
 
     fn setup_test_db() -> (tempfile::TempDir, rusqlite::Connection) {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -1213,6 +1303,88 @@ mod tests {
         assert_eq!(solvables[0], s2); // 3.0.0
         assert_eq!(solvables[1], s3); // 2.0.0 (installed)
         assert_eq!(solvables[2], s1); // 1.0.0
+    }
+
+    #[test]
+    fn sort_candidates_prefers_latest_signal_when_policy_requests_it() {
+        let (_dir, conn) = setup_test_db();
+
+        let mut canonical = CanonicalPackage::new("python".to_string(), "package".to_string());
+        let canonical_id = canonical.insert(&conn).unwrap();
+
+        let mut fedora_repo = Repository::new(
+            "fedora-remi".to_string(),
+            "https://example.invalid".to_string(),
+        );
+        fedora_repo.priority = 20;
+        fedora_repo.default_strategy_distro = Some("fedora".to_string());
+        let fedora_repo_id = fedora_repo.insert(&conn).unwrap();
+
+        let mut arch_repo = Repository::new(
+            "arch-core".to_string(),
+            "https://example.invalid".to_string(),
+        );
+        arch_repo.priority = 5;
+        arch_repo.default_strategy_distro = Some("arch".to_string());
+        let arch_repo_id = arch_repo.insert(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, canonical_id)
+             VALUES (?1, 'python', '3.12.2-1.fc43', 'sha256:fedora', 1, 'https://example.invalid/python-fedora.rpm', ?2)",
+            rusqlite::params![fedora_repo_id, canonical_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, canonical_id)
+             VALUES (?1, 'python', '3.13.0-1', 'sha256:arch', 1, 'https://example.invalid/python-arch.pkg.tar.zst', ?2)",
+            rusqlite::params![arch_repo_id, canonical_id],
+        )
+        .unwrap();
+
+        RepologyCacheEntry::insert_or_replace(
+            &conn,
+            &RepologyCacheEntry {
+                project_name: "python".into(),
+                distro: "fedora".into(),
+                distro_name: "python".into(),
+                version: Some("3.12.2".into()),
+                status: Some("outdated".into()),
+                fetched_at: "2026-04-07T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+        RepologyCacheEntry::insert_or_replace(
+            &conn,
+            &RepologyCacheEntry {
+                project_name: "python".into(),
+                distro: "arch".into(),
+                distro_name: "python".into(),
+                version: Some("3.13.0".into()),
+                status: Some("newest".into()),
+                fetched_at: "2026-04-07T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+
+        let mut provider = ConaryProvider::new_with_policy(
+            &conn,
+            ResolutionPolicy::new().with_selection_mode(SelectionMode::Latest),
+        );
+        provider
+            .load_repo_packages_for_names(&["python".to_string()])
+            .unwrap();
+
+        let name_id = provider.intern_name("python").unwrap();
+        let mut solvables = provider.solvables_for_name(name_id);
+        assert_eq!(solvables.len(), 2);
+
+        let cache = SolverCache::new(provider);
+        block_on(cache.provider().sort_candidates(&cache, &mut solvables));
+
+        assert_eq!(
+            cache.provider().get_solvable(solvables[0]).repository_name,
+            "arch-core"
+        );
     }
 
     #[test]

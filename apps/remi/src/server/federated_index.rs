@@ -347,6 +347,7 @@ fn build_local_sparse_entry(
                 advisory_url: row.get(16)?,
                 distro: None,
                 version_scheme: None,
+                canonical_id: None,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;

@@ -27,7 +27,9 @@ pub mod substituter;
 mod sync;
 
 pub mod dependency_model;
+pub mod effective_policy;
 pub mod gpg;
+pub mod latest_signal;
 pub mod parsers;
 pub mod resolution_policy;
 pub mod selector;
@@ -45,7 +47,12 @@ pub use download::{
     DownloadOptions, DownloadProgress, download_delta, download_package, download_package_verified,
     download_package_verified_with_progress, download_package_with_progress, verify_checksum,
 };
+pub use effective_policy::{
+    EffectiveSourcePolicy, SETTINGS_KEY_ALLOWED_DISTROS, SETTINGS_KEY_SELECTION_MODE,
+    load_effective_policy,
+};
 pub use gpg::GpgVerifier;
+pub use latest_signal::LatestSignal;
 pub use management::{add_repository, remove_repository, search_packages, set_repository_enabled};
 pub use metadata::{DeltaInfo, PackageMetadata, RepositoryMetadata};
 pub use metalink::{

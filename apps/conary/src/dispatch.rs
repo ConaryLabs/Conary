@@ -136,6 +136,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             package,
             common,
             security,
+            dry_run,
             sandbox,
             dep_mode,
             yes,
@@ -149,7 +150,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                     allow_live_system_mutation,
                     Cow::Borrowed("conary update @collection"),
                     LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
-                    false,
+                    dry_run,
                 )?;
                 let name = pkg.trim_start_matches('@');
                 return commands::cmd_update_group(
@@ -157,6 +158,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                     &common.db.db_path,
                     &common.root,
                     security,
+                    dry_run,
                     sandbox_mode,
                     dep_mode,
                     yes,
@@ -167,13 +169,14 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 allow_live_system_mutation,
                 Cow::Borrowed("conary update"),
                 LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
-                false,
+                dry_run,
             )?;
             commands::cmd_update(
                 package,
                 &common.db.db_path,
                 &common.root,
                 security,
+                dry_run,
                 sandbox_mode,
                 dep_mode,
                 yes,
@@ -1780,6 +1783,9 @@ async fn dispatch_distro_command(distro_cmd: cli::DistroCommands) -> Result<()> 
         cli::DistroCommands::Info { db } => commands::distro::cmd_distro_info(&db.db_path).await,
         cli::DistroCommands::Mixing { policy, db } => {
             commands::distro::cmd_distro_mixing(&db.db_path, &policy).await
+        }
+        cli::DistroCommands::SelectionMode { mode, db } => {
+            commands::distro::cmd_distro_selection_mode(&db.db_path, &mode).await
         }
     }
 }

@@ -9,10 +9,12 @@ use crate::db::models::{
     RepositoryRequirement, SystemAffinity, Trove,
 };
 use crate::error::Result;
+use crate::repository::load_effective_policy;
+use crate::repository::resolution_policy::RequestScope;
 use crate::repository::selector::{PackageSelector, SelectionOptions};
 use crate::repository::versioning::{
-    RepoVersionConstraint, VersionScheme, compare_repo_package_versions, infer_version_scheme,
-    parse_repo_constraint, repo_version_satisfies,
+    RepoVersionConstraint, VersionScheme, infer_version_scheme, parse_repo_constraint,
+    repo_version_satisfies,
 };
 
 use super::diff::{DiffAction, ReplatformEstimate};
@@ -45,6 +47,11 @@ pub struct VisibleRealignmentProposal {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplatformExecutionLeg {
+    pub ready: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplatformExecutionTransaction {
     pub package: String,
     pub current_distro: Option<String>,
@@ -57,7 +64,11 @@ pub struct ReplatformExecutionTransaction {
     pub install_repository_package_id: Option<i64>,
     pub install_route: Option<String>,
     pub unresolved_dependencies: Vec<String>,
+    pub remove_leg: ReplatformExecutionLeg,
+    pub install_leg: ReplatformExecutionLeg,
+    pub metadata_leg: ReplatformExecutionLeg,
     pub executable: bool,
+    pub blocked_reasons: Vec<ReplatformBlockedReason>,
     pub blocked_reason: Option<ReplatformBlockedReason>,
 }
 
@@ -95,33 +106,24 @@ fn candidate_target_package(
     trove: &Trove,
     target_distro: &str,
 ) -> Result<Option<RepositoryPackage>> {
-    let repo_packages = RepositoryPackage::find_by_name(conn, &trove.name)?;
-    let mut candidates = Vec::new();
+    let mut effective_policy = load_effective_policy(conn, RequestScope::Any)?;
+    effective_policy.resolution.allowed_distros = vec![target_distro.to_string()];
 
-    for repo_pkg in repo_packages {
-        if repo_pkg.architecture != trove.architecture && repo_pkg.architecture.is_some() {
-            continue;
-        }
+    let options = SelectionOptions {
+        architecture: trove.architecture.clone(),
+        policy: Some(effective_policy.resolution),
+        is_root: false,
+        primary_flavor: None,
+        ..SelectionOptions::default()
+    };
 
-        let Some(repo) = Repository::find_by_id(conn, repo_pkg.repository_id)? else {
-            continue;
-        };
-        if repo.default_strategy_distro.as_deref() == Some(target_distro) {
-            candidates.push((repo_pkg, repo));
-        }
+    let candidates = PackageSelector::search_packages(conn, &trove.name, &options)?;
+    if candidates.is_empty() {
+        return Ok(None);
     }
 
-    candidates.sort_by(|(pkg_a, repo_a), (pkg_b, repo_b)| {
-        compare_repo_package_versions(pkg_a, repo_a, pkg_b, repo_b)
-            .map(|ord| ord.reverse())
-            .unwrap_or_else(|| {
-                repo_b
-                    .name
-                    .cmp(&repo_a.name)
-                    .then_with(|| pkg_b.version.cmp(&pkg_a.version))
-            })
-    });
-    Ok(candidates.into_iter().next().map(|(pkg, _)| pkg))
+    let selected = PackageSelector::select_best_with_options(conn, candidates, &options)?;
+    Ok(Some(selected.package))
 }
 
 fn install_route_for_target(
@@ -293,34 +295,47 @@ pub fn replatform_execution_plan(
                 (Some(current_arch), Some(target_arch)) => current_arch != target_arch,
                 _ => false,
             };
-            let blocked_reason = match (
-                target_repository,
-                target_repository_package_id,
+            let mut blocked_reasons = Vec::new();
+            if architecture_mismatch {
+                blocked_reasons.push(ReplatformBlockedReason::ArchitectureMismatch);
+            }
+            if !unresolved_dependencies.is_empty() {
+                blocked_reasons.push(ReplatformBlockedReason::UnsatisfiedTargetDependencies);
+            }
+            if target_repository.is_none() {
+                blocked_reasons.push(ReplatformBlockedReason::MissingRepositoryMetadata);
+            }
+            if target_repository.is_some() && target_repository_package_id.is_none() {
+                blocked_reasons.push(ReplatformBlockedReason::MissingRepositoryPackageId);
+            }
+            if target_repository.is_some()
+                && target_repository_package_id.is_some()
+                && install_route_kind.is_none()
+            {
+                blocked_reasons.push(ReplatformBlockedReason::MissingInstallRoute);
+            }
+            if matches!(
                 install_route_kind,
-                architecture_mismatch,
-                unresolved_dependencies.is_empty(),
+                Some(InstallRouteKind::AnyVersionFallback)
             ) {
-                (_, _, _, true, _) => Some(ReplatformBlockedReason::ArchitectureMismatch),
-                (_, _, _, false, false) => {
-                    Some(ReplatformBlockedReason::UnsatisfiedTargetDependencies)
-                }
-                (Some(_), Some(_), Some(InstallRouteKind::ExactVersion), false, true) => None,
-                (Some(_), Some(_), Some(InstallRouteKind::AnyVersionFallback), false, true) => {
-                    Some(ReplatformBlockedReason::AnyVersionRouteOnly)
-                }
-                (Some(_), Some(_), Some(InstallRouteKind::DefaultStrategy), false, true) => {
-                    Some(ReplatformBlockedReason::MissingVersionedInstallRoute)
-                }
-                (None, _, _, false, true) => {
-                    Some(ReplatformBlockedReason::MissingRepositoryMetadata)
-                }
-                (Some(_), None, _, false, true) => {
-                    Some(ReplatformBlockedReason::MissingRepositoryPackageId)
-                }
-                (Some(_), Some(_), None, false, true) => {
-                    Some(ReplatformBlockedReason::MissingInstallRoute)
-                }
+                blocked_reasons.push(ReplatformBlockedReason::AnyVersionRouteOnly);
+            }
+            if matches!(install_route_kind, Some(InstallRouteKind::DefaultStrategy)) {
+                blocked_reasons.push(ReplatformBlockedReason::MissingVersionedInstallRoute);
+            }
+
+            let remove_leg = ReplatformExecutionLeg { ready: true };
+            let install_leg = ReplatformExecutionLeg {
+                ready: target_repository.is_some()
+                    && target_repository_package_id.is_some()
+                    && matches!(install_route_kind, Some(InstallRouteKind::ExactVersion))
+                    && !architecture_mismatch
+                    && unresolved_dependencies.is_empty(),
             };
+            let metadata_leg = ReplatformExecutionLeg {
+                ready: target_repository.is_some() && target_repository_package_id.is_some(),
+            };
+            let blocked_reason = blocked_reasons.first().cloned();
             transactions.push(ReplatformExecutionTransaction {
                 package: package.clone(),
                 current_distro: current_distro.clone(),
@@ -333,7 +348,11 @@ pub fn replatform_execution_plan(
                 install_repository_package_id: *target_repository_package_id,
                 install_route: install_route.map(|route| route.route),
                 unresolved_dependencies,
-                executable: blocked_reason.is_none(),
+                remove_leg,
+                install_leg,
+                metadata_leg,
+                executable: blocked_reasons.is_empty(),
+                blocked_reasons,
                 blocked_reason,
             });
         }
@@ -917,6 +936,88 @@ mod tests {
     }
 
     #[test]
+    fn test_source_policy_replatform_snapshot_uses_shared_selector_priority_ordering() {
+        let (_temp, conn) = create_test_db();
+
+        let mut fedora_repo = Repository::new(
+            "fedora".to_string(),
+            "https://example.test/fedora".to_string(),
+        );
+        fedora_repo.default_strategy_distro = Some("fedora-43".to_string());
+        let fedora_repo_id = fedora_repo.insert(&conn).unwrap();
+
+        let mut fedora_label = LabelEntry::new(
+            "fedora".to_string(),
+            "f43".to_string(),
+            "stable".to_string(),
+        );
+        fedora_label.repository_id = Some(fedora_repo_id);
+        let fedora_label_id = fedora_label.insert(&conn).unwrap();
+
+        let mut installed = Trove::new_with_source(
+            "demo".to_string(),
+            "0.9".to_string(),
+            TroveType::Package,
+            InstallSource::Repository,
+        );
+        installed.label_id = Some(fedora_label_id);
+        installed.architecture = Some("x86_64".to_string());
+        installed.insert(&conn).unwrap();
+
+        let mut arch_priority_repo = Repository::new(
+            "arch-priority".to_string(),
+            "https://example.test/arch-priority".to_string(),
+        );
+        arch_priority_repo.default_strategy_distro = Some("arch".to_string());
+        arch_priority_repo.priority = 100;
+        let arch_priority_repo_id = arch_priority_repo.insert(&conn).unwrap();
+
+        let mut arch_latest_repo = Repository::new(
+            "arch-latest".to_string(),
+            "https://example.test/arch-latest".to_string(),
+        );
+        arch_latest_repo.default_strategy_distro = Some("arch".to_string());
+        arch_latest_repo.priority = 10;
+        let arch_latest_repo_id = arch_latest_repo.insert(&conn).unwrap();
+
+        let mut priority_pkg = RepositoryPackage::new(
+            arch_priority_repo_id,
+            "demo".to_string(),
+            "1.0".to_string(),
+            "sha256:priority".to_string(),
+            111,
+            "https://example.test/arch-priority/demo-1.0.pkg.tar.zst".to_string(),
+        );
+        priority_pkg.architecture = Some("x86_64".to_string());
+        priority_pkg.insert(&conn).unwrap();
+
+        let mut latest_pkg = RepositoryPackage::new(
+            arch_latest_repo_id,
+            "demo".to_string(),
+            "2.0".to_string(),
+            "sha256:latest".to_string(),
+            222,
+            "https://example.test/arch-latest/demo-2.0.pkg.tar.zst".to_string(),
+        );
+        latest_pkg.architecture = Some("x86_64".to_string());
+        latest_pkg.insert(&conn).unwrap();
+
+        let snapshot = source_policy_replatform_snapshot(&conn, "arch").unwrap();
+
+        assert_eq!(snapshot.visible_realignment_candidates, 1);
+        assert_eq!(
+            snapshot.visible_realignment_proposals[0]
+                .target_repository
+                .as_deref(),
+            Some("arch-priority")
+        );
+        assert_eq!(
+            snapshot.visible_realignment_proposals[0].target_version,
+            "1.0"
+        );
+    }
+
+    #[test]
     fn test_planned_replatform_actions_use_installed_versions() {
         let snapshot = SourcePolicyReplatformSnapshot {
             target_distro: "arch".to_string(),
@@ -1151,6 +1252,91 @@ mod tests {
         assert_eq!(
             plan.transactions[0].blocked_reason,
             Some(ReplatformBlockedReason::AnyVersionRouteOnly)
+        );
+    }
+
+    #[test]
+    fn test_replatform_execution_plan_marks_transaction_executable_only_when_all_legs_are_ready() {
+        let (_temp, conn) = create_test_db();
+        let mut arch_repo = Repository::new(
+            "arch-core".to_string(),
+            "https://example.test/arch".to_string(),
+        );
+        arch_repo.default_strategy_distro = Some("arch".to_string());
+        let arch_repo_id = arch_repo.insert(&conn).unwrap();
+
+        let mut resolution = PackageResolution::new(
+            arch_repo_id,
+            "vim".to_string(),
+            vec![ResolutionStrategy::Binary {
+                url: "https://example.test/arch/vim-9.1.0.ccs".to_string(),
+                checksum: "sha256:exact".to_string(),
+                delta_base: None,
+            }],
+        );
+        resolution.version = Some("9.1.0".to_string());
+        resolution.primary_strategy = PrimaryStrategy::Binary;
+        resolution.insert(&conn).unwrap();
+
+        let actions = vec![DiffAction::ReplatformReplace {
+            package: "vim".to_string(),
+            current_distro: Some("fedora-43".to_string()),
+            target_distro: "arch".to_string(),
+            current_version: "9.0.1".to_string(),
+            current_architecture: Some("x86_64".to_string()),
+            target_version: "9.1.0".to_string(),
+            architecture: Some("x86_64".to_string()),
+            target_repository: Some("arch-core".to_string()),
+            target_repository_package_id: Some(22),
+        }];
+
+        let plan = replatform_execution_plan(&conn, &actions)
+            .expect("plan query should succeed")
+            .expect("expected plan");
+
+        let transaction = &plan.transactions[0];
+        assert!(transaction.executable);
+        assert!(transaction.remove_leg.ready);
+        assert!(transaction.install_leg.ready);
+        assert!(transaction.metadata_leg.ready);
+        assert!(transaction.blocked_reasons.is_empty());
+    }
+
+    #[test]
+    fn test_replatform_execution_plan_marks_transaction_blocked_when_route_is_missing() {
+        let (_temp, conn) = create_test_db();
+        let mut arch_repo = Repository::new(
+            "arch-core".to_string(),
+            "https://example.test/arch".to_string(),
+        );
+        arch_repo.default_strategy_distro = Some("arch".to_string());
+        arch_repo.insert(&conn).unwrap();
+
+        let actions = vec![DiffAction::ReplatformReplace {
+            package: "vim".to_string(),
+            current_distro: Some("fedora-43".to_string()),
+            target_distro: "arch".to_string(),
+            current_version: "9.0.1".to_string(),
+            current_architecture: Some("x86_64".to_string()),
+            target_version: "9.1.0".to_string(),
+            architecture: Some("x86_64".to_string()),
+            target_repository: Some("arch-core".to_string()),
+            target_repository_package_id: Some(22),
+        }];
+
+        let plan = replatform_execution_plan(&conn, &actions)
+            .expect("plan query should succeed")
+            .expect("expected plan");
+
+        let transaction = &plan.transactions[0];
+        assert!(!transaction.executable);
+        assert!(transaction.remove_leg.ready);
+        assert!(!transaction.install_leg.ready);
+        assert!(transaction.metadata_leg.ready);
+        assert!(
+            transaction
+                .blocked_reasons
+                .contains(&ReplatformBlockedReason::MissingInstallRoute)
         );
     }
 

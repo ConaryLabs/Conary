@@ -427,6 +427,46 @@ impl Trove {
         Ok(())
     }
 
+    pub fn update_replatform_metadata(
+        conn: &Connection,
+        id: i64,
+        source_distro: &str,
+        version_scheme: &str,
+        installed_from_repository_id: i64,
+        selection_reason: &str,
+    ) -> Result<()> {
+        conn.execute(
+            "UPDATE troves
+             SET source_distro = ?1,
+                 version_scheme = ?2,
+                 installed_from_repository_id = ?3,
+                 selection_reason = ?4
+             WHERE id = ?5",
+            params![
+                source_distro,
+                version_scheme,
+                installed_from_repository_id,
+                selection_reason,
+                id
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_selection_reason(
+        conn: &Connection,
+        id: i64,
+        selection_reason: &str,
+    ) -> Result<()> {
+        conn.execute(
+            "UPDATE troves
+             SET selection_reason = ?1
+             WHERE id = ?2",
+            params![selection_reason, id],
+        )?;
+        Ok(())
+    }
+
     /// Find all pinned packages
     pub fn find_pinned(conn: &Connection) -> Result<Vec<Self>> {
         let sql = format!(
@@ -595,6 +635,52 @@ mod tests {
         let loaded = Trove::find_by_id(&conn, trove_id).unwrap().unwrap();
         assert_eq!(loaded.source_distro.as_deref(), Some("fedora-43"));
         assert_eq!(loaded.version_scheme.as_deref(), Some("rpm"));
+    }
+
+    #[test]
+    fn trove_update_replatform_metadata_sets_all_provenance_fields() {
+        let (_dir, conn) = setup_test_db();
+        let mut repo = crate::db::models::Repository::new(
+            "arch-core".to_string(),
+            "https://example.test/arch".to_string(),
+        );
+        let repo_id = repo.insert(&conn).unwrap();
+        let mut trove = Trove::new("vim".to_string(), "9.1.0".to_string(), TroveType::Package);
+        let trove_id = trove.insert(&conn).unwrap();
+
+        Trove::update_replatform_metadata(
+            &conn,
+            trove_id,
+            "arch",
+            "arch",
+            repo_id,
+            "Replatformed from fedora-43 to arch by model apply",
+        )
+        .unwrap();
+
+        let loaded = Trove::find_by_id(&conn, trove_id).unwrap().unwrap();
+        assert_eq!(loaded.source_distro.as_deref(), Some("arch"));
+        assert_eq!(loaded.version_scheme.as_deref(), Some("arch"));
+        assert_eq!(loaded.installed_from_repository_id, Some(repo_id));
+        assert_eq!(
+            loaded.selection_reason.as_deref(),
+            Some("Replatformed from fedora-43 to arch by model apply")
+        );
+    }
+
+    #[test]
+    fn trove_update_selection_reason_overwrites_existing_reason() {
+        let (_dir, conn) = setup_test_db();
+        let mut trove = Trove::new("vim".to_string(), "9.1.0".to_string(), TroveType::Package);
+        let trove_id = trove.insert(&conn).unwrap();
+
+        Trove::update_selection_reason(&conn, trove_id, "Replatform partial failure").unwrap();
+
+        let loaded = Trove::find_by_id(&conn, trove_id).unwrap().unwrap();
+        assert_eq!(
+            loaded.selection_reason.as_deref(),
+            Some("Replatform partial failure")
+        );
     }
 
     #[test]
