@@ -883,6 +883,23 @@ impl SystemConfig {
             })
     }
 
+    /// Return the selection-mode value that should be mirrored into runtime state.
+    ///
+    /// Implicit default profiles do not count as an explicit runtime override.
+    pub fn runtime_selection_mode_mirror(&self) -> Option<SelectionMode> {
+        if self.selection_mode.is_some() {
+            self.selection_mode
+                .as_deref()
+                .and_then(selection_mode_from_string)
+        } else if self.profile_explicit {
+            self.profile
+                .as_deref()
+                .and_then(selection_mode_from_profile)
+        } else {
+            None
+        }
+    }
+
     /// Return the effective source pin, preferring the richer policy shape and
     /// falling back to legacy `distro` / `mixing` fields for compatibility.
     pub fn effective_pin(&self) -> Option<SourcePinConfig> {
