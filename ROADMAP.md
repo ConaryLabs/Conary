@@ -26,7 +26,7 @@ For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 
 
 - Group packages and published group definitions
 - Better system-model ergonomics for large host classes
-- Safer migration flows for changing system roles
+- Safer, broader-validated replatform and role-migration flows
 - Stronger lockfile and remote-include workflows
 
 ### 4. Distribution and Scale

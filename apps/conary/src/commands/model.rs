@@ -135,7 +135,7 @@ fn source_policy_summary(diff: &ModelDiff) -> Option<String> {
                 .to_string()
         }
         Some(ReplatformStatus::PendingWithEstimate(_)) | Some(ReplatformStatus::PolicyOnlyPending) => {
-            "This is a source-policy-only transition. Applying it updates Conary's preferred package source policy without replacing packages yet."
+            "This is a source-policy-only transition. Applying it updates Conary's preferred package source policy now; package realignment remains limited to transactions that are already executable."
                 .to_string()
         }
         None => return None,
@@ -515,7 +515,7 @@ pub async fn cmd_model_apply(opts: ApplyOptions<'_>) -> Result<()> {
         let blocked = plan.transactions.len().saturating_sub(executable);
         if executable == 0 {
             println!(
-                "Replatform replacement actions are planning-only in this slice. Review them here; automatic replacement execution is still pending."
+                "No executable replatform transactions are available in this plan yet. Review the blocked reasons above; those package replacements remain pending."
             );
             println!();
         } else if blocked == 0 {
@@ -1085,7 +1085,7 @@ mod tests {
         let summary = source_policy_summary(&diff).unwrap();
 
         assert!(summary.contains("source-policy-only transition"));
-        assert!(summary.contains("without replacing packages yet"));
+        assert!(summary.contains("updates Conary's preferred package source policy now"));
     }
 
     #[test]
@@ -1113,7 +1113,7 @@ mod tests {
 
         let summary = source_policy_summary(&diff).unwrap();
 
-        assert!(summary.contains("without replacing packages yet"));
+        assert!(summary.contains("transactions that are already executable"));
         assert!(!summary.contains("replaced"));
     }
 

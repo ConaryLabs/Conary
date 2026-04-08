@@ -90,8 +90,8 @@ tests/integration/remi/manifests/
   phase4-group-a.toml       # T160-T176 (Config/Distro/Canonical/Groups/Registry)
   phase4-group-b.toml       # T177-T195 (Label/Model/Collection/Derive)
   phase4-group-c.toml       # T196-T213 (CCS/Bootstrap/Cache/Automation)
-  phase4-group-d.toml       # T214-T229 (Trust/Federation/Provenance/Capability)
-  phase4-group-e.toml       # T230-T249 (Cross-distro compatibility)
+  phase4-group-d.toml       # T221-T255 (Provenance/Capability/Trust/System/Federation/Automation)
+  phase4-group-e.toml       # T230-T251 (Cross-distro compatibility overlay: distro policy/replatform/takeover)
 ```
 
 ## HTTP API

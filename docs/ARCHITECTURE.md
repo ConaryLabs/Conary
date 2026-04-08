@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-04-07
-revision: 9
-summary: Refresh workspace layout for shared operation vocabulary, canonical daemon defaults, and current service boundaries
+revision: 10
+summary: Refresh workspace layout for shared operation vocabulary, source-selection policy flow, and current service boundaries
 ---
 
 # Conary Architecture
@@ -120,7 +120,9 @@ crates/conary-core/      Core library crate
     |   +-- resolution.rs Per-package routing strategies
     |   +-- dependency_model.rs Cross-distro dependency model (provides/requires/groups)
     |   +-- versioning.rs Cross-distro version scheme awareness
-    |   +-- resolution_policy.rs Per-repo capability resolution policies
+    |   +-- resolution_policy.rs Candidate eligibility and ranking policy types
+    |   +-- effective_policy.rs Shared runtime source-policy loading from pins + settings
+    |   +-- latest_signal.rs Repology-backed latest-signal scoring for ranking
     +-- filesystem/      Storage layer
     |   +-- cas.rs       Content-addressable store (SHA-256 keyed)
     |   +-- vfs/         Virtual filesystem tree (arena allocator)
@@ -147,7 +149,7 @@ crates/conary-core/      Core library crate
     |   +-- remote.rs    Remote collection fetching
     |   +-- lockfile.rs  Model lockfile for remote includes
     |   +-- signing.rs   Ed25519 collection signing
-    |   +-- replatform.rs Cross-distro system replatforming
+    |   +-- replatform.rs Cross-distro system replatforming + executable transaction planning
     +-- recipe/          Source-based package building
     |   +-- format.rs    Recipe format types and build-stage definitions
     |   +-- parser.rs    TOML recipe parser

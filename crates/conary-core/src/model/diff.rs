@@ -741,7 +741,7 @@ fn compute_diff_inner(
 
     if diff.has_source_policy_changes() && diff.structural_change_count() == 0 {
         diff.add_warning(
-            "Source policy changed, but automatic package convergence planning is still pending. Applying this model will update preferred sources without replacing packages yet.",
+            "Source policy changed, but package realignment is still pending. Applying this model will update preferred sources now and leave blocked or unresolved replacements for later review.",
         );
     }
 
@@ -1051,9 +1051,11 @@ mod tests {
         let state = SystemState::new();
         let diff = compute_diff(&model, &state);
 
-        assert!(diff.warnings.iter().any(|warning| {
-            warning.contains("automatic package convergence planning is still pending")
-        }));
+        assert!(
+            diff.warnings
+                .iter()
+                .any(|warning| { warning.contains("package realignment is still pending") })
+        );
     }
 
     #[test]
@@ -1068,9 +1070,12 @@ mod tests {
         let state = SystemState::new();
         let diff = compute_diff(&model, &state);
 
-        assert!(!diff.warnings.iter().any(|warning| {
-            warning.contains("automatic package convergence planning is still pending")
-        }));
+        assert!(
+            !diff
+                .warnings
+                .iter()
+                .any(|warning| { warning.contains("package realignment is still pending") })
+        );
     }
 
     #[test]
