@@ -2,6 +2,8 @@
 
 use std::path::Path;
 
+use crate::commands::replatform_rendering::render_replatform_blocked_reason;
+use crate::commands::{InstallOptions, SandboxMode, cmd_install};
 use anyhow::{Context, Result, anyhow};
 use conary_core::db::models::{
     DerivedOverride, DerivedPackage, DerivedPatch, DistroPin, Trove, VersionPolicy, settings,
@@ -10,7 +12,7 @@ use conary_core::derived::{build_from_definition, persist_build_artifact};
 use conary_core::filesystem::CasStore;
 use conary_core::hash::sha256;
 use conary_core::model::parser::SystemModel;
-use conary_core::model::{DiffAction, ModelDerivedPackage};
+use conary_core::model::{DiffAction, ModelDerivedPackage, replatform_execution_plan};
 use conary_core::repository::{
     SETTINGS_KEY_ALLOWED_DISTROS, SETTINGS_KEY_SELECTION_MODE, resolution_policy::SelectionMode,
 };
@@ -93,6 +95,105 @@ fn selection_mode_value(mode: SelectionMode) -> &'static str {
         SelectionMode::Policy => "policy",
         SelectionMode::Latest => "latest",
     }
+}
+
+/// Apply executable replatform transactions through the shared install path.
+///
+/// Returns `(executed, errors)`.
+pub(super) async fn apply_replatform_changes(
+    db_path: &str,
+    root: &str,
+    actions: &[&DiffAction],
+) -> Result<(usize, Vec<String>)> {
+    let conn = rusqlite::Connection::open(db_path)?;
+    let owned_actions = actions
+        .iter()
+        .map(|action| (*action).clone())
+        .collect::<Vec<_>>();
+    let Some(plan) = replatform_execution_plan(&conn, &owned_actions)? else {
+        return Ok((0, Vec::new()));
+    };
+    drop(conn);
+
+    let mut executed = 0usize;
+    let mut errors = Vec::new();
+
+    for transaction in plan.transactions {
+        if !transaction.executable {
+            let reason = if !transaction.blocked_reasons.is_empty() {
+                transaction
+                    .blocked_reasons
+                    .iter()
+                    .map(render_replatform_blocked_reason)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            } else {
+                transaction
+                    .blocked_reason
+                    .as_ref()
+                    .map(render_replatform_blocked_reason)
+                    .unwrap_or("unknown replatform block")
+                    .to_string()
+            };
+            errors.push(format!(
+                "Replatform '{}' blocked: {}",
+                transaction.package, reason
+            ));
+            continue;
+        }
+
+        let Some(repository) = transaction.install_repository.clone() else {
+            errors.push(format!(
+                "Replatform '{}' executable plan missing repository metadata",
+                transaction.package
+            ));
+            continue;
+        };
+
+        let selection_reason = format!(
+            "Replatformed from {} to {} by model apply",
+            transaction
+                .current_distro
+                .as_deref()
+                .unwrap_or("unknown source"),
+            transaction.target_distro
+        );
+
+        match cmd_install(
+            &transaction.package,
+            InstallOptions {
+                db_path,
+                root,
+                version: Some(transaction.target_version.clone()),
+                repo: Some(repository),
+                dry_run: false,
+                no_deps: false,
+                no_scripts: false,
+                selection_reason: Some(selection_reason.as_str()),
+                sandbox_mode: SandboxMode::None,
+                allow_downgrade: true,
+                convert_to_ccs: false,
+                no_capture: true,
+                force: false,
+                dep_mode: None,
+                yes: true,
+                from_distro: None,
+            },
+        )
+        .await
+        {
+            Ok(()) => {
+                println!(
+                    "Executed replatform replacement: {} -> {} {}",
+                    transaction.package, transaction.target_distro, transaction.target_version
+                );
+                executed += 1;
+            }
+            Err(err) => errors.push(format!("Replatform '{}': {}", transaction.package, err)),
+        }
+    }
+
+    Ok((executed, errors))
 }
 
 /// Apply package install/remove actions. Currently stubs that print a
