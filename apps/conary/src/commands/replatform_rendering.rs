@@ -45,16 +45,26 @@ pub(crate) fn render_replatform_execution_plan(plan: &ReplatformExecutionPlan) -
                 if let Some(route) = &transaction.install_route {
                     line.push_str(&format!(" [route:{}]", route));
                 }
-                if let Some(reason) = transaction.blocked_reason.as_ref() {
+                if !transaction.blocked_reasons.is_empty() {
+                    line.push_str(&format!(
+                        " [{}]",
+                        render_replatform_blocked_reasons(&transaction.blocked_reasons)
+                    ));
+                } else if let Some(reason) = transaction.blocked_reason.as_ref() {
                     line.push_str(&format!(" [{}]", render_replatform_blocked_reason(reason)));
                 }
             }
             _ => {
-                let reason = transaction
-                    .blocked_reason
-                    .as_ref()
-                    .map(render_replatform_blocked_reason)
-                    .unwrap_or("pending repo/package resolution");
+                let reason = if !transaction.blocked_reasons.is_empty() {
+                    render_replatform_blocked_reasons(&transaction.blocked_reasons)
+                } else {
+                    transaction
+                        .blocked_reason
+                        .as_ref()
+                        .map(render_replatform_blocked_reason)
+                        .unwrap_or("pending repo/package resolution")
+                        .to_string()
+                };
                 line.push_str(&format!(" [{}]", reason));
             }
         }
@@ -68,6 +78,14 @@ pub(crate) fn render_replatform_execution_plan(plan: &ReplatformExecutionPlan) -
     }
 
     lines.join("\n")
+}
+
+fn render_replatform_blocked_reasons(reasons: &[ReplatformBlockedReason]) -> String {
+    reasons
+        .iter()
+        .map(render_replatform_blocked_reason)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 pub(crate) fn render_replatform_blocked_reason(reason: &ReplatformBlockedReason) -> &'static str {
@@ -85,7 +103,17 @@ pub(crate) fn render_replatform_blocked_reason(reason: &ReplatformBlockedReason)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conary_core::model::{ReplatformBlockedReason, ReplatformExecutionPlan};
+    use conary_core::model::{
+        ReplatformBlockedReason, ReplatformExecutionLeg, ReplatformExecutionPlan,
+    };
+
+    fn ready_leg() -> ReplatformExecutionLeg {
+        ReplatformExecutionLeg { ready: true }
+    }
+
+    fn blocked_leg() -> ReplatformExecutionLeg {
+        ReplatformExecutionLeg { ready: false }
+    }
 
     #[test]
     fn test_render_replatform_execution_plan_lists_transactions() {
@@ -103,7 +131,11 @@ mod tests {
                     install_repository_package_id: Some(11),
                     install_route: Some("default:legacy".to_string()),
                     unresolved_dependencies: Vec::new(),
+                    remove_leg: ready_leg(),
+                    install_leg: blocked_leg(),
+                    metadata_leg: ready_leg(),
                     executable: false,
+                    blocked_reasons: vec![ReplatformBlockedReason::MissingVersionedInstallRoute],
                     blocked_reason: Some(ReplatformBlockedReason::MissingVersionedInstallRoute),
                 },
                 conary_core::model::ReplatformExecutionTransaction {
@@ -118,7 +150,11 @@ mod tests {
                     install_repository_package_id: Some(22),
                     install_route: Some("default:legacy".to_string()),
                     unresolved_dependencies: Vec::new(),
+                    remove_leg: ready_leg(),
+                    install_leg: blocked_leg(),
+                    metadata_leg: ready_leg(),
                     executable: false,
+                    blocked_reasons: vec![ReplatformBlockedReason::MissingVersionedInstallRoute],
                     blocked_reason: Some(ReplatformBlockedReason::MissingVersionedInstallRoute),
                 },
             ],
@@ -168,7 +204,11 @@ mod tests {
                 install_repository_package_id: Some(22),
                 install_route: Some("resolution:binary".to_string()),
                 unresolved_dependencies: Vec::new(),
+                remove_leg: ready_leg(),
+                install_leg: ready_leg(),
+                metadata_leg: ready_leg(),
                 executable: true,
+                blocked_reasons: Vec::new(),
                 blocked_reason: None,
             }],
         };
@@ -197,7 +237,11 @@ mod tests {
                 install_repository_package_id: Some(22),
                 install_route: Some("resolution:binary".to_string()),
                 unresolved_dependencies: vec!["libmagic (>= 1.0)".to_string()],
+                remove_leg: ready_leg(),
+                install_leg: blocked_leg(),
+                metadata_leg: ready_leg(),
                 executable: false,
+                blocked_reasons: vec![ReplatformBlockedReason::UnsatisfiedTargetDependencies],
                 blocked_reason: Some(ReplatformBlockedReason::UnsatisfiedTargetDependencies),
             }],
         };
