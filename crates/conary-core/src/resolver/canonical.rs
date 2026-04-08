@@ -6,11 +6,15 @@
 //! ranks them by pin/affinity, and enforces mixing policy.
 
 use crate::db::models::{
-    CanonicalPackage, DistroPin, PackageImplementation, PackageOverride, SystemAffinity,
+    CanonicalPackage, DistroPin, PackageImplementation, PackageOverride, RepologyCacheEntry,
+    SystemAffinity,
 };
 use crate::error::{Error, Result};
+use crate::repository::LatestSignal;
 use crate::repository::resolution_policy::{RequestScope, ResolutionPolicy};
+use chrono::Utc;
 use rusqlite::Connection;
+use std::collections::HashSet;
 
 /// A candidate package from canonical expansion
 #[derive(Debug, Clone)]
@@ -210,10 +214,21 @@ impl<'db> CanonicalResolver<'db> {
     ) -> Result<Vec<ResolverCandidate>> {
         let mut ranked = candidates.to_vec();
 
+        ranked.retain(|candidate| candidate_allowed_by_policy(candidate, policy));
+
         let pin = DistroPin::get_current(self.conn)?;
         let affinities = SystemAffinity::list(self.conn)?;
+        let latest_positive_distros = self.latest_positive_distros(&ranked, policy)?;
 
         ranked.sort_by(|a, b| {
+            if policy.selection_mode == crate::repository::resolution_policy::SelectionMode::Latest {
+                let a_latest = latest_positive_distros.contains(&a.distro);
+                let b_latest = latest_positive_distros.contains(&b.distro);
+                if a_latest != b_latest {
+                    return b_latest.cmp(&a_latest);
+                }
+            }
+
             // 0. Explicit request scope first (root requests only)
             match &policy.request_scope {
                 RequestScope::Repository(repo) => {
@@ -285,6 +300,38 @@ impl<'db> CanonicalResolver<'db> {
         Ok(ranked)
     }
 
+    fn latest_positive_distros(
+        &self,
+        candidates: &[ResolverCandidate],
+        policy: &ResolutionPolicy,
+    ) -> Result<HashSet<String>> {
+        if policy.selection_mode != crate::repository::resolution_policy::SelectionMode::Latest
+            || candidates.is_empty()
+        {
+            return Ok(HashSet::new());
+        }
+
+        let canonical_id = candidates[0].canonical_id;
+        let distros = candidates
+            .iter()
+            .map(|candidate| candidate.distro.clone())
+            .collect::<Vec<_>>();
+        let rows = RepologyCacheEntry::find_for_canonical_and_distros(self.conn, canonical_id, &distros)?;
+        let now = Utc::now();
+        let mut positive = HashSet::new();
+
+        for row in rows {
+            let status = row.status.as_deref().unwrap_or("");
+            let signal =
+                LatestSignal::from_repology(status, row.version.as_deref(), &row.fetched_at, now)?;
+            if signal.is_positive() {
+                positive.insert(row.distro);
+            }
+        }
+
+        Ok(positive)
+    }
+
     /// Get packages that conflict with the given package (canonical equivalents).
     /// All distro implementations of the same canonical package conflict with each other.
     pub fn get_conflicts(&self, package_name: &str) -> Result<Vec<String>> {
@@ -330,13 +377,29 @@ fn distro_matches_flavor(
     }
 }
 
+fn candidate_allowed_by_policy(candidate: &ResolverCandidate, policy: &ResolutionPolicy) -> bool {
+    if policy.allowed_distros.is_empty() {
+        return true;
+    }
+
+    policy.allowed_distros.iter().any(|allowed| {
+        allowed == &candidate.distro
+            || candidate
+                .repository_name
+                .as_ref()
+                .is_some_and(|repository_name| repository_name == allowed)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::models::{CanonicalPackage, DistroPin, PackageImplementation, PackageOverride};
+    use crate::db::models::{
+        CanonicalPackage, DistroPin, PackageImplementation, PackageOverride, RepologyCacheEntry,
+    };
     use crate::db::testing::create_test_db;
     use crate::repository::dependency_model::RepositoryDependencyFlavor;
-    use crate::repository::resolution_policy::{RequestScope, ResolutionPolicy};
+    use crate::repository::resolution_policy::{RequestScope, ResolutionPolicy, SelectionMode};
 
     #[test]
     fn test_expand_canonical_name() {
@@ -587,6 +650,102 @@ mod tests {
             .unwrap();
         // Override should beat pin
         assert_eq!(ranked[0].distro, "fedora-41");
+    }
+
+    #[test]
+    fn latest_mode_prefers_newest_repology_candidate_before_pin_affinity_tiebreakers() {
+        let (_t, conn) = create_test_db();
+
+        let mut pkg = CanonicalPackage::new("python".into(), "package".into());
+        let cid = pkg.insert(&conn).unwrap();
+        let mut fedora_impl =
+            PackageImplementation::new(cid, "fedora".into(), "python".into(), "auto".into());
+        fedora_impl.insert_or_ignore(&conn).unwrap();
+        let mut arch_impl =
+            PackageImplementation::new(cid, "arch".into(), "python".into(), "auto".into());
+        arch_impl.insert_or_ignore(&conn).unwrap();
+
+        RepologyCacheEntry::insert_or_replace(
+            &conn,
+            &RepologyCacheEntry {
+                project_name: "python".into(),
+                distro: "fedora".into(),
+                distro_name: "python".into(),
+                version: Some("3.12.0".into()),
+                status: Some("outdated".into()),
+                fetched_at: "2026-04-07T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+        RepologyCacheEntry::insert_or_replace(
+            &conn,
+            &RepologyCacheEntry {
+                project_name: "python".into(),
+                distro: "arch".into(),
+                distro_name: "python".into(),
+                version: Some("3.13.0".into()),
+                status: Some("newest".into()),
+                fetched_at: "2026-04-07T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+
+        let resolver = CanonicalResolver::new(&conn);
+        let candidates = resolver.expand("python").unwrap();
+        let policy = ResolutionPolicy::new().with_selection_mode(SelectionMode::Latest);
+        let ranked = resolver
+            .rank_candidates_with_policy(&candidates, &policy)
+            .unwrap();
+        assert_eq!(ranked[0].distro, "arch");
+    }
+
+    #[test]
+    fn latest_mode_does_not_choose_ineligible_newest_candidate() {
+        let (_t, conn) = create_test_db();
+
+        let mut pkg = CanonicalPackage::new("python".into(), "package".into());
+        let cid = pkg.insert(&conn).unwrap();
+        let mut fedora_impl =
+            PackageImplementation::new(cid, "fedora".into(), "python".into(), "auto".into());
+        fedora_impl.insert_or_ignore(&conn).unwrap();
+        let mut arch_impl =
+            PackageImplementation::new(cid, "arch".into(), "python".into(), "auto".into());
+        arch_impl.insert_or_ignore(&conn).unwrap();
+
+        RepologyCacheEntry::insert_or_replace(
+            &conn,
+            &RepologyCacheEntry {
+                project_name: "python".into(),
+                distro: "fedora".into(),
+                distro_name: "python".into(),
+                version: Some("3.12.0".into()),
+                status: Some("outdated".into()),
+                fetched_at: "2026-04-07T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+        RepologyCacheEntry::insert_or_replace(
+            &conn,
+            &RepologyCacheEntry {
+                project_name: "python".into(),
+                distro: "arch".into(),
+                distro_name: "python".into(),
+                version: Some("3.13.0".into()),
+                status: Some("newest".into()),
+                fetched_at: "2026-04-07T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+
+        let resolver = CanonicalResolver::new(&conn);
+        let candidates = resolver.expand("python").unwrap();
+        let policy = ResolutionPolicy::new()
+            .with_selection_mode(SelectionMode::Latest)
+            .with_allowed_distros(vec!["fedora".to_string()]);
+        let ranked = resolver
+            .rank_candidates_with_policy(&candidates, &policy)
+            .unwrap();
+        assert_eq!(ranked[0].distro, "fedora");
     }
 
     #[test]
