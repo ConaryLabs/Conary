@@ -221,7 +221,8 @@ impl<'db> CanonicalResolver<'db> {
         let latest_positive_distros = self.latest_positive_distros(&ranked, policy)?;
 
         ranked.sort_by(|a, b| {
-            if policy.selection_mode == crate::repository::resolution_policy::SelectionMode::Latest {
+            if policy.selection_mode == crate::repository::resolution_policy::SelectionMode::Latest
+            {
                 let a_latest = latest_positive_distros.contains(&a.distro);
                 let b_latest = latest_positive_distros.contains(&b.distro);
                 if a_latest != b_latest {
@@ -316,7 +317,8 @@ impl<'db> CanonicalResolver<'db> {
             .iter()
             .map(|candidate| candidate.distro.clone())
             .collect::<Vec<_>>();
-        let rows = RepologyCacheEntry::find_for_canonical_and_distros(self.conn, canonical_id, &distros)?;
+        let rows =
+            RepologyCacheEntry::find_for_canonical_and_distros(self.conn, canonical_id, &distros)?;
         let now = Utc::now();
         let mut positive = HashSet::new();
 

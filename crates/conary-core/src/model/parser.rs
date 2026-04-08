@@ -1792,7 +1792,10 @@ mesa = { from = "fedora-41" }
     #[test]
     fn source_policy_default_profile_maps_to_latest_selection_mode() {
         let config = SystemConfig::default();
-        assert_eq!(config.effective_selection_mode(), Some(SelectionMode::Latest));
+        assert_eq!(
+            config.effective_selection_mode(),
+            Some(SelectionMode::Latest)
+        );
     }
 
     #[test]
@@ -1802,7 +1805,10 @@ mesa = { from = "fedora-41" }
             selection_mode: Some("policy".to_string()),
             ..Default::default()
         };
-        assert_eq!(config.effective_selection_mode(), Some(SelectionMode::Policy));
+        assert_eq!(
+            config.effective_selection_mode(),
+            Some(SelectionMode::Policy)
+        );
     }
 
     #[test]

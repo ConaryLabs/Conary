@@ -74,7 +74,7 @@ pub fn render_distro_info(conn: &Connection) -> Result<String> {
             output.push_str(&format!("Mixing: {}\n", pin.mixing_policy));
             output.push_str(&format!("{selection_mode}\n\n"));
             output.push_str("Source affinity:\n");
-            let affinities = SystemAffinity::list(&conn)?;
+            let affinities = SystemAffinity::list(conn)?;
             if affinities.is_empty() {
                 output.push_str("  (no data yet -- run a sync first)\n");
             } else {

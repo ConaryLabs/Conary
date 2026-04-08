@@ -347,9 +347,11 @@ fn latest_positive_keys(
     candidates: &[PackageWithRepo],
     options: &SelectionOptions,
 ) -> Result<HashSet<(i64, String)>> {
-    if options.policy.as_ref().map_or(true, |policy| {
-        policy.selection_mode != SelectionMode::Latest
-    }) {
+    if options
+        .policy
+        .as_ref()
+        .is_none_or(|policy| policy.selection_mode != SelectionMode::Latest)
+    {
         return Ok(HashSet::new());
     }
 

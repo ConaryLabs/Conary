@@ -112,7 +112,12 @@ mod tests {
     #[test]
     fn effective_policy_loads_allowed_distros_from_settings() {
         let (_tmp, conn) = create_test_db();
-        settings::set(&conn, SETTINGS_KEY_ALLOWED_DISTROS, "[\"arch\",\"fedora-43\"]").unwrap();
+        settings::set(
+            &conn,
+            SETTINGS_KEY_ALLOWED_DISTROS,
+            "[\"arch\",\"fedora-43\"]",
+        )
+        .unwrap();
         let policy = load_effective_policy(&conn, RequestScope::Any).unwrap();
         assert_eq!(
             policy.resolution.allowed_distros.as_slice(),

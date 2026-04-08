@@ -228,7 +228,10 @@ impl ResolutionPolicy {
         primary_flavor: Option<RepositoryDependencyFlavor>,
     ) -> bool {
         if !self.allowed_distros.is_empty()
-            && !self.allowed_distros.iter().any(|allowed| allowed == repository_name)
+            && !self
+                .allowed_distros
+                .iter()
+                .any(|allowed| allowed == repository_name)
         {
             return false;
         }

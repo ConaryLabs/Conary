@@ -17,7 +17,9 @@ impl LatestSignal {
         now: DateTime<Utc>,
     ) -> Result<Self> {
         let fetched_at = DateTime::parse_from_rfc3339(fetched_at)
-            .map_err(|err| Error::ParseError(format!("invalid fetched_at '{}': {}", fetched_at, err)))?
+            .map_err(|err| {
+                Error::ParseError(format!("invalid fetched_at '{}': {}", fetched_at, err))
+            })?
             .with_timezone(&Utc);
         let is_recent = now.signed_duration_since(fetched_at) <= Duration::days(7);
         let has_version = version.is_some_and(|value| !value.trim().is_empty());
