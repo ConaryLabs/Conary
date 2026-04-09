@@ -727,37 +727,6 @@ pub async fn cmd_bootstrap_seed(from: &str, output: &str, target: &str) -> Resul
 
 /// Load all recipes from subdirectories of `recipe_dir`, returning a `HashMap`
 /// keyed by package name. Walks `cross-tools/`, `temp-tools/`, `system/`, `tier2/`.
-fn load_recipes(
-    recipe_dir: &std::path::Path,
-) -> Result<std::collections::HashMap<String, conary_core::recipe::Recipe>> {
-    use conary_core::recipe::parser::parse_recipe_file;
-
-    let mut recipes = std::collections::HashMap::new();
-    let subdirs = ["cross-tools", "temp-tools", "system", "tier2"];
-
-    for subdir in &subdirs {
-        let dir = recipe_dir.join(subdir);
-        if !dir.exists() {
-            continue;
-        }
-        for entry in std::fs::read_dir(&dir)? {
-            let path = entry?.path();
-            if path.extension().is_some_and(|e| e == "toml") {
-                match parse_recipe_file(&path) {
-                    Ok(recipe) => {
-                        recipes.insert(recipe.package.name.clone(), recipe);
-                    }
-                    Err(e) => {
-                        tracing::warn!("Skipping {}: {e}", path.display());
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(recipes)
-}
-
 fn start_bootstrap_run_record(
     opts: &BootstrapRunOptions<'_>,
     manifest_path: &Path,
@@ -947,7 +916,7 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
 
     // 3. Load recipes and filter to manifest includes + transitive deps
     let recipe_dir = PathBuf::from(opts.recipe_dir);
-    let all_recipes = load_recipes(&recipe_dir)?;
+    let all_recipes = conary_core::derivation::load_recipes(&recipe_dir)?;
     println!("Recipes loaded: {}", all_recipes.len());
 
     let included: HashSet<String> = manifest.packages.include.iter().cloned().collect();

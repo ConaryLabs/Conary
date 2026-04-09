@@ -20,8 +20,8 @@ use tracing::warn;
 
 pub use download::{download_update, download_update_with_progress};
 pub use versioning::{
-    LatestVersionInfo, VersionCheckResult, check_for_update, fetch_latest_version_info, is_newer,
-    validate_download_origin,
+    LatestVersionInfo, VersionCheckResult, check_for_update, fetch_latest_version_info,
+    fetch_version_info, is_newer, validate_download_origin,
 };
 
 /// Trusted Ed25519 public keys for verifying self-update signatures (hex-encoded).

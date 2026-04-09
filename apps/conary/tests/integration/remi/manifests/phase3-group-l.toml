@@ -1,6 +1,6 @@
 # tests/integration/remi/manifests/phase3-group-l.toml
 #
-# Phase 3, Group L: Lifecycle Robustness (T128-T137).
+# Phase 3, Group L: Lifecycle Robustness (T128-T138).
 #
 # Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}
 #
@@ -108,6 +108,35 @@ echo "$OUTPUT"
 [test.step.assert]
 stdout_contains_any = ["trunc", "size", "failed", "end of file"]
 stdout_not_contains = "Updated successfully"
+
+# --------------------------------------------------------------------------
+# T138: Version-specific self-update metadata
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T138"
+name = "self_update_check_specific_version"
+description = "Self-update --check --version should query the version-specific metadata endpoint instead of bailing"
+timeout = 60
+group = "L"
+
+[[test.step]]
+run = """MOCK_DIR=/tmp/conary-self-update/t138 && \
+mkdir -p "$MOCK_DIR" && \
+printf '{"version":"99.1.0","download_url":"/v1/ccs/conary/99.1.0/download","sha256":"%064d","size":1234}' 0 > "$MOCK_DIR/99.1.0" && \
+python3 -m http.server 19880 --directory "$MOCK_DIR" >/tmp/t138-server.log 2>&1 & \
+SERVER_PID=$! && \
+sleep 1 && \
+${CONARY_BIN} system update-channel set http://127.0.0.1:19880 --db-path ${DB_PATH} >/dev/null && \
+OUTPUT=$(${CONARY_BIN} self-update --check --version 99.1.0 --db-path ${DB_PATH} 2>&1 || true) && \
+kill $SERVER_PID 2>/dev/null || true && \
+${CONARY_BIN} system update-channel reset --db-path ${DB_PATH} >/dev/null 2>&1 || true && \
+echo "$OUTPUT"
+"""
+
+[test.step.assert]
+stdout_contains_any = ["Current version:", "99.1.0", "Update available"]
+stdout_not_contains = "not yet implemented"
 
 # --------------------------------------------------------------------------
 # T131: Build and switch among generations

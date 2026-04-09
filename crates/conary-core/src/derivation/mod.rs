@@ -22,6 +22,7 @@ pub mod output;
 pub mod pipeline;
 pub mod profile;
 pub mod recipe_hash;
+pub mod recipe_loader;
 pub mod seed;
 pub mod seed_diff;
 pub mod substituter;
@@ -46,5 +47,6 @@ pub use profile::{
     BuildProfile, ProfileDerivation, ProfileDiff, ProfileMetadata, ProfileSeedRef, ProfileStage,
 };
 pub use recipe_hash::{build_script_hash, expand_variables, source_hash};
+pub use recipe_loader::{RecipeLoaderError, find_recipe_path, load_recipes};
 pub use seed::{Seed, SeedError, SeedMetadata, SeedSource, SeedValidation};
 pub use seed_diff::{SeedDiffReport, diff_seed_dirs};

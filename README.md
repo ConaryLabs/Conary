@@ -73,7 +73,7 @@ conary install nginx
 | Component model (install :devel only) | No | Split packages | No | Automatic |
 | Declarative system state | No | No | Yes (flake.nix) | Yes (system.toml) |
 | Content-addressable storage | No | No | Yes | Yes |
-| Hermetic builds | No | No | Yes | Yes (experimental) |
+| Hermetic builds | No | No | Yes | Partial (experimental) |
 | Dev shells | No | No | Yes | Yes |
 | OCI container export | No | No | Yes | Yes (experimental) |
 | Capability enforcement (landlock/seccomp) | No | No | No | Yes |
@@ -237,7 +237,7 @@ conary install openssl:devel      # Headers and libs for building
 
 ### Bootstrap System
 
-Build a complete Conary-managed Linux system from scratch. The current public command surface is `cross-tools`, `temp-tools`, `system`, `config`, `image`, and optional `tier2`, with `bootstrap run` available for manifest-driven derivation pipelines. Completed manifest-driven runs now persist operation-scoped artifacts under `<work_dir>/operations/<op-id>/`, and the comparison commands operate on those completed run workdirs. Targets x86_64, aarch64, and riscv64.
+Build a complete Conary-managed Linux system from scratch. The current public command surface is `cross-tools`, `temp-tools`, `system`, `config`, `image`, and optional `tier2`, with `bootstrap run` available for manifest-driven derivation pipelines. Completed manifest-driven runs now persist operation-scoped artifacts under `<work_dir>/operations/<op-id>/`, and the comparison commands operate on those completed run workdirs. Targets x86_64, aarch64, and riscv64. `conary derivation build` is now wired to the single-recipe executor path, while the broader derivation/profile pipeline is still evolving.
 
 ```bash
 conary bootstrap init --target x86_64

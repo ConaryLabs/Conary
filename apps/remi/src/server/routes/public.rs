@@ -106,6 +106,10 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
         .route("/v1/ccs/conary/latest", get(self_update::get_latest))
         .route("/v1/ccs/conary/versions", get(self_update::get_versions))
         .route(
+            "/v1/ccs/conary/{version}",
+            get(self_update::get_version_info),
+        )
+        .route(
             "/v1/ccs/conary/{version}/download",
             get(self_update::download),
         )
