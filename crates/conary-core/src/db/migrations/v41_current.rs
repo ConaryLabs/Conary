@@ -906,6 +906,35 @@ pub fn migrate_v65(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 66: Automation apply history
+pub fn migrate_v66(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 66");
+
+    conn.execute_batch(
+        "
+        CREATE TABLE automation_history (
+            id INTEGER PRIMARY KEY,
+            action_id TEXT NOT NULL,
+            category TEXT NOT NULL,
+            packages TEXT,
+            status TEXT NOT NULL,
+            error_message TEXT,
+            applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE INDEX idx_automation_history_applied_at
+            ON automation_history(applied_at DESC);
+        CREATE INDEX idx_automation_history_category
+            ON automation_history(category);
+        CREATE INDEX idx_automation_history_status
+            ON automation_history(status);
+        ",
+    )?;
+
+    info!("Schema version 66 applied successfully (automation history)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1158,5 +1187,40 @@ mod tests {
             )
             .unwrap();
         assert_eq!(base_generation, 0);
+    }
+
+    #[test]
+    fn test_migrate_v66_adds_automation_history_table() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        let version: i32 = conn
+            .query_row(
+                "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, crate::db::schema::SCHEMA_VERSION);
+
+        conn.execute(
+            "INSERT INTO automation_history (action_id, category, packages, status)
+             VALUES (?1, ?2, ?3, ?4)",
+            ("updates:openssl", "updates", "[\"openssl\"]", "applied"),
+        )
+        .unwrap();
+
+        let row: (String, String, String, String) = conn
+            .query_row(
+                "SELECT action_id, category, packages, status FROM automation_history",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+
+        assert_eq!(row.0, "updates:openssl");
+        assert_eq!(row.1, "updates");
+        assert_eq!(row.2, "[\"openssl\"]");
+        assert_eq!(row.3, "applied");
     }
 }

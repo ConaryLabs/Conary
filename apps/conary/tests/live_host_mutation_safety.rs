@@ -99,6 +99,48 @@ fn model_apply_refuses_without_live_mutation_flag() {
 }
 
 #[test]
+fn automation_apply_refuses_without_live_mutation_flag() {
+    let (_tmp, db_path) = common::setup_command_test_db();
+    let root = tempfile::tempdir().unwrap();
+
+    let output = run_conary(&[
+        "automation",
+        "apply",
+        "--db-path",
+        &db_path,
+        "--root",
+        root.path().to_str().unwrap(),
+        "--yes",
+    ]);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("conary automation apply"));
+    assert!(stderr.contains("--allow-live-system-mutation"));
+}
+
+#[test]
+fn automation_apply_dry_run_bypasses_gate() {
+    let (_tmp, db_path) = common::setup_command_test_db();
+    let root = tempfile::tempdir().unwrap();
+
+    let output = run_conary(&[
+        "automation",
+        "apply",
+        "--db-path",
+        &db_path,
+        "--root",
+        root.path().to_str().unwrap(),
+        "--dry-run",
+        "--yes",
+    ]);
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("--allow-live-system-mutation"));
+}
+
+#[test]
 fn system_restore_dry_run_bypasses_gate() {
     let (_tmp, db_path) = common::setup_command_test_db();
     let root = tempfile::tempdir().unwrap();

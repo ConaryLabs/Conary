@@ -404,6 +404,7 @@ pub(super) async fn apply_package_changes(
                     db_path,
                     root,
                     Some(current_version.clone()),
+                    arch.cloned(),
                     false,
                     SandboxMode::Always,
                     false,

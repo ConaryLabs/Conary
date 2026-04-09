@@ -8,20 +8,24 @@
 //! - Available update checking
 //! - Integrity verification
 
-use super::PendingAction;
 use super::action::{
     integrity_repair_action, major_upgrade_action, orphan_cleanup_action, package_update_action,
     security_update_action,
 };
+use super::{InstalledPackageRef, PendingAction};
 use crate::error::Result;
 use crate::hash::verify_file_sha256;
 use crate::model::AutomationConfig;
 use crate::repository::versioning::{VersionScheme, compare_repo_versions};
 use chrono::{Duration, Utc};
 use rusqlite::Connection;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use tracing::{debug, trace, warn};
+#[cfg(test)]
+use tracing::trace;
+use tracing::{debug, warn};
+
+type SecurityUpdateCandidate = (String, String, Vec<String>, String);
 
 /// Parse a stored version_scheme string into the enum, defaulting to RPM.
 fn parse_version_scheme(s: Option<&str>) -> VersionScheme {
@@ -124,8 +128,9 @@ impl<'a> AutomationChecker<'a> {
         // Query repository_packages for security updates
         let security_updates = self.find_security_updates()?;
 
-        for (package, cves, severity) in security_updates {
-            let action = security_update_action(&[package], &cves, &severity);
+        for (package, target_version, cves, severity) in security_updates {
+            let action =
+                security_update_action(&[package], &target_version, None, &cves, &severity);
 
             // Apply deadline based on config
             let deadline = self.calculate_security_deadline(&severity);
@@ -139,7 +144,7 @@ impl<'a> AutomationChecker<'a> {
     }
 
     /// Find packages with available security updates
-    fn find_security_updates(&self) -> Result<Vec<(String, Vec<String>, String)>> {
+    fn find_security_updates(&self) -> Result<Vec<SecurityUpdateCandidate>> {
         // Fetch candidates with version_scheme, filtering by provenance.
         // Join on name AND match the installed package's source_distro to the
         // repository's distro so we don't compare against rows from a different
@@ -191,7 +196,7 @@ impl<'a> AutomationChecker<'a> {
 
             // Filter by configured severity levels
             if self.should_include_severity(&severity) {
-                updates.push((name, cves, severity));
+                updates.push((name, repo_ver, cves, severity));
             }
         }
 
@@ -206,7 +211,7 @@ impl<'a> AutomationChecker<'a> {
                     _ => 5,
                 }
             };
-            severity_order(&a.2).cmp(&severity_order(&b.2))
+            severity_order(&a.3).cmp(&severity_order(&b.3))
         });
 
         Ok(updates)
@@ -248,7 +253,7 @@ impl<'a> AutomationChecker<'a> {
         let keep_set: HashSet<_> = self.config.orphans.keep.iter().collect();
         let orphans: Vec<_> = orphans
             .into_iter()
-            .filter(|p| !keep_set.contains(p))
+            .filter(|installed| !keep_set.contains(&installed.name))
             .collect();
 
         if orphans.is_empty() {
@@ -257,32 +262,52 @@ impl<'a> AutomationChecker<'a> {
 
         // Check grace period
         let grace_period = super::parse_duration(&self.config.orphans.after)?;
-        let orphans_with_age = self.filter_by_grace_period(&orphans, grace_period)?;
+        let orphan_names: Vec<String> = orphans
+            .iter()
+            .map(|installed| installed.name.clone())
+            .collect();
+        let ready_names = self.filter_by_grace_period(&orphan_names, grace_period)?;
 
-        if !orphans_with_age.is_empty() {
+        if !ready_names.is_empty() {
+            let ready_set: HashSet<_> = ready_names.iter().collect();
+            let ready_installed: Vec<_> = orphans
+                .into_iter()
+                .filter(|installed| ready_set.contains(&installed.name))
+                .collect();
+            let ready_packages = ready_installed
+                .iter()
+                .map(|installed| installed.name.clone())
+                .collect::<Vec<_>>();
+
             results
                 .orphans
-                .push(orphan_cleanup_action(&orphans_with_age));
+                .push(orphan_cleanup_action(&ready_installed, &ready_packages));
         }
 
         Ok(())
     }
 
     /// Find packages that are no longer required by anything
-    fn find_orphan_packages(&self) -> Result<Vec<String>> {
+    fn find_orphan_packages(&self) -> Result<Vec<InstalledPackageRef>> {
         // Find packages installed as dependencies that are no longer needed
         let mut stmt = self.conn.prepare(
-            "SELECT t.name FROM troves t
+            "SELECT t.name, t.version, t.architecture FROM troves t
              WHERE t.install_reason = 'dependency'
                AND NOT EXISTS (
                  SELECT 1 FROM dependencies d
                  JOIN troves t2 ON d.trove_id = t2.id
-                 WHERE d.name = t.name
+                 WHERE d.depends_on_name = t.name
                )",
         )?;
 
-        let orphans: Vec<String> = stmt
-            .query_map([], |row| row.get(0))?
+        let orphans: Vec<InstalledPackageRef> = stmt
+            .query_map([], |row| {
+                Ok(InstalledPackageRef {
+                    name: row.get(0)?,
+                    version: Some(row.get(1)?),
+                    architecture: row.get(2)?,
+                })
+            })?
             .filter_map(|r| match r {
                 Ok(v) => Some(v),
                 Err(e) => {
@@ -450,11 +475,11 @@ impl<'a> AutomationChecker<'a> {
             if is_major_upgrade(&current, &new) {
                 results
                     .major_upgrades
-                    .push(major_upgrade_action(&name, &current, &new, &[]));
+                    .push(major_upgrade_action(&name, &current, &new, None, &[]));
             } else {
                 results
                     .updates
-                    .push(package_update_action(&name, &current, &new));
+                    .push(package_update_action(&name, &current, &new, None));
             }
         }
 
@@ -463,22 +488,60 @@ impl<'a> AutomationChecker<'a> {
 
     /// Check file integrity against CAS
     fn check_integrity(&self, results: &mut CheckResults) -> Result<()> {
-        // Query files table and verify against CAS
-        // This is a placeholder - real implementation would:
-        // 1. Query files table for all managed files
-        // 2. Compute hash of each file on disk
-        // 3. Compare against stored hash
-        // 4. Report mismatches
+        let grouped = self.find_corrupted_files_by_package()?;
 
-        let corrupted = self.find_corrupted_files()?;
-
-        if !corrupted.is_empty() {
-            // Group by package
-            let action = integrity_repair_action(&corrupted, None);
-            results.integrity.push(action);
+        for (installed, files) in grouped {
+            results
+                .integrity
+                .push(integrity_repair_action(&files, installed));
         }
 
         Ok(())
+    }
+
+    fn find_corrupted_files_by_package(&self) -> Result<Vec<(InstalledPackageRef, Vec<String>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT t.name, t.version, t.architecture, f.path, f.sha256_hash
+             FROM files f
+             JOIN troves t ON f.trove_id = t.id
+             ORDER BY t.name, t.version, t.architecture, f.path",
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                InstalledPackageRef {
+                    name: row.get(0)?,
+                    version: Some(row.get(1)?),
+                    architecture: row.get(2)?,
+                },
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?;
+
+        let mut grouped: HashMap<InstalledPackageRef, Vec<String>> = HashMap::new();
+
+        for row in rows {
+            let (installed, path, expected_hash) = row?;
+            let file_path = Path::new(&path);
+            let missing = !file_path.exists() && !file_path.is_symlink();
+            let mismatched =
+                file_path.exists() && verify_file_sha256(file_path, &expected_hash).is_err();
+
+            if missing || mismatched {
+                grouped.entry(installed).or_default().push(path);
+            }
+        }
+
+        let mut grouped: Vec<_> = grouped.into_iter().collect();
+        grouped.sort_by(|(left, _), (right, _)| {
+            (&left.name, &left.version, &left.architecture).cmp(&(
+                &right.name,
+                &right.version,
+                &right.architecture,
+            ))
+        });
+        Ok(grouped)
     }
 
     /// Find files that have been corrupted (hash mismatch)
@@ -488,6 +551,7 @@ impl<'a> AutomationChecker<'a> {
     /// - File hash matches expected SHA-256 hash
     ///
     /// Returns paths of files that are missing or have hash mismatches.
+    #[cfg(test)]
     fn find_corrupted_files(&self) -> Result<Vec<String>> {
         // Query all managed files with their expected hashes
         let mut stmt = self
@@ -587,9 +651,13 @@ mod tests {
         let mut results = CheckResults::default();
         assert_eq!(results.total(), 0);
 
-        results
-            .security
-            .push(security_update_action(&["test".to_string()], &[], "high"));
+        results.security.push(security_update_action(
+            &["test".to_string()],
+            "1.0.1",
+            None,
+            &[],
+            "high",
+        ));
         assert_eq!(results.total(), 1);
     }
 
@@ -849,5 +917,76 @@ mod tests {
             )
             .unwrap();
         assert!(orphan_since.is_none(), "orphan_since should be cleared");
+    }
+
+    #[test]
+    fn test_check_integrity_groups_corruption_by_package() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let missing_a1 = temp_dir.path().join("pkg-a-bin");
+        let missing_a2 = temp_dir.path().join("pkg-a-lib");
+        let missing_b1 = temp_dir.path().join("pkg-b-bin");
+
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE troves (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                version TEXT NOT NULL,
+                architecture TEXT
+            );
+            CREATE TABLE files (
+                id INTEGER PRIMARY KEY,
+                path TEXT NOT NULL,
+                sha256_hash TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                permissions INTEGER NOT NULL,
+                trove_id INTEGER NOT NULL
+            );",
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO troves (id, name, version, architecture) VALUES (1, 'pkg-a', '1.0.0', 'x86_64')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO troves (id, name, version, architecture) VALUES (2, 'pkg-b', '2.0.0', 'x86_64')",
+            [],
+        )
+        .unwrap();
+
+        for (path, trove_id) in [
+            (missing_a1, 1_i64),
+            (missing_a2, 1_i64),
+            (missing_b1, 2_i64),
+        ] {
+            conn.execute(
+                "INSERT INTO files (path, sha256_hash, size, permissions, trove_id)
+                 VALUES (?1, 'deadbeef', 1, 493, ?2)",
+                rusqlite::params![path.to_string_lossy(), trove_id],
+            )
+            .unwrap();
+        }
+
+        let config = AutomationConfig::default();
+        let checker = AutomationChecker::new(&conn, &config);
+        let mut results = CheckResults::default();
+
+        checker.check_integrity(&mut results).unwrap();
+
+        assert_eq!(results.integrity.len(), 2);
+        let repaired_packages: Vec<_> = results
+            .integrity
+            .iter()
+            .map(|action| match &action.payload {
+                super::super::ActionPayload::RestorePackage { installed } => {
+                    installed.name.as_str()
+                }
+                other => panic!("unexpected payload: {other:?}"),
+            })
+            .collect();
+        assert!(repaired_packages.contains(&"pkg-a"));
+        assert!(repaired_packages.contains(&"pkg-b"));
     }
 }

@@ -21,7 +21,9 @@ use tracing::info;
 pub async fn cmd_restore(
     package_name: &str,
     db_path: &str,
-    _root: &str,
+    root: &str,
+    version: Option<String>,
+    architecture: Option<String>,
     force: bool,
     dry_run: bool,
 ) -> Result<()> {
@@ -32,9 +34,48 @@ pub async fn cmd_restore(
 
     let conn = open_db(db_path)?;
 
-    // Find the package
-    let trove = Trove::find_one_by_name(&conn, package_name)?
-        .ok_or_else(|| anyhow::anyhow!("Package '{}' not found in database", package_name))?;
+    let troves = Trove::find_by_name(&conn, package_name)?;
+    if troves.is_empty() {
+        return Err(anyhow::anyhow!(
+            "Package '{}' not found in database",
+            package_name
+        ));
+    }
+    let matches: Vec<&Trove> = troves
+        .iter()
+        .filter(|trove| {
+            version.as_ref().is_none_or(|ver| trove.version == *ver)
+                && architecture
+                    .as_deref()
+                    .is_none_or(|arch| trove.architecture.as_deref() == Some(arch))
+        })
+        .collect();
+    let trove = match matches.as_slice() {
+        [] => {
+            let installed = troves
+                .iter()
+                .map(|trove| match trove.architecture.as_deref() {
+                    Some(arch) => format!("{} [{}]", trove.version, arch),
+                    None => trove.version.clone(),
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(anyhow::anyhow!(
+                "Package '{}' with selector version={:?} architecture={:?} is not installed. Installed variants: {}",
+                package_name,
+                version,
+                architecture,
+                installed
+            ));
+        }
+        [trove] => *trove,
+        _ => {
+            return Err(anyhow::anyhow!(
+                "Multiple installed variants match '{}'. Use version and/or architecture to disambiguate.",
+                package_name
+            ));
+        }
+    };
     let trove_id = trove.id.ok_or_else(|| anyhow::anyhow!("Trove has no ID"))?;
 
     println!("Package: {} {}", trove.name, trove.version);
@@ -100,7 +141,7 @@ pub async fn cmd_restore(
         &conn,
         &format!("Restore {}", package_name),
         None,
-        std::path::Path::new("/conary"),
+        std::path::Path::new(root),
     )?;
 
     println!("\nRestore complete (generation {}):", gen_num);
@@ -126,7 +167,7 @@ pub async fn cmd_restore(
 }
 
 /// Restore all packages with missing files
-pub async fn cmd_restore_all(db_path: &str, _root: &str, dry_run: bool) -> Result<()> {
+pub async fn cmd_restore_all(db_path: &str, root: &str, dry_run: bool) -> Result<()> {
     info!(
         "Restoring all packages with missing files (dry_run={})",
         dry_run
@@ -199,7 +240,7 @@ pub async fn cmd_restore_all(db_path: &str, _root: &str, dry_run: bool) -> Resul
             &conn,
             "Restore all packages",
             None,
-            std::path::Path::new("/conary"),
+            std::path::Path::new(root),
         )?;
         println!("\nComposefs-native restore (generation {}):", gen_num);
         println!("  Packages checked: {}", packages_checked);

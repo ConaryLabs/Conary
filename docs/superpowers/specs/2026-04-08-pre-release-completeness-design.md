@@ -268,22 +268,44 @@ executor can reliably extract target versions, we need typed payloads.
 Add to `PendingAction`:
 
 ```rust
+pub struct InstalledPackageRef {
+    pub name: String,
+    pub version: Option<String>,
+    pub architecture: Option<String>,
+}
+
 /// Typed payload for executor dispatch. Details remain for display.
 pub enum ActionPayload {
     /// Install/update a package to a specific version.
-    UpdatePackage { target_version: String },
-    /// Remove packages (names already in PendingAction.packages).
-    RemovePackages,
-    /// Restore packages with corrupted/missing files from CAS.
-    /// Package names are in PendingAction.packages (one action per package).
-    RestorePackage,
+    UpdatePackage {
+        target_version: String,
+        architecture: Option<String>,
+    },
+    /// Remove concrete installed troves. packages remains display-oriented.
+    RemovePackages { installed: Vec<InstalledPackageRef> },
+    /// Restore a concrete installed trove with corrupted/missing files from CAS.
+    RestorePackage { installed: InstalledPackageRef },
 }
 ```
 
 Add `pub payload: ActionPayload` to `PendingAction`. Update the action builders
 in `check.rs` to populate the payload alongside the existing `details` strings.
 `details` remains for human-readable display; `payload` is for machine
-dispatch.
+dispatch. Keep `PendingAction.packages` as display-oriented strings; the typed
+payload carries the concrete installed trove identity Conary already needs for
+multi-version and multi-arch correctness.
+
+Security actions must also thread the repository target version through
+`find_security_updates()` into `security_update_action()`. The query already
+selects `rp.version`; Phase 2 must preserve that value instead of dropping it
+before action construction.
+
+Typed payloads also need a stable action identity. The current builder uses a
+timestamp-based ID, which makes the same logical action appear new on every
+scan and breaks defer/history correlation. Phase 2 should replace that with a
+deterministic action key derived from normalized category + payload + concrete
+package selectors. `identified_at` remains the scan timestamp; only the action
+ID becomes stable.
 
 #### Executor becomes a planner (crate boundary fix)
 
@@ -294,9 +316,21 @@ Rename `execute()` to `plan()`. It returns an `ActionPlan`:
 
 ```rust
 pub enum PlannedOp {
-    Install { package: String, version: Option<String> },
-    Remove { package: String },
-    Restore { package: String },
+    Install {
+        package: String,
+        version: Option<String>,
+        architecture: Option<String>,
+    },
+    Remove {
+        package: String,
+        version: Option<String>,
+        architecture: Option<String>,
+    },
+    Restore {
+        package: String,
+        version: Option<String>,
+        architecture: Option<String>,
+    },
 }
 
 pub struct ActionPlan {
@@ -310,11 +344,18 @@ pub struct ActionPlan {
 
 | Category | Payload | Produces |
 |----------|---------|----------|
-| Security | `UpdatePackage { target_version }` | `PlannedOp::Install` per package with version |
-| Updates | `UpdatePackage { target_version }` | `PlannedOp::Install` per package with version |
-| MajorUpgrades | `UpdatePackage { target_version }` | `PlannedOp::Install` per package with version |
-| Orphans | `RemovePackages` | `PlannedOp::Remove` per package |
-| Repair | `RestorePackage` | `PlannedOp::Restore` per package (see below) |
+| Security | `UpdatePackage { target_version, architecture }` | `PlannedOp::Install` per package with version + architecture |
+| Updates | `UpdatePackage { target_version, architecture }` | `PlannedOp::Install` per package with version + architecture |
+| MajorUpgrades | `UpdatePackage { target_version, architecture }` | `PlannedOp::Install` per package with version + architecture |
+| Orphans | `RemovePackages { installed }` | `PlannedOp::Remove` per concrete installed trove |
+| Repair | `RestorePackage { installed }` | `PlannedOp::Restore` per concrete installed trove (see below) |
+
+The detection queries in `check.rs` must explicitly select and parse the needed
+architecture columns, rather than letting payload architecture default to
+`None`. For update/security/major-upgrade actions, select `t.architecture` and
+`rp.architecture`, then prefer the repo-package architecture when present and
+otherwise fall back to the installed trove architecture. For orphan/repair
+actions, select the installed trove architecture directly from `troves`.
 
 #### Repair: group by package in check.rs
 
@@ -326,13 +367,16 @@ Change `check_integrity()` to:
 1. Query `files` joined with `troves` (`SELECT t.name, f.path, f.sha256_hash
    FROM files f JOIN troves t ON f.trove_id = t.id`) so each corrupted file
    is associated with its owning package.
-2. Group corrupted files by package name.
+2. Group corrupted files by concrete installed trove identity
+   (`name/version/architecture`), not just display name.
 3. Emit one `PendingAction` per affected package, with
-   `packages: vec![package_name]`, `payload: ActionPayload::RestorePackage`,
-   and `details` listing the corrupted file paths for display.
+   `packages: vec![package_name]`,
+   `payload: ActionPayload::RestorePackage { installed }`, and `details`
+   listing the corrupted file paths for display.
 
-This gives the planner one `PlannedOp::Restore { package }` per package, which
-the CLI dispatches to `cmd_restore(package_name, ...)`.
+This gives the planner one `PlannedOp::Restore { package, version, architecture
+}` per package, which the CLI dispatches to `cmd_restore(...)` with a concrete
+selector.
 
 #### MajorUpgrades: wire end-to-end
 
@@ -356,15 +400,33 @@ Conary already has `cmd_restore` (`restore.rs:21`) and `cmd_restore_all`
 
 ```rust
 pub enum PlannedOp {
-    Install { package: String, version: Option<String> },
-    Remove { package: String },
-    Restore { package: String },  // delegates to cmd_restore
+    Install {
+        package: String,
+        version: Option<String>,
+        architecture: Option<String>,
+    },
+    Remove {
+        package: String,
+        version: Option<String>,
+        architecture: Option<String>,
+    },
+    Restore {
+        package: String,
+        version: Option<String>,
+        architecture: Option<String>,
+    },  // delegates to cmd_restore
 }
 ```
 
-The CLI layer dispatches `PlannedOp::Restore { package }` to
-`cmd_restore(package, db_path, root, force: true, dry_run: false)`. This
-keeps repair tied to Conary's existing restore semantics.
+The CLI layer dispatches `PlannedOp::Restore { package, version, architecture }` to
+`cmd_restore(...)`. If the current restore/remove helpers are still name-only,
+Phase 2 extends those existing command entry points to accept `version` /
+`architecture` selectors and to honor the passed `root`, rather than inventing
+a parallel automation-only executor. This keeps repair tied to Conary's
+existing restore semantics. For restore specifically, replace the current
+`find_one_by_name()` lookup with `find_by_name()` plus explicit
+version/architecture filtering so automation does not silently restore the first
+matching package on multi-version or multi-arch systems.
 
 #### CLI-side execution and history logging
 
@@ -375,6 +437,11 @@ issue). After each action's plan is executed, the CLI inserts a row into
 
 This keeps history logging in the CLI layer where the execution results are
 known, not in the core crate's `plan()` method.
+
+Because `automation apply` now performs the same live-system mutations as
+install/remove/restore, its dispatcher arm must also call
+`require_live_mutation(...)` before invoking `cmd_automation_apply`. Dry-run
+remains allowed without the override; real live mutation does not.
 
 #### Automation history table
 
@@ -396,6 +463,10 @@ CREATE TABLE automation_history (
 (limit, category, status, since).
 
 Schema migration: increment to v66.
+That migration work includes both:
+- the new `migrate_v66()` function, and
+- the `66 => migrations::migrate_v66(conn)` arm in the schema dispatcher
+  (`db/schema.rs`)
 
 #### Automation configure
 
@@ -408,10 +479,19 @@ system model (`system.toml`). No `save_model()` currently exists in
 
 **Write operations** (`--mode`, `--enable`, `--disable`, `--interval`,
 `--enable-ai`, `--disable-ai`): load the raw TOML string, use `toml_edit` to
-modify the `[automation]` section in place (preserving comments and formatting),
-write back to the model path. This avoids needing a full `save_model()` API in
-core -- `toml_edit` is already a workspace dependency. The write logic lives in
-the CLI crate (`commands/automation.rs`).
+modify the `[automation]` and `[automation.ai_assist]` sections in place
+(preserving comments and formatting), write back to the model path. This avoids
+needing a full `save_model()` API in core -- `toml_edit` is already a workspace
+dependency. The write logic lives in the CLI crate (`commands/automation.rs`).
+
+To keep this testable without writing `/etc/conary/system.toml`, Phase 2 should
+add a small path-aware helper in the CLI layer so tests can point
+`cmd_automation_configure` at a temp model file while production still defaults
+to `DEFAULT_MODEL_PATH`.
+
+When config writes succeed, `cmd_automation_configure` should print a short note
+that an already-running foreground automation daemon must be restarted to pick
+up the new settings. Dynamic config reload is not part of Phase 2.
 
 #### Automation daemon: foreground-only, fix help text
 
@@ -430,22 +510,33 @@ Concrete change:
 
 | File | Change |
 |------|--------|
-| `crates/conary-core/src/automation/mod.rs` | Add `ActionPayload` to `PendingAction` |
-| `crates/conary-core/src/automation/action.rs` | Rename `execute()` to `plan()`, return `ActionPlan` |
-| `crates/conary-core/src/automation/check.rs` | Populate typed payloads in action builders; wire MajorUpgrades detection |
-| `crates/conary-core/src/db/schema.rs` | Migration v66: `automation_history` table |
-| `apps/conary/src/commands/automation.rs` | Execute plans via cmd_install/cmd_remove/restore, log history, wire configure, wire MajorUpgrades status/check, fix daemon help |
+| `crates/conary-core/src/automation/mod.rs` | Add `InstalledPackageRef` + `ActionPayload` to `PendingAction` |
+| `crates/conary-core/src/automation/action.rs` | Rename `execute()` to `plan()`, return `ActionPlan` with concrete trove selectors |
+| `crates/conary-core/src/automation/check.rs` | Populate typed payloads in action builders; thread security target versions; wire MajorUpgrades detection |
+| `crates/conary-core/src/db/schema.rs` | Migration v66: bump schema version and add the v66 dispatcher arm |
+| `apps/conary/src/dispatch.rs` | Add `require_live_mutation()` gate for `automation apply` |
+| `apps/conary/src/commands/automation.rs` | Execute plans via cmd_install/cmd_remove/restore, log history, add path-aware configure helper, wire MajorUpgrades status/check, fix daemon help |
 | `apps/conary/src/cli/automation.rs` | Add `major_upgrades` to category parser, fix daemon help text |
+| `apps/conary/src/commands/restore.rs` | Accept concrete package selectors and honor the caller-provided root |
+| `apps/conary/src/commands/remove.rs` | Accept concrete package selectors when automation removal cannot rely on name-only matching |
 
 ### Testing
 
 - Unit test: build a `PendingAction` with `ActionPayload::UpdatePackage`,
   call `plan()`, verify `PlannedOp::Install` with correct version.
+- Unit test: `find_security_updates()` / `security_update_action()` preserve the
+  repository target version into the typed payload.
+- Unit test: repeated scans of the same logical action produce the same
+  deterministic `PendingAction.id`.
+- Unit test/integration test: multi-version or multi-arch orphan/repair actions
+  produce concrete selectors instead of ambiguous package-name-only ops.
+- Integration test: `automation apply` is blocked by `require_live_mutation`
+  on `/` without the override flag.
 - Unit test: verify `automation_history` row inserted after CLI execution.
 - Unit test: `cmd_automation_configure --show` reads model values, not hardcoded
   defaults.
 - Unit test: `cmd_automation_configure --mode auto` writes to system.toml via
-  `toml_edit` and preserves comments.
+  `toml_edit`, edits `[automation.ai_assist]` correctly, and preserves comments.
 
 ---
 

@@ -1,11 +1,13 @@
 // conary-core/src/automation/action.rs
 
-//! Action definitions and execution for automation system.
+//! Action definitions and planning for the automation system.
 
-use super::{ActionStatus, PendingAction};
+use super::{ActionPayload, InstalledPackageRef, PendingAction};
 use crate::error::Result;
 use crate::model::AutomationCategory;
 use chrono::Utc;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 /// Builder for creating pending actions
 pub struct ActionBuilder {
@@ -13,6 +15,7 @@ pub struct ActionBuilder {
     summary: String,
     details: Vec<String>,
     packages: Vec<String>,
+    payload: Option<ActionPayload>,
     risk_level: f64,
     requires_reboot: bool,
     reversible: bool,
@@ -27,6 +30,7 @@ impl ActionBuilder {
             summary: summary.into(),
             details: Vec::new(),
             packages: Vec::new(),
+            payload: None,
             risk_level: 0.1,
             requires_reboot: false,
             reversible: true,
@@ -58,6 +62,12 @@ impl ActionBuilder {
         self
     }
 
+    /// Set the typed payload for this action.
+    pub fn payload(mut self, payload: ActionPayload) -> Self {
+        self.payload = Some(payload);
+        self
+    }
+
     /// Set the risk level (0.0 to 1.0)
     pub fn risk(mut self, level: f64) -> Self {
         self.risk_level = level.clamp(0.0, 1.0);
@@ -84,12 +94,10 @@ impl ActionBuilder {
 
     /// Build the pending action
     pub fn build(self) -> PendingAction {
-        let id = format!(
-            "{:?}-{}-{}",
-            self.category,
-            self.packages.first().unwrap_or(&"system".to_string()),
-            Utc::now().timestamp_millis()
-        );
+        let payload = self
+            .payload
+            .expect("ActionBuilder::build() requires a typed payload");
+        let id = stable_action_id(self.category, &self.packages, &payload);
 
         PendingAction {
             id,
@@ -97,6 +105,7 @@ impl ActionBuilder {
             summary: self.summary,
             details: self.details,
             packages: self.packages,
+            payload,
             risk_level: self.risk_level,
             requires_reboot: self.requires_reboot,
             reversible: self.reversible,
@@ -107,9 +116,23 @@ impl ActionBuilder {
     }
 }
 
+fn stable_action_id(
+    category: AutomationCategory,
+    packages: &[String],
+    payload: &ActionPayload,
+) -> String {
+    let mut hasher = DefaultHasher::new();
+    category.hash(&mut hasher);
+    packages.hash(&mut hasher);
+    payload.hash(&mut hasher);
+    format!("automation-{:016x}", hasher.finish())
+}
+
 /// Creates a security update action
 pub fn security_update_action(
     packages: &[String],
+    target_version: &str,
+    architecture: Option<&str>,
     cve_ids: &[String],
     severity: &str,
 ) -> PendingAction {
@@ -129,6 +152,10 @@ pub fn security_update_action(
 
     let mut builder = ActionBuilder::new(AutomationCategory::Security, summary)
         .packages(packages.iter().cloned())
+        .payload(ActionPayload::UpdatePackage {
+            target_version: target_version.to_string(),
+            architecture: architecture.map(str::to_string),
+        })
         .risk(risk);
 
     if !cve_ids.is_empty() {
@@ -141,7 +168,10 @@ pub fn security_update_action(
 }
 
 /// Creates an orphan cleanup action
-pub fn orphan_cleanup_action(packages: &[String]) -> PendingAction {
+pub fn orphan_cleanup_action(
+    installed: &[InstalledPackageRef],
+    packages: &[String],
+) -> PendingAction {
     let summary = if packages.len() == 1 {
         format!("Remove orphaned package: {}", packages[0])
     } else {
@@ -150,6 +180,9 @@ pub fn orphan_cleanup_action(packages: &[String]) -> PendingAction {
 
     ActionBuilder::new(AutomationCategory::Orphans, summary)
         .packages(packages.iter().cloned())
+        .payload(ActionPayload::RemovePackages {
+            installed: installed.to_vec(),
+        })
         .detail("These packages are no longer required by any installed package")
         .risk(0.3)
         .build()
@@ -160,6 +193,7 @@ pub fn package_update_action(
     package: &str,
     current_version: &str,
     new_version: &str,
+    architecture: Option<&str>,
 ) -> PendingAction {
     ActionBuilder::new(
         AutomationCategory::Updates,
@@ -169,6 +203,10 @@ pub fn package_update_action(
         ),
     )
     .package(package)
+    .payload(ActionPayload::UpdatePackage {
+        target_version: new_version.to_string(),
+        architecture: architecture.map(str::to_string),
+    })
     .detail(format!("Current version: {}", current_version))
     .detail(format!("New version: {}", new_version))
     .risk(0.2)
@@ -180,6 +218,7 @@ pub fn major_upgrade_action(
     package: &str,
     current_version: &str,
     new_version: &str,
+    architecture: Option<&str>,
     breaking_changes: &[String],
 ) -> PendingAction {
     let mut builder = ActionBuilder::new(
@@ -190,6 +229,10 @@ pub fn major_upgrade_action(
         ),
     )
     .package(package)
+    .payload(ActionPayload::UpdatePackage {
+        target_version: new_version.to_string(),
+        architecture: architecture.map(str::to_string),
+    })
     .risk(0.6);
 
     if !breaking_changes.is_empty() {
@@ -203,18 +246,17 @@ pub fn major_upgrade_action(
 }
 
 /// Creates an integrity repair action
-pub fn integrity_repair_action(files: &[String], package: Option<&str>) -> PendingAction {
-    let summary = if let Some(pkg) = package {
-        format!("Repair {} corrupted files in {}", files.len(), pkg)
-    } else {
-        format!("Repair {} corrupted system files", files.len())
-    };
+pub fn integrity_repair_action(files: &[String], installed: InstalledPackageRef) -> PendingAction {
+    let summary = format!(
+        "Repair {} corrupted files in {}",
+        files.len(),
+        installed.name
+    );
 
-    let mut builder = ActionBuilder::new(AutomationCategory::Repair, summary).risk(0.4);
-
-    if let Some(pkg) = package {
-        builder = builder.package(pkg);
-    }
+    let mut builder = ActionBuilder::new(AutomationCategory::Repair, summary)
+        .package(installed.name.clone())
+        .payload(ActionPayload::RestorePackage { installed })
+        .risk(0.4);
 
     builder = builder.detail(format!("Files to restore: {}", files.len()));
 
@@ -232,77 +274,95 @@ pub fn integrity_repair_action(files: &[String], package: Option<&str>) -> Pendi
     builder.build()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlannedOp {
+    Install {
+        package: String,
+        version: Option<String>,
+        architecture: Option<String>,
+    },
+    Remove {
+        package: String,
+        version: Option<String>,
+        architecture: Option<String>,
+    },
+    Restore {
+        package: String,
+        version: Option<String>,
+        architecture: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActionPlan {
+    pub ops: Vec<PlannedOp>,
+    pub category: AutomationCategory,
+    pub action_id: String,
+}
+
 /// Executor for automation actions
-pub struct ActionExecutor {
-    dry_run: bool,
-    executed: Vec<String>,
-    failed: Vec<(String, String)>,
+pub struct ActionExecutor;
+
+impl Default for ActionExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ActionExecutor {
     /// Create a new action executor
-    pub fn new(dry_run: bool) -> Self {
-        Self {
-            dry_run,
-            executed: Vec::new(),
-            failed: Vec::new(),
-        }
+    pub fn new() -> Self {
+        Self
     }
 
-    /// Execute an action
-    pub fn execute(&mut self, action: &PendingAction) -> Result<ActionStatus> {
-        if self.dry_run {
-            tracing::info!(
-                action_id = %action.id,
-                category = ?action.category,
-                "Dry run: would execute action"
-            );
-            return Ok(ActionStatus::Completed);
-        }
+    pub fn plan(&self, action: &PendingAction) -> Result<ActionPlan> {
+        let ops = match (&action.category, &action.payload) {
+            (
+                AutomationCategory::Security
+                | AutomationCategory::Updates
+                | AutomationCategory::MajorUpgrades,
+                ActionPayload::UpdatePackage {
+                    target_version,
+                    architecture,
+                },
+            ) => action
+                .packages
+                .iter()
+                .cloned()
+                .map(|package| PlannedOp::Install {
+                    package,
+                    version: Some(target_version.clone()),
+                    architecture: architecture.clone(),
+                })
+                .collect(),
+            (AutomationCategory::Orphans, ActionPayload::RemovePackages { installed }) => installed
+                .iter()
+                .cloned()
+                .map(|installed| PlannedOp::Remove {
+                    package: installed.name,
+                    version: installed.version,
+                    architecture: installed.architecture,
+                })
+                .collect(),
+            (AutomationCategory::Repair, ActionPayload::RestorePackage { installed }) => {
+                vec![PlannedOp::Restore {
+                    package: installed.name.clone(),
+                    version: installed.version.clone(),
+                    architecture: installed.architecture.clone(),
+                }]
+            }
+            (category, payload) => {
+                return Err(crate::error::Error::ConfigError(format!(
+                    "mismatched automation category/payload: {category:?} cannot use {payload:?}"
+                )));
+            }
+        };
 
-        tracing::info!(
-            action_id = %action.id,
-            category = ?action.category,
-            packages = ?action.packages,
-            "Executing automation action"
-        );
-
-        // TODO: Implement actual execution dispatch per category:
-        //   Security    -> call into install system for security updates
-        //   Orphans     -> call into remove system for orphan cleanup
-        //   Updates     -> call into upgrade system for package updates
-        //   MajorUpgrades -> upgrade with major version flag + user confirmation
-        //   Repair      -> CAS-based file restoration via generation rebuild
-        //
-        // Until implemented, return Failed so callers (CLI automation apply)
-        // do not report success for actions that were never performed.
-        let reason = format!(
-            "Action execution not yet implemented for {:?} category",
-            action.category
-        );
-        tracing::warn!(
-            action_id = %action.id,
-            category = ?action.category,
-            "ActionExecutor: {reason}"
-        );
-
-        self.failed.push((action.id.clone(), reason.clone()));
-        Ok(ActionStatus::Failed { reason })
-    }
-
-    /// Get list of successfully executed action IDs
-    pub fn executed(&self) -> &[String] {
-        &self.executed
-    }
-
-    /// Get list of failed actions with reasons
-    pub fn failed(&self) -> &[(String, String)] {
-        &self.failed
-    }
-
-    /// Get execution statistics
-    pub fn stats(&self) -> (usize, usize) {
-        (self.executed.len(), self.failed.len())
+        Ok(ActionPlan {
+            ops,
+            category: action.category,
+            action_id: action.id.clone(),
+        })
     }
 }
 
@@ -315,6 +375,10 @@ mod tests {
         let action = ActionBuilder::new(AutomationCategory::Updates, "Test update")
             .package("nginx")
             .package("redis")
+            .payload(ActionPayload::UpdatePackage {
+                target_version: "1.27.0".to_string(),
+                architecture: Some("x86_64".to_string()),
+            })
             .risk(0.5)
             .detail("Important fix")
             .build();
@@ -329,6 +393,8 @@ mod tests {
     fn test_security_update_action() {
         let action = security_update_action(
             &["openssl".to_string()],
+            "3.0.15-1",
+            Some("x86_64"),
             &["CVE-2024-1234".to_string()],
             "critical",
         );
@@ -339,19 +405,214 @@ mod tests {
     }
 
     #[test]
+    fn test_security_update_action_sets_update_payload() {
+        let action = security_update_action(
+            &["openssl".to_string()],
+            "3.0.15-1",
+            Some("x86_64"),
+            &["CVE-2024-1234".to_string()],
+            "critical",
+        );
+
+        assert_eq!(
+            action.payload,
+            ActionPayload::UpdatePackage {
+                target_version: "3.0.15-1".to_string(),
+                architecture: Some("x86_64".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn test_orphan_cleanup_action_sets_remove_payload() {
+        let action = orphan_cleanup_action(
+            &[InstalledPackageRef {
+                name: "unused-lib".to_string(),
+                version: Some("1.2.3-1".to_string()),
+                architecture: Some("x86_64".to_string()),
+            }],
+            &["unused-lib".to_string()],
+        );
+
+        assert_eq!(
+            action.payload,
+            ActionPayload::RemovePackages {
+                installed: vec![InstalledPackageRef {
+                    name: "unused-lib".to_string(),
+                    version: Some("1.2.3-1".to_string()),
+                    architecture: Some("x86_64".to_string()),
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn test_integrity_repair_action_sets_restore_payload() {
+        let action = integrity_repair_action(
+            &["/usr/bin/foo".to_string()],
+            InstalledPackageRef {
+                name: "foo".to_string(),
+                version: Some("1.0.0-1".to_string()),
+                architecture: Some("x86_64".to_string()),
+            },
+        );
+
+        assert_eq!(
+            action.payload,
+            ActionPayload::RestorePackage {
+                installed: InstalledPackageRef {
+                    name: "foo".to_string(),
+                    version: Some("1.0.0-1".to_string()),
+                    architecture: Some("x86_64".to_string()),
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn test_same_logical_action_builds_stable_id() {
+        let action_a = ActionBuilder::new(AutomationCategory::Updates, "Test update")
+            .package("nginx")
+            .detail("Current version: 1.26.0")
+            .detail("New version: 1.26.1")
+            .payload(ActionPayload::UpdatePackage {
+                target_version: "1.26.1".to_string(),
+                architecture: Some("x86_64".to_string()),
+            })
+            .build();
+
+        let action_b = ActionBuilder::new(AutomationCategory::Updates, "Test update")
+            .package("nginx")
+            .detail("Current version: 1.26.0")
+            .detail("New version: 1.26.1")
+            .payload(ActionPayload::UpdatePackage {
+                target_version: "1.26.1".to_string(),
+                architecture: Some("x86_64".to_string()),
+            })
+            .build();
+
+        assert_eq!(action_a.id, action_b.id);
+    }
+
+    #[test]
+    fn test_payload_change_changes_action_id() {
+        let update = ActionBuilder::new(AutomationCategory::Updates, "Test update")
+            .package("nginx")
+            .payload(ActionPayload::UpdatePackage {
+                target_version: "1.26.1".to_string(),
+                architecture: Some("x86_64".to_string()),
+            })
+            .build();
+
+        let other_update = ActionBuilder::new(AutomationCategory::Updates, "Test update")
+            .package("nginx")
+            .payload(ActionPayload::UpdatePackage {
+                target_version: "1.27.0".to_string(),
+                architecture: Some("x86_64".to_string()),
+            })
+            .build();
+
+        assert_ne!(update.id, other_update.id);
+    }
+
+    #[test]
     fn test_orphan_cleanup_action() {
-        let action = orphan_cleanup_action(&["libfoo".to_string(), "libbar".to_string()]);
+        let action = orphan_cleanup_action(
+            &[
+                InstalledPackageRef {
+                    name: "libfoo".to_string(),
+                    version: Some("1.0.0".to_string()),
+                    architecture: Some("x86_64".to_string()),
+                },
+                InstalledPackageRef {
+                    name: "libbar".to_string(),
+                    version: Some("2.0.0".to_string()),
+                    architecture: Some("x86_64".to_string()),
+                },
+            ],
+            &["libfoo".to_string(), "libbar".to_string()],
+        );
 
         assert_eq!(action.category, AutomationCategory::Orphans);
         assert!(action.summary.contains("2 orphaned packages"));
     }
 
     #[test]
-    fn test_executor_dry_run() {
-        let mut executor = ActionExecutor::new(true);
-        let action = ActionBuilder::new(AutomationCategory::Updates, "Test").build();
+    fn test_plan_update_action_produces_install_with_version() {
+        let planner = ActionExecutor::new();
+        let action = package_update_action("nginx", "1.26.0", "1.26.1", Some("x86_64"));
 
-        let status = executor.execute(&action).unwrap();
-        assert_eq!(status, ActionStatus::Completed);
+        let plan = planner.plan(&action).unwrap();
+        assert_eq!(
+            plan.ops,
+            vec![PlannedOp::Install {
+                package: "nginx".to_string(),
+                version: Some("1.26.1".to_string()),
+                architecture: Some("x86_64".to_string()),
+            }]
+        );
+    }
+
+    #[test]
+    fn test_plan_major_upgrade_produces_install_with_version() {
+        let planner = ActionExecutor::new();
+        let action = major_upgrade_action(
+            "postgresql",
+            "15.3",
+            "16.0",
+            Some("x86_64"),
+            &["breaking".to_string()],
+        );
+
+        let plan = planner.plan(&action).unwrap();
+        assert_eq!(
+            plan.ops,
+            vec![PlannedOp::Install {
+                package: "postgresql".to_string(),
+                version: Some("16.0".to_string()),
+                architecture: Some("x86_64".to_string()),
+            }]
+        );
+    }
+
+    #[test]
+    fn test_plan_repair_action_produces_restore() {
+        let planner = ActionExecutor::new();
+        let action = integrity_repair_action(
+            &["/usr/bin/foo".to_string()],
+            InstalledPackageRef {
+                name: "foo".to_string(),
+                version: Some("1.0.0-1".to_string()),
+                architecture: Some("x86_64".to_string()),
+            },
+        );
+
+        let plan = planner.plan(&action).unwrap();
+        assert_eq!(
+            plan.ops,
+            vec![PlannedOp::Restore {
+                package: "foo".to_string(),
+                version: Some("1.0.0-1".to_string()),
+                architecture: Some("x86_64".to_string()),
+            }]
+        );
+    }
+
+    #[test]
+    fn test_plan_mismatched_payload_errors() {
+        let planner = ActionExecutor::new();
+        let action = ActionBuilder::new(AutomationCategory::Security, "Wrong payload")
+            .package("nginx")
+            .payload(ActionPayload::RemovePackages {
+                installed: vec![InstalledPackageRef {
+                    name: "nginx".to_string(),
+                    version: Some("1.26.0".to_string()),
+                    architecture: Some("x86_64".to_string()),
+                }],
+            })
+            .build();
+
+        let error = planner.plan(&action).unwrap_err();
+        assert!(error.to_string().contains("mismatched"));
     }
 }
