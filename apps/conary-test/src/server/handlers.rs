@@ -14,6 +14,17 @@ pub async fn health() -> &'static str {
     "ok"
 }
 
+pub async fn deploy_status(State(state): State<AppState>) -> Response {
+    match service::deployment_status(&state) {
+        Ok(status) => (StatusCode::OK, Json(serde_json::json!(status))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
 pub async fn list_suites(State(state): State<AppState>) -> impl IntoResponse {
     match service::list_suites(&state) {
         Ok(suites) => (StatusCode::OK, Json(serde_json::json!(suites))),
@@ -335,15 +346,45 @@ pub async fn stream_run(
 mod tests {
     use super::*;
     use crate::server::routes::create_router;
+    use crate::server::wal::Wal;
     use crate::test_fixtures;
     use axum::body::Body;
     use axum::http::Request;
+    use chrono::{TimeZone, Utc};
+    use std::sync::{Arc, Mutex};
     use tower::ServiceExt;
 
     #[tokio::test]
     async fn test_health() {
         let response = health().await;
         assert_eq!(response, "ok");
+    }
+
+    #[tokio::test]
+    async fn test_deploy_status_returns_expected_sections() {
+        let mut state = test_fixtures::test_app_state();
+        state.start_time = Utc.with_ymd_and_hms(2026, 4, 9, 0, 0, 0).unwrap();
+
+        let wal = Wal::open(":memory:").unwrap();
+        wal.buffer(1, r#"{"test_id":"T01"}"#).unwrap();
+        state.wal = Some(Arc::new(Mutex::new(wal)));
+
+        let app = create_router(state, None);
+        let req = Request::builder()
+            .uri("/v1/deploy/status")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(parsed.get("binary").is_some());
+        assert!(parsed.get("runtime").is_some());
+        assert!(parsed.get("service").is_some());
     }
 
     #[tokio::test]

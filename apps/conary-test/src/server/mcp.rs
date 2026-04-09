@@ -9,7 +9,6 @@
 
 use std::future::Future;
 
-use chrono::Utc;
 use conary_mcp::{server_info, to_json_text};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
@@ -972,49 +971,8 @@ impl TestMcpServer {
         description = "Get deployment status: binary version, uptime, WAL pending items, service health."
     )]
     async fn deploy_status(&self) -> Result<CallToolResult, McpError> {
-        let version = env!("CARGO_PKG_VERSION");
-
-        let now = Utc::now();
-        let uptime = now - self.state.start_time;
-        let uptime_str = format!(
-            "{}d {}h {}m {}s",
-            uptime.num_days(),
-            uptime.num_hours() % 24,
-            uptime.num_minutes() % 60,
-            uptime.num_seconds() % 60,
-        );
-
-        let wal_pending = self
-            .state
-            .wal
-            .as_ref()
-            .and_then(|w| w.lock().ok())
-            .and_then(|w| w.pending_count().ok())
-            .unwrap_or(0);
-
-        let active_runs = self.state.runs.len();
-
-        // Check systemd service status.
-        let (service_code, service_stdout, _) =
-            run_command("systemctl", &["--user", "is-active", "conary-test"], None)
-                .await
-                .unwrap_or((-1, "unknown".to_string(), String::new()));
-
-        let service_status = if service_code == 0 {
-            service_stdout.trim().to_string()
-        } else {
-            "unknown".to_string()
-        };
-
-        let value = serde_json::json!({
-            "version": version,
-            "uptime": uptime_str,
-            "started_at": self.state.start_time.to_rfc3339(),
-            "wal_pending": wal_pending,
-            "active_runs": active_runs,
-            "service_status": service_status,
-        });
-        let text = to_json_text(&value)?;
+        let status = service::deployment_status(&self.state).map_err(anyhow_to_mcp)?;
+        let text = to_json_text(&status)?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
@@ -1136,7 +1094,12 @@ impl ServerHandler for TestMcpServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::service;
+    use crate::server::wal::Wal;
     use crate::test_fixtures;
+    use chrono::{TimeZone, Utc};
+    use serde_json::Value;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn test_mcp_server_info() {
@@ -1152,5 +1115,36 @@ mod tests {
         let router = TestMcpServer::tool_router();
         let tools = router.list_all();
         assert_eq!(tools.len(), 23, "Expected 23 MCP tools");
+    }
+
+    #[tokio::test]
+    async fn test_mcp_deploy_status_reuses_shared_service_builder() {
+        let mut state = test_fixtures::test_app_state();
+        state.start_time = Utc.with_ymd_and_hms(2026, 4, 9, 0, 0, 0).unwrap();
+
+        let wal = Wal::open(":memory:").unwrap();
+        wal.buffer(1, r#"{"test_id":"T01"}"#).unwrap();
+        state.wal = Some(Arc::new(Mutex::new(wal)));
+
+        let expected = service::deployment_status_at(
+            &state,
+            Utc.with_ymd_and_hms(2026, 4, 9, 1, 1, 1).unwrap(),
+        )
+        .unwrap();
+
+        let server = TestMcpServer::new(state);
+        let value = server
+            .deploy_status()
+            .await
+            .unwrap()
+            .into_typed::<Value>()
+            .unwrap();
+
+        assert_eq!(value["binary"]["git_commit"], expected.binary.git_commit);
+        assert_eq!(
+            value["runtime"]["wal_pending"],
+            expected.runtime.wal_pending
+        );
+        assert_eq!(value["service"]["status"], expected.service.status);
     }
 }

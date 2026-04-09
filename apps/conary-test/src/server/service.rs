@@ -6,9 +6,11 @@
 
 use std::sync::Arc;
 
-use anyhow::{Context, Result, bail};
-use serde::Serialize;
+use anyhow::{Context, Result, anyhow, bail};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
+use crate::build_info::BuildInfo;
 use crate::config::load_manifest;
 use crate::container::{ContainerBackend, ImageInfo};
 use crate::engine::suite::{RunStatus, TestSuite};
@@ -62,9 +64,103 @@ pub struct DistroInfo {
     pub repo_name: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeploymentStatus {
+    pub binary: BinaryStatus,
+    pub runtime: RuntimeStatus,
+    pub service: ServiceStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BinaryStatus {
+    pub version: String,
+    pub git_commit: String,
+    pub commit_timestamp: String,
+    pub build_timestamp: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeStatus {
+    pub started_at: String,
+    pub uptime_seconds: i64,
+    pub uptime_human: String,
+    pub wal_pending: u64,
+    pub active_runs: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServiceStatus {
+    pub status: String,
+}
+
 // ---------------------------------------------------------------------------
 // Operations
 // ---------------------------------------------------------------------------
+
+pub fn deployment_status(state: &AppState) -> Result<DeploymentStatus> {
+    deployment_status_at(state, Utc::now())
+}
+
+pub(crate) fn deployment_status_at(
+    state: &AppState,
+    now: DateTime<Utc>,
+) -> Result<DeploymentStatus> {
+    let build_info = BuildInfo::current();
+    let uptime = now.signed_duration_since(state.start_time);
+    let active_runs = state
+        .runs
+        .iter()
+        .filter(|entry| matches!(entry.status, RunStatus::Pending | RunStatus::Running))
+        .count();
+    let wal_pending = state
+        .wal
+        .as_ref()
+        .map(|wal| {
+            let wal = wal
+                .lock()
+                .map_err(|_| anyhow!("failed to lock conary-test WAL"));
+            match wal {
+                Ok(wal) => wal.pending_count().unwrap_or_else(|error| {
+                    tracing::warn!("failed to read conary-test WAL pending count: {error}");
+                    0
+                }),
+                Err(error) => {
+                    tracing::warn!("{error}");
+                    0
+                }
+            }
+        })
+        .unwrap_or(0);
+
+    Ok(DeploymentStatus {
+        binary: BinaryStatus {
+            version: build_info.version,
+            git_commit: build_info.git_commit,
+            commit_timestamp: build_info.commit_timestamp,
+            build_timestamp: build_info.build_timestamp,
+        },
+        runtime: RuntimeStatus {
+            started_at: state.start_time.to_rfc3339(),
+            uptime_seconds: uptime.num_seconds(),
+            uptime_human: format_uptime(uptime),
+            wal_pending,
+            active_runs,
+        },
+        service: ServiceStatus {
+            status: "running".to_string(),
+        },
+    })
+}
+
+fn format_uptime(uptime: chrono::TimeDelta) -> String {
+    format!(
+        "{}d {}h {}m {}s",
+        uptime.num_days(),
+        uptime.num_hours() % 24,
+        uptime.num_minutes() % 60,
+        uptime.num_seconds() % 60,
+    )
+}
 
 /// List all TOML manifests in the manifest directory.
 pub fn list_suites(state: &AppState) -> Result<Vec<SuiteInfo>> {
@@ -814,7 +910,10 @@ pub fn get_run_artifacts(state: &AppState, run_id: u64) -> crate::error::Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::wal::Wal;
     use crate::test_fixtures;
+    use chrono::{TimeZone, Utc};
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn test_start_run_unknown_distro() {
@@ -853,6 +952,82 @@ mod tests {
         let distros = list_distros(&state);
         assert_eq!(distros.len(), 1);
         assert_eq!(distros[0].name, "fedora43");
+    }
+
+    #[test]
+    fn test_deployment_status_reports_binary_runtime_and_service_sections() {
+        let mut state = test_fixtures::test_app_state();
+        state.start_time = Utc.with_ymd_and_hms(2026, 4, 9, 0, 0, 0).unwrap();
+
+        let wal = Wal::open(":memory:").unwrap();
+        wal.buffer(1, r#"{"test_id":"T01"}"#).unwrap();
+        state.wal = Some(Arc::new(Mutex::new(wal)));
+
+        let now = Utc.with_ymd_and_hms(2026, 4, 9, 1, 1, 1).unwrap();
+        let status = deployment_status_at(&state, now).unwrap();
+
+        assert_eq!(
+            status.binary.version,
+            crate::build_info::BuildInfo::current().version
+        );
+        assert_eq!(
+            status.binary.git_commit,
+            crate::build_info::BuildInfo::current().git_commit
+        );
+        assert_eq!(status.runtime.started_at, "2026-04-09T00:00:00+00:00");
+        assert_eq!(status.runtime.uptime_seconds, 3661);
+        assert_eq!(status.runtime.uptime_human, "0d 1h 1m 1s");
+        assert_eq!(status.runtime.wal_pending, 1);
+        assert_eq!(status.runtime.active_runs, 0);
+        assert_eq!(status.service.status, "running");
+    }
+
+    #[test]
+    fn test_deployment_status_counts_only_pending_and_running_runs() {
+        let state = test_fixtures::test_app_state();
+
+        let pending = crate::engine::suite::TestSuite::new("pending", 1);
+
+        let mut running = crate::engine::suite::TestSuite::new("running", 1);
+        running.status = RunStatus::Running;
+
+        let mut completed = crate::engine::suite::TestSuite::new("completed", 1);
+        completed.status = RunStatus::Completed;
+
+        let mut cancelled = crate::engine::suite::TestSuite::new("cancelled", 1);
+        cancelled.status = RunStatus::Cancelled;
+
+        state.insert_run(1, pending);
+        state.insert_run(2, running);
+        state.insert_run(3, completed);
+        state.insert_run(4, cancelled);
+
+        let status =
+            deployment_status_at(&state, Utc.with_ymd_and_hms(2026, 4, 9, 0, 0, 1).unwrap())
+                .unwrap();
+
+        assert_eq!(status.runtime.active_runs, 2);
+    }
+
+    #[test]
+    fn test_deployment_status_degrades_when_wal_lock_is_poisoned() {
+        let mut state = test_fixtures::test_app_state();
+        let wal = Arc::new(Mutex::new(Wal::open(":memory:").unwrap()));
+        let wal_for_poison = Arc::clone(&wal);
+
+        let _ = std::thread::spawn(move || {
+            let _guard = wal_for_poison.lock().unwrap();
+            panic!("poison wal");
+        })
+        .join();
+
+        state.wal = Some(wal);
+
+        let status =
+            deployment_status_at(&state, Utc.with_ymd_and_hms(2026, 4, 9, 0, 0, 1).unwrap())
+                .unwrap();
+
+        assert_eq!(status.runtime.wal_pending, 0);
     }
 
     #[test]

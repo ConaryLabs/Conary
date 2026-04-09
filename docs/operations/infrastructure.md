@@ -33,6 +33,7 @@ task or when you are debugging the underlying service path itself.
 - Remi OpenAPI spec: `https://localhost:8082/v1/admin/openapi.json` via SSH
   tunnel or direct origin access
 - Forge-local `conary-test` health endpoint: `http://127.0.0.1:9090/v1/health`
+- Forge-local `conary-test` deploy-status endpoint: `http://127.0.0.1:9090/v1/deploy/status`
 
 ## Source Deploy Patterns
 
@@ -41,6 +42,9 @@ task or when you are debugging the underlying service path itself.
 - Sync a checkout or worktree with `./scripts/deploy-forge.sh`
 - Build the needed binaries on Forge and restart the `conary-test` user service
 - Use the worktree-aware `--path` option when deploying from a feature worktree
+- For supported control-plane verification, run `bash scripts/forge-smoke.sh`
+- Port resolution for CLI and smoke checks is `--port` > `CONARY_TEST_PORT` >
+  `9090`
 
 ### Remi
 
@@ -78,4 +82,6 @@ old process. That can fail with `Text file busy`.
   starting template
 - For suite layout, phase selection, and manifest-run behavior, use
   [`docs/INTEGRATION-TESTING.md`](../INTEGRATION-TESTING.md)
+- For supported Forge smoke validation, prefer `scripts/forge-smoke.sh` over
+  treating raw `cargo run -p conary-test -- run ...` as the main operator path
 - For legacy historical context, use [`docs/llms/archive/claude-era-notes.md`](../llms/archive/claude-era-notes.md)

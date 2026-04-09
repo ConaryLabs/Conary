@@ -21,8 +21,10 @@ pub fn create_router(state: AppState, token: Option<String>) -> Router {
         Default::default(),
     );
 
-    // Health route — always unauthenticated.
-    let health_router = Router::new().route("/v1/health", get(handlers::health));
+    // Local status routes — always unauthenticated.
+    let health_router = Router::new()
+        .route("/v1/health", get(handlers::health))
+        .route("/v1/deploy/status", get(handlers::deploy_status));
 
     // All other routes (API + MCP).
     let api_router = Router::new()
@@ -60,9 +62,12 @@ pub fn create_router(state: AppState, token: Option<String>) -> Router {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::wal::Wal;
     use crate::test_fixtures;
     use axum::body::Body;
     use axum::http::Request;
+    use chrono::{TimeZone, Utc};
+    use std::sync::{Arc, Mutex};
     use tower::ServiceExt;
 
     #[tokio::test]
@@ -119,6 +124,25 @@ mod tests {
         let app = create_router(test_fixtures::test_app_state(), None);
         let req = Request::builder()
             .uri("/v1/distros")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_deploy_status_route_is_public_even_with_token() {
+        let mut state = test_fixtures::test_app_state();
+        state.start_time = Utc.with_ymd_and_hms(2026, 4, 9, 0, 0, 0).unwrap();
+
+        let wal = Wal::open(":memory:").unwrap();
+        wal.buffer(1, r#"{"test_id":"T01"}"#).unwrap();
+        state.wal = Some(Arc::new(Mutex::new(wal)));
+
+        let app = create_router(state, Some("top-secret".to_string()));
+        let req = Request::builder()
+            .uri("/v1/deploy/status")
             .body(Body::empty())
             .unwrap();
 

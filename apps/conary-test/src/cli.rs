@@ -128,7 +128,11 @@ enum Commands {
     },
 
     /// Check service health and deployment status
-    Health,
+    Health {
+        /// Local conary-test service port
+        #[arg(long, env = "CONARY_TEST_PORT", default_value = "9090")]
+        port: u16,
+    },
 
     /// Reload test manifests from disk
     Manifests {
@@ -183,7 +187,11 @@ enum DeployCommands {
     Restart,
 
     /// Show deployment status (version, uptime, service state)
-    Status,
+    Status {
+        /// Local conary-test service port
+        #[arg(long, env = "CONARY_TEST_PORT", default_value = "9090")]
+        port: u16,
+    },
 }
 
 #[derive(Subcommand)]
@@ -742,7 +750,7 @@ fn main() -> Result<()> {
                     rt.block_on(cmd_deploy_rebuild(crate_name.as_deref(), json))
                 }
                 DeployCommands::Restart => rt.block_on(cmd_deploy_restart(json)),
-                DeployCommands::Status => rt.block_on(cmd_deploy_status(json)),
+                DeployCommands::Status { port } => rt.block_on(cmd_deploy_status(json, port)),
             }
         }
 
@@ -764,9 +772,9 @@ fn main() -> Result<()> {
             rt.block_on(cmd_logs(&test_id, run, step, stream.as_deref(), json))
         }
 
-        Commands::Health => {
+        Commands::Health { port } => {
             let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(cmd_health(json))
+            rt.block_on(cmd_health(json, port))
         }
 
         Commands::Manifests { command } => match command {
@@ -784,6 +792,18 @@ mod tests {
     fn cwd_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn set_test_port_env(value: Option<&str>) {
+        match value {
+            Some(value) => unsafe { std::env::set_var("CONARY_TEST_PORT", value) },
+            None => unsafe { std::env::remove_var("CONARY_TEST_PORT") },
+        }
     }
 
     #[test]
@@ -821,5 +841,49 @@ mod tests {
             "expected load_config() to work from {}, got {result:?}",
             root.display()
         );
+    }
+
+    #[test]
+    fn deploy_status_port_defaults_to_9090() {
+        let _guard = env_lock().lock().expect("env lock");
+        set_test_port_env(None);
+
+        let cli = Cli::try_parse_from(["conary-test", "deploy", "status"]).unwrap();
+        match cli.command {
+            Commands::Deploy {
+                command: DeployCommands::Status { port },
+            } => assert_eq!(port, 9090),
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn deploy_status_port_uses_env_when_flag_is_absent() {
+        let _guard = env_lock().lock().expect("env lock");
+        set_test_port_env(Some("9191"));
+
+        let cli = Cli::try_parse_from(["conary-test", "deploy", "status"]).unwrap();
+        set_test_port_env(None);
+
+        match cli.command {
+            Commands::Deploy {
+                command: DeployCommands::Status { port },
+            } => assert_eq!(port, 9191),
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn explicit_port_flag_overrides_env_for_health() {
+        let _guard = env_lock().lock().expect("env lock");
+        set_test_port_env(Some("9191"));
+
+        let cli = Cli::try_parse_from(["conary-test", "health", "--port", "8181"]).unwrap();
+        set_test_port_env(None);
+
+        match cli.command {
+            Commands::Health { port } => assert_eq!(port, 8181),
+            _ => panic!("unexpected command"),
+        }
     }
 }

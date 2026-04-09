@@ -48,16 +48,37 @@ Every MCP tool has a CLI equivalent for human use:
 | `conary-test run --suite <name> --distro <distro> --phase <N>` | Execute a test suite |
 | `conary-test deploy source [--ref <git-ref>]` | Deploy source and rebuild |
 | `conary-test deploy restart` | Restart the test service |
-| `conary-test deploy status` | Show commit-aware deploy status, uptime, WAL pending |
+| `conary-test deploy status [--port <port>]` | Show running-binary status separately from local checkout state and drift |
 | `conary-test fixtures build [--groups all]` | Build test fixture CCS packages |
 | `conary-test fixtures publish` | Publish fixtures to Remi |
 | `conary-test logs <test-id> [--run <id>] [--step <N>]` | Retrieve test logs |
-| `conary-test health` | Service health summary |
+| `conary-test health [--port <port>]` | Normalized health envelope with `mode`, `deploy_status`, optional `remi`, and optional `reason` |
 | `conary-test images prune [--keep <N>]` | Remove old container images |
 | `conary-test images info <image>` | Inspect container image |
 | `conary-test manifests reload` | Reload TOML manifests without restart |
 
 Add `--json` to any command for machine-readable output.
+
+For supported Forge control-plane validation, prefer:
+
+```bash
+bash scripts/forge-smoke.sh
+```
+
+That path validates the local `conary-test` service contract (`/v1/health`,
+`/v1/deploy/status`, `health --json`, and `deploy status --json`) without
+pretending to be a full integration suite.
+
+## Validation Modes
+
+- `merge-validation` is the trusted on-merge lane. It now runs the Forge
+  control-plane smoke against a freshly started `conary-test` server on a
+  dedicated test port before the package-manager smoke and Remi smoke.
+- `scheduled-ops` remains the place for broader Phase 1-3 validation and other
+  deeper operational checks.
+- Raw `cargo run -p conary-test -- run ...` from an SSH shell is still useful
+  for debugging, but it is no longer the main supported Forge control-plane
+  check.
 
 ### Available Distros
 
@@ -261,13 +282,23 @@ as execution capacity rather than as an independent control plane.
 `conary-test deploy status` is internal infrastructure state, not a product
 release identity. Operators should read it as commit/ref/build provenance for
 the harness that is currently running on Forge.
+
+Current JSON semantics:
+
+- `conary-test deploy status --json` separates running binary state from local
+  checkout branch/commit and marks degraded output explicitly when the local
+  service is unreachable.
+- `conary-test health --json` always returns valid JSON. The top-level shape is
+  normalized to `mode`, `deploy_status`, optional `remi`, and optional
+  `reason`.
 ```
 
 ## Adding Tests
 
 1. Create or edit a TOML manifest in `tests/integration/remi/manifests/`
 2. Define test steps using the manifest schema (run, assert, mock_server, etc.)
-3. Run with `cargo run -p conary-test -- run --suite <manifest> --distro <distro> --phase <N>`
+3. For supported Forge control-plane validation, run `bash scripts/forge-smoke.sh`
+4. For deeper manual debugging, run `cargo run -p conary-test -- run --suite <manifest> --distro <distro> --phase <N>`
 
 ## Adding Distros
 
