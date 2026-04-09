@@ -6,7 +6,7 @@ use super::open_db;
 use super::progress::{RemovePhase, RemoveProgress};
 use super::{FileSnapshot, TroveSnapshot};
 use anyhow::{Context, Result};
-use conary_core::db::models::ScriptletEntry;
+use conary_core::db::models::{FileEntry, ScriptletEntry, Trove};
 use conary_core::scriptlet::{
     ExecutionMode, PackageFormat as ScriptletPackageFormat, SandboxMode, ScriptletExecutor,
 };
@@ -15,6 +15,15 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::{info, warn};
+
+pub(crate) struct RemoveInnerResult {
+    pub(crate) snapshot: TroveSnapshot,
+    trove: Trove,
+    stored_scriptlets: Vec<ScriptletEntry>,
+    scriptlet_format: ScriptletPackageFormat,
+    removed_count: usize,
+    dirs_removed: usize,
+}
 
 /// Remove an installed package
 pub async fn cmd_remove(
@@ -162,13 +171,130 @@ pub async fn cmd_remove(
         );
     }
 
-    // Get files BEFORE deleting the trove (cascade delete will remove file records)
-    let files = conary_core::db::models::FileEntry::find_by_trove(&conn, trove_id)?;
+    // DB-first approach: commit the DB transaction before removing files from disk.
+    // If a crash occurs after the DB commit but before file removal completes, the
+    // package is already correctly marked as removed. Leftover files on disk are
+    // harmless orphans rather than a broken state where files are gone but the
+    // package is still recorded as installed.
+    // Capture /etc snapshot BEFORE the DB transaction so the three-way merge
+    // can distinguish pre- from post-removal state.
+    let prev_etc = crate::commands::composefs_ops::collect_etc_files(&conn)?;
 
-    // Get stored scriptlets BEFORE deleting the trove
-    let stored_scriptlets = ScriptletEntry::find_by_trove(&conn, trove_id)?;
+    progress.set_phase(RemovePhase::UpdatingDb);
+    let mut changeset =
+        conary_core::db::models::Changeset::new(format!("Remove {}-{}", trove.name, trove.version));
+    let tx = conn.unchecked_transaction()?;
+    let remove_changeset_id = changeset.insert(&tx)?;
 
-    // Determine package format from stored scriptlets (default to RPM if no scriptlets)
+    let remove_result = match remove_inner(
+        &tx,
+        remove_changeset_id,
+        trove,
+        root,
+        no_scripts,
+        sandbox_mode,
+        &progress,
+    ) {
+        Ok(result) => result,
+        Err(e) => {
+            engine.release_lock();
+            return Err(e);
+        }
+    };
+    let snapshot_json = serde_json::to_string(&remove_result.snapshot)?;
+    tx.execute(
+        "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
+        [&snapshot_json, &remove_changeset_id.to_string()],
+    )?;
+    tx.commit()?;
+
+    // Composefs-native: rebuild EROFS image and remount to reflect removal
+    progress.set_phase(RemovePhase::RemovingFiles);
+    let post_commit_result = (|| -> Result<()> {
+        crate::commands::composefs_ops::rebuild_and_mount(
+            &conn,
+            &format!("Remove {}", package_name),
+            Some(prev_etc),
+            std::path::Path::new(root),
+        )?;
+        changeset.update_status(&conn, conary_core::db::models::ChangesetStatus::Applied)?;
+        Ok(())
+    })();
+    engine.release_lock();
+    post_commit_result?;
+
+    // Execute post-remove scriptlet (best effort - warn on failure, don't abort)
+    if !no_scripts && !remove_result.stored_scriptlets.is_empty() {
+        progress.set_phase(RemovePhase::PostScript);
+        let executor = ScriptletExecutor::new(
+            Path::new(root),
+            &remove_result.trove.name,
+            &remove_result.trove.version,
+            remove_result.scriptlet_format,
+        )
+        .with_sandbox_mode(sandbox_mode);
+
+        if let Some(post) = remove_result
+            .stored_scriptlets
+            .iter()
+            .find(|s| s.phase == "post-remove")
+        {
+            info!("Running post-remove scriptlet...");
+            if let Err(e) = executor.execute_entry(post, &ExecutionMode::Remove) {
+                warn!(
+                    "Post-remove scriptlet failed: {}. Package files already removed.",
+                    e
+                );
+                eprintln!("WARNING: Post-remove scriptlet failed: {}", e);
+            }
+        }
+    }
+
+    progress.finish(&format!(
+        "Removed {} {}",
+        remove_result.trove.name, remove_result.trove.version
+    ));
+
+    println!(
+        "Removed package: {} version {}",
+        remove_result.trove.name, remove_result.trove.version
+    );
+    println!(
+        "  Architecture: {}",
+        remove_result
+            .trove
+            .architecture
+            .as_deref()
+            .unwrap_or("none")
+    );
+    println!("  Files removed: {}", remove_result.removed_count);
+    if remove_result.dirs_removed > 0 {
+        println!("  Directories removed: {}", remove_result.dirs_removed);
+    }
+    // Note: composefs-native removal rebuilds the entire EROFS image,
+    // so individual file failure tracking is not applicable.
+
+    Ok(())
+}
+
+/// Inner remove helper for callers that own the transaction lifecycle.
+///
+/// Performs pre-remove scriptlets and DB writes using a caller-provided DB
+/// transaction and `changeset_id`. Returns the rollback snapshot plus enough
+/// metadata for the caller to run post-remove handling after rebuild.
+pub(crate) fn remove_inner(
+    tx: &rusqlite::Transaction<'_>,
+    changeset_id: i64,
+    trove: &Trove,
+    root: &str,
+    no_scripts: bool,
+    sandbox_mode: SandboxMode,
+    progress: &RemoveProgress,
+) -> Result<RemoveInnerResult> {
+    let trove_id = trove.id.ok_or_else(|| anyhow::anyhow!("Trove has no ID"))?;
+
+    let files = FileEntry::find_by_trove(tx, trove_id)?;
+    let stored_scriptlets = ScriptletEntry::find_by_trove(tx, trove_id)?;
     let scriptlet_format = stored_scriptlets
         .first()
         .and_then(|s| ScriptletPackageFormat::parse(&s.package_format))
@@ -177,8 +303,6 @@ pub async fn cmd_remove(
     // NOTE: Known limitation -- if the pre-remove scriptlet partially executes
     // and then fails, there is no automatic recovery. This is consistent with
     // RPM, dpkg, and pacman which also have no pre-remove rollback mechanism.
-
-    // Execute pre-remove scriptlet (before any changes)
     if !no_scripts && !stored_scriptlets.is_empty() {
         progress.set_phase(RemovePhase::PreScript);
         let executor = ScriptletExecutor::new(
@@ -195,7 +319,6 @@ pub async fn cmd_remove(
         }
     }
 
-    // Create snapshot of trove for rollback support
     let snapshot = TroveSnapshot {
         name: trove.name.clone(),
         version: trove.version.clone(),
@@ -214,149 +337,65 @@ pub async fn cmd_remove(
             })
             .collect(),
     };
-    let snapshot_json = serde_json::to_string(&snapshot)?;
 
-    // In composefs-native model, we don't remove files from disk directly.
-    // Files are served via EROFS images mounted through composefs.
-    // Removing a package means: update DB -> rebuild EROFS -> remount.
-
-    // Separate files and directories for logging/summary purposes
     let (directories, regular_files): (Vec<_>, Vec<_>) = files
         .iter()
         .partition(|f| f.path.ends_with('/') || (f.permissions & 0o170000) == 0o040000);
 
-    // DB-first approach: commit the DB transaction before removing files from disk.
-    // If a crash occurs after the DB commit but before file removal completes, the
-    // package is already correctly marked as removed. Leftover files on disk are
-    // harmless orphans rather than a broken state where files are gone but the
-    // package is still recorded as installed.
-    // Capture /etc snapshot BEFORE the DB transaction so the three-way merge
-    // can distinguish pre- from post-removal state.
-    let prev_etc = crate::commands::composefs_ops::collect_etc_files(&conn)?;
+    let breaking_now = conary_core::resolver::solve_removal(tx, std::slice::from_ref(&trove.name))?;
+    if !breaking_now.is_empty() {
+        return Err(conary_core::Error::IoError(format!(
+            "Concurrent change: '{}' now required by: {}",
+            trove.name,
+            breaking_now.join(", ")
+        ))
+        .into());
+    }
 
-    progress.set_phase(RemovePhase::UpdatingDb);
-    let pkg_name_for_tx = package_name.to_string();
-    let _remove_changeset_id = conary_core::db::transaction(&mut conn, |tx| {
-        // Re-check dependency breakage inside the transaction to close the TOCTOU
-        // window between the pre-check above and the actual delete. (fix X1.6)
-        let breaking_now =
-            conary_core::resolver::solve_removal(tx, std::slice::from_ref(&pkg_name_for_tx))?;
-        if !breaking_now.is_empty() {
-            return Err(conary_core::Error::IoError(format!(
-                "Concurrent change: '{}' now required by: {}",
-                pkg_name_for_tx,
-                breaking_now.join(", ")
-            )));
-        }
-
-        let mut changeset = conary_core::db::models::Changeset::new(format!(
-            "Remove {}-{}",
-            trove.name, trove.version
-        ));
-        let changeset_id = changeset.insert(tx)?;
-
-        // Store snapshot metadata for rollback
-        tx.execute(
-            "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
-            [&snapshot_json, &changeset_id.to_string()],
-        )?;
-
-        // Record file removals in history before deleting
-        for file in &files {
-            // Check if hash is valid format (64 hex chars) and exists in file_contents
-            // Adopted files may have placeholder hashes or real hashes not in the content store
-            let use_hash = if file.sha256_hash.len() == 64
-                && file.sha256_hash.chars().all(|c| c.is_ascii_hexdigit())
-            {
-                // Check if this hash actually exists in file_contents (FK constraint)
-                let hash_exists: bool = tx.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM file_contents WHERE sha256_hash = ?1)",
-                    [&file.sha256_hash],
-                    |row| row.get(0),
-                )?;
-                if hash_exists {
-                    Some(file.sha256_hash.as_str())
-                } else {
-                    None // Hash not in content store (adopted file)
-                }
+    for file in &files {
+        let use_hash = if file.sha256_hash.len() == 64
+            && file.sha256_hash.chars().all(|c| c.is_ascii_hexdigit())
+        {
+            let hash_exists: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM file_contents WHERE sha256_hash = ?1)",
+                [&file.sha256_hash],
+                |row| row.get(0),
+            )?;
+            if hash_exists {
+                Some(file.sha256_hash.as_str())
             } else {
-                None // Placeholder hash
-            };
-
-            // Always record file removal, but only include hash if it exists in file_contents
-            match use_hash {
-                Some(hash) => {
-                    tx.execute(
-                        "INSERT INTO file_history (changeset_id, path, sha256_hash, action) VALUES (?1, ?2, ?3, ?4)",
-                        [&changeset_id.to_string(), &file.path, hash, "delete"],
-                    )?;
-                }
-                None => {
-                    tx.execute(
-                        "INSERT INTO file_history (changeset_id, path, sha256_hash, action) VALUES (?1, ?2, NULL, ?3)",
-                        [&changeset_id.to_string(), &file.path, "delete"],
-                    )?;
-                }
+                None
             }
-        }
+        } else {
+            None
+        };
 
-        conary_core::db::models::Trove::delete(tx, trove_id)?;
-        changeset.update_status(tx, conary_core::db::models::ChangesetStatus::Applied)?;
-        Ok(changeset_id)
-    })?;
-
-    // Composefs-native: rebuild EROFS image and remount to reflect removal
-    progress.set_phase(RemovePhase::RemovingFiles);
-    let removed_count = regular_files.len();
-    let dirs_removed = directories.len();
-
-    let _gen_num = crate::commands::composefs_ops::rebuild_and_mount(
-        &conn,
-        &format!("Remove {}", package_name),
-        Some(prev_etc),
-        std::path::Path::new("/conary"),
-    )?;
-    engine.release_lock();
-
-    // Execute post-remove scriptlet (best effort - warn on failure, don't abort)
-    if !no_scripts && !stored_scriptlets.is_empty() {
-        progress.set_phase(RemovePhase::PostScript);
-        let executor = ScriptletExecutor::new(
-            Path::new(root),
-            &trove.name,
-            &trove.version,
-            scriptlet_format,
-        )
-        .with_sandbox_mode(sandbox_mode);
-
-        if let Some(post) = stored_scriptlets.iter().find(|s| s.phase == "post-remove") {
-            info!("Running post-remove scriptlet...");
-            if let Err(e) = executor.execute_entry(post, &ExecutionMode::Remove) {
-                // Post-remove failure is not critical - files are already removed
-                warn!(
-                    "Post-remove scriptlet failed: {}. Package files already removed.",
-                    e
-                );
-                eprintln!("WARNING: Post-remove scriptlet failed: {}", e);
+        match use_hash {
+            Some(hash) => {
+                tx.execute(
+                    "INSERT INTO file_history (changeset_id, path, sha256_hash, action) VALUES (?1, ?2, ?3, ?4)",
+                    [&changeset_id.to_string(), &file.path, hash, "delete"],
+                )?;
+            }
+            None => {
+                tx.execute(
+                    "INSERT INTO file_history (changeset_id, path, sha256_hash, action) VALUES (?1, ?2, NULL, ?3)",
+                    [&changeset_id.to_string(), &file.path, "delete"],
+                )?;
             }
         }
     }
 
-    progress.finish(&format!("Removed {} {}", trove.name, trove.version));
+    conary_core::db::models::Trove::delete(tx, trove_id)?;
 
-    println!("Removed package: {} version {}", trove.name, trove.version);
-    println!(
-        "  Architecture: {}",
-        trove.architecture.as_deref().unwrap_or("none")
-    );
-    println!("  Files removed: {}", removed_count);
-    if dirs_removed > 0 {
-        println!("  Directories removed: {}", dirs_removed);
-    }
-    // Note: composefs-native removal rebuilds the entire EROFS image,
-    // so individual file failure tracking is not applicable.
-
-    Ok(())
+    Ok(RemoveInnerResult {
+        snapshot,
+        trove: trove.clone(),
+        stored_scriptlets,
+        scriptlet_format,
+        removed_count: regular_files.len(),
+        dirs_removed: directories.len(),
+    })
 }
 
 /// Remove orphaned packages (installed as dependencies but no longer needed)

@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use crate::commands::replatform_rendering::render_replatform_blocked_reason;
-use crate::commands::{InstallOptions, SandboxMode, cmd_install};
+use crate::commands::{InstallOptions, SandboxMode, cmd_install, cmd_remove};
 use anyhow::{Context, Result, anyhow};
 use conary_core::db::models::{
     DerivedOverride, DerivedPackage, DerivedPatch, DistroPin, Repository, Trove, VersionPolicy,
@@ -178,6 +178,7 @@ pub(super) async fn apply_replatform_changes(
                 root,
                 version: Some(transaction.target_version.clone()),
                 repo: Some(repository),
+                architecture: transaction.architecture.clone(),
                 dry_run: false,
                 no_deps: false,
                 no_scripts: false,
@@ -365,38 +366,180 @@ fn maybe_fail_replatform_metadata_for_test() -> Result<()> {
     Ok(())
 }
 
-/// Apply package install/remove actions. Currently stubs that print a
-/// manual-action notice and return the pending name lists `(installs, removes)`.
-pub(super) fn apply_package_changes(actions: &[&DiffAction]) -> (Vec<String>, Vec<String>) {
-    let removes: Vec<String> = actions
-        .iter()
-        .filter_map(|a| match a {
-            DiffAction::Remove { package, .. } => Some(package.clone()),
-            _ => None,
-        })
-        .collect();
+/// Apply package install/remove actions from the model diff.
+///
+/// Returns `(applied_count, error_list)`.
+pub(super) async fn apply_package_changes(
+    db_path: &str,
+    root: &str,
+    actions: &[&DiffAction],
+    strict: bool,
+) -> Result<(usize, Vec<String>)> {
+    let mut applied = 0usize;
+    let mut errors = Vec::new();
 
-    let installs: Vec<String> = actions
-        .iter()
-        .filter_map(|a| match a {
-            DiffAction::Install { package, .. } => Some(package.clone()),
-            _ => None,
-        })
-        .collect();
+    for action in actions {
+        if let DiffAction::Remove {
+            package,
+            current_version,
+            architectures,
+        } = action
+        {
+            let iterations = architectures.len().max(1);
+            for arch in architectures
+                .iter()
+                .map(Some)
+                .chain(std::iter::once(None))
+                .take(iterations)
+            {
+                match arch {
+                    Some(arch) => {
+                        println!("Removing {} {} [{}]...", package, current_version, arch)
+                    }
+                    None => println!("Removing {} {}...", package, current_version),
+                }
 
-    if !removes.is_empty() {
-        println!("Packages to remove: {}", removes.join(", "));
-        println!("  [NOTE: Package removal not yet implemented - run manually]");
-        println!();
+                match cmd_remove(
+                    package,
+                    db_path,
+                    root,
+                    Some(current_version.clone()),
+                    false,
+                    SandboxMode::Always,
+                    false,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        println!("  Removed {}", package);
+                        applied += 1;
+                    }
+                    Err(e) => {
+                        let msg = match arch {
+                            Some(arch) => {
+                                format!(
+                                    "Remove '{}' {} [{}]: {}",
+                                    package, current_version, arch, e
+                                )
+                            }
+                            None => format!("Remove '{}' {}: {}", package, current_version, e),
+                        };
+                        eprintln!("  [FAILED] {}", msg);
+                        if strict {
+                            anyhow::bail!(msg);
+                        }
+                        errors.push(msg);
+                    }
+                }
+            }
+        }
     }
 
-    if !installs.is_empty() {
-        println!("Packages to install: {}", installs.join(", "));
-        println!("  [NOTE: Package installation not yet implemented - run manually]");
-        println!();
+    for action in actions {
+        match action {
+            DiffAction::Install { package, pin, .. } => {
+                println!(
+                    "Installing {}{}...",
+                    package,
+                    display_pin_suffix(pin.as_deref())
+                );
+                match cmd_install(
+                    package,
+                    InstallOptions {
+                        db_path,
+                        root,
+                        version: pin.clone(),
+                        repo: None,
+                        architecture: None,
+                        dry_run: false,
+                        no_deps: false,
+                        no_scripts: false,
+                        selection_reason: Some("Installed by model apply"),
+                        sandbox_mode: SandboxMode::Always,
+                        allow_downgrade: false,
+                        convert_to_ccs: false,
+                        no_capture: false,
+                        force: false,
+                        dep_mode: None,
+                        yes: true,
+                        from_distro: None,
+                    },
+                )
+                .await
+                {
+                    Ok(()) => {
+                        println!("  Installed {}", package);
+                        applied += 1;
+                    }
+                    Err(e) => {
+                        let msg = format!("Install '{}': {}", package, e);
+                        eprintln!("  [FAILED] {}", msg);
+                        if strict {
+                            anyhow::bail!(msg);
+                        }
+                        errors.push(msg);
+                    }
+                }
+            }
+            DiffAction::Update {
+                package,
+                current_version,
+                target_version,
+            } => {
+                println!(
+                    "Updating {} from {} to {}...",
+                    package, current_version, target_version
+                );
+                match cmd_install(
+                    package,
+                    InstallOptions {
+                        db_path,
+                        root,
+                        version: Some(target_version.clone()),
+                        repo: None,
+                        architecture: None,
+                        dry_run: false,
+                        no_deps: false,
+                        no_scripts: false,
+                        selection_reason: Some("Updated by model apply"),
+                        sandbox_mode: SandboxMode::Always,
+                        allow_downgrade: true,
+                        convert_to_ccs: false,
+                        no_capture: false,
+                        force: false,
+                        dep_mode: None,
+                        yes: true,
+                        from_distro: None,
+                    },
+                )
+                .await
+                {
+                    Ok(()) => {
+                        println!("  Updated {} to {}", package, target_version);
+                        applied += 1;
+                    }
+                    Err(e) => {
+                        let msg = format!(
+                            "Update '{}' {} -> {}: {}",
+                            package, current_version, target_version, e
+                        );
+                        eprintln!("  [FAILED] {}", msg);
+                        if strict {
+                            anyhow::bail!(msg);
+                        }
+                        errors.push(msg);
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
-    (installs, removes)
+    Ok((applied, errors))
+}
+
+fn display_pin_suffix(pin: Option<&str>) -> String {
+    pin.map(|pin| format!(" ({})", pin)).unwrap_or_default()
 }
 
 /// Apply derived-package build/rebuild actions.
@@ -541,21 +684,6 @@ pub(super) fn apply_metadata_changes(
                     }
                     Err(e) => errors.push(format!("MarkDependency '{}': {}", package, e)),
                 }
-            }
-            DiffAction::Update {
-                package,
-                current_version,
-                target_version,
-            } => {
-                println!(
-                    "Package '{}' needs update: {} -> {}",
-                    package, current_version, target_version
-                );
-                println!(
-                    "  [NOTE: Package update not yet implemented - run 'conary update {}' manually]",
-                    package
-                );
-                applied += 1;
             }
             _ => {}
         }

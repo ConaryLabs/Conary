@@ -1,7 +1,8 @@
 // src/commands/install/prepare.rs
 //! Package parsing and pre-installation validation
 
-use super::PackageFormatType;
+use super::InstallSemantics;
+use crate::commands::PackageFormatType;
 use anyhow::{Context, Result};
 use conary_core::components::ComponentType;
 use conary_core::db::models::Trove;
@@ -61,7 +62,7 @@ pub enum UpgradeCheck {
 pub fn check_upgrade_status(
     conn: &Connection,
     pkg: &dyn PackageFormat,
-    format: PackageFormatType,
+    semantics: &InstallSemantics,
     allow_downgrade: bool,
 ) -> Result<UpgradeCheck> {
     let existing = conary_core::db::models::Trove::find_by_name(conn, pkg.name())?;
@@ -77,7 +78,7 @@ pub fn check_upgrade_status(
                 ));
             }
 
-            match compare_installed_and_incoming_versions(trove, pkg.version(), format) {
+            match compare_installed_and_incoming_versions(trove, pkg.version(), semantics) {
                 Some(Ordering::Less) => {
                     info!(
                         "Upgrading {} from version {} to {}",
@@ -120,12 +121,12 @@ pub fn check_upgrade_status(
 fn compare_installed_and_incoming_versions(
     trove: &Trove,
     incoming_version: &str,
-    incoming_format: PackageFormatType,
+    semantics: &InstallSemantics,
 ) -> Option<Ordering> {
     compare_mixed_repo_versions(
         installed_version_scheme(trove),
         &trove.version,
-        version_scheme_for_format(incoming_format),
+        semantics.version_scheme,
         incoming_version,
     )
 }
@@ -138,7 +139,7 @@ fn installed_version_scheme(trove: &Trove) -> VersionScheme {
         .unwrap_or(VersionScheme::Rpm)
 }
 
-fn version_scheme_for_format(format: PackageFormatType) -> VersionScheme {
+pub(super) fn version_scheme_for_format(format: PackageFormatType) -> VersionScheme {
     match format {
         PackageFormatType::Rpm => VersionScheme::Rpm,
         PackageFormatType::Deb => VersionScheme::Debian,
@@ -286,7 +287,13 @@ mod tests {
             architecture: Some("amd64".to_string()),
         };
 
-        let result = check_upgrade_status(&conn, &pkg, PackageFormatType::Deb, false).unwrap();
+        let result = check_upgrade_status(
+            &conn,
+            &pkg,
+            &InstallSemantics::legacy(PackageFormatType::Deb),
+            false,
+        )
+        .unwrap();
         assert!(matches!(result, UpgradeCheck::Upgrade(_)));
     }
 
@@ -309,7 +316,13 @@ mod tests {
             architecture: Some("x86_64".to_string()),
         };
 
-        let result = check_upgrade_status(&conn, &pkg, PackageFormatType::Arch, false).unwrap();
+        let result = check_upgrade_status(
+            &conn,
+            &pkg,
+            &InstallSemantics::legacy(PackageFormatType::Arch),
+            false,
+        )
+        .unwrap();
         assert!(matches!(result, UpgradeCheck::Upgrade(_)));
     }
 }

@@ -8,17 +8,24 @@ mod dep_mode;
 mod dep_resolution;
 mod dependencies;
 mod execute;
+mod inner;
 mod prepare;
 mod resolve;
+mod restore;
 mod scriptlets;
 mod system_pm;
 
 pub use batch::{BatchInstaller, prepare_package_for_batch};
 pub use blocklist::is_blocked as is_package_blocked;
 pub use dep_mode::DepMode;
-use rusqlite::OptionalExtension;
 
 pub use prepare::{ComponentSelection, UpgradeCheck};
+pub(crate) use restore::{
+    add_prepared_install_to_target_state, build_target_state_view,
+    finalize_prepared_install_without_snapshot, install_prepared_inner,
+    prepare_install_for_restore, run_pre_install_for_prepared,
+    validate_prepared_install_dependencies,
+};
 
 use super::open_db;
 use conversion::{
@@ -43,15 +50,13 @@ use anyhow::{Context, Result};
 use conary_core::components::{
     ComponentClassifier, ComponentType, parse_component_spec, should_run_scriptlets,
 };
-use conary_core::db::models::{
-    Changeset, ChangesetStatus, Component, DerivedPackage, ProvideEntry, ScriptletEntry,
-};
+use conary_core::db::models::{Changeset, ChangesetStatus, DerivedPackage};
 use conary_core::db::paths::keyring_dir;
-use conary_core::dependencies::{DependencyClass, LanguageDepDetector};
+use conary_core::dependencies::LanguageDepDetector;
 use conary_core::repository;
 use conary_core::repository::versioning::VersionScheme;
 use conary_core::resolver::MissingDependency;
-use conary_core::scriptlet::SandboxMode;
+use conary_core::scriptlet::{PackageFormat as ScriptletPackageFormat, SandboxMode};
 use conary_core::transaction::{TransactionConfig, TransactionEngine};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -69,6 +74,8 @@ pub struct InstallOptions<'a> {
     pub version: Option<String>,
     /// Specific repository to use
     pub repo: Option<String>,
+    /// Preferred architecture to resolve/install
+    pub architecture: Option<String>,
     /// Preview without installing
     pub dry_run: bool,
     /// Skip dependency resolution
@@ -98,6 +105,41 @@ pub struct InstallOptions<'a> {
     pub yes: bool,
     /// Install from a specific distro (cross-distro canonical resolution)
     pub from_distro: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PreparedSourceKind {
+    Legacy { format: PackageFormatType },
+    Ccs,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InstallSemantics {
+    source: PreparedSourceKind,
+    version_scheme: VersionScheme,
+    scriptlet_format: ScriptletPackageFormat,
+}
+
+impl InstallSemantics {
+    fn legacy(format: PackageFormatType) -> Self {
+        Self {
+            source: PreparedSourceKind::Legacy { format },
+            version_scheme: prepare::version_scheme_for_format(format),
+            scriptlet_format: to_scriptlet_format(format),
+        }
+    }
+
+    fn ccs() -> Self {
+        Self {
+            source: PreparedSourceKind::Ccs,
+            // CCS is the native artifact shape, but the current install/rollback
+            // metadata still expects a version-scheme and scriptlet-family.
+            // Until CCS carries an explicit scheme, keep the existing RPM
+            // fallback for mixed-version comparisons and upgrade scriptlets.
+            version_scheme: VersionScheme::Rpm,
+            scriptlet_format: ScriptletPackageFormat::Rpm,
+        }
+    }
 }
 
 /// Map a distro identifier string to its `RepositoryDependencyFlavor`.
@@ -263,6 +305,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         root,
         version,
         repo,
+        architecture,
         dry_run,
         no_deps,
         no_scripts,
@@ -361,6 +404,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         db_path,
         version.as_deref(),
         repo.as_deref(),
+        architecture.as_deref(),
         convert_to_ccs,
         no_capture,
         &policy,
@@ -372,6 +416,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         // Already installed as CCS — no further processing needed.
         return Ok(());
     };
+    let semantics = InstallSemantics::legacy(format);
 
     // Promote the pre-install connection to mutable for the main install transaction
     let mut conn = conn;
@@ -405,7 +450,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
 
     // --- Phase 8: Scriptlet execution (pre-install) ---
     let old_trove_to_upgrade =
-        match check_upgrade_status(&conn, pkg.as_ref(), format, allow_downgrade)? {
+        match check_upgrade_status(&conn, pkg.as_ref(), &semantics, allow_downgrade)? {
             UpgradeCheck::FreshInstall => None,
             UpgradeCheck::Upgrade(trove) | UpgradeCheck::Downgrade(trove) => Some(trove),
         };
@@ -414,7 +459,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         root,
         no_scripts,
         sandbox_mode,
-        format,
+        semantics,
         old_trove: old_trove_to_upgrade.as_deref(),
     };
     let pre_scriptlet_state = run_pre_install_phase(
@@ -429,7 +474,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
     let tx_ctx = TransactionContext {
         db_path,
         root,
-        format,
+        semantics,
         selection_reason,
         old_trove_to_upgrade: old_trove_to_upgrade.as_deref(),
     };
@@ -489,7 +534,7 @@ struct ScriptletContext<'a> {
     root: &'a str,
     no_scripts: bool,
     sandbox_mode: SandboxMode,
-    format: PackageFormatType,
+    semantics: InstallSemantics,
     old_trove: Option<&'a conary_core::db::models::Trove>,
 }
 
@@ -514,7 +559,7 @@ struct ExtractionResult {
 struct TransactionContext<'a> {
     db_path: &'a str,
     root: &'a str,
-    format: PackageFormatType,
+    semantics: InstallSemantics,
     selection_reason: Option<&'a str>,
     old_trove_to_upgrade: Option<&'a conary_core::db::models::Trove>,
 }
@@ -738,6 +783,7 @@ async fn resolve_and_parse_package(
     db_path: &str,
     version: Option<&str>,
     repo: Option<&str>,
+    architecture: Option<&str>,
     convert_to_ccs: bool,
     no_capture: bool,
     policy: &conary_core::repository::resolution_policy::ResolutionPolicy,
@@ -772,6 +818,7 @@ async fn resolve_and_parse_package(
         db_path,
         version,
         repo,
+        architecture,
         &progress,
         &policy_opts,
     )
@@ -1387,7 +1434,7 @@ fn run_pre_install_phase(
     progress: &InstallProgress,
 ) -> Result<PreScriptletState> {
     // Determine package format and execution mode for scriptlet execution
-    let scriptlet_format = to_scriptlet_format(ctx.format);
+    let scriptlet_format = ctx.semantics.scriptlet_format;
     let execution_mode = build_execution_mode(ctx.old_trove.map(|t| t.version.as_str()));
 
     // Execute pre-install scriptlet (before any changes)
@@ -1451,21 +1498,15 @@ fn execute_install_transaction(
     ctx: &TransactionContext<'_>,
     progress: &InstallProgress,
 ) -> Result<InstallTransactionResult> {
-    let is_upgrade = ctx.old_trove_to_upgrade.is_some();
-
-    // === COMPOSEFS-NATIVE TRANSACTION ===
-    // Flow: store in CAS -> DB commit -> EROFS build -> composefs mount
     let db_path_buf = PathBuf::from(ctx.db_path);
-    let tx_config = TransactionConfig::from_paths(PathBuf::from(ctx.root), db_path_buf.clone());
+    let tx_config = TransactionConfig::from_paths(PathBuf::from(ctx.root), db_path_buf);
     let mut engine =
         TransactionEngine::new(tx_config).context("Failed to create transaction engine")?;
 
-    // Recover any incomplete transactions from previous crashes
     engine
         .recover(conn)
         .context("Failed to recover incomplete transactions")?;
 
-    // Acquire transaction lock
     let tx_description = if let Some(old_trove) = ctx.old_trove_to_upgrade {
         format!(
             "Upgrade {} from {} to {}",
@@ -1478,229 +1519,56 @@ fn execute_install_transaction(
     };
     engine.begin().context("Failed to begin transaction")?;
 
-    info!("Started transaction for {}", tx_description);
-
-    // Store extracted file content in CAS
-    progress.set_phase(pkg.name(), InstallPhase::Deploying);
-    let mut file_hashes: Vec<(String, String, i64, i32, Option<String>)> =
-        Vec::with_capacity(extraction.extracted_files.len());
-    for file in &extraction.extracted_files {
-        let hash = engine
-            .cas()
-            .store(&file.content)
-            .with_context(|| format!("Failed to store {} in CAS", file.path))?;
-        file_hashes.push((
-            file.path.clone(),
-            hash,
-            file.size,
-            file.mode,
-            file.symlink_target.clone(),
-        ));
-    }
-
-    info!(
-        "Stored {} files in CAS for {}",
-        file_hashes.len(),
-        pkg.name()
-    );
-
-    // DB transaction with tx_uuid for crash recovery
-    let format = ctx.format;
-    let selection_reason = ctx.selection_reason;
-    let classified = &extraction.classified;
-    let language_provides = &extraction.language_provides;
-    let scriptlets = pkg.scriptlets();
-
     // Capture /etc snapshot BEFORE the DB transaction so the three-way merge
     // can distinguish pre- from post-install state.
     let prev_etc = crate::commands::composefs_ops::collect_etc_files(conn)?;
 
-    let db_result = conary_core::db::transaction(conn, |tx| {
-        // Create changeset for this install/upgrade
-        let mut changeset = Changeset::new(tx_description.clone());
-        let changeset_id = changeset.insert(tx)?;
+    let mut changeset = Changeset::new(tx_description.clone());
+    let tx = conn.unchecked_transaction()?;
+    let changeset_id = changeset.insert(&tx)?;
 
-        if let Some(old_trove) = ctx.old_trove_to_upgrade
-            && let Some(old_id) = old_trove.id
-        {
-            info!("Removing old version {} before upgrade", old_trove.version);
-            conary_core::db::models::Trove::delete(tx, old_id)?;
-        }
-
-        let mut trove = pkg.to_trove();
-        trove.installed_by_changeset_id = Some(changeset_id);
-        trove.version_scheme = Some(scheme_to_string(version_scheme_for_format(format)));
-
-        // Set custom selection reason if provided (e.g., from collection install)
-        if let Some(reason) = selection_reason {
-            trove.selection_reason = Some(reason.to_string());
-        }
-
-        // Record which repository this package came from (if repo-installed).
-        // Prefer the repo matching the distro pin, then highest priority.
-        if trove.install_source == conary_core::db::models::InstallSource::Repository {
-            let repo_id: Option<i64> = tx
-                .query_row(
-                    "SELECT r.id FROM repository_packages rp
-                     JOIN repositories r ON rp.repository_id = r.id
-                     WHERE rp.name = ?1 AND rp.version = ?2
-                       AND (?3 IS NULL OR rp.architecture IS NULL OR rp.architecture = ?3)
-                     ORDER BY
-                         (r.default_strategy_distro = (SELECT distro FROM distro_pin LIMIT 1)) DESC,
-                         r.priority DESC, r.id ASC
-                     LIMIT 1",
-                    rusqlite::params![pkg.name(), pkg.version(), pkg.architecture()],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(conary_core::Error::from)?;
-            trove.installed_from_repository_id = repo_id;
-        }
-
-        let trove_id = trove.insert(tx)?;
-
-        // Create components and build path-to-component-id mapping
-        let mut component_ids: HashMap<ComponentType, i64> = HashMap::new();
-        for comp_type in classified.keys() {
-            let mut component = Component::from_type(trove_id, *comp_type);
-            component.description = Some(format!("{} files", comp_type.as_str()));
-            let comp_id = component.insert(tx)?;
-            component_ids.insert(*comp_type, comp_id);
-            info!("Created component :{} (id={})", comp_type.as_str(), comp_id);
-        }
-
-        // Build path-to-component-id lookup for efficient file insertion
-        let mut path_to_component: HashMap<&str, i64> = HashMap::new();
-        for (comp_type, files) in classified {
-            if let Some(&comp_id) = component_ids.get(comp_type) {
-                for path in files {
-                    path_to_component.insert(path.as_str(), comp_id);
-                }
-            }
-        }
-
-        for (path, hash, size, mode, symlink_target) in &file_hashes {
-            if hash.len() < 3 {
-                warn!("Skipping file with short hash: {} (hash={})", path, hash);
-                continue;
-            }
-            tx.execute(
-                "INSERT OR IGNORE INTO file_contents (sha256_hash, content_path, size) VALUES (?1, ?2, ?3)",
-                [hash, &format!("objects/{}/{}", &hash[0..2], &hash[2..]), &size.to_string()],
-            )?;
-
-            // Look up the component ID for this file
-            let component_id = path_to_component.get(path.as_str()).copied();
-
-            let mut file_entry = conary_core::db::models::FileEntry::new(
-                path.clone(),
-                hash.clone(),
-                *size,
-                *mode,
-                trove_id,
-            );
-            file_entry.component_id = component_id;
-            file_entry.symlink_target = symlink_target.clone();
-            file_entry.insert(tx)?;
-
-            // Record in history
-            let action = if is_upgrade { "modify" } else { "add" };
-            tx.execute(
-                "INSERT INTO file_history (changeset_id, path, sha256_hash, action) VALUES (?1, ?2, ?3, ?4)",
-                [&changeset_id.to_string(), path, hash, action],
-            )?;
-        }
-
-        for dep in pkg.dependencies() {
-            let mut dep_entry = conary_core::db::models::DependencyEntry::new(
-                trove_id,
-                dep.name.clone(),
-                None, // depends_on_version is for resolved version, not constraint
-                dep.dep_type.as_str().to_string(),
-                dep.version.clone(), // Store the version constraint
-            );
-            dep_entry.insert(tx)?;
-        }
-
-        // Store scriptlets for later removal (always, even if --no-scripts)
-        for scriptlet in scriptlets {
-            let mut entry = ScriptletEntry::with_flags(
-                trove_id,
-                scriptlet.phase.to_string(),
-                scriptlet.interpreter.clone(),
-                scriptlet.content.clone(),
-                scriptlet.flags.clone(),
-                format.as_str(),
-            );
-            entry.insert(tx)?;
-        }
-
-        // Store language-specific provides (python, perl, ruby, etc.)
-        for lang_dep in language_provides {
-            let kind = match lang_dep.class {
-                DependencyClass::Package => "package",
-                _ => lang_dep.class.prefix(),
-            };
-            let mut provide = ProvideEntry::new_typed(
-                trove_id,
-                kind,
-                lang_dep.name.clone(),
-                lang_dep.version_constraint.clone(),
-            );
-            provide.insert_or_ignore(tx)?;
-        }
-
-        // Also store the package name itself as a provide
-        let mut pkg_provide = ProvideEntry::new(
-            trove_id,
-            pkg.name().to_string(),
-            Some(pkg.version().to_string()),
-        );
-        pkg_provide.insert_or_ignore(tx)?;
-
-        changeset.update_status(tx, ChangesetStatus::Applied)?;
-        Ok((changeset_id, trove_id))
-    });
-
-    // Handle DB transaction result
-    let (changeset_id, _trove_id) = match db_result {
-        Ok((cs_id, tr_id)) => {
-            info!("DB commit successful: changeset={}, trove={}", cs_id, tr_id);
-            (cs_id, tr_id)
-        }
+    let inner_result = match inner::install_inner(
+        &tx,
+        &mut engine,
+        changeset_id,
+        pkg,
+        extraction,
+        ctx,
+        progress,
+    ) {
+        Ok(result) => result,
         Err(e) => {
-            // DB failed - release lock and bail
             engine.release_lock();
-            return Err(anyhow::anyhow!("Database transaction failed: {}", e));
+            return Err(e);
         }
     };
 
-    if let Some(old_trove) = ctx.old_trove_to_upgrade {
-        mark_upgraded_parent_deriveds_stale(
+    tx.commit()?;
+    info!(
+        "DB commit successful: changeset={}, trove={}",
+        changeset_id, inner_result.trove_id
+    );
+
+    let post_commit_result = (|| -> Result<()> {
+        crate::commands::composefs_ops::rebuild_and_mount(
             conn,
-            pkg.name(),
-            Some(&old_trove.version),
-            pkg.version(),
-        );
-    }
+            &tx_description,
+            Some(prev_etc),
+            std::path::Path::new(ctx.root),
+        )?;
 
-    // Composefs-native: build EROFS image from DB state and mount new generation.
-    // Pass the pre-captured prev_etc so the three-way merge sees the correct base.
-    let _gen_num = crate::commands::composefs_ops::rebuild_and_mount(
-        conn,
-        &tx_description,
-        Some(prev_etc),
-        std::path::Path::new("/conary"),
-    )?;
+        changeset.update_status(conn, ChangesetStatus::Applied)?;
+        Ok(())
+    })();
 
-    // Release transaction lock
     engine.release_lock();
+    post_commit_result?;
 
     Ok(InstallTransactionResult { changeset_id })
 }
 
 /// Run post-install scriptlets, triggers, and print the final summary.
-fn finalize_install(
+fn finalize_install_without_snapshot(
     conn: &rusqlite::Connection,
     pkg: &dyn conary_core::packages::PackageFormat,
     extraction: &ExtractionResult,
@@ -1786,22 +1654,33 @@ fn finalize_install(
         );
     }
 
-    // Create state snapshot after successful install
+    Ok(())
+}
+
+fn finalize_install(
+    conn: &rusqlite::Connection,
+    pkg: &dyn conary_core::packages::PackageFormat,
+    extraction: &ExtractionResult,
+    scriptlet_ctx: &ScriptletContext<'_>,
+    pre_state: &PreScriptletState,
+    tx_result: &InstallTransactionResult,
+    progress: &InstallProgress,
+) -> Result<()> {
+    finalize_install_without_snapshot(
+        conn,
+        pkg,
+        extraction,
+        scriptlet_ctx,
+        pre_state,
+        tx_result,
+        progress,
+    )?;
     create_state_snapshot(
         conn,
         tx_result.changeset_id,
         &format!("Install {}", pkg.name()),
     )?;
-
     Ok(())
-}
-
-fn version_scheme_for_format(format: PackageFormatType) -> VersionScheme {
-    match format {
-        PackageFormatType::Rpm => VersionScheme::Rpm,
-        PackageFormatType::Deb => VersionScheme::Debian,
-        PackageFormatType::Arch => VersionScheme::Arch,
-    }
 }
 
 fn scheme_to_string(scheme: VersionScheme) -> String {

@@ -1,8 +1,8 @@
 // src/commands/system.rs
 //! System management commands (init, verify, rollback)
 
-use super::TroveSnapshot;
 use super::open_db;
+use super::{RevertMetadata, TroveSnapshot};
 use anyhow::Result;
 use conary_core::db::paths::objects_dir;
 use conary_core::filesystem::CasStore;
@@ -112,7 +112,7 @@ fn is_rollback_eligible_status(status: &conary_core::db::models::ChangesetStatus
 }
 
 /// Rollback a changeset
-pub async fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Result<()> {
+pub async fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> {
     info!("Rolling back changeset: {}", changeset_id);
     println!("Rolling back changeset: {}", changeset_id);
     std::io::stdout().flush()?;
@@ -164,18 +164,23 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Resu
             )));
         }
 
-        // Atomically claim this changeset for rollback using a conditional UPDATE.
-        // We set reversed_by_changeset_id to a sentinel (-1) as a claim marker;
-        // the actual rollback transaction will overwrite it with the real rollback
-        // changeset ID. This keeps status within the valid enum
-        // (pending/applied/post_hooks_failed/rolled_back) while preventing a
-        // second concurrent rollback from passing
-        // the reversed_by_changeset_id IS NULL guard.
+        // Atomically claim this changeset for rollback using a conditional
+        // UPDATE. We temporarily set reversed_by_changeset_id to the changeset's
+        // own ID as an in-band claim marker; the actual rollback transaction
+        // overwrites it with the real rollback changeset ID. This keeps status
+        // within the valid enum while avoiding invalid foreign-key sentinels and
+        // still prevents a second concurrent rollback from passing the
+        // reversed_by_changeset_id IS NULL guard.
         let rollback_statuses = rollback_claim_statuses();
         let claimed = tx.execute(
-            "UPDATE changesets SET reversed_by_changeset_id = -1
-             WHERE id = ?1 AND status IN (?2, ?3) AND reversed_by_changeset_id IS NULL",
-            rusqlite::params![changeset_id, rollback_statuses[0], rollback_statuses[1]],
+            "UPDATE changesets SET reversed_by_changeset_id = ?2
+             WHERE id = ?1 AND status IN (?3, ?4) AND reversed_by_changeset_id IS NULL",
+            rusqlite::params![
+                changeset_id,
+                changeset_id,
+                rollback_statuses[0],
+                rollback_statuses[1]
+            ],
         )?;
         if claimed == 0 {
             return Err(conary_core::Error::InitError(format!(
@@ -193,17 +198,18 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Resu
         Ok((changeset, metadata))
     })?;
 
-    // Helper: clear the -1 claim sentinel if the rollback fails, so the
-    // changeset doesn't get permanently wedged.
+    // Helper: clear the self-reference claim marker if the rollback fails, so
+    // the changeset doesn't get permanently wedged.
     let clear_claim = |conn: &rusqlite::Connection| {
         let _ = conn.execute(
             "UPDATE changesets SET reversed_by_changeset_id = NULL
-             WHERE id = ?1 AND reversed_by_changeset_id = -1",
+             WHERE id = ?1 AND reversed_by_changeset_id = ?1",
             [changeset_id],
         );
     };
 
     if let Some(ref json) = metadata {
+        let snapshots = parse_rollback_snapshots(json)?;
         // Check if this changeset also has installed troves (= upgrade vs removal)
         let has_troves: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM troves WHERE installed_by_changeset_id = ?1)",
@@ -211,14 +217,15 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Resu
             |row| row.get(0),
         )?;
 
-        if has_troves {
-            // Upgrade: remove new version, restore old version from snapshot
-            return rollback_upgrade(changeset_id, json, &mut conn, &changeset)
-                .inspect_err(|_| clear_claim(&conn));
-        }
-        // Removal: restore the package from snapshot
-        return rollback_removal(changeset_id, json, &mut conn, &changeset)
-            .inspect_err(|_| clear_claim(&conn));
+        return rollback_changeset_with_snapshots(
+            changeset_id,
+            &snapshots,
+            has_troves,
+            &mut conn,
+            &changeset,
+            root,
+        )
+        .inspect_err(|_| clear_claim(&conn));
     }
 
     // Otherwise, this is a fresh install - remove the installed packages
@@ -354,7 +361,7 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Resu
         &conn,
         &format!("Rollback changeset {}", changeset_id),
         None,
-        std::path::Path::new("/conary"),
+        std::path::Path::new(root),
     )?;
 
     for message in &removed_messages {
@@ -369,215 +376,122 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Resu
     Ok(())
 }
 
-/// Rollback a removal by restoring the package from snapshot
-fn rollback_removal(
-    changeset_id: i64,
-    snapshot_json: &str,
-    conn: &mut rusqlite::Connection,
-    changeset: &conary_core::db::models::Changeset,
-) -> Result<()> {
-    info!("Rolling back removal changeset: {}", changeset_id);
+fn parse_rollback_snapshots(snapshot_json: &str) -> Result<Vec<TroveSnapshot>> {
+    if let Ok(wrapper) = serde_json::from_str::<RevertMetadata>(snapshot_json) {
+        return Ok(wrapper.removed_troves);
+    }
+    Ok(vec![serde_json::from_str(snapshot_json)?])
+}
 
-    let snapshot: TroveSnapshot = serde_json::from_str(snapshot_json)?;
-    println!(
-        "Restoring package: {} version {}",
-        snapshot.name, snapshot.version
+fn restore_snapshot(
+    tx: &rusqlite::Transaction<'_>,
+    rollback_changeset_id: i64,
+    snapshot: &TroveSnapshot,
+) -> conary_core::Result<()> {
+    let install_source: conary_core::db::models::InstallSource =
+        snapshot.install_source.parse().map_err(|e| {
+            conary_core::Error::InitError(format!(
+                "Invalid install_source in snapshot '{}': {}",
+                snapshot.install_source, e
+            ))
+        })?;
+
+    let mut trove = conary_core::db::models::Trove::new_with_source(
+        snapshot.name.clone(),
+        snapshot.version.clone(),
+        conary_core::db::models::TroveType::Package,
+        install_source,
     );
+    trove.architecture = snapshot.architecture.clone();
+    trove.description = snapshot.description.clone();
+    trove.installed_by_changeset_id = Some(rollback_changeset_id);
+    if let Some(repo_id) = snapshot.installed_from_repository_id {
+        let repo_exists: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM repositories WHERE id = ?1)",
+                [repo_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+        trove.installed_from_repository_id = if repo_exists { Some(repo_id) } else { None };
+    }
 
-    let file_count = snapshot.files.len();
+    let trove_id = trove.insert(tx)?;
 
-    conary_core::db::transaction(conn, |tx| {
-        // Create rollback changeset
-        let mut rollback_changeset = conary_core::db::models::Changeset::new(format!(
-            "Rollback of changeset {} ({})",
-            changeset_id, changeset.description
-        ));
-        let rollback_changeset_id = rollback_changeset.insert(tx)?;
-
-        // Restore the trove
-        let install_source: conary_core::db::models::InstallSource =
-            snapshot.install_source.parse().map_err(|e| {
-                conary_core::Error::InitError(format!(
-                    "Invalid install_source in snapshot '{}': {}",
-                    snapshot.install_source, e
-                ))
-            })?;
-
-        let mut trove = conary_core::db::models::Trove::new_with_source(
-            snapshot.name.clone(),
-            snapshot.version.clone(),
-            conary_core::db::models::TroveType::Package,
-            install_source,
+    for file in &snapshot.files {
+        let mut file_entry = conary_core::db::models::FileEntry::new(
+            file.path.clone(),
+            file.sha256_hash.clone(),
+            file.size,
+            file.permissions,
+            trove_id,
         );
-        trove.architecture = snapshot.architecture.clone();
-        trove.description = snapshot.description.clone();
-        trove.installed_by_changeset_id = Some(rollback_changeset_id);
-        // Preserve repo provenance if the repo still exists; null out if deleted.
-        if let Some(repo_id) = snapshot.installed_from_repository_id {
-            let repo_exists: bool = tx
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM repositories WHERE id = ?1)",
-                    [repo_id],
-                    |row| row.get(0),
-                )
-                .unwrap_or(false);
-            trove.installed_from_repository_id = if repo_exists { Some(repo_id) } else { None };
+        file_entry.symlink_target = file.symlink_target.clone();
+        file_entry.insert(tx)?;
+
+        if file.sha256_hash.len() == 64 && file.sha256_hash.chars().all(|c| c.is_ascii_hexdigit()) {
+            tx.execute(
+                "INSERT INTO file_history (changeset_id, path, sha256_hash, action) VALUES (?1, ?2, ?3, ?4)",
+                [&rollback_changeset_id.to_string(), &file.path, &file.sha256_hash, "add"],
+            )?;
         }
-
-        let trove_id = trove.insert(tx)?;
-
-        // Restore file entries
-        for file in &snapshot.files {
-            let mut file_entry = conary_core::db::models::FileEntry::new(
-                file.path.clone(),
-                file.sha256_hash.clone(),
-                file.size,
-                file.permissions,
-                trove_id,
-            );
-            file_entry.symlink_target = file.symlink_target.clone();
-            file_entry.insert(tx)?;
-
-            // Record in file history only for valid SHA256 hashes
-            if file.sha256_hash.len() == 64
-                && file.sha256_hash.chars().all(|c| c.is_ascii_hexdigit())
-            {
-                tx.execute(
-                    "INSERT INTO file_history (changeset_id, path, sha256_hash, action) VALUES (?1, ?2, ?3, ?4)",
-                    [&rollback_changeset_id.to_string(), &file.path, &file.sha256_hash, "add"],
-                )?;
-            }
-        }
-
-        rollback_changeset.update_status(tx, conary_core::db::models::ChangesetStatus::Applied)?;
-
-        // Mark original changeset as rolled back
-        tx.execute(
-            "UPDATE changesets SET status = 'rolled_back', rolled_back_at = CURRENT_TIMESTAMP,
-             reversed_by_changeset_id = ?1 WHERE id = ?2",
-            [rollback_changeset_id, changeset_id],
-        )?;
-
-        Ok(())
-    })?;
-
-    // Composefs-native: rebuild EROFS image from updated DB state and remount
-    let _gen_num = crate::commands::composefs_ops::rebuild_and_mount(
-        conn,
-        &format!("Rollback removal of {}", snapshot.name),
-        None,
-        std::path::Path::new("/conary"),
-    )?;
-
-    println!(
-        "Rollback complete. Changeset {} has been reversed.",
-        changeset_id
-    );
-    println!("  Restored {} version {}", snapshot.name, snapshot.version);
-    println!("  Files in DB: {}", file_count);
+    }
 
     Ok(())
 }
 
-/// Rollback an upgrade by removing the new version and restoring the old
-fn rollback_upgrade(
+fn rollback_changeset_with_snapshots(
     changeset_id: i64,
-    snapshot_json: &str,
+    snapshots: &[TroveSnapshot],
+    remove_new_troves: bool,
     conn: &mut rusqlite::Connection,
     changeset: &conary_core::db::models::Changeset,
+    root: &str,
 ) -> Result<()> {
-    info!("Rolling back upgrade changeset: {}", changeset_id);
+    if snapshots.is_empty() {
+        anyhow::bail!(
+            "Changeset {} metadata did not contain any rollback snapshots",
+            changeset_id
+        );
+    }
 
-    let snapshot: TroveSnapshot = serde_json::from_str(snapshot_json)?;
-    println!(
-        "Rolling back upgrade: restoring {} version {}",
-        snapshot.name, snapshot.version
-    );
-
-    // Collect new version's files for filesystem cleanup
-    let files_to_remove = std::cell::RefCell::new(Vec::new());
     let removed_messages = std::cell::RefCell::new(Vec::new());
 
     conary_core::db::transaction(conn, |tx| {
-        // Find and remove the new trove installed by this changeset
-        let new_troves: Vec<(i64, String)> = {
-            let mut stmt =
-                tx.prepare("SELECT id, version FROM troves WHERE installed_by_changeset_id = ?1")?;
-            stmt.query_map([changeset_id], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-        };
+        if remove_new_troves {
+            let new_troves: Vec<(i64, String, String)> = {
+                let mut stmt = tx.prepare(
+                    "SELECT id, name, version FROM troves WHERE installed_by_changeset_id = ?1",
+                )?;
+                stmt.query_map([changeset_id], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+            };
 
-        for (trove_id, version) in &new_troves {
-            // Collect files for filesystem removal
-            let files = conary_core::db::models::FileEntry::find_by_trove(tx, *trove_id)?;
-            files_to_remove
-                .borrow_mut()
-                .extend(files.iter().map(|f| f.path.clone()));
-
-            // Delete from DB
-            conary_core::db::models::Trove::delete(tx, *trove_id)?;
-            removed_messages
-                .borrow_mut()
-                .push(format!("  Removed new version {}", version));
+            for (trove_id, name, version) in &new_troves {
+                conary_core::db::models::Trove::delete(tx, *trove_id)?;
+                removed_messages
+                    .borrow_mut()
+                    .push(format!("  Removed reverted package {} {}", name, version));
+            }
         }
 
-        // Create rollback changeset
         let mut rollback_changeset = conary_core::db::models::Changeset::new(format!(
             "Rollback of changeset {} ({})",
             changeset_id, changeset.description
         ));
         let rollback_changeset_id = rollback_changeset.insert(tx)?;
 
-        // Restore the old trove from snapshot
-        let install_source: conary_core::db::models::InstallSource =
-            snapshot.install_source.parse().map_err(|e| {
-                conary_core::Error::InitError(format!(
-                    "Invalid install_source in snapshot '{}': {}",
-                    snapshot.install_source, e
-                ))
-            })?;
-
-        let mut trove = conary_core::db::models::Trove::new_with_source(
-            snapshot.name.clone(),
-            snapshot.version.clone(),
-            conary_core::db::models::TroveType::Package,
-            install_source,
-        );
-        trove.architecture = snapshot.architecture.clone();
-        trove.description = snapshot.description.clone();
-        trove.installed_by_changeset_id = Some(rollback_changeset_id);
-        // Preserve repo provenance if the repo still exists; null out if deleted.
-        if let Some(repo_id) = snapshot.installed_from_repository_id {
-            let repo_exists: bool = tx
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM repositories WHERE id = ?1)",
-                    [repo_id],
-                    |row| row.get(0),
-                )
-                .unwrap_or(false);
-            trove.installed_from_repository_id = if repo_exists { Some(repo_id) } else { None };
-        }
-
-        let trove_id = trove.insert(tx)?;
-
-        // Restore file entries
-        for file in &snapshot.files {
-            let mut file_entry = conary_core::db::models::FileEntry::new(
-                file.path.clone(),
-                file.sha256_hash.clone(),
-                file.size,
-                file.permissions,
-                trove_id,
-            );
-            file_entry.symlink_target = file.symlink_target.clone();
-            file_entry.insert(tx)?;
+        for snapshot in snapshots {
+            restore_snapshot(tx, rollback_changeset_id, snapshot)?;
         }
 
         rollback_changeset.update_status(tx, conary_core::db::models::ChangesetStatus::Applied)?;
-
-        // Mark original changeset as rolled back
         tx.execute(
             "UPDATE changesets SET status = 'rolled_back', rolled_back_at = CURRENT_TIMESTAMP,
              reversed_by_changeset_id = ?1 WHERE id = ?2",
@@ -587,15 +501,20 @@ fn rollback_upgrade(
         Ok(())
     })?;
 
-    // Composefs-native: rebuild EROFS image from DB state and remount
-    let _files_to_remove = files_to_remove.into_inner();
-    let removed_messages = removed_messages.into_inner();
+    let summary = if remove_new_troves {
+        format!("Rollback changeset {}", changeset_id)
+    } else {
+        format!("Rollback removal of {}", snapshots[0].name)
+    };
     let _gen_num = crate::commands::composefs_ops::rebuild_and_mount(
         conn,
-        &format!("Rollback upgrade of {}", snapshot.name),
+        &summary,
         None,
-        std::path::Path::new("/conary"),
+        std::path::Path::new(root),
     )?;
+
+    let removed_messages = removed_messages.into_inner();
+    let restored_file_count: usize = snapshots.iter().map(|snapshot| snapshot.files.len()).sum();
 
     for message in &removed_messages {
         println!("{message}");
@@ -604,12 +523,10 @@ fn rollback_upgrade(
         "Rollback complete. Changeset {} has been reversed.",
         changeset_id
     );
-    println!(
-        "  Restored {} version {} ({} files in DB)",
-        snapshot.name,
-        snapshot.version,
-        snapshot.files.len()
-    );
+    for snapshot in snapshots {
+        println!("  Restored {} version {}", snapshot.name, snapshot.version);
+    }
+    println!("  Files in DB: {}", restored_file_count);
 
     Ok(())
 }
@@ -1120,7 +1037,8 @@ use super::format_bytes;
 
 #[cfg(test)]
 mod tests {
-    use super::{cmd_init, rollback_claim_statuses};
+    use super::{cmd_init, parse_rollback_snapshots, rollback_claim_statuses};
+    use crate::commands::{FileSnapshot, RevertMetadata, TroveSnapshot};
 
     #[tokio::test]
     async fn init_adds_remi_with_strategy_defaults() {
@@ -1146,5 +1064,51 @@ mod tests {
     #[test]
     fn rollback_claim_statuses_include_post_hooks_failed() {
         assert_eq!(rollback_claim_statuses(), ["applied", "post_hooks_failed"]);
+    }
+
+    #[test]
+    fn rollback_metadata_parser_accepts_legacy_and_revert_wrapper_formats() {
+        let single = TroveSnapshot {
+            name: "nginx".to_string(),
+            version: "1.24.0".to_string(),
+            architecture: Some("x86_64".to_string()),
+            description: Some("web server".to_string()),
+            install_source: "repository".to_string(),
+            installed_from_repository_id: Some(7),
+            files: vec![FileSnapshot {
+                path: "/usr/sbin/nginx".to_string(),
+                sha256_hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .to_string(),
+                size: 1024,
+                permissions: 0o755,
+                symlink_target: None,
+            }],
+        };
+
+        let parsed_single =
+            parse_rollback_snapshots(&serde_json::to_string(&single).unwrap()).unwrap();
+        assert_eq!(parsed_single.len(), 1);
+        assert_eq!(parsed_single[0].name, "nginx");
+
+        let wrapper = RevertMetadata {
+            removed_troves: vec![
+                single.clone(),
+                TroveSnapshot {
+                    name: "vim".to_string(),
+                    version: "9.1.0".to_string(),
+                    architecture: Some("x86_64".to_string()),
+                    description: Some("editor".to_string()),
+                    install_source: "repository".to_string(),
+                    installed_from_repository_id: None,
+                    files: Vec::new(),
+                },
+            ],
+        };
+
+        let parsed_wrapper =
+            parse_rollback_snapshots(&serde_json::to_string(&wrapper).unwrap()).unwrap();
+        assert_eq!(parsed_wrapper.len(), 2);
+        assert_eq!(parsed_wrapper[0].name, "nginx");
+        assert_eq!(parsed_wrapper[1].name, "vim");
     }
 }

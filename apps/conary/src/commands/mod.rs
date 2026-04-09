@@ -189,6 +189,13 @@ pub(crate) struct TroveSnapshot {
     pub files: Vec<FileSnapshot>,
 }
 
+/// Rollback metadata for state-revert style changesets that may remove
+/// multiple troves under one wrapping changeset.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct RevertMetadata {
+    pub removed_troves: Vec<TroveSnapshot>,
+}
+
 /// Serializable file metadata for rollback support
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct FileSnapshot {

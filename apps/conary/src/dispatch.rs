@@ -88,6 +88,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                         root: &common.root,
                         version,
                         repo,
+                        architecture: None,
                         dry_run,
                         no_deps,
                         no_scripts,
@@ -315,7 +316,9 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         // =====================================================================
         // Model Commands
         // =====================================================================
-        Some(Commands::Model(model_cmd)) => dispatch_model_command(model_cmd).await,
+        Some(Commands::Model(model_cmd)) => {
+            dispatch_model_command(model_cmd, allow_live_system_mutation).await
+        }
 
         // =====================================================================
         // Automation Commands
@@ -560,7 +563,15 @@ async fn dispatch_system_command(
                 state_number,
                 db,
                 dry_run,
-            } => commands::cmd_state_restore(&db.db_path, state_number, dry_run).await,
+            } => {
+                require_live_mutation(
+                    allow_live_system_mutation,
+                    Cow::Borrowed("conary system state revert"),
+                    LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
+                    dry_run,
+                )?;
+                commands::cmd_state_restore(&db.db_path, state_number, dry_run).await
+            }
 
             cli::StateCommands::Prune { keep, db, dry_run } => {
                 commands::cmd_state_prune(&db.db_path, keep, dry_run).await
@@ -1207,7 +1218,10 @@ async fn dispatch_derive_command(derive_cmd: cli::DeriveCommands) -> Result<()> 
     }
 }
 
-async fn dispatch_model_command(model_cmd: cli::ModelCommands) -> Result<()> {
+async fn dispatch_model_command(
+    model_cmd: cli::ModelCommands,
+    allow_live_system_mutation: bool,
+) -> Result<()> {
     match model_cmd {
         cli::ModelCommands::Diff { model, offline, db } => {
             commands::cmd_model_diff(&model, &db.db_path, offline).await
@@ -1222,6 +1236,12 @@ async fn dispatch_model_command(model_cmd: cli::ModelCommands) -> Result<()> {
             no_autoremove,
             offline,
         } => {
+            require_live_mutation(
+                allow_live_system_mutation,
+                Cow::Borrowed("conary model apply"),
+                LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
+                dry_run,
+            )?;
             commands::cmd_model_apply(commands::ApplyOptions {
                 model_path: &model,
                 db_path: &common.db.db_path,

@@ -1,7 +1,7 @@
 # Pre-Release Completeness: Design Spec
 
 **Date:** 2026-04-08  
-**Status:** Approved (rev 4 -- incorporates third Codex review)  
+**Status:** Approved (rev 5 -- aligned with implementation plan)
 **Goal:** Close every stub, dead-end, and misleading exit code in the CLI before
 public announcement. Implementation order is bottom-up: user-facing mutators
 first, then automation, then stubs, then infrastructure.
@@ -13,6 +13,10 @@ first, then automation, then stubs, then infrastructure.
 These are the two flagship features shown in the README that don't work.
 They share the same prerequisite work (extracted inner install/remove helpers,
 live-host safety gate, architecture selector) so they belong in the same phase.
+This phase also tightens the install model Conary should expose going forward:
+RPM/DEB/Arch are ingress formats, CCS is the native install model, and shared
+mutation code should operate on format-neutral install semantics instead of a
+legacy-only enum.
 
 ### Problem
 
@@ -39,29 +43,39 @@ to `cmd_model_apply` and `cmd_state_restore` in `dispatch.rs`.
 
 `cmd_install` and `cmd_remove` each own their entire lifecycle: open a DB
 transaction, create a changeset, record file history, call
-`rebuild_and_mount()`, and create a state snapshot. A `batch_mode: bool` flag
-is not sufficient because the transaction boundaries and `rebuild_and_mount()`
-calls are deeply embedded in the function bodies (`install/mod.rs:1518`,
-`remove.rs:239`, `install/mod.rs:1689`, `remove.rs:313`).
+`rebuild_and_mount()`, and mark the changeset applied. A `batch_mode: bool`
+flag is not sufficient because the transaction boundaries and
+`rebuild_and_mount()` calls are deeply embedded in the function bodies
+(`install/mod.rs:1518`, `remove.rs:239`, `install/mod.rs:1689`,
+`remove.rs:313`).
 
 **Extract inner helpers:**
 
-- `install_inner(conn: &Connection, changeset_id: i64, package, opts)` --
+- `install_inner(tx: &Transaction<'_>, changeset_id: i64, package, opts)` --
   performs the DB transaction body (trove insert, dependency recording, file
-  history, CAS operations) using the caller's connection and changeset. Skips
-  `rebuild_and_mount()` and state snapshot creation. Returns the trove ID and
-  any scriptlet results.
+  history, CAS operations) inside the caller-owned DB transaction. Skips
+  `rebuild_and_mount()` and explicit state snapshot creation. Returns the trove
+  ID and any data needed for post-commit finalization.
 
-- `remove_inner(conn: &Connection, changeset_id: i64, package, opts)` --
+- `remove_inner(tx: &Transaction<'_>, changeset_id: i64, package, opts)` --
   performs the DB transaction body (dependency check, trove delete, file
-  history recording) using the caller's connection and changeset. Skips
-  `rebuild_and_mount()` and state snapshot creation. Returns the removal
-  result.
+  history recording) inside the caller-owned DB transaction. Skips
+  `rebuild_and_mount()` and explicit state snapshot creation. Returns the
+  removed `TroveSnapshot` so the caller can persist rollback metadata in a
+  backward-compatible format.
 
 The existing `cmd_install` and `cmd_remove` become thin wrappers: create
-changeset, call the inner helper, call `rebuild_and_mount()`, create state
-snapshot. No behavioral change for interactive `conary install` / `conary
-remove`.
+changeset, call the inner helper, call `rebuild_and_mount()`, and mark the
+changeset applied. Snapshot creation remains owned by the generation build that
+`rebuild_and_mount()` already performs. No behavioral change for interactive
+`conary install` / `conary remove`.
+
+**Install semantics redesign:** This extraction is also where Phase 1 stops
+letting `PackageFormatType` drive the mutation path. Legacy packages may still
+be parsed or converted during preparation, but shared execution should consume
+format-neutral install semantics (version-scheme + scriptlet-format + source
+kind) so CCS and legacy-prepared packages use the same install/remove/revert
+machinery.
 
 **Atomicity scope:** DB and generation state are atomic (one changeset, one
 rebuild, one snapshot). Pre-remove scriptlets that partially execute cannot be
@@ -127,6 +141,17 @@ giving the caller control over the transaction boundary. If a historical
 package version is no longer in any enabled repository, the user gets an
 explicit error listing what couldn't be restored and why.
 
+Restore preflight must validate against a capability-aware destination-state
+view, not just package names. Conary already resolves tracked dependencies via
+provides/capabilities (`ProvideEntry::find_satisfying_provider_fuzzy`,
+`check_provides_dependencies`), so restore must reuse that model for target
+state validation.
+
+Rollback compatibility is part of Phase 1. The wrapping revert changeset will
+contain multiple removals and possibly installs/upgrades, so the existing
+single-`TroveSnapshot` metadata assumption in `cmd_rollback` must be extended
+in a backward-compatible way.
+
 #### Implementation (state.rs, replacing bail at line 215)
 
 State revert must own the `TransactionEngine` lifecycle that `cmd_install`
@@ -139,19 +164,43 @@ model (`install/mod.rs:1460-1479`, `remove.rs:113-117`).
 3. Call `engine.begin()` to acquire the mutation lock.
 4. Open a DB transaction and create one wrapping changeset:
    `"Revert to state {N}"`.
-5. Execute removals: `remove_inner(conn, changeset_id, ...)` for each entry
-   in `plan.to_remove`, with `architecture` from `StateMember`.
-6. Execute installs: resolve the package from repositories (for version and
-   CAS content), then `install_inner(conn, changeset_id, ...)` for each
+5. Build a `TargetStateView` for the destination state that includes both:
+   destination members keyed by `(trove_name, architecture)`, and a
+   capability/provider view compatible with Conary's existing tracked-provider
+   semantics.
+6. Pre-resolve installs/upgrades without mutating the live system. Legacy
+   inputs may be parsed or converted, CCS inputs may be parsed directly, but
+   all prepared packages must produce shared `InstallSemantics`.
+7. Execute removals: `remove_inner(tx, changeset_id, ...)` for each entry
+   in `plan.to_remove`, with `architecture` from `StateMember`. Collect the
+   returned `TroveSnapshot`s in memory.
+8. Execute installs: resolve the package from repositories (for version and
+   CAS content), validate dependencies against the capability-aware target
+   state view, then `install_inner(tx, changeset_id, ...)` for each
    `plan.to_install`, with target version and architecture.
-7. Execute upgrades: `install_inner(conn, changeset_id, ...)` with target
-   version for each `plan.to_upgrade`.
-8. If all operations succeeded: commit the DB transaction, call
-   `rebuild_and_mount()` once, create one state snapshot via
-   `StateEngine::create_snapshot()` with summary `"Reverted to state {N}"`.
-9. Call `engine.release_lock()`.
-10. On any failure: roll back the DB transaction, release the lock, and report
+9. Execute upgrades: same pattern as installs, but with target version and
+   downgrade-aware semantics for each `plan.to_upgrade`.
+10. Serialize removed troves into a rollback-compatible revert metadata wrapper,
+    e.g. `{ removed_troves: Vec<TroveSnapshot> }`, and persist it on the
+    wrapping changeset before commit.
+11. If all operations succeeded: commit the DB transaction, call
+    `rebuild_and_mount()` once, and rely on the generation build to create the
+    single new active state snapshot with summary `"Reverted to state {N}"`.
+12. Mark the wrapping changeset `Applied` only after rebuild succeeds.
+13. Call `engine.release_lock()`.
+14. On any failure: roll back the DB transaction, release the lock, and report
     what failed. No `rebuild_and_mount()`, no snapshot.
+
+Rollback handling in `system.rs` must then accept either:
+- the legacy single `TroveSnapshot` JSON used by current remove/upgrade
+  rollback, or
+- the new revert metadata wrapper containing `removed_troves: Vec<TroveSnapshot>`
+
+For rollback of a revert changeset, Conary should:
+1. remove any troves installed by that revert changeset via
+   `installed_by_changeset_id`
+2. restore every removed trove from the revert metadata
+3. mark the original revert changeset `rolled_back`
 
 **Atomicity scope:** DB state and generation image are atomic. Scriptlet
 side-effects (pre-remove scripts that partially execute) are not rollback-safe.
@@ -162,11 +211,16 @@ This is consistent with RPM, dpkg, and pacman.
 | File | Change |
 |------|--------|
 | `apps/conary/src/dispatch.rs` | Add `require_live_mutation()` gates for model apply and state revert |
-| `apps/conary/src/commands/install/mod.rs` | Extract `install_inner()`; add `architecture` to `InstallOptions`; `cmd_install` becomes thin wrapper |
+| `apps/conary/src/commands/install/mod.rs` | Extract `install_inner()`; add `architecture` to `InstallOptions`; add owned prepared-install helpers; `cmd_install` becomes thin wrapper |
+| `apps/conary/src/commands/install/prepare.rs` | Move version/upgrade logic behind format-neutral install semantics |
+| `apps/conary/src/commands/install/scriptlets.rs` | Move scriptlet-format logic behind format-neutral install semantics |
+| `apps/conary/src/commands/install/conversion.rs` | Expose non-executing CCS preparation for shared restore path |
+| `apps/conary/src/commands/install/resolve.rs` | Thread `architecture` through `ResolutionOptions` |
 | `apps/conary/src/commands/remove.rs` | Extract `remove_inner()`; add `architecture` parameter; `cmd_remove` becomes thin wrapper |
 | `apps/conary/src/commands/model/apply.rs` | Implement `apply_package_changes()`, fix Update handling |
 | `apps/conary/src/commands/model.rs` | Update call site, wire autoremove |
 | `apps/conary/src/commands/state.rs` | Replace bail with inner-helper execution loop + TransactionEngine lifecycle |
+| `apps/conary/src/commands/system.rs` | Extend rollback parser/dispatcher to accept revert metadata wrapper |
 
 ### Testing
 
@@ -179,6 +233,10 @@ This is consistent with RPM, dpkg, and pacman.
   exactly ONE changeset + ONE snapshot was created for the revert.
 - Integration test: state revert with a package version not in any repo
   reports a clear error and rolls back the changeset.
+- Integration test: restore preflight accepts a target package that satisfies
+  dependencies via a tracked capability/provide, not just exact package name.
+- Unit/integration test: rollback metadata parser accepts both the legacy
+  single `TroveSnapshot` JSON and the new revert metadata wrapper.
 - Integration test: verify `require_live_mutation` blocks model apply and state
   revert when the flag is not set and root is `/`.
 

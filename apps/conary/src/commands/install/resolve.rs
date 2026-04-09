@@ -92,6 +92,25 @@ pub struct PolicyOptions {
     pub primary_flavor: Option<RepositoryDependencyFlavor>,
 }
 
+fn build_resolution_options(
+    version: Option<&str>,
+    repo: Option<&str>,
+    architecture: Option<&str>,
+    policy_opts: &PolicyOptions,
+) -> ResolutionOptions {
+    ResolutionOptions {
+        version: version.map(String::from),
+        repository: repo.map(String::from),
+        architecture: architecture.map(String::from),
+        output_dir: None,
+        gpg_options: None, // Will be set per-repository in resolver
+        skip_cas: false,
+        policy: policy_opts.policy.clone(),
+        is_root: policy_opts.is_root,
+        primary_flavor: policy_opts.primary_flavor,
+    }
+}
+
 /// Resolve package to a local path, downloading from repository if needed
 ///
 /// This is the main entry point for package resolution. It uses the unified
@@ -105,6 +124,7 @@ pub async fn resolve_package_path(
     db_path: &str,
     version: Option<&str>,
     repo: Option<&str>,
+    architecture: Option<&str>,
     progress: &InstallProgress,
 ) -> Result<ResolutionOutcome> {
     resolve_package_path_with_policy(
@@ -112,6 +132,7 @@ pub async fn resolve_package_path(
         db_path,
         version,
         repo,
+        architecture,
         progress,
         &PolicyOptions::default(),
     )
@@ -127,6 +148,7 @@ pub async fn resolve_package_path_with_policy(
     db_path: &str,
     version: Option<&str>,
     repo: Option<&str>,
+    architecture: Option<&str>,
     progress: &InstallProgress,
     policy_opts: &PolicyOptions,
 ) -> Result<ResolutionOutcome> {
@@ -152,17 +174,7 @@ pub async fn resolve_package_path_with_policy(
     // Build resolution options
     // Note: keyring_dir will be used when GPG options are integrated into resolution
     let _keyring_dir = keyring_dir(db_path);
-    let options = ResolutionOptions {
-        version: version.map(String::from),
-        repository: repo.map(String::from),
-        architecture: None,
-        output_dir: None,
-        gpg_options: None, // Will be set per-repository in resolver
-        skip_cas: false,
-        policy: policy_opts.policy.clone(),
-        is_root: policy_opts.is_root,
-        primary_flavor: policy_opts.primary_flavor,
-    };
+    let options = build_resolution_options(version, repo, architecture, policy_opts);
 
     // Use unified resolver
     progress.set_status("Resolving package source...");
@@ -345,5 +357,23 @@ mod tests {
     fn test_get_keyring_dir() {
         let keyring = keyring_dir("/var/lib/conary/conary.db");
         assert!(keyring.ends_with("keys"));
+    }
+
+    #[test]
+    fn test_build_resolution_options_preserves_architecture() {
+        let options = build_resolution_options(
+            Some("1.2.3"),
+            Some("stable"),
+            Some("x86_64"),
+            &PolicyOptions {
+                is_root: true,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(options.version.as_deref(), Some("1.2.3"));
+        assert_eq!(options.repository.as_deref(), Some("stable"));
+        assert_eq!(options.architecture.as_deref(), Some("x86_64"));
+        assert!(options.is_root);
     }
 }

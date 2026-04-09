@@ -21,7 +21,7 @@ use super::scriptlets::{
     build_execution_mode, get_old_package_scriptlets, run_old_post_remove, run_old_pre_remove,
     run_post_install, run_pre_install, to_scriptlet_format,
 };
-use super::{PackageFormatType, detect_package_format};
+use super::{InstallSemantics, PackageFormatType, detect_package_format};
 use anyhow::{Context, Result};
 use conary_core::components::{ComponentClassifier, ComponentType, should_run_scriptlets};
 use conary_core::db::models::{
@@ -678,11 +678,15 @@ pub fn prepare_package_for_batch(
     let conn = open_db(db_path)?;
 
     // Check for existing installation
-    let (is_upgrade, old_trove) =
-        match check_upgrade_status(&conn, pkg.as_ref(), format, allow_downgrade)? {
-            UpgradeCheck::FreshInstall => (false, None),
-            UpgradeCheck::Upgrade(trove) | UpgradeCheck::Downgrade(trove) => (true, Some(trove)),
-        };
+    let (is_upgrade, old_trove) = match check_upgrade_status(
+        &conn,
+        pkg.as_ref(),
+        &InstallSemantics::legacy(format),
+        allow_downgrade,
+    )? {
+        UpgradeCheck::FreshInstall => (false, None),
+        UpgradeCheck::Upgrade(trove) | UpgradeCheck::Downgrade(trove) => (true, Some(trove)),
+    };
 
     let old_files = get_old_files_for_upgrade(&conn, old_trove.as_deref(), pkg.files())?;
 
@@ -748,7 +752,12 @@ pub fn prepare_from_parsed(
     let conn = open_db(db_path)?;
 
     // Check for existing installation
-    let (is_upgrade, old_trove) = match check_upgrade_status(&conn, pkg, format, allow_downgrade)? {
+    let (is_upgrade, old_trove) = match check_upgrade_status(
+        &conn,
+        pkg,
+        &InstallSemantics::legacy(format),
+        allow_downgrade,
+    )? {
         UpgradeCheck::FreshInstall => (false, None),
         UpgradeCheck::Upgrade(trove) | UpgradeCheck::Downgrade(trove) => (true, Some(trove)),
     };
