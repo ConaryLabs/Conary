@@ -58,6 +58,21 @@ pub fn list(conn: &Connection) -> Result<Vec<FederationPeer>> {
     Ok(peers)
 }
 
+/// List enabled federation peers for a given tier ordered for substituter lookup.
+pub fn list_enabled_for_tier(conn: &Connection, tier: &str) -> Result<Vec<FederationPeer>> {
+    let sql = format!(
+        "SELECT {} FROM federation_peers \
+         WHERE tier = ?1 AND is_enabled = 1 \
+         ORDER BY latency_ms ASC, success_count DESC, endpoint ASC",
+        FederationPeer::COLUMNS
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let peers = stmt
+        .query_map(params![tier], FederationPeer::from_row)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(peers)
+}
+
 /// Find a federation peer by its ID.
 pub fn find_by_id(conn: &Connection, id: &str) -> Result<Option<FederationPeer>> {
     let sql = format!(
@@ -92,6 +107,31 @@ pub fn insert(
 pub fn delete(conn: &Connection, id: &str) -> Result<bool> {
     let affected = conn.execute("DELETE FROM federation_peers WHERE id = ?1", params![id])?;
     Ok(affected > 0)
+}
+
+/// Record a successful federation peer fetch.
+pub fn record_success(conn: &Connection, id: &str, latency_ms: i64) -> Result<()> {
+    conn.execute(
+        "UPDATE federation_peers \
+         SET success_count = success_count + 1, \
+             consecutive_failures = 0, \
+             latency_ms = ?2 \
+         WHERE id = ?1",
+        params![id, latency_ms],
+    )?;
+    Ok(())
+}
+
+/// Record a failed federation peer fetch.
+pub fn record_failure(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE federation_peers \
+         SET failure_count = failure_count + 1, \
+             consecutive_failures = consecutive_failures + 1 \
+         WHERE id = ?1",
+        params![id],
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -179,5 +219,140 @@ mod tests {
         assert!(delete(&conn, "peer-delta").unwrap());
         assert!(!delete(&conn, "peer-delta").unwrap());
         assert!(find_by_id(&conn, "peer-delta").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_list_enabled_for_tier_orders_by_latency_then_success() {
+        let conn = test_conn();
+        insert(
+            &conn,
+            "peer-slow",
+            "https://slow.example.com",
+            Some("Slow"),
+            "leaf",
+        )
+        .unwrap();
+        insert(
+            &conn,
+            "peer-fast-low-success",
+            "https://fast-low.example.com",
+            Some("Fast Low"),
+            "leaf",
+        )
+        .unwrap();
+        insert(
+            &conn,
+            "peer-fast-high-success",
+            "https://fast-high.example.com",
+            Some("Fast High"),
+            "leaf",
+        )
+        .unwrap();
+
+        conn.execute(
+            "UPDATE federation_peers SET latency_ms = 200, success_count = 1 WHERE id = 'peer-slow'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE federation_peers SET latency_ms = 10, success_count = 1 WHERE id = 'peer-fast-low-success'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE federation_peers SET latency_ms = 10, success_count = 5 WHERE id = 'peer-fast-high-success'",
+            [],
+        )
+        .unwrap();
+
+        let peers = list_enabled_for_tier(&conn, "leaf").unwrap();
+        let ids: Vec<_> = peers.iter().map(|peer| peer.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "peer-fast-high-success",
+                "peer-fast-low-success",
+                "peer-slow"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_list_enabled_for_tier_skips_disabled_peers() {
+        let conn = test_conn();
+        insert(
+            &conn,
+            "peer-enabled",
+            "https://enabled.example.com",
+            Some("Enabled"),
+            "leaf",
+        )
+        .unwrap();
+        insert(
+            &conn,
+            "peer-disabled",
+            "https://disabled.example.com",
+            Some("Disabled"),
+            "leaf",
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE federation_peers SET is_enabled = 0 WHERE id = 'peer-disabled'",
+            [],
+        )
+        .unwrap();
+
+        let peers = list_enabled_for_tier(&conn, "leaf").unwrap();
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].id, "peer-enabled");
+    }
+
+    #[test]
+    fn test_record_success_updates_latency_and_resets_consecutive_failures() {
+        let conn = test_conn();
+        insert(
+            &conn,
+            "peer-ok",
+            "https://ok.example.com",
+            Some("Okay"),
+            "leaf",
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE federation_peers SET success_count = 2, consecutive_failures = 4, latency_ms = 999 WHERE id = 'peer-ok'",
+            [],
+        )
+        .unwrap();
+
+        record_success(&conn, "peer-ok", 42).unwrap();
+
+        let peer = find_by_id(&conn, "peer-ok").unwrap().unwrap();
+        assert_eq!(peer.success_count, 3);
+        assert_eq!(peer.consecutive_failures, 0);
+        assert_eq!(peer.latency_ms, 42);
+    }
+
+    #[test]
+    fn test_record_failure_increments_failure_counters() {
+        let conn = test_conn();
+        insert(
+            &conn,
+            "peer-bad",
+            "https://bad.example.com",
+            Some("Bad"),
+            "leaf",
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE federation_peers SET failure_count = 2, consecutive_failures = 3 WHERE id = 'peer-bad'",
+            [],
+        )
+        .unwrap();
+
+        record_failure(&conn, "peer-bad").unwrap();
+
+        let peer = find_by_id(&conn, "peer-bad").unwrap().unwrap();
+        assert_eq!(peer.failure_count, 3);
+        assert_eq!(peer.consecutive_failures, 4);
     }
 }
