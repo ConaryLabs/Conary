@@ -40,6 +40,9 @@ conary-test run --suite phase1-core.toml --all-distros
 # Start the HTTP/MCP server
 conary-test serve --port 9090
 
+# Run the supported Forge control-plane smoke
+bash scripts/forge-smoke.sh
+
 # List available test suites
 conary-test list
 
@@ -99,6 +102,7 @@ tests/integration/remi/manifests/
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/v1/health` | Server health check |
+| GET | `/v1/deploy/status` | Running binary/runtime status for the local service |
 | GET | `/v1/suites` | List available test suites |
 | POST | `/v1/runs` | Start a new test run |
 | GET | `/v1/runs` | List recent runs |
@@ -140,8 +144,14 @@ The MCP endpoint is mounted at `/mcp` (Streamable HTTP transport).
 | `restart_service` | Restart the conary-test systemd user service |
 | `build_fixtures` | Build test fixture CCS packages |
 | `publish_fixtures` | Publish test fixtures to Remi repository |
-| `deploy_status` | Get deployment status (version, uptime, WAL pending) |
+| `deploy_status` | Get service-owned deployment status (binary provenance, runtime, WAL pending, service state) |
 | `flush_pending` | Flush pending WAL items to Remi |
+
+`conary-test deploy status --json` now separates the running binary identity
+from the local checkout branch/commit and marks degraded output explicitly when
+the local service is unreachable. `conary-test health --json` always emits one
+normalized envelope with `mode`, `deploy_status`, optional `remi`, and
+optional `reason`.
 
 ## Configuration
 

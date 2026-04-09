@@ -9,7 +9,8 @@ Conary validation and test-harness operations.
 - **OS:** Fedora 43
 - **RAM:** 8GB
 - **Disk:** 151GB
-- **Role:** self-hosted GitHub Actions runner plus local `conary-test` execution
+- **Role:** self-hosted GitHub Actions runner plus local `conary-test` service
+  and control-plane validation
 
 ## Quick Setup
 
@@ -43,17 +44,26 @@ that path when `GITHUB_RUNNER_REGISTRATION_TOKEN` is not provided.
 - `pr-gate` stays on GitHub-hosted runners.
 - No separate source-control or CI service is part of the target setup.
 
-## Manual Validation Commands
+## Supported Validation Commands
 
 ```bash
-# Run integration smoke checks locally on Forge:
-cargo run -p conary-test -- run --suite phase1-core --distro fedora43 --phase 1
-cargo run -p conary-test -- run --suite phase1-advanced --distro fedora43 --phase 1
+# Supported Forge control-plane smoke:
+bash scripts/forge-smoke.sh
+
+# Or point at an alternate local service port:
+bash scripts/forge-smoke.sh --port 9099
 
 # Run Remi health checks:
 ./scripts/remi-health.sh --smoke
 ./scripts/remi-health.sh --full
 ```
+
+`forge-smoke.sh` resolves the local port with `--port` > `CONARY_TEST_PORT` >
+`9090`, prefers `target/debug/conary-test` when present, and falls back to
+`conary-test` on `$PATH`.
+
+Raw `cargo run -p conary-test -- run ...` remains useful for deeper manual
+debugging, but it is no longer the main supported Forge smoke path.
 
 ## Troubleshooting
 

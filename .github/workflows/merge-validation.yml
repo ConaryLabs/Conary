@@ -28,6 +28,20 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Build trusted-lane binaries
         run: cargo build -p conary -p remi -p conaryd -p conary-test --verbose
+      - name: Run Forge control-plane smoke
+        run: |
+          target/debug/conary-test serve --port 9099 > /tmp/conary-test-smoke.log 2>&1 &
+          smoke_pid=$!
+          trap 'kill "${smoke_pid}" 2>/dev/null || true' EXIT
+
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:9099/v1/health >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          bash scripts/forge-smoke.sh --port 9099
       - name: Run conary-test smoke subset
         run: cargo run -p conary-test -- run --suite phase1-core --distro "${SMOKE_DISTRO}" --phase 1
       - name: Run Remi smoke health check
