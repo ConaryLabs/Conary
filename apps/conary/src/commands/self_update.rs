@@ -8,7 +8,8 @@ use conary_core::db::models::settings;
 use conary_core::db::paths::objects_dir;
 use conary_core::self_update::{
     LatestVersionInfo, VersionCheckResult, apply_update, check_for_update,
-    download_update_with_progress, extract_binary, fetch_latest_version_info, get_update_channel,
+    download_update_with_progress, extract_binary, fetch_latest_version_info, fetch_version_info,
+    get_update_channel,
 };
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -108,6 +109,15 @@ fn record_no_verify_audit_event(
     Ok(())
 }
 
+fn validate_requested_version(version: &str) -> Result<()> {
+    let parts: Vec<&str> = version.split('.').collect();
+    if parts.len() == 3 && parts.iter().all(|part| part.parse::<u64>().is_ok()) {
+        Ok(())
+    } else {
+        anyhow::bail!("Invalid version format: {version} (expected SemVer x.y.z)");
+    }
+}
+
 pub async fn cmd_self_update(
     db_path: &str,
     check: bool,
@@ -119,19 +129,32 @@ pub async fn cmd_self_update(
     let conn = open_db(db_path)?;
     let channel_url = get_update_channel(&conn)?;
     let have_trusted_keys = !conary_core::self_update::TRUSTED_UPDATE_KEYS.is_empty();
+    let user_agent = format!("conary/{current_version}");
 
     println!("Current version: {current_version}");
     println!("Update channel: {channel_url}");
 
-    if let Some(ref v) = version {
-        anyhow::bail!(
-            "--version {v} is not yet implemented. \
-             Omit --version to install the latest available version."
-        );
-    }
-
     // Check for updates
-    let result = check_for_update(&channel_url, current_version).await?;
+    let result = if let Some(requested_version) = version.as_deref() {
+        validate_requested_version(requested_version)?;
+        let info = fetch_version_info(&channel_url, requested_version, &user_agent).await?;
+        if info.version == current_version {
+            VersionCheckResult::UpToDate {
+                version: info.version,
+            }
+        } else {
+            VersionCheckResult::UpdateAvailable {
+                current: current_version.to_string(),
+                latest: info.version,
+                download_url: info.download_url,
+                sha256: info.sha256,
+                size: info.size,
+                signature: info.signature,
+            }
+        }
+    } else {
+        check_for_update(&channel_url, current_version).await?
+    };
 
     match &result {
         VersionCheckResult::UpToDate { version } => {
@@ -181,9 +204,11 @@ pub async fn cmd_self_update(
         } => (download_url.clone(), sha256.clone(), latest.clone()),
         VersionCheckResult::UpToDate { .. } => {
             // --force path: re-fetch latest info using the same bounded metadata path
-            let info: LatestVersionInfo =
-                fetch_latest_version_info(&channel_url, &format!("conary/{current_version}"))
-                    .await?;
+            let info: LatestVersionInfo = if let Some(requested_version) = version.as_deref() {
+                fetch_version_info(&channel_url, requested_version, &user_agent).await?
+            } else {
+                fetch_latest_version_info(&channel_url, &user_agent).await?
+            };
             check_update_signature(&info.sha256, &info.signature, no_verify)?;
             (info.download_url, info.sha256, info.version)
         }
@@ -238,7 +263,7 @@ pub async fn cmd_self_update(
 
 #[cfg(test)]
 mod tests {
-    use super::{NO_VERIFY_AUDIT_KEY, record_no_verify_audit_event};
+    use super::{NO_VERIFY_AUDIT_KEY, record_no_verify_audit_event, validate_requested_version};
     use conary_core::db::models::settings;
     use conary_core::db::schema;
     use rusqlite::Connection;
@@ -268,5 +293,16 @@ mod tests {
             .expect("audit record should be written");
         assert!(value.contains("\"current_version\":\"0.7.0\""));
         assert!(value.contains("\"target_version\":\"0.8.0\""));
+    }
+
+    #[test]
+    fn validate_requested_version_accepts_semver_triple() {
+        validate_requested_version("1.2.3").unwrap();
+    }
+
+    #[test]
+    fn validate_requested_version_rejects_non_semver() {
+        let err = validate_requested_version("latest").unwrap_err();
+        assert!(err.to_string().contains("Invalid version format"));
     }
 }

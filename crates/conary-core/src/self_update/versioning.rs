@@ -54,18 +54,39 @@ pub fn validate_download_origin(channel_url: &str, download_url: &str) -> Result
     Ok(())
 }
 
-pub async fn fetch_latest_version_info(
-    channel_url: &str,
-    user_agent: &str,
-) -> Result<LatestVersionInfo> {
+fn build_http_client() -> Result<reqwest::Client> {
     use std::time::Duration;
 
-    let client = reqwest::Client::builder()
+    reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
-        .map_err(|e| Error::IoError(format!("Failed to create HTTP client: {e}")))?;
+        .map_err(|e| Error::IoError(format!("Failed to create HTTP client: {e}")))
+}
 
-    let url = format!("{channel_url}/latest");
+fn resolve_download_url(channel_url: &str, download_url: &str) -> Result<String> {
+    let channel = Url::parse(channel_url)
+        .map_err(|e| Error::ParseError(format!("Invalid update channel URL: {e}")))?;
+
+    match Url::parse(download_url) {
+        Ok(url) => Ok(url.to_string()),
+        Err(url::ParseError::RelativeUrlWithoutBase) => channel
+            .join(download_url)
+            .map(|url| url.to_string())
+            .map_err(|e| Error::ParseError(format!("Invalid update download URL: {e}"))),
+        Err(e) => Err(Error::ParseError(format!(
+            "Invalid update download URL: {e}"
+        ))),
+    }
+}
+
+async fn fetch_version_metadata(
+    channel_url: &str,
+    metadata_path: &str,
+    user_agent: &str,
+) -> Result<LatestVersionInfo> {
+    let client = build_http_client()?;
+
+    let url = format!("{channel_url}/{metadata_path}");
     let response = client
         .get(&url)
         .header("User-Agent", user_agent)
@@ -83,9 +104,25 @@ pub async fn fetch_latest_version_info(
     let bytes =
         read_limited_response_bytes(response, MAX_SELF_UPDATE_METADATA_SIZE, "update response")
             .await?;
-    let info = parse_latest_version_info_bytes(&bytes)?;
+    let mut info = parse_latest_version_info_bytes(&bytes)?;
+    info.download_url = resolve_download_url(channel_url, &info.download_url)?;
     validate_download_origin(channel_url, &info.download_url)?;
     Ok(info)
+}
+
+pub async fn fetch_latest_version_info(
+    channel_url: &str,
+    user_agent: &str,
+) -> Result<LatestVersionInfo> {
+    fetch_version_metadata(channel_url, "latest", user_agent).await
+}
+
+pub async fn fetch_version_info(
+    channel_url: &str,
+    version: &str,
+    user_agent: &str,
+) -> Result<LatestVersionInfo> {
+    fetch_version_metadata(channel_url, version, user_agent).await
 }
 
 /// Check for available updates by querying the update channel
@@ -227,6 +264,38 @@ async fn read_limited_response_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn spawn_metadata_server(body: String) -> (String, Arc<Mutex<Option<String>>>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen_path = Arc::new(Mutex::new(None));
+        let seen_path_task = Arc::clone(&seen_path);
+
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0_u8; 4096];
+            let bytes_read = stream.read(&mut buf).await.unwrap();
+            let request = String::from_utf8_lossy(&buf[..bytes_read]);
+            let path = request
+                .lines()
+                .next()
+                .and_then(|line| line.split_whitespace().nth(1))
+                .unwrap_or("/")
+                .to_string();
+            *seen_path_task.lock().unwrap() = Some(path);
+
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        (format!("http://{addr}"), seen_path)
+    }
 
     #[test]
     fn test_is_newer() {
@@ -329,5 +398,50 @@ mod tests {
         assert!(!is_newer("2.0.0", "1.9.9"));
         assert!(is_newer("1.0.9", "1.1.0"));
         assert!(!is_newer("1.1.0", "1.0.9"));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_version_info_uses_version_endpoint() {
+        let body = r#"{
+            "version":"1.2.3",
+            "download_url":"/v1/ccs/conary/1.2.3/download",
+            "sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "size":12345
+        }"#
+        .to_string();
+        let (base_url, seen_path) = spawn_metadata_server(body).await;
+        let channel_url = format!("{base_url}/v1/ccs/conary");
+
+        let info = fetch_version_info(&channel_url, "1.2.3", "conary/test")
+            .await
+            .unwrap();
+
+        assert_eq!(info.version, "1.2.3");
+        assert_eq!(
+            seen_path.lock().unwrap().as_deref(),
+            Some("/v1/ccs/conary/1.2.3")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_fetch_latest_version_info_resolves_relative_download_url() {
+        let body = r#"{
+            "version":"1.2.4",
+            "download_url":"/v1/ccs/conary/1.2.4/download",
+            "sha256":"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+            "size":67890
+        }"#
+        .to_string();
+        let (base_url, _seen_path) = spawn_metadata_server(body).await;
+        let channel_url = format!("{base_url}/v1/ccs/conary");
+
+        let info = fetch_latest_version_info(&channel_url, "conary/test")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            info.download_url,
+            format!("{base_url}/v1/ccs/conary/1.2.4/download")
+        );
     }
 }

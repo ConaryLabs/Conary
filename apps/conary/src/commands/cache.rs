@@ -2,59 +2,121 @@
 
 //! Implementation of `conary cache` commands.
 
-use anyhow::Result;
+use std::collections::HashSet;
+use std::path::PathBuf;
 
-/// Pre-fetch derivation outputs from configured substituters.
-pub async fn cmd_cache_populate(
-    profile_path: &str,
-    sources_only: bool,
-    full: bool,
-    db_path: &str,
-) -> Result<()> {
-    // Read profile TOML
-    let content = std::fs::read_to_string(profile_path)
-        .map_err(|e| anyhow::anyhow!("failed to read profile: {e}"))?;
+use anyhow::{Context, Result};
 
-    let profile: conary_core::derivation::BuildProfile =
-        toml::from_str(&content).map_err(|e| anyhow::anyhow!("failed to parse profile: {e}"))?;
+use super::profile::resolve_recipe_root_for_manifest;
+use conary_core::bootstrap::{BootstrapConfig, PackageBuildRunner};
+use conary_core::derivation::{BuildProfile, load_recipes};
 
-    // Collect all derivation IDs from all stages
-    let mut derivation_ids: Vec<String> = Vec::new();
-    for stage in &profile.stages {
-        for drv in &stage.derivations {
-            if drv.derivation_id != "pending" {
-                derivation_ids.push(drv.derivation_id.clone());
-            }
+#[derive(Debug, Default)]
+struct SourcePrefetchStats {
+    downloaded: u64,
+    skipped: u64,
+}
+
+#[derive(Debug, Default)]
+struct OutputPrefetchStats {
+    total: usize,
+    available: usize,
+    unavailable: usize,
+    fetched: u64,
+    total_bytes: u64,
+}
+
+fn source_cache_dir(db_path: &str) -> PathBuf {
+    conary_core::db::paths::db_dir(db_path).join("sources")
+}
+
+fn profile_derivation_ids(profile: &BuildProfile) -> Vec<String> {
+    profile
+        .stages
+        .iter()
+        .flat_map(|stage| stage.derivations.iter())
+        .filter(|drv| drv.derivation_id != "pending")
+        .map(|drv| drv.derivation_id.clone())
+        .collect()
+}
+
+fn prefetch_profile_sources(profile: &BuildProfile, db_path: &str) -> Result<SourcePrefetchStats> {
+    let manifest_path = PathBuf::from(&profile.profile.manifest);
+    if !manifest_path.exists() {
+        anyhow::bail!("Profile manifest not found: {}", manifest_path.display());
+    }
+
+    let recipe_root = resolve_recipe_root_for_manifest(&manifest_path)?;
+    let recipes = load_recipes(&recipe_root)
+        .with_context(|| format!("Failed to load recipes from {}", recipe_root.display()))?;
+
+    let sources_dir = source_cache_dir(db_path);
+    std::fs::create_dir_all(&sources_dir)
+        .with_context(|| format!("Failed to create source cache: {}", sources_dir.display()))?;
+
+    let runner = PackageBuildRunner::new(&sources_dir, &BootstrapConfig::new());
+    let mut seen_packages = HashSet::new();
+    let mut stats = SourcePrefetchStats::default();
+
+    for drv in profile
+        .stages
+        .iter()
+        .flat_map(|stage| stage.derivations.iter())
+    {
+        if !seen_packages.insert(drv.package.clone()) {
+            continue;
+        }
+
+        let recipe = recipes.get(&drv.package).ok_or_else(|| {
+            anyhow::anyhow!(
+                "recipe for '{}' not found in {}",
+                drv.package,
+                recipe_root.display()
+            )
+        })?;
+
+        let target_path = sources_dir.join(recipe.archive_filename());
+        let cached = target_path.exists()
+            && runner
+                .verify_checksum(&drv.package, &recipe.source.checksum, &target_path)
+                .is_ok();
+
+        runner
+            .fetch_source(&drv.package, recipe)
+            .map_err(|e| anyhow::anyhow!("Failed to prefetch source for {}: {e}", drv.package))?;
+
+        if cached {
+            stats.skipped += 1;
+        } else {
+            stats.downloaded += 1;
         }
     }
 
-    let total = derivation_ids.len();
-    println!(
-        "Profile has {total} derivations across {} stages.",
-        profile.stages.len()
-    );
+    Ok(stats)
+}
 
-    if sources_only {
-        println!(
-            "[NOT YET IMPLEMENTED] cache populate --sources-only: source tarball download is not yet available."
-        );
-        return Ok(());
+async fn prefetch_remote_outputs(
+    profile: &BuildProfile,
+    db_path: &str,
+) -> Result<OutputPrefetchStats> {
+    let derivation_ids = profile_derivation_ids(profile);
+    let total = derivation_ids.len();
+
+    if total == 0 {
+        return Ok(OutputPrefetchStats::default());
     }
 
-    // Load substituter configuration from DB
     let conn = super::open_db(db_path)?;
 
-    let mut substituter =
-        match conary_core::derivation::substituter::DerivationSubstituter::from_db(&conn) {
-            Ok(s) => s,
-            Err(e) => {
-                anyhow::bail!(
-                    "No substituter peers configured: {e}. Add peers with substituter config first."
-                );
-            }
-        };
+    let mut substituter = conary_core::derivation::substituter::DerivationSubstituter::from_db(
+        &conn,
+    )
+    .map_err(|e| {
+        anyhow::anyhow!(
+            "No substituter peers configured: {e}. Add peers with substituter config first."
+        )
+    })?;
 
-    // Batch probe to find available derivations
     let peers = substituter.peers();
     if peers.is_empty() {
         anyhow::bail!("No substituter peers available");
@@ -80,13 +142,16 @@ pub async fn cmd_cache_populate(
         unavailable
     );
 
-    // Fetch each available derivation
     let cas_dir = conary_core::db::paths::objects_dir(db_path);
     let cas = conary_core::filesystem::CasStore::new(&cas_dir)
         .map_err(|e| anyhow::anyhow!("failed to open CAS: {e}"))?;
 
-    let mut fetched = 0u64;
-    let mut total_bytes = 0u64;
+    let mut stats = OutputPrefetchStats {
+        total,
+        available: available.len(),
+        unavailable,
+        ..OutputPrefetchStats::default()
+    };
 
     for (i, id) in available.iter().enumerate() {
         let short_id = &id[..16.min(id.len())];
@@ -98,8 +163,8 @@ pub async fn cmd_cache_populate(
                     .await
                 {
                     Ok(report) => {
-                        fetched += 1;
-                        total_bytes += report.bytes_transferred;
+                        stats.fetched += 1;
+                        stats.total_bytes += report.bytes_transferred;
                     }
                     Err(e) => {
                         eprintln!("\n  [WARN] Failed to fetch objects for {short_id}: {e}");
@@ -110,18 +175,67 @@ pub async fn cmd_cache_populate(
         }
     }
 
+    Ok(stats)
+}
+
+/// Pre-fetch derivation outputs from configured substituters.
+pub async fn cmd_cache_populate(
+    profile_path: &str,
+    sources_only: bool,
+    full: bool,
+    db_path: &str,
+) -> Result<()> {
+    // Read profile TOML
+    let content = std::fs::read_to_string(profile_path)
+        .map_err(|e| anyhow::anyhow!("failed to read profile: {e}"))?;
+
+    let profile: BuildProfile =
+        toml::from_str(&content).map_err(|e| anyhow::anyhow!("failed to parse profile: {e}"))?;
+
+    let total = profile_derivation_ids(&profile).len();
     println!(
-        "\n\nDownloaded {fetched}/{} derivation outputs ({:.1} MB)",
-        available.len(),
-        total_bytes as f64 / 1_048_576.0,
+        "Profile has {total} derivations across {} stages.",
+        profile.stages.len()
     );
-    if unavailable > 0 {
-        println!("{unavailable} derivations will be built from source.");
+
+    if sources_only {
+        let stats = prefetch_profile_sources(&profile, db_path)?;
+        println!(
+            "Downloaded {} source archives, skipped {} already cached.",
+            stats.downloaded, stats.skipped
+        );
+        return Ok(());
+    }
+
+    match prefetch_remote_outputs(&profile, db_path).await {
+        Ok(stats) => {
+            println!(
+                "\n\nDownloaded {}/{} derivation outputs ({:.1} MB)",
+                stats.fetched,
+                stats.available,
+                stats.total_bytes as f64 / 1_048_576.0,
+            );
+            if stats.unavailable > 0 {
+                println!(
+                    "{} derivations will be built from source.",
+                    stats.unavailable
+                );
+            }
+            if stats.total == 0 {
+                println!("No derivation outputs needed prefetch.");
+            }
+        }
+        Err(err) if full => {
+            eprintln!("[WARN] Failed to prefetch derivation outputs: {err}");
+        }
+        Err(err) => return Err(err),
     }
 
     if full {
+        let stats = prefetch_profile_sources(&profile, db_path)?;
         println!(
-            "\n[NOT YET IMPLEMENTED] cache populate --full: source tarball download is not yet available."
+            "\nDownloaded {} source archives, skipped {} already cached.",
+            stats.downloaded, stats.skipped
         );
     }
 
@@ -195,4 +309,208 @@ fn dir_file_count(path: &std::path::Path) -> usize {
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
         .count()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cmd_cache_populate;
+    use crate::commands::profile::cmd_profile_generate;
+    use conary_core::derivation::compose::erofs_image_hash;
+    use conary_core::derivation::seed::{SeedMetadata, SeedSource};
+    use conary_core::hash;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    fn write_archive(root: &Path, package: &str) -> (PathBuf, Vec<u8>, String) {
+        let archive_dir = root.join("distfiles");
+        fs::create_dir_all(&archive_dir).unwrap();
+
+        let archive_path = archive_dir.join(format!("{package}-1.0.0.tar.gz"));
+        let contents = format!("phase3 cache source for {package}").into_bytes();
+        fs::write(&archive_path, &contents).unwrap();
+
+        (
+            archive_path,
+            contents.clone(),
+            format!("sha256:{}", hash::sha256(&contents)),
+        )
+    }
+
+    fn write_recipe(
+        recipe_root: &Path,
+        relative_path: &str,
+        name: &str,
+        archive: &Path,
+        checksum: &str,
+    ) {
+        let path = recipe_root.join(relative_path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+
+        fs::write(
+            path,
+            format!(
+                r#"[package]
+name = "{name}"
+version = "1.0.0"
+
+[source]
+archive = "file://{}"
+checksum = "{checksum}"
+
+[build]
+requires = []
+makedepends = []
+install = "make install DESTDIR=%(destdir)s"
+"#,
+                archive.display()
+            ),
+        )
+        .unwrap();
+    }
+
+    fn write_seed_dir(root: &Path) -> PathBuf {
+        let seed_dir = root.join("seed");
+        fs::create_dir_all(&seed_dir).unwrap();
+
+        let image_path = seed_dir.join("seed.erofs");
+        fs::write(&image_path, b"phase3 cache test seed").unwrap();
+        let seed_id = erofs_image_hash(&image_path).unwrap();
+
+        let seed = SeedMetadata {
+            seed_id,
+            source: SeedSource::SelfBuilt,
+            origin_url: None,
+            builder: Some("test".to_string()),
+            packages: vec!["hello".to_string()],
+            target_triple: "x86_64-unknown-linux-gnu".to_string(),
+            verified_by: vec![],
+            origin_distro: None,
+            origin_version: None,
+        };
+
+        fs::write(seed_dir.join("seed.toml"), toml::to_string(&seed).unwrap()).unwrap();
+        seed_dir
+    }
+
+    fn write_manifest(root: &Path, seed_source: &Path) -> PathBuf {
+        let manifest = root.join("system.toml");
+        fs::write(
+            &manifest,
+            format!(
+                r#"[system]
+name = "phase3-cache-test"
+target = "x86_64-unknown-linux-gnu"
+
+[seed]
+source = "{}"
+
+[packages]
+include = ["hello"]
+"#,
+                seed_source.display()
+            ),
+        )
+        .unwrap();
+        manifest
+    }
+
+    async fn generate_profile_fixture(
+        project_root: &Path,
+        profile_dir: &Path,
+    ) -> (PathBuf, PathBuf, Vec<u8>) {
+        let recipe_root = project_root.join("recipes");
+        let (archive_path, contents, checksum) = write_archive(project_root, "hello");
+        write_recipe(
+            &recipe_root,
+            "system/hello.toml",
+            "hello",
+            &archive_path,
+            &checksum,
+        );
+        let seed_dir = write_seed_dir(project_root);
+        let manifest = write_manifest(project_root, &seed_dir);
+
+        fs::create_dir_all(profile_dir).unwrap();
+        let profile_path = profile_dir.join("profile.toml");
+        cmd_profile_generate(&manifest, Some(&profile_path))
+            .await
+            .unwrap();
+
+        (profile_path, archive_path, contents)
+    }
+
+    #[tokio::test]
+    async fn test_cache_populate_sources_only_downloads_recipe_archives() {
+        let temp = tempfile::tempdir().unwrap();
+        let (profile_path, archive_path, contents) =
+            generate_profile_fixture(temp.path(), temp.path()).await;
+        let db_path = temp.path().join("conary.db");
+
+        cmd_cache_populate(
+            profile_path.to_str().unwrap(),
+            true,
+            false,
+            db_path.to_str().unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let cached_source = temp
+            .path()
+            .join("sources")
+            .join(archive_path.file_name().unwrap());
+        assert_eq!(fs::read(cached_source).unwrap(), contents);
+    }
+
+    #[tokio::test]
+    async fn test_cache_populate_full_downloads_sources_after_outputs() {
+        let temp = tempfile::tempdir().unwrap();
+        let (profile_path, archive_path, contents) =
+            generate_profile_fixture(temp.path(), temp.path()).await;
+        let db_path = temp.path().join("conary.db");
+        conary_core::db::init(db_path.to_str().unwrap()).unwrap();
+
+        cmd_cache_populate(
+            profile_path.to_str().unwrap(),
+            false,
+            true,
+            db_path.to_str().unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let cached_source = temp
+            .path()
+            .join("sources")
+            .join(archive_path.file_name().unwrap());
+        assert_eq!(fs::read(cached_source).unwrap(), contents);
+    }
+
+    #[tokio::test]
+    async fn test_cache_populate_sources_only_uses_profile_manifest_to_find_recipes() {
+        let temp = tempfile::tempdir().unwrap();
+        let project_root = temp.path().join("project");
+        let profile_dir = temp.path().join("consumer");
+        fs::create_dir_all(&project_root).unwrap();
+        let (profile_path, archive_path, contents) =
+            generate_profile_fixture(&project_root, &profile_dir).await;
+        let db_path = temp.path().join("conary.db");
+
+        cmd_cache_populate(
+            profile_path.to_str().unwrap(),
+            true,
+            false,
+            db_path.to_str().unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let cached_source = temp
+            .path()
+            .join("sources")
+            .join(archive_path.file_name().unwrap());
+        assert_eq!(fs::read(cached_source).unwrap(), contents);
+    }
 }

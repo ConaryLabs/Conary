@@ -65,6 +65,11 @@ fn parse_semver(v: &str) -> (u64, u64, u64) {
     (major, minor, patch)
 }
 
+fn is_valid_semver_triple(version: &str) -> bool {
+    let parts: Vec<&str> = version.split('.').collect();
+    parts.len() == 3 && parts.iter().all(|p| p.parse::<u64>().is_ok())
+}
+
 /// Derive the self-update directory from server config.
 ///
 /// Layout: `{storage_root}/self-update/conary-{version}.ccs`
@@ -80,6 +85,58 @@ fn self_update_dir(state: &ServerState) -> PathBuf {
 
 /// Precomputed hash, size, and optional signature for the latest CCS package.
 type LatestHash = Option<(String, u64, Option<String>)>;
+
+#[allow(clippy::result_large_err)]
+fn read_version_payload(
+    dir: &std::path::Path,
+    version: &str,
+) -> Result<(String, u64, Option<String>), Response> {
+    let ccs_path = dir.join(format!("conary-{version}.ccs"));
+    let data = match std::fs::read(&ccs_path) {
+        Ok(data) => data,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err((StatusCode::NOT_FOUND, "Version not found").into_response());
+        }
+        Err(e) => {
+            tracing::error!("Failed to read CCS package {}: {}", ccs_path.display(), e);
+            return Err(
+                (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read package").into_response(),
+            );
+        }
+    };
+
+    let sig_path = dir.join(format!("conary-{version}.ccs.sig"));
+    let signature = std::fs::read_to_string(&sig_path)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    Ok((
+        conary_core::hash::sha256(&data),
+        data.len() as u64,
+        signature,
+    ))
+}
+
+#[allow(clippy::result_large_err)]
+fn build_version_response(
+    dir: &std::path::Path,
+    version: &str,
+    cached_payload: LatestHash,
+) -> Result<LatestResponse, Response> {
+    let (sha256, size, signature) = match cached_payload {
+        Some(cached) => cached,
+        None => read_version_payload(dir, version)?,
+    };
+
+    Ok(LatestResponse {
+        version: version.to_string(),
+        download_url: format!("/v1/ccs/conary/{version}/download"),
+        sha256,
+        size,
+        signature,
+    })
+}
 
 /// Scan the self-update directory and return sorted (ascending) version strings,
 /// plus the SHA-256 hash and size of the latest CCS package.
@@ -216,36 +273,9 @@ pub async fn get_latest(State(state): State<Arc<RwLock<ServerState>>>) -> Respon
 
     let latest = versions.last().expect("scan_versions guarantees non-empty");
 
-    let (sha256, size, signature) = match latest_hash {
-        Some(cached) => cached,
-        None => {
-            // Fallback: hash not cached (e.g., file read failed during scan).
-            // Read the file directly as a last resort.
-            let ccs_path = dir.join(format!("conary-{latest}.ccs"));
-            let data = match tokio::fs::read(&ccs_path).await {
-                Ok(d) => d,
-                Err(e) => {
-                    tracing::error!("Failed to read CCS package {}: {}", ccs_path.display(), e);
-                    return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read package")
-                        .into_response();
-                }
-            };
-            let sig_path = dir.join(format!("conary-{latest}.ccs.sig"));
-            let sig = tokio::fs::read_to_string(&sig_path)
-                .await
-                .ok()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty());
-            (conary_core::hash::sha256(&data), data.len() as u64, sig)
-        }
-    };
-
-    let response = LatestResponse {
-        version: latest.clone(),
-        download_url: format!("/v1/ccs/conary/{latest}/download"),
-        sha256,
-        size,
-        signature,
+    let response = match build_version_response(&dir, latest, latest_hash) {
+        Ok(response) => response,
+        Err(e) => return e,
     };
 
     let json = match super::serialize_json(&response, "self-update latest") {
@@ -254,6 +284,52 @@ pub async fn get_latest(State(state): State<Arc<RwLock<ServerState>>>) -> Respon
     };
 
     // Cache for 5 minutes -- clients should not hammer this endpoint
+    super::json_response(json, 300)
+}
+
+/// GET /v1/ccs/conary/:version
+///
+/// Returns metadata about a specific self-update package version.
+pub async fn get_version_info(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    Path(version): Path<String>,
+) -> Response {
+    if let Err(e) = super::validate_name(&version) {
+        return e;
+    }
+
+    if !is_valid_semver_triple(&version) {
+        return (StatusCode::BAD_REQUEST, "Invalid version format").into_response();
+    }
+
+    let state_guard = state.read().await;
+    let dir = self_update_dir(&state_guard);
+    drop(state_guard);
+
+    let (versions, latest_hash) = match scan_versions_cached(&dir).await {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+
+    if !versions.iter().any(|candidate| candidate == &version) {
+        return (StatusCode::NOT_FOUND, "Version not found").into_response();
+    }
+
+    let cached_payload = if versions.last().is_some_and(|latest| latest == &version) {
+        latest_hash
+    } else {
+        None
+    };
+    let response = match build_version_response(&dir, &version, cached_payload) {
+        Ok(response) => response,
+        Err(e) => return e,
+    };
+
+    let json = match super::serialize_json(&response, "self-update version") {
+        Ok(j) => j,
+        Err(e) => return e,
+    };
+
     super::json_response(json, 300)
 }
 
@@ -298,8 +374,7 @@ pub async fn download(
     }
 
     // Additional validation: must be a valid semver triple
-    let parts: Vec<&str> = version.split('.').collect();
-    if parts.len() != 3 || !parts.iter().all(|p| p.parse::<u64>().is_ok()) {
+    if !is_valid_semver_triple(&version) {
         return (StatusCode::BAD_REQUEST, "Invalid version format").into_response();
     }
 
@@ -350,7 +425,30 @@ pub async fn download(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::{ServerConfig, ServerState};
+    use axum::body::to_bytes;
+    use axum::extract::{Path as AxumPath, State as AxumState};
+    use axum::http::StatusCode;
     use std::fs;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    async fn test_state(root: &tempfile::TempDir) -> Arc<RwLock<ServerState>> {
+        let mut config = ServerConfig::default();
+        config.db_path = root.path().join("remi.db");
+        config.chunk_dir = root.path().join("chunks");
+        config.cache_dir = root.path().join("cache");
+
+        fs::create_dir_all(&config.chunk_dir).unwrap();
+        fs::create_dir_all(&config.cache_dir).unwrap();
+        conary_core::db::init(&config.db_path).unwrap();
+
+        Arc::new(RwLock::new(ServerState::new(config).unwrap()))
+    }
+
+    async fn clear_versions_cache() {
+        *VERSIONS_CACHE.lock().await = None;
+    }
 
     #[test]
     fn test_parse_semver() {
@@ -400,5 +498,44 @@ mod tests {
         assert_eq!(size, b"latest-pkg".len() as u64);
         assert_eq!(sha256, conary_core::hash::sha256(b"latest-pkg"));
         assert!(signature.is_none(), "no .sig file was created");
+    }
+
+    #[tokio::test]
+    async fn test_get_version_info_returns_requested_version_metadata() {
+        clear_versions_cache().await;
+        let temp = tempfile::tempdir().unwrap();
+        let self_update_dir = temp.path().join("self-update");
+        fs::create_dir_all(&self_update_dir).unwrap();
+        fs::write(
+            self_update_dir.join("conary-1.2.3.ccs"),
+            b"requested-version",
+        )
+        .unwrap();
+
+        let state = test_state(&temp).await;
+        let response = get_version_info(AxumState(state), AxumPath("1.2.3".to_string())).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["version"], "1.2.3");
+        assert_eq!(json["download_url"], "/v1/ccs/conary/1.2.3/download");
+        assert_eq!(
+            json["sha256"],
+            conary_core::hash::sha256(b"requested-version")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_version_info_returns_404_for_missing_version() {
+        clear_versions_cache().await;
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(temp.path().join("self-update")).unwrap();
+
+        let state = test_state(&temp).await;
+        let response = get_version_info(AxumState(state), AxumPath("9.9.9".to_string())).await;
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }

@@ -575,9 +575,11 @@ Bridging this requires:
    `crates/conary-core/src/generation/`). The sysroot is the mount point.
    On cleanup, unmount.
 3. **Handle `db_path: Option<&Path>`**: When `None`, use a temporary in-memory
-   database for the derivation index. When `Some`, open the database. The
-   executor needs the connection for its derivation index
-   (`index.rs:lookup/insert`).
+   database for the derivation index and a temporary on-disk CAS directory for
+   output capture. When `Some`, open the database and use the normal CAS path.
+   The executor needs the connection for its derivation index
+   (`index.rs:lookup/insert`), but `DerivationExecutor` still needs a real
+   filesystem-backed `CasStore`.
 4. **Dependency IDs**: Currently passed as `BTreeMap::new()`. For standalone
    `derivation build`, this is acceptable -- full dependency resolution is the
    job of `profile generate` + `derivation pipeline`. Document that standalone
@@ -610,6 +612,11 @@ Missing piece: recipe loading + dependency resolution glue.
 6. Populate profile stages with real IDs.
 7. Write via `BuildProfile::to_toml()`.
 
+`profile generate` must canonicalize the manifest path before storing it in
+`profile.profile.manifest`. Phase 3's `cache populate` reopens that path later,
+often from a different working directory, so keeping a raw relative path would
+make profiles fragile in CI and when moved across directories.
+
 The recipe loading logic already exists: `load_recipes()` at
 `apps/conary/src/commands/bootstrap/mod.rs:730` walks recipe subdirectories,
 parses TOML files, and returns a `HashMap<String, Recipe>`. Extract this into
@@ -617,6 +624,9 @@ a shared helper in `crates/conary-core/src/derivation/recipe_loader.rs` so
 both `profile generate` and `cache populate` can consume it without depending
 on the bootstrap command module. The dependency resolution (topological sort
 with stage classification) is the only genuinely new logic (~50-80 lines).
+The shared helper should preserve the existing bootstrap subdirectory search
+(`cross-tools`, `temp-tools`, `system`, `tier2`) and add a plain `recipes/`
+root fallback so Phase 3 can also find non-bootstrap recipes.
 
 **Files:** `apps/conary/src/commands/profile.rs`,
 `apps/conary/src/commands/bootstrap/mod.rs` (extract `load_recipes`),
@@ -631,7 +641,9 @@ new `crates/conary-core/src/derivation/recipe_loader.rs`
 verification). Recipe `archive_url()` and `archive_filename()` methods exist.
 
 1. Load profile, iterate derivations.
-2. For each derivation, load its recipe file (recipe loading helper from above).
+2. Reopen the canonical manifest path stored in the profile, resolve the
+   recipe root from that manifest location, then load each derivation's recipe
+   via the shared recipe-loading helper.
 3. Extract source URL via `recipe.archive_url()`.
 4. Download to sources cache with checksum verification.
 5. Skip already-cached sources.

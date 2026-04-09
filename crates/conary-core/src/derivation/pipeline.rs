@@ -200,14 +200,48 @@ impl Pipeline {
     /// All derivation IDs are marked as `"pending"` since no actual
     /// content-addressing has been computed. This is useful for dry-run
     /// planning and diffing against previous profiles.
-    #[must_use]
     pub fn generate_profile(
-        seed: &Seed,
+        seed_id: &str,
+        seed_source: &str,
+        target_triple: &str,
         recipes: &HashMap<String, Recipe>,
         build_steps: &[crate::derivation::build_order::BuildStep],
         manifest_path: &str,
-    ) -> BuildProfile {
+    ) -> Result<BuildProfile, crate::derivation::DerivationError> {
         let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let build_env_hash = seed_id.to_owned();
+        let mut derivation_ids = HashMap::new();
+
+        for step in build_steps {
+            let recipe = recipes
+                .get(&step.package)
+                .expect("build steps should only reference loaded recipes");
+
+            let dependency_ids = recipe
+                .build
+                .requires
+                .iter()
+                .chain(recipe.build.makedepends.iter())
+                .filter_map(|dep| {
+                    derivation_ids
+                        .get(dep)
+                        .cloned()
+                        .map(|drv_id| (dep.clone(), drv_id))
+                })
+                .collect();
+
+            let inputs = DerivationInputs {
+                source_hash: recipe_hash::source_hash(recipe),
+                build_script_hash: recipe_hash::build_script_hash(recipe),
+                dependency_ids,
+                build_env_hash: build_env_hash.clone(),
+                target_triple: target_triple.to_owned(),
+                build_options: BTreeMap::new(),
+            };
+
+            let derivation_id = DerivationId::compute(&inputs)?;
+            derivation_ids.insert(step.package.clone(), derivation_id);
+        }
 
         let stages_ordered = ordered_stages(build_steps);
         let mut profile_stages = Vec::new();
@@ -219,14 +253,17 @@ impl Pipeline {
                     recipes.get(name.as_str()).map(|recipe| ProfileDerivation {
                         package: recipe.package.name.clone(),
                         version: recipe.package.version.clone(),
-                        derivation_id: "pending".to_owned(),
+                        derivation_id: derivation_ids
+                            .get(name.as_str())
+                            .expect("derivation ID should exist for every build step")
+                            .to_string(),
                     })
                 })
                 .collect();
 
             profile_stages.push(ProfileStage {
                 name: stage.to_string(),
-                build_env: "pending".to_owned(),
+                build_env: build_env_hash.clone(),
                 derivations,
             });
         }
@@ -236,17 +273,17 @@ impl Pipeline {
                 manifest: manifest_path.to_owned(),
                 profile_hash: String::new(),
                 generated_at: now,
-                target: seed.metadata.target_triple.clone(),
+                target: target_triple.to_owned(),
             },
             seed: ProfileSeedRef {
-                id: seed.metadata.seed_id.clone(),
-                source: seed.metadata.source.to_string(),
+                id: seed_id.to_owned(),
+                source: seed_source.to_owned(),
             },
             stages: profile_stages,
         };
 
         profile.profile.profile_hash = profile.compute_hash();
-        profile
+        Ok(profile)
     }
 
     /// Execute the build pipeline.
@@ -716,7 +753,15 @@ mod tests {
         let build_steps =
             crate::derivation::build_order::compute_build_order(&recipes, &custom).unwrap();
 
-        let profile = Pipeline::generate_profile(&seed, &recipes, &build_steps, "test-manifest");
+        let profile = Pipeline::generate_profile(
+            &seed.metadata.seed_id,
+            &seed.metadata.source.to_string(),
+            &seed.metadata.target_triple,
+            &recipes,
+            &build_steps,
+            "test-manifest",
+        )
+        .unwrap();
 
         // Verify metadata.
         assert_eq!(profile.profile.manifest, "test-manifest");
@@ -730,11 +775,13 @@ mod tests {
             "profile should have at least one stage"
         );
 
-        // All derivation IDs should be "pending".
+        // Generated profiles should carry concrete derivation IDs and the
+        // shared seed build environment hash.
         for stage in &profile.stages {
-            assert_eq!(stage.build_env, "pending");
+            assert_eq!(stage.build_env, seed.build_env_hash());
             for drv in &stage.derivations {
-                assert_eq!(drv.derivation_id, "pending");
+                assert_ne!(drv.derivation_id, "pending");
+                assert!(!drv.derivation_id.is_empty());
             }
         }
 
@@ -755,8 +802,24 @@ mod tests {
         let build_steps =
             crate::derivation::build_order::compute_build_order(&recipes, &custom).unwrap();
 
-        let p1 = Pipeline::generate_profile(&seed, &recipes, &build_steps, "m");
-        let p2 = Pipeline::generate_profile(&seed, &recipes, &build_steps, "m");
+        let p1 = Pipeline::generate_profile(
+            &seed.metadata.seed_id,
+            &seed.metadata.source.to_string(),
+            &seed.metadata.target_triple,
+            &recipes,
+            &build_steps,
+            "m",
+        )
+        .unwrap();
+        let p2 = Pipeline::generate_profile(
+            &seed.metadata.seed_id,
+            &seed.metadata.source.to_string(),
+            &seed.metadata.target_triple,
+            &recipes,
+            &build_steps,
+            "m",
+        )
+        .unwrap();
 
         // The hash should be the same even though generated_at differs.
         assert_eq!(p1.profile.profile_hash, p2.profile.profile_hash);
@@ -794,8 +857,24 @@ mod tests {
         let build_steps =
             crate::derivation::build_order::compute_build_order(&recipes, &custom).unwrap();
 
-        let p1 = Pipeline::generate_profile(&seed1, &recipes, &build_steps, "m");
-        let p2 = Pipeline::generate_profile(&seed2, &recipes, &build_steps, "m");
+        let p1 = Pipeline::generate_profile(
+            &seed1.metadata.seed_id,
+            &seed1.metadata.source.to_string(),
+            &seed1.metadata.target_triple,
+            &recipes,
+            &build_steps,
+            "m",
+        )
+        .unwrap();
+        let p2 = Pipeline::generate_profile(
+            &seed2.metadata.seed_id,
+            &seed2.metadata.source.to_string(),
+            &seed2.metadata.target_triple,
+            &recipes,
+            &build_steps,
+            "m",
+        )
+        .unwrap();
 
         assert_ne!(p1.profile.profile_hash, p2.profile.profile_hash);
     }
@@ -871,7 +950,15 @@ mod tests {
         let recipes = HashMap::new();
         let build_steps: Vec<crate::derivation::build_order::BuildStep> = vec![];
 
-        let profile = Pipeline::generate_profile(&seed, &recipes, &build_steps, "empty");
+        let profile = Pipeline::generate_profile(
+            &seed.metadata.seed_id,
+            &seed.metadata.source.to_string(),
+            &seed.metadata.target_triple,
+            &recipes,
+            &build_steps,
+            "empty",
+        )
+        .unwrap();
 
         assert!(profile.stages.is_empty());
     }
