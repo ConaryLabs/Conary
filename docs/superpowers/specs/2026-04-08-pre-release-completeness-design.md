@@ -734,73 +734,105 @@ CLI commands work without it. Prioritize Phases 1-3 first.
 `SubstituterChain::fetch_from_source()` in
 `crates/conary-core/src/repository/substituter.rs:202` dispatches on
 `SubstituterSource`. `LocalCache` works. `Federation` and `Remi` return
-`NotFound` with TODO stubs. `Binary` claims "does not serve individual chunks."
+`NotFound` with TODO stubs. `Binary` correctly claims "does not serve
+individual chunks," but Phase 4 still needs to make that branch an explicit
+compatibility stub rather than an implementation target.
 
 ### Design
 
 #### Make the substituter async
 
 `fetch_from_source()`, `resolve_chunk()`, and `resolve_chunks()` become
-`async fn`. All HTTP clients (`RemiClient`, `HttpChunkFetcher`,
-`RepositoryClient`) are already async. The `LocalCache` path uses
-`tokio::task::spawn_blocking` or inline `std::fs::read` (acceptable since it is
-fast).
+`async fn`. All HTTP clients (`AsyncRemiClient`, `HttpChunkFetcher`,
+`RepositoryClient`) are already async. The `LocalCache` path can use
+`LocalCacheFetcher` / `tokio::fs` directly; no new fetch subsystem is needed.
 
 Update all callers (currently only test code and the re-export in
 `repository/mod.rs`).
 
+Federation DB access should **not** be threaded through the awaited fetch path.
+Instead, split that work into two tiny synchronous helpers around the async
+resolution loop:
+
+1. prepare owned federation peer inputs up front
+2. perform async chunk fetch attempts
+3. apply emitted peer success/failure metrics back to SQLite afterward
+
+That keeps `rusqlite` out of the async state machine and avoids designing the
+substituter around borrowed DB handles.
+
 #### Remi source
 
-`AsyncRemiClient` already has a `CompositeChunkFetcher` with
-`HttpChunkFetcher` under the hood. `RemiClientCore::chunk_url()` at
-`repository/remi.rs:149` constructs `/v1/chunks/{hash}` URLs.
+`AsyncRemiClient` already uses `CompositeChunkFetcher` with
+`HttpChunkFetcher` under the hood, and Remi publicly serves chunks at
+`/v1/chunks/{hash}`.
 
 Implementation:
-1. Construct `HttpChunkFetcher` with the Remi endpoint's chunk URL pattern.
+1. Construct `HttpChunkFetcher` against the Remi endpoint.
 2. Call `fetcher.fetch(hash).await`.
 3. On success, write the chunk to local cache for future hits using
    `LocalCacheFetcher::store()`.
 4. ~30 lines of new code in `fetch_from_source()`.
 
+Important: pass the bare Remi endpoint to `HttpChunkFetcher`. Do **not**
+append `/v1/chunks/{hash}` manually because the fetcher already owns that URL
+composition.
+
 #### Federation source
 
 Needs peer lookup then HTTP fetch.
 
-1. Query `federation_peers` table filtered by `tier` and `is_enabled = true`.
+1. Add a synchronous helper that inspects the chain, loads enabled peers from
+   `federation_peers` by `tier`, and returns owned peer lists keyed by tier.
 2. Sort by `latency_ms` ascending, break ties by `success_count`.
 3. Skip peers with `consecutive_failures > 5` (circuit breaker).
-4. For each candidate peer, construct chunk URL from
-   `peer.endpoint + "/v1/cas/chunks/{hash}"`.
+4. For each candidate peer, construct `HttpChunkFetcher` against the bare
+   `peer.endpoint`, then call `fetch(hash).await`.
 5. Try peers in order until one succeeds.
-6. Update `success_count`/`failure_count`/`latency_ms` on the peer record.
-7. Write fetched chunk to local cache.
+6. Emit success/failure telemetry from the async loop instead of mutating the
+   database inline.
+7. After the async call returns, apply `success_count` / `failure_count` /
+   `latency_ms` updates synchronously via the existing `federation_peer` model.
+8. Write fetched chunk to local cache.
 
-Requires plumbing `conn: Option<&Connection>` into `SubstituterChain` (not
-currently present). Federation source calls are skipped when `conn` is `None`.
+This keeps federation source behavior tied to Conary’s existing
+`federation_peers` table without borrowing `Connection` across `.await`.
 
-#### Remove Binary from chunk-level substituter
+#### Keep Binary as a compatibility stub
 
 Binary repos serve whole packages (RPMs, DEBs), not individual CAS chunks.
 Binary resolution already works at the package level in `resolution.rs:530`.
-Remove `SubstituterSource::Binary` from the enum. Any remaining references
-become compile errors that point to the places needing cleanup.
+
+Do **not** remove `SubstituterSource::Binary` from the enum, because existing
+config can already deserialize `type = "binary"`. Phase 4 should preserve that
+serde compatibility while making the runtime behavior explicit:
+
+- `Binary` remains parseable
+- `Binary` remains visible in source listings
+- `Binary` immediately returns `NotFound` for chunk resolution
+- tests prove legacy binary config still loads without pretending chunk fetch is
+  supported
 
 ### Files to modify
 
 | File | Change |
 |------|--------|
-| `crates/conary-core/src/repository/substituter.rs` | Async conversion, Remi + Federation implementation, Binary removal |
+| `crates/conary-core/src/repository/substituter.rs` | Async conversion, Remi + Federation implementation, Binary compatibility stub, async metric emission |
+| `crates/conary-core/src/db/models/federation_peer.rs` | Ordered enabled-peer lookup and success/failure stat update helpers |
 | Callers of `resolve_chunk`/`resolve_chunks` (test code + re-export) | Add `.await` |
 | `crates/conary-core/src/repository/mod.rs` | Re-export changes if needed |
 
 ### Testing
 
-- Unit test: mock `HttpChunkFetcher` returning known chunk data, verify
+- Unit test: local async HTTP server returning known chunk data; verify
   `fetch_from_source` for Remi source writes to local cache.
-- Unit test: mock federation peer DB with 3 peers (1 disabled, 1 failing, 1
-  healthy), verify selection order and circuit-breaker skip.
-- Integration test (conary-test phase): verify real Remi chunk fetch against
-  remi.conary.io with a known package hash.
+- Unit test: seeded federation peer DB with 3 peers (1 disabled, 1 failing, 1
+  healthy), verify selection order, circuit-breaker skip, emitted peer metrics,
+  and synchronous stat application.
+- Unit test: legacy `Binary` substituter config still deserializes and still
+  fails chunk resolution honestly.
+- Optional manual smoke: verify a real Remi chunk fetch against a known server
+  and hash outside CI if desired.
 
 ---
 
