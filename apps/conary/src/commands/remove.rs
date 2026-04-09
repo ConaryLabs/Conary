@@ -26,11 +26,13 @@ pub(crate) struct RemoveInnerResult {
 }
 
 /// Remove an installed package
+#[allow(clippy::too_many_arguments)]
 pub async fn cmd_remove(
     package_name: &str,
     db_path: &str,
     root: &str,
     version: Option<String>,
+    architecture: Option<String>,
     no_scripts: bool,
     sandbox_mode: SandboxMode,
     purge_files: bool,
@@ -60,30 +62,51 @@ pub async fn cmd_remove(
     }
 
     // Handle version-specific removal
-    let trove = if let Some(ref ver) = version {
-        // Find the specific version
-        troves.iter().find(|t| t.version == *ver).ok_or_else(|| {
-            anyhow::anyhow!(
-                "Package '{}' version '{}' is not installed. Installed versions: {}",
+    let matches: Vec<&Trove> = troves
+        .iter()
+        .filter(|trove| {
+            version.as_ref().is_none_or(|ver| trove.version == *ver)
+                && architecture
+                    .as_deref()
+                    .is_none_or(|arch| trove.architecture.as_deref() == Some(arch))
+        })
+        .collect();
+
+    let trove = match matches.as_slice() {
+        [] => {
+            let installed = troves
+                .iter()
+                .map(|trove| match trove.architecture.as_deref() {
+                    Some(arch) => format!("{} [{}]", trove.version, arch),
+                    None => trove.version.clone(),
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(anyhow::anyhow!(
+                "Package '{}' with selector version={:?} architecture={:?} is not installed. Installed variants: {}",
                 package_name,
-                ver,
-                troves
-                    .iter()
-                    .map(|t| t.version.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        })?
-    } else if troves.len() > 1 {
-        println!("Multiple versions of '{}' found:", package_name);
-        for trove in &troves {
-            println!("  - version {}", trove.version);
+                version,
+                architecture,
+                installed
+            ));
         }
-        return Err(anyhow::anyhow!(
-            "Multiple versions installed. Use --version to specify which one to remove."
-        ));
-    } else {
-        &troves[0]
+        [trove] => *trove,
+        _ => {
+            println!(
+                "Multiple installed variants of '{}' match the selector:",
+                package_name
+            );
+            for trove in &matches {
+                println!(
+                    "  - version {} [{}]",
+                    trove.version,
+                    trove.architecture.as_deref().unwrap_or("none")
+                );
+            }
+            return Err(anyhow::anyhow!(
+                "Multiple installed variants match. Use --version and/or architecture to specify which one to remove."
+            ));
+        }
     };
     let trove_id = trove.id.ok_or_else(|| anyhow::anyhow!("Trove has no ID"))?;
 
@@ -477,6 +500,7 @@ pub async fn cmd_autoremove(
                 db_path,
                 root,
                 Some(trove.version.clone()),
+                trove.architecture.clone(),
                 no_scripts,
                 sandbox_mode,
                 false,

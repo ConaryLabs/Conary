@@ -38,8 +38,8 @@ pub enum AutomationCommands {
         #[command(flatten)]
         common: CommonArgs,
 
-        /// Only check specific categories (security, orphans, updates, integrity)
-        #[arg(long, value_delimiter = ',', value_parser = ["security", "orphans", "updates", "integrity", "repair"])]
+        /// Only check specific categories (security, orphans, updates, major_upgrades, integrity)
+        #[arg(long, value_delimiter = ',', value_parser = ["security", "orphans", "updates", "major_upgrades", "major-upgrades", "integrity", "repair"])]
         categories: Option<Vec<String>>,
 
         /// Save results without prompting
@@ -60,7 +60,7 @@ pub enum AutomationCommands {
         yes: bool,
 
         /// Only apply specific categories
-        #[arg(long, value_delimiter = ',', value_parser = ["security", "orphans", "updates", "integrity", "repair"])]
+        #[arg(long, value_delimiter = ',', value_parser = ["security", "orphans", "updates", "major_upgrades", "major-upgrades", "integrity", "repair"])]
         categories: Option<Vec<String>>,
 
         /// Show what would be done without making changes
@@ -109,18 +109,14 @@ pub enum AutomationCommands {
         disable_ai: bool,
     },
 
-    /// Run automation daemon in background
+    /// Run automation daemon (use systemd for background operation)
     ///
-    /// Starts a background process that periodically checks for
+    /// Starts the foreground daemon loop that periodically checks for
     /// automation actions and either applies them automatically
     /// or queues them for review based on configuration.
     Daemon {
         #[command(flatten)]
         common: CommonArgs,
-
-        /// Run in foreground (don't daemonize)
-        #[arg(long)]
-        foreground: bool,
 
         /// PID file location
         #[arg(long, default_value = "/run/conary/automation.pid")]
@@ -227,4 +223,51 @@ pub enum AiCommands {
         #[command(flatten)]
         db: DbArgs,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AutomationCommands;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct AutomationCli {
+        #[command(subcommand)]
+        command: AutomationCommands,
+    }
+
+    #[test]
+    fn cli_accepts_major_upgrades_category_for_check() {
+        let parsed = AutomationCli::try_parse_from([
+            "automation",
+            "check",
+            "--categories",
+            "major_upgrades",
+        ])
+        .expect("parse automation check");
+
+        assert!(matches!(parsed.command, AutomationCommands::Check { .. }));
+    }
+
+    #[test]
+    fn cli_accepts_major_upgrades_category_for_apply() {
+        let parsed = AutomationCli::try_parse_from([
+            "automation",
+            "apply",
+            "--categories",
+            "major_upgrades",
+        ])
+        .expect("parse automation apply");
+
+        assert!(matches!(parsed.command, AutomationCommands::Apply { .. }));
+    }
+
+    #[test]
+    fn cli_rejects_foreground_flag_for_daemon() {
+        let parsed = AutomationCli::try_parse_from(["automation", "daemon", "--foreground"]);
+        assert!(
+            parsed.is_err(),
+            "daemon should no longer accept --foreground"
+        );
+    }
 }

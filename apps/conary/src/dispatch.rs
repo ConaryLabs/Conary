@@ -126,6 +126,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 &common.db.db_path,
                 &common.root,
                 version,
+                None,
                 no_scripts,
                 sandbox.into(),
                 purge_files,
@@ -323,7 +324,9 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         // =====================================================================
         // Automation Commands
         // =====================================================================
-        Some(Commands::Automation(auto_cmd)) => dispatch_automation_command(auto_cmd).await,
+        Some(Commands::Automation(auto_cmd)) => {
+            dispatch_automation_command(auto_cmd, allow_live_system_mutation).await
+        }
 
         // =====================================================================
         // Bootstrap Commands
@@ -483,8 +486,16 @@ async fn dispatch_system_command(
             if package == "all" {
                 commands::cmd_restore_all(&common.db.db_path, &common.root, dry_run).await
             } else {
-                commands::cmd_restore(&package, &common.db.db_path, &common.root, force, dry_run)
-                    .await
+                commands::cmd_restore(
+                    &package,
+                    &common.db.db_path,
+                    &common.root,
+                    None,
+                    None,
+                    force,
+                    dry_run,
+                )
+                .await
             }
         }
 
@@ -1305,7 +1316,10 @@ async fn dispatch_model_command(
     }
 }
 
-async fn dispatch_automation_command(auto_cmd: cli::AutomationCommands) -> Result<()> {
+async fn dispatch_automation_command(
+    auto_cmd: cli::AutomationCommands,
+    allow_live_system_mutation: bool,
+) -> Result<()> {
     match auto_cmd {
         cli::AutomationCommands::Status {
             db,
@@ -1329,6 +1343,12 @@ async fn dispatch_automation_command(auto_cmd: cli::AutomationCommands) -> Resul
             dry_run,
             no_scripts,
         } => {
+            require_live_mutation(
+                allow_live_system_mutation,
+                Cow::Borrowed("conary automation apply"),
+                LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
+                dry_run,
+            )?;
             commands::cmd_automation_apply(
                 &common.db.db_path,
                 &common.root,
@@ -1363,13 +1383,8 @@ async fn dispatch_automation_command(auto_cmd: cli::AutomationCommands) -> Resul
             .await
         }
 
-        cli::AutomationCommands::Daemon {
-            common,
-            foreground,
-            pidfile,
-        } => {
-            commands::cmd_automation_daemon(&common.db.db_path, &common.root, foreground, &pidfile)
-                .await
+        cli::AutomationCommands::Daemon { common, pidfile } => {
+            commands::cmd_automation_daemon(&common.db.db_path, &common.root, &pidfile).await
         }
 
         cli::AutomationCommands::History {

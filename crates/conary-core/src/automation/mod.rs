@@ -26,6 +26,31 @@ use crate::model::{
 use std::collections::HashMap;
 use std::time::Duration;
 
+/// Concrete installed package identity for automation execution.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct InstalledPackageRef {
+    /// Package/trove name.
+    pub name: String,
+    /// Installed package version when known.
+    pub version: Option<String>,
+    /// Installed package architecture when known.
+    pub architecture: Option<String>,
+}
+
+/// Typed payload for executor/planner dispatch.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ActionPayload {
+    /// Install or update a package to a specific version.
+    UpdatePackage {
+        target_version: String,
+        architecture: Option<String>,
+    },
+    /// Remove one or more concrete installed packages.
+    RemovePackages { installed: Vec<InstalledPackageRef> },
+    /// Restore a concrete installed package from CAS-backed state.
+    RestorePackage { installed: InstalledPackageRef },
+}
+
 /// An automation action that has been identified but not yet executed
 #[derive(Debug, Clone)]
 pub struct PendingAction {
@@ -43,6 +68,9 @@ pub struct PendingAction {
 
     /// Packages affected
     pub packages: Vec<String>,
+
+    /// Typed payload for machine dispatch
+    pub payload: ActionPayload,
 
     /// Risk level (0.0 = no risk, 1.0 = high risk)
     pub risk_level: f64,
