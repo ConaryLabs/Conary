@@ -557,13 +557,15 @@ pub async fn cmd_model_apply(opts: ApplyOptions<'_>) -> Result<()> {
     let (replatform_executed, replatform_errors) =
         apply_replatform_changes(db_path, root, &actions).await?;
 
-    // Phase 3: package changes (install/remove stubs)
-    let (installs, removes) = apply_package_changes(&actions);
+    // Phase 3: package changes (install/remove/update execution)
+    let (package_applied, package_errors) =
+        apply_package_changes(db_path, root, &actions, strict).await?;
 
     // Phase 4: derived packages
     let (derived_built, derived_rebuilt, mut errors) =
         apply_derived_packages(&conn, &actions, &model, model_dir, &cas);
     errors.extend(replatform_errors);
+    errors.extend(package_errors);
 
     // Phase 5: metadata changes (pin/unpin, mark explicit/dependency, update)
     let (metadata_applied, metadata_errors) = apply_metadata_changes(&conn, &actions);
@@ -571,7 +573,17 @@ pub async fn cmd_model_apply(opts: ApplyOptions<'_>) -> Result<()> {
 
     if autoremove {
         println!();
-        println!("Autoremove: [NOTE: Not yet implemented - run 'conary autoremove' manually]");
+        if let Err(e) = crate::commands::cmd_autoremove(
+            db_path,
+            root,
+            false,
+            false,
+            crate::commands::SandboxMode::Always,
+        )
+        .await
+        {
+            errors.push(format!("Autoremove: {}", e));
+        }
     }
 
     // Summary
@@ -584,11 +596,8 @@ pub async fn cmd_model_apply(opts: ApplyOptions<'_>) -> Result<()> {
     if derived_rebuilt > 0 {
         println!("  Derived packages rebuilt: {}", derived_rebuilt);
     }
-    if !installs.is_empty() {
-        println!("  Packages to install (manual): {}", installs.len());
-    }
-    if !removes.is_empty() {
-        println!("  Packages to remove (manual): {}", removes.len());
+    if package_applied > 0 {
+        println!("  Package changes applied: {}", package_applied);
     }
     if replatform_executed > 0 {
         println!(

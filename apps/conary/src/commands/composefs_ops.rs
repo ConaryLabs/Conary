@@ -206,7 +206,7 @@ pub fn rebuild_and_mount(
     };
 
     // Step 2: Build the new generation (creates state snapshot + EROFS image).
-    let generations_dir = conary_core::generation::metadata::generations_dir();
+    let generations_dir = conary_root.join("generations");
     let (gen_num, build_result) =
         conary_core::generation::builder::build_generation_from_db(conn, &generations_dir, summary)
             .map_err(|e| anyhow::anyhow!("Failed to build EROFS generation: {e}"))?;
@@ -295,6 +295,13 @@ pub fn rebuild_and_mount(
         );
     }
 
+    if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
+        conary_core::generation::mount::update_current_symlink(conary_root, gen_num)
+            .map_err(|e| anyhow::anyhow!("Failed to update current symlink: {e}"))?;
+        info!("Skipping generation mount because CONARY_TEST_SKIP_GENERATION_MOUNT is set");
+        return Ok(gen_num);
+    }
+
     // Step 6: Mount the new generation at the staging point.
     let staging_mount = conary_root.join("mnt");
     let requested_verity = build_result.erofs_verity_digest.is_some();
@@ -333,6 +340,32 @@ pub fn rebuild_and_mount(
 
     info!("Generation {gen_num} mounted and active");
     Ok(gen_num)
+}
+
+#[cfg(test)]
+pub(crate) struct TestMountSkipGuard {
+    _guard: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+static TEST_MOUNT_SKIP_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+pub(crate) fn test_mount_skip_guard() -> TestMountSkipGuard {
+    let guard = TEST_MOUNT_SKIP_LOCK.lock().unwrap();
+    unsafe {
+        std::env::set_var("CONARY_TEST_SKIP_GENERATION_MOUNT", "1");
+    }
+    TestMountSkipGuard { _guard: guard }
+}
+
+#[cfg(test)]
+impl Drop for TestMountSkipGuard {
+    fn drop(&mut self) {
+        unsafe {
+            std::env::remove_var("CONARY_TEST_SKIP_GENERATION_MOUNT");
+        }
+    }
 }
 
 #[cfg(test)]

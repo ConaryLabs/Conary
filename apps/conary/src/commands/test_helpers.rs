@@ -7,11 +7,12 @@
 //! so each test module can import them with `use super::test_helpers::*`.
 
 use conary_core::db::models::{
-    InstallSource, LabelEntry, PackageResolution, PrimaryStrategy, Repository, RepositoryPackage,
+    Changeset, ChangesetStatus, Component, DependencyEntry, FileEntry, InstallSource, LabelEntry,
+    PackageResolution, PrimaryStrategy, ProvideEntry, Repository, RepositoryPackage,
     ResolutionStrategy, Trove, TroveType,
 };
 use conary_core::db::schema;
-use tempfile::NamedTempFile;
+use tempfile::{NamedTempFile, TempDir};
 
 pub(crate) fn create_test_db() -> (NamedTempFile, String) {
     let temp_file = NamedTempFile::new().unwrap();
@@ -21,6 +22,105 @@ pub(crate) fn create_test_db() -> (NamedTempFile, String) {
     schema::migrate(&conn).unwrap();
     drop(conn);
     (temp_file, db_path)
+}
+
+pub(crate) fn setup_command_test_db() -> (TempDir, String) {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let db_path = temp_dir
+        .path()
+        .join("test.db")
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    conary_core::db::init(&db_path).unwrap();
+    let mut conn = conary_core::db::open(&db_path).unwrap();
+
+    conary_core::db::transaction(&mut conn, |tx| {
+        let mut changeset1 = Changeset::new("Install nginx-1.24.0".to_string());
+        let changeset1_id = changeset1.insert(tx)?;
+
+        let mut nginx = Trove::new(
+            "nginx".to_string(),
+            "1.24.0".to_string(),
+            TroveType::Package,
+        );
+        nginx.architecture = Some("x86_64".to_string());
+        nginx.description = Some("High performance web server".to_string());
+        nginx.installed_by_changeset_id = Some(changeset1_id);
+        let nginx_id = nginx.insert(tx)?;
+
+        let mut nginx_runtime = Component::new(nginx_id, "runtime".to_string());
+        let runtime_id = nginx_runtime.insert(tx)?;
+
+        let mut nginx_config = Component::new(nginx_id, "config".to_string());
+        let config_id = nginx_config.insert(tx)?;
+
+        let mut f1 = FileEntry::new(
+            "/usr/sbin/nginx".to_string(),
+            "abc123def456789012345678901234567890123456789012345678901234".to_string(),
+            1_024_000,
+            0o755,
+            nginx_id,
+        );
+        f1.component_id = Some(runtime_id);
+        f1.insert(tx)?;
+
+        let mut f2 = FileEntry::new(
+            "/etc/nginx/nginx.conf".to_string(),
+            "def456abc123789012345678901234567890123456789012345678901234".to_string(),
+            2048,
+            0o644,
+            nginx_id,
+        );
+        f2.component_id = Some(config_id);
+        f2.insert(tx)?;
+
+        let mut p1 = ProvideEntry::new(nginx_id, "nginx".to_string(), Some("1.24.0".to_string()));
+        p1.insert(tx)?;
+        let mut p2 = ProvideEntry::new(nginx_id, "webserver".to_string(), None);
+        p2.insert(tx)?;
+
+        let mut dep = DependencyEntry::new(
+            nginx_id,
+            "openssl".to_string(),
+            Some(">= 3.0".to_string()),
+            "runtime".to_string(),
+            None,
+        );
+        dep.insert(tx)?;
+
+        changeset1.update_status(tx, ChangesetStatus::Applied)?;
+
+        let mut changeset2 = Changeset::new("Install openssl-3.0.0".to_string());
+        let changeset2_id = changeset2.insert(tx)?;
+
+        let mut openssl = Trove::new(
+            "openssl".to_string(),
+            "3.0.0".to_string(),
+            TroveType::Package,
+        );
+        openssl.architecture = Some("x86_64".to_string());
+        openssl.description = Some("Cryptography and SSL/TLS toolkit".to_string());
+        openssl.installed_by_changeset_id = Some(changeset2_id);
+        let openssl_id = openssl.insert(tx)?;
+
+        let mut openssl_runtime = Component::new(openssl_id, "runtime".to_string());
+        openssl_runtime.insert(tx)?;
+
+        let mut p3 =
+            ProvideEntry::new(openssl_id, "openssl".to_string(), Some("3.0.0".to_string()));
+        p3.insert(tx)?;
+        let mut p4 = ProvideEntry::new(openssl_id, "soname(libssl.so.3)".to_string(), None);
+        p4.insert(tx)?;
+
+        changeset2.update_status(tx, ChangesetStatus::Applied)?;
+
+        Ok(())
+    })
+    .unwrap();
+
+    (temp_dir, db_path)
 }
 
 pub(crate) fn seed_mixed_replatform_fixture(conn: &rusqlite::Connection) {
