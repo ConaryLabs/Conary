@@ -8,8 +8,10 @@ use async_trait::async_trait;
 use conary_test::deploy::manifest::load_rollout_manifest_from_file;
 use conary_test::deploy::orchestrator::{RolloutExecutor, execute_rollout};
 use conary_test::deploy::plan::{RolloutPlan, RolloutPlanRequest, build_rollout_plan};
+use conary_test::deploy::status::{RolloutProvenance, write_rollout_provenance};
 use conary_test::paths;
 use conary_test::server::service::DeploymentStatus;
+use chrono::Utc;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -137,7 +139,22 @@ impl RolloutExecutor for HandlerRolloutExecutor {
         }
     }
 
-    async fn record_success(&mut self, _plan: &RolloutPlan) -> Result<()> {
+    async fn record_success(&mut self, plan: &RolloutPlan, work_tree: &Path) -> Result<()> {
+        let work_tree_string = work_tree.to_string_lossy().to_string();
+        let (code, stdout, stderr) = run_command(
+            "git",
+            &["rev-parse", "HEAD"],
+            Some(work_tree_string.as_str()),
+        )
+        .await?;
+        print_step("git rev-parse HEAD", code, &stdout, &stderr, self.json);
+        if code != 0 {
+            bail!("git rev-parse HEAD failed (exit {code})");
+        }
+
+        let provenance = RolloutProvenance::from_plan(plan, stdout.trim(), Utc::now());
+        let provenance_path = paths::rollout_provenance_path()?;
+        write_rollout_provenance(&provenance_path, &provenance)?;
         Ok(())
     }
 }

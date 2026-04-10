@@ -3,3 +3,4 @@
 pub mod manifest;
 pub mod orchestrator;
 pub mod plan;
+pub mod status;

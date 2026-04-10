@@ -7,6 +7,8 @@ const WORKSPACE_REMI_ROOT: &str = "apps/conary/tests/integration/remi";
 const LEGACY_REMI_ROOT: &str = "tests/integration/remi";
 const WORKSPACE_FIXTURES_ROOT: &str = "apps/conary/tests/fixtures";
 const LEGACY_FIXTURES_ROOT: &str = "tests/fixtures";
+const DEFAULT_STATE_SUBDIR: &str = ".local/state/conary-test";
+const ROLLOUT_PROVENANCE_FILE: &str = "forge-rollout.json";
 
 fn find_workspace_root_from(start: &Path) -> Option<PathBuf> {
     let mut candidate = start.to_path_buf();
@@ -85,8 +87,29 @@ pub fn default_results_dir() -> Result<PathBuf> {
     Ok(remi_integration_root()?.join("results"))
 }
 
+pub fn state_dir() -> Result<PathBuf> {
+    if let Some(dir) = std::env::var_os("CONARY_TEST_STATE_DIR") {
+        return Ok(PathBuf::from(dir));
+    }
+
+    if let Some(dir) = std::env::var_os("XDG_STATE_HOME") {
+        return Ok(PathBuf::from(dir).join("conary-test"));
+    }
+
+    let home = std::env::var_os("HOME").context("cannot determine conary-test state directory")?;
+    Ok(PathBuf::from(home).join(DEFAULT_STATE_SUBDIR))
+}
+
+pub fn rollout_provenance_path() -> Result<PathBuf> {
+    Ok(rollout_provenance_path_for(&state_dir()?))
+}
+
 pub(crate) fn resolve_fixtures_root_for(project_root: &Path) -> PathBuf {
     resolve_layout_root(project_root, WORKSPACE_FIXTURES_ROOT, LEGACY_FIXTURES_ROOT)
+}
+
+pub(crate) fn rollout_provenance_path_for(state_dir: &Path) -> PathBuf {
+    state_dir.join(ROLLOUT_PROVENANCE_FILE)
 }
 
 #[cfg(test)]
@@ -124,5 +147,13 @@ mod tests {
         assert_eq!(resolved, root.join(LEGACY_FIXTURES_ROOT));
 
         fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn rollout_provenance_path_uses_state_directory() {
+        let state_root = unique_temp_root("state-root");
+        let provenance_path = rollout_provenance_path_for(&state_root);
+
+        assert_eq!(provenance_path, state_root.join(ROLLOUT_PROVENANCE_FILE));
     }
 }
