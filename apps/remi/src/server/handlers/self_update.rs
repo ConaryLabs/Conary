@@ -434,10 +434,12 @@ mod tests {
     use tokio::sync::RwLock;
 
     async fn test_state(root: &tempfile::TempDir) -> Arc<RwLock<ServerState>> {
-        let mut config = ServerConfig::default();
-        config.db_path = root.path().join("remi.db");
-        config.chunk_dir = root.path().join("chunks");
-        config.cache_dir = root.path().join("cache");
+        let config = ServerConfig {
+            db_path: root.path().join("remi.db"),
+            chunk_dir: root.path().join("chunks"),
+            cache_dir: root.path().join("cache"),
+            ..Default::default()
+        };
 
         fs::create_dir_all(&config.chunk_dir).unwrap();
         fs::create_dir_all(&config.cache_dir).unwrap();

@@ -742,6 +742,129 @@ pub(super) async fn cmd_images_prune(keep: usize, json: bool) -> Result<()> {
     Ok(())
 }
 
+pub(super) async fn cmd_images_info(image: &str, json: bool) -> Result<()> {
+    let (code, stdout, stderr) = run_command(
+        "podman",
+        &["image", "inspect", "--format", "{{json .}}", image],
+        None,
+    )
+    .await?;
+
+    if code != 0 {
+        bail!("image '{}' not found: {}", image, stderr.trim());
+    }
+
+    let inspect: serde_json::Value =
+        serde_json::from_str(&stdout).context("failed to parse podman inspect output")?;
+
+    let value = serde_json::json!({
+        "image": image,
+        "id": inspect.get("Id").and_then(|value| value.as_str()).unwrap_or(""),
+        "created": inspect.get("Created").and_then(|value| value.as_str()).unwrap_or(""),
+        "size": inspect.get("Size").and_then(|value| value.as_u64()).unwrap_or(0),
+        "labels": inspect
+            .pointer("/Config/Labels")
+            .cloned()
+            .unwrap_or(serde_json::json!({})),
+        "repo_tags": inspect
+            .get("RepoTags")
+            .cloned()
+            .unwrap_or(serde_json::json!([])),
+    });
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&value)?);
+    } else {
+        let id = value["id"].as_str().unwrap_or("");
+        let short_id = if id.len() > 12 { &id[..12] } else { id };
+        let created = value["created"].as_str().unwrap_or("");
+        let size = value["size"].as_u64().unwrap_or(0);
+        let size_mb = size / (1024 * 1024);
+
+        println!("{}Image: {}{}", BOLD, image, RESET);
+        println!("  ID:      {short_id}");
+        println!("  Created: {created}");
+        println!("  Size:    {size_mb} MB");
+
+        if let Some(tags) = value["repo_tags"].as_array() {
+            let tag_strs: Vec<&str> = tags.iter().filter_map(|tag| tag.as_str()).collect();
+            if !tag_strs.is_empty() {
+                println!("  Tags:    {}", tag_strs.join(", "));
+            }
+        }
+
+        if let Some(labels) = value["labels"].as_object()
+            && !labels.is_empty()
+        {
+            println!("  Labels:");
+            for (key, value) in labels {
+                let owned = value.to_string();
+                let display = value.as_str().unwrap_or(&owned);
+                println!("    {key}: {display}");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+pub(super) fn cmd_manifests_reload(json: bool) -> Result<()> {
+    let dir = manifest_dir()?;
+    let dir_path = dir.as_path();
+
+    if !dir_path.is_dir() {
+        bail!("manifest directory not found: {}", dir_path.display());
+    }
+
+    let mut entries: Vec<_> = std::fs::read_dir(dir_path)?
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "toml"))
+        .collect();
+    entries.sort_by_key(|entry| entry.file_name());
+
+    let mut suites = Vec::new();
+    for entry in &entries {
+        let path = entry.path();
+        if let Ok(manifest) = conary_test::config::load_manifest(&path) {
+            suites.push(serde_json::json!({
+                "name": manifest.suite.name,
+                "phase": manifest.suite.phase,
+                "test_count": manifest.test.len(),
+            }));
+        }
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "status": "reloaded",
+                "manifest_dir": dir.display().to_string(),
+                "manifests_found": suites.len(),
+                "suites": suites,
+            })
+        );
+    } else {
+        println!("Reloaded manifests from {}", dir.display());
+        println!();
+        println!("{:<30} {:<8} TESTS", "NAME", "PHASE");
+        println!("{}", "-".repeat(50));
+        for suite in &suites {
+            let name = suite["name"].as_str().unwrap_or("");
+            let phase = suite["phase"].as_u64().unwrap_or(0);
+            let count = suite["test_count"].as_u64().unwrap_or(0);
+            println!("{name:<30} {phase:<8} {count}");
+        }
+        println!();
+        println!(
+            "{} manifests found",
+            color(&suites.len().to_string(), GREEN)
+        );
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -874,127 +997,4 @@ units = ["conary_test"]
         assert!(value.get("remi").is_some());
         assert_eq!(value["reason"], "fallback");
     }
-}
-
-pub(super) async fn cmd_images_info(image: &str, json: bool) -> Result<()> {
-    let (code, stdout, stderr) = run_command(
-        "podman",
-        &["image", "inspect", "--format", "{{json .}}", image],
-        None,
-    )
-    .await?;
-
-    if code != 0 {
-        bail!("image '{}' not found: {}", image, stderr.trim());
-    }
-
-    let inspect: serde_json::Value =
-        serde_json::from_str(&stdout).context("failed to parse podman inspect output")?;
-
-    let value = serde_json::json!({
-        "image": image,
-        "id": inspect.get("Id").and_then(|value| value.as_str()).unwrap_or(""),
-        "created": inspect.get("Created").and_then(|value| value.as_str()).unwrap_or(""),
-        "size": inspect.get("Size").and_then(|value| value.as_u64()).unwrap_or(0),
-        "labels": inspect
-            .pointer("/Config/Labels")
-            .cloned()
-            .unwrap_or(serde_json::json!({})),
-        "repo_tags": inspect
-            .get("RepoTags")
-            .cloned()
-            .unwrap_or(serde_json::json!([])),
-    });
-
-    if json {
-        println!("{}", serde_json::to_string_pretty(&value)?);
-    } else {
-        let id = value["id"].as_str().unwrap_or("");
-        let short_id = if id.len() > 12 { &id[..12] } else { id };
-        let created = value["created"].as_str().unwrap_or("");
-        let size = value["size"].as_u64().unwrap_or(0);
-        let size_mb = size / (1024 * 1024);
-
-        println!("{}Image: {}{}", BOLD, image, RESET);
-        println!("  ID:      {short_id}");
-        println!("  Created: {created}");
-        println!("  Size:    {size_mb} MB");
-
-        if let Some(tags) = value["repo_tags"].as_array() {
-            let tag_strs: Vec<&str> = tags.iter().filter_map(|tag| tag.as_str()).collect();
-            if !tag_strs.is_empty() {
-                println!("  Tags:    {}", tag_strs.join(", "));
-            }
-        }
-
-        if let Some(labels) = value["labels"].as_object()
-            && !labels.is_empty()
-        {
-            println!("  Labels:");
-            for (key, value) in labels {
-                let owned = value.to_string();
-                let display = value.as_str().unwrap_or(&owned);
-                println!("    {key}: {display}");
-            }
-        }
-    }
-
-    Ok(())
-}
-
-pub(super) fn cmd_manifests_reload(json: bool) -> Result<()> {
-    let dir = manifest_dir()?;
-    let dir_path = dir.as_path();
-
-    if !dir_path.is_dir() {
-        bail!("manifest directory not found: {}", dir_path.display());
-    }
-
-    let mut entries: Vec<_> = std::fs::read_dir(dir_path)?
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "toml"))
-        .collect();
-    entries.sort_by_key(|entry| entry.file_name());
-
-    let mut suites = Vec::new();
-    for entry in &entries {
-        let path = entry.path();
-        if let Ok(manifest) = conary_test::config::load_manifest(&path) {
-            suites.push(serde_json::json!({
-                "name": manifest.suite.name,
-                "phase": manifest.suite.phase,
-                "test_count": manifest.test.len(),
-            }));
-        }
-    }
-
-    if json {
-        println!(
-            "{}",
-            serde_json::json!({
-                "status": "reloaded",
-                "manifest_dir": dir.display().to_string(),
-                "manifests_found": suites.len(),
-                "suites": suites,
-            })
-        );
-    } else {
-        println!("Reloaded manifests from {}", dir.display());
-        println!();
-        println!("{:<30} {:<8} TESTS", "NAME", "PHASE");
-        println!("{}", "-".repeat(50));
-        for suite in &suites {
-            let name = suite["name"].as_str().unwrap_or("");
-            let phase = suite["phase"].as_u64().unwrap_or(0);
-            let count = suite["test_count"].as_u64().unwrap_or(0);
-            println!("{name:<30} {phase:<8} {count}");
-        }
-        println!();
-        println!(
-            "{} manifests found",
-            color(&suites.len().to_string(), GREEN)
-        );
-    }
-
-    Ok(())
 }

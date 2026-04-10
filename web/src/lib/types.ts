@@ -89,3 +89,17 @@ export interface PackageListResponse {
 export interface SuggestResponse {
 	suggestions: string[];
 }
+
+export interface CanonicalImplementationInfo {
+	distro: string;
+	distro_name: string;
+	source: string;
+}
+
+export interface CanonicalLookupResponse {
+	canonical_name: string;
+	appstream_id: string | null;
+	kind: string;
+	description: string | null;
+	implementations: CanonicalImplementationInfo[];
+}
