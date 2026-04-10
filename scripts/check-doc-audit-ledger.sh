@@ -40,7 +40,7 @@ is_allowed_disposition() {
 
 is_historical_disposition() {
     case "$1" in
-        reframed-as-historical|retained-historical|archived)
+        reframed-as-historical|retained-historical|archived|deleted)
             return 0
             ;;
         *)

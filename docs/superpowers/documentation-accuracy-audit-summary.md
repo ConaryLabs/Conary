@@ -96,6 +96,10 @@ tracked repository docs.
   existing archive notes already redirect readers to current bootstrap commands
   and version sources.
 - No tracked planning/spec files were deleted in Chunk 1.
+- A later repo hygiene pass on 2026-04-10 moved all dated
+  `docs/superpowers/plans/*.md` and `docs/superpowers/specs/*.md` files into
+  ignored local archive directories and removed them from Git tracking so they
+  no longer ship on GitHub.
 
 ## Residual Risks
 
@@ -114,3 +118,7 @@ tracked repository docs.
 - `archived`: 7
 - `deleted`: 0
 - Remaining pending rows: 0
+
+These counts reflect the original audit close-out. The later 2026-04-10 repo
+hygiene pass removed the dated superpowers plan/spec docs from Git tracking
+while preserving local ignored archive copies.
