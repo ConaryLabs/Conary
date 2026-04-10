@@ -40,6 +40,9 @@ conary-test run --suite phase1-core.toml --all-distros
 # Start the HTTP/MCP server
 conary-test serve --port 9090
 
+# Run a managed Forge rollout from a trusted GitHub ref
+conary-test deploy rollout --group control_plane --ref main
+
 # Run the supported Forge control-plane smoke
 bash scripts/forge-smoke.sh
 
@@ -148,10 +151,13 @@ The MCP endpoint is mounted at `/mcp` (Streamable HTTP transport).
 | `flush_pending` | Flush pending WAL items to Remi |
 
 `conary-test deploy status --json` now separates the running binary identity
-from the local checkout branch/commit and marks degraded output explicitly when
-the local service is unreachable. `conary-test health --json` always emits one
-normalized envelope with `mode`, `deploy_status`, optional `remi`, and
-optional `reason`.
+from the local checkout branch/commit and now also reports the last successful
+managed rollout plus explicit drift flags when the live binary or checkout no
+longer match that rollout. `conary-test deploy rollout` is the managed Forge
+deployment path for checked-in units/groups, with `--ref` as the trusted
+default and `--path` as explicit debug/local-snapshot mode. `conary-test
+health --json` always emits one normalized envelope with `mode`,
+`deploy_status`, optional `remi`, and optional `reason`.
 
 ## Configuration
 

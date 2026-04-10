@@ -45,6 +45,7 @@ Every MCP tool has a CLI equivalent for human use:
 
 | Command | Purpose |
 |---------|---------|
+| `conary-test deploy rollout (--unit <name> \| --group <name>) [--ref <git-ref> \| --path <path>]` | Managed Forge deploy flow; trusted default source is a GitHub ref |
 | `conary-test run --suite <name> --distro <distro> --phase <N>` | Execute a test suite |
 | `conary-test deploy source [--ref <git-ref>]` | Deploy source and rebuild |
 | `conary-test deploy restart` | Restart the test service |
@@ -68,6 +69,12 @@ bash scripts/forge-smoke.sh
 That path validates the local `conary-test` service contract (`/v1/health`,
 `/v1/deploy/status`, `health --json`, and `deploy status --json`) without
 pretending to be a full integration suite.
+
+For managed Forge deployments from an operator workstation, prefer:
+
+```bash
+./scripts/deploy-forge.sh --group control_plane --ref main
+```
 
 ## Validation Modes
 

@@ -39,9 +39,19 @@ task or when you are debugging the underlying service path itself.
 
 ### Forge
 
-- Sync a checkout or worktree with `./scripts/deploy-forge.sh`
-- Build the needed binaries on Forge and restart the `conary-test` user service
-- Use the worktree-aware `--path` option when deploying from a feature worktree
+- Preferred deployment path is managed rollout orchestration through
+  `conary-test deploy rollout`
+- From an operator workstation, use
+  `./scripts/deploy-forge.sh --group control_plane --ref main` for the trusted
+  default path
+- `--ref` is the normal supported source mode and resolves an exact GitHub ref
+  on Forge before build/restart/verify
+- `--path` remains available for debug/local-snapshot deploys; the wrapper keeps
+  the rsync boundary by syncing directly over the active Forge checkout before
+  invoking the managed rollout there
+- Rollout groups live in `deploy/forge-rollouts.toml`
+- `conary-test deploy status --json` now reports both live binary truth and the
+  last successful managed rollout, including explicit drift flags
 - For supported control-plane verification, run `bash scripts/forge-smoke.sh`
 - Port resolution for CLI and smoke checks is `--port` > `CONARY_TEST_PORT` >
   `9090`

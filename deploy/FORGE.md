@@ -44,6 +44,33 @@ that path when `GITHUB_RUNNER_REGISTRATION_TOKEN` is not provided.
 - `pr-gate` stays on GitHub-hosted runners.
 - No separate source-control or CI service is part of the target setup.
 
+## Supported Deployment Commands
+
+Trusted/default deploys should now go through the managed rollout wrapper:
+
+```bash
+# Trusted default: fetch and deploy an exact GitHub ref on Forge
+./scripts/deploy-forge.sh --group control_plane --ref main
+
+# Roll out a broader named group from a specific commit
+./scripts/deploy-forge.sh --group all_forge_tooling --ref 78e7194e
+
+# Debug-only local snapshot deploy over the active Forge checkout
+./scripts/deploy-forge.sh --unit conary_test --path "$(pwd)"
+```
+
+Under the hood:
+
+- `--ref` runs the managed `conary-test deploy rollout ... --ref ...` flow on
+  Forge and is the normal supported mode
+- `--path` keeps the `rsync` boundary, syncing directly over `~/Conary` before
+  invoking the same managed rollout against that active checkout
+- rollout groups and units come from `deploy/forge-rollouts.toml`
+- verification stays tied to `scripts/forge-smoke.sh`
+
+`scripts/deploy-forge.sh` is now a convenience wrapper, not the deployment
+brain. Build/restart/verify ordering lives in `conary-test deploy rollout`.
+
 ## Supported Validation Commands
 
 ```bash
