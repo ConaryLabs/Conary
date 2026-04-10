@@ -2,7 +2,7 @@
 
 [![PR Gate](https://github.com/ConaryLabs/Conary/actions/workflows/pr-gate.yml/badge.svg)](https://github.com/ConaryLabs/Conary/actions/workflows/pr-gate.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![v0.7.0](https://img.shields.io/badge/version-0.7.0-orange.svg)](CHANGELOG.md)
+[![v0.8.0](https://img.shields.io/badge/version-0.8.0-orange.svg)](CHANGELOG.md)
 
 **Website:** [conary.io](https://conary.io) | **Packages:** [remi.conary.io](https://remi.conary.io) | **Discussions:** [GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions)
 
@@ -547,7 +547,7 @@ cargo build --profile fast-release   # Faster compile, still optimized
 
 ## Project Status
 
-**Version 0.7.0** -- The project has a working end-to-end stack: multi-format installs, atomic changesets, immutable generations, takeover/bootstrap flows, Remi conversion and serving, federation, and capability-restricted runtime execution. Recent work has focused on tightening trust defaults, transaction atomicity, daemon/server auth, scriptlet isolation, and integrity verification across retrieval and generation paths.
+**Version 0.8.0** -- The project has a working end-to-end stack: multi-format installs, atomic changesets, immutable generations, takeover/bootstrap flows, Remi conversion and serving, federation, and capability-restricted runtime execution. Recent work has focused on tightening trust defaults, transaction atomicity, daemon/server auth, scriptlet isolation, and integrity verification across retrieval and generation paths.
 
 See [ROADMAP.md](ROADMAP.md) for what we're building next.
 
