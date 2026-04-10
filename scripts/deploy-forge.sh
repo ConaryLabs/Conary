@@ -11,7 +11,7 @@
 set -euo pipefail
 
 FORGE_HOST="${FORGE_HOST:-peter@forge.conarylabs.com}"
-FORGE_DEST="${FORGE_DEST:-~/Conary}"
+FORGE_DEST="${FORGE_DEST:-/home/peter/Conary}"
 TARGET_FLAG=""
 TARGET_VALUE=""
 SOURCE_MODE="ref"
@@ -30,7 +30,7 @@ Options:
   --unit NAME      Roll out a single manifest unit
   --group NAME     Roll out a named manifest group
   --ref REF        Deploy an exact GitHub ref on Forge (default: main)
-  --path PATH      Deploy a local snapshot by rsyncing PATH over ~/Conary on Forge
+  --path PATH      Deploy a local snapshot by rsyncing PATH over the active Forge checkout
   --help           Show this help text
 
 Examples:
@@ -141,6 +141,7 @@ if [[ "$SOURCE_MODE" == "path" ]]; then
     echo "Syncing local snapshot ${SOURCE_VALUE} -> ${FORGE_HOST}:${FORGE_DEST}"
     rsync -az --delete \
         --exclude target/ \
+        --exclude '.git' \
         --exclude '.git/' \
         --exclude '.worktrees/' \
         "${SOURCE_VALUE}/" "${FORGE_HOST}:${FORGE_DEST}/"
