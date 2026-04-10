@@ -55,9 +55,29 @@ Untracked file dispositions:
 
 ## Public-Surface Audit
 
-- Grep sweep:
-- Manual file review:
-- Release-surface fixes:
+- Grep sweep: `pass`
+  Final targeted sweep used `0.7.0|0.8.0|0.5.0|0.6.0|version-|Release |Conary is a ` across `README.md`, `site`, `web`, and `apps/conary/man`, with results captured in `/home/peter/.claude/tmp/conary-release-hardening-2026-04-10/release-surface-grep.txt`.
+  Actionable release-facing hits were:
+  - `README.md` version badge and project-status version callout
+  - `site/src/routes/install/+page.svelte` sample `conary --version` output
+  - `site/src/routes/compare/+page.svelte` early-release wording
+  - `apps/conary/man/conary.1` local generated manpage version string
+  Non-blocking noise:
+  - `site/package-lock.json` and `web/package-lock.json` `0.6.0` hits were dependency metadata, not public release copy
+  - `web/src/routes/packages/[distro]/[name]/+page.svelte` `version-` hits were CSS class names, not release claims
+- Manual file review: `pass`
+  Reviewed the named release-facing files from the plan:
+  - `README.md`: updated stale top-level version badge and status section
+  - `site/src/routes/install/+page.svelte`: updated stale sample CLI version
+  - `site/src/routes/compare/+page.svelte`: updated stale release-version sentence
+  - `apps/conary/man/conary.1`: reviewed and locally regenerated at `0.8.0`, but confirmed this file is ignored/generated under `.gitignore` rather than tracked in `HEAD`
+  - `web/src/routes/+layout.svelte`: reviewed, no stale version or misleading release/install claim found
+  - `web/src/routes/+page.svelte`: reviewed, no stale version or misleading release/install claim found
+- Release-surface fixes: `pass`
+  Updated release-facing copy to the planned `conary 0.8.0` public surface, then reran:
+  - `cargo build -p conary --release`
+  - `(cd site && npm run check && npm run build)` outside the sandbox
+  Both passed cleanly.
 
 ## GitHub Dry-Run Rehearsal
 
@@ -82,6 +102,8 @@ Untracked file dispositions:
 - `apps/remi/src/server/handlers/self_update.rs`: rewrote the test `ServerConfig` setup to use a struct literal with `..Default::default()` so `clippy::field_reassign_with_default` passes.
 - `web/src/lib/types.ts`, `web/src/lib/api.ts`, and `web/src/routes/packages/[distro]/[name]/+page.svelte`: added a typed canonical lookup response and typed page state so the package detail page no longer fails `svelte-check` on an implicit-`any` callback.
 - Frontend validation commands for `site` and `web` had to run outside the sandbox because `esbuild` execution inside the sandbox returned `EPERM`.
+- `README.md`, `site/src/routes/install/+page.svelte`, and `site/src/routes/compare/+page.svelte`: refreshed stale tracked release-facing version strings from `0.7.0` to the planned `0.8.0` public release surface.
+- `apps/conary/man/conary.1`: confirmed the generated local manpage now reflects `0.8.0`, but it is ignored/generated (`/apps/conary/man/`) rather than a tracked repo file.
 
 ## Release Decision
 
