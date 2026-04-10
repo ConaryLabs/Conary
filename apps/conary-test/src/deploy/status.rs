@@ -33,6 +33,20 @@ pub struct RolloutProvenance {
     pub deployed_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RolloutStatus {
+    pub source_kind: RolloutSourceKind,
+    pub requested_ref: Option<String>,
+    pub resolved_commit: String,
+    pub target_kind: RolloutTargetKind,
+    pub rollout_name: String,
+    pub units: Vec<String>,
+    pub deployed_at: String,
+    pub drifted: bool,
+    pub binary_matches_rollout: bool,
+    pub checkout_matches_rollout: bool,
+}
+
 impl RolloutProvenance {
     pub fn from_plan(
         plan: &RolloutPlan,
@@ -60,6 +74,28 @@ impl RolloutProvenance {
             units: plan.units.iter().map(|unit| unit.name.clone()).collect(),
             deployed_at: deployed_at.to_rfc3339(),
         }
+    }
+}
+
+pub fn evaluate_rollout_status(
+    rollout: &RolloutProvenance,
+    running_binary_commit: Option<&str>,
+    checkout_commit: Option<&str>,
+) -> RolloutStatus {
+    let binary_matches_rollout = running_binary_commit == Some(rollout.resolved_commit.as_str());
+    let checkout_matches_rollout = checkout_commit == Some(rollout.resolved_commit.as_str());
+
+    RolloutStatus {
+        source_kind: rollout.source_kind.clone(),
+        requested_ref: rollout.requested_ref.clone(),
+        resolved_commit: rollout.resolved_commit.clone(),
+        target_kind: rollout.target_kind.clone(),
+        rollout_name: rollout.rollout_name.clone(),
+        units: rollout.units.clone(),
+        deployed_at: rollout.deployed_at.clone(),
+        drifted: !(binary_matches_rollout && checkout_matches_rollout),
+        binary_matches_rollout,
+        checkout_matches_rollout,
     }
 }
 
@@ -245,5 +281,68 @@ units = ["conary_test", "conary"]
         assert_eq!(loaded, original);
 
         fs::remove_dir_all(temp_root).expect("cleanup");
+    }
+
+    #[test]
+    fn rollout_status_has_no_drift_when_binary_and_checkout_match() {
+        let rollout = RolloutProvenance::from_plan(
+            &sample_plan(),
+            "6533e5ddcafebabe".to_string(),
+            DateTime::parse_from_rfc3339("2026-04-09T19:00:00Z")
+                .expect("timestamp parses")
+                .with_timezone(&Utc),
+        );
+
+        let status = evaluate_rollout_status(
+            &rollout,
+            Some("6533e5ddcafebabe"),
+            Some("6533e5ddcafebabe"),
+        );
+
+        assert!(!status.drifted);
+        assert!(status.binary_matches_rollout);
+        assert!(status.checkout_matches_rollout);
+    }
+
+    #[test]
+    fn rollout_status_flags_binary_drift() {
+        let rollout = RolloutProvenance::from_plan(
+            &sample_plan(),
+            "6533e5ddcafebabe".to_string(),
+            DateTime::parse_from_rfc3339("2026-04-09T19:00:00Z")
+                .expect("timestamp parses")
+                .with_timezone(&Utc),
+        );
+
+        let status = evaluate_rollout_status(
+            &rollout,
+            Some("different-binary"),
+            Some("6533e5ddcafebabe"),
+        );
+
+        assert!(status.drifted);
+        assert!(!status.binary_matches_rollout);
+        assert!(status.checkout_matches_rollout);
+    }
+
+    #[test]
+    fn rollout_status_flags_checkout_drift() {
+        let rollout = RolloutProvenance::from_plan(
+            &sample_plan(),
+            "6533e5ddcafebabe".to_string(),
+            DateTime::parse_from_rfc3339("2026-04-09T19:00:00Z")
+                .expect("timestamp parses")
+                .with_timezone(&Utc),
+        );
+
+        let status = evaluate_rollout_status(
+            &rollout,
+            Some("6533e5ddcafebabe"),
+            Some("different-checkout"),
+        );
+
+        assert!(status.drifted);
+        assert!(status.binary_matches_rollout);
+        assert!(!status.checkout_matches_rollout);
     }
 }
