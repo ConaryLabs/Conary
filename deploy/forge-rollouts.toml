@@ -1,0 +1,14 @@
+[units.conary_test]
+build = { cargo_package = "conary-test" }
+restart = { systemd_user_unit = "conary-test.service" }
+verify = "forge_smoke"
+
+[units.conary]
+build = { cargo_package = "conary" }
+verify = "none"
+
+[groups.control_plane]
+units = ["conary_test"]
+
+[groups.all_forge_tooling]
+units = ["conary_test", "conary"]
