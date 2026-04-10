@@ -23,6 +23,13 @@ Pending.
   historical continuity markers, not current canonical release tags.
 - SECURITY now describes the disclosure/triage process without unverifiable SLA
   promises.
+- ARCHITECTURE now reflects schema v66 and includes `crates/conary-bootstrap`
+  in both the system overview and workspace package map.
+- The query module guide now reflects the real user-facing surface:
+  `label` remains nested under `conary query`, while SBOM is a top-level
+  `conary sbom` command backed by the query module internals.
+- The CCS format spec now uses the current `conary ccs keygen/sign/verify`
+  command names instead of the old standalone `ccs-*` tooling names.
 
 ## WIP Clarifications
 

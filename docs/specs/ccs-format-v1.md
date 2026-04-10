@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-03-13
-revision: 1
+last_updated: 2026-04-09
+revision: 2
 summary: Add YAML frontmatter; spec verified accurate against current ccs manifest code
 ---
 
@@ -390,7 +390,7 @@ A `.ccs` file is a **gzip-compressed tar archive** with the following structure:
 ```
 myapp-1.2.3.ccs (gzipped tar)
 ├── MANIFEST              # Binary manifest (CBOR-encoded)
-├── MANIFEST.sig          # Ed25519 signature (optional, created by ccs-sign)
+├── MANIFEST.sig          # Ed25519 signature (optional, created by `conary ccs sign`)
 ├── MANIFEST.toml         # Human-readable manifest (for debugging)
 ├── components/
 │   ├── runtime.json      # File list for :runtime component
@@ -584,9 +584,9 @@ concatenate them in order. Verify the result matches the file's `hash` field.
 
 1. `MANIFEST.sig` contains an Ed25519 signature (raw bytes or base64)
 2. Verify signature over `MANIFEST` file bytes using the public key
-3. Public keys are managed via `ccs-keygen` (generates Ed25519 keypair)
-4. Sign packages with `ccs-sign --key <private.pem>`
-5. Verify with `ccs-verify <package.ccs>` (checks Merkle tree and optional signature)
+3. Public keys are managed via `conary ccs keygen` (generates Ed25519 keypair)
+4. Sign packages with `conary ccs sign --key <private.pem> <package.ccs>`
+5. Verify with `conary ccs verify <package.ccs>` (checks Merkle tree and optional signature)
 
 ### Content Verification
 
