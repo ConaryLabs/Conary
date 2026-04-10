@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-04-10
-revision: 1
+revision: 2
 summary: Ship-blocker-only hardening design for a coordinated Conary, Remi, conaryd, and conary-test release before public announcement
 ---
 
@@ -96,6 +96,16 @@ This phase answers four questions:
    repo's conventional-commit policy?
 4. What exact tags and versions would the coordinated release cut?
 
+Before moving on, record the Phase 1 release matrix for each candidate track in
+the hardening checklist:
+
+- current version/tag
+- next version
+- next canonical tag
+- bundle name
+- deploy mode
+- release decision: `candidate` or `drop-from-release`
+
 If `./scripts/release.sh all --dry-run` shows that a track does not bump, that
 is a release decision point, not a cosmetic detail. A track with no qualifying
 commits is not automatically part of the coordinated release.
@@ -117,6 +127,8 @@ Run:
 - `cargo test -p remi`
 - `cargo test -p conaryd`
 - `cargo run -p conary-test -- list`
+- `cd site && npm ci && npm run check && npm run build`
+- `cd web && npm ci && npm run check && npm run build`
 
 This phase proves that the source tree is releasable before GitHub Actions is
 asked to package or route anything. It is not intended to rerun every deep
@@ -133,15 +145,21 @@ Audit:
 
 - top-level README release badge and release summary text
 - install and comparison pages on the public site
+- package frontend entrypoints and install/deep-link surfaces under `web/`
 - checked-in release-facing man page content
-- any release/build/download wording that a subreddit reader could encounter
-  immediately after clicking through
+- exact-version and release-wording grep results over:
+  - `README.md`
+  - `site/`
+  - `web/`
+  - `apps/conary/man/`
 
 Known likely review targets discovered during brainstorming:
 
 - `README.md`
 - `site/src/routes/install/+page.svelte`
 - `site/src/routes/compare/+page.svelte`
+- `web/src/routes/+layout.svelte`
+- `web/src/routes/+page.svelte`
 - `apps/conary/man/conary.1`
 
 This phase should also sweep for hardcoded exact version strings that are not
@@ -153,6 +171,11 @@ shown to end users during the release flow.
 
 Rehearse the actual GitHub release control plane without creating live releases
 or deploying live binaries.
+
+The dry-run handoff must use workflow artifacts, not GitHub Release assets.
+`deploy-and-verify` consumes the `release-build` run's artifacts via the
+`source_run` input and `gh run download`, so the rehearsal must explicitly
+exercise that artifact path.
 
 For each intended release track, manually dispatch `release-build` with:
 
@@ -167,6 +190,18 @@ Expected coverage:
 - `remi`
 - `conaryd`
 - `conary-test`
+
+After each `release-build` dry-run completes, download its workflow artifacts
+locally and verify:
+
+- `metadata.json` matches the intended product, version, tag, bundle name, and
+  deploy mode
+- the expected primary artifact filenames exist for that product
+- for `conary`, `SHA256SUMS` exists and matches the downloaded bundle contents
+- for `conary`, if a self-update `*.sig` file is present, verify it through the
+  repository's current self-update signature verification path; if that path
+  cannot be exercised, stop and treat signature rehearsal as incomplete rather
+  than assuming success
 
 Then manually dispatch `deploy-and-verify` with `dry_run=true` using the
 `release-build` run IDs for the deployable tracks only:
@@ -201,8 +236,15 @@ At minimum, confirm the presence and intended scope of:
 - `CONARYD_SSH_TARGET`
 - `CONARYD_VERIFY_URL`
 
-This phase is about existence, environment placement, and release-path
-coverage, not secret rotation or value changes.
+Presence alone is not sufficient. This phase must also establish that the live
+release path is still usable:
+
+- if the operator can validate the secret-backed path directly, do so
+- if the operator cannot inspect or validate the secret value from GitHub,
+  obtain an explicit freshness/usability confirmation from the environment
+  owner or repo admin before calling the release `go`
+
+If that confirmation cannot be obtained, the release stays `no-go`.
 
 ---
 
@@ -234,9 +276,12 @@ true:
   release
 - public release-facing copy is stale or misleading in a way that would be
   visible from the subreddit thread, README, install page, or GitHub release
+- downloaded dry-run artifacts fail checksum verification or the self-update
+  signature path cannot be exercised for a produced `conary` signature artifact
 - a GitHub dry-run rehearsal fails to build, bundle, route, or resolve
   artifacts the way the live workflow expects
-- required live-release secrets or environment configuration are missing
+- required live-release secrets or environment configuration are missing, or
+  secret usability cannot be confirmed by the operator or environment owner
 
 Known non-blockers may be waived only if they are clearly outside the release
 path and do not affect first-touch credibility.
@@ -249,6 +294,7 @@ The hardening task should leave behind:
 
 - a short checklist with every hardening item marked `pass`, `fail`, or
   `waived`
+- the recorded Phase 1 release matrix for every candidate track
 - a list of fixes made during the pass
 - a list of remaining blockers, if any
 - the exact release commands to run once green
@@ -265,7 +311,23 @@ git push --tags
 ```
 
 If the pass shows only a subset is justified, the final release commands should
-be narrowed accordingly rather than forcing the full coordinated cut.
+be narrowed accordingly rather than forcing the full coordinated cut. The
+supported subset syntax is the same script with only the approved tracks, for
+example:
+
+```bash
+./scripts/release.sh conary remi
+git push
+git push --tags
+```
+
+or, for a single-track cut:
+
+```bash
+./scripts/release.sh remi
+git push
+git push --tags
+```
 
 ---
 
