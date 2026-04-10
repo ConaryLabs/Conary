@@ -310,7 +310,7 @@ cloudflare_ips_file = "/etc/conary/cloudflare-ips.txt"
   - URL: `https://remi.conary.io/health`
   - Interval: 60 seconds
   - Expected status: 200
-  - Expected body contains: `"status":"ok"`
+  - Expected body contains: `OK`
 
 ### Notifications
 
@@ -325,7 +325,7 @@ Configure alerts under **Notifications**:
 
 After completing setup, verify:
 
-1. `curl -I https://remi.conary.io/health` returns 200
+1. `curl -fsS https://remi.conary.io/health` returns `OK`
 2. `curl -I https://remi.conary.io/v1/chunks/HASH` returns `cf-cache-status: HIT` on second request
 3. `curl -I https://remi.conary.io/v1/index/fedora/43/x86_64` returns short-TTL cache headers
 4. R2 dashboard shows objects being written (if write-through is enabled)

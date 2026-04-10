@@ -30,10 +30,28 @@ Pending.
   `conary sbom` command backed by the query module internals.
 - The CCS format spec now uses the current `conary ccs keygen/sign/verify`
   command names instead of the old standalone `ccs-*` tooling names.
+- `docs/INTEGRATION-TESTING.md` and `apps/conary-test/README.md` now point at
+  the workspace-correct `apps/conary/tests/integration/remi/...` paths, current
+  Phase 2/4 suite coverage, and `<distro>-phase<N>.json` result filenames.
+- `docs/SCRIPTLET_SECURITY.md` now reflects the current scriptlet executor:
+  `crates/` paths, `RLIMIT_NPROC=1024`, target-root execution, and the modern
+  `conary query scripts` inspection command.
+- `docs/conaryopedia-v2.md` now matches the current Remi admin surface:
+  loopback external admin bind on `127.0.0.1:8082`, unauthenticated `/health`
+  and `/v1/admin/openapi.json`, and the real repo/federation/test-data/MCP
+  endpoints.
+- `deploy/CLOUDFLARE.md` and `deploy/FORGE.md` now use the current health-check
+  behavior and workspace-correct container troubleshooting paths.
+- The scriptlet harness and adversarial fixture READMEs now use
+  workspace-correct paths and describe the current contained/live-root and
+  tracked-large-fixture behavior.
 
 ## WIP Clarifications
 
-Pending.
+- `bootstrap/stage0/README.md` now explicitly marks the checked-in
+  `crosstool-ng` config as a historical reference. The supported bootstrap
+  workflow is the `conary bootstrap ...` CLI surface, not `ct-ng build` in the
+  `bootstrap/stage0/` directory.
 
 ## Archive/Delete Decisions
 

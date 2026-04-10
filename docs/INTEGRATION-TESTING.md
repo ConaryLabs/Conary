@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-04-02
-revision: 9
+last_updated: 2026-04-09
+revision: 10
 summary: Align integration-testing guidance with the virtual workspace package layout
 ---
 
@@ -151,7 +151,7 @@ cleanly with an explicit message rather than pretending it is production-ready.
 |-------|-------|----------|
 | A | T160-T176 | Config, distro, canonical, groups, registry |
 | B | T177-T195 | Label, model, collection, derive |
-| C | T196-T213 | CCS, bootstrap, cache, query, repo management |
+| C | T196-T220 | CCS ops, query, repo management |
 | D | T221-T255 | Provenance, capability, trust, system ops, federation, automation |
 | E | T230-T251 | Cross-distro compatibility overlay: native package parity, distro policy, replatform, and takeover |
 
@@ -172,7 +172,7 @@ covers canonical mapping, distro pinning and mixing behavior, source-policy
 replatform planning and apply flows, takeover across distro boundaries, and
 native-format package handling on the host distro.
 
-In addition to the container-backed suites, `tests/bootstrap_workflow.rs`
+In addition to the container-backed suites, `apps/conary/tests/bootstrap_workflow.rs`
 exercises the `conary` binary directly for manifest-run record loading,
 `bootstrap verify-convergence`, and `bootstrap diff-seeds` using synthetic
 completed-run metadata. Those tests do not replace the container suites, but
@@ -198,7 +198,7 @@ QEMU images are downloaded from `https://remi.conary.io/test-artifacts/` and cac
 
 ## Configuration
 
-All test parameters live in `tests/integration/remi/config.toml`:
+All test parameters live in `apps/conary/tests/integration/remi/config.toml`:
 
 ```toml
 [remi]
@@ -240,7 +240,9 @@ publishing, also set:
 
 ## Results
 
-Test results are written as JSON to `tests/integration/remi/results/<distro>.json`:
+Test results are written as JSON under
+`apps/conary/tests/integration/remi/results/`, using filenames such as
+`<distro>-phase<N>.json`:
 
 ```json
 {
@@ -298,18 +300,17 @@ Current JSON semantics:
 - `conary-test health --json` always returns valid JSON. The top-level shape is
   normalized to `mode`, `deploy_status`, optional `remi`, and optional
   `reason`.
-```
 
 ## Adding Tests
 
-1. Create or edit a TOML manifest in `tests/integration/remi/manifests/`
+1. Create or edit a TOML manifest in `apps/conary/tests/integration/remi/manifests/`
 2. Define test steps using the manifest schema (run, assert, mock_server, etc.)
 3. For supported Forge control-plane validation, run `bash scripts/forge-smoke.sh`
 4. For deeper manual debugging, run `cargo run -p conary-test -- run --suite <manifest> --distro <distro> --phase <N>`
 
 ## Adding Distros
 
-1. Create `tests/integration/remi/containers/Containerfile.<name>`
+1. Create `apps/conary/tests/integration/remi/containers/Containerfile.<name>`
 2. Add `[distros.<name>]` section to `config.toml`
 3. Add to CI workflow matrices
 
