@@ -16,22 +16,22 @@ bootstrap/stage0/README.md	bootstrap/stage0/README.md	app-local	contributor			pe
 deploy/CLOUDFLARE.md	deploy/CLOUDFLARE.md	deploy	operator			pending		
 deploy/FORGE.md	deploy/FORGE.md	deploy	operator			pending		
 deploy/dracut/NOTE.md	deploy/dracut/NOTE.md	deploy	operator			pending		
-docs/ARCHITECTURE.md	docs/ARCHITECTURE.md	canonical	contributor			pending		
+docs/ARCHITECTURE.md	docs/ARCHITECTURE.md	canonical	contributor	paths-modules; workflow-deploy-release; support-status	Cargo.toml; crates/conary-core/src/db/schema.rs; crates/conary-bootstrap/src/lib.rs; apps/remi/src/server/routes/mcp.rs; apps/conary-test/src/server/routes.rs	verified	corrected	Updated schema-version references and workspace member coverage for the current crate layout.
 docs/INTEGRATION-TESTING.md	docs/INTEGRATION-TESTING.md	canonical	contributor			pending		
 docs/SCRIPTLET_SECURITY.md	docs/SCRIPTLET_SECURITY.md	canonical	contributor			pending		
 docs/conaryopedia-v2.md	docs/conaryopedia-v2.md	canonical	contributor			pending		
-docs/llms/README.md	docs/llms/README.md	canonical	contributor			pending		
+docs/llms/README.md	docs/llms/README.md	canonical	contributor	paths-modules; workflow-deploy-release	AGENTS.md; docs/ARCHITECTURE.md; docs/INTEGRATION-TESTING.md; docs/operations/infrastructure.md	verified	verified-no-change	Assistant landing-page links still point at the current canonical docs.
 docs/llms/archive/claude-era-notes.md	docs/llms/archive/claude-era-notes.md	historical	historical			pending		
-docs/llms/subsystem-map.md	docs/llms/subsystem-map.md	canonical	contributor			pending		
-docs/modules/bootstrap.md	docs/modules/bootstrap.md	canonical	contributor			pending		
-docs/modules/ccs.md	docs/modules/ccs.md	canonical	contributor			pending		
-docs/modules/federation.md	docs/modules/federation.md	canonical	contributor			pending		
-docs/modules/query.md	docs/modules/query.md	canonical	contributor			pending		
-docs/modules/recipe.md	docs/modules/recipe.md	canonical	contributor			pending		
-docs/modules/source-selection.md	docs/modules/source-selection.md	canonical	contributor			pending		
-docs/operations/LOCAL_ACCESS.example.md	docs/operations/LOCAL_ACCESS.example.md	template	contributor			pending		
-docs/operations/infrastructure.md	docs/operations/infrastructure.md	canonical	contributor			pending		
-docs/specs/ccs-format-v1.md	docs/specs/ccs-format-v1.md	canonical	contributor			pending		
+docs/llms/subsystem-map.md	docs/llms/subsystem-map.md	canonical	contributor	paths-modules; support-status	Cargo.toml; crates/conary-bootstrap/src/lib.rs; apps/remi/src/server/admin_service.rs; apps/conary-test/src/server/service.rs	verified	verified-no-change	Subsystem pointers still resolve to the current crate layout and service ownership boundaries.
+docs/modules/bootstrap.md	docs/modules/bootstrap.md	canonical	contributor	paths-modules; commands-cli	apps/conary/src/cli/bootstrap.rs; crates/conary-core/src/bootstrap/mod.rs	verified	verified-no-change	Bootstrap module guide still matches the current stage layout and CLI ownership.
+docs/modules/ccs.md	docs/modules/ccs.md	canonical	contributor	commands-cli; support-status	apps/conary/src/cli/ccs.rs; apps/conary/src/commands/ccs/runtime.rs; docs/specs/ccs-format-v1.md	verified	verified-no-change	CCS module guide still matches the current CLI surface and runtime helpers.
+docs/modules/federation.md	docs/modules/federation.md	canonical	contributor	commands-cli; security-trust	apps/conary/src/cli/federation.rs; apps/remi/src/federation/mod.rs; apps/remi/src/server/admin_service.rs	verified	verified-no-change	Federation guide still matches the current peer-management and trust model.
+docs/modules/query.md	docs/modules/query.md	canonical	contributor	commands-cli; paths-modules	apps/conary/src/cli/query.rs; apps/conary/src/dispatch.rs; apps/conary/src/commands/query/sbom.rs	verified	corrected	Clarified that SBOM is a top-level command and fixed the nested query dispatch map.
+docs/modules/recipe.md	docs/modules/recipe.md	canonical	contributor	paths-modules; support-status	crates/conary-core/src/recipe/format.rs; crates/conary-core/src/recipe/kitchen/cook.rs; crates/conary-core/src/recipe/pkgbuild.rs	verified	verified-no-change	Recipe guide still matches the current build graph and kitchen pipeline.
+docs/modules/source-selection.md	docs/modules/source-selection.md	canonical	contributor	paths-modules; support-status	crates/conary-core/src/repository/effective_policy.rs; crates/conary-core/src/model/replatform.rs; apps/conary/src/commands/update.rs; apps/conary/src/commands/model.rs	verified	verified-no-change	Source-selection guide still matches the current runtime-policy and replatform flow.
+docs/operations/LOCAL_ACCESS.example.md	docs/operations/LOCAL_ACCESS.example.md	template	contributor	workflow-template; support-status	CLAUDE.md; docs/operations/infrastructure.md	verified	verified-no-change	Local-access template still matches the current rule for keeping sensitive host notes untracked.
+docs/operations/infrastructure.md	docs/operations/infrastructure.md	canonical	contributor	workflow-deploy-release; urls-hosts-endpoints; support-status	.github/workflows/release-build.yml; .github/workflows/deploy-and-verify.yml; scripts/deploy-forge.sh; scripts/forge-smoke.sh; apps/remi/src/server/routes/mcp.rs; apps/conary-test/src/cli.rs	verified	verified-no-change	Infrastructure guide still matches the current release workflows, Forge smoke path, and endpoint defaults.
+docs/specs/ccs-format-v1.md	docs/specs/ccs-format-v1.md	canonical	contributor	commands-cli; support-status	apps/conary/src/cli/ccs.rs; apps/conary/src/dispatch.rs; crates/conary-core/src/ccs/manifest.rs	verified	corrected	Updated the verification section to use the current `conary ccs` command surface.
 docs/superpowers/archive/2026-04-04-codebase-simplification-retrospective.md	docs/superpowers/archive/2026-04-04-codebase-simplification-retrospective.md	historical	historical			pending		
 docs/superpowers/documentation-accuracy-audit-summary.md	docs/superpowers/documentation-accuracy-audit-summary.md	planning	maintainer			pending		
 docs/superpowers/plans/2026-04-07-docs-source-selection-refresh-plan.md	docs/superpowers/plans/archive/2026-04-07-docs-source-selection-refresh-plan.md	historical	historical			pending	archived	Completed doc-refresh implementation plan; archived after merged work.

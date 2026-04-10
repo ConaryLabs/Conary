@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-04-07
-revision: 10
+last_updated: 2026-04-09
+revision: 11
 summary: Refresh workspace layout for shared operation vocabulary, source-selection policy flow, and current service boundaries
 ---
 
@@ -34,6 +34,7 @@ Supporting workspace members
   apps/remi/         public/admin package service, search, federation, MCP
   apps/conaryd/      local daemon, auth, job queue, REST/SSE routes
   apps/conary-test/  integration harness, HTTP API, MCP, container runners
+  crates/conary-bootstrap/ shared tracing/runtime/exit helpers for workspace binaries
   crates/conary-mcp/ shared transport-agnostic MCP helpers
 ```
 
@@ -89,7 +90,7 @@ crates/conary-core/      Core library crate
     +-- lib.rs           Public API surface
     +-- operations.rs    Shared operation vocabulary across CLI and daemon boundaries
     +-- db/              Database layer
-    |   +-- schema.rs    Schema v65, migration dispatcher
+    |   +-- schema.rs    Schema v66, migration dispatcher
     |   +-- migrations/  Migration functions grouped into v1_v20.rs, v21_v40.rs, v41_current.rs
     |   +-- models/      ORM-style model structs
     +-- transaction/     Composefs-native transaction engine
@@ -398,7 +399,7 @@ itself.
 Supports x86_64, aarch64, and riscv64 targets. Dry-run mode
 (`--dry-run`) validates the full pipeline without building.
 
-## Database Schema (v65)
+## Database Schema (v66)
 
 All runtime state lives in SQLite, and migrations are dispatched from
 `crates/conary-core/src/db/schema.rs`.
@@ -424,6 +425,7 @@ The root manifest is now a virtual workspace. Build the owning crate directly:
 | `remi` | Remi conversion/proxy service | `cargo build -p remi` |
 | `conaryd` | Local daemon | `cargo build -p conaryd` |
 | `conary-test` | Test harness | `cargo build -p conary-test` |
+| `conary-bootstrap` | Shared binary bootstrap helpers | `cargo build -p conary-bootstrap` |
 | `conary-core` | Shared library | `cargo build -p conary-core` |
 | `conary-mcp` | Shared MCP helpers | `cargo build -p conary-mcp` |
 

@@ -1,7 +1,9 @@
 # Query Module (apps/conary/src/commands/query/)
 
 Package, file, dependency, and repository queries against the local SQLite
-database. Includes SBOM generation in CycloneDX format.
+database. Label management remains nested under `conary query`, while the
+CycloneDX SBOM surface now lives at the top-level `conary sbom` command even
+though its implementation still lives in `src/commands/query/sbom.rs`.
 
 ## Data Flow: Query Dispatch
 
@@ -22,8 +24,12 @@ conary query <subcommand> [args]
   +-- scripts                -> package.rs      (parse scriptlets from .rpm/.deb/.pkg)
   +-- conflicts              -> dependency.rs   (file ownership overlap detection)
   +-- delta-stats            -> dependency.rs   (delta update statistics)
-  +-- label                  -> dependency.rs   (label/provenance management)
-  +-- sbom                   -> sbom.rs         (CycloneDX 1.5 JSON export)
+  +-- label                  -> cli/label.rs + dispatch.rs   (label path, delegation, and provenance management)
+
+Related top-level command:
+conary sbom [--profile ... | --derivation ...]
+        |
+  apps/conary/src/dispatch.rs -> sbom.rs       (CycloneDX derivation export)
 ```
 
 ## Key Types
@@ -58,9 +64,13 @@ Primary tables hit by queries:
 - **Recursive traversal**: deptree uses HashSet-based cycle detection with configurable depth
 - **Reverse lookup**: `WHERE depends_on_name = ?` for rdepends/whatbreaks
 
-## SBOM Generation
+## Related SBOM Command
 
-Produces CycloneDX 1.5 JSON. Can target a single package or all installed.
+`cmd_sbom()` lives in this module tree, but the user-facing surface is the
+top-level `conary sbom` command rather than `conary query sbom`.
+
+It produces CycloneDX JSON from derivation data, targeting either a single
+derivation or a named profile.
 
 Each component includes:
 - Package URL (PURL): `pkg:conary/name@version?arch=x86_64`
