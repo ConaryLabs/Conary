@@ -1,7 +1,7 @@
 // conary-test/src/cli.rs
 
 use anyhow::{Context, Result, bail};
-use clap::{Parser, Subcommand};
+use clap::{ArgGroup, Parser, Subcommand};
 use conary_test::engine::container_setup::initialize_container_state;
 use conary_test::paths;
 use handlers::{
@@ -191,6 +191,29 @@ enum DeployCommands {
         /// Local conary-test service port
         #[arg(long, env = "CONARY_TEST_PORT", default_value = "9090")]
         port: u16,
+    },
+
+    /// Perform a managed Forge rollout from a Git ref or explicit local snapshot
+    #[command(
+        group(ArgGroup::new("rollout_target").args(["unit", "group"]).required(true).multiple(false)),
+        group(ArgGroup::new("rollout_source").args(["git_ref", "path"]).required(true).multiple(false))
+    )]
+    Rollout {
+        /// Deploy a single manifest-defined rollout unit
+        #[arg(long, group = "rollout_target")]
+        unit: Option<String>,
+
+        /// Deploy a manifest-defined rollout group
+        #[arg(long, group = "rollout_target")]
+        group: Option<String>,
+
+        /// Resolve and deploy an exact Git ref on Forge
+        #[arg(long = "ref", group = "rollout_source")]
+        git_ref: Option<String>,
+
+        /// Deploy an explicit local-snapshot path already synced to Forge
+        #[arg(long, group = "rollout_source")]
+        path: Option<PathBuf>,
     },
 }
 
@@ -751,6 +774,12 @@ fn main() -> Result<()> {
                 }
                 DeployCommands::Restart => rt.block_on(cmd_deploy_restart(json)),
                 DeployCommands::Status { port } => rt.block_on(cmd_deploy_status(json, port)),
+                DeployCommands::Rollout {
+                    unit: _,
+                    group: _,
+                    git_ref: _,
+                    path: _,
+                } => bail!("deploy rollout not yet implemented"),
             }
         }
 
@@ -885,5 +914,132 @@ mod tests {
             Commands::Health { port } => assert_eq!(port, 8181),
             _ => panic!("unexpected command"),
         }
+    }
+
+    #[test]
+    fn deploy_rollout_parses_unit_with_ref() {
+        let cli = Cli::try_parse_from([
+            "conary-test",
+            "deploy",
+            "rollout",
+            "--unit",
+            "conary_test",
+            "--ref",
+            "main",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Deploy {
+                command:
+                    DeployCommands::Rollout {
+                        unit,
+                        group,
+                        git_ref,
+                        path,
+                    },
+            } => {
+                assert_eq!(unit.as_deref(), Some("conary_test"));
+                assert_eq!(group, None);
+                assert_eq!(git_ref.as_deref(), Some("main"));
+                assert_eq!(path, None);
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn deploy_rollout_parses_group_with_path() {
+        let cli = Cli::try_parse_from([
+            "conary-test",
+            "deploy",
+            "rollout",
+            "--group",
+            "control_plane",
+            "--path",
+            "~/Conary",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Deploy {
+                command:
+                    DeployCommands::Rollout {
+                        unit,
+                        group,
+                        git_ref,
+                        path,
+                    },
+            } => {
+                assert_eq!(unit, None);
+                assert_eq!(group.as_deref(), Some("control_plane"));
+                assert_eq!(git_ref, None);
+                assert_eq!(path.as_deref(), Some(std::path::Path::new("~/Conary")));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn deploy_rollout_rejects_unit_and_group_together() {
+        let error = Cli::try_parse_from([
+            "conary-test",
+            "deploy",
+            "rollout",
+            "--unit",
+            "conary_test",
+            "--group",
+            "control_plane",
+            "--ref",
+            "main",
+        ])
+        .err()
+        .expect("mixed target rejected");
+
+        let rendered = error.to_string();
+        assert!(rendered.contains("--unit"));
+        assert!(rendered.contains("--group"));
+    }
+
+    #[test]
+    fn deploy_rollout_rejects_ref_and_path_together() {
+        let error = Cli::try_parse_from([
+            "conary-test",
+            "deploy",
+            "rollout",
+            "--unit",
+            "conary_test",
+            "--ref",
+            "main",
+            "--path",
+            "~/Conary",
+        ])
+        .err()
+        .expect("mixed source rejected");
+
+        let rendered = error.to_string();
+        assert!(rendered.contains("--ref"));
+        assert!(rendered.contains("--path"));
+    }
+
+    #[test]
+    fn deploy_rollout_requires_target_and_source() {
+        let target_error =
+            Cli::try_parse_from(["conary-test", "deploy", "rollout", "--ref", "main"])
+                .err()
+                .expect("missing target rejected");
+        assert!(
+            target_error.to_string().contains("--unit")
+                || target_error.to_string().contains("--group")
+        );
+
+        let source_error =
+            Cli::try_parse_from(["conary-test", "deploy", "rollout", "--unit", "conary_test"])
+                .err()
+                .expect("missing source rejected");
+        assert!(
+            source_error.to_string().contains("--ref")
+                || source_error.to_string().contains("--path")
+        );
     }
 }
