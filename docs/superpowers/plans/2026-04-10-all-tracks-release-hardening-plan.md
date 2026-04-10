@@ -6,7 +6,7 @@
 
 **Architecture:** Follow the approved spec in strict order: preflight and release-matrix capture, local Rust and frontend validation, release-facing truthfulness audit, GitHub dry-run rehearsal, secrets/readiness confirmation, go/no-go decision, then the real release cut. Keep one tracked checklist document as the execution ledger, and only modify release-surface files called out by the spec unless a command failure forces a focused follow-up fix plan.
 
-**Tech Stack:** Bash, Git, Cargo, npm, SvelteKit, GitHub CLI (`gh`), GitHub Actions, Markdown, repo-local release scripts, and the checked-in release/deploy workflows.
+**Tech Stack:** Bash, Git, Cargo, npm, SvelteKit, GitHub CLI (`gh`), GitHub Actions, Markdown, ripgrep (`rg`), repo-local release scripts, and the checked-in release/deploy workflows.
 
 **Commit Convention:** Every non-release-fix commit in this plan should reference `docs/superpowers/plans/2026-04-10-all-tracks-release-hardening-plan.md` in the commit body.
 
@@ -49,12 +49,25 @@
 
 ## Chunk 1: Preflight And Release Matrix
 
-### Task 1: Create the tracked execution checklist and artifact workspace
+### Task 1: Capture the untouched worktree baseline, then create the checklist and artifact workspace
 
 **Files:**
 - Create: `docs/superpowers/release-hardening-checklist-2026-04-10.md`
 
-- [ ] **Step 1: Create the checklist scaffold**
+- [ ] **Step 1: Capture the untouched worktree baseline before creating or committing anything**
+
+Run:
+
+```bash
+mkdir -p /tmp/conary-release-hardening-2026-04-10
+git status --short | tee /tmp/conary-release-hardening-2026-04-10/initial-git-status.txt
+```
+
+Expected:
+- the saved file captures the real pre-plan worktree state
+- unrelated untracked files, if any, are visible before any new checklist file or commit changes the repo state
+
+- [ ] **Step 2: Create the checklist scaffold**
 
 Create `docs/superpowers/release-hardening-checklist-2026-04-10.md` with these sections:
 
@@ -75,51 +88,41 @@ Include a table under `Phase 1 Release Matrix` with columns:
 track | current_tag | next_version | next_tag | bundle_name | deploy_mode | decision | notes
 ```
 
-- [ ] **Step 2: Create the local artifact workspace**
+- [ ] **Step 3: Create the local artifact workspace**
 
 Run:
 
 ```bash
-mkdir -p /tmp/conary-release-hardening-2026-04-10
 mkdir -p /tmp/conary-release-hardening-2026-04-10/runs
 mkdir -p /tmp/conary-release-hardening-2026-04-10/artifacts
 ```
 
 Expected: all three directories exist and are empty or reusable.
 
-- [ ] **Step 3: Commit the checklist scaffold**
+- [ ] **Step 4: Copy the untouched baseline into the checklist**
+
+Copy the contents of `/tmp/conary-release-hardening-2026-04-10/initial-git-status.txt`
+into the checklist under `Scope` or `Blockers`, and for every untracked file
+record one of:
+
+- `approved to ignore during release hardening`
+- `must be removed or moved before release`
+
+- [ ] **Step 5: Commit the checklist scaffold**
 
 ```bash
 git add docs/superpowers/release-hardening-checklist-2026-04-10.md
 git commit -m "docs: add release hardening checklist" -m "Refs docs/superpowers/plans/2026-04-10-all-tracks-release-hardening-plan.md"
 ```
 
-### Task 2: Capture the worktree state and release-matrix baseline
+### Task 2: Capture the release-matrix baseline
 
 **Files:**
 - Modify: `docs/superpowers/release-hardening-checklist-2026-04-10.md`
 - Read: `scripts/release.sh`
 - Read: `scripts/release-matrix.sh`
 
-- [ ] **Step 1: Record the current worktree state**
-
-Run:
-
-```bash
-git status --short
-```
-
-Expected:
-- release-related tracked changes should be absent before the hardening pass starts
-- unrelated untracked files, if any, must be recorded explicitly in the checklist instead of deleted blindly
-
-Action:
-- copy the `git status --short` output into the checklist
-- for every untracked file, record one of:
-  - `approved to ignore during release hardening`
-  - `must be removed or moved before release`
-
-- [ ] **Step 2: Run release-matrix self-tests**
+- [ ] **Step 1: Run release-matrix self-tests**
 
 Run:
 
@@ -132,7 +135,7 @@ Expected:
 - `scripts/test-release-matrix.sh` exits `0`
 - `scripts/check-release-matrix.sh` prints `Release matrix workflow checks passed.`
 
-- [ ] **Step 3: Capture the coordinated release dry-run baseline**
+- [ ] **Step 2: Capture the coordinated release dry-run baseline**
 
 Run:
 
@@ -145,7 +148,7 @@ Expected:
 - explicit `Current`, `Next version`, `Tag`, `Bundle`, and `Deploy mode` lines for releasable tracks
 - explicit skip output for unreleasable tracks
 
-- [ ] **Step 4: Transcribe the release matrix into the checklist**
+- [ ] **Step 3: Transcribe the release matrix into the checklist**
 
 From `/tmp/conary-release-hardening-2026-04-10/release-all-dry-run.txt`, record for each track:
 
@@ -161,7 +164,7 @@ From `/tmp/conary-release-hardening-2026-04-10/release-all-dry-run.txt`, record 
 Rule:
 - if a track does not bump under `./scripts/release.sh all --dry-run`, mark it `drop-from-release` unless the human explicitly approves an override policy
 
-- [ ] **Step 5: Commit the recorded release baseline**
+- [ ] **Step 4: Commit the recorded release baseline**
 
 ```bash
 git add docs/superpowers/release-hardening-checklist-2026-04-10.md
@@ -283,7 +286,8 @@ Action:
 
 - [ ] **Step 1: Run the release-surface grep sweep**
 
-Substitute the actual current and next versions recorded in the checklist, then run:
+Substitute the actual current and next versions recorded in the checklist, then run.
+If `rg` is unavailable, use `grep -rnE` with the same pattern and paths.
 
 ```bash
 rg -n "<CONARY_CURRENT>|<CONARY_NEXT>|<REMI_CURRENT>|<REMI_NEXT>|version-|Release |Conary is a " \
@@ -328,7 +332,8 @@ Expected:
 If any release-facing file changed:
 
 ```bash
-git add README.md site/src/routes/install/+page.svelte site/src/routes/compare/+page.svelte web/src/routes/+layout.svelte web/src/routes/+page.svelte apps/conary/man/conary.1 docs/superpowers/release-hardening-checklist-2026-04-10.md
+git add docs/superpowers/release-hardening-checklist-2026-04-10.md
+git add -- README.md site web apps/conary/man
 git commit -m "docs: refresh release-facing copy for release hardening" -m "Refs docs/superpowers/plans/2026-04-10-all-tracks-release-hardening-plan.md"
 ```
 
@@ -399,16 +404,21 @@ For each track still marked `candidate`, run:
 gh workflow run release-build.yml --ref main -f product=<TRACK> -f tag_name=<NEXT_TAG> -f dry_run=true
 ```
 
-Immediately after each dispatch, capture the newest workflow-dispatch run ID:
+Then wait for GitHub to register the workflow run and capture the newest
+workflow-dispatch run ID:
 
 ```bash
-gh run list --workflow release-build.yml --event workflow_dispatch --limit 1 --json databaseId,displayTitle,status,conclusion > /tmp/conary-release-hardening-2026-04-10/runs/release-build-<TRACK>.json
+sleep 10
+gh run list --workflow release-build.yml --event workflow_dispatch --limit 5 --json databaseId,displayTitle,status,conclusion,createdAt > /tmp/conary-release-hardening-2026-04-10/runs/release-build-<TRACK>.json
+jq '.[0]' /tmp/conary-release-hardening-2026-04-10/runs/release-build-<TRACK>.json
 jq -r '.[0].databaseId' /tmp/conary-release-hardening-2026-04-10/runs/release-build-<TRACK>.json
 ```
 
 Expected:
 - `gh workflow run` exits `0`
-- the saved JSON contains a single newest run with a non-empty `databaseId`
+- the saved JSON contains a newest run with a non-empty `databaseId`
+- the newest run is visibly the just-dispatched `workflow_dispatch` run for the
+  expected workflow, not an older completed run
 
 - [ ] **Step 2: Wait for each dry-run to finish**
 
@@ -487,7 +497,7 @@ Expected:
 Run:
 
 ```bash
-conary_bundle_dir=$(find /tmp/conary-release-hardening-2026-04-10/artifacts/conary -type d -name 'release-bundle' -print -quit)
+conary_bundle_dir=$(dirname "$(find /tmp/conary-release-hardening-2026-04-10/artifacts/conary -name SHA256SUMS -print -quit)")
 (cd "$conary_bundle_dir" && sha256sum -c SHA256SUMS)
 ```
 
@@ -531,10 +541,14 @@ For each candidate track in `{conary, remi, conaryd}`:
 gh workflow run deploy-and-verify.yml --ref main -f product=<TRACK> -f source_run=<RELEASE_BUILD_RUN_ID> -f environment=production -f dry_run=true
 ```
 
-Immediately capture the newest run ID:
+Then wait for GitHub to register the workflow run and capture the newest run
+ID. In `dry_run=true`, only the verification path should execute; deploy jobs
+with environment bindings should remain skipped.
 
 ```bash
-gh run list --workflow deploy-and-verify.yml --event workflow_dispatch --limit 1 --json databaseId,displayTitle,status,conclusion > /tmp/conary-release-hardening-2026-04-10/runs/deploy-and-verify-<TRACK>.json
+sleep 10
+gh run list --workflow deploy-and-verify.yml --event workflow_dispatch --limit 5 --json databaseId,displayTitle,status,conclusion,createdAt > /tmp/conary-release-hardening-2026-04-10/runs/deploy-and-verify-<TRACK>.json
+jq '.[0]' /tmp/conary-release-hardening-2026-04-10/runs/deploy-and-verify-<TRACK>.json
 jq -r '.[0].databaseId' /tmp/conary-release-hardening-2026-04-10/runs/deploy-and-verify-<TRACK>.json
 ```
 
