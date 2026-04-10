@@ -23,10 +23,10 @@ Untracked file dispositions:
 
 | track | current_tag | next_version | next_tag | bundle_name | deploy_mode | decision | notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| conary |  |  |  |  |  |  |  |
-| remi |  |  |  |  |  |  |  |
-| conaryd |  |  |  |  |  |  |  |
-| conary-test |  |  |  |  |  |  |  |
+| conary | v0.7.0 | 0.8.0 | v0.8.0 | release-bundle | release_bundle | candidate | canonical history baseline matches owned manifest baseline |
+| remi | remi-v0.5.0 | 0.6.0 | remi-v0.6.0 | remi-bundle | remote_bundle | candidate | history baseline is derived from legacy `server-v*` tags |
+| conaryd | conaryd-v0.5.0 | 0.6.0 | conaryd-v0.6.0 | conaryd-bundle | remote_bundle | candidate | no prior canonical tags; history baseline fell back to `0.0.0` while owned manifest baseline remained `0.5.0` |
+| conary-test | conary-test-v0.7.0 | 0.8.0 | conary-test-v0.8.0 | conary-test-bundle | none | candidate | deploy intentionally skipped because `deploy_mode=none` |
 
 ## Local Gates
 
