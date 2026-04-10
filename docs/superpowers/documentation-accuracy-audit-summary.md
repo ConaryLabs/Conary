@@ -2,11 +2,36 @@
 
 ## Scope
 
-Pending.
+Audited every tracked documentation-like file returned by
+`bash scripts/docs-audit-inventory.sh`: 61 tracked files spanning root docs,
+GitHub templates, canonical docs under `docs/`, deploy/operator docs, app-local
+READMEs, active planning/design docs, historical/archive docs, and the
+`site/`/`web/` frontend READMEs.
+
+Ignored local trees such as `docs/plans/archive/` and
+`docs/superpowers/reviews/` were intentionally excluded because they are not
+tracked repository docs.
 
 ## Verification Commands
 
-Pending.
+- `cargo build -p conary-test`
+- `cargo test -p conary-test --quiet`
+- `cargo run -p conary -- --help`
+- `cargo run -p conary-test -- --help`
+- `cargo run -p conary-test -- list`
+- `target/debug/conary bootstrap --help`
+- `target/debug/conary query --help`
+- `target/debug/conary query scripts --help`
+- `target/debug/conary-test deploy rollout --help`
+- `target/debug/conary-test fixtures build --help`
+- `target/debug/conary-test images --help`
+- `target/debug/conary-test manifests reload --help`
+- `target/debug/conary-test health --help`
+- `target/debug/conary-test deploy status --help`
+- `bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --allow-pending`
+- `bash -n scripts/docs-audit-inventory.sh scripts/check-doc-audit-ledger.sh`
+- `bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete`
+- `git diff --check`
 
 ## Major Corrections
 
@@ -74,8 +99,18 @@ Pending.
 
 ## Residual Risks
 
-Pending.
+- `apps/conary/tests/scriptlet_harness/test_scriptlets.py` still emits an old
+  temp-root warning string that can read more pessimistically than the current
+  target-root executor behavior documented in the README. The docs are now
+  truthful, but the harness message itself should be cleaned up in code.
 
 ## Final Counts
 
-Pending.
+- Total tracked doc-like files audited: 61
+- `verified-no-change`: 21
+- `corrected`: 18
+- `clarified-as-wip`: 1
+- `retained-historical`: 14
+- `archived`: 7
+- `deleted`: 0
+- Remaining pending rows: 0
