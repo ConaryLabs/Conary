@@ -26,6 +26,7 @@
 |------|----------------|
 | `scripts/docs-audit-inventory.sh` | Enumerate tracked documentation-like files from `git ls-files`, classify each file into an audit family, and provide the authoritative inventory order |
 | `scripts/check-doc-audit-ledger.sh` | Validate that the ledger covers every tracked doc path and enforces allowed statuses/dispositions/claim-cluster fields |
+| `docs/superpowers/documentation-accuracy-audit-inventory.tsv` | Baseline snapshot of the tracked documentation surface at audit start; used to prove every originally tracked doc received a disposition even if later moved or deleted |
 | `docs/superpowers/documentation-accuracy-audit-ledger.tsv` | Machine-checkable ledger with one row per tracked doc-like file |
 | `docs/superpowers/documentation-accuracy-audit-summary.md` | Human-readable audit report listing major corrections, archival decisions, WIP clarifications, residual risks, and final verification commands |
 | `.gitignore` | Permit tracked markdown archives under `docs/superpowers/plans/archive/` and `docs/superpowers/specs/archive/` while leaving ignored review trees ignored |
@@ -82,14 +83,17 @@ docs/ARCHITECTURE.md	canonical	contributor
 
 Requirements:
 - accept `docs/superpowers/documentation-accuracy-audit-ledger.tsv` as input
+- read `docs/superpowers/documentation-accuracy-audit-inventory.tsv` as the baseline inventory snapshot
 - support:
   - `--allow-pending`
   - `--require-complete`
-- compare ledger paths against the authoritative inventory from `scripts/docs-audit-inventory.sh`
+- compare ledger `origin_path` values against the baseline inventory snapshot
+- compare ledger `path` values for retained rows against the current tracked inventory from `scripts/docs-audit-inventory.sh`
 - fail if:
-  - a tracked doc path is missing from the ledger
-  - a ledger row references a non-tracked doc path
-  - a tracked doc path appears more than once
+  - a baseline tracked doc `origin_path` is missing from the ledger
+  - a baseline tracked doc `origin_path` appears more than once
+  - a retained row references a non-tracked current `path`
+  - a current tracked doc path is missing from the ledger `path` column for a non-deleted row
   - `family` is outside the allowed set
   - `status` is not `pending` or `verified`
   - `disposition` is not blank in pending mode or one of:
@@ -105,6 +109,7 @@ Requirements:
   - any retained doc has empty `claim_clusters`
   - any retained doc has empty `evidence_sources`
   - any historical doc row lacks a historical disposition
+  - any deleted row has a non-empty current `path`
 
 - [ ] **Step 3: Verify both helpers parse and the inventory shape is correct**
 
@@ -140,6 +145,7 @@ git commit -m "docs(audit): add documentation inventory helpers" -m "Part of doc
 ### Task 2: Seed the ledger and audit summary from the tracked inventory
 
 **Files:**
+- Create: `docs/superpowers/documentation-accuracy-audit-inventory.tsv`
 - Create: `docs/superpowers/documentation-accuracy-audit-ledger.tsv`
 - Create: `docs/superpowers/documentation-accuracy-audit-summary.md`
 
@@ -156,27 +162,42 @@ Create `docs/superpowers/documentation-accuracy-audit-summary.md` with these sec
 
 Keep claims narrow at this stage. This file will be filled in as the audit progresses and must itself be included in the ledger once it exists.
 
-- [ ] **Step 2: Seed the TSV ledger from the current inventory**
+- [ ] **Step 2: Freeze the baseline inventory snapshot after the summary file exists**
+
+Create:
+
+```bash
+bash scripts/docs-audit-inventory.sh > docs/superpowers/documentation-accuracy-audit-inventory.tsv
+```
+
+Requirements:
+- the snapshot must be taken after `docs/superpowers/documentation-accuracy-audit-summary.md` exists
+- the snapshot becomes the audit baseline for original coverage accounting
+- do not regenerate this file later to “follow along” with moves/deletions; it records the starting tracked-doc surface
+
+- [ ] **Step 3: Seed the TSV ledger from the baseline inventory**
 
 Create `docs/superpowers/documentation-accuracy-audit-ledger.tsv` with this header:
 
 ```text
-path	family	audience	claim_clusters	evidence_sources	status	disposition	notes
+origin_path	path	family	audience	claim_clusters	evidence_sources	status	disposition	notes
 ```
 
-Populate one row per tracked doc from `bash scripts/docs-audit-inventory.sh`, including:
+Populate one row per tracked doc from `docs/superpowers/documentation-accuracy-audit-inventory.tsv`, including:
 - the new summary file
 - the current audit design spec
 - this implementation plan
 
 Initialize:
+- `origin_path` = baseline tracked path
+- `path` = current tracked path (initially equal to `origin_path`)
 - `claim_clusters` = empty
 - `evidence_sources` = empty
 - `status` = `pending`
 - `disposition` = empty
 - `notes` = optional
 
-- [ ] **Step 3: Verify the seeded ledger covers the entire tracked doc inventory**
+- [ ] **Step 4: Verify the seeded ledger covers the entire tracked doc inventory**
 
 Run:
 
@@ -186,10 +207,10 @@ bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-a
 
 Expected: PASS, even though rows are still pending, because every tracked doc path is represented exactly once.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add docs/superpowers/documentation-accuracy-audit-ledger.tsv docs/superpowers/documentation-accuracy-audit-summary.md
+git add docs/superpowers/documentation-accuracy-audit-inventory.tsv docs/superpowers/documentation-accuracy-audit-ledger.tsv docs/superpowers/documentation-accuracy-audit-summary.md
 git commit -m "docs(audit): seed documentation audit ledger" -m "Part of docs/superpowers/plans/2026-04-09-documentation-accuracy-audit-plan.md"
 ```
 
@@ -203,6 +224,7 @@ git commit -m "docs(audit): seed documentation audit ledger" -m "Part of docs/su
 - Modify: `docs/superpowers/plans/2026-04-07-source-selection-program-plan.md`
 - Modify: `docs/superpowers/plans/2026-04-09-forge-integration-hardening-plan.md`
 - Modify: `docs/superpowers/plans/2026-04-09-release-matrix-realignment-plan.md`
+- Modify: `docs/superpowers/plans/2026-04-09-documentation-accuracy-audit-plan.md`
 - Modify: `docs/superpowers/specs/2026-04-04-deferred-refactors-roadmap-design.md`
 - Modify: `docs/superpowers/specs/2026-04-07-cross-distro-root-version-matching-design.md`
 - Modify: `docs/superpowers/specs/2026-04-07-source-selection-policy-design.md`
@@ -216,8 +238,8 @@ git commit -m "docs(audit): seed documentation audit ledger" -m "Part of docs/su
 - [ ] **Step 1: Update `.gitignore` so tracked archived plans/specs can exist**
 
 Change the archive rules so:
-- `docs/superpowers/plans/archive/` can hold tracked `*.md`
-- `docs/superpowers/specs/archive/` can hold tracked `*.md`
+- `docs/superpowers/plans/archive/*` is ignored by default, but `!docs/superpowers/plans/archive/*.md` is unignored so tracked markdown can live there
+- `docs/superpowers/specs/archive/*` is ignored by default, but `!docs/superpowers/specs/archive/*.md` is unignored so tracked markdown can live there
 - `docs/superpowers/reviews/` remains ignored
 - ignored local `docs/plans/archive/` remains ignored
 
@@ -244,6 +266,7 @@ for path in \
   docs/superpowers/plans/2026-04-07-source-selection-program-plan.md \
   docs/superpowers/plans/2026-04-09-forge-integration-hardening-plan.md \
   docs/superpowers/plans/2026-04-09-release-matrix-realignment-plan.md \
+  docs/superpowers/plans/2026-04-09-documentation-accuracy-audit-plan.md \
   docs/superpowers/specs/2026-04-04-deferred-refactors-roadmap-design.md \
   docs/superpowers/specs/2026-04-07-cross-distro-root-version-matching-design.md \
   docs/superpowers/specs/2026-04-07-source-selection-policy-design.md \
@@ -260,6 +283,7 @@ done
 Expected:
 - the audit design and this plan remain active
 - any doc moved or deleted has a recorded rationale in the ledger `notes` column
+- any doc kept active is fully verified in this task: populate `claim_clusters`, populate `evidence_sources`, set `status=verified`, and set `disposition=verified-no-change`, `corrected`, or `clarified-as-wip` as appropriate
 
 - [ ] **Step 3: Execute archive moves and deletions under the approved policy**
 
@@ -268,7 +292,10 @@ Rules:
 - if a tracked plan/spec is superseded, outside an archive subtree, dated before `2026-04-01`, unreferenced by retained docs, and already captured elsewhere, delete it
 - do not archive or delete the current audit design or this implementation plan in this task
 
-After each move or deletion, update the ledger row disposition and add a short note.
+After each action:
+- for a moved file, keep `origin_path` unchanged, update `path` to the new archive path, keep `status=pending` unless the file was also fully verified in this task, set `disposition=archived`, and add a short note
+- for a deleted file, keep `origin_path` unchanged, set `path` to empty, set `status=verified`, set `disposition=deleted`, and add a short note
+- for a kept-active file, leave `origin_path` and `path` unchanged, set `status=verified`, and set the appropriate retained disposition
 
 - [ ] **Step 4: Verify archive paths are now tracked cleanly and references are not dangling**
 
@@ -276,12 +303,13 @@ Run:
 
 ```bash
 git ls-files | rg '^docs/superpowers/(plans|specs)/archive/.*\.md$'
-rg -n '2026-04-07-docs-source-selection-refresh-plan|2026-04-07-source-selection-program-plan|2026-04-09-forge-integration-hardening-plan|2026-04-09-release-matrix-realignment-plan|2026-04-04-deferred-refactors-roadmap-design|2026-04-07-cross-distro-root-version-matching-design|2026-04-07-source-selection-policy-design|2026-04-09-forge-integration-hardening-design|2026-04-09-release-matrix-realignment-design|cross-crate-duplication-findings' .
+rg -n '2026-04-07-docs-source-selection-refresh-plan|2026-04-07-source-selection-program-plan|2026-04-09-forge-integration-hardening-plan|2026-04-09-release-matrix-realignment-plan|2026-04-09-documentation-accuracy-audit-plan|2026-04-04-deferred-refactors-roadmap-design|2026-04-07-cross-distro-root-version-matching-design|2026-04-07-source-selection-policy-design|2026-04-09-forge-integration-hardening-design|2026-04-09-release-matrix-realignment-design|cross-crate-duplication-findings' .
 ```
 
 Expected:
 - any retained archived plan/spec files appear under tracked archive paths
 - deleted file basenames no longer appear in retained active-doc references
+- kept-active plan/spec rows are already marked `status=verified` in the ledger
 - the ledger still passes pending-mode coverage
 
 Run:
@@ -316,6 +344,7 @@ git commit -m "docs(audit): triage tracked planning material" -m "Part of docs/s
 - Modify: `CLAUDE.md`
 - Modify: `docs/superpowers/documentation-accuracy-audit-ledger.tsv`
 - Modify: `docs/superpowers/documentation-accuracy-audit-summary.md`
+- Modify: `docs/superpowers/documentation-accuracy-audit-inventory.tsv`
 
 - [ ] **Step 1: Fill in claim clusters and evidence sources for the root/template family**
 
