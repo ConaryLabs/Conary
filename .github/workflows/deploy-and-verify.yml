@@ -7,8 +7,8 @@ on:
   workflow_dispatch:
     inputs:
       product:
-        description: Product to deploy.
-        required: true
+        description: Optional product to validate against serialized metadata.
+        required: false
       source_run:
         description: release-build workflow run ID to deploy from.
         required: true
@@ -38,6 +38,9 @@ jobs:
       version: ${{ steps.meta.outputs.version }}
       tag_name: ${{ steps.meta.outputs.tag_name }}
       dry_run: ${{ steps.meta.outputs.dry_run }}
+      bundle_name: ${{ steps.meta.outputs.bundle_name }}
+      deploy_mode: ${{ steps.meta.outputs.deploy_mode }}
+      artifact_patterns: ${{ steps.meta.outputs.artifact_patterns }}
       source_run: ${{ steps.meta.outputs.source_run }}
       environment: ${{ steps.meta.outputs.environment }}
     steps:
@@ -79,9 +82,20 @@ jobs:
           version=$(jq -r '.version' "$metadata_file")
           tag_name=$(jq -r '.tag_name' "$metadata_file")
           dry_run=$(jq -r '.dry_run' "$metadata_file")
+          bundle_name=$(jq -r '.bundle_name' "$metadata_file")
+          deploy_mode=$(jq -r '.deploy_mode' "$metadata_file")
+          artifact_patterns=$(jq -c '.artifact_patterns' "$metadata_file")
 
-          if [[ -n "$MANUAL_PRODUCT" ]]; then
-            product="$MANUAL_PRODUCT"
+          [[ -n "$product" && "$product" != "null" ]] || { echo "metadata product missing" >&2; exit 1; }
+          [[ -n "$version" && "$version" != "null" ]] || { echo "metadata version missing" >&2; exit 1; }
+          [[ -n "$tag_name" && "$tag_name" != "null" ]] || { echo "metadata tag_name missing" >&2; exit 1; }
+          [[ -n "$bundle_name" && "$bundle_name" != "null" ]] || { echo "metadata bundle_name missing" >&2; exit 1; }
+          [[ -n "$deploy_mode" && "$deploy_mode" != "null" ]] || { echo "metadata deploy_mode missing" >&2; exit 1; }
+          [[ -n "$artifact_patterns" && "$artifact_patterns" != "null" ]] || { echo "metadata artifact_patterns missing" >&2; exit 1; }
+
+          if [[ -n "$MANUAL_PRODUCT" && "$MANUAL_PRODUCT" != "$product" ]]; then
+            echo "workflow_dispatch product ${MANUAL_PRODUCT} does not match serialized metadata product ${product}" >&2
+            exit 1
           fi
           if [[ -n "$MANUAL_DRY_RUN" ]]; then
             dry_run="$MANUAL_DRY_RUN"
@@ -91,13 +105,43 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
           echo "dry_run=${dry_run}" >> "$GITHUB_OUTPUT"
+          echo "bundle_name=${bundle_name}" >> "$GITHUB_OUTPUT"
+          echo "deploy_mode=${deploy_mode}" >> "$GITHUB_OUTPUT"
+          echo "artifact_patterns=${artifact_patterns}" >> "$GITHUB_OUTPUT"
           echo "source_run=${SOURCE_RUN}" >> "$GITHUB_OUTPUT"
           echo "environment=${TARGET_ENVIRONMENT}" >> "$GITHUB_OUTPUT"
 
+  validate-routing:
+    name: validate-routing
+    needs: resolve
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate deploy routing
+        shell: bash
+        env:
+          PRODUCT: ${{ needs.resolve.outputs.product }}
+          DEPLOY_MODE: ${{ needs.resolve.outputs.deploy_mode }}
+          BUNDLE_NAME: ${{ needs.resolve.outputs.bundle_name }}
+          ARTIFACT_PATTERNS: ${{ needs.resolve.outputs.artifact_patterns }}
+        run: |
+          set -euo pipefail
+
+          [[ -n "$BUNDLE_NAME" ]] || { echo "bundle_name output missing" >&2; exit 1; }
+          [[ -n "$ARTIFACT_PATTERNS" && "$ARTIFACT_PATTERNS" != "null" ]] || { echo "artifact_patterns output missing" >&2; exit 1; }
+
+          case "$PRODUCT:$DEPLOY_MODE" in
+            conary:release_bundle|remi:remote_bundle|conaryd:remote_bundle|conary-test:none)
+              ;;
+            *)
+              echo "No deploy lane defined for product=${PRODUCT} deploy_mode=${DEPLOY_MODE}" >&2
+              exit 1
+              ;;
+          esac
+
   verify-conary:
     name: verify-conary
-    needs: resolve
-    if: ${{ needs.resolve.outputs.product == 'conary' && github.event_name == 'workflow_dispatch' && needs.resolve.outputs.dry_run == 'true' }}
+    needs: [resolve, validate-routing]
+    if: ${{ needs.resolve.outputs.product == 'conary' && needs.resolve.outputs.deploy_mode == 'release_bundle' && github.event_name == 'workflow_dispatch' && needs.resolve.outputs.dry_run == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - name: Download source artifacts
@@ -108,17 +152,19 @@ jobs:
         run: gh run download "$SOURCE_RUN" --dir source-artifacts
       - name: Verify conary artifacts
         shell: bash
+        env:
+          BUNDLE_NAME: ${{ needs.resolve.outputs.bundle_name }}
         run: |
           set -euo pipefail
-          release_dir=$(find source-artifacts -type d -name release-bundle -print -quit)
+          release_dir=$(find source-artifacts -type d -name "$BUNDLE_NAME" -print -quit)
           [[ -n "$release_dir" ]] || { echo "release-bundle artifact missing" >&2; exit 1; }
           echo "[DRY RUN] Conary artifacts ready for deployment:"
           find "$release_dir" -maxdepth 1 -type f -printf '  %f\n' | sort
 
   deploy-conary:
     name: deploy-conary
-    needs: resolve
-    if: ${{ needs.resolve.outputs.product == 'conary' && needs.resolve.outputs.dry_run != 'true' }}
+    needs: [resolve, validate-routing]
+    if: ${{ needs.resolve.outputs.product == 'conary' && needs.resolve.outputs.deploy_mode == 'release_bundle' && needs.resolve.outputs.dry_run != 'true' }}
     runs-on: ubuntu-latest
     environment: ${{ needs.resolve.outputs.environment }}
     steps:
@@ -131,12 +177,13 @@ jobs:
       - name: Deploy conary artifacts
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
+          BUNDLE_NAME: ${{ needs.resolve.outputs.bundle_name }}
           REMI_SSH_KEY: ${{ secrets.REMI_SSH_KEY }}
           REMI_SSH_TARGET: ${{ secrets.REMI_SSH_TARGET }}
         shell: bash
         run: |
           set -euo pipefail
-          release_dir=$(find source-artifacts -type d -name release-bundle -print -quit)
+          release_dir=$(find source-artifacts -type d -name "$BUNDLE_NAME" -print -quit)
           [[ -n "$release_dir" ]] || { echo "release-bundle artifact missing" >&2; exit 1; }
           [[ -n "${REMI_SSH_KEY:-}" ]] || { echo "REMI_SSH_KEY is required" >&2; exit 1; }
 
@@ -178,8 +225,8 @@ jobs:
 
   verify-remi:
     name: verify-remi
-    needs: resolve
-    if: ${{ needs.resolve.outputs.product == 'remi' && github.event_name == 'workflow_dispatch' && needs.resolve.outputs.dry_run == 'true' }}
+    needs: [resolve, validate-routing]
+    if: ${{ needs.resolve.outputs.product == 'remi' && needs.resolve.outputs.deploy_mode == 'remote_bundle' && github.event_name == 'workflow_dispatch' && needs.resolve.outputs.dry_run == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - name: Download source artifacts
@@ -191,17 +238,20 @@ jobs:
       - name: Verify remi bundle
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
+          BUNDLE_NAME: ${{ needs.resolve.outputs.bundle_name }}
         shell: bash
         run: |
           set -euo pipefail
-          bundle=$(find source-artifacts -name "remi-${VERSION}-linux-x64.tar.gz" -print -quit)
+          bundle_dir=$(find source-artifacts -type d -name "$BUNDLE_NAME" -print -quit)
+          [[ -n "$bundle_dir" ]] || { echo "remi bundle artifact directory missing" >&2; exit 1; }
+          bundle=$(find "$bundle_dir" -maxdepth 1 -name "remi-${VERSION}-linux-x64.tar.gz" -print -quit)
           [[ -n "$bundle" ]] || { echo "remi bundle missing" >&2; exit 1; }
           echo "[DRY RUN] remi bundle ready: $bundle"
 
   deploy-remi:
     name: deploy-remi
-    needs: resolve
-    if: ${{ needs.resolve.outputs.product == 'remi' && needs.resolve.outputs.dry_run != 'true' }}
+    needs: [resolve, validate-routing]
+    if: ${{ needs.resolve.outputs.product == 'remi' && needs.resolve.outputs.deploy_mode == 'remote_bundle' && needs.resolve.outputs.dry_run != 'true' }}
     runs-on: ubuntu-latest
     environment: ${{ needs.resolve.outputs.environment }}
     steps:
@@ -214,12 +264,15 @@ jobs:
       - name: Deploy remi bundle
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
+          BUNDLE_NAME: ${{ needs.resolve.outputs.bundle_name }}
           REMI_SSH_KEY: ${{ secrets.REMI_SSH_KEY }}
           REMI_SSH_TARGET: ${{ secrets.REMI_SSH_TARGET }}
         shell: bash
         run: |
           set -euo pipefail
-          bundle=$(find source-artifacts -name "remi-${VERSION}-linux-x64.tar.gz" -print -quit)
+          bundle_dir=$(find source-artifacts -type d -name "$BUNDLE_NAME" -print -quit)
+          [[ -n "$bundle_dir" ]] || { echo "remi bundle artifact directory missing" >&2; exit 1; }
+          bundle=$(find "$bundle_dir" -maxdepth 1 -name "remi-${VERSION}-linux-x64.tar.gz" -print -quit)
           [[ -n "$bundle" ]] || { echo "remi bundle missing" >&2; exit 1; }
           [[ -n "${REMI_SSH_KEY:-}" ]] || { echo "REMI_SSH_KEY is required" >&2; exit 1; }
 
@@ -249,8 +302,8 @@ jobs:
 
   verify-conaryd:
     name: verify-conaryd
-    needs: resolve
-    if: ${{ needs.resolve.outputs.product == 'conaryd' && github.event_name == 'workflow_dispatch' && needs.resolve.outputs.dry_run == 'true' }}
+    needs: [resolve, validate-routing]
+    if: ${{ needs.resolve.outputs.product == 'conaryd' && needs.resolve.outputs.deploy_mode == 'remote_bundle' && github.event_name == 'workflow_dispatch' && needs.resolve.outputs.dry_run == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - name: Download source artifacts
@@ -262,17 +315,20 @@ jobs:
       - name: Verify conaryd bundle
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
+          BUNDLE_NAME: ${{ needs.resolve.outputs.bundle_name }}
         shell: bash
         run: |
           set -euo pipefail
-          bundle=$(find source-artifacts -name "conaryd-${VERSION}-linux-x64.tar.gz" -print -quit)
+          bundle_dir=$(find source-artifacts -type d -name "$BUNDLE_NAME" -print -quit)
+          [[ -n "$bundle_dir" ]] || { echo "conaryd bundle artifact directory missing" >&2; exit 1; }
+          bundle=$(find "$bundle_dir" -maxdepth 1 -name "conaryd-${VERSION}-linux-x64.tar.gz" -print -quit)
           [[ -n "$bundle" ]] || { echo "conaryd bundle missing" >&2; exit 1; }
           echo "[DRY RUN] conaryd bundle ready: $bundle"
 
   deploy-conaryd:
     name: deploy-conaryd
-    needs: resolve
-    if: ${{ needs.resolve.outputs.product == 'conaryd' && needs.resolve.outputs.dry_run != 'true' }}
+    needs: [resolve, validate-routing]
+    if: ${{ needs.resolve.outputs.product == 'conaryd' && needs.resolve.outputs.deploy_mode == 'remote_bundle' && needs.resolve.outputs.dry_run != 'true' }}
     runs-on: ubuntu-latest
     environment: ${{ needs.resolve.outputs.environment }}
     steps:
@@ -285,13 +341,16 @@ jobs:
       - name: Deploy conaryd bundle
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
+          BUNDLE_NAME: ${{ needs.resolve.outputs.bundle_name }}
           CONARYD_SSH_KEY: ${{ secrets.CONARYD_SSH_KEY }}
           CONARYD_SSH_TARGET: ${{ secrets.CONARYD_SSH_TARGET }}
           CONARYD_VERIFY_URL: ${{ secrets.CONARYD_VERIFY_URL }}
         shell: bash
         run: |
           set -euo pipefail
-          bundle=$(find source-artifacts -name "conaryd-${VERSION}-linux-x64.tar.gz" -print -quit)
+          bundle_dir=$(find source-artifacts -type d -name "$BUNDLE_NAME" -print -quit)
+          [[ -n "$bundle_dir" ]] || { echo "conaryd bundle artifact directory missing" >&2; exit 1; }
+          bundle=$(find "$bundle_dir" -maxdepth 1 -name "conaryd-${VERSION}-linux-x64.tar.gz" -print -quit)
           [[ -n "$bundle" ]] || { echo "conaryd bundle missing" >&2; exit 1; }
           [[ -n "${CONARYD_SSH_KEY:-}" ]] || { echo "CONARYD_SSH_KEY is required" >&2; exit 1; }
           [[ -n "${CONARYD_SSH_TARGET:-}" ]] || { echo "CONARYD_SSH_TARGET is required" >&2; exit 1; }
@@ -317,3 +376,11 @@ jobs:
           REMOTE_EOF
       - name: Verify conaryd endpoint
         run: curl -fsS "${{ secrets.CONARYD_VERIFY_URL }}" >/dev/null
+
+  no-deploy-required:
+    name: no-deploy-required
+    needs: [resolve, validate-routing]
+    if: ${{ needs.resolve.outputs.deploy_mode == 'none' }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "No deployment configured for ${{ needs.resolve.outputs.product }}"

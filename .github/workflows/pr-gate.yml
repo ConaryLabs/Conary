@@ -26,6 +26,14 @@ jobs:
       - name: Check GitHub Actions runtime policy
         run: bash scripts/check-github-action-runtimes.sh
 
+  release-matrix-policy:
+    name: release-matrix-policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Check release matrix workflow alignment
+        run: bash scripts/check-release-matrix.sh
+
   fmt:
     name: fmt
     runs-on: ubuntu-latest
