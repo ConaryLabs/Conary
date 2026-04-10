@@ -1,10 +1,15 @@
 ---
 last_updated: 2026-04-09
-revision: 1
+revision: 2
 summary: Design for replacing ad hoc release versioning and tag logic with an explicit multi-product release matrix that preserves legacy tag continuity while standardizing future releases
 ---
 
 # Release Matrix Realignment
+
+> **Historical note:** This archived design is preserved for traceability. It
+> describes the repository state and design intent at the time it was written,
+> not the current canonical behavior. Use active docs under `docs/` and
+> non-archived `docs/superpowers/` for current guidance.
 
 ## Context
 

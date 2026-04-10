@@ -1,10 +1,15 @@
 ---
-last_updated: 2026-04-07
-revision: 4
+last_updated: 2026-04-09
+revision: 5
 summary: Design for a coherent source-selection program with profile-aware policy decomposition, persistent runtime mirrors, Repology-backed latest signal, and staged integration across install, update, and replatform flows
 ---
 
 # Source Selection Policy
+
+> **Historical note:** This archived design is preserved for traceability. It
+> describes the repository state and design intent at the time it was written,
+> not the current canonical behavior. Use active docs under `docs/` and
+> non-archived `docs/superpowers/` for current guidance.
 
 ## Context
 

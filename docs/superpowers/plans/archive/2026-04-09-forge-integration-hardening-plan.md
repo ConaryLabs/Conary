@@ -1,5 +1,10 @@
 # Forge Integration Hardening Implementation Plan
 
+> **Historical note:** This archived implementation plan is preserved for
+> traceability. It reflects the intended work and repository state at the time
+> it was written, not the current execution contract. Use active docs under
+> `docs/` and non-archived `docs/superpowers/` for current guidance.
+
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make Forge-backed integration validation trustworthy by unifying `conary-test` deployment status around the running service, fixing the CLI JSON contract, adding a supported Forge control-plane smoke path, and modestly strengthening `merge-validation`.

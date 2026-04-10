@@ -64,6 +64,12 @@ Pending.
   - `docs/superpowers/specs/archive/2026-04-07-source-selection-policy-design.md`
   - `docs/superpowers/specs/archive/2026-04-09-forge-integration-hardening-design.md`
   - `docs/superpowers/specs/archive/2026-04-09-release-matrix-realignment-design.md`
+- Added explicit historical banners to the retained archived plans/specs so
+  their step-by-step instructions and design language are not mistaken for
+  current execution guidance.
+- Retained the archived recipe READMEs as historical reference material; their
+  existing archive notes already redirect readers to current bootstrap commands
+  and version sources.
 - No tracked planning/spec files were deleted in Chunk 1.
 
 ## Residual Risks

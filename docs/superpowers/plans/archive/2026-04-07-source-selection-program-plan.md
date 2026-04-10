@@ -1,5 +1,10 @@
 # Source Selection Program Implementation Plan
 
+> **Historical note:** This archived implementation plan is preserved for
+> traceability. It reflects the intended work and repository state at the time
+> it was written, not the current execution contract. Use active docs under
+> `docs/` and non-archived `docs/superpowers/` for current guidance.
+
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 > **Status:** Executed and merged on 2026-04-07. Keep this document for traceability; do not treat it as pending implementation work.

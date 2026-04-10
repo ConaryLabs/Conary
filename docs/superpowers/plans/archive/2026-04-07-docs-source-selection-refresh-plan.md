@@ -1,5 +1,10 @@
 # Docs Source Selection Refresh Implementation Plan
 
+> **Historical note:** This archived implementation plan is preserved for
+> traceability. It reflects the intended work and repository state at the time
+> it was written, not the current execution contract. Use active docs under
+> `docs/` and non-archived `docs/superpowers/` for current guidance.
+
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Bring canonical docs, assistant-facing docs, and user-facing copy back in sync with the implemented source-selection and executable replatform behavior.
