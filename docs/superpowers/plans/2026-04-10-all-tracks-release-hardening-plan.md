@@ -251,7 +251,7 @@ Action:
 Run:
 
 ```bash
-(cd site && npm ci && npm run check && npm run build)
+(cd site && set -euo pipefail && npm ci && npm run check && npm run build)
 ```
 
 Expected:
@@ -264,7 +264,7 @@ Expected:
 Run:
 
 ```bash
-(cd web && npm ci && npm run check && npm run build)
+(cd web && set -euo pipefail && npm ci && npm run check && npm run build)
 ```
 
 Expected:
@@ -732,6 +732,10 @@ Expected:
 - `git fetch origin` exits `0`
 - `git status -sb` shows the expected local branch relationship before pushing
 - both pushes exit `0`
+
+Rule:
+- if `git status -sb` shows the local branch is behind or diverged from the
+  remote branch, stop and re-confirm the correct push target before proceeding
 
 - [ ] **Step 5: Capture and watch the live GitHub workflows**
 
