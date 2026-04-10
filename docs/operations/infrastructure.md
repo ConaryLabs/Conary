@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-04-02
-revision: 2
+last_updated: 2026-04-09
+revision: 3
 summary: Non-secret infrastructure, MCP, and deployment guidance for Conary contributors and coding assistants
 ---
 
@@ -76,11 +76,32 @@ old process. That can fail with `Text file busy`.
 ## Release Flow
 
 - GitHub Actions is the only long-term CI/CD control plane.
-- Run `./scripts/release.sh [conary|remi|conaryd|all]` to bump versions,
-  update changelog state, and create tags
-- Push the relevant tags to trigger the GitHub release pipeline
-- GitHub Actions builds release artifacts in `release-build` and performs
-  protected deployment and verification in `deploy-and-verify`
+- Run `./scripts/release.sh [conary|remi|conaryd|conary-test|all]` to inspect
+  the current release baseline, bump owned versions, update release state, and
+  create canonical tags
+- The supported release tracks are:
+  - `conary`
+  - `remi`
+  - `conaryd`
+  - `conary-test`
+- Canonical tag forms are:
+  - `v*` for `conary`
+  - `remi-v*` for `remi`
+  - `conaryd-v*` for `conaryd`
+  - `conary-test-v*` for `conary-test`
+- Legacy tags are read for continuity only:
+  - `server-v*` continues the historical `remi` line
+  - `test-v*` continues the historical `conary-test` line
+- New releases emit canonical tags only; legacy prefixes remain lookup-only
+- Push the relevant canonical tags to trigger the GitHub release pipeline
+- GitHub Actions builds release artifacts in `release-build` and serializes the
+  resolved product metadata into the bundle
+- `deploy-and-verify` consumes that serialized metadata instead of re-deriving
+  product behavior locally
+- `conary-test` is a supported build-and-release track in this phase, but it
+  intentionally has no deployment lane
+- `deploy-and-verify` performs protected deployment and verification only for
+  deployable products (`conary`, `remi`, and `conaryd`)
 - Release verification is a GitHub workflow concern, not a Forgejo or
   Forge-hosted control-plane concern
 
