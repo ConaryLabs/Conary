@@ -6,7 +6,7 @@ This document covers the Cloudflare configuration for `remi.conary.io`, includin
 
 - A Cloudflare account (Free plan works, Pro recommended for advanced WAF rules)
 - The `remi.conary.io` domain managed by Cloudflare DNS
-- A running Remi server (see `deploy/setup-remi.sh` or `deploy/nixos/remi.nix`)
+- A running Remi server (see `deploy/setup-remi.sh`)
 
 ## 1. DNS Setup
 
@@ -115,7 +115,9 @@ systemctl edit remi
 EnvironmentFile=/etc/conary/r2-credentials
 ```
 
-For NixOS, use the `r2.accessKeyFile` and `r2.secretKeyFile` options.
+If you are not using systemd, use the equivalent secret-file or environment-file
+mechanism for your service manager instead of putting credentials directly in
+`remi.toml`.
 
 Update `remi.toml`:
 
