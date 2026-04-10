@@ -1,14 +1,14 @@
 origin_path	path	family	audience	claim_clusters	evidence_sources	status	disposition	notes
-.github/ISSUE_TEMPLATE/bug_report.md	.github/ISSUE_TEMPLATE/bug_report.md	template	contributor			pending		
-.github/ISSUE_TEMPLATE/feature_request.md	.github/ISSUE_TEMPLATE/feature_request.md	template	contributor			pending		
-.github/PULL_REQUEST_TEMPLATE.md	.github/PULL_REQUEST_TEMPLATE.md	template	contributor			pending		
-AGENTS.md	AGENTS.md	root	contributor			pending		
-CHANGELOG.md	CHANGELOG.md	root	contributor			pending		
-CLAUDE.md	CLAUDE.md	root	contributor			pending		
-CONTRIBUTING.md	CONTRIBUTING.md	root	contributor			pending		
-README.md	README.md	root	user			pending		
-ROADMAP.md	ROADMAP.md	root	user			pending		
-SECURITY.md	SECURITY.md	root	contributor			pending		
+.github/ISSUE_TEMPLATE/bug_report.md	.github/ISSUE_TEMPLATE/bug_report.md	template	contributor	workflow-template; commands-cli	Cargo.toml; apps/conary/src/dispatch.rs	verified	verified-no-change	Bug-report template still matches the current CLI/project context.
+.github/ISSUE_TEMPLATE/feature_request.md	.github/ISSUE_TEMPLATE/feature_request.md	template	contributor	workflow-template	.github/PULL_REQUEST_TEMPLATE.md; CONTRIBUTING.md	verified	verified-no-change	Feature-request template remains generic and accurate.
+.github/PULL_REQUEST_TEMPLATE.md	.github/PULL_REQUEST_TEMPLATE.md	template	contributor	workflow-template; commands-cli; release-process	AGENTS.md; CONTRIBUTING.md; .github/workflows/pr-gate.yml	verified	corrected	Updated verification guidance to match the current repo contract and PR gate.
+AGENTS.md	AGENTS.md	root	contributor	paths-modules; commands-cli; security-trust	Cargo.toml; docs/llms/README.md; docs/ARCHITECTURE.md; docs/INTEGRATION-TESTING.md; docs/operations/infrastructure.md	verified	verified-no-change	Root assistant contract remains accurate after the planning-material cleanup.
+CHANGELOG.md	CHANGELOG.md	root	contributor	release-process; historical-framing	.github/workflows/release-build.yml; scripts/release-matrix.sh; scripts/release.sh	verified	corrected	Added continuity framing for legacy Remi and conary-test tag prefixes.
+CLAUDE.md	CLAUDE.md	root	contributor	workflow-template; paths-modules	AGENTS.md; docs/llms/README.md	verified	verified-no-change	Compatibility shim still points readers at the canonical assistant docs.
+CONTRIBUTING.md	CONTRIBUTING.md	root	contributor	commands-cli; paths-modules; release-process	Cargo.toml; .github/workflows/pr-gate.yml; scripts/release.sh; scripts/release-matrix.sh; crates/conary-bootstrap/src/lib.rs	verified	corrected	Fixed the workspace member count, local verification commands, and shared-crate map.
+README.md	README.md	root	user	commands-cli; paths-modules; release-process	Cargo.toml; .github/workflows/pr-gate.yml; apps/conary/src/dispatch.rs; apps/conary-test/src/cli.rs; crates/conary-bootstrap/src/lib.rs	verified	corrected	Fixed the broken workflow badge, source-build quick start, and workspace member count.
+ROADMAP.md	ROADMAP.md	root	user	support-status; release-process	docs/ARCHITECTURE.md; .github/workflows/pr-gate.yml	verified	verified-no-change	Roadmap focus areas still match the current repo direction.
+SECURITY.md	SECURITY.md	root	contributor	security-trust; support-status	CHANGELOG.md; apps/remi/src/federation/mod.rs; apps/conary/src/commands/cook.rs	verified	corrected	Replaced hard response timelines with a narrower process description the repo can support.
 apps/conary-test/README.md	apps/conary-test/README.md	app-local	contributor			pending		
 apps/conary/tests/fixtures/adversarial/README.md	apps/conary/tests/fixtures/adversarial/README.md	app-local	contributor			pending		
 apps/conary/tests/scriptlet_harness/README.md	apps/conary/tests/scriptlet_harness/README.md	app-local	contributor			pending		

@@ -23,16 +23,12 @@ A good vulnerability report helps us respond quickly. Please include:
 - **Environment**: Conary version, Linux distribution, kernel version
 - **Suggested fix**: If you have one (optional but appreciated)
 
-## Response Timeline
+## Response Process
 
-We take security reports seriously and aim to:
-
-- **Acknowledge** your report within 48 hours
-- **Assess** severity and impact within 1 week
-- **Develop and release** a fix based on severity:
-  - Critical: as soon as possible
-  - High: within 2 weeks
-  - Medium/Low: in the next planned release
+We triage security reports privately, confirm impact, and coordinate disclosure
+before publishing fixes. Timing depends on severity, exploitability, report
+quality, and maintainer availability. Critical issues may be handled
+out-of-band; lower-risk fixes may ship in the next planned release.
 
 We will coordinate disclosure with you. You will be credited in the advisory unless you prefer to remain anonymous.
 
