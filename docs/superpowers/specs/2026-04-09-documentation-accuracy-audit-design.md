@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-04-09
-revision: 1
+revision: 2
 summary: Design for a release-blocking, evidence-backed audit of every tracked documentation file in the repository, including archival cleanup and cross-doc consistency repair
 ---
 
@@ -144,6 +144,7 @@ documentation-like, including at minimum:
 
 - root docs and contributor guidance
 - `.github/` issue and PR templates
+- tracked example/template docs such as `*.example.md`
 - canonical docs under `docs/`
 - deploy docs under `deploy/`
 - app-local and bootstrap READMEs
@@ -154,6 +155,12 @@ documentation-like, including at minimum:
 
 The practical inventory should be generated from tracked files, not maintained
 by hand, so the audit cannot silently skip a newly added doc.
+
+Ignored or untracked local documentation trees are not part of the
+release-blocking tracked-doc inventory unless they are promoted into version
+control. For example, ignored local archives such as `docs/plans/archive/` and
+`docs/superpowers/reviews/archive/` may exist on disk, but they are not part of
+the tracked documentation surface unless they become tracked files.
 
 ## Audit Policies
 
@@ -167,16 +174,27 @@ by hand, so the audit cannot silently skip a newly added doc.
 
 ### Planning-material policy
 
-- Recent superseded plans/specs should be moved into the appropriate archive
-  folder.
-- Older stale planning material should be deleted instead of being preserved
-  indefinitely.
+- Tracked planning or review docs that are already inside archive subtrees are
+  retained by default and reviewed as historical records unless they are
+  duplicated, misleading, or explicitly selected for later cleanup.
+- Superseded tracked planning or review docs outside archive subtrees dated
+  `2026-04-01` or later should be moved into the appropriate archive subtree if
+  they are still worth retaining as recent release-cycle history.
+- Superseded tracked planning or review docs outside archive subtrees dated
+  before `2026-04-01` may be deleted only if they are unreferenced by retained
+  docs, no longer needed as active historical records, and their important
+  decisions are already captured elsewhere in retained documentation.
 - Retained planning/history docs should be framed as design records or archive
   material, not as active source-of-truth guidance.
+- If tracked repo guidance such as `AGENTS.md` needs wording updates so the
+  cleanup policy is no longer ambiguous, update that guidance as part of the
+  audit instead of silently diverging from it.
 
 ### Historical-material policy
 
 - Historical documents may remain historical.
+- Historical documents that are already archived are not deleted by default as
+  part of this audit.
 - Historical documents must not read like current instructions unless they are
   still accurate and intentionally retained for present-day use.
 - Old references to removed topology, retired harnesses, renamed products, or
@@ -218,6 +236,7 @@ Examples:
 
 - `.github/ISSUE_TEMPLATE/*.md`
 - `.github/PULL_REQUEST_TEMPLATE.md`
+- tracked example docs such as `docs/operations/LOCAL_ACCESS.example.md`
 
 These should be checked for current workflow names, expected release/process
 language, and references to current product structure.
@@ -245,8 +264,11 @@ and freedom from misleading current-tense claims.
 
 ## Verification Standard
 
-Every retained substantive claim should be validated against one or more
-primary repository sources.
+Every retained active or template document should have its substantive claim
+clusters validated against one or more primary repository sources. Historical
+documents should still be checked for framing, stale present-tense language, and
+link/status hygiene even when they are not re-proved line by line against
+current code.
 
 ### Hard claims
 
@@ -286,6 +308,21 @@ kept at a stable abstraction level to reduce churn.
 
 These must be obviously historical and not mistaken for active instructions.
 Where necessary, add framing that makes the time horizon explicit.
+
+### Claim-cluster recording
+
+The audit does not need a separate ledger row for every sentence, but it does
+need more than a single file-level boolean. Each retained active or template doc
+should record the major substantive claim clusters that were checked, such as:
+
+- command/CLI surface
+- paths and module ownership
+- workflow/deploy/release behavior
+- support-status and WIP language
+- URLs, ports, hosts, and endpoint descriptions
+
+If a claim cluster could not be proven as originally written, the ledger should
+record whether it was narrowed, reframed, or removed.
 
 ## Evidence Sources By Doc Type
 
@@ -344,6 +381,8 @@ Every tracked doc file should end the audit with one explicit disposition:
 - `verified-no-change`
 - `corrected`
 - `clarified-as-wip`
+- `reframed-as-historical`
+- `retained-historical`
 - `archived`
 - `deleted`
 
@@ -360,6 +399,8 @@ ledger that includes, for each tracked doc:
 - intended audience
 - verification status
 - evidence sources checked
+- substantive claim clusters reviewed
+- claims narrowed, reframed, or removed
 - final disposition
 - notable follow-up risk, if any
 
@@ -407,6 +448,10 @@ shared facts such as:
 - paths, URLs, and ports
 - host-role descriptions
 - product boundaries and workspace layout
+
+The ledger is not final until this pass is complete. If Phase 4 changes a file,
+update that file's ledger entry to reflect the normalization change and confirm
+that the relevant claim cluster still has evidence behind it.
 
 ### Phase 5: Release-readiness wrap-up
 
@@ -469,8 +514,12 @@ following true:
 
 - every tracked documentation-like file has been inventoried
 - every file has a recorded final disposition
-- every retained substantive claim has been verified or narrowed to something
-  provable
+- every retained active or template document has a verification record covering
+  its substantive claim clusters, and every retained historical document has a
+  historical-framing disposition that confirms it is not being treated as active
+  guidance
+- every retained active/template substantive claim has been verified or narrowed
+  to something provable
 - recent superseded planning docs have been archived
 - older stale planning docs have been deleted
 - visible-but-incomplete surfaces are documented honestly
