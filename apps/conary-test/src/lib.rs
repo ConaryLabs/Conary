@@ -3,6 +3,7 @@
 pub mod build_info;
 pub mod config;
 pub mod container;
+pub mod deploy;
 pub mod engine;
 pub mod error;
 pub mod error_taxonomy;
