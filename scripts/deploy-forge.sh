@@ -53,11 +53,7 @@ remote_rollout_command() {
     quoted_args="$(quote_remote_args deploy rollout "$@")"
     cat <<EOF
 cd $(printf '%q' "$FORGE_DEST")
-if [[ -x target/debug/conary-test ]]; then
-  target/debug/conary-test${quoted_args}
-else
-  cargo run -p conary-test --${quoted_args}
-fi
+cargo run -p conary-test --${quoted_args}
 EOF
 }
 

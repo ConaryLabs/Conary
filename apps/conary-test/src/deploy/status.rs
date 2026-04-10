@@ -126,7 +126,8 @@ pub fn write_rollout_provenance(path: &Path, rollout: &RolloutProvenance) -> Res
     }
 
     let temp_path = temporary_rollout_path(path);
-    let json = serde_json::to_vec_pretty(rollout).context("failed to serialize rollout metadata")?;
+    let json =
+        serde_json::to_vec_pretty(rollout).context("failed to serialize rollout metadata")?;
     fs::write(&temp_path, json).with_context(|| {
         format!(
             "failed to write temporary rollout provenance `{}`",
@@ -293,11 +294,8 @@ units = ["conary_test", "conary"]
                 .with_timezone(&Utc),
         );
 
-        let status = evaluate_rollout_status(
-            &rollout,
-            Some("6533e5ddcafebabe"),
-            Some("6533e5ddcafebabe"),
-        );
+        let status =
+            evaluate_rollout_status(&rollout, Some("6533e5ddcafebabe"), Some("6533e5ddcafebabe"));
 
         assert!(!status.drifted);
         assert!(status.binary_matches_rollout);
@@ -314,11 +312,8 @@ units = ["conary_test", "conary"]
                 .with_timezone(&Utc),
         );
 
-        let status = evaluate_rollout_status(
-            &rollout,
-            Some("different-binary"),
-            Some("6533e5ddcafebabe"),
-        );
+        let status =
+            evaluate_rollout_status(&rollout, Some("different-binary"), Some("6533e5ddcafebabe"));
 
         assert!(status.drifted);
         assert!(!status.binary_matches_rollout);

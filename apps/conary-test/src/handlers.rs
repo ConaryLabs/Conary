@@ -5,6 +5,7 @@ use super::{
 };
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
+use chrono::Utc;
 use conary_test::deploy::manifest::load_rollout_manifest_from_file;
 use conary_test::deploy::orchestrator::{RolloutExecutor, execute_rollout};
 use conary_test::deploy::plan::{RolloutPlan, RolloutPlanRequest, build_rollout_plan};
@@ -14,7 +15,6 @@ use conary_test::deploy::status::{
 };
 use conary_test::paths;
 use conary_test::server::service::DeploymentStatus;
-use chrono::Utc;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -131,14 +131,15 @@ impl RolloutExecutor for HandlerRolloutExecutor {
 
     async fn verify(&mut self, verify_mode: &str, repo_dir: &Path) -> Result<()> {
         match verify_mode {
-            "forge_smoke" => self
-                .run_checked(
+            "forge_smoke" => {
+                self.run_checked(
                     "forge smoke",
                     "bash",
                     &["scripts/forge-smoke.sh"],
                     Some(repo_dir),
                 )
-                .await,
+                .await
+            }
             other => bail!("unsupported verify mode `{other}`"),
         }
     }
@@ -397,7 +398,10 @@ pub(super) async fn cmd_deploy_status(json: bool, port: u16) -> Result<()> {
     let output = match rollout_path {
         Ok(path) => match load_rollout_provenance(&path) {
             Ok(Some(rollout)) => {
-                let binary_commit = output.binary.as_ref().map(|binary| binary.git_commit.as_str());
+                let binary_commit = output
+                    .binary
+                    .as_ref()
+                    .map(|binary| binary.git_commit.as_str());
                 let checkout_commit = Some(output.checkout.git_commit.as_str());
                 let rollout = evaluate_rollout_status(&rollout, binary_commit, checkout_commit);
                 attach_rollout_status(output, Some(rollout), None)
@@ -741,11 +745,11 @@ pub(super) async fn cmd_images_prune(keep: usize, json: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{DateTime, Utc};
     use conary_test::deploy::manifest::load_rollout_manifest_from_str;
     use conary_test::deploy::plan::{RolloutPlanRequest, build_rollout_plan};
     use conary_test::deploy::status::RolloutProvenance;
     use conary_test::server::service::{BinaryStatus, RuntimeStatus, ServiceStatus};
-    use chrono::{DateTime, Utc};
     use serde_json::json;
 
     fn sample_deploy_status(git_commit: &str) -> DeploymentStatus {
@@ -847,8 +851,9 @@ units = ["conary_test"]
             None,
         );
 
-        let value = serde_json::to_value(attach_rollout_status(output, Some(sample_rollout()), None))
-            .expect("json serializes");
+        let value =
+            serde_json::to_value(attach_rollout_status(output, Some(sample_rollout()), None))
+                .expect("json serializes");
 
         assert_eq!(value["rollout"]["rollout_name"], "control_plane");
         assert_eq!(value["rollout"]["drifted"], false);

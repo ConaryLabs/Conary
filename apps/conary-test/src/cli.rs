@@ -6,9 +6,8 @@ use conary_test::engine::container_setup::initialize_container_state;
 use conary_test::paths;
 use handlers::{
     cmd_deploy_rebuild, cmd_deploy_restart, cmd_deploy_rollout, cmd_deploy_source,
-    cmd_deploy_status,
-    cmd_fixtures_build, cmd_fixtures_publish, cmd_health, cmd_images_info, cmd_images_prune,
-    cmd_logs, cmd_manifests_reload,
+    cmd_deploy_status, cmd_fixtures_build, cmd_fixtures_publish, cmd_health, cmd_images_info,
+    cmd_images_prune, cmd_logs, cmd_manifests_reload,
 };
 use std::path::{Path, PathBuf};
 
