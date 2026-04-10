@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-04-07
-revision: 12
+last_updated: 2026-04-09
+revision: 13
 summary: Refresh daemon and database reference details while preserving the current deployment guidance
 ---
 
@@ -2391,7 +2391,7 @@ apps/remi/src/server/
 Remi runs two Axum HTTP servers concurrently:
 
 - **Public API** (default `0.0.0.0:8080`): Chunk serving, package metadata, sparse index, search, OCI, federation, health checks, Prometheus metrics.
-- **Admin API** (default `127.0.0.1:8081` internal + `0.0.0.0:8082` external origin): Internal routes (conversion triggers, cache management, Bloom filter rebuild) stay on localhost-only :8081 without auth. External admin routes (token management, CI proxy, federation config, SSE events, test-data APIs) live on the admin origin listener with bearer token auth, per-IP rate limiting, and audit logging. In production behind the reverse proxy, the authenticated MCP surface is exposed on standard HTTPS at `https://remi.conary.io/mcp` instead of asking clients to connect to `:8082` directly.
+- **Admin API** (default `127.0.0.1:8081` internal + `127.0.0.1:8082` external origin): Internal routes (conversion triggers, cache management, Bloom filter rebuild) stay on localhost-only :8081 without auth. External admin routes (token management, repository/federation management, SSE events, MCP, and test-data APIs) live on the admin origin listener with bearer token auth, per-IP rate limiting, and audit logging. In production behind the reverse proxy, the authenticated MCP surface is exposed on standard HTTPS at `https://remi.conary.io/mcp` instead of asking clients to connect to `:8082` directly.
 
 Both servers share a single `ServerState` behind `Arc<RwLock<>>`:
 
@@ -2450,7 +2450,9 @@ pub struct RemiConfig {
     pub r2: R2Section,                  // Cloudflare R2 bucket, write_through, redirect
     pub search: SearchSection,          // Tantivy index directory
     pub prewarm: PrewarmConfigSection,  // distros, top_n, interval
-    pub web: WebSection,               // SvelteKit frontend path
+    pub web: WebSection,                // SvelteKit frontend path
+    pub admin: AdminSection,            // external admin listener + bootstrap token
+    pub canonical: CanonicalSection,    // curated canonical mapping sources
 }
 ```
 
@@ -3377,7 +3379,10 @@ The frontend is served as a SPA with `ServeDir` + `ServeFile` fallback to `index
 
 ### External Admin API (origin port 8082)
 
-Authenticated via bearer tokens. Rate-limited per IP (read 60/min, write 10/min, auth-fail 5/min). All requests audit-logged.
+Protected routes use bearer tokens. The external admin listener is rate-limited
+per IP (read 60/min, write 10/min, auth-fail 5/min) and audit-logged. The
+listener also exposes unauthenticated `/health` and `/v1/admin/openapi.json`
+endpoints for basic liveness and schema discovery.
 
 In a proxied deployment, treat `:8082` as the admin origin listener. The public
 Cloudflare-facing MCP entry point is `https://remi.conary.io/mcp`; REST
@@ -3385,13 +3390,13 @@ admin routes are only public if you explicitly proxy them.
 
 | Method | Path | Purpose | Scope |
 |--------|------|---------|-------|
+| GET | `/health` | External admin liveness | (no auth) |
 | POST | `/v1/admin/tokens` | Create API token | admin |
 | GET | `/v1/admin/tokens` | List tokens | admin |
 | DELETE | `/v1/admin/tokens/:id` | Delete token | admin |
-| GET | `/v1/admin/ci/workflows` | List CI workflows | ci:read |
-| GET | `/v1/admin/ci/workflows/:name/runs` | List workflow runs | ci:read |
-| POST | `/v1/admin/ci/workflows/:name/dispatch` | Trigger workflow | ci:trigger |
-| POST | `/v1/admin/ci/mirror-sync` | Trigger mirror sync | ci:trigger |
+| PUT | `/v1/admin/test-fixtures/{*path}` | Upload test fixture content | admin |
+| PUT | `/v1/admin/test-artifacts/{*path}` | Upload test artifact content | admin |
+| POST | `/v1/admin/packages/{distro}` | Upload package payload | admin |
 | GET | `/v1/admin/repos` | List repositories | repos:read |
 | GET | `/v1/admin/repos/:name` | Get repository | repos:read |
 | POST | `/v1/admin/repos` | Create repository | repos:write |
@@ -3402,6 +3407,7 @@ admin routes are only public if you explicitly proxy them.
 | GET | `/v1/admin/federation/config` | Get federation config | federation:read |
 | POST | `/v1/admin/federation/peers` | Add federation peer | federation:write |
 | DELETE | `/v1/admin/federation/peers/:id` | Remove peer | federation:write |
+| GET | `/v1/admin/federation/peers/{id}/health` | Check peer health | federation:read |
 | PUT | `/v1/admin/federation/config` | Update federation config | federation:write |
 | GET | `/v1/admin/events` | SSE event stream | any valid token |
 | GET | `/v1/admin/audit` | Query audit log | admin |

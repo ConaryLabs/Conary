@@ -120,5 +120,5 @@ sudo -u peter -H bash -lc 'cargo --version && podman --version'
 **Container builds fail locally:**
 ```bash
 podman system prune -a
-podman build -f tests/integration/remi/containers/Containerfile.fedora43 tests/integration/remi/
+podman build -f apps/conary/tests/integration/remi/containers/Containerfile.fedora43 apps/conary/tests/integration/remi/
 ```

@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-03-28
-revision: 2
+last_updated: 2026-04-09
+revision: 3
 summary: Refresh sandbox defaults, enforcement paths, and current isolation behavior
 ---
 
@@ -32,7 +32,8 @@ Before execution, scripts are analyzed for dangerous patterns:
 | Medium | `chmod u+s`, `crontab`, `/etc/shadow`, `/etc/sudoers` | Privilege escalation |
 | Low | `nc`, `/dev/tcp/`, `base64 -d` | Network backdoors, obfuscation |
 
-Risk analysis is performed by `analyze_script()` in `conary-core/src/container/mod.rs`.
+Risk analysis is performed by `analyze_script()` in
+`crates/conary-core/src/container/mod.rs`.
 
 ### 2. Sandbox Modes
 
@@ -79,7 +80,7 @@ When sandboxing is enabled, scripts run in a lightweight Linux container with:
 | Memory (RLIMIT_AS) | 512 MB | Prevent memory exhaustion |
 | CPU time (RLIMIT_CPU) | 60 seconds | Prevent CPU exhaustion |
 | File size (RLIMIT_FSIZE) | 100 MB | Prevent disk filling |
-| Processes (RLIMIT_NPROC) | 64 | Prevent fork bombs |
+| Processes (RLIMIT_NPROC) | 1024 | Prevent fork bombs |
 
 #### Timeout Protection
 - Wall-clock timeout: 60 seconds (configurable)
@@ -113,14 +114,18 @@ Scripts cannot read from stdin, preventing interactive prompts that would hang t
 #### Environment Filtering
 Direct execution paths clear the inherited environment and repopulate only the minimal variables Conary needs (`PATH`, `HOME`, `LANG`, scriptlet context variables). This reduces ambient secret leakage and makes direct execution closer to the sandboxed environment.
 
-#### Non-Root Install Safety
+#### Target-Root Execution
 ```rust
-if self.root != Path::new("/") {
-    warn!("Skipping scriptlet: execution in non-root paths not supported");
-    return Ok(());
+if self.is_live_root() {
+    self.execute_sandbox_live(...)
+} else {
+    self.execute_in_target(...)
 }
 ```
-Scriptlets are skipped when installing to non-root destinations (e.g., `--root=/mnt/target`), as they would incorrectly affect the host system.
+Installing into an alternate root (for example `--root=/mnt/target`) uses the
+target-root execution path instead of mutating the host `/`. That path chroots
+into the target root and requires the privileges needed to enter that target
+environment safely.
 
 #### Interpreter Validation
 ```rust
@@ -164,8 +169,8 @@ Arch `.INSTALL` files define functions rather than executable scripts, so Conary
 Full namespace isolation requires root privileges. When running as non-root:
 
 1. Check for unprivileged user namespaces (`/proc/sys/kernel/unprivileged_userns_clone`)
-2. If unavailable, fall back to resource limits only (no namespace isolation)
-3. Warning is logged: "Namespace isolation requires root privileges, falling back to resource limits only"
+2. If namespace setup is unavailable, fall back to resource limits only
+3. Warning is logged: "Namespace isolation not available, falling back to resource limits only"
 
 ## Security Recommendations
 
@@ -177,7 +182,8 @@ Full namespace isolation requires root privileges. When running as non-root:
 
 ### For System Administrators
 1. Keep the default `--sandbox=always` for packages from untrusted sources
-2. Review scriptlets before installing unknown packages: `conary query --scripts <package>`
+2. Review scriptlets before installing unknown packages:
+   `conary query scripts ./package.rpm`
 3. Monitor `/var/log/conary.log` for scriptlet warnings
 4. Consider `--sandbox=always` for high-security environments
 
@@ -190,18 +196,18 @@ Full namespace isolation requires root privileges. When running as non-root:
 
 | File | Purpose |
 |------|---------|
-| `conary-core/src/scriptlet/mod.rs` | Scriptlet executor, cross-distro handling |
-| `conary-core/src/container/mod.rs` | Container isolation, risk analysis |
-| `conary-core/src/trigger/mod.rs` | Post-install triggers (preferred over scriptlets) |
-| `conary-core/src/db/models/scriptlet_entry.rs` | Scriptlet database storage |
+| `crates/conary-core/src/scriptlet/mod.rs` | Scriptlet executor, cross-distro handling |
+| `crates/conary-core/src/container/mod.rs` | Container isolation, risk analysis |
+| `crates/conary-core/src/trigger/mod.rs` | Post-install triggers (preferred over scriptlets) |
+| `crates/conary-core/src/db/models/scriptlet_entry.rs` | Scriptlet database storage |
 
 ## Implemented Since Initial Design
 
 The following features, originally planned as future enhancements, are now implemented:
 
-- **seccomp-BPF syscall filtering** -- See `conary-core/src/capability/enforcement/seccomp_enforce.rs`
+- **seccomp-BPF syscall filtering** -- See `crates/conary-core/src/capability/enforcement/seccomp_enforce.rs`
 - **Network namespace isolation** -- `CLONE_NEWNET` blocks all network access in hermetic builds
-- **Landlock filesystem enforcement** -- Kernel-enforced path restrictions via `conary-core/src/capability/enforcement/landlock_enforce.rs`
+- **Landlock filesystem enforcement** -- Kernel-enforced path restrictions via `crates/conary-core/src/capability/enforcement/landlock_enforce.rs`
 - **Capability declarations** -- Packages declare network, filesystem, and syscall requirements
 
 ## Future Enhancements

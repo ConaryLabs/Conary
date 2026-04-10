@@ -31,31 +31,32 @@ by CI pipelines and LLM agents.
 ## CLI Usage
 
 ```bash
-# Run Phase 1 tests on Fedora 43
-conary-test run --distro fedora43 --phase 1
+# Run Phase 1 tests on Fedora 43 from the repo root
+cargo run -p conary-test -- run --distro fedora43 --phase 1
 
 # Run a specific suite on all configured distros
-conary-test run --suite phase1-core.toml --all-distros
+cargo run -p conary-test -- run --suite phase1-core --all-distros --phase 1
 
 # Start the HTTP/MCP server
-conary-test serve --port 9090
+cargo run -p conary-test -- serve --port 9090
 
 # Run a managed Forge rollout from a trusted GitHub ref
-conary-test deploy rollout --group control_plane --ref main
+cargo run -p conary-test -- deploy rollout --group control_plane --ref main
 
 # Run the supported Forge control-plane smoke
 bash scripts/forge-smoke.sh
 
 # List available test suites
-conary-test list
+cargo run -p conary-test -- list
 
 # Build container images
-conary-test images build --distro fedora43
+cargo run -p conary-test -- images build --distro fedora43
 ```
 
 ## Test Manifest Format
 
-Tests are defined in TOML manifests under `tests/integration/remi/manifests/`.
+Tests are defined in TOML manifests under
+`apps/conary/tests/integration/remi/manifests/`.
 Each manifest declares a suite with metadata and a list of test steps:
 
 ```toml
@@ -75,7 +76,7 @@ timeout = 30
 ### Manifest Files
 
 ```
-tests/integration/remi/manifests/
+apps/conary/tests/integration/remi/manifests/
   phase1-core.toml          # T01-T10
   phase1-advanced.toml      # T11-T37
   phase2-group-a.toml       # T38-T50 (Deep install)
@@ -95,7 +96,7 @@ tests/integration/remi/manifests/
   phase3-group-n-qemu.toml       # QEMU boot tests
   phase4-group-a.toml       # T160-T176 (Config/Distro/Canonical/Groups/Registry)
   phase4-group-b.toml       # T177-T195 (Label/Model/Collection/Derive)
-  phase4-group-c.toml       # T196-T213 (CCS/Bootstrap/Cache/Automation)
+  phase4-group-c.toml       # T196-T220 (CCS ops / query / repo management)
   phase4-group-d.toml       # T221-T255 (Provenance/Capability/Trust/System/Federation/Automation)
   phase4-group-e.toml       # T230-T251 (Cross-distro compatibility overlay: distro policy/replatform/takeover)
 ```
@@ -161,7 +162,8 @@ health --json` always emits one normalized envelope with `mode`,
 
 ## Configuration
 
-Environment variables override values from `tests/integration/remi/config.toml`:
+Environment variables override values from
+`apps/conary/tests/integration/remi/config.toml`:
 
 | Variable | Purpose |
 |----------|---------|

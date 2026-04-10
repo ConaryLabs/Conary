@@ -10,8 +10,12 @@ Layout:
   `corrupted/native/output/`.
 - `malicious/`: fixtures for traversal, symlink, setuid, and hostile scriptlets
 - `deps/`: interdependent CCS packages for resolver edge cases
-- `large/`: generated stress fixtures that are too large to check in directly
+- `large/`: tracked large CCS stress fixtures plus the regeneration scripts used
+  to rebuild them
+- `build-boot-image.sh`: optional QEMU boot fixture builder used by the
+  adversarial boot-validation path
 
-Use `tests/fixtures/adversarial/build-all.sh` to build every fixture set, or run
-`tests/fixtures/adversarial/build-large.sh` directly to regenerate the large stress
-fixtures in `large/`.
+Use `apps/conary/tests/fixtures/adversarial/build-all.sh` to build every
+fixture set, or run
+`apps/conary/tests/fixtures/adversarial/build-large.sh` directly to regenerate
+the large stress fixtures in `large/`.
