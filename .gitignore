@@ -80,11 +80,9 @@ vendor/
 # Git worktrees
 .worktrees/
 
-# Completed plan/spec/review archives (active ones stay tracked)
+# Local-only plan/spec/review archives
 docs/plans/archive/
 docs/superpowers/plans/archive/*
-!docs/superpowers/plans/archive/*.md
 docs/superpowers/specs/archive/*
-!docs/superpowers/specs/archive/*.md
 docs/superpowers/reviews/
 tests/integration/remi/runner/__pycache__/
