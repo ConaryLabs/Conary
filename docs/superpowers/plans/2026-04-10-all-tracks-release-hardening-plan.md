@@ -347,7 +347,8 @@ If any release-facing file changed:
 
 ```bash
 git add docs/superpowers/release-hardening-checklist-2026-04-10.md
-git add -- README.md site web apps/conary/man
+git add -u -- README.md site web apps/conary/man
+git diff --cached --name-only
 git commit -m "docs: refresh release-facing copy for release hardening" -m "Refs docs/superpowers/plans/2026-04-10-all-tracks-release-hardening-plan.md"
 ```
 
