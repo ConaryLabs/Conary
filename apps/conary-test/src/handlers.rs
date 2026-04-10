@@ -8,7 +8,10 @@ use async_trait::async_trait;
 use conary_test::deploy::manifest::load_rollout_manifest_from_file;
 use conary_test::deploy::orchestrator::{RolloutExecutor, execute_rollout};
 use conary_test::deploy::plan::{RolloutPlan, RolloutPlanRequest, build_rollout_plan};
-use conary_test::deploy::status::{RolloutProvenance, write_rollout_provenance};
+use conary_test::deploy::status::{
+    RolloutProvenance, RolloutStatus, evaluate_rollout_status, load_rollout_provenance,
+    write_rollout_provenance,
+};
 use conary_test::paths;
 use conary_test::server::service::DeploymentStatus;
 use chrono::Utc;
@@ -29,6 +32,7 @@ struct DeployStatusOutput {
     binary: Option<conary_test::server::service::BinaryStatus>,
     runtime: Option<conary_test::server::service::RuntimeStatus>,
     service: Option<conary_test::server::service::ServiceStatus>,
+    rollout: Option<RolloutStatus>,
     checkout: CheckoutStatus,
     checkout_matches_binary: Option<bool>,
     degraded: bool,
@@ -176,6 +180,7 @@ fn combine_deploy_status(
         binary: deploy_status.as_ref().map(|status| status.binary.clone()),
         runtime: deploy_status.as_ref().map(|status| status.runtime.clone()),
         service: deploy_status.as_ref().map(|status| status.service.clone()),
+        rollout: None,
         checkout,
         checkout_matches_binary,
         degraded: deploy_status.is_none(),
@@ -217,7 +222,7 @@ async fn current_checkout_status() -> CheckoutStatus {
     let (_, git_branch, _) = run_command("git", &["rev-parse", "--abbrev-ref", "HEAD"], Some(&dir))
         .await
         .unwrap_or((1, "unknown".to_string(), String::new()));
-    let (_, git_commit, _) = run_command("git", &["rev-parse", "--short", "HEAD"], Some(&dir))
+    let (_, git_commit, _) = run_command("git", &["rev-parse", "HEAD"], Some(&dir))
         .await
         .unwrap_or((1, "unknown".to_string(), String::new()));
 
@@ -258,6 +263,26 @@ pub(super) async fn cmd_deploy_source(git_ref: Option<&str>, json: bool) -> Resu
     print_step("cargo build conary", code, &stdout, &stderr, json);
 
     Ok(())
+}
+
+fn append_reason(reason: Option<String>, extra: impl Into<String>) -> Option<String> {
+    let extra = extra.into();
+    match reason {
+        Some(existing) => Some(format!("{existing}; {extra}")),
+        None => Some(extra),
+    }
+}
+
+fn attach_rollout_status(
+    mut output: DeployStatusOutput,
+    rollout: Option<RolloutStatus>,
+    rollout_error: Option<String>,
+) -> DeployStatusOutput {
+    output.rollout = rollout;
+    if let Some(error) = rollout_error {
+        output.reason = append_reason(output.reason, error);
+    }
+    output
 }
 
 pub(super) async fn cmd_deploy_rebuild(crate_name: Option<&str>, json: bool) -> Result<()> {
@@ -368,6 +393,28 @@ pub(super) async fn cmd_deploy_status(json: bool, port: u16) -> Result<()> {
             Some(format!("local deployment status unavailable: {error}")),
         ),
     };
+    let rollout_path = paths::rollout_provenance_path();
+    let output = match rollout_path {
+        Ok(path) => match load_rollout_provenance(&path) {
+            Ok(Some(rollout)) => {
+                let binary_commit = output.binary.as_ref().map(|binary| binary.git_commit.as_str());
+                let checkout_commit = Some(output.checkout.git_commit.as_str());
+                let rollout = evaluate_rollout_status(&rollout, binary_commit, checkout_commit);
+                attach_rollout_status(output, Some(rollout), None)
+            }
+            Ok(None) => output,
+            Err(error) => attach_rollout_status(
+                output,
+                None,
+                Some(format!("rollout provenance unavailable: {error}")),
+            ),
+        },
+        Err(error) => attach_rollout_status(
+            output,
+            None,
+            Some(format!("rollout provenance path unavailable: {error}")),
+        ),
+    };
 
     if json {
         println!("{}", serde_json::to_string_pretty(&output)?);
@@ -395,6 +442,17 @@ pub(super) async fn cmd_deploy_status(json: bool, port: u16) -> Result<()> {
     }
     println!("  Checkout branch: {}", output.checkout.git_branch);
     println!("  Checkout commit: {}", output.checkout.git_commit);
+    if let Some(rollout) = &output.rollout {
+        println!("  Rollout target:  {}", rollout.rollout_name);
+        println!("  Rollout source:  {:?}", rollout.source_kind);
+        println!("  Rollout commit:  {}", rollout.resolved_commit);
+        let rollout_drift = if rollout.drifted {
+            color("drifted", YELLOW)
+        } else {
+            color("matched", GREEN)
+        };
+        println!("  Rollout drift:   {rollout_drift}");
+    }
     match output.checkout_matches_binary {
         Some(true) => println!(
             "  Drift:          {}",
@@ -683,7 +741,11 @@ pub(super) async fn cmd_images_prune(keep: usize, json: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conary_test::deploy::manifest::load_rollout_manifest_from_str;
+    use conary_test::deploy::plan::{RolloutPlanRequest, build_rollout_plan};
+    use conary_test::deploy::status::RolloutProvenance;
     use conary_test::server::service::{BinaryStatus, RuntimeStatus, ServiceStatus};
+    use chrono::{DateTime, Utc};
     use serde_json::json;
 
     fn sample_deploy_status(git_commit: &str) -> DeploymentStatus {
@@ -705,6 +767,40 @@ mod tests {
                 status: "running".to_string(),
             },
         }
+    }
+
+    fn sample_rollout() -> RolloutStatus {
+        let manifest = load_rollout_manifest_from_str(
+            r#"
+[units.conary_test]
+build = { cargo_package = "conary-test" }
+restart = { systemd_user_unit = "conary-test.service" }
+verify = "forge_smoke"
+
+[groups.control_plane]
+units = ["conary_test"]
+"#,
+        )
+        .expect("manifest parses");
+        let plan = build_rollout_plan(
+            &manifest,
+            RolloutPlanRequest {
+                unit: None,
+                group: Some("control_plane".to_string()),
+                git_ref: Some("main".to_string()),
+                path: None,
+            },
+        )
+        .expect("plan builds");
+        let provenance = RolloutProvenance::from_plan(
+            &plan,
+            "abc123".to_string(),
+            DateTime::parse_from_rfc3339("2026-04-09T00:00:00Z")
+                .expect("timestamp parses")
+                .with_timezone(&Utc),
+        );
+
+        evaluate_rollout_status(&provenance, Some("abc123"), Some("abc123"))
     }
 
     #[test]
@@ -738,6 +834,24 @@ mod tests {
         assert_eq!(json["degraded"], true);
         assert_eq!(json["reason"], "local deployment status unavailable");
         assert!(json["binary"].is_null());
+    }
+
+    #[test]
+    fn attach_rollout_status_includes_rollout_section_in_json_output() {
+        let output = combine_deploy_status(
+            Some(sample_deploy_status("abc123")),
+            CheckoutStatus {
+                git_branch: "main".to_string(),
+                git_commit: "abc123".to_string(),
+            },
+            None,
+        );
+
+        let value = serde_json::to_value(attach_rollout_status(output, Some(sample_rollout()), None))
+            .expect("json serializes");
+
+        assert_eq!(value["rollout"]["rollout_name"], "control_plane");
+        assert_eq!(value["rollout"]["drifted"], false);
     }
 
     #[test]
