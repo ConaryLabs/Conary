@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+Historical Remi and `conary-test` entries before the release-matrix
+realignment may use legacy `server-v*` and `test-v*` headings. Current
+canonical release tags are `remi-v*`, `conaryd-v*`, and `conary-test-v*`.
+Older entries also preserve historical service names such as `Forgejo` where
+that was the name in use at the time.
+
 ## [v0.7.0] - 2026-03-22
 
 ### Added

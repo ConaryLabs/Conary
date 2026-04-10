@@ -6,14 +6,19 @@ Brief description of what this PR does.
 
 -
 
-## Test Plan
+## Verification
 
-- [ ] `cargo test` passes
-- [ ] `cargo clippy -- -D warnings` clean
-- [ ] `cargo fmt -- --check` clean
-- [ ] New tests added for new functionality
-- [ ] Tested affected packages directly (for example `cargo build -p remi` and `cargo build -p conaryd`)
+- [ ] Listed the exact verification commands run below
+- [ ] Added or updated tests when behavior changed
+- [ ] Ran affected-package verification directly when touching service or daemon code
 
-## Related Issues
+```text
+- cargo fmt --check
+- cargo clippy --workspace --all-targets -- -D warnings
+- cargo test -p conary
+```
+
+## Related Issues / Plans
 
 Closes #
+Plan:

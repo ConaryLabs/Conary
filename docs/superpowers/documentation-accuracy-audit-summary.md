@@ -10,7 +10,19 @@ Pending.
 
 ## Major Corrections
 
-Pending.
+- Root README badge now points at the real `pr-gate` workflow instead of a
+  removed `ci.yml` workflow.
+- Root source-build quick start now uses `./target/debug/conary` instead of
+  assuming the freshly built CLI is already on `PATH`.
+- README and CONTRIBUTING now describe the workspace correctly as seven members,
+  including `crates/conary-bootstrap`.
+- CONTRIBUTING and the PR template now use current verification commands and PR
+  expectations instead of stale `cargo clippy -- -D warnings` /
+  `cargo fmt -- --check` guidance.
+- CHANGELOG now explains that legacy `server-v*` and `test-v*` headings are
+  historical continuity markers, not current canonical release tags.
+- SECURITY now describes the disclosure/triage process without unverifiable SLA
+  promises.
 
 ## WIP Clarifications
 

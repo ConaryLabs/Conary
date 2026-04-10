@@ -1,6 +1,6 @@
 # Conary
 
-[![CI](https://github.com/ConaryLabs/Conary/actions/workflows/ci.yml/badge.svg)](https://github.com/ConaryLabs/Conary/actions/workflows/ci.yml)
+[![PR Gate](https://github.com/ConaryLabs/Conary/actions/workflows/pr-gate.yml/badge.svg)](https://github.com/ConaryLabs/Conary/actions/workflows/pr-gate.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![v0.7.0](https://img.shields.io/badge/version-0.7.0-orange.svg)](CHANGELOG.md)
 
@@ -94,31 +94,31 @@ The honest gap: ecosystem maturity. apt and dnf have decades of packages and int
 # Build from source (requires Rust 1.94+, Linux only)
 git clone https://github.com/ConaryLabs/Conary.git
 cd Conary
-cargo build
+cargo build -p conary
 
-# Initialize the database
-conary system init
+# Use the freshly built CLI directly from target/
+./target/debug/conary system init
 
 # Add the Remi package server (Fedora, Arch, Ubuntu, Debian)
-conary repo add remi https://remi.conary.io
-conary repo sync
+./target/debug/conary repo add remi https://remi.conary.io
+./target/debug/conary repo sync
 
 # Install a package
-conary install nginx --dry-run   # Preview changes
-conary install nginx             # Apply atomically
+./target/debug/conary install nginx --dry-run   # Preview changes
+./target/debug/conary install nginx             # Apply atomically
 
 # Query your system
-conary list                      # All installed packages
-conary query depends nginx       # Show dependencies
-conary query whatprovides libc.so.6
+./target/debug/conary list                      # All installed packages
+./target/debug/conary query depends nginx       # Show dependencies
+./target/debug/conary query whatprovides libc.so.6
 
 # Adopt packages already on the system
-conary system adopt --system     # Track everything installed by the native package manager
+./target/debug/conary system adopt --system     # Track everything installed by the native package manager
 
 # Build a generation from current system state
-conary system generation build --summary "Initial setup"
-conary system generation list
-conary system generation switch 1
+./target/debug/conary system generation build --summary "Initial setup"
+./target/debug/conary system generation list
+./target/debug/conary system generation switch 1
 ```
 
 ---
@@ -521,8 +521,9 @@ cargo run -p conary-test -- logs T42  # Retrieve test logs
 ## Building
 
 Requires Rust 1.94+ (edition 2024). The project root is a virtual Cargo
-workspace with six members: `apps/conary` (CLI), `apps/remi` (Remi),
+workspace with seven members: `apps/conary` (CLI), `apps/remi` (Remi),
 `apps/conaryd` (daemon), `apps/conary-test` (test infrastructure),
+`crates/conary-bootstrap` (shared binary bootstrap helpers),
 `crates/conary-core` (shared library), and `crates/conary-mcp` (shared MCP
 helpers).
 

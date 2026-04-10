@@ -68,10 +68,10 @@ cargo build -p conaryd
 cargo build -p conary --release
 ```
 
-The project root is a virtual Cargo workspace with six members:
+The project root is a virtual Cargo workspace with seven members:
 `apps/conary`, `apps/remi`, `apps/conaryd`, `apps/conary-test`,
-`crates/conary-core`, and `crates/conary-mcp`. EROFS support uses
-`composefs-rs` directly in `crates/conary-core`.
+`crates/conary-bootstrap`, `crates/conary-core`, and `crates/conary-mcp`.
+EROFS support uses `composefs-rs` directly in `crates/conary-core`.
 
 ## Running Tests
 
@@ -87,14 +87,14 @@ cargo test -p conaryd
 # Test harness
 cargo test -p conary-test
 
-# Run a specific test module
-cargo test --test database
+# Run a specific integration-test target owned by a package
+cargo test -p conary --test database
 
 # Library tests only
 cargo test --lib
 
-# Integration tests only
-cargo test --test '*'
+# Workspace doctests
+cargo test --doc --workspace
 ```
 
 All tests must pass before submitting a PR. At minimum, run the verification path that matches the code you touched:
@@ -130,7 +130,7 @@ cargo test -p conaryd
   ```
 - **Database-first**: All runtime state lives in SQLite. No config files (INI, TOML, YAML, JSON) for runtime state.
 - **No emojis**: Use text markers like `[COMPLETE]`, `[IN PROGRESS]`, `[FAILED]` in output and documentation.
-- **Clippy-clean**: All code must pass `cargo clippy -- -D warnings`. Pedantic lints are encouraged.
+- **Clippy-clean**: All code must pass `cargo clippy --workspace --all-targets -- -D warnings`. Pedantic lints are encouraged.
 - **Tests in same file**: Unit tests go in a `#[cfg(test)] mod tests` block at the bottom of each source file, not in separate test files.
 
 ### Rust Specifics
@@ -160,12 +160,12 @@ Add `!` after the type for breaking changes: `feat!: remove legacy API`.
 
 Scopes are optional but encouraged: `feat(resolver): add SAT backtracking`.
 
-Use the imperative mood in the subject line (e.g., "add sparse index support" not "added sparse index support"). Keep the subject under 72 characters. The release pipeline (`scripts/release.sh`) uses these prefixes to determine version bumps and generate changelogs.
+Use the imperative mood in the subject line (e.g., "add sparse index support" not "added sparse index support"). Keep the subject under 72 characters. The release pipeline (`scripts/release.sh`, backed by `scripts/release-matrix.sh`) uses these prefixes to determine version bumps and generate changelogs.
 
 ## Module Overview
 
-The project is a virtual Cargo workspace with six members: four app crates and
-two shared crates.
+The project is a virtual Cargo workspace with seven members: four app crates
+and three shared crates.
 
 **`apps/conary`** -- CLI binary
 
@@ -209,6 +209,12 @@ two shared crates.
 | `crates/conary-core/src/self_update.rs` | Self-update version checking, download, atomic replacement |
 | `crates/conary-core/src/hash.rs` | Multi-algorithm hashing (SHA-256, XXH128) |
 
+**`crates/conary-bootstrap`** -- Shared binary bootstrap helpers
+
+| Module | Purpose |
+|--------|---------|
+| `crates/conary-bootstrap/src/lib.rs` | Shared tracing, runtime, and exit-code helpers for workspace binaries |
+
 **`crates/conary-mcp`** -- Shared transport-agnostic MCP helpers
 
 | Module | Purpose |
@@ -251,12 +257,14 @@ two shared crates.
 
 4. **Run CI checks locally** before pushing:
    ```bash
-   cargo fmt --check
-   cargo clippy -- -D warnings
-   cargo test
+   cargo fmt --all -- --check
+   cargo clippy --workspace --all-targets -- -D warnings
+   cargo test --workspace --exclude conary-test --verbose
+   cargo test -p conary-test --verbose
    ```
 
-   Add the `cargo test -p remi` and `cargo test -p conaryd` pair when your change touches service-owned code.
+   Add the `cargo test -p remi` and `cargo test -p conaryd` pair when your
+   change touches service-owned code.
 
 5. **Write a clear PR description** explaining what changed and why. If it addresses an issue, reference it (e.g., "Fixes #42").
 
