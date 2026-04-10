@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-04-05
-revision: 2
+last_updated: 2026-04-09
+revision: 3
 summary: Roadmap for deferred post-simplification refactors tracked in issues #30 through #34
 ---
 
@@ -184,6 +184,7 @@ The first implementation spec should target Track 1 for `remi` only:
   enablement, prewarm settings, canonical fetch settings, and environment-based
   bootstrap paths
 
-That slice is documented separately in:
-
-- `docs/superpowers/specs/archive/2026-04-04-remi-config-ownership-design.md`
+That slice remains tracked here, alongside Issue `#31` and the server-config
+ownership notes in
+`docs/superpowers/specs/cross-crate-duplication-findings.md`. No separate
+retained archived design doc currently exists for it.
