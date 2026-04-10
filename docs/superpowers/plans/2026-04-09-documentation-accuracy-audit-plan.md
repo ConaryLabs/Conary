@@ -162,6 +162,12 @@ Create `docs/superpowers/documentation-accuracy-audit-summary.md` with these sec
 
 Keep claims narrow at this stage. This file will be filled in as the audit progresses and must itself be included in the ledger once it exists.
 
+Immediately stage it so the current tracked-doc inventory can see it:
+
+```bash
+git add docs/superpowers/documentation-accuracy-audit-summary.md
+```
+
 - [ ] **Step 2: Freeze the baseline inventory snapshot after the summary file exists**
 
 Create:
@@ -628,6 +634,7 @@ Expected:
 - [ ] **Step 4: Update dispositions and summary**
 
 For each file:
+- update frontmatter where present
 - use `retained-historical` if no changes were required beyond verification
 - use `reframed-as-historical` if wording or framing changed
 - document major historical clarifications in the summary
@@ -662,6 +669,7 @@ Expected:
 - preview/WIP wording only appears where intended
 
 If Step 1 changes a file during normalization:
+- update frontmatter where present
 - update that file's ledger row disposition
 - confirm the relevant `claim_clusters` still match the file
 - confirm `evidence_sources` still support the normalized wording
@@ -703,7 +711,7 @@ Expected:
 - [ ] **Step 5: Commit**
 
 ```bash
-bash scripts/docs-audit-inventory.sh | tail -n +2 | cut -f1 | xargs git add --
+bash scripts/docs-audit-inventory.sh | tail -n +2 | cut -f1 | tr '\n' '\0' | xargs -0r git add --
 git add docs/superpowers/documentation-accuracy-audit-inventory.tsv docs/superpowers/documentation-accuracy-audit-ledger.tsv docs/superpowers/documentation-accuracy-audit-summary.md scripts/docs-audit-inventory.sh scripts/check-doc-audit-ledger.sh .gitignore
 git commit -m "docs: complete documentation accuracy audit" -m "Part of docs/superpowers/plans/2026-04-09-documentation-accuracy-audit-plan.md"
 ```
