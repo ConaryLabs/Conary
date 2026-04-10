@@ -13,7 +13,7 @@ pub trait RolloutExecutor {
     async fn cargo_build_package(&mut self, repo_dir: &Path, package: &str) -> Result<()>;
     async fn restart_systemd_user_unit(&mut self, unit: &str) -> Result<()>;
     async fn verify(&mut self, verify_mode: &str, repo_dir: &Path) -> Result<()>;
-    async fn record_success(&mut self, plan: &RolloutPlan) -> Result<()>;
+    async fn record_success(&mut self, plan: &RolloutPlan, work_tree: &Path) -> Result<()>;
 }
 
 pub async fn execute_rollout<E: RolloutExecutor + Send>(
@@ -76,7 +76,7 @@ pub async fn execute_rollout<E: RolloutExecutor + Send>(
     }
 
     executor
-        .record_success(plan)
+        .record_success(plan, work_tree)
         .await
         .context("failed to record successful rollout")?;
 
@@ -164,7 +164,7 @@ units = ["conary_test", "conary"]
             self.maybe_fail(&stage)
         }
 
-        async fn record_success(&mut self, _plan: &RolloutPlan) -> Result<()> {
+        async fn record_success(&mut self, _plan: &RolloutPlan, _work_tree: &Path) -> Result<()> {
             let stage = "record_success".to_string();
             self.actions.push(stage.clone());
             self.recorded_success = true;
