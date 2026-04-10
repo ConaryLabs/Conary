@@ -4,11 +4,16 @@ use super::{
     BOLD, GREEN, RED, RESET, YELLOW, color, manifest_dir, print_step, project_dir, run_command,
 };
 use anyhow::{Context, Result, bail};
+use async_trait::async_trait;
+use conary_test::deploy::manifest::load_rollout_manifest_from_file;
+use conary_test::deploy::orchestrator::{RolloutExecutor, execute_rollout};
+use conary_test::deploy::plan::{RolloutPlan, RolloutPlanRequest, build_rollout_plan};
 use conary_test::paths;
 use conary_test::server::service::DeploymentStatus;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -34,6 +39,107 @@ struct HealthEnvelope {
     deploy_status: Option<DeploymentStatus>,
     remi: Option<Value>,
     reason: Option<String>,
+}
+
+struct HandlerRolloutExecutor {
+    json: bool,
+}
+
+impl HandlerRolloutExecutor {
+    async fn run_checked(
+        &self,
+        label: &str,
+        cmd: &str,
+        args: &[&str],
+        cwd: Option<&Path>,
+    ) -> Result<()> {
+        let cwd_string = cwd
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let cwd_ref = if cwd.is_some() {
+            Some(cwd_string.as_str())
+        } else {
+            None
+        };
+
+        let (code, stdout, stderr) = run_command(cmd, args, cwd_ref).await?;
+        print_step(label, code, &stdout, &stderr, self.json);
+        if code != 0 {
+            bail!("{label} failed (exit {code})");
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl RolloutExecutor for HandlerRolloutExecutor {
+    async fn git_fetch(&mut self, repo_dir: &Path, git_ref: &str) -> Result<()> {
+        self.run_checked(
+            &format!("git fetch {git_ref}"),
+            "git",
+            &["fetch", "origin", git_ref],
+            Some(repo_dir),
+        )
+        .await
+    }
+
+    async fn git_checkout(&mut self, repo_dir: &Path, git_ref: &str) -> Result<()> {
+        let _ = git_ref;
+        self.run_checked(
+            "git checkout FETCH_HEAD",
+            "git",
+            &["checkout", "--detach", "FETCH_HEAD"],
+            Some(repo_dir),
+        )
+        .await
+    }
+
+    async fn cargo_build_package(&mut self, repo_dir: &Path, package: &str) -> Result<()> {
+        self.run_checked(
+            &format!("cargo build {package}"),
+            "cargo",
+            &["build", "-p", package],
+            Some(repo_dir),
+        )
+        .await
+    }
+
+    async fn restart_systemd_user_unit(&mut self, unit: &str) -> Result<()> {
+        self.run_checked(
+            &format!("systemctl --user restart {unit}"),
+            "systemctl",
+            &["--user", "restart", unit],
+            None,
+        )
+        .await?;
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        self.run_checked(
+            &format!("systemctl --user is-active {unit}"),
+            "systemctl",
+            &["--user", "is-active", unit],
+            None,
+        )
+        .await
+    }
+
+    async fn verify(&mut self, verify_mode: &str, repo_dir: &Path) -> Result<()> {
+        match verify_mode {
+            "forge_smoke" => self
+                .run_checked(
+                    "forge smoke",
+                    "bash",
+                    &["scripts/forge-smoke.sh"],
+                    Some(repo_dir),
+                )
+                .await,
+            other => bail!("unsupported verify mode `{other}`"),
+        }
+    }
+
+    async fn record_success(&mut self, _plan: &RolloutPlan) -> Result<()> {
+        Ok(())
+    }
 }
 
 fn local_service_url(port: u16) -> String {
@@ -190,6 +296,45 @@ pub(super) async fn cmd_deploy_restart(json: bool) -> Result<()> {
         println!("Service status: {}", color(status, GREEN));
     } else {
         println!("Service status: {}", color(status, RED));
+    }
+
+    Ok(())
+}
+
+pub(super) async fn cmd_deploy_rollout(
+    unit: Option<String>,
+    group: Option<String>,
+    git_ref: Option<String>,
+    path: Option<PathBuf>,
+    json: bool,
+) -> Result<()> {
+    let project_root = PathBuf::from(project_dir()?);
+    let manifest_path = project_root.join("deploy/forge-rollouts.toml");
+    let manifest = load_rollout_manifest_from_file(&manifest_path)?;
+    let plan = build_rollout_plan(
+        &manifest,
+        RolloutPlanRequest {
+            unit,
+            group,
+            git_ref,
+            path,
+        },
+    )?;
+
+    let mut executor = HandlerRolloutExecutor { json };
+    execute_rollout(&mut executor, &plan, &project_root).await?;
+
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "status": "ok",
+                "target": format!("{:?}", plan.target),
+                "source": format!("{:?}", plan.source),
+            })
+        );
+    } else {
+        println!("Managed rollout completed successfully.");
     }
 
     Ok(())
