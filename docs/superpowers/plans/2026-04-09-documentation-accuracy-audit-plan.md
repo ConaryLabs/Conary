@@ -58,9 +58,9 @@ Requirements:
   - `SECURITY.md`
   - `CLAUDE.md`
   - `*.md`
-  - `*.mdx`
-  - `*.rst`
-  - `*.adoc`
+- `*.mdx`
+- `*.rst`
+- `*.adoc`
 - classify each row into one of:
   - `root`
   - `template`
@@ -70,7 +70,7 @@ Requirements:
   - `planning`
   - `historical`
   - `frontend`
-- output tab-separated rows in stable sorted order:
+- output one header row plus tab-separated data rows in stable sorted order:
 
 ```text
 path	family	audience
@@ -183,7 +183,7 @@ Create `docs/superpowers/documentation-accuracy-audit-ledger.tsv` with this head
 origin_path	path	family	audience	claim_clusters	evidence_sources	status	disposition	notes
 ```
 
-Populate one row per tracked doc from `docs/superpowers/documentation-accuracy-audit-inventory.tsv`, including:
+Populate one row per tracked doc from `docs/superpowers/documentation-accuracy-audit-inventory.tsv`, skipping the header row, including:
 - the new summary file
 - the current audit design spec
 - this implementation plan
@@ -329,6 +329,10 @@ git commit -m "docs(audit): triage tracked planning material" -m "Part of docs/s
 
 ## Chunk 2: Active Release-Facing Documentation
 
+Retained active planning/design docs are verified during Chunk 1 Task 3. This
+chunk covers the remaining active release-facing docs outside the planning/spec
+triage set, plus the audit artifacts revisited in the final gate.
+
 ### Task 4: Audit root docs and tracked templates
 
 **Files:**
@@ -344,7 +348,6 @@ git commit -m "docs(audit): triage tracked planning material" -m "Part of docs/s
 - Modify: `CLAUDE.md`
 - Modify: `docs/superpowers/documentation-accuracy-audit-ledger.tsv`
 - Modify: `docs/superpowers/documentation-accuracy-audit-summary.md`
-- Modify: `docs/superpowers/documentation-accuracy-audit-inventory.tsv`
 
 - [ ] **Step 1: Fill in claim clusters and evidence sources for the root/template family**
 
@@ -383,6 +386,7 @@ Expected:
 - [ ] **Step 3: Correct the files and update ledger dispositions**
 
 For each modified file:
+- update frontmatter where present
 - make claims narrow and provable
 - mark visible-but-incomplete behavior honestly
 - preserve short map-like guidance in `AGENTS.md`
@@ -527,7 +531,7 @@ Run:
 
 ```bash
 cargo run -p conary-test -- list >/tmp/conary-test-list.txt
-rg -n 'phase 1|phase 2|phase 3|phase 4|qemu_boot|fixtures|deploy rollout|deploy status|forge-smoke|selection-mode|replatform' docs/INTEGRATION-TESTING.md apps/conary-test/README.md apps/conary/tests/integration/remi/manifests apps/conary-test/src scripts/forge-smoke.sh scripts/deploy-forge.sh
+rg -n 'phase 1|phase 2|phase 3|phase 4|qemu_boot|fixtures|deploy rollout|deploy status|forge-smoke|selection-mode|replatform' docs/INTEGRATION-TESTING.md apps/conary-test/README.md apps/conary/tests/integration/remi/manifests apps/conary-test/src scripts/forge-smoke.sh scripts/deploy-forge.sh /tmp/conary-test-list.txt
 ```
 
 Expected:
@@ -549,6 +553,7 @@ Expected:
 - [ ] **Step 4: Correct the docs and update dispositions**
 
 Required outcomes:
+- update frontmatter where present
 - handbook examples reflect current behavior or explicit WIP status
 - testing/deploy docs describe only supported flows as supported
 - frontend/app README ownership statements match the current repo
@@ -614,7 +619,7 @@ Expected:
 Run:
 
 ```bash
-rg -n 'claude-era-notes|recipes/archive|docs/superpowers/archive|docs/superpowers/plans/archive|docs/superpowers/specs/archive' README.md ROADMAP.md CONTRIBUTING.md AGENTS.md CLAUDE.md docs/ARCHITECTURE.md docs/INTEGRATION-TESTING.md docs/SCRIPTLET_SECURITY.md docs/conaryopedia-v2.md docs/llms/README.md docs/llms/subsystem-map.md docs/modules docs/operations docs/specs/ccs-format-v1.md deploy apps/conary-test/README.md apps/conary/tests/scriptlet_harness/README.md apps/conary/tests/fixtures/adversarial/README.md bootstrap/stage0/README.md .github site/README.md web/README.md
+rg -n 'claude-era-notes|recipes/archive|docs/superpowers/archive|docs/superpowers/plans/archive|docs/superpowers/specs/archive' README.md ROADMAP.md CONTRIBUTING.md AGENTS.md CLAUDE.md docs/ARCHITECTURE.md docs/INTEGRATION-TESTING.md docs/SCRIPTLET_SECURITY.md docs/conaryopedia-v2.md docs/llms/README.md docs/llms/subsystem-map.md docs/modules docs/operations docs/specs/ccs-format-v1.md docs/superpowers/plans docs/superpowers/specs deploy apps/conary-test/README.md apps/conary/tests/scriptlet_harness/README.md apps/conary/tests/fixtures/adversarial/README.md bootstrap/stage0/README.md .github site/README.md web/README.md
 ```
 
 Expected:
@@ -630,7 +635,8 @@ For each file:
 - [ ] **Step 5: Commit**
 
 ```bash
-git add docs/llms/archive/claude-era-notes.md docs/superpowers/archive/2026-04-04-codebase-simplification-retrospective.md recipes/archive/core/README.md recipes/archive/core/archive/README.md recipes/archive/core/base/README.md recipes/archive/core/boot/README.md recipes/archive/core/dev/README.md recipes/archive/core/editors/README.md recipes/archive/core/libs/README.md recipes/archive/core/net/README.md recipes/archive/core/stage1/README.md recipes/archive/core/sys/README.md recipes/archive/core/text/README.md recipes/archive/core/vcs/README.md docs/superpowers/plans/archive docs/superpowers/specs/archive docs/superpowers/documentation-accuracy-audit-ledger.tsv docs/superpowers/documentation-accuracy-audit-summary.md
+git add docs/llms/archive/claude-era-notes.md docs/superpowers/archive/2026-04-04-codebase-simplification-retrospective.md recipes/archive/core/README.md recipes/archive/core/archive/README.md recipes/archive/core/base/README.md recipes/archive/core/boot/README.md recipes/archive/core/dev/README.md recipes/archive/core/editors/README.md recipes/archive/core/libs/README.md recipes/archive/core/net/README.md recipes/archive/core/stage1/README.md recipes/archive/core/sys/README.md recipes/archive/core/text/README.md recipes/archive/core/vcs/README.md docs/superpowers/documentation-accuracy-audit-ledger.tsv docs/superpowers/documentation-accuracy-audit-summary.md
+find docs/superpowers/plans/archive docs/superpowers/specs/archive -maxdepth 1 -name '*.md' -print0 2>/dev/null | xargs -0r git add --
 git commit -m "docs(audit): reframe retained historical docs" -m "Part of docs/superpowers/plans/2026-04-09-documentation-accuracy-audit-plan.md"
 ```
 
@@ -646,13 +652,19 @@ git commit -m "docs(audit): reframe retained historical docs" -m "Part of docs/s
 Run:
 
 ```bash
-rg -n 'Forgejo|server-v|test-v|conary test|not yet supported|preview|WIP|GitHub Actions|docs/plans/archive|docs/superpowers/reviews' README.md ROADMAP.md CONTRIBUTING.md SECURITY.md CHANGELOG.md AGENTS.md CLAUDE.md docs/ARCHITECTURE.md docs/INTEGRATION-TESTING.md docs/SCRIPTLET_SECURITY.md docs/conaryopedia-v2.md docs/llms/README.md docs/llms/subsystem-map.md docs/modules docs/operations docs/specs/ccs-format-v1.md deploy apps/conary-test/README.md apps/conary/tests/scriptlet_harness/README.md apps/conary/tests/fixtures/adversarial/README.md bootstrap/stage0/README.md .github site/README.md web/README.md
+rg -n 'Forgejo|server-v|test-v|conary test|not yet supported|preview|WIP|GitHub Actions|docs/plans/archive|docs/superpowers/reviews' README.md ROADMAP.md CONTRIBUTING.md SECURITY.md CHANGELOG.md AGENTS.md CLAUDE.md docs/ARCHITECTURE.md docs/INTEGRATION-TESTING.md docs/SCRIPTLET_SECURITY.md docs/conaryopedia-v2.md docs/llms/README.md docs/llms/subsystem-map.md docs/modules docs/operations docs/specs/ccs-format-v1.md docs/superpowers/plans docs/superpowers/specs deploy apps/conary-test/README.md apps/conary/tests/scriptlet_harness/README.md apps/conary/tests/fixtures/adversarial/README.md bootstrap/stage0/README.md .github site/README.md web/README.md
 ```
 
 Expected:
 - stale or misleading terms are gone
 - any retained legacy names are explicitly historical/continuity notes
+- `GitHub Actions`, `preview`, and `WIP` are retained where truthful and intended; this search is for normalization and context review, not blind deletion
 - preview/WIP wording only appears where intended
+
+If Step 1 changes a file during normalization:
+- update that file's ledger row disposition
+- confirm the relevant `claim_clusters` still match the file
+- confirm `evidence_sources` still support the normalized wording
 
 - [ ] **Step 2: Re-audit the current audit artifacts themselves**
 
@@ -691,7 +703,8 @@ Expected:
 - [ ] **Step 5: Commit**
 
 ```bash
-git add docs/superpowers/documentation-accuracy-audit-ledger.tsv docs/superpowers/documentation-accuracy-audit-summary.md scripts/docs-audit-inventory.sh scripts/check-doc-audit-ledger.sh .gitignore README.md ROADMAP.md CONTRIBUTING.md SECURITY.md CHANGELOG.md AGENTS.md CLAUDE.md .github/ISSUE_TEMPLATE/bug_report.md .github/ISSUE_TEMPLATE/feature_request.md .github/PULL_REQUEST_TEMPLATE.md docs deploy apps bootstrap site web recipes/archive docs/superpowers/plans docs/superpowers/specs
+bash scripts/docs-audit-inventory.sh | tail -n +2 | cut -f1 | xargs git add --
+git add docs/superpowers/documentation-accuracy-audit-inventory.tsv docs/superpowers/documentation-accuracy-audit-ledger.tsv docs/superpowers/documentation-accuracy-audit-summary.md scripts/docs-audit-inventory.sh scripts/check-doc-audit-ledger.sh .gitignore
 git commit -m "docs: complete documentation accuracy audit" -m "Part of docs/superpowers/plans/2026-04-09-documentation-accuracy-audit-plan.md"
 ```
 
