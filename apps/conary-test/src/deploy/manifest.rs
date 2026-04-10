@@ -61,8 +61,8 @@ struct RawRestartSpec {
 }
 
 pub fn load_rollout_manifest_from_file(path: &Path) -> Result<RolloutManifest> {
-    let content =
-        std::fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
     load_rollout_manifest_from_str(&content)
 }
 
@@ -81,7 +81,9 @@ pub fn load_rollout_manifest_from_str(input: &str) -> Result<RolloutManifest> {
         let restart = match raw_unit.restart {
             Some(raw_restart) => Some(RestartSpec {
                 systemd_user_unit: raw_restart.systemd_user_unit.ok_or_else(|| {
-                    anyhow::anyhow!("unit `{unit_name}` restart metadata must include `systemd_user_unit`")
+                    anyhow::anyhow!(
+                        "unit `{unit_name}` restart metadata must include `systemd_user_unit`"
+                    )
                 })?,
             }),
             None => None,
@@ -135,7 +137,10 @@ units = ["conary_test"]
         assert_eq!(unit.build.cargo_package, "conary-test");
         assert_eq!(unit.verify, VerifyMode::ForgeSmoke);
         assert_eq!(
-            unit.restart.as_ref().expect("restart exists").systemd_user_unit,
+            unit.restart
+                .as_ref()
+                .expect("restart exists")
+                .systemd_user_unit,
             "conary-test.service"
         );
         assert_eq!(
@@ -185,8 +190,7 @@ restart = {}
 verify = "forge_smoke"
 "#;
 
-        let error =
-            load_rollout_manifest_from_str(manifest).expect_err("invalid restart rejected");
+        let error = load_rollout_manifest_from_str(manifest).expect_err("invalid restart rejected");
         assert!(error.to_string().contains("systemd_user_unit"));
     }
 }

@@ -213,8 +213,7 @@ units = ["conary_test", "conary"]
     #[tokio::test]
     async fn build_failure_aborts_before_restart_and_verify() {
         let plan = build_ref_plan("control_plane");
-        let mut executor =
-            MockExecutor::with_failure("cargo_build:conary-test@/home/peter/Conary");
+        let mut executor = MockExecutor::with_failure("cargo_build:conary-test@/home/peter/Conary");
         let forge_checkout = PathBuf::from("/home/peter/Conary");
 
         let error = execute_rollout(&mut executor, &plan, &forge_checkout)
@@ -222,16 +221,25 @@ units = ["conary_test", "conary"]
             .expect_err("build failure propagates");
 
         assert!(error.to_string().contains("cargo_build"));
-        assert!(!executor.actions.iter().any(|action| action.starts_with("restart:")));
-        assert!(!executor.actions.iter().any(|action| action.starts_with("verify:")));
+        assert!(
+            !executor
+                .actions
+                .iter()
+                .any(|action| action.starts_with("restart:"))
+        );
+        assert!(
+            !executor
+                .actions
+                .iter()
+                .any(|action| action.starts_with("verify:"))
+        );
         assert!(!executor.recorded_success);
     }
 
     #[tokio::test]
     async fn verification_failure_does_not_record_last_successful_rollout() {
         let plan = build_ref_plan("control_plane");
-        let mut executor =
-            MockExecutor::with_failure("verify:forge_smoke@/home/peter/Conary");
+        let mut executor = MockExecutor::with_failure("verify:forge_smoke@/home/peter/Conary");
         let forge_checkout = PathBuf::from("/home/peter/Conary");
 
         let error = execute_rollout(&mut executor, &plan, &forge_checkout)
@@ -239,7 +247,12 @@ units = ["conary_test", "conary"]
             .expect_err("verify failure propagates");
 
         assert!(error.to_string().contains("verify"));
-        assert!(!executor.actions.iter().any(|action| action == "record_success"));
+        assert!(
+            !executor
+                .actions
+                .iter()
+                .any(|action| action == "record_success")
+        );
         assert!(!executor.recorded_success);
     }
 
