@@ -5,7 +5,8 @@ use clap::{ArgGroup, Parser, Subcommand};
 use conary_test::engine::container_setup::initialize_container_state;
 use conary_test::paths;
 use handlers::{
-    cmd_deploy_rebuild, cmd_deploy_restart, cmd_deploy_source, cmd_deploy_status,
+    cmd_deploy_rebuild, cmd_deploy_restart, cmd_deploy_rollout, cmd_deploy_source,
+    cmd_deploy_status,
     cmd_fixtures_build, cmd_fixtures_publish, cmd_health, cmd_images_info, cmd_images_prune,
     cmd_logs, cmd_manifests_reload,
 };
@@ -775,11 +776,11 @@ fn main() -> Result<()> {
                 DeployCommands::Restart => rt.block_on(cmd_deploy_restart(json)),
                 DeployCommands::Status { port } => rt.block_on(cmd_deploy_status(json, port)),
                 DeployCommands::Rollout {
-                    unit: _,
-                    group: _,
-                    git_ref: _,
-                    path: _,
-                } => bail!("deploy rollout not yet implemented"),
+                    unit,
+                    group,
+                    git_ref,
+                    path,
+                } => rt.block_on(cmd_deploy_rollout(unit, group, git_ref, path, json)),
             }
         }
 
