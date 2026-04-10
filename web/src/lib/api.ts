@@ -7,7 +7,8 @@ import type {
 	RecentPackage,
 	SparseIndexEntry,
 	PackageListResponse,
-	SuggestResponse
+	SuggestResponse,
+	CanonicalLookupResponse
 } from './types';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
@@ -107,6 +108,6 @@ export async function getSparseIndex(
 	return fetchJson(`/v1/index/${encodeURIComponent(distro)}/${encodeURIComponent(name)}`);
 }
 
-export async function getCanonicalInfo(name: string) {
+export async function getCanonicalInfo(name: string): Promise<CanonicalLookupResponse> {
 	return fetchJson(`/v1/canonical/${encodeURIComponent(name)}`);
 }

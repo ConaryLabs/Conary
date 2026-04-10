@@ -1,11 +1,11 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { getPackageDetail, getReverseDependencies, getCanonicalInfo } from '$lib/api';
-	import type { PackageDetail } from '$lib/types';
+	import type { CanonicalLookupResponse, PackageDetail } from '$lib/types';
 
 	let pkg: PackageDetail | null = $state(null);
 	let rdepends: string[] = $state([]);
-	let canonicalInfo: any = $state(null);
+	let canonicalInfo: CanonicalLookupResponse | null = $state(null);
 	let loading = $state(true);
 	let error: string | null = $state(null);
 	let showAllVersions = $state(false);
