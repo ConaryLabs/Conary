@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-04-10
-revision: 2
+revision: 3
 summary: Ship-blocker-only hardening design for a coordinated Conary, Remi, conaryd, and conary-test release before public announcement
 ---
 
@@ -127,8 +127,8 @@ Run:
 - `cargo test -p remi`
 - `cargo test -p conaryd`
 - `cargo run -p conary-test -- list`
-- `cd site && npm ci && npm run check && npm run build`
-- `cd web && npm ci && npm run check && npm run build`
+- `(cd site && npm ci && npm run check && npm run build)`
+- `(cd web && npm ci && npm run check && npm run build)`
 
 This phase proves that the source tree is releasable before GitHub Actions is
 asked to package or route anything. It is not intended to rerun every deep
@@ -197,7 +197,9 @@ locally and verify:
 - `metadata.json` matches the intended product, version, tag, bundle name, and
   deploy mode
 - the expected primary artifact filenames exist for that product
-- for `conary`, `SHA256SUMS` exists and matches the downloaded bundle contents
+- for `conary`, which is the only track that currently emits `SHA256SUMS` and a
+  self-update `*.sig` artifact, `SHA256SUMS` exists and matches the downloaded
+  bundle contents
 - for `conary`, if a self-update `*.sig` file is present, verify it through the
   repository's current self-update signature verification path; if that path
   cannot be exercised, stop and treat signature rehearsal as incomplete rather
