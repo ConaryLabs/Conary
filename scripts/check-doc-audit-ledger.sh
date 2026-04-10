@@ -90,8 +90,10 @@ done < "$current_inventory"
 
 header_seen=0
 line_no=0
-while IFS=$'\t' read -r origin_path path family audience claim_clusters evidence_sources status disposition notes extra; do
+while IFS= read -r line; do
     line_no=$((line_no + 1))
+    normalized_line="${line//$'\t'/$'\x1f'}"
+    IFS=$'\x1f' read -r origin_path path family audience claim_clusters evidence_sources status disposition notes extra <<< "$normalized_line"
 
     if [[ $line_no -eq 1 ]]; then
         [[ "$origin_path" == "origin_path" && "$path" == "path" ]] || fail "unexpected ledger header in $ledger_path"
