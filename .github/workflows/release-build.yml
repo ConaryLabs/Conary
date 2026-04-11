@@ -36,6 +36,8 @@ jobs:
       artifact_patterns: ${{ steps.meta.outputs.artifact_patterns }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
       - name: Resolve release metadata
         id: meta
         shell: bash
@@ -50,6 +52,11 @@ jobs:
             tag_name="${GITHUB_REF#refs/tags/}"
             manual_product=""
             dry_run="false"
+          fi
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "$dry_run" != "true" ]]; then
+            echo "workflow_dispatch is dry-run only; push the canonical tag for live releases" >&2
+            exit 1
           fi
 
           mkdir -p release-metadata
@@ -86,6 +93,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Prepare dry-run release tree
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        env:
+          product: ${{ needs.prepare.outputs.product }}
+          tag_name: ${{ needs.prepare.outputs.tag_name }}
+          dry_run: ${{ needs.prepare.outputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [[ "$dry_run" != "true" ]]; then
+            echo "workflow_dispatch is dry-run only; push the canonical tag for live releases" >&2
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          ./scripts/release.sh "$product"
+          git tag --points-at HEAD | grep -Fx "$tag_name"
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - name: Cache cargo
@@ -137,6 +163,25 @@ jobs:
             sh -s -- -y --default-toolchain stable --profile minimal
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Prepare dry-run release tree
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        env:
+          product: ${{ needs.prepare.outputs.product }}
+          tag_name: ${{ needs.prepare.outputs.tag_name }}
+          dry_run: ${{ needs.prepare.outputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [[ "$dry_run" != "true" ]]; then
+            echo "workflow_dispatch is dry-run only; push the canonical tag for live releases" >&2
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          ./scripts/release.sh "$product"
+          git tag --points-at HEAD | grep -Fx "$tag_name"
       - name: Build RPM
         run: bash packaging/rpm/build.sh
       - name: Upload RPM artifact
@@ -170,6 +215,25 @@ jobs:
             sh -s -- -y --default-toolchain stable --profile minimal
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Prepare dry-run release tree
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        env:
+          product: ${{ needs.prepare.outputs.product }}
+          tag_name: ${{ needs.prepare.outputs.tag_name }}
+          dry_run: ${{ needs.prepare.outputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [[ "$dry_run" != "true" ]]; then
+            echo "workflow_dispatch is dry-run only; push the canonical tag for live releases" >&2
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          ./scripts/release.sh "$product"
+          git tag --points-at HEAD | grep -Fx "$tag_name"
       - name: Build DEB
         run: bash packaging/deb/build.sh
       - name: Upload DEB artifact
@@ -199,6 +263,25 @@ jobs:
       - name: Install Rust toolchain
         run: runuser -u builder -- rustup default stable
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Prepare dry-run release tree
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        env:
+          product: ${{ needs.prepare.outputs.product }}
+          tag_name: ${{ needs.prepare.outputs.tag_name }}
+          dry_run: ${{ needs.prepare.outputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [[ "$dry_run" != "true" ]]; then
+            echo "workflow_dispatch is dry-run only; push the canonical tag for live releases" >&2
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          ./scripts/release.sh "$product"
+          git tag --points-at HEAD | grep -Fx "$tag_name"
       - name: Fix ownership for makepkg
         run: chown -R builder:builder .
       - name: Build Arch package
@@ -239,7 +322,9 @@ jobs:
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
           DRY_RUN: ${{ needs.prepare.outputs.dry_run }}
+          DRY_RUN_SIGNING_KEY: 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
         run: |
+          set -euo pipefail
           chmod +x release-artifacts/sign-hash/sign_hash
           CCS_FILE=$(ls release-packages/conary-*.ccs 2>/dev/null | head -1)
           if [ -z "$CCS_FILE" ]; then
@@ -248,11 +333,15 @@ jobs:
           fi
           if [ -z "${RELEASE_SIGNING_KEY:-}" ]; then
             if [ "$DRY_RUN" = "true" ]; then
-              echo "[DRY RUN] RELEASE_SIGNING_KEY not set; skipping signature generation"
-              exit 0
+              export RELEASE_SIGNING_KEY="$DRY_RUN_SIGNING_KEY"
+              echo "[DRY RUN] RELEASE_SIGNING_KEY not set; using deterministic dry-run signing key"
+            else
+              echo "RELEASE_SIGNING_KEY must be configured for conary releases" >&2
+              exit 1
             fi
-            echo "RELEASE_SIGNING_KEY must be configured for conary releases" >&2
-            exit 1
+          fi
+          if [ "$DRY_RUN" = "true" ]; then
+            release-artifacts/sign-hash/sign_hash --show-public-key > release-packages/REHEARSAL_SIGNING_PUBLIC_KEY.txt
           fi
           release-artifacts/sign-hash/sign_hash "$CCS_FILE" > "${CCS_FILE}.sig"
       - name: Upload release bundle
@@ -283,6 +372,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Prepare dry-run release tree
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        env:
+          product: ${{ needs.prepare.outputs.product }}
+          tag_name: ${{ needs.prepare.outputs.tag_name }}
+          dry_run: ${{ needs.prepare.outputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [[ "$dry_run" != "true" ]]; then
+            echo "workflow_dispatch is dry-run only; push the canonical tag for live releases" >&2
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          ./scripts/release.sh "$product"
+          git tag --points-at HEAD | grep -Fx "$tag_name"
       - uses: ./.github/actions/setup-rust-workspace
       - name: Build remi release binary
         run: cargo build -p remi --release --verbose
@@ -348,6 +456,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Prepare dry-run release tree
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        env:
+          product: ${{ needs.prepare.outputs.product }}
+          tag_name: ${{ needs.prepare.outputs.tag_name }}
+          dry_run: ${{ needs.prepare.outputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [[ "$dry_run" != "true" ]]; then
+            echo "workflow_dispatch is dry-run only; push the canonical tag for live releases" >&2
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          ./scripts/release.sh "$product"
+          git tag --points-at HEAD | grep -Fx "$tag_name"
       - uses: ./.github/actions/setup-rust-workspace
       - name: Build conaryd release binary
         run: cargo build -p conaryd --release --verbose
@@ -413,6 +540,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Prepare dry-run release tree
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        env:
+          product: ${{ needs.prepare.outputs.product }}
+          tag_name: ${{ needs.prepare.outputs.tag_name }}
+          dry_run: ${{ needs.prepare.outputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [[ "$dry_run" != "true" ]]; then
+            echo "workflow_dispatch is dry-run only; push the canonical tag for live releases" >&2
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          ./scripts/release.sh "$product"
+          git tag --points-at HEAD | grep -Fx "$tag_name"
       - uses: ./.github/actions/setup-rust-workspace
       - name: Build conary-test release binary
         run: cargo build -p conary-test --release --verbose

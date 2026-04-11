@@ -41,7 +41,7 @@ pub enum UpdateSignatureError {
 /// provided list of trusted public keys.
 ///
 /// Returns `Ok(())` if any trusted key successfully verifies the signature.
-fn verify_update_signature_with_keys(
+pub fn verify_update_signature_with_keys(
     sha256_hex: &str,
     signature_base64: &str,
     trusted_keys: &[&str],

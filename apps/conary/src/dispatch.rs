@@ -406,7 +406,26 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             force,
             version,
             no_verify,
-        }) => commands::cmd_self_update(&db.db_path, check, force, version, no_verify).await,
+            verify_sha256,
+            verify_signature_file,
+            trusted_keys,
+            print_trusted_keys,
+        }) => {
+            commands::cmd_self_update(
+                &db.db_path,
+                commands::SelfUpdateOptions {
+                    check,
+                    force,
+                    version,
+                    no_verify,
+                    verify_sha256,
+                    verify_signature_file,
+                    trusted_keys,
+                    print_trusted_keys,
+                },
+            )
+            .await
+        }
 
         // =====================================================================
         // Derivation Verification
