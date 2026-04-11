@@ -25,8 +25,8 @@ pub use versioning::{
 };
 
 /// Trusted Ed25519 public keys for verifying self-update signatures (hex-encoded).
-/// Real key will be added when release signing is enabled.
-pub const TRUSTED_UPDATE_KEYS: &[&str] = &[];
+pub const TRUSTED_UPDATE_KEYS: &[&str] =
+    &["08eaacd1fa08389d38dc3f00d20be9df306da5367e65ad3be1f36e9d801e8003"];
 
 /// Errors from self-update signature verification
 #[derive(Debug, thiserror::Error)]
