@@ -134,7 +134,14 @@ Untracked file dispositions:
     - `tar tzf` confirms the tarball payload path is `conaryd-0.6.0-linux-x64`, and `tar xOf ... | sha256sum` matches the loose bundled binary hash exactly
   - `deploy-and-verify`: run ID `24273620044`, conclusion `success`, `source_run=24273530124`; `resolve`, `validate-routing`, and `verify-conaryd` succeeded while live deploy jobs stayed skipped in `dry_run=true`
   - rerun conclusion: `conaryd` dry-run build truthfulness and deploy-handoff verification now pass on `main`
-  - scope note: `conary-test` was not rerun after these workflow fixes, so its latest recorded evidence remains the earlier failing rehearsal
+- Superseding `conary-test` rerun after release-fix commits:
+  - `release-build`: run ID `24274310549`, conclusion `success`, artifact target `/home/peter/.claude/tmp/conary-release-hardening-2026-04-10/artifacts/conary-test-run-24274310549`
+  - artifact validation: `pass`
+    - `metadata.json` reports `product=conary-test`, `version=0.8.0`, `tag_name=conary-test-v0.8.0`, `bundle_name=conary-test-bundle`, `deploy_mode=none`, `dry_run=true`
+    - downloaded bundle files align on `0.8.0`: `conary-test-0.8.0-linux-x64` and `conary-test-0.8.0-linux-x64.tar.gz`
+    - the downloaded binary itself returns `conary-test 0.8.0` under `--version`
+    - `tar tzf` confirms the tarball payload path is `conary-test-0.8.0-linux-x64`, and `tar xOf ... | sha256sum` matches the loose bundled binary hash exactly
+  - rerun conclusion: `conary-test` dry-run build truthfulness now passes on `main`; no deploy rehearsal is required because `deploy_mode=none`
 
 ## Secrets And Environment Readiness
 
@@ -162,10 +169,10 @@ Untracked file dispositions:
   - the earlier `remi` live deploy target readiness blocker is cleared by successful live `deploy-remi` run `24273444167`
   - the earlier `conaryd` dry-run truthfulness blocker is cleared by `release-build` run `24273530124`
   - the earlier `conaryd` deploy-handoff rehearsal blocker is cleared by dry-run `deploy-and-verify` run `24273620044`
+  - the earlier `conary-test` dry-run truthfulness blocker is cleared by `release-build` run `24274310549`
 - Remaining active blockers:
   - `conaryd` live deployment is blocked because `deploy-and-verify` run `24273754560` proved `CONARYD_SSH_KEY`, `CONARYD_SSH_TARGET`, and `CONARYD_VERIFY_URL` were blank in workflow context
-  - `conary-test` was not rerun after the workflow fixes in this pass, so its latest recorded dry-run evidence is still the earlier version-skew failure
-  - coordinated all-tracks release remains blocked until `conaryd` secrets are configured and `conary-test` is rerun cleanly
+  - coordinated all-tracks release remains blocked until `conaryd` gets a real deployment target and the missing `CONARYD_*` secrets are configured
 
 ## Fixes Made
 
@@ -184,11 +191,11 @@ Untracked file dispositions:
 - Approved Tracks:
   - `conary`: passing `release-build` dry-run `24271605335`, offline detached-signature verification, passing `deploy-and-verify` dry-run `24272138949`, and successful live cut with `release-build` run `24272510305`, `deploy-and-verify` run `24272911392`, and published GitHub release `v0.8.0`
   - `remi`: passing `release-build` dry-run `24272999752`, passing `deploy-and-verify` dry-run `24273182800`, successful live deploy via `deploy-and-verify` run `24273444167`, and published GitHub release `remi-v0.6.0`
+  - `conary-test`: passing `release-build` dry-run `24274310549`, no deploy lane by design because `deploy_mode=none`, and successful live cut with `release-build` run `24274467713` plus published GitHub release `conary-test-v0.8.0`
 - Dropped Tracks: none
 - Blocked Tracks:
   - `conaryd`: dry-run `release-build` `24273530124` and dry-run `deploy-and-verify` `24273620044` both passed, and live `release-build` `24273700060` published GitHub release `conaryd-v0.6.0`, but live `deploy-and-verify` `24273754560` failed because `CONARYD_SSH_KEY`, `CONARYD_SSH_TARGET`, and `CONARYD_VERIFY_URL` were blank in workflow context
-  - `conary-test`: blocked by the earlier dry-run binary-version mismatch; not rerun after the workflow fixes in this pass
-- Final Release Command: coordinated all-tracks release remains `no-go`; narrowed `conary` and `remi` releases are complete, `conaryd` is release-published but deployment-blocked on missing secrets, and `conary-test` still requires its own rerun/hardening work before any broader cut
+- Final Release Command: coordinated all-tracks release remains `no-go`; `conary`, `remi`, and `conary-test` are complete, while `conaryd` is release-published but deployment-blocked because no usable `CONARYD_*` deploy configuration reached the workflow
 
 ## Final Commands
 
@@ -236,3 +243,15 @@ Untracked file dispositions:
     - `deploy-and-verify` run `24273754560`: `failure` in `deploy-conaryd` because `CONARYD_SSH_KEY`, `CONARYD_SSH_TARGET`, and `CONARYD_VERIFY_URL` were blank in workflow context
   - resulting published GitHub release: `https://github.com/ConaryLabs/Conary/releases/tag/conaryd-v0.6.0`
   - remaining follow-up before conaryd can be considered fully released: configure the missing `CONARYD_*` secrets, then rerun `deploy-and-verify` against `source_run=24273700060` with `dry_run=false`
+- Live `conary-test` cut:
+  - ran `./scripts/release.sh conary-test`
+  - resulting release commit: `04a08383`
+  - resulting tag: `conary-test-v0.8.0`
+  - pushed with:
+    - `git push`
+    - `git push --tags`
+  - resulting live workflow chain:
+    - `release-build` run `24274467713`: `success`
+    - `publish-conary-test`: `success`
+  - no deploy follow-up was required because `deploy_mode=none`
+  - resulting published GitHub release: `https://github.com/ConaryLabs/Conary/releases/tag/conary-test-v0.8.0`
