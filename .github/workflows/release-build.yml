@@ -109,8 +109,8 @@ jobs:
             echo "workflow_dispatch is dry-run only; push the canonical tag for live releases" >&2
             exit 1
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           ./scripts/release.sh "$product"
           git tag --points-at HEAD | grep -Fx "$tag_name"
       - name: Install Rust
@@ -180,8 +180,8 @@ jobs:
             echo "workflow_dispatch is dry-run only; push the canonical tag for live releases" >&2
             exit 1
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           ./scripts/release.sh "$product"
           git tag --points-at HEAD | grep -Fx "$tag_name"
       - name: Build RPM
@@ -233,8 +233,8 @@ jobs:
             echo "workflow_dispatch is dry-run only; push the canonical tag for live releases" >&2
             exit 1
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           ./scripts/release.sh "$product"
           git tag --points-at HEAD | grep -Fx "$tag_name"
       - name: Build DEB
@@ -282,8 +282,8 @@ jobs:
             echo "workflow_dispatch is dry-run only; push the canonical tag for live releases" >&2
             exit 1
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           ./scripts/release.sh "$product"
           git tag --points-at HEAD | grep -Fx "$tag_name"
       - name: Fix ownership for makepkg
@@ -392,8 +392,8 @@ jobs:
             echo "workflow_dispatch is dry-run only; push the canonical tag for live releases" >&2
             exit 1
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           ./scripts/release.sh "$product"
           git tag --points-at HEAD | grep -Fx "$tag_name"
       - uses: ./.github/actions/setup-rust-workspace
@@ -477,8 +477,8 @@ jobs:
             echo "workflow_dispatch is dry-run only; push the canonical tag for live releases" >&2
             exit 1
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           ./scripts/release.sh "$product"
           git tag --points-at HEAD | grep -Fx "$tag_name"
       - uses: ./.github/actions/setup-rust-workspace
@@ -562,8 +562,8 @@ jobs:
             echo "workflow_dispatch is dry-run only; push the canonical tag for live releases" >&2
             exit 1
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           ./scripts/release.sh "$product"
           git tag --points-at HEAD | grep -Fx "$tag_name"
       - uses: ./.github/actions/setup-rust-workspace
