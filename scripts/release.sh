@@ -503,7 +503,17 @@ main() {
             update_packaging_versions "$new_version" "${owned_paths[@]}"
         fi
 
-        cargo update --workspace --offline --quiet
+        case "${CONARY_RELEASE_LOCKFILE_MODE:-offline}" in
+            offline)
+                cargo update --workspace --offline --quiet
+                ;;
+            online)
+                cargo update --workspace --quiet
+                ;;
+            *)
+                die "unknown CONARY_RELEASE_LOCKFILE_MODE: ${CONARY_RELEASE_LOCKFILE_MODE}"
+                ;;
+        esac
         printf '  Updated Cargo.lock\n'
 
         changelog_entry="$(generate_changelog "$product" "$local_history_tag" "$new_version")"
