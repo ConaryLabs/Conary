@@ -111,6 +111,7 @@ jobs:
           fi
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$(pwd)"
           ./scripts/release.sh "$product"
           git tag --points-at HEAD | grep -Fx "$tag_name"
       - name: Install Rust
@@ -182,6 +183,7 @@ jobs:
           fi
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$(pwd)"
           ./scripts/release.sh "$product"
           git tag --points-at HEAD | grep -Fx "$tag_name"
       - name: Build RPM
@@ -235,6 +237,7 @@ jobs:
           fi
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$(pwd)"
           ./scripts/release.sh "$product"
           git tag --points-at HEAD | grep -Fx "$tag_name"
       - name: Build DEB
@@ -284,6 +287,7 @@ jobs:
           fi
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$(pwd)"
           ./scripts/release.sh "$product"
           git tag --points-at HEAD | grep -Fx "$tag_name"
       - name: Fix ownership for makepkg
@@ -394,6 +398,7 @@ jobs:
           fi
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$(pwd)"
           ./scripts/release.sh "$product"
           git tag --points-at HEAD | grep -Fx "$tag_name"
       - uses: ./.github/actions/setup-rust-workspace
@@ -479,6 +484,7 @@ jobs:
           fi
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$(pwd)"
           ./scripts/release.sh "$product"
           git tag --points-at HEAD | grep -Fx "$tag_name"
       - uses: ./.github/actions/setup-rust-workspace
@@ -564,6 +570,7 @@ jobs:
           fi
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$(pwd)"
           ./scripts/release.sh "$product"
           git tag --points-at HEAD | grep -Fx "$tag_name"
       - uses: ./.github/actions/setup-rust-workspace
