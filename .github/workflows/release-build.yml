@@ -267,7 +267,9 @@ jobs:
           useradd -m builder
           echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
       - name: Install Rust toolchain
-        run: runuser -u builder -- rustup default stable
+        run: |
+          rustup default stable
+          runuser -u builder -- rustup default stable
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
