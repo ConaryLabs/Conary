@@ -116,7 +116,16 @@ Untracked file dispositions:
     - `target/debug/conary self-update --verify-sha256 <sha256-of-conary-0.8.0.ccs> --verify-signature-file /home/peter/.claude/tmp/conary-release-hardening-2026-04-10/artifacts/conary-run-24271605335/conary-0.8.0.ccs.sig` returned `Signature verified`
   - `deploy-and-verify`: run ID `24272138949`, conclusion `success`, `source_run=24271605335`; `resolve`, `validate-routing`, and `verify-conary` succeeded while `deploy-conary` correctly stayed skipped in `dry_run=true`
   - rerun conclusion: `conary` dry-run build truthfulness, detached signature rehearsal, and deploy-handoff verification now pass on `main`
-  - scope note: `remi`, `conaryd`, and `conary-test` were not rerun after these `conary`-focused workflow fixes, so their latest recorded evidence remains the earlier failing rehearsal
+- Superseding `remi` rerun after release-fix commits:
+  - `release-build`: run ID `24272999752`, conclusion `success`, artifact target `/home/peter/.claude/tmp/conary-release-hardening-2026-04-10/artifacts/remi-run-24272999752`
+  - artifact validation: `pass`
+    - `metadata.json` reports `product=remi`, `version=0.6.0`, `tag_name=remi-v0.6.0`, `bundle_name=remi-bundle`, `deploy_mode=remote_bundle`, `dry_run=true`
+    - downloaded bundle files align on `0.6.0`: `remi-0.6.0-linux-x64` and `remi-0.6.0-linux-x64.tar.gz`
+    - the downloaded binary itself returns `remi 0.6.0` under `--version`
+    - `tar tzf` confirms the tarball payload path is `remi-0.6.0-linux-x64`, and `tar xOf ... | sha256sum` matches the loose bundled binary hash exactly
+  - `deploy-and-verify`: run ID `24273182800`, conclusion `success`, `source_run=24272999752`; `resolve`, `validate-routing`, and `verify-remi` succeeded while live deploy jobs stayed skipped in `dry_run=true`
+  - rerun conclusion: `remi` dry-run build truthfulness and deploy-handoff verification now pass on `main`
+  - scope note: `conaryd` and `conary-test` were not rerun after these workflow fixes, so their latest recorded evidence remains the earlier failing rehearsal
 
 ## Secrets And Environment Readiness
 
@@ -126,8 +135,8 @@ Untracked file dispositions:
   - Direct `gh secret list --env production` inspection from this session returned no visible `production` environment secrets
 - Usability confirmation:
   - `RELEASE_SIGNING_KEY`: `confirmed indirectly` by successful dry-run signing in `release-build` run `24271605335`
-  - `REMI_SSH_KEY`: `verified directly`
-  - `REMI_SSH_TARGET`: `not confirmed` (workflow has a default fallback target, but no secret-backed confirmation was available from this session)
+  - `REMI_SSH_KEY`: `verified directly` and exercised successfully by live `deploy-remi` run `24273444167`
+  - `REMI_SSH_TARGET`: `confirmed indirectly` by successful live `deploy-remi` run `24273444167` (whether provided via secret or workflow fallback)
   - `CONARYD_SSH_KEY`: `not confirmed`
   - `CONARYD_SSH_TARGET`: `not confirmed`
   - `CONARYD_VERIFY_URL`: `not confirmed`
@@ -139,9 +148,11 @@ Untracked file dispositions:
 - Cleared in this pass:
   - the earlier `conary` dry-run truthfulness blocker is cleared by `release-build` run `24271605335`
   - the earlier `conary` detached-signature rehearsal blocker is cleared by the successful offline verification of `conary-0.8.0.ccs.sig`
+  - the earlier `remi` dry-run truthfulness blocker is cleared by `release-build` run `24272999752`
+  - the earlier `remi` live deploy target readiness blocker is cleared by successful live `deploy-remi` run `24273444167`
 - Remaining active blockers:
-  - coordinated all-tracks release remains blocked because `remi`, `conaryd`, and `conary-test` were not rerun after the workflow fixes in this pass; their latest recorded dry-run evidence is still the earlier version-skew failure
-  - required live-release secrets remain missing or unconfirmed from this session for the remaining remote deploy lanes: `REMI_SSH_TARGET`, `CONARYD_SSH_KEY`, `CONARYD_SSH_TARGET`, and `CONARYD_VERIFY_URL`
+  - coordinated all-tracks release remains blocked because `conaryd` and `conary-test` were not rerun after the workflow fixes in this pass; their latest recorded dry-run evidence is still the earlier version-skew failure
+  - required live-release secrets remain missing or unconfirmed from this session for the remaining remote deploy lane: `CONARYD_SSH_KEY`, `CONARYD_SSH_TARGET`, and `CONARYD_VERIFY_URL`
 
 ## Fixes Made
 
@@ -152,18 +163,19 @@ Untracked file dispositions:
 - `README.md`, `site/src/routes/install/+page.svelte`, and `site/src/routes/compare/+page.svelte`: refreshed stale tracked release-facing version strings from `0.7.0` to the planned `0.8.0` public release surface.
 - `apps/conary/man/conary.1`: confirmed the generated local manpage now reflects `0.8.0`, but it is ignored/generated (`/apps/conary/man/`) rather than a tracked repo file.
 - `.github/workflows/release-build.yml`, `scripts/release.sh`, and `scripts/check-release-matrix.sh`: hardened truthful dry-run preparation so CI rehearsals run the canonical `release.sh` flow with online lockfile refresh, safe-directory handling, and the necessary git/rust setup for container packaging lanes.
+- `.github/workflows/release-build.yml`: added explicit checkout steps to `publish-remi`, `publish-conaryd`, and `publish-conary-test` so `gh release create ... --verify-tag` runs inside a real git repository during live publish jobs.
 - `apps/conary/src/cli/mod.rs`, `apps/conary/src/commands/self_update.rs`, `apps/conary/src/dispatch.rs`, and `crates/conary-core/src/self_update.rs`: added offline detached-signature verification support for self-update rehearsal and committed the production trusted self-update public key.
 
 ## Release Decision
 
 - Approved Tracks:
   - `conary`: passing `release-build` dry-run `24271605335`, offline detached-signature verification, passing `deploy-and-verify` dry-run `24272138949`, and successful live cut with `release-build` run `24272510305`, `deploy-and-verify` run `24272911392`, and published GitHub release `v0.8.0`
+  - `remi`: passing `release-build` dry-run `24272999752`, passing `deploy-and-verify` dry-run `24273182800`, successful live deploy via `deploy-and-verify` run `24273444167`, and published GitHub release `remi-v0.6.0`
 - Dropped Tracks: none
 - Blocked Tracks:
-  - `remi`: blocked by the earlier dry-run binary-version mismatch and unconfirmed live deploy target readiness; not rerun after the workflow fixes in this pass
   - `conaryd`: blocked by the earlier dry-run binary-version mismatch and unconfirmed deploy secrets; not rerun after the workflow fixes in this pass
   - `conary-test`: blocked by the earlier dry-run binary-version mismatch; not rerun after the workflow fixes in this pass
-- Final Release Command: coordinated all-tracks release remains `no-go`; narrowed `conary` release is complete and the remaining tracks still require their own reruns/hardening work before any broader cut
+- Final Release Command: coordinated all-tracks release remains `no-go`; narrowed `conary` and `remi` releases are complete and the remaining tracks still require their own reruns/hardening work before any broader cut
 
 ## Final Commands
 
@@ -180,3 +192,20 @@ Untracked file dispositions:
     - `release-build` run `24272510305`: `success`
     - `deploy-and-verify` run `24272911392`: `success`
   - resulting published GitHub release: `https://github.com/ConaryLabs/Conary/releases/tag/v0.8.0`
+- Live `remi` cut:
+  - ran `./scripts/release.sh remi`
+  - resulting release commit: `5babda60`
+  - resulting tag: `remi-v0.6.0`
+  - pushed with:
+    - `git push`
+    - `git push --tags`
+  - initial live `release-build` run `24273221697` built the `remi` bundle successfully but failed in `publish-remi` because the workflow called `gh release create ... --verify-tag` without checking out the repository first
+  - fixed that publish-job root cause on `main` in commit `1b710394` (`fix(release): checkout before publish verify-tag`)
+  - manually recovered the current `remi` release by:
+    - downloading the live bundle artifacts from run `24273221697`
+    - creating the GitHub release locally with `gh release create remi-v0.6.0 /home/peter/.claude/tmp/conary-release-hardening-2026-04-10/artifacts/remi-live-run-24273221697/remi-bundle/* --generate-notes --verify-tag`
+    - dispatching live `deploy-and-verify` with `product=remi`, `source_run=24273221697`, `environment=production`, and `dry_run=false`
+  - resulting live workflow chain:
+    - `release-build` run `24273221697`: `failure` limited to `publish-remi` after successful `build-remi`
+    - `deploy-and-verify` run `24273444167`: `success`
+  - resulting published GitHub release: `https://github.com/ConaryLabs/Conary/releases/tag/remi-v0.6.0`
