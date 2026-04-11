@@ -4,6 +4,93 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [conaryd-v0.6.0] - 2026-04-10
+
+### Added
+- improve boot recovery with 4-step fallback and Dracut module
+- Add Forge server setup script (Forgejo + Runner)
+- Public Remi package index with search, R2 storage, and web frontend
+- Add Remi server production deployment support
+
+### Fixed
+- deep code review — 155 findings across 11 feature domains
+- Resolve 6 clippy warnings for clean CI
+- Update Forge setup for Forgejo 14.0.2 + Runner 12.7.1
+
+### Other
+- fix(release): checkout before publish verify-tag
+- fix(release): configure arch rust toolchains for dry-run prep
+- fix(release): trust CI checkout ownership during dry-runs
+- fix(release): use global git identity in dry-run prep
+- fix(release): allow CI lockfile refresh during dry-runs
+- security(self-update): trust production release signing key
+- fix(release): harden dry-run rehearsal
+- docs(audit): refresh operational and handbook docs
+- feat(release): realign four-track release matrix
+- feat(conary-test): add forge rollout manifest
+- feat(conary-test): harden forge integration validation
+- feat(repository): implement remote substituter sources
+- feat(conary): implement phase 3 build surfaces
+- feat(automation): implement phase 2 executor flow
+- style(model): format diff warning assertions
+- fix(model): align source-policy copy with executable replatforming
+- feat(model): harden replatform execution failure handling
+- feat(replatform): define execution transaction model
+- feat(replatform): use shared source-selection ranking
+- feat(model): capture and diff source policy state
+- feat(resolver): close exact-name selection bypass
+- feat(resolver): make sat sorting selection-mode aware
+- feat(resolver): honor latest mode in canonical ranking
+- feat(policy): add repology latest signal helpers
+- feat(policy): add effective runtime policy loader
+- feat(model): reconcile profile presets with decomposed policy
+- feat(policy): add selection mode and allowlist support
+- refactor(conaryd): centralize defaults and operation kinds
+- ci(deploy): skip GitHub deployments for dry runs
+- simplify: finish cross-chunk cleanup pass
+- merge: wave4 chunk6 core-system
+- simplify: core-system - extract container and EROFS helpers
+- simplify: core-supporting — extract recovery and execution helpers
+- Merge branch 'main' into wave3/integration
+- test(conaryd): use live creds in route tests
+- Merge branch 'main' into wave3/integration
+- fix(core): replace wait-timeout child waits
+- Merge branch 'simplify/core-model-ccs' into wave3/integration
+- refactor(ccs): extract package writer helpers
+- refactor(core-db): extract trigger engine module
+- Merge branch 'simplify/core-repository' follow-up into wave2/integration
+- Merge branch 'simplify/core-build' follow-up into wave2/integration
+- style(core-repository): format extracted sync helpers
+- style(core-build): format extracted scriptlet helpers
+- Merge branch 'simplify/core-repository' into wave2/integration
+- refactor(core-repository): split repository sync helpers
+- refactor(core-build): extract scriptlet runtime helpers
+- refactor(conaryd): split daemon runtime helpers
+- refactor(conary-core): split SAT solver helpers
+- test(conaryd): stabilize regular-user auth fixture
+- remi: make remi.conary.io canonical
+- docs(remi): drop legacy forgejo config example
+- ci: refresh GitHub Actions runtimes (#29)
+- fix(ci): pass repo context to deploy downloads
+- fix(conaryd): trust daemon identity for write actions
+- fix(ci): tolerate hosted sandbox exit fallbacks
+- fix(ci): skip mount-isolation tests on hosted runners
+- ops(forge): support token-based runner setup
+- security(ci): pin actions and isolate cargo audit
+- ci: split release build from deployment
+- ops(ci): switch Forge setup to GitHub runner host
+- test(derivation): make shell-on-failure test tty-safe
+- test(workspace): stabilize moved crate verification
+- refactor(tooling): align release and packaging with new workspace
+- refactor(apps): split oversized dispatch and route modules
+- refactor(core): simplify core features and shared helpers
+- refactor(cli): remove cross-package server feature wiring
+- refactor(workspace): split remi and conaryd into separate apps
+- refactor(workspace): relocate shared core and test harness
+- wip(remi): checkpoint root worktree changes
+- feat(test): switch CI to conary-test runner, delete Python runner
+- feat(infra): add conary-test systemd unit for Forge
+- ops: Add deploy script and README markers for site vs packages frontend
 ## [remi-v0.6.0] - 2026-04-10
 
 ### Added
