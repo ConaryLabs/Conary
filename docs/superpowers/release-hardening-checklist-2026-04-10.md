@@ -81,51 +81,67 @@ Untracked file dispositions:
 
 ## GitHub Dry-Run Rehearsal
 
-- `release-build` runs:
+- Initial `release-build` runs:
   - `conary`: run ID `24268944297`, conclusion `success`, artifact target `/home/peter/.claude/tmp/conary-release-hardening-2026-04-10/artifacts/conary`
   - `remi`: run ID `24269042684`, conclusion `success`, artifact target `/home/peter/.claude/tmp/conary-release-hardening-2026-04-10/artifacts/remi`
   - `conaryd`: run ID `24269042691`, conclusion `success`, artifact target `/home/peter/.claude/tmp/conary-release-hardening-2026-04-10/artifacts/conaryd`
   - `conary-test`: run ID `24269042766`, conclusion `success`, artifact target `/home/peter/.claude/tmp/conary-release-hardening-2026-04-10/artifacts/conary-test`
-- Artifact validation:
-  - `conary`: `fail` — release metadata reports `product=conary`, `version=0.8.0`, `tag_name=v0.8.0`, `bundle_name=release-bundle`, `deploy_mode=release_bundle`, `dry_run=true`, but the downloaded bundle files are still built as `0.7.0` artifacts: `conary-0.7.0.ccs`, `conary-0.7.0-1.fc43.x86_64.rpm`, `conary_0.7.0-1_amd64.deb`, and `conary-0.7.0-1-x86_64.pkg.tar.zst`
+- Initial artifact validation:
+  - `conary`: `fail` — release metadata reports `product=conary`, `version=0.8.0`, `tag_name=v0.8.0`, `bundle_name=release-bundle`, `deploy_mode=release_bundle`, `dry_run=true`, but the downloaded bundle files are still built as `0.7.0` artifacts: `conary-0.7.0.ccs`, `conary-0.7.0-1.fc43.x86_64.rpm`, `conary_0.7.0-1_amd64.deb`, and `conary-0.7.0-1-x86_64.pkg.tar.zst`. This initial failure is superseded by rerun `24271605335` below.
   - `conary`: checksum verification `pass` — `sha256sum -c SHA256SUMS` returned `OK` for every file in `release-bundle`, but the checksums only prove internal consistency of the stale `0.7.0` bundle
   - `remi`: `fail` — bundle filenames and metadata align on `0.6.0`, but the downloaded binary itself reports `remi 0.5.0` when executed with `--version`, proving the dry-run built old code and only renamed the output file
   - `conaryd`: `fail` — bundle filenames and metadata align on `0.6.0`, but the downloaded binary reports `conaryd 0.5.0` under `--version`
   - `conary-test`: `fail` — bundle filenames and metadata align on `0.8.0`, but the downloaded binary reports `conary-test 0.7.0` under `--version`
   - Dry-run rehearsal conclusion: the current `workflow_dispatch` `release-build` path is not a truthful version rehearsal for any track on `main`; it serializes future release metadata while building binaries/packages from the pre-release source tree
-- Signature rehearsal:
+- Initial signature rehearsal:
   - `release-build` bundle job log for `conary` confirms the signing step ran in dry-run mode with an empty `RELEASE_SIGNING_KEY` and printed `[DRY RUN] RELEASE_SIGNING_KEY not set; skipping signature generation`; no `*.sig` file was produced in the downloaded bundle
   - pre-existing repo fact still applies: `crates/conary-core/src/self_update.rs` declares `TRUSTED_UPDATE_KEYS = &[]`
   - `cargo run -p conary -- self-update --help` exposes only the networked `self-update` flow plus `--no-verify`; there is no repo-supported offline operator command to feed a downloaded `sha256` and detached `.sig` into verification without writing new code
-  - outcome: `signature rehearsal incomplete`
-- `deploy-and-verify` runs:
+  - outcome: `signature rehearsal incomplete` for the original dry-run `24268944297`
+- Initial `deploy-and-verify` runs:
   - `conary`: run ID `24269729475`, conclusion `success`, `source_run=24268944297`; job graph confirms `resolve`, `validate-routing`, and `verify-conary` succeeded while deploy jobs stayed skipped in `dry_run=true`
   - `remi`: run ID `24269286949`, conclusion `success`, `source_run=24269042684`; job graph confirms `resolve`, `validate-routing`, and `verify-remi` succeeded while deploy jobs stayed skipped in `dry_run=true`
   - `conaryd`: run ID `24269180924`, conclusion `success`, `source_run=24269042691`; job graph confirms `resolve`, `validate-routing`, and `verify-conaryd` succeeded while deploy jobs stayed skipped in `dry_run=true`
   - `conary-test`: intentionally excluded because `deploy_mode=none`
   - Important limit: these deploy rehearsals only validated routing and artifact plumbing against the serialized metadata and filenames; they did not catch the binary-version skew documented above
+- Superseding `conary` rerun after release-fix commits:
+  - `release-build`: run ID `24271605335`, conclusion `success`, artifact target `/home/peter/.claude/tmp/conary-release-hardening-2026-04-10/artifacts/conary-run-24271605335`
+  - artifact validation: `pass`
+    - `metadata.json` reports `product=conary`, `version=0.8.0`, `tag_name=v0.8.0`, `bundle_name=release-bundle`, `deploy_mode=release_bundle`, `dry_run=true`
+    - downloaded bundle files align on `0.8.0`: `conary-0.8.0.ccs`, `conary-0.8.0-1.fc43.x86_64.rpm`, `conary_0.8.0-1_amd64.deb`, and `conary-0.8.0-1-x86_64.pkg.tar.zst`
+    - `sha256sum -c SHA256SUMS` returned `OK` for every bundled artifact
+  - signature rehearsal: `pass`
+    - `conary-0.8.0.ccs.sig` is present in the downloaded bundle
+    - `REHEARSAL_SIGNING_PUBLIC_KEY.txt` in the bundle exactly matches the trusted production key committed in `crates/conary-core/src/self_update.rs`
+    - `target/debug/conary self-update --verify-sha256 <sha256-of-conary-0.8.0.ccs> --verify-signature-file /home/peter/.claude/tmp/conary-release-hardening-2026-04-10/artifacts/conary-run-24271605335/conary-0.8.0.ccs.sig` returned `Signature verified`
+  - `deploy-and-verify`: run ID `24272138949`, conclusion `success`, `source_run=24271605335`; `resolve`, `validate-routing`, and `verify-conary` succeeded while `deploy-conary` correctly stayed skipped in `dry_run=true`
+  - rerun conclusion: `conary` dry-run build truthfulness, detached signature rehearsal, and deploy-handoff verification now pass on `main`
+  - scope note: `remi`, `conaryd`, and `conary-test` were not rerun after these `conary`-focused workflow fixes, so their latest recorded evidence remains the earlier failing rehearsal
 
 ## Secrets And Environment Readiness
 
 - Repo secrets:
-  - Direct `gh secret list` and `gh api repos/ConaryLabs/Conary/actions/secrets` inspection from this session shows exactly one visible repo-level Actions secret: `REMI_SSH_KEY`
+  - Direct `gh secret list` and `gh api repos/ConaryLabs/Conary/actions/secrets` inspection from this session shows two visible repo-level Actions secrets: `RELEASE_SIGNING_KEY` and `REMI_SSH_KEY`
 - Production environment secrets:
-  - Direct `gh secret list --env production` and `gh api repos/ConaryLabs/Conary/environments/production/secrets` inspection shows the `production` environment exists, but this session can see zero environment secrets there
+  - Direct `gh secret list --env production` inspection from this session returned no visible `production` environment secrets
 - Usability confirmation:
-  - `RELEASE_SIGNING_KEY`: `not confirmed`
+  - `RELEASE_SIGNING_KEY`: `confirmed indirectly` by successful dry-run signing in `release-build` run `24271605335`
   - `REMI_SSH_KEY`: `verified directly`
   - `REMI_SSH_TARGET`: `not confirmed` (workflow has a default fallback target, but no secret-backed confirmation was available from this session)
   - `CONARYD_SSH_KEY`: `not confirmed`
   - `CONARYD_SSH_TARGET`: `not confirmed`
   - `CONARYD_VERIFY_URL`: `not confirmed`
   - `gh secret list --org ConaryLabs` returned `HTTP 403`, so organization-level secret inheritance could not be inspected from this session
-  - per the plan rule, any `not confirmed` entry keeps the release `no-go`
+  - per the plan rule, the remaining `not confirmed` entries keep the coordinated all-tracks release `no-go`
 
 ## Blockers
 
-- `release-build` dry-run rehearsal is not version-truthful on `main`: all candidate tracks produced artifact version skew between serialized release metadata and the actual packaged binaries/packages
-- `conary` self-update signature rehearsal is incomplete: dry-run skipped `.sig` generation because `RELEASE_SIGNING_KEY` was unset, `TRUSTED_UPDATE_KEYS` is still empty in the repo, and there is no supported offline verification path to exercise without new code
-- Required live-release secrets are missing or unconfirmed from this session: `RELEASE_SIGNING_KEY`, `REMI_SSH_TARGET`, `CONARYD_SSH_KEY`, `CONARYD_SSH_TARGET`, and `CONARYD_VERIFY_URL`
+- Cleared in this pass:
+  - the earlier `conary` dry-run truthfulness blocker is cleared by `release-build` run `24271605335`
+  - the earlier `conary` detached-signature rehearsal blocker is cleared by the successful offline verification of `conary-0.8.0.ccs.sig`
+- Remaining active blockers:
+  - coordinated all-tracks release remains blocked because `remi`, `conaryd`, and `conary-test` were not rerun after the workflow fixes in this pass; their latest recorded dry-run evidence is still the earlier version-skew failure
+  - required live-release secrets remain missing or unconfirmed from this session for the remaining remote deploy lanes: `REMI_SSH_TARGET`, `CONARYD_SSH_KEY`, `CONARYD_SSH_TARGET`, and `CONARYD_VERIFY_URL`
 
 ## Fixes Made
 
@@ -135,18 +151,20 @@ Untracked file dispositions:
 - Frontend validation commands for `site` and `web` had to run outside the sandbox because `esbuild` execution inside the sandbox returned `EPERM`.
 - `README.md`, `site/src/routes/install/+page.svelte`, and `site/src/routes/compare/+page.svelte`: refreshed stale tracked release-facing version strings from `0.7.0` to the planned `0.8.0` public release surface.
 - `apps/conary/man/conary.1`: confirmed the generated local manpage now reflects `0.8.0`, but it is ignored/generated (`/apps/conary/man/`) rather than a tracked repo file.
+- `.github/workflows/release-build.yml`, `scripts/release.sh`, and `scripts/check-release-matrix.sh`: hardened truthful dry-run preparation so CI rehearsals run the canonical `release.sh` flow with online lockfile refresh, safe-directory handling, and the necessary git/rust setup for container packaging lanes.
+- `apps/conary/src/cli/mod.rs`, `apps/conary/src/commands/self_update.rs`, `apps/conary/src/dispatch.rs`, and `crates/conary-core/src/self_update.rs`: added offline detached-signature verification support for self-update rehearsal and committed the production trusted self-update public key.
 
 ## Release Decision
 
-- Approved Tracks: none
+- Approved Tracks:
+  - `conary`: passing `release-build` dry-run `24271605335`, offline detached-signature verification, and passing `deploy-and-verify` dry-run `24272138949`
 - Dropped Tracks: none
 - Blocked Tracks:
-  - `conary`: blocked by version-skewed dry-run artifacts, incomplete signature rehearsal, and unconfirmed `RELEASE_SIGNING_KEY`
-  - `remi`: blocked by dry-run binary-version mismatch and unconfirmed live deploy target readiness
-  - `conaryd`: blocked by dry-run binary-version mismatch and unconfirmed deploy secrets
-  - `conary-test`: blocked by dry-run binary-version mismatch
-- Final Release Command: do not cut; release is `no-go`
+  - `remi`: blocked by the earlier dry-run binary-version mismatch and unconfirmed live deploy target readiness; not rerun after the workflow fixes in this pass
+  - `conaryd`: blocked by the earlier dry-run binary-version mismatch and unconfirmed deploy secrets; not rerun after the workflow fixes in this pass
+  - `conary-test`: blocked by the earlier dry-run binary-version mismatch; not rerun after the workflow fixes in this pass
+- Final Release Command: coordinated all-tracks release remains `no-go`; if scope narrows to `conary` only, current rehearsal evidence supports `./scripts/release.sh conary`
 
 ## Final Commands
 
-- No live release command executed. The hardening pass stopped before any irreversible tag push or production deploy.
+- No live release command executed. The hardening pass still has not pushed any release tag or production deploy, but `conary` now has passing build, detached-signature, and deploy-handoff dry-run evidence.
