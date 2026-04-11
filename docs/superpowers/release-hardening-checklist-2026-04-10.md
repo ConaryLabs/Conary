@@ -82,19 +82,50 @@ Untracked file dispositions:
 ## GitHub Dry-Run Rehearsal
 
 - `release-build` runs:
+  - `conary`: run ID `24268944297`, conclusion `success`, artifact target `/home/peter/.claude/tmp/conary-release-hardening-2026-04-10/artifacts/conary`
+  - `remi`: run ID `24269042684`, conclusion `success`, artifact target `/home/peter/.claude/tmp/conary-release-hardening-2026-04-10/artifacts/remi`
+  - `conaryd`: run ID `24269042691`, conclusion `success`, artifact target `/home/peter/.claude/tmp/conary-release-hardening-2026-04-10/artifacts/conaryd`
+  - `conary-test`: run ID `24269042766`, conclusion `success`, artifact target `/home/peter/.claude/tmp/conary-release-hardening-2026-04-10/artifacts/conary-test`
 - Artifact validation:
+  - `conary`: `fail` — release metadata reports `product=conary`, `version=0.8.0`, `tag_name=v0.8.0`, `bundle_name=release-bundle`, `deploy_mode=release_bundle`, `dry_run=true`, but the downloaded bundle files are still built as `0.7.0` artifacts: `conary-0.7.0.ccs`, `conary-0.7.0-1.fc43.x86_64.rpm`, `conary_0.7.0-1_amd64.deb`, and `conary-0.7.0-1-x86_64.pkg.tar.zst`
+  - `conary`: checksum verification `pass` — `sha256sum -c SHA256SUMS` returned `OK` for every file in `release-bundle`, but the checksums only prove internal consistency of the stale `0.7.0` bundle
+  - `remi`: `fail` — bundle filenames and metadata align on `0.6.0`, but the downloaded binary itself reports `remi 0.5.0` when executed with `--version`, proving the dry-run built old code and only renamed the output file
+  - `conaryd`: `fail` — bundle filenames and metadata align on `0.6.0`, but the downloaded binary reports `conaryd 0.5.0` under `--version`
+  - `conary-test`: `fail` — bundle filenames and metadata align on `0.8.0`, but the downloaded binary reports `conary-test 0.7.0` under `--version`
+  - Dry-run rehearsal conclusion: the current `workflow_dispatch` `release-build` path is not a truthful version rehearsal for any track on `main`; it serializes future release metadata while building binaries/packages from the pre-release source tree
 - Signature rehearsal:
+  - `release-build` bundle job log for `conary` confirms the signing step ran in dry-run mode with an empty `RELEASE_SIGNING_KEY` and printed `[DRY RUN] RELEASE_SIGNING_KEY not set; skipping signature generation`; no `*.sig` file was produced in the downloaded bundle
+  - pre-existing repo fact still applies: `crates/conary-core/src/self_update.rs` declares `TRUSTED_UPDATE_KEYS = &[]`
+  - `cargo run -p conary -- self-update --help` exposes only the networked `self-update` flow plus `--no-verify`; there is no repo-supported offline operator command to feed a downloaded `sha256` and detached `.sig` into verification without writing new code
+  - outcome: `signature rehearsal incomplete`
 - `deploy-and-verify` runs:
+  - `conary`: run ID `24269729475`, conclusion `success`, `source_run=24268944297`; job graph confirms `resolve`, `validate-routing`, and `verify-conary` succeeded while deploy jobs stayed skipped in `dry_run=true`
+  - `remi`: run ID `24269286949`, conclusion `success`, `source_run=24269042684`; job graph confirms `resolve`, `validate-routing`, and `verify-remi` succeeded while deploy jobs stayed skipped in `dry_run=true`
+  - `conaryd`: run ID `24269180924`, conclusion `success`, `source_run=24269042691`; job graph confirms `resolve`, `validate-routing`, and `verify-conaryd` succeeded while deploy jobs stayed skipped in `dry_run=true`
+  - `conary-test`: intentionally excluded because `deploy_mode=none`
+  - Important limit: these deploy rehearsals only validated routing and artifact plumbing against the serialized metadata and filenames; they did not catch the binary-version skew documented above
 
 ## Secrets And Environment Readiness
 
 - Repo secrets:
+  - Direct `gh secret list` and `gh api repos/ConaryLabs/Conary/actions/secrets` inspection from this session shows exactly one visible repo-level Actions secret: `REMI_SSH_KEY`
 - Production environment secrets:
+  - Direct `gh secret list --env production` and `gh api repos/ConaryLabs/Conary/environments/production/secrets` inspection shows the `production` environment exists, but this session can see zero environment secrets there
 - Usability confirmation:
+  - `RELEASE_SIGNING_KEY`: `not confirmed`
+  - `REMI_SSH_KEY`: `verified directly`
+  - `REMI_SSH_TARGET`: `not confirmed` (workflow has a default fallback target, but no secret-backed confirmation was available from this session)
+  - `CONARYD_SSH_KEY`: `not confirmed`
+  - `CONARYD_SSH_TARGET`: `not confirmed`
+  - `CONARYD_VERIFY_URL`: `not confirmed`
+  - `gh secret list --org ConaryLabs` returned `HTTP 403`, so organization-level secret inheritance could not be inspected from this session
+  - per the plan rule, any `not confirmed` entry keeps the release `no-go`
 
 ## Blockers
 
-- No active blockers.
+- `release-build` dry-run rehearsal is not version-truthful on `main`: all candidate tracks produced artifact version skew between serialized release metadata and the actual packaged binaries/packages
+- `conary` self-update signature rehearsal is incomplete: dry-run skipped `.sig` generation because `RELEASE_SIGNING_KEY` was unset, `TRUSTED_UPDATE_KEYS` is still empty in the repo, and there is no supported offline verification path to exercise without new code
+- Required live-release secrets are missing or unconfirmed from this session: `RELEASE_SIGNING_KEY`, `REMI_SSH_TARGET`, `CONARYD_SSH_KEY`, `CONARYD_SSH_TARGET`, and `CONARYD_VERIFY_URL`
 
 ## Fixes Made
 
@@ -107,11 +138,15 @@ Untracked file dispositions:
 
 ## Release Decision
 
-- Approved Tracks:
-- Dropped Tracks:
+- Approved Tracks: none
+- Dropped Tracks: none
 - Blocked Tracks:
-- Final Release Command:
+  - `conary`: blocked by version-skewed dry-run artifacts, incomplete signature rehearsal, and unconfirmed `RELEASE_SIGNING_KEY`
+  - `remi`: blocked by dry-run binary-version mismatch and unconfirmed live deploy target readiness
+  - `conaryd`: blocked by dry-run binary-version mismatch and unconfirmed deploy secrets
+  - `conary-test`: blocked by dry-run binary-version mismatch
+- Final Release Command: do not cut; release is `no-go`
 
 ## Final Commands
 
-- Pending.
+- No live release command executed. The hardening pass stopped before any irreversible tag push or production deploy.
