@@ -102,6 +102,7 @@ jobs:
           product: ${{ needs.prepare.outputs.product }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           dry_run: ${{ needs.prepare.outputs.dry_run }}
+          CONARY_RELEASE_LOCKFILE_MODE: online
         run: |
           set -euo pipefail
           if [[ "$dry_run" != "true" ]]; then
@@ -172,6 +173,7 @@ jobs:
           product: ${{ needs.prepare.outputs.product }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           dry_run: ${{ needs.prepare.outputs.dry_run }}
+          CONARY_RELEASE_LOCKFILE_MODE: online
         run: |
           set -euo pipefail
           if [[ "$dry_run" != "true" ]]; then
@@ -224,6 +226,7 @@ jobs:
           product: ${{ needs.prepare.outputs.product }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           dry_run: ${{ needs.prepare.outputs.dry_run }}
+          CONARY_RELEASE_LOCKFILE_MODE: online
         run: |
           set -euo pipefail
           if [[ "$dry_run" != "true" ]]; then
@@ -272,6 +275,7 @@ jobs:
           product: ${{ needs.prepare.outputs.product }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           dry_run: ${{ needs.prepare.outputs.dry_run }}
+          CONARY_RELEASE_LOCKFILE_MODE: online
         run: |
           set -euo pipefail
           if [[ "$dry_run" != "true" ]]; then
@@ -381,6 +385,7 @@ jobs:
           product: ${{ needs.prepare.outputs.product }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           dry_run: ${{ needs.prepare.outputs.dry_run }}
+          CONARY_RELEASE_LOCKFILE_MODE: online
         run: |
           set -euo pipefail
           if [[ "$dry_run" != "true" ]]; then
@@ -465,6 +470,7 @@ jobs:
           product: ${{ needs.prepare.outputs.product }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           dry_run: ${{ needs.prepare.outputs.dry_run }}
+          CONARY_RELEASE_LOCKFILE_MODE: online
         run: |
           set -euo pipefail
           if [[ "$dry_run" != "true" ]]; then
@@ -549,6 +555,7 @@ jobs:
           product: ${{ needs.prepare.outputs.product }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           dry_run: ${{ needs.prepare.outputs.dry_run }}
+          CONARY_RELEASE_LOCKFILE_MODE: online
         run: |
           set -euo pipefail
           if [[ "$dry_run" != "true" ]]; then
