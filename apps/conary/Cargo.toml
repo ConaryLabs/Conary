@@ -73,3 +73,6 @@ clap = { workspace = true, features = ["cargo"] }
 clap_complete = "4.5"
 clap_mangen = "0.2"
 conary-core = { path = "../../crates/conary-core" }
+
+[dev-dependencies]
+ed25519-dalek.workspace = true

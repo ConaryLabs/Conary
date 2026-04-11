@@ -552,6 +552,22 @@ pub enum Commands {
         /// Skip signature verification (NOT RECOMMENDED)
         #[arg(long)]
         no_verify: bool,
+
+        /// Verify a detached signature over a SHA-256 digest without downloading an update
+        #[arg(long)]
+        verify_sha256: Option<String>,
+
+        /// Path to a detached signature file for offline self-update verification
+        #[arg(long)]
+        verify_signature_file: Option<String>,
+
+        /// Additional trusted Ed25519 public key (hex) for offline self-update verification
+        #[arg(long = "trusted-key")]
+        trusted_keys: Vec<String>,
+
+        /// Print the configured self-update trusted keys and exit
+        #[arg(long)]
+        print_trusted_keys: bool,
     },
 
     /// Package DNA / Provenance queries
@@ -678,5 +694,25 @@ mod tests {
         .expect("global live-mutation flag should parse before nested commands");
 
         assert!(cli.allow_live_system_mutation);
+    }
+
+    #[test]
+    fn self_update_accepts_offline_signature_verification_flags() {
+        let cli = Cli::try_parse_from([
+            "conary",
+            "self-update",
+            "--verify-sha256",
+            "abc123def456",
+            "--verify-signature-file",
+            "/tmp/conary.sig",
+            "--trusted-key",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+        ])
+        .expect("offline self-update verification flags should parse");
+
+        match cli.command {
+            Some(Commands::SelfUpdate { .. }) => {}
+            _ => panic!("expected self-update command"),
+        }
     }
 }

@@ -13,6 +13,7 @@ use conary_core::self_update::{
 };
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const NO_VERIFY_AUDIT_KEY: &str = "self-update.no-verify-audit";
@@ -118,13 +119,126 @@ fn validate_requested_version(version: &str) -> Result<()> {
     }
 }
 
-pub async fn cmd_self_update(
-    db_path: &str,
-    check: bool,
-    force: bool,
-    version: Option<String>,
-    no_verify: bool,
+fn validate_sha256_hex(sha256: &str) -> Result<()> {
+    if sha256.len() == 64 && sha256.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        Ok(())
+    } else {
+        anyhow::bail!("Invalid SHA-256 digest: expected 64 hex characters");
+    }
+}
+
+fn print_trusted_update_keys() {
+    if conary_core::self_update::TRUSTED_UPDATE_KEYS.is_empty() {
+        println!("No trusted self-update keys configured.");
+        return;
+    }
+
+    for key in conary_core::self_update::TRUSTED_UPDATE_KEYS {
+        println!("{key}");
+    }
+}
+
+fn verify_detached_signature_file(
+    sha256_hex: &str,
+    signature_path: &Path,
+    trusted_keys: &[String],
 ) -> Result<()> {
+    validate_sha256_hex(sha256_hex)?;
+
+    let signature = std::fs::read_to_string(signature_path).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to read signature file {}: {e}",
+            signature_path.display()
+        )
+    })?;
+    let signature = signature.trim();
+    if signature.is_empty() {
+        anyhow::bail!("Signature file {} is empty", signature_path.display());
+    }
+
+    let mut key_refs: Vec<&str> = trusted_keys.iter().map(String::as_str).collect();
+    key_refs.extend(
+        conary_core::self_update::TRUSTED_UPDATE_KEYS
+            .iter()
+            .copied(),
+    );
+
+    if key_refs.is_empty() {
+        anyhow::bail!(
+            "No trusted keys configured or provided. Supply --trusted-key <HEX> or configure TRUSTED_UPDATE_KEYS first."
+        );
+    }
+
+    conary_core::self_update::verify_update_signature_with_keys(sha256_hex, signature, &key_refs)
+        .map_err(|e| anyhow::anyhow!("Update signature verification failed: {e}"))?;
+
+    println!("Signature verified");
+    Ok(())
+}
+
+pub struct SelfUpdateOptions {
+    pub check: bool,
+    pub force: bool,
+    pub version: Option<String>,
+    pub no_verify: bool,
+    pub verify_sha256: Option<String>,
+    pub verify_signature_file: Option<String>,
+    pub trusted_keys: Vec<String>,
+    pub print_trusted_keys: bool,
+}
+
+pub async fn cmd_self_update(db_path: &str, options: SelfUpdateOptions) -> Result<()> {
+    let SelfUpdateOptions {
+        check,
+        force,
+        version,
+        no_verify,
+        verify_sha256,
+        verify_signature_file,
+        trusted_keys,
+        print_trusted_keys,
+    } = options;
+
+    if print_trusted_keys {
+        if check
+            || force
+            || version.is_some()
+            || no_verify
+            || verify_sha256.is_some()
+            || verify_signature_file.is_some()
+            || !trusted_keys.is_empty()
+        {
+            anyhow::bail!(
+                "--print-trusted-keys cannot be combined with update or offline verification flags"
+            );
+        }
+
+        print_trusted_update_keys();
+        return Ok(());
+    }
+
+    let offline_verify_mode =
+        verify_sha256.is_some() || verify_signature_file.is_some() || !trusted_keys.is_empty();
+    if offline_verify_mode {
+        if check || force || version.is_some() || no_verify {
+            anyhow::bail!(
+                "Offline signature verification mode cannot be combined with update/install flags"
+            );
+        }
+
+        let sha256 = verify_sha256.ok_or_else(|| {
+            anyhow::anyhow!("--verify-sha256 is required for offline signature verification")
+        })?;
+        let signature_file = verify_signature_file.ok_or_else(|| {
+            anyhow::anyhow!(
+                "--verify-signature-file is required for offline signature verification"
+            )
+        })?;
+
+        verify_detached_signature_file(&sha256, Path::new(&signature_file), &trusted_keys)?;
+        return Ok(());
+    }
+
     let current_version = env!("CARGO_PKG_VERSION");
     let conn = open_db(db_path)?;
     let channel_url = get_update_channel(&conn)?;
@@ -263,10 +377,16 @@ pub async fn cmd_self_update(
 
 #[cfg(test)]
 mod tests {
-    use super::{NO_VERIFY_AUDIT_KEY, record_no_verify_audit_event, validate_requested_version};
+    use super::{
+        NO_VERIFY_AUDIT_KEY, record_no_verify_audit_event, validate_requested_version,
+        verify_detached_signature_file,
+    };
+    use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
     use conary_core::db::models::settings;
     use conary_core::db::schema;
+    use ed25519_dalek::Signer;
     use rusqlite::Connection;
+    use tempfile::tempdir;
 
     fn create_test_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -304,5 +424,40 @@ mod tests {
     fn validate_requested_version_rejects_non_semver() {
         let err = validate_requested_version("latest").unwrap_err();
         assert!(err.to_string().contains("Invalid version format"));
+    }
+
+    #[test]
+    fn verify_detached_signature_file_accepts_custom_trusted_key() {
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+        let verifying_key_hex = hex::encode(signing_key.verifying_key().as_bytes());
+        let sha256_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let signature = signing_key.sign(sha256_hex.as_bytes());
+        let signature_b64 = BASE64.encode(signature.to_bytes());
+
+        let temp_dir = tempdir().unwrap();
+        let signature_path = temp_dir.path().join("conary.sig");
+        std::fs::write(&signature_path, format!("{signature_b64}\n")).unwrap();
+
+        verify_detached_signature_file(sha256_hex, &signature_path, &[verifying_key_hex])
+            .expect("custom trusted key should verify the detached signature");
+    }
+
+    #[test]
+    fn verify_detached_signature_file_rejects_missing_trusted_keys() {
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]);
+        let sha256_hex = "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd";
+        let signature = signing_key.sign(sha256_hex.as_bytes());
+        let signature_b64 = BASE64.encode(signature.to_bytes());
+
+        let temp_dir = tempdir().unwrap();
+        let signature_path = temp_dir.path().join("conary.sig");
+        std::fs::write(&signature_path, format!("{signature_b64}\n")).unwrap();
+
+        let err = verify_detached_signature_file(sha256_hex, &signature_path, &[])
+            .expect_err("verification should fail when no trusted keys are available");
+        assert!(
+            err.to_string()
+                .contains("No trusted keys configured or provided")
+        );
     }
 }

@@ -1091,6 +1091,7 @@ dependencies = [
  "conary-bootstrap",
  "conary-core",
  "const-oid 0.10.2",
+ "ed25519-dalek",
  "flate2",
  "glob",
  "hex",
