@@ -37,10 +37,10 @@ fn check_update_signature(sha256: &str, signature: &Option<String>, no_verify: b
     let have_trusted_keys = !conary_core::self_update::TRUSTED_UPDATE_KEYS.is_empty();
 
     if !have_trusted_keys {
-        // No trusted keys shipped yet -- signature verification is impossible.
-        // Refuse by default; the user must pass --no-verify to proceed with
-        // an unverifiable update.  This prevents silent unsigned binary
-        // replacement when TRUSTED_UPDATE_KEYS is empty.
+        // No trusted keys are configured in this build, so signature
+        // verification is impossible. Refuse by default; the user must pass
+        // --no-verify to proceed with an unverifiable update. This prevents
+        // silent unsigned binary replacement when TRUSTED_UPDATE_KEYS is empty.
         if signature.is_some() {
             anyhow::bail!(
                 "Update has a signature but no trusted keys are configured to verify it. \
@@ -443,7 +443,7 @@ mod tests {
     }
 
     #[test]
-    fn verify_detached_signature_file_rejects_missing_trusted_keys() {
+    fn verify_detached_signature_file_rejects_untrusted_signature() {
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]);
         let sha256_hex = "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd";
         let signature = signing_key.sign(sha256_hex.as_bytes());
@@ -454,10 +454,10 @@ mod tests {
         std::fs::write(&signature_path, format!("{signature_b64}\n")).unwrap();
 
         let err = verify_detached_signature_file(sha256_hex, &signature_path, &[])
-            .expect_err("verification should fail when no trusted keys are available");
+            .expect_err("verification should fail when no trusted key matches the signature");
         assert!(
             err.to_string()
-                .contains("No trusted keys configured or provided")
+                .contains("Update signature verification failed: invalid signature")
         );
     }
 }
