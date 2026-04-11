@@ -4,6 +4,104 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.8.0] - 2026-04-10
+
+### Fixed
+- deep code review — 155 findings across 11 feature domains
+
+### Other
+- fix(release): configure arch rust toolchains for dry-run prep
+- fix(release): trust CI checkout ownership during dry-runs
+- fix(release): use global git identity in dry-run prep
+- fix(release): allow CI lockfile refresh during dry-runs
+- security(self-update): trust production release signing key
+- fix(release): harden dry-run rehearsal
+- docs(audit): refresh operational and handbook docs
+- docs(audit): add inventory snapshot and ledger
+- docs(audit): add documentation inventory helpers
+- feat(release): realign four-track release matrix
+- fix(ops): preserve forge checkout metadata during sync
+- fix(ops): run forge rollouts through checkout code
+- fix(ops): restore forge deploy wrapper mode
+- feat(ops): wrap forge deploys through managed rollout flow
+- feat(conary-test): add forge rollout manifest
+- feat(conary-test): harden forge integration validation
+- feat(repository): implement remote substituter sources
+- feat(conary): implement phase 3 build surfaces
+- feat(automation): implement phase 2 executor flow
+- feat(conary): implement phase 1 model apply and state revert
+- style(model): format diff warning assertions
+- fix(model): align source-policy copy with executable replatforming
+- feat(model): harden replatform execution failure handling
+- feat(model): execute replatform install and remove legs
+- feat(replatform): define execution transaction model
+- feat(replatform): use shared source-selection ranking
+- feat(model): persist decomposed source policy
+- feat(model): capture and diff source policy state
+- feat(update): make update source-policy aware
+- test(update): lock latest-mode update semantics
+- feat(resolver): close exact-name selection bypass
+- feat(resolver): make sat sorting selection-mode aware
+- feat(resolver): honor latest mode in canonical ranking
+- feat(cli): add selection mode command
+- feat(policy): add repology latest signal helpers
+- feat(policy): add effective runtime policy loader
+- feat(model): reconcile profile presets with decomposed policy
+- feat(policy): add selection mode and allowlist support
+- refactor(conaryd): centralize defaults and operation kinds
+- fix(bootstrap): address verification fallout
+- refactor(conary): share bootstrap helpers
+- refactor(bootstrap): add shared binary helpers
+- ci(deploy): skip GitHub deployments for dry runs
+- simplify: finish cross-chunk cleanup pass
+- merge: wave4 chunk9 cli-commands
+- simplify: cli-commands - split model apply and publish helpers
+- merge: wave4 chunk6 core-system
+- simplify: core-system - extract container and EROFS helpers
+- simplify: core-supporting — extract recovery and execution helpers
+- Merge branch 'main' into wave3/integration
+- style(conary): format capability workflow test
+- Merge branch 'main' into wave3/integration
+- test(conary): skip capability run on limited hosts
+- Merge branch 'main' into wave3/integration
+- fix(core): replace wait-timeout child waits
+- Merge branch 'simplify/core-model-ccs' into wave3/integration
+- refactor(ccs): extract package writer helpers
+- refactor(core-db): extract trigger engine module
+- Merge branch 'simplify/core-repository' follow-up into wave2/integration
+- Merge branch 'simplify/core-build' follow-up into wave2/integration
+- style(core-repository): format extracted sync helpers
+- style(core-build): format extracted scriptlet helpers
+- Merge branch 'simplify/core-repository' into wave2/integration
+- refactor(core-repository): split repository sync helpers
+- refactor(core-build): extract scriptlet runtime helpers
+- refactor(conary): split dispatch handlers
+- refactor(conary-core): split SAT solver helpers
+- remi: make remi.conary.io canonical
+- docs(remi): drop legacy forgejo config example
+- ci: refresh GitHub Actions runtimes (#29)
+- fix(ci): always rebuild ccs release binary
+- fix(ci): pass repo context to deploy downloads
+- fix(ci): restore trusted-lane path defaults
+- fix(ci): tolerate hosted sandbox exit fallbacks
+- fix(ci): skip mount-isolation tests on hosted runners
+- fix(ci): tolerate hosted-runner capability limits
+- ops(forge): support token-based runner setup
+- security(ci): pin actions and isolate cargo audit
+- ci: split release build from deployment
+- ops(ci): switch Forge setup to GitHub runner host
+- docs(ci): align release taxonomy with product model
+- feat(cli): refresh live host mutation safety gate
+- test(derivation): make shell-on-failure test tty-safe
+- test(workspace): stabilize moved crate verification
+- refactor(tooling): align release and packaging with new workspace
+- refactor(apps): split oversized dispatch and route modules
+- refactor(core): simplify core features and shared helpers
+- refactor(cli): remove cross-package server feature wiring
+- refactor(workspace): relocate shared core and test harness
+- refactor(workspace): move conary app into apps directory
+- wip(remi): checkpoint root worktree changes
+- security(dracut): align /etc overlay to per-generation scheme (Task 8)
 Historical Remi and `conary-test` entries before the release-matrix
 realignment may use legacy `server-v*` and `test-v*` headings. Current
 canonical release tags are `remi-v*`, `conaryd-v*`, and `conary-test-v*`.

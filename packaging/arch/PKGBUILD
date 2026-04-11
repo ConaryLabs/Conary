@@ -4,7 +4,7 @@
 # Builds from a vendored source tarball (no network access needed during build).
 
 pkgname=conary
-pkgver=0.7.0
+pkgver=0.8.0
 pkgrel=1
 pkgdesc='Modern package manager with atomic operations, rollback, and delta updates'
 arch=('x86_64' 'aarch64')
