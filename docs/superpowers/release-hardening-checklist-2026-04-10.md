@@ -157,14 +157,26 @@ Untracked file dispositions:
 ## Release Decision
 
 - Approved Tracks:
-  - `conary`: passing `release-build` dry-run `24271605335`, offline detached-signature verification, and passing `deploy-and-verify` dry-run `24272138949`
+  - `conary`: passing `release-build` dry-run `24271605335`, offline detached-signature verification, passing `deploy-and-verify` dry-run `24272138949`, and successful live cut with `release-build` run `24272510305`, `deploy-and-verify` run `24272911392`, and published GitHub release `v0.8.0`
 - Dropped Tracks: none
 - Blocked Tracks:
   - `remi`: blocked by the earlier dry-run binary-version mismatch and unconfirmed live deploy target readiness; not rerun after the workflow fixes in this pass
   - `conaryd`: blocked by the earlier dry-run binary-version mismatch and unconfirmed deploy secrets; not rerun after the workflow fixes in this pass
   - `conary-test`: blocked by the earlier dry-run binary-version mismatch; not rerun after the workflow fixes in this pass
-- Final Release Command: coordinated all-tracks release remains `no-go`; if scope narrows to `conary` only, current rehearsal evidence supports `./scripts/release.sh conary`
+- Final Release Command: coordinated all-tracks release remains `no-go`; narrowed `conary` release is complete and the remaining tracks still require their own reruns/hardening work before any broader cut
 
 ## Final Commands
 
-- No live release command executed. The hardening pass still has not pushed any release tag or production deploy, but `conary` now has passing build, detached-signature, and deploy-handoff dry-run evidence.
+- Live `conary` cut:
+  - attempted `./scripts/release.sh conary`, which prepared the `0.8.0` version bumps but could not write `.git/index.lock` in this session's sandbox
+  - completed the prepared release state manually with:
+    - `git add CHANGELOG.md Cargo.lock apps/conary/Cargo.toml crates/conary-bootstrap/Cargo.toml crates/conary-core/Cargo.toml packaging/arch/PKGBUILD packaging/ccs/ccs.toml packaging/deb/debian/changelog packaging/rpm/conary.spec`
+    - `git commit -m "chore: release v0.8.0"`
+    - `git tag -a v0.8.0 -m "Release v0.8.0"`
+    - `git push`
+    - `git push --tags`
+  - resulting release commit: `0e997c63`
+  - resulting live workflow chain:
+    - `release-build` run `24272510305`: `success`
+    - `deploy-and-verify` run `24272911392`: `success`
+  - resulting published GitHub release: `https://github.com/ConaryLabs/Conary/releases/tag/v0.8.0`
