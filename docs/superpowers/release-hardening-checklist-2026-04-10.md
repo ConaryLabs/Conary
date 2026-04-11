@@ -125,7 +125,16 @@ Untracked file dispositions:
     - `tar tzf` confirms the tarball payload path is `remi-0.6.0-linux-x64`, and `tar xOf ... | sha256sum` matches the loose bundled binary hash exactly
   - `deploy-and-verify`: run ID `24273182800`, conclusion `success`, `source_run=24272999752`; `resolve`, `validate-routing`, and `verify-remi` succeeded while live deploy jobs stayed skipped in `dry_run=true`
   - rerun conclusion: `remi` dry-run build truthfulness and deploy-handoff verification now pass on `main`
-  - scope note: `conaryd` and `conary-test` were not rerun after these workflow fixes, so their latest recorded evidence remains the earlier failing rehearsal
+- Superseding `conaryd` rerun after release-fix commits:
+  - `release-build`: run ID `24273530124`, conclusion `success`, artifact target `/home/peter/.claude/tmp/conary-release-hardening-2026-04-10/artifacts/conaryd-run-24273530124`
+  - artifact validation: `pass`
+    - `metadata.json` reports `product=conaryd`, `version=0.6.0`, `tag_name=conaryd-v0.6.0`, `bundle_name=conaryd-bundle`, `deploy_mode=remote_bundle`, `dry_run=true`
+    - downloaded bundle files align on `0.6.0`: `conaryd-0.6.0-linux-x64` and `conaryd-0.6.0-linux-x64.tar.gz`
+    - the downloaded binary itself returns `conaryd 0.6.0` under `--version`
+    - `tar tzf` confirms the tarball payload path is `conaryd-0.6.0-linux-x64`, and `tar xOf ... | sha256sum` matches the loose bundled binary hash exactly
+  - `deploy-and-verify`: run ID `24273620044`, conclusion `success`, `source_run=24273530124`; `resolve`, `validate-routing`, and `verify-conaryd` succeeded while live deploy jobs stayed skipped in `dry_run=true`
+  - rerun conclusion: `conaryd` dry-run build truthfulness and deploy-handoff verification now pass on `main`
+  - scope note: `conary-test` was not rerun after these workflow fixes, so its latest recorded evidence remains the earlier failing rehearsal
 
 ## Secrets And Environment Readiness
 
@@ -137,11 +146,12 @@ Untracked file dispositions:
   - `RELEASE_SIGNING_KEY`: `confirmed indirectly` by successful dry-run signing in `release-build` run `24271605335`
   - `REMI_SSH_KEY`: `verified directly` and exercised successfully by live `deploy-remi` run `24273444167`
   - `REMI_SSH_TARGET`: `confirmed indirectly` by successful live `deploy-remi` run `24273444167` (whether provided via secret or workflow fallback)
-  - `CONARYD_SSH_KEY`: `not confirmed`
-  - `CONARYD_SSH_TARGET`: `not confirmed`
-  - `CONARYD_VERIFY_URL`: `not confirmed`
+  - `CONARYD_SSH_KEY`: `verified missing in live workflow context` because `deploy-conaryd` in run `24273754560` printed `CONARYD_SSH_KEY:` with an empty value and failed with `CONARYD_SSH_KEY is required`
+  - `CONARYD_SSH_TARGET`: `verified missing in live workflow context` because `deploy-conaryd` in run `24273754560` printed `CONARYD_SSH_TARGET:` with an empty value
+  - `CONARYD_VERIFY_URL`: `verified missing in live workflow context` because `deploy-conaryd` in run `24273754560` printed `CONARYD_VERIFY_URL:` with an empty value
   - `gh secret list --org ConaryLabs` returned `HTTP 403`, so organization-level secret inheritance could not be inspected from this session
-  - per the plan rule, the remaining `not confirmed` entries keep the coordinated all-tracks release `no-go`
+  - the live `deploy-conaryd` failure proves that no usable `CONARYD_*` values reached the workflow job from repo, environment, or any unseen inherited source
+  - per the plan rule, the missing `CONARYD_*` entries keep the coordinated all-tracks release `no-go`
 
 ## Blockers
 
@@ -150,9 +160,12 @@ Untracked file dispositions:
   - the earlier `conary` detached-signature rehearsal blocker is cleared by the successful offline verification of `conary-0.8.0.ccs.sig`
   - the earlier `remi` dry-run truthfulness blocker is cleared by `release-build` run `24272999752`
   - the earlier `remi` live deploy target readiness blocker is cleared by successful live `deploy-remi` run `24273444167`
+  - the earlier `conaryd` dry-run truthfulness blocker is cleared by `release-build` run `24273530124`
+  - the earlier `conaryd` deploy-handoff rehearsal blocker is cleared by dry-run `deploy-and-verify` run `24273620044`
 - Remaining active blockers:
-  - coordinated all-tracks release remains blocked because `conaryd` and `conary-test` were not rerun after the workflow fixes in this pass; their latest recorded dry-run evidence is still the earlier version-skew failure
-  - required live-release secrets remain missing or unconfirmed from this session for the remaining remote deploy lane: `CONARYD_SSH_KEY`, `CONARYD_SSH_TARGET`, and `CONARYD_VERIFY_URL`
+  - `conaryd` live deployment is blocked because `deploy-and-verify` run `24273754560` proved `CONARYD_SSH_KEY`, `CONARYD_SSH_TARGET`, and `CONARYD_VERIFY_URL` were blank in workflow context
+  - `conary-test` was not rerun after the workflow fixes in this pass, so its latest recorded dry-run evidence is still the earlier version-skew failure
+  - coordinated all-tracks release remains blocked until `conaryd` secrets are configured and `conary-test` is rerun cleanly
 
 ## Fixes Made
 
@@ -173,9 +186,9 @@ Untracked file dispositions:
   - `remi`: passing `release-build` dry-run `24272999752`, passing `deploy-and-verify` dry-run `24273182800`, successful live deploy via `deploy-and-verify` run `24273444167`, and published GitHub release `remi-v0.6.0`
 - Dropped Tracks: none
 - Blocked Tracks:
-  - `conaryd`: blocked by the earlier dry-run binary-version mismatch and unconfirmed deploy secrets; not rerun after the workflow fixes in this pass
+  - `conaryd`: dry-run `release-build` `24273530124` and dry-run `deploy-and-verify` `24273620044` both passed, and live `release-build` `24273700060` published GitHub release `conaryd-v0.6.0`, but live `deploy-and-verify` `24273754560` failed because `CONARYD_SSH_KEY`, `CONARYD_SSH_TARGET`, and `CONARYD_VERIFY_URL` were blank in workflow context
   - `conary-test`: blocked by the earlier dry-run binary-version mismatch; not rerun after the workflow fixes in this pass
-- Final Release Command: coordinated all-tracks release remains `no-go`; narrowed `conary` and `remi` releases are complete and the remaining tracks still require their own reruns/hardening work before any broader cut
+- Final Release Command: coordinated all-tracks release remains `no-go`; narrowed `conary` and `remi` releases are complete, `conaryd` is release-published but deployment-blocked on missing secrets, and `conary-test` still requires its own rerun/hardening work before any broader cut
 
 ## Final Commands
 
@@ -209,3 +222,17 @@ Untracked file dispositions:
     - `release-build` run `24273221697`: `failure` limited to `publish-remi` after successful `build-remi`
     - `deploy-and-verify` run `24273444167`: `success`
   - resulting published GitHub release: `https://github.com/ConaryLabs/Conary/releases/tag/remi-v0.6.0`
+- Live `conaryd` cut:
+  - attempted `./scripts/release.sh conaryd`, which prepared the `0.6.0` version bumps but could not write `.git/index.lock` in this session's sandbox
+  - completed the prepared release state manually with:
+    - `git add CHANGELOG.md Cargo.lock apps/conaryd/Cargo.toml`
+    - `git commit -m "chore: release conaryd-v0.6.0"`
+    - `git tag -a conaryd-v0.6.0 -m "Release conaryd-v0.6.0"`
+    - `git push`
+    - `git push --tags`
+  - resulting release commit: `45b03496`
+  - resulting live workflow chain:
+    - `release-build` run `24273700060`: `success`
+    - `deploy-and-verify` run `24273754560`: `failure` in `deploy-conaryd` because `CONARYD_SSH_KEY`, `CONARYD_SSH_TARGET`, and `CONARYD_VERIFY_URL` were blank in workflow context
+  - resulting published GitHub release: `https://github.com/ConaryLabs/Conary/releases/tag/conaryd-v0.6.0`
+  - remaining follow-up before conaryd can be considered fully released: configure the missing `CONARYD_*` secrets, then rerun `deploy-and-verify` against `source_run=24273700060` with `dry_run=false`
