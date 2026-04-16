@@ -59,6 +59,18 @@ require_match "$deploy_workflow" 'No deploy lane defined for product=' 'explicit
 require_match "$deploy_workflow" 'no-deploy-required:' 'explicit no-deploy lane'
 require_match "$deploy_workflow" "needs\\.resolve\\.outputs\\.deploy_mode == 'none'" 'deploy_mode none handling'
 require_match "$deploy_workflow" 'BUNDLE_NAME: \$\{\{ needs\.resolve\.outputs\.bundle_name \}\}' 'bundle_name-driven artifact lookup'
+require_match "$deploy_workflow" 'deploy_asset_ref' 'bootstrap-only deploy asset ref input'
+require_match "$deploy_workflow" 'bootstrap_exception' 'bootstrap exception resolve output'
+require_match "$deploy_workflow" '24273700060' 'one-time conaryd bootstrap exception gate'
+require_match "$deploy_workflow" 'ref: \$\{\{ needs\.resolve\.outputs\.deploy_asset_ref \}\}' 'deploy assets checked out from resolved asset ref'
+require_match "$deploy_workflow" 'deploy/ssh/forge-known-hosts' 'pinned Forge host trust'
+require_match "$deploy_workflow" 'StrictHostKeyChecking=yes' 'strict host-key checking for conaryd'
+require_match "$deploy_workflow" 'scripts/install-conaryd-on-forge\.sh' 'checked-in conaryd helper staging'
+require_match "$deploy_workflow" 'scripts/conaryd-health\.sh' 'checked-in conaryd verifier staging'
+require_match "$deploy_workflow" 'deploy/systemd/conaryd\.service' 'checked-in conaryd unit staging'
+require_match "$deploy_workflow" 'EXPECTED_SHA256="\$\(sha256sum "\$bundle" \| awk' 'runner-side conaryd bundle hash computation'
+require_match "$deploy_workflow" "mkdir -p '\\\$\\{remote_stage\\}'" 'remote staging directory creation'
+forbid_match "$deploy_workflow" 'CONARYD_VERIFY_URL' 'legacy public verify URL'
 
 for product in conary remi conaryd; do
     deploy_mode="$(bash scripts/release-matrix.sh field "$product" deploy_mode)"

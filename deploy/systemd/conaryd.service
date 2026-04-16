@@ -1,0 +1,17 @@
+[Unit]
+Description=Conary daemon (Forge staging)
+After=network.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+TimeoutStartSec=180
+User=root
+Group=root
+RuntimeDirectory=conary
+StateDirectory=conary
+ExecStart=/usr/local/bin/conaryd --db /var/lib/conary/conary.db --socket /run/conary/conaryd.sock
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

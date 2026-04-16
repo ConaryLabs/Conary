@@ -1,0 +1,14 @@
+# /etc/sudoers.d/conaryd-forge
+Cmnd_Alias CONARYD_INSTALL = \
+    /usr/bin/install -m 0755 * /usr/local/bin/conaryd, \
+    /usr/bin/install -m 0644 * /etc/systemd/system/conaryd.service, \
+    /usr/bin/rm -f /usr/local/bin/conaryd, \
+    /usr/bin/rm -f /etc/systemd/system/conaryd.service, \
+    /usr/bin/systemctl daemon-reload, \
+    /usr/bin/systemctl restart conaryd
+Cmnd_Alias CONARYD_VERIFY = \
+    /usr/bin/curl --fail --silent --show-error --unix-socket /run/conary/conaryd.sock http\://localhost/health
+
+peter ALL=(root) NOPASSWD: CONARYD_INSTALL, CONARYD_VERIFY
+Defaults!CONARYD_INSTALL !requiretty
+Defaults!CONARYD_VERIFY !requiretty
