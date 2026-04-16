@@ -71,6 +71,22 @@ Under the hood:
 `scripts/deploy-forge.sh` is now a convenience wrapper, not the deployment
 brain. Build/restart/verify ordering lives in `conary-test deploy rollout`.
 
+## Conaryd Staging Service
+
+Forge also hosts `conaryd` as a local-only staging daemon managed as the
+system unit `conaryd.service`. This is intentionally separate from the managed
+`conary-test` rollout groups above.
+
+- Deploys come from the GitHub `deploy-and-verify` workflow, not from ad hoc
+  SSH copy/paste or public endpoint curls
+- Verification uses `scripts/conaryd-health.sh`, which checks the
+  Forge-local Unix socket at `/run/conary/conaryd.sock`
+- The tracked bootstrap prerequisites are `deploy/ssh/forge-known-hosts` for
+  pinned SSH host trust and `deploy/sudoers/conaryd-forge` for the narrowed
+  non-interactive install/verify command surface
+- The staging service is local-only on Forge; this does not imply that public
+  production hosting for `conaryd` is solved
+
 ## Supported Validation Commands
 
 ```bash
@@ -83,6 +99,9 @@ bash scripts/forge-smoke.sh --port 9099
 # Run Remi health checks:
 ./scripts/remi-health.sh --smoke
 ./scripts/remi-health.sh --full
+
+# Run the Forge-local conaryd staging verifier:
+bash scripts/conaryd-health.sh --expected-version 0.6.0
 ```
 
 `forge-smoke.sh` resolves the local port with `--port` > `CONARY_TEST_PORT` >

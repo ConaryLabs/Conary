@@ -19,6 +19,9 @@ on:
         description: Skip live deployment and verify artifact handling only.
         required: false
         default: "true"
+      deploy_asset_ref:
+        description: Optional repo ref for checked-in deploy assets.
+        required: false
 
 permissions:
   actions: read
@@ -43,6 +46,8 @@ jobs:
       artifact_patterns: ${{ steps.meta.outputs.artifact_patterns }}
       source_run: ${{ steps.meta.outputs.source_run }}
       environment: ${{ steps.meta.outputs.environment }}
+      deploy_asset_ref: ${{ steps.meta.outputs.deploy_asset_ref }}
+      bootstrap_exception: ${{ steps.meta.outputs.bootstrap_exception }}
     steps:
       - name: Resolve source run
         id: source
@@ -101,6 +106,24 @@ jobs:
             dry_run="$MANUAL_DRY_RUN"
           fi
 
+          manual_deploy_asset_ref="${{ github.event.inputs.deploy_asset_ref || '' }}"
+
+          if [[ "$SOURCE_RUN" == "24273700060" && "$tag_name" == "conaryd-v0.6.0" ]]; then
+            [[ -n "$manual_deploy_asset_ref" ]] || {
+              echo "bootstrap rerun requires deploy_asset_ref" >&2
+              exit 1
+            }
+            deploy_asset_ref="$manual_deploy_asset_ref"
+            bootstrap_exception="true"
+          else
+            [[ -z "$manual_deploy_asset_ref" ]] || {
+              echo "deploy_asset_ref is bootstrap-only and may only be used with source_run=24273700060" >&2
+              exit 1
+            }
+            deploy_asset_ref="$tag_name"
+            bootstrap_exception="false"
+          fi
+
           echo "product=${product}" >> "$GITHUB_OUTPUT"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
@@ -110,6 +133,8 @@ jobs:
           echo "artifact_patterns=${artifact_patterns}" >> "$GITHUB_OUTPUT"
           echo "source_run=${SOURCE_RUN}" >> "$GITHUB_OUTPUT"
           echo "environment=${TARGET_ENVIRONMENT}" >> "$GITHUB_OUTPUT"
+          echo "deploy_asset_ref=${deploy_asset_ref}" >> "$GITHUB_OUTPUT"
+          echo "bootstrap_exception=${bootstrap_exception}" >> "$GITHUB_OUTPUT"
 
   validate-routing:
     name: validate-routing
@@ -306,6 +331,10 @@ jobs:
     if: ${{ needs.resolve.outputs.product == 'conaryd' && needs.resolve.outputs.deploy_mode == 'remote_bundle' && github.event_name == 'workflow_dispatch' && needs.resolve.outputs.dry_run == 'true' }}
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.resolve.outputs.deploy_asset_ref }}
       - name: Download source artifacts
         env:
           GH_TOKEN: ${{ github.token }}
@@ -316,6 +345,7 @@ jobs:
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
           BUNDLE_NAME: ${{ needs.resolve.outputs.bundle_name }}
+          DEPLOY_ASSET_REF: ${{ needs.resolve.outputs.deploy_asset_ref }}
         shell: bash
         run: |
           set -euo pipefail
@@ -323,7 +353,16 @@ jobs:
           [[ -n "$bundle_dir" ]] || { echo "conaryd bundle artifact directory missing" >&2; exit 1; }
           bundle=$(find "$bundle_dir" -maxdepth 1 -name "conaryd-${VERSION}-linux-x64.tar.gz" -print -quit)
           [[ -n "$bundle" ]] || { echo "conaryd bundle missing" >&2; exit 1; }
+          helper="${GITHUB_WORKSPACE}/scripts/install-conaryd-on-forge.sh"
+          verifier="${GITHUB_WORKSPACE}/scripts/conaryd-health.sh"
+          unit="${GITHUB_WORKSPACE}/deploy/systemd/conaryd.service"
+          test -f "$helper"
+          test -f "$verifier"
+          test -f "$unit"
+          echo "[DRY RUN] deploy_asset_ref: $DEPLOY_ASSET_REF"
           echo "[DRY RUN] conaryd bundle ready: $bundle"
+          echo "[DRY RUN] checked-in assets to stage:"
+          printf '  %s\n' "$helper" "$verifier" "$unit"
 
   deploy-conaryd:
     name: deploy-conaryd
@@ -332,6 +371,10 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ needs.resolve.outputs.environment }}
     steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.resolve.outputs.deploy_asset_ref }}
       - name: Download source artifacts
         env:
           GH_TOKEN: ${{ github.token }}
@@ -344,7 +387,8 @@ jobs:
           BUNDLE_NAME: ${{ needs.resolve.outputs.bundle_name }}
           CONARYD_SSH_KEY: ${{ secrets.CONARYD_SSH_KEY }}
           CONARYD_SSH_TARGET: ${{ secrets.CONARYD_SSH_TARGET }}
-          CONARYD_VERIFY_URL: ${{ secrets.CONARYD_VERIFY_URL }}
+          DEPLOY_ASSET_REF: ${{ needs.resolve.outputs.deploy_asset_ref }}
+          BOOTSTRAP_EXCEPTION: ${{ needs.resolve.outputs.bootstrap_exception }}
         shell: bash
         run: |
           set -euo pipefail
@@ -352,30 +396,45 @@ jobs:
           [[ -n "$bundle_dir" ]] || { echo "conaryd bundle artifact directory missing" >&2; exit 1; }
           bundle=$(find "$bundle_dir" -maxdepth 1 -name "conaryd-${VERSION}-linux-x64.tar.gz" -print -quit)
           [[ -n "$bundle" ]] || { echo "conaryd bundle missing" >&2; exit 1; }
+          helper="${GITHUB_WORKSPACE}/scripts/install-conaryd-on-forge.sh"
+          verifier="${GITHUB_WORKSPACE}/scripts/conaryd-health.sh"
+          unit="${GITHUB_WORKSPACE}/deploy/systemd/conaryd.service"
+          [[ -f "$helper" ]] || { echo "conaryd helper missing" >&2; exit 1; }
+          [[ -f "$verifier" ]] || { echo "conaryd verifier missing" >&2; exit 1; }
+          [[ -f "$unit" ]] || { echo "conaryd unit missing" >&2; exit 1; }
           [[ -n "${CONARYD_SSH_KEY:-}" ]] || { echo "CONARYD_SSH_KEY is required" >&2; exit 1; }
           [[ -n "${CONARYD_SSH_TARGET:-}" ]] || { echo "CONARYD_SSH_TARGET is required" >&2; exit 1; }
-          [[ -n "${CONARYD_VERIFY_URL:-}" ]] || { echo "CONARYD_VERIFY_URL is required" >&2; exit 1; }
+          EXPECTED_SHA256="$(sha256sum "$bundle" | awk '{print $1}')"
+          remote_stage="/var/tmp/conaryd-deploy-${VERSION}"
 
           mkdir -p ~/.ssh
           echo "$CONARYD_SSH_KEY" > ~/.ssh/conaryd_key
           chmod 600 ~/.ssh/conaryd_key
-          ssh-keyscan -H "${CONARYD_SSH_TARGET#*@}" >> ~/.ssh/known_hosts 2>/dev/null
-          ssh_opts="-i ~/.ssh/conaryd_key -o StrictHostKeyChecking=accept-new"
+          ssh_opts=(
+            -i ~/.ssh/conaryd_key
+            -o UserKnownHostsFile=deploy/ssh/forge-known-hosts
+            -o StrictHostKeyChecking=yes
+          )
 
-          scp $ssh_opts "$bundle" "${CONARYD_SSH_TARGET}:/tmp/conaryd-${VERSION}.tar.gz"
-          ssh $ssh_opts "$CONARYD_SSH_TARGET" bash -s "$VERSION" <<'REMOTE_EOF'
-            set -euo pipefail
-            VERSION="$1"
-            tmpdir=$(mktemp -d)
-            trap 'rm -rf "$tmpdir"' EXIT
-            tar xzf "/tmp/conaryd-${VERSION}.tar.gz" -C "$tmpdir"
-            systemctl stop conaryd
-            cp "$tmpdir/conaryd-${VERSION}-linux-x64" /usr/local/bin/conaryd
-            chmod 755 /usr/local/bin/conaryd
-            systemctl start conaryd
-          REMOTE_EOF
-      - name: Verify conaryd endpoint
-        run: curl -fsS "${{ secrets.CONARYD_VERIFY_URL }}" >/dev/null
+          echo "deploy_asset_ref=${DEPLOY_ASSET_REF}"
+          echo "bootstrap_exception=${BOOTSTRAP_EXCEPTION}"
+
+          ssh "${ssh_opts[@]}" "$CONARYD_SSH_TARGET" "rm -rf '${remote_stage}' && mkdir -p '${remote_stage}'"
+          scp "${ssh_opts[@]}" \
+            "$bundle" \
+            "$helper" \
+            "$verifier" \
+            "$unit" \
+            "${CONARYD_SSH_TARGET}:${remote_stage}/"
+
+          ssh "${ssh_opts[@]}" "$CONARYD_SSH_TARGET" \
+            "bash ${remote_stage}/install-conaryd-on-forge.sh \
+              --staging-dir ${remote_stage} \
+              --bundle ${remote_stage}/conaryd-${VERSION}-linux-x64.tar.gz \
+              --expected-version ${VERSION} \
+              --expected-sha256 ${EXPECTED_SHA256} \
+              --unit-file ${remote_stage}/conaryd.service \
+              --verifier ${remote_stage}/conaryd-health.sh"
 
   no-deploy-required:
     name: no-deploy-required

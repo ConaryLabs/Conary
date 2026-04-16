@@ -11,6 +11,8 @@ summary: Non-secret infrastructure, MCP, and deployment guidance for Conary cont
 - Remi is the production package service behind `https://remi.conary.io`.
 - Forge is the trusted GitHub runner host used for `conary-test` validation,
   test-harness service work, and source-sync validation.
+- Forge also serves as the current local-only staging host for `conaryd`
+  release deployment verification.
 - Sensitive usernames, credentials, or workstation-only shortcuts belong in the
   ignored `docs/operations/LOCAL_ACCESS.md`, not in tracked docs.
 
@@ -55,6 +57,14 @@ task or when you are debugging the underlying service path itself.
 - For supported control-plane verification, run `bash scripts/forge-smoke.sh`
 - Port resolution for CLI and smoke checks is `--port` > `CONARY_TEST_PORT` >
   `9090`
+- `conaryd` is not yet a managed rollout unit here; its release deployment path
+  is the GitHub `deploy-and-verify` workflow plus the checked-in Forge helper
+  assets
+- `conaryd` deployment verification is Forge-local over
+  `scripts/conaryd-health.sh`, which probes `/run/conary/conaryd.sock` rather
+  than a public network endpoint
+- The tracked Forge bootstrap trust for that path lives in
+  `deploy/ssh/forge-known-hosts` and `deploy/sudoers/conaryd-forge`
 
 ### Remi
 
@@ -102,6 +112,8 @@ old process. That can fail with `Text file busy`.
   intentionally has no deployment lane
 - `deploy-and-verify` performs protected deployment and verification only for
   deployable products (`conary`, `remi`, and `conaryd`)
+- The `conaryd` lane deploys only to the Forge local-only staging daemon today;
+  public production hosting for `conaryd` is still an open follow-up
 - Release verification is a GitHub workflow concern, not a Forgejo or
   Forge-hosted control-plane concern
 
