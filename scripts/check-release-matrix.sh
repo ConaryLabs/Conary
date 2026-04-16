@@ -70,6 +70,8 @@ require_match "$deploy_workflow" 'scripts/conaryd-health\.sh' 'checked-in conary
 require_match "$deploy_workflow" 'deploy/systemd/conaryd\.service' 'checked-in conaryd unit staging'
 require_match "$deploy_workflow" 'EXPECTED_SHA256="\$\(sha256sum "\$bundle" \| awk' 'runner-side conaryd bundle hash computation'
 require_match "$deploy_workflow" "mkdir -p '\\\$\\{remote_stage\\}'" 'remote staging directory creation'
+require_match "$deploy_workflow" 'gh api "repos/\$\{?GH_REPO\}?/actions/runs/\$\{?SOURCE_RUN\}?" --jq '\''\.head_branch'\''' 'source-run head-branch lookup for release fallback'
+require_match "$deploy_workflow" 'gh release download "\$source_tag"' 'release-asset fallback for expired source-run artifacts'
 forbid_match "$deploy_workflow" 'CONARYD_VERIFY_URL' 'legacy public verify URL'
 
 for product in conary remi conaryd; do

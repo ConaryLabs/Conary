@@ -65,11 +65,45 @@ jobs:
             echo "manual_dry_run=" >> "$GITHUB_OUTPUT"
           fi
       - name: Download source artifacts
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           SOURCE_RUN: ${{ steps.source.outputs.source_run }}
-        run: gh run download "$SOURCE_RUN" --dir source-artifacts
+        run: |
+          set -euo pipefail
+          if gh run download "$SOURCE_RUN" --dir source-artifacts; then
+            exit 0
+          fi
+
+          echo "gh run download failed for source_run=${SOURCE_RUN}; attempting release-asset fallback" >&2
+          rm -rf source-artifacts
+          source_tag="$(gh api "repos/${GH_REPO}/actions/runs/${SOURCE_RUN}" --jq '.head_branch')"
+          [[ -n "$source_tag" && "$source_tag" != "null" ]] || {
+            echo "source run has no head_branch for release fallback" >&2
+            exit 1
+          }
+
+          fallback_dir="source-artifacts/release-fallback"
+          mkdir -p "$fallback_dir"
+          gh release download "$source_tag" --repo "$GH_REPO" --dir "$fallback_dir"
+
+          metadata_file="${fallback_dir}/metadata.json"
+          [[ -f "$metadata_file" ]] || {
+            echo "release fallback metadata.json missing for ${source_tag}" >&2
+            exit 1
+          }
+
+          bundle_name="$(jq -r '.bundle_name' "$metadata_file")"
+          [[ -n "$bundle_name" && "$bundle_name" != "null" ]] || {
+            echo "release fallback bundle_name missing for ${source_tag}" >&2
+            exit 1
+          }
+
+          bundle_dir="source-artifacts/${bundle_name}"
+          mkdir -p "$bundle_dir"
+          find "$fallback_dir" -maxdepth 1 -type f -exec mv {} "$bundle_dir"/ \;
+          rmdir "$fallback_dir"
       - name: Read release metadata
         id: meta
         shell: bash
@@ -170,11 +204,45 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download source artifacts
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           SOURCE_RUN: ${{ needs.resolve.outputs.source_run }}
-        run: gh run download "$SOURCE_RUN" --dir source-artifacts
+        run: |
+          set -euo pipefail
+          if gh run download "$SOURCE_RUN" --dir source-artifacts; then
+            exit 0
+          fi
+
+          echo "gh run download failed for source_run=${SOURCE_RUN}; attempting release-asset fallback" >&2
+          rm -rf source-artifacts
+          source_tag="$(gh api "repos/${GH_REPO}/actions/runs/${SOURCE_RUN}" --jq '.head_branch')"
+          [[ -n "$source_tag" && "$source_tag" != "null" ]] || {
+            echo "source run has no head_branch for release fallback" >&2
+            exit 1
+          }
+
+          fallback_dir="source-artifacts/release-fallback"
+          mkdir -p "$fallback_dir"
+          gh release download "$source_tag" --repo "$GH_REPO" --dir "$fallback_dir"
+
+          metadata_file="${fallback_dir}/metadata.json"
+          [[ -f "$metadata_file" ]] || {
+            echo "release fallback metadata.json missing for ${source_tag}" >&2
+            exit 1
+          }
+
+          bundle_name="$(jq -r '.bundle_name' "$metadata_file")"
+          [[ -n "$bundle_name" && "$bundle_name" != "null" ]] || {
+            echo "release fallback bundle_name missing for ${source_tag}" >&2
+            exit 1
+          }
+
+          bundle_dir="source-artifacts/${bundle_name}"
+          mkdir -p "$bundle_dir"
+          find "$fallback_dir" -maxdepth 1 -type f -exec mv {} "$bundle_dir"/ \;
+          rmdir "$fallback_dir"
       - name: Verify conary artifacts
         shell: bash
         env:
@@ -194,11 +262,45 @@ jobs:
     environment: ${{ needs.resolve.outputs.environment }}
     steps:
       - name: Download source artifacts
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           SOURCE_RUN: ${{ needs.resolve.outputs.source_run }}
-        run: gh run download "$SOURCE_RUN" --dir source-artifacts
+        run: |
+          set -euo pipefail
+          if gh run download "$SOURCE_RUN" --dir source-artifacts; then
+            exit 0
+          fi
+
+          echo "gh run download failed for source_run=${SOURCE_RUN}; attempting release-asset fallback" >&2
+          rm -rf source-artifacts
+          source_tag="$(gh api "repos/${GH_REPO}/actions/runs/${SOURCE_RUN}" --jq '.head_branch')"
+          [[ -n "$source_tag" && "$source_tag" != "null" ]] || {
+            echo "source run has no head_branch for release fallback" >&2
+            exit 1
+          }
+
+          fallback_dir="source-artifacts/release-fallback"
+          mkdir -p "$fallback_dir"
+          gh release download "$source_tag" --repo "$GH_REPO" --dir "$fallback_dir"
+
+          metadata_file="${fallback_dir}/metadata.json"
+          [[ -f "$metadata_file" ]] || {
+            echo "release fallback metadata.json missing for ${source_tag}" >&2
+            exit 1
+          }
+
+          bundle_name="$(jq -r '.bundle_name' "$metadata_file")"
+          [[ -n "$bundle_name" && "$bundle_name" != "null" ]] || {
+            echo "release fallback bundle_name missing for ${source_tag}" >&2
+            exit 1
+          }
+
+          bundle_dir="source-artifacts/${bundle_name}"
+          mkdir -p "$bundle_dir"
+          find "$fallback_dir" -maxdepth 1 -type f -exec mv {} "$bundle_dir"/ \;
+          rmdir "$fallback_dir"
       - name: Deploy conary artifacts
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
@@ -255,11 +357,45 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download source artifacts
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           SOURCE_RUN: ${{ needs.resolve.outputs.source_run }}
-        run: gh run download "$SOURCE_RUN" --dir source-artifacts
+        run: |
+          set -euo pipefail
+          if gh run download "$SOURCE_RUN" --dir source-artifacts; then
+            exit 0
+          fi
+
+          echo "gh run download failed for source_run=${SOURCE_RUN}; attempting release-asset fallback" >&2
+          rm -rf source-artifacts
+          source_tag="$(gh api "repos/${GH_REPO}/actions/runs/${SOURCE_RUN}" --jq '.head_branch')"
+          [[ -n "$source_tag" && "$source_tag" != "null" ]] || {
+            echo "source run has no head_branch for release fallback" >&2
+            exit 1
+          }
+
+          fallback_dir="source-artifacts/release-fallback"
+          mkdir -p "$fallback_dir"
+          gh release download "$source_tag" --repo "$GH_REPO" --dir "$fallback_dir"
+
+          metadata_file="${fallback_dir}/metadata.json"
+          [[ -f "$metadata_file" ]] || {
+            echo "release fallback metadata.json missing for ${source_tag}" >&2
+            exit 1
+          }
+
+          bundle_name="$(jq -r '.bundle_name' "$metadata_file")"
+          [[ -n "$bundle_name" && "$bundle_name" != "null" ]] || {
+            echo "release fallback bundle_name missing for ${source_tag}" >&2
+            exit 1
+          }
+
+          bundle_dir="source-artifacts/${bundle_name}"
+          mkdir -p "$bundle_dir"
+          find "$fallback_dir" -maxdepth 1 -type f -exec mv {} "$bundle_dir"/ \;
+          rmdir "$fallback_dir"
       - name: Verify remi bundle
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
@@ -281,11 +417,45 @@ jobs:
     environment: ${{ needs.resolve.outputs.environment }}
     steps:
       - name: Download source artifacts
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           SOURCE_RUN: ${{ needs.resolve.outputs.source_run }}
-        run: gh run download "$SOURCE_RUN" --dir source-artifacts
+        run: |
+          set -euo pipefail
+          if gh run download "$SOURCE_RUN" --dir source-artifacts; then
+            exit 0
+          fi
+
+          echo "gh run download failed for source_run=${SOURCE_RUN}; attempting release-asset fallback" >&2
+          rm -rf source-artifacts
+          source_tag="$(gh api "repos/${GH_REPO}/actions/runs/${SOURCE_RUN}" --jq '.head_branch')"
+          [[ -n "$source_tag" && "$source_tag" != "null" ]] || {
+            echo "source run has no head_branch for release fallback" >&2
+            exit 1
+          }
+
+          fallback_dir="source-artifacts/release-fallback"
+          mkdir -p "$fallback_dir"
+          gh release download "$source_tag" --repo "$GH_REPO" --dir "$fallback_dir"
+
+          metadata_file="${fallback_dir}/metadata.json"
+          [[ -f "$metadata_file" ]] || {
+            echo "release fallback metadata.json missing for ${source_tag}" >&2
+            exit 1
+          }
+
+          bundle_name="$(jq -r '.bundle_name' "$metadata_file")"
+          [[ -n "$bundle_name" && "$bundle_name" != "null" ]] || {
+            echo "release fallback bundle_name missing for ${source_tag}" >&2
+            exit 1
+          }
+
+          bundle_dir="source-artifacts/${bundle_name}"
+          mkdir -p "$bundle_dir"
+          find "$fallback_dir" -maxdepth 1 -type f -exec mv {} "$bundle_dir"/ \;
+          rmdir "$fallback_dir"
       - name: Deploy remi bundle
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
@@ -336,11 +506,45 @@ jobs:
           fetch-depth: 0
           ref: ${{ needs.resolve.outputs.deploy_asset_ref }}
       - name: Download source artifacts
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           SOURCE_RUN: ${{ needs.resolve.outputs.source_run }}
-        run: gh run download "$SOURCE_RUN" --dir source-artifacts
+        run: |
+          set -euo pipefail
+          if gh run download "$SOURCE_RUN" --dir source-artifacts; then
+            exit 0
+          fi
+
+          echo "gh run download failed for source_run=${SOURCE_RUN}; attempting release-asset fallback" >&2
+          rm -rf source-artifacts
+          source_tag="$(gh api "repos/${GH_REPO}/actions/runs/${SOURCE_RUN}" --jq '.head_branch')"
+          [[ -n "$source_tag" && "$source_tag" != "null" ]] || {
+            echo "source run has no head_branch for release fallback" >&2
+            exit 1
+          }
+
+          fallback_dir="source-artifacts/release-fallback"
+          mkdir -p "$fallback_dir"
+          gh release download "$source_tag" --repo "$GH_REPO" --dir "$fallback_dir"
+
+          metadata_file="${fallback_dir}/metadata.json"
+          [[ -f "$metadata_file" ]] || {
+            echo "release fallback metadata.json missing for ${source_tag}" >&2
+            exit 1
+          }
+
+          bundle_name="$(jq -r '.bundle_name' "$metadata_file")"
+          [[ -n "$bundle_name" && "$bundle_name" != "null" ]] || {
+            echo "release fallback bundle_name missing for ${source_tag}" >&2
+            exit 1
+          }
+
+          bundle_dir="source-artifacts/${bundle_name}"
+          mkdir -p "$bundle_dir"
+          find "$fallback_dir" -maxdepth 1 -type f -exec mv {} "$bundle_dir"/ \;
+          rmdir "$fallback_dir"
       - name: Verify conaryd bundle
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
@@ -376,11 +580,45 @@ jobs:
           fetch-depth: 0
           ref: ${{ needs.resolve.outputs.deploy_asset_ref }}
       - name: Download source artifacts
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           SOURCE_RUN: ${{ needs.resolve.outputs.source_run }}
-        run: gh run download "$SOURCE_RUN" --dir source-artifacts
+        run: |
+          set -euo pipefail
+          if gh run download "$SOURCE_RUN" --dir source-artifacts; then
+            exit 0
+          fi
+
+          echo "gh run download failed for source_run=${SOURCE_RUN}; attempting release-asset fallback" >&2
+          rm -rf source-artifacts
+          source_tag="$(gh api "repos/${GH_REPO}/actions/runs/${SOURCE_RUN}" --jq '.head_branch')"
+          [[ -n "$source_tag" && "$source_tag" != "null" ]] || {
+            echo "source run has no head_branch for release fallback" >&2
+            exit 1
+          }
+
+          fallback_dir="source-artifacts/release-fallback"
+          mkdir -p "$fallback_dir"
+          gh release download "$source_tag" --repo "$GH_REPO" --dir "$fallback_dir"
+
+          metadata_file="${fallback_dir}/metadata.json"
+          [[ -f "$metadata_file" ]] || {
+            echo "release fallback metadata.json missing for ${source_tag}" >&2
+            exit 1
+          }
+
+          bundle_name="$(jq -r '.bundle_name' "$metadata_file")"
+          [[ -n "$bundle_name" && "$bundle_name" != "null" ]] || {
+            echo "release fallback bundle_name missing for ${source_tag}" >&2
+            exit 1
+          }
+
+          bundle_dir="source-artifacts/${bundle_name}"
+          mkdir -p "$bundle_dir"
+          find "$fallback_dir" -maxdepth 1 -type f -exec mv {} "$bundle_dir"/ \;
+          rmdir "$fallback_dir"
       - name: Deploy conaryd bundle
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
