@@ -148,17 +148,19 @@ Untracked file dispositions:
 - Repo secrets:
   - Direct `gh secret list` and `gh api repos/ConaryLabs/Conary/actions/secrets` inspection from this session shows two visible repo-level Actions secrets: `RELEASE_SIGNING_KEY` and `REMI_SSH_KEY`
 - Production environment secrets:
-  - Direct `gh secret list --env production` inspection from this session returned no visible `production` environment secrets
+  - Direct `gh secret list --env production` inspection from this session now shows:
+    - `CONARYD_SSH_KEY`
+    - `CONARYD_SSH_TARGET`
 - Usability confirmation:
   - `RELEASE_SIGNING_KEY`: `confirmed indirectly` by successful dry-run signing in `release-build` run `24271605335`
   - `REMI_SSH_KEY`: `verified directly` and exercised successfully by live `deploy-remi` run `24273444167`
   - `REMI_SSH_TARGET`: `confirmed indirectly` by successful live `deploy-remi` run `24273444167` (whether provided via secret or workflow fallback)
-  - `CONARYD_SSH_KEY`: `verified missing in live workflow context` because `deploy-conaryd` in run `24273754560` printed `CONARYD_SSH_KEY:` with an empty value and failed with `CONARYD_SSH_KEY is required`
-  - `CONARYD_SSH_TARGET`: `verified missing in live workflow context` because `deploy-conaryd` in run `24273754560` printed `CONARYD_SSH_TARGET:` with an empty value
-  - `CONARYD_VERIFY_URL`: `verified missing in live workflow context` because `deploy-conaryd` in run `24273754560` printed `CONARYD_VERIFY_URL:` with an empty value
+  - `CONARYD_SSH_KEY`: `verified directly` by successful live `deploy-conaryd` run `24540238484` after setting the `production` environment secret from the local Forge SSH identity
+  - `CONARYD_SSH_TARGET`: `verified directly` by successful live `deploy-conaryd` run `24540238484` after setting the `production` environment secret to `peter@forge.conarylabs.com`
+  - `CONARYD_VERIFY_URL`: no longer required by the workflow once the Forge-local helper path landed; verification now comes from `scripts/conaryd-health.sh` over `/run/conary/conaryd.sock`
   - `gh secret list --org ConaryLabs` returned `HTTP 403`, so organization-level secret inheritance could not be inspected from this session
-  - the live `deploy-conaryd` failure proves that no usable `CONARYD_*` values reached the workflow job from repo, environment, or any unseen inherited source
-  - per the plan rule, the missing `CONARYD_*` entries keep the coordinated all-tracks release `no-go`
+  - the first live `deploy-conaryd` failure (`24273754560`) correctly proved the old workflow had no usable `CONARYD_*` values in job context; that blocker is now cleared
+  - the successful Forge staging rerun (`24540238484`) proves the current repo/environment configuration is sufficient for the checked-in helper path
 
 ## Blockers
 
@@ -169,10 +171,10 @@ Untracked file dispositions:
   - the earlier `remi` live deploy target readiness blocker is cleared by successful live `deploy-remi` run `24273444167`
   - the earlier `conaryd` dry-run truthfulness blocker is cleared by `release-build` run `24273530124`
   - the earlier `conaryd` deploy-handoff rehearsal blocker is cleared by dry-run `deploy-and-verify` run `24273620044`
+  - the earlier `conaryd` live deployment blocker is cleared by the successful Forge staging bootstrap rerun `24540238484`
   - the earlier `conary-test` dry-run truthfulness blocker is cleared by `release-build` run `24274310549`
 - Remaining active blockers:
-  - `conaryd` live deployment is blocked because `deploy-and-verify` run `24273754560` proved `CONARYD_SSH_KEY`, `CONARYD_SSH_TARGET`, and `CONARYD_VERIFY_URL` were blank in workflow context
-  - coordinated all-tracks release remains blocked until `conaryd` gets a real deployment target and the missing `CONARYD_*` secrets are configured
+  - none
 
 ## Fixes Made
 
@@ -191,11 +193,11 @@ Untracked file dispositions:
 - Approved Tracks:
   - `conary`: passing `release-build` dry-run `24271605335`, offline detached-signature verification, passing `deploy-and-verify` dry-run `24272138949`, and successful live cut with `release-build` run `24272510305`, `deploy-and-verify` run `24272911392`, and published GitHub release `v0.8.0`
   - `remi`: passing `release-build` dry-run `24272999752`, passing `deploy-and-verify` dry-run `24273182800`, successful live deploy via `deploy-and-verify` run `24273444167`, and published GitHub release `remi-v0.6.0`
+  - `conaryd`: passing `release-build` dry-run `24273530124`, passing `deploy-and-verify` dry-run `24273620044`, successful live `release-build` run `24273700060`, successful Forge staging bootstrap rerun `24540238484` for `source_run=24273700060` plus bootstrap `deploy_asset_ref=d701d15c526a094b3a6ecfcf026e2bfbbb8b97dc`, and published GitHub release `conaryd-v0.6.0`
   - `conary-test`: passing `release-build` dry-run `24274310549`, no deploy lane by design because `deploy_mode=none`, and successful live cut with `release-build` run `24274467713` plus published GitHub release `conary-test-v0.8.0`
 - Dropped Tracks: none
-- Blocked Tracks:
-  - `conaryd`: dry-run `release-build` `24273530124` and dry-run `deploy-and-verify` `24273620044` both passed, and live `release-build` `24273700060` published GitHub release `conaryd-v0.6.0`, but live `deploy-and-verify` `24273754560` failed because `CONARYD_SSH_KEY`, `CONARYD_SSH_TARGET`, and `CONARYD_VERIFY_URL` were blank in workflow context
-- Final Release Command: coordinated all-tracks release remains `no-go`; `conary`, `remi`, and `conary-test` are complete, while `conaryd` is release-published but deployment-blocked because no usable `CONARYD_*` deploy configuration reached the workflow
+- Blocked Tracks: none
+- Final Release Command: coordinated all-tracks release is now `go`; `conary`, `remi`, and `conary-test` are complete, and `conaryd` is release-published plus Forge staging deployment verified
 
 ## Final Commands
 
@@ -241,8 +243,13 @@ Untracked file dispositions:
   - resulting live workflow chain:
     - `release-build` run `24273700060`: `success`
     - `deploy-and-verify` run `24273754560`: `failure` in `deploy-conaryd` because `CONARYD_SSH_KEY`, `CONARYD_SSH_TARGET`, and `CONARYD_VERIFY_URL` were blank in workflow context
+    - `deploy-and-verify` run `24539663062`: `failure` in `resolve` because the historical `source_run=24273700060` workflow artifacts had expired and `gh run download` found no valid artifacts
+    - `fix(ci): fall back to release assets for expired source runs` landed on `main` in commit `e2fb21dd`
+    - `deploy-and-verify` run `24540099583`: `failure` in `deploy-conaryd` because the workflow reached the new Forge helper path but `CONARYD_SSH_KEY` and `CONARYD_SSH_TARGET` were still unset in the `production` environment
+    - configured `production` environment secrets `CONARYD_SSH_KEY` and `CONARYD_SSH_TARGET`
+    - `deploy-and-verify` run `24540238484`: `success` for `source_run=24273700060` using bootstrap `deploy_asset_ref=d701d15c526a094b3a6ecfcf026e2bfbbb8b97dc`; logs show release-asset fallback, `bootstrap_exception=true`, and `[conaryd-health] ok`
   - resulting published GitHub release: `https://github.com/ConaryLabs/Conary/releases/tag/conaryd-v0.6.0`
-  - remaining follow-up before conaryd can be considered fully released: configure the missing `CONARYD_*` secrets, then rerun `deploy-and-verify` against `source_run=24273700060` with `dry_run=false`
+  - current release truth: `conaryd` is release-published and Forge staging deployment verified
 - Live `conary-test` cut:
   - ran `./scripts/release.sh conary-test`
   - resulting release commit: `04a08383`
