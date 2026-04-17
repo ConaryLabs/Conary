@@ -11,7 +11,7 @@
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
-use super::build_runner::PackageBuildRunner;
+use super::build_runner::{ChecksumPolicy, PackageBuildRunner};
 use super::config::BootstrapConfig;
 use super::toolchain::Toolchain;
 
@@ -110,7 +110,8 @@ impl Tier2Builder {
         let sources_dir = work_dir.join("sources");
         std::fs::create_dir_all(&sources_dir)?;
 
-        let runner = PackageBuildRunner::new(&sources_dir, &config);
+        let runner =
+            PackageBuildRunner::new(&sources_dir, &config).with_checksum_policy(ChecksumPolicy::StrictSha256);
 
         Ok(Self {
             work_dir: work_dir.to_path_buf(),

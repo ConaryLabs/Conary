@@ -36,6 +36,16 @@ pub enum BuildContext {
     Native,
 }
 
+/// Checksum verification policy for a bootstrap phase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChecksumPolicy {
+    /// Preserve the current behavior for earlier phases: verify `sha256`,
+    /// reject placeholders, and warn on legacy/unknown algorithms.
+    Legacy,
+    /// Self-hosting / Tier 2 behavior: only `sha256` is accepted.
+    StrictSha256,
+}
+
 /// Errors from the shared build runner
 #[derive(Debug, thiserror::Error)]
 pub enum BuildRunnerError {
@@ -63,6 +73,8 @@ pub struct PackageBuildRunner {
     sources_dir: PathBuf,
     /// Whether to skip checksum verification
     skip_verify: bool,
+    /// Checksum verification policy for this build phase.
+    checksum_policy: ChecksumPolicy,
     /// Optional build context for cross-compilation or chroot builds
     context: Option<BuildContext>,
 }
@@ -73,6 +85,7 @@ impl PackageBuildRunner {
         Self {
             sources_dir: sources_dir.to_path_buf(),
             skip_verify: config.skip_verify,
+            checksum_policy: ChecksumPolicy::Legacy,
             context: None,
         }
     }
@@ -84,6 +97,13 @@ impl PackageBuildRunner {
     #[must_use]
     pub fn with_context(mut self, context: BuildContext) -> Self {
         self.context = Some(context);
+        self
+    }
+
+    /// Override the checksum policy for this runner.
+    #[must_use]
+    pub fn with_checksum_policy(mut self, checksum_policy: ChecksumPolicy) -> Self {
+        self.checksum_policy = checksum_policy;
         self
     }
 
@@ -182,23 +202,32 @@ impl PackageBuildRunner {
                     reason: "Invalid checksum format".to_string(),
                 })?;
 
-        if algo == "sha256" {
-            let output = Command::new("sha256sum").arg(path).output().map_err(|e| {
-                BuildRunnerError::SourceFetchFailed {
-                    package: pkg_name.to_string(),
-                    reason: e.to_string(),
+        match algo {
+            "sha256" => {
+                let output = Command::new("sha256sum").arg(path).output().map_err(|e| {
+                    BuildRunnerError::SourceFetchFailed {
+                        package: pkg_name.to_string(),
+                        reason: e.to_string(),
+                    }
+                })?;
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let computed = stdout.split_whitespace().next().unwrap_or("");
+                if computed != hash {
+                    return Err(BuildRunnerError::SourceFetchFailed {
+                        package: pkg_name.to_string(),
+                        reason: format!("Checksum mismatch: expected {}, got {}", hash, computed),
+                    });
                 }
-            })?;
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let computed = stdout.split_whitespace().next().unwrap_or("");
-            if computed != hash {
+            }
+            other if self.checksum_policy == ChecksumPolicy::StrictSha256 => {
                 return Err(BuildRunnerError::SourceFetchFailed {
                     package: pkg_name.to_string(),
-                    reason: format!("Checksum mismatch: expected {}, got {}", hash, computed),
+                    reason: format!("Unsupported checksum algorithm in strict mode: {other}"),
                 });
             }
-        } else {
-            warn!("  Unknown checksum algorithm: {}", algo);
+            other => {
+                warn!("  Unknown checksum algorithm: {}", other);
+            }
         }
 
         Ok(())
@@ -315,6 +344,13 @@ impl PackageBuildRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
+    fn strict_mode_runner(sources_dir: &Path) -> PackageBuildRunner {
+        let config = BootstrapConfig::new();
+        PackageBuildRunner::new(sources_dir, &config)
+            .with_checksum_policy(ChecksumPolicy::StrictSha256)
+    }
 
     #[test]
     fn test_build_runner_new() {
@@ -323,6 +359,7 @@ mod tests {
         let runner = PackageBuildRunner::new(dir.path(), &config);
         assert_eq!(runner.sources_dir, dir.path());
         assert!(!runner.skip_verify);
+        assert_eq!(runner.checksum_policy, ChecksumPolicy::Legacy);
     }
 
     #[test]
@@ -371,6 +408,31 @@ mod tests {
         std::fs::write(&file, b"test").unwrap();
 
         let result = runner.verify_checksum("test", "nocolon", &file);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_verify_checksum_unknown_algo_allowed_in_legacy_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = BootstrapConfig::new();
+        let runner = PackageBuildRunner::new(dir.path(), &config);
+
+        let file = dir.path().join("test.tar.gz");
+        std::fs::write(&file, b"test").unwrap();
+
+        let result = runner.verify_checksum("test", "md5:d41d8cd98f00b204e9800998ecf8427e", &file);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_verify_checksum_unknown_algo_rejected_in_strict_sha256_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = strict_mode_runner(dir.path());
+
+        let file = dir.path().join("test.tar.gz");
+        std::fs::write(&file, b"test").unwrap();
+
+        let result = runner.verify_checksum("test", "md5:d41d8cd98f00b204e9800998ecf8427e", &file);
         assert!(result.is_err());
     }
 
