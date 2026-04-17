@@ -10,6 +10,19 @@ use std::path::Path;
 use std::process::Command;
 use tracing::warn;
 
+fn gnu_fetch_candidates(url: &str) -> Vec<String> {
+    let mut candidates = vec![url.to_string()];
+
+    for prefix in ["https://ftpmirror.gnu.org/", "http://ftpmirror.gnu.org/"] {
+        if let Some(rest) = url.strip_prefix(prefix) {
+            candidates.push(format!("https://ftp.gnu.org/gnu/{rest}"));
+            break;
+        }
+    }
+
+    candidates
+}
+
 /// Download a file from a URL
 pub fn download_file(url: &str, dest: &Path) -> Result<()> {
     // Reject non-HTTP(S) URL schemes to prevent file:// and other injections
@@ -24,28 +37,38 @@ pub fn download_file(url: &str, dest: &Path) -> Result<()> {
     let dest_str = dest.to_str().ok_or_else(|| {
         Error::DownloadError(format!("Non-UTF-8 download path: {}", dest.display()))
     })?;
-    let output = Command::new("curl")
-        .args([
-            "-fsSL",
-            "--connect-timeout",
-            "30",
-            "--max-time",
-            "600",
-            "--retry",
-            "3",
-            "-o",
-            dest_str,
-            url,
-        ])
-        .output()
-        .map_err(|e| Error::DownloadError(format!("curl failed: {}", e)))?;
+    let mut last_error = String::new();
+    for candidate in gnu_fetch_candidates(url) {
+        let output = Command::new("curl")
+            .args([
+                "-fsSL",
+                "--connect-timeout",
+                "30",
+                "--max-time",
+                "600",
+                "--retry",
+                "3",
+                "-o",
+                dest_str,
+                &candidate,
+            ])
+            .output()
+            .map_err(|e| Error::DownloadError(format!("curl failed: {}", e)))?;
 
-    if !output.status.success() {
-        return Err(Error::DownloadError(format!(
+        if output.status.success() {
+            last_error.clear();
+            break;
+        }
+
+        last_error = format!(
             "Failed to download {}: {}",
-            url,
-            String::from_utf8_lossy(&output.stderr)
-        )));
+            candidate,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    if !last_error.is_empty() {
+        return Err(Error::DownloadError(last_error));
     }
 
     Ok(())
@@ -194,5 +217,17 @@ mod tests {
     fn test_extract_archive_unknown_format() {
         let result = extract_archive(Path::new("file.unknown"), Path::new("/tmp"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_gnu_fetch_candidates_adds_canonical_fallback_for_ftpmirror() {
+        let candidates = gnu_fetch_candidates("https://ftpmirror.gnu.org/bash/bash-5.3.tar.gz");
+        assert_eq!(
+            candidates,
+            vec![
+                "https://ftpmirror.gnu.org/bash/bash-5.3.tar.gz".to_string(),
+                "https://ftp.gnu.org/gnu/bash/bash-5.3.tar.gz".to_string()
+            ]
+        );
     }
 }
