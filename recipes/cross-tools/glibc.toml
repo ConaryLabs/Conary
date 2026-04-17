@@ -25,9 +25,10 @@ homepage = "https://www.gnu.org/software/libc/"
 archive = "https://ftpmirror.gnu.org/glibc/glibc-%(version)s.tar.xz"
 checksum = "sha256:d9c86c6b5dbddb43a3e08270c5844fc5177d19442cf5b8df4be7c07cd5fa3831"
 
-[[source.additional]]
-url = "https://www.linuxfromscratch.org/patches/lfs/development/glibc-fhs-1.patch"
-checksum = "sha256:643552db030e2f2d7ffde4f558e0f5f83d3fabf34a2e0e56ebdb49750ac27b0d"
+[patches]
+files = [
+    { file = "https://www.linuxfromscratch.org/patches/lfs/development/glibc-fhs-1.patch", checksum = "sha256:643552db030e2f2d7ffde4f558e0f5f83d3fabf34a2e0e56ebdb49750ac27b0d", strip = 1 },
+]
 
 [build]
 requires = ["binutils-pass1", "gcc-pass1", "linux-headers"]
@@ -44,9 +45,6 @@ case $(uname -m) in
             ln -sfv ../lib/ld-linux-x86-64.so.2 $LFS/lib64/ld-lsb-x86-64.so.3
     ;;
 esac
-
-# Apply FHS compliance patch
-patch -Np1 -i ../glibc-fhs-1.patch
 
 # Fix: GCC Pass 1 was built with --disable-shared, so libgcc_s does not exist.
 # Remove references to it from Makeconfig to prevent linker errors.

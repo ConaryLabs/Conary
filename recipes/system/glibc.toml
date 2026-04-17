@@ -26,9 +26,10 @@ homepage = "https://www.gnu.org/software/libc/"
 archive = "https://ftpmirror.gnu.org/glibc/glibc-%(version)s.tar.xz"
 checksum = "md5:7ec2588300b299215a65aec7e6afa04f"
 
-[[source.patches]]
-url = "https://www.linuxfromscratch.org/patches/lfs/development/glibc-fhs-1.patch"
-checksum = "md5:9a5997c3452909b1769918c759eff8a2"
+[patches]
+files = [
+    { file = "https://www.linuxfromscratch.org/patches/lfs/development/glibc-fhs-1.patch", checksum = "md5:9a5997c3452909b1769918c759eff8a2", strip = 1 },
+]
 
 [build]
 requires = ["man-pages", "iana-etc"]
@@ -36,9 +37,6 @@ makedepends = ["binutils", "gcc", "linux-headers", "python"]
 chroot = true
 
 configure = """
-# Apply FHS compliance patch
-patch -Np1 -i ../glibc-fhs-1.patch
-
 mkdir -v build
 cd build
 

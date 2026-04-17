@@ -23,9 +23,10 @@ homepage = "https://kbd-project.org/"
 archive = "https://www.kernel.org/pub/linux/utils/kbd/kbd-%(version)s.tar.xz"
 checksum = "md5:7be7c6f658f5fb9512e2c490349a8eeb"
 
-[[source.patches]]
-url = "https://www.linuxfromscratch.org/patches/lfs/development/kbd-2.9.0-backspace-1.patch"
-checksum = "md5:f75cca16a38da6caa7d52151f7136895"
+[patches]
+files = [
+    { file = "https://www.linuxfromscratch.org/patches/lfs/development/kbd-2.9.0-backspace-1.patch", checksum = "md5:f75cca16a38da6caa7d52151f7136895", strip = 1 },
+]
 
 [build]
 requires = ["glibc"]
@@ -33,9 +34,6 @@ makedepends = []
 chroot = true
 
 configure = """
-# Apply backspace/delete consistency patch
-patch -Np1 -i ../kbd-%(version)s-backspace-1.patch
-
 # Disable resizecons program (requires obsolete kernel API)
 sed -i '/RESIZECONS_PROGS=/s/yes/no/' configure
 sed -i 's/resizecons.8 //' docs/man/man8/Makefile.in
