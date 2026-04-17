@@ -1,0 +1,43 @@
+# recipes/bootstrap-smoke/simple-hello.toml
+#
+# GNU Hello 2.12.3 -- self-hosting VM smoke target
+# https://ftp.gnu.org/gnu/hello/hello-2.12.3.tar.gz
+#
+# Small checked-in recipe used only for guest-side self-host validation.
+
+[package]
+name = "simple-hello"
+version = "2.12.3"
+release = "1"
+summary = "GNU Hello smoke recipe"
+description = """
+GNU Hello is a minimal sample package that prints a greeting. It is used here
+as the explicit guest-side cooking target for the self-hosting VM validation
+flow.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/hello/"
+
+[source]
+archive = "https://ftp.gnu.org/gnu/hello/hello-%(version)s.tar.gz"
+checksum = "sha256:0d5f60154382fee10b114a1c34e785d8b1f492073ae2d3a6f7b147687b366aa0"
+
+[build]
+requires = ["glibc"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install DESTDIR=%(destdir)s
+"""
+
+[variables]
+jobs = "$(nproc)"
