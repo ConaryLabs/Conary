@@ -385,10 +385,6 @@ impl Bootstrap {
                 info!("Tier-2 builds complete");
                 self.stages.mark_complete(BootstrapStage::Tier2, lfs_root)?;
             }
-            Err(Tier2Error::NotImplemented(msg)) => {
-                info!("Tier-2 skipped (not yet implemented): {msg}");
-                // Do NOT mark complete -- resume will retry when implemented
-            }
             Err(e) => return Err(anyhow::anyhow!("{e}")),
         }
 
