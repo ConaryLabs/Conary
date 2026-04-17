@@ -204,6 +204,10 @@ For this design, a successful Tier 2 run means:
   Tier 2 recipes is already present in the sysroot before Tier 2 begins; in
   the current tree this explicitly includes `sqlite` for the `conary` build,
   and it is not counted as a ninth Tier 2 package
+- for this milestone, the preferred way to close that prerequisite gap is to
+  add `sqlite` to the normal Phase 3 system build order before `python`, so
+  the sysroot gains both the SQLite libraries and the Python sqlite bindings
+  through the regular final-system path instead of through an ad hoc tail step
 - the resulting sysroot contains a usable Rust toolchain
 - the resulting sysroot contains a usable `conary` binary
 - the resulting sysroot contains the networking/auth/runtime packages needed to
@@ -241,13 +245,20 @@ That means:
 
 - no Tier 2 recipe may quietly proceed with `VERIFY_BEFORE_BUILD` or similar
   placeholders during normal operation
-- `PackageBuildRunner::verify_checksum()` must stop warning-and-continuing on
-  unsupported algorithms; unsupported algorithms are a hard error in the
-  self-hosting path
+- the Tier 2 / self-host execution path must stop warning-and-continuing on
+  unsupported algorithms for required Tier 2 recipes and any new
+  self-host-specific staged inputs introduced by this project
+- unsupported algorithms are therefore a hard error for required Tier 2
+  recipes in the self-hosting path
 - the required Tier 2 recipes for this milestone must use explicit
   `sha256:<digest>` checksums
 - the current `md5:` Tier 2 entries are treated as invalid for the self-hosting
   path until they are migrated
+- this milestone does **not** require retrofitting the entire existing Phase 3
+  system recipe set away from MD5 before self-host validation can begin
+- Phase 3-owned prerequisites such as `sqlite` may remain on the current
+  final-system checksum policy for this milestone unless they are explicitly
+  migrated as part of separate earlier-phase work
 - because the official BLFS package pages still publish MD5 sums by default,
   implementation must not treat "the BLFS page gave us an md5" as sufficient
   verification for the self-hosting path
@@ -650,7 +661,10 @@ that the image is self-hosting.
     operator envelope
   - the checked-in wrapper should request an image size with enough headroom
     for the Rust toolchain plus an in-guest `conary` rebuild; the generic
-    default image size may be too small for a truthful validation run
+    4G default image size is too small for a truthful validation run
+  - for this milestone, the wrapper should request at least `12G`, with `16G`
+    preferred as the default validation size unless measurement during
+    implementation justifies a smaller floor
 - **Remote infrastructure drift**
   - using real infrastructure improves truthfulness but increases external
     variability; that is why the validation inputs must be explicit and logged
