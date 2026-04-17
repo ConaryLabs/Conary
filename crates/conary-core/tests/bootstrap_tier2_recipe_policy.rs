@@ -70,14 +70,14 @@ fn load_tier2_recipes() -> BTreeMap<String, Recipe> {
 fn load_tier2_versions() -> BTreeMap<String, String> {
     let content =
         fs::read_to_string(versions_toml()).expect("failed to read recipes/versions.toml");
-    let parsed: Value =
-        toml::from_str(&content).expect("recipes/versions.toml must parse as TOML");
+    let parsed: Value = toml::from_str(&content).expect("recipes/versions.toml must parse as TOML");
     let tier2 = parsed
         .get("tier2")
         .and_then(Value::as_table)
         .expect("recipes/versions.toml must contain a [tier2] table");
 
-    tier2.iter()
+    tier2
+        .iter()
         .map(|(name, value)| {
             let version = value
                 .as_str()
@@ -127,9 +127,7 @@ fn tier2_required_recipes_use_repo_owned_sha256_checksums() {
 #[test]
 fn conary_recipe_keeps_staged_workspace_contract() {
     let recipes = load_tier2_recipes();
-    let recipe = recipes
-        .get("conary")
-        .expect("missing Tier 2 recipe conary");
+    let recipe = recipes.get("conary").expect("missing Tier 2 recipe conary");
 
     assert!(
         recipe.source.archive.is_empty(),
