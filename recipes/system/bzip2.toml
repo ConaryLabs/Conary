@@ -26,9 +26,10 @@ homepage = "https://sourceware.org/bzip2/"
 archive = "https://www.sourceware.org/pub/bzip2/bzip2-%(version)s.tar.gz"
 checksum = "md5:67e051268d0c475ea773822f7500d0e5"
 
-[[source.patches]]
-url = "https://www.linuxfromscratch.org/patches/lfs/development/bzip2-1.0.8-install_docs-1.patch"
-checksum = "md5:6a5ac7e89b791aae556de0f745916f7f"
+[patches]
+files = [
+    { file = "https://www.linuxfromscratch.org/patches/lfs/development/bzip2-1.0.8-install_docs-1.patch", checksum = "md5:6a5ac7e89b791aae556de0f745916f7f", strip = 1 },
+]
 
 [build]
 requires = ["glibc"]
@@ -36,9 +37,6 @@ makedepends = []
 chroot = true
 
 configure = """
-# Apply documentation installation patch
-patch -Np1 -i ../bzip2-1.0.8-install_docs-1.patch
-
 # Fix symlink creation to use relative paths
 sed -i 's@\\(ln -s -f \\)$(PREFIX)/bin/@\\1@' Makefile
 

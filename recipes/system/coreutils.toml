@@ -25,9 +25,10 @@ homepage = "https://www.gnu.org/software/coreutils/"
 archive = "https://ftpmirror.gnu.org/coreutils/coreutils-%(version)s.tar.xz"
 checksum = "md5:b0482ebec42fd48e95cb9187d566b9e4"
 
-[[source.patches]]
-url = "https://www.linuxfromscratch.org/patches/lfs/development/coreutils-9.10-i18n-1.patch"
-checksum = "md5:6e9aea31b1662176101e6438a39fdad4"
+[patches]
+files = [
+    { file = "https://www.linuxfromscratch.org/patches/lfs/development/coreutils-9.10-i18n-1.patch", checksum = "md5:6e9aea31b1662176101e6438a39fdad4", strip = 1 },
+]
 
 [build]
 requires = ["glibc", "acl", "attr", "libcap", "gmp"]
@@ -35,9 +36,6 @@ makedepends = ["autoconf", "automake", "perl"]
 chroot = true
 
 configure = """
-# Apply internationalization patch
-patch -Np1 -i ../coreutils-%(version)s-i18n-1.patch
-
 # Regenerate autotools files after patching
 autoreconf -fv
 automake -af
