@@ -1561,6 +1561,21 @@ async fn dispatch_bootstrap_command(bootstrap_cmd: cli::BootstrapCommands) -> Re
             .await
         }
 
+        cli::BootstrapCommands::GuestProfile {
+            work_dir,
+            public_key,
+            verbose,
+            lfs_root,
+        } => {
+            commands::cmd_bootstrap_guest_profile(
+                &work_dir,
+                &public_key,
+                verbose,
+                lfs_root.as_deref(),
+            )
+            .await
+        }
+
         cli::BootstrapCommands::Seed {
             from,
             from_adopted,

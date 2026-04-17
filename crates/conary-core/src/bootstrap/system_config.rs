@@ -6,8 +6,9 @@
 //! fstab, locale, systemd targets, and shell configuration. This phase
 //! transforms the collection of built packages into a bootable system.
 //!
-//! Does NOT include SSH configuration (sshd_config, host keys,
-//! authorized_keys) -- that belongs in Tier 2.
+//! Does NOT include SSH guest-validation configuration (`sshd_config`,
+//! host keys, `authorized_keys`) -- that belongs in the self-host guest
+//! profile applied after Tier 2.
 
 use std::fs;
 use std::path::Path;

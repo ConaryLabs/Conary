@@ -320,6 +320,26 @@ pub enum BootstrapCommands {
         #[arg(long)]
         skip_verify: bool,
     },
+
+    /// Apply the self-host guest access profile to the built sysroot
+    #[command(name = "guest-profile")]
+    GuestProfile {
+        /// Directory for bootstrap work
+        #[arg(short, long, default_value = "/var/lib/conary/bootstrap")]
+        work_dir: String,
+
+        /// Host-generated public key to install for guest access
+        #[arg(long)]
+        public_key: String,
+
+        /// Show verbose output
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// LFS root directory ($LFS)
+        #[arg(long)]
+        lfs_root: Option<String>,
+    },
 }
 
 #[cfg(test)]
@@ -379,5 +399,21 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn cli_accepts_guest_profile_name() {
+        let parsed = BootstrapCli::try_parse_from([
+            "bootstrap",
+            "guest-profile",
+            "--public-key",
+            "/tmp/selfhost_ed25519.pub",
+        ])
+        .expect("parse guest-profile");
+
+        assert!(matches!(
+            parsed.command,
+            BootstrapCommands::GuestProfile { .. }
+        ));
     }
 }

@@ -63,6 +63,7 @@ pub mod chroot_env;
 mod config;
 mod cross_tools;
 mod final_system;
+mod guest_profile;
 mod image;
 pub(crate) mod repart;
 mod stages;
@@ -75,6 +76,7 @@ pub use build_runner::{BuildRunnerError, PackageBuildRunner};
 pub use config::{BootstrapConfig, TargetArch};
 pub use cross_tools::{CrossToolsBuilder, CrossToolsError};
 pub use final_system::{FinalSystemBuilder, FinalSystemError, SYSTEM_BUILD_ORDER};
+pub use guest_profile::{GuestProfileError, apply_guest_profile};
 pub use image::{ImageBuilder, ImageError, ImageFormat, ImageResult, ImageSize, ImageTools};
 pub use stages::{BootstrapStage, StageManager, StageState};
 pub use system_config::{SystemConfigError, configure_system};
@@ -389,6 +391,12 @@ impl Bootstrap {
         }
 
         Ok(())
+    }
+
+    /// Apply the self-host test guest profile to an already-built sysroot.
+    pub fn apply_guest_profile(&self, public_key: &Path) -> Result<()> {
+        guest_profile::apply_guest_profile(&self.config.lfs_root, public_key)
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     /// Get the LFS root path from configuration.
