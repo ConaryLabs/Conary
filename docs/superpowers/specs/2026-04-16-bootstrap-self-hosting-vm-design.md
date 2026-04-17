@@ -100,6 +100,10 @@ The recipe inventory is partly present but not yet trustworthy enough to claim a
 self-hosting guest:
 
 - `recipes/tier2/` already contains all eight recipe files
+- `recipes/system/sqlite.toml` exists in-tree, but the current Phase 3
+  `SYSTEM_BUILD_ORDER` omits `sqlite` even though `recipes/tier2/conary.toml`
+  requires it; the self-hosting path must close that prerequisite gap before
+  the Tier 2 `conary` build can succeed
 - several Tier 2 recipes still use placeholder checksums, for example:
   - `recipes/tier2/rust.toml`
   - `recipes/tier2/linux-pam.toml`
@@ -196,6 +200,10 @@ capable of managing, building, and rebuilding Conary from inside itself.
 For this design, a successful Tier 2 run means:
 
 - all eight Tier 2 packages are installed into the sysroot in a defined order
+- any prerequisite package owned by an earlier phase but required by those
+  Tier 2 recipes is already present in the sysroot before Tier 2 begins; in
+  the current tree this explicitly includes `sqlite` for the `conary` build,
+  and it is not counted as a ninth Tier 2 package
 - the resulting sysroot contains a usable Rust toolchain
 - the resulting sysroot contains a usable `conary` binary
 - the resulting sysroot contains the networking/auth/runtime packages needed to
@@ -259,14 +267,18 @@ For this milestone:
 
 - `recipes/versions.toml` is the canonical repo inventory
 - the upstream comparison baseline for this design is:
-  - `LFS 13.0-systemd` (published 2026-03-05)
+  - `LFS 13.0-systemd`
   - the current BLFS systemd book `r13.0-355` (published 2026-04-15)
 - implementation must refresh the Tier 2 recipe versions and any directly
   coupled bootstrap notes against the current official LFS/BLFS pages before
   calling the self-hosting path complete
 - the initial comparison as of 2026-04-16 is:
-  - `linux-pam`, `make-ca`, `curl`, `sudo`, and `rust` match the current BLFS
-    pages we checked
+  - `linux-pam`, `make-ca`, `curl`, and `sudo` match the current BLFS pages we
+    checked by version
+  - `rust` matches the current BLFS version number (`1.94.0`), but the in-tree
+    recipe intentionally diverges from BLFS install method by using the
+    upstream prebuilt binary distribution instead of the BLFS source-build
+    path; that divergence must remain documented if retained
   - `openssh` in-tree (`10.2p1`) lags the current BLFS page (`10.3p1`)
   - `nano` needs an explicit refresh audit before implementation sign-off; the
     current BLFS top-level TOC lists `Nano-9.0`, while the in-tree recipe is
@@ -283,6 +295,9 @@ For this milestone, the source-handoff mechanism is:
 
 - the checked-in VM/self-host wrapper creates a filtered workspace tarball from
   the current tracked working tree using repo-tracked files only
+- the preferred generation mechanism is `git archive` (or an equivalent that
+  preserves tracked-file ordering, symlinks, modes, and deterministic metadata)
+  with deterministic gzip output such as `gzip -n`
 - that tarball is written to a deterministic path under the bootstrap work dir:
   `<work_dir>/vm-selfhost/inputs/conary-workspace.tar.gz`
 - the wrapper also writes a sidecar checksum file at
@@ -376,9 +391,19 @@ The validation profile also needs a clear home in the tree:
   as `crates/conary-core/src/bootstrap/guest_profile.rs`
 - operator/QEMU orchestration and guest-side validation scripts should live
   under a checked-in directory such as `scripts/bootstrap-vm/`
+- `recipes/tier2/openssh.toml` should remain responsible for package-normal
+  installation concerns such as binaries, service-unit file installation,
+  service user/group creation, and runtime directories
 - overlapping SSH/test-image behavior currently split between
   `recipes/tier2/openssh.toml` and `Tier2Builder::add_ssh_config()` should be
   collapsed into that dedicated profile instead of left duplicated
+- the guest validation profile should own test-posture `sshd_config`
+  decisions, operator/test public-key injection, test-only unit enablement,
+  and post-install access setup
+
+The "no baked-in private key" rule applies to reusable operator/test client
+credentials. It does not forbid normal SSH server host keys required by
+`sshd`.
 
 The validation profile should be explicitly marked as a **test image profile**,
 not a production security posture.
@@ -445,6 +470,11 @@ the host-side `conary` Tier 2 build must be copied into the guest at:
 - `/var/lib/conary/bootstrap-inputs/conary-workspace.tar.gz`
 - `/var/lib/conary/bootstrap-inputs/conary-workspace.tar.gz.sha256`
 
+For this milestone, post-boot input delivery uses SCP/SFTP over the ephemeral
+SSH access path established by the guest validation profile. The workspace
+tarball and optional trust bootstrap material are not baked into the final
+image by default.
+
 The guest-side checks should prove the “top to bottom” contract:
 
 1. the guest boots and is reachable
@@ -497,6 +527,9 @@ For this milestone, the delivery mechanism is explicit:
 
 - the SSH public key is injected before final imaging as part of the guest
   validation profile
+- the workspace tarball, its sidecar checksum, and any optional trust bootstrap
+  material are copied into the running guest after boot via the same
+  post-boot SCP/SFTP path
 - optional trust bootstrap material such as `root.json` is copied into the
   running guest after boot at
   `/var/lib/conary/bootstrap-inputs/root.json`
@@ -537,6 +570,9 @@ Failure conditions include:
   and the operator did not explicitly choose a development override
 - any required Tier 2 recipe still uses an unsupported checksum algorithm such
   as `md5:` in the default self-hosting path
+- a prerequisite package owned by an earlier phase but required by the Tier 2
+  `conary` build, such as `sqlite`, is still missing from the sysroot when
+  Tier 2 begins
 - the `conary` source handoff into Tier 2 is ambiguous or broken
 - the post-Tier-2 image artifact does not actually contain the Tier 2 closure
 - the VM path reuses a stale pre-Tier-2 image instead of re-imaging after Tier
@@ -568,6 +604,9 @@ Verification should happen at three levels.
   algorithms in the default path
 - the version-audit note for the Tier 2 package set matches the current
   official LFS/BLFS pages used by the implementation
+- the self-hosting path records any intentional divergence from current BLFS
+  package method/version guidance, including the current Rust binary-install
+  deviation if it is retained
 - source handoff for the `conary` recipe is validated before the build starts
 - guest validation input parsing and script generation are tested
 
@@ -575,6 +614,8 @@ Verification should happen at three levels.
 
 - `Tier2Builder` executes packages in the declared order
 - the VM/self-host path rejects non-`x86_64` targets for the first milestone
+- the earlier bootstrap phases install any prerequisite package required by the
+  Tier 2 `conary` recipe, including `sqlite`
 - the Tier 2 stage writes enough state to prove the sysroot is self-hosting
   capable
 - the same deterministic workspace tarball is the `conary` source input on the
@@ -607,6 +648,9 @@ that the image is self-hosting.
   - for the first milestone, the in-guest `conary` rebuild may use a debug
     build specifically to keep QEMU runtime and memory costs within a practical
     operator envelope
+  - the checked-in wrapper should request an image size with enough headroom
+    for the Rust toolchain plus an in-guest `conary` rebuild; the generic
+    default image size may be too small for a truthful validation run
 - **Remote infrastructure drift**
   - using real infrastructure improves truthfulness but increases external
     variability; that is why the validation inputs must be explicit and logged
@@ -641,28 +685,34 @@ This project is complete when all of the following are true:
 
 1. `conary bootstrap tier2` installs all eight required Tier 2 packages in the
    declared order instead of returning a stub/skip result.
-2. The default self-hosting path does not rely on placeholder checksums or
+2. Any prerequisite package required by the Tier 2 `conary` recipe but owned
+   by an earlier phase, including `sqlite`, is present in the sysroot before
+   the Tier 2 `conary` build begins.
+3. The default self-hosting path does not rely on placeholder checksums or
    unsupported checksum algorithms for required Tier 2 recipes.
-3. Required Tier 2 recipe checksums are stored as repo-owned `sha256` digests
+4. Required Tier 2 recipe checksums are stored as repo-owned `sha256` digests
    even though the upstream LFS/BLFS package pages still publish MD5 by
    default.
-4. The pipeline has a checked-in, single-entry path that runs Tier 2, applies
+5. The checked-in implementation records a current version audit for the Tier 2
+   package set and documents any intentional divergence from BLFS package
+   version or install-method guidance.
+6. The pipeline has a checked-in, single-entry path that runs Tier 2, applies
    the guest validation profile, re-emits a post-Tier-2 `qcow2`, and validates
    that artifact under QEMU.
-5. The same deterministic `conary` workspace tarball is used as the source
+7. The same deterministic `conary` workspace tarball is used as the source
    input for the host-side Tier 2 build and for the in-guest self-hosting
    rebuild check.
-6. The produced guest can reach the configured real remote infrastructure using
+8. The produced guest can reach the configured real remote infrastructure using
    explicit, documented trust/configuration inputs.
-7. No reusable private SSH operator/test key is baked into the final image.
-8. Inside the guest, `conary` can perform representative query/install/update/
+9. No reusable private SSH operator/test key is baked into the final image.
+10. Inside the guest, `conary` can perform representative query/install/update/
    remove operations.
-9. Inside the guest, at least one representative checked-in smoke recipe can be
+11. Inside the guest, at least one representative checked-in smoke recipe can be
    cooked successfully.
-10. Inside the guest, `conary` can be rebuilt from source and the rebuilt
+12. Inside the guest, `conary` can be rebuilt from source and the rebuilt
     binary successfully executes:
     - `--version`
     - one read-oriented query command
     - one focused package-management smoke command
-11. The operator can use the resulting `qcow2` as the foundation for later
+13. The operator can use the resulting `qcow2` as the foundation for later
     VMware conversion/import work without needing a separate bootstrap design.
