@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-04-16
-revision: 1
+revision: 2
 summary: QEMU-first self-hosting bootstrap design for end-to-end Conary VM testing
 ---
 
@@ -24,6 +24,7 @@ It includes:
 - turning Phase 6 / Tier 2 into a real executable bootstrap stage
 - using the existing `recipes/tier2/*.toml` set as the starting point for that
   stage
+- making the first self-hosting milestone explicitly `x86_64` and QEMU-first
 - producing a **Tier-2-complete** `qcow2` guest image as the primary test
   artifact
 - adding a checked-in QEMU validation path that boots the guest and proves
@@ -45,6 +46,7 @@ It excludes:
   self-hosting validation path needs
 - making Tier 2 mandatory for every bootstrap use case; a minimal bootable base
   system is still a valid bootstrap output
+- first-milestone `aarch64` or `riscv64` self-hosting guest support
 
 ## Non-Goals
 
@@ -105,6 +107,9 @@ self-hosting guest:
 - `recipes/tier2/conary.toml` assumes the bootstrap pipeline will copy the
   workspace into the build directory before invoking the recipe, but no
   end-to-end Tier 2 implementation currently enforces that contract
+- the non-placeholder Tier 2 checksums currently use `md5`, but
+  `PackageBuildRunner::verify_checksum()` only enforces `sha256` today and
+  warns-and-continues on unknown algorithms
 - some Tier 2 test-access behavior is currently expressed inside the package
   recipes themselves, especially `openssh.toml`, rather than through a separate
   guest validation profile
@@ -116,6 +121,25 @@ The existing image builder is close to what this project needs:
 - [apps/conary/src/commands/bootstrap/mod.rs](../../apps/conary/src/commands/bootstrap/mod.rs)
   already treats `qcow2` as a first-class QEMU testing target
 - there is no first-class VMware artifact or import flow yet
+
+The first milestone should be explicit about architecture:
+
+- Tier 2 Rust bootstrapping currently points at the
+  `x86_64-unknown-linux-gnu` binary distribution
+- the self-hosting VM validation target for this spec is therefore
+  `x86_64` only
+- extending the same flow to `aarch64` or `riscv64` is follow-up work after the
+  `x86_64` path is truthful
+
+The first milestone should also be explicit about upstream book alignment:
+
+- `recipes/versions.toml` is the repo-local version inventory for bootstrap
+- as of 2026-04-16, the current official upstream baselines are
+  `LFS 13.0-systemd` and the ongoing BLFS systemd book `r13.0-355`
+  published on 2026-04-15
+- implementation should refresh the Tier 2 package set against those current
+  upstream book pages before claiming the self-hosting path is aligned with
+  "today's reality"
 
 That means the right next step is not “invent VM support from scratch.” It is:
 
@@ -133,6 +157,7 @@ target for bootstrap.
 This means:
 
 - Tier 2 becomes a real recipe-driven stage, not a stub
+- the first self-hosting milestone is `x86_64` only
 - the primary operator artifact is a `qcow2` image produced from a
   Tier-2-complete sysroot
 - QEMU is the first-class acceptance environment
@@ -201,29 +226,75 @@ The design should separate those concerns.
 
 #### 2.1 Checksum policy
 
-Tier 2 must fail closed on placeholder checksums by default.
+Tier 2 must fail closed on placeholder checksums and unsupported checksum
+algorithms by default.
 
 That means:
 
 - no Tier 2 recipe may quietly proceed with `VERIFY_BEFORE_BUILD` or similar
   placeholders during normal operation
+- `PackageBuildRunner::verify_checksum()` must stop warning-and-continuing on
+  unsupported algorithms; unsupported algorithms are a hard error in the
+  self-hosting path
+- the required Tier 2 recipes for this milestone must use explicit
+  `sha256:<digest>` checksums
+- the current `md5:` Tier 2 entries are treated as invalid for the self-hosting
+  path until they are migrated
+- because the official BLFS package pages still publish MD5 sums by default,
+  implementation must not treat "the BLFS page gave us an md5" as sufficient
+  verification for the self-hosting path
+- instead, recipe checksum fields should be repo-owned `sha256` digests
+  computed from the upstream archives and refreshed alongside version bumps;
+  the upstream MD5 value may be retained in comments or audit notes, but it is
+  not the enforcement mechanism
 - a development escape hatch such as `--skip-verify` may remain, but it must be
   visibly noisy and must not be the default success path for the self-hosting
   VM artifact
+
+#### 2.1a Version alignment
+
+The self-hosting path should be truthful about the package versions it builds.
+
+For this milestone:
+
+- `recipes/versions.toml` is the canonical repo inventory
+- the upstream comparison baseline for this design is:
+  - `LFS 13.0-systemd` (published 2026-03-05)
+  - the current BLFS systemd book `r13.0-355` (published 2026-04-15)
+- implementation must refresh the Tier 2 recipe versions and any directly
+  coupled bootstrap notes against the current official LFS/BLFS pages before
+  calling the self-hosting path complete
+- the initial comparison as of 2026-04-16 is:
+  - `linux-pam`, `make-ca`, `curl`, `sudo`, and `rust` match the current BLFS
+    pages we checked
+  - `openssh` in-tree (`10.2p1`) lags the current BLFS page (`10.3p1`)
+  - `nano` needs an explicit refresh audit before implementation sign-off; the
+    current BLFS top-level TOC lists `Nano-9.0`, while the in-tree recipe is
+    still `8.7.1`
+- if the repo intentionally diverges from the current books for a package
+  version, that divergence must be documented in the recipe comments or in the
+  implementation notes, not left implicit
 
 #### 2.2 `conary` source handoff
 
 The `conary` Tier 2 recipe should not rely on undocumented magic.
 
-The bootstrap pipeline must explicitly define how the source tree is handed into
-the Tier 2 build:
+For this milestone, the source-handoff mechanism is:
 
-- a filtered workspace snapshot or source bundle is created from the current
-  checkout
-- that bundle is staged into the Tier 2 build workspace in a deterministic
-  location
-- the `conary` recipe builds against that staged source, not against the live
-  host checkout by accident
+- the checked-in VM/self-host wrapper creates a filtered workspace tarball from
+  the current tracked working tree using repo-tracked files only
+- that tarball is written to a deterministic path under the bootstrap work dir:
+  `<work_dir>/vm-selfhost/inputs/conary-workspace.tar.gz`
+- the wrapper also writes a sidecar checksum file at
+  `<work_dir>/vm-selfhost/inputs/conary-workspace.tar.gz.sha256`
+- the tarball intentionally excludes `.git/`, `target/`, `.worktrees/`, and
+  other untracked build outputs by deriving its contents from tracked files
+- `Tier2Builder` owns the `conary` special-case: when building the `conary`
+  Tier 2 recipe, it must skip remote source fetching, validate the staged
+  tarball against the sidecar `sha256`, extract it into the package build dir,
+  and then run the recipe against that extracted tree
+- no other Tier 2 recipe gets this exception; the special-case is specific to
+  `recipes/tier2/conary.toml`
 
 For this milestone, the build target is “the current local Conary source tree
 under test,” not “a published release tarball.” The operator is trying to test
@@ -239,15 +310,30 @@ effects from inside the package recipes. In particular:
 
 - enabling systemd units should be expressed as sysroot file/link creation, not
   as reliance on a live systemd instance
-- guest users/groups needed by packages should be created through a controlled
-  sysroot mutation path, not by assuming the host account database is the right
-  place to mutate
+- guest users/groups needed by packages should be created through the
+  chrooted-sysroot path owned by the bootstrap core, not through any live-host
+  fallback or post-image ad hoc mutation step
 - package recipes should not bake permanent operator/test credentials into the
   image
 
 Where package install steps truly need a runtime/testing overlay rather than a
 generic package install action, that work belongs in the guest validation
 profile, not in the package recipe itself.
+
+#### 2.4 Tier 2 chroot ownership
+
+All Tier 2 recipes in the current tree declare `chroot = true`, so the
+bootstrap core must own the virtual filesystem mounts that make that safe and
+predictable.
+
+For this milestone:
+
+- `Tier2Builder` is responsible for preparing and tearing down the chroot
+  environment before any Tier 2 recipe executes
+- that responsibility should reuse `ChrootEnv` or a refactor extracted from it,
+  not be delegated to the outer wrapper script
+- the checked-in wrapper may orchestrate stages, but it must not be the mount
+  manager for `/dev`, `/proc`, `/sys`, or `/run`
 
 ### 3. Guest Validation Profile Is Separate From Tier 2 Package Installation
 
@@ -264,14 +350,35 @@ prepares the Tier-2-complete sysroot for VM testing. It should own:
 - enabling and configuring SSH for guest access
 - generating or triggering generation of SSH host keys without embedding
   long-lived private material in the repo
-- installing an ephemeral or operator-provided public key for test access
+- installing a host-generated ephemeral or operator-provided public key for
+  test access
 - any guest-only “ready for validation” unit/service hooks
 - bootstrap-time repository/trust configuration needed for the selected remote
   infrastructure
 
+For this milestone, the SSH boundary is:
+
+- the wrapper creates an ephemeral Ed25519 keypair on the host at
+  `<work_dir>/vm-selfhost/keys/`
+- only the public key is injected into the sysroot/image
+- the private key never enters the sysroot, the package recipes, or the final
+  `qcow2`
+- existing logic that generates a reusable operator/test keypair inside the
+  sysroot must be removed from the self-hosting VM path
+
 This design intentionally keeps that profile out of the package recipes
 themselves, so the recipes stay about package installation and the validation
 overlay stays about “how do we get into and test this VM.”
+
+The validation profile also needs a clear home in the tree:
+
+- bootstrap-core logic for the profile should live in a dedicated module such
+  as `crates/conary-core/src/bootstrap/guest_profile.rs`
+- operator/QEMU orchestration and guest-side validation scripts should live
+  under a checked-in directory such as `scripts/bootstrap-vm/`
+- overlapping SSH/test-image behavior currently split between
+  `recipes/tier2/openssh.toml` and `Tier2Builder::add_ssh_config()` should be
+  collapsed into that dedicated profile instead of left duplicated
 
 The validation profile should be explicitly marked as a **test image profile**,
 not a production security posture.
@@ -293,6 +400,11 @@ This design prefers a checked-in wrapper script or equivalent orchestrated entry
 point over adding broad new bootstrap CLI surface immediately, because the core
 risk is Tier 2 correctness and guest validation, not CLI taxonomy.
 
+For this milestone, the existing generic stage order may stay as-is for
+non-self-hosting users. The VM/self-host path must not rely on
+`conary bootstrap resume` to define the artifact boundary, because the generic
+stage tracker currently reaches image emission before Tier 2.
+
 That single-entry path must make the ordering explicit:
 
 1. complete base bootstrap stages
@@ -300,6 +412,20 @@ That single-entry path must make the ordering explicit:
 3. apply the guest validation profile
 4. emit the `qcow2`
 5. boot and validate it under QEMU
+
+Concretely, the checked-in VM path must:
+
+- treat “Tier 2 skipped” / `NotImplemented` as a hard failure, not a successful
+  partial run
+- delete any stale pre-existing
+  `<work_dir>/vm-selfhost/output/conaryos-selfhost-x86_64.qcow2`
+  before final imaging
+- invoke `conary bootstrap image` only after Tier 2 and the guest validation
+  profile have completed
+- write the validation target to a distinct artifact path such as
+  `<work_dir>/vm-selfhost/output/conaryos-selfhost-x86_64.qcow2`
+- treat any pre-Tier-2 Phase 5 image as an intermediate/debug artifact, not as
+  the validation target for this project
 
 ### 5. QEMU Validation Is The Acceptance Test
 
@@ -313,6 +439,12 @@ The validation path should:
 - run guest-side checks over SSH or another explicit access channel
 - collect logs and return a clear pass/fail result
 
+Before the guest-side rebuild checks begin, the same workspace tarball used for
+the host-side `conary` Tier 2 build must be copied into the guest at:
+
+- `/var/lib/conary/bootstrap-inputs/conary-workspace.tar.gz`
+- `/var/lib/conary/bootstrap-inputs/conary-workspace.tar.gz.sha256`
+
 The guest-side checks should prove the “top to bottom” contract:
 
 1. the guest boots and is reachable
@@ -322,6 +454,19 @@ The guest-side checks should prove the “top to bottom” contract:
 5. the guest can cook at least one representative package/recipe
 6. the guest can rebuild `conary` itself from source
 7. the rebuilt `conary` binary runs successfully inside the guest
+
+For this milestone:
+
+- the representative “cook” target should be a small checked-in smoke recipe
+  under a directory such as `recipes/bootstrap-smoke/`
+- the in-guest `conary` rebuild may use `cargo build` debug mode for
+  practicality inside QEMU; the goal is truthful self-host validation, not a
+  production-optimized build benchmark
+- “the rebuilt binary runs successfully” means at minimum:
+  - `target/debug/conary --version`
+  - one read-oriented command such as `target/debug/conary query label list`
+  - one focused package-management smoke command using the rebuilt binary
+    against the configured remote infrastructure
 
 The validation output should be a checked, operator-readable artifact rather
 than a requirement to scroll through unstructured console output.
@@ -347,6 +492,17 @@ surface such as:
 - repository URL / Remi endpoint
 - optional TUF root metadata path or equivalent trust bootstrap material
 - optional guest-side public key for SSH access
+
+For this milestone, the delivery mechanism is explicit:
+
+- the SSH public key is injected before final imaging as part of the guest
+  validation profile
+- optional trust bootstrap material such as `root.json` is copied into the
+  running guest after boot at
+  `/var/lib/conary/bootstrap-inputs/root.json`
+- the guest-side validation script is then responsible for invoking the
+  appropriate `conary trust` bootstrap command against that file before package
+  operations begin
 
 If those inputs are missing or invalid, guest validation must fail with a
 specific infrastructure/configuration error, not with a vague Tier 2 success
@@ -379,11 +535,16 @@ Failure conditions include:
 
 - any Tier 2 recipe required for self-hosting still has placeholder checksums
   and the operator did not explicitly choose a development override
+- any required Tier 2 recipe still uses an unsupported checksum algorithm such
+  as `md5:` in the default self-hosting path
 - the `conary` source handoff into Tier 2 is ambiguous or broken
 - the post-Tier-2 image artifact does not actually contain the Tier 2 closure
+- the VM path reuses a stale pre-Tier-2 image instead of re-imaging after Tier
+  2 and the guest validation profile
 - the guest boots but cannot reach the configured remote infrastructure
 - package operations work but recipe cooking or `conary` self-rebuild fails
 - the image only boots before Tier 2 but regresses after Tier 2 is applied
+- a reusable private SSH access key is baked into the final image
 
 The implementation should report which class of failure occurred:
 
@@ -403,23 +564,32 @@ Verification should happen at three levels.
 ### 1. Local structural checks
 
 - Tier 2 recipe inventory loads cleanly
-- no required Tier 2 recipe uses placeholder checksums in the default path
+- no required Tier 2 recipe uses placeholder checksums or unsupported checksum
+  algorithms in the default path
+- the version-audit note for the Tier 2 package set matches the current
+  official LFS/BLFS pages used by the implementation
 - source handoff for the `conary` recipe is validated before the build starts
 - guest validation input parsing and script generation are tested
 
 ### 2. Bootstrap-stage checks
 
 - `Tier2Builder` executes packages in the declared order
+- the VM/self-host path rejects non-`x86_64` targets for the first milestone
 - the Tier 2 stage writes enough state to prove the sysroot is self-hosting
   capable
+- the same deterministic workspace tarball is the `conary` source input on the
+  host and the guest
 - the wrapper/orchestrated flow refuses to emit the “test this in a VM” image
   unless Tier 2 completed successfully
+- the wrapper/orchestrated flow re-emits the final image after Tier 2 instead
+  of validating a pre-Tier-2 artifact
 
 ### 3. Guest acceptance checks
 
 - boot the produced `qcow2` under QEMU
 - establish guest access
 - run the checked guest-side validation script
+- verify no reusable private SSH operator key exists in the final image
 - store the result and enough logs to debug failures without rerunning blindly
 
 For this design, the QEMU guest validation is the authoritative acceptance
@@ -434,9 +604,18 @@ that the image is self-hosting.
   - a full self-hosting build plus guest validation will be expensive; this is
     expected and should be treated as a deliberate validation path, not a cheap
     CI smoke test
+  - for the first milestone, the in-guest `conary` rebuild may use a debug
+    build specifically to keep QEMU runtime and memory costs within a practical
+    operator envelope
 - **Remote infrastructure drift**
   - using real infrastructure improves truthfulness but increases external
     variability; that is why the validation inputs must be explicit and logged
+- **Book checksum mismatch**
+  - the official LFS/BLFS books still publish MD5 sums on the package pages, so
+    moving the self-hosting path to repo-owned `sha256` digests adds a small
+    maintenance burden whenever package versions change; that burden is
+    intentional because it gives the bootstrap verifier a meaningful default
+    enforcement path
 - **Recipe/install semantics mismatch**
   - the current Tier 2 recipes include bootstrap-friendly behavior that is not
     cleanly separated from package installation; this design addresses that by
@@ -449,6 +628,10 @@ that the image is self-hosting.
   - VMware users wait slightly longer for a first-class artifact, but the
     resulting conversion/import path is built on a proven `qcow2` instead of on
     an unvalidated parallel artifact
+- **Phase 5 bootability remains a prerequisite**
+  - if the pre-existing Phase 5 image path does not produce a bootable `qcow2`,
+    the QEMU validation flow will block on that prerequisite before the
+    self-hosting checks even begin
 
 ---
 
@@ -456,18 +639,30 @@ that the image is self-hosting.
 
 This project is complete when all of the following are true:
 
-1. `conary bootstrap tier2` is a real executable stage rather than a stub.
-2. The default self-hosting path does not rely on placeholder checksums for
-   required Tier 2 recipes.
-3. The pipeline has a checked-in, single-entry path that builds a
-   Tier-2-complete `qcow2` and validates it under QEMU.
-4. The produced guest can reach the configured real remote infrastructure using
+1. `conary bootstrap tier2` installs all eight required Tier 2 packages in the
+   declared order instead of returning a stub/skip result.
+2. The default self-hosting path does not rely on placeholder checksums or
+   unsupported checksum algorithms for required Tier 2 recipes.
+3. Required Tier 2 recipe checksums are stored as repo-owned `sha256` digests
+   even though the upstream LFS/BLFS package pages still publish MD5 by
+   default.
+4. The pipeline has a checked-in, single-entry path that runs Tier 2, applies
+   the guest validation profile, re-emits a post-Tier-2 `qcow2`, and validates
+   that artifact under QEMU.
+5. The same deterministic `conary` workspace tarball is used as the source
+   input for the host-side Tier 2 build and for the in-guest self-hosting
+   rebuild check.
+6. The produced guest can reach the configured real remote infrastructure using
    explicit, documented trust/configuration inputs.
-5. Inside the guest, `conary` can perform representative query/install/update/
+7. No reusable private SSH operator/test key is baked into the final image.
+8. Inside the guest, `conary` can perform representative query/install/update/
    remove operations.
-6. Inside the guest, at least one representative recipe can be cooked
-   successfully.
-7. Inside the guest, `conary` can be rebuilt from source and the rebuilt binary
-   runs successfully.
-8. The operator can use the resulting `qcow2` as the foundation for later
-   VMware conversion/import work without needing a separate bootstrap design.
+9. Inside the guest, at least one representative checked-in smoke recipe can be
+   cooked successfully.
+10. Inside the guest, `conary` can be rebuilt from source and the rebuilt
+    binary successfully executes:
+    - `--version`
+    - one read-oriented query command
+    - one focused package-management smoke command
+11. The operator can use the resulting `qcow2` as the foundation for later
+    VMware conversion/import work without needing a separate bootstrap design.
