@@ -23,7 +23,7 @@ homepage = "https://curl.se/"
 
 [source]
 archive = "https://curl.se/download/curl-%(version)s.tar.xz"
-checksum = "md5:d5d3581ba4b4df1140a26a6efcf13e61"
+checksum = "sha256:4eb41489790d19e190d7ac7e18e82857cdd68af8f4e66b292ced562d333f11df"
 
 [build]
 requires = ["glibc", "openssl", "zlib"]

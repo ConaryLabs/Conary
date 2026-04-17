@@ -23,7 +23,7 @@ homepage = "https://github.com/linux-pam/linux-pam"
 
 [source]
 archive = "https://github.com/linux-pam/linux-pam/releases/download/v%(version)s/Linux-PAM-%(version)s.tar.xz"
-checksum = "md5:VERIFY_BEFORE_BUILD"
+checksum = "sha256:3d86b6383fb5fd9eb9578d2cd47d92801191f4bf3f9bc61419bfefc8aa1e531a"
 
 [build]
 requires = ["glibc", "systemd"]
