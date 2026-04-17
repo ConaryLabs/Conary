@@ -27,16 +27,16 @@ homepage = "https://gcc.gnu.org/"
 archive = "https://ftpmirror.gnu.org/gcc/gcc-%(version)s/gcc-%(version)s.tar.xz"
 checksum = "md5:b861b092bf1af683c46a8aa2e689a6fd"
 
-[[source.companions]]
-archive = "https://ftpmirror.gnu.org/mpfr/mpfr-%(mpfr_version)s.tar.xz"
+[[source.additional]]
+url = "https://ftpmirror.gnu.org/mpfr/mpfr-%(mpfr_version)s.tar.xz"
 checksum = "md5:7c32c39b8b6e3ae85f25156228156061"
 
-[[source.companions]]
-archive = "https://ftpmirror.gnu.org/gmp/gmp-%(gmp_version)s.tar.xz"
+[[source.additional]]
+url = "https://ftpmirror.gnu.org/gmp/gmp-%(gmp_version)s.tar.xz"
 checksum = "md5:956dc04e864001a9c22429f761f2c283"
 
-[[source.companions]]
-archive = "https://ftpmirror.gnu.org/mpc/mpc-%(mpc_version)s.tar.gz"
+[[source.additional]]
+url = "https://ftpmirror.gnu.org/mpc/mpc-%(mpc_version)s.tar.gz"
 checksum = "md5:5c9bc658c9fd0f940e8e3e0f09530c62"
 
 [build]
