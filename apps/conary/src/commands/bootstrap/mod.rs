@@ -554,6 +554,33 @@ pub async fn cmd_bootstrap_config(
     Ok(())
 }
 
+/// Apply the self-host guest profile to the built sysroot.
+pub async fn cmd_bootstrap_guest_profile(
+    work_dir: &str,
+    public_key: &str,
+    verbose: bool,
+    lfs_root: Option<&str>,
+) -> Result<()> {
+    println!("Applying self-host guest profile...");
+    println!("  Work directory: {}", work_dir);
+    println!("  Public key: {}", public_key);
+
+    let mut config = BootstrapConfig::new().with_verbose(verbose);
+    if let Some(root) = lfs_root {
+        config = config.with_lfs_root(root);
+    }
+
+    println!("  LFS root: {}", config.lfs_root.display());
+
+    let bootstrap = Bootstrap::with_config(work_dir, config)?;
+    bootstrap.apply_guest_profile(Path::new(public_key))?;
+
+    println!("\n[OK] Self-host guest profile applied successfully!");
+    println!("  The sysroot now has SSH-ready test posture for VM validation.");
+
+    Ok(())
+}
+
 /// Build Phase 6: Tier-2 packages (BLFS + Conary self-hosting)
 pub async fn cmd_bootstrap_tier2(
     work_dir: &str,

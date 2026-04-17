@@ -3,12 +3,10 @@
 # BLFS — OpenSSH-10.3p1
 # https://www.linuxfromscratch.org/blfs/view/systemd/postlfs/openssh.html
 #
-# Secure shell client and server. Built with PAM support. Includes
-# sshd.service systemd unit and sshd_config that enables PubkeyAuth
-# and PermitRootLogin for bootstrap testing.
-#
-# DEVIATION: PermitRootLogin enabled (LFS/BLFS default is no)
-# DEVIATION: PasswordAuthentication yes (for bootstrap testing)
+# Secure shell client and server. Built with PAM support and an
+# installed `sshd.service` unit. Test-image SSH posture, host-key
+# generation, and authorized_keys injection are owned by the guest
+# profile, not by this package recipe.
 
 [package]
 name = "openssh"
@@ -70,26 +68,6 @@ mkdir -pv $DESTDIR/etc/pam.d
 sed 's@d/login@d/sshd@g' /etc/pam.d/login > $DESTDIR/etc/pam.d/sshd
 chmod 644 $DESTDIR/etc/pam.d/sshd
 
-# Write sshd_config with bootstrap-friendly settings
-mkdir -pv $DESTDIR/etc/ssh
-cat > $DESTDIR/etc/ssh/sshd_config << "SSHEOF"
-# conaryOS sshd_config -- bootstrap defaults
-# Regenerate with stricter settings for production use.
-
-PermitRootLogin yes
-PubkeyAuthentication yes
-PasswordAuthentication yes
-PermitEmptyPasswords yes
-UsePAM no
-
-# Logging
-SyslogFacility AUTH
-LogLevel INFO
-
-# Subsystem
-Subsystem sftp /usr/libexec/sftp-server
-SSHEOF
-
 # Install systemd unit
 mkdir -pv $DESTDIR/usr/lib/systemd/system
 cat > $DESTDIR/usr/lib/systemd/system/sshd.service << "UNITEOF"
@@ -107,23 +85,7 @@ RestartSec=42s
 [Install]
 WantedBy=multi-user.target
 UNITEOF
-
-# Enable sshd.service
-systemctl enable sshd.service 2>/dev/null || \
-    mkdir -p $DESTDIR/etc/systemd/system/multi-user.target.wants && \
-    ln -sf /usr/lib/systemd/system/sshd.service \
-           $DESTDIR/etc/systemd/system/multi-user.target.wants/sshd.service
 """
 
 [variables]
 jobs = "$(nproc)"
-
-[deviations]
-lfs_section = "BLFS"
-lfs_url = "https://www.linuxfromscratch.org/blfs/view/systemd/postlfs/openssh.html"
-changes = [
-    { flag = "PermitRootLogin", lfs = "no", conary = "yes", reason = "Required for bootstrap/test access" },
-    { flag = "PasswordAuthentication", lfs = "default", conary = "yes", reason = "Bootstrap convenience" },
-    { flag = "PermitEmptyPasswords", lfs = "no", conary = "yes", reason = "Bootstrap convenience (no password set)" },
-    { flag = "UsePAM", lfs = "yes", conary = "no", reason = "Simpler bootstrap without PAM session" },
-]
