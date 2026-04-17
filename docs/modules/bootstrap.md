@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-03-31
-revision: 3
-summary: Document the current bootstrap command surface, manifest pipeline artifacts, and comparison commands
+last_updated: 2026-04-16
+revision: 4
+summary: Document the current bootstrap command surface, self-host VM overlay, manifest pipeline artifacts, and comparison commands
 ---
 
 # Bootstrap Module (conary-core/src/bootstrap/)
@@ -24,7 +24,7 @@ Host System (any Linux with gcc)
      |                 17 cross-compiled + 6 chroot packages
      |
   FinalSystemBuilder -- Phase 3: Final system (LFS Ch8)
-     |                   77 packages -- complete Linux system
+     |                   78 packages -- complete Linux system
      |                   Built inside chroot via ChrootEnv
      |
   configure_system() -- Phase 4: System configuration (LFS Ch9)
@@ -37,6 +37,9 @@ Host System (any Linux with gcc)
      |
   Tier2Builder -- Phase 6: BLFS + Conary
      |             PAM, OpenSSH, curl, Rust, Conary self-hosting
+     |
+  apply_guest_profile() -- Self-host VM guest access overlay
+     |                    Host public key, test sshd_config, SSH host keys
      |
   StageManager -- JSON checkpoint file (bootstrap-state.json)
                    Per-stage completion + per-package checkpointing
@@ -61,6 +64,7 @@ Host System (any Linux with gcc)
 | `ImageTools` | image.rs | Host tool availability check for imaging |
 | `ImageResult` | image.rs | Build result with path and metadata |
 | `Tier2Builder` | tier2.rs | Phase 6: BLFS + Conary self-hosting |
+| `apply_guest_profile()` | guest_profile.rs | Install the self-host test guest profile with a host-generated public key |
 | `PackageBuildRunner` | build_runner.rs | Source fetch, verify, extract, build for individual packages |
 | `BuildContext` | build_runner.rs | Enum: build context type |
 | `ChrootEnv` | chroot_env.rs | Chroot environment setup for Phase 3 builds |
@@ -70,7 +74,7 @@ Host System (any Linux with gcc)
 
 ## Files
 
-15 files in `conary-core/src/bootstrap/`:
+16 files in `conary-core/src/bootstrap/`:
 
 - `mod.rs` -- module root, re-exports public types
 - `config.rs` -- `BootstrapConfig`, `TargetArch`
@@ -81,6 +85,7 @@ Host System (any Linux with gcc)
 - `system_config.rs` -- `configure_system()` (Phase 4)
 - `image.rs` -- `ImageBuilder`, `ImageFormat`, `ImageSize`, `ImageTools`, `ImageResult` (Phase 5)
 - `tier2.rs` -- `Tier2Builder` (Phase 6)
+- `guest_profile.rs` -- self-host VM guest profile application (`apply_guest_profile()`)
 - `build_runner.rs` -- `PackageBuildRunner` (source fetch/verify/extract/build)
 - `build_helpers.rs` -- shared build helper functions
 - `chroot_env.rs` -- `ChrootEnv` for Phase 3 chroot setup
@@ -115,6 +120,28 @@ system.
 
 Supports x86_64, aarch64, and riscv64 targets.
 
+## Self-Hosting VM Overlay
+
+The first truthful self-hosting VM path is a checked-in wrapper flow layered on
+top of the core bootstrap commands, not a new bootstrap phase sequence.
+
+- `conary bootstrap guest-profile --public-key <path>` applies the test-image
+  guest profile after Tier 2 by installing a host-generated public key,
+  writing the guest profile SSH configuration, enabling `sshd`, and generating
+  SSH host keys inside the sysroot
+- `scripts/bootstrap-vm/build-selfhost-qcow2.sh` is the single-entry operator
+  path for this milestone; it stages `conary-workspace.tar.gz`, runs the core
+  bootstrap phases through Tier 2 plus guest profile, and emits
+  `<work_dir>/vm-selfhost/output/conaryos-selfhost-x86_64.qcow2`
+- `scripts/bootstrap-vm/validate-selfhost-vm.sh` boots that image under QEMU,
+  copies `conary-workspace.tar.gz` and optional `root.json` into
+  `/var/lib/conary/bootstrap-inputs/`, and then runs
+  `scripts/bootstrap-vm/guest-validate.sh`
+- the wrapper defaults the self-host image size to `16G`; the generic
+  `conary bootstrap image` default remains `4G`
+- VMware remains a follow-up conversion/import story after the QEMU `qcow2`
+  path is trustworthy
+
 ## Canonical CLI
 
 The active user-facing bootstrap commands are:
@@ -127,6 +154,7 @@ conary bootstrap system
 conary bootstrap config
 conary bootstrap image --format qcow2
 conary bootstrap tier2
+conary bootstrap guest-profile --public-key /tmp/selfhost_ed25519.pub
 conary bootstrap run conaryos.toml --seed ./seed
 conary bootstrap verify-convergence --run-a ./bootstrap-a --run-b ./bootstrap-b
 conary bootstrap diff-seeds ./seed-a ./seed-b
