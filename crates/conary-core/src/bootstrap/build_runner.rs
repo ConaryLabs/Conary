@@ -79,6 +79,19 @@ pub struct PackageBuildRunner {
     context: Option<BuildContext>,
 }
 
+fn gnu_fetch_candidates(url: &str) -> Vec<String> {
+    let mut candidates = vec![url.to_string()];
+
+    for prefix in ["https://ftpmirror.gnu.org/", "http://ftpmirror.gnu.org/"] {
+        if let Some(rest) = url.strip_prefix(prefix) {
+            candidates.push(format!("https://ftp.gnu.org/gnu/{rest}"));
+            break;
+        }
+    }
+
+    candidates
+}
+
 impl PackageBuildRunner {
     /// Create a new build runner
     pub fn new(sources_dir: &Path, config: &BootstrapConfig) -> Self {
@@ -142,25 +155,49 @@ impl PackageBuildRunner {
             }
         }
 
-        info!("  Fetching: {}", url);
-
         let target_str = target_path
             .to_str()
             .ok_or_else(|| BuildRunnerError::InvalidPath(target_path.clone()))?;
 
-        let output = Command::new("curl")
-            .args(["-fsSL", "-o", target_str, &url])
-            .output()
-            .map_err(|e| BuildRunnerError::SourceFetchFailed {
-                package: pkg_name.to_string(),
-                reason: e.to_string(),
-            })?;
+        let mut last_reason = String::new();
+        for (idx, candidate) in gnu_fetch_candidates(&url).iter().enumerate() {
+            if idx == 0 {
+                info!("  Fetching: {}", candidate);
+            } else {
+                warn!("  Primary GNU mirror failed, retrying with fallback: {candidate}");
+            }
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+            let output = Command::new("curl")
+                .args([
+                    "-fsSL",
+                    "--connect-timeout",
+                    "30",
+                    "--max-time",
+                    "600",
+                    "--retry",
+                    "3",
+                    "-o",
+                    target_str,
+                    candidate,
+                ])
+                .output()
+                .map_err(|e| BuildRunnerError::SourceFetchFailed {
+                    package: pkg_name.to_string(),
+                    reason: e.to_string(),
+                })?;
+
+            if output.status.success() {
+                last_reason.clear();
+                break;
+            }
+
+            last_reason = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        }
+
+        if !last_reason.is_empty() {
             return Err(BuildRunnerError::SourceFetchFailed {
                 package: pkg_name.to_string(),
-                reason: stderr.to_string(),
+                reason: last_reason,
             });
         }
 
@@ -258,19 +295,47 @@ impl PackageBuildRunner {
                     .to_str()
                     .ok_or_else(|| BuildRunnerError::InvalidPath(target_path.clone()))?;
 
-                let output = Command::new("curl")
-                    .args(["-fsSL", "-o", target_str, &url])
-                    .output()
-                    .map_err(|e| BuildRunnerError::SourceFetchFailed {
-                        package: pkg_name.to_string(),
-                        reason: e.to_string(),
-                    })?;
+                let mut last_reason = String::new();
+                for (idx, candidate) in gnu_fetch_candidates(&url).iter().enumerate() {
+                    if idx == 0 {
+                        info!("  Fetching additional from: {}", candidate);
+                    } else {
+                        warn!(
+                            "  Primary GNU mirror failed, retrying additional source with fallback: {candidate}"
+                        );
+                    }
 
-                if !output.status.success() {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    let output = Command::new("curl")
+                        .args([
+                            "-fsSL",
+                            "--connect-timeout",
+                            "30",
+                            "--max-time",
+                            "600",
+                            "--retry",
+                            "3",
+                            "-o",
+                            target_str,
+                            candidate,
+                        ])
+                        .output()
+                        .map_err(|e| BuildRunnerError::SourceFetchFailed {
+                            package: pkg_name.to_string(),
+                            reason: e.to_string(),
+                        })?;
+
+                    if output.status.success() {
+                        last_reason.clear();
+                        break;
+                    }
+
+                    last_reason = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                }
+
+                if !last_reason.is_empty() {
                     return Err(BuildRunnerError::SourceFetchFailed {
                         package: pkg_name.to_string(),
-                        reason: format!("Additional source fetch failed: {}", stderr),
+                        reason: format!("Additional source fetch failed: {}", last_reason),
                     });
                 }
             }
@@ -434,6 +499,24 @@ mod tests {
 
         let result = runner.verify_checksum("test", "md5:d41d8cd98f00b204e9800998ecf8427e", &file);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_gnu_fetch_candidates_adds_canonical_fallback_for_ftpmirror() {
+        let candidates = gnu_fetch_candidates("https://ftpmirror.gnu.org/bash/bash-5.3.tar.gz");
+        assert_eq!(
+            candidates,
+            vec![
+                "https://ftpmirror.gnu.org/bash/bash-5.3.tar.gz".to_string(),
+                "https://ftp.gnu.org/gnu/bash/bash-5.3.tar.gz".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn test_gnu_fetch_candidates_leaves_non_ftpmirror_urls_unchanged() {
+        let candidates = gnu_fetch_candidates("https://example.invalid/src.tar.gz");
+        assert_eq!(candidates, vec!["https://example.invalid/src.tar.gz".to_string()]);
     }
 
     #[test]
