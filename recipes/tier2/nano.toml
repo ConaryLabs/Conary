@@ -1,14 +1,17 @@
 # recipes/tier2/nano.toml
 #
-# BLFS — Nano-8.7.1
-# https://www.linuxfromscratch.org/blfs/view/systemd/postlfs/nano.html
+# Upstream — Nano-9.0
+# https://www.nano-editor.org/dist/v9/nano-9.0.tar.xz
 #
 # Small, friendly text editor. An alternative to vim for users who
 # prefer a simpler editor. Built with UTF-8 support.
+#
+# DEVIATION: BLFS systemd still documents Nano-8.7.1, but the self-hosting
+# milestone tracks the current upstream 9.0 release from the approved audit.
 
 [package]
 name = "nano"
-version = "8.7.1"
+version = "9.0"
 release = "1"
 summary = "Small and friendly text editor"
 description = """
@@ -21,8 +24,8 @@ license = "GPL-3.0-or-later"
 homepage = "https://www.nano-editor.org/"
 
 [source]
-archive = "https://www.nano-editor.org/dist/v8/nano-%(version)s.tar.xz"
-checksum = "md5:d873085c342e3670d108c08a0c3ebe2f"
+archive = "https://www.nano-editor.org/dist/v9/nano-%(version)s.tar.xz"
+checksum = "sha256:9f384374b496110a25b73ad5a5febb384783c6e3188b37063f677ac908013fde"
 
 [build]
 requires = ["glibc", "ncurses"]

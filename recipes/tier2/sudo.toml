@@ -23,7 +23,7 @@ homepage = "https://www.sudo.ws/"
 
 [source]
 archive = "https://www.sudo.ws/dist/sudo-%(version)s.tar.gz"
-checksum = "md5:VERIFY_BEFORE_BUILD"
+checksum = "sha256:4a38a1ab3adb1199257edc2a7c4a2bd714665eb605b04368843b06dada2cfcfb"
 
 [build]
 requires = ["glibc", "linux-pam", "zlib"]

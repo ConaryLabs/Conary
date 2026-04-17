@@ -1,6 +1,6 @@
 # recipes/tier2/openssh.toml
 #
-# BLFS — OpenSSH-10.2p1
+# BLFS — OpenSSH-10.3p1
 # https://www.linuxfromscratch.org/blfs/view/systemd/postlfs/openssh.html
 #
 # Secure shell client and server. Built with PAM support. Includes
@@ -12,7 +12,7 @@
 
 [package]
 name = "openssh"
-version = "10.2p1"
+version = "10.3p1"
 release = "1"
 summary = "Secure Shell client and server"
 description = """
@@ -26,7 +26,7 @@ homepage = "https://www.openssh.com/"
 
 [source]
 archive = "https://ftp.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-%(version)s.tar.gz"
-checksum = "md5:801b5ad6da38e0045de20dd5dd2f6a80"
+checksum = "sha256:56682a36bb92dcf4b4f016fd8ec8e74059b79a8de25c15d670d731e7d18e45f4"
 
 [build]
 requires = ["glibc", "openssl", "linux-pam", "zlib"]

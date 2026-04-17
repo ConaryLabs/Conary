@@ -3,7 +3,7 @@
 # Package versions for LFS 13 (systemd) bootstrap alignment
 # Source: https://www.linuxfromscratch.org/lfs/view/systemd/chapter03/packages.html
 #
-# Last updated: 2026-03-17
+# Last updated: 2026-04-16
 
 [toolchain]
 gcc = "15.2.0"
@@ -130,13 +130,13 @@ expect = "5.45.4"
 tcl = "8.6.17"
 
 [tier2]
-# BLFS + Conary packages
+# BLFS + Conary packages audited for the self-hosting VM milestone
 linux-pam = "1.7.2"
-openssh = "10.2p1"
+openssh = "10.3p1"
 make-ca = "1.16.1"
 curl = "8.19.0"
 sudo = "1.9.17p2"
-nano = "8.7.1"
+nano = "9.0"
 rust = "1.94.0"
 
 [urls]

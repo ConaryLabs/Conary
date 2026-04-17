@@ -28,7 +28,7 @@ homepage = "https://github.com/lfs-book/make-ca"
 
 [source]
 archive = "https://github.com/lfs-book/make-ca/archive/v%(version)s/make-ca-%(version)s.tar.gz"
-checksum = "md5:bf9cea2d24fc5344d4951b49f275c595"
+checksum = "sha256:98c7e6fded1938b972d0177b5d5e925d318be87f84ee9e4cad680656a8c29414"
 
 [build]
 requires = ["openssl"]
