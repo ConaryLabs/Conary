@@ -104,6 +104,27 @@ pub struct TempToolsBuilder {
     runner: PackageBuildRunner,
 }
 
+fn ensure_usr_merge_layout(lfs_root: &Path) -> Result<(), TempToolsError> {
+    for dir in ["usr/bin", "usr/lib", "usr/sbin"] {
+        std::fs::create_dir_all(lfs_root.join(dir))?;
+    }
+
+    for (link, target) in [
+        ("bin", "usr/bin"),
+        ("lib", "usr/lib"),
+        ("sbin", "usr/sbin"),
+        ("lib64", "usr/lib"),
+    ] {
+        let link_path = lfs_root.join(link);
+        if link_path.exists() {
+            continue;
+        }
+        std::os::unix::fs::symlink(target, &link_path)?;
+    }
+
+    Ok(())
+}
+
 impl TempToolsBuilder {
     /// Create a new temporary tools builder.
     ///
@@ -128,6 +149,8 @@ impl TempToolsBuilder {
         if !tools_bin.exists() {
             return Err(TempToolsError::MissingCrossTools(tools_bin));
         }
+
+        ensure_usr_merge_layout(lfs_root)?;
 
         let sources_dir = work_dir.join("sources");
         std::fs::create_dir_all(&sources_dir)?;
@@ -456,6 +479,44 @@ mod tests {
 
         let builder = TempToolsBuilder::new(work.path(), lfs.path(), config, cross_tc);
         assert!(builder.is_ok());
+    }
+
+    #[test]
+    fn test_new_initializes_usr_merge_layout_for_cross_packages() {
+        let work = tempfile::tempdir().unwrap();
+        let lfs = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(lfs.path().join("tools/bin")).unwrap();
+
+        let config = BootstrapConfig::new();
+        let cross_tc = Toolchain {
+            kind: ToolchainKind::CrossTools,
+            path: lfs.path().join("tools"),
+            target: "x86_64-conary-linux-gnu".to_string(),
+            gcc_version: None,
+            glibc_version: None,
+            binutils_version: None,
+            is_static: false,
+        };
+
+        TempToolsBuilder::new(work.path(), lfs.path(), config, cross_tc).unwrap();
+
+        assert!(lfs.path().join("usr/bin").is_dir());
+        assert!(lfs.path().join("usr/lib").is_dir());
+        assert!(lfs.path().join("usr/sbin").is_dir());
+
+        let bin_link = std::fs::read_link(lfs.path().join("bin"))
+            .expect("/bin symlink should exist for Chapter 6 installs");
+        let lib_link = std::fs::read_link(lfs.path().join("lib"))
+            .expect("/lib symlink should exist for Chapter 6 installs");
+        let sbin_link = std::fs::read_link(lfs.path().join("sbin"))
+            .expect("/sbin symlink should exist for Chapter 6 installs");
+        let lib64_link = std::fs::read_link(lfs.path().join("lib64"))
+            .expect("/lib64 symlink should exist for Chapter 6 installs");
+
+        assert_eq!(bin_link, PathBuf::from("usr/bin"));
+        assert_eq!(lib_link, PathBuf::from("usr/lib"));
+        assert_eq!(sbin_link, PathBuf::from("usr/sbin"));
+        assert_eq!(lib64_link, PathBuf::from("usr/lib"));
     }
 
     #[test]
