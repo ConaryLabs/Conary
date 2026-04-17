@@ -4,9 +4,11 @@
 
 use crate::error::{Error, Result};
 use crate::hash::{HashAlgorithm, hash_bytes};
+use crate::recipe::kitchen::config::SourceChecksumPolicy;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use tracing::warn;
 
 /// Download a file from a URL
 pub fn download_file(url: &str, dest: &Path) -> Result<()> {
@@ -57,7 +59,11 @@ pub fn download_file(url: &str, dest: &Path) -> Result<()> {
 /// Returns `Ok(None)` when the checksum matches, or `Ok(Some(actual_hash))`
 /// when it does not, allowing callers to include the actual hash in error
 /// messages. Returns `Err` on I/O failure or unsupported algorithm.
-pub fn verify_file_checksum(path: &Path, expected: &str) -> Result<Option<String>> {
+pub fn verify_file_checksum(
+    path: &Path,
+    expected: &str,
+    policy: SourceChecksumPolicy,
+) -> Result<Option<String>> {
     let content = fs::read(path)?;
 
     let (algorithm, expected_hash) = expected
@@ -67,6 +73,13 @@ pub fn verify_file_checksum(path: &Path, expected: &str) -> Result<Option<String
     let algo = match algorithm {
         "sha256" => HashAlgorithm::Sha256,
         "xxh128" => HashAlgorithm::Xxh128,
+        _ if policy == SourceChecksumPolicy::BootstrapLegacy => {
+            warn!(
+                "Skipping unsupported checksum algorithm {} in bootstrap legacy mode",
+                algorithm
+            );
+            return Ok(None);
+        }
         _ => {
             return Err(Error::ParseError(format!(
                 "Unsupported checksum algorithm: {} (supported: sha256, xxh128)",
@@ -162,10 +175,18 @@ mod tests {
     #[test]
     fn test_verify_checksum_format() {
         // Just testing the format parsing (not actual file content)
-        let result = verify_file_checksum(Path::new("/nonexistent"), "invalid");
+        let result = verify_file_checksum(
+            Path::new("/nonexistent"),
+            "invalid",
+            SourceChecksumPolicy::Supported,
+        );
         assert!(result.is_err());
 
-        let result = verify_file_checksum(Path::new("/nonexistent"), "unknown:abc");
+        let result = verify_file_checksum(
+            Path::new("/nonexistent"),
+            "unknown:abc",
+            SourceChecksumPolicy::Supported,
+        );
         assert!(result.is_err()); // unsupported algorithm
     }
 

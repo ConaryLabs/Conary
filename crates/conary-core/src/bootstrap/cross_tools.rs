@@ -22,7 +22,7 @@ use super::build_runner::PackageBuildRunner;
 use super::config::BootstrapConfig;
 use super::toolchain::{Toolchain, ToolchainKind};
 use crate::recipe::parser::parse_recipe_file;
-use crate::recipe::{Kitchen, KitchenConfig};
+use crate::recipe::{Kitchen, KitchenConfig, SourceChecksumPolicy};
 
 /// Derive the LFS target triplet from the bootstrap configuration.
 ///
@@ -232,6 +232,7 @@ impl CrossToolsBuilder {
             source_cache: self.work_dir.join("sources"),
             jobs: self.config.jobs as u32,
             use_isolation: false,
+            checksum_policy: SourceChecksumPolicy::BootstrapLegacy,
             extra_env: extra_env.to_vec(),
             ..Default::default()
         };

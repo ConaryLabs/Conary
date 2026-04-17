@@ -7,6 +7,17 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+/// Source-checksum verification policy for Kitchen fetches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceChecksumPolicy {
+    /// Default Kitchen behavior: verify supported algorithms and reject
+    /// unsupported ones.
+    Supported,
+    /// Bootstrap early-phase behavior: verify supported algorithms but allow
+    /// legacy/unsupported algorithms to pass through unchanged.
+    BootstrapLegacy,
+}
+
 /// Configuration for a specific bootstrap stage
 ///
 /// This specifies the sysroot, toolchain paths, and environment
@@ -214,6 +225,8 @@ pub struct KitchenConfig {
     /// `std::env::set_var` to avoid the UB associated with mutating the
     /// process-wide environment from a multi-threaded context.
     pub extra_env: Vec<(String, String)>,
+    /// Source-checksum verification policy for fetches.
+    pub checksum_policy: SourceChecksumPolicy,
 }
 
 impl Default for KitchenConfig {
@@ -236,6 +249,7 @@ impl Default for KitchenConfig {
             auto_makedepends: false,   // Off by default, requires resolver
             cleanup_makedepends: true, // Clean up by default when auto is enabled
             extra_env: Vec::new(),
+            checksum_policy: SourceChecksumPolicy::Supported,
         }
     }
 }
@@ -258,6 +272,7 @@ impl KitchenConfig {
             // since the sysroot should already be configured with the toolchain
             auto_makedepends: false,
             cleanup_makedepends: false,
+            checksum_policy: SourceChecksumPolicy::BootstrapLegacy,
             ..Self::default()
         }
     }
