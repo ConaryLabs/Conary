@@ -15,7 +15,7 @@ mod cook;
 pub mod makedepends;
 pub mod provenance_capture;
 
-pub use config::{CookResult, KitchenConfig, StageConfig, StageRegistry};
+pub use config::{CookResult, KitchenConfig, SourceChecksumPolicy, StageConfig, StageRegistry};
 pub use cook::Cook;
 pub use makedepends::{MakedependsResolver, MakedependsResult, NoopResolver};
 // Re-exported for external consumers (e.g., CLI tools that inspect provenance)
@@ -512,7 +512,8 @@ impl Kitchen {
         if cached_path.exists() {
             debug!("Using cached source: {}", cached_path.display());
             // Verify checksum -- None means match
-            if verify_file_checksum(&cached_path, checksum)?.is_none() {
+            if verify_file_checksum(&cached_path, checksum, self.config.checksum_policy)?.is_none()
+            {
                 return Ok(cached_path);
             }
             warn!("Cached file checksum mismatch, re-downloading");
@@ -526,7 +527,9 @@ impl Kitchen {
         download_file(url, &temp_path)?;
 
         // Verify checksum -- Some(actual) means mismatch
-        if let Some(actual) = verify_file_checksum(&temp_path, checksum)? {
+        if let Some(actual) =
+            verify_file_checksum(&temp_path, checksum, self.config.checksum_policy)?
+        {
             fs::remove_file(&temp_path)?;
             return Err(Error::ChecksumMismatch {
                 expected: checksum.to_string(),
@@ -544,6 +547,8 @@ impl Kitchen {
 mod tests {
     use super::*;
     use crate::recipe::format::{BuildSection, PackageSection, SourceSection};
+    use std::fs;
+    use tempfile::tempdir;
 
     fn make_test_recipe(makedepends: &[&str]) -> Recipe {
         Recipe {
@@ -604,5 +609,47 @@ mod tests {
         assert_eq!(result.already_installed.len(), 2);
         assert!(result.newly_installed.is_empty());
         assert!(result.unresolved.is_empty());
+    }
+
+    #[test]
+    fn test_fetch_source_rejects_md5_in_supported_mode() {
+        let cache = tempdir().unwrap();
+        let checksum = "md5:d41d8cd98f00b204e9800998ecf8427e";
+        let cached_path = cache.path().join(source_cache_key(checksum));
+        fs::write(&cached_path, b"").unwrap();
+
+        let kitchen = Kitchen::new(KitchenConfig {
+            source_cache: cache.path().to_path_buf(),
+            ..KitchenConfig::default()
+        });
+
+        let err = kitchen
+            .fetch_source("https://example.invalid/test.tar.gz", checksum)
+            .unwrap_err();
+
+        assert!(
+            format!("{err}").contains("Unsupported checksum algorithm: md5"),
+            "expected unsupported md5 error, got {err}"
+        );
+    }
+
+    #[test]
+    fn test_fetch_source_allows_md5_in_bootstrap_legacy_mode() {
+        let cache = tempdir().unwrap();
+        let checksum = "md5:d41d8cd98f00b204e9800998ecf8427e";
+        let cached_path = cache.path().join(source_cache_key(checksum));
+        fs::write(&cached_path, b"").unwrap();
+
+        let kitchen = Kitchen::new(KitchenConfig {
+            source_cache: cache.path().to_path_buf(),
+            checksum_policy: SourceChecksumPolicy::BootstrapLegacy,
+            ..KitchenConfig::default()
+        });
+
+        let resolved = kitchen
+            .fetch_source("https://example.invalid/test.tar.gz", checksum)
+            .unwrap();
+
+        assert_eq!(resolved, cached_path);
     }
 }

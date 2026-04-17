@@ -60,7 +60,7 @@ pub use format::{
 pub use graph::{BootstrapPhase, BootstrapPlan, RecipeGraph};
 pub use kitchen::{
     Cook, CookResult, Kitchen, KitchenConfig, MakedependsResolver, MakedependsResult, NoopResolver,
-    StageConfig, StageRegistry,
+    SourceChecksumPolicy, StageConfig, StageRegistry,
 };
 pub use parser::{parse_recipe, parse_recipe_file, validate_recipe};
 pub use pkgbuild::{convert_pkgbuild, pkgbuild_to_toml};
