@@ -2,7 +2,7 @@
 
 //! Phase 3: Final system (LFS Chapter 8)
 //!
-//! Builds all 77 packages of the complete LFS system inside the chroot.
+//! Builds all 78 packages of the complete LFS system inside the chroot.
 //! Each package is compiled from source using the temporary tools from
 //! Phase 2. The build order follows LFS 13 Chapter 8 exactly.
 //!
@@ -22,8 +22,9 @@ use crate::recipe::parser::parse_recipe_file;
 
 /// Complete build order for the final system (LFS Chapter 8).
 ///
-/// All 77 packages in the order specified by LFS 13.
-pub const SYSTEM_BUILD_ORDER: [&str; 77] = [
+/// All 78 packages in the order specified by LFS 13 plus the self-hosting
+/// sqlite prerequisite before Python.
+pub const SYSTEM_BUILD_ORDER: [&str; 78] = [
     "man-pages",
     "iana-etc",
     "glibc",
@@ -72,6 +73,7 @@ pub const SYSTEM_BUILD_ORDER: [&str; 77] = [
     "kmod",
     "libelf",
     "libffi",
+    "sqlite",
     "python",
     "flit-core",
     "wheel",
@@ -133,7 +135,7 @@ pub enum FinalSystemError {
 
 /// Builder for the Phase 3 final system.
 ///
-/// Builds all 77 LFS Chapter 8 packages inside the chroot, tracking
+/// Builds all 78 final-system packages inside the chroot, tracking
 /// progress so builds can be resumed after failure.
 pub struct FinalSystemBuilder {
     /// Working directory for build artifacts.
@@ -402,7 +404,7 @@ mod tests {
 
     #[test]
     fn test_system_build_order_count() {
-        assert_eq!(SYSTEM_BUILD_ORDER.len(), 77);
+        assert_eq!(SYSTEM_BUILD_ORDER.len(), 78);
     }
 
     #[test]
@@ -412,7 +414,21 @@ mod tests {
 
     #[test]
     fn test_system_build_order_ends_with_e2fsprogs() {
-        assert_eq!(SYSTEM_BUILD_ORDER[76], "e2fsprogs");
+        assert_eq!(SYSTEM_BUILD_ORDER[77], "e2fsprogs");
+    }
+
+    #[test]
+    fn test_system_build_order_includes_sqlite_before_python() {
+        let sqlite_idx = SYSTEM_BUILD_ORDER
+            .iter()
+            .position(|pkg| *pkg == "sqlite")
+            .expect("sqlite in system build order");
+        let python_idx = SYSTEM_BUILD_ORDER
+            .iter()
+            .position(|pkg| *pkg == "python")
+            .expect("python in system build order");
+
+        assert!(sqlite_idx < python_idx);
     }
 
     #[test]
@@ -480,7 +496,7 @@ mod tests {
         let mut sm = StageManager::new(work.path()).unwrap();
         let mut builder = FinalSystemBuilder::new(work.path(), lfs.path(), config, tc).unwrap();
         assert!(builder.build_all(&[], &mut sm).is_ok());
-        assert_eq!(builder.completed().len(), 77);
+        assert_eq!(builder.completed().len(), 78);
     }
 
     #[test]
@@ -508,8 +524,8 @@ mod tests {
         let mut sm = StageManager::new(work.path()).unwrap();
         let mut builder = FinalSystemBuilder::new(work.path(), lfs.path(), config, tc).unwrap();
         assert!(builder.build_from("gcc", &mut sm).is_ok());
-        // gcc is at index 25, so 77 - 25 = 52 remaining
-        assert_eq!(builder.completed().len(), 52);
+        // gcc is at index 25, so 78 - 25 = 53 remaining
+        assert_eq!(builder.completed().len(), 53);
     }
 
     #[test]
