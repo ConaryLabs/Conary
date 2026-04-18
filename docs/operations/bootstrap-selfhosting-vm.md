@@ -60,6 +60,23 @@ self-hosting image:
 7. `conary bootstrap guest-profile --public-key <work_dir>/vm-selfhost/keys/selfhost_ed25519.pub`
 8. `conary bootstrap image --format qcow2 --size 16G`
 
+The wrapper keeps Phase 1 and the deterministic input generation unprivileged,
+but it deliberately routes the mount-owning phases through a rootful runner so
+the bootstrap core, not the shell wrapper, still owns `/dev`, `/proc`, `/sys`,
+`/run`, `chroot`, and image-mount setup:
+
+- `conary bootstrap temp-tools`
+- `conary bootstrap system`
+- `conary bootstrap tier2`
+- `conary bootstrap image`
+
+By default that rootful runner is `sudo`. After each privileged phase, the
+wrapper restores ownership of `<work_dir>` back to the invoking user so the
+later unprivileged steps (`config`, `guest-profile`, and VM validation) can
+still mutate and read the generated artifacts normally. For harness/testing
+scenarios, the wrapper also honors `CONARY_BOOTSTRAP_ROOTFUL_RUNNER` as an
+override for the rootful command.
+
 The validation wrapper then:
 
 1. boots the finished `qcow2` under QEMU
