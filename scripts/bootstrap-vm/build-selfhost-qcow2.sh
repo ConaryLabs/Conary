@@ -28,6 +28,7 @@ IMAGE_SIZE="${IMAGE_SIZE:-16G}"
 TARGET_ARCH="${TARGET_ARCH:-x86_64}"
 DEFAULT_CONARY_BIN="$PROJECT_DIR/target/debug/conary"
 CONARY_BIN="${CONARY_BIN:-$DEFAULT_CONARY_BIN}"
+ROOTFUL_RUNNER="${CONARY_BOOTSTRAP_ROOTFUL_RUNNER:-sudo}"
 JOBS=""
 
 while [[ $# -gt 0 ]]; do
@@ -136,8 +137,41 @@ run_bootstrap() {
     "$CONARY_BIN" bootstrap "$@"
 }
 
+run_rootful_command() {
+    if [[ "$(id -u)" -eq 0 ]]; then
+        "$@"
+    else
+        "$ROOTFUL_RUNNER" "$@"
+    fi
+}
+
+restore_workdir_ownership() {
+    if [[ "$(id -u)" -eq 0 ]]; then
+        return
+    fi
+
+    local owner
+    owner="$(id -u):$(id -g)"
+    run_rootful_command chown -R "$owner" "$WORK_DIR"
+}
+
+run_bootstrap_rootful() {
+    local status=0
+
+    log "Running rootful: $CONARY_BIN bootstrap $*"
+    if ! run_rootful_command "$CONARY_BIN" bootstrap "$@"; then
+        status=$?
+    fi
+
+    restore_workdir_ownership
+    return "$status"
+}
+
 main() {
     require_cmd git gzip sha256sum ssh-keygen cargo
+    if [[ "$(id -u)" -ne 0 ]]; then
+        require_cmd "$ROOTFUL_RUNNER"
+    fi
 
     if [[ "$TARGET_ARCH" != "x86_64" ]]; then
         echo "This self-hosting VM wrapper only supports x86_64 for the first milestone." >&2
@@ -161,16 +195,16 @@ main() {
 
     run_bootstrap init --work-dir "$WORK_DIR" --target "$TARGET_ARCH" ${jobs_arg:+$jobs_arg}
     run_bootstrap cross-tools --work-dir "$WORK_DIR" --lfs-root "$LFS_ROOT" ${jobs_arg:+$jobs_arg}
-    run_bootstrap temp-tools --work-dir "$WORK_DIR" --lfs-root "$LFS_ROOT" ${jobs_arg:+$jobs_arg}
-    run_bootstrap system --work-dir "$WORK_DIR" --lfs-root "$LFS_ROOT" ${jobs_arg:+$jobs_arg}
+    run_bootstrap_rootful temp-tools --work-dir "$WORK_DIR" --lfs-root "$LFS_ROOT" ${jobs_arg:+$jobs_arg}
+    run_bootstrap_rootful system --work-dir "$WORK_DIR" --lfs-root "$LFS_ROOT" ${jobs_arg:+$jobs_arg}
     run_bootstrap config --work-dir "$WORK_DIR" --lfs-root "$LFS_ROOT"
-    run_bootstrap tier2 --work-dir "$WORK_DIR" --lfs-root "$LFS_ROOT" ${jobs_arg:+$jobs_arg}
+    run_bootstrap_rootful tier2 --work-dir "$WORK_DIR" --lfs-root "$LFS_ROOT" ${jobs_arg:+$jobs_arg}
     run_bootstrap guest-profile --work-dir "$WORK_DIR" --lfs-root "$LFS_ROOT" --public-key "$PUBLIC_KEY"
 
     log "Removing stale validation image at $OUTPUT_IMAGE"
     rm -f "$OUTPUT_IMAGE"
 
-    run_bootstrap image \
+    run_bootstrap_rootful image \
         --work-dir "$WORK_DIR" \
         --output "$OUTPUT_IMAGE" \
         --format qcow2 \
