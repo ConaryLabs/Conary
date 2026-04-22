@@ -308,7 +308,7 @@ impl SearchEngine {
         };
 
         let top_docs = searcher
-            .search(&final_query, &TopDocs::with_limit(limit))
+            .search(&final_query, &TopDocs::with_limit(limit).order_by_score())
             .context("Search failed")?;
 
         let mut results = Vec::with_capacity(top_docs.len());
@@ -380,7 +380,7 @@ impl SearchEngine {
             .context("Failed to create prefix query")?;
 
         let top_docs = searcher
-            .search(&regex_query, &TopDocs::with_limit(limit))
+            .search(&regex_query, &TopDocs::with_limit(limit).order_by_score())
             .context("Suggest search failed")?;
 
         let mut names: Vec<String> = Vec::with_capacity(top_docs.len());

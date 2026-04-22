@@ -34,10 +34,10 @@ tar.workspace = true
 rusqlite.workspace = true
 
 # Concurrency
-dashmap = "6"
+dashmap.workspace = true
 
 # Async utilities
-async-stream = "0.3"
+async-stream.workspace = true
 
 # Container management
 bollard = "0.20"

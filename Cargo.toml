@@ -79,6 +79,7 @@ clap = { version = "4.5", features = ["derive", "env"] }
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
 futures = "0.3"
+async-stream = "0.3"
 
 # Crypto
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
@@ -90,6 +91,7 @@ tower = "0.5"
 tower-http = "0.6"
 tokio-stream = "0.1"
 mdns-sd = "0.18"
+dashmap = "6.0"
 
 # MCP
 rmcp = "1.1"

@@ -28,7 +28,7 @@ xxhash-rust = { version = "0.8", features = ["xxh3"] }
 tracing.workspace = true
 
 # Package format parsing
-rpm = "0.19"
+rpm = "0.22"
 
 # Temp files for RPM extraction
 tempfile.workspace = true
