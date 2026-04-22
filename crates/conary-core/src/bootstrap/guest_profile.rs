@@ -41,6 +41,7 @@ pub fn apply_guest_profile(
     install_authorized_keys(sysroot, &public_key)?;
     enable_sshd_service(sysroot)?;
     generate_host_keys(sysroot)?;
+    write_ssh_tmpfiles_config(sysroot)?;
 
     Ok(())
 }
@@ -175,6 +176,34 @@ fn generate_host_keys(sysroot: &Path) -> Result<(), GuestProfileError> {
     Ok(())
 }
 
+fn write_ssh_tmpfiles_config(sysroot: &Path) -> Result<(), GuestProfileError> {
+    let tmpfiles_dir = sysroot.join("usr/lib/tmpfiles.d");
+    fs::create_dir_all(&tmpfiles_dir)?;
+
+    fs::write(
+        tmpfiles_dir.join("conary-guest-ssh.conf"),
+        "\
+# Normalize SSH-critical ownership inside the guest. The bootstrap sysroot is
+# assembled unprivileged on the host, so systemd-tmpfiles needs to fix these
+# paths back to root ownership before sshd can use them reliably.
+d /root 0755 root root -
+d /root/.ssh 0700 root root -
+z /root/.ssh/authorized_keys 0600 root root -
+d /etc/ssh 0755 root root -
+z /etc/ssh/sshd_config 0644 root root -
+z /etc/ssh/ssh_host_rsa_key 0600 root root -
+z /etc/ssh/ssh_host_rsa_key.pub 0644 root root -
+z /etc/ssh/ssh_host_ecdsa_key 0600 root root -
+z /etc/ssh/ssh_host_ecdsa_key.pub 0644 root root -
+z /etc/ssh/ssh_host_ed25519_key 0600 root root -
+z /etc/ssh/ssh_host_ed25519_key.pub 0644 root root -
+d /var/lib/sshd 0700 root root -
+",
+    )?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,5 +333,28 @@ printf 'ssh-ed25519 AAAATESTKEY generated-by-test\n' > "$key_path.pub"
             link_target,
             PathBuf::from("/usr/lib/systemd/system/sshd.service")
         );
+    }
+
+    #[test]
+    fn guest_profile_writes_tmpfiles_rules_for_ssh_ownership() {
+        let sysroot = tempfile::tempdir().unwrap();
+        write_fake_ssh_keygen(sysroot.path());
+        write_fake_sshd_service(sysroot.path());
+        let host_key_dir = host_public_key_file();
+        let public_key = host_key_dir.path().join("selfhost_ed25519.pub");
+
+        apply_guest_profile(sysroot.path(), &public_key).unwrap();
+
+        let tmpfiles = fs::read_to_string(
+            sysroot
+                .path()
+                .join("usr/lib/tmpfiles.d/conary-guest-ssh.conf"),
+        )
+        .unwrap();
+        assert!(tmpfiles.contains("d /root 0755 root root -"));
+        assert!(tmpfiles.contains("d /root/.ssh 0700 root root -"));
+        assert!(tmpfiles.contains("z /root/.ssh/authorized_keys 0600 root root -"));
+        assert!(tmpfiles.contains("z /etc/ssh/ssh_host_ed25519_key 0600 root root -"));
+        assert!(tmpfiles.contains("d /var/lib/sshd 0700 root root -"));
     }
 }

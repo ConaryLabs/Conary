@@ -177,10 +177,7 @@ pub async fn cmd_bootstrap_image(
         println!("\nRequired tools for {} format:", image_format);
         match image_format {
             ImageFormat::Raw | ImageFormat::Qcow2 => {
-                println!("  - sfdisk or parted (partitioning)");
-                println!("  - mkfs.fat (ESP filesystem)");
-                println!("  - mkfs.ext4 (root filesystem)");
-                println!("  - losetup (loop device setup)");
+                println!("  - systemd-repart (GPT image creation and filesystem population)");
                 if image_format == ImageFormat::Qcow2 {
                     println!("  - qemu-img (format conversion)");
                 }
@@ -512,7 +509,7 @@ pub async fn cmd_bootstrap_system(
 
     let mut bootstrap = Bootstrap::with_config(work_dir, config)?;
 
-    println!("\nThis will build all 77 packages of the final LFS system.\n");
+    println!("\nThis will build all 82 packages of the final LFS system.\n");
 
     bootstrap.build_final_system()?;
 

@@ -2,11 +2,13 @@
 
 //! Kernel composefs and fs-verity capability detection.
 //!
-//! Provides runtime checks for EROFS/composefs kernel support and
-//! fs-verity filesystem support. Used by the generation builder to
-//! decide whether to enable integrity verification.
+//! Provides runtime checks for the composefs kernel/userspace contract and
+//! fs-verity filesystem support. Used by the generation builder to decide
+//! whether composefs generation mounts are actually possible.
 
+use std::ffi::OsStr;
 use std::path::Path;
+use std::path::PathBuf;
 
 use crate::error::{Error, Result};
 use tracing::debug;
@@ -18,19 +20,110 @@ use crate::filesystem::fsverity::{FsVerityError, enable_fsverity};
 pub struct ComposefsCaps {
     /// Whether fs-verity is supported on the CAS filesystem.
     pub fsverity: bool,
+    /// Resolved path to the composefs mount helper.
+    pub mount_helper: PathBuf,
 }
 
-/// Check if the running kernel supports composefs.
+const COMPOSEFS_HELPER_CANDIDATES: &[&str] = &[
+    "/usr/sbin/mount.composefs",
+    "/usr/bin/mount.composefs",
+    "/sbin/mount.composefs",
+    "/bin/mount.composefs",
+];
+
+fn has_required_composefs_filesystems(proc_filesystems: &str) -> bool {
+    let mut has_overlay = false;
+    let mut has_erofs = false;
+
+    for line in proc_filesystems.lines() {
+        let fs_name = line.split_whitespace().last().unwrap_or_default();
+        match fs_name {
+            "overlay" => has_overlay = true,
+            "erofs" => has_erofs = true,
+            _ => {}
+        }
+    }
+
+    has_overlay && has_erofs
+}
+
+fn find_mount_composefs_in_path_with_fallbacks(
+    path_env: Option<&OsStr>,
+    fallback_candidates: &[&str],
+) -> Option<PathBuf> {
+    if let Some(path_env) = path_env {
+        for dir in std::env::split_paths(path_env) {
+            let candidate = dir.join("mount.composefs");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    fallback_candidates
+        .iter()
+        .map(PathBuf::from)
+        .find(|candidate| candidate.is_file())
+}
+
+fn find_mount_composefs_in_path(path_env: Option<&OsStr>) -> Option<PathBuf> {
+    find_mount_composefs_in_path_with_fallbacks(path_env, COMPOSEFS_HELPER_CANDIDATES)
+}
+
+fn has_loop_device_support() -> bool {
+    Path::new("/dev/loop-control").exists()
+        || std::fs::read_dir("/dev")
+            .ok()
+            .into_iter()
+            .flat_map(|entries| entries.flatten())
+            .any(|entry| entry.file_name().to_string_lossy().starts_with("loop"))
+}
+
+fn check_composefs_runtime_support(
+    proc_filesystems: &str,
+    path_env: Option<&OsStr>,
+    loop_device_available: bool,
+) -> std::result::Result<PathBuf, String> {
+    if !has_required_composefs_filesystems(proc_filesystems) {
+        return Err(
+            "running kernel is missing overlayfs and/or EROFS support required for composefs mounts"
+                .to_string(),
+        );
+    }
+
+    if !loop_device_available {
+        return Err(
+            "running system is missing loop-device support required for composefs metadata images"
+                .to_string(),
+        );
+    }
+
+    find_mount_composefs_in_path(path_env).ok_or_else(|| {
+        "mount.composefs helper not found in PATH or standard sbin/bin locations".to_string()
+    })
+}
+
+/// Check if the running kernel/userspace can support composefs mounts.
 ///
 /// Modern composefs uses EROFS under the hood (not a separate filesystem type).
-/// Checks /proc/filesystems for "erofs" entry, which is present when the
-/// erofs kernel module is loaded or built-in (`CONFIG_EROFS_FS`).
+/// A truthful runtime therefore requires:
+/// - EROFS support in the running kernel
+/// - overlayfs support in the running kernel
+/// - loop-device support for file-backed metadata images
+/// - the `mount.composefs` userspace helper in the runtime environment
 #[must_use]
 pub fn supports_composefs() -> bool {
-    match std::fs::read_to_string("/proc/filesystems") {
-        Ok(contents) => contents.lines().any(|line| line.trim().ends_with("erofs")),
-        Err(_) => false,
-    }
+    let proc_filesystems = match std::fs::read_to_string("/proc/filesystems") {
+        Ok(contents) => contents,
+        Err(_) => return false,
+    };
+
+    check_composefs_runtime_support(
+        &proc_filesystems,
+        std::env::var_os("PATH").as_deref(),
+        has_loop_device_support(),
+    )
+    .is_ok()
 }
 
 /// Check if fs-verity is supported on the filesystem containing the given path.
@@ -93,13 +186,22 @@ pub fn supports_fsverity(path: &Path) -> bool {
 ///
 /// Returns capabilities on success, or an error if composefs is not supported.
 pub fn preflight_composefs(cas_dir: &Path) -> Result<ComposefsCaps> {
-    if !supports_composefs() {
-        return Err(Error::IoError(
-            "Composefs not supported by running kernel. \
-             Requires Linux 6.2+ with CONFIG_EROFS_FS and composefs module."
-                .to_string(),
-        ));
-    }
+    let proc_filesystems = std::fs::read_to_string("/proc/filesystems").map_err(|e| {
+        Error::IoError(format!(
+            "Failed to read /proc/filesystems while checking composefs runtime support: {e}"
+        ))
+    })?;
+    let mount_helper = check_composefs_runtime_support(
+        &proc_filesystems,
+        std::env::var_os("PATH").as_deref(),
+        has_loop_device_support(),
+    )
+    .map_err(|reason| {
+        Error::IoError(format!(
+            "Composefs runtime support incomplete: {reason}. \
+             Conary requires overlayfs + EROFS + loop-device support and the mount.composefs helper."
+        ))
+    })?;
 
     let fsverity = supports_fsverity(cas_dir);
     if !fsverity {
@@ -109,7 +211,10 @@ pub fn preflight_composefs(cas_dir: &Path) -> Result<ComposefsCaps> {
         );
     }
 
-    Ok(ComposefsCaps { fsverity })
+    Ok(ComposefsCaps {
+        fsverity,
+        mount_helper,
+    })
 }
 
 #[cfg(test)]
@@ -123,6 +228,56 @@ mod tests {
     }
 
     #[test]
+    fn test_composefs_runtime_support_requires_overlay_and_erofs() {
+        let helper_dir = tempfile::TempDir::new().unwrap();
+        let helper_path = helper_dir.path().join("mount.composefs");
+        std::fs::write(&helper_path, "#!/bin/sh\n").unwrap();
+
+        assert!(
+            check_composefs_runtime_support(
+                "nodev\toverlay\nnodev\terofs\n",
+                Some(helper_dir.path().as_os_str()),
+                true,
+            )
+            .is_ok()
+        );
+
+        let err = check_composefs_runtime_support(
+            "nodev\terofs\n",
+            Some(helper_dir.path().as_os_str()),
+            true,
+        )
+        .unwrap_err();
+        assert!(err.contains("overlayfs"));
+    }
+
+    #[test]
+    fn test_composefs_runtime_support_requires_mount_helper() {
+        let err = find_mount_composefs_in_path_with_fallbacks(None, &[])
+            .ok_or_else(|| {
+                "mount.composefs helper not found in PATH or standard sbin/bin locations"
+                    .to_string()
+            })
+            .unwrap_err();
+        assert!(err.contains("mount.composefs"));
+    }
+
+    #[test]
+    fn test_composefs_runtime_support_requires_loop_devices() {
+        let helper_dir = tempfile::TempDir::new().unwrap();
+        let helper_path = helper_dir.path().join("mount.composefs");
+        std::fs::write(&helper_path, "#!/bin/sh\n").unwrap();
+
+        let err = check_composefs_runtime_support(
+            "nodev\toverlay\nnodev\terofs\n",
+            Some(helper_dir.path().as_os_str()),
+            false,
+        )
+        .unwrap_err();
+        assert!(err.contains("loop-device"));
+    }
+
+    #[test]
     fn test_supports_fsverity_does_not_panic() {
         // Test with a temp directory
         let tmp = tempfile::TempDir::new().unwrap();
@@ -130,28 +285,14 @@ mod tests {
     }
 
     #[test]
-    fn test_preflight_error_message() {
-        // On most dev machines, composefs won't be available.
-        // Just verify the function returns a proper Result.
-        let tmp = tempfile::TempDir::new().unwrap();
-        let result = preflight_composefs(tmp.path());
-        // Either Ok or Err is fine -- we just verify it doesn't panic
-        match result {
-            Ok(caps) => {
-                // If we're on a composefs-capable system, great
-                println!("Composefs supported, fsverity: {}", caps.fsverity);
-            }
-            Err(e) => {
-                assert!(e.to_string().contains("Composefs not supported"));
-            }
-        }
-    }
-
-    #[test]
     fn test_composefs_caps_debug() {
         // Verify ComposefsCaps derives Debug without panic
-        let caps = ComposefsCaps { fsverity: true };
+        let caps = ComposefsCaps {
+            fsverity: true,
+            mount_helper: PathBuf::from("/usr/sbin/mount.composefs"),
+        };
         let debug_str = format!("{caps:?}");
         assert!(debug_str.contains("fsverity: true"));
+        assert!(debug_str.contains("mount.composefs"));
     }
 }

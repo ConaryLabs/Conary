@@ -251,9 +251,16 @@ pub struct AdditionalSource {
     pub url: String,
     /// Checksum
     pub checksum: String,
+    /// Whether to extract the archive automatically after staging.
+    #[serde(default = "default_true")]
+    pub extract: bool,
     /// Where to extract (relative to main source)
     #[serde(default)]
     pub extract_to: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Patch configuration section

@@ -98,6 +98,7 @@ async fn download_package_inner(
 
 fn parse_remi_download_url(url: &str) -> Option<(String, String, String)> {
     let (base_url, path) = url.split_once("/v1/")?;
+    let path = path.split('?').next()?;
     let mut segments = path.split('/');
     let distro = segments.next()?;
     if segments.next()? != "packages" {
@@ -511,5 +512,41 @@ impl DownloadProgress {
 impl Default for DownloadProgress {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_remi_download_url;
+
+    #[test]
+    fn parse_remi_download_url_accepts_plain_download_endpoint() {
+        let parsed =
+            parse_remi_download_url("https://remi.conary.io/v1/fedora/packages/tree/download");
+
+        assert_eq!(
+            parsed,
+            Some((
+                "https://remi.conary.io".to_string(),
+                "fedora".to_string(),
+                "tree".to_string(),
+            ))
+        );
+    }
+
+    #[test]
+    fn parse_remi_download_url_accepts_versioned_download_endpoint() {
+        let parsed = parse_remi_download_url(
+            "https://remi.conary.io/v1/fedora/packages/glibc/download?version=2.42-4.fc43",
+        );
+
+        assert_eq!(
+            parsed,
+            Some((
+                "https://remi.conary.io".to_string(),
+                "fedora".to_string(),
+                "glibc".to_string(),
+            ))
+        );
     }
 }

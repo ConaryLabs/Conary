@@ -124,6 +124,7 @@ main() {
     unpack_workspace
     check_for_baked_private_key
 
+    conary system init
     conary repo remove "$REPO_NAME" >/dev/null 2>&1 || true
     conary repo add \
         "$REPO_NAME" \

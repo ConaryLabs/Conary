@@ -7,7 +7,9 @@
 
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
+use std::collections::HashSet;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
@@ -17,6 +19,19 @@ use tracing::{info, warn};
 const DEVTMPFS_OPTS: &str = "mode=0755,nosuid";
 const DEVPTS_OPTS: &str = "gid=5,mode=0620";
 const CHROOT_KILL_GRACE_PERIOD: Duration = Duration::from_millis(100);
+const BOOTSTRAP_PASSWD_ENTRIES: [(&str, &str); 2] = [
+    ("root", "root:x:0:0:root:/root:/bin/bash"),
+    ("nobody", "nobody:x:65534:65534:Nobody:/:/usr/bin/false"),
+];
+const BOOTSTRAP_GROUP_ENTRIES: [(&str, &str); 6] = [
+    ("root", "root:x:0:"),
+    ("mail", "mail:x:34:"),
+    ("wheel", "wheel:x:10:"),
+    ("tty", "tty:x:5:"),
+    ("users", "users:x:999:"),
+    ("nogroup", "nogroup:x:65534:"),
+];
+const BOOTSTRAP_HOST_LINES: [&str; 2] = ["127.0.0.1 localhost conary-bootstrap", "::1 localhost"];
 
 #[derive(Debug, Clone, Copy)]
 struct DeviceNodeSpec {
@@ -78,6 +93,100 @@ fn umount_attempts(mount_point: &Path) -> Vec<Vec<String>> {
     vec![vec![mount.clone()], vec!["--lazy".to_string(), mount]]
 }
 
+fn ensure_keyed_lines(path: &Path, required: &[(&str, &str)]) -> anyhow::Result<()> {
+    let mut lines = if path.exists() {
+        fs::read_to_string(path)?
+            .lines()
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    let mut present = lines
+        .iter()
+        .filter_map(|line| line.split_once(':').map(|(key, _)| key.to_string()))
+        .collect::<HashSet<_>>();
+    let mut changed = false;
+
+    for (key, line) in required {
+        if present.insert((*key).to_string()) {
+            lines.push((*line).to_string());
+            changed = true;
+        }
+    }
+
+    if changed || !path.exists() {
+        let mut contents = lines.join("\n");
+        contents.push('\n');
+        fs::write(path, contents)?;
+    }
+
+    Ok(())
+}
+
+fn ensure_literal_lines(path: &Path, required: &[&str]) -> anyhow::Result<()> {
+    let mut lines = if path.exists() {
+        fs::read_to_string(path)?
+            .lines()
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    let mut present = lines.iter().cloned().collect::<HashSet<_>>();
+    let mut changed = false;
+
+    for line in required {
+        if present.insert((*line).to_string()) {
+            lines.push((*line).to_string());
+            changed = true;
+        }
+    }
+
+    if changed || !path.exists() {
+        let mut contents = lines.join("\n");
+        contents.push('\n');
+        fs::write(path, contents)?;
+    }
+
+    Ok(())
+}
+
+fn resolver_mount_target(lfs_root: &Path) -> PathBuf {
+    lfs_root.join("run/systemd/resolve/stub-resolv.conf")
+}
+
+fn prepare_resolver_mount_target(lfs_root: &Path) -> anyhow::Result<PathBuf> {
+    let target = resolver_mount_target(lfs_root);
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if !target.exists() {
+        fs::write(&target, b"")?;
+    }
+    Ok(target)
+}
+
+pub(crate) fn ensure_bootstrap_identity_files(lfs_root: &Path) -> anyhow::Result<()> {
+    let etc = lfs_root.join("etc");
+    fs::create_dir_all(&etc)?;
+    fs::create_dir_all(lfs_root.join("root"))?;
+
+    ensure_literal_lines(&etc.join("hosts"), &BOOTSTRAP_HOST_LINES)?;
+    ensure_keyed_lines(&etc.join("passwd"), &BOOTSTRAP_PASSWD_ENTRIES)?;
+    ensure_keyed_lines(&etc.join("group"), &BOOTSTRAP_GROUP_ENTRIES)?;
+
+    let mtab = etc.join("mtab");
+    if !mtab.is_symlink() {
+        if mtab.exists() {
+            fs::remove_file(&mtab)?;
+        }
+        std::os::unix::fs::symlink("/proc/self/mounts", &mtab)?;
+    }
+
+    Ok(())
+}
+
 /// Manages chroot mount lifecycle for LFS bootstrap builds.
 ///
 /// Tracks which mounts succeeded so teardown only unmounts what was actually
@@ -115,14 +224,20 @@ impl ChrootEnv {
             "mnt",
             "opt",
             "srv",
+            "tmp",
             "usr/bin",
             "usr/lib",
             "usr/sbin",
             "var/log",
             "var/mail",
             "var/spool",
+            "var/tmp",
         ] {
             std::fs::create_dir_all(lfs.join(dir))?;
+        }
+
+        for dir in ["tmp", "var/tmp"] {
+            fs::set_permissions(lfs.join(dir), fs::Permissions::from_mode(0o1777))?;
         }
 
         // Create compatibility symlinks (LFS uses merged /usr)
@@ -145,6 +260,8 @@ impl ChrootEnv {
         self.mount_fs("proc", &lfs.join("proc"), "proc", "")?;
         self.mount_fs("sysfs", &lfs.join("sys"), "sysfs", "")?;
         self.mount_fs("tmpfs", &lfs.join("run"), "tmpfs", "")?;
+        let resolver_target = prepare_resolver_mount_target(&lfs)?;
+        self.bind_mount(Path::new("/etc/resolv.conf"), &resolver_target)?;
 
         info!("Chroot environment ready at {}", lfs.display());
         Ok(())
@@ -165,6 +282,28 @@ impl ChrootEnv {
             Ok(())
         } else {
             anyhow::bail!("mount -t {} {} {} failed", fstype, dev, dest.display());
+        }
+    }
+
+    fn bind_mount(&mut self, src: &Path, dest: &Path) -> anyhow::Result<()> {
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        if !dest.exists() {
+            fs::write(dest, b"")?;
+        }
+
+        let status = Command::new("mount")
+            .args(["--bind"])
+            .arg(src)
+            .arg(dest)
+            .status()?;
+
+        if status.success() {
+            self.mounted.push(dest.to_path_buf());
+            Ok(())
+        } else {
+            anyhow::bail!("mount --bind {} {} failed", src.display(), dest.display());
         }
     }
 
@@ -324,6 +463,27 @@ mod tests {
     }
 
     #[test]
+    fn test_chroot_env_creates_tmp_dirs_with_sticky_bit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lfs = tmp.path().join("lfs");
+        std::fs::create_dir_all(&lfs).unwrap();
+
+        let mut env = ChrootEnv::new(&lfs);
+        let _ = env.setup();
+
+        let tmp_meta = std::fs::metadata(lfs.join("tmp")).unwrap();
+        let var_tmp_meta = std::fs::metadata(lfs.join("var/tmp")).unwrap();
+
+        #[allow(clippy::useless_conversion)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            assert_eq!(tmp_meta.permissions().mode() & 0o7777, 0o1777);
+            assert_eq!(var_tmp_meta.permissions().mode() & 0o7777, 0o1777);
+        }
+    }
+
+    #[test]
     fn test_chroot_env_teardown_is_idempotent() {
         let tmp = tempfile::tempdir().unwrap();
         let lfs = tmp.path().join("lfs");
@@ -364,5 +524,16 @@ mod tests {
             attempts[1],
             vec!["--lazy".to_string(), "/tmp/lfs/dev".to_string()]
         );
+    }
+
+    #[test]
+    fn test_prepare_resolver_mount_target_creates_stub_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lfs = tmp.path().join("lfs");
+        std::fs::create_dir_all(&lfs).unwrap();
+
+        let target = prepare_resolver_mount_target(&lfs).unwrap();
+        assert_eq!(target, lfs.join("run/systemd/resolve/stub-resolv.conf"));
+        assert!(target.exists());
     }
 }

@@ -662,9 +662,9 @@ that the image is self-hosting.
   - the checked-in wrapper should request an image size with enough headroom
     for the Rust toolchain plus an in-guest `conary` rebuild; the generic
     4G default image size is too small for a truthful validation run
-  - for this milestone, the wrapper should request at least `12G`, with `16G`
-    preferred as the default validation size unless measurement during
-    implementation justifies a smaller floor
+  - for this milestone, the wrapper should request at least `32G` by default;
+    the earlier `16G` draft floor proved insufficient once the guest ran the
+    full `cargo build --locked` workspace rebuild during validation
 - **Remote infrastructure drift**
   - using real infrastructure improves truthfulness but increases external
     variability; that is why the validation inputs must be explicit and logged

@@ -1,6 +1,6 @@
 # recipes/system/iana-etc.toml
 #
-# LFS 13 Section 8.4 — Iana-Etc-20260306
+# LFS 13 Section 8.4 — Iana-Etc-20260202
 # https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/iana-etc.html
 #
 # IANA service name and transport protocol port number registry.
@@ -8,7 +8,7 @@
 
 [package]
 name = "iana-etc"
-version = "20260306"
+version = "20260202"
 release = "1"
 summary = "IANA protocol and service name databases"
 description = """
@@ -21,7 +21,7 @@ homepage = "https://github.com/Mic92/iana-etc"
 
 [source]
 archive = "https://github.com/Mic92/iana-etc/releases/download/%(version)s/iana-etc-%(version)s.tar.gz"
-checksum = "md5:5f5a1a8d3c4545bc796f5252a2140dd7"
+checksum = "md5:fe91258a0760912f61f1d6b200a1d885"
 
 [build]
 requires = []

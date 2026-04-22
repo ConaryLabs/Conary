@@ -34,7 +34,7 @@
 //!      ▼ (builds inside chroot)
 //! ┌─────────────────────────────────────────────┐
 //! │  Phase 3: Final system (LFS Ch8)             │
-//! │  77 packages -- complete Linux system        │
+//! │  82 packages -- complete Linux system        │
 //! └─────────────────────────────────────────────┘
 //!      │
 //!      ▼ (configures)
@@ -154,6 +154,45 @@ pub fn assemble_build_script(recipe: &crate::recipe::Recipe, destdir: &str) -> S
         script.push_str(&substituted);
         script.push('\n');
     }
+    script
+}
+
+/// Assemble a chroot build script that first enters the staged source tree.
+///
+/// Chrooted bootstrap phases stage unpacked sources inside the sysroot under a
+/// deterministic path, then run the recipe phases from that directory.
+pub fn assemble_chroot_build_script(
+    recipe: &crate::recipe::Recipe,
+    src_dir_in_chroot: &str,
+    destdir: &str,
+) -> String {
+    for (field_name, field_value) in [
+        ("package.version", recipe.package.version.as_str()),
+        ("package.name", recipe.package.name.as_str()),
+    ] {
+        if let Err(msg) = validate_shell_safe(field_value, field_name) {
+            return format!("set -e\necho 'ERROR: {msg}' >&2\nexit 1\n");
+        }
+    }
+
+    let mut script = String::from("set -e\n");
+    for phase in [
+        &recipe.build.setup,
+        &recipe.build.configure,
+        &recipe.build.make,
+        &recipe.build.install,
+        &recipe.build.post_install,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        script.push_str("cd ");
+        script.push_str(src_dir_in_chroot);
+        script.push('\n');
+        script.push_str(&recipe.substitute(phase, destdir));
+        script.push('\n');
+    }
+
     script
 }
 
@@ -317,7 +356,7 @@ impl Bootstrap {
 
     /// Build Phase 3: Final system (LFS Chapter 8).
     ///
-    /// Builds all 77 packages of the complete LFS system inside the chroot.
+    /// Builds all 82 packages of the complete LFS system inside the chroot.
     pub fn build_final_system(&mut self) -> Result<()> {
         let lfs_root = &self.config.lfs_root.clone();
 
@@ -338,9 +377,12 @@ impl Bootstrap {
             FinalSystemBuilder::new(&self.work_dir, lfs_root, self.config.clone(), toolchain)
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
 
+        // IMPORTANT: chroot_env must stay alive until build_all() completes.
+        let chroot_env = builder.setup_chroot().map_err(|e| anyhow::anyhow!("{e}"))?;
         builder
             .build_all(&completed, &mut self.stages)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
+        drop(chroot_env);
 
         self.stages
             .mark_complete(BootstrapStage::FinalSystem, lfs_root)?;
@@ -509,14 +551,19 @@ impl Bootstrap {
 
     /// Get the base system sysroot path if built.
     ///
-    /// Returns the LFS root from configuration if the `FinalSystem` stage
-    /// has been completed, otherwise falls back to the stage artifact path.
+    /// Returns the recorded `FinalSystem` artifact path when available.
+    ///
+    /// Completed bootstrap runs may have been built with a custom `--lfs-root`,
+    /// so image generation must prefer the checkpointed artifact path from the
+    /// work directory over the config default.
     pub fn get_sysroot(&self) -> Option<PathBuf> {
-        if self.stages.is_complete(BootstrapStage::FinalSystem) {
-            Some(self.config.lfs_root.clone())
-        } else {
-            self.stages.get_artifact_path(BootstrapStage::FinalSystem)
-        }
+        self.stages
+            .get_artifact_path(BootstrapStage::FinalSystem)
+            .or_else(|| {
+                self.stages
+                    .is_complete(BootstrapStage::FinalSystem)
+                    .then(|| self.config.lfs_root.clone())
+            })
     }
 
     /// Build a bootable image from the base system
@@ -610,6 +657,8 @@ impl Prerequisites {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::recipe::parser::parse_recipe_file;
+    use std::path::Path;
 
     #[test]
     fn test_prerequisites_check() {
@@ -624,6 +673,21 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let bootstrap = Bootstrap::new(temp.path()).unwrap();
         assert!(bootstrap.work_dir().exists());
+    }
+
+    #[test]
+    fn test_get_sysroot_prefers_recorded_final_system_artifact_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut bootstrap = Bootstrap::new(temp.path()).unwrap();
+        let custom_sysroot = temp.path().join("custom-lfs-root");
+        std::fs::create_dir_all(&custom_sysroot).unwrap();
+
+        bootstrap
+            .stages
+            .mark_complete(BootstrapStage::FinalSystem, &custom_sysroot)
+            .unwrap();
+
+        assert_eq!(bootstrap.get_sysroot(), Some(custom_sysroot));
     }
 
     #[test]
@@ -690,5 +754,37 @@ mod tests {
             !report_with_placeholder.is_ok(),
             "Report with placeholder should not be ok"
         );
+    }
+
+    #[test]
+    fn test_assemble_chroot_build_script_changes_into_staged_source_dir() {
+        let recipe_path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../recipes/temp-tools/gettext.toml");
+        let recipe = parse_recipe_file(&recipe_path).unwrap();
+
+        let script = assemble_chroot_build_script(
+            &recipe,
+            "/var/tmp/conary-bootstrap/temp-tools/gettext/src",
+            "/",
+        );
+
+        assert!(
+            script.starts_with("set -e\ncd /var/tmp/conary-bootstrap/temp-tools/gettext/src\n")
+        );
+        assert!(script.contains("./configure --disable-shared"));
+    }
+
+    #[test]
+    fn test_assemble_chroot_build_script_resets_to_source_root_between_phases() {
+        let recipe_path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../recipes/system/glibc.toml");
+        let recipe = parse_recipe_file(&recipe_path).unwrap();
+
+        let source_root = "/var/tmp/conary-bootstrap/final-system/glibc/src";
+        let script = assemble_chroot_build_script(&recipe, source_root, "/");
+
+        assert_eq!(script.matches(&format!("cd {source_root}\n")).count(), 3);
+        assert!(script.contains(&format!("cd {source_root}\nmkdir -v build\ncd build")));
+        assert!(script.contains(&format!("cd {source_root}\ncd build\nmake -j")));
     }
 }

@@ -60,15 +60,34 @@ const CRITICAL_PACKAGES: &[&str] = &[
     "ca-certificates",
 ];
 
+/// Runtime capabilities that are expected to be satisfied by the live system
+/// for critical packages we never want to overlay from Remi during a
+/// live-root install.
+const CRITICAL_RUNTIME_CAPABILITY_PREFIXES: &[&str] = &["libc.so.6", "ld-linux", "rtld("];
+
+fn is_blocked_package(name: &str) -> bool {
+    CRITICAL_PACKAGES
+        .iter()
+        .any(|p| p.eq_ignore_ascii_case(name))
+}
+
+/// Check if a dependency string is a live runtime capability for a blocked
+/// system package such as glibc or the dynamic linker.
+#[must_use]
+pub fn is_critical_runtime_capability(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    CRITICAL_RUNTIME_CAPABILITY_PREFIXES
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
+}
+
 /// Check if a package name is on the critical blocklist.
 ///
 /// Blocked packages cannot be overlaid or taken over by Conary.
 /// They are always treated as satisfied by the system package manager.
 #[must_use]
 pub fn is_blocked(name: &str) -> bool {
-    CRITICAL_PACKAGES
-        .iter()
-        .any(|p| p.eq_ignore_ascii_case(name))
+    is_blocked_package(name) || is_critical_runtime_capability(name)
 }
 
 /// Return the full blocklist for display purposes.
@@ -106,5 +125,15 @@ mod tests {
     #[test]
     fn test_blocklist_not_empty() {
         assert!(!blocked_packages().is_empty());
+    }
+
+    #[test]
+    fn test_glibc_runtime_capabilities_are_blocked() {
+        assert!(is_blocked("libc.so.6()(64bit)"));
+        assert!(is_blocked("libc.so.6(GLIBC_2.34)(64bit)"));
+        assert!(is_blocked("rtld(GNU_HASH)"));
+        assert!(is_critical_runtime_capability(
+            "ld-linux-x86-64.so.2()(64bit)"
+        ));
     }
 }

@@ -3,13 +3,15 @@
 //! Phase 4: System configuration (LFS Chapter 9)
 //!
 //! Configures the built system for booting: user accounts, networking,
-//! fstab, locale, systemd targets, and shell configuration. This phase
-//! transforms the collection of built packages into a bootable system.
+//! fstab, locale, systemd targets, shell configuration, and the boot
+//! artifacts Phase 5 copies onto the ESP. This phase transforms the
+//! collection of built packages into a bootable system.
 //!
 //! Does NOT include SSH guest-validation configuration (`sshd_config`,
 //! host keys, `authorized_keys`) -- that belongs in the self-host guest
 //! profile applied after Tier 2.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use tracing::info;
@@ -30,12 +32,142 @@ pub enum SystemConfigError {
     Io(#[from] std::io::Error),
 }
 
+#[cfg(unix)]
+fn ensure_symlink(target: &Path, link_path: &Path) -> Result<(), std::io::Error> {
+    use std::os::unix::fs::symlink;
+
+    if let Ok(metadata) = fs::symlink_metadata(link_path) {
+        if metadata.file_type().is_symlink()
+            && fs::read_link(link_path).ok().as_deref() == Some(target)
+        {
+            return Ok(());
+        }
+
+        if metadata.file_type().is_dir() {
+            fs::remove_dir_all(link_path)?;
+        } else {
+            fs::remove_file(link_path)?;
+        }
+    }
+
+    symlink(target, link_path)
+}
+
+fn detect_boot_kernel(root: &Path) -> Result<std::path::PathBuf, SystemConfigError> {
+    let boot_dir = root.join("boot");
+    let entries = fs::read_dir(&boot_dir).map_err(|e| {
+        SystemConfigError::ConfigFailed(format!("boot directory not readable: {e}"))
+    })?;
+
+    let mut versioned = Vec::new();
+    let mut unversioned = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if name == "vmlinuz" {
+            unversioned = Some(path);
+        } else if name.starts_with("vmlinuz-") {
+            versioned.push(path);
+        }
+    }
+
+    versioned.sort();
+    versioned.into_iter().next().or(unversioned).ok_or_else(|| {
+        SystemConfigError::ConfigFailed(
+            "kernel image not found under /boot (expected vmlinuz-* from Phase 3)".into(),
+        )
+    })
+}
+
+fn merge_named_entries(
+    existing_path: &Path,
+    baseline_entries: &[&str],
+) -> Result<String, std::io::Error> {
+    let mut seen = HashSet::new();
+    let mut merged = Vec::new();
+
+    for entry in baseline_entries {
+        let name = entry.split(':').next().unwrap_or_default();
+        if !name.is_empty() && seen.insert(name.to_string()) {
+            merged.push((*entry).to_string());
+        }
+    }
+
+    if let Ok(existing) = fs::read_to_string(existing_path) {
+        for line in existing.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            let name = trimmed.split(':').next().unwrap_or_default();
+            if !name.is_empty() && seen.insert(name.to_string()) {
+                merged.push(trimmed.to_string());
+            }
+        }
+    }
+
+    Ok(merged.join("\n") + "\n")
+}
+
+fn detect_systemd_boot_efi(root: &Path) -> Result<std::path::PathBuf, SystemConfigError> {
+    let candidates = [
+        root.join("usr/lib/systemd/boot/efi/systemd-bootx64.efi"),
+        root.join("usr/lib/systemd/boot/efi/systemd-bootaa64.efi"),
+    ];
+
+    candidates
+        .into_iter()
+        .find(|path| path.exists())
+        .ok_or_else(|| {
+            SystemConfigError::ConfigFailed(
+                "systemd-boot EFI binary not found under /usr/lib/systemd/boot/efi".into(),
+            )
+        })
+}
+
+fn configure_boot_artifacts(root: &Path) -> Result<(), SystemConfigError> {
+    let boot_dir = root.join("boot");
+    fs::create_dir_all(&boot_dir)?;
+
+    let kernel_src = detect_boot_kernel(root)?;
+    let canonical_kernel = boot_dir.join("vmlinuz");
+    if kernel_src != canonical_kernel {
+        fs::copy(&kernel_src, &canonical_kernel)?;
+    }
+
+    let efi_dest = boot_dir.join("EFI/BOOT/BOOTX64.EFI");
+    fs::create_dir_all(
+        efi_dest
+            .parent()
+            .ok_or_else(|| SystemConfigError::ConfigFailed("invalid EFI destination".into()))?,
+    )?;
+    fs::copy(detect_systemd_boot_efi(root)?, &efi_dest)?;
+
+    let loader_dir = boot_dir.join("loader/entries");
+    fs::create_dir_all(&loader_dir)?;
+    fs::write(
+        boot_dir.join("loader/loader.conf"),
+        "default conaryos\ntimeout 3\nconsole-mode max\neditor no\n",
+    )?;
+    fs::write(
+        loader_dir.join("conaryos.conf"),
+        "title   conaryOS\n\
+         linux   /vmlinuz\n\
+         options root=PARTLABEL=CONARY_ROOT rootfstype=ext4 rw console=tty0 console=ttyS0\n",
+    )?;
+
+    info!("Created boot artifacts (kernel copy, loader config, and EFI binary)");
+    Ok(())
+}
+
 /// Configure the final system for booting (LFS Chapter 9).
 ///
 /// Creates essential system configuration files: user accounts, hostname,
-/// os-release, fstab, networking, locale, readline, systemd targets, and
-/// shell prompt. After this, the system is ready for image generation
-/// (Phase 5).
+/// os-release, fstab, networking, locale, readline, systemd targets, shell
+/// prompt, and the systemd-boot artifacts Phase 5 copies onto the ESP.
 ///
 /// # Arguments
 ///
@@ -57,18 +189,71 @@ pub fn configure_system(root: &Path) -> Result<(), SystemConfigError> {
     let etc = root.join("etc");
     fs::create_dir_all(&etc)?;
 
-    // 1. /etc/passwd -- root with no password, plus nobody
-    fs::write(
-        etc.join("passwd"),
-        "root:x:0:0:root:/root:/bin/bash\nnobody:x:65534:65534:Nobody:/:/sbin/nologin\n",
+    // 1. /etc/passwd -- LFS systemd baseline users needed for core services.
+    let passwd_path = etc.join("passwd");
+    let passwd = merge_named_entries(
+        &passwd_path,
+        &[
+            "root:x:0:0:root:/root:/bin/bash",
+            "bin:x:1:1:bin:/dev/null:/usr/bin/false",
+            "daemon:x:6:6:Daemon User:/dev/null:/usr/bin/false",
+            "messagebus:x:18:18:D-Bus Message Daemon User:/run/dbus:/usr/bin/false",
+            "systemd-journal-gateway:x:73:73:systemd Journal Gateway:/:/usr/bin/false",
+            "systemd-journal-remote:x:74:74:systemd Journal Remote:/:/usr/bin/false",
+            "systemd-journal-upload:x:75:75:systemd Journal Upload:/:/usr/bin/false",
+            "systemd-network:x:76:76:systemd Network Management:/:/usr/bin/false",
+            "systemd-resolve:x:77:77:systemd Resolver:/:/usr/bin/false",
+            "systemd-timesync:x:78:78:systemd Time Synchronization:/:/usr/bin/false",
+            "systemd-coredump:x:79:79:systemd Core Dumper:/:/usr/bin/false",
+            "uuidd:x:80:80:UUID Generation Daemon User:/dev/null:/usr/bin/false",
+            "systemd-oom:x:81:81:systemd Out Of Memory Daemon:/:/usr/bin/false",
+            "nobody:x:65534:65534:Unprivileged User:/dev/null:/usr/bin/false",
+        ],
     )?;
+    fs::write(&passwd_path, passwd)?;
     info!("Created /etc/passwd");
 
-    // 2. /etc/group -- essential groups
-    fs::write(
-        etc.join("group"),
-        "root:x:0:\nwheel:x:10:\ntty:x:5:\nnogroup:x:65534:\n",
+    // 2. /etc/group -- LFS systemd baseline groups for core services and devices.
+    let group_path = etc.join("group");
+    let group = merge_named_entries(
+        &group_path,
+        &[
+            "root:x:0:",
+            "bin:x:1:daemon",
+            "sys:x:2:",
+            "kmem:x:3:",
+            "tape:x:4:",
+            "tty:x:5:",
+            "daemon:x:6:",
+            "floppy:x:7:",
+            "disk:x:8:",
+            "lp:x:9:",
+            "dialout:x:10:",
+            "audio:x:11:",
+            "video:x:12:",
+            "utmp:x:13:",
+            "cdrom:x:15:",
+            "adm:x:16:",
+            "messagebus:x:18:",
+            "systemd-journal:x:23:",
+            "input:x:24:",
+            "mail:x:34:",
+            "kvm:x:61:",
+            "systemd-journal-gateway:x:73:",
+            "systemd-journal-remote:x:74:",
+            "systemd-journal-upload:x:75:",
+            "systemd-network:x:76:",
+            "systemd-resolve:x:77:",
+            "systemd-timesync:x:78:",
+            "systemd-coredump:x:79:",
+            "uuidd:x:80:",
+            "systemd-oom:x:81:",
+            "wheel:x:97:",
+            "users:x:999:",
+            "nogroup:x:65534:",
+        ],
     )?;
+    fs::write(&group_path, group)?;
     info!("Created /etc/group");
 
     // 3. /etc/shadow -- root with empty password (permits passwordless login)
@@ -100,16 +285,23 @@ pub fn configure_system(root: &Path) -> Result<(), SystemConfigError> {
     )?;
     info!("Created /etc/os-release");
 
-    // 6. /etc/machine-id -- empty file, systemd generates on first boot
-    fs::write(etc.join("machine-id"), "")?;
+    // 6. /etc/machine-id -- empty file, systemd generates on first boot.
+    // Re-runs must tolerate a read-only machine-id from an existing sysroot.
+    let machine_id_path = etc.join("machine-id");
+    #[cfg(unix)]
+    if machine_id_path.exists() {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&machine_id_path, fs::Permissions::from_mode(0o644))?;
+    }
+    fs::write(&machine_id_path, "")?;
     info!("Created /etc/machine-id (empty, systemd fills on first boot)");
 
     // 7. /etc/fstab (LFS 10.2)
     fs::write(
         etc.join("fstab"),
         "# /etc/fstab - conaryOS\n\
-         LABEL=CONARY_ROOT  /      ext4  defaults,noatime  0 1\n\
-         LABEL=CONARY_ESP   /boot  vfat  defaults,noatime  0 2\n\
+         PARTLABEL=CONARY_ROOT  /      ext4  defaults,noatime  0 1\n\
+         PARTLABEL=CONARY_ESP   /boot  vfat  defaults,noatime  0 2\n\
          tmpfs              /tmp   tmpfs defaults,nosuid   0 0\n",
     )?;
     info!("Created /etc/fstab");
@@ -179,27 +371,45 @@ pub fn configure_system(root: &Path) -> Result<(), SystemConfigError> {
 
     #[cfg(unix)]
     {
-        use std::os::unix::fs::symlink;
-
         // default.target -> multi-user.target
-        symlink(
-            "/usr/lib/systemd/system/multi-user.target",
-            systemd_system.join("default.target"),
+        ensure_symlink(
+            Path::new("/usr/lib/systemd/system/multi-user.target"),
+            &systemd_system.join("default.target"),
         )?;
 
         // Enable systemd-networkd
-        symlink(
-            "/usr/lib/systemd/system/systemd-networkd.service",
-            systemd_system.join("multi-user.target.wants/systemd-networkd.service"),
+        ensure_symlink(
+            Path::new("/usr/lib/systemd/system/systemd-networkd.service"),
+            &systemd_system.join("multi-user.target.wants/systemd-networkd.service"),
+        )?;
+
+        // Enable systemd-resolved so the guest gets a live resolver stub.
+        ensure_symlink(
+            Path::new("/usr/lib/systemd/system/systemd-resolved.service"),
+            &systemd_system.join("multi-user.target.wants/systemd-resolved.service"),
         )?;
 
         // Enable serial console for QEMU -nographic
-        symlink(
-            "/usr/lib/systemd/system/serial-getty@.service",
-            systemd_system.join("getty.target.wants/serial-getty@ttyS0.service"),
+        ensure_symlink(
+            Path::new("/usr/lib/systemd/system/serial-getty@.service"),
+            &systemd_system.join("getty.target.wants/serial-getty@ttyS0.service"),
+        )?;
+
+        // EFI variable storage is optional for the bootstrap VM path. Mask the
+        // generated efivars mount so boot does not depend on kernel/runtime
+        // efivarfs support being healthy inside the guest.
+        ensure_symlink(
+            Path::new("/dev/null"),
+            &systemd_system.join("sys-firmware-efi-efivars.mount"),
+        )?;
+
+        // Use the systemd-resolved stub at boot time.
+        ensure_symlink(
+            Path::new("/run/systemd/resolve/stub-resolv.conf"),
+            &etc.join("resolv.conf"),
         )?;
     }
-    info!("Created systemd service symlinks (default.target, networkd, serial-getty)");
+    info!("Created systemd service symlinks (default.target, networkd, resolved, serial-getty)");
 
     // 13. /root/.bashrc -- minimal shell prompt
     let root_home = root.join("root");
@@ -211,6 +421,9 @@ pub fn configure_system(root: &Path) -> Result<(), SystemConfigError> {
     )?;
     info!("Created /root/.bashrc");
 
+    // 14. systemd-boot + BLS artifacts for Phase 5 image generation.
+    configure_boot_artifacts(root)?;
+
     info!("Phase 4 complete: system configuration applied");
     Ok(())
 }
@@ -218,6 +431,15 @@ pub fn configure_system(root: &Path) -> Result<(), SystemConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn seed_minimal_boot_inputs(root: &Path) {
+        let boot_dir = root.join("boot");
+        let efi_dir = root.join("usr/lib/systemd/boot/efi");
+        std::fs::create_dir_all(&boot_dir).unwrap();
+        std::fs::create_dir_all(&efi_dir).unwrap();
+        std::fs::write(boot_dir.join("vmlinuz-6.19.8-conary"), b"kernel").unwrap();
+        std::fs::write(efi_dir.join("systemd-bootx64.efi"), b"efi").unwrap();
+    }
 
     #[test]
     fn test_configure_nonexistent_root() {
@@ -236,6 +458,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("sysroot");
         std::fs::create_dir_all(&root).unwrap();
+        seed_minimal_boot_inputs(&root);
 
         configure_system(&root).unwrap();
 
@@ -248,6 +471,7 @@ mod tests {
         assert!(root.join("etc/machine-id").exists());
         assert!(root.join("etc/fstab").exists());
         assert!(root.join("etc/nsswitch.conf").exists());
+        assert!(root.join("etc/resolv.conf").exists());
 
         // LFS Ch9 locale and readline
         assert!(root.join("etc/locale.conf").exists());
@@ -266,7 +490,7 @@ mod tests {
 
         let group = std::fs::read_to_string(root.join("etc/group")).unwrap();
         assert!(group.contains("root:x:0"));
-        assert!(group.contains("wheel:x:10"));
+        assert!(group.contains("wheel:x:97"));
 
         let hostname = std::fs::read_to_string(root.join("etc/hostname")).unwrap();
         assert_eq!(hostname.trim(), "conaryos");
@@ -279,13 +503,27 @@ mod tests {
         assert!(machine_id.is_empty());
 
         let fstab = std::fs::read_to_string(root.join("etc/fstab")).unwrap();
-        assert!(fstab.contains("LABEL=CONARY_ROOT"));
-        assert!(fstab.contains("LABEL=CONARY_ESP"));
+        assert!(fstab.contains("PARTLABEL=CONARY_ROOT"));
+        assert!(fstab.contains("PARTLABEL=CONARY_ESP"));
         assert!(fstab.contains("tmpfs"));
 
         let nsswitch = std::fs::read_to_string(root.join("etc/nsswitch.conf")).unwrap();
         assert!(nsswitch.contains("hosts:"));
         assert!(nsswitch.contains("files dns"));
+
+        let passwd = std::fs::read_to_string(root.join("etc/passwd")).unwrap();
+        assert!(passwd.contains("messagebus:x:18:18:"));
+        assert!(passwd.contains("systemd-network:x:76:76:"));
+        assert!(passwd.contains("systemd-resolve:x:77:77:"));
+        assert!(passwd.contains("systemd-timesync:x:78:78:"));
+        assert!(passwd.contains("uuidd:x:80:80:"));
+
+        let group = std::fs::read_to_string(root.join("etc/group")).unwrap();
+        assert!(group.contains("messagebus:x:18:"));
+        assert!(group.contains("systemd-network:x:76:"));
+        assert!(group.contains("systemd-resolve:x:77:"));
+        assert!(group.contains("systemd-timesync:x:78:"));
+        assert!(group.contains("uuidd:x:80:"));
 
         let locale = std::fs::read_to_string(root.join("etc/locale.conf")).unwrap();
         assert!(locale.contains("LANG=en_US.UTF-8"));
@@ -307,10 +545,76 @@ mod tests {
     }
 
     #[test]
+    fn test_configure_system_creates_bootloader_artifacts_from_versioned_kernel() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sysroot");
+        std::fs::create_dir_all(&root).unwrap();
+        seed_minimal_boot_inputs(&root);
+
+        configure_system(&root).unwrap();
+
+        assert_eq!(std::fs::read(root.join("boot/vmlinuz")).unwrap(), b"kernel");
+        assert_eq!(
+            std::fs::read(root.join("boot/EFI/BOOT/BOOTX64.EFI")).unwrap(),
+            b"efi"
+        );
+
+        let loader = std::fs::read_to_string(root.join("boot/loader/loader.conf")).unwrap();
+        assert!(loader.contains("default conaryos"));
+
+        let entry =
+            std::fs::read_to_string(root.join("boot/loader/entries/conaryos.conf")).unwrap();
+        assert!(entry.contains("title   conaryOS"));
+        assert!(entry.contains("linux   /vmlinuz"));
+        assert!(entry.contains("root=PARTLABEL=CONARY_ROOT"));
+        assert!(entry.contains("console=ttyS0"));
+    }
+
+    #[test]
+    fn test_configure_system_preserves_package_created_service_accounts() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sysroot");
+        let etc = root.join("etc");
+        std::fs::create_dir_all(&etc).unwrap();
+        seed_minimal_boot_inputs(&root);
+
+        std::fs::write(
+            etc.join("passwd"),
+            "sshd:x:50:50:sshd PrivSep:/var/lib/sshd:/bin/false\n",
+        )
+        .unwrap();
+        std::fs::write(etc.join("group"), "sshd:x:50:\n").unwrap();
+
+        configure_system(&root).unwrap();
+
+        let passwd = std::fs::read_to_string(etc.join("passwd")).unwrap();
+        assert!(passwd.contains("root:x:0:0:root:/root:/bin/bash"));
+        assert!(passwd.contains("sshd:x:50:50:sshd PrivSep:/var/lib/sshd:/bin/false"));
+
+        let group = std::fs::read_to_string(etc.join("group")).unwrap();
+        assert!(group.contains("wheel:x:97:"));
+        assert!(group.contains("sshd:x:50:"));
+    }
+
+    #[test]
+    fn test_configure_system_fails_without_kernel_boot_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sysroot");
+        let efi_dir = root.join("usr/lib/systemd/boot/efi");
+        std::fs::create_dir_all(&efi_dir).unwrap();
+        std::fs::write(efi_dir.join("systemd-bootx64.efi"), b"efi").unwrap();
+
+        let err = configure_system(&root).unwrap_err();
+        assert!(matches!(err, SystemConfigError::ConfigFailed(_)));
+        assert!(err.to_string().contains("kernel"));
+    }
+
+    #[test]
     fn test_configure_system_shadow_permissions() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("sysroot");
         std::fs::create_dir_all(&root).unwrap();
+        seed_minimal_boot_inputs(&root);
 
         configure_system(&root).unwrap();
 
@@ -325,10 +629,34 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn test_configure_system_tolerates_read_only_machine_id() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sysroot");
+        let etc = root.join("etc");
+        std::fs::create_dir_all(&etc).unwrap();
+        seed_minimal_boot_inputs(&root);
+
+        let machine_id = etc.join("machine-id");
+        std::fs::write(&machine_id, "").unwrap();
+        std::fs::set_permissions(&machine_id, std::fs::Permissions::from_mode(0o444)).unwrap();
+
+        configure_system(&root).unwrap();
+
+        let metadata = std::fs::metadata(&machine_id).unwrap();
+        let mode = metadata.permissions().mode() & 0o777;
+        assert_eq!(mode, 0o644, "machine-id should be made writable for reruns");
+        assert!(std::fs::read_to_string(&machine_id).unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn test_configure_system_symlinks() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("sysroot");
         std::fs::create_dir_all(&root).unwrap();
+        seed_minimal_boot_inputs(&root);
 
         configure_system(&root).unwrap();
 
@@ -339,9 +667,16 @@ mod tests {
                 .exists()
         );
         assert!(
+            root.join("etc/systemd/system/multi-user.target.wants/systemd-resolved.service")
+                .exists()
+        );
+        assert!(
             root.join("etc/systemd/system/getty.target.wants/serial-getty@ttyS0.service")
                 .exists()
         );
+        assert!(root
+            .join("etc/systemd/system/sys-firmware-efi-efivars.mount")
+            .exists());
 
         // Verify symlink targets
         let target = std::fs::read_link(root.join("etc/systemd/system/default.target")).unwrap();
@@ -349,5 +684,71 @@ mod tests {
             target.to_str().unwrap(),
             "/usr/lib/systemd/system/multi-user.target"
         );
+        let resolv = std::fs::read_link(root.join("etc/resolv.conf")).unwrap();
+        assert_eq!(
+            resolv.to_str().unwrap(),
+            "/run/systemd/resolve/stub-resolv.conf"
+        );
+        let efivars_mask =
+            std::fs::read_link(root.join("etc/systemd/system/sys-firmware-efi-efivars.mount"))
+                .unwrap();
+        assert_eq!(efivars_mask.to_str().unwrap(), "/dev/null");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_configure_system_tolerates_preexisting_systemd_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sysroot");
+        let systemd_system = root.join("etc/systemd/system");
+        std::fs::create_dir_all(systemd_system.join("multi-user.target.wants")).unwrap();
+        std::fs::create_dir_all(systemd_system.join("getty.target.wants")).unwrap();
+        seed_minimal_boot_inputs(&root);
+
+        std::os::unix::fs::symlink(
+            "/usr/lib/systemd/system/multi-user.target",
+            systemd_system.join("default.target"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(
+            "/usr/lib/systemd/system/systemd-networkd.service",
+            systemd_system.join("multi-user.target.wants/systemd-networkd.service"),
+        )
+        .unwrap();
+
+        configure_system(&root).unwrap();
+
+        let default_target = std::fs::read_link(systemd_system.join("default.target")).unwrap();
+        assert_eq!(
+            default_target.to_str().unwrap(),
+            "/usr/lib/systemd/system/multi-user.target"
+        );
+        let networkd_target = std::fs::read_link(
+            systemd_system.join("multi-user.target.wants/systemd-networkd.service"),
+        )
+        .unwrap();
+        assert_eq!(
+            networkd_target.to_str().unwrap(),
+            "/usr/lib/systemd/system/systemd-networkd.service"
+        );
+        let resolved_target = std::fs::read_link(
+            systemd_system.join("multi-user.target.wants/systemd-resolved.service"),
+        )
+        .unwrap();
+        assert_eq!(
+            resolved_target.to_str().unwrap(),
+            "/usr/lib/systemd/system/systemd-resolved.service"
+        );
+        let serial_getty = std::fs::read_link(
+            systemd_system.join("getty.target.wants/serial-getty@ttyS0.service"),
+        )
+        .unwrap();
+        assert_eq!(
+            serial_getty.to_str().unwrap(),
+            "/usr/lib/systemd/system/serial-getty@.service"
+        );
+        let efivars_mask =
+            std::fs::read_link(systemd_system.join("sys-firmware-efi-efivars.mount")).unwrap();
+        assert_eq!(efivars_mask.to_str().unwrap(), "/dev/null");
     }
 }

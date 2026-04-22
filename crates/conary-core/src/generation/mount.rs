@@ -45,7 +45,6 @@ pub struct MountOptions {
 pub enum GenerationMountOutcome {
     ComposefsVerity,
     ComposefsPlain,
-    ErofsFallback,
 }
 
 impl MountOptions {
@@ -65,7 +64,7 @@ impl MountOptions {
         let mut opts = vec![format!("basedir={}", self.basedir.display())];
 
         if self.verity {
-            opts.push("verity_check=1".to_string());
+            opts.push("verity".to_string());
         }
 
         if let Some(digest) = &self.digest {
@@ -79,24 +78,6 @@ impl MountOptions {
             self.mount_point.to_string_lossy().into_owned(),
             "-o".to_string(),
             opts.join(","),
-        ]
-    }
-
-    /// Build argument list for a plain EROFS loopback mount (fallback).
-    ///
-    /// Used when composefs mount helper isn't available or for bootstrap
-    /// seed mounts. The EROFS image must contain file data inline (not
-    /// metadata-only with external CAS references), as plain EROFS has
-    /// no CAS resolution.
-    #[must_use]
-    pub fn to_erofs_mount_args(&self) -> Vec<String> {
-        vec![
-            "-t".to_string(),
-            "erofs".to_string(),
-            "-o".to_string(),
-            "loop,ro".to_string(),
-            self.image_path.to_string_lossy().into_owned(),
-            self.mount_point.to_string_lossy().into_owned(),
         ]
     }
 }
@@ -132,10 +113,7 @@ fn verify_erofs_verity_digest(_image_path: &Path, _expected_digest: &str) -> cra
 /// Mount a composefs generation image.
 ///
 /// Uses `mount -t composefs` (the composefs mount helper) which resolves
-/// external CAS references via `basedir=`. Falls back to plain EROFS
-/// loopback mount if the composefs helper isn't available. Note: the EROFS
-/// fallback only works for images with inline file data, not metadata-only
-/// images that rely on CAS.
+/// external CAS references via `basedir=`.
 ///
 /// This function only mounts the composefs image at `mount_point`. The
 /// `/etc` overlay must be set up separately by the caller using
@@ -169,30 +147,16 @@ pub fn mount_generation(opts: &MountOptions) -> crate::Result<GenerationMountOut
     }
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    info!(
-        "composefs mount failed ({}), falling back to EROFS loopback for {}",
-        stderr.trim(),
-        opts.image_path.display()
-    );
-
-    let erofs_args = opts.to_erofs_mount_args();
-    let erofs_status = Command::new("mount")
-        .args(&erofs_args)
-        .status()
-        .map_err(|e| Error::IoError(format!("Failed to execute EROFS mount: {e}")))?;
-
-    if erofs_status.success() {
-        info!(
-            "Mounted generation (EROFS loopback) at {}",
-            opts.mount_point.display()
-        );
-        Ok(GenerationMountOutcome::ErofsFallback)
-    } else {
-        Err(Error::IoError(format!(
-            "Both composefs and EROFS mount failed for image {}",
-            opts.image_path.display()
-        )))
-    }
+    let detail = stderr.trim();
+    Err(Error::IoError(format!(
+        "composefs mount failed for image {}: {}",
+        opts.image_path.display(),
+        if detail.is_empty() {
+            output.status.to_string()
+        } else {
+            detail.to_string()
+        }
+    )))
 }
 
 #[must_use]
@@ -209,10 +173,6 @@ pub fn verity_downgrade_warning(
         GenerationMountOutcome::ComposefsVerity => None,
         GenerationMountOutcome::ComposefsPlain => Some(format!(
             "Mounted generation image {} without fs-verity enforcement after a fallback retry. Integrity protection is downgraded until composefs verity can be restored.",
-            image_path.display()
-        )),
-        GenerationMountOutcome::ErofsFallback => Some(format!(
-            "Mounted generation image {} via plain EROFS fallback instead of a verity-enforced composefs mount. Integrity protection is downgraded until composefs verity can be restored.",
             image_path.display()
         )),
     }
@@ -490,9 +450,10 @@ mod tests {
         };
         let args = opts.to_mount_args();
         let opts_str = &args[5];
+        assert!(opts_str.contains("verity"), "verity missing");
         assert!(
-            opts_str.contains("verity_check=1"),
-            "verity_check=1 missing"
+            !opts_str.contains("verity_check=1"),
+            "obsolete verity_check=1 should not be emitted"
         );
     }
 
@@ -520,19 +481,6 @@ mod tests {
             !opts_str.contains("verity"),
             "verity must be absent when not requested"
         );
-    }
-
-    #[test]
-    fn erofs_fallback_args() {
-        let opts = base_opts();
-        let args = opts.to_erofs_mount_args();
-
-        assert_eq!(args[0], "-t");
-        assert_eq!(args[1], "erofs");
-        assert_eq!(args[2], "-o");
-        assert_eq!(args[3], "loop,ro");
-        assert_eq!(args[4], "/conary/generations/5/root.erofs");
-        assert_eq!(args[5], "/conary/mnt");
     }
 
     #[cfg(feature = "composefs-rs")]

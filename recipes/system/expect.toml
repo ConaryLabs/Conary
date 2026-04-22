@@ -1,0 +1,56 @@
+# recipes/system/expect.toml
+#
+# LFS 13 Section 8.18 — Expect-5.45.4
+# https://www.linuxfromscratch.org/lfs/view/13.0-systemd/chapter08/expect.html
+#
+# Expect provides the scripted PTY/dialogue tooling required by DejaGNU and
+# several later test suites.
+
+[package]
+name = "expect"
+version = "5.45.4"
+release = "1"
+summary = "Programmed dialogue with interactive programs"
+description = """
+Expect automates interactive terminal programs by matching prompts and sending
+ scripted responses. LFS uses it to support DejaGNU and the test suites of
+ later toolchain packages.
+"""
+license = "Public-Domain-like"
+homepage = "https://core.tcl-lang.org/expect/index"
+
+[source]
+archive = "https://downloads.sourceforge.net/expect/expect%(version)s.tar.gz"
+checksum = "md5:00fce8de158422f5ccd2666512329bd2"
+
+[patches]
+files = [
+    { file = "https://www.linuxfromscratch.org/patches/lfs/13.0/expect-5.45.4-gcc15-1.patch", checksum = "md5:0ca4d6bb8d572fbcdb13cb36cd34833e", strip = 1 },
+]
+
+[build]
+requires = ["glibc", "tcl"]
+makedepends = []
+chroot = true
+
+configure = """
+./configure --prefix=/usr           \
+            --with-tcl=/usr/lib     \
+            --enable-shared         \
+            --disable-rpath         \
+            --mandir=/usr/share/man \
+            --with-tclinclude=/usr/include
+"""
+
+make = """
+make -j%(jobs)s
+"""
+
+install = """
+make install DESTDIR=$DESTDIR
+ln -svf expect%(version)s/libexpect%(version)s.so \
+        $DESTDIR/usr/lib/libexpect%(version)s.so
+"""
+
+[variables]
+jobs = "$(nproc)"

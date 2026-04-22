@@ -8,6 +8,7 @@
 use super::super::open_db;
 use super::PackageFormatType;
 use super::batch::{BatchInstaller, prepare_package_for_batch};
+use super::blocklist;
 use super::dep_mode::DepMode;
 use super::dep_resolution;
 use super::resolve::check_provides_dependencies;
@@ -129,6 +130,19 @@ fn promote_repo_resolvable_satisfy_deps(
     let mut still_unresolvable = Vec::new();
 
     for dep in dep_plan.unresolvable.drain(..) {
+        // Critical live-runtime capabilities such as glibc/rtld symbols must
+        // never be promoted into repository installs during satisfy mode. If
+        // they reach this point, keep honoring the blocklist boundary instead
+        // of asking Remi to convert impossible system packages like glibc.
+        if blocklist::is_critical_runtime_capability(&dep.name) {
+            info!(
+                "Keeping satisfy-mode dependency '{}' blocked on the live system instead of promoting it to a repository install",
+                dep.name
+            );
+            dep_plan.blocked.push(dep.name);
+            continue;
+        }
+
         if is_repo_resolvable(conn, &dep.name) {
             promoted.push(dep);
         } else {
@@ -700,5 +714,53 @@ mod tests {
         assert!(dep_plan.to_install.is_empty());
         assert_eq!(dep_plan.unresolvable.len(), 1);
         assert_eq!(dep_plan.unresolvable[0].name, "nonexistent-pkg");
+    }
+
+    #[test]
+    fn promote_does_not_convert_blocked_runtime_capability_into_repo_install() {
+        let conn = test_db();
+
+        let mut repo = Repository::new("fedora-remi".to_string(), "https://example.invalid".into());
+        repo.insert(&conn).unwrap();
+        let repo_id = repo.id.unwrap();
+
+        let mut pkg = RepositoryPackage::new(
+            repo_id,
+            "glibc".to_string(),
+            "2.42-4.fc43".to_string(),
+            "sha256:glibc".to_string(),
+            123,
+            "https://example.invalid/glibc.rpm".to_string(),
+        );
+        pkg.insert(&conn).unwrap();
+        let pkg_id = pkg.id.unwrap();
+
+        let mut provide = RepositoryProvide::new(
+            pkg_id,
+            "libc.so.6(GLIBC_2.34)(64bit)".to_string(),
+            Some("2.42-4.fc43".to_string()),
+            "package".to_string(),
+            Some("libc.so.6(GLIBC_2.34)(64bit)".to_string()),
+        );
+        provide.insert(&conn).unwrap();
+
+        let dep_name = "libc.so.6(GLIBC_2.34)(64bit)".to_string();
+        let mut dep_plan = dep_resolution::DepResolutionPlan {
+            unresolvable: vec![conary_core::resolver::MissingDependency {
+                name: dep_name.clone(),
+                constraint: VersionConstraint::Any,
+                required_by: vec!["tree".to_string()],
+            }],
+            ..Default::default()
+        };
+
+        promote_repo_resolvable_satisfy_deps(&conn, &mut dep_plan);
+
+        assert!(
+            dep_plan.to_install.is_empty(),
+            "blocked runtime capabilities must never be promoted into repo installs"
+        );
+        assert!(dep_plan.unresolvable.is_empty());
+        assert_eq!(dep_plan.blocked, vec![dep_name]);
     }
 }

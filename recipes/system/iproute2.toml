@@ -1,6 +1,6 @@
 # recipes/system/iproute2.toml
 #
-# LFS 13 Section 8.64 — IPRoute2-6.19.0
+# LFS 13 Section 8.64 — IPRoute2-6.18.0
 # https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/iproute2.html
 #
 # Linux networking utilities (ip, ss, bridge, tc, etc.). Does NOT use
@@ -9,7 +9,7 @@
 
 [package]
 name = "iproute2"
-version = "6.19.0"
+version = "6.18.0"
 release = "1"
 summary = "Linux networking utilities"
 description = """
@@ -23,7 +23,7 @@ homepage = "https://wiki.linuxfoundation.org/networking/iproute2"
 
 [source]
 archive = "https://www.kernel.org/pub/linux/utils/net/iproute2/iproute2-%(version)s.tar.xz"
-checksum = "md5:90590c3c593a33d7d8eca997c2c18d1c"
+checksum = "md5:9e3f70620db43fe0ecab29b36a47914d"
 
 [build]
 requires = ["glibc", "elfutils"]

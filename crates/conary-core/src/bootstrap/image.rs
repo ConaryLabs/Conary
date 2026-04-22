@@ -32,8 +32,8 @@
 //! |  - /loader/entries/conaryos.conf             |
 //! +---------------------------------------------+
 //! |  Root Partition (remaining, ext4)           |
-//! |  - Full base system                         |
-//! |  - /boot/vmlinuz-<ver>                       |
+//! |  - Full base system except /boot contents   |
+//! |  - Empty /boot mount point for the ESP      |
 //! +---------------------------------------------+
 //! |  GPT Footer                                 |
 //! +---------------------------------------------+
@@ -46,7 +46,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::str::FromStr;
 use thiserror::Error;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 /// Errors during image generation
 #[derive(Debug, Error)]
@@ -203,12 +203,7 @@ impl std::fmt::Display for ImageSize {
 /// Required tools for image generation
 pub struct ImageTools {
     pub dd: PathBuf,
-    pub parted: Option<PathBuf>,
-    pub sfdisk: Option<PathBuf>,
     pub mkfs_fat: Option<PathBuf>,
-    pub mkfs_ext4: Option<PathBuf>,
-    pub mount: PathBuf,
-    pub umount: PathBuf,
     pub qemu_img: Option<PathBuf>,
     pub xorriso: Option<PathBuf>,
     pub mksquashfs: Option<PathBuf>,
@@ -232,19 +227,10 @@ impl ImageTools {
         };
 
         let dd = find_tool(&["dd"]).ok_or_else(|| ImageError::ToolNotFound("dd".to_string()))?;
-        let mount =
-            find_tool(&["mount"]).ok_or_else(|| ImageError::ToolNotFound("mount".to_string()))?;
-        let umount =
-            find_tool(&["umount"]).ok_or_else(|| ImageError::ToolNotFound("umount".to_string()))?;
 
         Ok(Self {
             dd,
-            parted: find_tool(&["parted"]),
-            sfdisk: find_tool(&["sfdisk"]),
             mkfs_fat: find_tool(&["mkfs.fat", "mkfs.vfat"]),
-            mkfs_ext4: find_tool(&["mkfs.ext4", "mke2fs"]),
-            mount,
-            umount,
             qemu_img: find_tool(&["qemu-img"]),
             xorriso: find_tool(&["xorriso"]),
             mksquashfs: find_tool(&["mksquashfs"]),
@@ -257,24 +243,10 @@ impl ImageTools {
     pub fn check_for_format(&self, format: ImageFormat) -> Result<(), ImageError> {
         match format {
             ImageFormat::Raw | ImageFormat::Qcow2 => {
-                // systemd-repart handles partitioning and filesystem creation internally,
-                // so legacy tools (sfdisk/parted/mkfs) are only required without it.
                 if self.systemd_repart.is_none() {
-                    if self.sfdisk.is_none() && self.parted.is_none() {
-                        return Err(ImageError::ToolNotFound(
-                            "sfdisk or parted (for partitioning) or systemd-repart".to_string(),
-                        ));
-                    }
-                    if self.mkfs_fat.is_none() {
-                        return Err(ImageError::ToolNotFound(
-                            "mkfs.fat (for ESP partition)".to_string(),
-                        ));
-                    }
-                    if self.mkfs_ext4.is_none() {
-                        return Err(ImageError::ToolNotFound(
-                            "mkfs.ext4 (for root partition)".to_string(),
-                        ));
-                    }
+                    return Err(ImageError::ToolNotFound(
+                        "systemd-repart (required for bootstrap raw/qcow2 images)".to_string(),
+                    ));
                 }
                 if format == ImageFormat::Qcow2 && self.qemu_img.is_none() {
                     return Err(ImageError::ToolNotFound(
@@ -305,14 +277,8 @@ impl ImageTools {
     /// Get list of missing optional tools
     pub fn missing_optional(&self) -> Vec<&'static str> {
         let mut missing = Vec::new();
-        if self.parted.is_none() && self.sfdisk.is_none() {
-            missing.push("parted/sfdisk");
-        }
         if self.mkfs_fat.is_none() {
             missing.push("mkfs.fat");
-        }
-        if self.mkfs_ext4.is_none() {
-            missing.push("mkfs.ext4");
         }
         if self.qemu_img.is_none() {
             missing.push("qemu-img");
@@ -346,7 +312,7 @@ pub struct ImageResult {
     pub efi_bootable: bool,
     /// Whether BIOS boot is supported
     pub bios_bootable: bool,
-    /// Build method used (e.g., "legacy", "systemd-repart")
+    /// Build method used (e.g., "systemd-repart", "qemu-img")
     pub method: String,
     /// Partition descriptions (if applicable)
     pub partitions: Vec<String>,
@@ -376,12 +342,6 @@ pub struct ImageBuilder {
 
     /// Detected tools
     tools: ImageTools,
-
-    /// Temporary mount directory
-    mount_dir: Option<PathBuf>,
-
-    /// Loop device (if mounted)
-    loop_device: Option<String>,
 
     /// Build log
     log: String,
@@ -434,8 +394,6 @@ impl ImageBuilder {
             format,
             size,
             tools,
-            mount_dir: None,
-            loop_device: None,
             log: String::new(),
         })
     }
@@ -447,6 +405,37 @@ impl ImageBuilder {
 
     /// Default output filename for the Tier 1 base image.
     pub const TIER1_DEFAULT_NAME: &'static str = "conaryos-base.qcow2";
+
+    fn verify_tier1_boot_artifacts(&self) -> Result<(), ImageError> {
+        let kernel = self.sysroot.join("boot/vmlinuz");
+        if !kernel.exists() {
+            return Err(ImageError::CreationFailed(
+                "Kernel not found at boot/vmlinuz. Run system_config::configure_system() \
+                 after Phase 3 installs the versioned kernel."
+                    .to_string(),
+            ));
+        }
+
+        let efi_binary = self.sysroot.join("boot/EFI/BOOT/BOOTX64.EFI");
+        if !efi_binary.exists() {
+            return Err(ImageError::CreationFailed(
+                "EFI binary not found at boot/EFI/BOOT/BOOTX64.EFI. \
+                 Run system_config::configure_system() first."
+                    .to_string(),
+            ));
+        }
+
+        let bls_entry = self.sysroot.join("boot/loader/entries/conaryos.conf");
+        if !bls_entry.exists() {
+            return Err(ImageError::CreationFailed(
+                "BLS entry not found at boot/loader/entries/conaryos.conf. \
+                 Run system_config::configure_system() first."
+                    .to_string(),
+            ));
+        }
+
+        Ok(())
+    }
 
     /// Build a Tier 1 base image using the standard pipeline.
     ///
@@ -466,48 +455,7 @@ impl ImageBuilder {
     /// the sysroot, or if image creation fails.
     pub fn build_tier1_image(&mut self) -> Result<ImageResult, ImageError> {
         info!("Building Tier 1 base image: {}", self.output.display());
-
-        // Verify kernel is installed in sysroot
-        let boot_dir = self.sysroot.join("boot");
-        let has_kernel = boot_dir.exists()
-            && std::fs::read_dir(&boot_dir)
-                .map(|entries| {
-                    entries.flatten().any(|e| {
-                        e.file_name()
-                            .to_str()
-                            .is_some_and(|n| n.starts_with("vmlinuz"))
-                    })
-                })
-                .unwrap_or(false);
-
-        if !has_kernel {
-            return Err(ImageError::CreationFailed(
-                "Kernel not found in sysroot /boot/. Phase 3 must build the kernel \
-                 (system/linux.toml) before image generation."
-                    .to_string(),
-            ));
-        }
-
-        // Verify EFI binary is in place
-        let efi_binary = self.sysroot.join("boot/EFI/BOOT/BOOTX64.EFI");
-        if !efi_binary.exists() {
-            return Err(ImageError::CreationFailed(
-                "EFI binary not found at boot/EFI/BOOT/BOOTX64.EFI. \
-                 Run system_config::configure_system() first."
-                    .to_string(),
-            ));
-        }
-
-        // Verify BLS entry exists
-        let bls_entry = self.sysroot.join("boot/loader/entries/conaryos.conf");
-        if !bls_entry.exists() {
-            return Err(ImageError::CreationFailed(
-                "BLS entry not found at boot/loader/entries/conaryos.conf. \
-                 Run system_config::configure_system() first."
-                    .to_string(),
-            ));
-        }
-
+        self.verify_tier1_boot_artifacts()?;
         self.build()
     }
 
@@ -808,7 +756,30 @@ impl ImageBuilder {
         Ok(())
     }
 
-    /// Build a raw disk image using systemd-repart (rootless, no loop devices).
+    fn write_repart_mke2fs_config(&self) -> Result<tempfile::NamedTempFile, ImageError> {
+        let host_config = fs::read_to_string("/etc/mke2fs.conf").map_err(|e| {
+            ImageError::FilesystemFailed(format!("failed to read /etc/mke2fs.conf: {e}"))
+        })?;
+        let updated = enable_ext4_verity_feature(&host_config)
+            .map_err(|e| ImageError::FilesystemFailed(format!("invalid mke2fs.conf: {e}")))?;
+
+        let mut temp = tempfile::NamedTempFile::new_in(&self.work_dir).map_err(|e| {
+            ImageError::FilesystemFailed(format!(
+                "failed to create temporary mke2fs.conf in {}: {e}",
+                self.work_dir.display()
+            ))
+        })?;
+        temp.write_all(updated.as_bytes()).map_err(|e| {
+            ImageError::FilesystemFailed(format!("failed to write temporary mke2fs.conf: {e}"))
+        })?;
+        temp.flush().map_err(|e| {
+            ImageError::FilesystemFailed(format!("failed to flush temporary mke2fs.conf: {e}"))
+        })?;
+
+        Ok(temp)
+    }
+
+    /// Build a raw disk image using systemd-repart.
     fn build_raw_repart(&mut self) -> Result<ImageResult, ImageError> {
         let repart_dir = self.work_dir.join("repart.d");
         super::repart::generate_repart_definitions(
@@ -823,8 +794,9 @@ impl ImageBuilder {
             .systemd_repart
             .clone()
             .ok_or_else(|| ImageError::ToolNotFound("systemd-repart".to_string()))?;
+        let mke2fs_config = self.write_repart_mke2fs_config()?;
 
-        self.log_line("Creating disk image with systemd-repart (rootless)");
+        self.log_line("Creating disk image with systemd-repart");
 
         let output = Command::new(&repart_bin)
             .arg("--empty=create")
@@ -832,6 +804,7 @@ impl ImageBuilder {
             .arg(format!("--definitions={}", repart_dir.display()))
             .arg(format!("--root={}", self.sysroot.display()))
             .arg("--discard=no")
+            .env("MKE2FS_CONFIG", mke2fs_config.path())
             .arg(&self.output)
             .output()
             .map_err(|e| ImageError::CommandFailed(format!("systemd-repart: {e}")))?;
@@ -847,12 +820,11 @@ impl ImageBuilder {
 
         let size = fs::metadata(&self.output)?.len();
 
-        warn!("Boot artifact population not yet implemented -- image may not be bootable");
         Ok(ImageResult {
             path: self.output.clone(),
             format: self.format,
             size,
-            efi_bootable: false,
+            efi_bootable: true,
             bios_bootable: false,
             method: "systemd-repart".to_string(),
             partitions: vec![
@@ -862,57 +834,11 @@ impl ImageBuilder {
         })
     }
 
-    /// Build raw disk image, preferring systemd-repart when available.
+    /// Build raw disk image using systemd-repart.
     fn build_raw(&mut self) -> Result<ImageResult, ImageError> {
-        if self.tools.systemd_repart.is_some() {
-            self.log_line("Using systemd-repart for rootless image generation");
-            self.build_raw_repart()
-        } else {
-            self.log_line("systemd-repart not found, using legacy method (requires root)");
-            self.build_raw_legacy()
-        }
-    }
-
-    /// Build raw disk image using the legacy loop-device method (requires root).
-    fn build_raw_legacy(&mut self) -> Result<ImageResult, ImageError> {
-        self.log_line("Creating raw disk image");
-
-        // Create sparse image file
-        self.create_sparse_image()?;
-
-        // Partition the image
-        self.partition_image()?;
-
-        // Set up loop device
-        self.setup_loop_device()?;
-
-        // Format partitions
-        self.format_partitions()?;
-
-        // Mount and populate
-        self.mount_and_populate()?;
-
-        // Install bootloader
-        self.install_bootloader()?;
-
-        // Cleanup
-        self.cleanup()?;
-
-        let size = fs::metadata(&self.output)?.len();
-
-        warn!("Boot artifact population not yet implemented -- image may not be bootable");
-        Ok(ImageResult {
-            path: self.output.clone(),
-            format: ImageFormat::Raw,
-            size,
-            efi_bootable: false,
-            bios_bootable: false,
-            method: "legacy".to_string(),
-            partitions: vec![
-                format!("ESP ({}MB vfat)", Self::ESP_SIZE_MB),
-                "root (ext4)".to_string(),
-            ],
-        })
+        self.verify_tier1_boot_artifacts()?;
+        self.log_line("Using systemd-repart for bootstrap image generation");
+        self.build_raw_repart()
     }
 
     /// Build qcow2 image (raw + convert)
@@ -955,12 +881,11 @@ impl ImageBuilder {
 
         let size = fs::metadata(&self.output)?.len();
 
-        warn!("Boot artifact population not yet implemented -- image may not be bootable");
         Ok(ImageResult {
             path: self.output.clone(),
             format: ImageFormat::Qcow2,
             size,
-            efi_bootable: false,
+            efi_bootable: true,
             bios_bootable: false,
             method: "qemu-img".to_string(),
             partitions: vec![
@@ -1005,339 +930,6 @@ impl ImageBuilder {
             method: "xorriso".to_string(),
             partitions: Vec::new(),
         })
-    }
-
-    /// Create a sparse image file
-    fn create_sparse_image(&mut self) -> Result<(), ImageError> {
-        self.log_line(&format!(
-            "Creating sparse image: {} bytes",
-            self.size.bytes()
-        ));
-
-        // Use truncate for sparse file creation
-        let file = File::create(&self.output)?;
-        file.set_len(self.size.bytes())?;
-
-        debug!("Created sparse image at {:?}", self.output);
-        Ok(())
-    }
-
-    /// Partition the image with GPT
-    fn partition_image(&mut self) -> Result<(), ImageError> {
-        self.log_line("Creating GPT partition table");
-
-        // Clone tool paths upfront to avoid borrow conflicts
-        let sfdisk = self.tools.sfdisk.clone();
-        let parted = self.tools.parted.clone();
-
-        // Prefer sfdisk for scripted partitioning
-        if let Some(ref sfdisk_path) = sfdisk {
-            self.partition_with_sfdisk(sfdisk_path)?;
-        } else if let Some(ref parted_path) = parted {
-            self.partition_with_parted(parted_path)?;
-        } else {
-            return Err(ImageError::ToolNotFound("sfdisk or parted".to_string()));
-        }
-
-        Ok(())
-    }
-
-    /// Partition using sfdisk
-    fn partition_with_sfdisk(&mut self, sfdisk: &Path) -> Result<(), ImageError> {
-        // sfdisk script for GPT with ESP and root
-        let script = format!(
-            "label: gpt\n\
-             size={}M, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name=\"EFI System\"\n\
-             type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name=\"Linux root\"\n",
-            Self::ESP_SIZE_MB
-        );
-
-        let mut child = Command::new(sfdisk)
-            .arg(&self.output)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()?;
-
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(script.as_bytes())?;
-        }
-
-        let output = child.wait_with_output()?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(ImageError::PartitionFailed(stderr.to_string()));
-        }
-
-        Ok(())
-    }
-
-    /// Partition using parted
-    fn partition_with_parted(&mut self, parted: &Path) -> Result<(), ImageError> {
-        // Create GPT label
-        let run_parted = |args: &[&str]| -> Result<(), ImageError> {
-            let output = Command::new(parted)
-                .arg("-s")
-                .arg(&self.output)
-                .args(args)
-                .output()?;
-
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(ImageError::PartitionFailed(stderr.to_string()));
-            }
-            Ok(())
-        };
-
-        run_parted(&["mklabel", "gpt"])?;
-
-        // Create ESP partition
-        run_parted(&[
-            "mkpart",
-            "ESP",
-            "fat32",
-            "1MiB",
-            &format!("{}MiB", Self::ESP_SIZE_MB + 1),
-        ])?;
-        run_parted(&["set", "1", "esp", "on"])?;
-
-        // Create root partition
-        run_parted(&[
-            "mkpart",
-            "root",
-            "ext4",
-            &format!("{}MiB", Self::ESP_SIZE_MB + 1),
-            "100%",
-        ])?;
-
-        Ok(())
-    }
-
-    /// Set up loop device for the image
-    fn setup_loop_device(&mut self) -> Result<(), ImageError> {
-        self.log_line("Setting up loop device");
-
-        let output = Command::new("losetup")
-            .args(["--find", "--show", "--partscan"])
-            .arg(&self.output)
-            .output()?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(ImageError::CommandFailed(format!(
-                "losetup failed: {}",
-                stderr
-            )));
-        }
-
-        let loop_dev = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        debug!("Loop device: {}", loop_dev);
-        self.loop_device = Some(loop_dev);
-
-        // Wait for partition devices to appear
-        std::thread::sleep(std::time::Duration::from_millis(500));
-
-        Ok(())
-    }
-
-    /// Format partitions
-    fn format_partitions(&mut self) -> Result<(), ImageError> {
-        let loop_dev = self
-            .loop_device
-            .as_ref()
-            .ok_or_else(|| ImageError::CommandFailed("No loop device".to_string()))?;
-
-        let esp_dev = format!("{}p1", loop_dev);
-        let root_dev = format!("{}p2", loop_dev);
-
-        // Format ESP as FAT32
-        self.log_line("Formatting ESP partition (FAT32)");
-        let mkfs_fat = self
-            .tools
-            .mkfs_fat
-            .as_ref()
-            .ok_or_else(|| ImageError::ToolNotFound("mkfs.fat".to_string()))?;
-
-        let output = Command::new(mkfs_fat)
-            .args(["-F", "32", "-n", "CONARY_ESP"])
-            .arg(&esp_dev)
-            .output()?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(ImageError::FilesystemFailed(format!(
-                "mkfs.fat failed: {}",
-                stderr
-            )));
-        }
-
-        // Format root as ext4
-        self.log_line("Formatting root partition (ext4)");
-        let mkfs_ext4 = self
-            .tools
-            .mkfs_ext4
-            .as_ref()
-            .ok_or_else(|| ImageError::ToolNotFound("mkfs.ext4".to_string()))?;
-
-        let output = Command::new(mkfs_ext4)
-            .args(["-L", "CONARY_ROOT", "-F"])
-            .arg(&root_dev)
-            .output()?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(ImageError::FilesystemFailed(format!(
-                "mkfs.ext4 failed: {}",
-                stderr
-            )));
-        }
-
-        Ok(())
-    }
-
-    /// Mount partitions and populate with base system
-    fn mount_and_populate(&mut self) -> Result<(), ImageError> {
-        let loop_dev = self
-            .loop_device
-            .as_ref()
-            .ok_or_else(|| ImageError::CommandFailed("No loop device".to_string()))?;
-
-        let esp_dev = format!("{}p1", loop_dev);
-        let root_dev = format!("{}p2", loop_dev);
-
-        // Create mount directory
-        let mount_dir = self.work_dir.join("mnt");
-        fs::create_dir_all(&mount_dir)?;
-        self.mount_dir = Some(mount_dir.clone());
-
-        // Mount root partition
-        self.log_line("Mounting root partition");
-        let status = Command::new(&self.tools.mount)
-            .arg(&root_dev)
-            .arg(&mount_dir)
-            .status()?;
-
-        if !status.success() {
-            return Err(ImageError::CommandFailed(
-                "Failed to mount root".to_string(),
-            ));
-        }
-
-        // Create and mount ESP
-        let esp_mount = mount_dir.join("boot/efi");
-        fs::create_dir_all(&esp_mount)?;
-
-        self.log_line("Mounting ESP partition");
-        let status = Command::new(&self.tools.mount)
-            .arg(&esp_dev)
-            .arg(&esp_mount)
-            .status()?;
-
-        if !status.success() {
-            return Err(ImageError::CommandFailed("Failed to mount ESP".to_string()));
-        }
-
-        // Copy base system
-        self.log_line("Copying base system (this may take a while)");
-        self.copy_system(&mount_dir)?;
-
-        // Create /etc/fstab
-        self.log_line("Creating fstab");
-        self.create_fstab(&mount_dir)?;
-
-        Ok(())
-    }
-
-    /// Copy base system to mounted image
-    fn copy_system(&mut self, mount_dir: &Path) -> Result<(), ImageError> {
-        // Use rsync if available, otherwise cp -a
-        let rsync_available = Command::new("which")
-            .arg("rsync")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-
-        if rsync_available {
-            let status = Command::new("rsync")
-                .args([
-                    "-aHAX",
-                    "--info=progress2",
-                    "--exclude=/dev/*",
-                    "--exclude=/proc/*",
-                    "--exclude=/sys/*",
-                    "--exclude=/tmp/*",
-                    "--exclude=/run/*",
-                ])
-                .arg(format!("{}/", self.sysroot.display()))
-                .arg(format!("{}/", mount_dir.display()))
-                .status()?;
-
-            if !status.success() {
-                return Err(ImageError::CommandFailed("rsync failed".to_string()));
-            }
-        } else {
-            let status = Command::new("cp")
-                .args(["-a"])
-                .arg(format!("{}/.", self.sysroot.display()))
-                .arg(mount_dir)
-                .status()?;
-
-            if !status.success() {
-                return Err(ImageError::CommandFailed("cp failed".to_string()));
-            }
-        }
-
-        // Create essential directories
-        for dir in ["dev", "proc", "sys", "tmp", "run"] {
-            let path = mount_dir.join(dir);
-            if !path.exists() {
-                fs::create_dir_all(&path)?;
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Create /etc/fstab
-    fn create_fstab(&self, mount_dir: &Path) -> Result<(), ImageError> {
-        let etc = mount_dir.join("etc");
-        fs::create_dir_all(&etc)?;
-
-        let fstab_content = "\
-# /etc/fstab - Conary system file table
-#
-# <file system>  <mount point>  <type>  <options>        <dump> <pass>
-LABEL=CONARY_ROOT  /              ext4    defaults,noatime  0      1
-LABEL=CONARY_ESP   /boot          vfat    defaults,noatime  0      2
-tmpfs              /tmp           tmpfs   defaults,nosuid   0      0
-";
-
-        fs::write(etc.join("fstab"), fstab_content)?;
-        Ok(())
-    }
-
-    /// Install bootloader
-    fn install_bootloader(&mut self) -> Result<(), ImageError> {
-        // Clone mount_dir upfront to avoid borrow conflicts
-        let mount_dir = self
-            .mount_dir
-            .clone()
-            .ok_or_else(|| ImageError::CommandFailed("Not mounted".to_string()))?;
-
-        // Create EFI boot structure
-        self.log_line("Setting up EFI boot");
-        self.setup_efi_boot(&mount_dir)?;
-
-        Ok(())
-    }
-
-    /// Set up EFI boot structure.
-    ///
-    /// Boot setup is now handled by `system_config::configure_system()` in base.rs.
-    /// systemd-repart's `CopyFiles=/boot:/` copies the bootloader, kernel,
-    /// initramfs, and loader config from the sysroot to the ESP.
-    fn setup_efi_boot(&self, _mount_dir: &Path) -> Result<(), ImageError> {
-        Ok(())
     }
 
     /// Create squashfs for ISO
@@ -1500,35 +1092,6 @@ menuentry "Conary Linux (Live, Text Mode)" {
         Ok(())
     }
 
-    /// Cleanup mounts and loop device
-    fn cleanup(&mut self) -> Result<(), ImageError> {
-        self.log_line("Cleaning up");
-
-        // Unmount ESP first
-        if let Some(ref mount_dir) = self.mount_dir {
-            let esp_mount = mount_dir.join("boot/efi");
-            if esp_mount.exists() {
-                let _ = Command::new(&self.tools.umount).arg(&esp_mount).status();
-            }
-
-            // Unmount root
-            let _ = Command::new(&self.tools.umount).arg(mount_dir).status();
-
-            // Remove mount directory
-            let _ = fs::remove_dir_all(mount_dir);
-        }
-
-        // Detach loop device
-        if let Some(ref loop_dev) = self.loop_device {
-            let _ = Command::new("losetup").args(["-d", loop_dev]).status();
-        }
-
-        self.mount_dir = None;
-        self.loop_device = None;
-
-        Ok(())
-    }
-
     /// Add a line to the build log
     fn log_line(&mut self, msg: &str) {
         info!("{}", msg);
@@ -1591,7 +1154,7 @@ menuentry "Conary Linux (Live, Text Mode)" {
         drop(f);
 
         // Partition with sfdisk
-        let sfdisk_input = "label: gpt\nsize=512M, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name=ESP\ntype=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name=conaryos\n";
+        let sfdisk_input = "label: gpt\nsize=512M, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name=CONARY_ESP\ntype=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name=CONARY_ROOT\n";
         let mut child = Command::new("sfdisk")
             .arg(&raw_path)
             .stdin(Stdio::piped())
@@ -1721,15 +1284,6 @@ menuentry "Conary Linux (Live, Text Mode)" {
     }
 }
 
-impl Drop for ImageBuilder {
-    fn drop(&mut self) {
-        // Ensure cleanup on drop
-        if self.mount_dir.is_some() || self.loop_device.is_some() {
-            let _ = self.cleanup();
-        }
-    }
-}
-
 /// Recursively compute the total size of a directory in bytes.
 fn dir_size(path: &Path) -> u64 {
     let mut total = 0u64;
@@ -1744,6 +1298,85 @@ fn dir_size(path: &Path) -> u64 {
         }
     }
     total
+}
+
+fn enable_ext4_verity_feature(config: &str) -> Result<String, String> {
+    let mut updated = Vec::new();
+    let mut in_ext4 = false;
+    let mut ext4_found = false;
+    let mut features_found = false;
+
+    for line in config.lines() {
+        let trimmed = line.trim();
+
+        if !in_ext4
+            && trimmed.ends_with('{')
+            && let Some((name, _)) = trimmed.split_once('=')
+            && name.trim() == "ext4"
+        {
+            in_ext4 = true;
+            ext4_found = true;
+            updated.push(line.to_string());
+            continue;
+        }
+
+        if in_ext4 {
+            if trimmed.starts_with('}') {
+                if !features_found {
+                    return Err("mke2fs.conf ext4 features line not found".to_string());
+                }
+                in_ext4 = false;
+                updated.push(line.to_string());
+                continue;
+            }
+
+            if let Some((key, value)) = line.split_once('=')
+                && key.trim() == "features"
+            {
+                let (raw_value, comment) = value
+                    .split_once('#')
+                    .map_or((value, None), |(features, comment)| {
+                        (features, Some(comment))
+                    });
+                let mut features: Vec<String> = raw_value
+                    .split(',')
+                    .map(|feature| feature.trim())
+                    .filter(|feature| !feature.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect();
+
+                if !features.iter().any(|feature| feature == "verity") {
+                    features.push("verity".to_string());
+                }
+
+                let indent = &line[..line.find("features").unwrap_or(0)];
+                let mut rebuilt = format!("{indent}features = {}", features.join(","));
+                if let Some(comment) = comment {
+                    rebuilt.push_str(" #");
+                    rebuilt.push_str(comment);
+                }
+
+                updated.push(rebuilt);
+                features_found = true;
+                continue;
+            }
+        }
+
+        updated.push(line.to_string());
+    }
+
+    if !ext4_found {
+        return Err("mke2fs.conf ext4 stanza not found".to_string());
+    }
+    if in_ext4 && !features_found {
+        return Err("mke2fs.conf ext4 features line not found".to_string());
+    }
+
+    let mut rebuilt = updated.join("\n");
+    if config.ends_with('\n') {
+        rebuilt.push('\n');
+    }
+    Ok(rebuilt)
 }
 
 #[cfg(test)]
@@ -1950,5 +1583,86 @@ mod tests {
         fs::create_dir_all(tmp.path().join("usr/lib/modules/6.12.1-conary")).unwrap();
         let version = detect_kernel_version(tmp.path());
         assert_eq!(version.as_deref(), Some("6.12.1-conary"));
+    }
+
+    #[test]
+    fn test_enable_ext4_verity_feature_adds_verity_to_ext4_features() {
+        let input = "\
+[defaults]
+base_features = sparse_super
+
+[fs_types]
+ext4 = {
+    features = has_journal,extent,64bit
+}
+";
+
+        let updated = enable_ext4_verity_feature(input).expect("ext4 stanza should be updated");
+        assert!(updated.contains("features = has_journal,extent,64bit,verity"));
+    }
+
+    #[test]
+    fn test_enable_ext4_verity_feature_is_idempotent() {
+        let input = "\
+[fs_types]
+ext4 = {
+    features = has_journal,extent,verity
+}
+";
+
+        let updated =
+            enable_ext4_verity_feature(input).expect("ext4 stanza with verity should parse");
+        assert_eq!(updated.matches("verity").count(), 1);
+    }
+
+    #[test]
+    fn test_enable_ext4_verity_feature_rejects_missing_ext4_features_line() {
+        let input = "\
+[fs_types]
+ext4 = {
+    inode_size = 256
+}
+";
+
+        let err = enable_ext4_verity_feature(input).unwrap_err();
+        assert!(err.contains("ext4 features line"));
+    }
+
+    #[test]
+    fn test_build_raw_rejects_missing_efi_boot_artifacts() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sysroot = tmp.path().join("sysroot");
+        fs::create_dir_all(sysroot.join("boot")).unwrap();
+        fs::write(sysroot.join("boot/vmlinuz"), b"kernel").unwrap();
+
+        let config = BootstrapConfig::new();
+        let mut builder = ImageBuilder::new(
+            tmp.path(),
+            &config,
+            &sysroot,
+            tmp.path().join("out.raw"),
+            ImageFormat::Raw,
+            ImageSize::from_str("1G").unwrap(),
+        )
+        .unwrap();
+
+        let err = builder.build_raw().unwrap_err();
+        assert!(err.to_string().contains("EFI binary not found"));
+    }
+
+    #[test]
+    fn test_raw_qcow2_formats_require_systemd_repart() {
+        let tools = ImageTools {
+            dd: PathBuf::from("/bin/dd"),
+            mkfs_fat: None,
+            qemu_img: Some(PathBuf::from("/usr/bin/qemu-img")),
+            xorriso: None,
+            mksquashfs: None,
+            systemd_repart: None,
+            ukify: None,
+        };
+
+        let err = tools.check_for_format(ImageFormat::Raw).unwrap_err();
+        assert!(err.to_string().contains("systemd-repart"));
     }
 }

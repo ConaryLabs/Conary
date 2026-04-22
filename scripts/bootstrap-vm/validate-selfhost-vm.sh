@@ -19,6 +19,11 @@ Options:
   --memory MB            QEMU guest memory in MiB (default: 4096)
   --cpus N               QEMU vCPU count (default: 4)
   --help                 Show this help text
+
+Environment overrides:
+  CONARY_BOOTSTRAP_OVMF_CODE           Override the OVMF code firmware path
+  CONARY_BOOTSTRAP_OVMF_VARS_TEMPLATE  Override the OVMF vars template path
+  CONARY_BOOTSTRAP_QEMU_CPU            Override the QEMU CPU model (default: host with KVM, else max)
 EOF
 }
 
@@ -106,6 +111,10 @@ SSH_LOG="$LOGS_DIR/ssh-probe.log"
 GUEST_VALIDATE_LOG="$LOGS_DIR/guest-validate.log"
 GUEST_INPUT_DIR="/var/lib/conary/bootstrap-inputs"
 GUEST_VALIDATE_REMOTE="$GUEST_INPUT_DIR/guest-validate.sh"
+OVMF_CODE="${CONARY_BOOTSTRAP_OVMF_CODE:-}"
+OVMF_VARS_TEMPLATE="${CONARY_BOOTSTRAP_OVMF_VARS_TEMPLATE:-}"
+OVMF_VARS_RUNTIME="$LOGS_DIR/OVMF_VARS.fd"
+QEMU_CPU="${CONARY_BOOTSTRAP_QEMU_CPU:-}"
 QEMU_PID=""
 
 ssh_opts=(
@@ -136,6 +145,59 @@ cleanup() {
     fi
 }
 
+resolve_ovmf_firmware() {
+    local candidate
+
+    if [[ -z "$OVMF_CODE" ]]; then
+        for candidate in \
+            /usr/share/OVMF/OVMF_CODE.fd \
+            /usr/share/edk2/ovmf/OVMF_CODE.fd
+        do
+            if [[ -f "$candidate" ]]; then
+                OVMF_CODE="$candidate"
+                break
+            fi
+        done
+    fi
+
+    if [[ -z "$OVMF_VARS_TEMPLATE" ]]; then
+        for candidate in \
+            /usr/share/OVMF/OVMF_VARS.fd \
+            /usr/share/edk2/ovmf/OVMF_VARS.fd
+        do
+            if [[ -f "$candidate" ]]; then
+                OVMF_VARS_TEMPLATE="$candidate"
+                break
+            fi
+        done
+    fi
+
+    if [[ ! -f "$OVMF_CODE" ]]; then
+        echo "OVMF code firmware not found. Set CONARY_BOOTSTRAP_OVMF_CODE if your distro installs it elsewhere." >&2
+        exit 1
+    fi
+
+    if [[ ! -f "$OVMF_VARS_TEMPLATE" ]]; then
+        echo "OVMF vars template not found. Set CONARY_BOOTSTRAP_OVMF_VARS_TEMPLATE if your distro installs it elsewhere." >&2
+        exit 1
+    fi
+}
+
+resolve_qemu_cpu() {
+    if [[ -n "$QEMU_CPU" ]]; then
+        return
+    fi
+
+    if [[ -e /dev/kvm ]]; then
+        QEMU_CPU="host"
+    else
+        # The self-host sysroot currently runs userland built with x86-64-v2
+        # instructions, so the tiny qemu64 default is not representative enough
+        # for truthful guest validation.
+        QEMU_CPU="max"
+    fi
+}
+
 start_qemu() {
     local accel_args=()
     if [[ -e /dev/kvm ]]; then
@@ -145,11 +207,16 @@ start_qemu() {
     : >"$SERIAL_LOG"
     : >"$SSH_LOG"
     : >"$GUEST_VALIDATE_LOG"
+    cp "$OVMF_VARS_TEMPLATE" "$OVMF_VARS_RUNTIME"
 
     qemu-system-x86_64 \
+        -machine q35 \
+        -drive "if=pflash,format=raw,readonly=on,file=$OVMF_CODE" \
+        -drive "if=pflash,format=raw,file=$OVMF_VARS_RUNTIME" \
         -drive "file=$IMAGE,format=qcow2,if=virtio" \
         -m "$MEMORY_MB" \
         -smp "$CPUS" \
+        -cpu "$QEMU_CPU" \
         -nographic \
         -no-reboot \
         -serial "file:$SERIAL_LOG" \
@@ -201,6 +268,8 @@ main() {
     require_cmd qemu-system-x86_64 ssh scp
 
     mkdir -p "$LOGS_DIR"
+    resolve_ovmf_firmware
+    resolve_qemu_cpu
 
     for required_file in "$IMAGE" "$SSH_KEY" "$WORKSPACE_TARBALL" "$WORKSPACE_SHA256" "$GUEST_VALIDATE_LOCAL"; do
         if [[ ! -e "$required_file" ]]; then

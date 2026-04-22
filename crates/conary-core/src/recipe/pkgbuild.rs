@@ -202,6 +202,7 @@ pub fn convert_pkgbuild(content: &str) -> Result<ConversionResult, PkgbuildError
             crate::recipe::format::AdditionalSource {
                 url: convert_pkgbuild_url(url, &pkgname, &pkgver),
                 checksum: cs,
+                extract: true,
                 extract_to: None,
             }
         })

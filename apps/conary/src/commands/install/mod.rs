@@ -1552,9 +1552,9 @@ fn execute_install_transaction(
     let post_commit_result = (|| -> Result<()> {
         crate::commands::composefs_ops::rebuild_and_mount(
             conn,
+            ctx.db_path,
             &tx_description,
             Some(prev_etc),
-            std::path::Path::new(ctx.root),
         )?;
 
         changeset.update_status(conn, ChangesetStatus::Applied)?;

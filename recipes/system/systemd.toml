@@ -1,6 +1,6 @@
 # recipes/system/systemd.toml
 #
-# LFS 13 Section 8.74 — Systemd-259.5
+# LFS 13 Section 8.74 — Systemd-259.1
 # https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/systemd.html
 #
 # System and service manager. The most complex recipe after gcc/glibc.
@@ -8,11 +8,13 @@
 # needed or not available in a fresh LFS system.
 #
 # DEVIATION: -Dbootloader=true enables systemd-boot (replaces GRUB)
-# DEVIATION: -Dversion-tag=259.5-conary adds conaryOS branding
+# DEVIATION: pyelftools is required because upstream systemd now needs the
+#            Python `elftools` module when bootloader support is enabled
+# DEVIATION: -Dversion-tag=259.1-conary adds conaryOS branding
 
 [package]
 name = "systemd"
-version = "259.5"
+version = "259.1"
 release = "1"
 summary = "System and service manager"
 description = """
@@ -26,11 +28,16 @@ homepage = "https://systemd.io/"
 
 [source]
 archive = "https://github.com/systemd/systemd/archive/v%(version)s/systemd-%(version)s.tar.gz"
-checksum = "md5:6ac65dfbd3c9dc14f3bf4086f83b8aae"
+checksum = "md5:623f73826e7702ac08c57febb9d20431"
+
+[[source.additional]]
+url = "https://anduin.linuxfromscratch.org/LFS/systemd-man-pages-%(version)s.tar.xz"
+checksum = "sha256:0d130b265ed45015a88c35a1647463945dacbb48a379b506d09b1584360a49e1"
+extract = false
 
 [build]
 requires = ["glibc", "elfutils", "kmod", "libcap", "openssl", "util-linux", "zlib", "zstd", "xz", "lz4", "acl", "libxcrypt"]
-makedepends = ["meson", "ninja", "python", "jinja2", "gperf", "pkgconf"]
+makedepends = ["meson", "ninja", "python", "jinja2", "pyelftools", "gperf", "pkgconf"]
 chroot = true
 
 configure = """
@@ -61,6 +68,10 @@ meson setup ..                                    \
       -D ukify=disabled                           \
       -D docdir=/usr/share/doc/systemd-%(version)s \
       -D bootloader=true                          \
+      -D sbat-distro=conaryos                     \
+      -D sbat-distro-summary=conaryOS             \
+      -D sbat-distro-url=https://conary.io        \
+      -D sbat-distro-version=%(version)s-conary   \
       -D version-tag=%(version)s-conary
 """
 
@@ -93,5 +104,6 @@ lfs_section = "8.74"
 lfs_url = "https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/systemd.html"
 changes = [
     { flag = "-Dbootloader", lfs = "not set", conary = "true", reason = "systemd-boot replaces GRUB" },
-    { flag = "-Dversion-tag", lfs = "not set", conary = "259.5-conary", reason = "conaryOS branding" },
+    { flag = "-Dsbat-distro*", lfs = "autodetect via os-release", conary = "explicit conaryOS metadata", reason = "Phase 3 builds systemd-boot before /etc/os-release exists" },
+    { flag = "-Dversion-tag", lfs = "not set", conary = "259.1-conary", reason = "conaryOS branding" },
 ]

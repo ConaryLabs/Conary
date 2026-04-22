@@ -35,6 +35,7 @@ configure = """
             --disable-static                      \
             --with-openssl                        \
             --enable-threaded-resolver            \
+            --without-libpsl                      \
             --with-ca-path=/etc/ssl/certs
 """
 

@@ -73,6 +73,18 @@ scripts/config --enable NET_NS
 
 # Overlay filesystem (composefs, containers)
 scripts/config --enable OVERLAY_FS
+scripts/config --set-val OVERLAY_FS y
+
+# EROFS filesystem (Conary generations and composefs metadata images)
+scripts/config --enable EROFS_FS
+scripts/config --set-val EROFS_FS y
+
+# FS verity (composefs root.erofs integrity protection on ext4)
+scripts/config --enable FS_VERITY
+
+# Loop devices (composefs mounts EROFS metadata images through the loop stack)
+scripts/config --enable BLK_DEV_LOOP
+scripts/config --set-val BLK_DEV_LOOP y
 
 # Seccomp filtering (sandboxing, systemd)
 scripts/config --enable SECCOMP
@@ -112,11 +124,11 @@ make modules_install INSTALL_MOD_PATH=$DESTDIR
 
 # Install the kernel image
 mkdir -pv $DESTDIR/boot
-cp -iv arch/x86/boot/bzImage $DESTDIR/boot/vmlinuz-%(version)s-conary
+install -m 0644 arch/x86/boot/bzImage $DESTDIR/boot/vmlinuz-%(version)s-conary
 
 # Install System.map and config for debugging
-cp -iv System.map $DESTDIR/boot/System.map-%(version)s
-cp -iv .config $DESTDIR/boot/config-%(version)s
+install -m 0644 System.map $DESTDIR/boot/System.map-%(version)s
+install -m 0644 .config $DESTDIR/boot/config-%(version)s
 
 # Install kernel documentation
 cp -r Documentation -T $DESTDIR/usr/share/doc/linux-%(version)s
@@ -134,7 +146,10 @@ changes = [
     { flag = "USER_NS", lfs = "not specified", conary = "enabled", reason = "Unprivileged user namespaces" },
     { flag = "PID_NS", lfs = "not specified", conary = "enabled", reason = "PID namespace isolation" },
     { flag = "NET_NS", lfs = "not specified", conary = "enabled", reason = "Network namespace isolation" },
-    { flag = "OVERLAY_FS", lfs = "not specified", conary = "enabled", reason = "Overlay filesystem for composefs and containers" },
+    { flag = "OVERLAY_FS", lfs = "not specified", conary = "built-in (=y)", reason = "Composefs runtime mounts and container overlays without late module loading" },
+    { flag = "EROFS_FS", lfs = "not specified", conary = "built-in (=y)", reason = "Conary generation images and composefs metadata mounts" },
+    { flag = "FS_VERITY", lfs = "not specified", conary = "enabled", reason = "Composefs root.erofs images must be fs-verity protected before remount" },
+    { flag = "BLK_DEV_LOOP", lfs = "not specified", conary = "built-in (=y)", reason = "Composefs mounts EROFS metadata images through loop-backed files" },
     { flag = "SECCOMP", lfs = "not specified", conary = "enabled", reason = "Seccomp syscall filtering" },
     { flag = "SECCOMP_FILTER", lfs = "not specified", conary = "enabled", reason = "Seccomp BPF filter programs" },
     { flag = "VIRTIO*", lfs = "not specified", conary = "built-in (=y)", reason = "QEMU/KVM guest support without initramfs" },
