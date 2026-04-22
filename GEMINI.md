@@ -1,4 +1,4 @@
-# CLAUDE.md
+# GEMINI.md
 
 Conary's canonical assistant guidance lives in `AGENTS.md`.
 
@@ -9,14 +9,11 @@ Start with:
 3. The linked canonical docs for architecture, testing, and operations
 
 This file is intentionally thin. It exists only as a compatibility shim for
-tools that still look for `CLAUDE.md`.
+Gemini setups that still default to `GEMINI.md`.
 
 Do not treat this file as a second source of truth. If a rule, command, or
 workflow matters for the repository as a whole, it belongs in `AGENTS.md` or a
 linked canonical doc instead.
 
-Keep tool-specific local notes in ignored local files such as `CLAUDE.local.md`
-or `docs/operations/LOCAL_ACCESS.md`, not in tracked assistant guidance. If
-you need Gemini or Copilot-specific compatibility, use the equally thin
-`GEMINI.md` or `.github/copilot-instructions.md` shims rather than duplicating
-repo-wide instructions here.
+If your Gemini configuration already loads `AGENTS.md`, prefer that shared path
+and keep any personal machine-specific notes outside tracked repo docs.

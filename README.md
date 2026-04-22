@@ -566,13 +566,27 @@ The next milestone is the current **developer-experience and validation** push -
 
 ## Documentation
 
+For the repo-level documentation system:
+
+- Human contributors should start with [CONTRIBUTING.md](CONTRIBUTING.md).
+- Coding assistants should start with [AGENTS.md](AGENTS.md) and
+  [docs/llms/README.md](docs/llms/README.md), then follow the linked canonical
+  docs.
+
 | Document | Description |
 |----------|-------------|
+| [AGENTS.md](AGENTS.md) | Canonical repo-wide contract for coding agents |
 | [ROADMAP.md](ROADMAP.md) | Forward-looking development roadmap |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup and contribution guidelines |
 | [SECURITY.md](SECURITY.md) | Vulnerability reporting policy |
+| [docs/llms/README.md](docs/llms/README.md) | Vendor-neutral assistant map into the canonical docs |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design overview |
+| [docs/INTEGRATION-TESTING.md](docs/INTEGRATION-TESTING.md) | Integration-test suites, phases, and runtime expectations |
+| [docs/modules/bootstrap.md](docs/modules/bootstrap.md) | Bootstrap pipeline and command-surface reference |
+| [docs/operations/bootstrap-selfhosting-vm.md](docs/operations/bootstrap-selfhosting-vm.md) | Truthful operator flow for the current self-hosting VM path |
+| [docs/operations/bootstrap-follow-up-investigations.md](docs/operations/bootstrap-follow-up-investigations.md) | Deferred bootstrap architecture follow-ups to revisit later |
+| [docs/operations/infrastructure.md](docs/operations/infrastructure.md) | MCP, deploy, and host workflow notes |
 | [docs/conaryopedia-v2.md](docs/conaryopedia-v2.md) | Comprehensive technical guide |
 | [docs/specs/ccs-format-v1.md](docs/specs/ccs-format-v1.md) | CCS package format specification |
 | [docs/SCRIPTLET_SECURITY.md](docs/SCRIPTLET_SECURITY.md) | Scriptlet sandboxing and isolation |

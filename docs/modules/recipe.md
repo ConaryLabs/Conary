@@ -1,3 +1,9 @@
+---
+last_updated: 2026-04-22
+revision: 1
+summary: Recipe parsing, kitchen execution, build graph behavior, and provenance-aware source builds
+---
+
 # Recipe Module (conary-core/src/recipe/)
 
 Source-based package building. Parses TOML recipe files, resolves build

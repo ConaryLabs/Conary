@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-04-07
-revision: 3
-summary: Stable subsystem pointers and durable assistant-facing guidance for the Conary workspace after the source-selection and replatform execution refresh
+last_updated: 2026-04-22
+revision: 4
+summary: Stable subsystem pointers and durable assistant-facing guidance for the Conary workspace after the bootstrap self-hosting and documentation-system refresh
 ---
 
 # Assistant Subsystem Map
@@ -89,6 +89,7 @@ summary: Stable subsystem pointers and durable assistant-facing guidance for the
 - [`docs/modules/federation.md`](../modules/federation.md) for federation background
 - [`docs/modules/ccs.md`](../modules/ccs.md) for CCS format and conversion context
 - [`docs/modules/bootstrap.md`](../modules/bootstrap.md) for bootstrap and stage flows
+- [`docs/operations/bootstrap-selfhosting-vm.md`](../operations/bootstrap-selfhosting-vm.md) for the truthful self-hosting VM build and validation path
 - [`docs/modules/recipe.md`](../modules/recipe.md) for recipe/build-system behavior
 - [`docs/modules/query.md`](../modules/query.md) for query-oriented CLI flows
 - [`docs/modules/source-selection.md`](../modules/source-selection.md) for source-policy, ranking, and replatform behavior
