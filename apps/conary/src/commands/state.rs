@@ -13,7 +13,7 @@ use super::{RevertMetadata, SandboxMode, open_db};
 use anyhow::Result;
 use conary_core::db::models::{Changeset, StateDiff, StateEngine, StateMember, SystemState, Trove};
 use conary_core::transaction::{TransactionConfig, TransactionEngine};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tracing::info;
 
 /// List all system states
@@ -361,9 +361,9 @@ async fn execute_restore_plan_with_root(
     let post_commit_result = (|| -> Result<()> {
         crate::commands::composefs_ops::rebuild_and_mount(
             &conn,
+            db_path,
             &format!("Restore state {}", state_number),
             Some(prev_etc),
-            Path::new(root),
         )?;
         changeset.update_status(&conn, conary_core::db::models::ChangesetStatus::Applied)?;
         for execution in &prepared_executions {

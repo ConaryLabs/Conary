@@ -6,6 +6,7 @@
 //! step-by-step orchestration that is specific to live system switching.
 
 use super::metadata::{GenerationMetadata, generation_path};
+use crate::commands::generation::builder::requested_generation_verity;
 use anyhow::{Context, Result, anyhow};
 use conary_core::generation::mount::{
     MountOptions, is_overlay_mount, mount_generation, unmount_generation, update_current_symlink,
@@ -56,13 +57,22 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
     // Step 1: Mount new generation's composefs at staging point
     std::fs::create_dir_all(staging).context("Failed to create composefs staging directory")?;
 
-    // Try with verity first, fall back without
+    let requested_verity = requested_generation_verity(
+        metadata.erofs_verity_digest.as_deref(),
+        metadata.fsverity_enabled,
+    );
+
+    // Try with verity first when the generation metadata proves the image is ready.
     let opts_verity = MountOptions {
         image_path: erofs_img.clone(),
         basedir: cas_dir.into(),
         mount_point: staging.into(),
-        verity: true,
-        digest: metadata.erofs_verity_digest.clone(),
+        verity: requested_verity,
+        digest: if requested_verity {
+            metadata.erofs_verity_digest.clone()
+        } else {
+            None
+        },
         upperdir: None,
         workdir: None,
     };
@@ -72,16 +82,21 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
         ..opts_verity.clone()
     };
 
-    let mount_outcome = mount_generation(&opts_verity)
-        .or_else(|error| {
-            if matches!(error, conary_core::Error::ChecksumMismatch { .. }) {
-                return Err(anyhow!("EROFS verity digest mismatch: {error}"));
-            }
-            warn!("composefs mount with verity failed, retrying without");
-            mount_generation(&opts_plain).map_err(anyhow::Error::from)
-        })
-        .map_err(|e| anyhow!("Failed to mount composefs image: {e}"))?;
-    if let Some(message) = verity_downgrade_warning(true, mount_outcome, &erofs_img) {
+    let mount_outcome = if requested_verity {
+        mount_generation(&opts_verity)
+            .or_else(|error| {
+                if matches!(error, conary_core::Error::ChecksumMismatch { .. }) {
+                    return Err(anyhow!("EROFS verity digest mismatch: {error}"));
+                }
+                warn!("composefs mount with verity failed, retrying without");
+                mount_generation(&opts_plain).map_err(anyhow::Error::from)
+            })
+            .map_err(|e| anyhow!("Failed to mount composefs image: {e}"))?
+    } else {
+        mount_generation(&opts_plain)
+            .map_err(|e| anyhow!("Failed to mount composefs image: {e}"))?
+    };
+    if let Some(message) = verity_downgrade_warning(requested_verity, mount_outcome, &erofs_img) {
         warn!("{message}");
         eprintln!("Warning: {message}");
     }

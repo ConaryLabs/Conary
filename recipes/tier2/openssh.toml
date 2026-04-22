@@ -56,16 +56,23 @@ install -v -m644 INSTALL LICENCE OVERVIEW README* $DESTDIR/usr/share/doc/openssh
 # Create privilege separation directory
 install -v -dm700 $DESTDIR/var/lib/sshd
 
-# Create sshd user if it does not exist
-if ! getent passwd sshd >/dev/null 2>&1; then
+# Create sshd user/group if they do not exist
+if ! getent group sshd >/dev/null 2>&1; then
     groupadd -g 50 sshd
+fi
+if ! getent passwd sshd >/dev/null 2>&1; then
     useradd -c 'sshd PrivSep' -d /var/lib/sshd -g sshd \
             -s /bin/false -u 50 sshd
 fi
 
 # PAM configuration for sshd
 mkdir -pv $DESTDIR/etc/pam.d
-sed 's@d/login@d/sshd@g' /etc/pam.d/login > $DESTDIR/etc/pam.d/sshd
+cat > $DESTDIR/etc/pam.d/sshd << "PAMEOF"
+auth      include system-auth
+account   include system-account
+session   include system-session
+password  include system-password
+PAMEOF
 chmod 644 $DESTDIR/etc/pam.d/sshd
 
 # Install systemd unit

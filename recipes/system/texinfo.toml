@@ -1,6 +1,6 @@
 # recipes/system/texinfo.toml
 #
-# LFS 13 Section 8.70 — Texinfo-7.3
+# LFS 13 Section 8.70 — Texinfo-7.2
 # https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/texinfo.html
 #
 # GNU documentation system — produces Info documents, HTML, and other
@@ -8,7 +8,7 @@
 
 [package]
 name = "texinfo"
-version = "7.3"
+version = "7.2"
 release = "1"
 summary = "GNU documentation system"
 description = """
@@ -22,7 +22,7 @@ homepage = "https://www.gnu.org/software/texinfo/"
 
 [source]
 archive = "https://ftpmirror.gnu.org/texinfo/texinfo-%(version)s.tar.xz"
-checksum = "md5:915a09fcdfc2bf0f5ecf9e556d5698ff"
+checksum = "md5:11939a7624572814912a18e76c8d8972"
 
 [build]
 requires = ["glibc", "ncurses", "perl"]

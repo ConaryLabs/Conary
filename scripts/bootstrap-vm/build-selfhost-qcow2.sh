@@ -11,7 +11,7 @@ depends on.
 Options:
   --work-dir PATH     Bootstrap work directory (default: /tmp/conary-selfhost-vm)
   --lfs-root PATH     Sysroot path for bootstrap phases (default: <work-dir>/lfs-root)
-  --image-size SIZE   qcow2 size passed to `conary bootstrap image` (default: 16G)
+  --image-size SIZE   qcow2 size passed to `conary bootstrap image` (default: 32G)
   --jobs N            Parallel job count for bootstrap build phases
   --target ARCH       Target architecture (must be x86_64 for this milestone)
   --conary-bin PATH   Conary binary to invoke (default: <repo>/target/debug/conary)
@@ -24,7 +24,7 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 WORK_DIR="${WORK_DIR:-/tmp/conary-selfhost-vm}"
 LFS_ROOT=""
-IMAGE_SIZE="${IMAGE_SIZE:-16G}"
+IMAGE_SIZE="${IMAGE_SIZE:-32G}"
 TARGET_ARCH="${TARGET_ARCH:-x86_64}"
 DEFAULT_CONARY_BIN="$PROJECT_DIR/target/debug/conary"
 CONARY_BIN="${CONARY_BIN:-$DEFAULT_CONARY_BIN}"
@@ -98,17 +98,6 @@ require_cmd() {
     done
 }
 
-require_clean_tracked_files() {
-    if ! git -C "$PROJECT_DIR" diff --quiet --ignore-submodules HEAD --; then
-        echo "Tracked files are dirty. Commit or stash tracked changes before building the self-host image." >&2
-        exit 1
-    fi
-    if ! git -C "$PROJECT_DIR" diff --cached --quiet --ignore-submodules --; then
-        echo "Tracked files are staged but uncommitted. Commit them before building the self-host image." >&2
-        exit 1
-    fi
-}
-
 ensure_conary_bin() {
     if [[ -x "$CONARY_BIN" ]]; then
         return
@@ -167,8 +156,29 @@ run_bootstrap_rootful() {
     return "$status"
 }
 
+create_workspace_tarball() {
+    log "Creating deterministic workspace tarball at $WORKSPACE_TARBALL"
+    (
+        cd "$PROJECT_DIR"
+        LC_ALL=C git ls-files -z --cached --modified --others --exclude-standard \
+            | sort -z \
+            | tar \
+                --null \
+                --no-recursion \
+                --files-from=- \
+                --transform='s,^,conary-workspace/,' \
+                --mtime='UTC 1970-01-01' \
+                --owner=0 \
+                --group=0 \
+                --numeric-owner \
+                -cf - \
+            | gzip -n >"$WORKSPACE_TARBALL"
+    )
+    sha256sum "$WORKSPACE_TARBALL" | awk '{print $1}' >"$WORKSPACE_SHA256"
+}
+
 main() {
-    require_cmd git gzip sha256sum ssh-keygen cargo
+    require_cmd git gzip sha256sum sort ssh-keygen tar cargo
     if [[ "$(id -u)" -ne 0 ]]; then
         require_cmd "$ROOTFUL_RUNNER"
     fi
@@ -178,14 +188,10 @@ main() {
         exit 1
     fi
 
-    require_clean_tracked_files
     ensure_conary_bin
 
     mkdir -p "$INPUTS_DIR" "$KEYS_DIR" "$OUTPUT_DIR" "$LOGS_DIR"
-
-    log "Creating deterministic workspace tarball at $WORKSPACE_TARBALL"
-    git -C "$PROJECT_DIR" archive --format=tar --prefix=conary-workspace/ HEAD | gzip -n >"$WORKSPACE_TARBALL"
-    sha256sum "$WORKSPACE_TARBALL" | awk '{print $1}' >"$WORKSPACE_SHA256"
+    create_workspace_tarball
 
     log "Generating ephemeral VM access keypair under $KEYS_DIR"
     rm -f "$PRIVATE_KEY" "$PUBLIC_KEY"
@@ -204,7 +210,7 @@ main() {
     log "Removing stale validation image at $OUTPUT_IMAGE"
     rm -f "$OUTPUT_IMAGE"
 
-    run_bootstrap_rootful image \
+    run_bootstrap image \
         --work-dir "$WORK_DIR" \
         --output "$OUTPUT_IMAGE" \
         --format qcow2 \

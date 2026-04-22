@@ -90,8 +90,9 @@ impl BuildEnvironment {
             workdir: None,
         };
 
-        // mount_generation tries overlayfs composefs first, falls back to
-        // plain EROFS loopback automatically.
+        // mount_generation requires a real composefs runtime; missing helper
+        // or kernel support now fails closed instead of downgrading to plain
+        // EROFS.
         let _mount_outcome = crate::generation::mount::mount_generation(&opts)
             .map_err(|e| EnvironmentError::Mount(format!("mount failed: {e}")))?;
 

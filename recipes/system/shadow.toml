@@ -1,6 +1,6 @@
 # recipes/system/shadow.toml
 #
-# LFS 13 Section 8.26 — Shadow-4.19.4
+# LFS 13 Section 8.26 — Shadow-4.19.3
 # https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/shadow.html
 #
 # Shadow password suite — provides secure password management utilities
@@ -10,7 +10,7 @@
 
 [package]
 name = "shadow"
-version = "4.19.4"
+version = "4.19.3"
 release = "1"
 summary = "Shadow password suite"
 description = """
@@ -24,7 +24,7 @@ homepage = "https://github.com/shadow-maint/shadow"
 
 [source]
 archive = "https://github.com/shadow-maint/shadow/releases/download/%(version)s/shadow-%(version)s.tar.xz"
-checksum = "md5:ed0f3ff4940822ba75a3b0687a9ce93b"
+checksum = "md5:c56d98c09e5dbae816250ba5c2285a37"
 
 [build]
 requires = ["glibc", "libxcrypt", "acl", "attr"]

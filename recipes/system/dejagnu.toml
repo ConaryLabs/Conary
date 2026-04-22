@@ -1,0 +1,53 @@
+# recipes/system/dejagnu.toml
+#
+# LFS 13 Section 8.19 — DejaGNU-1.6.3
+# https://www.linuxfromscratch.org/lfs/view/13.0-systemd/chapter08/dejagnu.html
+#
+# DejaGNU is the GNU test harness framework used by later package test suites.
+
+[package]
+name = "dejagnu"
+version = "1.6.3"
+release = "1"
+summary = "GNU test harness framework"
+description = """
+DejaGNU provides a common framework for running test suites for GNU software.
+It is built on top of Expect and Tcl and is used by several later toolchain and
+system package tests.
+"""
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/dejagnu/"
+
+[source]
+archive = "https://ftpmirror.gnu.org/dejagnu/dejagnu-%(version)s.tar.gz"
+checksum = "md5:68c5208c58236eba447d7d6d1326b821"
+
+[build]
+requires = ["glibc", "expect", "tcl"]
+makedepends = ["texinfo"]
+chroot = true
+
+configure = """
+mkdir -v build
+cd build
+
+../configure --prefix=/usr
+makeinfo --html --no-split -o doc/dejagnu.html ../doc/dejagnu.texi
+makeinfo --plaintext -o doc/dejagnu.txt ../doc/dejagnu.texi
+"""
+
+make = """
+cd build
+make -j%(jobs)s
+"""
+
+install = """
+cd build
+make install DESTDIR=$DESTDIR
+install -v -dm755 $DESTDIR/usr/share/doc/dejagnu-%(version)s
+install -v -m644 doc/dejagnu.html doc/dejagnu.txt \
+    $DESTDIR/usr/share/doc/dejagnu-%(version)s
+"""
+
+[variables]
+jobs = "$(nproc)"

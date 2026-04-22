@@ -112,7 +112,7 @@ fn is_rollback_eligible_status(status: &conary_core::db::models::ChangesetStatus
 }
 
 /// Rollback a changeset
-pub async fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> {
+pub async fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Result<()> {
     info!("Rolling back changeset: {}", changeset_id);
     println!("Rolling back changeset: {}", changeset_id);
     std::io::stdout().flush()?;
@@ -223,7 +223,7 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Resul
             has_troves,
             &mut conn,
             &changeset,
-            root,
+            db_path,
         )
         .inspect_err(|_| clear_claim(&conn));
     }
@@ -359,9 +359,9 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Resul
     // Composefs-native: rebuild EROFS image from updated DB state and remount
     let _gen_num = crate::commands::composefs_ops::rebuild_and_mount(
         &conn,
+        db_path,
         &format!("Rollback changeset {}", changeset_id),
         None,
-        std::path::Path::new(root),
     )?;
 
     for message in &removed_messages {
@@ -446,7 +446,7 @@ fn rollback_changeset_with_snapshots(
     remove_new_troves: bool,
     conn: &mut rusqlite::Connection,
     changeset: &conary_core::db::models::Changeset,
-    root: &str,
+    db_path: &str,
 ) -> Result<()> {
     if snapshots.is_empty() {
         anyhow::bail!(
@@ -508,9 +508,9 @@ fn rollback_changeset_with_snapshots(
     };
     let _gen_num = crate::commands::composefs_ops::rebuild_and_mount(
         conn,
+        db_path,
         &summary,
         None,
-        std::path::Path::new(root),
     )?;
 
     let removed_messages = removed_messages.into_inner();

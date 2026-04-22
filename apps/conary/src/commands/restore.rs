@@ -21,7 +21,7 @@ use tracing::info;
 pub async fn cmd_restore(
     package_name: &str,
     db_path: &str,
-    root: &str,
+    _root: &str,
     version: Option<String>,
     architecture: Option<String>,
     force: bool,
@@ -139,9 +139,9 @@ pub async fn cmd_restore(
     let restored = files_to_restore.len();
     let gen_num = crate::commands::composefs_ops::rebuild_and_mount(
         &conn,
+        db_path,
         &format!("Restore {}", package_name),
         None,
-        std::path::Path::new(root),
     )?;
 
     println!("\nRestore complete (generation {}):", gen_num);
@@ -167,7 +167,7 @@ pub async fn cmd_restore(
 }
 
 /// Restore all packages with missing files
-pub async fn cmd_restore_all(db_path: &str, root: &str, dry_run: bool) -> Result<()> {
+pub async fn cmd_restore_all(db_path: &str, _root: &str, dry_run: bool) -> Result<()> {
     info!(
         "Restoring all packages with missing files (dry_run={})",
         dry_run
@@ -238,9 +238,9 @@ pub async fn cmd_restore_all(db_path: &str, root: &str, dry_run: bool) -> Result
         // Composefs-native: rebuild EROFS from DB state
         let gen_num = crate::commands::composefs_ops::rebuild_and_mount(
             &conn,
+            db_path,
             "Restore all packages",
             None,
-            std::path::Path::new(root),
         )?;
         println!("\nComposefs-native restore (generation {}):", gen_num);
         println!("  Packages checked: {}", packages_checked);

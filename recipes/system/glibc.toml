@@ -26,6 +26,11 @@ homepage = "https://www.gnu.org/software/libc/"
 archive = "https://ftpmirror.gnu.org/glibc/glibc-%(version)s.tar.xz"
 checksum = "md5:7ec2588300b299215a65aec7e6afa04f"
 
+[[source.additional]]
+url = "https://data.iana.org/time-zones/releases/tzdata%(tzdata_version)s.tar.gz"
+checksum = "sha256:77b541725937bb53bd92bd484c0b43bec8545e2d3431ee01f04ef8f2203ba2b7"
+extract = false
+
 [patches]
 files = [
     { file = "https://www.linuxfromscratch.org/patches/lfs/development/glibc-fhs-1.patch", checksum = "md5:9a5997c3452909b1769918c759eff8a2", strip = 1 },

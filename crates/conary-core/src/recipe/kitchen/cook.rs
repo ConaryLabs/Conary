@@ -264,7 +264,7 @@ impl<'a> Cook<'a> {
                 .unwrap_or("additional.tar.gz");
             let additional_archive = staging_dir.join(filename);
 
-            if additional_archive.exists() {
+            if additional.extract && additional_archive.exists() {
                 let dest = if let Some(extract_to) = &additional.extract_to {
                     let target = self.source_dir.join(extract_to);
                     fs::create_dir_all(&target)?;

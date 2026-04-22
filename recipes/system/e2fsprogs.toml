@@ -1,6 +1,6 @@
 # recipes/system/e2fsprogs.toml
 #
-# LFS 13 Section 8.79 — E2fsprogs-1.47.4
+# LFS 13 Section 8.79 — E2fsprogs-1.47.3
 # https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/e2fsprogs.html
 #
 # Ext2/3/4 filesystem utilities (mke2fs, e2fsck, tune2fs, etc.). Built
@@ -10,7 +10,7 @@
 
 [package]
 name = "e2fsprogs"
-version = "1.47.4"
+version = "1.47.3"
 release = "1"
 summary = "Ext2/3/4 filesystem utilities"
 description = """
@@ -24,7 +24,7 @@ homepage = "https://e2fsprogs.sourceforge.net/"
 
 [source]
 archive = "https://downloads.sourceforge.net/project/e2fsprogs/e2fsprogs/v%(version)s/e2fsprogs-%(version)s.tar.gz"
-checksum = "md5:733a93bc688314834ff2d10530ff4dc4"
+checksum = "md5:113d7a7ee0710d2a670a44692a35fd2e"
 
 [build]
 requires = ["glibc", "util-linux"]

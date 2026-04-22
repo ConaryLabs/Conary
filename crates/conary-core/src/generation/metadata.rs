@@ -63,7 +63,7 @@ pub struct GenerationMetadata {
     /// Number of CAS objects referenced by the EROFS image
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cas_objects_referenced: Option<i64>,
-    /// Whether fs-verity is enabled on CAS objects
+    /// Whether this generation is ready for fs-verity-enforced composefs mounts.
     #[serde(default)]
     pub fsverity_enabled: bool,
     /// Hex-encoded fs-verity digest of the EROFS image itself

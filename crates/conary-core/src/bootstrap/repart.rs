@@ -31,6 +31,10 @@ pub struct RepartDefinition {
     pub size_max: Option<u64>,
     /// Source directory to copy files from
     pub copy_files: Option<String>,
+    /// Source paths to exclude while copying files into the partition
+    pub exclude_files: Vec<String>,
+    /// Directories to create in the target partition before first boot
+    pub make_directories: Vec<String>,
     /// Label for the partition
     pub label: Option<String>,
     /// Whether to minimize the partition size
@@ -47,6 +51,8 @@ impl RepartDefinition {
             size_min: Some(size_bytes),
             size_max: Some(size_bytes),
             copy_files: Some("/boot:/".to_string()),
+            exclude_files: Vec::new(),
+            make_directories: Vec::new(),
             label: Some("CONARY_ESP".to_string()),
             minimize: false,
         }
@@ -65,6 +71,8 @@ impl RepartDefinition {
             size_min: None,
             size_max: None,
             copy_files: Some("/:/".to_string()),
+            exclude_files: vec!["/boot".to_string()],
+            make_directories: vec!["/boot".to_string()],
             label: Some("CONARY_ROOT".to_string()),
             minimize: true,
         }
@@ -84,6 +92,12 @@ impl fmt::Display for RepartDefinition {
         }
         if let Some(ref copy) = self.copy_files {
             writeln!(f, "CopyFiles={copy}")?;
+        }
+        for exclude in &self.exclude_files {
+            writeln!(f, "ExcludeFiles={exclude}")?;
+        }
+        for directory in &self.make_directories {
+            writeln!(f, "MakeDirectories={directory}")?;
         }
         if let Some(ref label) = self.label {
             writeln!(f, "Label={label}")?;
@@ -125,6 +139,7 @@ mod tests {
         assert!(content.contains("SizeMinBytes=536870912")); // 512 * 1024 * 1024
         assert!(content.contains("Format=vfat"));
         assert!(content.contains("Label=CONARY_ESP"));
+        assert!(content.contains("CopyFiles=/boot:/"));
     }
 
     #[test]
@@ -133,6 +148,9 @@ mod tests {
         let content = def.to_string();
         assert!(content.contains("Type=root-x86-64"));
         assert!(content.contains("Format=ext4"));
+        assert!(content.contains("CopyFiles=/:/"));
+        assert!(content.contains("ExcludeFiles=/boot"));
+        assert!(content.contains("MakeDirectories=/boot"));
         assert!(content.contains("Minimize=guess"));
         assert!(!content.contains("SizeMinBytes")); // fills remaining space
     }
@@ -164,5 +182,7 @@ mod tests {
 
         let root = std::fs::read_to_string(repart_dir.join("10-root.conf")).unwrap();
         assert!(root.contains("Type=root-x86-64"));
+        assert!(root.contains("ExcludeFiles=/boot"));
+        assert!(root.contains("MakeDirectories=/boot"));
     }
 }

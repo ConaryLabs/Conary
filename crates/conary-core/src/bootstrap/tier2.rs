@@ -303,6 +303,14 @@ impl Tier2Builder {
         Ok(format!("/{}", relative.display()))
     }
 
+    fn assemble_recipe_script(
+        &self,
+        recipe: &crate::recipe::Recipe,
+        src_dir_in_chroot: &str,
+    ) -> String {
+        super::assemble_chroot_build_script(recipe, src_dir_in_chroot, "/")
+    }
+
     fn build_package(&self, package: &str) -> Result<(), Tier2Error> {
         let recipe_path = Path::new("recipes/tier2").join(format!("{package}.toml"));
         let recipe = parse_recipe_file(&recipe_path).map_err(|e| Tier2Error::BuildFailed {
@@ -321,17 +329,18 @@ impl Tier2Builder {
         };
 
         let (src_dir, _build_dir) = self.prepare_build_dirs(package)?;
+        let package_root = src_dir
+            .parent()
+            .expect("package source directory should have a package root");
         self.runner
             .extract_source_strip(&source_archive, &src_dir)?;
         self.runner
-            .fetch_additional_sources(package, &recipe, &src_dir)?;
+            .stage_additional_sources(package, &recipe, package_root, &src_dir)?;
+        self.runner
+            .stage_and_apply_patches(package, &recipe, package_root, &src_dir)?;
 
         let src_dir_in_chroot = self.path_in_chroot(&src_dir)?;
-        let script = format!(
-            "set -e\ncd {}\n{}",
-            src_dir_in_chroot,
-            super::assemble_build_script(&recipe, "/")
-        );
+        let script = self.assemble_recipe_script(&recipe, &src_dir_in_chroot);
 
         let output = Command::new("chroot")
             .arg(&self.system_root)
@@ -551,5 +560,70 @@ mod tests {
 
         let err = Tier2Error::Preflight("test error".to_string());
         assert!(err.to_string().contains("test error"));
+    }
+
+    #[test]
+    fn test_tier2_recipe_script_reenters_source_dir_before_each_phase() {
+        let work = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let recipe_dir = tempfile::tempdir().unwrap();
+        let gcc_path = root.path().join("usr/bin");
+        std::fs::create_dir_all(&gcc_path).unwrap();
+        std::fs::write(gcc_path.join("gcc"), b"").unwrap();
+
+        let config = BootstrapConfig::new();
+        let tc = make_toolchain(root.path());
+        let builder = Tier2Builder::new(work.path(), root.path(), config, tc).unwrap();
+
+        let recipe_path = recipe_dir.path().join("linux-pam.toml");
+        std::fs::write(
+            &recipe_path,
+            r#"[package]
+name = "linux-pam"
+version = "1.7.2"
+release = "1"
+summary = "test"
+description = "test"
+license = "BSD-3-Clause"
+homepage = "https://example.com"
+
+[source]
+archive = "https://example.com/linux-pam-1.7.2.tar.xz"
+checksum = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+[build]
+chroot = true
+configure = """
+mkdir -p build
+cd build
+meson setup ..
+"""
+make = """
+cd build
+ninja
+"""
+install = """
+cd build
+DESTDIR=$DESTDIR ninja install
+"""
+"#,
+        )
+        .unwrap();
+
+        let recipe = parse_recipe_file(&recipe_path).unwrap();
+        let script = builder.assemble_recipe_script(&recipe, "/tier2/linux-pam/src");
+
+        assert!(
+            script.contains("cd /tier2/linux-pam/src\nmkdir -p build"),
+            "configure phase should start from the staged source root"
+        );
+        assert!(
+            script.contains("cd /tier2/linux-pam/src\ncd build\nninja"),
+            "make phase should re-enter the staged source root before cd build"
+        );
+        assert!(
+            script.contains("cd /tier2/linux-pam/src\ncd build\nDESTDIR=$DESTDIR ninja install"),
+            "install phase should also re-enter the staged source root"
+        );
     }
 }

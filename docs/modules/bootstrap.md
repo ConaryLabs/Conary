@@ -7,9 +7,10 @@ summary: Document the current bootstrap command surface, self-host VM overlay, m
 # Bootstrap Module (conary-core/src/bootstrap/)
 
 6-phase bootstrap pipeline for building a complete Conary system from scratch
-without an existing package manager. Aligned with Linux From Scratch 13
-(binutils 2.45, gcc 15.2.0, glibc 2.42, kernel 6.16.1) through cross-compilation,
-temporary tools, final system, configuration, imaging, and Tier 2 extension.
+without an existing package manager. The package selection and stage structure
+track LFS 13.0-systemd, with recipe-level deviations documented in-tree where
+Conary intentionally diverges (for example, systemd-boot instead of standalone
+GRUB in the qcow2 path).
 
 ## Data Flow: Bootstrap Pipeline
 
@@ -24,14 +25,14 @@ Host System (any Linux with gcc)
      |                 17 cross-compiled + 6 chroot packages
      |
   FinalSystemBuilder -- Phase 3: Final system (LFS Ch8)
-     |                   78 packages -- complete Linux system
+     |                   80 packages -- complete Linux system
      |                   Built inside chroot via ChrootEnv
      |
   configure_system() -- Phase 4: System configuration (LFS Ch9)
      |                   Network, fstab, kernel, bootloader
      |
   ImageBuilder -- Phase 5: Bootable image (LFS Ch10)
-     |             systemd-repart (fallback: sfdisk/mkfs)
+     |             systemd-repart
      |             GPT: 512MB ESP (FAT32) + root (ext4)
      |             Output: raw, qcow2, ISO, EROFS
      |
@@ -103,12 +104,12 @@ on a stage clears it and all subsequent stages.
 
 ## Image Generation
 
-`ImageBuilder` prefers systemd-repart for rootless GPT image creation.
+`ImageBuilder` uses systemd-repart for bootstrap raw/qcow2 image creation.
 `RepartDefinition` generates `repart.d/*.conf` files for ESP and root
-partitions with architecture-aware type GUIDs. Falls back to sfdisk/mkfs
-when systemd-repart is unavailable. Supports raw, qcow2 (via qemu-img),
-hybrid ISO output, and EROFS generation images (CAS + EROFS + DB for
-composefs-native boot).
+partitions with architecture-aware type GUIDs, reserving `/boot` for the ESP
+and leaving `/boot` in the root partition as a mountpoint. Supports raw,
+qcow2 (via qemu-img), hybrid ISO output, and EROFS generation images
+(CAS + EROFS + DB for composefs-native boot).
 
 ## Architecture Context
 
@@ -137,7 +138,7 @@ top of the core bootstrap commands, not a new bootstrap phase sequence.
   copies `conary-workspace.tar.gz` and optional `root.json` into
   `/var/lib/conary/bootstrap-inputs/`, and then runs
   `scripts/bootstrap-vm/guest-validate.sh`
-- the wrapper defaults the self-host image size to `16G`; the generic
+- the wrapper defaults the self-host image size to `32G`; the generic
   `conary bootstrap image` default remains `4G`
 - VMware remains a follow-up conversion/import story after the QEMU `qcow2`
   path is trustworthy

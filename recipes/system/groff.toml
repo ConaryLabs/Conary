@@ -1,6 +1,6 @@
 # recipes/system/groff.toml
 #
-# LFS 13 Section 8.62 — Groff-1.24.0
+# LFS 13 Section 8.62 — Groff-1.23.0
 # https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/groff.html
 #
 # GNU text formatting system (troff). The PAGE environment variable
@@ -8,7 +8,7 @@
 
 [package]
 name = "groff"
-version = "1.24.0"
+version = "1.23.0"
 release = "1"
 summary = "GNU text formatting system"
 description = """
@@ -21,7 +21,7 @@ homepage = "https://www.gnu.org/software/groff/"
 
 [source]
 archive = "https://ftpmirror.gnu.org/groff/groff-%(version)s.tar.gz"
-checksum = "md5:0087812b25366ebfaeec00bf386384b5"
+checksum = "md5:5e4f40315a22bb8a158748e7d5094c7d"
 
 [build]
 requires = ["glibc", "perl"]

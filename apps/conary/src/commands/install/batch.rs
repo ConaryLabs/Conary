@@ -476,9 +476,9 @@ impl<'a> BatchInstaller<'a> {
         // Phase 7: Build EROFS image and mount new generation
         let _gen_num = crate::commands::composefs_ops::rebuild_and_mount(
             &conn,
+            self.db_path,
             &format!("Batch install: {}", main_pkg_name),
             None,
-            std::path::Path::new("/conary"),
         )?;
 
         // Release transaction lock

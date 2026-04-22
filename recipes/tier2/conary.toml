@@ -36,7 +36,7 @@ chroot = true
 configure = ""
 
 make = """
-cargo build --release
+cargo build --release -p conary
 """
 
 install = """

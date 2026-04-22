@@ -12,11 +12,14 @@
 //! 4. `update_current_symlink` -- point `/conary/current` at the new generation
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 use tracing::{debug, info, warn};
 
+use crate::commands::generation::builder::{
+    enable_generation_rootfs_verity, requested_generation_verity,
+};
 use conary_core::db::models::FileEntry;
 use conary_core::generation::etc_merge::{self, MergeAction};
 use conary_core::generation::mount::{GenerationMountOutcome, verity_downgrade_warning};
@@ -103,6 +106,17 @@ fn emit_verity_downgrade_warning(
     }
 }
 
+fn ensure_staging_mount_dir(conary_root: &Path) -> anyhow::Result<PathBuf> {
+    let staging_mount = conary_root.join("mnt");
+    std::fs::create_dir_all(&staging_mount).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to create composefs staging mount directory {}: {e}",
+            staging_mount.display()
+        )
+    })?;
+    Ok(staging_mount)
+}
+
 /// Rebuild the EROFS generation from current DB state and mount it.
 ///
 /// This is the composefs-native "apply" step that follows every DB mutation
@@ -123,21 +137,28 @@ fn emit_verity_downgrade_warning(
 /// remove).  Pass `None` for callers that do not perform a prior mutation (restore,
 /// rollback, `system init`) -- the snapshot will be read from the current DB state.
 ///
-/// `conary_root` is the Conary data directory (typically `/conary`). Callers
-/// must pass this explicitly rather than relying on a hardcoded default so
-/// that alternate roots (tests, alternate layouts) work correctly.
+/// The Conary data root is derived from `db_path`, so live systems rooted at
+/// `/` still store generations under the database directory (for example
+/// `/var/lib/conary/generations`) instead of accidentally resolving to
+/// `/generations`.
 ///
 /// Returns the new generation number on success.
+fn conary_root_for_db_path(db_path: &str) -> PathBuf {
+    conary_core::db::paths::db_dir(db_path)
+}
+
 pub fn rebuild_and_mount(
     conn: &Connection,
+    db_path: &str,
     summary: &str,
     prev_etc_snapshot: Option<HashMap<String, String>>,
-    conary_root: &Path,
 ) -> anyhow::Result<i64> {
+    let conary_root = conary_root_for_db_path(db_path);
+
     // Record the currently active generation before building the new one.
     // The state snapshot for the new generation stores this as its
     // database-backed /etc merge base.
-    let current_gen = conary_core::generation::mount::current_generation(conary_root)
+    let current_gen = conary_core::generation::mount::current_generation(&conary_root)
         .unwrap_or(None)
         .unwrap_or(0);
 
@@ -296,22 +317,35 @@ pub fn rebuild_and_mount(
     }
 
     if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
-        conary_core::generation::mount::update_current_symlink(conary_root, gen_num)
+        conary_core::generation::mount::update_current_symlink(&conary_root, gen_num)
             .map_err(|e| anyhow::anyhow!("Failed to update current symlink: {e}"))?;
         info!("Skipping generation mount because CONARY_TEST_SKIP_GENERATION_MOUNT is set");
         return Ok(gen_num);
     }
 
+    let gen_dir = generations_dir.join(gen_num.to_string());
+    enable_generation_rootfs_verity(&gen_dir, &build_result.image_path).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to enable fs-verity on generation {gen_num} image {}: {e}",
+            build_result.image_path.display()
+        )
+    })?;
+
     // Step 6: Mount the new generation at the staging point.
-    let staging_mount = conary_root.join("mnt");
-    let requested_verity = build_result.erofs_verity_digest.is_some();
+    let staging_mount = ensure_staging_mount_dir(&conary_root)?;
+    let requested_verity =
+        requested_generation_verity(build_result.erofs_verity_digest.as_deref(), true);
     let mount_outcome = conary_core::generation::mount::mount_generation(
         &conary_core::generation::mount::MountOptions {
             image_path: build_result.image_path.clone(),
             basedir: conary_root.join("objects"),
             mount_point: staging_mount.clone(),
             verity: requested_verity,
-            digest: build_result.erofs_verity_digest.clone(),
+            digest: if requested_verity {
+                build_result.erofs_verity_digest.clone()
+            } else {
+                None
+            },
             upperdir: None,
             workdir: None,
         },
@@ -335,7 +369,7 @@ pub fn rebuild_and_mount(
         warn!("Failed to mount /etc overlay: {e}; /etc may be stale");
     }
 
-    conary_core::generation::mount::update_current_symlink(conary_root, gen_num)
+    conary_core::generation::mount::update_current_symlink(&conary_root, gen_num)
         .map_err(|e| anyhow::anyhow!("Failed to update current symlink: {e}"))?;
 
     info!("Generation {gen_num} mounted and active");
@@ -399,5 +433,28 @@ mod tests {
         )
         .unwrap();
         assert!(warning.contains("downgraded"));
+    }
+
+    #[test]
+    fn conary_root_for_db_path_uses_database_directory() {
+        assert_eq!(
+            conary_root_for_db_path("/var/lib/conary/conary.db"),
+            PathBuf::from("/var/lib/conary")
+        );
+        assert_eq!(
+            conary_root_for_db_path("/tmp/test-conary.db"),
+            PathBuf::from("/tmp")
+        );
+    }
+
+    #[test]
+    fn ensure_staging_mount_dir_creates_mountpoint_under_conary_root() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let conary_root = temp.path().join("var/lib/conary");
+
+        let staging_mount = ensure_staging_mount_dir(&conary_root).unwrap();
+
+        assert_eq!(staging_mount, conary_root.join("mnt"));
+        assert!(staging_mount.is_dir());
     }
 }

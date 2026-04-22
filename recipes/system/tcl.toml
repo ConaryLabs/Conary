@@ -1,0 +1,72 @@
+# recipes/system/tcl.toml
+#
+# LFS 13 Section 8.17 — Tcl-8.6.17
+# https://www.linuxfromscratch.org/lfs/view/13.0-systemd/chapter08/tcl.html
+#
+# Tcl provides the Tool Command Language runtime and headers needed by
+# Expect and DejaGNU later in Phase 3.
+
+[package]
+name = "tcl"
+version = "8.6.17"
+release = "1"
+summary = "Tool Command Language"
+description = """
+Tcl provides a robust, embeddable scripting language runtime. In the LFS
+bootstrap it exists primarily to support Expect and DejaGNU for later toolchain
+test suites, but it is also a general-purpose interpreter and library.
+"""
+license = "TCL"
+homepage = "https://tcl.sourceforge.net/"
+
+[source]
+archive = "https://downloads.sourceforge.net/tcl/tcl%(version)s-src.tar.gz"
+checksum = "md5:1ec3444533f54d0f86cd120058e15e48"
+
+[build]
+requires = ["glibc", "zlib"]
+makedepends = []
+chroot = true
+
+configure = """
+SRCDIR=$(pwd)
+cd unix
+./configure --prefix=/usr           \
+            --mandir=/usr/share/man \
+            --disable-rpath
+"""
+
+make = """
+SRCDIR=$(pwd)
+cd unix
+make -j%(jobs)s
+
+sed -e "s|$SRCDIR/unix|/usr/lib|" \
+    -e "s|$SRCDIR|/usr/include|"  \
+    -i tclConfig.sh
+
+sed -e "s|$SRCDIR/unix/pkgs/tdbc1.1.12|/usr/lib/tdbc1.1.12|" \
+    -e "s|$SRCDIR/pkgs/tdbc1.1.12/generic|/usr/include|"     \
+    -e "s|$SRCDIR/pkgs/tdbc1.1.12/library|/usr/lib/tcl8.6|"  \
+    -e "s|$SRCDIR/pkgs/tdbc1.1.12|/usr/include|"             \
+    -i pkgs/tdbc1.1.12/tdbcConfig.sh
+
+sed -e "s|$SRCDIR/unix/pkgs/itcl4.3.4|/usr/lib/itcl4.3.4|" \
+    -e "s|$SRCDIR/pkgs/itcl4.3.4/generic|/usr/include|"    \
+    -e "s|$SRCDIR/pkgs/itcl4.3.4|/usr/include|"            \
+    -i pkgs/itcl4.3.4/itclConfig.sh
+"""
+
+install = """
+cd unix
+make install DESTDIR=$DESTDIR
+chmod 644 $DESTDIR/usr/lib/libtclstub8.6.a
+chmod -v u+w $DESTDIR/usr/lib/libtcl8.6.so
+make install-private-headers DESTDIR=$DESTDIR
+ln -sfv tclsh8.6 $DESTDIR/usr/bin/tclsh
+mv -v $DESTDIR/usr/share/man/man3/Thread.3 \
+      $DESTDIR/usr/share/man/man3/Tcl_Thread.3
+"""
+
+[variables]
+jobs = "$(nproc)"

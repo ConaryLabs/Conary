@@ -8,9 +8,11 @@
 # make steps -- just install the script, then run it to populate the
 # certificate store.
 #
-# NOTE: Requires p11-kit at runtime (not enforced here since the base
-# system does not include it; the script will work for basic OpenSSL
-# trust without p11-kit).
+# NOTE: BLFS expects p11-kit at runtime. For the first self-hosting
+# milestone we patch make-ca so it can still emit an OpenSSL-compatible
+# CA bundle and hash directory when p11-kit is not yet present in the
+# sysroot. This keeps the bootstrap path honest without widening the
+# required Tier 2 package set.
 
 [package]
 name = "make-ca"
@@ -38,6 +40,135 @@ chroot = true
 configure = """
 # Fix mktemp flag for portability
 sed '/mktemp/s/-t //' -i make-ca
+
+# The upstream script expects p11-kit `trust` to derive OpenSSL-compatible
+# bundles from the generated anchors. The self-hosting bootstrap does not
+# ship p11-kit yet, so teach make-ca to retain server-auth PEMs and use
+# them as an OpenSSL fallback when `trust` is absent.
+python3 - <<'PY'
+import re
+from pathlib import Path
+
+path = Path("make-ca")
+text = path.read_text()
+
+fallback_cert_dir_setup = '''mkdir -p "${TEMPDIR}"/{certs,pki/anchors,work}
+rm -rf "${DESTDIR}${SSLDIR}/.make-ca-fallback"
+install -dm755 "${DESTDIR}${SSLDIR}/.make-ca-fallback"
+'''
+
+fallback_cert_dir_setup_original = '''mkdir -p "${TEMPDIR}"/{certs,pki/anchors,work}
+'''
+
+server_auth_capture = '''  # Import all certificates with trust args to the temporary NSS DB
+  if test "${WITH_NSS}" == "1"; then
+    write_nss_db ${TEMPDIR}/pki/nssdb ${tempcrt}
+  fi
+'''
+
+server_auth_capture_replacement = '''  if test "${satrust}" == "C"; then
+    install -m644 "${tempcrt}" "${DESTDIR}${SSLDIR}/.make-ca-fallback/${keyhash}.pem"
+  fi
+
+  # Import all certificates with trust args to the temporary NSS DB
+  if test "${WITH_NSS}" == "1"; then
+    write_nss_db ${TEMPDIR}/pki/nssdb ${tempcrt}
+  fi
+'''
+
+local_server_auth_capture = '''    # Add to Shared NSS DB
+    if test "${WITH_NSS}" == "1"; then
+      write_nss_db "${DESTDIR}${NSSDB}" ${tempcert}
+    fi
+'''
+
+local_server_auth_capture_replacement = '''    if test "${satrust}" == "C"; then
+      install -m644 "${tempcert}" "${DESTDIR}${SSLDIR}/.make-ca-fallback/${keyhash}.pem"
+    fi
+
+    # Add to Shared NSS DB
+    if test "${WITH_NSS}" == "1"; then
+      write_nss_db "${DESTDIR}${NSSDB}" ${tempcert}
+    fi
+'''
+
+trust_extract_replacement = '''# Build alternate formats using p11-kit trust when available. If it is
+# missing, keep the self-hosting bootstrap usable by emitting an
+# OpenSSL-compatible certificate directory and bundle directly.
+install -dm755 "${DESTDIR}${CERTDIR}" "${DESTDIR}${BUNDLEDIR}" "${DESTDIR}${KEYSTORE}"
+if command -v "${TRUST}" > /dev/null 2>&1; then
+  echo "Extracting OpenSSL certificates to:"
+  echo -n "${DESTDIR}${CERTDIR}..."
+  "${TRUST}" extract --filter=ca-anchors --format=openssl-directory \\
+                     --overwrite --comment "${DESTDIR}${CERTDIR}" \\
+                     && echo "Done!" || echo "Failed!!!"
+  echo "Extracting GNUTLS server auth certificates to:"
+  echo -n "${DESTDIR}${CABUNDLE}..."
+  "${TRUST}" extract --filter=ca-anchors --format=pem-bundle \\
+                     --purpose server-auth --overwrite --comment "${DESTDIR}${CABUNDLE}" \\
+                     && echo "Done!" || echo "Failed!!!"
+  echo "Extracting GNUTLS S-Mime certificates to:"
+  echo -n "${DESTDIR}${SMBUNDLE}..."
+  "${TRUST}" extract --filter=ca-anchors --format=pem-bundle \\
+                     --purpose email --overwrite --comment "${DESTDIR}${SMBUNDLE}" \\
+                     && echo "Done!" || echo "Failed!!!"
+  echo "Extracting GNUTLS code signing certificates to:"
+  echo -n "${DESTDIR}${CSBUNDLE}..."
+  "${TRUST}" extract --filter=ca-anchors --format=pem-bundle \\
+                     --purpose code-signing --overwrite --comment \\
+                     "${DESTDIR}${CSBUNDLE}" && echo "Done!" || echo "Failed!!!"
+  echo "Extracting Java cacerts (JKS) to:"
+  echo -n "${DESTDIR}${KEYSTORE}/cacerts..."
+  "${TRUST}" extract --filter=ca-anchors --format=java-cacerts \\
+                     --purpose server-auth --overwrite \\
+                     --comment "${DESTDIR}${KEYSTORE}/cacerts" \\
+                     && echo "Done!" || echo "Failed!!!"
+else
+  echo "p11-kit trust not available; generating OpenSSL-only trust store fallback..."
+  if ls "${DESTDIR}${SSLDIR}"/.make-ca-fallback/*.pem > /dev/null 2>&1; then
+    install -m644 "${DESTDIR}${SSLDIR}"/.make-ca-fallback/*.pem "${DESTDIR}${CERTDIR}"
+    "${OPENSSL}" rehash "${DESTDIR}${CERTDIR}"
+    cat "${DESTDIR}${SSLDIR}"/.make-ca-fallback/*.pem > "${DESTDIR}${CABUNDLE}"
+    echo "Wrote OpenSSL CA bundle to ${DESTDIR}${CABUNDLE}."
+  else
+    echo "No server-auth certificates were extracted; cannot build OpenSSL trust store." >&2
+    exit 1
+  fi
+fi
+
+rm -rf "${DESTDIR}${SSLDIR}/.make-ca-fallback"
+'''
+
+if fallback_cert_dir_setup_original not in text:
+    raise SystemExit("missing fallback certificate setup point in make-ca")
+text = text.replace(fallback_cert_dir_setup_original, fallback_cert_dir_setup, 1)
+
+if server_auth_capture not in text:
+    raise SystemExit("missing primary server-auth insertion point in make-ca")
+text = text.replace(server_auth_capture, server_auth_capture_replacement, 1)
+
+if local_server_auth_capture not in text:
+    raise SystemExit("missing local-certificate server-auth insertion point in make-ca")
+text = text.replace(local_server_auth_capture, local_server_auth_capture_replacement, 1)
+
+trust_extract_pattern = re.compile(
+    r'''# Build alternate formats using p11-kit trust
+.*?
+# End /usr/sbin/make-ca''',
+    re.S,
+)
+if not trust_extract_pattern.search(text):
+    raise SystemExit("missing trust-extract block in make-ca")
+text = trust_extract_pattern.sub(
+    trust_extract_replacement + '''
+
+# End /usr/sbin/make-ca''',
+    text,
+    count=1,
+)
+
+path.write_text(text)
+PY
 """
 
 make = ""
@@ -45,10 +176,19 @@ make = ""
 install = """
 make install DESTDIR=$DESTDIR
 
-install -vdm755 $DESTDIR/etc/ssl/local
+install -vdm755 $DESTDIR/etc/ssl/local $DESTDIR/etc/pki/tls/certs
 
-# Download Mozilla root certificates and generate trust store
-/usr/sbin/make-ca -g 2>/dev/null || true
+# Rebuild the trust store from the locally installed certdata.txt. The
+# bootstrap path must not rely on a live network fetch here.
+/usr/sbin/make-ca -r
+
+test -s $DESTDIR/etc/pki/tls/certs/ca-bundle.crt || {
+    echo "make-ca did not produce /etc/pki/tls/certs/ca-bundle.crt" >&2
+    exit 1
+}
+
+ln -sf /etc/pki/tls/certs/ca-bundle.crt $DESTDIR/etc/ssl/cert.pem
+ln -sf /etc/pki/tls/certs/ca-bundle.crt $DESTDIR/etc/ssl/certs/ca-certificates.crt
 
 # Enable automatic certificate update timer if systemd is running
 systemctl enable update-pki.timer 2>/dev/null || true

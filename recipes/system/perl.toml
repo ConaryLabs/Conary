@@ -1,6 +1,6 @@
 # recipes/system/perl.toml
 #
-# LFS 13 Section 8.41 — Perl-5.42.1
+# LFS 13 Section 8.41 — Perl-5.42.0
 # https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/perl.html
 #
 # Practical Extraction and Report Language. Full system build with
@@ -9,7 +9,7 @@
 
 [package]
 name = "perl"
-version = "5.42.1"
+version = "5.42.0"
 release = "1"
 summary = "Practical Extraction and Report Language"
 description = """
@@ -23,7 +23,7 @@ homepage = "https://www.perl.org/"
 
 [source]
 archive = "https://www.cpan.org/src/5.0/perl-%(version)s.tar.xz"
-checksum = "md5:aea480078218bcc6d6636a622c7d187d"
+checksum = "md5:7a6950a9f12d01eb96a9d2ed2f4e0072"
 
 [build]
 requires = ["glibc", "zlib", "bzip2", "gdbm"]

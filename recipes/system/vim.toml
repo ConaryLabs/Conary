@@ -1,6 +1,6 @@
 # recipes/system/vim.toml
 #
-# LFS 13 Section 8.71 — Vim-9.2.0161
+# LFS 13 Section 8.71 — Vim-9.2.0078
 # https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/vim.html
 #
 # Vi IMproved — the ubiquitous text editor. Pre-configure sets the
@@ -9,7 +9,7 @@
 
 [package]
 name = "vim"
-version = "9.2.0161"
+version = "9.2.0078"
 release = "1"
 summary = "Vi IMproved text editor"
 description = """
@@ -23,7 +23,7 @@ homepage = "https://www.vim.org/"
 
 [source]
 archive = "https://github.com/vim/vim/archive/v%(version)s/vim-%(version)s.tar.gz"
-checksum = "md5:f6369455ad984b867977268fb8503c48"
+checksum = "md5:592819d17a5f76d39ddba5651912afe0"
 
 [build]
 requires = ["glibc", "ncurses", "acl", "attr"]

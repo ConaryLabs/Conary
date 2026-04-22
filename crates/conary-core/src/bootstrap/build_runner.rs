@@ -7,7 +7,8 @@
 
 use super::build_helpers;
 use super::config::BootstrapConfig;
-use crate::recipe::Recipe;
+use crate::recipe::{Recipe, is_remote_url};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::{info, warn};
@@ -125,20 +126,17 @@ impl PackageBuildRunner {
         self.context.as_ref()
     }
 
-    /// Fetch the primary source archive for a package, returning the local path.
-    ///
-    /// Downloads the archive if not already cached in `sources_dir`.
-    pub fn fetch_source(
+    fn fetch_artifact_to_cache(
         &self,
         pkg_name: &str,
-        recipe: &Recipe,
+        url: &str,
+        checksum: &str,
+        filename: &str,
     ) -> Result<PathBuf, BuildRunnerError> {
-        let url = recipe.archive_url();
-        let filename = recipe.archive_filename();
-        let target_path = self.sources_dir.join(&filename);
+        let target_path = self.sources_dir.join(filename);
 
         if target_path.exists() {
-            match self.verify_checksum(pkg_name, &recipe.source.checksum, &target_path) {
+            match self.verify_checksum(pkg_name, checksum, &target_path) {
                 Ok(()) => {
                     info!("  Using cached source (checksum verified): {}", filename);
                     return Ok(target_path);
@@ -148,7 +146,7 @@ impl PackageBuildRunner {
                         "  Cached source {} failed verification: {e} -- re-downloading",
                         filename
                     );
-                    if let Err(rm_err) = std::fs::remove_file(&target_path) {
+                    if let Err(rm_err) = fs::remove_file(&target_path) {
                         warn!("  Failed to remove corrupted cache file: {rm_err}");
                     }
                 }
@@ -160,7 +158,7 @@ impl PackageBuildRunner {
             .ok_or_else(|| BuildRunnerError::InvalidPath(target_path.clone()))?;
 
         let mut last_reason = String::new();
-        for (idx, candidate) in gnu_fetch_candidates(&url).iter().enumerate() {
+        for (idx, candidate) in gnu_fetch_candidates(url).iter().enumerate() {
             if idx == 0 {
                 info!("  Fetching: {}", candidate);
             } else {
@@ -201,9 +199,22 @@ impl PackageBuildRunner {
             });
         }
 
-        self.verify_checksum(pkg_name, &recipe.source.checksum, &target_path)?;
+        self.verify_checksum(pkg_name, checksum, &target_path)?;
 
         Ok(target_path)
+    }
+
+    /// Fetch the primary source archive for a package, returning the local path.
+    ///
+    /// Downloads the archive if not already cached in `sources_dir`.
+    pub fn fetch_source(
+        &self,
+        pkg_name: &str,
+        recipe: &Recipe,
+    ) -> Result<PathBuf, BuildRunnerError> {
+        let url = recipe.archive_url();
+        let filename = recipe.archive_filename();
+        self.fetch_artifact_to_cache(pkg_name, &url, &recipe.source.checksum, &filename)
     }
 
     /// Verify a SHA-256 checksum, rejecting placeholders unless `skip_verify` is set.
@@ -270,87 +281,102 @@ impl PackageBuildRunner {
         Ok(())
     }
 
-    /// Fetch and extract additional sources (e.g., GMP, MPFR, MPC for GCC).
-    pub fn fetch_additional_sources(
+    /// Stage additional sources into the package root and optionally extract them.
+    ///
+    /// Raw archives are copied into `package_root` so recipes can unpack them later
+    /// via relative paths like `../foo.tar.xz` or `../../foo.tar.xz`.
+    pub fn stage_additional_sources(
         &self,
         pkg_name: &str,
         recipe: &Recipe,
+        package_root: &Path,
         src_dir: &Path,
     ) -> Result<(), BuildRunnerError> {
-        let additional_sources: Vec<_> = recipe
-            .source
-            .additional
-            .iter()
-            .map(|a| (a.url.clone(), a.checksum.clone(), a.extract_to.clone()))
-            .collect();
-
-        for (url, checksum, extract_to) in additional_sources {
+        for additional in &recipe.source.additional {
+            let url = recipe.substitute(&additional.url, "");
             let filename = url.split('/').next_back().unwrap_or("additional.tar.gz");
-            let target_path = self.sources_dir.join(filename);
+            let cached_path =
+                self.fetch_artifact_to_cache(pkg_name, &url, &additional.checksum, filename)?;
+            let staged_path = package_root.join(filename);
+            fs::copy(&cached_path, &staged_path)?;
 
-            // Download if not cached
-            if !target_path.exists() {
-                info!("  Fetching additional: {}", filename);
-                let target_str = target_path
-                    .to_str()
-                    .ok_or_else(|| BuildRunnerError::InvalidPath(target_path.clone()))?;
-
-                let mut last_reason = String::new();
-                for (idx, candidate) in gnu_fetch_candidates(&url).iter().enumerate() {
-                    if idx == 0 {
-                        info!("  Fetching additional from: {}", candidate);
-                    } else {
-                        warn!(
-                            "  Primary GNU mirror failed, retrying additional source with fallback: {candidate}"
-                        );
-                    }
-
-                    let output = Command::new("curl")
-                        .args([
-                            "-fsSL",
-                            "--connect-timeout",
-                            "30",
-                            "--max-time",
-                            "600",
-                            "--retry",
-                            "3",
-                            "-o",
-                            target_str,
-                            candidate,
-                        ])
-                        .output()
-                        .map_err(|e| BuildRunnerError::SourceFetchFailed {
-                            package: pkg_name.to_string(),
-                            reason: e.to_string(),
-                        })?;
-
-                    if output.status.success() {
-                        last_reason.clear();
-                        break;
-                    }
-
-                    last_reason = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                }
-
-                if !last_reason.is_empty() {
-                    return Err(BuildRunnerError::SourceFetchFailed {
-                        package: pkg_name.to_string(),
-                        reason: format!("Additional source fetch failed: {}", last_reason),
-                    });
-                }
+            if !additional.extract {
+                continue;
             }
 
-            // Verify checksum
-            self.verify_checksum(pkg_name, &checksum, &target_path)?;
-
-            // Extract to the specified location, stripping top-level directory
-            let extract_dest = if let Some(dest) = &extract_to {
+            let extract_dest = if let Some(dest) = &additional.extract_to {
                 src_dir.join(dest)
             } else {
                 src_dir.to_path_buf()
             };
 
-            self.extract_source_strip(&target_path, &extract_dest)?;
+            self.extract_source_strip(&staged_path, &extract_dest)?;
+        }
+
+        Ok(())
+    }
+
+    /// Stage recipe patches into the package root and apply them to the source tree.
+    pub fn stage_and_apply_patches(
+        &self,
+        pkg_name: &str,
+        recipe: &Recipe,
+        package_root: &Path,
+        src_dir: &Path,
+    ) -> Result<(), BuildRunnerError> {
+        let Some(patches) = &recipe.patches else {
+            return Ok(());
+        };
+
+        let patch_root = package_root.join("patches");
+        fs::create_dir_all(&patch_root)?;
+
+        for patch_info in &patches.files {
+            let staged_patch = if is_remote_url(&patch_info.file) {
+                let filename = patch_info
+                    .file
+                    .split('/')
+                    .next_back()
+                    .unwrap_or("patch.diff");
+                let checksum = patch_info.checksum.as_ref().ok_or_else(|| {
+                    BuildRunnerError::SourceFetchFailed {
+                        package: pkg_name.to_string(),
+                        reason: format!("Remote patch '{}' has no checksum", patch_info.file),
+                    }
+                })?;
+                let cached =
+                    self.fetch_artifact_to_cache(pkg_name, &patch_info.file, checksum, filename)?;
+                let staged = patch_root.join(filename);
+                fs::copy(cached, &staged)?;
+                staged
+            } else {
+                let source_patch = PathBuf::from(&patch_info.file);
+                let filename = source_patch
+                    .file_name()
+                    .ok_or_else(|| BuildRunnerError::InvalidPath(source_patch.clone()))?;
+                let staged = patch_root.join(filename);
+                fs::copy(&source_patch, &staged)?;
+                staged
+            };
+
+            let output = Command::new("patch")
+                .arg(format!("-Np{}", patch_info.strip))
+                .arg("-i")
+                .arg(&staged_patch)
+                .current_dir(src_dir)
+                .output()
+                .map_err(|e| BuildRunnerError::BuildFailed {
+                    package: pkg_name.to_string(),
+                    reason: format!("failed to execute patch: {e}"),
+                })?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(BuildRunnerError::BuildFailed {
+                    package: pkg_name.to_string(),
+                    reason: format!("patch apply failed:\n{stderr}"),
+                });
+            }
         }
 
         Ok(())
@@ -409,7 +435,39 @@ impl PackageBuildRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::recipe::parse_recipe;
     use std::path::Path;
+    use std::process::Command;
+
+    fn sha256_of(path: &Path) -> String {
+        let output = Command::new("sha256sum").arg(path).output().unwrap();
+        assert!(output.status.success(), "sha256sum should succeed in tests");
+        String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .to_string()
+    }
+
+    fn create_tarball(archive: &Path, top_level: &str, file_name: &str, contents: &str) {
+        let tempdir = tempfile::tempdir().unwrap();
+        let source_root = tempdir.path().join(top_level);
+        fs::create_dir_all(&source_root).unwrap();
+        fs::write(source_root.join(file_name), contents).unwrap();
+
+        let output = Command::new("tar")
+            .arg("-czf")
+            .arg(archive)
+            .arg("-C")
+            .arg(tempdir.path())
+            .arg(top_level)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "test tarball creation should succeed"
+        );
+    }
 
     fn strict_mode_runner(sources_dir: &Path) -> PackageBuildRunner {
         let config = BootstrapConfig::new();
@@ -516,7 +574,154 @@ mod tests {
     #[test]
     fn test_gnu_fetch_candidates_leaves_non_ftpmirror_urls_unchanged() {
         let candidates = gnu_fetch_candidates("https://example.invalid/src.tar.gz");
-        assert_eq!(candidates, vec!["https://example.invalid/src.tar.gz".to_string()]);
+        assert_eq!(
+            candidates,
+            vec!["https://example.invalid/src.tar.gz".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_stage_additional_sources_preserves_raw_archive_in_package_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = BootstrapConfig::new();
+        let runner = PackageBuildRunner::new(dir.path(), &config);
+        let package_root = dir.path().join("pkg");
+        let src_dir = package_root.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        let cached_archive = dir.path().join("dep-1.0.tar.gz");
+        create_tarball(&cached_archive, "dep-1.0", "README", "hello\n");
+        let digest = sha256_of(&cached_archive);
+        let recipe = parse_recipe(&format!(
+            r#"
+[package]
+name = "test"
+version = "1.0"
+
+[source]
+archive = "https://example.invalid/test-1.0.tar.gz"
+checksum = "sha256:{digest}"
+
+[[source.additional]]
+url = "https://example.invalid/dep-1.0.tar.gz"
+checksum = "sha256:{digest}"
+
+[build]
+install = "true"
+"#
+        ))
+        .unwrap();
+
+        runner
+            .stage_additional_sources("test", &recipe, &package_root, &src_dir)
+            .unwrap();
+
+        assert!(
+            package_root.join("dep-1.0.tar.gz").exists(),
+            "raw additional archive should remain staged next to the package root"
+        );
+        assert!(
+            src_dir.join("README").exists(),
+            "extracting an additional source should populate the source tree"
+        );
+    }
+
+    #[test]
+    fn test_stage_additional_sources_skips_extraction_when_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = BootstrapConfig::new();
+        let runner = PackageBuildRunner::new(dir.path(), &config);
+        let package_root = dir.path().join("pkg");
+        let src_dir = package_root.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        let cached_archive = dir.path().join("tzdata.tar.gz");
+        create_tarball(&cached_archive, "tzdata", "zone.tab", "UTC\n");
+        let digest = sha256_of(&cached_archive);
+        let recipe = parse_recipe(&format!(
+            r#"
+[package]
+name = "test"
+version = "1.0"
+
+[source]
+archive = "https://example.invalid/test-1.0.tar.gz"
+checksum = "sha256:{digest}"
+
+[[source.additional]]
+url = "https://example.invalid/tzdata.tar.gz"
+checksum = "sha256:{digest}"
+extract = false
+
+[build]
+install = "true"
+"#
+        ))
+        .unwrap();
+
+        runner
+            .stage_additional_sources("test", &recipe, &package_root, &src_dir)
+            .unwrap();
+
+        assert!(package_root.join("tzdata.tar.gz").exists());
+        assert!(
+            !src_dir.join("zone.tab").exists(),
+            "extract = false should keep the raw archive only"
+        );
+    }
+
+    #[test]
+    fn test_stage_and_apply_patches_copies_remote_patch_then_applies_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = BootstrapConfig::new();
+        let runner = PackageBuildRunner::new(dir.path(), &config);
+        let package_root = dir.path().join("pkg");
+        let src_dir = package_root.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::write(src_dir.join("hello.txt"), "before\n").unwrap();
+
+        let patch_content = "\
+--- a/hello.txt\n\
++++ b/hello.txt\n\
+@@ -1 +1 @@\n\
+-before\n\
++after\n";
+        let cached_patch = dir.path().join("fix.patch");
+        fs::write(&cached_patch, patch_content).unwrap();
+        let digest = sha256_of(&cached_patch);
+        let recipe = parse_recipe(&format!(
+            r#"
+[package]
+name = "test"
+version = "1.0"
+
+[source]
+archive = "https://example.invalid/test-1.0.tar.gz"
+checksum = "sha256:{digest}"
+
+[patches]
+files = [
+  {{ file = "https://example.invalid/fix.patch", checksum = "sha256:{digest}", strip = 1 }},
+]
+
+[build]
+install = "true"
+"#
+        ))
+        .unwrap();
+
+        runner
+            .stage_and_apply_patches("test", &recipe, &package_root, &src_dir)
+            .unwrap();
+
+        assert!(
+            package_root.join("patches/fix.patch").exists(),
+            "remote patch should be staged into the package-local patches directory"
+        );
+        assert_eq!(
+            fs::read_to_string(src_dir.join("hello.txt")).unwrap(),
+            "after\n"
+        );
     }
 
     #[test]

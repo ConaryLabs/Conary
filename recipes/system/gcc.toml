@@ -33,7 +33,7 @@ chroot = true
 
 configure = """
 # Fix a const-correctness issue in libgomp
-sed -i 's/char \\[\\*\\]q/const &/' libgomp/affinity-fmt.c
+sed -i 's/char \\*q/const char *q/' libgomp/affinity-fmt.c
 
 # On x86_64, set the default directory name for 64-bit libraries to "lib"
 case $(uname -m) in

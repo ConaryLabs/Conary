@@ -78,6 +78,26 @@ pub fn resolve_missing_deps(
     missing: &[MissingDependency],
     dep_mode: DepMode,
 ) -> DepResolutionPlan {
+    resolve_missing_deps_with_probes(
+        conn,
+        missing,
+        dep_mode,
+        system_pm::is_system_package_installed,
+        system_pm::is_live_runtime_dependency_present,
+    )
+}
+
+fn resolve_missing_deps_with_probes<PackageProbe, RuntimeProbe>(
+    conn: &rusqlite::Connection,
+    missing: &[MissingDependency],
+    dep_mode: DepMode,
+    is_system_package_installed: PackageProbe,
+    is_live_runtime_dependency_present: RuntimeProbe,
+) -> DepResolutionPlan
+where
+    PackageProbe: Fn(&str) -> bool,
+    RuntimeProbe: Fn(&str) -> bool,
+{
     let mut plan = DepResolutionPlan::default();
 
     for dep in missing {
@@ -87,7 +107,9 @@ pub fn resolve_missing_deps(
             let is_tracked = Trove::find_by_name(conn, &dep.name)
                 .map(|t| !t.is_empty())
                 .unwrap_or(false);
-            let is_on_system = is_tracked || system_pm::is_system_package_installed(&dep.name);
+            let is_on_system = is_tracked
+                || is_system_package_installed(&dep.name)
+                || is_live_runtime_dependency_present(&dep.name);
 
             if is_on_system {
                 debug!("Dependency '{}' is blocked and present on system", dep.name);
@@ -141,8 +163,11 @@ pub fn resolve_missing_deps(
         // 3. Not in Conary DB -- check system PM
         match dep_mode {
             DepMode::Satisfy => {
-                if system_pm::is_system_package_installed(&dep.name) {
+                if is_system_package_installed(&dep.name) {
                     plan.satisfied.push((dep.name.clone(), "system PM".into()));
+                } else if is_live_runtime_dependency_present(&dep.name) {
+                    plan.satisfied
+                        .push((dep.name.clone(), "live runtime".into()));
                 } else {
                     // Not on system either -- unresolvable in satisfy mode
                     debug!(
@@ -358,5 +383,25 @@ mod tests {
             &ConvergenceIntent::FullOwnership,
         );
         assert_eq!(plan.unresolvable.len(), 1);
+    }
+
+    #[test]
+    fn test_glibc_runtime_capability_blocks_repo_promotion_when_live_root_satisfies_it() {
+        let conn = test_db();
+        let missing = vec![make_dep("libc.so.6(GLIBC_2.34)(64bit)", &["tree"])];
+
+        let plan = resolve_missing_deps_with_probes(
+            &conn,
+            &missing,
+            DepMode::Satisfy,
+            |_| false,
+            |dep| dep.starts_with("libc.so.6"),
+        );
+
+        assert_eq!(plan.blocked, vec!["libc.so.6(GLIBC_2.34)(64bit)"]);
+        assert!(plan.to_install.is_empty());
+        assert!(plan.to_adopt.is_empty());
+        assert!(plan.satisfied.is_empty());
+        assert!(plan.unresolvable.is_empty());
     }
 }

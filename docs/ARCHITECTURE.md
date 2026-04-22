@@ -360,7 +360,8 @@ The composefs driver (Linux 6.2+, `CONFIG_EROFS_FS`) provides:
 ## Bootstrap Pipeline
 
 Build a complete Conary-managed system from scratch. The pipeline has
-6 phases aligned with Linux From Scratch 13:
+6 phases whose package selection and ordering are guided by LFS 13.0-systemd,
+with documented recipe-level deviations where Conary intentionally differs:
 
 ```
 Phase 1: CrossTools (LFS Ch5)
@@ -371,24 +372,28 @@ Phase 2: TempTools (LFS Ch6-7)
   Temporary tools (17 cross-compiled + 6 chroot packages)
        |
 Phase 3: FinalSystem (LFS Ch8)
-  Complete Linux system (77 packages)
+  Complete Linux system (80 packages; Chapter 8 set with
+  systemd-boot-over-GRUB deviation)
   Built inside chroot
        |
 Phase 4: SystemConfig (LFS Ch9)
   Network, fstab, kernel, bootloader configuration
        |
 Phase 5: BootableImage (LFS Ch10)
-  systemd-repart for rootless image generation (fallback: sfdisk/mkfs)
+  systemd-repart for declarative GPT image generation
   Output formats: raw, qcow2, ISO, EROFS
        |
 Phase 6: Tier2 (BLFS + Conary)
   PAM, OpenSSH, curl, Rust, Conary self-hosting
 ```
 
-Aligned with LFS 13 (binutils 2.45, gcc 15.2.0, glibc 2.42,
-kernel 6.16.1). All recipes carry SHA-256 checksums enforced at
-build time (`--skip-verify` to override). All stages run in
-sandboxed containers via `ContainerConfig::pristine_for_bootstrap()`.
+Do not treat this section as the authoritative version inventory. Use
+`recipes/versions.toml`, individual recipe headers, and the active bootstrap
+specs/plans when exact package versions or intentional divergences matter.
+Tier 2 recipes and self-host-specific staged inputs enforce SHA-256 checksums;
+earlier bootstrap phases still carry legacy MD5 recipe entries in the current
+tree. All stages run in sandboxed containers via
+`ContainerConfig::pristine_for_bootstrap()`.
 
 Bootstrap trust has a TOFU boundary: the first trusted TUF root metadata and
 bootstrap source manifests must arrive through an authenticated out-of-band

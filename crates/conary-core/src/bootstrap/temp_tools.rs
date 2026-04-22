@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
 use super::build_runner::PackageBuildRunner;
-use super::chroot_env::ChrootEnv;
+use super::chroot_env::{ChrootEnv, ensure_bootstrap_identity_files};
 use super::config::BootstrapConfig;
 use super::stages::{BootstrapStage, StageManager};
 use super::toolchain::Toolchain;
@@ -290,6 +290,9 @@ impl TempToolsBuilder {
             self.lfs_root.display()
         );
 
+        ensure_bootstrap_identity_files(&self.lfs_root)
+            .map_err(|e| TempToolsError::ChrootSetup(e.to_string()))?;
+
         let mut env = ChrootEnv::new(&self.lfs_root);
         env.setup()
             .map_err(|e| TempToolsError::ChrootSetup(e.to_string()))?;
@@ -335,17 +338,39 @@ impl TempToolsBuilder {
                     reason: format!("Failed to parse recipe: {e}"),
                 })?;
 
-            // Fetch source to $LFS/sources/ (accessible inside chroot)
             info!("  Fetching source for {pkg}...");
-            self.runner
-                .fetch_source(pkg, &recipe)
-                .map_err(|e| TempToolsError::BuildFailed {
+            let source_archive = self.runner.fetch_source(pkg, &recipe).map_err(|e| {
+                TempToolsError::BuildFailed {
                     package: pkg.to_string(),
                     reason: format!("Source fetch failed: {e}"),
+                }
+            })?;
+
+            let (src_dir, _build_dir) = self.prepare_chroot_build_dirs(pkg)?;
+            let package_root = src_dir
+                .parent()
+                .expect("package source directory should have a package root");
+            self.runner
+                .extract_source_strip(&source_archive, &src_dir)
+                .map_err(|e| TempToolsError::BuildFailed {
+                    package: pkg.to_string(),
+                    reason: format!("Source extract failed: {e}"),
+                })?;
+            self.runner
+                .stage_additional_sources(pkg, &recipe, package_root, &src_dir)
+                .map_err(|e| TempToolsError::BuildFailed {
+                    package: pkg.to_string(),
+                    reason: format!("Additional source staging failed: {e}"),
+                })?;
+            self.runner
+                .stage_and_apply_patches(pkg, &recipe, package_root, &src_dir)
+                .map_err(|e| TempToolsError::BuildFailed {
+                    package: pkg.to_string(),
+                    reason: format!("Patch staging failed: {e}"),
                 })?;
 
-            // Assemble build script and run in chroot
-            let script = super::assemble_build_script(&recipe, "/");
+            let src_dir_in_chroot = self.path_in_chroot(&src_dir)?;
+            let script = super::assemble_chroot_build_script(&recipe, &src_dir_in_chroot, "/");
             let env = self.chroot_env_vars();
 
             info!("  Building {pkg} in chroot...");
@@ -380,6 +405,43 @@ impl TempToolsBuilder {
         }
         info!("Phase 2b complete: all Chapter 7 packages built");
         Ok(())
+    }
+
+    fn chroot_build_root(&self) -> PathBuf {
+        self.lfs_root.join("var/tmp/conary-bootstrap/temp-tools")
+    }
+
+    fn prepare_chroot_build_dirs(
+        &self,
+        package: &str,
+    ) -> Result<(PathBuf, PathBuf), TempToolsError> {
+        let package_root = self.chroot_build_root().join(package);
+        let src_dir = package_root.join("src");
+        let build_dir = package_root.join("build");
+
+        if package_root.exists() {
+            std::fs::remove_dir_all(&package_root)?;
+        }
+        std::fs::create_dir_all(&src_dir)?;
+        std::fs::create_dir_all(&build_dir)?;
+
+        Ok((src_dir, build_dir))
+    }
+
+    fn path_in_chroot(&self, host_path: &Path) -> Result<String, TempToolsError> {
+        let relative =
+            host_path
+                .strip_prefix(&self.lfs_root)
+                .map_err(|_| TempToolsError::BuildFailed {
+                    package: "temp-tools".to_string(),
+                    reason: format!(
+                        "path {} is not inside sysroot {}",
+                        host_path.display(),
+                        self.lfs_root.display()
+                    ),
+                })?;
+
+        Ok(format!("/{}", relative.display()))
     }
 
     /// Environment variables for chroot builds (hermetic -- `env_clear()` first).
@@ -544,5 +606,97 @@ mod tests {
         let mut sm = StageManager::new(work.path()).unwrap();
         let builder = TempToolsBuilder::new(work.path(), lfs.path(), config, cross_tc).unwrap();
         assert!(builder.build_cross_packages(&[], &mut sm).is_ok());
+    }
+
+    #[test]
+    fn test_prepare_chroot_build_dirs_uses_sysroot_staging_area() {
+        let work = tempfile::tempdir().unwrap();
+        let lfs = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(lfs.path().join("tools/bin")).unwrap();
+
+        let config = BootstrapConfig::new();
+        let cross_tc = Toolchain {
+            kind: ToolchainKind::CrossTools,
+            path: lfs.path().join("tools"),
+            target: "x86_64-conary-linux-gnu".to_string(),
+            gcc_version: None,
+            glibc_version: None,
+            binutils_version: None,
+            is_static: false,
+        };
+
+        let builder = TempToolsBuilder::new(work.path(), lfs.path(), config, cross_tc).unwrap();
+        let (src_dir, build_dir) = builder.prepare_chroot_build_dirs("gettext").unwrap();
+
+        assert_eq!(
+            src_dir,
+            lfs.path()
+                .join("var/tmp/conary-bootstrap/temp-tools/gettext/src")
+        );
+        assert_eq!(
+            build_dir,
+            lfs.path()
+                .join("var/tmp/conary-bootstrap/temp-tools/gettext/build")
+        );
+    }
+
+    #[test]
+    fn test_path_in_chroot_rewrites_sysroot_staging_paths() {
+        let work = tempfile::tempdir().unwrap();
+        let lfs = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(lfs.path().join("tools/bin")).unwrap();
+
+        let config = BootstrapConfig::new();
+        let cross_tc = Toolchain {
+            kind: ToolchainKind::CrossTools,
+            path: lfs.path().join("tools"),
+            target: "x86_64-conary-linux-gnu".to_string(),
+            gcc_version: None,
+            glibc_version: None,
+            binutils_version: None,
+            is_static: false,
+        };
+
+        let builder = TempToolsBuilder::new(work.path(), lfs.path(), config, cross_tc).unwrap();
+        let staged_src = lfs
+            .path()
+            .join("var/tmp/conary-bootstrap/temp-tools/gettext/src");
+
+        assert_eq!(
+            builder.path_in_chroot(&staged_src).unwrap(),
+            "/var/tmp/conary-bootstrap/temp-tools/gettext/src"
+        );
+    }
+
+    #[test]
+    fn test_setup_chroot_seeds_essential_account_files() {
+        let work = tempfile::tempdir().unwrap();
+        let lfs = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(lfs.path().join("tools/bin")).unwrap();
+
+        let config = BootstrapConfig::new();
+        let cross_tc = Toolchain {
+            kind: ToolchainKind::CrossTools,
+            path: lfs.path().join("tools"),
+            target: "x86_64-conary-linux-gnu".to_string(),
+            gcc_version: None,
+            glibc_version: None,
+            binutils_version: None,
+            is_static: false,
+        };
+
+        let builder = TempToolsBuilder::new(work.path(), lfs.path(), config, cross_tc).unwrap();
+        let _ = builder.setup_chroot();
+
+        let passwd = std::fs::read_to_string(lfs.path().join("etc/passwd")).unwrap();
+        let group = std::fs::read_to_string(lfs.path().join("etc/group")).unwrap();
+        let mtab_target = std::fs::read_link(lfs.path().join("etc/mtab")).unwrap();
+
+        assert!(passwd.contains("root:x:0:0:root:/root:/bin/bash"));
+        assert!(group.contains("root:x:0:"));
+        assert!(group.contains("mail:x:34:"));
+        assert!(group.contains("tty:x:5:"));
+        assert!(group.contains("users:x:999:"));
+        assert_eq!(mtab_target, PathBuf::from("/proc/self/mounts"));
     }
 }

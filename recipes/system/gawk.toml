@@ -1,6 +1,6 @@
 # recipes/system/gawk.toml
 #
-# LFS 13 Section 8.60 — Gawk-5.4.0
+# LFS 13 Section 8.60 — Gawk-5.3.2
 # https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/gawk.html
 #
 # GNU AWK — pattern scanning and processing language. The sed command
@@ -9,7 +9,7 @@
 
 [package]
 name = "gawk"
-version = "5.4.0"
+version = "5.3.2"
 release = "1"
 summary = "GNU pattern scanning and processing language"
 description = """
@@ -23,7 +23,7 @@ homepage = "https://www.gnu.org/software/gawk/"
 
 [source]
 archive = "https://ftpmirror.gnu.org/gawk/gawk-%(version)s.tar.xz"
-checksum = "md5:c07cc9beb6c3bf83274741d0c9489357"
+checksum = "md5:b7014650c5f45e5d4837c31209dc0037"
 
 [build]
 requires = ["glibc", "mpfr", "readline"]
@@ -42,7 +42,6 @@ make -j%(jobs)s
 """
 
 install = """
-rm -f $DESTDIR/usr/bin/gawk-%(version)s
 make install DESTDIR=$DESTDIR
 
 # Create awk.1 man page symlink

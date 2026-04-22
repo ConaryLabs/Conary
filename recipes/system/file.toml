@@ -1,6 +1,6 @@
 # recipes/system/file.toml
 #
-# LFS 13 Section 8.11 — File-5.47
+# LFS 13 Section 8.11 — File-5.46
 # https://www.linuxfromscratch.org/lfs/view/systemd/chapter08/file.html
 #
 # Utility to determine file types by examining file contents using
@@ -8,7 +8,7 @@
 
 [package]
 name = "file"
-version = "5.47"
+version = "5.46"
 release = "1"
 summary = "File type identification utility"
 description = """
@@ -22,7 +22,7 @@ homepage = "https://www.darwinsys.com/file/"
 
 [source]
 archive = "https://astron.com/pub/file/file-%(version)s.tar.gz"
-checksum = "md5:1023ef52a2fb64acdf80211e469d6939"
+checksum = "md5:459da2d4b534801e2e2861611d823864"
 
 [build]
 requires = ["glibc", "zlib"]

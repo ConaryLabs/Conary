@@ -17,6 +17,24 @@ fn gcc_recipe_paths() -> [PathBuf; 2] {
 }
 
 #[test]
+fn final_system_gcc_recipe_patches_libgomp_const_warning_with_exact_match() {
+    let path = workspace_root().join("recipes/system/gcc.toml");
+    let recipe = parse_recipe_file(&path)
+        .unwrap_or_else(|err| panic!("failed to parse {}: {err}", path.display()));
+    let configure = recipe
+        .build
+        .configure
+        .as_deref()
+        .unwrap_or_else(|| panic!("{} must define a configure script", path.display()));
+
+    assert!(
+        configure.contains("sed -i 's/char \\*q/const char *q/' libgomp/affinity-fmt.c"),
+        "{} must patch libgomp/affinity-fmt.c using the exact pre-GCC-15 line so the sed actually matches",
+        path.display()
+    );
+}
+
+#[test]
 fn bootstrap_gcc_recipes_stage_companion_libraries_via_additional_sources() {
     for path in gcc_recipe_paths() {
         let recipe = parse_recipe_file(&path)

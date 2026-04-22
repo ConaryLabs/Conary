@@ -2,7 +2,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use conary_core::recipe::{Recipe, parse_recipe_file};
 use toml::Value;
@@ -87,6 +89,16 @@ fn load_tier2_versions() -> BTreeMap<String, String> {
         .collect()
 }
 
+fn extract_python_heredoc(script: &str) -> String {
+    let (_, rest) = script
+        .split_once("python3 - <<'PY'\n")
+        .expect("expected embedded python heredoc");
+    let (python, _) = rest
+        .split_once("\nPY\n")
+        .expect("expected python heredoc terminator");
+    python.to_string()
+}
+
 #[test]
 fn tier2_recipe_set_matches_self_hosting_milestone() {
     let recipes = load_tier2_recipes();
@@ -142,6 +154,11 @@ fn conary_recipe_keeps_staged_workspace_contract() {
         ["glibc", "openssl", "sqlite", "rust"],
         "conary Tier 2 recipe must declare the staged-source dependency contract"
     );
+    assert_eq!(
+        recipe.build.make.as_deref(),
+        Some("cargo build --release -p conary\n"),
+        "conary Tier 2 recipe must build only the CLI package needed for the self-hosting milestone"
+    );
 }
 
 #[test]
@@ -157,4 +174,126 @@ fn versions_toml_records_the_approved_tier2_audit() {
             "recipes/versions.toml drifted for Tier 2 package {package_name}"
         );
     }
+}
+
+#[test]
+fn openssh_recipe_uses_bootstrap_local_pam_and_idempotent_sshd_account_setup() {
+    let recipes = load_tier2_recipes();
+    let recipe = recipes
+        .get("openssh")
+        .expect("missing Tier 2 recipe openssh");
+    let install = recipe
+        .build
+        .install
+        .as_deref()
+        .expect("openssh recipe must define an install phase");
+
+    assert!(
+        !install.contains("/etc/pam.d/login"),
+        "openssh Tier 2 install must not depend on /etc/pam.d/login existing in the sysroot"
+    );
+    assert!(
+        install.contains("cat > $DESTDIR/etc/pam.d/sshd"),
+        "openssh Tier 2 install must create an sshd PAM file directly"
+    );
+    assert!(
+        install.contains("include system-auth"),
+        "openssh sshd PAM file must consume the bootstrap system-auth policy"
+    );
+    assert!(
+        install.contains("if ! getent group sshd"),
+        "openssh Tier 2 install must create the sshd group idempotently"
+    );
+    assert!(
+        install.contains("if ! getent passwd sshd"),
+        "openssh Tier 2 install must create the sshd user idempotently"
+    );
+}
+
+#[test]
+fn curl_recipe_explicitly_disables_libpsl_for_the_first_milestone() {
+    let recipes = load_tier2_recipes();
+    let recipe = recipes.get("curl").expect("missing Tier 2 recipe curl");
+    let configure = recipe
+        .build
+        .configure
+        .as_deref()
+        .expect("curl recipe must define a configure phase");
+
+    assert!(
+        configure.contains("--without-libpsl"),
+        "curl Tier 2 configure phase must disable libpsl until it is part of the milestone sysroot"
+    );
+}
+
+#[test]
+fn make_ca_recipe_rebuilds_offline_and_exports_openssl_compat_paths() {
+    let recipes = load_tier2_recipes();
+    let recipe = recipes
+        .get("make-ca")
+        .expect("missing Tier 2 recipe make-ca");
+    let configure = recipe
+        .build
+        .configure
+        .as_deref()
+        .expect("make-ca recipe must define a configure phase");
+    let install = recipe
+        .build
+        .install
+        .as_deref()
+        .expect("make-ca recipe must define an install phase");
+
+    assert!(
+        !install.contains("/usr/sbin/make-ca -g"),
+        "make-ca Tier 2 install must not fetch certdata live during the self-hosting bootstrap"
+    );
+    assert!(
+        install.contains("/usr/sbin/make-ca -r"),
+        "make-ca Tier 2 install must rebuild from the locally installed certdata.txt"
+    );
+    assert!(
+        install.contains("test -s $DESTDIR/etc/pki/tls/certs/ca-bundle.crt"),
+        "make-ca Tier 2 install must fail closed if no CA bundle is produced"
+    );
+    assert!(
+        install.contains("ln -sf /etc/pki/tls/certs/ca-bundle.crt $DESTDIR/etc/ssl/cert.pem"),
+        "make-ca Tier 2 install must expose the OpenSSL compatibility symlink at /etc/ssl/cert.pem"
+    );
+    assert!(
+        install.contains(
+            "ln -sf /etc/pki/tls/certs/ca-bundle.crt $DESTDIR/etc/ssl/certs/ca-certificates.crt"
+        ),
+        "make-ca Tier 2 install must expose the compatibility bundle path used by existing tooling"
+    );
+    assert!(
+        configure
+            .contains("p11-kit trust not available; generating OpenSSL-only trust store fallback"),
+        "make-ca Tier 2 configure phase must patch in the bootstrap OpenSSL fallback when p11-kit is absent"
+    );
+    assert!(
+        configure.contains("\"${OPENSSL}\" rehash \"${DESTDIR}${CERTDIR}\""),
+        "make-ca Tier 2 configure phase must hash the fallback OpenSSL cert directory"
+    );
+    let python_script = extract_python_heredoc(configure);
+    let mut child = Command::new("python3")
+        .arg("-c")
+        .arg("import sys; compile(sys.stdin.read(), '<make-ca recipe>', 'exec')")
+        .stdin(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("python3 must be available to validate the embedded make-ca patch script");
+    child
+        .stdin
+        .as_mut()
+        .expect("python child must expose stdin")
+        .write_all(python_script.as_bytes())
+        .expect("failed to write embedded python to stdin");
+    let output = child
+        .wait_with_output()
+        .expect("failed to wait for python compile check");
+    assert!(
+        output.status.success(),
+        "make-ca Tier 2 configure phase must keep the embedded Python patch script syntactically valid: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

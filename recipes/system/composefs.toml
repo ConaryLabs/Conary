@@ -1,0 +1,60 @@
+# recipes/system/composefs.toml
+#
+# Conary Phase 3 addition — composefs-1.0.8
+# https://github.com/composefs/composefs/releases/tag/v1.0.8
+#
+# Installs the composefs userspace helper required for truthful generation
+# mounting and self-hosting VM validation. This package is not part of the
+# upstream LFS 13.0-systemd book; it is a Conary bootstrap requirement because
+# live generation mounts use `mount -t composefs` and therefore need
+# `/usr/sbin/mount.composefs` inside the final system.
+
+[package]
+name = "composefs"
+version = "1.0.8"
+release = "1"
+summary = "Composefs userspace tooling"
+description = """
+Composefs provides userspace tools for building and mounting composefs images.
+Conary uses the mount helper so live generation mounts can resolve EROFS
+metadata images against the content-addressed object store without falling back
+to plain loop-mounted EROFS.
+"""
+license = "GPL-2.0-or-later OR Apache-2.0"
+homepage = "https://github.com/composefs/composefs"
+
+[source]
+archive = "https://github.com/composefs/composefs/archive/refs/tags/v%(version)s.tar.gz"
+checksum = "sha256:2b2b11f9a25744c82e9e12b098eefd0ab42d56ae6322634c15f966b3a64926ef"
+
+[build]
+requires = ["glibc", "openssl"]
+makedepends = ["meson", "ninja", "pkgconf"]
+chroot = true
+
+configure = """
+mkdir -p build
+cd build
+
+meson setup --prefix=/usr       \
+            --buildtype=release \
+            -Dman=disabled      \
+            -Dfuse=disabled     \
+            ..
+"""
+
+make = """
+cd build
+ninja
+"""
+
+install = """
+cd build
+DESTDIR=$DESTDIR ninja install
+"""
+
+[deviations]
+changes = [
+    { flag = "phase3 package set", lfs = "not included", conary = "added", reason = "Conary live generation mounts require mount.composefs in the final system" },
+    { flag = "meson options", lfs = "not applicable", conary = "-Dman=disabled -Dfuse=disabled", reason = "Keep the bootstrap dependency surface minimal for the first self-hosting milestone" },
+]

@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-04-16
-revision: 1
+last_updated: 2026-04-21
+revision: 2
 summary: Operator flow for building and validating the x86_64 self-hosting bootstrap VM
 ---
 
@@ -29,7 +29,7 @@ Build the Tier-2-complete image:
 ```bash
 scripts/bootstrap-vm/build-selfhost-qcow2.sh \
   --work-dir /tmp/conary-selfhost-vm \
-  --image-size 16G
+  --image-size 32G
 ```
 
 Validate the guest against explicit remote inputs:
@@ -58,24 +58,23 @@ self-hosting image:
 5. `conary bootstrap config`
 6. `conary bootstrap tier2`
 7. `conary bootstrap guest-profile --public-key <work_dir>/vm-selfhost/keys/selfhost_ed25519.pub`
-8. `conary bootstrap image --format qcow2 --size 16G`
+8. `conary bootstrap image --format qcow2 --size 32G`
 
 The wrapper keeps Phase 1 and the deterministic input generation unprivileged,
-but it deliberately routes the mount-owning phases through a rootful runner so
+but it deliberately routes the chroot-owning phases through a rootful runner so
 the bootstrap core, not the shell wrapper, still owns `/dev`, `/proc`, `/sys`,
-`/run`, `chroot`, and image-mount setup:
+`/run`, and `chroot` setup:
 
 - `conary bootstrap temp-tools`
 - `conary bootstrap system`
 - `conary bootstrap tier2`
-- `conary bootstrap image`
 
 By default that rootful runner is `sudo`. After each privileged phase, the
 wrapper restores ownership of `<work_dir>` back to the invoking user so the
-later unprivileged steps (`config`, `guest-profile`, and VM validation) can
-still mutate and read the generated artifacts normally. For harness/testing
-scenarios, the wrapper also honors `CONARY_BOOTSTRAP_ROOTFUL_RUNNER` as an
-override for the rootful command.
+later unprivileged steps (`config`, `guest-profile`, `image`, and VM
+validation) can still mutate and read the generated artifacts normally. For
+harness/testing scenarios, the wrapper also honors
+`CONARY_BOOTSTRAP_ROOTFUL_RUNNER` as an override for the rootful command.
 
 The validation wrapper then:
 
@@ -123,8 +122,8 @@ workspace snapshot.
 
 The checked-in wrapper therefore creates:
 
-- `conary-workspace.tar.gz` from tracked files only via
-  `git archive --format=tar --prefix=conary-workspace/ HEAD | gzip -n`
+- `conary-workspace.tar.gz` from the current working tree via:
+  `git ls-files -z --cached --modified --others --exclude-standard | sort -z | tar --null --no-recursion --files-from=- --transform='s,^,conary-workspace/,' --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner -cf - | gzip -n`
 - `conary-workspace.tar.gz.sha256` as a plain `sha256sum` digest sidecar
 
 The host Tier 2 implementation validates that sidecar before it extracts the
@@ -184,7 +183,7 @@ official `x86_64-unknown-linux-gnu` Rust binary distribution instead of
 building `rustc` from source. Keep that divergence explicit in recipe comments
 and in future audit updates.
 
-## Why The Wrapper Defaults To 16G
+## Why The Wrapper Defaults To 32G
 
 The generic `conary bootstrap image` default is `4G`, which is too small for a
 truthful self-hosting validation run once the guest contains:
@@ -194,8 +193,10 @@ truthful self-hosting validation run once the guest contains:
 - a writable Cargo target directory
 - temporary build outputs for the in-guest `cargo build --locked`
 
-The checked-in wrapper therefore defaults to `16G`. Treat smaller images as
-debug-only experiments unless a later audit proves otherwise.
+The first full self-hosting validation run on the checked-in workspace
+exhausted a `16G` image during the in-guest `cargo build --locked`, so the
+checked-in wrapper now defaults to `32G`. Treat smaller images as debug-only
+experiments unless a later measurement proves a lower floor is still truthful.
 
 ## Follow-Up: VMware
 

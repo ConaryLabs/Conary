@@ -236,9 +236,9 @@ pub async fn cmd_remove(
     let post_commit_result = (|| -> Result<()> {
         crate::commands::composefs_ops::rebuild_and_mount(
             &conn,
+            db_path,
             &format!("Remove {}", package_name),
             Some(prev_etc),
-            std::path::Path::new(root),
         )?;
         changeset.update_status(&conn, conary_core::db::models::ChangesetStatus::Applied)?;
         Ok(())

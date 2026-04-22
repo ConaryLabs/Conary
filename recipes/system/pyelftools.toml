@@ -1,0 +1,42 @@
+# recipes/system/pyelftools.toml
+#
+# Conary deviation for LFS 13 Section 8.78 — pyelftools-0.32
+# https://pypi.org/project/pyelftools/
+#
+# Upstream systemd-259.1 now requires the Python `elftools` module when
+# `-Dbootloader=true` is enabled. LFS does not need this because it does not
+# build systemd-boot, but Conary does.
+
+[package]
+name = "pyelftools"
+version = "0.32"
+release = "1"
+summary = "Python ELF and DWARF inspection library"
+description = """
+pyelftools is a Python library for parsing ELF binaries and DWARF debugging
+information. Conary installs it in Phase 3 so the documented systemd-boot
+build deviation can configure and build successfully.
+"""
+license = "Public Domain"
+homepage = "https://github.com/eliben/pyelftools"
+
+[source]
+archive = "https://pypi.org/packages/source/p/pyelftools/pyelftools-%(version)s.tar.gz"
+checksum = "sha256:6de90ee7b8263e740c8715a925382d4099b354f29ac48ea40d840cf7aa14ace5"
+
+[build]
+requires = ["python", "setuptools"]
+makedepends = []
+chroot = true
+
+configure = ""
+
+make = """
+pip3 wheel -w dist --no-cache-dir --no-build-isolation --no-deps $PWD
+"""
+
+install = """
+pip3 install --no-index --find-links dist pyelftools
+"""
+
+[variables]
