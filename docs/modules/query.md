@@ -1,3 +1,9 @@
+---
+last_updated: 2026-04-22
+revision: 1
+summary: Query-oriented CLI surfaces, local database read paths, and the related SBOM command placement
+---
+
 # Query Module (apps/conary/src/commands/query/)
 
 Package, file, dependency, and repository queries against the local SQLite

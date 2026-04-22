@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-04-07
-revision: 2
-summary: Vendor-neutral map for coding assistants working in the Conary repository
+last_updated: 2026-04-22
+revision: 3
+summary: Vendor-neutral map for coding assistants working in the Conary repository and the compatibility layer around the canonical doc system
 ---
 
 # Conary For Coding Assistants
@@ -20,6 +20,19 @@ root guidance into a manual.
 3. Follow the linked canonical docs for subsystem, testing, and operations
    detail.
 
+## Instruction Layers
+
+- `AGENTS.md` is the shared repo-wide contract for coding agents.
+- This file is the vendor-neutral map into the canonical docs under `docs/`.
+- Canonical subsystem and operations detail belongs in human-readable docs such
+  as `docs/ARCHITECTURE.md`, `docs/modules/*.md`, and
+  `docs/operations/*.md`.
+- Compatibility shims such as `CLAUDE.md`, `GEMINI.md`, and
+  `.github/copilot-instructions.md` should stay intentionally thin and point
+  back to this layered doc system instead of becoming parallel manuals.
+- If a subtree later needs materially different durable instructions, prefer a
+  nested `AGENTS.md` scoped to that subtree over bloating the root guidance.
+
 ## Core Docs
 
 - [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md): workspace-level architecture and data flow
@@ -33,11 +46,20 @@ root guidance into a manual.
 - [`docs/operations/infrastructure.md`](../operations/infrastructure.md): MCP-first operations, deploy, and host notes
 - [`docs/llms/subsystem-map.md`](subsystem-map.md): stable "look here first" pointers distilled from legacy assistant docs
 
+## Focused Docs
+
+- [`docs/operations/bootstrap-selfhosting-vm.md`](../operations/bootstrap-selfhosting-vm.md): truthful operator flow for the current bootstrap self-hosting VM path
+- [`docs/operations/bootstrap-follow-up-investigations.md`](../operations/bootstrap-follow-up-investigations.md): deferred architecture and cleanup ideas to revisit after bootstrap is stable
+
 ## Working Rules
 
 - Treat `AGENTS.md` as a map, not a manual.
-- Keep tool-specific files such as `CLAUDE.md` or future shims like `GEMINI.md`
-  short and pointed back at `AGENTS.md`.
+- Prefer `AGENTS.md` as the shared cross-tool filename where the tool supports
+  it.
+- Keep tool-specific files such as `CLAUDE.md`, `GEMINI.md`, or
+  `.github/copilot-instructions.md` short and pointed back at `AGENTS.md`.
+- Avoid duplicating or conflicting repo-wide guidance across compatibility
+  shims or tool-specific path rules.
 - Prefer MCP tools over ad hoc SSH or curl when the MCP surface already covers
   the workflow.
 - When version-specific library behavior matters, check current external
@@ -46,6 +68,8 @@ root guidance into a manual.
 ## Freshness Rules
 
 - Prefer linked canonical docs over copied volatile facts.
+- Use frontmatter (`last_updated`, `revision`, `summary`) for canonical docs
+  that are meant to stay discoverable and maintained over time.
 - Do not duplicate schema counts, workflow counts, or host-specific trivia here.
 - If a detail cannot be kept fresh realistically, omit it instead of preserving
   stale lore.

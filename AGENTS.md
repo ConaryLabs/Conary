@@ -30,6 +30,14 @@ Start assistant-facing work with:
 - `docs/INTEGRATION-TESTING.md` when validation spans `conary-test`
 - `docs/operations/infrastructure.md` for MCP, deploy, and host workflow notes
 
+Assistant doc model:
+
+- `AGENTS.md` is the canonical repo-wide assistant contract.
+- `docs/llms/README.md` is the vendor-neutral routing layer into canonical docs.
+- Thin compatibility shims such as `CLAUDE.md`, `GEMINI.md`, or `.github/copilot-instructions.md` should point back here instead of restating repo-wide rules.
+- Add nested `AGENTS.md` files only when a subtree genuinely needs durable instructions that differ from the repo root.
+- Keep host-local, credential-bearing, or personal notes in ignored local files such as `docs/operations/LOCAL_ACCESS.md`, not in tracked assistant guidance.
+
 Keep this file map-like. If a detail changes often or needs more than a short paragraph to explain, move it into a linked canonical doc instead of expanding this file.
 
 ## Security & Contributor Notes

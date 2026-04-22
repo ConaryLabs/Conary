@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-04-16
-revision: 4
-summary: Document the current bootstrap command surface, self-host VM overlay, manifest pipeline artifacts, and comparison commands
+last_updated: 2026-04-22
+revision: 5
+summary: Document the current bootstrap command surface, self-host VM overlay, focused operator docs, and manifest comparison commands
 ---
 
 # Bootstrap Module (conary-core/src/bootstrap/)
@@ -208,4 +208,8 @@ compares:
 
 It does not mount or recursively diff EROFS contents.
 
-See also: [docs/ARCHITECTURE.md](/docs/ARCHITECTURE.md).
+See also:
+
+- [docs/ARCHITECTURE.md](/docs/ARCHITECTURE.md)
+- [docs/operations/bootstrap-selfhosting-vm.md](/docs/operations/bootstrap-selfhosting-vm.md)
+- [docs/operations/bootstrap-follow-up-investigations.md](/docs/operations/bootstrap-follow-up-investigations.md)
