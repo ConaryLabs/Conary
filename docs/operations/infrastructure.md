@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-04-09
-revision: 3
+last_updated: 2026-04-17
+revision: 4
 summary: Non-secret infrastructure, MCP, and deployment guidance for Conary contributors and coding assistants
 ---
 
@@ -9,6 +9,12 @@ summary: Non-secret infrastructure, MCP, and deployment guidance for Conary cont
 ## Host Roles
 
 - Remi is the production package service behind `https://remi.conary.io`.
+- `https://packages.conary.io` remains the public compatibility alias and
+  simple external health-check hostname for that same Remi service.
+- Direct SSH access for the Remi host uses `ssh.conary.io`, not the proxied
+  public HTTPS hostnames.
+- Remi currently runs Arch Linux, so host-level package-manager notes should
+  assume `pacman` rather than Debian or Ubuntu tooling.
 - Forge is the trusted GitHub runner host used for `conary-test` validation,
   test-harness service work, and source-sync validation.
 - Forge also serves as the current local-only staging host for `conaryd`
@@ -28,8 +34,11 @@ task or when you are debugging the underlying service path itself.
 
 ## Safe Public And Admin Endpoints
 
-- Public package service: `https://remi.conary.io`
-- Public authenticated MCP endpoint: `https://remi.conary.io/mcp`
+- Public package web UI and authenticated MCP endpoint:
+  `https://remi.conary.io`
+- Public package API and compatibility health alias:
+  `https://packages.conary.io`
+- Direct SSH hostname for the Remi origin host: `ssh.conary.io`
 - Remi admin origin API: `https://localhost:8082` via SSH tunnel or direct
   origin access
 - Remi OpenAPI spec: `https://localhost:8082/v1/admin/openapi.json` via SSH
@@ -68,7 +77,11 @@ task or when you are debugging the underlying service path itself.
 
 ### Remi
 
-- Use rsync to `/root/conary-src/`
+- Use the direct origin hostname `ssh.conary.io` for SSH and rsync.
+- Use a normal admin account plus `sudo`; do not assume root SSH login is
+  enabled on the host.
+- Stage source under `~/conary-src/` on the admin account rather than under
+  `/root/`
 - Exclude `target/`, `.git/`, and `.worktrees/`
 - Build `remi`, stop the service before replacing the live binary, then restart
   and verify the local health endpoint
@@ -79,6 +92,8 @@ task or when you are debugging the underlying service path itself.
 - The package frontend is the one wired into Remi's tracked config via
   `[web].root = "/conary/web"`; the main site remains a separate static root on
   the same host
+- `packages.conary.io` should be treated as the public compatibility alias for
+  the same Remi origin, not as a separate host or deployment target
 
 Do not overwrite the live Remi binary while `remi.service` is still running the
 old process. That can fail with `Text file busy`.

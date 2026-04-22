@@ -15,18 +15,29 @@ Create an A record pointing to your Hetzner server:
 | Type | Name       | Content         | Proxy | TTL  |
 |------|------------|-----------------|-------|------|
 | A    | remi       | YOUR_SERVER_IP  | Yes   | Auto |
+| A    | ssh        | YOUR_SERVER_IP  | No    | Auto |
 
 The orange cloud (proxy) must be enabled for caching and DDoS protection to work.
+The direct SSH hostname must stay gray-cloud / DNS only so OpenSSH reaches the
+origin host directly.
 
 If using IPv6 (recommended on Hetzner):
 
 | Type | Name       | Content         | Proxy | TTL  |
 |------|------------|-----------------|-------|------|
 | AAAA | remi       | YOUR_IPV6_ADDR  | Yes   | Auto |
+| AAAA | ssh        | YOUR_IPV6_ADDR  | No    | Auto |
 
-If you are preserving `packages.conary.io` as a legacy alias, keep matching
-proxied `packages` records as well and redirect or otherwise treat them as a
-compatibility hostname rather than the canonical public endpoint.
+If you are publishing `packages.conary.io` as a compatibility alias, keep
+matching proxied `packages` records as well and redirect or otherwise treat
+them as a compatibility hostname rather than the canonical public endpoint.
+
+Operationally, that means:
+
+- `remi.conary.io` is the proxied public UI and MCP hostname
+- `packages.conary.io` is the proxied compatibility alias for package-service
+  traffic and simple external health checks
+- `ssh.conary.io` is the direct origin SSH hostname and must not be proxied
 
 ### Admin and MCP proxying
 
