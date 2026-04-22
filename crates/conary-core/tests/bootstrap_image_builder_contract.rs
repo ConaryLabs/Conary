@@ -6,7 +6,10 @@ use std::path::{Path, PathBuf};
 fn workspace_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
-        .find(|dir| dir.join("crates/conary-core/src/bootstrap/image.rs").is_file())
+        .find(|dir| {
+            dir.join("crates/conary-core/src/bootstrap/image.rs")
+                .is_file()
+        })
         .expect("workspace root not found from crate manifest ancestors")
 }
 

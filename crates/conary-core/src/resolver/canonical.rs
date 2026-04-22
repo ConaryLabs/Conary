@@ -657,6 +657,7 @@ mod tests {
     #[test]
     fn latest_mode_prefers_newest_repology_candidate_before_pin_affinity_tiebreakers() {
         let (_t, conn) = create_test_db();
+        let fresh = chrono::Utc::now().to_rfc3339();
 
         let mut pkg = CanonicalPackage::new("python".into(), "package".into());
         let cid = pkg.insert(&conn).unwrap();
@@ -675,7 +676,7 @@ mod tests {
                 distro_name: "python".into(),
                 version: Some("3.12.0".into()),
                 status: Some("outdated".into()),
-                fetched_at: "2026-04-07T00:00:00Z".into(),
+                fetched_at: fresh.clone(),
             },
         )
         .unwrap();
@@ -687,7 +688,7 @@ mod tests {
                 distro_name: "python".into(),
                 version: Some("3.13.0".into()),
                 status: Some("newest".into()),
-                fetched_at: "2026-04-07T00:00:00Z".into(),
+                fetched_at: fresh.clone(),
             },
         )
         .unwrap();
@@ -704,6 +705,7 @@ mod tests {
     #[test]
     fn latest_mode_does_not_choose_ineligible_newest_candidate() {
         let (_t, conn) = create_test_db();
+        let fresh = chrono::Utc::now().to_rfc3339();
 
         let mut pkg = CanonicalPackage::new("python".into(), "package".into());
         let cid = pkg.insert(&conn).unwrap();
@@ -722,7 +724,7 @@ mod tests {
                 distro_name: "python".into(),
                 version: Some("3.12.0".into()),
                 status: Some("outdated".into()),
-                fetched_at: "2026-04-07T00:00:00Z".into(),
+                fetched_at: fresh.clone(),
             },
         )
         .unwrap();
@@ -734,7 +736,7 @@ mod tests {
                 distro_name: "python".into(),
                 version: Some("3.13.0".into()),
                 status: Some("newest".into()),
-                fetched_at: "2026-04-07T00:00:00Z".into(),
+                fetched_at: fresh,
             },
         )
         .unwrap();

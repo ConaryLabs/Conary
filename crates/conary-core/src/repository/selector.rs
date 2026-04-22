@@ -910,6 +910,7 @@ mod tests {
     #[test]
     fn select_best_respects_latest_mode_for_cross_distro_exact_name_candidates() {
         let conn = test_db();
+        let fresh = chrono::Utc::now().to_rfc3339();
 
         conn.execute(
             "INSERT INTO canonical_packages (name, kind) VALUES ('python', 'package')",
@@ -970,7 +971,7 @@ mod tests {
                 distro_name: "python".into(),
                 version: Some("3.12.2".into()),
                 status: Some("outdated".into()),
-                fetched_at: "2026-04-07T00:00:00Z".into(),
+                fetched_at: fresh.clone(),
             },
         )
         .unwrap();
@@ -982,7 +983,7 @@ mod tests {
                 distro_name: "python".into(),
                 version: Some("3.13.0".into()),
                 status: Some("newest".into()),
-                fetched_at: "2026-04-07T00:00:00Z".into(),
+                fetched_at: fresh,
             },
         )
         .unwrap();

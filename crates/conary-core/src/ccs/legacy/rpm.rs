@@ -93,7 +93,7 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
 
     // Add URL if present
     if let Some(url) = &manifest.package.homepage {
-        builder = builder.url(url);
+        builder.url(url);
     }
 
     // Add group from legacy overrides
@@ -101,17 +101,17 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
         && let Some(rpm_legacy) = &legacy.rpm
     {
         if let Some(group) = &rpm_legacy.group {
-            builder = builder.group(group);
+            builder.group(group);
         }
 
         // Add explicit requires
         for req in &rpm_legacy.requires {
-            builder = builder.requires(rpm::Dependency::any(req));
+            builder.requires(rpm::Dependency::any(req));
         }
 
         // Add explicit provides
         for prov in &rpm_legacy.provides {
-            builder = builder.provides(rpm::Dependency::any(prov));
+            builder.provides(rpm::Dependency::any(prov));
         }
     }
 
@@ -122,9 +122,9 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
             if let Some(ver) = cap.version() {
                 // Parse version constraint
                 let dep = parse_rpm_dependency(&pkg, ver);
-                builder = builder.requires(dep);
+                builder.requires(dep);
             } else {
-                builder = builder.requires(rpm::Dependency::any(&pkg));
+                builder.requires(rpm::Dependency::any(&pkg));
             }
         } else {
             loss_report.add_dependency_note(&format!(
@@ -138,9 +138,9 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
     for pkg_dep in &manifest.requires.packages {
         if let Some(ver) = &pkg_dep.version {
             let dep = parse_rpm_dependency(&pkg_dep.name, ver);
-            builder = builder.requires(dep);
+            builder.requires(dep);
         } else {
-            builder = builder.requires(rpm::Dependency::any(&pkg_dep.name));
+            builder.requires(rpm::Dependency::any(&pkg_dep.name));
         }
     }
 
@@ -159,36 +159,28 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
 
                 // Determine file options
                 let options =
-                    rpm::FileOptions::new(&file.path).mode(rpm::FileMode::from(file.mode as i32));
+                    rpm::FileOptions::new(&file.path).permissions((file.mode & 0o7777) as u16);
 
                 // Check if config file
                 let options = if manifest.config.files.contains(&file.path) {
                     if manifest.config.noreplace {
-                        options.is_config_noreplace()
+                        options.config().noreplace()
                     } else {
-                        options.is_config()
+                        options.config()
                     }
                 } else {
                     options
                 };
 
-                builder = builder
+                builder
                     .with_file(&temp_path, options)
                     .context(format!("Failed to add file: {}", file.path))?;
             }
             FileType::Symlink => {
                 if let Some(target) = &file.target {
-                    // RPM handles symlinks differently - create in temp and add
-                    let temp_path = temp_dir.path().join(format!("link_{}", file.hash));
-                    #[cfg(unix)]
-                    {
-                        let _ = fs::remove_file(&temp_path);
-                        std::os::unix::fs::symlink(target, &temp_path)?;
-                    }
-
-                    let options = rpm::FileOptions::new(&file.path);
-                    builder = builder
-                        .with_file(&temp_path, options)
+                    let options = rpm::FileOptions::symlink(&file.path, target);
+                    builder
+                        .with_symlink(options)
                         .context(format!("Failed to add symlink: {}", file.path))?;
                 }
             }
@@ -200,19 +192,19 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
     let hook_converter = RpmHookConverter;
 
     if let Some(script) = hook_converter.pre_install(&manifest.hooks) {
-        builder = builder.pre_install_script(script);
+        builder.pre_install_script(script);
     }
 
     if let Some(script) = hook_converter.post_install(&manifest.hooks) {
-        builder = builder.post_install_script(script);
+        builder.post_install_script(script);
     }
 
     if let Some(script) = hook_converter.pre_remove(&manifest.hooks) {
-        builder = builder.pre_uninstall_script(script);
+        builder.pre_uninstall_script(script);
     }
 
     if let Some(script) = hook_converter.post_remove(&manifest.hooks) {
-        builder = builder.post_uninstall_script(script);
+        builder.post_uninstall_script(script);
     }
 
     // Note conversion limitations

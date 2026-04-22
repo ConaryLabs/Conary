@@ -24,8 +24,8 @@ tower.workspace = true
 filetime = "0.2"
 async-trait.workspace = true
 futures.workspace = true
-async-stream = "0.3"
-dashmap = "6.0"
+async-stream.workspace = true
+dashmap.workspace = true
 governor = "0.10"
 parking_lot = "0.12"
 
@@ -33,7 +33,7 @@ parking_lot = "0.12"
 rust-s3 = { version = "0.37", default-features = false, features = ["tokio-rustls-tls"] }
 
 # Full-text search
-tantivy = "0.25"
+tantivy = "0.26"
 
 # CLI parsing (for binary entry points)
 clap.workspace = true

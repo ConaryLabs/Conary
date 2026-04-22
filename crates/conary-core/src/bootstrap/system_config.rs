@@ -674,9 +674,10 @@ mod tests {
             root.join("etc/systemd/system/getty.target.wants/serial-getty@ttyS0.service")
                 .exists()
         );
-        assert!(root
-            .join("etc/systemd/system/sys-firmware-efi-efivars.mount")
-            .exists());
+        assert!(
+            root.join("etc/systemd/system/sys-firmware-efi-efivars.mount")
+                .exists()
+        );
 
         // Verify symlink targets
         let target = std::fs::read_link(root.join("etc/systemd/system/default.target")).unwrap();

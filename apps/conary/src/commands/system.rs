@@ -506,12 +506,8 @@ fn rollback_changeset_with_snapshots(
     } else {
         format!("Rollback removal of {}", snapshots[0].name)
     };
-    let _gen_num = crate::commands::composefs_ops::rebuild_and_mount(
-        conn,
-        db_path,
-        &summary,
-        None,
-    )?;
+    let _gen_num =
+        crate::commands::composefs_ops::rebuild_and_mount(conn, db_path, &summary, None)?;
 
     let removed_messages = removed_messages.into_inner();
     let restored_file_count: usize = snapshots.iter().map(|snapshot| snapshot.files.len()).sum();
