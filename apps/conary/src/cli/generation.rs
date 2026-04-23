@@ -19,6 +19,29 @@ pub enum GenerationCommands {
         db: DbArgs,
     },
 
+    /// Export a generation artifact as a disk image.
+    Export {
+        /// Installed generation number to export (defaults to current generation).
+        #[arg(conflicts_with = "path")]
+        generation: Option<i64>,
+
+        /// Explicit generation directory, e.g. output/generations/1.
+        #[arg(long)]
+        path: Option<String>,
+
+        /// Output format: raw, qcow2, or iso.
+        #[arg(long, default_value = "qcow2")]
+        format: String,
+
+        /// Output image path.
+        #[arg(short, long)]
+        output: String,
+
+        /// Optional image size larger than the computed minimum, e.g. 8G.
+        #[arg(long)]
+        size: Option<String>,
+    },
+
     /// Switch to a specific generation
     Switch {
         /// Generation number to switch to

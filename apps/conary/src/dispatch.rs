@@ -640,6 +640,22 @@ async fn dispatch_system_command(
                 )?;
                 commands::generation::commands::cmd_generation_build(&db.db_path, &summary)
             }
+            cli::GenerationCommands::Export {
+                generation,
+                path,
+                format,
+                output,
+                size,
+            } => {
+                commands::generation::export::cmd_generation_export(
+                    generation,
+                    path.as_deref(),
+                    &format,
+                    &output,
+                    size.as_deref(),
+                )
+                .await
+            }
             cli::GenerationCommands::Switch { number, reboot } => {
                 require_live_mutation(
                     allow_live_system_mutation,
@@ -1455,17 +1471,7 @@ async fn dispatch_bootstrap_command(bootstrap_cmd: cli::BootstrapCommands) -> Re
             output,
             format,
             size,
-            from_generation,
-        } => {
-            commands::cmd_bootstrap_image(
-                &work_dir,
-                &output,
-                &format,
-                &size,
-                from_generation.as_deref(),
-            )
-            .await
-        }
+        } => commands::cmd_bootstrap_image(&work_dir, &output, &format, &size).await,
 
         cli::BootstrapCommands::Status { work_dir, verbose } => {
             commands::cmd_bootstrap_status(&work_dir, verbose).await
