@@ -1107,7 +1107,6 @@ menuentry "Conary Linux (Live, Text Mode)" {
     pub fn log(&self) -> &str {
         &self.log
     }
-
 }
 
 /// Recursively compute the total size of a directory in bytes.
