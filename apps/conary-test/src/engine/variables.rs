@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use crate::config::distro::GlobalConfig;
-use crate::config::manifest::{Assertion, FileChecksum, QemuBoot, TestManifest};
+use crate::config::manifest::{Assertion, FileChecksum, QemuBoot, QemuGuestCopy, TestManifest};
 
 /// Build the base variable map from global config and distro selection.
 ///
@@ -161,6 +161,18 @@ pub fn expand_assertion(assertion: &Assertion, vars: &HashMap<String, String>) -
 pub fn expand_qemu_boot(config: &QemuBoot, vars: &HashMap<String, String>) -> QemuBoot {
     QemuBoot {
         image: expand_variables(&config.image, vars),
+        local_image_path: config
+            .local_image_path
+            .as_ref()
+            .map(|path| expand_variables(path, vars)),
+        copy_from_guest: config
+            .copy_from_guest
+            .iter()
+            .map(|copy| QemuGuestCopy {
+                source: expand_variables(&copy.source, vars),
+                dest: expand_variables(&copy.dest, vars),
+            })
+            .collect(),
         memory_mb: config.memory_mb,
         timeout_seconds: config.timeout_seconds,
         ssh_port: config.ssh_port,
@@ -388,6 +400,8 @@ mod tests {
         let expanded = expand_qemu_boot(
             &QemuBoot {
                 image: "${IMG}".to_string(),
+                local_image_path: None,
+                copy_from_guest: Vec::new(),
                 memory_mb: 1024,
                 timeout_seconds: 120,
                 ssh_port: 2222,
@@ -400,5 +414,50 @@ mod tests {
         assert_eq!(expanded.image, "minimal-boot-v1");
         assert_eq!(expanded.commands, vec!["echo minimal-boot-v1"]);
         assert_eq!(expanded.expect_output, vec!["minimal-boot-v1"]);
+    }
+
+    #[test]
+    fn test_expand_qemu_boot_expands_local_image_and_copy_fields() {
+        let mut vars = HashMap::new();
+        vars.insert("IMG".to_string(), "minimal-boot-v2".to_string());
+        vars.insert(
+            "HOST_OUT".to_string(),
+            "/tmp/conary-generation-export/generated.qcow2".to_string(),
+        );
+
+        let expanded = expand_qemu_boot(
+            &QemuBoot {
+                image: "${IMG}".to_string(),
+                local_image_path: Some("${HOST_OUT}".to_string()),
+                copy_from_guest: vec![QemuGuestCopy {
+                    source: "/tmp/${IMG}.qcow2".to_string(),
+                    dest: "${HOST_OUT}".to_string(),
+                }],
+                memory_mb: 1024,
+                timeout_seconds: 120,
+                ssh_port: 2222,
+                commands: vec!["test -s ${HOST_OUT}".to_string()],
+                expect_output: vec!["${IMG}".to_string()],
+            },
+            &vars,
+        );
+
+        assert_eq!(expanded.image, "minimal-boot-v2");
+        assert_eq!(
+            expanded.local_image_path.as_deref(),
+            Some("/tmp/conary-generation-export/generated.qcow2")
+        );
+        assert_eq!(
+            expanded.copy_from_guest[0].source,
+            "/tmp/minimal-boot-v2.qcow2"
+        );
+        assert_eq!(
+            expanded.copy_from_guest[0].dest,
+            "/tmp/conary-generation-export/generated.qcow2"
+        );
+        assert_eq!(
+            expanded.commands,
+            vec!["test -s /tmp/conary-generation-export/generated.qcow2"]
+        );
     }
 }

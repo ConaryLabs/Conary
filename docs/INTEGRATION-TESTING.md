@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-04-09
-revision: 10
-summary: Align integration-testing guidance with the virtual workspace package layout
+last_updated: 2026-04-22
+revision: 11
+summary: Align integration-testing guidance with generation export QEMU validation and the virtual workspace package layout
 ---
 
 # Integration Testing
@@ -31,6 +31,9 @@ cargo run -p conary-test -- run --suite phase1-advanced --distro fedora43 --phas
 
 # Run Phase 2 (deep E2E) tests
 cargo run -p conary-test -- run --suite phase2-group-a --distro fedora43 --phase 2
+
+# Run generation artifact export QEMU validation
+cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora43 --phase 3
 
 # Run all tests for a phase
 cargo run -p conary-test -- run --distro fedora43 --phase 1
@@ -138,7 +141,8 @@ Adversarial and stress tests.
 |-------|----------|
 | G-M | Container-based adversarial tests |
 | N (container) | Container-based adversarial tests |
-| N (QEMU) | QEMU boot tests |
+| N (QEMU) | Kernel and boot QEMU tests |
+| O (QEMU) | Generation artifact export QEMU tests |
 
 ### Phase 4: Feature Validation (Groups A-E)
 
@@ -195,6 +199,24 @@ expect_output = ["vmlinuz"]
 ```
 
 QEMU images are downloaded from `https://remi.conary.io/test-artifacts/` and cached locally. Tests gracefully skip when QEMU tools are unavailable.
+
+Generated-image suites can boot a host-local qcow2 and copy files out of a
+guest before shutdown:
+
+```toml
+[[test.step]]
+[test.step.qemu_boot]
+image = "minimal-boot-v2"
+local_image_path = "/tmp/conary-generation-export/generated.qcow2"
+copy_from_guest = [
+  { source = "/tmp/out.qcow2", dest = "/tmp/conary-generation-export/out.qcow2" },
+]
+commands = ["true"]
+```
+
+When `local_image_path` is set, `image` remains a required logical name but the
+engine uses the local path directly instead of downloading a cached Remi
+artifact. `copy_from_guest.dest` parent directories are created automatically.
 
 ## Configuration
 

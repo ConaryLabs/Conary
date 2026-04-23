@@ -1291,6 +1291,8 @@ mod tests {
             step: vec![simple_step_qemu_boot(
                 QemuBoot {
                     image: "https://127.0.0.1:9/minimal-boot-${PKG}.qcow2".to_string(),
+                    local_image_path: None,
+                    copy_from_guest: Vec::new(),
                     memory_mb: 512,
                     timeout_seconds: 5,
                     ssh_port: 2223,
@@ -1351,6 +1353,8 @@ mod tests {
         let expanded = variables::expand_qemu_boot(
             &QemuBoot {
                 image: "${IMG}".to_string(),
+                local_image_path: None,
+                copy_from_guest: Vec::new(),
                 memory_mb: 1024,
                 timeout_seconds: 120,
                 ssh_port: 2222,
