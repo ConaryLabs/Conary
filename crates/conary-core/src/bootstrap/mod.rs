@@ -65,7 +65,6 @@ mod cross_tools;
 mod final_system;
 mod guest_profile;
 mod image;
-pub(crate) mod repart;
 mod stages;
 mod system_config;
 mod temp_tools;

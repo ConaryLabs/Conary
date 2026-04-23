@@ -48,6 +48,8 @@ use std::str::FromStr;
 use thiserror::Error;
 use tracing::{info, warn};
 
+pub use crate::image::size::ImageSize;
+
 /// Errors during image generation
 #[derive(Debug, Error)]
 pub enum ImageError {
@@ -132,70 +134,6 @@ impl std::fmt::Display for ImageFormat {
             Self::Qcow2 => write!(f, "qcow2"),
             Self::Iso => write!(f, "iso"),
             Self::Erofs => write!(f, "erofs"),
-        }
-    }
-}
-
-/// Image size in bytes
-#[derive(Debug, Clone, Copy)]
-pub struct ImageSize(u64);
-
-impl FromStr for ImageSize {
-    type Err = ImageError;
-
-    /// Parse size from string (e.g., "4G", "512M", "8192")
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let s = s.trim();
-        if s.is_empty() {
-            return Err(ImageError::InvalidSize("empty size".to_string()));
-        }
-
-        let (num_str, multiplier) = if let Some(n) = s.strip_suffix(['G', 'g']) {
-            (n, 1024 * 1024 * 1024u64)
-        } else if let Some(n) = s.strip_suffix(['M', 'm']) {
-            (n, 1024 * 1024u64)
-        } else if let Some(n) = s.strip_suffix(['K', 'k']) {
-            (n, 1024u64)
-        } else if let Some(n) = s.strip_suffix(['T', 't']) {
-            (n, 1024 * 1024 * 1024 * 1024u64)
-        } else {
-            (s, 1u64)
-        };
-
-        let num: u64 = num_str
-            .trim()
-            .parse()
-            .map_err(|_| ImageError::InvalidSize(s.to_string()))?;
-
-        Ok(Self(num * multiplier))
-    }
-}
-
-impl ImageSize {
-    /// Get size in bytes
-    pub fn bytes(&self) -> u64 {
-        self.0
-    }
-
-    /// Get size in megabytes
-    pub fn megabytes(&self) -> u64 {
-        self.0 / (1024 * 1024)
-    }
-
-    /// Get size in gigabytes
-    pub fn gigabytes(&self) -> u64 {
-        self.0 / (1024 * 1024 * 1024)
-    }
-}
-
-impl std::fmt::Display for ImageSize {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.0 >= 1024 * 1024 * 1024 {
-            write!(f, "{}G", self.gigabytes())
-        } else if self.0 >= 1024 * 1024 {
-            write!(f, "{}M", self.megabytes())
-        } else {
-            write!(f, "{}", self.0)
         }
     }
 }
@@ -841,12 +779,15 @@ impl ImageBuilder {
     /// Build a raw disk image using systemd-repart.
     fn build_raw_repart(&mut self) -> Result<ImageResult, ImageError> {
         let repart_dir = self.work_dir.join("repart.d");
-        super::repart::generate_repart_definitions(
-            &repart_dir,
-            self.config.target_arch,
-            Self::ESP_SIZE_MB,
-        )
-        .map_err(|e| ImageError::PartitionFailed(e.to_string()))?;
+        let plan = crate::image::repart::DiskImagePlan {
+            architecture: self.config.target_arch,
+            esp_staging_dir: PathBuf::from("/boot"),
+            root_staging_dir: PathBuf::from("/"),
+            output_raw: self.output.clone(),
+            size_bytes: self.size.bytes(),
+        };
+        crate::image::repart::generate_repart_definitions(&repart_dir, &plan, Self::ESP_SIZE_MB)
+            .map_err(|e| ImageError::PartitionFailed(e.to_string()))?;
 
         let repart_bin = self
             .tools
