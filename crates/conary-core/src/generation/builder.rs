@@ -18,6 +18,10 @@ use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
 use crate::db::models::{FileEntry, InstallSource, StateEngine, SystemState, Trove};
+use crate::generation::artifact::{
+    ArtifactWriteInputs, BootAssetSources, CasObjectRef, stage_boot_assets,
+    write_generation_artifact,
+};
 use crate::generation::metadata::{
     GENERATION_FORMAT, GenerationMetadata, clear_generation_pending, mark_generation_pending,
 };
@@ -42,6 +46,15 @@ pub fn build_generation_from_db(
     conn: &rusqlite::Connection,
     generations_root: &Path,
     summary: &str,
+) -> crate::Result<(i64, BuildResult)> {
+    build_generation_from_db_with_boot_root(conn, generations_root, summary, Path::new("/boot"))
+}
+
+pub(crate) fn build_generation_from_db_with_boot_root(
+    conn: &rusqlite::Connection,
+    generations_root: &Path,
+    summary: &str,
+    boot_root: &Path,
 ) -> crate::Result<(i64, BuildResult)> {
     struct PendingGenerationGuard {
         gen_dir: PathBuf,
@@ -180,7 +193,32 @@ pub fn build_generation_from_db(
     let symlink_refs = collect_symlink_refs(conn)?;
     let result = build_erofs_image(&file_refs, &symlink_refs, &gen_dir)?;
 
-    // Step 5: Create system state snapshot at the reserved number -- only
+    // Step 5: Stage boot assets and write the export artifact contract before
+    // committing metadata. Export must not scrape live /boot later.
+    let architecture = runtime_generation_architecture()?;
+    let kernel_version = detect_kernel_version_from_troves(&troves).ok_or_else(|| {
+        crate::error::Error::NotFound(
+            "could not determine kernel version for generation boot assets".to_string(),
+        )
+    })?;
+    let boot_assets = stage_runtime_boot_assets_from_boot_root(
+        &gen_dir,
+        gen_number,
+        architecture,
+        &kernel_version,
+        boot_root,
+    )?;
+    let artifact_manifest_sha256 = write_generation_artifact(ArtifactWriteInputs {
+        generation_dir: &gen_dir,
+        generation: gen_number,
+        architecture,
+        erofs_path: &result.image_path,
+        cas_base_rel: "../../objects",
+        cas_objects: cas_objects_from_file_refs(&file_refs),
+        boot_assets,
+    })?;
+
+    // Step 6: Create system state snapshot at the reserved number -- only
     // after successful image build so we never leave orphaned state records
     // on build failure. Using create_snapshot_at() ensures the DB state
     // number matches the directory number we already created.
@@ -193,7 +231,7 @@ pub fn build_generation_from_db(
             ))
         })?;
 
-    // Step 6: Write generation metadata
+    // Step 7: Write generation metadata
     #[allow(clippy::cast_possible_wrap)]
     let metadata = GenerationMetadata {
         generation: gen_number,
@@ -202,10 +240,10 @@ pub fn build_generation_from_db(
         cas_objects_referenced: Some(result.cas_objects_referenced as i64),
         fsverity_enabled: false, // Caller can enable separately
         erofs_verity_digest: result.erofs_verity_digest.clone(),
-        artifact_manifest_sha256: None,
+        artifact_manifest_sha256: Some(artifact_manifest_sha256),
         created_at: chrono::Utc::now().to_rfc3339(),
         package_count: troves.len() as i64,
-        kernel_version: detect_kernel_version_from_troves(&troves),
+        kernel_version: Some(kernel_version),
         summary: summary.to_string(),
     };
     metadata.write_to(&gen_dir).map_err(|e| {
@@ -242,6 +280,22 @@ pub(crate) fn rebuild_generation_image(
     gen_number: i64,
     summary: &str,
 ) -> crate::Result<BuildResult> {
+    rebuild_generation_image_with_boot_root(
+        conn,
+        generations_root,
+        gen_number,
+        summary,
+        Path::new("/boot"),
+    )
+}
+
+pub(crate) fn rebuild_generation_image_with_boot_root(
+    conn: &rusqlite::Connection,
+    generations_root: &Path,
+    gen_number: i64,
+    summary: &str,
+    boot_root: &Path,
+) -> crate::Result<BuildResult> {
     let gen_dir = generations_root.join(gen_number.to_string());
     std::fs::create_dir_all(&gen_dir).map_err(|e| {
         crate::error::Error::IoError(format!(
@@ -273,6 +327,28 @@ pub(crate) fn rebuild_generation_image(
 
     let symlink_refs = collect_symlink_refs(conn)?;
     let result = build_erofs_image(&file_refs, &symlink_refs, &gen_dir)?;
+    let architecture = runtime_generation_architecture()?;
+    let kernel_version = detect_kernel_version_from_troves(&troves).ok_or_else(|| {
+        crate::error::Error::NotFound(
+            "could not determine kernel version for generation boot assets".to_string(),
+        )
+    })?;
+    let boot_assets = stage_runtime_boot_assets_from_boot_root(
+        &gen_dir,
+        gen_number,
+        architecture,
+        &kernel_version,
+        boot_root,
+    )?;
+    let artifact_manifest_sha256 = write_generation_artifact(ArtifactWriteInputs {
+        generation_dir: &gen_dir,
+        generation: gen_number,
+        architecture,
+        erofs_path: &result.image_path,
+        cas_base_rel: "../../objects",
+        cas_objects: cas_objects_from_file_refs(&file_refs),
+        boot_assets,
+    })?;
 
     #[allow(clippy::cast_possible_wrap)]
     let metadata = GenerationMetadata {
@@ -282,10 +358,10 @@ pub(crate) fn rebuild_generation_image(
         cas_objects_referenced: Some(result.cas_objects_referenced as i64),
         fsverity_enabled: false,
         erofs_verity_digest: result.erofs_verity_digest.clone(),
-        artifact_manifest_sha256: None,
+        artifact_manifest_sha256: Some(artifact_manifest_sha256),
         created_at: chrono::Utc::now().to_rfc3339(),
         package_count: troves.len() as i64,
-        kernel_version: detect_kernel_version_from_troves(&troves),
+        kernel_version: Some(kernel_version),
         summary: summary.to_string(),
     };
     metadata.write_to(&gen_dir).map_err(|e| {
@@ -336,6 +412,58 @@ fn collect_symlink_refs(conn: &rusqlite::Connection) -> crate::Result<Vec<Symlin
     Ok(refs)
 }
 
+fn cas_objects_from_file_refs(file_refs: &[FileEntryRef]) -> Vec<CasObjectRef> {
+    file_refs
+        .iter()
+        .map(|file| CasObjectRef {
+            sha256: file.sha256_hash.clone(),
+            size: file.size,
+        })
+        .collect()
+}
+
+fn runtime_generation_architecture() -> crate::Result<&'static str> {
+    match std::env::consts::ARCH {
+        "x86_64" => Ok("x86_64"),
+        "aarch64" => Err(crate::error::Error::NotImplemented(
+            "aarch64 generation export boot assets are reserved but not implemented".to_string(),
+        )),
+        "riscv64" => Err(crate::error::Error::NotImplemented(
+            "riscv64 generation export boot assets are reserved but not implemented".to_string(),
+        )),
+        other => Err(crate::error::Error::NotImplemented(format!(
+            "unsupported runtime architecture for generation export: {other}"
+        ))),
+    }
+}
+
+fn stage_runtime_boot_assets_from_boot_root(
+    gen_dir: &Path,
+    generation: i64,
+    architecture: &str,
+    kernel_version: &str,
+    boot_root: &Path,
+) -> crate::Result<crate::generation::artifact::BootAssetsManifest> {
+    if kernel_version.contains('/') || kernel_version.contains('\\') {
+        return Err(crate::error::Error::InvalidPath(format!(
+            "kernel version must not contain path separators: {kernel_version}"
+        )));
+    }
+
+    let kernel = boot_root.join(format!("vmlinuz-{kernel_version}"));
+    let initramfs = boot_root.join(format!("initramfs-{kernel_version}.img"));
+    let efi_bootloader = boot_root.join("EFI/BOOT/BOOTX64.EFI");
+    stage_boot_assets(BootAssetSources {
+        generation_dir: gen_dir,
+        generation,
+        architecture,
+        kernel_version,
+        kernel: &kernel,
+        initramfs: &initramfs,
+        efi_bootloader: &efi_bootloader,
+    })
+}
+
 /// Get kernel version from an already-loaded trove list.
 ///
 /// Looks for kernel-related packages in the trove list, falling back to
@@ -353,6 +481,64 @@ pub fn detect_kernel_version_from_troves(troves: &[Trove]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "composefs-rs")]
+    #[test]
+    fn build_generation_from_db_writes_export_artifact_contract() {
+        use crate::db::models::{FileEntry, Trove, TroveType};
+        use crate::db::schema::migrate;
+        use crate::filesystem::CasStore;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let generations_root = tmp.path().join("generations");
+        let objects_dir = tmp.path().join("objects");
+        let boot_root = tmp.path().join("boot");
+        std::fs::create_dir_all(&generations_root).unwrap();
+        std::fs::create_dir_all(boot_root.join("EFI/BOOT")).unwrap();
+        std::fs::write(boot_root.join("vmlinuz-6.19.8-conary"), b"kernel").unwrap();
+        std::fs::write(boot_root.join("initramfs-6.19.8-conary.img"), b"initramfs").unwrap();
+        std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"efi").unwrap();
+
+        let cas = CasStore::new(&objects_dir).unwrap();
+        let hello_hash = cas.store(b"hello").unwrap();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let mut trove = Trove::new(
+            "kernel".to_string(),
+            "6.19.8-conary".to_string(),
+            TroveType::Package,
+        );
+        trove.architecture = Some("x86_64".to_string());
+        let trove_id = trove.insert(&conn).unwrap();
+        let mut file = FileEntry::new(
+            "/usr/bin/hello".to_string(),
+            hello_hash,
+            b"hello".len() as i64,
+            0o755,
+            trove_id,
+        );
+        file.insert(&conn).unwrap();
+
+        let (generation, _result) = build_generation_from_db_with_boot_root(
+            &conn,
+            &generations_root,
+            "runtime artifact test",
+            &boot_root,
+        )
+        .unwrap();
+        let gen_dir = generations_root.join(generation.to_string());
+
+        assert!(gen_dir.join(".conary-artifact.json").is_file());
+        assert!(gen_dir.join("cas-manifest.json").is_file());
+        assert!(gen_dir.join("boot-assets/manifest.json").is_file());
+        assert!(gen_dir.join("boot-assets/vmlinuz").is_file());
+        assert!(gen_dir.join("boot-assets/initramfs.img").is_file());
+        assert!(gen_dir.join("boot-assets/EFI/BOOT/BOOTX64.EFI").is_file());
+        let metadata = GenerationMetadata::read_from(&gen_dir).unwrap();
+        assert!(metadata.artifact_manifest_sha256.is_some());
+        assert_eq!(metadata.kernel_version.as_deref(), Some("6.19.8-conary"));
+        crate::generation::artifact::load_generation_artifact(&gen_dir).unwrap();
+    }
 
     #[test]
     fn detect_kernel_version_does_not_panic() {
