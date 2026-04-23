@@ -650,7 +650,7 @@ pub enum Commands {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, CliSandboxMode, Commands};
+    use super::{Cli, CliSandboxMode, Commands, GenerationCommands, SystemCommands};
     use clap::Parser;
 
     #[test]
@@ -694,6 +694,78 @@ mod tests {
         .expect("global live-mutation flag should parse before nested commands");
 
         assert!(cli.allow_live_system_mutation);
+    }
+
+    #[test]
+    fn cli_rejects_bootstrap_image_from_generation() {
+        let err = match Cli::try_parse_from([
+            "conary",
+            "bootstrap",
+            "image",
+            "--from-generation",
+            "output/generations/1",
+        ]) {
+            Ok(_) => panic!("--from-generation must be removed from bootstrap image"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
+
+    #[test]
+    fn cli_accepts_generation_export_from_explicit_path() {
+        let cli = Cli::try_parse_from([
+            "conary",
+            "system",
+            "generation",
+            "export",
+            "--path",
+            "output/generations/1",
+            "--format",
+            "raw",
+            "--output",
+            "gen1.raw",
+        ])
+        .expect("generation export from path should parse");
+
+        match cli.command {
+            Some(Commands::System(SystemCommands::Generation(GenerationCommands::Export {
+                generation,
+                path,
+                format,
+                output,
+                size,
+            }))) => {
+                assert_eq!(generation, None);
+                assert_eq!(path.as_deref(), Some("output/generations/1"));
+                assert_eq!(format, "raw");
+                assert_eq!(output, "gen1.raw");
+                assert_eq!(size, None);
+            }
+            _ => panic!("expected system generation export command"),
+        }
+    }
+
+    #[test]
+    fn cli_rejects_generation_export_path_and_number_together() {
+        let err = match Cli::try_parse_from([
+            "conary",
+            "system",
+            "generation",
+            "export",
+            "7",
+            "--path",
+            "output/generations/1",
+            "--format",
+            "raw",
+            "--output",
+            "gen.raw",
+        ]) {
+            Ok(_) => panic!("--path must conflict with positional generation number"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[test]

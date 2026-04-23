@@ -8,6 +8,7 @@ pub mod boot;
 pub mod builder;
 pub mod commands;
 pub mod composefs;
+pub mod export;
 pub mod metadata;
 pub mod switch;
 pub mod takeover;

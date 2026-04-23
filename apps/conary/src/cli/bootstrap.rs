@@ -45,10 +45,6 @@ pub enum BootstrapCommands {
         /// Image size (e.g., "4G", "8G")
         #[arg(short, long, default_value = "4G")]
         size: String,
-
-        /// Use EROFS generation output instead of sysroot (from bootstrap run)
-        #[arg(long)]
-        from_generation: Option<String>,
     },
 
     /// Show bootstrap status and progress
