@@ -597,6 +597,7 @@ impl ImageBuilder {
             cas_objects_referenced: Some(build_result.cas_objects_referenced as i64),
             fsverity_enabled: false,
             erofs_verity_digest: None,
+            artifact_manifest_sha256: None,
             created_at: chrono::Utc::now().to_rfc3339(),
             package_count: 1,
             kernel_version: crate::generation::metadata::detect_kernel_version(&self.sysroot),

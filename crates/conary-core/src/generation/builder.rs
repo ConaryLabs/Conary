@@ -202,6 +202,7 @@ pub fn build_generation_from_db(
         cas_objects_referenced: Some(result.cas_objects_referenced as i64),
         fsverity_enabled: false, // Caller can enable separately
         erofs_verity_digest: result.erofs_verity_digest.clone(),
+        artifact_manifest_sha256: None,
         created_at: chrono::Utc::now().to_rfc3339(),
         package_count: troves.len() as i64,
         kernel_version: detect_kernel_version_from_troves(&troves),
@@ -281,6 +282,7 @@ pub(crate) fn rebuild_generation_image(
         cas_objects_referenced: Some(result.cas_objects_referenced as i64),
         fsverity_enabled: false,
         erofs_verity_digest: result.erofs_verity_digest.clone(),
+        artifact_manifest_sha256: None,
         created_at: chrono::Utc::now().to_rfc3339(),
         package_count: troves.len() as i64,
         kernel_version: detect_kernel_version_from_troves(&troves),
