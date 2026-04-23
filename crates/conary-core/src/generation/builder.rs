@@ -50,7 +50,7 @@ pub fn build_generation_from_db(
     build_generation_from_db_with_boot_root(conn, generations_root, summary, Path::new("/boot"))
 }
 
-pub(crate) fn build_generation_from_db_with_boot_root(
+pub fn build_generation_from_db_with_boot_root(
     conn: &rusqlite::Connection,
     generations_root: &Path,
     summary: &str,

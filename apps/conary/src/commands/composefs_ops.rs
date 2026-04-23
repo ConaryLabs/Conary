@@ -147,6 +147,23 @@ fn conary_root_for_db_path(db_path: &str) -> PathBuf {
     conary_core::db::paths::db_dir(db_path)
 }
 
+#[cfg(test)]
+fn boot_root_for_generation_build(conary_root: &Path) -> PathBuf {
+    if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
+        let test_boot = conary_root.join("boot");
+        if test_boot.is_dir() {
+            return test_boot;
+        }
+    }
+
+    PathBuf::from("/boot")
+}
+
+#[cfg(not(test))]
+fn boot_root_for_generation_build(_conary_root: &Path) -> PathBuf {
+    PathBuf::from("/boot")
+}
+
 pub fn rebuild_and_mount(
     conn: &Connection,
     db_path: &str,
@@ -228,9 +245,15 @@ pub fn rebuild_and_mount(
 
     // Step 2: Build the new generation (creates state snapshot + EROFS image).
     let generations_dir = conary_root.join("generations");
+    let boot_root = boot_root_for_generation_build(&conary_root);
     let (gen_num, build_result) =
-        conary_core::generation::builder::build_generation_from_db(conn, &generations_dir, summary)
-            .map_err(|e| anyhow::anyhow!("Failed to build EROFS generation: {e}"))?;
+        conary_core::generation::builder::build_generation_from_db_with_boot_root(
+            conn,
+            &generations_dir,
+            summary,
+            &boot_root,
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to build EROFS generation: {e}"))?;
 
     // Per-generation /etc overlay directories -- isolate user modifications so
     // they do not bleed across generation switches.

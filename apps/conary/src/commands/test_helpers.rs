@@ -34,6 +34,14 @@ pub(crate) fn setup_command_test_db() -> (TempDir, String) {
         .to_string();
 
     conary_core::db::init(&db_path).unwrap();
+    stage_test_boot_assets(temp_dir.path());
+    let cas = conary_core::filesystem::CasStore::new(temp_dir.path().join("objects")).unwrap();
+    let nginx_binary = b"test nginx binary";
+    let nginx_binary_hash = cas.store(nginx_binary).unwrap();
+    let nginx_binary_size = i64::try_from(nginx_binary.len()).unwrap();
+    let nginx_config_contents = b"worker_processes 1;\n";
+    let nginx_config_hash = cas.store(nginx_config_contents).unwrap();
+    let nginx_config_size = i64::try_from(nginx_config_contents.len()).unwrap();
     let mut conn = conary_core::db::open(&db_path).unwrap();
 
     conary_core::db::transaction(&mut conn, |tx| {
@@ -56,10 +64,27 @@ pub(crate) fn setup_command_test_db() -> (TempDir, String) {
         let mut nginx_config = Component::new(nginx_id, "config".to_string());
         let config_id = nginx_config.insert(tx)?;
 
+        tx.execute(
+            "INSERT OR IGNORE INTO file_contents (sha256_hash, content_path, size) VALUES (?1, ?2, ?3)",
+            rusqlite::params![
+                &nginx_binary_hash,
+                format!("objects/{}/{}", &nginx_binary_hash[0..2], &nginx_binary_hash[2..]),
+                nginx_binary_size
+            ],
+        )?;
+        tx.execute(
+            "INSERT OR IGNORE INTO file_contents (sha256_hash, content_path, size) VALUES (?1, ?2, ?3)",
+            rusqlite::params![
+                &nginx_config_hash,
+                format!("objects/{}/{}", &nginx_config_hash[0..2], &nginx_config_hash[2..]),
+                nginx_config_size
+            ],
+        )?;
+
         let mut f1 = FileEntry::new(
             "/usr/sbin/nginx".to_string(),
-            "abc123def456789012345678901234567890123456789012345678901234".to_string(),
-            1_024_000,
+            nginx_binary_hash.clone(),
+            nginx_binary_size,
             0o755,
             nginx_id,
         );
@@ -68,8 +93,8 @@ pub(crate) fn setup_command_test_db() -> (TempDir, String) {
 
         let mut f2 = FileEntry::new(
             "/etc/nginx/nginx.conf".to_string(),
-            "def456abc123789012345678901234567890123456789012345678901234".to_string(),
-            2048,
+            nginx_config_hash.clone(),
+            nginx_config_size,
             0o644,
             nginx_id,
         );
@@ -121,6 +146,24 @@ pub(crate) fn setup_command_test_db() -> (TempDir, String) {
     .unwrap();
 
     (temp_dir, db_path)
+}
+
+fn stage_test_boot_assets(root: &std::path::Path) {
+    let kernel_version = conary_core::generation::builder::detect_kernel_version_from_troves(&[])
+        .unwrap_or_else(|| "test-kernel".to_string());
+    let boot_root = root.join("boot");
+    std::fs::create_dir_all(boot_root.join("EFI/BOOT")).unwrap();
+    std::fs::write(
+        boot_root.join(format!("vmlinuz-{kernel_version}")),
+        b"test-kernel",
+    )
+    .unwrap();
+    std::fs::write(
+        boot_root.join(format!("initramfs-{kernel_version}.img")),
+        b"test-initramfs",
+    )
+    .unwrap();
+    std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"test-efi").unwrap();
 }
 
 pub(crate) fn seed_mixed_replatform_fixture(conn: &rusqlite::Connection) {
