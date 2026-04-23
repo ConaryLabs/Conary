@@ -1,15 +1,240 @@
 // conary-core/src/generation/export.rs
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::str::FromStr;
 
 use crate::generation::artifact::{
     ARTIFACT_MANIFEST_FILE, BOOT_ASSETS_DIR, CAS_MANIFEST_FILE, GenerationArtifact,
+    load_generation_artifact, load_installed_generation_artifact,
 };
 use crate::generation::metadata::{
     EXCLUDED_DIRS, GENERATION_METADATA_FILE, GENERATION_METADATA_SIGNATURE_FILE, ROOT_SYMLINKS,
 };
 
 const RUNTIME_ROOT_DIRS: &[&str] = &["usr", "etc", "boot"];
+const ESP_SIZE_MB: u64 = 512;
+const GPT_OVERHEAD_BYTES: u64 = 16 * 1024 * 1024;
+const IMAGE_SIZE_MARGIN_BYTES: u64 = 256 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GenerationExportFormat {
+    Raw,
+    Qcow2,
+    Iso,
+}
+
+impl FromStr for GenerationExportFormat {
+    type Err = crate::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "raw" => Ok(Self::Raw),
+            "qcow2" => Ok(Self::Qcow2),
+            "iso" => Ok(Self::Iso),
+            other => Err(crate::Error::InvalidPath(format!(
+                "invalid generation export format {other}; expected raw, qcow2, or iso"
+            ))),
+        }
+    }
+}
+
+impl std::fmt::Display for GenerationExportFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Raw => write!(f, "raw"),
+            Self::Qcow2 => write!(f, "qcow2"),
+            Self::Iso => write!(f, "iso"),
+        }
+    }
+}
+
+pub struct GenerationExportOptions {
+    pub generation: Option<i64>,
+    pub generation_path: Option<PathBuf>,
+    pub format: GenerationExportFormat,
+    pub output: PathBuf,
+    pub size_bytes: Option<u64>,
+}
+
+#[derive(Debug)]
+pub struct GenerationExportResult {
+    pub path: PathBuf,
+    pub format: GenerationExportFormat,
+    pub size: u64,
+    pub raw_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub struct GenerationExportTools {
+    pub systemd_repart: PathBuf,
+    pub qemu_img: PathBuf,
+}
+
+impl Default for GenerationExportTools {
+    fn default() -> Self {
+        Self {
+            systemd_repart: PathBuf::from("systemd-repart"),
+            qemu_img: PathBuf::from("qemu-img"),
+        }
+    }
+}
+
+pub fn export_generation_image(
+    options: GenerationExportOptions,
+) -> crate::Result<GenerationExportResult> {
+    export_generation_image_with_tools(options, &GenerationExportTools::default())
+}
+
+pub fn export_generation_image_with_tools(
+    options: GenerationExportOptions,
+    tools: &GenerationExportTools,
+) -> crate::Result<GenerationExportResult> {
+    if options.format == GenerationExportFormat::Iso {
+        return Err(crate::Error::NotImplemented(
+            "ISO export is reserved on the generation artifact contract but not implemented yet"
+                .to_string(),
+        ));
+    }
+
+    let artifact = load_artifact_for_options(&options)?;
+    ensure_export_architecture(&artifact)?;
+
+    match options.format {
+        GenerationExportFormat::Raw => export_raw(&artifact, &options, tools),
+        GenerationExportFormat::Qcow2 => export_qcow2(&artifact, &options, tools),
+        GenerationExportFormat::Iso => unreachable!("ISO returned above"),
+    }
+}
+
+fn load_artifact_for_options(
+    options: &GenerationExportOptions,
+) -> crate::Result<GenerationArtifact> {
+    match (options.generation, options.generation_path.as_deref()) {
+        (Some(_), Some(_)) => Err(crate::Error::InvalidPath(
+            "generation number and generation path are mutually exclusive".to_string(),
+        )),
+        (Some(generation), None) => load_installed_generation_artifact(generation),
+        (None, Some(path)) => load_generation_artifact(path),
+        (None, None) => load_generation_artifact(Path::new("/conary/current")),
+    }
+}
+
+fn export_raw(
+    artifact: &GenerationArtifact,
+    options: &GenerationExportOptions,
+    tools: &GenerationExportTools,
+) -> crate::Result<GenerationExportResult> {
+    let parent = options.output.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    let staging = tempfile::Builder::new()
+        .prefix(".conary-generation-export-")
+        .tempdir_in(parent)?;
+    let rootfs = staging.path().join("rootfs");
+    let esp = staging.path().join("esp");
+    project_generation_rootfs(artifact, &rootfs)?;
+    project_generation_esp(artifact, &esp)?;
+
+    let minimum_size = minimum_image_size_bytes(&rootfs)?;
+    let size_bytes = options.size_bytes.unwrap_or(minimum_size);
+    if size_bytes < minimum_size {
+        return Err(crate::Error::InvalidPath(format!(
+            "requested image size {size_bytes} bytes is below minimum {minimum_size} bytes"
+        )));
+    }
+
+    let definitions = staging.path().join("repart.d");
+    let plan = crate::image::repart::DiskImagePlan {
+        architecture: crate::bootstrap::TargetArch::X86_64,
+        esp_staging_dir: esp,
+        root_staging_dir: rootfs,
+        output_raw: options.output.clone(),
+        size_bytes,
+    };
+    let size = crate::image::repart::create_raw_image(
+        &plan,
+        &definitions,
+        &tools.systemd_repart,
+        ESP_SIZE_MB,
+    )
+    .map_err(|e| crate::Error::IoError(e.to_string()))?;
+
+    Ok(GenerationExportResult {
+        path: options.output.clone(),
+        format: GenerationExportFormat::Raw,
+        size,
+        raw_path: None,
+    })
+}
+
+fn export_qcow2(
+    artifact: &GenerationArtifact,
+    options: &GenerationExportOptions,
+    tools: &GenerationExportTools,
+) -> crate::Result<GenerationExportResult> {
+    let raw_tmp = raw_temp_path(&options.output);
+    let raw_options = GenerationExportOptions {
+        generation: None,
+        generation_path: None,
+        format: GenerationExportFormat::Raw,
+        output: raw_tmp.clone(),
+        size_bytes: options.size_bytes,
+    };
+    let raw_result = match export_raw(artifact, &raw_options, tools) {
+        Ok(result) => result,
+        Err(error) => {
+            let _ = std::fs::remove_file(&raw_tmp);
+            return Err(error);
+        }
+    };
+
+    let output = Command::new(&tools.qemu_img)
+        .args(["convert", "-f", "raw", "-O", "qcow2", "-c"])
+        .arg(&raw_tmp)
+        .arg(&options.output)
+        .output()
+        .map_err(|e| crate::Error::IoError(format!("failed to run qemu-img: {e}")))?;
+    let remove_result = std::fs::remove_file(&raw_tmp);
+    if !output.status.success() {
+        return Err(crate::Error::IoError(format!(
+            "qemu-img convert failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    remove_result?;
+    let size = std::fs::metadata(&options.output)?.len();
+    Ok(GenerationExportResult {
+        path: options.output.clone(),
+        format: GenerationExportFormat::Qcow2,
+        size,
+        raw_path: Some(raw_result.path),
+    })
+}
+
+fn raw_temp_path(output: &Path) -> PathBuf {
+    let mut raw = OsString::from(output.as_os_str());
+    raw.push(".raw.tmp");
+    PathBuf::from(raw)
+}
+
+fn ensure_export_architecture(artifact: &GenerationArtifact) -> crate::Result<()> {
+    if artifact.artifact_manifest.architecture == "x86_64" {
+        Ok(())
+    } else {
+        Err(crate::Error::NotImplemented(format!(
+            "generation export only supports x86_64, got {}",
+            artifact.artifact_manifest.architecture
+        )))
+    }
+}
+
+fn minimum_image_size_bytes(rootfs_staging_dir: &Path) -> crate::Result<u64> {
+    Ok(dir_size(rootfs_staging_dir)?
+        + (ESP_SIZE_MB * 1024 * 1024)
+        + GPT_OVERHEAD_BYTES
+        + IMAGE_SIZE_MARGIN_BYTES)
+}
 
 pub fn project_generation_rootfs(
     artifact: &GenerationArtifact,
@@ -156,6 +381,21 @@ fn copy_dir_recursive(source: &Path, dest: &Path) -> crate::Result<()> {
     Ok(())
 }
 
+fn dir_size(path: &Path) -> crate::Result<u64> {
+    let mut total = 0;
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let path = entry.path();
+        let metadata = std::fs::symlink_metadata(&path)?;
+        if metadata.is_dir() {
+            total += dir_size(&path)?;
+        } else if metadata.is_file() {
+            total += metadata.len();
+        }
+    }
+    Ok(total)
+}
+
 #[cfg(unix)]
 fn create_current_symlink(staging_dir: &Path, generation: &str) -> crate::Result<()> {
     let link = staging_dir.join("conary/current");
@@ -209,6 +449,41 @@ mod tests {
 
     fn digest(bytes: &[u8]) -> String {
         format!("{:x}", Sha256::digest(bytes))
+    }
+
+    #[cfg(unix)]
+    fn write_script(path: &Path, content: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(path, content).unwrap();
+        let mut permissions = std::fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn fake_tools(dir: &Path) -> GenerationExportTools {
+        let repart = dir.join("systemd-repart");
+        let qemu_img = dir.join("qemu-img");
+        let repart_log = dir.join("repart.log");
+        let qemu_log = dir.join("qemu.log");
+        write_script(
+            &repart,
+            &format!(
+                "#!/bin/sh\nlast=''\nfor arg in \"$@\"; do echo \"$arg\" >> '{}'; last=\"$arg\"; done\nprintf raw > \"$last\"\n",
+                repart_log.display()
+            ),
+        );
+        write_script(
+            &qemu_img,
+            &format!(
+                "#!/bin/sh\nprev=''\nlast=''\nfor arg in \"$@\"; do echo \"$arg\" >> '{}'; prev=\"$last\"; last=\"$arg\"; done\nprintf qcow2 > \"$last\"\n",
+                qemu_log.display()
+            ),
+        );
+        GenerationExportTools {
+            systemd_repart: repart,
+            qemu_img,
+        }
     }
 
     fn write_cas_object(objects_dir: &Path, bytes: &[u8]) -> CasObjectRef {
@@ -391,5 +666,145 @@ mod tests {
 
         assert!(err.to_string().contains("only supports x86_64"));
         assert!(!staging.join("EFI").exists());
+    }
+
+    #[test]
+    fn export_format_parsing_reports_allowed_values() {
+        let err = GenerationExportFormat::from_str("vmdk").unwrap_err();
+        assert!(err.to_string().contains("raw, qcow2, or iso"));
+        assert_eq!(
+            GenerationExportFormat::from_str("raw").unwrap(),
+            GenerationExportFormat::Raw
+        );
+        assert_eq!(
+            GenerationExportFormat::from_str("qcow2").unwrap(),
+            GenerationExportFormat::Qcow2
+        );
+        assert_eq!(
+            GenerationExportFormat::from_str("iso").unwrap(),
+            GenerationExportFormat::Iso
+        );
+    }
+
+    #[test]
+    fn iso_export_returns_reserved_error_without_loading_artifact() {
+        let err = export_generation_image(GenerationExportOptions {
+            generation: None,
+            generation_path: Some(PathBuf::from("/does/not/exist")),
+            format: GenerationExportFormat::Iso,
+            output: PathBuf::from("out.iso"),
+            size_bytes: None,
+        })
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("ISO export is reserved on the generation artifact contract")
+        );
+    }
+
+    #[test]
+    fn minimum_size_includes_fixed_overhead_and_margin() {
+        let fixture = Fixture::new();
+        let artifact = fixture.artifact();
+        let staging = fixture._tmp.path().join("minimum-rootfs");
+        project_generation_rootfs(&artifact, &staging).unwrap();
+
+        let minimum = minimum_image_size_bytes(&staging).unwrap();
+
+        assert!(
+            minimum >= (ESP_SIZE_MB * 1024 * 1024) + GPT_OVERHEAD_BYTES + IMAGE_SIZE_MARGIN_BYTES
+        );
+        assert!(minimum > dir_size(&staging).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn undersized_export_reports_requested_and_minimum_sizes() {
+        let fixture = Fixture::new();
+        let tools = fake_tools(fixture._tmp.path());
+        let output = fixture._tmp.path().join("undersized.raw");
+
+        let err = export_generation_image_with_tools(
+            GenerationExportOptions {
+                generation: None,
+                generation_path: Some(fixture.generation_dir.clone()),
+                format: GenerationExportFormat::Raw,
+                output,
+                size_bytes: Some(1),
+            },
+            &tools,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("requested image size 1 bytes"));
+        assert!(err.to_string().contains("minimum"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn raw_export_calls_shared_repart_backend_and_cleans_staging() {
+        let fixture = Fixture::new();
+        let tools = fake_tools(fixture._tmp.path());
+        let output = fixture._tmp.path().join("gen.raw");
+
+        let result = export_generation_image_with_tools(
+            GenerationExportOptions {
+                generation: None,
+                generation_path: Some(fixture.generation_dir.clone()),
+                format: GenerationExportFormat::Raw,
+                output: output.clone(),
+                size_bytes: Some(1024 * 1024 * 1024),
+            },
+            &tools,
+        )
+        .unwrap();
+
+        assert_eq!(result.path, output);
+        assert_eq!(result.format, GenerationExportFormat::Raw);
+        assert!(result.size > 0);
+        assert!(output.is_file());
+        let repart_log = std::fs::read_to_string(fixture._tmp.path().join("repart.log")).unwrap();
+        assert!(repart_log.contains("--root=/"));
+        assert!(repart_log.contains(output.to_string_lossy().as_ref()));
+        assert!(
+            !std::fs::read_dir(fixture._tmp.path())
+                .unwrap()
+                .any(|entry| entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".conary-generation-export-"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn qcow2_export_converts_raw_and_removes_temp_raw() {
+        let fixture = Fixture::new();
+        let tools = fake_tools(fixture._tmp.path());
+        let output = fixture._tmp.path().join("gen.qcow2");
+        let raw_tmp = raw_temp_path(&output);
+
+        let result = export_generation_image_with_tools(
+            GenerationExportOptions {
+                generation: None,
+                generation_path: Some(fixture.generation_dir.clone()),
+                format: GenerationExportFormat::Qcow2,
+                output: output.clone(),
+                size_bytes: Some(1024 * 1024 * 1024),
+            },
+            &tools,
+        )
+        .unwrap();
+
+        assert_eq!(result.path, output);
+        assert_eq!(result.format, GenerationExportFormat::Qcow2);
+        assert!(output.is_file());
+        assert!(!raw_tmp.exists());
+        let qemu_log = std::fs::read_to_string(fixture._tmp.path().join("qemu.log")).unwrap();
+        assert!(qemu_log.contains("convert"));
+        assert!(qemu_log.contains("-O"));
+        assert!(qemu_log.contains("qcow2"));
     }
 }
