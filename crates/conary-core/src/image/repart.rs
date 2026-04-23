@@ -8,6 +8,7 @@
 use crate::bootstrap::TargetArch;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use thiserror::Error;
 
 pub const ROOT_FILESYSTEM: &str = "ext4";
@@ -22,6 +23,9 @@ pub enum RepartError {
 
     #[error(transparent)]
     Io(#[from] std::io::Error),
+
+    #[error("systemd-repart failed: {0}")]
+    CommandFailed(String),
 }
 
 #[derive(Debug, Clone)]
@@ -138,6 +142,33 @@ pub fn generate_repart_definitions(
     std::fs::write(output_dir.join("10-root.conf"), root.to_string())?;
 
     Ok(())
+}
+
+pub fn create_raw_image(
+    plan: &DiskImagePlan,
+    definitions_dir: &Path,
+    systemd_repart: &Path,
+    esp_size_mb: u64,
+) -> Result<u64, RepartError> {
+    generate_repart_definitions(definitions_dir, plan, esp_size_mb)?;
+    let output = Command::new(systemd_repart)
+        .arg("--empty=create")
+        .arg(format!("--size={}", plan.size_bytes))
+        .arg(format!("--definitions={}", definitions_dir.display()))
+        .arg("--root=/")
+        .arg("--discard=no")
+        .arg(&plan.output_raw)
+        .output()?;
+
+    if !output.status.success() {
+        return Err(RepartError::CommandFailed(
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ));
+    }
+
+    std::fs::metadata(&plan.output_raw)
+        .map(|metadata| metadata.len())
+        .map_err(RepartError::Io)
 }
 
 #[cfg(test)]
