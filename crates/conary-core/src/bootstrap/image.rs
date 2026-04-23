@@ -483,6 +483,9 @@ impl ImageBuilder {
     /// - `objects/` -- CAS store with all file content
     /// - `generations/1/root.erofs` -- EROFS image referencing CAS objects
     /// - `generations/1/.conary-gen.json` -- generation metadata
+    /// - `generations/1/.conary-artifact.json` -- export artifact contract
+    /// - `generations/1/cas-manifest.json` -- scoped CAS object list
+    /// - `generations/1/boot-assets/` -- kernel, initramfs, and EFI bootloader
     /// - `db.sqlite3` -- SQLite database with trove + file records
     ///
     /// No external tools are needed -- composefs-rs builds EROFS in userspace.
@@ -490,6 +493,10 @@ impl ImageBuilder {
         use crate::db::models::{FileEntry, Trove, TroveType};
         use crate::db::schema::migrate;
         use crate::filesystem::CasStore;
+        use crate::generation::artifact::{
+            ArtifactWriteInputs, BootAssetSources, CasObjectRef, stage_boot_assets,
+            write_generation_artifact,
+        };
         use crate::generation::builder::{FileEntryRef, SymlinkEntryRef, build_erofs_image};
         use crate::generation::metadata::{GENERATION_FORMAT, GenerationMetadata};
 
@@ -587,7 +594,58 @@ impl ImageBuilder {
         let build_result = build_erofs_image(&erofs_entries, &symlink_refs, &gen_dir)
             .map_err(|e| ImageError::CreationFailed(format!("Failed to build EROFS image: {e}")))?;
 
-        // Step 5: Write generation metadata
+        // Step 5: Stage boot assets and write the export artifact contract
+        self.log_line("Staging boot assets");
+        let architecture = self.config.target_arch.to_string();
+        let detected_kernel_version =
+            crate::generation::metadata::detect_kernel_version(&self.sysroot);
+        let boot_kernel_version = detected_kernel_version
+            .clone()
+            .unwrap_or_else(|| "bootstrap".to_string());
+        let kernel_src = self.sysroot.join("boot/vmlinuz");
+        let initramfs_src = self.sysroot.join("boot/initramfs.img");
+        let efi_bootloader_src = self.sysroot.join("boot/EFI/BOOT/BOOTX64.EFI");
+        if !efi_bootloader_src.exists() {
+            return Err(ImageError::CreationFailed(format!(
+                "bootstrap sysroot is missing systemd-boot at {}; copy \
+                 /usr/lib/systemd/boot/efi/systemd-bootx64.efi into \
+                 /boot/EFI/BOOT/BOOTX64.EFI before building exportable EROFS output",
+                efi_bootloader_src.display()
+            )));
+        }
+        let boot_assets = stage_boot_assets(BootAssetSources {
+            generation_dir: &gen_dir,
+            generation: 1,
+            architecture: &architecture,
+            kernel_version: &boot_kernel_version,
+            kernel: &kernel_src,
+            initramfs: &initramfs_src,
+            efi_bootloader: &efi_bootloader_src,
+        })
+        .map_err(|e| ImageError::CreationFailed(format!("Failed to stage boot assets: {e}")))?;
+
+        self.log_line("Writing generation artifact manifests");
+        let cas_objects: Vec<CasObjectRef> = file_entries
+            .iter()
+            .map(|(_, hash, size, _)| CasObjectRef {
+                sha256: hash.clone(),
+                size: *size,
+            })
+            .collect();
+        let artifact_manifest_sha256 = write_generation_artifact(ArtifactWriteInputs {
+            generation_dir: &gen_dir,
+            generation: 1,
+            architecture: &architecture,
+            erofs_path: &gen_dir.join("root.erofs"),
+            cas_base_rel: "../../objects",
+            cas_objects,
+            boot_assets,
+        })
+        .map_err(|e| {
+            ImageError::CreationFailed(format!("Failed to write generation artifact: {e}"))
+        })?;
+
+        // Step 6: Write generation metadata bound to the artifact manifest bytes
         self.log_line("Writing generation metadata");
         #[allow(clippy::cast_possible_wrap)]
         let metadata = GenerationMetadata {
@@ -597,10 +655,10 @@ impl ImageBuilder {
             cas_objects_referenced: Some(build_result.cas_objects_referenced as i64),
             fsverity_enabled: false,
             erofs_verity_digest: None,
-            artifact_manifest_sha256: None,
+            artifact_manifest_sha256: Some(artifact_manifest_sha256),
             created_at: chrono::Utc::now().to_rfc3339(),
             package_count: 1,
-            kernel_version: crate::generation::metadata::detect_kernel_version(&self.sysroot),
+            kernel_version: detected_kernel_version.or(Some(boot_kernel_version)),
             summary: "Bootstrap generation 1 (LFS base system)".to_string(),
         };
         metadata.write_to(&gen_dir).map_err(|e| {
@@ -1301,6 +1359,7 @@ mod tests {
         fs::create_dir_all(sysroot.join("usr/bin")).unwrap();
         fs::create_dir_all(sysroot.join("usr/lib")).unwrap();
         fs::create_dir_all(sysroot.join("etc")).unwrap();
+        fs::create_dir_all(sysroot.join("boot/EFI/BOOT")).unwrap();
 
         fs::write(sysroot.join("usr/bin/hello"), b"#!/bin/sh\necho hello\n").unwrap();
         fs::set_permissions(
@@ -1311,6 +1370,11 @@ mod tests {
 
         fs::write(sysroot.join("usr/lib/libtest.so"), b"fake shared lib").unwrap();
         fs::write(sysroot.join("etc/hostname"), b"conaryos\n").unwrap();
+        // Boot asset bytes are opaque to this test; artifact loading verifies
+        // staging, digesting, and manifest wiring, not executable structure.
+        fs::write(sysroot.join("boot/vmlinuz"), b"kernel").unwrap();
+        fs::write(sysroot.join("boot/initramfs.img"), b"initramfs").unwrap();
+        fs::write(sysroot.join("boot/EFI/BOOT/BOOTX64.EFI"), b"efi").unwrap();
 
         // Create ImageBuilder with EROFS format
         let config = BootstrapConfig::new();
@@ -1344,11 +1408,44 @@ mod tests {
             output.join("generations/1/.conary-gen.json").is_file(),
             "Generation metadata must exist"
         );
+        assert!(
+            output.join("generations/1/.conary-artifact.json").is_file(),
+            "Generation artifact manifest must exist"
+        );
+        assert!(
+            output.join("generations/1/cas-manifest.json").is_file(),
+            "CAS manifest must exist"
+        );
+        assert!(
+            output
+                .join("generations/1/boot-assets/manifest.json")
+                .is_file(),
+            "Boot assets manifest must exist"
+        );
+        assert!(
+            output.join("generations/1/boot-assets/vmlinuz").is_file(),
+            "Staged kernel must exist"
+        );
+        assert!(
+            output
+                .join("generations/1/boot-assets/initramfs.img")
+                .is_file(),
+            "Staged initramfs must exist"
+        );
+        assert!(
+            output
+                .join("generations/1/boot-assets/EFI/BOOT/BOOTX64.EFI")
+                .is_file(),
+            "Staged EFI bootloader must exist"
+        );
         assert!(output.join("db.sqlite3").is_file(), "SQLite DB must exist");
         assert!(
             output.join("current").exists(),
             "current symlink must exist"
         );
+
+        crate::generation::artifact::load_generation_artifact(&output.join("generations/1"))
+            .unwrap();
 
         // Verify EROFS magic
         let erofs_bytes = fs::read(output.join("generations/1/root.erofs")).unwrap();
@@ -1371,7 +1468,7 @@ mod tests {
         let file_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(file_count, 3, "Should have 3 file entries");
+        assert_eq!(file_count, 6, "Should have 6 file entries");
 
         // Verify generation metadata
         let metadata = crate::generation::metadata::GenerationMetadata::read_from(
@@ -1381,6 +1478,7 @@ mod tests {
         assert_eq!(metadata.generation, 1);
         assert_eq!(metadata.format, GENERATION_FORMAT);
         assert_eq!(metadata.package_count, 1);
+        assert!(metadata.artifact_manifest_sha256.is_some());
         assert!(metadata.cas_objects_referenced.unwrap() > 0);
     }
 

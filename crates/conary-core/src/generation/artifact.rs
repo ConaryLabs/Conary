@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
 use super::metadata::{GENERATION_METADATA_FILE, GenerationMetadata, generation_path};
@@ -66,6 +66,135 @@ pub struct GenerationArtifact {
     pub cas_dir: PathBuf,
     pub cas_objects: Vec<CasObjectRef>,
     pub boot_assets: BootAssetsManifest,
+}
+
+pub struct BootAssetSources<'a> {
+    pub generation_dir: &'a Path,
+    pub generation: i64,
+    pub architecture: &'a str,
+    pub kernel_version: &'a str,
+    pub kernel: &'a Path,
+    pub initramfs: &'a Path,
+    pub efi_bootloader: &'a Path,
+}
+
+pub struct ArtifactWriteInputs<'a> {
+    pub generation_dir: &'a Path,
+    pub generation: i64,
+    pub architecture: &'a str,
+    pub erofs_path: &'a Path,
+    pub cas_base_rel: &'a str,
+    pub cas_objects: Vec<CasObjectRef>,
+    pub boot_assets: BootAssetsManifest,
+}
+
+pub fn stage_boot_assets(inputs: BootAssetSources<'_>) -> crate::Result<BootAssetsManifest> {
+    require_version("boot-assets manifest", 1)?;
+    require_supported_architecture(inputs.architecture)?;
+
+    let boot_assets_dir = inputs.generation_dir.join(BOOT_ASSETS_DIR);
+    copy_boot_asset(inputs.kernel, &boot_assets_dir.join("vmlinuz"), "kernel")?;
+    copy_boot_asset(
+        inputs.initramfs,
+        &boot_assets_dir.join("initramfs.img"),
+        "initramfs",
+    )?;
+    copy_boot_asset(
+        inputs.efi_bootloader,
+        &boot_assets_dir.join("EFI/BOOT/BOOTX64.EFI"),
+        "efi_bootloader",
+    )?;
+
+    Ok(BootAssetsManifest {
+        version: 1,
+        generation: inputs.generation,
+        architecture: inputs.architecture.to_string(),
+        kernel_version: inputs.kernel_version.to_string(),
+        kernel: "vmlinuz".to_string(),
+        kernel_sha256: sha256_file(&boot_assets_dir.join("vmlinuz"))?,
+        initramfs: "initramfs.img".to_string(),
+        initramfs_sha256: sha256_file(&boot_assets_dir.join("initramfs.img"))?,
+        efi_bootloader: "EFI/BOOT/BOOTX64.EFI".to_string(),
+        efi_bootloader_sha256: sha256_file(&boot_assets_dir.join("EFI/BOOT/BOOTX64.EFI"))?,
+        created_at: chrono::Utc::now().to_rfc3339(),
+    })
+}
+
+pub fn write_generation_artifact(inputs: ArtifactWriteInputs<'_>) -> crate::Result<String> {
+    require_supported_architecture(inputs.architecture)?;
+    let erofs_rel = path_relative_to_generation(inputs.generation_dir, inputs.erofs_path, "erofs")?;
+    let erofs_sha256 = sha256_file(inputs.erofs_path)?;
+
+    let cas_dir = resolve_cas_base(inputs.generation_dir, inputs.cas_base_rel)?;
+    require_version("boot-assets manifest", inputs.boot_assets.version)?;
+    require_manifest_identity(
+        "boot-assets manifest",
+        inputs.generation,
+        inputs.architecture,
+        inputs.boot_assets.generation,
+        &inputs.boot_assets.architecture,
+    )?;
+    verify_boot_assets(inputs.generation_dir, &inputs.boot_assets)?;
+    let cas_objects = deduplicate_sort_cas_objects(inputs.cas_objects)?;
+    verify_cas_objects(&cas_dir, &cas_objects)?;
+
+    let cas_manifest = CasManifest {
+        version: 1,
+        generation: inputs.generation,
+        architecture: inputs.architecture.to_string(),
+        objects: cas_objects,
+    };
+    let cas_manifest_bytes = write_json_pretty(
+        &inputs.generation_dir.join(CAS_MANIFEST_FILE),
+        &cas_manifest,
+    )?;
+
+    let boot_assets_bytes = write_json_pretty(
+        &inputs.generation_dir.join(BOOT_ASSETS_MANIFEST_REL),
+        &inputs.boot_assets,
+    )?;
+
+    let artifact_manifest = GenerationArtifactManifest {
+        version: 1,
+        generation: inputs.generation,
+        architecture: inputs.architecture.to_string(),
+        metadata: GENERATION_METADATA_FILE.to_string(),
+        erofs: erofs_rel,
+        erofs_sha256,
+        cas_base: inputs.cas_base_rel.to_string(),
+        cas_manifest: CAS_MANIFEST_FILE.to_string(),
+        cas_manifest_sha256: sha256_bytes(&cas_manifest_bytes),
+        boot_assets: BOOT_ASSETS_MANIFEST_REL.to_string(),
+        boot_assets_sha256: sha256_bytes(&boot_assets_bytes),
+    };
+    let artifact_bytes = write_json_pretty(
+        &inputs.generation_dir.join(ARTIFACT_MANIFEST_FILE),
+        &artifact_manifest,
+    )?;
+    Ok(sha256_bytes(&artifact_bytes))
+}
+
+pub fn deduplicate_sort_cas_objects(
+    objects: Vec<CasObjectRef>,
+) -> crate::Result<Vec<CasObjectRef>> {
+    let mut by_hash = BTreeMap::new();
+    for object in objects {
+        validate_sha256_hex("CAS object sha256", &object.sha256)?;
+        match by_hash.insert(object.sha256.clone(), object.size) {
+            Some(existing_size) if existing_size != object.size => {
+                return Err(crate::Error::ConflictError(format!(
+                    "CAS object {} has conflicting sizes: {existing_size} and {}",
+                    object.sha256, object.size
+                )));
+            }
+            _ => {}
+        }
+    }
+
+    Ok(by_hash
+        .into_iter()
+        .map(|(sha256, size)| CasObjectRef { sha256, size })
+        .collect())
 }
 
 pub fn load_generation_artifact(generation_dir: &Path) -> crate::Result<GenerationArtifact> {
@@ -402,6 +531,89 @@ fn verify_boot_asset(
     verify_file_digest(&format!("boot asset {field}"), &path, expected_sha256)
 }
 
+fn copy_boot_asset(source: &Path, dest: &Path, label: &str) -> crate::Result<()> {
+    let source_metadata = std::fs::metadata(source).map_err(|e| {
+        crate::Error::NotFound(format!(
+            "missing required boot asset {label} at {}: {e}",
+            source.display()
+        ))
+    })?;
+    if !source_metadata.file_type().is_file() {
+        return Err(crate::Error::InvalidPath(format!(
+            "boot asset source {label} must resolve to a regular file: {}",
+            source.display()
+        )));
+    }
+
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    if let Ok(existing) = std::fs::symlink_metadata(dest) {
+        if !existing.file_type().is_file() && !existing.file_type().is_symlink() {
+            return Err(crate::Error::InvalidPath(format!(
+                "boot asset destination {label} is not replaceable: {}",
+                dest.display()
+            )));
+        }
+        std::fs::remove_file(dest)?;
+    }
+
+    std::fs::copy(source, dest).map_err(|e| {
+        crate::Error::IoError(format!(
+            "failed to copy boot asset {label} from {} to {}: {e}",
+            source.display(),
+            dest.display()
+        ))
+    })?;
+
+    let dest_metadata = std::fs::symlink_metadata(dest)?;
+    if dest_metadata.file_type().is_symlink() {
+        return Err(crate::Error::InvalidPath(format!(
+            "staged boot asset {label} must not be a symlink: {}",
+            dest.display()
+        )));
+    }
+    if !dest_metadata.file_type().is_file() {
+        return Err(crate::Error::InvalidPath(format!(
+            "staged boot asset {label} must be a regular file: {}",
+            dest.display()
+        )));
+    }
+
+    Ok(())
+}
+
+fn path_relative_to_generation(
+    generation_dir: &Path,
+    path: &Path,
+    field: &str,
+) -> crate::Result<String> {
+    let rel = if path.is_absolute() {
+        path.strip_prefix(generation_dir).map_err(|_| {
+            crate::Error::InvalidPath(format!(
+                "{field} path must be inside generation directory {}: {}",
+                generation_dir.display(),
+                path.display()
+            ))
+        })?
+    } else {
+        path
+    };
+
+    let rel = rel.to_string_lossy().replace('\\', "/");
+    validate_generation_relative_path(field, &rel)?;
+    Ok(rel)
+}
+
+fn write_json_pretty<T: Serialize>(path: &Path, value: &T) -> crate::Result<Vec<u8>> {
+    let bytes = serde_json::to_vec_pretty(value)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, &bytes)?;
+    Ok(bytes)
+}
+
 fn validate_relative_path(field: &str, rel: &str, root_label: &str) -> crate::Result<PathBuf> {
     let path = Path::new(rel);
     if rel.is_empty() {
@@ -555,6 +767,17 @@ mod tests {
         let bytes = serde_json::to_vec_pretty(value).unwrap();
         fs::write(path, &bytes).unwrap();
         bytes
+    }
+
+    fn write_cas_object(objects_dir: &std::path::Path, bytes: &[u8]) -> CasObjectRef {
+        let sha256 = digest_bytes(bytes);
+        let object_path = crate::filesystem::object_path(objects_dir, &sha256).unwrap();
+        fs::create_dir_all(object_path.parent().unwrap()).unwrap();
+        fs::write(object_path, bytes).unwrap();
+        CasObjectRef {
+            sha256,
+            size: bytes.len() as u64,
+        }
     }
 
     fn metadata_for_fixture(
@@ -855,6 +1078,115 @@ mod tests {
         assert_eq!(artifact.erofs_path, fixture.root_erofs);
         assert_eq!(artifact.cas_objects.len(), 1);
         assert_eq!(artifact.boot_assets.kernel, "vmlinuz");
+    }
+
+    #[test]
+    fn write_generation_artifact_sorts_cas_manifest_objects() {
+        let tmp = TempDir::new().unwrap();
+        let artifact_root = tmp.path().join("output");
+        let generation_dir = artifact_root.join("generations/1");
+        let objects_dir = artifact_root.join("objects");
+        fs::create_dir_all(generation_dir.join(BOOT_ASSETS_DIR).join("EFI/BOOT")).unwrap();
+        fs::create_dir_all(&objects_dir).unwrap();
+
+        let erofs_path = generation_dir.join("root.erofs");
+        fs::write(&erofs_path, b"root-erofs").unwrap();
+        fs::write(generation_dir.join("boot-assets/vmlinuz"), b"kernel").unwrap();
+        fs::write(
+            generation_dir.join("boot-assets/initramfs.img"),
+            b"initramfs",
+        )
+        .unwrap();
+        fs::write(
+            generation_dir.join("boot-assets/EFI/BOOT/BOOTX64.EFI"),
+            b"efi",
+        )
+        .unwrap();
+
+        let object_a = write_cas_object(&objects_dir, b"a-object");
+        let object_b = write_cas_object(&objects_dir, b"b-object");
+        let boot_assets = BootAssetsManifest {
+            version: 1,
+            generation: 1,
+            architecture: "x86_64".to_string(),
+            kernel_version: "6.19.8-conary".to_string(),
+            kernel: "vmlinuz".to_string(),
+            kernel_sha256: digest_file(&generation_dir.join("boot-assets/vmlinuz")),
+            initramfs: "initramfs.img".to_string(),
+            initramfs_sha256: digest_file(&generation_dir.join("boot-assets/initramfs.img")),
+            efi_bootloader: "EFI/BOOT/BOOTX64.EFI".to_string(),
+            efi_bootloader_sha256: digest_file(
+                &generation_dir.join("boot-assets/EFI/BOOT/BOOTX64.EFI"),
+            ),
+            created_at: "2026-04-22T00:00:00Z".to_string(),
+        };
+
+        let artifact_digest = write_generation_artifact(ArtifactWriteInputs {
+            generation_dir: &generation_dir,
+            generation: 1,
+            architecture: "x86_64",
+            erofs_path: &erofs_path,
+            cas_base_rel: "../../objects",
+            cas_objects: vec![object_b.clone(), object_a.clone(), object_b],
+            boot_assets,
+        })
+        .unwrap();
+        metadata_for_fixture(1, Some(artifact_digest))
+            .write_to(&generation_dir)
+            .unwrap();
+
+        let cas_manifest: CasManifest =
+            serde_json::from_slice(&fs::read(generation_dir.join(CAS_MANIFEST_FILE)).unwrap())
+                .unwrap();
+        assert_eq!(cas_manifest.objects.len(), 2);
+        assert!(cas_manifest.objects[0].sha256 < cas_manifest.objects[1].sha256);
+
+        load_generation_artifact(&generation_dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage_boot_assets_dereferences_symlink_sources() {
+        let tmp = TempDir::new().unwrap();
+        let generation_dir = tmp.path().join("output/generations/1");
+        let source_dir = tmp.path().join("source");
+        fs::create_dir_all(&generation_dir).unwrap();
+        fs::create_dir_all(source_dir.join("EFI/BOOT")).unwrap();
+
+        fs::write(source_dir.join("vmlinuz-real"), b"kernel").unwrap();
+        fs::write(source_dir.join("initramfs-real.img"), b"initramfs").unwrap();
+        fs::write(source_dir.join("EFI/BOOT/BOOTX64-real.EFI"), b"efi").unwrap();
+        std::os::unix::fs::symlink(source_dir.join("vmlinuz-real"), source_dir.join("vmlinuz"))
+            .unwrap();
+        std::os::unix::fs::symlink(
+            source_dir.join("initramfs-real.img"),
+            source_dir.join("initramfs.img"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(
+            source_dir.join("EFI/BOOT/BOOTX64-real.EFI"),
+            source_dir.join("EFI/BOOT/BOOTX64.EFI"),
+        )
+        .unwrap();
+
+        let manifest = stage_boot_assets(BootAssetSources {
+            generation_dir: &generation_dir,
+            generation: 1,
+            architecture: "x86_64",
+            kernel_version: "6.19.8-conary",
+            kernel: &source_dir.join("vmlinuz"),
+            initramfs: &source_dir.join("initramfs.img"),
+            efi_bootloader: &source_dir.join("EFI/BOOT/BOOTX64.EFI"),
+        })
+        .unwrap();
+
+        assert_eq!(manifest.kernel_sha256, digest_bytes(b"kernel"));
+        assert!(
+            !fs::symlink_metadata(generation_dir.join("boot-assets/vmlinuz"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 
     #[test]
