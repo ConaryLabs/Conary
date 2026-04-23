@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use tokio::process::{Child, Command};
 use tokio::time::{Instant, sleep};
 
-use crate::config::manifest::QemuBoot;
+use crate::config::manifest::{QemuBoot, QemuGuestCopy};
 use crate::container::backend::ExecResult;
 
 const DEFAULT_ARTIFACT_BASE_URL: &str = "https://remi.conary.io/test-artifacts";
@@ -19,7 +19,8 @@ const DEFAULT_ARTIFACT_BASE_URL: &str = "https://remi.conary.io/test-artifacts";
 const TEST_SSH_KEY_NAME: &str = "conaryos-test-key";
 
 pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
-    let missing_tools = missing_tools(["curl", "qemu-system-x86_64", "ssh"]).await?;
+    let required_tools = required_qemu_tools(config);
+    let missing_tools = missing_tools(&required_tools).await?;
     if !missing_tools.is_empty() {
         return Ok(skipped_result(format!(
             "qemu boot skipped: missing required tool(s): {}",
@@ -27,8 +28,17 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
         )));
     }
 
-    let image_path = cache_path_for_image(&config.image)?;
-    if !image_path.exists() {
+    let image_path = match resolve_qemu_image_path(config) {
+        Ok(path) => path,
+        Err(err) => {
+            return Ok(ExecResult {
+                exit_code: 1,
+                stdout: String::new(),
+                stderr: err.to_string(),
+            });
+        }
+    };
+    if config.local_image_path.is_none() && !image_path.exists() {
         let url = image_download_url(&config.image);
         if let Err(err) = download_image(&url, &image_path).await {
             return Ok(skipped_result(format!(
@@ -108,6 +118,17 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
         }
     }
 
+    if exit_code == 0 {
+        for copy in &config.copy_from_guest {
+            let result = copy_file_from_guest(config.ssh_port, copy, key_path.as_deref()).await?;
+            append_guest_copy_output(&mut stdout, &mut stderr, copy, &result);
+            if result.exit_code != 0 {
+                exit_code = result.exit_code;
+                break;
+            }
+        }
+    }
+
     let qemu_output = stop_qemu(child).await?;
     let qemu_stdout = String::from_utf8_lossy(&qemu_output.stdout)
         .trim()
@@ -148,6 +169,29 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
     })
 }
 
+fn required_qemu_tools(config: &QemuBoot) -> Vec<&'static str> {
+    let mut tools = vec!["qemu-system-x86_64", "ssh"];
+    if config.local_image_path.is_none() {
+        tools.push("curl");
+    }
+    if !config.copy_from_guest.is_empty() {
+        tools.push("scp");
+    }
+    tools
+}
+
+fn resolve_qemu_image_path(config: &QemuBoot) -> Result<PathBuf> {
+    if let Some(local_path) = &config.local_image_path {
+        let path = PathBuf::from(local_path);
+        if !path.is_file() {
+            anyhow::bail!("local QEMU image path does not exist: {}", path.display());
+        }
+        return Ok(path);
+    }
+
+    cache_path_for_image(&config.image)
+}
+
 fn skipped_result(message: String) -> ExecResult {
     ExecResult {
         exit_code: 0,
@@ -183,7 +227,17 @@ fn append_command_output(
     }
 }
 
-async fn missing_tools<const N: usize>(tools: [&str; N]) -> Result<Vec<String>> {
+fn append_guest_copy_output(
+    stdout: &mut String,
+    stderr: &mut String,
+    copy: &QemuGuestCopy,
+    result: &ExecResult,
+) {
+    let command = format!("scp root@127.0.0.1:{} {}", copy.source, copy.dest);
+    append_command_output(stdout, stderr, &command, result);
+}
+
+async fn missing_tools(tools: &[&str]) -> Result<Vec<String>> {
     #[cfg(test)]
     if let Some(override_tools) = test_missing_tools_override().lock().unwrap().clone() {
         return Ok(override_tools);
@@ -365,6 +419,65 @@ async fn run_ssh_command(
     })
 }
 
+async fn copy_file_from_guest(
+    ssh_port: u16,
+    copy: &QemuGuestCopy,
+    key_path: Option<&Path>,
+) -> Result<ExecResult> {
+    let dest = Path::new(&copy.dest);
+    prepare_guest_copy_destination(dest)?;
+
+    let remote = format!("root@127.0.0.1:{}", copy.source);
+    let mut scp = Command::new("scp");
+    if let Some(key) = key_path {
+        scp.args(["-i", &key.display().to_string()]);
+    } else {
+        scp.args(["-o", "BatchMode=yes"]);
+    }
+    let output = scp
+        .args([
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "LogLevel=ERROR",
+            "-o",
+            "ConnectTimeout=10",
+            "-P",
+            &ssh_port.to_string(),
+            &remote,
+        ])
+        .arg(dest)
+        .output()
+        .await
+        .with_context(|| {
+            format!(
+                "failed to copy {} from QEMU guest to {}",
+                copy.source,
+                dest.display()
+            )
+        })?;
+
+    Ok(ExecResult {
+        exit_code: output.status.code().unwrap_or(1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    })
+}
+
+fn prepare_guest_copy_destination(dest: &Path) -> Result<()> {
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create QEMU guest-copy destination directory {}",
+                parent.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
 async fn stop_qemu(mut child: Child) -> Result<std::process::Output> {
     let _ = child.start_kill();
     child
@@ -436,5 +549,45 @@ mod tests {
     fn test_shell_quote_escapes_single_quotes() {
         assert_eq!(shell_quote("uname -r"), "'uname -r'");
         assert_eq!(shell_quote("printf 'hello'"), r#"'printf '\''hello'\'''"#);
+    }
+
+    #[test]
+    fn test_local_image_path_requires_existing_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let missing = dir.path().join("missing.qcow2");
+        let config = QemuBoot {
+            image: "local-image".to_string(),
+            local_image_path: Some(missing.display().to_string()),
+            copy_from_guest: Vec::new(),
+            memory_mb: 1024,
+            timeout_seconds: 120,
+            ssh_port: 2222,
+            commands: vec!["true".to_string()],
+            expect_output: Vec::new(),
+        };
+
+        let err = resolve_qemu_image_path(&config).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("local QEMU image path does not exist")
+        );
+        assert!(err.to_string().contains("missing.qcow2"));
+    }
+
+    #[test]
+    fn test_prepare_guest_copy_destination_creates_parent_directory() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let dest = dir.path().join("nested/generated/image.qcow2");
+        assert!(!dest.parent().unwrap().exists());
+
+        prepare_guest_copy_destination(&dest).unwrap();
+
+        assert!(dest.parent().unwrap().is_dir());
+    }
+
+    #[test]
+    fn test_prepare_guest_copy_destination_allows_current_dir_destination() {
+        prepare_guest_copy_destination(Path::new("image.qcow2")).unwrap();
     }
 }

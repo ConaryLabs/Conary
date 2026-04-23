@@ -54,6 +54,9 @@ tokio-stream.workspace = true
 rmcp = { workspace = true, features = ["server", "macros", "transport-streamable-http-server"] }
 schemars.workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [[bin]]
 name = "conary-test"
 path = "src/cli.rs"

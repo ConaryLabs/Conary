@@ -160,8 +160,18 @@ fn default_kill_timeout() -> u64 {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct QemuGuestCopy {
+    pub source: String,
+    pub dest: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct QemuBoot {
     pub image: String,
+    #[serde(default)]
+    pub local_image_path: Option<String>,
+    #[serde(default)]
+    pub copy_from_guest: Vec<QemuGuestCopy>,
     #[serde(default = "default_qemu_memory")]
     pub memory_mb: u32,
     #[serde(default = "default_qemu_timeout")]
@@ -553,6 +563,49 @@ commands = ["uname -r"]
                 assert_eq!(cfg.timeout_seconds, 300);
                 assert_eq!(cfg.ssh_port, 2222);
                 assert_eq!(cfg.commands, vec!["uname -r"]);
+            }
+            other => panic!("expected qemu_boot step, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_qemu_boot_local_image_and_copy_fields_parse() {
+        let toml = r#"
+[suite]
+name = "qemu-local"
+phase = 3
+
+[[test]]
+id = "TGE01"
+name = "qemu_boot_local"
+description = "Boot a generated qcow2 image"
+timeout = 30
+
+[[test.step]]
+[test.step.qemu_boot]
+image = "minimal-boot-v2"
+local_image_path = "/tmp/generated.qcow2"
+copy_from_guest = [
+  { source = "/tmp/out.qcow2", dest = "/tmp/conary-generation-export/host-out.qcow2" },
+]
+commands = ["true"]
+"#;
+
+        let manifest: TestManifest = toml::from_str(toml).unwrap();
+        let step = &manifest.test[0].step[0];
+        match step.step_type() {
+            Some(StepType::QemuBoot(cfg)) => {
+                assert_eq!(cfg.image, "minimal-boot-v2");
+                assert_eq!(
+                    cfg.local_image_path.as_deref(),
+                    Some("/tmp/generated.qcow2")
+                );
+                assert_eq!(cfg.copy_from_guest.len(), 1);
+                assert_eq!(cfg.copy_from_guest[0].source, "/tmp/out.qcow2");
+                assert_eq!(
+                    cfg.copy_from_guest[0].dest,
+                    "/tmp/conary-generation-export/host-out.qcow2"
+                );
             }
             other => panic!("expected qemu_boot step, got {other:?}"),
         }
