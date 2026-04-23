@@ -63,24 +63,27 @@ Relevant files:
 
 ### 2. Unify Disk And Export Artifacts Around One Canonical Generation Source
 
-Bootstrap raw/qcow2 image creation is moving toward a declarative
-`systemd-repart` contract, but generation-derived images are still built
-through a separate imperative path.
+Generation-derived disk export is now tracked by
+`docs/superpowers/specs/2026-04-22-generation-artifact-export-unification-design.md`
+and
+`docs/superpowers/plans/2026-04-22-generation-artifact-export-unification-plan.md`.
+That slice removes the old imperative generation-image path and moves raw/qcow2
+export onto the same declarative `systemd-repart` direction as bootstrap
+sysroot images.
 
 Today:
 
 - bootstrap sysroot raw/qcow2 uses `systemd-repart`
-- `ImageBuilder::build_from_generation()` still hand-rolls GPT layout with
-  `sfdisk`, `mkfs.fat`, offset math, and an incomplete EFI story
-- CCS export treats OCI as real while `qcow2`/`raw`/`vmdk` remain "future
-  formats"
+- generation raw/qcow2 export is being unified around explicit generation
+  artifacts, scoped CAS manifests, staged boot assets, and the shared repart
+  backend
+- CCS export treats OCI as real while `vmdk` and other platform images remain
+  future formats
 
 Questions to revisit:
 
 - should raw, qcow2, ISO, and later VMware all derive from the same generation
   artifact and partition contract?
-- should `build_from_generation()` be replaced by the same declarative image
-  builder pattern now being used for bootstrap?
 - can OCI export, disk-image export, and generation metadata share more of the
   same identity/signing model instead of behaving like separate products?
 
