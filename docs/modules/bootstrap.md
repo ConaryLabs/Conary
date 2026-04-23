@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-04-22
-revision: 5
-summary: Document the current bootstrap command surface, self-host VM overlay, focused operator docs, and manifest comparison commands
+revision: 6
+summary: Document the current bootstrap command surface, generation artifact export split, self-host VM overlay, focused operator docs, and manifest comparison commands
 ---
 
 # Bootstrap Module (conary-core/src/bootstrap/)
@@ -31,10 +31,10 @@ Host System (any Linux with gcc)
   configure_system() -- Phase 4: System configuration (LFS Ch9)
      |                   Network, fstab, kernel, bootloader
      |
-  ImageBuilder -- Phase 5: Bootable image (LFS Ch10)
+  ImageBuilder -- Phase 5: Bootable image / generation artifact (LFS Ch10)
      |             systemd-repart
-     |             GPT: 512MB ESP (FAT32) + root (ext4)
-     |             Output: raw, qcow2, ISO, EROFS
+     |             GPT: 512MB ESP (FAT32) + root (ext4) for disk images
+     |             Output: raw, qcow2, ISO, or EROFS generation artifact
      |
   Tier2Builder -- Phase 6: BLFS + Conary
      |             PAM, OpenSSH, curl, Rust, Conary self-hosting
@@ -60,8 +60,8 @@ Host System (any Linux with gcc)
 | `FinalSystemBuilder` | final_system.rs | Phase 3: complete system build (SYSTEM_BUILD_ORDER) |
 | `configure_system()` | system_config.rs | Phase 4: system configuration |
 | `ImageBuilder` | image.rs | Phase 5: disk image generation (raw, qcow2, ISO, EROFS) |
-| `ImageFormat` | image.rs | Enum: Raw, Qcow2, Iso |
-| `ImageSize` | image.rs | Parsed size specification for disk images |
+| `ImageFormat` | image.rs | Enum: Raw, Qcow2, Iso, Erofs |
+| `ImageSize` | image.rs / `image/size.rs` | Parsed size specification for disk images |
 | `ImageTools` | image.rs | Host tool availability check for imaging |
 | `ImageResult` | image.rs | Build result with path and metadata |
 | `Tier2Builder` | tier2.rs | Phase 6: BLFS + Conary self-hosting |
@@ -69,13 +69,13 @@ Host System (any Linux with gcc)
 | `PackageBuildRunner` | build_runner.rs | Source fetch, verify, extract, build for individual packages |
 | `BuildContext` | build_runner.rs | Enum: build context type |
 | `ChrootEnv` | chroot_env.rs | Chroot environment setup for Phase 3 builds |
-| `RepartDefinition` | repart.rs | systemd-repart partition config (ESP, root) |
+| `DiskImagePlan` | `image/repart.rs` | Shared systemd-repart partition plan for bootstrap and generation export |
 | `Toolchain` | toolchain.rs | Resolved toolchain path, kind, and version detection |
 | `ToolchainKind` | toolchain.rs | Enum: toolchain type discriminant |
 
 ## Files
 
-16 files in `conary-core/src/bootstrap/`:
+15 files in `conary-core/src/bootstrap/`:
 
 - `mod.rs` -- module root, re-exports public types
 - `config.rs` -- `BootstrapConfig`, `TargetArch`
@@ -91,8 +91,12 @@ Host System (any Linux with gcc)
 - `build_helpers.rs` -- shared build helper functions
 - `chroot_env.rs` -- `ChrootEnv` for Phase 3 chroot setup
 - `toolchain.rs` -- `Toolchain`, `ToolchainKind`, version detection
-- `repart.rs` -- `RepartDefinition` for systemd-repart partition configs
 - `adopt_seed.rs` -- seed adoption for bootstrapping from existing packages
+
+Shared imaging helpers live in `conary-core/src/image/`:
+
+- `repart.rs` -- `DiskImagePlan` and systemd-repart definition generation
+- `size.rs` -- shared human-readable image size parser
 
 ## Checkpointing and Resume
 
@@ -104,12 +108,26 @@ on a stage clears it and all subsequent stages.
 
 ## Image Generation
 
-`ImageBuilder` uses systemd-repart for bootstrap raw/qcow2 image creation.
-`RepartDefinition` generates `repart.d/*.conf` files for ESP and root
-partitions with architecture-aware type GUIDs, reserving `/boot` for the ESP
-and leaving `/boot` in the root partition as a mountpoint. Supports raw,
-qcow2 (via qemu-img), hybrid ISO output, and EROFS generation images
-(CAS + EROFS + DB for composefs-native boot).
+`ImageBuilder` still owns bootstrap sysroot image production: raw images are
+created with the shared systemd-repart backend, qcow2 uses qemu-img conversion,
+and ISO remains a bootstrap-image format. EROFS is different: `conary bootstrap
+image --format erofs` produces a self-contained generation artifact contract
+(`root.erofs`, scoped CAS manifest, boot assets, and `.conary-artifact.json`)
+instead of directly wrapping that generation in a disk image.
+
+Generation artifact disk export is a separate system command:
+
+```bash
+conary system generation export \
+  --path ./output/generations/1 \
+  --format qcow2 \
+  --output gen1.qcow2
+```
+
+That command loads the generation artifact contract, projects the runtime
+rootfs and ESP staging trees, then uses the same shared systemd-repart raw
+backend. It does not scrape `/boot`, `/conary`, or other live-host paths while
+exporting.
 
 ## Architecture Context
 
@@ -153,7 +171,8 @@ conary bootstrap cross-tools
 conary bootstrap temp-tools
 conary bootstrap system
 conary bootstrap config
-conary bootstrap image --format qcow2
+conary bootstrap image --format erofs
+conary system generation export --path ./output/generations/1 --format qcow2 --output gen1.qcow2
 conary bootstrap tier2
 conary bootstrap guest-profile --public-key /tmp/selfhost_ed25519.pub
 conary bootstrap run conaryos.toml --seed ./seed

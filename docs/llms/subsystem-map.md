@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-04-22
-revision: 4
-summary: Stable subsystem pointers and durable assistant-facing guidance for the Conary workspace after the bootstrap self-hosting and documentation-system refresh
+revision: 5
+summary: Stable subsystem pointers and durable assistant-facing guidance for the Conary workspace after generation artifact export and the documentation-system refresh
 ---
 
 # Assistant Subsystem Map
@@ -34,8 +34,11 @@ summary: Stable subsystem pointers and durable assistant-facing guidance for the
 - Transaction lifecycle and conflict preflight:
   `crates/conary-core/src/transaction/mod.rs` and
   `crates/conary-core/src/transaction/planner.rs`
-- Generation building, composefs mounting, `/etc` merge, and GC:
+- Generation building, artifact export, composefs mounting, `/etc` merge, and GC:
   `crates/conary-core/src/generation/builder.rs`,
+  `crates/conary-core/src/generation/artifact.rs`,
+  `crates/conary-core/src/generation/export.rs`,
+  `crates/conary-core/src/image/repart.rs`,
   `crates/conary-core/src/generation/mount.rs`,
   `crates/conary-core/src/generation/etc_merge.rs`, and
   `crates/conary-core/src/generation/gc.rs`
@@ -80,7 +83,7 @@ summary: Stable subsystem pointers and durable assistant-facing guidance for the
   handlers and MCP tools. Look for `admin_service.rs` and `server/service.rs`
   before duplicating business logic in handlers.
 - Transaction and generation work are tightly coupled: resolve, fetch, DB
-  commit, build the EROFS generation, then mount it.
+  commit, build the EROFS generation artifact, then mount or export it.
 - Trust defaults matter. Keep HTTPS peer identity pinning and strict signature
   verification intact unless the task explicitly changes the trust model.
 
