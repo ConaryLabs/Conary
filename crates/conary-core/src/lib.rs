@@ -25,6 +25,7 @@ pub mod filesystem;
 pub mod flavor;
 pub mod generation;
 pub mod hash;
+pub mod image;
 pub mod json;
 pub mod label;
 pub mod model;
