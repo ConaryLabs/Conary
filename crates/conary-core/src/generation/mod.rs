@@ -10,6 +10,7 @@ pub mod builder;
 pub mod composefs;
 pub mod delta;
 pub mod etc_merge;
+pub mod export;
 pub mod gc;
 pub mod metadata;
 pub mod mount;
