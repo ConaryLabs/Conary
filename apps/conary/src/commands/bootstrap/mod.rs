@@ -11,6 +11,7 @@ use conary_core::bootstrap::{
     Bootstrap, BootstrapConfig, BootstrapStage, ImageBuilder, ImageFormat, ImageSize, ImageTools,
     Prerequisites, TargetArch,
 };
+use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use tracing::info;
@@ -812,6 +813,219 @@ fn load_completed_bootstrap_run_record(work_dir: &Path) -> Result<BootstrapRunRe
     Ok(record)
 }
 
+fn write_bootstrap_run_generation_artifact(
+    conn: &Connection,
+    cas_dir: &Path,
+    gen_dir: &Path,
+    profile: &conary_core::derivation::BuildProfile,
+    target_triple: &str,
+    system_name: &str,
+) -> Result<()> {
+    use conary_core::derivation::{OutputManifest, compose_file_entries};
+    use conary_core::filesystem::CasStore;
+    use conary_core::generation::artifact::{
+        ArtifactWriteInputs, BootAssetSources, CasObjectRef, deduplicate_sort_cas_objects,
+        stage_boot_assets, write_generation_artifact,
+    };
+    use conary_core::generation::metadata::{GENERATION_FORMAT, GenerationMetadata};
+
+    let architecture = architecture_from_target_triple(target_triple)?;
+    if architecture != "x86_64" {
+        anyhow::bail!(
+            "bootstrap-run generation artifacts currently support only x86_64, got {architecture}"
+        );
+    }
+
+    let cas = CasStore::new(cas_dir).context("Failed to open bootstrap-run CAS")?;
+    let output_manifests = load_bootstrap_run_output_manifests(conn, &cas, profile)?;
+    let manifest_refs: Vec<&OutputManifest> = output_manifests.iter().collect();
+    let file_refs = compose_file_entries(&manifest_refs);
+    if file_refs.is_empty() {
+        anyhow::bail!("bootstrap-run output has no file entries to export");
+    }
+
+    let boot_source_dir =
+        tempfile::tempdir_in(gen_dir).context("Failed to create boot asset staging tempdir")?;
+    let kernel_source = write_bootstrap_run_boot_asset_source(
+        &cas,
+        &file_refs,
+        "/boot/vmlinuz",
+        boot_source_dir.path(),
+    )?;
+    let initramfs_source = write_bootstrap_run_boot_asset_source(
+        &cas,
+        &file_refs,
+        "/boot/initramfs.img",
+        boot_source_dir.path(),
+    )?;
+    let efi_source = write_bootstrap_run_boot_asset_source(
+        &cas,
+        &file_refs,
+        "/boot/EFI/BOOT/BOOTX64.EFI",
+        boot_source_dir.path(),
+    )?;
+
+    let boot_assets = stage_boot_assets(BootAssetSources {
+        generation_dir: gen_dir,
+        generation: 1,
+        architecture,
+        kernel_version: "bootstrap",
+        kernel: &kernel_source,
+        initramfs: &initramfs_source,
+        efi_bootloader: &efi_source,
+    })
+    .context("Failed to stage bootstrap-run boot assets")?;
+
+    let cas_objects: Vec<CasObjectRef> = file_refs
+        .iter()
+        .map(|file| CasObjectRef {
+            sha256: file.sha256_hash.clone(),
+            size: file.size,
+        })
+        .collect();
+    let cas_object_count = deduplicate_sort_cas_objects(cas_objects.clone())?.len();
+    let erofs_path = gen_dir.join("root.erofs");
+    let erofs_size = std::fs::metadata(&erofs_path)
+        .with_context(|| format!("Failed to stat {}", erofs_path.display()))?
+        .len();
+    let erofs_size = i64::try_from(erofs_size)
+        .context("root.erofs is too large to record in generation metadata")?;
+    let artifact_manifest_sha256 = write_generation_artifact(ArtifactWriteInputs {
+        generation_dir: gen_dir,
+        generation: 1,
+        architecture,
+        erofs_path: &erofs_path,
+        cas_base_rel: "../../objects",
+        cas_objects,
+        boot_assets,
+    })
+    .context("Failed to write bootstrap-run generation artifact")?;
+
+    let package_count: usize = profile
+        .stages
+        .iter()
+        .map(|stage| stage.derivations.len())
+        .sum();
+    let metadata = GenerationMetadata {
+        generation: 1,
+        format: GENERATION_FORMAT.to_string(),
+        erofs_size: Some(erofs_size),
+        cas_objects_referenced: Some(i64::try_from(cas_object_count).unwrap_or(i64::MAX)),
+        fsverity_enabled: false,
+        erofs_verity_digest: None,
+        artifact_manifest_sha256: Some(artifact_manifest_sha256),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        package_count: i64::try_from(package_count).unwrap_or(i64::MAX),
+        kernel_version: Some("bootstrap".to_string()),
+        summary: format!(
+            "Bootstrap-run generation 1 for {system_name} ({})",
+            profile.profile.profile_hash
+        ),
+    };
+    metadata
+        .write_to(gen_dir)
+        .context("Failed to write bootstrap-run generation metadata")?;
+
+    Ok(())
+}
+
+fn architecture_from_target_triple(target_triple: &str) -> Result<&'static str> {
+    if target_triple == "x86_64" || target_triple.starts_with("x86_64-") {
+        Ok("x86_64")
+    } else if target_triple == "aarch64" || target_triple.starts_with("aarch64-") {
+        Ok("aarch64")
+    } else if target_triple == "riscv64" || target_triple.starts_with("riscv64-") {
+        Ok("riscv64")
+    } else {
+        anyhow::bail!("unsupported bootstrap target triple for generation export: {target_triple}")
+    }
+}
+
+fn load_bootstrap_run_output_manifests(
+    conn: &Connection,
+    cas: &conary_core::filesystem::CasStore,
+    profile: &conary_core::derivation::BuildProfile,
+) -> Result<Vec<conary_core::derivation::OutputManifest>> {
+    let index = conary_core::derivation::DerivationIndex::new(conn);
+    let mut manifests = Vec::new();
+    for derivation in profile
+        .stages
+        .iter()
+        .flat_map(|stage| stage.derivations.iter())
+    {
+        let record = index
+            .lookup(&derivation.derivation_id)
+            .with_context(|| {
+                format!(
+                    "Failed to look up derivation record for {}",
+                    derivation.derivation_id
+                )
+            })?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "missing derivation record for bootstrap-run output {}",
+                    derivation.derivation_id
+                )
+            })?;
+        let manifest_bytes = cas.retrieve(&record.manifest_cas_hash).with_context(|| {
+            format!(
+                "Failed to load output manifest {} from CAS",
+                record.manifest_cas_hash
+            )
+        })?;
+        let manifest_toml = std::str::from_utf8(&manifest_bytes)
+            .context("bootstrap-run output manifest is not valid UTF-8")?;
+        let manifest = toml::from_str(manifest_toml)
+            .context("bootstrap-run output manifest TOML parse failed")?;
+        manifests.push(manifest);
+    }
+
+    if manifests.is_empty() {
+        anyhow::bail!("bootstrap-run profile has no derivation outputs to export");
+    }
+
+    Ok(manifests)
+}
+
+fn write_bootstrap_run_boot_asset_source(
+    cas: &conary_core::filesystem::CasStore,
+    file_refs: &[conary_core::generation::builder::FileEntryRef],
+    manifest_path: &str,
+    temp_dir: &Path,
+) -> Result<PathBuf> {
+    let file = file_refs
+        .iter()
+        .find(|file| file.path == manifest_path)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "bootstrap-run output is missing required boot asset {manifest_path}; ensure the bootstrap pipeline stages kernel, initramfs, and systemd-boot into /boot before generation export"
+            )
+        })?;
+    let bytes = cas.retrieve(&file.sha256_hash).with_context(|| {
+        format!(
+            "Failed to retrieve bootstrap-run boot asset {} from CAS object {}",
+            manifest_path, file.sha256_hash
+        )
+    })?;
+    if bytes.len() as u64 != file.size {
+        anyhow::bail!(
+            "bootstrap-run boot asset {manifest_path} size mismatch: manifest says {}, CAS object has {}",
+            file.size,
+            bytes.len()
+        );
+    }
+
+    let file_name = manifest_path
+        .rsplit('/')
+        .next()
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("invalid boot asset path {manifest_path}"))?;
+    let dest = temp_dir.join(file_name);
+    std::fs::write(&dest, bytes)
+        .with_context(|| format!("Failed to write temporary boot asset {}", dest.display()))?;
+    Ok(dest)
+}
+
 /// Options for the `bootstrap run` command.
 pub struct BootstrapRunOptions<'a> {
     /// Path to system manifest TOML.
@@ -1059,33 +1273,25 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
                 .join("root.erofs")
         });
         let erofs_source = if compose_erofs.exists() {
-            Some(compose_erofs)
+            compose_erofs
         } else {
-            stage_erofs.filter(|p| p.exists())
+            stage_erofs
+                .filter(|p| p.exists())
+                .ok_or_else(|| anyhow::anyhow!(
+                    "No EROFS image found in pipeline output; bootstrap-run cannot create an exportable generation"
+                ))?
         };
-        if let Some(src) = erofs_source {
-            let dest = gen_dir.join("root.erofs");
-            std::fs::copy(&src, &dest)?;
-            println!("Generation 1 EROFS: {}", dest.display());
-        } else {
-            tracing::warn!(
-                "No EROFS image found in pipeline output -- generation may be incomplete"
-            );
-        }
+        let dest = gen_dir.join("root.erofs");
+        std::fs::copy(&erofs_source, &dest)?;
+        println!("Generation 1 EROFS: {}", dest.display());
 
-        let gen_meta = serde_json::json!({
-            "generation": 1,
-            "system_name": manifest.system.name,
-            "target": manifest.system.target,
-            "packages": profile.stages.iter()
-                .flat_map(|s| s.derivations.iter())
-                .map(|d| format!("{}-{}", d.package, d.version))
-                .collect::<Vec<_>>(),
-            "profile_hash": profile.profile.profile_hash,
-        });
-        std::fs::write(
-            gen_dir.join(".conary-gen.json"),
-            serde_json::to_string_pretty(&gen_meta)?,
+        write_bootstrap_run_generation_artifact(
+            &conn,
+            &cas_dir,
+            &gen_dir,
+            &profile,
+            &manifest.system.target,
+            &manifest.system.name,
         )?;
 
         let profile_hash = profile.profile.profile_hash.clone();
@@ -1352,6 +1558,7 @@ mod tests {
     use super::{
         BootstrapLatestPointer, BootstrapRunOptions, BootstrapRunRecord,
         finish_bootstrap_run_success, skip_verify_warning_message, start_bootstrap_run_record,
+        write_bootstrap_run_generation_artifact,
     };
 
     #[test]
@@ -1430,5 +1637,125 @@ mod tests {
                 .join("output")
                 .join("current")
         );
+    }
+
+    #[test]
+    fn bootstrap_run_artifact_writer_creates_loadable_generation() {
+        use conary_core::db::schema::migrate;
+        use conary_core::derivation::{
+            BuildProfile, DerivationIndex, DerivationRecord, OutputFile, OutputManifest,
+            PackageOutput, ProfileDerivation, ProfileMetadata, ProfileSeedRef, ProfileStage,
+        };
+        use conary_core::filesystem::CasStore;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let output_dir = temp.path().join("output");
+        let cas_dir = output_dir.join("objects");
+        let gen_dir = output_dir.join("generations/1");
+        std::fs::create_dir_all(&gen_dir).expect("generation dir");
+        std::fs::write(gen_dir.join("root.erofs"), b"root-erofs").expect("root erofs");
+
+        let conn = rusqlite::Connection::open_in_memory().expect("db");
+        migrate(&conn).expect("migrate");
+        let cas = CasStore::new(&cas_dir).expect("cas");
+        let kernel_hash = cas.store(b"kernel").expect("kernel object");
+        let initramfs_hash = cas.store(b"initramfs").expect("initramfs object");
+        let efi_hash = cas.store(b"efi").expect("efi object");
+        let hello_hash = cas.store(b"hello").expect("hello object");
+
+        let derivation_id = "1111111111111111111111111111111111111111111111111111111111111111";
+        let files = vec![
+            OutputFile {
+                path: "/boot/vmlinuz".to_string(),
+                hash: kernel_hash,
+                size: b"kernel".len() as u64,
+                mode: 0o644,
+            },
+            OutputFile {
+                path: "/boot/initramfs.img".to_string(),
+                hash: initramfs_hash,
+                size: b"initramfs".len() as u64,
+                mode: 0o644,
+            },
+            OutputFile {
+                path: "/boot/EFI/BOOT/BOOTX64.EFI".to_string(),
+                hash: efi_hash,
+                size: b"efi".len() as u64,
+                mode: 0o644,
+            },
+            OutputFile {
+                path: "/usr/bin/hello".to_string(),
+                hash: hello_hash,
+                size: b"hello".len() as u64,
+                mode: 0o755,
+            },
+        ];
+        let output_hash = OutputManifest::compute_output_hash_v2(&files, &[]);
+        let manifest = OutputManifest {
+            derivation_id: derivation_id.to_string(),
+            output_hash: output_hash.clone(),
+            hash_version: 2,
+            files,
+            symlinks: vec![],
+            build_duration_secs: 1,
+            built_at: "2026-04-22T00:00:00Z".to_string(),
+        };
+        let package_output = PackageOutput::from_manifest(manifest).expect("package output");
+        let manifest_cas_hash = cas
+            .store(&package_output.manifest_bytes)
+            .expect("manifest object");
+        DerivationIndex::new(&conn)
+            .insert(&DerivationRecord {
+                derivation_id: derivation_id.to_string(),
+                output_hash,
+                package_name: "hello".to_string(),
+                package_version: "1.0.0".to_string(),
+                manifest_cas_hash,
+                stage: Some("system".to_string()),
+                build_env_hash: Some("seed".to_string()),
+                built_at: "2026-04-22T00:00:00Z".to_string(),
+                build_duration_secs: 1,
+                trust_level: 2,
+                provenance_cas_hash: None,
+                reproducible: None,
+            })
+            .expect("insert derivation record");
+        let profile = BuildProfile {
+            profile: ProfileMetadata {
+                manifest: "test".to_string(),
+                profile_hash: "profile-xyz".to_string(),
+                generated_at: "2026-04-22T00:00:00Z".to_string(),
+                target: "x86_64-conary-linux-gnu".to_string(),
+            },
+            seed: ProfileSeedRef {
+                id: "seed".to_string(),
+                source: "local".to_string(),
+            },
+            stages: vec![ProfileStage {
+                name: "system".to_string(),
+                build_env: "seed".to_string(),
+                derivations: vec![ProfileDerivation {
+                    package: "hello".to_string(),
+                    version: "1.0.0".to_string(),
+                    derivation_id: derivation_id.to_string(),
+                }],
+            }],
+        };
+
+        write_bootstrap_run_generation_artifact(
+            &conn,
+            &cas_dir,
+            &gen_dir,
+            &profile,
+            "x86_64-conary-linux-gnu",
+            "test-system",
+        )
+        .expect("artifact writer");
+
+        conary_core::generation::artifact::load_generation_artifact(&gen_dir)
+            .expect("load generated artifact");
+        assert!(gen_dir.join(".conary-artifact.json").is_file());
+        assert!(gen_dir.join("cas-manifest.json").is_file());
+        assert!(gen_dir.join("boot-assets/manifest.json").is_file());
     }
 }
