@@ -318,7 +318,8 @@ pub struct TransactionResult {
 #[cfg(all(test, feature = "composefs-rs"))]
 mod integration_tests {
     use crate::db::models::{FileEntry, SystemState, Trove, TroveType};
-    use crate::generation::builder::build_generation_from_db;
+    use crate::filesystem::CasStore;
+    use crate::generation::builder::build_generation_from_db_with_boot_root;
     use crate::generation::metadata::{
         GENERATION_FORMAT, GENERATION_METADATA_FILE, GenerationMetadata,
     };
@@ -337,32 +338,42 @@ mod integration_tests {
         let (tmp, conn) = setup_test_db();
         let root = tmp.path();
         let generations_dir = root.join("generations");
+        let objects_dir = root.join("objects");
+        let boot_root = root.join("boot");
         std::fs::create_dir_all(&generations_dir).unwrap();
+        std::fs::create_dir_all(boot_root.join("EFI/BOOT")).unwrap();
+        std::fs::write(boot_root.join("vmlinuz-6.19.8-conary"), b"kernel").unwrap();
+        std::fs::write(boot_root.join("initramfs-6.19.8-conary.img"), b"initramfs").unwrap();
+        std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"efi").unwrap();
 
         // Insert a mock trove
         let mut trove = Trove::new(
-            "hello-world".to_string(),
-            "1.0.0-1".to_string(),
+            "kernel".to_string(),
+            "6.19.8-conary".to_string(),
             TroveType::Package,
         );
         trove.architecture = Some("x86_64".to_string());
         let trove_id = trove.insert(&conn).unwrap();
 
         // Insert file entries for the trove
-        // Use a 64-char hex hash that the EROFS builder will accept
-        let hash = "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd";
+        let cas = CasStore::new(&objects_dir).unwrap();
+        let hash = cas.store(b"hello").unwrap();
         let mut fe = FileEntry::new(
             "/usr/bin/hello".to_string(),
-            hash.to_string(),
-            1024,
+            hash,
+            b"hello".len() as i64,
             0o755,
             trove_id,
         );
         fe.insert(&conn).unwrap();
 
         // Run build_generation_from_db
-        let result =
-            build_generation_from_db(&conn, &generations_dir, "Full transaction round-trip test");
+        let result = build_generation_from_db_with_boot_root(
+            &conn,
+            &generations_dir,
+            "Full transaction round-trip test",
+            &boot_root,
+        );
         assert!(
             result.is_ok(),
             "build_generation_from_db failed: {:?}",
@@ -400,6 +411,8 @@ mod integration_tests {
         assert_eq!(meta.generation, gen_num);
         assert_eq!(meta.format, GENERATION_FORMAT);
         assert_eq!(meta.package_count, 1);
+        assert!(meta.artifact_manifest_sha256.is_some());
+        crate::generation::artifact::load_generation_artifact(&gen_dir).unwrap();
 
         // Verify SystemState was created and is active
         let active_state = SystemState::get_active(&conn).unwrap();
