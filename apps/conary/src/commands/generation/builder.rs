@@ -182,6 +182,7 @@ mod tests {
             cas_objects_referenced: Some(3),
             fsverity_enabled: false,
             erofs_verity_digest: Some("ab".repeat(32)),
+            artifact_manifest_sha256: None,
             created_at: "2026-04-21T00:00:00Z".to_string(),
             package_count: 2,
             kernel_version: Some("6.16.1".to_string()),

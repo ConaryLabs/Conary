@@ -69,6 +69,9 @@ pub struct GenerationMetadata {
     /// Hex-encoded fs-verity digest of the EROFS image itself
     #[serde(skip_serializing_if = "Option::is_none")]
     pub erofs_verity_digest: Option<String>,
+    /// SHA-256 of the exact on-disk `.conary-artifact.json` bytes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_manifest_sha256: Option<String>,
     pub created_at: String,
     pub package_count: i64,
     pub kernel_version: Option<String>,
@@ -425,6 +428,9 @@ mod tests {
             cas_objects_referenced: Some(320),
             fsverity_enabled: true,
             erofs_verity_digest: Some("abc123def456".to_string()),
+            artifact_manifest_sha256: Some(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            ),
             created_at: "2026-03-04T12:00:00Z".to_string(),
             package_count: 150,
             kernel_version: Some("6.12.1-arch1-1".to_string()),
@@ -440,6 +446,10 @@ mod tests {
         assert_eq!(loaded.cas_objects_referenced, Some(320));
         assert!(loaded.fsverity_enabled);
         assert_eq!(loaded.erofs_verity_digest.as_deref(), Some("abc123def456"));
+        assert_eq!(
+            loaded.artifact_manifest_sha256.as_deref(),
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
         assert_eq!(loaded.created_at, "2026-03-04T12:00:00Z");
         assert_eq!(loaded.package_count, 150);
         assert_eq!(loaded.kernel_version.as_deref(), Some("6.12.1-arch1-1"));
@@ -456,6 +466,7 @@ mod tests {
             cas_objects_referenced: Some(100),
             fsverity_enabled: false,
             erofs_verity_digest: None,
+            artifact_manifest_sha256: None,
             created_at: "2026-03-17T10:00:00Z".to_string(),
             package_count: 80,
             kernel_version: None,
@@ -495,6 +506,7 @@ mod tests {
         assert_eq!(loaded.cas_objects_referenced, None);
         assert!(!loaded.fsverity_enabled); // serde(default) gives false
         assert_eq!(loaded.erofs_verity_digest, None);
+        assert_eq!(loaded.artifact_manifest_sha256, None);
         assert_eq!(loaded.summary, "old generation");
     }
 
@@ -541,6 +553,7 @@ mod tests {
             cas_objects_referenced: Some(9),
             fsverity_enabled: true,
             erofs_verity_digest: Some("abcd".to_string()),
+            artifact_manifest_sha256: None,
             created_at: "2026-03-27T12:00:00Z".to_string(),
             package_count: 3,
             kernel_version: Some("6.13.0".to_string()),
@@ -570,6 +583,7 @@ mod tests {
             cas_objects_referenced: Some(2),
             fsverity_enabled: false,
             erofs_verity_digest: None,
+            artifact_manifest_sha256: None,
             created_at: "2026-03-27T12:00:00Z".to_string(),
             package_count: 1,
             kernel_version: None,
@@ -607,6 +621,7 @@ mod tests {
             cas_objects_referenced: Some(4),
             fsverity_enabled: false,
             erofs_verity_digest: None,
+            artifact_manifest_sha256: None,
             created_at: "2026-03-27T12:00:00Z".to_string(),
             package_count: 2,
             kernel_version: None,
