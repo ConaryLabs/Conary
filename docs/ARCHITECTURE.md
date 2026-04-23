@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-04-09
-revision: 11
-summary: Refresh workspace layout for shared operation vocabulary, source-selection policy flow, and current service boundaries
+last_updated: 2026-04-22
+revision: 12
+summary: Refresh workspace layout for generation artifact export, shared operation vocabulary, source-selection policy flow, and current service boundaries
 ---
 
 # Conary Architecture
@@ -98,6 +98,8 @@ crates/conary-core/      Core library crate
     |   +-- planner.rs   VFS preflight conflict detection
     +-- generation/      EROFS generation building and composefs mounting
     |   +-- builder.rs   Build EROFS images from DB state (uses composefs-rs)
+    |   +-- artifact.rs  Generation artifact contract, CAS manifest, and boot assets
+    |   +-- export.rs    Raw/qcow2 generation artifact disk export
     |   +-- mount.rs     composefs mount/unmount, current symlink
     |   +-- metadata.rs  Generation metadata (JSON)
     |   +-- composefs.rs composefs detection and feature probing
@@ -331,6 +333,10 @@ Current System State
   +----+----+
        |
   Generation N (immutable, verified)
+       |
+  conary system generation export --format raw|qcow2
+       |
+  validated artifact contract -> staged ESP/rootfs -> systemd-repart
 ```
 
 ### Generation Lifecycle
@@ -345,10 +351,11 @@ Current System State
 
 The primary builder for composefs generations. Uses the composefs-rs crate
 (v0.3.0) to produce EROFS images from the current DB state. Submodules:
-builder.rs (EROFS image construction), mount.rs (composefs mount/unmount),
-metadata.rs (JSON metadata), gc.rs (old generation cleanup), etc_merge.rs
-(three-way /etc merge), delta.rs (EROFS image deltas), composefs.rs
-(runtime feature detection).
+builder.rs (EROFS image construction), artifact.rs (exportable generation
+contract and boot assets), export.rs (raw/qcow2 disk export from validated
+artifacts), mount.rs (composefs mount/unmount), metadata.rs (JSON metadata),
+gc.rs (old generation cleanup), etc_merge.rs (three-way /etc merge), delta.rs
+(EROFS image deltas), composefs.rs (runtime feature detection).
 
 ### composefs Integration
 
@@ -380,8 +387,8 @@ Phase 4: SystemConfig (LFS Ch9)
   Network, fstab, kernel, bootloader configuration
        |
 Phase 5: BootableImage (LFS Ch10)
-  systemd-repart for declarative GPT image generation
-  Output formats: raw, qcow2, ISO, EROFS
+  systemd-repart for bootstrap sysroot disk images
+  Output formats: raw, qcow2, ISO, or EROFS generation artifact
        |
 Phase 6: Tier2 (BLFS + Conary)
   PAM, OpenSSH, curl, Rust, Conary self-hosting
