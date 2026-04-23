@@ -5,6 +5,7 @@
 //! This module will contain the core logic for building, managing, and
 //! switching between composefs generations (EROFS images backed by CAS).
 
+pub mod artifact;
 pub mod builder;
 pub mod composefs;
 pub mod delta;
