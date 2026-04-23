@@ -81,6 +81,9 @@ the same level of traceability.
 Likely work:
 
 - emit digest manifests for raw, qcow2, ISO, OCI, and bundles
+- build on the source-level digest binding added by the generation export
+  unification slice without treating that binding as a full image signing
+  story
 - add provenance links from image artifacts back to generation metadata,
   source packages, and build records
 - support operator verification such as "this qcow2 came from this signed
@@ -91,7 +94,9 @@ Likely work:
 
 The dracut path still contains a legacy bind-mount fallback for generation
 directories that lack `root.erofs`. Once the generation and export contracts
-are composefs-native and bootable, that fallback should be removed.
+are composefs-native and bootable, that fallback should be removed. This is the
+continuation of the current slice's explicit non-goal to leave the fallback in
+place while generation artifact export is being unified.
 
 Likely work:
 
