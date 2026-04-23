@@ -1305,6 +1305,7 @@ mod tests {
 
         let mut canonical = CanonicalPackage::new("demo".to_string(), "package".to_string());
         let canonical_id = canonical.insert(conn).unwrap();
+        let fresh = Utc::now().to_rfc3339();
 
         RepologyCacheEntry::insert_or_replace(
             conn,
@@ -1314,7 +1315,7 @@ mod tests {
                 distro_name: "demo".to_string(),
                 version: Some("1.1.0-1.fc43".to_string()),
                 status: Some("outdated".to_string()),
-                fetched_at: "2026-04-07T00:00:00Z".to_string(),
+                fetched_at: fresh.clone(),
             },
         )
         .unwrap();
@@ -1326,7 +1327,7 @@ mod tests {
                 distro_name: "demo".to_string(),
                 version: Some("1.2.0-1".to_string()),
                 status: Some("newest".to_string()),
-                fetched_at: "2026-04-07T00:00:00Z".to_string(),
+                fetched_at: fresh,
             },
         )
         .unwrap();
