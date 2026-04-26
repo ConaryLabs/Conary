@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-04-22
-revision: 11
+last_updated: 2026-04-25
+revision: 12
 summary: Align integration-testing guidance with generation export QEMU validation and the virtual workspace package layout
 ---
 
@@ -41,6 +41,11 @@ cargo run -p conary-test -- run --distro fedora43 --phase 1
 # List available suites
 cargo run -p conary-test -- list
 ```
+
+The generation artifact export QEMU suite is the remaining operational proof
+for the 2026-04-22 generation-export unification slice. It should pass or
+produce a narrowly scoped remote fixture/tooling blocker before that slice is
+treated as fully validated in operations.
 
 ## CLI Subcommands
 

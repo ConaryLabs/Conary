@@ -110,6 +110,15 @@ pub struct ConversionService {
     r2_store: Option<Arc<R2Store>>,
 }
 
+struct PackageDownloadRefresh<'a> {
+    distro: &'a str,
+    package_name: &'a str,
+    version: Option<&'a str>,
+    architecture: Option<&'a str>,
+    repo_pkg: RepositoryPackage,
+    dest_dir: &'a Path,
+}
+
 impl ConversionService {
     pub fn new(
         chunk_dir: PathBuf,
@@ -215,12 +224,14 @@ impl ConversionService {
         let (repo_pkg, pkg_path) = self
             .download_package_with_refresh(
                 &conn,
-                distro,
-                package_name,
-                version,
-                architecture,
-                repo_pkg,
-                temp_dir.path(),
+                PackageDownloadRefresh {
+                    distro,
+                    package_name,
+                    version,
+                    architecture,
+                    repo_pkg,
+                    dest_dir: temp_dir.path(),
+                },
             )
             .map_err(|e| anyhow!("Failed to download package: {}", e))?;
         info!("Downloaded to: {:?}", pkg_path);
@@ -502,13 +513,16 @@ impl ConversionService {
     fn download_package_with_refresh(
         &self,
         conn: &rusqlite::Connection,
-        distro: &str,
-        package_name: &str,
-        version: Option<&str>,
-        architecture: Option<&str>,
-        repo_pkg: RepositoryPackage,
-        dest_dir: &Path,
+        request: PackageDownloadRefresh<'_>,
     ) -> Result<(RepositoryPackage, PathBuf)> {
+        let PackageDownloadRefresh {
+            distro,
+            package_name,
+            version,
+            architecture,
+            repo_pkg,
+            dest_dir,
+        } = request;
         let handle = tokio::runtime::Handle::current();
         match handle.block_on(download_package(&repo_pkg, dest_dir)) {
             Ok(path) => return Ok((repo_pkg, path)),

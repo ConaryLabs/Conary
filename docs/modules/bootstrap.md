@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-04-22
-revision: 6
+last_updated: 2026-04-25
+revision: 7
 summary: Document the current bootstrap command surface, generation artifact export split, self-host VM overlay, focused operator docs, and manifest comparison commands
 ---
 
@@ -128,6 +128,10 @@ That command loads the generation artifact contract, projects the runtime
 rootfs and ESP staging trees, then uses the same shared systemd-repart raw
 backend. It does not scrape `/boot`, `/conary`, or other live-host paths while
 exporting.
+
+The generation artifact export implementation is merged. The remaining
+operational validation is the `Generation Artifact Export QEMU` suite described
+in [docs/INTEGRATION-TESTING.md](/docs/INTEGRATION-TESTING.md).
 
 ## Architecture Context
 

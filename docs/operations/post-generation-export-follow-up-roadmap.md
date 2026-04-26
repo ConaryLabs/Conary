@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-04-22
-revision: 1
+last_updated: 2026-04-25
+revision: 2
 summary: Follow-up roadmap for bootstrap and generation architecture work after the generation export unification slice
 ---
 
@@ -8,15 +8,15 @@ summary: Follow-up roadmap for bootstrap and generation architecture work after 
 
 ## Purpose
 
-This roadmap preserves the work we are **not** tackling in the first
+This roadmap preserves the work we did **not** tackle in the first
 generation-export unification slice.
 
 The original parking-lot note remains
 [`docs/operations/bootstrap-follow-up-investigations.md`](bootstrap-follow-up-investigations.md).
-This document is the cleaned-up handoff list to use after the current slice
-lands.
+This document is the cleaned-up handoff list to use now that the current slice
+has landed.
 
-Current slice in progress:
+Completed first slice:
 
 - unify generation-derived raw/qcow2 export around the canonical generation
   directory contract
@@ -24,13 +24,20 @@ Current slice in progress:
 - stage explicit boot assets next to generation artifacts
 - reserve ISO on the same artifact contract
 
-Everything below is deferred until that slice is complete.
+Operational validation still to run before we call the slice fully proven:
+
+- run the `Generation Artifact Export QEMU` suite against the remote/QEMU
+  environment and record the result
+- keep the existing fail-closed behavior if the runtime-generation path is not
+  yet self-contained
+
+Everything below remains deferred follow-up work.
 
 ## Follow-Up Slices
 
 ### 1. Make Installed Runtime Generations Self-Contained
 
-The current slice now fails closed when an installed runtime generation has
+The landed slice fails closed when an installed runtime generation has
 boot assets but its root filesystem is not represented fully in Conary CAS. A
 follow-up should make installed-generation export bootable without scraping the
 live host root.
@@ -47,7 +54,7 @@ Likely work:
 
 ### 2. Finish ISO Export On The Generation Artifact Contract
 
-The current slice reserves `iso` on the same source contract as raw/qcow2. A
+The landed slice reserves `iso` on the same source contract as raw/qcow2. A
 focused follow-up should implement the ISO backend without changing the
 generation artifact loader.
 
@@ -195,8 +202,9 @@ highest-leverage order is:
 
 ## Scope Guard
 
-Do not start these follow-ups during the generation-export unification slice
-unless the current slice exposes a direct blocker. The immediate goal remains:
+Do not start these follow-ups until the remaining QEMU-suite validation from
+the generation-export unification slice has either passed or produced a
+narrowly scoped blocker. The completed slice established:
 
 - one generation artifact contract
 - no legacy generation image path

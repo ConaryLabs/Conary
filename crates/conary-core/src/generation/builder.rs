@@ -553,7 +553,6 @@ fn parent_virtual_path(path: &str) -> String {
     let path = path.trim_end_matches('/');
     match path.rsplit_once('/') {
         Some(("", _)) | None => "/".to_string(),
-        Some((parent, _)) if parent.is_empty() => "/".to_string(),
         Some((parent, _)) => parent.to_string(),
     }
 }
@@ -843,7 +842,7 @@ fn link_or_copy_dracut_entry(source: &Path, dest: &Path) -> crate::Result<()> {
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink(source, dest)?;
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(unix))]
