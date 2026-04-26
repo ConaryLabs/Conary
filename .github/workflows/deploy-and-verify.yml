@@ -11,7 +11,7 @@ on:
         required: false
       source_run:
         description: release-build workflow run ID to deploy from.
-        required: true
+        required: false
       environment:
         description: GitHub environment name.
         required: true
@@ -22,6 +22,10 @@ on:
       deploy_asset_ref:
         description: Optional repo ref for checked-in deploy assets.
         required: false
+      bootstrap_remi_access:
+        description: Install the Remi deploy helper and sudo policy using the bootstrap SSH key.
+        required: false
+        default: "false"
 
 permissions:
   actions: read
@@ -34,7 +38,7 @@ concurrency:
 jobs:
   resolve:
     name: resolve
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') && github.event.inputs.bootstrap_remi_access != 'true' }}
     runs-on: ubuntu-latest
     outputs:
       product: ${{ steps.meta.outputs.product }}
@@ -197,6 +201,43 @@ jobs:
               ;;
           esac
 
+  bootstrap-remi-access:
+    name: bootstrap-remi-access
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.bootstrap_remi_access == 'true' }}
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install Remi deploy access
+        env:
+          REMI_SSH_KEY: ${{ secrets.REMI_SSH_KEY }}
+          REMI_BOOTSTRAP_SSH_TARGET: ${{ secrets.REMI_BOOTSTRAP_SSH_TARGET }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "${REMI_SSH_KEY:-}" ]] || { echo "REMI_SSH_KEY is required" >&2; exit 1; }
+
+          target="${REMI_BOOTSTRAP_SSH_TARGET:-root@ssh.conary.io}"
+          remote_stage="/tmp/remi-deploy-access-${GITHUB_RUN_ID}"
+
+          mkdir -p ~/.ssh
+          echo "$REMI_SSH_KEY" > ~/.ssh/remi_key
+          chmod 600 ~/.ssh/remi_key
+          ssh-keyscan -H "${target#*@}" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh_opts="-i ~/.ssh/remi_key -o StrictHostKeyChecking=accept-new"
+
+          ssh $ssh_opts "$target" "rm -rf '$remote_stage' && mkdir -p '$remote_stage/deploy/sudoers' '$remote_stage/scripts'"
+          scp $ssh_opts \
+            deploy/remi-deploy-helper.sh \
+            "$target:${remote_stage}/deploy/remi-deploy-helper.sh"
+          scp $ssh_opts \
+            deploy/sudoers/remi \
+            "$target:${remote_stage}/deploy/sudoers/remi"
+          scp $ssh_opts \
+            scripts/install-remi-deploy-access.sh \
+            "$target:${remote_stage}/scripts/install-remi-deploy-access.sh"
+          ssh $ssh_opts "$target" "cd '$remote_stage' && bash scripts/install-remi-deploy-access.sh && sudo -n /usr/local/sbin/conary-remi-deploy verify-access"
+
   verify-conary:
     name: verify-conary
     needs: [resolve, validate-routing]
@@ -314,30 +355,28 @@ jobs:
           [[ -n "$release_dir" ]] || { echo "release-bundle artifact missing" >&2; exit 1; }
           [[ -n "${REMI_SSH_KEY:-}" ]] || { echo "REMI_SSH_KEY is required" >&2; exit 1; }
 
-          target="${REMI_SSH_TARGET:-root@ssh.conary.io}"
+          target="${REMI_SSH_TARGET:-peter@ssh.conary.io}"
           mkdir -p ~/.ssh
           echo "$REMI_SSH_KEY" > ~/.ssh/remi_key
           chmod 600 ~/.ssh/remi_key
           ssh-keyscan -H "${target#*@}" >> ~/.ssh/known_hosts 2>/dev/null
           ssh_opts="-i ~/.ssh/remi_key -o StrictHostKeyChecking=accept-new"
 
-          ssh $ssh_opts "$target" "mkdir -p /conary/releases/${VERSION} /conary/self-update"
+          staging="/tmp/conary-release-${VERSION}-${GITHUB_RUN_ID}"
+          ssh $ssh_opts "$target" "sudo -n /usr/local/sbin/conary-remi-deploy verify-access"
+          ssh $ssh_opts "$target" bash -s "$staging" <<'REMOTE_EOF'
+            set -euo pipefail
+            staging="$1"
+            rm -rf "$staging"
+            mkdir -p "$staging"
+          REMOTE_EOF
 
-          ccs_file=$(find "$release_dir" -maxdepth 1 -name '*.ccs' ! -name '*.sig' -print -quit)
-          if [[ -n "$ccs_file" ]]; then
-            scp $ssh_opts "$ccs_file" "${target}:/conary/self-update/conary-${VERSION}.ccs"
-            if [[ -f "${ccs_file}.sig" ]]; then
-              scp $ssh_opts "${ccs_file}.sig" "${target}:/conary/self-update/conary-${VERSION}.ccs.sig"
-            fi
-          fi
-
-          scp $ssh_opts "${release_dir}"/* "${target}:/conary/releases/${VERSION}/"
-          ssh $ssh_opts "$target" bash -s "$VERSION" <<'REMOTE_EOF'
+          scp $ssh_opts "${release_dir}"/* "${target}:${staging}/"
+          ssh $ssh_opts "$target" bash -s "$VERSION" "$staging" <<'REMOTE_EOF'
             set -euo pipefail
             VERSION="$1"
-            cd "/conary/releases/${VERSION}"
-            sha256sum -- * > SHA256SUMS
-            ln -sfn "$VERSION" /conary/releases/latest
+            staging="$2"
+            sudo -n /usr/local/sbin/conary-remi-deploy deploy-conary "$VERSION" "$staging"
           REMOTE_EOF
       - name: Verify self-update endpoint
         run: |
@@ -462,6 +501,7 @@ jobs:
           BUNDLE_NAME: ${{ needs.resolve.outputs.bundle_name }}
           REMI_SSH_KEY: ${{ secrets.REMI_SSH_KEY }}
           REMI_SSH_TARGET: ${{ secrets.REMI_SSH_TARGET }}
+          REMI_MAX_CONCURRENT: 32
         shell: bash
         run: |
           set -euo pipefail
@@ -471,26 +511,23 @@ jobs:
           [[ -n "$bundle" ]] || { echo "remi bundle missing" >&2; exit 1; }
           [[ -n "${REMI_SSH_KEY:-}" ]] || { echo "REMI_SSH_KEY is required" >&2; exit 1; }
 
-          target="${REMI_SSH_TARGET:-root@ssh.conary.io}"
+          target="${REMI_SSH_TARGET:-peter@ssh.conary.io}"
           mkdir -p ~/.ssh
           echo "$REMI_SSH_KEY" > ~/.ssh/remi_key
           chmod 600 ~/.ssh/remi_key
           ssh-keyscan -H "${target#*@}" >> ~/.ssh/known_hosts 2>/dev/null
           ssh_opts="-i ~/.ssh/remi_key -o StrictHostKeyChecking=accept-new"
 
-          scp $ssh_opts "$bundle" "${target}:/tmp/remi-${VERSION}.tar.gz"
-          ssh $ssh_opts "$target" bash -s "$VERSION" <<'REMOTE_EOF'
+          remote_bundle="/tmp/remi-${VERSION}-${GITHUB_RUN_ID}.tar.gz"
+          ssh $ssh_opts "$target" "sudo -n /usr/local/sbin/conary-remi-deploy verify-access"
+          scp $ssh_opts "$bundle" "${target}:${remote_bundle}"
+          ssh $ssh_opts "$target" bash -s "$VERSION" "$remote_bundle" "$REMI_MAX_CONCURRENT" <<'REMOTE_EOF'
             set -euo pipefail
             VERSION="$1"
-            tmpdir=$(mktemp -d)
-            trap 'rm -rf "$tmpdir"' EXIT
-            tar xzf "/tmp/remi-${VERSION}.tar.gz" -C "$tmpdir"
-            systemctl stop remi
-            cp "$tmpdir/remi-${VERSION}-linux-x64" /usr/local/bin/remi
-            chmod 755 /usr/local/bin/remi
-            systemctl start remi
-            sleep 2
-            curl -fsS http://localhost:8081/health >/dev/null
+            remote_bundle="$2"
+            max_concurrent="$3"
+            sudo -n /usr/local/sbin/conary-remi-deploy deploy-remi "$VERSION" "$remote_bundle"
+            sudo -n /usr/local/sbin/conary-remi-deploy configure-concurrency "$max_concurrent"
           REMOTE_EOF
       - name: Verify remi health
         run: curl -fsS https://remi.conary.io/health >/dev/null

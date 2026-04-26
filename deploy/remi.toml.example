@@ -77,7 +77,7 @@ chunk_max = 262144   # 256 KB maximum
 strip_debug = false
 
 # Maximum concurrent conversions (tune based on CPU cores and available RAM)
-max_concurrent = 4
+max_concurrent = 32
 
 [r2]
 # Cloudflare R2 object storage for CDN-backed chunk distribution

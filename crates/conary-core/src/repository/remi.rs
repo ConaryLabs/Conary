@@ -37,6 +37,9 @@ const POLL_TIMEOUT: Duration = Duration::from_secs(300);
 /// Poll interval (2 seconds)
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
+/// Number of times to retry when Remi's conversion queue is temporarily full.
+const QUEUE_FULL_MAX_RETRIES: u32 = 5;
+
 /// Chunk download timeout (60 seconds per chunk)
 const CHUNK_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -53,6 +56,16 @@ fn check_total_chunk_bytes(current: u64, next: u64) -> Result<u64> {
         )));
     }
     Ok(total)
+}
+
+#[cfg(not(test))]
+fn queue_full_retry_delay(attempt: u32) -> Duration {
+    Duration::from_secs(1_u64 << attempt.saturating_sub(1).min(4))
+}
+
+#[cfg(test)]
+fn queue_full_retry_delay(attempt: u32) -> Duration {
+    Duration::from_millis(attempt as u64)
 }
 
 /// Response when package needs conversion (202 Accepted)
@@ -253,6 +266,39 @@ impl RemiClient {
                 Err(self.core.map_http_error(status, body, name, distro))
             }
         }
+    }
+
+    async fn send_download_request_with_queue_retry(
+        &self,
+        url: &str,
+        name: &str,
+        distro: &str,
+    ) -> Result<reqwest::Response> {
+        for attempt in 0..=QUEUE_FULL_MAX_RETRIES {
+            let response = self.client.get(url).send().await.download_context(url)?;
+            let status = response.status().as_u16();
+            if status != 503 {
+                return Ok(response);
+            }
+
+            let body = response.text().await.unwrap_or_default();
+            if attempt == QUEUE_FULL_MAX_RETRIES {
+                return Err(self.core.map_http_error(status, body, name, distro));
+            }
+
+            let retry_after = queue_full_retry_delay(attempt + 1);
+            warn!(
+                "Remi conversion queue full for {} on {}; retrying in {:?} ({}/{})",
+                name,
+                distro,
+                retry_after,
+                attempt + 1,
+                QUEUE_FULL_MAX_RETRIES
+            );
+            tokio::time::sleep(retry_after).await;
+        }
+
+        unreachable!("queue-full retry loop always returns")
     }
 
     /// Poll for job completion
@@ -574,7 +620,9 @@ impl RemiClient {
 
         info!("Downloading CCS package from Remi: {}", url);
 
-        let response = self.client.get(&url).send().await.download_context(&url)?;
+        let response = self
+            .send_download_request_with_queue_retry(&url, name, distro)
+            .await?;
 
         match response.status().as_u16() {
             200 => {
@@ -1107,6 +1155,68 @@ mod tests {
     fn test_chunk_byte_limit_rejects_excessive_total() {
         let err = check_total_chunk_bytes(MAX_TOTAL_CHUNK_BYTES - 4, 8).unwrap_err();
         assert!(err.to_string().contains("chunk bytes"));
+    }
+
+    #[tokio::test]
+    async fn fetch_package_retries_when_conversion_queue_is_full() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let server_attempts = attempts.clone();
+
+        tokio::spawn(async move {
+            for n in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 1024];
+                let _ = socket.read(&mut request).await.unwrap();
+                server_attempts.fetch_add(1, Ordering::SeqCst);
+
+                if n == 0 {
+                    socket
+                        .write_all(
+                            b"HTTP/1.1 503 Service Unavailable\r\n\
+                              Content-Length: 21\r\n\
+                              Connection: close\r\n\
+                              \r\n\
+                              Conversion queue full",
+                        )
+                        .await
+                        .unwrap();
+                } else {
+                    let mut response = b"HTTP/1.1 200 OK\r\n\
+                                         Content-Disposition: attachment; filename=\"qemu-img.ccs\"\r\n\
+                                         Content-Length: 2\r\n\
+                                         Connection: close\r\n\
+                                         \r\n"
+                        .to_vec();
+                    response.extend_from_slice(&[0x1f, 0x8b]);
+                    socket.write_all(&response).await.unwrap();
+                }
+            }
+        });
+
+        let output = tempfile::tempdir().unwrap();
+        let client = RemiClient::new(&base_url).unwrap();
+        let path = client
+            .fetch_package(
+                "fedora",
+                "qemu-img",
+                Some("2:10.1.0-7.fc43"),
+                None,
+                output.path(),
+            )
+            .await
+            .expect("queue-full response should be retried");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(std::fs::read(path).unwrap(), [0x1f, 0x8b]);
     }
 
     mod async_tests {

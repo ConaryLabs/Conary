@@ -1,0 +1,5 @@
+# /etc/sudoers.d/remi
+Cmnd_Alias CONARY_REMI_DEPLOY = /usr/local/sbin/conary-remi-deploy *
+
+peter ALL=(root) NOPASSWD: CONARY_REMI_DEPLOY
+Defaults!CONARY_REMI_DEPLOY !requiretty

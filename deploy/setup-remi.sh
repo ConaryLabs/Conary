@@ -160,6 +160,17 @@ cp systemd/remi.service /etc/systemd/system/
 systemctl daemon-reload
 
 # =============================================================================
+# Deployment Access
+# =============================================================================
+
+log "Installing Remi deploy helper..."
+install -m 755 -o root -g root deploy/remi-deploy-helper.sh /usr/local/sbin/conary-remi-deploy
+if [[ -f deploy/sudoers/remi ]]; then
+    install -m 440 -o root -g root deploy/sudoers/remi /etc/sudoers.d/remi
+    visudo -cf /etc/sudoers.d/remi >/dev/null
+fi
+
+# =============================================================================
 # Initialize Database
 # =============================================================================
 

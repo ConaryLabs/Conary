@@ -15,7 +15,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 
-const QUEUE_CAPACITY_MULTIPLIER: usize = 2;
+// Tracked jobs are lightweight metadata; the semaphore below controls real
+// conversion parallelism. Keep the queue broad enough for dependency bursts.
+const QUEUE_CAPACITY_MULTIPLIER: usize = 32;
 
 /// Unique job identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -295,11 +297,13 @@ pub struct JobStats {
 mod tests {
     use super::*;
 
+    const EXPECTED_QUEUE_CAPACITY_MULTIPLIER: usize = 32;
+
     #[test]
     fn create_job_rejects_when_active_tracked_jobs_hit_capacity() {
         let mut manager = JobManager::new(2);
 
-        for n in 0..4 {
+        for n in 0..(2 * EXPECTED_QUEUE_CAPACITY_MULTIPLIER) {
             manager
                 .create_job(
                     format!("key-{n}"),
@@ -324,21 +328,44 @@ mod tests {
     }
 
     #[test]
+    fn create_job_absorbs_dependency_bursts_above_conversion_parallelism() {
+        let max_concurrent = 16;
+        let mut manager = JobManager::new(max_concurrent);
+
+        for n in 0..(max_concurrent * 8) {
+            manager
+                .create_job(
+                    format!("burst-key-{n}"),
+                    "arch".into(),
+                    format!("burst-pkg-{n}"),
+                    None,
+                    None,
+                )
+                .expect("dependency bursts should queue without making Remi the bottleneck");
+        }
+
+        assert_eq!(manager.stats().total, max_concurrent * 8);
+    }
+
+    #[test]
     fn create_job_evicts_terminal_jobs_at_capacity() {
         let mut manager = JobManager::new(1);
         let completed = manager
             .create_job("done".into(), "arch".into(), "pkg-done".into(), None, None)
             .expect("first job");
         manager.update_status(&completed, JobStatus::Ready);
-        manager
-            .create_job(
-                "pending".into(),
-                "arch".into(),
-                "pkg-pending".into(),
-                None,
-                None,
-            )
-            .expect("fill capacity");
+
+        for n in 1..EXPECTED_QUEUE_CAPACITY_MULTIPLIER {
+            manager
+                .create_job(
+                    format!("pending-{n}"),
+                    "arch".into(),
+                    format!("pkg-pending-{n}"),
+                    None,
+                    None,
+                )
+                .expect("fill capacity");
+        }
 
         let fresh = manager
             .create_job(
@@ -352,7 +379,7 @@ mod tests {
 
         assert!(manager.get_job_by_key("done").is_none());
         assert!(manager.get_job(&fresh).is_some());
-        assert!(manager.get_job_by_key("pending").is_some());
+        assert!(manager.get_job_by_key("pending-1").is_some());
     }
 
     #[test]
@@ -361,9 +388,18 @@ mod tests {
         let existing = manager
             .create_job("shared".into(), "arch".into(), "pkg".into(), None, None)
             .expect("first job");
-        manager
-            .create_job("other".into(), "arch".into(), "pkg2".into(), None, None)
-            .expect("fill capacity");
+
+        for n in 1..EXPECTED_QUEUE_CAPACITY_MULTIPLIER {
+            manager
+                .create_job(
+                    format!("other-{n}"),
+                    "arch".into(),
+                    format!("pkg-other-{n}"),
+                    None,
+                    None,
+                )
+                .expect("fill capacity");
+        }
 
         let deduped = manager
             .create_job("shared".into(), "arch".into(), "pkg".into(), None, None)

@@ -17,6 +17,8 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+const DEFAULT_MAX_CONVERSIONS: usize = 32;
+
 /// TOML configuration file structure
 #[derive(Debug, Default, Deserialize)]
 pub struct RemiConfig {
@@ -243,7 +245,7 @@ impl Default for ConversionSection {
             chunk_avg: 65536,
             chunk_max: 262144,
             strip_debug: false,
-            max_concurrent: 4,
+            max_concurrent: DEFAULT_MAX_CONVERSIONS,
         }
     }
 }
@@ -261,7 +263,7 @@ fn default_chunk_max() -> usize {
 }
 
 fn default_max_conversions() -> usize {
-    4
+    DEFAULT_MAX_CONVERSIONS
 }
 
 /// Federation configuration
@@ -971,7 +973,7 @@ mod tests {
         assert_eq!(runtime.db_path, PathBuf::from("/conary/metadata/conary.db"));
         assert_eq!(runtime.chunk_dir, PathBuf::from("/conary/chunks"));
         assert_eq!(runtime.cache_dir, PathBuf::from("/conary/cache"));
-        assert_eq!(runtime.max_concurrent_conversions, 4);
+        assert_eq!(runtime.max_concurrent_conversions, 32);
         assert_eq!(runtime.cache_max_bytes, 700 * 1024 * 1024 * 1024);
         assert_eq!(runtime.chunk_ttl_days, 30);
         assert!(runtime.enable_bloom_filter);

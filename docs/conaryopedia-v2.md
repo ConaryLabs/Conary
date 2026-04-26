@@ -2490,7 +2490,7 @@ chunking = true
 chunk_min = 16384     # 16 KB
 chunk_avg = 65536     # 64 KB
 chunk_max = 262144    # 256 KB
-max_concurrent = 4
+max_concurrent = 32
 
 [r2]
 enabled = true
@@ -3051,7 +3051,7 @@ pub enum JobStatus {
 
 **Deduplication**: Jobs are keyed by `{distro}:{name}:{version}`. If a job for the same package already exists, the existing job ID is returned instead of creating a duplicate.
 
-**Queue capacity**: At most `2 * max_concurrent` jobs can be pending. Beyond that, new requests are rejected with `503 Service Unavailable`.
+**Queue capacity**: At most `32 * max_concurrent` jobs can be tracked. The conversion semaphore limits active work, while the broader queue absorbs dependency bursts so clients do not make Remi the bottleneck.
 
 **Cleanup**: Completed and failed jobs are removed after 1 hour by the eviction loop.
 

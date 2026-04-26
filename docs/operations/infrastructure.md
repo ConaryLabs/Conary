@@ -78,13 +78,26 @@ task or when you are debugging the underlying service path itself.
 ### Remi
 
 - Use the direct origin hostname `ssh.conary.io` for SSH and rsync.
-- Use a normal admin account plus `sudo`; do not assume root SSH login is
-  enabled on the host.
+- Use the normal admin account (`peter@ssh.conary.io`) plus passwordless,
+  least-privilege `sudo`; root SSH login is not part of the supported deploy
+  path.
 - Stage source under `~/conary-src/` on the admin account rather than under
   `/root/`
 - Exclude `target/`, `.git/`, and `.worktrees/`
 - Build `remi`, stop the service before replacing the live binary, then restart
   and verify the local health endpoint
+- The durable deploy entry point is the root-owned helper installed at
+  `/usr/local/sbin/conary-remi-deploy`, with the sudo policy tracked in
+  `deploy/sudoers/remi`. The helper owns privileged actions for publishing
+  Conary release artifacts, replacing the Remi binary, and applying operational
+  Remi concurrency config.
+- Bootstrap or repair deploy access once from an existing privileged shell with
+  `sudo scripts/install-remi-deploy-access.sh`. It installs
+  `deploy/remi-deploy-helper.sh` to `/usr/local/sbin/conary-remi-deploy`,
+  installs `deploy/sudoers/remi` to `/etc/sudoers.d/remi`, and validates the
+  sudoers file with `visudo -cf`.
+- After bootstrap, `ssh peter@ssh.conary.io 'sudo -n /usr/local/sbin/conary-remi-deploy verify-access'`
+  should succeed without prompting for a password.
 - The public frontends currently share the Remi host but deploy as two separate
   static sites:
   `conary.io` syncs to `/conary/site/`, while `remi.conary.io` syncs to
