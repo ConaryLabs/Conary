@@ -1,13 +1,14 @@
 ---
-last_updated: 2026-04-22
-revision: 2
+last_updated: 2026-04-25
+revision: 3
 summary: Design for replacing legacy generation image export with one canonical generation-artifact-to-image pipeline
 ---
 
 # Generation Artifact Export Unification: Design Spec
 
 **Date:** 2026-04-22
-**Status:** Draft after external review; pending user lock-in
+**Status:** Implemented on `main`; full generation-export QEMU suite execution
+pending
 **Goal:** Replace the legacy generation-derived image path with one truthful
 generation-artifact export contract that emits `raw` and `qcow2` disk images
 through a shared declarative image backend and reserves the same contract for
@@ -15,9 +16,38 @@ future `iso` output.
 
 ---
 
+## Current Implementation State
+
+The implementation for this slice landed on `main` in commit
+`3df9716f feat(generation): unify artifact image export`.
+
+Code-level acceptance is implemented:
+
+- `conary bootstrap image --from-generation` is removed
+- generation disk export lives under `conary system generation export`
+- the old imperative generation image builder is gone
+- generation export uses the shared `systemd-repart` raw backend and
+  `qemu-img` qcow2 conversion
+- export consumes validated generation-local artifacts rather than live host
+  `/boot`
+- bootstrap and runtime generation producers stage artifact manifests, CAS
+  manifests, and boot assets
+- ISO is accepted by the contract but fails closed with the reserved
+  not-implemented error
+
+The remaining validation item is operational, not design-shape work: run the
+full `Generation Artifact Export QEMU` suite from
+[`docs/INTEGRATION-TESTING.md`](../../INTEGRATION-TESTING.md) against the
+remote/QEMU environment and record the result. The suite manifest exists and is
+visible to `conary-test`, but the exact end-to-end suite command has not yet
+been recorded as passing in this doc.
+
+Deferred work after this slice is tracked in
+[`docs/operations/post-generation-export-follow-up-roadmap.md`](../../operations/post-generation-export-follow-up-roadmap.md).
+
 ## Scope
 
-This task covers the first implementation slice from
+This task covered the first implementation slice from
 [`docs/operations/bootstrap-follow-up-investigations.md`](../../operations/bootstrap-follow-up-investigations.md):
 unifying generation-derived image creation with the declarative
 `systemd-repart` image contract.
@@ -79,21 +109,22 @@ contract:
 
 - `crates/conary-core/src/bootstrap/image.rs` uses `systemd-repart` for
   bootstrap `raw` images and converts those raw images to `qcow2`
-- `crates/conary-core/src/bootstrap/repart.rs` owns the current repart
-  definition generator
+- `crates/conary-core/src/image/repart.rs` owns the shared repart definition
+  generator used by both bootstrap and generation export
 - `conary bootstrap image` is still the sysroot-oriented bootstrap image
   command
 
-Generation-derived image creation is still split and partly untruthful:
+Before this slice, generation-derived image creation was split and partly
+untruthful:
 
-- `crates/conary-core/src/bootstrap/image.rs` still contains
+- `crates/conary-core/src/bootstrap/image.rs` contained
   `ImageBuilder::build_from_generation()`
-- that method hand-rolls a GPT layout with `sfdisk`, creates a FAT ESP with
-  `mkfs.fat`, writes bytes into fixed offsets, and then optionally runs
+- that method hand-rolled a GPT layout with `sfdisk`, created a FAT ESP with
+  `mkfs.fat`, wrote bytes into fixed offsets, and then optionally ran
   `qemu-img`
-- it writes `root.erofs` into the root partition without building the runtime
+- it wrote `root.erofs` into the root partition without building the runtime
   root layout that the boot path actually expects
-- it warns that ESP kernel population is not implemented, which means the
+- it warned that ESP kernel population was not implemented, which meant the
   result is not truthfully bootable
 
 Generation boot activation has a different shape:
@@ -109,15 +140,15 @@ Generation boot activation has a different shape:
 - runtime boot entries in `apps/conary/src/commands/generation/boot.rs` assume
   real kernel and initramfs assets exist outside the composefs generation
 
-Bootstrap-run output already creates a generation-shaped artifact, but it is
-not yet self-contained enough for truthful disk export:
+Before this slice, bootstrap-run output already created a generation-shaped
+artifact, but it was not self-contained enough for truthful disk export:
 
-- `conary bootstrap image --format erofs` emits `objects/`,
+- `conary bootstrap image --format erofs` emitted `objects/`,
   `generations/1/root.erofs`, `generations/1/.conary-gen.json`, and
   `db.sqlite3`
-- `conary bootstrap run` writes operation-scoped output with
+- `conary bootstrap run` wrote operation-scoped output with
   `output/generations/1/root.erofs` and a `current` symlink
-- neither path currently gives the generation directory an explicit
+- neither path gave the generation directory an explicit
   boot-assets manifest that disk export can validate
 
 The current top-level OCI generation export is out of scope for this slice:
@@ -742,6 +773,12 @@ is required.
 ---
 
 ## Acceptance Criteria
+
+Current status: all code-level criteria below are implemented. The QEMU boot
+criterion is represented by
+`apps/conary/tests/integration/remi/manifests/phase3-group-o-generation-export.toml`,
+but still needs an end-to-end remote/QEMU run recorded before this slice should
+be considered fully validated in operations.
 
 - `conary bootstrap image --from-generation` is gone.
 - `conary system generation export` is the only disk-image export surface for

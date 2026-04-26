@@ -1,6 +1,9 @@
 # Generation Artifact Export Unification Implementation Plan
 
-> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Historical execution plan:** This plan drove the generation artifact export
+> unification slice that landed on `main` in
+> `3df9716f feat(generation): unify artifact image export`. The checkboxes
+> below were planning scaffolding, not an authoritative post-merge ledger.
 
 **Goal:** Replace the false legacy generation image path with one validated generation-artifact export pipeline that emits raw/qcow2 images through `systemd-repart` and reserves ISO on the same contract.
 
@@ -11,6 +14,38 @@
 **Spec:** `docs/superpowers/specs/2026-04-22-generation-artifact-export-unification-design.md`
 
 ---
+
+## Current State
+
+Implemented and merged:
+
+- the legacy `conary bootstrap image --from-generation` surface is removed
+- `conary system generation export` is wired to the shared core export path
+- generation artifacts now include `.conary-artifact.json`,
+  `cas-manifest.json`, and `boot-assets/manifest.json`
+- bootstrap and runtime producers stage explicit boot assets
+- raw export uses the shared `systemd-repart` backend
+- qcow2 export is raw plus `qemu-img convert`
+- ISO parses but returns the explicit reserved/not-implemented error
+- `conary-test` has manifest support for `qemu_boot.local_image_path` and
+  `qemu_boot.copy_from_guest`
+- the `Generation Artifact Export QEMU` suite exists and appears in
+  `cargo run -p conary-test -- list`
+
+Still pending before closing the slice operationally:
+
+- run and record:
+
+```bash
+cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora43 --phase 3
+```
+
+- if that suite exposes a remote image/tooling/bootstrap fixture blocker, fix
+  the blocker directly or record it as a narrow follow-up with maintainer
+  approval
+
+Follow-up design work after this slice is tracked in
+`docs/operations/post-generation-export-follow-up-roadmap.md`.
 
 ## Scope Guard
 

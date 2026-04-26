@@ -462,7 +462,7 @@ fn append_cpio_entry(
 
 #[cfg(unix)]
 fn pad_cpio(archive: &mut Vec<u8>) {
-    while archive.len() % 4 != 0 {
+    while !archive.len().is_multiple_of(4) {
         archive.push(0);
     }
 }
