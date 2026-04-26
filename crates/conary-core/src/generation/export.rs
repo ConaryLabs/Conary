@@ -17,6 +17,7 @@ const RUNTIME_ROOT_DIRS: &[&str] = &["usr", "etc", "boot"];
 const ESP_SIZE_MB: u64 = 512;
 const GPT_OVERHEAD_BYTES: u64 = 16 * 1024 * 1024;
 const IMAGE_SIZE_MARGIN_BYTES: u64 = 256 * 1024 * 1024;
+const EXT4_MINIMIZE_HEADROOM_DIVISOR: u64 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GenerationExportFormat {
@@ -230,10 +231,18 @@ fn ensure_export_architecture(artifact: &GenerationArtifact) -> crate::Result<()
 }
 
 fn minimum_image_size_bytes(rootfs_staging_dir: &Path) -> crate::Result<u64> {
-    Ok(dir_size(rootfs_staging_dir)?
-        + (ESP_SIZE_MB * 1024 * 1024)
-        + GPT_OVERHEAD_BYTES
-        + IMAGE_SIZE_MARGIN_BYTES)
+    let rootfs_size = dir_size(rootfs_staging_dir)?;
+    let ext4_headroom = rootfs_size.div_ceil(EXT4_MINIMIZE_HEADROOM_DIVISOR);
+    rootfs_size
+        .checked_add(ext4_headroom)
+        .and_then(|size| size.checked_add(ESP_SIZE_MB * 1024 * 1024))
+        .and_then(|size| size.checked_add(GPT_OVERHEAD_BYTES))
+        .and_then(|size| size.checked_add(IMAGE_SIZE_MARGIN_BYTES))
+        .ok_or_else(|| {
+            crate::Error::InternalError(format!(
+                "generation export image size overflow for rootfs size {rootfs_size}"
+            ))
+        })
 }
 
 pub fn project_generation_rootfs(
@@ -718,6 +727,22 @@ mod tests {
         assert!(minimum > dir_size(&staging).unwrap());
     }
 
+    #[test]
+    fn minimum_size_scales_for_ext4_minimize_headroom() {
+        let tmp = TempDir::new().unwrap();
+        let rootfs = tmp.path().join("large-rootfs");
+        std::fs::create_dir_all(&rootfs).unwrap();
+        let large_file = std::fs::File::create(rootfs.join("large-cas-object")).unwrap();
+        large_file.set_len(7 * 1024 * 1024 * 1024).unwrap();
+
+        let minimum = minimum_image_size_bytes(&rootfs).unwrap();
+
+        assert!(
+            minimum >= 11 * 1024 * 1024 * 1024,
+            "7GiB rootfs should default to an image large enough for ext4 metadata; got {minimum}"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn undersized_export_reports_requested_and_minimum_sizes() {
@@ -766,7 +791,8 @@ mod tests {
         assert!(output.is_file());
         let repart_log = std::fs::read_to_string(fixture._tmp.path().join("repart.log")).unwrap();
         assert!(repart_log.contains("--root=/"));
-        assert!(repart_log.contains(output.to_string_lossy().as_ref()));
+        let output_path = output.to_string_lossy().into_owned();
+        assert!(repart_log.contains(&output_path));
         assert!(
             !std::fs::read_dir(fixture._tmp.path())
                 .unwrap()
@@ -776,6 +802,29 @@ mod tests {
                     .to_string_lossy()
                     .starts_with(".conary-generation-export-"))
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn raw_export_passes_4k_aligned_size_to_repart() {
+        let fixture = Fixture::new();
+        let tools = fake_tools(fixture._tmp.path());
+        let output = fixture._tmp.path().join("aligned.raw");
+
+        export_generation_image_with_tools(
+            GenerationExportOptions {
+                generation: None,
+                generation_path: Some(fixture.generation_dir.clone()),
+                format: GenerationExportFormat::Raw,
+                output,
+                size_bytes: Some(1024 * 1024 * 1024 + 1),
+            },
+            &tools,
+        )
+        .unwrap();
+
+        let repart_log = std::fs::read_to_string(fixture._tmp.path().join("repart.log")).unwrap();
+        assert!(repart_log.lines().any(|line| line == "--size=1073745920"));
     }
 
     #[cfg(unix)]

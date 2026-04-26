@@ -95,26 +95,6 @@ fn copy_dir_filtered(src: &Path, dst: &Path, skip_names: &[&str]) -> Result<()> 
     Ok(())
 }
 
-fn find_host_conary_binary(project_root: &Path) -> Result<PathBuf> {
-    let candidates = [
-        std::env::var_os("CONARY_HOST_BIN").map(PathBuf::from),
-        std::env::var_os("CONARY_BIN").map(PathBuf::from),
-        Some(project_root.join("conary")),
-        Some(project_root.join("target/debug/conary")),
-        Some(project_root.join("target/release/conary")),
-    ];
-
-    for candidate in candidates.into_iter().flatten() {
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
-    }
-
-    bail!(
-        "failed to locate host conary binary; tried CONARY_HOST_BIN, CONARY_BIN, ./conary, target/debug/conary, and target/release/conary"
-    )
-}
-
 fn stage_build_context(containerfile: &Path, distro: &str) -> Result<StagedBuildContext> {
     let integration_root = containerfile
         .parent()
@@ -155,7 +135,7 @@ fn stage_build_context(containerfile: &Path, distro: &str) -> Result<StagedBuild
             .with_context(|| format!("failed to copy {}", arch_pkgbuild.display()))?;
     }
 
-    let binary = find_host_conary_binary(&project_root)?;
+    let binary = crate::paths::find_host_conary_binary(&project_root)?;
     let staged_binary = root.join("conary");
     fs::copy(&binary, &staged_binary)
         .with_context(|| format!("failed to stage host conary binary {}", binary.display()))?;

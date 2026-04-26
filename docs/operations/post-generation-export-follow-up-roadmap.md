@@ -28,7 +28,24 @@ Everything below is deferred until that slice is complete.
 
 ## Follow-Up Slices
 
-### 1. Finish ISO Export On The Generation Artifact Contract
+### 1. Make Installed Runtime Generations Self-Contained
+
+The current slice now fails closed when an installed runtime generation has
+boot assets but its root filesystem is not represented fully in Conary CAS. A
+follow-up should make installed-generation export bootable without scraping the
+live host root.
+
+Likely work:
+
+- define how a running ConaryOS base is adopted or imported into Conary-owned
+  CAS identity
+- ensure `/sbin/init` resolves through usr-merge and package symlinks to a
+  CAS-backed executable in runtime generations
+- make installed-generation QEMU export validation boot a truly self-contained
+  runtime generation
+- keep the fail-closed behavior for partial or metadata-only generations
+
+### 2. Finish ISO Export On The Generation Artifact Contract
 
 The current slice reserves `iso` on the same source contract as raw/qcow2. A
 focused follow-up should implement the ISO backend without changing the
@@ -42,7 +59,7 @@ Likely work:
 - make boot configuration generation image-type-specific, not source-specific
 - add QEMU boot validation for ISO output
 
-### 2. Move OCI Generation Export Onto The Same Artifact Interface
+### 3. Move OCI Generation Export Onto The Same Artifact Interface
 
 `conary export` currently packages a generation into an OCI image layout through
 its own path. Once disk export consumes `GenerationArtifact`, OCI should use
@@ -58,7 +75,7 @@ Likely work:
 - ensure OCI and disk-image exports derive identity labels from the same
   generation metadata
 
-### 3. Introduce Signed Portable Generation Bundles
+### 4. Introduce Signed Portable Generation Bundles
 
 After the generation directory contract is clean, we can decide whether to
 promote the internal artifact interface into a portable bundle format.
@@ -72,7 +89,7 @@ Likely work:
   a bundle without changing backend logic
 - make bundles suitable for Remi publication or artifact archival
 
-### 4. Extend Trust And Provenance To Bootable Artifacts
+### 5. Extend Trust And Provenance To Bootable Artifacts
 
 Generation metadata already supports detached signatures, and package
 provenance already has SLSA/in-toto structures. Bootable system artifacts need
@@ -90,7 +107,7 @@ Likely work:
   generation"
 - decide which trust roots apply to boot artifact verification
 
-### 5. Make Boot-Time Activation The Only Supported Generation Contract
+### 6. Make Boot-Time Activation The Only Supported Generation Contract
 
 The dracut path still contains a legacy bind-mount fallback for generation
 directories that lack `root.erofs`. Once the generation and export contracts
@@ -108,7 +125,7 @@ Likely work:
 - make verity-backed activation strict once the kernel and image pipeline are
   aligned
 
-### 6. Make Self-Host Validation Inputs Pristine By Default
+### 7. Make Self-Host Validation Inputs Pristine By Default
 
 The self-host VM tooling can still become stale or stateful if validation
 reuses a mutable qcow2 or an old staged workspace tarball.
@@ -121,7 +138,7 @@ Likely work:
 - boot validation through a temporary overlay or QEMU snapshot mode
 - make reruns pristine by default
 
-### 7. Finish The Sandbox Story So Sandbox Means No Host Mutation
+### 8. Finish The Sandbox Story So Sandbox Means No Host Mutation
 
 Live-root sandboxing still has uneven host mutation boundaries.
 
@@ -135,7 +152,7 @@ Likely work:
 - converge bootstrap source verification on strict repo-owned `sha256`
   checksums everywhere
 
-### 8. Treat CCS/CAS Compatibility Surfaces As Projections
+### 9. Treat CCS/CAS Compatibility Surfaces As Projections
 
 Conary's strongest model is native CCS/CAS identity, but some edges still read
 like legacy package-manager sidecars.
@@ -148,7 +165,7 @@ Likely work:
 - remove duplicate identity encoding where metadata can be derived once
 - audit docs for wording that implies sidecar flows are primary products
 
-### 9. VMware And Other Image Projections
+### 10. VMware And Other Image Projections
 
 VMware remains follow-up work after raw/qcow2 export is truthful.
 
@@ -165,15 +182,16 @@ Likely work:
 After the current generation-export unification slice lands, the likely
 highest-leverage order is:
 
-1. finish ISO export on the same generation artifact contract
-2. move OCI generation export onto the same artifact loader
-3. introduce signed portable generation bundles
-4. extend trust and provenance to bootable artifacts
-5. remove the dracut legacy bind-mount fallback
-6. make self-host validation pristine by default
-7. finish live-root sandbox/no-host-mutation work
-8. simplify CCS/CAS compatibility projections
-9. add VMware and other provider-specific image projections
+1. make installed runtime generations self-contained
+2. finish ISO export on the same generation artifact contract
+3. move OCI generation export onto the same artifact loader
+4. introduce signed portable generation bundles
+5. extend trust and provenance to bootable artifacts
+6. remove the dracut legacy bind-mount fallback
+7. make self-host validation pristine by default
+8. finish live-root sandbox/no-host-mutation work
+9. simplify CCS/CAS compatibility projections
+10. add VMware and other provider-specific image projections
 
 ## Scope Guard
 

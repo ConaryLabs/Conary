@@ -36,6 +36,9 @@ const CRITICAL_PACKAGES: &[&str] = &[
     "libpam-runtime", // Debian/Ubuntu
     "shadow-utils",
     // Core utilities (running system depends on these)
+    "bash",
+    "filesystem",
+    "setup",
     "util-linux",
     "util-linux-core",
     "coreutils",
@@ -63,7 +66,19 @@ const CRITICAL_PACKAGES: &[&str] = &[
 /// Runtime capabilities that are expected to be satisfied by the live system
 /// for critical packages we never want to overlay from Remi during a
 /// live-root install.
-const CRITICAL_RUNTIME_CAPABILITY_PREFIXES: &[&str] = &["libc.so.6", "ld-linux", "rtld("];
+const CRITICAL_RUNTIME_CAPABILITY_PREFIXES: &[&str] = &[
+    "libc.so.6",
+    "ld-linux",
+    "rtld(",
+    "libcrypto.so.",
+    "libssl.so.",
+    "libgcc_s.so.",
+    "libpam.so.",
+    "libpcre2-8.so.",
+    "libm.so.6",
+    "filesystem(",
+    "group(",
+];
 
 fn is_blocked_package(name: &str) -> bool {
     CRITICAL_PACKAGES
@@ -110,6 +125,8 @@ mod tests {
         assert!(is_blocked("pam"));
         assert!(is_blocked("libc6"));
         assert!(is_blocked("linux-pam"));
+        assert!(is_blocked("bash"));
+        assert!(is_blocked("filesystem"));
     }
 
     #[test]
@@ -131,9 +148,21 @@ mod tests {
     fn test_glibc_runtime_capabilities_are_blocked() {
         assert!(is_blocked("libc.so.6()(64bit)"));
         assert!(is_blocked("libc.so.6(GLIBC_2.34)(64bit)"));
+        assert!(is_blocked("libcrypto.so.3()(64bit)"));
+        assert!(is_blocked("libgcc_s.so.1(GCC_3.0)(64bit)"));
+        assert!(is_blocked("libpam.so.0(LIBPAM_1.0)(64bit)"));
+        assert!(is_blocked("libpcre2-8.so.0()(64bit)"));
+        assert!(is_blocked("libm.so.6(GLIBC_2.2.5)(64bit)"));
         assert!(is_blocked("rtld(GNU_HASH)"));
         assert!(is_critical_runtime_capability(
             "ld-linux-x86-64.so.2()(64bit)"
         ));
+    }
+
+    #[test]
+    fn test_base_filesystem_and_account_capabilities_are_blocked() {
+        assert!(is_blocked("setup"));
+        assert!(is_blocked("filesystem(unmerged-sbin-symlinks)"));
+        assert!(is_blocked("group(mail)"));
     }
 }

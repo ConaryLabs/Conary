@@ -427,6 +427,13 @@ pub fn generate_capability_variations(capability: &str) -> Vec<String> {
 
     // Library variations
     if capability.ends_with(".so") || capability.contains(".so.") {
+        // RPM sonames often carry ABI/version/arch markers while normalized
+        // repository provides may store the plain soname.
+        let plain_soname = capability.split('(').next().unwrap_or(capability);
+        if plain_soname != capability {
+            variations.push(plain_soname.to_string());
+        }
+
         // libc.so.6 -> glibc, libc6
         if capability.starts_with("libc.so") {
             variations.push("glibc".to_string());

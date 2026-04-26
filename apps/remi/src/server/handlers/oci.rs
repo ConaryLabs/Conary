@@ -485,7 +485,7 @@ fn build_manifest(
                     enhancement_version, inferred_caps_json, extracted_provenance_json,
                     enhancement_status, enhancement_error, enhancement_attempted_at,
                     package_name, package_version, distro, chunk_hashes_json,
-                    total_size, content_hash, ccs_path
+                    total_size, content_hash, ccs_path, package_architecture
              FROM converted_packages
              WHERE distro = ?1 AND package_name = ?2 AND content_hash = ?3",
             rusqlite::params![distro, package, hash],
@@ -513,6 +513,7 @@ fn build_manifest(
                     total_size: row.get(18).ok(),
                     content_hash: row.get(19).ok(),
                     ccs_path: row.get(20).ok(),
+                    package_architecture: row.get(21).ok(),
                 })
             },
         )

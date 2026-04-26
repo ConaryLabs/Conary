@@ -673,6 +673,7 @@ mod tests {
             name: "kernel-core".to_string(),
             version: "6.19.6-200.fc43".to_string(),
             converted: false,
+            architecture: Some("x86_64".to_string()),
             dependencies: Some(vec![
                 "kernel-modules-core-uname-r = 6.19.6-200.fc43.x86_64".to_string(),
                 "glibc >= 2.39".to_string(),
@@ -690,7 +691,6 @@ mod tests {
             "https://remi.conary.io".to_string(),
             "fedora".to_string(),
             entry,
-            "x86_64",
         );
 
         assert!(row.provides.iter().any(|provide| {

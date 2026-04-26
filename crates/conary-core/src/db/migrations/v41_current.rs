@@ -935,6 +935,23 @@ pub fn migrate_v66(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 67: Architecture-aware server-side conversion cache
+pub fn migrate_v67(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 67");
+
+    conn.execute_batch(
+        "
+        ALTER TABLE converted_packages ADD COLUMN package_architecture TEXT;
+
+        CREATE INDEX idx_converted_packages_identity_arch
+            ON converted_packages(distro, package_name, package_version, package_architecture);
+        ",
+    )?;
+
+    info!("Schema version 67 applied successfully (architecture-aware conversions)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

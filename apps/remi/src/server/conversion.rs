@@ -7,14 +7,15 @@
 use crate::server::R2Store;
 use anyhow::{Context, Result, anyhow};
 use conary_core::ccs::convert::{ConversionOptions, ConversionResult, LegacyConverter};
-use conary_core::db::models::{ConvertedPackage, RepositoryPackage};
+use conary_core::db::models::{ConvertedPackage, RepositoryPackage, RepositoryProvide};
 use conary_core::filesystem::path::sanitize_filename;
 use conary_core::packages::arch::ArchPackage;
 use conary_core::packages::common::PackageMetadata;
 use conary_core::packages::deb::DebPackage;
 use conary_core::packages::rpm::RpmPackage;
-use conary_core::packages::traits::PackageFormat;
+use conary_core::packages::traits::{Dependency, DependencyType, PackageFormat};
 use conary_core::repository::download_package;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -129,11 +130,33 @@ impl ConversionService {
     /// Sanitizes both name and version to prevent path traversal attacks
     /// where malicious package metadata could escape the packages directory.
     fn safe_ccs_filename(name: &str, version: &str) -> Result<String> {
+        Self::safe_ccs_filename_with_arch(name, version, None)
+    }
+
+    fn safe_ccs_filename_with_arch(
+        name: &str,
+        version: &str,
+        architecture: Option<&str>,
+    ) -> Result<String> {
         let safe_name = sanitize_filename(name)
             .map_err(|e| anyhow!("Invalid package name '{}': {}", name, e))?;
         let safe_version = sanitize_filename(version)
             .map_err(|e| anyhow!("Invalid package version '{}': {}", version, e))?;
-        Ok(format!("{}-{}.ccs", safe_name, safe_version))
+        if let Some(arch) = architecture {
+            let safe_arch = sanitize_filename(arch)
+                .map_err(|e| anyhow!("Invalid package architecture '{}': {}", arch, e))?;
+            Ok(format!("{}-{}-{}.ccs", safe_name, safe_version, safe_arch))
+        } else {
+            Ok(format!("{}-{}.ccs", safe_name, safe_version))
+        }
+    }
+
+    fn apply_repository_identity(metadata: &mut PackageMetadata, repo_pkg: &RepositoryPackage) {
+        metadata.name = repo_pkg.name.clone();
+        metadata.version = repo_pkg.version.clone();
+        if let Some(architecture) = &repo_pkg.architecture {
+            metadata.architecture = Some(architecture.clone());
+        }
     }
 
     /// Convert a package from a repository
@@ -161,6 +184,7 @@ impl ConversionService {
         distro: &str,
         package_name: &str,
         version: Option<&str>,
+        architecture: Option<&str>,
     ) -> Result<ServerConversionResult> {
         // Refuse to convert critical system packages
         if is_critical_system_package(package_name) {
@@ -178,7 +202,7 @@ impl ConversionService {
         // Step 1: Find package in repository
         let conn = conary_core::db::open(&self.db_path)?;
 
-        let repo_pkg = self.find_package(&conn, distro, package_name, version)?;
+        let repo_pkg = self.find_package(&conn, distro, package_name, version, architecture)?;
         info!(
             "Found package: {} {} from repo {}",
             repo_pkg.name, repo_pkg.version, repo_pkg.repository_id
@@ -194,6 +218,7 @@ impl ConversionService {
                 distro,
                 package_name,
                 version,
+                architecture,
                 repo_pkg,
                 temp_dir.path(),
             )
@@ -205,7 +230,11 @@ impl ConversionService {
 
         // Check if already converted AND the CCS file still exists
         if let Some(existing) = ConvertedPackage::find_by_checksum(&conn, &original_checksum)? {
-            let ccs_filename = Self::safe_ccs_filename(&repo_pkg.name, &repo_pkg.version)?;
+            let ccs_filename = Self::safe_ccs_filename_with_arch(
+                &repo_pkg.name,
+                &repo_pkg.version,
+                repo_pkg.architecture.as_deref(),
+            )?;
             let ccs_path = self.cache_dir.join("packages").join(&ccs_filename);
             if !existing.needs_reconversion() && ccs_path.exists() {
                 info!(
@@ -223,12 +252,15 @@ impl ConversionService {
         }
 
         // Step 3: Parse package based on distro
-        let (metadata, files, format) = self.parse_package(&pkg_path, distro)?;
+        let (mut metadata, files, format) = self.parse_package(&pkg_path, distro)?;
+        Self::apply_repository_identity(&mut metadata, &repo_pkg);
+        Self::merge_repository_provides(&conn, &repo_pkg, &mut metadata)?;
         info!(
-            "Parsed: {} v{} ({} files)",
+            "Parsed: {} v{} ({} files, {} native provides)",
             metadata.name,
             metadata.version,
-            files.len()
+            files.len(),
+            metadata.provides.len()
         );
 
         // Step 4: Convert to CCS
@@ -267,7 +299,15 @@ impl ConversionService {
         let total_size = std::fs::metadata(ccs_path)?.len();
 
         // Copy CCS package to persistent location first (need path for DB record)
-        let ccs_filename = Self::safe_ccs_filename(&metadata.name, &metadata.version)?;
+        let package_architecture = repo_pkg
+            .architecture
+            .clone()
+            .or_else(|| metadata.architecture.clone());
+        let ccs_filename = Self::safe_ccs_filename_with_arch(
+            &metadata.name,
+            &metadata.version,
+            package_architecture.as_deref(),
+        )?;
         let final_ccs_path = self.cache_dir.join("packages").join(&ccs_filename);
 
         if let Some(parent) = final_ccs_path.parent() {
@@ -289,6 +329,7 @@ impl ConversionService {
             final_ccs_path.to_string_lossy().to_string(),
         );
         converted.detected_hooks = Some(serde_json::to_string(&conversion_result.detected_hooks)?);
+        converted.package_architecture = package_architecture;
         converted.insert(&conn)?;
 
         info!(
@@ -318,6 +359,7 @@ impl ConversionService {
         distro: &str,
         package_name: &str,
         version: Option<&str>,
+        architecture: Option<&str>,
     ) -> Result<RepositoryPackage> {
         use conary_core::repository::versioning::{VersionScheme, compare_repo_versions};
 
@@ -357,6 +399,37 @@ impl ConversionService {
 
         // When a specific version is requested, use a simple exact-match query.
         if let Some(ver) = version {
+            if let Some(arch) = architecture {
+                let mut stmt = conn.prepare(
+                    "SELECT rp.id, rp.repository_id, rp.name, rp.version, rp.architecture,
+                            rp.description, rp.checksum, rp.size, rp.download_url, rp.dependencies,
+                            rp.metadata, rp.synced_at, rp.is_security_update, rp.severity,
+                            rp.cve_ids, rp.advisory_id, rp.advisory_url
+                     FROM repository_packages rp
+                     JOIN repositories r ON rp.repository_id = r.id
+                     WHERE rp.name = ?1
+                     AND r.name LIKE ?2
+                     AND rp.version = ?3
+                     AND rp.architecture = ?4
+                     LIMIT 1",
+                )?;
+
+                return stmt
+                    .query_row(
+                        rusqlite::params![package_name, repo_pattern, ver, arch],
+                        row_mapper,
+                    )
+                    .map_err(|e| match e {
+                        rusqlite::Error::QueryReturnedNoRows => {
+                            anyhow!(
+                                "Package '{}' version '{}' arch '{}' not found in {} repositories. Run 'conary repo-sync' first.",
+                                package_name, ver, arch, distro
+                            )
+                        }
+                        _ => anyhow!("Database error: {}", e),
+                    });
+            }
+
             let mut stmt = conn.prepare(
                 "SELECT rp.id, rp.repository_id, rp.name, rp.version, rp.architecture,
                         rp.description, rp.checksum, rp.size, rp.download_url, rp.dependencies,
@@ -393,11 +466,15 @@ impl ConversionService {
              FROM repository_packages rp
              JOIN repositories r ON rp.repository_id = r.id
              WHERE rp.name = ?1
-             AND r.name LIKE ?2",
+             AND r.name LIKE ?2
+             AND (?3 IS NULL OR rp.architecture = ?3)",
         )?;
 
         let candidates: Vec<RepositoryPackage> = stmt
-            .query_map(rusqlite::params![package_name, repo_pattern], row_mapper)?
+            .query_map(
+                rusqlite::params![package_name, repo_pattern, architecture],
+                row_mapper,
+            )?
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(|e| anyhow!("Database error: {}", e))?;
 
@@ -428,6 +505,7 @@ impl ConversionService {
         distro: &str,
         package_name: &str,
         version: Option<&str>,
+        architecture: Option<&str>,
         repo_pkg: RepositoryPackage,
         dest_dir: &Path,
     ) -> Result<(RepositoryPackage, PathBuf)> {
@@ -455,7 +533,7 @@ impl ConversionService {
             .block_on(conary_core::repository::sync_repository(conn, &mut repo))
             .map_err(|e| anyhow!("Repository refresh failed for {}: {}", repo.name, e))?;
 
-        let refreshed_pkg = self.find_package(conn, distro, package_name, version)?;
+        let refreshed_pkg = self.find_package(conn, distro, package_name, version, architecture)?;
         let path = handle
             .block_on(download_package(&refreshed_pkg, dest_dir))
             .map_err(|e| anyhow!("Retry after refresh failed: {}", e))?;
@@ -515,6 +593,48 @@ impl ConversionService {
         }
     }
 
+    fn merge_repository_provides(
+        conn: &rusqlite::Connection,
+        repo_pkg: &RepositoryPackage,
+        metadata: &mut PackageMetadata,
+    ) -> Result<()> {
+        let Some(repository_package_id) = repo_pkg.id else {
+            return Ok(());
+        };
+
+        let repo_provides =
+            RepositoryProvide::find_by_repository_package(conn, repository_package_id)?;
+        if repo_provides.is_empty() {
+            return Ok(());
+        }
+
+        let mut seen: HashSet<(String, Option<String>)> = metadata
+            .provides
+            .iter()
+            .map(|provide| (provide.name.clone(), provide.version.clone()))
+            .collect();
+
+        for provide in repo_provides {
+            if should_skip_repository_provide(&provide, metadata) {
+                continue;
+            }
+
+            let version = repository_provide_constraint(&provide);
+            if !seen.insert((provide.capability.clone(), version.clone())) {
+                continue;
+            }
+
+            metadata.provides.push(Dependency {
+                name: provide.capability,
+                version,
+                dep_type: DependencyType::Runtime,
+                description: None,
+            });
+        }
+
+        Ok(())
+    }
+
     /// Build PackageMetadata from a parsed package
     fn build_metadata<P: PackageFormat>(pkg: &P) -> PackageMetadata {
         PackageMetadata {
@@ -544,6 +664,7 @@ impl ConversionService {
                     description: d.description.clone(),
                 })
                 .collect(),
+            provides: pkg.provides().to_vec(),
             scriptlets: pkg.scriptlets().to_vec(),
             config_files: pkg.config_files().to_vec(),
         }
@@ -625,7 +746,11 @@ impl ConversionService {
         let ccs_path = if let Some(stored_path) = &existing.ccs_path {
             PathBuf::from(stored_path)
         } else {
-            let ccs_filename = Self::safe_ccs_filename(&name, &version)?;
+            let ccs_filename = Self::safe_ccs_filename_with_arch(
+                &name,
+                &version,
+                existing.package_architecture.as_deref(),
+            )?;
             self.cache_dir.join("packages").join(&ccs_filename)
         };
 
@@ -935,11 +1060,55 @@ impl ConversionService {
     }
 }
 
+fn should_skip_repository_provide(provide: &RepositoryProvide, metadata: &PackageMetadata) -> bool {
+    provide.capability.is_empty()
+        || provide.capability == metadata.name
+        || provide.capability.starts_with('/')
+        || provide.capability.starts_with("rpmlib(")
+        || provide.kind == "file"
+}
+
+fn repository_provide_constraint(provide: &RepositoryProvide) -> Option<String> {
+    if let Some(raw) = provide.raw.as_deref()
+        && let Some(constraint) = constraint_from_raw_provide(raw, &provide.capability)
+    {
+        return Some(constraint);
+    }
+
+    provide
+        .version
+        .as_deref()
+        .map(str::trim)
+        .filter(|version| !version.is_empty())
+        .map(|version| format!("= {version}"))
+}
+
+fn constraint_from_raw_provide(raw: &str, capability: &str) -> Option<String> {
+    let suffix = raw.strip_prefix(capability)?.trim_start();
+    if suffix.is_empty() {
+        return None;
+    }
+
+    for op in ["<=", ">=", "=", "<", ">"] {
+        if let Some(version) = suffix.strip_prefix(op) {
+            let version = version.trim();
+            if !version.is_empty() {
+                return Some(format!("{op} {version}"));
+            }
+        }
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conary_core::db::models::{ConvertedPackage, Repository, RepositoryPackage};
+    use conary_core::db::models::{
+        ConvertedPackage, Repository, RepositoryPackage, RepositoryProvide,
+    };
     use conary_core::db::schema;
+    use conary_core::packages::common::PackageMetadata;
     use tempfile::NamedTempFile;
 
     fn create_test_db() -> (NamedTempFile, rusqlite::Connection) {
@@ -988,6 +1157,43 @@ mod tests {
     fn test_safe_ccs_filename_complex_name() {
         let result = ConversionService::safe_ccs_filename("lib32-glibc-devel", "2.38-1").unwrap();
         assert_eq!(result, "lib32-glibc-devel-2.38-1.ccs");
+    }
+
+    #[test]
+    fn test_safe_ccs_filename_with_architecture() {
+        let result = ConversionService::safe_ccs_filename_with_arch(
+            "glib2",
+            "2.86.0-2.fc43",
+            Some("x86_64"),
+        )
+        .unwrap();
+        assert_eq!(result, "glib2-2.86.0-2.fc43-x86_64.ccs");
+    }
+
+    #[test]
+    fn test_apply_repository_identity_preserves_epoch_and_architecture() {
+        let mut metadata = PackageMetadata::new(
+            PathBuf::from("/tmp/qemu-img.rpm"),
+            "qemu-img".to_string(),
+            "10.1.0-7.fc43".to_string(),
+        );
+        metadata.architecture = Some("i686".to_string());
+
+        let mut repo_pkg = RepositoryPackage::new(
+            42,
+            "qemu-img".to_string(),
+            "2:10.1.0-7.fc43".to_string(),
+            "sha256:qemu-img".to_string(),
+            4096,
+            "https://example.com/qemu-img.rpm".to_string(),
+        );
+        repo_pkg.architecture = Some("x86_64".to_string());
+
+        ConversionService::apply_repository_identity(&mut metadata, &repo_pkg);
+
+        assert_eq!(metadata.name, "qemu-img");
+        assert_eq!(metadata.version, "2:10.1.0-7.fc43");
+        assert_eq!(metadata.architecture.as_deref(), Some("x86_64"));
     }
 
     #[test]
@@ -1076,7 +1282,7 @@ mod tests {
         );
 
         let pkg = service
-            .find_package(&conn, "fedora", "nginx", None)
+            .find_package(&conn, "fedora", "nginx", None, None)
             .unwrap();
         assert_eq!(pkg.name, "nginx");
         assert_eq!(pkg.version, "1.24.0");
@@ -1097,9 +1303,56 @@ mod tests {
         );
 
         let pkg = service
-            .find_package(&conn, "fedora", "nginx", Some("1.24.0"))
+            .find_package(&conn, "fedora", "nginx", Some("1.24.0"), None)
             .unwrap();
         assert_eq!(pkg.version, "1.24.0");
+    }
+
+    #[test]
+    fn test_find_package_with_specific_version_and_architecture() {
+        let (temp_file, conn) = create_test_db();
+        let repo_id = insert_repo(&conn, "fedora-base", "fedora");
+
+        let mut i686 = RepositoryPackage::new(
+            repo_id,
+            "glib2".to_string(),
+            "2.86.0-2.fc43".to_string(),
+            "sha256:glib2-i686".to_string(),
+            1024,
+            "https://example.com/glib2-2.86.0-2.fc43.i686.rpm".to_string(),
+        );
+        i686.architecture = Some("i686".to_string());
+        i686.insert(&conn).unwrap();
+
+        let mut x86_64 = RepositoryPackage::new(
+            repo_id,
+            "glib2".to_string(),
+            "2.86.0-2.fc43".to_string(),
+            "sha256:glib2-x86_64".to_string(),
+            2048,
+            "https://example.com/glib2-2.86.0-2.fc43.x86_64.rpm".to_string(),
+        );
+        x86_64.architecture = Some("x86_64".to_string());
+        x86_64.insert(&conn).unwrap();
+
+        let service = ConversionService::new(
+            PathBuf::from("/tmp/chunks"),
+            PathBuf::from("/tmp/cache"),
+            temp_file.path().to_path_buf(),
+            None,
+        );
+
+        let pkg = service
+            .find_package(
+                &conn,
+                "fedora",
+                "glib2",
+                Some("2.86.0-2.fc43"),
+                Some("x86_64"),
+            )
+            .unwrap();
+        assert_eq!(pkg.architecture.as_deref(), Some("x86_64"));
+        assert!(pkg.download_url.ends_with(".x86_64.rpm"));
     }
 
     #[test]
@@ -1114,7 +1367,7 @@ mod tests {
             None,
         );
 
-        let result = service.find_package(&conn, "fedora", "nonexistent", None);
+        let result = service.find_package(&conn, "fedora", "nonexistent", None, None);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("not found"));
@@ -1132,7 +1385,7 @@ mod tests {
             None,
         );
 
-        let result = service.find_package(&conn, "gentoo", "nginx", None);
+        let result = service.find_package(&conn, "gentoo", "nginx", None, None);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("Unknown distribution"));
@@ -1151,7 +1404,9 @@ mod tests {
             None,
         );
 
-        let pkg = service.find_package(&conn, "arch", "pacman", None).unwrap();
+        let pkg = service
+            .find_package(&conn, "arch", "pacman", None, None)
+            .unwrap();
         assert_eq!(pkg.name, "pacman");
     }
 
@@ -1169,7 +1424,7 @@ mod tests {
         );
 
         let pkg = service
-            .find_package(&conn, "ubuntu", "libc6", None)
+            .find_package(&conn, "ubuntu", "libc6", None, None)
             .unwrap();
         assert_eq!(pkg.name, "libc6");
     }
@@ -1188,7 +1443,9 @@ mod tests {
         );
 
         // debian maps to "ubuntu-%" repo pattern
-        let pkg = service.find_package(&conn, "debian", "apt", None).unwrap();
+        let pkg = service
+            .find_package(&conn, "debian", "apt", None, None)
+            .unwrap();
         assert_eq!(pkg.name, "apt");
     }
 
@@ -1226,7 +1483,7 @@ mod tests {
             .unwrap();
 
         let repo_pkg = service
-            .find_package(&conn, "fedora", "nginx", None)
+            .find_package(&conn, "fedora", "nginx", None, None)
             .unwrap();
 
         let result = service
@@ -1274,7 +1531,9 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let repo_pkg = service.find_package(&conn, "fedora", "curl", None).unwrap();
+        let repo_pkg = service
+            .find_package(&conn, "fedora", "curl", None, None)
+            .unwrap();
 
         let result = service
             .build_result_from_existing(&existing, "fedora", &repo_pkg)
@@ -1282,6 +1541,47 @@ mod tests {
 
         // Should return empty chunk list, not panic
         assert!(result.chunk_hashes.is_empty());
+    }
+
+    #[test]
+    fn repository_native_provides_are_merged_into_conversion_metadata() {
+        let (_temp_file, conn) = create_test_db();
+        let repo_id = insert_repo(&conn, "fedora-base", "fedora");
+
+        let mut repo_pkg = RepositoryPackage::new(
+            repo_id,
+            "kernel-modules-core".to_string(),
+            "6.17.1-300.fc43".to_string(),
+            "sha256:kernel-modules-core".to_string(),
+            1024,
+            "https://example.com/kernel-modules-core.rpm".to_string(),
+        );
+        repo_pkg.insert(&conn).unwrap();
+        let repo_pkg = repo_pkg;
+        let repo_pkg_id = repo_pkg.id.unwrap();
+
+        let mut provide = RepositoryProvide::new(
+            repo_pkg_id,
+            "kernel-uname-r".to_string(),
+            Some("6.17.1-300.fc43.x86_64".to_string()),
+            "package".to_string(),
+            Some("kernel-uname-r = 6.17.1-300.fc43.x86_64".to_string()),
+        );
+        provide = provide.with_version_scheme("rpm".to_string());
+        provide.insert(&conn).unwrap();
+
+        let mut metadata = PackageMetadata::new(
+            PathBuf::from("/tmp/kernel-modules-core.rpm"),
+            "kernel-modules-core".to_string(),
+            "6.17.1-300.fc43".to_string(),
+        );
+
+        ConversionService::merge_repository_provides(&conn, &repo_pkg, &mut metadata).unwrap();
+
+        assert!(metadata.provides.iter().any(|provide| {
+            provide.name == "kernel-uname-r"
+                && provide.version.as_deref() == Some("= 6.17.1-300.fc43.x86_64")
+        }));
     }
 
     // --- store_chunks tests ---
@@ -1624,10 +1924,26 @@ mod tests {
             None,
         );
 
-        assert!(service.find_package(&conn, "arch", "vim", None).is_ok());
-        assert!(service.find_package(&conn, "fedora", "vim", None).is_ok());
-        assert!(service.find_package(&conn, "ubuntu", "vim", None).is_ok());
-        assert!(service.find_package(&conn, "debian", "vim", None).is_ok());
+        assert!(
+            service
+                .find_package(&conn, "arch", "vim", None, None)
+                .is_ok()
+        );
+        assert!(
+            service
+                .find_package(&conn, "fedora", "vim", None, None)
+                .is_ok()
+        );
+        assert!(
+            service
+                .find_package(&conn, "ubuntu", "vim", None, None)
+                .is_ok()
+        );
+        assert!(
+            service
+                .find_package(&conn, "debian", "vim", None, None)
+                .is_ok()
+        );
     }
 
     #[test]

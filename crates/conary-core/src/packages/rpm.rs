@@ -164,6 +164,35 @@ impl RpmPackage {
 
         deps
     }
+
+    /// Extract native provides from RPM package metadata.
+    fn extract_provides(pkg: &Package) -> Vec<Dependency> {
+        let mut provides = Vec::new();
+
+        if let Ok(entries) = pkg.metadata.get_provides() {
+            for entry in entries {
+                if entry.name.starts_with("rpmlib(") {
+                    continue;
+                }
+
+                let version = if !entry.version.is_empty() {
+                    let operator = flags_to_operator(entry.flags);
+                    Some(format!("{}{}", operator, entry.version))
+                } else {
+                    None
+                };
+
+                provides.push(Dependency {
+                    name: entry.name.to_string(),
+                    version,
+                    dep_type: DependencyType::Runtime,
+                    description: None,
+                });
+            }
+        }
+
+        provides
+    }
 }
 
 /// Convert RPM DependencyFlags to constraint operator string
@@ -235,6 +264,7 @@ impl PackageFormat for RpmPackage {
 
         let files = Self::extract_files(&pkg);
         let dependencies = Self::extract_dependencies(&pkg);
+        let provides = Self::extract_provides(&pkg);
 
         // Extract scriptlets and config files using package metadata
         let scriptlets = Self::extract_scriptlets(&pkg);
@@ -258,6 +288,7 @@ impl PackageFormat for RpmPackage {
             description,
             files,
             dependencies,
+            provides,
             scriptlets,
             config_files,
         };
@@ -294,6 +325,10 @@ impl PackageFormat for RpmPackage {
 
     fn dependencies(&self) -> &[Dependency] {
         self.meta.dependencies()
+    }
+
+    fn provides(&self) -> &[Dependency] {
+        self.meta.provides()
     }
 
     fn extract_file_contents(&self) -> Result<Vec<ExtractedFile>> {

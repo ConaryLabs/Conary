@@ -79,6 +79,7 @@ pub struct ConversionJob {
     pub distro: String,
     pub package_name: String,
     pub version: Option<String>,
+    pub architecture: Option<String>,
     pub status: JobStatus,
     /// Progress percentage (0-100)
     pub progress: Option<u8>,
@@ -125,15 +126,19 @@ impl JobManager {
         distro: String,
         package_name: String,
         version: Option<String>,
+        architecture: Option<String>,
     ) -> Result<JobId, &'static str> {
         // Check if job already exists for this key
         if let Some(&existing_id) = self.key_to_id.get(&key) {
             return Ok(existing_id);
         }
 
-        // Check queue capacity against the total tracked jobs, not just pending jobs.
-        // Completed jobs remain in memory until TTL cleanup, so bounding only the
-        // pending set still allows unbounded memory growth under churn.
+        self.evict_terminal_jobs_for_capacity();
+
+        // Check queue capacity against tracked jobs after evicting terminal
+        // entries. Completed jobs are useful for polling, but they must not
+        // block fresh conversion work for the full TTL during bursty package
+        // installs.
         if self.jobs.len() >= self.max_concurrent * QUEUE_CAPACITY_MULTIPLIER {
             return Err("Conversion queue full");
         }
@@ -146,6 +151,7 @@ impl JobManager {
             distro,
             package_name,
             version,
+            architecture,
             status: JobStatus::Pending,
             progress: None,
             created_at: Instant::now(),
@@ -157,6 +163,30 @@ impl JobManager {
         self.key_to_id.insert(key, job_id);
 
         Ok(job_id)
+    }
+
+    fn evict_terminal_jobs_for_capacity(&mut self) {
+        let capacity = self.max_concurrent * QUEUE_CAPACITY_MULTIPLIER;
+        while self.jobs.len() >= capacity {
+            let Some(oldest_terminal_id) = self
+                .jobs
+                .iter()
+                .filter(|(_, job)| matches!(job.status, JobStatus::Ready | JobStatus::Failed(_)))
+                .min_by_key(|(_, job)| job.completed_at.unwrap_or(job.created_at))
+                .map(|(id, _)| *id)
+            else {
+                break;
+            };
+
+            if let Some(job) = self.jobs.remove(&oldest_terminal_id) {
+                self.key_to_id.remove(&job.key);
+                tracing::debug!(
+                    "Evicted terminal conversion job for capacity: {} ({})",
+                    oldest_terminal_id,
+                    job.key
+                );
+            }
+        }
     }
 
     /// Get a job by ID
@@ -266,12 +296,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn create_job_rejects_when_total_tracked_jobs_hit_capacity() {
+    fn create_job_rejects_when_active_tracked_jobs_hit_capacity() {
         let mut manager = JobManager::new(2);
 
         for n in 0..4 {
             manager
-                .create_job(format!("key-{n}"), "arch".into(), format!("pkg-{n}"), None)
+                .create_job(
+                    format!("key-{n}"),
+                    "arch".into(),
+                    format!("pkg-{n}"),
+                    None,
+                    None,
+                )
                 .expect("capacity should allow initial jobs");
         }
 
@@ -281,23 +317,56 @@ mod tests {
                 "arch".into(),
                 "pkg-overflow".into(),
                 None,
+                None,
             )
             .expect_err("total tracked jobs should be capped");
         assert_eq!(err, "Conversion queue full");
     }
 
     #[test]
+    fn create_job_evicts_terminal_jobs_at_capacity() {
+        let mut manager = JobManager::new(1);
+        let completed = manager
+            .create_job("done".into(), "arch".into(), "pkg-done".into(), None, None)
+            .expect("first job");
+        manager.update_status(&completed, JobStatus::Ready);
+        manager
+            .create_job(
+                "pending".into(),
+                "arch".into(),
+                "pkg-pending".into(),
+                None,
+                None,
+            )
+            .expect("fill capacity");
+
+        let fresh = manager
+            .create_job(
+                "fresh".into(),
+                "arch".into(),
+                "pkg-fresh".into(),
+                None,
+                None,
+            )
+            .expect("terminal jobs should be evicted before rejecting new work");
+
+        assert!(manager.get_job_by_key("done").is_none());
+        assert!(manager.get_job(&fresh).is_some());
+        assert!(manager.get_job_by_key("pending").is_some());
+    }
+
+    #[test]
     fn create_job_still_deduplicates_existing_keys_at_capacity() {
         let mut manager = JobManager::new(1);
         let existing = manager
-            .create_job("shared".into(), "arch".into(), "pkg".into(), None)
+            .create_job("shared".into(), "arch".into(), "pkg".into(), None, None)
             .expect("first job");
         manager
-            .create_job("other".into(), "arch".into(), "pkg2".into(), None)
+            .create_job("other".into(), "arch".into(), "pkg2".into(), None, None)
             .expect("fill capacity");
 
         let deduped = manager
-            .create_job("shared".into(), "arch".into(), "pkg".into(), None)
+            .create_job("shared".into(), "arch".into(), "pkg".into(), None, None)
             .expect("existing keys should still deduplicate");
         assert_eq!(deduped, existing);
     }

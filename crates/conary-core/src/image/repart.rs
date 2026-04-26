@@ -15,6 +15,7 @@ pub const ROOT_FILESYSTEM: &str = "ext4";
 pub const BLS_ROOTFSTYPE: &str = ROOT_FILESYSTEM;
 pub const ROOT_PARTITION_LABEL: &str = "CONARY_ROOT";
 pub const ESP_PARTITION_LABEL: &str = "CONARY_ESP";
+const REPART_SIZE_ALIGNMENT_BYTES: u64 = 4096;
 
 #[derive(Debug, Error)]
 pub enum RepartError {
@@ -26,6 +27,9 @@ pub enum RepartError {
 
     #[error("systemd-repart failed: {0}")]
     CommandFailed(String),
+
+    #[error("image size {0} cannot be aligned to 4096 bytes without overflow")]
+    SizeAlignmentOverflow(u64),
 }
 
 #[derive(Debug, Clone)]
@@ -151,9 +155,10 @@ pub fn create_raw_image(
     esp_size_mb: u64,
 ) -> Result<u64, RepartError> {
     generate_repart_definitions(definitions_dir, plan, esp_size_mb)?;
+    let size_bytes = align_repart_size(plan.size_bytes)?;
     let output = Command::new(systemd_repart)
         .arg("--empty=create")
-        .arg(format!("--size={}", plan.size_bytes))
+        .arg(format!("--size={size_bytes}"))
         .arg(format!("--definitions={}", definitions_dir.display()))
         .arg("--root=/")
         .arg("--discard=no")
@@ -169,6 +174,17 @@ pub fn create_raw_image(
     std::fs::metadata(&plan.output_raw)
         .map(|metadata| metadata.len())
         .map_err(RepartError::Io)
+}
+
+fn align_repart_size(size_bytes: u64) -> Result<u64, RepartError> {
+    let remainder = size_bytes % REPART_SIZE_ALIGNMENT_BYTES;
+    if remainder == 0 {
+        Ok(size_bytes)
+    } else {
+        size_bytes
+            .checked_add(REPART_SIZE_ALIGNMENT_BYTES - remainder)
+            .ok_or(RepartError::SizeAlignmentOverflow(size_bytes))
+    }
 }
 
 #[cfg(test)]

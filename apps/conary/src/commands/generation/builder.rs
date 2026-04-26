@@ -14,7 +14,7 @@ use conary_core::filesystem::fsverity::{FsVerityError, enable_fsverity};
 use conary_core::generation::builder as core_builder;
 use conary_core::model;
 use conary_core::model::ConvergenceIntent;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
 pub(crate) fn requested_generation_verity(digest: Option<&str>, fsverity_enabled: bool) -> bool {
@@ -23,6 +23,157 @@ pub(crate) fn requested_generation_verity(digest: Option<&str>, fsverity_enabled
 
 pub(crate) fn enable_generation_rootfs_verity(gen_dir: &Path, image_path: &Path) -> Result<()> {
     enable_generation_rootfs_verity_with(gen_dir, image_path, enable_fsverity)
+}
+
+fn ensure_generation_cas_layout(generations_root: &Path, objects_dir: &Path) -> Result<()> {
+    let artifact_root = generations_root.parent().ok_or_else(|| {
+        anyhow!(
+            "Generation root {} has no parent artifact root",
+            generations_root.display()
+        )
+    })?;
+    let contract_objects = artifact_root.join("objects");
+
+    std::fs::create_dir_all(artifact_root).with_context(|| {
+        format!(
+            "Failed to create generation artifact root {}",
+            artifact_root.display()
+        )
+    })?;
+    std::fs::create_dir_all(objects_dir).with_context(|| {
+        format!(
+            "Failed to create CAS objects directory {}",
+            objects_dir.display()
+        )
+    })?;
+
+    let real_objects = std::fs::canonicalize(objects_dir).with_context(|| {
+        format!(
+            "Failed to resolve CAS objects directory {}",
+            objects_dir.display()
+        )
+    })?;
+
+    match std::fs::symlink_metadata(&contract_objects) {
+        Ok(_) => {
+            let resolved = std::fs::canonicalize(&contract_objects).with_context(|| {
+                format!(
+                    "Generation CAS contract path {} exists but does not resolve",
+                    contract_objects.display()
+                )
+            })?;
+            if resolved != real_objects {
+                return Err(anyhow!(
+                    "Generation CAS contract path {} does not resolve to CAS objects {}; got {}",
+                    contract_objects.display(),
+                    real_objects.display(),
+                    resolved.display()
+                ));
+            }
+            return Ok(());
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "Failed to inspect generation CAS contract path {}",
+                    contract_objects.display()
+                )
+            });
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        let artifact_root = std::fs::canonicalize(artifact_root).with_context(|| {
+            format!(
+                "Failed to resolve generation artifact root {}",
+                artifact_root.display()
+            )
+        })?;
+        let link_target = relative_symlink_target(&artifact_root, &real_objects)?;
+        std::os::unix::fs::symlink(&link_target, &contract_objects).with_context(|| {
+            format!(
+                "Failed to link generation CAS contract path {} -> {}",
+                contract_objects.display(),
+                link_target.display()
+            )
+        })?;
+
+        let resolved = std::fs::canonicalize(&contract_objects).with_context(|| {
+            format!(
+                "Failed to resolve generated CAS contract link {}",
+                contract_objects.display()
+            )
+        })?;
+        if resolved != real_objects {
+            return Err(anyhow!(
+                "Generated CAS contract link {} resolves to {}, expected {}",
+                contract_objects.display(),
+                resolved.display(),
+                real_objects.display()
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    {
+        Err(anyhow!(
+            "Generation CAS contract path {} is missing and non-Unix platforms cannot create the required symlink to {}",
+            contract_objects.display(),
+            real_objects.display()
+        ))
+    }
+}
+
+#[cfg(unix)]
+fn relative_symlink_target(from_dir: &Path, target: &Path) -> Result<PathBuf> {
+    let from_components = absolute_normal_components(from_dir).ok_or_else(|| {
+        anyhow!(
+            "Cannot compute relative CAS symlink from non-normal path {}",
+            from_dir.display()
+        )
+    })?;
+    let target_components = absolute_normal_components(target).ok_or_else(|| {
+        anyhow!(
+            "Cannot compute relative CAS symlink to non-normal path {}",
+            target.display()
+        )
+    })?;
+
+    let common = from_components
+        .iter()
+        .zip(target_components.iter())
+        .take_while(|(left, right)| left == right)
+        .count();
+
+    let mut relative = PathBuf::new();
+    for _ in common..from_components.len() {
+        relative.push("..");
+    }
+    for component in &target_components[common..] {
+        relative.push(component);
+    }
+    if relative.as_os_str().is_empty() {
+        relative.push(".");
+    }
+    Ok(relative)
+}
+
+#[cfg(unix)]
+fn absolute_normal_components(path: &Path) -> Option<Vec<std::ffi::OsString>> {
+    let mut saw_root = false;
+    let mut components = Vec::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::RootDir => saw_root = true,
+            std::path::Component::Normal(value) => components.push(value.to_os_string()),
+            _ => return None,
+        }
+    }
+
+    saw_root.then_some(components)
 }
 
 fn enable_generation_rootfs_verity_with<F>(
@@ -123,10 +274,12 @@ pub fn build_generation(conn: &rusqlite::Connection, db_path: &str, summary: &st
 
     // Step 1: Composefs preflight check
     let obj_dir = objects_dir(db_path);
+    let generations_root = generations_dir();
+    ensure_generation_cas_layout(&generations_root, &obj_dir)
+        .context("Failed to prepare generation CAS layout")?;
     let caps = preflight_composefs(&obj_dir).context("Composefs preflight failed")?;
 
     // Step 2: Delegate to core builder
-    let generations_root = generations_dir();
     let (gen_number, result) =
         core_builder::build_generation_from_db(conn, &generations_root, summary)
             .map_err(|e| anyhow!("Generation build failed: {e}"))?;
@@ -233,5 +386,44 @@ mod tests {
             !metadata.fsverity_enabled,
             "metadata must stay false when root.erofs could not be protected"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_generation_cas_layout_links_contract_objects_to_real_cas() {
+        let tmp = TempDir::new().unwrap();
+        let generations_root = tmp.path().join("conary/generations");
+        let objects_dir = tmp.path().join("var/lib/conary/objects");
+        std::fs::create_dir_all(&objects_dir).unwrap();
+
+        ensure_generation_cas_layout(&generations_root, &objects_dir).unwrap();
+
+        let contract_objects = tmp.path().join("conary/objects");
+        let link_target = std::fs::read_link(&contract_objects).unwrap();
+        assert!(
+            !link_target.is_absolute(),
+            "contract CAS link must be relative so initramfs /sysroot access stays inside the booted root"
+        );
+        assert_eq!(
+            std::fs::canonicalize(&contract_objects).unwrap(),
+            std::fs::canonicalize(&objects_dir).unwrap()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_generation_cas_layout_rejects_conflicting_contract_objects() {
+        let tmp = TempDir::new().unwrap();
+        let generations_root = tmp.path().join("conary/generations");
+        let objects_dir = tmp.path().join("var/lib/conary/objects");
+        let wrong_objects = tmp.path().join("wrong/objects");
+        std::fs::create_dir_all(&objects_dir).unwrap();
+        std::fs::create_dir_all(&wrong_objects).unwrap();
+        std::fs::create_dir_all(tmp.path().join("conary")).unwrap();
+        std::os::unix::fs::symlink("../wrong/objects", tmp.path().join("conary/objects")).unwrap();
+
+        let err = ensure_generation_cas_layout(&generations_root, &objects_dir).unwrap_err();
+
+        assert!(err.to_string().contains("does not resolve to CAS objects"));
     }
 }

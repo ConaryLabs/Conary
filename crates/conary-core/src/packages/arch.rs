@@ -93,6 +93,7 @@ impl ArchPackage {
                     "license" => info.licenses.push(value.to_string()),
                     "group" => info.groups.push(value.to_string()),
                     "depend" => info.dependencies.push(value.to_string()),
+                    "provides" => info.provides.push(value.to_string()),
                     "optdepend" => info.optional_deps.push(value.to_string()),
                     "makedepend" => info.make_deps.push(value.to_string()),
                     "backup" => info.backup.push(value.to_string()),
@@ -265,6 +266,7 @@ struct PkgInfo {
     licenses: Vec<String>,
     groups: Vec<String>,
     dependencies: Vec<String>,
+    provides: Vec<String>,
     optional_deps: Vec<String>,
     make_deps: Vec<String>,
     /// Backup files (config files that should preserve user changes)
@@ -376,6 +378,7 @@ impl PackageFormat for ArchPackage {
             &pkginfo.make_deps,
             DependencyType::Build,
         ));
+        let provides = Self::parse_dependencies(&pkginfo.provides, DependencyType::Runtime);
 
         // Parse scriptlets from .INSTALL file (already extracted in single pass)
         let scriptlets = install_content
@@ -414,6 +417,7 @@ impl PackageFormat for ArchPackage {
             description: pkginfo.description,
             files,
             dependencies,
+            provides,
             scriptlets,
             config_files,
         };
@@ -450,6 +454,10 @@ impl PackageFormat for ArchPackage {
 
     fn dependencies(&self) -> &[Dependency] {
         self.meta.dependencies()
+    }
+
+    fn provides(&self) -> &[Dependency] {
+        self.meta.provides()
     }
 
     fn extract_file_contents(&self) -> Result<Vec<ExtractedFile>> {

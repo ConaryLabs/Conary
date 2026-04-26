@@ -16,19 +16,109 @@ use anyhow::{Context, Result};
 use conary_core::capability::inference::InferenceOptions;
 use conary_core::ccs::CcsPackage;
 use conary_core::ccs::convert::{ConversionOptions, FidelityLevel, LegacyConverter};
-use conary_core::db::models::RepositoryProvide;
 use conary_core::db::models::generate_capability_variations;
 use conary_core::db::paths::keyring_dir;
 use conary_core::packages::PackageFormat;
 use conary_core::packages::common::PackageMetadata;
 use conary_core::repository;
-use conary_core::repository::selector::{PackageSelector, SelectionOptions};
 use conary_core::resolver::MissingDependency;
 use conary_core::scriptlet::SandboxMode;
 use conary_core::version::VersionConstraint;
 use std::path::Path;
 use tempfile::TempDir;
 use tracing::{info, warn};
+
+/// Bounded dependency expansion for live CCS installs.
+///
+/// Kernel installs need to reach the initramfs toolchain without allowing a
+/// full unbounded distro dependency takeover:
+/// kernel -> kernel-core -> dracut -> cpio.
+pub const DEFAULT_CCS_DEPENDENCY_PASSES: usize = 2;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingCcsProvider {
+    name: String,
+    version: String,
+    provides: Vec<String>,
+}
+
+impl PendingCcsProvider {
+    fn from_package(ccs_pkg: &CcsPackage) -> Self {
+        let mut provides: Vec<String> = std::iter::once(ccs_pkg.name().to_string())
+            .chain(ccs_pkg.manifest().provides.capabilities.iter().cloned())
+            .chain(ccs_pkg.manifest().provides.sonames.iter().cloned())
+            .chain(ccs_pkg.manifest().provides.binaries.iter().cloned())
+            .chain(ccs_pkg.manifest().provides.pkgconfig.iter().cloned())
+            .collect();
+        provides.sort();
+        provides.dedup();
+
+        Self {
+            name: ccs_pkg.name().to_string(),
+            version: ccs_pkg.version().to_string(),
+            provides,
+        }
+    }
+}
+
+fn capability_name_matches(provided: &str, dep_name: &str) -> bool {
+    let mut candidates = vec![dep_name.to_string()];
+    for variation in generate_capability_variations(dep_name) {
+        if !candidates.contains(&variation) {
+            candidates.push(variation);
+        }
+    }
+
+    candidates.iter().any(|candidate| {
+        provided == candidate
+            || provided.starts_with(&format!("{candidate} "))
+            || provided.starts_with(&format!("{candidate}("))
+    })
+}
+
+fn pending_provider_directly_satisfies(
+    provider: &PendingCcsProvider,
+    dep: &MissingDependency,
+) -> bool {
+    if !provider
+        .provides
+        .iter()
+        .any(|provided| capability_name_matches(provided, &dep.name))
+    {
+        return false;
+    }
+
+    match &dep.constraint {
+        VersionConstraint::Any => true,
+        constraint => conary_core::version::RpmVersion::parse(&provider.version)
+            .map(|version| constraint.satisfies(&version))
+            .unwrap_or(false),
+    }
+}
+
+fn pending_provider_satisfies_dependency(
+    conn: &rusqlite::Connection,
+    pending_providers: &[PendingCcsProvider],
+    dep: &MissingDependency,
+) -> bool {
+    if pending_providers
+        .iter()
+        .any(|provider| pending_provider_directly_satisfies(provider, dep))
+    {
+        return true;
+    }
+
+    let requests = [(dep.name.clone(), dep.constraint.clone())];
+    let Ok(resolved) = repository::resolve_dependency_requests(conn, &requests) else {
+        return false;
+    };
+
+    resolved.iter().any(|(_, package)| {
+        pending_providers.iter().any(|provider| {
+            provider.name == package.package.name && provider.version == package.package.version
+        })
+    })
+}
 
 fn package_self_provides(ccs_pkg: &CcsPackage, dep_name: &str) -> bool {
     let provided: std::collections::HashSet<String> = std::iter::once(ccs_pkg.name().to_string())
@@ -68,6 +158,13 @@ fn is_conditional_rpm_dependency(dep_name: &str) -> bool {
         || dep_name.starts_with("((")
 }
 
+fn is_ignored_rpm_dependency(dep_name: &str) -> bool {
+    dep_name.starts_with("rpmlib(")
+        || dep_name.starts_with("config(")
+        || dep_name.starts_with('/')
+        || is_conditional_rpm_dependency(dep_name)
+}
+
 fn build_dependency_requests(
     missing: &[MissingDependency],
     to_install: &[dep_resolution::ResolvedDep],
@@ -85,35 +182,22 @@ fn build_dependency_requests(
         .collect()
 }
 
-/// Check whether a single dependency can be found in any enabled repository,
-/// either by direct name, capability variation, or normalized provides lookup.
+fn is_already_installed_error(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.to_string().contains("already installed"))
+}
+
+/// Check whether a single dependency can be found in any enabled repository.
 ///
 /// This is intentionally non-transitive: we only check existence, not whether
 /// the package's own dependencies are satisfiable.  The full transitive SAT
 /// solve happens later, during the actual download/install step.
-fn is_repo_resolvable(conn: &rusqlite::Connection, dep_name: &str) -> bool {
-    let options = SelectionOptions::default();
-
-    // 1. Direct package name lookup
-    if PackageSelector::find_best_package(conn, dep_name, &options).is_ok() {
-        return true;
-    }
-
-    // 2. Capability variations (e.g. strip arch suffix, soname stems)
-    for variation in generate_capability_variations(dep_name) {
-        if PackageSelector::find_best_package(conn, &variation, &options).is_ok() {
-            return true;
-        }
-    }
-
-    // 3. Normalized repository_provides table
-    if let Ok(provides) = RepositoryProvide::find_by_capability(conn, dep_name)
-        && !provides.is_empty()
-    {
-        return true;
-    }
-
-    false
+fn is_repo_resolvable(conn: &rusqlite::Connection, dep: &MissingDependency) -> bool {
+    let requests = [(dep.name.clone(), dep.constraint.clone())];
+    repository::resolve_dependency_requests(conn, &requests)
+        .map(|resolved| !resolved.is_empty())
+        .unwrap_or(false)
 }
 
 fn promote_repo_resolvable_satisfy_deps(
@@ -130,11 +214,11 @@ fn promote_repo_resolvable_satisfy_deps(
     let mut still_unresolvable = Vec::new();
 
     for dep in dep_plan.unresolvable.drain(..) {
-        // Critical live-runtime capabilities such as glibc/rtld symbols must
-        // never be promoted into repository installs during satisfy mode. If
-        // they reach this point, keep honoring the blocklist boundary instead
-        // of asking Remi to convert impossible system packages like glibc.
-        if blocklist::is_critical_runtime_capability(&dep.name) {
+        // Critical live-root packages and runtime capabilities must never be
+        // promoted into repository installs during satisfy mode. If they reach
+        // this point, keep honoring the blocklist boundary instead of asking
+        // Remi to replace packages such as systemd, coreutils, or glibc.
+        if blocklist::is_blocked(&dep.name) {
             info!(
                 "Keeping satisfy-mode dependency '{}' blocked on the live system instead of promoting it to a repository install",
                 dep.name
@@ -143,7 +227,7 @@ fn promote_repo_resolvable_satisfy_deps(
             continue;
         }
 
-        if is_repo_resolvable(conn, &dep.name) {
+        if is_repo_resolvable(conn, &dep) {
             promoted.push(dep);
         } else {
             still_unresolvable.push(dep);
@@ -197,6 +281,7 @@ pub struct ConvertedCcsInstallOptions<'a> {
     pub allow_downgrade: bool,
     pub dep_mode: Option<DepMode>,
     pub yes: bool,
+    pub dependency_passes_remaining: usize,
 }
 
 /// Attempt to convert a legacy package to CCS format
@@ -270,6 +355,7 @@ pub async fn try_convert_to_ccs(
         description: pkg.description().map(|s| s.to_string()),
         files: pkg.files().to_vec(),
         dependencies: pkg.dependencies().to_vec(),
+        provides: pkg.provides().to_vec(),
         scriptlets: pkg.scriptlets().to_vec(),
         config_files: Vec::new(),
     };
@@ -361,6 +447,13 @@ pub async fn try_convert_to_ccs(
 ///
 /// This is a wrapper that calls the CCS installer with appropriate options.
 pub async fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Result<()> {
+    install_converted_ccs_with_pending(opts, Vec::new()).await
+}
+
+async fn install_converted_ccs_with_pending(
+    opts: ConvertedCcsInstallOptions<'_>,
+    pending_providers: Vec<PendingCcsProvider>,
+) -> Result<()> {
     let ConvertedCcsInstallOptions {
         ccs_path,
         db_path,
@@ -372,12 +465,15 @@ pub async fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Resu
         allow_downgrade,
         dep_mode,
         yes,
+        dependency_passes_remaining,
     } = opts;
 
     if !no_deps {
         let conn = open_db(db_path)?;
         let ccs_pkg =
             CcsPackage::parse(ccs_path).context("Failed to parse converted CCS package")?;
+        let mut scoped_pending_providers = pending_providers;
+        scoped_pending_providers.push(PendingCcsProvider::from_package(&ccs_pkg));
         let missing: Vec<MissingDependency> = ccs_pkg
             .dependencies()
             .iter()
@@ -385,8 +481,7 @@ pub async fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Resu
             // Skip RPM-internal capabilities and filesystem deps.
             // TODO: remove after full migration -- use scheme-aware dependency
             // classification from `dependency_model` instead of string prefixes.
-            .filter(|dep| !dep.name.starts_with("rpmlib(") && !dep.name.starts_with('/'))
-            .filter(|dep| !is_conditional_rpm_dependency(&dep.name))
+            .filter(|dep| !is_ignored_rpm_dependency(&dep.name))
             .map(|dep| MissingDependency {
                 name: dep.name.clone(),
                 constraint: dep
@@ -408,6 +503,22 @@ pub async fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Resu
                     dep_name, provider
                 );
             }
+            let mut pending_satisfied = Vec::new();
+            let mut still_unresolved_missing = Vec::new();
+            for dep in unresolved_missing {
+                if pending_provider_satisfies_dependency(&conn, &scoped_pending_providers, &dep) {
+                    pending_satisfied.push(dep);
+                } else {
+                    still_unresolved_missing.push(dep);
+                }
+            }
+            for dep in &pending_satisfied {
+                info!(
+                    "Dependency {} already satisfied by pending CCS transaction provider",
+                    dep.name
+                );
+            }
+            let unresolved_missing = still_unresolved_missing;
 
             // Resolve the effective dep-mode from the explicit option or
             // the system model convergence intent.
@@ -490,27 +601,46 @@ pub async fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Resu
                                 let dep_ccs_path = dep_path.to_str().ok_or_else(|| {
                                     anyhow::anyhow!("Invalid CCS path (non-UTF8)")
                                 })?;
-                                // Break recursion: sub-deps are system packages
-                                // handled by the system PM in satisfy mode, or
-                                // already resolved at the parent level.  Allowing
-                                // unbounded recursive Remi downloads would create
-                                // an exponential chain of server-side conversions.
-                                Box::pin(install_converted_ccs(ConvertedCcsInstallOptions {
-                                    ccs_path: dep_ccs_path,
-                                    db_path,
-                                    root,
-                                    dry_run,
-                                    sandbox_mode,
-                                    no_deps: true,
-                                    no_scripts,
-                                    allow_downgrade,
-                                    dep_mode,
-                                    yes,
-                                }))
-                                .await
-                                .with_context(|| {
-                                    format!("Failed to install CCS dependency {}", dep_name)
-                                })?;
+                                // Allow one nested dependency pass for
+                                // downloaded CCS dependencies. Kernel meta
+                                // packages need this for kernel-core -> dracut,
+                                // but grandchildren remain non-recursive inside
+                                // that child call so dependency expansion stays
+                                // bounded.
+                                let nested_dependency_passes =
+                                    dependency_passes_remaining.saturating_sub(1);
+                                let child_pending_providers = scoped_pending_providers.clone();
+                                let install_result = Box::pin(install_converted_ccs_with_pending(
+                                    ConvertedCcsInstallOptions {
+                                        ccs_path: dep_ccs_path,
+                                        db_path,
+                                        root,
+                                        dry_run,
+                                        sandbox_mode,
+                                        no_deps: dependency_passes_remaining == 0,
+                                        no_scripts,
+                                        allow_downgrade,
+                                        dep_mode,
+                                        yes,
+                                        dependency_passes_remaining: nested_dependency_passes,
+                                    },
+                                    child_pending_providers,
+                                ))
+                                .await;
+                                match install_result {
+                                    Ok(()) => {}
+                                    Err(e) if is_already_installed_error(&e) => {
+                                        info!(
+                                            "Dependency {} already installed, skipping",
+                                            dep_name
+                                        );
+                                    }
+                                    Err(e) => {
+                                        return Err(e).with_context(|| {
+                                            format!("Failed to install CCS dependency {}", dep_name)
+                                        });
+                                    }
+                                }
                                 continue;
                             }
 
@@ -612,6 +742,14 @@ mod tests {
             "((kernel-modules-extra-uname-r = 6.19.6-200.fc43.x86_64) if kernel-modules-extra-matched)"
         ));
         assert!(!is_conditional_rpm_dependency("kernel-core-uname-r"));
+    }
+
+    #[test]
+    fn ignores_rpm_internal_config_dependencies() {
+        assert!(is_ignored_rpm_dependency("config(dracut) = 107-8.fc43"));
+        assert!(is_ignored_rpm_dependency("rpmlib(CompressedFileNames)"));
+        assert!(is_ignored_rpm_dependency("/usr/bin/bash"));
+        assert!(!is_ignored_rpm_dependency("kernel-core-uname-r"));
     }
 
     #[test]
@@ -717,6 +855,51 @@ mod tests {
     }
 
     #[test]
+    fn pending_providers_satisfy_versioned_kernel_family_capability() {
+        let conn = test_db();
+
+        let mut repo = Repository::new("fedora-remi".to_string(), "https://example.invalid".into());
+        repo.insert(&conn).unwrap();
+        let repo_id = repo.id.unwrap();
+
+        let mut pkg = RepositoryPackage::new(
+            repo_id,
+            "kernel".to_string(),
+            "6.17.1-300.fc43".to_string(),
+            "sha256:kernel".to_string(),
+            123,
+            "https://example.invalid/kernel.rpm".to_string(),
+        );
+        pkg.insert(&conn).unwrap();
+        let pkg_id = pkg.id.unwrap();
+
+        let mut provide = RepositoryProvide::new(
+            pkg_id,
+            "kernel-uname-r".to_string(),
+            Some("6.17.1-300.fc43.x86_64".to_string()),
+            "package".to_string(),
+            Some("kernel-uname-r = 6.17.1-300.fc43.x86_64".to_string()),
+        );
+        provide.insert(&conn).unwrap();
+
+        let pending = vec![PendingCcsProvider {
+            name: "kernel".to_string(),
+            version: "6.17.1-300.fc43".to_string(),
+            provides: vec!["kernel-uname-r".to_string()],
+        }];
+        let dep = conary_core::resolver::MissingDependency {
+            name: "kernel-uname-r".to_string(),
+            constraint: VersionConstraint::parse("= 6.17.1-300.fc43.x86_64").unwrap(),
+            required_by: vec!["kernel-modules-core".to_string()],
+        };
+
+        assert!(
+            pending_provider_satisfies_dependency(&conn, &pending, &dep),
+            "recursive CCS dependency installs must honor providers already pending in the transaction"
+        );
+    }
+
+    #[test]
     fn promote_does_not_convert_blocked_runtime_capability_into_repo_install() {
         let conn = test_db();
 
@@ -762,5 +945,208 @@ mod tests {
         );
         assert!(dep_plan.unresolvable.is_empty());
         assert_eq!(dep_plan.blocked, vec![dep_name]);
+    }
+
+    #[test]
+    fn promote_does_not_convert_pam_soname_capabilities_into_repo_installs() {
+        let conn = test_db();
+
+        let mut repo = Repository::new("fedora-remi".to_string(), "https://example.invalid".into());
+        repo.insert(&conn).unwrap();
+        let repo_id = repo.id.unwrap();
+
+        let mut pkg = RepositoryPackage::new(
+            repo_id,
+            "pam".to_string(),
+            "1.7.1-3.fc43".to_string(),
+            "sha256:pam".to_string(),
+            123,
+            "https://example.invalid/pam.rpm".to_string(),
+        );
+        pkg.insert(&conn).unwrap();
+        let pkg_id = pkg.id.unwrap();
+
+        let mut provide = RepositoryProvide::new(
+            pkg_id,
+            "libpam.so.0(LIBPAM_1.0)(64bit)".to_string(),
+            Some("1.7.1-3.fc43".to_string()),
+            "soname".to_string(),
+            Some("libpam.so.0(LIBPAM_1.0)(64bit)".to_string()),
+        );
+        provide.insert(&conn).unwrap();
+
+        let dep_name = "libpam.so.0(LIBPAM_1.0)(64bit)".to_string();
+        let mut dep_plan = dep_resolution::DepResolutionPlan {
+            unresolvable: vec![conary_core::resolver::MissingDependency {
+                name: dep_name.clone(),
+                constraint: VersionConstraint::Any,
+                required_by: vec!["qemu-img".to_string()],
+            }],
+            ..Default::default()
+        };
+
+        promote_repo_resolvable_satisfy_deps(&conn, &mut dep_plan);
+
+        assert!(
+            dep_plan.to_install.is_empty(),
+            "libpam runtime capabilities must not ask Remi to convert pam"
+        );
+        assert!(dep_plan.unresolvable.is_empty());
+        assert_eq!(dep_plan.blocked, vec![dep_name]);
+    }
+
+    #[test]
+    fn promote_does_not_convert_pcre2_soname_capabilities_into_repo_installs() {
+        let conn = test_db();
+
+        let mut repo = Repository::new("fedora-remi".to_string(), "https://example.invalid".into());
+        repo.insert(&conn).unwrap();
+        let repo_id = repo.id.unwrap();
+
+        let mut pkg = RepositoryPackage::new(
+            repo_id,
+            "pcre2".to_string(),
+            "10.45-1.fc43".to_string(),
+            "sha256:pcre2".to_string(),
+            123,
+            "https://example.invalid/pcre2.rpm".to_string(),
+        );
+        pkg.insert(&conn).unwrap();
+        let pkg_id = pkg.id.unwrap();
+
+        let mut provide = RepositoryProvide::new(
+            pkg_id,
+            "libpcre2-8.so.0()(64bit)".to_string(),
+            Some("10.45-1.fc43".to_string()),
+            "soname".to_string(),
+            Some("libpcre2-8.so.0()(64bit)".to_string()),
+        );
+        provide.insert(&conn).unwrap();
+
+        let dep_name = "libpcre2-8.so.0()(64bit)".to_string();
+        let mut dep_plan = dep_resolution::DepResolutionPlan {
+            unresolvable: vec![conary_core::resolver::MissingDependency {
+                name: dep_name.clone(),
+                constraint: VersionConstraint::Any,
+                required_by: vec!["libselinux".to_string()],
+            }],
+            ..Default::default()
+        };
+
+        promote_repo_resolvable_satisfy_deps(&conn, &mut dep_plan);
+
+        assert!(
+            dep_plan.to_install.is_empty(),
+            "live pcre2 runtime capabilities must not replace the running userspace"
+        );
+        assert!(dep_plan.unresolvable.is_empty());
+        assert_eq!(dep_plan.blocked, vec![dep_name]);
+    }
+
+    #[test]
+    fn promote_uses_normalized_repository_provides_for_rpm_soname_deps() {
+        let conn = test_db();
+
+        let mut repo = Repository::new("fedora-remi".to_string(), "https://example.invalid".into());
+        repo.insert(&conn).unwrap();
+        let repo_id = repo.id.unwrap();
+
+        let mut pkg = RepositoryPackage::new(
+            repo_id,
+            "glib2".to_string(),
+            "2.86.0-2.fc43".to_string(),
+            "sha256:glib2".to_string(),
+            123,
+            "https://example.invalid/glib2.rpm".to_string(),
+        );
+        pkg.insert(&conn).unwrap();
+        let pkg_id = pkg.id.unwrap();
+
+        let mut provide = RepositoryProvide::new(
+            pkg_id,
+            "libglib-2.0.so.0".to_string(),
+            None,
+            "soname".to_string(),
+            Some("libglib-2.0.so.0()(64bit)".to_string()),
+        );
+        provide.insert(&conn).unwrap();
+
+        let dep_name = "libglib-2.0.so.0()(64bit)".to_string();
+        let mut dep_plan = dep_resolution::DepResolutionPlan {
+            unresolvable: vec![conary_core::resolver::MissingDependency {
+                name: dep_name.clone(),
+                constraint: VersionConstraint::Any,
+                required_by: vec!["qemu-img".to_string()],
+            }],
+            ..Default::default()
+        };
+
+        promote_repo_resolvable_satisfy_deps(&conn, &mut dep_plan);
+
+        assert_eq!(dep_plan.to_install.len(), 1);
+        assert_eq!(dep_plan.to_install[0].name, dep_name);
+        assert!(dep_plan.unresolvable.is_empty());
+    }
+
+    #[test]
+    fn promote_does_not_convert_blocked_package_names_into_repo_installs() {
+        let conn = test_db();
+
+        let mut repo = Repository::new("fedora-remi".to_string(), "https://example.invalid".into());
+        repo.insert(&conn).unwrap();
+        let repo_id = repo.id.unwrap();
+
+        for name in ["systemd", "coreutils"] {
+            let mut pkg = RepositoryPackage::new(
+                repo_id,
+                name.to_string(),
+                "1.0".to_string(),
+                format!("sha256:{name}"),
+                123,
+                format!("https://example.invalid/{name}.rpm"),
+            );
+            pkg.insert(&conn).unwrap();
+        }
+
+        let mut dep_plan = dep_resolution::DepResolutionPlan {
+            unresolvable: vec![
+                conary_core::resolver::MissingDependency {
+                    name: "systemd".to_string(),
+                    constraint: VersionConstraint::Any,
+                    required_by: vec!["kernel-core".to_string()],
+                },
+                conary_core::resolver::MissingDependency {
+                    name: "coreutils".to_string(),
+                    constraint: VersionConstraint::Any,
+                    required_by: vec!["kernel-core".to_string()],
+                },
+            ],
+            ..Default::default()
+        };
+
+        promote_repo_resolvable_satisfy_deps(&conn, &mut dep_plan);
+
+        assert!(
+            dep_plan.to_install.is_empty(),
+            "blocked package names must never be promoted into repo installs"
+        );
+        assert!(dep_plan.unresolvable.is_empty());
+        assert_eq!(dep_plan.blocked, vec!["systemd", "coreutils"]);
+    }
+
+    #[test]
+    fn detects_already_installed_errors_in_context_chain() {
+        let error = anyhow::anyhow!("Package kernel-core version 6.17.1 is already installed")
+            .context("Failed to install CCS dependency kernel-uname-r");
+
+        assert!(is_already_installed_error(&error));
+    }
+
+    #[test]
+    fn default_dependency_passes_reach_kernel_initramfs_toolchain() {
+        assert_eq!(
+            DEFAULT_CCS_DEPENDENCY_PASSES, 2,
+            "kernel installs must be able to resolve kernel-core -> dracut -> cpio"
+        );
     }
 }

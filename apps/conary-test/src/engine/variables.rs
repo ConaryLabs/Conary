@@ -165,6 +165,7 @@ pub fn expand_qemu_boot(config: &QemuBoot, vars: &HashMap<String, String>) -> Qe
             .local_image_path
             .as_ref()
             .map(|path| expand_variables(path, vars)),
+        stage_conary: config.stage_conary,
         copy_from_guest: config
             .copy_from_guest
             .iter()
@@ -401,6 +402,7 @@ mod tests {
             &QemuBoot {
                 image: "${IMG}".to_string(),
                 local_image_path: None,
+                stage_conary: false,
                 copy_from_guest: Vec::new(),
                 memory_mb: 1024,
                 timeout_seconds: 120,
@@ -429,6 +431,7 @@ mod tests {
             &QemuBoot {
                 image: "${IMG}".to_string(),
                 local_image_path: Some("${HOST_OUT}".to_string()),
+                stage_conary: true,
                 copy_from_guest: vec![QemuGuestCopy {
                     source: "/tmp/${IMG}.qcow2".to_string(),
                     dest: "${HOST_OUT}".to_string(),
@@ -447,6 +450,7 @@ mod tests {
             expanded.local_image_path.as_deref(),
             Some("/tmp/conary-generation-export/generated.qcow2")
         );
+        assert!(expanded.stage_conary);
         assert_eq!(
             expanded.copy_from_guest[0].source,
             "/tmp/minimal-boot-v2.qcow2"

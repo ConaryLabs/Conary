@@ -22,6 +22,9 @@ use tokio::sync::RwLock;
 pub struct PackageQuery {
     /// Specific version to fetch (optional)
     pub version: Option<String>,
+    /// Specific native package architecture to fetch (optional)
+    #[serde(alias = "architecture")]
+    pub arch: Option<String>,
 }
 
 /// Response when package is ready
@@ -79,6 +82,7 @@ pub async fn get_package(
     let check_distro = distro.clone();
     let check_name = name.clone();
     let check_version = query.version.clone();
+    let check_arch = query.arch.clone();
     let check_db = db_path.clone();
     match tokio::task::spawn_blocking(move || {
         check_converted(
@@ -86,6 +90,7 @@ pub async fn get_package(
             &check_distro,
             &check_name,
             check_version.as_deref(),
+            check_arch.as_deref(),
         )
     })
     .await
@@ -106,10 +111,11 @@ pub async fn get_package(
 
     // Package not converted - check if conversion is already in progress
     let job_key = format!(
-        "{}:{}:{}",
+        "{}:{}:{}:{}",
         distro,
         name,
-        query.version.as_deref().unwrap_or("latest")
+        query.version.as_deref().unwrap_or("latest"),
+        query.arch.as_deref().unwrap_or("default")
     );
 
     if let Some(existing_job) = state_guard.job_manager.get_job_by_key(&job_key) {
@@ -150,6 +156,7 @@ pub async fn get_package(
         distro.clone(),
         name.clone(),
         query.version.clone(),
+        query.arch.clone(),
     ) {
         Ok(job_id) => {
             // Spawn conversion task
@@ -185,6 +192,7 @@ fn check_converted(
     distro: &str,
     name: &str,
     version: Option<&str>,
+    architecture: Option<&str>,
 ) -> Result<Option<PackageManifest>, anyhow::Error> {
     use conary_core::db::models::ConvertedPackage;
 
@@ -192,9 +200,18 @@ fn check_converted(
     let conn = conary_core::db::open_fast(db_path)?;
 
     // Query for existing conversion
-    let existing = ConvertedPackage::find_by_package_identity(&conn, distro, name, version)?;
+    let existing = ConvertedPackage::find_by_package_identity_with_arch(
+        &conn,
+        distro,
+        name,
+        version,
+        architecture,
+    )?;
 
     if let Some(converted) = existing {
+        if converted.needs_reconversion() {
+            return Ok(None);
+        }
         // Check if the CCS file still exists
         if let Some(ccs_path_str) = &converted.ccs_path {
             let ccs_path = std::path::Path::new(ccs_path_str);
@@ -310,8 +327,14 @@ async fn run_conversion(state: Arc<RwLock<ServerState>>, job_id: JobId) {
     let distro = job.distro.clone();
     let package_name = job.package_name.clone();
     let version = job.version.clone();
+    let architecture = job.architecture.clone();
     let result = tokio::task::spawn_blocking(move || {
-        conversion_service.convert_package(&distro, &package_name, version.as_deref())
+        conversion_service.convert_package(
+            &distro,
+            &package_name,
+            version.as_deref(),
+            architecture.as_deref(),
+        )
     })
     .await
     .unwrap_or_else(|e| Err(anyhow::anyhow!("conversion task panicked: {e}")));
@@ -377,10 +400,11 @@ pub async fn download_package(
 
     // Check for conversion job (in-progress or completed)
     let job_key = format!(
-        "{}:{}:{}",
+        "{}:{}:{}:{}",
         distro,
         name,
-        query.version.as_deref().unwrap_or("latest")
+        query.version.as_deref().unwrap_or("latest"),
+        query.arch.as_deref().unwrap_or("default")
     );
     let job_info = state_guard
         .job_manager
@@ -414,6 +438,7 @@ pub async fn download_package(
                         &distro,
                         &name,
                         query.version.as_deref(),
+                        query.arch.as_deref(),
                         ua.as_deref(),
                     )
                     .await;
@@ -444,48 +469,46 @@ pub async fn download_package(
         }
     }
 
-    // No job found - look for the CCS package file on disk
-    // The conversion service stores it at: {cache_dir}/packages/{distro}/{name}-{version}.ccs
-    // Also check the legacy flat path for backwards compatibility.
-    let packages_dir = state_guard.config.cache_dir.join("packages").join(&distro);
-    let legacy_packages_dir = state_guard.config.cache_dir.join("packages");
+    // No job found: look up the converted package through the DB instead of
+    // trusting a cache filename. Conversion-version bumps make old CCS files
+    // stale even when the bytes are still on disk.
+    let db_path = state_guard.config.db_path.clone();
     let analytics = state_guard.analytics.clone();
     let ua = headers
         .get(header::USER_AGENT)
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
+    drop(state_guard);
 
-    // If version specified, look for exact match
-    // Otherwise, find the latest version.
-    // Check the distro-namespaced path first, then fall back to legacy flat path.
-    let ccs_path = if let Some(version) = &query.version {
-        let namespaced = packages_dir.join(format!("{}-{}.ccs", name, version));
-        if namespaced.exists() {
-            namespaced
-        } else {
-            legacy_packages_dir.join(format!("{}-{}.ccs", name, version))
+    let lookup_db = db_path.clone();
+    let lookup_distro = distro.clone();
+    let lookup_name = name.clone();
+    let lookup_version = query.version.clone();
+    let lookup_arch = query.arch.clone();
+    let ccs_path = match tokio::task::spawn_blocking(move || {
+        converted_ccs_path_for_download(
+            &lookup_db,
+            &lookup_distro,
+            &lookup_name,
+            lookup_version.as_deref(),
+            lookup_arch.as_deref(),
+        )
+    })
+    .await
+    {
+        Ok(Ok(Some(path))) => path,
+        Ok(Ok(None)) => {
+            return get_package(State(state), Path((distro, name)), Query(query)).await;
         }
-    } else {
-        // Find any matching package (glob for {name}-*.ccs)
-        match find_latest_package(&packages_dir, &name)
-            .or_else(|| find_latest_package(&legacy_packages_dir, &name))
-        {
-            Some(path) => path,
-            None => {
-                // No converted package found - trigger conversion
-                drop(state_guard);
-                return get_package(State(state), Path((distro, name)), Query(query)).await;
-            }
+        Ok(Err(e)) => {
+            tracing::error!("Database error checking downloadable conversion: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
+        }
+        Err(e) => {
+            tracing::error!("Blocking task failed: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
         }
     };
-
-    if !ccs_path.exists() {
-        // No converted package found - trigger conversion
-        drop(state_guard);
-        return get_package(State(state), Path((distro, name)), Query(query)).await;
-    }
-
-    drop(state_guard);
 
     // Stream the file (analytics recorded inside after confirming file is readable)
     stream_ccs_file(
@@ -494,36 +517,47 @@ pub async fn download_package(
         &distro,
         &name,
         query.version.as_deref(),
+        query.arch.as_deref(),
         ua.as_deref(),
     )
     .await
 }
 
-/// Find the latest version of a package in the packages directory
-fn find_latest_package(packages_dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
-    let prefix = format!("{}-", name);
+fn converted_ccs_path_for_download(
+    db_path: &std::path::Path,
+    distro: &str,
+    name: &str,
+    version: Option<&str>,
+    architecture: Option<&str>,
+) -> Result<Option<std::path::PathBuf>, anyhow::Error> {
+    use conary_core::db::models::ConvertedPackage;
 
-    std::fs::read_dir(packages_dir)
-        .ok()?
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| {
-            entry
-                .file_name()
-                .to_str()
-                .map(|n| {
-                    if !n.starts_with(&prefix) || !n.ends_with(".ccs") {
-                        return false;
-                    }
-                    // Extract the version portion between prefix and ".ccs" suffix.
-                    // Verify it starts with a digit to avoid matching different package
-                    // names that share a prefix (e.g., "nginx-extra" when name is "nginx").
-                    let remainder = &n[prefix.len()..n.len() - 4];
-                    remainder.starts_with(|c: char| c.is_ascii_digit())
-                })
-                .unwrap_or(false)
-        })
-        .max_by_key(|entry| entry.metadata().ok().and_then(|m| m.modified().ok()))
-        .map(|entry| entry.path())
+    let conn = conary_core::db::open_fast(db_path)?;
+    let Some(converted) = ConvertedPackage::find_by_package_identity_with_arch(
+        &conn,
+        distro,
+        name,
+        version,
+        architecture,
+    )?
+    else {
+        return Ok(None);
+    };
+
+    if converted.needs_reconversion() {
+        return Ok(None);
+    }
+
+    let Some(ccs_path) = converted.ccs_path else {
+        return Ok(None);
+    };
+
+    let ccs_path = std::path::PathBuf::from(ccs_path);
+    if ccs_path.exists() {
+        Ok(Some(ccs_path))
+    } else {
+        Ok(None)
+    }
 }
 
 /// Stream a CCS file as a response, recording analytics only on success.
@@ -536,6 +570,7 @@ async fn stream_ccs_file(
     distro: &str,
     name: &str,
     version: Option<&str>,
+    architecture: Option<&str>,
     ua: Option<&str>,
 ) -> Response {
     use axum::body::Body;
@@ -588,7 +623,9 @@ async fn stream_ccs_file(
 
     // Record analytics only after confirming the file is readable
     if let Some(recorder) = analytics {
-        recorder.record(distro, name, version, None, ua).await;
+        recorder
+            .record(distro, name, version, architecture, ua)
+            .await;
     }
 
     // Stream the file
@@ -639,6 +676,7 @@ pub async fn trigger_conversion(
     // Reuse the get_package logic
     let query = PackageQuery {
         version: req.version,
+        arch: None,
     };
     get_package(State(state), Path((req.distro, req.package)), Query(query)).await
 }
@@ -710,5 +748,52 @@ pub async fn get_delta(
             tracing::error!("Blocking task failed: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use conary_core::db::models::{CONVERSION_VERSION, ConvertedPackage};
+
+    #[test]
+    fn converted_ccs_path_for_download_rejects_stale_conversion_records() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let db_path = temp.path().join("conary.db");
+        conary_core::db::init(&db_path).unwrap();
+
+        let ccs_path = temp
+            .path()
+            .join("cache/packages/p11-kit-trust-0.25.8-1.fc43-x86_64.ccs");
+        std::fs::create_dir_all(ccs_path.parent().unwrap()).unwrap();
+        std::fs::write(&ccs_path, b"stale ccs payload").unwrap();
+
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let mut converted = ConvertedPackage::new_server(
+            "fedora".to_string(),
+            "p11-kit-trust".to_string(),
+            "0.25.8-1.fc43".to_string(),
+            "rpm".to_string(),
+            "sha256:stale".to_string(),
+            "high".to_string(),
+            &[],
+            17,
+            "sha256:content".to_string(),
+            ccs_path.to_string_lossy().to_string(),
+        );
+        converted.package_architecture = Some("x86_64".to_string());
+        converted.conversion_version = CONVERSION_VERSION - 1;
+        converted.insert(&conn).unwrap();
+
+        let resolved = converted_ccs_path_for_download(
+            &db_path,
+            "fedora",
+            "p11-kit-trust",
+            Some("0.25.8-1.fc43"),
+            Some("x86_64"),
+        )
+        .unwrap();
+
+        assert!(resolved.is_none());
     }
 }

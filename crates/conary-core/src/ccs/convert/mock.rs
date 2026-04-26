@@ -32,29 +32,7 @@ pub fn setup_mock_tools(root: &Path) -> Result<()> {
     // Mock only utility commands, not shells. Mocking sh/bash would break
     // the scriptlet itself when it calls `sh -c`. The sandbox uses real
     // shells from the host.
-    let utils = [
-        // User/Group management
-        "useradd",
-        "userdel",
-        "groupadd",
-        "groupdel",
-        "usermod",
-        "groupmod",
-        // Service management
-        "systemctl",
-        "service",
-        "chkconfig",
-        // System updates
-        "ldconfig",
-        "update-alternatives",
-        "update-desktop-database",
-        "gtk-update-icon-cache",
-        "glib-compile-schemas",
-        "update-mime-database",
-        "install-info",
-    ];
-
-    for tool in utils {
+    for tool in MOCKED_UTILS {
         create_mock_tool(&bin_dir, tool, log_file)?;
         symlink_force(&bin_dir.join(tool), &sbin_dir.join(tool))?;
         symlink_force(&bin_dir.join(tool), &usr_bin_dir.join(tool))?;
@@ -63,6 +41,32 @@ pub fn setup_mock_tools(root: &Path) -> Result<()> {
 
     Ok(())
 }
+
+/// Utility commands replaced by capture-mode shims.
+///
+/// These are execution scaffolding only. They must never be treated as files
+/// created by the legacy package's scriptlets.
+pub(crate) const MOCKED_UTILS: &[&str] = &[
+    // User/Group management
+    "useradd",
+    "userdel",
+    "groupadd",
+    "groupdel",
+    "usermod",
+    "groupmod",
+    // Service management
+    "systemctl",
+    "service",
+    "chkconfig",
+    // System updates
+    "ldconfig",
+    "update-alternatives",
+    "update-desktop-database",
+    "gtk-update-icon-cache",
+    "glib-compile-schemas",
+    "update-mime-database",
+    "install-info",
+];
 
 /// Create a mock script that logs arguments
 fn create_mock_tool(dir: &Path, name: &str, log_file: &str) -> Result<()> {

@@ -13,7 +13,10 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+#[cfg(unix)]
+use std::io::ErrorKind;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use tracing::info;
 
 /// Errors specific to system configuration.
@@ -128,6 +131,369 @@ fn detect_systemd_boot_efi(root: &Path) -> Result<std::path::PathBuf, SystemConf
         })
 }
 
+#[cfg(unix)]
+fn ensure_exported_usr_merge_linker_layout(root: &Path) -> Result<(), SystemConfigError> {
+    let usr = root.join("usr");
+    let usr_lib = usr.join("lib");
+    let usr_lib64 = usr.join("lib64");
+
+    fs::create_dir_all(&usr_lib)?;
+    match fs::symlink_metadata(&usr_lib64) {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            // Exported generation rootfs projection creates /lib64 -> usr/lib64.
+            // LFS stores the x86_64 loader in /usr/lib, so bridge that contract
+            // without replacing a distro-style /usr/lib64 when one exists.
+            std::os::unix::fs::symlink("lib", usr_lib64)?;
+            Ok(())
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+#[cfg(not(unix))]
+fn ensure_exported_usr_merge_linker_layout(_root: &Path) -> Result<(), SystemConfigError> {
+    Ok(())
+}
+
+const INITRAMFS_BINARIES: &[&str] = &[
+    "usr/bin/bash",
+    "usr/bin/basename",
+    "usr/bin/cat",
+    "usr/bin/mkdir",
+    "usr/bin/mount",
+    "usr/bin/readlink",
+    "usr/sbin/mount.composefs",
+    "usr/sbin/switch_root",
+];
+
+const INITRAMFS_LIBRARIES: &[&str] = &[
+    "usr/lib/ld-linux-x86-64.so.2",
+    "usr/lib/libblkid.so.1",
+    "usr/lib/libc.so.6",
+    "usr/lib/libcomposefs.so.1",
+    "usr/lib/libcrypto.so.3",
+    "usr/lib/libhistory.so.8",
+    "usr/lib/libmount.so.1",
+    "usr/lib/libncursesw.so.6",
+    "usr/lib/libreadline.so.8",
+];
+
+const INITRAMFS_INIT: &str = r#"#!/bin/sh
+PATH=/usr/bin:/usr/sbin:/bin:/sbin
+export PATH
+
+fail() {
+    echo "conary-initramfs: $*" >&2
+    exec /bin/sh
+}
+
+mkdir -p /proc /sys /dev /sysroot
+mount -t proc proc /proc || fail "failed to mount /proc"
+mount -t sysfs sysfs /sys || fail "failed to mount /sys"
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+
+ROOT_SPEC="PARTLABEL=CONARY_ROOT"
+CONARY_GEN=""
+for opt in $(cat /proc/cmdline); do
+    case "$opt" in
+        root=*) ROOT_SPEC="${opt#root=}" ;;
+        conary.generation=*) CONARY_GEN="${opt#conary.generation=}" ;;
+    esac
+done
+
+mount -t ext4 -o rw "$ROOT_SPEC" /sysroot || fail "failed to mount root filesystem $ROOT_SPEC"
+
+if [ -z "$CONARY_GEN" ] && [ -L /sysroot/conary/current ]; then
+    CONARY_GEN="$(basename "$(readlink /sysroot/conary/current)")"
+fi
+
+if [ -n "$CONARY_GEN" ]; then
+    GEN_DIR="/sysroot/conary/generations/$CONARY_GEN"
+    EROFS_IMG="$GEN_DIR/root.erofs"
+    CAS_DIR="/sysroot/conary/objects"
+
+    [ -f "$EROFS_IMG" ] || fail "generation $CONARY_GEN is missing root.erofs"
+    mkdir -p /sysroot/conary/mnt
+    mount -t composefs "$EROFS_IMG" /sysroot/conary/mnt -o "basedir=$CAS_DIR,verity_check=1" 2>/dev/null ||
+        mount -t composefs "$EROFS_IMG" /sysroot/conary/mnt -o "basedir=$CAS_DIR" ||
+        fail "composefs mount failed for generation $CONARY_GEN"
+
+    if [ -d /sysroot/conary/mnt/usr ]; then
+        mkdir -p /sysroot/usr
+        mount --bind /sysroot/conary/mnt/usr /sysroot/usr || fail "failed to bind generation /usr"
+        mount -o remount,ro /sysroot/usr 2>/dev/null || true
+    fi
+
+    if [ -d /sysroot/conary/mnt/etc ]; then
+        ETC_UPPER="/sysroot/conary/etc-state/$CONARY_GEN"
+        ETC_WORK="/sysroot/conary/etc-state/$CONARY_GEN-work"
+        mkdir -p "$ETC_UPPER" "$ETC_WORK" /sysroot/etc
+        mount -t overlay overlay /sysroot/etc \
+            -o "lowerdir=/sysroot/conary/mnt/etc,upperdir=$ETC_UPPER,workdir=$ETC_WORK" ||
+            fail "failed to mount generation /etc overlay"
+    fi
+fi
+
+mkdir -p /sysroot/dev /sysroot/proc /sysroot/sys /sysroot/run
+mount --move /dev /sysroot/dev 2>/dev/null || true
+mount --move /proc /sysroot/proc 2>/dev/null || true
+mount --move /sys /sysroot/sys 2>/dev/null || true
+exec switch_root /sysroot /usr/lib/systemd/systemd
+fail "switch_root failed"
+"#;
+
+#[cfg(unix)]
+fn write_bootstrap_initramfs(root: &Path, initramfs_dest: &Path) -> Result<(), SystemConfigError> {
+    let mut archive = Vec::new();
+    let mut seen = HashSet::new();
+
+    for dir in [
+        "dev", "proc", "run", "sys", "sysroot", "tmp", "usr", "usr/bin", "usr/lib", "usr/sbin",
+        "lib64",
+    ] {
+        append_cpio_dir(&mut archive, &mut seen, dir, 0o755)?;
+    }
+
+    append_cpio_symlink(&mut archive, &mut seen, "bin", "usr/bin")?;
+    append_cpio_symlink(&mut archive, &mut seen, "sbin", "usr/sbin")?;
+    append_cpio_symlink(&mut archive, &mut seen, "lib", "usr/lib")?;
+    append_cpio_symlink(
+        &mut archive,
+        &mut seen,
+        "lib64/ld-linux-x86-64.so.2",
+        "../lib/ld-linux-x86-64.so.2",
+    )?;
+
+    append_cpio_file(
+        &mut archive,
+        &mut seen,
+        "init",
+        INITRAMFS_INIT.as_bytes(),
+        0o755,
+    )?;
+
+    for rel in INITRAMFS_BINARIES.iter().chain(INITRAMFS_LIBRARIES.iter()) {
+        append_sysroot_path(&mut archive, &mut seen, root, Path::new(rel))?;
+    }
+
+    if !seen.contains("usr/bin/sh") {
+        append_cpio_symlink(&mut archive, &mut seen, "usr/bin/sh", "bash")?;
+    }
+
+    append_cpio_entry(&mut archive, "TRAILER!!!", 0, &[])?;
+    fs::write(initramfs_dest, archive)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_bootstrap_initramfs(
+    _root: &Path,
+    _initramfs_dest: &Path,
+) -> Result<(), SystemConfigError> {
+    Err(SystemConfigError::ConfigFailed(
+        "bootstrap initramfs generation requires Unix filesystem metadata".into(),
+    ))
+}
+
+#[cfg(unix)]
+fn append_sysroot_path(
+    archive: &mut Vec<u8>,
+    seen: &mut HashSet<String>,
+    root: &Path,
+    rel: &Path,
+) -> Result<(), SystemConfigError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let archive_name = path_to_archive_name(rel)?;
+    if seen.contains(&archive_name) {
+        return Ok(());
+    }
+
+    let source = root.join(rel);
+    let metadata = fs::symlink_metadata(&source).map_err(|e| {
+        SystemConfigError::ConfigFailed(format!(
+            "required bootstrap initramfs input missing at {}: {e}",
+            source.display()
+        ))
+    })?;
+
+    if metadata.file_type().is_symlink() {
+        let target = fs::read_link(&source)?;
+        append_cpio_symlink(
+            archive,
+            seen,
+            &archive_name,
+            target.to_str().ok_or_else(|| {
+                SystemConfigError::ConfigFailed(format!(
+                    "bootstrap initramfs symlink target is not UTF-8: {}",
+                    source.display()
+                ))
+            })?,
+        )?;
+
+        let resolved = if target.is_absolute() {
+            root.join(target.strip_prefix("/").map_err(|_| {
+                SystemConfigError::ConfigFailed(format!(
+                    "invalid absolute symlink target for {}",
+                    source.display()
+                ))
+            })?)
+        } else {
+            source
+                .parent()
+                .ok_or_else(|| {
+                    SystemConfigError::ConfigFailed(format!(
+                        "bootstrap initramfs symlink has no parent: {}",
+                        source.display()
+                    ))
+                })?
+                .join(target)
+        };
+        let resolved = normalize_path(&resolved);
+        let resolved_rel = resolved.strip_prefix(root).map_err(|_| {
+            SystemConfigError::ConfigFailed(format!(
+                "bootstrap initramfs symlink {} resolves outside sysroot to {}",
+                source.display(),
+                resolved.display()
+            ))
+        })?;
+        return append_sysroot_path(archive, seen, root, resolved_rel);
+    }
+
+    if metadata.is_dir() {
+        append_cpio_dir(
+            archive,
+            seen,
+            &archive_name,
+            metadata.permissions().mode() & 0o777,
+        )
+    } else if metadata.is_file() {
+        let bytes = fs::read(&source)?;
+        append_cpio_file(
+            archive,
+            seen,
+            &archive_name,
+            &bytes,
+            metadata.permissions().mode() & 0o777,
+        )
+    } else {
+        Err(SystemConfigError::ConfigFailed(format!(
+            "unsupported bootstrap initramfs input type at {}",
+            source.display()
+        )))
+    }
+}
+
+#[cfg(unix)]
+fn append_cpio_dir(
+    archive: &mut Vec<u8>,
+    seen: &mut HashSet<String>,
+    name: &str,
+    mode: u32,
+) -> Result<(), SystemConfigError> {
+    if seen.insert(name.to_string()) {
+        append_cpio_entry(archive, name, 0o040000 | mode, &[])?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn append_cpio_file(
+    archive: &mut Vec<u8>,
+    seen: &mut HashSet<String>,
+    name: &str,
+    bytes: &[u8],
+    mode: u32,
+) -> Result<(), SystemConfigError> {
+    if seen.insert(name.to_string()) {
+        append_cpio_entry(archive, name, 0o100000 | mode, bytes)?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn append_cpio_symlink(
+    archive: &mut Vec<u8>,
+    seen: &mut HashSet<String>,
+    name: &str,
+    target: &str,
+) -> Result<(), SystemConfigError> {
+    if seen.insert(name.to_string()) {
+        append_cpio_entry(archive, name, 0o120777, target.as_bytes())?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn append_cpio_entry(
+    archive: &mut Vec<u8>,
+    name: &str,
+    mode: u32,
+    bytes: &[u8],
+) -> Result<(), SystemConfigError> {
+    let inode = (archive.len() as u32).wrapping_add(1);
+    let namesize = name.len().checked_add(1).ok_or_else(|| {
+        SystemConfigError::ConfigFailed("bootstrap initramfs entry name too large".into())
+    })?;
+
+    write!(
+        archive,
+        "070701{inode:08x}{mode:08x}{:08x}{:08x}{:08x}{:08x}{:08x}{:08x}{:08x}{:08x}{:08x}{namesize:08x}{:08x}",
+        0,
+        0,
+        1,
+        0,
+        bytes.len(),
+        0,
+        0,
+        0,
+        0,
+        0,
+    )
+    .map_err(|e| SystemConfigError::ConfigFailed(format!("failed to write cpio header: {e}")))?;
+    archive.extend_from_slice(name.as_bytes());
+    archive.push(0);
+    pad_cpio(archive);
+    archive.extend_from_slice(bytes);
+    pad_cpio(archive);
+    Ok(())
+}
+
+#[cfg(unix)]
+fn pad_cpio(archive: &mut Vec<u8>) {
+    while archive.len() % 4 != 0 {
+        archive.push(0);
+    }
+}
+
+#[cfg(unix)]
+fn path_to_archive_name(path: &Path) -> Result<String, SystemConfigError> {
+    let value = path.to_string_lossy().trim_start_matches('/').to_string();
+    if value.is_empty() || value.contains("..") {
+        return Err(SystemConfigError::ConfigFailed(format!(
+            "invalid bootstrap initramfs archive path: {}",
+            path.display()
+        )));
+    }
+    Ok(value)
+}
+
+#[cfg(unix)]
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
+}
+
 fn configure_boot_artifacts(root: &Path) -> Result<(), SystemConfigError> {
     let boot_dir = root.join("boot");
     fs::create_dir_all(&boot_dir)?;
@@ -146,6 +512,9 @@ fn configure_boot_artifacts(root: &Path) -> Result<(), SystemConfigError> {
     )?;
     fs::copy(detect_systemd_boot_efi(root)?, &efi_dest)?;
 
+    let initramfs_dest = boot_dir.join("initramfs.img");
+    write_bootstrap_initramfs(root, &initramfs_dest)?;
+
     let loader_dir = boot_dir.join("loader/entries");
     fs::create_dir_all(&loader_dir)?;
     fs::write(
@@ -156,10 +525,11 @@ fn configure_boot_artifacts(root: &Path) -> Result<(), SystemConfigError> {
         loader_dir.join("conaryos.conf"),
         "title   conaryOS\n\
          linux   /vmlinuz\n\
+         initrd  /initramfs.img\n\
          options root=PARTLABEL=CONARY_ROOT rootfstype=ext4 rw console=tty0 console=ttyS0\n",
     )?;
 
-    info!("Created boot artifacts (kernel copy, loader config, and EFI binary)");
+    info!("Created boot artifacts (kernel copy, initramfs, loader config, and EFI binary)");
     Ok(())
 }
 
@@ -259,7 +629,7 @@ pub fn configure_system(root: &Path) -> Result<(), SystemConfigError> {
     // 3. /etc/shadow -- root with empty password (permits passwordless login)
     fs::write(
         etc.join("shadow"),
-        "root::0:0:99999:7:::\nnobody:!:0:0:99999:7:::\n",
+        "root::1:0:99999:7:::\nnobody:!:0:0:99999:7:::\n",
     )?;
 
     // Restrict shadow permissions (LFS 9.3)
@@ -422,6 +792,7 @@ pub fn configure_system(root: &Path) -> Result<(), SystemConfigError> {
     info!("Created /root/.bashrc");
 
     // 14. systemd-boot + BLS artifacts for Phase 5 image generation.
+    ensure_exported_usr_merge_linker_layout(root)?;
     configure_boot_artifacts(root)?;
 
     info!("Phase 4 complete: system configuration applied");
@@ -439,6 +810,19 @@ mod tests {
         std::fs::create_dir_all(&efi_dir).unwrap();
         std::fs::write(boot_dir.join("vmlinuz-6.19.8-conary"), b"kernel").unwrap();
         std::fs::write(efi_dir.join("systemd-bootx64.efi"), b"efi").unwrap();
+
+        for rel in INITRAMFS_BINARIES.iter().chain(INITRAMFS_LIBRARIES.iter()) {
+            let path = root.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, format!("fake initramfs input: {rel}\n")).unwrap();
+        }
+
+        let sh = root.join("usr/bin/sh");
+        let _ = std::fs::remove_file(&sh);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("bash", sh).unwrap();
+        #[cfg(not(unix))]
+        std::fs::write(sh, b"fake sh").unwrap();
     }
 
     #[test]
@@ -545,6 +929,22 @@ mod tests {
     }
 
     #[test]
+    fn test_configure_system_root_shadow_does_not_force_password_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sysroot");
+        std::fs::create_dir_all(&root).unwrap();
+        seed_minimal_boot_inputs(&root);
+
+        configure_system(&root).unwrap();
+
+        let shadow = std::fs::read_to_string(root.join("etc/shadow")).unwrap();
+        assert!(
+            shadow.lines().any(|line| line == "root::1:0:99999:7:::"),
+            "empty root password needs a nonzero last-change day so login works without first-login rotation"
+        );
+    }
+
+    #[test]
     fn test_configure_system_creates_bootloader_artifacts_from_versioned_kernel() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("sysroot");
@@ -566,8 +966,30 @@ mod tests {
             std::fs::read_to_string(root.join("boot/loader/entries/conaryos.conf")).unwrap();
         assert!(entry.contains("title   conaryOS"));
         assert!(entry.contains("linux   /vmlinuz"));
+        assert!(entry.contains("initrd  /initramfs.img"));
         assert!(entry.contains("root=PARTLABEL=CONARY_ROOT"));
         assert!(entry.contains("console=ttyS0"));
+        assert!(root.join("boot/initramfs.img").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_configure_system_bridges_lib64_to_usr_lib_for_exported_generations() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sysroot");
+        std::fs::create_dir_all(&root).unwrap();
+        seed_minimal_boot_inputs(&root);
+
+        configure_system(&root).unwrap();
+
+        assert_eq!(
+            std::fs::read_link(root.join("usr/lib64")).unwrap(),
+            PathBuf::from("lib")
+        );
+        assert!(
+            root.join("usr/lib64/ld-linux-x86-64.so.2").exists(),
+            "exported generations expose /lib64 through usr/lib64, so the ELF interpreter must resolve there"
+        );
     }
 
     #[test]

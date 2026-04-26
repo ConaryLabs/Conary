@@ -25,19 +25,23 @@ phase = 3
 id = "T150"
 name = "kernel_file_deployment"
 description = "Install a kernel package and verify kernel, initramfs, and modules are deployed"
-timeout = 360
+timeout = 900
 group = "N"
 fatal = true
 
 [[test.step]]
 [test.step.qemu_boot]
 image = "minimal-boot-v2"
-memory_mb = 1024
+memory_mb = 2048
 timeout_seconds = 240
 ssh_port = 2230
+stage_conary = true
 commands = [
-    "conary repo sync fedora-remi --force",
-    "conary install kernel --repo fedora-remi --yes --sandbox never --allow-live-system-mutation",
+    "conary system init",
+    "conary repo remove remi || true",
+    "conary repo add remi ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check",
+    "conary repo sync remi --force",
+    "conary install kernel --repo remi --yes --sandbox never --allow-live-system-mutation",
     "ls /boot/vmlinuz* /boot/init* 2>/dev/null | wc -l",
     "find /lib/modules /usr/lib/modules -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l",
     "echo kernel-deploy-ok",
@@ -57,19 +61,23 @@ exit_code = 0
 id = "T151"
 name = "bls_entry_created"
 description = "Installing a kernel and building a generation should produce a BLS entry"
-timeout = 360
+timeout = 900
 group = "N"
 depends_on = ["T150"]
 
 [[test.step]]
 [test.step.qemu_boot]
 image = "minimal-boot-v2"
-memory_mb = 1024
+memory_mb = 2048
 timeout_seconds = 180
 ssh_port = 2231
+stage_conary = true
 commands = [
-    "conary repo sync fedora-remi --force",
-    "conary install kernel --repo fedora-remi --yes --sandbox never --allow-live-system-mutation",
+    "conary system init",
+    "conary repo remove remi || true",
+    "conary repo add remi ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check",
+    "conary repo sync remi --force",
+    "conary install kernel --repo remi --yes --sandbox never --allow-live-system-mutation",
     "conary system generation build --allow-live-system-mutation",
     "find /boot/loader/entries -maxdepth 1 -name '*.conf' 2>/dev/null || true",
     "echo bls-check-done",
@@ -89,19 +97,23 @@ exit_code = 0
 id = "T153"
 name = "kernel_generation_rollback"
 description = "Rolling back a generation should leave boot entries in a consistent prior state"
-timeout = 360
+timeout = 900
 group = "N"
 depends_on = ["T150"]
 
 [[test.step]]
 [test.step.qemu_boot]
 image = "minimal-boot-v2"
-memory_mb = 1024
+memory_mb = 2048
 timeout_seconds = 180
 ssh_port = 2232
+stage_conary = true
 commands = [
-    "conary repo sync fedora-remi --force",
-    "conary install kernel --repo fedora-remi --yes --sandbox never --allow-live-system-mutation",
+    "conary system init",
+    "conary repo remove remi || true",
+    "conary repo add remi ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check",
+    "conary repo sync remi --force",
+    "conary install kernel --repo remi --yes --sandbox never --allow-live-system-mutation",
     "conary system generation build --allow-live-system-mutation",
     "conary system generation rollback --allow-live-system-mutation 2>&1 || true",
     "find /boot/loader/entries -maxdepth 1 -name '*.conf' 2>/dev/null | sort || true",
@@ -122,20 +134,24 @@ exit_code = 0
 id = "T154"
 name = "bootloader_config_deployed"
 description = "Install the bootloader package and verify expected config paths exist"
-timeout = 360
+timeout = 900
 group = "N"
 depends_on = ["T150"]
 
 [[test.step]]
 [test.step.qemu_boot]
 image = "minimal-boot-v2"
-memory_mb = 1024
+memory_mb = 2048
 timeout_seconds = 240
 ssh_port = 2233
+stage_conary = true
 commands = [
-    "conary repo sync fedora-remi --force",
-    "conary install kernel --repo fedora-remi --yes --sandbox never --allow-live-system-mutation",
-    "conary install grub2 --repo fedora-remi --yes --sandbox never --allow-live-system-mutation",
+    "conary system init",
+    "conary repo remove remi || true",
+    "conary repo add remi ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check",
+    "conary repo sync remi --force",
+    "conary install kernel --repo remi --yes --sandbox never --allow-live-system-mutation",
+    "conary install grub2 --repo remi --yes --sandbox never --allow-live-system-mutation",
     "ls /etc/grub.d /boot/grub /boot/grub2 /boot/loader 2>/dev/null || true",
     "echo bootloader-config-ok",
 ]

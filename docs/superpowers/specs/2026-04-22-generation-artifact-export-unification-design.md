@@ -356,6 +356,13 @@ generation, because the generation build is the point where a host-specific
 runtime snapshot is being created. Export must not later paper over missing
 assets by scraping live `/boot`.
 
+Runtime generation builds also fail closed if the CAS-backed generation root is
+not self-contained enough to hand off to init. In this slice that means
+`/sbin/init` must resolve through the generation's usr-merge and package
+symlinks to an executable file inside the generation root. The builder must not
+publish `.conary-artifact.json` for a root that only becomes bootable by
+scraping the current host `/usr`.
+
 Bootstrap EROFS generation creation and bootstrap-run output should stage boot
 assets from the bootstrap sysroot as part of producing `generations/1`. This is
 what makes external `--path` export truthful without requiring an operator to
@@ -681,8 +688,10 @@ Regression tests:
 - exportable artifacts with `.conary-artifact.json` but no matching
   `artifact_manifest_sha256` in `.conary-gen.json` report incomplete or corrupt
   artifact errors
-- at least one installed-generation export and one bootstrap-run generation
-  export boot under QEMU with UEFI firmware to the validation target
+- installed runtime generation builds without a self-contained CAS-backed init
+  path fail closed before artifact publication
+- at least one complete bootstrap-run generation export boots under QEMU with
+  UEFI firmware to the validation target
 
 Verification commands for the implementation:
 
@@ -754,8 +763,10 @@ is required.
   `.conary-artifact.json` and `cas-manifest.json`.
 - external `--path` export works for a complete bootstrap-run generation
   artifact.
-- at least one installed-generation export and one bootstrap-run generation
-  export boot successfully under QEMU with UEFI firmware.
+- an installed runtime generation whose base OS is not represented in Conary
+  CAS fails closed before artifact publication, and at least one complete
+  bootstrap-run generation export boots successfully under QEMU with UEFI
+  firmware.
 - unsupported architectures fail closed instead of attempting to guess boot
   asset paths.
 - incomplete generations fail closed with actionable messages.

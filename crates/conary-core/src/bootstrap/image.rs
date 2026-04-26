@@ -295,6 +295,27 @@ const BUSYBOX_SOURCE_URL: &str = "https://busybox.net/downloads/busybox-1.37.0.t
 impl ImageBuilder {
     /// ESP partition size (512MB)
     const ESP_SIZE_MB: u64 = 512;
+    const TIER1_ROOT_EXCLUDE_FILES: &'static [&'static str] = &[
+        "/boot",
+        "/dev",
+        "/home",
+        "/media",
+        "/mnt",
+        "/opt",
+        "/proc",
+        "/root/.cargo",
+        "/run",
+        "/srv",
+        "/sys",
+        "/tmp",
+        "/tools",
+        "/var/tmp/conary-bootstrap",
+        "/var/tmp/conary-bootstrap/*",
+    ];
+    const TIER1_ROOT_MAKE_DIRECTORIES: &'static [&'static str] = &[
+        "/boot", "/dev", "/home", "/media", "/mnt", "/opt", "/proc", "/run", "/srv", "/sys",
+        "/tmp", "/var/tmp",
+    ];
 
     /// Create a new image builder
     pub fn new(
@@ -339,6 +360,34 @@ impl ImageBuilder {
     /// Get the output path
     pub fn output_path(&self) -> &Path {
         &self.output
+    }
+
+    fn tier1_root_repart_definition(
+        arch: crate::bootstrap::TargetArch,
+    ) -> crate::image::repart::RepartDefinition {
+        let mut root = crate::image::repart::RepartDefinition::root(arch, Path::new("/"));
+        root.exclude_files = Self::TIER1_ROOT_EXCLUDE_FILES
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        root.make_directories = Self::TIER1_ROOT_MAKE_DIRECTORIES
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        root
+    }
+
+    fn write_tier1_repart_definitions(&self, output_dir: &Path) -> Result<(), ImageError> {
+        fs::create_dir_all(output_dir)?;
+
+        let esp =
+            crate::image::repart::RepartDefinition::esp(Path::new("/boot"), Self::ESP_SIZE_MB);
+        fs::write(output_dir.join("00-esp.conf"), esp.to_string())?;
+
+        let root = Self::tier1_root_repart_definition(self.config.target_arch);
+        fs::write(output_dir.join("10-root.conf"), root.to_string())?;
+
+        Ok(())
     }
 
     /// Default output filename for the Tier 1 base image.
@@ -428,7 +477,7 @@ impl ImageBuilder {
     ///
     /// No external tools are needed -- composefs-rs builds EROFS in userspace.
     fn build_erofs_generation(&mut self) -> Result<ImageResult, ImageError> {
-        use crate::db::models::{FileEntry, Trove, TroveType};
+        use crate::db::models::{Trove, TroveType};
         use crate::db::schema::migrate;
         use crate::filesystem::CasStore;
         use crate::generation::artifact::{
@@ -471,7 +520,7 @@ impl ImageBuilder {
         // Step 2: Create and initialize SQLite database
         self.log_line("Creating SQLite database with schema");
         let db_path = output_dir.join("db.sqlite3");
-        let conn = rusqlite::Connection::open(&db_path)
+        let mut conn = rusqlite::Connection::open(&db_path)
             .map_err(|e| ImageError::CreationFailed(format!("Failed to create database: {e}")))?;
         migrate(&conn)
             .map_err(|e| ImageError::CreationFailed(format!("Failed to initialize schema: {e}")))?;
@@ -489,19 +538,7 @@ impl ImageBuilder {
             .insert(&conn)
             .map_err(|e| ImageError::CreationFailed(format!("Failed to insert trove: {e}")))?;
 
-        for (path, hash, size, permissions) in &file_entries {
-            #[allow(clippy::cast_possible_wrap)]
-            let mut fe = FileEntry::new(
-                path.clone(),
-                hash.clone(),
-                *size as i64,
-                *permissions as i32,
-                trove_id,
-            );
-            fe.insert_or_replace(&conn).map_err(|e| {
-                ImageError::CreationFailed(format!("Failed to insert file entry {path}: {e}"))
-            })?;
-        }
+        insert_bootstrap_file_entries(&mut conn, trove_id, &file_entries)?;
 
         // Step 4: Build EROFS image from file entries
         self.log_line("Building EROFS image");
@@ -779,15 +816,7 @@ impl ImageBuilder {
     /// Build a raw disk image using systemd-repart.
     fn build_raw_repart(&mut self) -> Result<ImageResult, ImageError> {
         let repart_dir = self.work_dir.join("repart.d");
-        let plan = crate::image::repart::DiskImagePlan {
-            architecture: self.config.target_arch,
-            esp_staging_dir: PathBuf::from("/boot"),
-            root_staging_dir: PathBuf::from("/"),
-            output_raw: self.output.clone(),
-            size_bytes: self.size.bytes(),
-        };
-        crate::image::repart::generate_repart_definitions(&repart_dir, &plan, Self::ESP_SIZE_MB)
-            .map_err(|e| ImageError::PartitionFailed(e.to_string()))?;
+        self.write_tier1_repart_definitions(&repart_dir)?;
 
         let repart_bin = self
             .tools
@@ -1124,6 +1153,62 @@ fn dir_size(path: &Path) -> u64 {
     total
 }
 
+fn insert_bootstrap_file_entries(
+    conn: &mut rusqlite::Connection,
+    trove_id: i64,
+    file_entries: &[(String, String, u64, u32)],
+) -> Result<(), ImageError> {
+    let tx = conn.transaction().map_err(|e| {
+        ImageError::CreationFailed(format!("Failed to start file-entry transaction: {e}"))
+    })?;
+
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT OR REPLACE INTO files \
+                 (path, sha256_hash, size, permissions, owner, group_name, trove_id, \
+                  component_id, symlink_target) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            )
+            .map_err(|e| {
+                ImageError::CreationFailed(format!("Failed to prepare file-entry insert: {e}"))
+            })?;
+
+        for (path, hash, size, permissions) in file_entries {
+            let size = i64::try_from(*size).map_err(|_| {
+                ImageError::CreationFailed(format!(
+                    "File entry {path} is too large to record in SQLite"
+                ))
+            })?;
+            let permissions = i32::try_from(*permissions).map_err(|_| {
+                ImageError::CreationFailed(format!(
+                    "File entry {path} has permissions outside SQLite range"
+                ))
+            })?;
+
+            stmt.execute(rusqlite::params![
+                path,
+                hash,
+                size,
+                permissions,
+                Option::<String>::None,
+                Option::<String>::None,
+                trove_id,
+                Option::<i64>::None,
+                Option::<String>::None,
+            ])
+            .map_err(|e| {
+                ImageError::CreationFailed(format!("Failed to insert file entry {path}: {e}"))
+            })?;
+        }
+    }
+
+    tx.commit().map_err(|e| {
+        ImageError::CreationFailed(format!("Failed to commit file-entry transaction: {e}"))
+    })?;
+    Ok(())
+}
+
 fn enable_ext4_verity_feature(config: &str) -> Result<String, String> {
     let mut updated = Vec::new();
     let mut in_ext4 = false;
@@ -1435,6 +1520,34 @@ mod tests {
     }
 
     #[test]
+    fn test_insert_bootstrap_file_entries_batches_file_records() {
+        use crate::db::models::{Trove, TroveType};
+        use crate::db::schema::migrate;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut conn = rusqlite::Connection::open(tmp.path().join("db.sqlite3")).unwrap();
+        migrate(&conn).unwrap();
+
+        let mut trove = Trove::new(
+            "conaryos-base".to_string(),
+            "1.0.0".to_string(),
+            TroveType::Package,
+        );
+        let trove_id = trove.insert(&conn).unwrap();
+        let entries = vec![
+            ("/usr/bin/one".to_string(), "a".repeat(64), 3_u64, 0o755_u32),
+            ("/usr/bin/two".to_string(), "b".repeat(64), 5_u64, 0o755_u32),
+        ];
+
+        insert_bootstrap_file_entries(&mut conn, trove_id, &entries).unwrap();
+
+        let file_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(file_count, 2);
+    }
+
+    #[test]
     fn test_detect_kernel_in_sysroot() {
         use crate::generation::metadata::detect_kernel_version;
 
@@ -1512,6 +1625,29 @@ ext4 = {
 
         let err = builder.build_raw().unwrap_err();
         assert!(err.to_string().contains("EFI binary not found"));
+    }
+
+    #[test]
+    fn test_tier1_root_repart_definition_excludes_bootstrap_workdirs_but_keeps_ssh_profile() {
+        let def = ImageBuilder::tier1_root_repart_definition(crate::bootstrap::TargetArch::X86_64);
+
+        assert!(def.exclude_files.contains(&"/boot".to_string()));
+        assert!(
+            def.exclude_files
+                .contains(&"/var/tmp/conary-bootstrap".to_string())
+        );
+        assert!(
+            def.exclude_files
+                .contains(&"/var/tmp/conary-bootstrap/*".to_string())
+        );
+        assert!(def.exclude_files.contains(&"/tools".to_string()));
+        assert!(def.exclude_files.contains(&"/root/.cargo".to_string()));
+        assert!(
+            !def.exclude_files.contains(&"/root".to_string()),
+            "the QEMU guest profile stores root authorized_keys under /root/.ssh"
+        );
+        assert!(def.make_directories.contains(&"/tmp".to_string()));
+        assert!(def.make_directories.contains(&"/var/tmp".to_string()));
     }
 
     #[test]

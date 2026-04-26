@@ -143,6 +143,14 @@ pub trait PackageFormat {
     /// Get the list of dependencies
     fn dependencies(&self) -> &[Dependency];
 
+    /// Get the list of native capabilities this package provides.
+    ///
+    /// Defaults to an empty slice for formats that do not expose native
+    /// provide metadata.
+    fn provides(&self) -> &[Dependency] {
+        &[]
+    }
+
     /// Extract all file contents from the package
     ///
     /// Returns a vector of ExtractedFile containing file metadata and content.

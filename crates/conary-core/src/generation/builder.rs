@@ -13,7 +13,10 @@
 //!   snapshot, and builds a complete generation directory with EROFS
 //!   image and metadata JSON.
 
-use std::path::{Path, PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    path::{Path, PathBuf},
+};
 
 use tracing::{debug, info, warn};
 
@@ -23,11 +26,19 @@ use crate::generation::artifact::{
     write_generation_artifact,
 };
 use crate::generation::metadata::{
-    GENERATION_FORMAT, GenerationMetadata, clear_generation_pending, mark_generation_pending,
+    GENERATION_FORMAT, GenerationMetadata, ROOT_SYMLINKS, clear_generation_pending,
+    mark_generation_pending,
 };
 mod erofs;
 
 pub use erofs::{BuildResult, FileEntryRef, SymlinkEntryRef, build_erofs_image, hex_to_digest};
+
+const CONARY_DRACUT_MODULE_SETUP: &str =
+    include_str!("../../../../packaging/dracut/90conary/module-setup.sh");
+const CONARY_DRACUT_GENERATOR: &str =
+    include_str!("../../../../packaging/dracut/90conary/conary-generator.sh");
+const RUNTIME_DRACUT_ADD_MODULES: &str = "conary";
+const RUNTIME_DRACUT_OMIT_MODULES: &str = "systemd";
 
 /// Build a complete generation from the current database state.
 ///
@@ -190,23 +201,20 @@ pub fn build_generation_from_db_with_boot_root(
 
     // Step 4: Build EROFS image with symlinks from DB.
     // This must succeed before we commit state to the database.
-    let symlink_refs = collect_symlink_refs(conn)?;
+    let symlink_refs = collect_symlink_refs(conn, &adopted_track_ids)?;
+    validate_runtime_generation_root_is_self_contained(&file_refs, &symlink_refs)?;
     let result = build_erofs_image(&file_refs, &symlink_refs, &gen_dir)?;
 
     // Step 5: Stage boot assets and write the export artifact contract before
     // committing metadata. Export must not scrape live /boot later.
     let architecture = runtime_generation_architecture()?;
-    let kernel_version = detect_kernel_version_from_troves(&troves).ok_or_else(|| {
-        crate::error::Error::NotFound(
-            "could not determine kernel version for generation boot assets".to_string(),
-        )
-    })?;
-    let boot_assets = stage_runtime_boot_assets_from_boot_root(
+    let boot_asset_sources = resolve_runtime_boot_asset_sources(&troves, boot_root)?;
+    let kernel_version = boot_asset_sources.kernel_version.clone();
+    let boot_assets = stage_runtime_boot_assets_from_sources(
         &gen_dir,
         gen_number,
         architecture,
-        &kernel_version,
-        boot_root,
+        &boot_asset_sources,
     )?;
     let artifact_manifest_sha256 = write_generation_artifact(ArtifactWriteInputs {
         generation_dir: &gen_dir,
@@ -305,7 +313,16 @@ pub(crate) fn rebuild_generation_image_with_boot_root(
     })?;
 
     let troves = Trove::list_all(conn)?;
-    let all_files = FileEntry::find_all_ordered(conn)?;
+    let adopted_track_ids: HashSet<i64> = troves
+        .iter()
+        .filter(|t| t.install_source == InstallSource::AdoptedTrack)
+        .filter_map(|t| t.id)
+        .collect();
+    let all_files_raw = FileEntry::find_all_ordered(conn)?;
+    let all_files: Vec<FileEntry> = all_files_raw
+        .into_iter()
+        .filter(|f| !adopted_track_ids.contains(&f.trove_id))
+        .collect();
 
     let file_refs: Vec<FileEntryRef> = all_files
         .iter()
@@ -325,20 +342,17 @@ pub(crate) fn rebuild_generation_image_with_boot_root(
         })
         .collect();
 
-    let symlink_refs = collect_symlink_refs(conn)?;
+    let symlink_refs = collect_symlink_refs(conn, &adopted_track_ids)?;
+    validate_runtime_generation_root_is_self_contained(&file_refs, &symlink_refs)?;
     let result = build_erofs_image(&file_refs, &symlink_refs, &gen_dir)?;
     let architecture = runtime_generation_architecture()?;
-    let kernel_version = detect_kernel_version_from_troves(&troves).ok_or_else(|| {
-        crate::error::Error::NotFound(
-            "could not determine kernel version for generation boot assets".to_string(),
-        )
-    })?;
-    let boot_assets = stage_runtime_boot_assets_from_boot_root(
+    let boot_asset_sources = resolve_runtime_boot_asset_sources(&troves, boot_root)?;
+    let kernel_version = boot_asset_sources.kernel_version.clone();
+    let boot_assets = stage_runtime_boot_assets_from_sources(
         &gen_dir,
         gen_number,
         architecture,
-        &kernel_version,
-        boot_root,
+        &boot_asset_sources,
     )?;
     let artifact_manifest_sha256 = write_generation_artifact(ArtifactWriteInputs {
         generation_dir: &gen_dir,
@@ -385,9 +399,12 @@ pub(crate) fn rebuild_generation_image_with_boot_root(
 ///
 /// Returns an empty vec if the `file_entries` table does not have a
 /// `symlink_target` column (older schema or test databases).
-fn collect_symlink_refs(conn: &rusqlite::Connection) -> crate::Result<Vec<SymlinkEntryRef>> {
+fn collect_symlink_refs(
+    conn: &rusqlite::Connection,
+    excluded_trove_ids: &HashSet<i64>,
+) -> crate::Result<Vec<SymlinkEntryRef>> {
     let mut stmt = match conn.prepare(
-        "SELECT path, symlink_target FROM files \
+        "SELECT path, symlink_target, trove_id FROM files \
          WHERE symlink_target IS NOT NULL AND symlink_target != ''",
     ) {
         Ok(s) => s,
@@ -400,16 +417,145 @@ fn collect_symlink_refs(conn: &rusqlite::Connection) -> crate::Result<Vec<Symlin
 
     let refs = stmt
         .query_map([], |row| {
-            Ok(SymlinkEntryRef {
-                path: row.get(0)?,
-                target: row.get(1)?,
-            })
+            Ok((
+                SymlinkEntryRef {
+                    path: row.get(0)?,
+                    target: row.get(1)?,
+                },
+                row.get::<_, i64>(2)?,
+            ))
         })
         .map_err(|e| crate::error::Error::InternalError(format!("Failed to query symlinks: {e}")))?
-        .filter_map(|r| r.ok())
+        .filter_map(|r| match r {
+            Ok((symlink, trove_id)) if !excluded_trove_ids.contains(&trove_id) => Some(symlink),
+            Ok(_) => None,
+            Err(error) => {
+                debug!("Skipping unreadable symlink entry: {error}");
+                None
+            }
+        })
         .collect();
 
     Ok(refs)
+}
+
+fn validate_runtime_generation_root_is_self_contained(
+    file_refs: &[FileEntryRef],
+    symlink_refs: &[SymlinkEntryRef],
+) -> crate::Result<()> {
+    if generation_root_has_init_entrypoint(file_refs, symlink_refs) {
+        return Ok(());
+    }
+
+    Err(crate::error::Error::NotFound(
+        "exportable runtime generation is not self-contained: missing executable /sbin/init in the CAS-backed generation root; refusing to scrape the live host root to make the image bootable".to_string(),
+    ))
+}
+
+fn generation_root_has_init_entrypoint(
+    file_refs: &[FileEntryRef],
+    symlink_refs: &[SymlinkEntryRef],
+) -> bool {
+    let symlink_paths: HashSet<String> = symlink_refs
+        .iter()
+        .filter_map(|symlink| normalize_virtual_path(&symlink.path, "/"))
+        .collect();
+    let files: HashMap<String, u32> = file_refs
+        .iter()
+        .filter_map(|file| {
+            let path = normalize_virtual_path(&file.path, "/")?;
+            if symlink_paths.contains(&path) || hex_to_digest(&file.sha256_hash).is_err() {
+                return None;
+            }
+            Some((path, file.permissions))
+        })
+        .collect();
+    let symlinks = generation_symlink_map(symlink_refs);
+
+    resolve_virtual_path("/sbin/init", &symlinks)
+        .and_then(|resolved| files.get(&resolved).copied())
+        .is_some_and(|permissions| permissions & 0o111 != 0)
+}
+
+fn generation_symlink_map(symlink_refs: &[SymlinkEntryRef]) -> HashMap<String, String> {
+    let mut symlinks = HashMap::new();
+    for symlink in symlink_refs {
+        if let Some(path) = normalize_virtual_path(&symlink.path, "/") {
+            symlinks.insert(path, symlink.target.clone());
+        }
+    }
+    for (link, target) in ROOT_SYMLINKS {
+        symlinks.insert(format!("/{link}"), (*target).to_string());
+    }
+    symlinks
+}
+
+fn resolve_virtual_path(path: &str, symlinks: &HashMap<String, String>) -> Option<String> {
+    let mut current = normalize_virtual_path(path, "/")?;
+    for _ in 0..40 {
+        let Some(next) = rewrite_first_symlink_component(&current, symlinks) else {
+            return Some(current);
+        };
+        current = next;
+    }
+    None
+}
+
+fn rewrite_first_symlink_component(
+    path: &str,
+    symlinks: &HashMap<String, String>,
+) -> Option<String> {
+    let components: Vec<&str> = path
+        .trim_start_matches('/')
+        .split('/')
+        .filter(|component| !component.is_empty())
+        .collect();
+
+    for index in 0..components.len() {
+        let prefix = format!("/{}", components[..=index].join("/"));
+        let Some(target) = symlinks.get(&prefix) else {
+            continue;
+        };
+        let base = parent_virtual_path(&prefix);
+        let mut rewritten = normalize_virtual_path(target, &base)?;
+        for component in &components[index + 1..] {
+            if rewritten != "/" {
+                rewritten.push('/');
+            }
+            rewritten.push_str(component);
+        }
+        return normalize_virtual_path(&rewritten, "/");
+    }
+
+    None
+}
+
+fn normalize_virtual_path(path: &str, base: &str) -> Option<String> {
+    let combined = if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("{}/{}", base.trim_end_matches('/'), path)
+    };
+    let mut components = Vec::new();
+    for component in combined.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => {
+                components.pop()?;
+            }
+            component => components.push(component),
+        }
+    }
+    Some(format!("/{}", components.join("/")))
+}
+
+fn parent_virtual_path(path: &str) -> String {
+    let path = path.trim_end_matches('/');
+    match path.rsplit_once('/') {
+        Some(("", _)) | None => "/".to_string(),
+        Some((parent, _)) if parent.is_empty() => "/".to_string(),
+        Some((parent, _)) => parent.to_string(),
+    }
 }
 
 fn cas_objects_from_file_refs(file_refs: &[FileEntryRef]) -> Vec<CasObjectRef> {
@@ -437,31 +583,443 @@ fn runtime_generation_architecture() -> crate::Result<&'static str> {
     }
 }
 
-fn stage_runtime_boot_assets_from_boot_root(
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeBootAssetSources {
+    kernel_version: String,
+    kernel: PathBuf,
+    initramfs: PathBuf,
+    efi_bootloader: PathBuf,
+}
+
+fn stage_runtime_boot_assets_from_sources(
     gen_dir: &Path,
     generation: i64,
     architecture: &str,
-    kernel_version: &str,
-    boot_root: &Path,
+    sources: &RuntimeBootAssetSources,
 ) -> crate::Result<crate::generation::artifact::BootAssetsManifest> {
+    let kernel_version = sources.kernel_version.as_str();
     if kernel_version.contains('/') || kernel_version.contains('\\') {
         return Err(crate::error::Error::InvalidPath(format!(
             "kernel version must not contain path separators: {kernel_version}"
         )));
     }
 
-    let kernel = boot_root.join(format!("vmlinuz-{kernel_version}"));
-    let initramfs = boot_root.join(format!("initramfs-{kernel_version}.img"));
-    let efi_bootloader = boot_root.join("EFI/BOOT/BOOTX64.EFI");
     stage_boot_assets(BootAssetSources {
         generation_dir: gen_dir,
         generation,
         architecture,
         kernel_version,
-        kernel: &kernel,
-        initramfs: &initramfs,
-        efi_bootloader: &efi_bootloader,
+        kernel: &sources.kernel,
+        initramfs: &sources.initramfs,
+        efi_bootloader: &sources.efi_bootloader,
     })
+}
+
+fn resolve_runtime_boot_asset_sources(
+    troves: &[Trove],
+    boot_root: &Path,
+) -> crate::Result<RuntimeBootAssetSources> {
+    resolve_runtime_boot_asset_sources_with_tools(
+        troves,
+        boot_root,
+        Path::new("dracut"),
+        Path::new("depmod"),
+        Path::new("cpio"),
+    )
+}
+
+fn resolve_runtime_boot_asset_sources_with_tools(
+    troves: &[Trove],
+    boot_root: &Path,
+    dracut: &Path,
+    depmod: &Path,
+    cpio: &Path,
+) -> crate::Result<RuntimeBootAssetSources> {
+    let requested_version = detect_kernel_version_from_troves(troves).ok_or_else(|| {
+        crate::error::Error::NotFound(
+            "could not determine kernel version for generation boot assets".to_string(),
+        )
+    })?;
+    if requested_version.contains('/') || requested_version.contains('\\') {
+        return Err(crate::error::Error::InvalidPath(format!(
+            "kernel version must not contain path separators: {requested_version}"
+        )));
+    }
+
+    let system_root = system_root_for_boot_root(boot_root);
+    let mut candidate_releases = Vec::new();
+    push_unique_release(&mut candidate_releases, requested_version.clone());
+    collect_boot_kernel_releases(boot_root, &requested_version, &mut candidate_releases);
+    collect_module_kernel_releases(&system_root, &requested_version, &mut candidate_releases);
+
+    let mut last_error = None;
+    for release in candidate_releases {
+        match runtime_boot_asset_sources_for_release(
+            boot_root,
+            &system_root,
+            &release,
+            dracut,
+            depmod,
+            cpio,
+        ) {
+            Ok(sources) => return Ok(sources),
+            Err(error) => last_error = Some(error),
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        crate::error::Error::NotFound(format!(
+            "could not find runtime boot assets for kernel {requested_version}"
+        ))
+    }))
+}
+
+fn runtime_boot_asset_sources_for_release(
+    boot_root: &Path,
+    system_root: &Path,
+    release: &str,
+    dracut: &Path,
+    depmod: &Path,
+    cpio: &Path,
+) -> crate::Result<RuntimeBootAssetSources> {
+    let kernel = boot_root.join(format!("vmlinuz-{release}"));
+    let kernel = if regular_file_exists(&kernel) {
+        kernel
+    } else {
+        module_kernel_path(system_root, release).ok_or_else(|| {
+            crate::error::Error::NotFound(format!(
+                "missing required boot asset kernel for {release}; expected {} or a module kernel at lib/modules/{release}/vmlinuz",
+                boot_root.join(format!("vmlinuz-{release}")).display()
+            ))
+        })?
+    };
+
+    let initramfs = boot_root.join(format!("initramfs-{release}.img"));
+    if !regular_file_exists(&initramfs) {
+        generate_runtime_initramfs(dracut, depmod, cpio, system_root, release, &initramfs)?;
+    }
+    if !regular_file_exists(&initramfs) {
+        return Err(crate::error::Error::NotFound(format!(
+            "missing required boot asset initramfs for {release} at {}; generate it with dracut or install a package hook that stages runtime boot assets before building a generation",
+            initramfs.display()
+        )));
+    }
+
+    let efi_bootloader = boot_root.join("EFI/BOOT/BOOTX64.EFI");
+    if !regular_file_exists(&efi_bootloader) {
+        return Err(crate::error::Error::NotFound(format!(
+            "missing required boot asset efi_bootloader at {}",
+            efi_bootloader.display()
+        )));
+    }
+
+    Ok(RuntimeBootAssetSources {
+        kernel_version: release.to_string(),
+        kernel,
+        initramfs,
+        efi_bootloader,
+    })
+}
+
+fn generate_runtime_initramfs(
+    dracut: &Path,
+    depmod: &Path,
+    cpio: &Path,
+    system_root: &Path,
+    release: &str,
+    initramfs: &Path,
+) -> crate::Result<()> {
+    let Some(parent) = initramfs.parent() else {
+        return Err(crate::error::Error::InvalidPath(format!(
+            "initramfs destination has no parent: {}",
+            initramfs.display()
+        )));
+    };
+    std::fs::create_dir_all(parent)?;
+    ensure_initramfs_tool_available(cpio, "cpio")?;
+    ensure_kernel_module_metadata(depmod, system_root, release)?;
+
+    let modules_workspace = tempfile::Builder::new()
+        .prefix("conary-dracut-")
+        .tempdir()
+        .map_err(|e| {
+            crate::error::Error::IoError(format!("failed to create dracut workspace: {e}"))
+        })?;
+    prepare_dracut_workspace(modules_workspace.path())?;
+    let module_dir = modules_workspace.path().join("modules.d/90conary");
+    std::fs::create_dir_all(&module_dir)?;
+    write_dracut_module_file(
+        &module_dir.join("module-setup.sh"),
+        CONARY_DRACUT_MODULE_SETUP,
+    )?;
+    write_dracut_module_file(
+        &module_dir.join("conary-generator.sh"),
+        CONARY_DRACUT_GENERATOR,
+    )?;
+
+    let output = std::process::Command::new(dracut)
+        .env("dracutbasedir", modules_workspace.path())
+        .arg("--force")
+        .arg("--no-hostonly")
+        // Force dracut's shell init path. The default systemd module alone
+        // creates a partial initramfs without the initrd systemd contract.
+        .arg("--omit")
+        .arg(RUNTIME_DRACUT_OMIT_MODULES)
+        .arg("--add")
+        .arg(RUNTIME_DRACUT_ADD_MODULES)
+        .arg(initramfs)
+        .arg(release)
+        .output()
+        .map_err(|e| {
+            crate::error::Error::NotFound(format!(
+                "failed to run dracut to generate {} for {release}: {e}",
+                initramfs.display()
+            ))
+        })?;
+
+    if !output.status.success() {
+        return Err(crate::error::Error::IoError(format!(
+            "dracut failed to generate {} for {release} with status {}:\nstdout:\n{}\nstderr:\n{}",
+            initramfs.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+
+    Ok(())
+}
+
+fn ensure_initramfs_tool_available(tool: &Path, name: &str) -> crate::Result<()> {
+    match std::process::Command::new(tool).arg("--version").output() {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Err(crate::error::Error::NotFound(format!(
+                "missing required initramfs tool {name} at {}; source images that build runtime generations must include the initramfs toolchain because dracut emits initramfs archives through {name}",
+                tool.display()
+            )))
+        }
+        Err(e) => Err(crate::error::Error::IoError(format!(
+            "failed to check required initramfs tool {name} at {}: {e}",
+            tool.display()
+        ))),
+    }
+}
+
+fn prepare_dracut_workspace(workspace: &Path) -> crate::Result<()> {
+    let modules_dir = workspace.join("modules.d");
+    std::fs::create_dir_all(&modules_dir)?;
+
+    let system_dracut = Path::new("/usr/lib/dracut");
+    if !system_dracut.is_dir() {
+        return Ok(());
+    }
+
+    for entry in std::fs::read_dir(system_dracut)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if name == "modules.d" {
+            continue;
+        }
+        link_or_copy_dracut_entry(&entry.path(), &workspace.join(name))?;
+    }
+
+    let system_modules = system_dracut.join("modules.d");
+    if system_modules.is_dir() {
+        for entry in std::fs::read_dir(system_modules)? {
+            let entry = entry?;
+            link_or_copy_dracut_entry(&entry.path(), &modules_dir.join(entry.file_name()))?;
+        }
+    }
+
+    Ok(())
+}
+
+fn link_or_copy_dracut_entry(source: &Path, dest: &Path) -> crate::Result<()> {
+    if dest.exists() {
+        return Ok(());
+    }
+
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(source, dest)?;
+        return Ok(());
+    }
+
+    #[cfg(not(unix))]
+    {
+        if source.is_file() {
+            std::fs::copy(source, dest)?;
+        }
+        Ok(())
+    }
+}
+
+fn ensure_kernel_module_metadata(
+    depmod: &Path,
+    system_root: &Path,
+    release: &str,
+) -> crate::Result<()> {
+    let (module_dir, module_dir_arg) = kernel_module_dir(system_root, release).ok_or_else(|| {
+        crate::error::Error::NotFound(format!(
+            "missing kernel module directory for {release}; expected lib/modules/{release} or usr/lib/modules/{release}"
+        ))
+    })?;
+    let modules_dep = module_dir.join("modules.dep");
+    if regular_file_exists(&modules_dep) {
+        return Ok(());
+    }
+
+    let output = std::process::Command::new(depmod)
+        .arg("-b")
+        .arg(system_root)
+        .arg("-m")
+        .arg(module_dir_arg)
+        .arg(release)
+        .output()
+        .map_err(|e| {
+            crate::error::Error::NotFound(format!(
+                "failed to run depmod for kernel {release} under {}: {e}",
+                system_root.display()
+            ))
+        })?;
+
+    if !output.status.success() {
+        return Err(crate::error::Error::IoError(format!(
+            "depmod failed for kernel {release} under {} with status {}:\nstdout:\n{}\nstderr:\n{}",
+            system_root.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+
+    if !regular_file_exists(&modules_dep) {
+        return Err(crate::error::Error::NotFound(format!(
+            "depmod completed but did not create {}",
+            modules_dep.display()
+        )));
+    }
+
+    Ok(())
+}
+
+fn write_dracut_module_file(path: &Path, contents: &str) -> crate::Result<()> {
+    std::fs::write(path, contents)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = std::fs::metadata(path)?.permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions)?;
+    }
+    Ok(())
+}
+
+fn collect_boot_kernel_releases(
+    boot_root: &Path,
+    requested_version: &str,
+    releases: &mut Vec<String>,
+) {
+    let Ok(entries) = std::fs::read_dir(boot_root) else {
+        return;
+    };
+    let mut found = Vec::new();
+    for entry in entries.flatten() {
+        let Some(name) = entry.file_name().to_str().map(ToOwned::to_owned) else {
+            continue;
+        };
+        let Some(release) = name.strip_prefix("vmlinuz-") else {
+            continue;
+        };
+        if kernel_release_matches(requested_version, release) {
+            found.push(release.to_string());
+        }
+    }
+    found.sort();
+    for release in found {
+        push_unique_release(releases, release);
+    }
+}
+
+fn collect_module_kernel_releases(
+    system_root: &Path,
+    requested_version: &str,
+    releases: &mut Vec<String>,
+) {
+    let mut found = Vec::new();
+    for modules_root in [
+        system_root.join("lib/modules"),
+        system_root.join("usr/lib/modules"),
+    ] {
+        let Ok(entries) = std::fs::read_dir(modules_root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(release) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if kernel_release_matches(requested_version, release)
+                && regular_file_exists(&path.join("vmlinuz"))
+            {
+                found.push(release.to_string());
+            }
+        }
+    }
+    found.sort();
+    for release in found {
+        push_unique_release(releases, release);
+    }
+}
+
+fn push_unique_release(releases: &mut Vec<String>, release: String) {
+    if !releases.iter().any(|existing| existing == &release) {
+        releases.push(release);
+    }
+}
+
+fn kernel_release_matches(requested_version: &str, release: &str) -> bool {
+    release == requested_version
+        || release
+            .strip_prefix(requested_version)
+            .is_some_and(|suffix| suffix.starts_with('.'))
+}
+
+fn module_kernel_path(system_root: &Path, release: &str) -> Option<PathBuf> {
+    kernel_module_dir(system_root, release)
+        .map(|(module_dir, _module_dir_arg)| module_dir.join("vmlinuz"))
+        .filter(|path| regular_file_exists(path))
+}
+
+fn kernel_module_dir(system_root: &Path, release: &str) -> Option<(PathBuf, &'static str)> {
+    [
+        (
+            system_root.join("lib/modules").join(release),
+            "/lib/modules",
+        ),
+        (
+            system_root.join("usr/lib/modules").join(release),
+            "/usr/lib/modules",
+        ),
+    ]
+    .into_iter()
+    .find(|(path, _module_dir_arg)| path.is_dir())
+}
+
+fn regular_file_exists(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
+}
+
+fn system_root_for_boot_root(boot_root: &Path) -> PathBuf {
+    if boot_root.file_name().is_some_and(|name| name == "boot") {
+        return boot_root
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("/"));
+    }
+
+    PathBuf::from("/")
 }
 
 /// Get kernel version from an already-loaded trove list.
@@ -482,9 +1040,86 @@ pub fn detect_kernel_version_from_troves(troves: &[Trove]) -> Option<String> {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    fn write_executable(path: &Path, contents: &str) {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::write(path, contents).unwrap();
+        let mut permissions = std::fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions).unwrap();
+    }
+
     #[cfg(feature = "composefs-rs")]
     #[test]
     fn build_generation_from_db_writes_export_artifact_contract() {
+        use crate::db::models::{FileEntry, Trove, TroveType};
+        use crate::db::schema::migrate;
+        use crate::filesystem::CasStore;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let generations_root = tmp.path().join("generations");
+        let objects_dir = tmp.path().join("objects");
+        let boot_root = tmp.path().join("boot");
+        std::fs::create_dir_all(&generations_root).unwrap();
+        std::fs::create_dir_all(boot_root.join("EFI/BOOT")).unwrap();
+        std::fs::write(boot_root.join("vmlinuz-6.19.8-conary"), b"kernel").unwrap();
+        std::fs::write(boot_root.join("initramfs-6.19.8-conary.img"), b"initramfs").unwrap();
+        std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"efi").unwrap();
+
+        let cas = CasStore::new(&objects_dir).unwrap();
+        let hello_hash = cas.store(b"hello").unwrap();
+        let init_hash = cas.store(b"init").unwrap();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let mut trove = Trove::new(
+            "kernel".to_string(),
+            "6.19.8-conary".to_string(),
+            TroveType::Package,
+        );
+        trove.architecture = Some("x86_64".to_string());
+        let trove_id = trove.insert(&conn).unwrap();
+        let mut file = FileEntry::new(
+            "/usr/bin/hello".to_string(),
+            hello_hash,
+            b"hello".len() as i64,
+            0o755,
+            trove_id,
+        );
+        file.insert(&conn).unwrap();
+        let mut init = FileEntry::new(
+            "/usr/sbin/init".to_string(),
+            init_hash,
+            b"init".len() as i64,
+            0o755,
+            trove_id,
+        );
+        init.insert(&conn).unwrap();
+
+        let (generation, _result) = build_generation_from_db_with_boot_root(
+            &conn,
+            &generations_root,
+            "runtime artifact test",
+            &boot_root,
+        )
+        .unwrap();
+        let gen_dir = generations_root.join(generation.to_string());
+
+        assert!(gen_dir.join(".conary-artifact.json").is_file());
+        assert!(gen_dir.join("cas-manifest.json").is_file());
+        assert!(gen_dir.join("boot-assets/manifest.json").is_file());
+        assert!(gen_dir.join("boot-assets/vmlinuz").is_file());
+        assert!(gen_dir.join("boot-assets/initramfs.img").is_file());
+        assert!(gen_dir.join("boot-assets/EFI/BOOT/BOOTX64.EFI").is_file());
+        let metadata = GenerationMetadata::read_from(&gen_dir).unwrap();
+        assert!(metadata.artifact_manifest_sha256.is_some());
+        assert_eq!(metadata.kernel_version.as_deref(), Some("6.19.8-conary"));
+        crate::generation::artifact::load_generation_artifact(&gen_dir).unwrap();
+    }
+
+    #[cfg(feature = "composefs-rs")]
+    #[test]
+    fn build_generation_from_db_rejects_root_without_init() {
         use crate::db::models::{FileEntry, Trove, TroveType};
         use crate::db::schema::migrate;
         use crate::filesystem::CasStore;
@@ -519,30 +1154,221 @@ mod tests {
         );
         file.insert(&conn).unwrap();
 
-        let (generation, _result) = build_generation_from_db_with_boot_root(
+        let error = build_generation_from_db_with_boot_root(
             &conn,
             &generations_root,
             "runtime artifact test",
             &boot_root,
         )
-        .unwrap();
-        let gen_dir = generations_root.join(generation.to_string());
+        .unwrap_err()
+        .to_string();
 
-        assert!(gen_dir.join(".conary-artifact.json").is_file());
-        assert!(gen_dir.join("cas-manifest.json").is_file());
-        assert!(gen_dir.join("boot-assets/manifest.json").is_file());
-        assert!(gen_dir.join("boot-assets/vmlinuz").is_file());
-        assert!(gen_dir.join("boot-assets/initramfs.img").is_file());
-        assert!(gen_dir.join("boot-assets/EFI/BOOT/BOOTX64.EFI").is_file());
-        let metadata = GenerationMetadata::read_from(&gen_dir).unwrap();
-        assert!(metadata.artifact_manifest_sha256.is_some());
-        assert_eq!(metadata.kernel_version.as_deref(), Some("6.19.8-conary"));
-        crate::generation::artifact::load_generation_artifact(&gen_dir).unwrap();
+        assert!(error.contains("not self-contained"));
+        assert!(error.contains("/sbin/init"));
+        assert!(!generations_root.join("0").exists());
+    }
+
+    #[test]
+    fn runtime_root_init_detection_resolves_usr_merge_and_package_symlinks() {
+        let file_refs = vec![FileEntryRef {
+            path: "/usr/lib/systemd/systemd".to_string(),
+            sha256_hash: "a".repeat(64),
+            size: 6,
+            permissions: 0o755,
+            owner: None,
+            group_name: None,
+        }];
+        let symlink_refs = vec![SymlinkEntryRef {
+            path: "/usr/sbin/init".to_string(),
+            target: "../lib/systemd/systemd".to_string(),
+        }];
+
+        assert!(generation_root_has_init_entrypoint(
+            &file_refs,
+            &symlink_refs
+        ));
     }
 
     #[test]
     fn detect_kernel_version_does_not_panic() {
         let result = detect_kernel_version_from_troves(&[]);
         assert!(result.is_some() || result.is_none());
+    }
+
+    #[test]
+    fn runtime_boot_asset_resolution_uses_arch_qualified_module_release() {
+        use crate::db::models::TroveType;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let boot_root = tmp.path().join("boot");
+        let release = "6.17.1-300.fc43.x86_64";
+        let module_dir = tmp.path().join("lib/modules").join(release);
+        std::fs::create_dir_all(&module_dir).unwrap();
+        std::fs::create_dir_all(boot_root.join("EFI/BOOT")).unwrap();
+        std::fs::write(module_dir.join("vmlinuz"), b"kernel").unwrap();
+        std::fs::write(
+            boot_root.join(format!("initramfs-{release}.img")),
+            b"initramfs",
+        )
+        .unwrap();
+        std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"efi").unwrap();
+
+        let troves = vec![Trove::new(
+            "kernel-core".to_string(),
+            "6.17.1-300.fc43".to_string(),
+            TroveType::Package,
+        )];
+
+        let sources = resolve_runtime_boot_asset_sources(&troves, &boot_root).unwrap();
+
+        assert_eq!(sources.kernel_version, release);
+        assert_eq!(sources.kernel, module_dir.join("vmlinuz"));
+        assert_eq!(
+            sources.initramfs,
+            boot_root.join(format!("initramfs-{release}.img"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_boot_asset_resolution_generates_missing_initramfs_with_shell_dracut() {
+        use crate::db::models::TroveType;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let boot_root = tmp.path().join("boot");
+        let release = "6.17.1-300.fc43.x86_64";
+        let module_dir = tmp.path().join("lib/modules").join(release);
+        let fake_dracut = tmp.path().join("dracut");
+        let fake_depmod = tmp.path().join("depmod");
+        let fake_cpio = tmp.path().join("cpio");
+        let dracut_args = tmp.path().join("dracut.args");
+        std::fs::create_dir_all(&module_dir).unwrap();
+        std::fs::create_dir_all(boot_root.join("EFI/BOOT")).unwrap();
+        std::fs::write(module_dir.join("vmlinuz"), b"kernel").unwrap();
+        std::fs::write(module_dir.join("modules.dep"), b"deps").unwrap();
+        std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"efi").unwrap();
+        write_executable(
+            &fake_dracut,
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nprev=\nfor arg in \"$@\"; do out=\"$prev\"; prev=\"$arg\"; done\nprintf initramfs > \"$out\"\n",
+                dracut_args.display()
+            ),
+        );
+        write_executable(&fake_depmod, "#!/bin/sh\nexit 99\n");
+        write_executable(&fake_cpio, "#!/bin/sh\nexit 0\n");
+
+        let troves = vec![Trove::new(
+            "kernel-core".to_string(),
+            "6.17.1-300.fc43".to_string(),
+            TroveType::Package,
+        )];
+
+        let sources = resolve_runtime_boot_asset_sources_with_tools(
+            &troves,
+            &boot_root,
+            &fake_dracut,
+            &fake_depmod,
+            &fake_cpio,
+        )
+        .unwrap();
+
+        assert_eq!(sources.kernel_version, release);
+        assert_eq!(
+            std::fs::read(boot_root.join(format!("initramfs-{release}.img"))).unwrap(),
+            b"initramfs"
+        );
+        let args = std::fs::read_to_string(dracut_args).unwrap();
+        assert!(
+            args.lines().any(|line| line == "--omit") && args.lines().any(|line| line == "systemd"),
+            "generation initramfs must omit dracut's partial systemd path so shell /init runs; got args:\n{args}"
+        );
+        assert!(
+            !CONARY_DRACUT_MODULE_SETUP.contains("dracut-systemd"),
+            "the Conary dracut module must not force systemd-initrd dependencies"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_boot_asset_resolution_runs_depmod_before_dracut_when_modules_dep_is_missing() {
+        use crate::db::models::TroveType;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let boot_root = tmp.path().join("boot");
+        let release = "6.17.1-300.fc43.x86_64";
+        let module_dir = tmp.path().join("lib/modules").join(release);
+        let fake_dracut = tmp.path().join("dracut");
+        let fake_depmod = tmp.path().join("depmod");
+        let fake_cpio = tmp.path().join("cpio");
+        std::fs::create_dir_all(&module_dir).unwrap();
+        std::fs::create_dir_all(boot_root.join("EFI/BOOT")).unwrap();
+        std::fs::write(module_dir.join("vmlinuz"), b"kernel").unwrap();
+        std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"efi").unwrap();
+        write_executable(
+            &fake_depmod,
+            "#!/bin/sh\nbasedir=/\nmoduledir=/lib/modules\nrelease=\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    -b|--basedir) basedir=\"$2\"; shift 2 ;;\n    -m|--moduledir) moduledir=\"$2\"; shift 2 ;;\n    *) release=\"$1\"; shift ;;\n  esac\ndone\nprintf deps > \"${basedir}${moduledir}/${release}/modules.dep\"\n",
+        );
+        write_executable(
+            &fake_dracut,
+            "#!/bin/sh\nprev=\nfor arg in \"$@\"; do out=\"$prev\"; prev=\"$arg\"; done\nprintf initramfs > \"$out\"\n",
+        );
+        write_executable(&fake_cpio, "#!/bin/sh\nexit 0\n");
+
+        let troves = vec![Trove::new(
+            "kernel-core".to_string(),
+            "6.17.1-300.fc43".to_string(),
+            TroveType::Package,
+        )];
+
+        resolve_runtime_boot_asset_sources_with_tools(
+            &troves,
+            &boot_root,
+            &fake_dracut,
+            &fake_depmod,
+            &fake_cpio,
+        )
+        .unwrap();
+
+        assert!(module_dir.join("modules.dep").is_file());
+        assert!(boot_root.join(format!("initramfs-{release}.img")).is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_boot_asset_resolution_reports_missing_cpio_before_dracut() {
+        use crate::db::models::TroveType;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let boot_root = tmp.path().join("boot");
+        let release = "6.17.1-300.fc43.x86_64";
+        let module_dir = tmp.path().join("lib/modules").join(release);
+        let fake_dracut = tmp.path().join("dracut");
+        let fake_depmod = tmp.path().join("depmod");
+        let missing_cpio = tmp.path().join("missing-cpio");
+        std::fs::create_dir_all(&module_dir).unwrap();
+        std::fs::create_dir_all(boot_root.join("EFI/BOOT")).unwrap();
+        std::fs::write(module_dir.join("vmlinuz"), b"kernel").unwrap();
+        std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"efi").unwrap();
+        write_executable(&fake_dracut, "#!/bin/sh\nexit 99\n");
+        write_executable(&fake_depmod, "#!/bin/sh\nexit 99\n");
+
+        let troves = vec![Trove::new(
+            "kernel-core".to_string(),
+            "6.17.1-300.fc43".to_string(),
+            TroveType::Package,
+        )];
+
+        let error = resolve_runtime_boot_asset_sources_with_tools(
+            &troves,
+            &boot_root,
+            &fake_dracut,
+            &fake_depmod,
+            &missing_cpio,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("missing required initramfs tool cpio"));
+        assert!(!boot_root.join(format!("initramfs-{release}.img")).exists());
     }
 }

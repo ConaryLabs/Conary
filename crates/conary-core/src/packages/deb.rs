@@ -122,6 +122,7 @@ impl DebPackage {
             "Recommends" => info.recommends = Self::parse_dependency_list(value),
             "Suggests" => info.suggests = Self::parse_dependency_list(value),
             "Build-Depends" => info.build_depends = Self::parse_dependency_list(value),
+            "Provides" => info.provides = Self::parse_dependency_list(value),
             _ => {} // Ignore unknown fields
         }
     }
@@ -372,6 +373,7 @@ struct ControlInfo {
     homepage: Option<String>,
     installed_size: Option<u64>,
     dependencies: Vec<String>,
+    provides: Vec<String>,
     recommends: Vec<String>,
     suggests: Vec<String>,
     build_depends: Vec<String>,
@@ -423,6 +425,7 @@ impl PackageFormat for DebPackage {
             &control.build_depends,
             DependencyType::Build,
         ));
+        let provides = Self::convert_dependencies(&control.provides, DependencyType::Runtime);
 
         let scriptlets = control_tar.scriptlets;
         let config_files = control_tar.config_files;
@@ -445,6 +448,7 @@ impl PackageFormat for DebPackage {
             description: control.description,
             files,
             dependencies,
+            provides,
             scriptlets,
             config_files,
         };
@@ -482,6 +486,10 @@ impl PackageFormat for DebPackage {
 
     fn dependencies(&self) -> &[Dependency] {
         self.meta.dependencies()
+    }
+
+    fn provides(&self) -> &[Dependency] {
+        self.meta.provides()
     }
 
     fn extract_file_contents(&self) -> Result<Vec<ExtractedFile>> {

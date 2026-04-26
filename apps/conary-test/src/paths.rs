@@ -104,12 +104,36 @@ pub fn rollout_provenance_path() -> Result<PathBuf> {
     Ok(rollout_provenance_path_for(&state_dir()?))
 }
 
+pub(crate) fn host_conary_binary() -> Result<PathBuf> {
+    find_host_conary_binary(&project_dir()?)
+}
+
 pub(crate) fn resolve_fixtures_root_for(project_root: &Path) -> PathBuf {
     resolve_layout_root(project_root, WORKSPACE_FIXTURES_ROOT, LEGACY_FIXTURES_ROOT)
 }
 
 pub(crate) fn rollout_provenance_path_for(state_dir: &Path) -> PathBuf {
     state_dir.join(ROLLOUT_PROVENANCE_FILE)
+}
+
+pub(crate) fn find_host_conary_binary(project_root: &Path) -> Result<PathBuf> {
+    let candidates = [
+        std::env::var_os("CONARY_HOST_BIN").map(PathBuf::from),
+        std::env::var_os("CONARY_BIN").map(PathBuf::from),
+        Some(project_root.join("conary")),
+        Some(project_root.join("target/debug/conary")),
+        Some(project_root.join("target/release/conary")),
+    ];
+
+    for candidate in candidates.into_iter().flatten() {
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+
+    anyhow::bail!(
+        "failed to locate host conary binary; tried CONARY_HOST_BIN, CONARY_BIN, ./conary, target/debug/conary, and target/release/conary"
+    )
 }
 
 #[cfg(test)]

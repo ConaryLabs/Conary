@@ -1292,6 +1292,7 @@ mod tests {
                 QemuBoot {
                     image: "https://127.0.0.1:9/minimal-boot-${PKG}.qcow2".to_string(),
                     local_image_path: None,
+                    stage_conary: false,
                     copy_from_guest: Vec::new(),
                     memory_mb: 512,
                     timeout_seconds: 5,
@@ -1354,6 +1355,7 @@ mod tests {
             &QemuBoot {
                 image: "${IMG}".to_string(),
                 local_image_path: None,
+                stage_conary: false,
                 copy_from_guest: Vec::new(),
                 memory_mb: 1024,
                 timeout_seconds: 120,

@@ -54,6 +54,14 @@ impl Default for TimeoutConfig {
 /// package metadata for capability-aware dependency resolution.
 const MAX_BYTES_RESPONSE_SIZE: u64 = 256 * 1024 * 1024;
 
+fn byte_download_timeout(timeouts: &TimeoutConfig) -> Duration {
+    // In-memory downloads cover more than tiny signatures and keys: Remi and
+    // distro metadata blobs can legitimately be large enough that they need the
+    // same budget as package-file downloads, especially in low-resource QEMU
+    // guests.
+    timeouts.download
+}
+
 fn append_limited_chunk(
     body: &mut Vec<u8>,
     total: &mut u64,
@@ -299,7 +307,7 @@ impl RepositoryClient {
         let response = self
             .client
             .get(url)
-            .timeout(self.timeouts.metadata)
+            .timeout(byte_download_timeout(&self.timeouts))
             .send()
             .await
             .download_context(url)?;
@@ -696,5 +704,16 @@ mod tests {
         let mut total = 0;
         append_limited_chunk(&mut body, &mut total, &[1, 2, 3], 2, "https://example.test")
             .expect_err("chunk should be rejected once it exceeds the limit");
+    }
+
+    #[test]
+    fn test_byte_download_timeout_uses_download_budget() {
+        let timeouts = TimeoutConfig {
+            metadata: Duration::from_secs(30),
+            download: Duration::from_secs(300),
+            connect: Duration::from_secs(5),
+        };
+
+        assert_eq!(byte_download_timeout(&timeouts), Duration::from_secs(300));
     }
 }

@@ -49,7 +49,7 @@
 | `apps/conary-test/src/config/manifest.rs` | Add QEMU local-image and guest-copy manifest fields if needed |
 | `apps/conary-test/src/engine/qemu.rs` | Let QEMU tests copy generated images out of a guest and boot local qcow2 paths |
 | `apps/conary-test/src/engine/variables.rs` | Expand variables in new QEMU manifest fields |
-| `apps/conary/tests/integration/remi/manifests/phase3-group-o-generation-export.toml` | QEMU validation for exported installed/bootstrap-run generation images |
+| `apps/conary/tests/integration/remi/manifests/phase3-group-o-generation-export.toml` | QEMU validation for installed-generation fail-closed behavior and bootable bootstrap-run exports |
 | `docs/modules/bootstrap.md` | Update canonical CLI guidance after removing legacy export |
 | `docs/INTEGRATION-TESTING.md` | Mention the generation export QEMU suite if added |
 
@@ -1395,9 +1395,9 @@ phase = 3
 
 [[test]]
 id = "TGE01"
-name = "installed_generation_export_boots"
-description = "Export an installed generation to qcow2, copy it to the host, then boot it under UEFI"
-timeout = 1200
+name = "installed_generation_export_fails_closed_without_self_contained_root"
+description = "A runtime generation whose base OS is not represented in Conary CAS must fail before publishing a bootable artifact"
+timeout = 900
 group = "generation-export"
 fatal = true
 
@@ -1405,43 +1405,19 @@ fatal = true
 [test.step.qemu_boot]
 image = "minimal-boot-v2"
 memory_mb = 2048
-timeout_seconds = 600
+timeout_seconds = 900
 ssh_port = 2240
 commands = [
-    "conary repo sync fedora-remi --force",
-    "conary install kernel --repo fedora-remi --yes --sandbox never --allow-live-system-mutation",
-    "conary system generation build --allow-live-system-mutation",
-    "conary system generation export --format qcow2 --output /tmp/current-generation.qcow2",
-    "test -s /tmp/current-generation.qcow2",
-    "echo installed-generation-export-ok",
-]
-copy_from_guest = [
-    { source = "/tmp/current-generation.qcow2", dest = "/tmp/conary-generation-export/installed-generation.qcow2" },
+    "conary system init",
+    "mkdir -p /var/tmp/conary-generation-export",
+    "conary system generation build --allow-live-system-mutation > /var/tmp/conary-generation-export/build.log 2>&1; code=$?; cat /var/tmp/conary-generation-export/build.log; test \"$code\" -ne 0",
+    "grep -q 'not self-contained' /var/tmp/conary-generation-export/build.log",
+    "grep -q '/sbin/init' /var/tmp/conary-generation-export/build.log",
+    "test ! -e /conary/generations/0/.conary-artifact.json",
+    "echo installed-generation-export-failed-closed",
 ]
 expect_output = [
-    "installed-generation-export-ok",
-]
-
-[test.step.assert]
-exit_code = 0
-
-[[test.step]]
-[test.step.qemu_boot]
-image = "local-installed-generation-export"
-local_image_path = "/tmp/conary-generation-export/installed-generation.qcow2"
-memory_mb = 2048
-timeout_seconds = 420
-ssh_port = 2241
-commands = [
-    "GEN=$(sed -n 's/.*conary\\.generation=\\([0-9][0-9]*\\).*/\\1/p' /proc/cmdline); test -n \"$GEN\"",
-    "GEN=$(sed -n 's/.*conary\\.generation=\\([0-9][0-9]*\\).*/\\1/p' /proc/cmdline); TARGET=$(readlink /conary/current); test \"$TARGET\" = \"generations/$GEN\" || test \"$TARGET\" = \"$GEN\" || test \"$(readlink -f /conary/current)\" = \"/conary/generations/$GEN\"",
-    "GEN=$(sed -n 's/.*conary\\.generation=\\([0-9][0-9]*\\).*/\\1/p' /proc/cmdline); test -f \"/conary/generations/$GEN/.conary-artifact.json\"",
-    "GEN=$(sed -n 's/.*conary\\.generation=\\([0-9][0-9]*\\).*/\\1/p' /proc/cmdline); test -f \"/conary/generations/$GEN/cas-manifest.json\"",
-    "GEN=$(sed -n 's/.*conary\\.generation=\\([0-9][0-9]*\\).*/\\1/p' /proc/cmdline); test -f \"/conary/generations/$GEN/boot-assets/manifest.json\"",
-    "echo installed-generation-export-booted",
-]
-expect_output = [
-    "installed-generation-export-booted",
+    "installed-generation-export-failed-closed",
 ]
 
 [test.step.assert]
@@ -1461,16 +1437,20 @@ memory_mb = 2048
 timeout_seconds = 900
 ssh_port = 2242
 commands = [
+    "conary repo sync fedora-remi --force",
+    "conary install dosfstools --repo fedora-remi --yes --sandbox never --allow-live-system-mutation",
+    "conary install qemu-img --repo fedora-remi --yes --sandbox never --allow-live-system-mutation",
     "test -d /var/lib/conary/bootstrap-inputs",
     "test -f /var/lib/conary/bootstrap-inputs/conaryos.toml",
     "test -d /var/lib/conary/bootstrap-inputs/seed",
-    "conary bootstrap run /var/lib/conary/bootstrap-inputs/conaryos.toml --seed /var/lib/conary/bootstrap-inputs/seed --work-dir /tmp/bootstrap-run --up-to system",
-    "conary system generation export --path /tmp/bootstrap-run/output/generations/1 --format qcow2 --output /tmp/bootstrap-run-generation.qcow2",
-    "test -s /tmp/bootstrap-run-generation.qcow2",
+    "mkdir -p /var/tmp/conary-generation-export",
+    "conary bootstrap run /var/lib/conary/bootstrap-inputs/conaryos.toml --seed /var/lib/conary/bootstrap-inputs/seed --work-dir /var/tmp/bootstrap-run --up-to system",
+    "conary system generation export --path /var/tmp/bootstrap-run/output/generations/1 --format qcow2 --output /var/tmp/conary-generation-export/bootstrap-run-generation.qcow2",
+    "test -s /var/tmp/conary-generation-export/bootstrap-run-generation.qcow2",
     "echo bootstrap-run-generation-export-ok",
 ]
 copy_from_guest = [
-    { source = "/tmp/bootstrap-run-generation.qcow2", dest = "/tmp/conary-generation-export/bootstrap-run-generation.qcow2" },
+    { source = "/var/tmp/conary-generation-export/bootstrap-run-generation.qcow2", dest = "/tmp/conary-generation-export/bootstrap-run-generation.qcow2" },
 ]
 expect_output = [
     "bootstrap-run-generation-export-ok",
@@ -1512,9 +1492,10 @@ image with `conary system generation build --help`, `conary system generation
 export --help`, and `conary bootstrap run --help`. If
 `--allow-live-system-mutation` or `--up-to system` has drifted, update the
 manifest and CLI docs instead of preserving stale flags. Also verify the source
-image has the tools needed by the first QEMU step, especially `qemu-img`, a
-working kernel package channel for `conary install kernel`, and whatever
-bootstrap fixture work is needed to stage `BOOTX64.EFI`.
+image has the tools needed by the first QEMU step, especially `qemu-img`,
+`mkfs.vfat` from `dosfstools` for ESP formatting, a working kernel package
+channel for `conary install kernel`, and whatever bootstrap fixture work is
+needed to stage `BOOTX64.EFI`.
 
 - [ ] **Step 8: Run manifest inventory**
 

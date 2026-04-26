@@ -12,7 +12,7 @@ use conary_core::components::{ComponentType, should_run_scriptlets};
 use conary_core::db::models::generate_capability_variations;
 use conary_core::db::models::{Changeset, ChangesetStatus, Component as DbComponent};
 use conary_core::dependencies::{DependencyClass, LanguageDepDetector};
-use conary_core::packages::traits::PackageFormat;
+use conary_core::packages::traits::{ExtractedFile, PackageFormat};
 use conary_core::packages::traits::{Scriptlet, ScriptletPhase};
 use conary_core::repository::versioning::{
     RepoVersionConstraint, VersionScheme, parse_repo_constraint, repo_version_satisfies,
@@ -117,6 +117,146 @@ fn deployed_mode(mode: i32) -> (i32, bool) {
 
 fn is_symlink_mode(mode: i32) -> bool {
     (mode & 0o170000) == 0o120000
+}
+
+fn is_extracted_symlink(file: &ExtractedFile) -> bool {
+    is_symlink_mode(file.mode) || file.symlink_target.is_some()
+}
+
+fn symlink_target_for_file(file: &ExtractedFile) -> Result<String> {
+    if let Some(target) = &file.symlink_target {
+        return Ok(target.clone());
+    }
+
+    String::from_utf8(file.content.clone()).context("invalid symlink target in package payload")
+}
+
+#[cfg(unix)]
+fn deploy_symlink_idempotent(dest_path: &Path, relative_path: &Path, target: &str) -> Result<()> {
+    use std::os::unix::fs::symlink;
+
+    match std::fs::symlink_metadata(dest_path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            let existing = std::fs::read_link(dest_path)
+                .with_context(|| format!("failed to read symlink {}", dest_path.display()))?;
+            if existing == Path::new(target) {
+                return Ok(());
+            }
+            anyhow::bail!(
+                "symlink deployment path collision detected for {}: existing target {} != package target {}",
+                relative_path.display(),
+                existing.display(),
+                target
+            );
+        }
+        Ok(_) => {
+            anyhow::bail!(
+                "symlink deployment path collision detected for {}",
+                relative_path.display()
+            );
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            symlink(target, dest_path)?;
+        }
+        Err(err) => {
+            return Err(err).with_context(|| format!("failed to inspect {}", dest_path.display()));
+        }
+    }
+
+    Ok(())
+}
+
+struct DeploymentFile<'a> {
+    file: &'a ExtractedFile,
+    relative_path: PathBuf,
+    db_path: String,
+    symlink_target: Option<String>,
+}
+
+fn standard_usrmerge_target(component: &str) -> Option<&'static str> {
+    match component {
+        "bin" => Some("usr/bin"),
+        "sbin" => Some("usr/sbin"),
+        "lib" => Some("usr/lib"),
+        "lib64" => Some("usr/lib64"),
+        _ => None,
+    }
+}
+
+fn is_standard_usrmerge_link(actual: &Path, expected: &str) -> bool {
+    actual == Path::new(expected) || actual == Path::new("/").join(expected)
+}
+
+fn rewrite_standard_usrmerge_root_symlink(
+    root_path: &Path,
+    relative_path: &Path,
+) -> Result<PathBuf> {
+    let mut components = relative_path.components();
+    let Some(first) = components.next() else {
+        return Ok(relative_path.to_path_buf());
+    };
+    let first = first.as_os_str().to_str().ok_or_else(|| {
+        anyhow::anyhow!(
+            "invalid non-UTF8 package path component in {}",
+            relative_path.display()
+        )
+    })?;
+    let Some(target) = standard_usrmerge_target(first) else {
+        return Ok(relative_path.to_path_buf());
+    };
+
+    // Only rewrite descendants such as bin/foo. A package entry that targets
+    // the root symlink itself should still collide/fail rather than replace it.
+    let remaining: Vec<_> = components.collect();
+    if remaining.is_empty() {
+        return Ok(relative_path.to_path_buf());
+    }
+
+    let link_path = root_path.join(first);
+    match std::fs::symlink_metadata(&link_path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            let actual = std::fs::read_link(&link_path)
+                .with_context(|| format!("failed to read symlink {}", link_path.display()))?;
+            if is_standard_usrmerge_link(&actual, target) {
+                let mut rewritten = PathBuf::from(target);
+                for component in remaining {
+                    rewritten.push(component.as_os_str());
+                }
+                return Ok(rewritten);
+            }
+        }
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(err).with_context(|| format!("failed to inspect {}", link_path.display()));
+        }
+    }
+
+    Ok(relative_path.to_path_buf())
+}
+
+fn package_deployment_relative_path(root_path: &Path, package_path: &str) -> Result<PathBuf> {
+    let relative_path = sanitize_package_relative_path(package_path)?;
+    rewrite_standard_usrmerge_root_symlink(root_path, &relative_path)
+}
+
+fn deployment_db_path(relative_path: &Path) -> Result<String> {
+    let path = relative_path.to_str().ok_or_else(|| {
+        anyhow::anyhow!(
+            "invalid non-UTF8 deployment path {}",
+            relative_path.display()
+        )
+    })?;
+    Ok(format!("/{path}"))
+}
+
+fn identical_regular_deployment(existing: &ExtractedFile, current: &ExtractedFile) -> bool {
+    !is_extracted_symlink(existing)
+        && !is_extracted_symlink(current)
+        && existing.sha256 == current.sha256
+        && existing.size == current.size
+        && deployed_mode(existing.mode).0 == deployed_mode(current.mode).0
+        && existing.content == current.content
 }
 
 fn find_symlink_blocker(
@@ -336,6 +476,12 @@ fn select_ccs_components(
 ) -> Result<SelectedCcsComponents> {
     let available = sorted_available_component_names(ccs_pkg);
     if available.is_empty() {
+        if ccs_pkg.file_entries().is_empty() {
+            return Ok(SelectedCcsComponents {
+                names: Vec::new(),
+                recognized_types: Vec::new(),
+            });
+        }
         anyhow::bail!(
             "Package {} does not contain any installable components",
             ccs_pkg.name()
@@ -527,10 +673,14 @@ pub async fn cmd_ccs_install(
     );
 
     let selected_components = select_ccs_components(&ccs_pkg, components)?;
-    println!(
-        "Installing components: {}",
-        selected_components.names.join(", ")
-    );
+    if selected_components.names.is_empty() {
+        println!("Installing metadata-only package (no file components)");
+    } else {
+        println!(
+            "Installing components: {}",
+            selected_components.names.join(", ")
+        );
+    }
 
     if let Some(ref cap_decl) = ccs_pkg.manifest().capabilities {
         use conary_core::capability::policy::{
@@ -690,39 +840,63 @@ pub async fn cmd_ccs_install(
         .iter()
         .map(|file| (file.path.clone(), file.component.clone()))
         .collect();
-    let extracted_files: Vec<_> = ccs_pkg
-        .extract_file_contents()?
-        .into_iter()
-        .filter(|file| selected_paths.contains(file.path.as_str()))
-        .collect();
-    if extracted_files.is_empty() {
+    let extracted_files: Vec<_> = if selected_paths.is_empty() {
+        Vec::new()
+    } else {
+        ccs_pkg
+            .extract_file_contents()?
+            .into_iter()
+            .filter(|file| selected_paths.contains(file.path.as_str()))
+            .collect()
+    };
+    if extracted_files.is_empty() && !selected_file_entries.is_empty() {
         anyhow::bail!(
             "No files matched the selected components: {}",
             selected_components.names.join(", ")
         );
     }
     println!("Extracted {} files", extracted_files.len());
-    let mut seen_paths: HashMap<PathBuf, bool> = HashMap::new();
+    let root_path = std::path::Path::new(root);
+    let mut deployment_files: Vec<DeploymentFile<'_>> = Vec::new();
+    let mut seen_indexes: HashMap<PathBuf, usize> = HashMap::new();
     for file in &extracted_files {
-        let rel_path = sanitize_package_relative_path(&file.path)?;
-        let current_is_symlink = is_symlink_mode(file.mode);
-        if let Some(existing_is_symlink) = seen_paths.insert(rel_path.clone(), current_is_symlink) {
+        let relative_path = package_deployment_relative_path(root_path, &file.path)?;
+        let current_is_symlink = is_extracted_symlink(file);
+        let symlink_target = if current_is_symlink {
+            Some(symlink_target_for_file(file)?)
+        } else {
+            None
+        };
+        if let Some(existing_index) = seen_indexes.get(&relative_path).copied() {
+            let existing = deployment_files[existing_index].file;
+            let existing_is_symlink = is_extracted_symlink(existing);
             if existing_is_symlink || current_is_symlink {
                 anyhow::bail!(
                     "symlink deployment path collision detected for {}",
-                    rel_path.display()
+                    relative_path.display()
                 );
+            }
+            if identical_regular_deployment(existing, file) {
+                continue;
             }
             anyhow::bail!(
                 "duplicate deployment path detected for {}",
-                rel_path.display()
+                relative_path.display()
             );
         }
+        seen_indexes.insert(relative_path.clone(), deployment_files.len());
+        let db_path = deployment_db_path(&relative_path)?;
+        deployment_files.push(DeploymentFile {
+            file,
+            relative_path,
+            db_path,
+            symlink_target,
+        });
     }
     let detected_provides = LanguageDepDetector::detect_all_provides(
-        &extracted_files
+        &deployment_files
             .iter()
-            .map(|f| f.path.clone())
+            .map(|f| f.db_path.clone())
             .collect::<Vec<_>>(),
     );
 
@@ -762,7 +936,6 @@ pub async fn cmd_ccs_install(
         }
     }
 
-    let root_path = std::path::Path::new(root);
     let objects_dir = conary_core::db::paths::objects_dir(db_path);
     let is_upgrade = !existing.is_empty();
     let mut applied_changeset_id = 0_i64;
@@ -775,10 +948,11 @@ pub async fn cmd_ccs_install(
         let mut created_symlinks = HashSet::new();
         let mut post_commit_warnings = Vec::new();
 
-        for file in &extracted_files {
-            let relative_path = sanitize_package_relative_path(&file.path)?;
+        for deployment in &deployment_files {
+            let file = deployment.file;
+            let relative_path = deployment.relative_path.clone();
             let dest_path = root_path.join(&relative_path);
-            let current_is_symlink = is_symlink_mode(file.mode);
+            let current_is_symlink = deployment.symlink_target.is_some();
             let (effective_mode, stripped_special_bits) = deployed_mode(file.mode);
 
             ensure_no_symlink_ancestor(
@@ -796,11 +970,10 @@ pub async fn cmd_ccs_install(
             if current_is_symlink {
                 #[cfg(unix)]
                 {
-                    use std::os::unix::fs::symlink;
-
-                    let target = std::str::from_utf8(&file.content)
-                        .context("invalid symlink target in package payload")?;
-                    symlink(target, &dest_path)?;
+                    let target = deployment.symlink_target.as_deref().ok_or_else(|| {
+                        anyhow::anyhow!("symlink package entry {} is missing target", file.path)
+                    })?;
+                    deploy_symlink_idempotent(&dest_path, &relative_path, target)?;
                     created_symlinks.insert(relative_path.clone());
                 }
                 #[cfg(not(unix))]
@@ -841,8 +1014,9 @@ pub async fn cmd_ccs_install(
                     );
                 }
                 let stored_hash = if current_is_symlink {
-                    let target = std::str::from_utf8(&file.content)
-                        .context("invalid symlink target in package payload")?;
+                    let target = deployment.symlink_target.as_deref().ok_or_else(|| {
+                        anyhow::anyhow!("symlink package entry {} is missing target", file.path)
+                    })?;
                     engine.cas().store_symlink(target)?
                 } else {
                     engine.cas().store(&file.content)?
@@ -941,10 +1115,11 @@ pub async fn cmd_ccs_install(
             }
 
             // Register files, store in CAS index, and record history for rollback
-            for file in &extracted_files {
+            for deployment in &deployment_files {
+                let file = deployment.file;
                 let hash = file.sha256.clone().unwrap_or_default();
                 let mut file_entry = conary_core::db::models::FileEntry::new(
-                    file.path.clone(),
+                    deployment.db_path.clone(),
                     hash.clone(),
                     file.size,
                     deployed_mode(file.mode).0,
@@ -954,7 +1129,7 @@ pub async fn cmd_ccs_install(
                     .get(&file.path)
                     .and_then(|component_name| component_ids.get(component_name))
                     .copied();
-                file_entry.symlink_target = file.symlink_target.clone();
+                file_entry.symlink_target = deployment.symlink_target.clone();
                 file_entry.insert_or_replace(tx)?;
 
                 // Register in file_contents (CAS index) and file_history
@@ -973,7 +1148,7 @@ pub async fn cmd_ccs_install(
                     tx.execute(
                         "INSERT INTO file_history (changeset_id, path, sha256_hash, action) \
                      VALUES (?1, ?2, ?3, ?4)",
-                        params![changeset_id, &file.path, &hash, action],
+                        params![changeset_id, &deployment.db_path, &hash, action],
                     )?;
                 }
             }
@@ -1088,6 +1263,17 @@ pub async fn cmd_ccs_install(
                 ccs_pkg.version(),
             );
         }
+
+        let deployed_paths: Vec<String> = deployment_files
+            .iter()
+            .map(|deployment| deployment.db_path.clone())
+            .collect();
+        super::super::install::run_triggers(
+            &conn,
+            root_path,
+            applied_changeset_id,
+            &deployed_paths,
+        );
 
         // Step 9: Execute post-hooks (including post_install script)
         // Note: the DB transaction is already committed at this point (changeset
@@ -1549,6 +1735,389 @@ mod tests {
             "unexpected error: {err:#}"
         );
         assert!(!outside_root.join("cron.d/persist").exists());
+    }
+
+    #[tokio::test]
+    async fn ccs_install_allows_standard_usrmerge_root_symlink_ancestor() {
+        use conary_core::ccs::builder::write_ccs_package;
+        use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
+        use conary_core::hash;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let package_path = temp_dir.path().join("usrmerge.ccs");
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+
+        std::fs::create_dir_all(install_root.join("usr/bin")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("usr/bin", install_root.join("bin")).unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+
+        let content = b"chkconfig".to_vec();
+        let file_hash = hash::sha256(&content);
+        let files = vec![FileEntry {
+            path: "bin/chkconfig".to_string(),
+            hash: file_hash.clone(),
+            size: content.len() as u64,
+            mode: 0o100755,
+            component: "runtime".to_string(),
+            file_type: FileType::Regular,
+            target: None,
+            chunks: None,
+        }];
+
+        let result = BuildResult {
+            manifest: CcsManifest::new_minimal("usrmerge", "1.0.0"),
+            components: HashMap::from([(
+                "runtime".to_string(),
+                ComponentData {
+                    name: "runtime".to_string(),
+                    files: files.clone(),
+                    hash: "runtime".to_string(),
+                    size: content.len() as u64,
+                },
+            )]),
+            files,
+            blobs: HashMap::from([(file_hash, content.clone())]),
+            total_size: content.len() as u64,
+            chunked: false,
+            chunk_stats: None,
+        };
+        write_ccs_package(&result, &package_path).unwrap();
+
+        super::cmd_ccs_install(
+            package_path.to_str().unwrap(),
+            db_path_str,
+            install_root.to_str().unwrap(),
+            false,
+            true,
+            None,
+            None,
+            crate::commands::SandboxMode::None,
+            true,
+            false,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read(install_root.join("usr/bin/chkconfig")).unwrap(),
+            content
+        );
+        let conn = conary_core::db::open(db_path_str).unwrap();
+        let stored_path: String = conn
+            .query_row("SELECT path FROM files LIMIT 1", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(stored_path, "/usr/bin/chkconfig");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ccs_install_allows_identical_existing_symlink_destination() {
+        use conary_core::ccs::builder::write_ccs_package;
+        use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
+        use conary_core::filesystem::CasStore;
+        use std::path::PathBuf;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let package_path = temp_dir.path().join("bash-link.ccs");
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+
+        std::fs::create_dir_all(install_root.join("usr/bin")).unwrap();
+        std::os::unix::fs::symlink("bash", install_root.join("usr/bin/sh")).unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+
+        let target = "bash".to_string();
+        let symlink_hash = CasStore::compute_symlink_hash(&target);
+        let files = vec![FileEntry {
+            path: "/usr/bin/sh".to_string(),
+            hash: symlink_hash.clone(),
+            size: target.len() as u64,
+            mode: 0o120777,
+            component: "runtime".to_string(),
+            file_type: FileType::Symlink,
+            target: Some(target.clone()),
+            chunks: None,
+        }];
+        let result = BuildResult {
+            manifest: CcsManifest::new_minimal("bash-link", "1.0.0"),
+            components: HashMap::from([(
+                "runtime".to_string(),
+                ComponentData {
+                    name: "runtime".to_string(),
+                    files: files.clone(),
+                    hash: "runtime".to_string(),
+                    size: target.len() as u64,
+                },
+            )]),
+            files,
+            blobs: HashMap::from([(symlink_hash, target.as_bytes().to_vec())]),
+            total_size: target.len() as u64,
+            chunked: false,
+            chunk_stats: None,
+        };
+        write_ccs_package(&result, &package_path).unwrap();
+
+        super::cmd_ccs_install(
+            package_path.to_str().unwrap(),
+            db_path_str,
+            install_root.to_str().unwrap(),
+            false,
+            true,
+            None,
+            None,
+            crate::commands::SandboxMode::None,
+            true,
+            false,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_link(install_root.join("usr/bin/sh")).unwrap(),
+            PathBuf::from("bash")
+        );
+        let conn = conary_core::db::open(db_path_str).unwrap();
+        let symlink_target: String = conn
+            .query_row(
+                "SELECT symlink_target FROM files WHERE path = '/usr/bin/sh'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(symlink_target, "bash");
+    }
+
+    #[tokio::test]
+    async fn ccs_install_coalesces_identical_usrmerge_duplicate_files() {
+        use conary_core::ccs::builder::write_ccs_package;
+        use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
+        use conary_core::hash;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let package_path = temp_dir.path().join("usrmerge-duplicate.ccs");
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+
+        std::fs::create_dir_all(install_root.join("usr/bin")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("usr/bin", install_root.join("bin")).unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+
+        let content = b"chkconfig".to_vec();
+        let file_hash = hash::sha256(&content);
+        let files = vec![
+            FileEntry {
+                path: "bin/chkconfig".to_string(),
+                hash: file_hash.clone(),
+                size: content.len() as u64,
+                mode: 0o100755,
+                component: "runtime".to_string(),
+                file_type: FileType::Regular,
+                target: None,
+                chunks: None,
+            },
+            FileEntry {
+                path: "usr/bin/chkconfig".to_string(),
+                hash: file_hash.clone(),
+                size: content.len() as u64,
+                mode: 0o100755,
+                component: "runtime".to_string(),
+                file_type: FileType::Regular,
+                target: None,
+                chunks: None,
+            },
+        ];
+
+        let result = BuildResult {
+            manifest: CcsManifest::new_minimal("usrmerge-duplicate", "1.0.0"),
+            components: HashMap::from([(
+                "runtime".to_string(),
+                ComponentData {
+                    name: "runtime".to_string(),
+                    files: files.clone(),
+                    hash: "runtime".to_string(),
+                    size: content.len() as u64 * 2,
+                },
+            )]),
+            files,
+            blobs: HashMap::from([(file_hash, content.clone())]),
+            total_size: content.len() as u64 * 2,
+            chunked: false,
+            chunk_stats: None,
+        };
+        write_ccs_package(&result, &package_path).unwrap();
+
+        super::cmd_ccs_install(
+            package_path.to_str().unwrap(),
+            db_path_str,
+            install_root.to_str().unwrap(),
+            false,
+            true,
+            None,
+            None,
+            crate::commands::SandboxMode::None,
+            true,
+            false,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read(install_root.join("usr/bin/chkconfig")).unwrap(),
+            content
+        );
+        let conn = conary_core::db::open(db_path_str).unwrap();
+        let file_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(file_count, 1);
+    }
+
+    #[tokio::test]
+    async fn ccs_install_registers_metadata_only_package_without_files() {
+        use conary_core::ccs::builder::write_ccs_package;
+        use conary_core::ccs::{BuildResult, CcsManifest};
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let package_path = temp_dir.path().join("metadata-only.ccs");
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+
+        std::fs::create_dir_all(&install_root).unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+
+        let result = BuildResult {
+            manifest: CcsManifest::new_minimal("metadata-only", "1.0.0"),
+            components: HashMap::new(),
+            files: Vec::new(),
+            blobs: HashMap::new(),
+            total_size: 0,
+            chunked: false,
+            chunk_stats: None,
+        };
+        write_ccs_package(&result, &package_path).unwrap();
+
+        super::cmd_ccs_install(
+            package_path.to_str().unwrap(),
+            db_path_str,
+            install_root.to_str().unwrap(),
+            false,
+            true,
+            None,
+            None,
+            crate::commands::SandboxMode::None,
+            true,
+            false,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let conn = conary_core::db::open(db_path_str).unwrap();
+        let trove_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM troves WHERE name = 'metadata-only'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let file_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(trove_count, 1);
+        assert_eq!(file_count, 0);
+    }
+
+    #[tokio::test]
+    async fn ccs_install_records_ldconfig_trigger_for_shared_libraries() {
+        use conary_core::ccs::builder::write_ccs_package;
+        use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
+        use conary_core::hash;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let package_path = temp_dir.path().join("shared-lib.ccs");
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+
+        std::fs::create_dir_all(&install_root).unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+
+        let content = b"not a real elf; trigger matching is path-based".to_vec();
+        let file_hash = hash::sha256(&content);
+        let files = vec![FileEntry {
+            path: "/usr/lib64/libtrigger-test.so.1".to_string(),
+            hash: file_hash.clone(),
+            size: content.len() as u64,
+            mode: 0o100644,
+            component: "lib".to_string(),
+            file_type: FileType::Regular,
+            target: None,
+            chunks: None,
+        }];
+
+        let result = BuildResult {
+            manifest: CcsManifest::new_minimal("shared-lib", "1.0.0"),
+            components: HashMap::from([(
+                "lib".to_string(),
+                ComponentData {
+                    name: "lib".to_string(),
+                    files: files.clone(),
+                    hash: "lib".to_string(),
+                    size: content.len() as u64,
+                },
+            )]),
+            files,
+            blobs: HashMap::from([(file_hash, content)]),
+            total_size: 0,
+            chunked: false,
+            chunk_stats: None,
+        };
+        write_ccs_package(&result, &package_path).unwrap();
+
+        super::cmd_ccs_install(
+            package_path.to_str().unwrap(),
+            db_path_str,
+            install_root.to_str().unwrap(),
+            false,
+            true,
+            None,
+            None,
+            crate::commands::SandboxMode::None,
+            true,
+            false,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let conn = conary_core::db::open(db_path_str).unwrap();
+        let (status, matched_files): (String, i64) = conn
+            .query_row(
+                "SELECT ct.status, ct.matched_files \
+                 FROM changeset_triggers ct \
+                 JOIN triggers t ON t.id = ct.trigger_id \
+                 WHERE t.name = 'ldconfig'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(matched_files, 1);
+        assert_eq!(status, "completed");
     }
 
     #[tokio::test]

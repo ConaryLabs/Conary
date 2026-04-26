@@ -22,6 +22,7 @@ pub struct JobStatusResponse {
     pub distro: String,
     pub package: String,
     pub version: Option<String>,
+    pub architecture: Option<String>,
     /// Progress percentage (0-100) if available
     pub progress: Option<u8>,
     /// Error message if failed
@@ -76,6 +77,7 @@ pub async fn get_job_status(
                 "name": job.package_name,
                 "version": job.version.as_deref().unwrap_or("latest"),
                 "distro": job.distro,
+                "architecture": job.architecture,
                 "chunks": r.chunk_hashes.iter().enumerate().map(|(i, hash)| {
                     serde_json::json!({
                         "hash": hash,
@@ -97,6 +99,7 @@ pub async fn get_job_status(
         distro: job.distro,
         package: job.package_name,
         version: job.version,
+        architecture: job.architecture,
         progress: job.progress,
         error,
         manifest,
