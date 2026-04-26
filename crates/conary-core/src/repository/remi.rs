@@ -72,6 +72,7 @@ pub struct JobStatus {
     pub distro: String,
     pub package: String,
     pub version: Option<String>,
+    pub architecture: Option<String>,
     pub progress: Option<u8>,
     pub error: Option<String>,
     pub manifest: Option<PackageManifest>,
@@ -114,25 +115,45 @@ impl RemiClientCore {
         })
     }
 
-    /// Construct a package URL with optional version query parameter.
-    fn package_url(&self, distro: &str, name: &str, version: Option<&str>) -> String {
+    /// Construct a package URL with optional version and architecture query parameters.
+    fn package_url(
+        &self,
+        distro: &str,
+        name: &str,
+        version: Option<&str>,
+        architecture: Option<&str>,
+    ) -> String {
         let encoded_distro = urlencoding::encode(distro);
         let encoded_name = urlencoding::encode(name);
         let base = format!(
             "{}/v1/{encoded_distro}/packages/{encoded_name}",
             self.base_url
         );
+        let mut query = Vec::new();
         if let Some(v) = version {
             let encoded_version = urlencoding::encode(v);
-            format!("{base}?version={encoded_version}")
-        } else {
+            query.push(format!("version={encoded_version}"));
+        }
+        if let Some(arch) = architecture {
+            let encoded_arch = urlencoding::encode(arch);
+            query.push(format!("arch={encoded_arch}"));
+        }
+        if query.is_empty() {
             base
+        } else {
+            format!("{base}?{}", query.join("&"))
         }
     }
 
     /// Construct a direct download URL.
-    fn download_url(&self, distro: &str, name: &str, version: Option<&str>) -> String {
-        let package_url = self.package_url(distro, name, version);
+    fn download_url(
+        &self,
+        distro: &str,
+        name: &str,
+        version: Option<&str>,
+        architecture: Option<&str>,
+    ) -> String {
+        let package_url = self.package_url(distro, name, version, architecture);
         if let Some((path, query)) = package_url.split_once('?') {
             format!("{path}/download?{query}")
         } else {
@@ -198,8 +219,9 @@ impl RemiClient {
         distro: &str,
         name: &str,
         version: Option<&str>,
+        architecture: Option<&str>,
     ) -> Result<PackageManifest> {
-        let url = self.core.package_url(distro, name, version);
+        let url = self.core.package_url(distro, name, version, architecture);
 
         info!("Requesting package from Remi: {}", url);
 
@@ -344,6 +366,7 @@ impl RemiClient {
                         &status.distro,
                         &status.package,
                         status.version.as_deref(),
+                        status.architecture.as_deref(),
                     );
                     let response = self.client.get(&url).send().await.download_context(&url)?;
                     if !response.status().is_success() {
@@ -543,10 +566,11 @@ impl RemiClient {
         distro: &str,
         name: &str,
         version: Option<&str>,
+        architecture: Option<&str>,
         output_dir: &Path,
     ) -> Result<PathBuf> {
         // Use the direct download endpoint
-        let url = self.core.download_url(distro, name, version);
+        let url = self.core.download_url(distro, name, version, architecture);
 
         info!("Downloading CCS package from Remi: {}", url);
 
@@ -710,7 +734,7 @@ impl RemiClient {
 /// # Example
 /// ```ignore
 /// let client = AsyncRemiClient::new("http://localhost:8080", "/var/cache/conary")?;
-/// let manifest = client.get_package("arch", "nginx", None).await?;
+/// let manifest = client.get_package("arch", "nginx", None, None).await?;
 /// let chunks = client.download_chunks(&manifest).await?;
 /// client.assemble_package(&manifest, &chunks, Path::new("nginx.ccs"))?;
 /// ```
@@ -774,8 +798,9 @@ impl AsyncRemiClient {
         distro: &str,
         name: &str,
         version: Option<&str>,
+        architecture: Option<&str>,
     ) -> Result<PackageManifest> {
-        let url = self.core.package_url(distro, name, version);
+        let url = self.core.package_url(distro, name, version, architecture);
 
         info!("Requesting package from Remi: {}", url);
 
@@ -849,8 +874,13 @@ impl AsyncRemiClient {
                         return Ok(manifest);
                     }
                     let version = status.version.as_deref();
-                    return Box::pin(self.get_package(&status.distro, &status.package, version))
-                        .await;
+                    return Box::pin(self.get_package(
+                        &status.distro,
+                        &status.package,
+                        version,
+                        status.architecture.as_deref(),
+                    ))
+                    .await;
                 }
                 "failed" => {
                     let error_msg = status.error.unwrap_or_else(|| "Unknown error".to_string());
@@ -930,10 +960,13 @@ impl AsyncRemiClient {
         distro: &str,
         name: &str,
         version: Option<&str>,
+        architecture: Option<&str>,
         output_dir: &Path,
     ) -> Result<PathBuf> {
         // Get manifest
-        let manifest = self.get_package(distro, name, version).await?;
+        let manifest = self
+            .get_package(distro, name, version, architecture)
+            .await?;
 
         // Download chunks in parallel
         let chunks = self.download_chunks(&manifest).await?;
@@ -1020,14 +1053,14 @@ mod tests {
     #[test]
     fn test_build_package_url_without_version() {
         let core = RemiClientCore::new("http://remi:8080").unwrap();
-        let url = core.package_url("arch", "nginx", None);
+        let url = core.package_url("arch", "nginx", None, None);
         assert_eq!(url, "http://remi:8080/v1/arch/packages/nginx");
     }
 
     #[test]
     fn test_build_package_url_with_version() {
         let core = RemiClientCore::new("http://remi:8080").unwrap();
-        let url = core.package_url("arch", "nginx", Some("1.24.0"));
+        let url = core.package_url("arch", "nginx", Some("1.24.0"), None);
         assert_eq!(
             url,
             "http://remi:8080/v1/arch/packages/nginx?version=1.24.0"
@@ -1037,10 +1070,20 @@ mod tests {
     #[test]
     fn test_build_download_url_with_version() {
         let core = RemiClientCore::new("http://remi:8080").unwrap();
-        let url = core.download_url("arch", "nginx", Some("1.24.0"));
+        let url = core.download_url("arch", "nginx", Some("1.24.0"), None);
         assert_eq!(
             url,
             "http://remi:8080/v1/arch/packages/nginx/download?version=1.24.0"
+        );
+    }
+
+    #[test]
+    fn test_build_download_url_with_version_and_architecture() {
+        let core = RemiClientCore::new("http://remi:8080").unwrap();
+        let url = core.download_url("fedora", "glib2", Some("2.86.0-2.fc43"), Some("x86_64"));
+        assert_eq!(
+            url,
+            "http://remi:8080/v1/fedora/packages/glib2/download?version=2.86.0-2.fc43&arch=x86_64"
         );
     }
 

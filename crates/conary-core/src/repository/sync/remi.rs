@@ -6,7 +6,6 @@ use crate::db::models::{
 };
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
-use crate::repository::registry;
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
 use tracing::{debug, info};
@@ -28,6 +27,7 @@ pub(super) struct RemiPackageEntry {
     pub(super) version: String,
     #[allow(dead_code)] // Present in wire format; not used by sync logic
     pub(super) converted: bool,
+    pub(super) architecture: Option<String>,
     pub(super) dependencies: Option<Vec<String>>,
     pub(super) metadata: Option<serde_json::Value>,
 }
@@ -54,9 +54,9 @@ pub(super) fn remi_sync_row(
     endpoint: String,
     distro: String,
     entry: RemiPackageEntry,
-    system_arch: &str,
 ) -> SyncedPackageRow {
     let download_url = format!("{endpoint}/v1/{distro}/packages/{}/download", entry.name);
+    let architecture = entry.architecture.clone();
 
     let mut package = RepositoryPackage::new(
         repo_id,
@@ -66,7 +66,7 @@ pub(super) fn remi_sync_row(
         0,
         download_url,
     );
-    package.architecture = Some(system_arch.to_string());
+    package.architecture = architecture;
     package.dependencies = entry
         .dependencies
         .as_ref()
@@ -180,7 +180,6 @@ pub(super) async fn sync_repository_remi(
         .id
         .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
 
-    let system_arch = registry::detect_system_arch();
     let mut seen = HashSet::new();
     let synced_packages: Vec<SyncedPackageRow> = response
         .packages
@@ -189,7 +188,7 @@ pub(super) async fn sync_repository_remi(
             let key = (
                 entry.name.clone(),
                 entry.version.clone(),
-                system_arch.clone(),
+                entry.architecture.clone(),
             );
             if !seen.insert(key) {
                 return None;
@@ -199,7 +198,6 @@ pub(super) async fn sync_repository_remi(
                 endpoint.to_string(),
                 distro.to_string(),
                 entry,
-                &system_arch,
             ))
         })
         .collect();
@@ -259,4 +257,28 @@ pub(super) async fn fetch_and_persist_canonical_map(
 
     tx.commit()?;
     Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remi_sync_row_preserves_wire_architecture() {
+        let row = remi_sync_row(
+            7,
+            "http://remi.test".to_string(),
+            "fedora".to_string(),
+            RemiPackageEntry {
+                name: "qemu-img".to_string(),
+                version: "2:10.1.0-7.fc43".to_string(),
+                converted: false,
+                architecture: Some("x86_64".to_string()),
+                dependencies: None,
+                metadata: None,
+            },
+        );
+
+        assert_eq!(row.package.architecture.as_deref(), Some("x86_64"));
+    }
 }

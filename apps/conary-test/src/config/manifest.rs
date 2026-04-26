@@ -171,6 +171,8 @@ pub struct QemuBoot {
     #[serde(default)]
     pub local_image_path: Option<String>,
     #[serde(default)]
+    pub stage_conary: bool,
+    #[serde(default)]
     pub copy_from_guest: Vec<QemuGuestCopy>,
     #[serde(default = "default_qemu_memory")]
     pub memory_mb: u32,
@@ -585,6 +587,7 @@ timeout = 30
 [test.step.qemu_boot]
 image = "minimal-boot-v2"
 local_image_path = "/tmp/generated.qcow2"
+stage_conary = true
 copy_from_guest = [
   { source = "/tmp/out.qcow2", dest = "/tmp/conary-generation-export/host-out.qcow2" },
 ]
@@ -600,6 +603,7 @@ commands = ["true"]
                     cfg.local_image_path.as_deref(),
                     Some("/tmp/generated.qcow2")
                 );
+                assert!(cfg.stage_conary);
                 assert_eq!(cfg.copy_from_guest.len(), 1);
                 assert_eq!(cfg.copy_from_guest[0].source, "/tmp/out.qcow2");
                 assert_eq!(

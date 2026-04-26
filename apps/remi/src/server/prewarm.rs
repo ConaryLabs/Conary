@@ -119,7 +119,12 @@ pub fn run_prewarm(config: &PrewarmConfig) -> Result<PrewarmResult> {
         info!("Converting {} {}...", pkg.name, pkg.version);
 
         // Run conversion (blocking -- convert_package uses Handle::block_on internally)
-        match conversion_service.convert_package(&config.distro, &pkg.name, Some(&pkg.version)) {
+        match conversion_service.convert_package(
+            &config.distro,
+            &pkg.name,
+            Some(&pkg.version),
+            pkg.architecture.as_deref(),
+        ) {
             Ok(conv_result) => {
                 info!(
                     "Converted {} {}: {} chunks, {} bytes",

@@ -40,6 +40,17 @@ pub fn setup_command_test_db() -> (TempDir, String) {
         .to_string();
 
     db::init(&db_path).unwrap();
+    stage_test_boot_assets(temp_dir.path());
+    let cas = conary_core::filesystem::CasStore::new(temp_dir.path().join("objects")).unwrap();
+    let nginx_binary = vec![b'n'; 1_024_000];
+    let nginx_binary_hash = cas.store(&nginx_binary).unwrap();
+    let nginx_binary_size = i64::try_from(nginx_binary.len()).unwrap();
+    let nginx_config = vec![b'c'; 2048];
+    let nginx_config_hash = cas.store(&nginx_config).unwrap();
+    let nginx_config_size = i64::try_from(nginx_config.len()).unwrap();
+    let init_binary = b"test init binary";
+    let init_binary_hash = cas.store(init_binary).unwrap();
+    let init_binary_size = i64::try_from(init_binary.len()).unwrap();
     let mut conn = db::open(&db_path).unwrap();
 
     db::transaction(&mut conn, |tx| {
@@ -67,8 +78,8 @@ pub fn setup_command_test_db() -> (TempDir, String) {
         // Add nginx files
         let mut f1 = FileEntry::new(
             "/usr/sbin/nginx".to_string(),
-            "abc123def456789012345678901234567890123456789012345678901234".to_string(),
-            1024000,
+            nginx_binary_hash.clone(),
+            nginx_binary_size,
             0o755,
             nginx_id,
         );
@@ -77,8 +88,8 @@ pub fn setup_command_test_db() -> (TempDir, String) {
 
         let mut f2 = FileEntry::new(
             "/etc/nginx/nginx.conf".to_string(),
-            "def456abc123789012345678901234567890123456789012345678901234".to_string(),
-            2048,
+            nginx_config_hash.clone(),
+            nginx_config_size,
             0o644,
             nginx_id,
         );
@@ -118,7 +129,17 @@ pub fn setup_command_test_db() -> (TempDir, String) {
         let openssl_id = openssl.insert(tx)?;
 
         let mut openssl_runtime = Component::new(openssl_id, "runtime".to_string());
-        openssl_runtime.insert(tx)?;
+        let openssl_runtime_id = openssl_runtime.insert(tx)?;
+
+        let mut init = FileEntry::new(
+            "/usr/sbin/init".to_string(),
+            init_binary_hash.clone(),
+            init_binary_size,
+            0o755,
+            openssl_id,
+        );
+        init.component_id = Some(openssl_runtime_id);
+        init.insert(tx)?;
 
         let mut p3 =
             ProvideEntry::new(openssl_id, "openssl".to_string(), Some("3.0.0".to_string()));
@@ -133,4 +154,22 @@ pub fn setup_command_test_db() -> (TempDir, String) {
     .unwrap();
 
     (temp_dir, db_path)
+}
+
+fn stage_test_boot_assets(root: &std::path::Path) {
+    let kernel_version = conary_core::generation::builder::detect_kernel_version_from_troves(&[])
+        .unwrap_or_else(|| "test-kernel".to_string());
+    let boot_root = root.join("boot");
+    std::fs::create_dir_all(boot_root.join("EFI/BOOT")).unwrap();
+    std::fs::write(
+        boot_root.join(format!("vmlinuz-{kernel_version}")),
+        b"test-kernel",
+    )
+    .unwrap();
+    std::fs::write(
+        boot_root.join(format!("initramfs-{kernel_version}.img")),
+        b"test-initramfs",
+    )
+    .unwrap();
+    std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"test-efi").unwrap();
 }

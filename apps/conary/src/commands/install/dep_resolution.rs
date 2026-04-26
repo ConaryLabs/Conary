@@ -294,6 +294,48 @@ mod tests {
     }
 
     #[test]
+    fn test_satisfy_mode_uses_live_root_probe_for_bootstrap_core_packages() {
+        let conn = test_db();
+        let missing = vec![
+            make_dep("bash", &["dracut"]),
+            make_dep("filesystem", &["bash"]),
+            make_dep("filesystem(unmerged-sbin-symlinks)", &["dosfstools"]),
+            make_dep("group(mail)", &["setup"]),
+            make_dep("setup", &["filesystem"]),
+        ];
+
+        let plan = resolve_missing_deps_with_probes(
+            &conn,
+            &missing,
+            DepMode::Satisfy,
+            |_| false,
+            |name| {
+                matches!(
+                    name,
+                    "bash"
+                        | "filesystem"
+                        | "filesystem(unmerged-sbin-symlinks)"
+                        | "group(mail)"
+                        | "setup"
+                )
+            },
+        );
+
+        assert!(plan.to_install.is_empty());
+        assert!(plan.unresolvable.is_empty());
+        assert_eq!(
+            plan.blocked,
+            vec![
+                "bash".to_string(),
+                "filesystem".to_string(),
+                "filesystem(unmerged-sbin-symlinks)".to_string(),
+                "group(mail)".to_string(),
+                "setup".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn test_normal_dep_in_takeover_mode() {
         let conn = test_db();
 

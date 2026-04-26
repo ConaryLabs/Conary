@@ -39,6 +39,9 @@ pub(crate) fn setup_command_test_db() -> (TempDir, String) {
     let nginx_binary = b"test nginx binary";
     let nginx_binary_hash = cas.store(nginx_binary).unwrap();
     let nginx_binary_size = i64::try_from(nginx_binary.len()).unwrap();
+    let init_binary = b"test init binary";
+    let init_binary_hash = cas.store(init_binary).unwrap();
+    let init_binary_size = i64::try_from(init_binary.len()).unwrap();
     let nginx_config_contents = b"worker_processes 1;\n";
     let nginx_config_hash = cas.store(nginx_config_contents).unwrap();
     let nginx_config_size = i64::try_from(nginx_config_contents.len()).unwrap();
@@ -80,6 +83,14 @@ pub(crate) fn setup_command_test_db() -> (TempDir, String) {
                 nginx_config_size
             ],
         )?;
+        tx.execute(
+            "INSERT OR IGNORE INTO file_contents (sha256_hash, content_path, size) VALUES (?1, ?2, ?3)",
+            rusqlite::params![
+                &init_binary_hash,
+                format!("objects/{}/{}", &init_binary_hash[0..2], &init_binary_hash[2..]),
+                init_binary_size
+            ],
+        )?;
 
         let mut f1 = FileEntry::new(
             "/usr/sbin/nginx".to_string(),
@@ -90,6 +101,16 @@ pub(crate) fn setup_command_test_db() -> (TempDir, String) {
         );
         f1.component_id = Some(runtime_id);
         f1.insert(tx)?;
+
+        let mut init = FileEntry::new(
+            "/usr/sbin/init".to_string(),
+            init_binary_hash.clone(),
+            init_binary_size,
+            0o755,
+            nginx_id,
+        );
+        init.component_id = Some(runtime_id);
+        init.insert(tx)?;
 
         let mut f2 = FileEntry::new(
             "/etc/nginx/nginx.conf".to_string(),

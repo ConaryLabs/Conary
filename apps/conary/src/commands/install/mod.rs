@@ -29,7 +29,8 @@ pub(crate) use restore::{
 
 use super::open_db;
 use conversion::{
-    ConversionResult, ConvertedCcsInstallOptions, install_converted_ccs, try_convert_to_ccs,
+    ConversionResult, ConvertedCcsInstallOptions, DEFAULT_CCS_DEPENDENCY_PASSES,
+    install_converted_ccs, try_convert_to_ccs,
 };
 use dependencies::extract_runtime_deps;
 // execute::get_files_to_remove is used by batch.rs via super::execute
@@ -857,6 +858,7 @@ async fn resolve_and_parse_package(
             allow_downgrade: ccs_opts.allow_downgrade,
             dep_mode: ccs_opts.dep_mode,
             yes: ccs_opts.yes,
+            dependency_passes_remaining: DEFAULT_CCS_DEPENDENCY_PASSES,
         })
         .await?;
         return Ok(None);
@@ -881,6 +883,7 @@ async fn resolve_and_parse_package(
             allow_downgrade: ccs_opts.allow_downgrade,
             dep_mode: ccs_opts.dep_mode,
             yes: ccs_opts.yes,
+            dependency_passes_remaining: DEFAULT_CCS_DEPENDENCY_PASSES,
         })
         .await?;
         return Ok(None);
@@ -916,6 +919,7 @@ async fn resolve_and_parse_package(
                     allow_downgrade: ccs_opts.allow_downgrade,
                     dep_mode: ccs_opts.dep_mode,
                     yes: ccs_opts.yes,
+                    dependency_passes_remaining: DEFAULT_CCS_DEPENDENCY_PASSES,
                 })
                 .await?;
                 return Ok(None);

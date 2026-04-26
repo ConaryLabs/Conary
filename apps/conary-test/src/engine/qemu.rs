@@ -4,7 +4,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use tokio::process::{Child, Command};
@@ -14,6 +14,8 @@ use crate::config::manifest::{QemuBoot, QemuGuestCopy};
 use crate::container::backend::ExecResult;
 
 const DEFAULT_ARTIFACT_BASE_URL: &str = "https://remi.conary.io/test-artifacts";
+const GUEST_CONARY_STAGING_PATH: &str = "/tmp/conary-host";
+const GUEST_CONARY_INSTALL_PATH: &str = "/usr/bin/conary";
 
 /// Well-known filename for the conaryOS test SSH private key.
 const TEST_SSH_KEY_NAME: &str = "conaryos-test-key";
@@ -66,8 +68,6 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
     qemu.args([
         "-m",
         &config.memory_mb.to_string(),
-        "-drive",
-        &format!("file={},format=qcow2", image_path.display()),
         "-netdev",
         &format!("user,id=net0,hostfwd=tcp::{}-:22", config.ssh_port),
         "-device",
@@ -78,6 +78,7 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
         "-accel",
         accel,
     ]);
+    qemu.args(qemu_image_args(&image_path));
     // Add UEFI firmware if available (required for GPT/EFI boot images)
     if let Some(fw) = ovmf_code {
         qemu.args(["-bios", fw]);
@@ -108,19 +109,51 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
     let mut stdout = String::new();
     let mut stderr = String::new();
     let mut exit_code = 0;
+    let command_timeout = Duration::from_secs(config.timeout_seconds);
 
-    for command in &config.commands {
-        let result = run_ssh_command(config.ssh_port, command, key_path.as_deref()).await?;
-        append_command_output(&mut stdout, &mut stderr, command, &result);
-        if result.exit_code != 0 {
-            exit_code = result.exit_code;
-            break;
+    if config.stage_conary {
+        match stage_conary_binary(
+            config.ssh_port,
+            key_path.as_deref(),
+            command_timeout,
+            &mut stdout,
+            &mut stderr,
+        )
+        .await
+        {
+            Ok(stage_exit_code) => exit_code = stage_exit_code,
+            Err(err) => {
+                exit_code = 1;
+                if !stderr.is_empty() {
+                    stderr.push('\n');
+                }
+                stderr.push_str(&format!("failed to stage host conary binary: {err:#}"));
+            }
+        }
+    }
+
+    if exit_code == 0 {
+        for command in &config.commands {
+            let result = run_ssh_command(
+                config.ssh_port,
+                command,
+                key_path.as_deref(),
+                command_timeout,
+            )
+            .await?;
+            append_command_output(&mut stdout, &mut stderr, command, &result);
+            if result.exit_code != 0 {
+                exit_code = result.exit_code;
+                break;
+            }
         }
     }
 
     if exit_code == 0 {
         for copy in &config.copy_from_guest {
-            let result = copy_file_from_guest(config.ssh_port, copy, key_path.as_deref()).await?;
+            let result =
+                copy_file_from_guest(config.ssh_port, copy, key_path.as_deref(), command_timeout)
+                    .await?;
             append_guest_copy_output(&mut stdout, &mut stderr, copy, &result);
             if result.exit_code != 0 {
                 exit_code = result.exit_code;
@@ -177,7 +210,18 @@ fn required_qemu_tools(config: &QemuBoot) -> Vec<&'static str> {
     if !config.copy_from_guest.is_empty() {
         tools.push("scp");
     }
+    if config.stage_conary && !tools.contains(&"scp") {
+        tools.push("scp");
+    }
     tools
+}
+
+fn qemu_image_args(image_path: &Path) -> [String; 3] {
+    [
+        "-snapshot".to_string(),
+        "-drive".to_string(),
+        format!("file={},format=qcow2", image_path.display()),
+    ]
 }
 
 fn resolve_qemu_image_path(config: &QemuBoot) -> Result<PathBuf> {
@@ -234,6 +278,17 @@ fn append_guest_copy_output(
     result: &ExecResult,
 ) {
     let command = format!("scp root@127.0.0.1:{} {}", copy.source, copy.dest);
+    append_command_output(stdout, stderr, &command, result);
+}
+
+fn append_host_copy_output(
+    stdout: &mut String,
+    stderr: &mut String,
+    source: &Path,
+    dest: &str,
+    result: &ExecResult,
+) {
+    let command = format!("scp {} root@127.0.0.1:{dest}", source.display());
     append_command_output(stdout, stderr, &command, result);
 }
 
@@ -363,7 +418,13 @@ async fn wait_for_ssh(
             )));
         }
 
-        let probe = run_ssh_command(ssh_port, "true", key_path.as_deref()).await?;
+        let probe = run_ssh_command(
+            ssh_port,
+            "true",
+            key_path.as_deref(),
+            Duration::from_secs(5),
+        )
+        .await?;
         if probe.exit_code == 0 {
             return Ok(Ok(()));
         }
@@ -385,6 +446,7 @@ async fn run_ssh_command(
     ssh_port: u16,
     command: &str,
     key_path: Option<&Path>,
+    timeout: Duration,
 ) -> Result<ExecResult> {
     let remote = format!("sh -lc {}", shell_quote(command));
     let mut ssh = Command::new("ssh");
@@ -393,36 +455,29 @@ async fn run_ssh_command(
     } else {
         ssh.args(["-o", "BatchMode=yes"]);
     }
-    let output = ssh
-        .args([
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "UserKnownHostsFile=/dev/null",
-            "-o",
-            "LogLevel=ERROR",
-            "-o",
-            "ConnectTimeout=2",
-            "-p",
-            &ssh_port.to_string(),
-            "root@127.0.0.1",
-            &remote,
-        ])
-        .output()
-        .await
-        .with_context(|| format!("failed to run SSH command: {command}"))?;
+    ssh.args([
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
+        "-o",
+        "LogLevel=ERROR",
+        "-o",
+        "ConnectTimeout=2",
+        "-p",
+        &ssh_port.to_string(),
+        "root@127.0.0.1",
+        &remote,
+    ]);
 
-    Ok(ExecResult {
-        exit_code: output.status.code().unwrap_or(1),
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-    })
+    run_command_with_timeout(ssh, timeout, &format!("SSH command `{command}`")).await
 }
 
 async fn copy_file_from_guest(
     ssh_port: u16,
     copy: &QemuGuestCopy,
     key_path: Option<&Path>,
+    timeout: Duration,
 ) -> Result<ExecResult> {
     let dest = Path::new(&copy.dest);
     prepare_guest_copy_destination(dest)?;
@@ -434,36 +489,161 @@ async fn copy_file_from_guest(
     } else {
         scp.args(["-o", "BatchMode=yes"]);
     }
-    let output = scp
-        .args([
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "UserKnownHostsFile=/dev/null",
-            "-o",
-            "LogLevel=ERROR",
-            "-o",
-            "ConnectTimeout=10",
-            "-P",
-            &ssh_port.to_string(),
-            &remote,
-        ])
-        .arg(dest)
-        .output()
-        .await
-        .with_context(|| {
-            format!(
-                "failed to copy {} from QEMU guest to {}",
-                copy.source,
-                dest.display()
-            )
-        })?;
+    scp.args([
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
+        "-o",
+        "LogLevel=ERROR",
+        "-o",
+        "ConnectTimeout=10",
+        "-P",
+        &ssh_port.to_string(),
+        &remote,
+    ])
+    .arg(dest);
 
-    Ok(ExecResult {
-        exit_code: output.status.code().unwrap_or(1),
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-    })
+    run_command_with_timeout(
+        scp,
+        timeout,
+        &format!("copy {} from QEMU guest", copy.source),
+    )
+    .await
+}
+
+async fn copy_file_to_guest(
+    ssh_port: u16,
+    source: &Path,
+    dest: &str,
+    key_path: Option<&Path>,
+    timeout: Duration,
+) -> Result<ExecResult> {
+    let remote = format!("root@127.0.0.1:{dest}");
+    let mut scp = Command::new("scp");
+    if let Some(key) = key_path {
+        scp.args(["-i", &key.display().to_string()]);
+    } else {
+        scp.args(["-o", "BatchMode=yes"]);
+    }
+    scp.args([
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
+        "-o",
+        "LogLevel=ERROR",
+        "-o",
+        "ConnectTimeout=10",
+        "-P",
+        &ssh_port.to_string(),
+    ])
+    .arg(source)
+    .arg(&remote);
+
+    run_command_with_timeout(
+        scp,
+        timeout,
+        &format!("copy host conary binary {} to QEMU guest", source.display()),
+    )
+    .await
+}
+
+async fn run_command_with_timeout(
+    mut command: Command,
+    timeout: Duration,
+    description: &str,
+) -> Result<ExecResult> {
+    command.kill_on_drop(true);
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+    let child = command
+        .spawn()
+        .with_context(|| format!("failed to start {description}"))?;
+
+    match tokio::time::timeout(timeout, child.wait_with_output()).await {
+        Ok(output) => {
+            let output = output.with_context(|| format!("failed to wait for {description}"))?;
+            Ok(ExecResult {
+                exit_code: output.status.code().unwrap_or(1),
+                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            })
+        }
+        Err(_) => Ok(ExecResult {
+            exit_code: 124,
+            stdout: String::new(),
+            stderr: format!("{description} timed out after {}s", timeout.as_secs()),
+        }),
+    }
+}
+
+struct PreparedHostConary {
+    path: PathBuf,
+    temp_dir: PathBuf,
+}
+
+impl Drop for PreparedHostConary {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.temp_dir);
+    }
+}
+
+fn prepare_host_conary_for_guest() -> Result<PreparedHostConary> {
+    let source = crate::paths::host_conary_binary()?;
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system time before unix epoch")?
+        .as_nanos();
+    let temp_dir = std::env::temp_dir().join(format!(
+        "conary-test-qemu-conary-{}-{unique}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&temp_dir)
+        .with_context(|| format!("failed to create {}", temp_dir.display()))?;
+    let path = temp_dir.join("conary");
+    fs::copy(&source, &path)
+        .with_context(|| format!("failed to stage host conary binary {}", source.display()))?;
+
+    // Debug builds are large; strip a temporary copy before sending it over SSH.
+    let _ = std::process::Command::new("strip").arg(&path).status();
+
+    Ok(PreparedHostConary { path, temp_dir })
+}
+
+async fn stage_conary_binary(
+    ssh_port: u16,
+    key_path: Option<&Path>,
+    timeout: Duration,
+    stdout: &mut String,
+    stderr: &mut String,
+) -> Result<i32> {
+    let staged = prepare_host_conary_for_guest()?;
+    let copy = copy_file_to_guest(
+        ssh_port,
+        &staged.path,
+        GUEST_CONARY_STAGING_PATH,
+        key_path,
+        timeout,
+    )
+    .await?;
+    append_host_copy_output(
+        stdout,
+        stderr,
+        &staged.path,
+        GUEST_CONARY_STAGING_PATH,
+        &copy,
+    );
+    if copy.exit_code != 0 {
+        return Ok(copy.exit_code);
+    }
+
+    let install_command = format!(
+        "install -m 755 {GUEST_CONARY_STAGING_PATH} {GUEST_CONARY_INSTALL_PATH} && rm -f {GUEST_CONARY_STAGING_PATH} && {GUEST_CONARY_INSTALL_PATH} --version"
+    );
+    let install = run_ssh_command(ssh_port, &install_command, key_path, timeout).await?;
+    append_command_output(stdout, stderr, &install_command, &install);
+    Ok(install.exit_code)
 }
 
 fn prepare_guest_copy_destination(dest: &Path) -> Result<()> {
@@ -558,6 +738,7 @@ mod tests {
         let config = QemuBoot {
             image: "local-image".to_string(),
             local_image_path: Some(missing.display().to_string()),
+            stage_conary: false,
             copy_from_guest: Vec::new(),
             memory_mb: 1024,
             timeout_seconds: 120,
@@ -589,5 +770,44 @@ mod tests {
     #[test]
     fn test_prepare_guest_copy_destination_allows_current_dir_destination() {
         prepare_guest_copy_destination(Path::new("image.qcow2")).unwrap();
+    }
+
+    #[test]
+    fn test_qemu_image_args_use_snapshot_overlay() {
+        let args = qemu_image_args(Path::new("/tmp/minimal-boot-v2.qcow2"));
+
+        assert_eq!(args[0], "-snapshot");
+        assert_eq!(args[1], "-drive");
+        assert_eq!(args[2], "file=/tmp/minimal-boot-v2.qcow2,format=qcow2");
+    }
+
+    #[test]
+    fn test_required_qemu_tools_include_scp_when_staging_conary() {
+        let config = QemuBoot {
+            image: "minimal-boot-v2".to_string(),
+            local_image_path: None,
+            stage_conary: true,
+            copy_from_guest: Vec::new(),
+            memory_mb: 1024,
+            timeout_seconds: 120,
+            ssh_port: 2222,
+            commands: vec!["conary --version".to_string()],
+            expect_output: Vec::new(),
+        };
+
+        assert!(required_qemu_tools(&config).contains(&"scp"));
+    }
+
+    #[tokio::test]
+    async fn test_command_timeout_returns_failure_instead_of_hanging() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 5"]);
+
+        let result =
+            run_command_with_timeout(command, Duration::from_millis(10), "slow command").await;
+
+        let result = result.expect("timeout result");
+        assert_eq!(result.exit_code, 124);
+        assert!(result.stderr.contains("slow command timed out"));
     }
 }

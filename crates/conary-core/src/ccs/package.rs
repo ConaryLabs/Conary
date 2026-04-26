@@ -434,12 +434,13 @@ impl PackageFormat for CcsPackage {
                 continue;
             }
 
+            let symlink_target = if file.file_type == CcsFileType::Symlink {
+                file.target.clone()
+            } else {
+                None
+            };
             let content = if file.file_type == CcsFileType::Symlink {
-                // For symlinks, content is the target path
-                file.target
-                    .as_ref()
-                    .map(|t| t.as_bytes().to_vec())
-                    .unwrap_or_default()
+                Vec::new()
             } else if let Some(chunk_hashes) = &file.chunks {
                 // File is chunked - reassemble from chunks
                 let mut reassembled = Vec::with_capacity(file.size as usize);
@@ -483,7 +484,7 @@ impl PackageFormat for CcsPackage {
                 size: file.size as i64,
                 mode: file.mode as i32,
                 sha256,
-                symlink_target: None,
+                symlink_target,
             });
         }
 
@@ -582,6 +583,40 @@ license = "MIT"
         let target = "/usr/lib/libfoo.so.1";
         let hash = CasStore::compute_symlink_hash(target);
         assert_eq!(hash.len(), 64);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_extract_preserves_symlink_target() {
+        let temp = tempfile::tempdir().unwrap();
+        let source_dir = temp.path().join("src");
+        fs::create_dir_all(source_dir.join("usr/bin")).unwrap();
+        fs::write(source_dir.join("usr/bin/bash"), b"bash\n").unwrap();
+        std::os::unix::fs::symlink("bash", source_dir.join("usr/bin/sh")).unwrap();
+
+        let manifest = CcsManifest::parse(
+            r#"
+[package]
+name = "symlink-package"
+version = "1.0.0"
+description = "symlink fixture"
+license = "MIT"
+"#,
+        )
+        .unwrap();
+
+        let result = CcsBuilder::new(manifest, &source_dir).build().unwrap();
+        let package_path = temp.path().join("symlink-package.ccs");
+        write_ccs_package(&result, &package_path).unwrap();
+
+        let package = CcsPackage::parse(package_path.to_str().unwrap()).unwrap();
+        let files = package.extract_file_contents().unwrap();
+        let sh = files
+            .iter()
+            .find(|file| file.path == "/usr/bin/sh")
+            .expect("expected /usr/bin/sh symlink");
+
+        assert_eq!(sh.symlink_target.as_deref(), Some("bash"));
     }
 
     #[test]

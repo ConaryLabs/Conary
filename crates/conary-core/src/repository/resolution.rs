@@ -443,6 +443,7 @@ impl<'a> PackageResolver<'a> {
                     distro,
                     pkg_name,
                     effective_remi_version(pkg_with_repo, options),
+                    pkg_with_repo.package.architecture.as_deref(),
                     options,
                 )
                 .await
@@ -568,13 +569,14 @@ impl<'a> PackageResolver<'a> {
         distro: &str,
         name: &str,
         version: Option<&str>,
+        architecture: Option<&str>,
         options: &ResolutionOptions,
     ) -> Result<PackageSource> {
         let (temp_dir, output_dir) = create_output_dir(options)?;
 
         let client = RemiClient::new(endpoint)?;
         let path = client
-            .fetch_package(distro, name, version, &output_dir)
+            .fetch_package(distro, name, version, architecture, &output_dir)
             .await?;
 
         Ok(PackageSource::Ccs {

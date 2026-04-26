@@ -153,8 +153,9 @@ impl ScriptletCapturer {
             let rel_path = path.strip_prefix(root).unwrap();
             let abs_path = format!("/{}", rel_path.to_string_lossy());
 
-            // Skip logs and temp files
-            if abs_path.starts_with("/var/log/conary") || abs_path.starts_with("/tmp") {
+            // Skip capture scaffolding and temp files. These files are part of
+            // the sandbox used to observe scriptlets, not package output.
+            if is_capture_scaffold_path(&abs_path) || abs_path.starts_with("/tmp") {
                 continue;
             }
 
@@ -179,5 +180,57 @@ impl ScriptletCapturer {
         }
 
         Ok(new_files)
+    }
+}
+
+fn is_capture_scaffold_path(path: &str) -> bool {
+    if path.starts_with("/var/log/conary") {
+        return true;
+    }
+
+    let Some((prefix, tool)) = path.rsplit_once('/') else {
+        return false;
+    };
+
+    matches!(prefix, "/bin" | "/sbin" | "/usr/bin" | "/usr/sbin")
+        && mock::MOCKED_UTILS.contains(&tool)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ccs::convert::mock;
+    use std::collections::HashSet;
+
+    #[test]
+    fn scan_for_changes_does_not_return_capture_mock_tools() {
+        let capturer = ScriptletCapturer::new().unwrap();
+        let root = capturer.root.path();
+
+        mock::setup_mock_tools(root).unwrap();
+        std::fs::create_dir_all(root.join("etc/pki/ca-trust/extracted")).unwrap();
+        std::fs::write(
+            root.join("etc/pki/ca-trust/extracted/anchors.pem"),
+            "captured scriptlet output",
+        )
+        .unwrap();
+
+        let captured = capturer.scan_for_changes(&[]).unwrap();
+        let paths = captured
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect::<HashSet<_>>();
+
+        assert!(paths.contains("/etc/pki/ca-trust/extracted/anchors.pem"));
+
+        for tool in mock::MOCKED_UTILS {
+            for prefix in ["/bin", "/sbin", "/usr/bin", "/usr/sbin"] {
+                let path = format!("{prefix}/{tool}");
+                assert!(
+                    !paths.contains(path.as_str()),
+                    "capture mock tool leaked into package payload: {path}"
+                );
+            }
+        }
     }
 }

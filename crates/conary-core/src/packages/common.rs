@@ -44,6 +44,8 @@ pub struct PackageMetadata {
     pub files: Vec<PackageFile>,
     /// Package dependencies
     pub dependencies: Vec<Dependency>,
+    /// Native package-provided capabilities.
+    pub provides: Vec<Dependency>,
     /// Install/remove scriptlets
     pub scriptlets: Vec<Scriptlet>,
     /// Configuration files with special handling
@@ -61,6 +63,7 @@ impl PackageMetadata {
             description: None,
             files: Vec::new(),
             dependencies: Vec::new(),
+            provides: Vec::new(),
             scriptlets: Vec::new(),
             config_files: Vec::new(),
         }
@@ -94,6 +97,11 @@ impl PackageMetadata {
     /// Get the list of dependencies
     pub fn dependencies(&self) -> &[Dependency] {
         &self.dependencies
+    }
+
+    /// Get the list of native provides
+    pub fn provides(&self) -> &[Dependency] {
+        &self.provides
     }
 
     /// Get the scriptlets

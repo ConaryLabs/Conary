@@ -39,6 +39,7 @@ fn create_test_metadata(name: &str) -> PackageMetadata {
             symlink_target: None,
         }],
         dependencies: vec![],
+        provides: vec![],
         scriptlets: vec![],
         config_files: vec![],
     }
@@ -101,6 +102,7 @@ fn create_server_package() -> (PackageMetadata, Vec<ExtractedFile>) {
                 description: None,
             },
         ],
+        provides: vec![],
         scriptlets: vec![
             Scriptlet {
                 phase: ScriptletPhase::PreInstall,
@@ -184,6 +186,7 @@ fn create_complex_scriptlet_package() -> (PackageMetadata, Vec<ExtractedFile>) {
             symlink_target: None,
         }],
         dependencies: vec![],
+        provides: vec![],
         scriptlets: vec![
             Scriptlet {
                 phase: ScriptletPhase::PreInstall,
@@ -542,6 +545,7 @@ fn test_nginx_wellknown_inference_during_conversion() {
             },
         ],
         dependencies: vec![],
+        provides: vec![],
         scriptlets: vec![],
         config_files: vec![],
     };
@@ -735,6 +739,7 @@ fn test_file_permissions_preserved() {
             },
         ],
         dependencies: vec![],
+        provides: vec![],
         scriptlets: vec![],
         config_files: vec![],
     };
@@ -798,6 +803,7 @@ fn test_empty_package_conversion() {
         description: None,  // No description
         files: vec![],      // No files
         dependencies: vec![],
+        provides: vec![],
         scriptlets: vec![],
         config_files: vec![],
     };
@@ -847,6 +853,7 @@ fn test_large_file_handling() {
             symlink_target: None,
         }],
         dependencies: vec![],
+        provides: vec![],
         scriptlets: vec![],
         config_files: vec![],
     };

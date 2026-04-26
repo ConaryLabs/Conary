@@ -147,7 +147,6 @@ fn conary_root_for_db_path(db_path: &str) -> PathBuf {
     conary_core::db::paths::db_dir(db_path)
 }
 
-#[cfg(test)]
 fn boot_root_for_generation_build(conary_root: &Path) -> PathBuf {
     if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
         let test_boot = conary_root.join("boot");
@@ -156,11 +155,6 @@ fn boot_root_for_generation_build(conary_root: &Path) -> PathBuf {
         }
     }
 
-    PathBuf::from("/boot")
-}
-
-#[cfg(not(test))]
-fn boot_root_for_generation_build(_conary_root: &Path) -> PathBuf {
     PathBuf::from("/boot")
 }
 

@@ -217,15 +217,23 @@ fn resolve_repo_dependency_request(
     // 2. Normalized capability lookup -- preferred resolution path.
     //    Queries the indexed `repository_provides` table before falling back
     //    to cross-distro heuristics or JSON blob scans.
-    if let Some((package_name, package_version)) =
-        resolve_repo_dependency_by_capability(conn, dep_name, constraint, options)?
-    {
-        let resolved_constraint = if let Some(version) = package_version {
-            VersionConstraint::parse(&format!("= {version}")).unwrap_or(VersionConstraint::Any)
-        } else {
-            constraint.clone()
-        };
-        return Ok((package_name, resolved_constraint));
+    let mut capability_names = vec![dep_name.to_string()];
+    for variation in generate_capability_variations(dep_name) {
+        if !capability_names.contains(&variation) {
+            capability_names.push(variation);
+        }
+    }
+    for capability_name in capability_names {
+        if let Some((package_name, package_version)) =
+            resolve_repo_dependency_by_capability(conn, &capability_name, constraint, options)?
+        {
+            let resolved_constraint = if let Some(version) = package_version {
+                VersionConstraint::parse(&format!("= {version}")).unwrap_or(VersionConstraint::Any)
+            } else {
+                constraint.clone()
+            };
+            return Ok((package_name, resolved_constraint));
+        }
     }
 
     // 3. Cross-distro heuristics (repology / name-variation helpers).
@@ -386,6 +394,7 @@ pub fn resolve_dependency_requests(
     requests: &[(String, VersionConstraint)],
 ) -> Result<Vec<(String, PackageWithRepo)>> {
     let mut to_download = Vec::new();
+    let mut queued_packages = std::collections::HashSet::new();
     let options = SelectionOptions::default();
 
     for (dep_name, constraint) in requests {
@@ -401,6 +410,17 @@ pub fn resolve_dependency_requests(
 
         let (resolved_name, resolved_constraint) =
             resolve_repo_dependency_request(conn, dep_name, constraint, &options)?;
+
+        if resolved_name != *dep_name {
+            let installed = Trove::find_by_name(conn, &resolved_name)?;
+            if !installed.is_empty() {
+                debug!(
+                    "Dependency {} resolves to installed package {}, skipping",
+                    dep_name, resolved_name
+                );
+                continue;
+            }
+        }
 
         // Use the resolved constraint's version to pin selection when possible
         let select_options = match &resolved_constraint {
@@ -420,6 +440,18 @@ pub fn resolve_dependency_requests(
                     pkg_with_repo.package.version,
                     pkg_with_repo.repository.name
                 );
+                let package_key = (
+                    pkg_with_repo.repository.name.clone(),
+                    pkg_with_repo.package.name.clone(),
+                    pkg_with_repo.package.version.clone(),
+                );
+                if !queued_packages.insert(package_key) {
+                    debug!(
+                        "Dependency {} resolves to package {} {}, already queued",
+                        dep_name, pkg_with_repo.package.name, pkg_with_repo.package.version
+                    );
+                    continue;
+                }
                 to_download.push((dep_name.clone(), pkg_with_repo));
             }
             Err(e) => {
@@ -607,7 +639,7 @@ pub async fn download_dependencies(
 
     // Calculate statistics and show summary
     let mut succeeded_results = Vec::new();
-    let mut failed_count = 0;
+    let mut failures = Vec::new();
     let mut bytes_downloaded: u64 = 0;
 
     for result in individual_results {
@@ -616,20 +648,34 @@ pub async fn download_dependencies(
                 bytes_downloaded += size;
                 succeeded_results.push((name, path));
             }
-            Err(_) => {
-                failed_count += 1;
+            Err(e) => {
+                failures.push(e.to_string());
             }
         }
     }
 
+    let failed_count = failures.len();
     progress.finish_all(succeeded_results.len(), failed_count, bytes_downloaded);
 
     // If any downloads failed, return error
     if failed_count > 0 {
+        let details = failures
+            .iter()
+            .take(5)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("; ");
+        let suffix = if failed_count > 5 {
+            format!("; ... and {} more", failed_count - 5)
+        } else {
+            String::new()
+        };
         return Err(Error::DownloadError(format!(
-            "{} of {} dependency downloads failed",
+            "{} of {} dependency downloads failed: {}{}",
             failed_count,
-            dependencies.len()
+            dependencies.len(),
+            details,
+            suffix
         )));
     }
 
@@ -865,6 +911,91 @@ mod tests {
         let result = resolve_dependency_requests(&conn, &requests).unwrap();
 
         assert!(result.is_empty(), "installed packages should be skipped");
+    }
+
+    #[test]
+    fn resolve_dependency_requests_deduplicates_capabilities_to_same_package() {
+        let conn = test_db();
+
+        let mut repo = Repository::new("fedora-remi".to_string(), "https://example.invalid".into());
+        repo.insert(&conn).unwrap();
+        let repo_id = repo.id.unwrap();
+
+        let mut pkg = RepositoryPackage::new(
+            repo_id,
+            "kmod".to_string(),
+            "34.2-2.fc43".to_string(),
+            "sha256:kmod".to_string(),
+            100,
+            "https://example.invalid/kmod.rpm".to_string(),
+        );
+        pkg.insert(&conn).unwrap();
+        let pkg_id = pkg.id.unwrap();
+
+        for capability in ["libkmod.so.2()(64bit)", "libkmod.so.2(LIBKMOD_22)(64bit)"] {
+            let mut provide = RepositoryProvide::new(
+                pkg_id,
+                capability.to_string(),
+                None,
+                "soname".to_string(),
+                Some(capability.to_string()),
+            );
+            provide.insert(&conn).unwrap();
+        }
+
+        let requests = vec![
+            ("kmod".to_string(), VersionConstraint::Any),
+            ("libkmod.so.2()(64bit)".to_string(), VersionConstraint::Any),
+            (
+                "libkmod.so.2(LIBKMOD_22)(64bit)".to_string(),
+                VersionConstraint::Any,
+            ),
+        ];
+
+        let result = resolve_dependency_requests(&conn, &requests).unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].1.package.name, "kmod");
+        assert_eq!(result[0].1.package.version, "34.2-2.fc43");
+    }
+
+    #[test]
+    fn resolve_dependency_requests_normalizes_rpm_soname_markers_for_repo_provides() {
+        let conn = test_db();
+
+        let mut repo = Repository::new("fedora-remi".to_string(), "https://example.invalid".into());
+        repo.insert(&conn).unwrap();
+        let repo_id = repo.id.unwrap();
+
+        let mut pkg = RepositoryPackage::new(
+            repo_id,
+            "glib2".to_string(),
+            "2.86.0-2.fc43".to_string(),
+            "sha256:glib2".to_string(),
+            100,
+            "https://example.invalid/glib2.rpm".to_string(),
+        );
+        pkg.insert(&conn).unwrap();
+        let pkg_id = pkg.id.unwrap();
+
+        let mut provide = RepositoryProvide::new(
+            pkg_id,
+            "libglib-2.0.so.0".to_string(),
+            None,
+            "soname".to_string(),
+            Some("libglib-2.0.so.0()(64bit)".to_string()),
+        );
+        provide.insert(&conn).unwrap();
+
+        let requests = vec![(
+            "libglib-2.0.so.0()(64bit)".to_string(),
+            VersionConstraint::Any,
+        )];
+
+        let result = resolve_dependency_requests(&conn, &requests).unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].1.package.name, "glib2");
     }
 
     #[test]

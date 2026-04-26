@@ -35,6 +35,9 @@ pub struct RepositoryMetadata {
 pub struct PackageEntry {
     pub name: String,
     pub version: String,
+    /// Native package architecture from upstream repository metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub architecture: Option<String>,
     /// Whether this package has been converted to CCS
     pub converted: bool,
     /// Dependency names (from native repo metadata)
@@ -123,16 +126,16 @@ fn build_metadata(
     // Query converted packages once so we can both mark repo-backed entries as
     // converted and surface packages that exist only in Remi's CCS store.
     let converted_packages = build_converted_packages(&conn, distro)?;
-    let converted_set: HashSet<String> = converted_packages
+    let converted_set: HashSet<(String, String, Option<String>)> = converted_packages
         .iter()
-        .map(|pkg| format!("{}:{}", pkg.name, pkg.version))
+        .map(|pkg| package_key(&pkg.name, &pkg.version, pkg.architecture.as_deref()))
         .collect();
 
     // Build package entries
     let mut packages: Vec<PackageEntry> = repo_packages
         .iter()
         .map(|pkg| {
-            let key = format!("{}:{}", pkg.name, pkg.version);
+            let key = package_key(&pkg.name, &pkg.version, pkg.architecture.as_deref());
             let dependencies = pkg
                 .dependencies
                 .as_ref()
@@ -143,6 +146,7 @@ fn build_metadata(
             PackageEntry {
                 name: pkg.name.clone(),
                 version: pkg.version.clone(),
+                architecture: pkg.architecture.clone(),
                 converted: converted_set.contains(&key),
                 dependencies,
                 metadata,
@@ -150,12 +154,16 @@ fn build_metadata(
         })
         .collect();
 
-    let existing_keys: HashSet<String> = packages
+    let existing_keys: HashSet<(String, String, Option<String>)> = packages
         .iter()
-        .map(|pkg| format!("{}:{}", pkg.name, pkg.version))
+        .map(|pkg| package_key(&pkg.name, &pkg.version, pkg.architecture.as_deref()))
         .collect();
     for converted in converted_packages {
-        let key = format!("{}:{}", converted.name, converted.version);
+        let key = package_key(
+            &converted.name,
+            &converted.version,
+            converted.architecture.as_deref(),
+        );
         if !existing_keys.contains(&key) {
             packages.push(converted);
         }
@@ -179,13 +187,25 @@ fn build_metadata(
 /// Alias to shared implementation in handlers/mod.rs
 use super::find_repositories_for_distro;
 
+fn package_key(
+    name: &str,
+    version: &str,
+    architecture: Option<&str>,
+) -> (String, String, Option<String>) {
+    (
+        name.to_string(),
+        version.to_string(),
+        architecture.map(str::to_string),
+    )
+}
+
 /// Build converted package entries for this distro.
 fn build_converted_packages(
     conn: &Connection,
     distro: &str,
 ) -> Result<Vec<PackageEntry>, anyhow::Error> {
     let mut stmt = conn.prepare(
-        "SELECT package_name, package_version FROM converted_packages
+        "SELECT package_name, package_version, package_architecture, original_format FROM converted_packages
          WHERE distro = ?1 AND package_name IS NOT NULL AND package_version IS NOT NULL",
     )?;
 
@@ -195,9 +215,21 @@ fn build_converted_packages(
     while let Some(row) = rows.next()? {
         let name: String = row.get(0)?;
         let version: String = row.get(1)?;
+        let architecture: Option<String> = row.get(2)?;
+        let original_format: String = row.get(3)?;
+
+        // Pre-architecture Remi conversion records cannot be addressed safely
+        // once native metadata has multilib packages and epoch-aware versions.
+        // Keep uploaded CCS fixtures visible, but do not advertise ambiguous
+        // repo-derived conversions as installable repository metadata.
+        if architecture.is_none() && original_format != "ccs" {
+            continue;
+        }
+
         packages.push(PackageEntry {
             name,
             version,
+            architecture,
             converted: true,
             dependencies: None,
             metadata: None,
@@ -321,6 +353,7 @@ mod tests {
             1024,
             "https://example.com/nginx.rpm".to_string(),
         );
+        pkg1.architecture = Some("x86_64".to_string());
         pkg1.insert(&conn).unwrap();
 
         let mut pkg2 = RepositoryPackage::new(
@@ -355,6 +388,36 @@ mod tests {
     }
 
     #[test]
+    fn test_build_metadata_preserves_repository_architecture() {
+        let (temp_file, conn) = create_test_db();
+
+        let mut repo = Repository::new("fedora".to_string(), "https://example.com".to_string());
+        repo.default_strategy_distro = Some("fedora".to_string());
+        let repo_id = repo.insert(&conn).unwrap();
+
+        let mut pkg = RepositoryPackage::new(
+            repo_id,
+            "qemu-img".to_string(),
+            "2:10.1.0-7.fc43".to_string(),
+            "sha256:qemu-img".to_string(),
+            4096,
+            "https://example.com/qemu-img.rpm".to_string(),
+        );
+        pkg.architecture = Some("x86_64".to_string());
+        pkg.insert(&conn).unwrap();
+
+        let metadata = build_metadata(temp_file.path(), "fedora").unwrap();
+        let qemu_img = metadata
+            .packages
+            .iter()
+            .find(|p| p.name == "qemu-img")
+            .unwrap();
+        let serialized = serde_json::to_value(qemu_img).unwrap();
+
+        assert_eq!(serialized["architecture"], "x86_64");
+    }
+
+    #[test]
     fn test_build_metadata_with_converted_packages() {
         let (temp_file, conn) = create_test_db();
 
@@ -372,6 +435,7 @@ mod tests {
             1024,
             "https://example.com/nginx.rpm".to_string(),
         );
+        pkg1.architecture = Some("x86_64".to_string());
         pkg1.insert(&conn).unwrap();
 
         let mut pkg2 = RepositoryPackage::new(
@@ -397,6 +461,7 @@ mod tests {
             "sha256:content".to_string(),
             "/path/to/nginx.ccs".to_string(),
         );
+        converted.package_architecture = Some("x86_64".to_string());
         converted.insert(&conn).unwrap();
 
         let metadata = build_metadata(temp_file.path(), "fedora").unwrap();
@@ -452,6 +517,55 @@ mod tests {
         assert_eq!(fixture.version, "1.0.0");
         assert!(fixture.converted);
         assert!(fixture.dependencies.is_none());
+    }
+
+    #[test]
+    fn test_build_metadata_omits_legacy_repo_converted_only_without_architecture() {
+        let (temp_file, conn) = create_test_db();
+
+        let mut repo = Repository::new("fedora".to_string(), "https://example.com".to_string());
+        repo.default_strategy_distro = Some("fedora".to_string());
+        let repo_id = repo.insert(&conn).unwrap();
+
+        let mut repo_pkg = RepositoryPackage::new(
+            repo_id,
+            "qemu-img".to_string(),
+            "2:10.1.0-7.fc43".to_string(),
+            "sha256:qemu-img".to_string(),
+            4096,
+            "https://example.com/qemu-img.rpm".to_string(),
+        );
+        repo_pkg.architecture = Some("x86_64".to_string());
+        repo_pkg.insert(&conn).unwrap();
+
+        let mut stale_converted = ConvertedPackage::new_server(
+            "fedora".to_string(),
+            "qemu-img".to_string(),
+            "10.1.0-7.fc43".to_string(),
+            "rpm".to_string(),
+            "sha256:old-qemu-img".to_string(),
+            "high".to_string(),
+            &["chunk".to_string()],
+            2048,
+            "sha256:content".to_string(),
+            "/cache/qemu-img-10.1.0-7.fc43.ccs".to_string(),
+        );
+        stale_converted.insert(&conn).unwrap();
+
+        let metadata = build_metadata(temp_file.path(), "fedora").unwrap();
+
+        assert!(
+            metadata
+                .packages
+                .iter()
+                .any(|p| p.name == "qemu-img" && p.version == "2:10.1.0-7.fc43")
+        );
+        assert!(
+            !metadata
+                .packages
+                .iter()
+                .any(|p| p.name == "qemu-img" && p.version == "10.1.0-7.fc43")
+        );
     }
 
     #[test]
@@ -537,6 +651,7 @@ mod tests {
             "sha256:c1".to_string(),
             "/path/1.ccs".to_string(),
         );
+        fedora_pkg.package_architecture = Some("x86_64".to_string());
         fedora_pkg.insert(&conn).unwrap();
 
         let mut arch_pkg = ConvertedPackage::new_server(
@@ -551,6 +666,7 @@ mod tests {
             "sha256:c2".to_string(),
             "/path/2.ccs".to_string(),
         );
+        arch_pkg.package_architecture = Some("x86_64".to_string());
         arch_pkg.insert(&conn).unwrap();
 
         // Query for fedora - should only get fedora packages
@@ -596,6 +712,7 @@ mod tests {
             "sha256:c".to_string(),
             "/path/curl.ccs".to_string(),
         );
+        server_pkg.package_architecture = Some("x86_64".to_string());
         server_pkg.insert(&conn).unwrap();
 
         let set = build_converted_packages(&conn, "fedora").unwrap();

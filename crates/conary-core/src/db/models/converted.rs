@@ -14,7 +14,7 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 
 /// Current conversion algorithm version
 /// Bump this when making changes that require re-conversion of existing packages
-pub const CONVERSION_VERSION: i32 = 1;
+pub const CONVERSION_VERSION: i32 = 2;
 
 /// A converted package record
 #[derive(Debug, Clone)]
@@ -56,6 +56,8 @@ pub struct ConvertedPackage {
     pub package_version: Option<String>,
     /// Distribution (fedora, arch, ubuntu, debian)
     pub distro: Option<String>,
+    /// Native package architecture for server-side conversion cache identity.
+    pub package_architecture: Option<String>,
     /// JSON array of chunk hashes
     pub chunk_hashes_json: Option<String>,
     /// Total size of the CCS package
@@ -73,7 +75,7 @@ impl ConvertedPackage {
          enhancement_version, inferred_caps_json, extracted_provenance_json, \
          enhancement_status, enhancement_error, enhancement_attempted_at, \
          package_name, package_version, distro, chunk_hashes_json, total_size, \
-         content_hash, ccs_path";
+         content_hash, ccs_path, package_architecture";
 
     /// Create a new converted package record
     pub fn new(
@@ -101,6 +103,7 @@ impl ConvertedPackage {
             package_name: None,
             package_version: None,
             distro: None,
+            package_architecture: None,
             chunk_hashes_json: None,
             total_size: None,
             content_hash: None,
@@ -140,6 +143,7 @@ impl ConvertedPackage {
             package_name: Some(package_name),
             package_version: Some(package_version),
             distro: Some(distro),
+            package_architecture: None,
             chunk_hashes_json: Some(
                 serde_json::to_string(chunk_hashes).unwrap_or_else(|_| "[]".to_string()),
             ),
@@ -175,6 +179,7 @@ impl ConvertedPackage {
             total_size: row.get(18)?,
             content_hash: row.get(19)?,
             ccs_path: row.get(20)?,
+            package_architecture: row.get(21)?,
         })
     }
 
@@ -183,8 +188,8 @@ impl ConvertedPackage {
         conn.execute(
             "INSERT INTO converted_packages (trove_id, original_format, original_checksum, conversion_version, conversion_fidelity, detected_hooks,
                 enhancement_version, inferred_caps_json, extracted_provenance_json, enhancement_status,
-                package_name, package_version, distro, chunk_hashes_json, total_size, content_hash, ccs_path)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                package_name, package_version, distro, chunk_hashes_json, total_size, content_hash, ccs_path, package_architecture)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
                 self.trove_id,
                 &self.original_format,
@@ -203,6 +208,7 @@ impl ConvertedPackage {
                 self.total_size,
                 &self.content_hash,
                 &self.ccs_path,
+                &self.package_architecture,
             ],
         )?;
 
@@ -289,23 +295,58 @@ impl ConvertedPackage {
         name: &str,
         version: Option<&str>,
     ) -> Result<Option<Self>> {
+        Self::find_by_package_identity_with_arch(conn, distro, name, version, None)
+    }
+
+    /// Find a converted package by distro, name, version, and architecture.
+    pub fn find_by_package_identity_with_arch(
+        conn: &Connection,
+        distro: &str,
+        name: &str,
+        version: Option<&str>,
+        architecture: Option<&str>,
+    ) -> Result<Option<Self>> {
         let result = if let Some(ver) = version {
-            let sql = format!(
-                "SELECT {} FROM converted_packages \
-                 WHERE distro = ?1 AND package_name = ?2 AND package_version = ?3",
-                Self::COLUMNS
-            );
-            conn.query_row(&sql, params![distro, name, ver], Self::from_row)
-                .optional()?
+            if let Some(arch) = architecture {
+                let sql = format!(
+                    "SELECT {} FROM converted_packages \
+                     WHERE distro = ?1 AND package_name = ?2 AND package_version = ?3 \
+                     AND package_architecture = ?4 \
+                     ORDER BY converted_at DESC LIMIT 1",
+                    Self::COLUMNS
+                );
+                conn.query_row(&sql, params![distro, name, ver, arch], Self::from_row)
+                    .optional()?
+            } else {
+                let sql = format!(
+                    "SELECT {} FROM converted_packages \
+                     WHERE distro = ?1 AND package_name = ?2 AND package_version = ?3 \
+                     ORDER BY converted_at DESC LIMIT 1",
+                    Self::COLUMNS
+                );
+                conn.query_row(&sql, params![distro, name, ver], Self::from_row)
+                    .optional()?
+            }
         } else {
-            let sql = format!(
-                "SELECT {} FROM converted_packages \
-                 WHERE distro = ?1 AND package_name = ?2 \
-                 ORDER BY converted_at DESC LIMIT 1",
-                Self::COLUMNS
-            );
-            conn.query_row(&sql, params![distro, name], Self::from_row)
-                .optional()?
+            if let Some(arch) = architecture {
+                let sql = format!(
+                    "SELECT {} FROM converted_packages \
+                     WHERE distro = ?1 AND package_name = ?2 AND package_architecture = ?3 \
+                     ORDER BY converted_at DESC LIMIT 1",
+                    Self::COLUMNS
+                );
+                conn.query_row(&sql, params![distro, name, arch], Self::from_row)
+                    .optional()?
+            } else {
+                let sql = format!(
+                    "SELECT {} FROM converted_packages \
+                     WHERE distro = ?1 AND package_name = ?2 \
+                     ORDER BY converted_at DESC LIMIT 1",
+                    Self::COLUMNS
+                );
+                conn.query_row(&sql, params![distro, name], Self::from_row)
+                    .optional()?
+            }
         };
         Ok(result)
     }

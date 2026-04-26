@@ -57,7 +57,13 @@ async fn download_package_inner(
     if let Some((base_url, distro, name)) = parse_remi_download_url(&repo_pkg.download_url) {
         let client = RemiClient::new(&base_url)?;
         return client
-            .fetch_package(&distro, &name, Some(&repo_pkg.version), dest_dir)
+            .fetch_package(
+                &distro,
+                &name,
+                Some(&repo_pkg.version),
+                repo_pkg.architecture.as_deref(),
+                dest_dir,
+            )
             .await;
     }
 

@@ -358,6 +358,7 @@ mod integration_tests {
         // Insert file entries for the trove
         let cas = CasStore::new(&objects_dir).unwrap();
         let hash = cas.store(b"hello").unwrap();
+        let init_hash = cas.store(b"init").unwrap();
         let mut fe = FileEntry::new(
             "/usr/bin/hello".to_string(),
             hash,
@@ -366,6 +367,14 @@ mod integration_tests {
             trove_id,
         );
         fe.insert(&conn).unwrap();
+        let mut init = FileEntry::new(
+            "/usr/sbin/init".to_string(),
+            init_hash,
+            b"init".len() as i64,
+            0o755,
+            trove_id,
+        );
+        init.insert(&conn).unwrap();
 
         // Run build_generation_from_db
         let result = build_generation_from_db_with_boot_root(
@@ -394,8 +403,8 @@ mod integration_tests {
 
         // Verify at least one CAS object was referenced
         assert_eq!(
-            build_result.cas_objects_referenced, 1,
-            "Should reference 1 CAS object for the hello binary"
+            build_result.cas_objects_referenced, 2,
+            "Should reference CAS objects for the hello binary and init entrypoint"
         );
 
         // Verify metadata JSON was written

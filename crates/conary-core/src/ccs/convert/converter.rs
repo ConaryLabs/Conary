@@ -255,7 +255,11 @@ impl LegacyConverter {
                     .iter()
                     .map(|d| d.name.clone())
                     .collect(),
-                provides: Vec::new(),
+                provides: final_metadata
+                    .provides
+                    .iter()
+                    .map(|provide| provide.name.clone())
+                    .collect(),
             };
 
             match infer_capabilities(
@@ -376,6 +380,9 @@ impl LegacyConverter {
             .map(|c| c.path.clone())
             .collect();
 
+        let mut provides = derive_provides(files);
+        merge_native_provides(&mut provides, &metadata.provides);
+
         let manifest = CcsManifest {
             package: Package {
                 name: metadata.name.clone(),
@@ -389,7 +396,7 @@ impl LegacyConverter {
                 platform,
                 authors: None,
             },
-            provides: derive_provides(files),
+            provides,
             requires: Requires {
                 capabilities,
                 packages,
@@ -431,19 +438,48 @@ impl LegacyConverter {
                 })?;
             }
 
-            // Write file content
-            std::fs::write(&full_path, &file.content).map_err(|e| {
-                ConversionError::IoError(format!("Failed to write file {}: {}", file.path, e))
-            })?;
+            let is_symlink = file.symlink_target.is_some() || (file.mode & 0o170000) == 0o120000;
+            if is_symlink {
+                let target = file.symlink_target.as_deref().ok_or_else(|| {
+                    ConversionError::IoError(format!(
+                        "Symlink file {} is missing its target",
+                        file.path
+                    ))
+                })?;
 
-            // Set permissions (best effort on Unix)
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(
-                    &full_path,
-                    std::fs::Permissions::from_mode(file.mode as u32),
-                );
+                #[cfg(unix)]
+                std::os::unix::fs::symlink(target, &full_path).map_err(|e| {
+                    ConversionError::IoError(format!(
+                        "Failed to create symlink {} -> {}: {}",
+                        file.path, target, e
+                    ))
+                })?;
+
+                #[cfg(not(unix))]
+                {
+                    let _ = target;
+                    return Err(ConversionError::IoError(format!(
+                        "Symlink file {} is not supported on this platform",
+                        file.path
+                    )));
+                }
+
+                continue;
+            } else {
+                // Write file content
+                std::fs::write(&full_path, &file.content).map_err(|e| {
+                    ConversionError::IoError(format!("Failed to write file {}: {}", file.path, e))
+                })?;
+
+                // Set permissions (best effort on Unix)
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(
+                        &full_path,
+                        std::fs::Permissions::from_mode(file.mode as u32),
+                    );
+                }
             }
         }
 
@@ -500,6 +536,29 @@ fn derive_provides(files: &[ExtractedFile]) -> Provides {
     provides
 }
 
+fn merge_native_provides(
+    provides: &mut Provides,
+    native_provides: &[crate::packages::traits::Dependency],
+) {
+    let mut capabilities: std::collections::BTreeSet<String> =
+        provides.capabilities.iter().cloned().collect();
+
+    for native in native_provides {
+        if native.dep_type != DependencyType::Runtime {
+            continue;
+        }
+
+        capabilities.insert(native.name.clone());
+        if let Some(version) = native.version.as_deref().map(str::trim)
+            && !version.is_empty()
+        {
+            capabilities.insert(format!("{} {}", native.name, version));
+        }
+    }
+
+    provides.capabilities = capabilities.into_iter().collect();
+}
+
 fn binary_name(path: &str) -> Option<String> {
     let name = Path::new(path).file_name()?.to_str()?;
     if path.starts_with("/usr/bin/")
@@ -549,6 +608,7 @@ mod tests {
                 dep_type: DependencyType::Runtime,
                 description: None,
             }],
+            provides: vec![],
             scriptlets: vec![Scriptlet {
                 phase: ScriptletPhase::PreInstall,
                 interpreter: "/bin/sh".to_string(),
@@ -645,6 +705,64 @@ mod tests {
 
         assert_eq!(manifest.provides.sonames, vec!["libjq.so.1".to_string()]);
         assert_eq!(manifest.provides.pkgconfig, vec!["jq".to_string()]);
+    }
+
+    #[test]
+    fn build_manifest_preserves_native_virtual_provides_from_package_metadata() {
+        let converter = LegacyConverter::with_defaults();
+        let mut metadata = make_test_metadata();
+        metadata.provides = vec![Dependency {
+            name: "kernel-uname-r".to_string(),
+            version: Some("= 6.17.1-300.fc43.x86_64".to_string()),
+            dep_type: DependencyType::Runtime,
+            description: None,
+        }];
+
+        let manifest = converter
+            .build_manifest(&metadata, &make_test_files(), &Hooks::default())
+            .unwrap();
+
+        assert!(
+            manifest
+                .provides
+                .capabilities
+                .contains(&"kernel-uname-r".to_string()),
+            "native virtual provides must survive conversion without file-path heuristics"
+        );
+        assert!(
+            manifest
+                .provides
+                .capabilities
+                .contains(&"kernel-uname-r = 6.17.1-300.fc43.x86_64".to_string()),
+            "versioned native provides should retain their native constraint text"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_files_to_temp_preserves_symlinks() {
+        let converter = LegacyConverter::with_defaults();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let files = vec![ExtractedFile {
+            path: "/usr/bin/sh".to_string(),
+            content: Vec::new(),
+            size: 4,
+            mode: 0o120777,
+            sha256: None,
+            symlink_target: Some("bash".to_string()),
+        }];
+
+        converter
+            .write_files_to_temp(&files, temp_dir.path())
+            .unwrap();
+
+        let staged_path = temp_dir.path().join("usr/bin/sh");
+        let metadata = std::fs::symlink_metadata(&staged_path).unwrap();
+        assert!(metadata.file_type().is_symlink());
+        assert_eq!(
+            std::fs::read_link(staged_path).unwrap(),
+            PathBuf::from("bash")
+        );
     }
 
     #[test]
