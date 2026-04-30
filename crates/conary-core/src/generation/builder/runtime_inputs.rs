@@ -1,7 +1,10 @@
 // conary-core/src/generation/builder/runtime_inputs.rs
 
-use crate::db::models::{FileEntry, InstallSource};
+use std::collections::HashMap;
+
+use crate::db::models::{FileEntry, InstallSource, Trove};
 use crate::filesystem::CasStore;
+use crate::generation::metadata::is_excluded;
 
 use super::{FileEntryRef, SymlinkEntryRef, hex_to_digest};
 
@@ -37,6 +40,64 @@ pub(super) fn is_generation_input_source(source: InstallSource) -> bool {
             | InstallSource::Repository
             | InstallSource::File
     )
+}
+
+#[derive(Debug)]
+pub(super) struct RuntimeGenerationInputs {
+    pub file_refs: Vec<FileEntryRef>,
+    pub symlink_refs: Vec<SymlinkEntryRef>,
+    pub adopted_track_count: usize,
+}
+
+pub(super) fn collect_runtime_generation_inputs(
+    troves: &[Trove],
+    files: Vec<FileEntry>,
+) -> crate::Result<RuntimeGenerationInputs> {
+    let trove_map: HashMap<i64, (&str, &InstallSource)> = troves
+        .iter()
+        .filter_map(|trove| {
+            trove
+                .id
+                .map(|id| (id, (trove.name.as_str(), &trove.install_source)))
+        })
+        .collect();
+    let adopted_track_count = troves
+        .iter()
+        .filter(|trove| trove.install_source == InstallSource::AdoptedTrack)
+        .count();
+    let mut file_refs = Vec::new();
+    let mut symlink_refs = Vec::new();
+
+    for file in files {
+        let Some((package_name, source)) = trove_map.get(&file.trove_id) else {
+            return Err(crate::Error::InternalError(format!(
+                "orphaned file entry in generation input: path {} references missing trove_id {}",
+                file.path, file.trove_id
+            )));
+        };
+
+        if **source == InstallSource::AdoptedTrack {
+            continue;
+        }
+        if !is_generation_input_source((*source).clone()) {
+            continue;
+        }
+        if is_excluded(&file.path) {
+            continue;
+        }
+
+        match validate_runtime_file_entry(package_name, &file)? {
+            Some(ValidatedRuntimeEntry::Regular(file_ref)) => file_refs.push(file_ref),
+            Some(ValidatedRuntimeEntry::Symlink(symlink_ref)) => symlink_refs.push(symlink_ref),
+            None => {}
+        }
+    }
+
+    Ok(RuntimeGenerationInputs {
+        file_refs,
+        symlink_refs,
+        adopted_track_count,
+    })
 }
 
 fn classify_file_entry(file: &FileEntry) -> Result<RuntimeEntryKind, RuntimeEntryProblem> {
@@ -133,8 +194,19 @@ fn runtime_input_error(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::models::FileEntry;
+    use crate::db::models::{FileEntry, Trove, TroveType};
     use crate::filesystem::CasStore;
+
+    fn trove(id: i64, name: &str, source: InstallSource) -> Trove {
+        let mut trove = Trove::new_with_source(
+            name.to_string(),
+            "1.0-1".to_string(),
+            TroveType::Package,
+            source,
+        );
+        trove.id = Some(id);
+        trove
+    }
 
     fn file_entry(path: &str, hash: &str, mode: i32, trove_id: i64) -> FileEntry {
         let mut entry = FileEntry::new(path.to_string(), hash.to_string(), 0, mode, trove_id);
@@ -300,6 +372,72 @@ mod tests {
                 "symlink hash mismatch",
                 &hash,
             ],
+        );
+    }
+
+    #[test]
+    fn collect_runtime_generation_inputs_skips_excluded_paths_before_validation() {
+        let troves = vec![trove(1, "runtime", InstallSource::AdoptedFull)];
+        let files = vec![
+            file_entry("/var/bad-fifo", "not-a-sha256", 0o010644, 1),
+            file_entry("/dev/bad-symlink", &"e".repeat(64), 0o120777, 1),
+            symlink_entry("/tmp/bad-link", "target", &"f".repeat(64), 0o120777, 1),
+        ];
+
+        let inputs = collect_runtime_generation_inputs(&troves, files).unwrap();
+
+        assert!(inputs.file_refs.is_empty());
+        assert!(inputs.symlink_refs.is_empty());
+        assert_eq!(inputs.adopted_track_count, 0);
+    }
+
+    #[test]
+    fn collect_runtime_generation_inputs_skips_adopted_track_entries_but_counts_them() {
+        let troves = vec![
+            trove(1, "tracked", InstallSource::AdoptedTrack),
+            trove(2, "runtime", InstallSource::AdoptedFull),
+        ];
+        let files = vec![
+            file_entry("/usr/bin/tracked", "placeholder", 0o100755, 1),
+            file_entry("/usr/bin/runtime", &"1".repeat(64), 0o100755, 2),
+        ];
+
+        let inputs = collect_runtime_generation_inputs(&troves, files).unwrap();
+
+        assert_eq!(inputs.adopted_track_count, 1);
+        assert_eq!(inputs.file_refs.len(), 1);
+        assert_eq!(inputs.file_refs[0].path, "/usr/bin/runtime");
+        assert!(inputs.symlink_refs.is_empty());
+    }
+
+    #[test]
+    fn collect_runtime_generation_inputs_rejects_non_excluded_special_file() {
+        let troves = vec![trove(1, "systemd", InstallSource::Repository)];
+        let files = vec![file_entry(
+            "/etc/systemd/fifo",
+            &"2".repeat(64),
+            0o010644,
+            1,
+        )];
+
+        assert_error_contains(
+            collect_runtime_generation_inputs(&troves, files),
+            &[
+                "package systemd",
+                "/etc/systemd/fifo",
+                "unsupported special file mode",
+            ],
+        );
+    }
+
+    #[test]
+    fn collect_runtime_generation_inputs_rejects_orphaned_file_entries() {
+        let troves = vec![trove(1, "runtime", InstallSource::Repository)];
+        let files = vec![file_entry("/usr/bin/orphan", &"3".repeat(64), 0o100755, 99)];
+
+        assert_error_contains(
+            collect_runtime_generation_inputs(&troves, files),
+            &["orphaned file entry", "trove_id 99", "/usr/bin/orphan"],
         );
     }
 }
