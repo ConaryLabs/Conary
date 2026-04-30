@@ -728,7 +728,7 @@ mod tests {
             .expect("system time before unix epoch")
             .as_nanos();
         let root = std::env::temp_dir().join(format!("conary-test-build-context-{unique}"));
-        let dockerfile = root.join("tests/integration/remi/containers/Containerfile.fedora43");
+        let dockerfile = root.join("tests/integration/remi/containers/Containerfile.fedora44");
         let dockerfile_parent = dockerfile.parent().expect("dockerfile parent");
 
         fs::create_dir_all(dockerfile_parent).expect("create dockerfile directory");
@@ -742,7 +742,7 @@ mod tests {
         assert_eq!(context_dir, root);
         assert_eq!(
             dockerfile_name,
-            "tests/integration/remi/containers/Containerfile.fedora43"
+            "tests/integration/remi/containers/Containerfile.fedora44"
         );
 
         fs::remove_dir_all(&context_dir).expect("cleanup temp build context");

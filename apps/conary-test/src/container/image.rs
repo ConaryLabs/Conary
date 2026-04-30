@@ -191,7 +191,7 @@ mod tests {
             .as_nanos();
         let project_root = std::env::temp_dir().join(format!("conary-test-stage-context-{unique}"));
         let remi_root = project_root.join("tests/integration/remi");
-        let containerfile = remi_root.join("containers/Containerfile.fedora43");
+        let containerfile = remi_root.join("containers/Containerfile.fedora44");
 
         fs::create_dir_all(remi_root.join("containers")).expect("create containers");
         fs::create_dir_all(project_root.join("tests/fixtures/recipes/simple-hello"))
@@ -224,12 +224,12 @@ mod tests {
         )
         .expect("write pkgbuild");
 
-        let staged = stage_build_context(&containerfile, "fedora43").expect("stage build context");
+        let staged = stage_build_context(&containerfile, "fedora44").expect("stage build context");
 
         assert!(
             staged
                 .root
-                .join("containers/Containerfile.fedora43")
+                .join("containers/Containerfile.fedora44")
                 .is_file()
         );
         assert!(staged.root.join("config.toml").is_file());

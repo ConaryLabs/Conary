@@ -210,9 +210,9 @@ mod tests {
     fn test_config() -> GlobalConfig {
         let mut distros = HashMap::new();
         distros.insert(
-            "fedora43".to_string(),
+            "fedora44".to_string(),
             DistroConfig {
-                remi_distro: "fedora-43".to_string(),
+                remi_distro: "fedora".to_string(),
                 repo_name: "fedora-remi".to_string(),
                 containerfile: None,
                 test_packages: vec![TestPackage {
@@ -296,12 +296,12 @@ mod tests {
     #[test]
     fn test_build_variables_populates_core_fields() {
         let config = test_config();
-        let vars = build_variables(&config, "fedora43");
+        let vars = build_variables(&config, "fedora44");
 
         assert_eq!(vars["REMI_ENDPOINT"], "https://remi.conary.io");
         assert_eq!(vars["DB_PATH"], "/tmp/conary-test.db");
         assert_eq!(vars["CONARY_BIN"], "/usr/local/bin/conary");
-        assert_eq!(vars["REMI_DISTRO"], "fedora-43");
+        assert_eq!(vars["REMI_DISTRO"], "fedora");
         assert_eq!(vars["REPO_NAME"], "fedora-remi");
         assert_eq!(vars["TEST_PACKAGE_1"], "conary-test-fixture");
         assert_eq!(vars["TEST_BINARY_1"], "/usr/bin/true");
@@ -311,7 +311,7 @@ mod tests {
     #[test]
     fn test_build_variables_fixture_ccs_paths() {
         let config = test_config();
-        let vars = build_variables(&config, "fedora43");
+        let vars = build_variables(&config, "fedora44");
 
         assert_eq!(
             vars["FIXTURE_V1_CCS"],
@@ -338,7 +338,7 @@ mod tests {
     #[test]
     fn test_distro_override_precedence() {
         let config = test_config();
-        let mut vars = build_variables(&config, "fedora43");
+        let mut vars = build_variables(&config, "fedora44");
 
         // Simulate a manifest that overrides REMI_ENDPOINT.
         let mut manifest = TestManifest {
@@ -353,11 +353,11 @@ mod tests {
             distro_overrides: HashMap::new(),
         };
         manifest.distro_overrides.insert(
-            "fedora43".to_string(),
+            "fedora44".to_string(),
             HashMap::from([("REMI_ENDPOINT".to_string(), "http://override".to_string())]),
         );
 
-        load_manifest_overrides(&mut vars, &manifest, "fedora43");
+        load_manifest_overrides(&mut vars, &manifest, "fedora44");
         assert_eq!(vars["REMI_ENDPOINT"], "http://override");
     }
 

@@ -19,7 +19,7 @@ results_dir = "/results"
 fixture_dir = "/opt/remi-tests/fixtures"
 
 # Distro-specific settings. Key = DISTRO env var value.
-[distros.fedora43]
+[distros.fedora44]
 remi_distro = "fedora"
 repo_name = "fedora-remi"
 test_package = "which"
@@ -53,7 +53,7 @@ test_binary_3 = "/usr/bin/jq"
 [setup]
 remove_default_repos = [
     "arch-core", "arch-extra", "arch-multilib",
-    "fedora-43", "ubuntu-noble",
+    "fedora-44", "ubuntu-noble",
 ]
 
 # Test fixture packages (Phase 2)

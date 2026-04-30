@@ -141,10 +141,10 @@ results_dir = "/tmp/results"
 [setup]
 remove_default_repos = ["fedora", "updates"]
 
-[distros.fedora43]
-remi_distro = "fedora43"
-repo_name = "conary-fedora43"
-containerfile = "Containerfile.fedora43"
+[distros.fedora44]
+remi_distro = "fedora"
+repo_name = "conary-fedora44"
+containerfile = "Containerfile.fedora44"
 test_package = "tree"
 test_binary = "/usr/bin/tree"
 
@@ -168,14 +168,14 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
         assert_eq!(config.setup.remove_default_repos, &["fedora", "updates"]);
         assert_eq!(config.distros.len(), 2);
 
-        let fedora = &config.distros["fedora43"];
-        assert_eq!(fedora.remi_distro, "fedora43");
+        let fedora = &config.distros["fedora44"];
+        assert_eq!(fedora.remi_distro, "fedora");
         assert_eq!(fedora.test_packages.len(), 1);
         assert_eq!(fedora.test_packages[0].package, "tree");
         assert_eq!(fedora.test_packages[0].binary, "/usr/bin/tree");
         assert_eq!(
             fedora.containerfile.as_deref(),
-            Some("Containerfile.fedora43")
+            Some("Containerfile.fedora44")
         );
 
         let fixtures = config.fixtures.as_ref().unwrap();

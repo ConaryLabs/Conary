@@ -31,8 +31,8 @@ by CI pipelines and LLM agents.
 ## CLI Usage
 
 ```bash
-# Run Phase 1 tests on Fedora 43 from the repo root
-cargo run -p conary-test -- run --distro fedora43 --phase 1
+# Run Phase 1 tests on Fedora 44 from the repo root
+cargo run -p conary-test -- run --distro fedora44 --phase 1
 
 # Run a specific suite on all configured distros
 cargo run -p conary-test -- run --suite phase1-core --all-distros --phase 1
@@ -50,7 +50,7 @@ bash scripts/forge-smoke.sh
 cargo run -p conary-test -- list
 
 # Build container images
-cargo run -p conary-test -- images build --distro fedora43
+cargo run -p conary-test -- images build --distro fedora44
 ```
 
 ## Test Manifest Format

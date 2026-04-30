@@ -671,7 +671,7 @@ impl TestMcpServer {
             let id = parts[1];
             let created = parts[2];
 
-            // Extract distro name from tag like "conary-test-fedora43:latest".
+            // Extract distro name from tag like "conary-test-fedora44:latest".
             let distro = tag
                 .strip_prefix("conary-test-")
                 .and_then(|rest| rest.split(':').next())

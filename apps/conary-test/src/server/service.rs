@@ -925,9 +925,9 @@ mod tests {
     #[test]
     fn test_start_run_valid_distro() {
         let state = test_fixtures::test_app_state();
-        let result = start_run(&state, "smoke", "fedora43", 1).unwrap();
+        let result = start_run(&state, "smoke", "fedora44", 1).unwrap();
         assert_eq!(result.suite, "smoke");
-        assert_eq!(result.distro, "fedora43");
+        assert_eq!(result.distro, "fedora44");
 
         assert!(state.runs.contains_key(&result.run_id));
     }
@@ -951,7 +951,7 @@ mod tests {
         let state = test_fixtures::test_app_state();
         let distros = list_distros(&state);
         assert_eq!(distros.len(), 1);
-        assert_eq!(distros[0].name, "fedora43");
+        assert_eq!(distros[0].name, "fedora44");
     }
 
     #[test]
@@ -1041,7 +1041,7 @@ mod tests {
     #[test]
     fn test_cancel_run_sets_flag() {
         let state = test_fixtures::test_app_state();
-        let run = start_run(&state, "smoke", "fedora43", 1).unwrap();
+        let run = start_run(&state, "smoke", "fedora44", 1).unwrap();
         // start_run already registers the cancel flag.
 
         cancel_run(&state, run.run_id).unwrap();
@@ -1055,7 +1055,7 @@ mod tests {
         use crate::engine::suite::RunStatus;
 
         let state = test_fixtures::test_app_state();
-        let run = start_run(&state, "smoke", "fedora43", 1).unwrap();
+        let run = start_run(&state, "smoke", "fedora44", 1).unwrap();
         // Simulate a finished run by removing the cancel flag (as
         // execute_run does via remove_cancel_flag on completion).
         state.remove_cancel_flag(run.run_id);
@@ -1077,7 +1077,7 @@ mod tests {
     #[test]
     fn test_rerun_test_not_found_test() {
         let state = test_fixtures::test_app_state();
-        let run = start_run(&state, "smoke", "fedora43", 1).unwrap();
+        let run = start_run(&state, "smoke", "fedora44", 1).unwrap();
         let result = rerun_test(&state, run.run_id, "T99");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
@@ -1088,7 +1088,7 @@ mod tests {
         use crate::engine::suite::TestResult;
 
         let state = test_fixtures::test_app_state();
-        let run = start_run(&state, "smoke", "fedora43", 1).unwrap();
+        let run = start_run(&state, "smoke", "fedora44", 1).unwrap();
 
         // Record a test result in the original run.
         state.runs.get_mut(&run.run_id).unwrap().record(TestResult {
@@ -1121,7 +1121,7 @@ mod tests {
         use crate::engine::suite::TestResult;
 
         let state = test_fixtures::test_app_state();
-        let run = start_run(&state, "smoke", "fedora43", 1).unwrap();
+        let run = start_run(&state, "smoke", "fedora44", 1).unwrap();
 
         state.runs.get_mut(&run.run_id).unwrap().record(TestResult {
             id: "T01".to_string(),
@@ -1146,7 +1146,7 @@ mod tests {
         use crate::engine::suite::{AttemptResult, TestResult, TestStatus};
 
         let state = test_fixtures::test_app_state();
-        let run = start_run(&state, "smoke", "fedora43", 1).unwrap();
+        let run = start_run(&state, "smoke", "fedora44", 1).unwrap();
 
         state.runs.get_mut(&run.run_id).unwrap().record(TestResult {
             id: "T01".to_string(),
@@ -1191,7 +1191,7 @@ mod tests {
     #[test]
     fn test_get_run_artifacts_returns_summary() {
         let state = test_fixtures::test_app_state();
-        let run = start_run(&state, "smoke", "fedora43", 1).unwrap();
+        let run = start_run(&state, "smoke", "fedora44", 1).unwrap();
 
         let artifacts = get_run_artifacts(&state, run.run_id).unwrap();
         assert_eq!(artifacts.run_id, run.run_id);

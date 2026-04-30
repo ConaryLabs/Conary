@@ -655,9 +655,9 @@ mod tests {
     fn test_config() -> GlobalConfig {
         let mut distros = HashMap::new();
         distros.insert(
-            "fedora43".to_string(),
+            "fedora44".to_string(),
             DistroConfig {
-                remi_distro: "fedora-43".to_string(),
+                remi_distro: "fedora".to_string(),
                 repo_name: "fedora-remi".to_string(),
                 containerfile: None,
                 test_packages: vec![TestPackage {
@@ -776,7 +776,7 @@ mod tests {
             skip: None,
         }]);
 
-        let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
+        let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
         let suite = runner
             .run(&manifest, &backend, &"ctr-1".to_string(), None)
             .await
@@ -814,7 +814,7 @@ mod tests {
             skip: None,
         }]);
 
-        let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
+        let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
         let suite = runner
             .run(&manifest, &backend, &"ctr-1".to_string(), None)
             .await
@@ -877,7 +877,7 @@ mod tests {
             },
         ]);
 
-        let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
+        let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
         let suite = runner
             .run(&manifest, &backend, &"ctr-1".to_string(), None)
             .await
@@ -927,13 +927,13 @@ mod tests {
             skip: None,
         }]);
 
-        let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
+        let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
         let mut overrides = HashMap::new();
         overrides.insert("PKG".to_string(), "pkg.ccs".to_string());
         let mut manifest = manifest;
         manifest
             .distro_overrides
-            .insert("fedora43".to_string(), overrides);
+            .insert("fedora44".to_string(), overrides);
 
         let suite = runner
             .run(&manifest, &backend, &"ctr-1".to_string(), None)
@@ -994,7 +994,7 @@ mod tests {
             skip: None,
         }]);
 
-        let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
+        let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
         let suite = runner
             .run(&manifest, &backend, &"ctr-1".to_string(), None)
             .await
@@ -1050,7 +1050,7 @@ mod tests {
             skip: None,
         }]);
 
-        let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
+        let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
         let suite = runner
             .run(&manifest, &backend, &"ctr-1".to_string(), None)
             .await
@@ -1140,7 +1140,7 @@ mod tests {
             image: "mock-image".to_string(),
             ..Default::default()
         };
-        let mut runner = TestRunner::new(config, "fedora43".to_string());
+        let mut runner = TestRunner::new(config, "fedora44".to_string());
         let suite = runner
             .run(
                 &manifest,
@@ -1157,10 +1157,10 @@ mod tests {
 
     #[test]
     fn test_substitute_vars() {
-        let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
+        let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
         let mut manifest = make_manifest(Vec::new());
         manifest.distro_overrides.insert(
-            "fedora43".to_string(),
+            "fedora44".to_string(),
             HashMap::from([("PKG".to_string(), "tree".to_string())]),
         );
         runner.load_manifest_vars(&manifest);
@@ -1187,10 +1187,10 @@ mod tests {
 
     #[test]
     fn test_expand_assertion_substitutes_vars() {
-        let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
+        let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
         let mut manifest = make_manifest(Vec::new());
         manifest.distro_overrides.insert(
-            "fedora43".to_string(),
+            "fedora44".to_string(),
             HashMap::from([
                 ("PKG".to_string(), "conary-test-fixture".to_string()),
                 ("HELLO_SHA".to_string(), "abc123".to_string()),
@@ -1235,7 +1235,7 @@ mod tests {
 
     #[test]
     fn test_apply_resource_constraints() {
-        let runner = TestRunner::new(test_config(), "fedora43".to_string());
+        let runner = TestRunner::new(test_config(), "fedora44".to_string());
         let mut container_config = ContainerConfig::default();
         let resources = ResourceConstraints {
             tmpfs_size_mb: Some(50),
@@ -1314,13 +1314,13 @@ mod tests {
             skip: None,
         }]);
 
-        let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
+        let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
         let mut overrides = HashMap::new();
         overrides.insert("PKG".to_string(), "v1".to_string());
         let mut manifest = manifest;
         manifest
             .distro_overrides
-            .insert("fedora43".to_string(), overrides);
+            .insert("fedora44".to_string(), overrides);
 
         crate::engine::qemu::set_missing_tools_override_for_tests(Some(vec![
             "qemu-system-x86_64".to_string(),
@@ -1345,10 +1345,10 @@ mod tests {
 
     #[test]
     fn test_expand_qemu_boot_substitutes_vars() {
-        let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
+        let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
         let mut manifest = make_manifest(Vec::new());
         manifest.distro_overrides.insert(
-            "fedora43".to_string(),
+            "fedora44".to_string(),
             HashMap::from([("IMG".to_string(), "minimal-boot-v1".to_string())]),
         );
         runner.load_manifest_vars(&manifest);
@@ -1430,7 +1430,7 @@ mod tests {
         // set immediately so T02 should be cancelled.
         let cancel_flag = Arc::new(AtomicBool::new(true));
 
-        let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
+        let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
         let suite = runner
             .run_with_cancel(
                 &manifest,
@@ -1498,7 +1498,7 @@ mod tests {
         };
 
         let backend = MockBackend::new(Vec::new());
-        let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
+        let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
         let suite = runner
             .run_with_cancel(
                 &manifest,
@@ -1554,7 +1554,7 @@ mod tests {
             skip: None,
         }]);
 
-        let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
+        let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
         let suite = runner
             .run(&manifest, &backend, &"ctr-1".to_string(), None)
             .await
@@ -1618,14 +1618,14 @@ mod tests {
 
         let (suite_a, suite_b) = tokio::join!(
             async {
-                let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
+                let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
                 runner
                     .run(&manifest_a, &backend_a, &"ctr-a".to_string(), None)
                     .await
                     .unwrap()
             },
             async {
-                let mut runner = TestRunner::new(test_config(), "fedora43".to_string());
+                let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
                 runner
                     .run(&manifest_b, &backend_b, &"ctr-b".to_string(), None)
                     .await

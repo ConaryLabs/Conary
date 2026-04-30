@@ -15,7 +15,7 @@
 name = "Phase 4 Group E: Cross-Distro Compatibility"
 phase = 4
 
-[distro_overrides.fedora43]
+[distro_overrides.fedora44]
 distro_repo = "fedora-remi"
 # A package whose name differs across distros
 native_pkg = "python3"
@@ -43,7 +43,7 @@ dep_provides_format = "libz.so"
 solib_pkg = "zlib"
 distro_specific_name = "pacman"
 # Replatform: arch -> fedora
-replatform_target = "fedora43"
+replatform_target = "fedora44"
 replatform_repo = "fedora-remi"
 replatform_remi_distro = "fedora"
 local_native_target = "arch"
