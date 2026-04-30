@@ -7,6 +7,7 @@
 
 use super::super::create_state_snapshot;
 use super::super::open_db;
+use super::cas_capture::prepare_cas_backed_package_files;
 use super::system::{FileInfoTuple, compute_file_hash};
 use anyhow::Result;
 use conary_core::db::models::{
@@ -239,20 +240,34 @@ pub async fn cmd_adopt_refresh(
             };
 
             // Perform CAS writes outside the transaction.
-            let files_with_hashes: Vec<(FileInfoTuple, String)> = raw_files
-                .into_iter()
-                .map(|f| {
-                    let hash = compute_file_hash(
-                        &f.0,
-                        f.2,
-                        f.3.as_deref(),
-                        f.6.as_deref(),
-                        use_cas,
-                        if use_cas { Some(&cas) } else { None },
-                    );
-                    (f, hash)
-                })
-                .collect();
+            let files_with_hashes: Vec<(FileInfoTuple, String)> = if use_cas {
+                match prepare_cas_backed_package_files(&trove.name, &raw_files, &cas) {
+                    Ok(files) => files,
+                    Err(e) => {
+                        warn!(
+                            "Failed to prepare CAS-backed refresh for '{}': {}",
+                            trove.name, e
+                        );
+                        skip_names.insert(trove.name.clone());
+                        continue;
+                    }
+                }
+            } else {
+                raw_files
+                    .into_iter()
+                    .map(|f| {
+                        let hash = compute_file_hash(
+                            &f.0,
+                            f.2,
+                            f.3.as_deref(),
+                            f.6.as_deref(),
+                            false,
+                            None,
+                        );
+                        (f, hash)
+                    })
+                    .collect()
+            };
 
             update_data.push(UpdateData {
                 trove,

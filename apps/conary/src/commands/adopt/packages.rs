@@ -7,6 +7,7 @@
 use super::super::create_state_snapshot;
 use super::super::open_db;
 use super::super::progress::{AdoptPhase, AdoptProgress};
+use super::cas_capture::prepare_cas_backed_package_files;
 use super::system::{FileInfoTuple, compute_file_hash};
 use anyhow::Result;
 use conary_core::db::models::{
@@ -160,20 +161,34 @@ pub async fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result
         .collect();
 
         // Perform CAS writes (hardlinks) before opening the transaction.
-        let files_with_hashes: Vec<(FileInfoTuple, String)> = raw_files
-            .into_iter()
-            .map(|f| {
-                let hash = compute_file_hash(
-                    &f.0,
-                    f.2,
-                    f.3.as_deref(),
-                    f.6.as_deref(),
-                    full,
-                    cas.as_ref(),
-                );
-                (f, hash)
-            })
-            .collect();
+        let files_with_hashes: Vec<(FileInfoTuple, String)> = if full {
+            progress.set_phase(&pkg_name, AdoptPhase::CasStorage);
+            match prepare_cas_backed_package_files(
+                &pkg_name,
+                &raw_files,
+                cas.as_ref()
+                    .expect("CAS store must be available for full adoption"),
+            ) {
+                Ok(files) => files,
+                Err(e) => {
+                    println!(
+                        "Failed to prepare CAS-backed files for '{}': {}",
+                        pkg_name, e
+                    );
+                    progress.fail_package(&pkg_name, &e.to_string());
+                    continue;
+                }
+            }
+        } else {
+            raw_files
+                .into_iter()
+                .map(|f| {
+                    let hash =
+                        compute_file_hash(&f.0, f.2, f.3.as_deref(), f.6.as_deref(), false, None);
+                    (f, hash)
+                })
+                .collect()
+        };
 
         let deps: Vec<DependencyInfo> = match pkg_mgr {
             SystemPackageManager::Rpm => rpm_query::query_package_dependencies_full(&pkg_name)
