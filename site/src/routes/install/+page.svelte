@@ -105,7 +105,7 @@
 			<div class="distro-cards">
 				<div class="distro-card distro-fedora">
 					<div class="distro-badge">Fedora</div>
-					<p class="distro-note">Fedora 43+ / RPM-based</p>
+					<p class="distro-note">Fedora 44+ / RPM-based</p>
 				</div>
 				<div class="distro-card distro-arch">
 					<div class="distro-badge">Arch Linux</div>

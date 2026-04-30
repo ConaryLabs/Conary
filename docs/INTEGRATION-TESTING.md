@@ -22,21 +22,21 @@ domain in `crates/conary-core`.
 ## Running Tests
 
 ```bash
-# Run Phase 1 core tests on Fedora 43
-cargo run -p conary-test -- run --suite phase1-core --distro fedora43 --phase 1
+# Run Phase 1 core tests on Fedora 44
+cargo run -p conary-test -- run --suite phase1-core --distro fedora44 --phase 1
 
 # Run all Phase 1 tests
-cargo run -p conary-test -- run --suite phase1-core --distro fedora43 --phase 1
-cargo run -p conary-test -- run --suite phase1-advanced --distro fedora43 --phase 1
+cargo run -p conary-test -- run --suite phase1-core --distro fedora44 --phase 1
+cargo run -p conary-test -- run --suite phase1-advanced --distro fedora44 --phase 1
 
 # Run Phase 2 (deep E2E) tests
-cargo run -p conary-test -- run --suite phase2-group-a --distro fedora43 --phase 2
+cargo run -p conary-test -- run --suite phase2-group-a --distro fedora44 --phase 2
 
 # Run generation artifact export QEMU validation
-cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora43 --phase 3
+cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3
 
 # Run all tests for a phase
-cargo run -p conary-test -- run --distro fedora43 --phase 1
+cargo run -p conary-test -- run --distro fedora44 --phase 1
 
 # List available suites
 cargo run -p conary-test -- list
@@ -101,7 +101,7 @@ For managed Forge deployments from an operator workstation, prefer:
 
 | Distro | Container | Base |
 |--------|-----------|------|
-| `fedora43` | `Containerfile.fedora43` | Fedora 43 |
+| `fedora44` | `Containerfile.fedora44` | Fedora 44 |
 | `ubuntu-noble` | `Containerfile.ubuntu-noble` | Ubuntu 24.04 LTS |
 | `arch` | `Containerfile.arch` | Arch Linux (rolling) |
 
@@ -239,7 +239,7 @@ conary_bin = "/usr/bin/conary"
 results_dir = "/results"
 fixture_dir = "/opt/remi-tests/fixtures"
 
-[distros.fedora43]
+[distros.fedora44]
 remi_distro = "fedora"
 repo_name = "fedora-remi"
 test_package = "which"
@@ -275,7 +275,7 @@ Test results are written as JSON under
 
 ```json
 {
-  "distro": "fedora43",
+  "distro": "fedora44",
   "endpoint": "https://remi.conary.io",
   "total": 37,
   "passed": 37,

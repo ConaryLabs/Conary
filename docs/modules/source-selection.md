@@ -213,7 +213,7 @@ replatform replacements can execute immediately.
 The main CLI entry points are:
 
 ```bash
-conary distro set fedora-43 --mixing guarded
+conary distro set fedora-44 --mixing guarded
 conary distro mixing permissive
 conary distro selection-mode latest
 conary distro info

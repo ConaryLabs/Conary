@@ -1840,7 +1840,7 @@ mod tests {
     fn distro_name_to_flavor_known() {
         use conary_core::repository::dependency_model::RepositoryDependencyFlavor;
         assert_eq!(
-            distro_name_to_flavor("fedora43"),
+            distro_name_to_flavor("fedora44"),
             Some(RepositoryDependencyFlavor::Rpm)
         );
         assert_eq!(

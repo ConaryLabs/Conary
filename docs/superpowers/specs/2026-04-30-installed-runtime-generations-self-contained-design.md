@@ -144,9 +144,10 @@ documentation as a dedicated preparatory step:
   `registry.fedoraproject.org/fedora:44`
 - update the `ENV DISTRO` value and any other inline Fedora distro references
   inside the Containerfile, not only the `FROM` image tag
-- rename `GlobalConfig::with_fedora43()` and `AppState::with_fedora43()` in
-  `apps/conary-test/src/lib.rs` to `with_fedora44()`, update their internal
-  distro strings, and update call sites
+- update the existing `test_global_config_with_fedora()` and
+  `test_app_state()` helpers in `apps/conary-test/src/lib.rs` so they create
+  Fedora 44 fixture data, and rename them only if the implementation chooses
+  versioned helper names
 - update the inline `[distros.fedora43]` test configuration and assertions in
   `apps/conary-test/src/config/mod.rs`
 - update remaining `apps/conary-test/src/` fixture and assertion strings that

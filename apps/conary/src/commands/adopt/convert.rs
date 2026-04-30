@@ -584,7 +584,7 @@ mod tests {
         )
         .unwrap();
 
-        backfill_adopted_source_identity(&conn, Some("fedora-43"), Some("rpm")).unwrap();
+        backfill_adopted_source_identity(&conn, Some("fedora-44"), Some("rpm")).unwrap();
 
         let row1: (Option<String>, Option<String>) = conn
             .query_row(
@@ -593,7 +593,7 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!(row1.0.as_deref(), Some("fedora-43"));
+        assert_eq!(row1.0.as_deref(), Some("fedora-44"));
         assert_eq!(row1.1.as_deref(), Some("rpm"));
 
         let row2: (Option<String>, Option<String>) = conn

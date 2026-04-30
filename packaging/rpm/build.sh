@@ -5,7 +5,7 @@
 #
 # Usage:
 #   ./packaging/rpm/build.sh           # Build locally (needs cargo + rpmbuild)
-#   ./packaging/rpm/build.sh --podman  # Build inside a Fedora 43 container
+#   ./packaging/rpm/build.sh --podman  # Build inside a Fedora 44 container
 
 set -euo pipefail
 

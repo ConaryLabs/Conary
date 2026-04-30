@@ -100,7 +100,8 @@ pub async fn cmd_distro_list() -> Result<()> {
     println!("Available distros:");
     println!("  ubuntu-noble     Ubuntu 24.04 LTS (Noble Numbat)");
     println!("  ubuntu-plucky    Ubuntu 25.04 (Plucky Puffin)");
-    println!("  fedora-43        Fedora 43");
+    println!("  fedora-44        Fedora 44");
+    println!("  fedora-43        Fedora 43 (previous release)");
     println!("  debian-12        Debian 12 (Bookworm)");
     println!("  arch             Arch Linux (rolling)");
     Ok(())
@@ -159,7 +160,7 @@ mod tests {
     #[tokio::test]
     async fn test_cmd_distro_remove_clears_pin() {
         let (_temp, db_path, conn) = create_test_db();
-        DistroPin::set(&conn, "fedora-43", "guarded").unwrap();
+        DistroPin::set(&conn, "fedora-44", "guarded").unwrap();
 
         cmd_distro_remove(&db_path).await.unwrap();
 

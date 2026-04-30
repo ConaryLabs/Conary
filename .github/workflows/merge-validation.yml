@@ -8,7 +8,7 @@ on:
       smoke_distro:
         description: Distro for the smoke validation run.
         required: false
-        default: fedora43
+        default: fedora44
 
 permissions:
   contents: read
@@ -23,7 +23,7 @@ jobs:
     runs-on: [self-hosted, forge-trusted]
     env:
       DOCKER_HOST: unix:///run/user/1000/podman/podman.sock
-      SMOKE_DISTRO: ${{ github.event.inputs.smoke_distro || 'fedora43' }}
+      SMOKE_DISTRO: ${{ github.event.inputs.smoke_distro || 'fedora44' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Build trusted-lane binaries
