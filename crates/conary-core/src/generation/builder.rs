@@ -18,9 +18,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
-use crate::db::models::{FileEntry, InstallSource, StateEngine, SystemState, Trove};
+use crate::db::models::{FileEntry, StateEngine, SystemState, Trove};
 use crate::generation::artifact::{
     ArtifactWriteInputs, BootAssetSources, CasObjectRef, stage_boot_assets,
     write_generation_artifact,
@@ -163,48 +163,22 @@ pub fn build_generation_from_db_with_boot_root(
     })?;
     let mut pending_guard = PendingGenerationGuard::new(gen_dir.clone());
 
-    // Step 3: Collect file entries from all installed troves (single bulk query).
-    // Exclude files belonging to adopted-track troves: those troves are metadata-
-    // only and their file records use placeholder hashes that cannot be resolved
-    // in the CAS. Filtering here makes the intent explicit and avoids silently
-    // relying on hex parse failures to skip them.
+    // Step 3: Collect and validate exportable runtime inputs before building.
     let troves = Trove::list_all(conn)?;
-    // Build the adopted-track trove id set so we can exclude their files.
-    let adopted_track_ids: std::collections::HashSet<i64> = troves
-        .iter()
-        .filter(|t| t.install_source == InstallSource::AdoptedTrack)
-        .filter_map(|t| t.id)
-        .collect();
-    let all_files_raw = FileEntry::find_all_ordered(conn)?;
-    let all_files: Vec<FileEntry> = all_files_raw
-        .into_iter()
-        .filter(|f| !adopted_track_ids.contains(&f.trove_id))
-        .collect();
-
-    let file_refs: Vec<FileEntryRef> = all_files
-        .iter()
-        .map(|file| {
-            #[allow(clippy::cast_sign_loss)]
-            let permissions = file.permissions as u32;
-            #[allow(clippy::cast_sign_loss)]
-            let size = file.size as u64;
-
-            FileEntryRef {
-                path: file.path.clone(),
-                sha256_hash: file.sha256_hash.clone(),
-                size,
-                permissions,
-                owner: file.owner.clone(),
-                group_name: file.group_name.clone(),
-            }
-        })
-        .collect();
+    let all_files = FileEntry::find_all_ordered(conn)?;
+    let runtime_inputs = runtime_inputs::collect_runtime_generation_inputs(&troves, all_files)?;
 
     // Step 4: Build EROFS image with symlinks from DB.
     // This must succeed before we commit state to the database.
-    let symlink_refs = collect_symlink_refs(conn, &adopted_track_ids)?;
-    validate_runtime_generation_root_is_self_contained(&file_refs, &symlink_refs)?;
-    let result = build_erofs_image(&file_refs, &symlink_refs, &gen_dir)?;
+    validate_runtime_generation_root_is_self_contained(
+        &runtime_inputs.file_refs,
+        &runtime_inputs.symlink_refs,
+    )?;
+    let result = build_erofs_image(
+        &runtime_inputs.file_refs,
+        &runtime_inputs.symlink_refs,
+        &gen_dir,
+    )?;
 
     // Step 5: Stage boot assets and write the export artifact contract before
     // committing metadata. Export must not scrape live /boot later.
@@ -223,7 +197,7 @@ pub fn build_generation_from_db_with_boot_root(
         architecture,
         erofs_path: &result.image_path,
         cas_base_rel: "../../objects",
-        cas_objects: cas_objects_from_file_refs(&file_refs),
+        cas_objects: cas_objects_from_file_refs(&runtime_inputs.file_refs),
         boot_assets,
     })?;
 
@@ -267,10 +241,11 @@ pub fn build_generation_from_db_with_boot_root(
     pending_guard.disarm();
 
     info!(
-        "Generation {} built: {} CAS objects, {} packages, composefs format",
+        "Generation {} built: {} CAS objects, {} packages ({} metadata-only), composefs format",
         gen_number,
         result.cas_objects_referenced,
-        troves.len()
+        troves.len(),
+        runtime_inputs.adopted_track_count
     );
 
     Ok((gen_number, result))
@@ -314,38 +289,18 @@ pub(crate) fn rebuild_generation_image_with_boot_root(
     })?;
 
     let troves = Trove::list_all(conn)?;
-    let adopted_track_ids: HashSet<i64> = troves
-        .iter()
-        .filter(|t| t.install_source == InstallSource::AdoptedTrack)
-        .filter_map(|t| t.id)
-        .collect();
-    let all_files_raw = FileEntry::find_all_ordered(conn)?;
-    let all_files: Vec<FileEntry> = all_files_raw
-        .into_iter()
-        .filter(|f| !adopted_track_ids.contains(&f.trove_id))
-        .collect();
+    let all_files = FileEntry::find_all_ordered(conn)?;
+    let runtime_inputs = runtime_inputs::collect_runtime_generation_inputs(&troves, all_files)?;
 
-    let file_refs: Vec<FileEntryRef> = all_files
-        .iter()
-        .map(|file| {
-            #[allow(clippy::cast_sign_loss)]
-            let permissions = file.permissions as u32;
-            #[allow(clippy::cast_sign_loss)]
-            let size = file.size as u64;
-            FileEntryRef {
-                path: file.path.clone(),
-                sha256_hash: file.sha256_hash.clone(),
-                size,
-                permissions,
-                owner: file.owner.clone(),
-                group_name: file.group_name.clone(),
-            }
-        })
-        .collect();
-
-    let symlink_refs = collect_symlink_refs(conn, &adopted_track_ids)?;
-    validate_runtime_generation_root_is_self_contained(&file_refs, &symlink_refs)?;
-    let result = build_erofs_image(&file_refs, &symlink_refs, &gen_dir)?;
+    validate_runtime_generation_root_is_self_contained(
+        &runtime_inputs.file_refs,
+        &runtime_inputs.symlink_refs,
+    )?;
+    let result = build_erofs_image(
+        &runtime_inputs.file_refs,
+        &runtime_inputs.symlink_refs,
+        &gen_dir,
+    )?;
     let architecture = runtime_generation_architecture()?;
     let boot_asset_sources = resolve_runtime_boot_asset_sources(&troves, boot_root)?;
     let kernel_version = boot_asset_sources.kernel_version.clone();
@@ -361,7 +316,7 @@ pub(crate) fn rebuild_generation_image_with_boot_root(
         architecture,
         erofs_path: &result.image_path,
         cas_base_rel: "../../objects",
-        cas_objects: cas_objects_from_file_refs(&file_refs),
+        cas_objects: cas_objects_from_file_refs(&runtime_inputs.file_refs),
         boot_assets,
     })?;
 
@@ -384,60 +339,14 @@ pub(crate) fn rebuild_generation_image_with_boot_root(
     })?;
 
     info!(
-        "Generation {} rebuilt in place: {} CAS objects, {} packages",
+        "Generation {} rebuilt in place: {} CAS objects, {} packages ({} metadata-only)",
         gen_number,
         result.cas_objects_referenced,
-        troves.len()
+        troves.len(),
+        runtime_inputs.adopted_track_count
     );
 
     Ok(result)
-}
-
-/// Collect symlink entries from all installed troves.
-///
-/// Queries file entries that have a non-NULL symlink_target and returns them
-/// as `SymlinkEntryRef` values suitable for EROFS image building.
-///
-/// Returns an empty vec if the `file_entries` table does not have a
-/// `symlink_target` column (older schema or test databases).
-fn collect_symlink_refs(
-    conn: &rusqlite::Connection,
-    excluded_trove_ids: &HashSet<i64>,
-) -> crate::Result<Vec<SymlinkEntryRef>> {
-    let mut stmt = match conn.prepare(
-        "SELECT path, symlink_target, trove_id FROM files \
-         WHERE symlink_target IS NOT NULL AND symlink_target != ''",
-    ) {
-        Ok(s) => s,
-        Err(e) => {
-            // Column may not exist in pre-v60 schemas.
-            debug!("Skipping symlink collection: {e}");
-            return Ok(Vec::new());
-        }
-    };
-
-    let refs = stmt
-        .query_map([], |row| {
-            Ok((
-                SymlinkEntryRef {
-                    path: row.get(0)?,
-                    target: row.get(1)?,
-                },
-                row.get::<_, i64>(2)?,
-            ))
-        })
-        .map_err(|e| crate::error::Error::InternalError(format!("Failed to query symlinks: {e}")))?
-        .filter_map(|r| match r {
-            Ok((symlink, trove_id)) if !excluded_trove_ids.contains(&trove_id) => Some(symlink),
-            Ok(_) => None,
-            Err(error) => {
-                debug!("Skipping unreadable symlink entry: {error}");
-                None
-            }
-        })
-        .collect();
-
-    Ok(refs)
 }
 
 fn validate_runtime_generation_root_is_self_contained(
@@ -1051,6 +960,70 @@ mod tests {
     }
 
     #[cfg(feature = "composefs-rs")]
+    fn runtime_generation_db_with_invalid_regular_file()
+    -> (tempfile::TempDir, rusqlite::Connection, PathBuf, PathBuf) {
+        use crate::db::models::{FileEntry, Trove, TroveType};
+        use crate::db::schema::migrate;
+        use crate::filesystem::CasStore;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let generations_root = tmp.path().join("generations");
+        let objects_dir = tmp.path().join("objects");
+        let boot_root = tmp.path().join("boot");
+        std::fs::create_dir_all(&generations_root).unwrap();
+        std::fs::create_dir_all(boot_root.join("EFI/BOOT")).unwrap();
+        std::fs::write(boot_root.join("vmlinuz-6.19.8-conary"), b"kernel").unwrap();
+        std::fs::write(boot_root.join("initramfs-6.19.8-conary.img"), b"initramfs").unwrap();
+        std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"efi").unwrap();
+
+        let cas = CasStore::new(&objects_dir).unwrap();
+        let init_hash = cas.store(b"init").unwrap();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let mut trove = Trove::new(
+            "kernel-core".to_string(),
+            "6.19.8-conary".to_string(),
+            TroveType::Package,
+        );
+        trove.architecture = Some("x86_64".to_string());
+        let trove_id = trove.insert(&conn).unwrap();
+        let mut bad = FileEntry::new(
+            "/usr/bin/bad".to_string(),
+            "not-a-sha256".to_string(),
+            0,
+            0o100755,
+            trove_id,
+        );
+        bad.insert(&conn).unwrap();
+        let mut init = FileEntry::new(
+            "/usr/sbin/init".to_string(),
+            init_hash,
+            b"init".len() as i64,
+            0o100755,
+            trove_id,
+        );
+        init.insert(&conn).unwrap();
+
+        (tmp, conn, generations_root, boot_root)
+    }
+
+    fn assert_invalid_runtime_input_error(error: &str) {
+        for snippet in [
+            "exportable runtime generation is not self-contained",
+            "package kernel-core",
+            "/usr/bin/bad",
+            "invalid SHA-256 digest for regular file",
+            "conary system adopt --system --full",
+            "conary system takeover --up-to cas",
+        ] {
+            assert!(
+                error.contains(snippet),
+                "expected error to contain {snippet:?}; got {error}"
+            );
+        }
+    }
+
+    #[cfg(feature = "composefs-rs")]
     #[test]
     fn build_generation_from_db_writes_export_artifact_contract() {
         use crate::db::models::{FileEntry, Trove, TroveType};
@@ -1115,6 +1088,45 @@ mod tests {
         assert!(metadata.artifact_manifest_sha256.is_some());
         assert_eq!(metadata.kernel_version.as_deref(), Some("6.19.8-conary"));
         crate::generation::artifact::load_generation_artifact(&gen_dir).unwrap();
+    }
+
+    #[cfg(feature = "composefs-rs")]
+    #[test]
+    fn build_generation_from_db_rejects_invalid_runtime_input() {
+        let (_tmp, conn, generations_root, boot_root) =
+            runtime_generation_db_with_invalid_regular_file();
+
+        let error = build_generation_from_db_with_boot_root(
+            &conn,
+            &generations_root,
+            "invalid runtime input",
+            &boot_root,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert_invalid_runtime_input_error(&error);
+        assert!(!generations_root.join("0/.conary-artifact.json").exists());
+    }
+
+    #[cfg(feature = "composefs-rs")]
+    #[test]
+    fn rebuild_generation_image_rejects_invalid_runtime_input() {
+        let (_tmp, conn, generations_root, boot_root) =
+            runtime_generation_db_with_invalid_regular_file();
+
+        let error = rebuild_generation_image_with_boot_root(
+            &conn,
+            &generations_root,
+            7,
+            "invalid runtime input",
+            &boot_root,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert_invalid_runtime_input_error(&error);
+        assert!(!generations_root.join("7/.conary-artifact.json").exists());
     }
 
     #[cfg(feature = "composefs-rs")]
