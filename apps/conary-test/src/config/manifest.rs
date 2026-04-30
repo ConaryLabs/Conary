@@ -173,6 +173,10 @@ pub struct QemuBoot {
     #[serde(default)]
     pub stage_conary: bool,
     #[serde(default)]
+    pub scratch_disk_mb: Option<u64>,
+    #[serde(default)]
+    pub copy_to_guest: Vec<QemuGuestCopy>,
+    #[serde(default)]
     pub copy_from_guest: Vec<QemuGuestCopy>,
     #[serde(default = "default_qemu_memory")]
     pub memory_mb: u32,
@@ -588,6 +592,10 @@ timeout = 30
 image = "minimal-boot-v2"
 local_image_path = "/tmp/generated.qcow2"
 stage_conary = true
+scratch_disk_mb = 8192
+copy_to_guest = [
+  { source = "apps/conary/tests/fixtures/bootstrap-generation-export", dest = "/var/lib/conary/bootstrap-inputs" },
+]
 copy_from_guest = [
   { source = "/tmp/out.qcow2", dest = "/tmp/conary-generation-export/host-out.qcow2" },
 ]
@@ -604,6 +612,16 @@ commands = ["true"]
                     Some("/tmp/generated.qcow2")
                 );
                 assert!(cfg.stage_conary);
+                assert_eq!(cfg.scratch_disk_mb, Some(8192));
+                assert_eq!(cfg.copy_to_guest.len(), 1);
+                assert_eq!(
+                    cfg.copy_to_guest[0].source,
+                    "apps/conary/tests/fixtures/bootstrap-generation-export"
+                );
+                assert_eq!(
+                    cfg.copy_to_guest[0].dest,
+                    "/var/lib/conary/bootstrap-inputs"
+                );
                 assert_eq!(cfg.copy_from_guest.len(), 1);
                 assert_eq!(cfg.copy_from_guest[0].source, "/tmp/out.qcow2");
                 assert_eq!(

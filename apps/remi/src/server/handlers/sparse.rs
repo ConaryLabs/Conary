@@ -11,7 +11,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use conary_core::db::models::RepositoryPackage;
+use conary_core::db::models::{CONVERSION_VERSION, RepositoryPackage};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -202,6 +202,7 @@ fn build_sparse_entry(
                 is_security_update, severity, cve_ids, advisory_id, advisory_url
          FROM repository_packages
          WHERE repository_id IN ({placeholders}) AND name = ?{name_idx}
+         AND size > 0
          ORDER BY version"
     );
 
@@ -243,26 +244,32 @@ fn build_sparse_entry(
         return Ok(None);
     }
 
-    // Build converted lookup: version -> (content_hash)
+    // Build converted lookup keyed by version and architecture. Stale
+    // conversion-version rows are intentionally hidden so clients do not choose
+    // an old converted-only identity that cannot be regenerated from current
+    // repository metadata.
     let mut converted_stmt = conn.prepare(
-        "SELECT package_version, content_hash FROM converted_packages
+        "SELECT package_version, package_architecture, content_hash FROM converted_packages
          WHERE distro = ?1 AND package_name = ?2
-         AND package_version IS NOT NULL",
+         AND package_version IS NOT NULL
+         AND conversion_version >= ?3",
     )?;
 
     let mut converted_map = std::collections::HashMap::new();
-    let mut rows = converted_stmt.query(rusqlite::params![distro, name])?;
+    let mut rows = converted_stmt.query(rusqlite::params![distro, name, CONVERSION_VERSION])?;
     while let Some(row) = rows.next()? {
         let version: String = row.get(0)?;
-        let content_hash: Option<String> = row.get(1)?;
-        converted_map.insert(version, content_hash);
+        let architecture: Option<String> = row.get(1)?;
+        let content_hash: Option<String> = row.get(2)?;
+        converted_map.insert((version, architecture), content_hash);
     }
 
     // Build version entries
     let versions = packages
         .into_iter()
         .map(|pkg| {
-            let converted_info = converted_map.get(&pkg.version);
+            let converted_info =
+                converted_map.get(&(pkg.version.clone(), pkg.architecture.clone()));
             SparseVersionEntry {
                 version: pkg.version,
                 dependencies: pkg.dependencies,
@@ -430,6 +437,16 @@ mod tests {
     }
 
     #[test]
+    fn test_sparse_entry_ignores_zero_sized_repository_rows() {
+        let (temp_file, conn) = create_test_db();
+        let repo_id = insert_repo(&conn, "fedora-base", "fedora");
+        insert_package(&conn, repo_id, "nginx", "1.24.0-1.fc43", 0);
+
+        let result = build_sparse_entry(temp_file.path(), "fedora", "nginx").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
     fn test_sparse_entry_multiple_versions() {
         let (temp_file, conn) = create_test_db();
         let repo_id = insert_repo(&conn, "fedora-base", "fedora");
@@ -468,6 +485,7 @@ mod tests {
             "sha256:content_abc".to_string(),
             "/data/nginx.ccs".to_string(),
         );
+        converted.package_architecture = Some("x86_64".to_string());
         converted.insert(&conn).unwrap();
 
         let entry = build_sparse_entry(temp_file.path(), "fedora", "nginx")
@@ -489,6 +507,68 @@ mod tests {
             .unwrap();
         assert!(!v1250.converted);
         assert!(v1250.content_hash.is_none());
+    }
+
+    #[test]
+    fn test_sparse_entry_ignores_stale_converted_version() {
+        let (temp_file, conn) = create_test_db();
+        let repo_id = insert_repo(&conn, "fedora-base", "fedora");
+        insert_package(&conn, repo_id, "nginx", "1.24.0-1.fc43", 1024);
+
+        let mut converted = ConvertedPackage::new_server(
+            "fedora".to_string(),
+            "nginx".to_string(),
+            "1.24.0-1.fc43".to_string(),
+            "rpm".to_string(),
+            "sha256:nginx-1.24.0-1.fc43".to_string(),
+            "high".to_string(),
+            &["chunk1".to_string()],
+            2048,
+            "sha256:content_abc".to_string(),
+            "/data/nginx.ccs".to_string(),
+        );
+        converted.package_architecture = Some("x86_64".to_string());
+        converted.conversion_version = CONVERSION_VERSION - 1;
+        converted.insert(&conn).unwrap();
+
+        let entry = build_sparse_entry(temp_file.path(), "fedora", "nginx")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(entry.versions.len(), 1);
+        assert!(!entry.versions[0].converted);
+        assert!(entry.versions[0].content_hash.is_none());
+    }
+
+    #[test]
+    fn test_sparse_entry_matches_converted_architecture() {
+        let (temp_file, conn) = create_test_db();
+        let repo_id = insert_repo(&conn, "fedora-base", "fedora");
+        insert_package(&conn, repo_id, "libffi", "3.5.1-2.fc43", 1024);
+
+        let mut converted = ConvertedPackage::new_server(
+            "fedora".to_string(),
+            "libffi".to_string(),
+            "3.5.1-2.fc43".to_string(),
+            "rpm".to_string(),
+            "sha256:libffi-i686".to_string(),
+            "high".to_string(),
+            &["chunk1".to_string()],
+            2048,
+            "sha256:i686-content".to_string(),
+            "/data/libffi-i686.ccs".to_string(),
+        );
+        converted.package_architecture = Some("i686".to_string());
+        converted.insert(&conn).unwrap();
+
+        let entry = build_sparse_entry(temp_file.path(), "fedora", "libffi")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(entry.versions.len(), 1);
+        assert_eq!(entry.versions[0].architecture.as_deref(), Some("x86_64"));
+        assert!(!entry.versions[0].converted);
+        assert!(entry.versions[0].content_hash.is_none());
     }
 
     #[test]

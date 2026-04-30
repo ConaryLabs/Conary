@@ -6,12 +6,18 @@
 //! for a derivation. It creates the mount point directory, mounts the EROFS
 //! image via composefs, and unmounts on drop.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use tracing::{info, warn};
 
 use crate::generation::mount::MountOptions;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SeedMountKind {
+    Composefs,
+    PlainErofs,
+}
 
 /// Errors specific to build environment mount/unmount operations.
 #[derive(Debug, thiserror::Error)]
@@ -80,21 +86,27 @@ impl BuildEnvironment {
             ))
         })?;
 
-        let opts = MountOptions {
-            image_path: self.image_path.clone(),
-            basedir: self.cas_dir.clone(),
-            mount_point: self.mount_point.clone(),
-            verity: false,
-            digest: None,
-            upperdir: None,
-            workdir: None,
-        };
+        match seed_mount_kind(&self.cas_dir) {
+            SeedMountKind::Composefs => {
+                let opts = MountOptions {
+                    image_path: self.image_path.clone(),
+                    basedir: self.cas_dir.clone(),
+                    mount_point: self.mount_point.clone(),
+                    verity: false,
+                    digest: None,
+                    upperdir: None,
+                    workdir: None,
+                };
 
-        // mount_generation requires a real composefs runtime; missing helper
-        // or kernel support now fails closed instead of downgrading to plain
-        // EROFS.
-        let _mount_outcome = crate::generation::mount::mount_generation(&opts)
-            .map_err(|e| EnvironmentError::Mount(format!("mount failed: {e}")))?;
+                // CAS-backed seeds are composefs descriptors and must mount
+                // through composefs so external object references resolve.
+                let _mount_outcome = crate::generation::mount::mount_generation(&opts)
+                    .map_err(|e| EnvironmentError::Mount(format!("mount failed: {e}")))?;
+            }
+            SeedMountKind::PlainErofs => {
+                mount_plain_erofs(&self.image_path, &self.mount_point)?;
+            }
+        }
 
         info!(
             "Mounted build environment at {} (hash: {})",
@@ -155,6 +167,74 @@ impl BuildEnvironment {
     pub fn is_mounted(&self) -> bool {
         self.mounted
     }
+}
+
+fn seed_mount_kind(cas_dir: &Path) -> SeedMountKind {
+    if cas_dir_contains_file(cas_dir) {
+        SeedMountKind::Composefs
+    } else {
+        SeedMountKind::PlainErofs
+    }
+}
+
+fn cas_dir_contains_file(path: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return false;
+    };
+
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_file() {
+            return true;
+        }
+        if file_type.is_dir() && cas_dir_contains_file(&entry.path()) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn plain_erofs_mount_args(image_path: &Path, mount_point: &Path) -> Vec<String> {
+    vec![
+        "-t".to_owned(),
+        "erofs".to_owned(),
+        "-o".to_owned(),
+        "loop,ro".to_owned(),
+        image_path.to_string_lossy().to_string(),
+        mount_point.to_string_lossy().to_string(),
+    ]
+}
+
+fn mount_plain_erofs(image_path: &Path, mount_point: &Path) -> Result<(), EnvironmentError> {
+    let args = plain_erofs_mount_args(image_path, mount_point);
+    let output = Command::new("mount")
+        .args(&args)
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .map_err(|e| EnvironmentError::Mount(format!("failed to execute mount: {e}")))?;
+
+    if output.status.success() {
+        info!(
+            "Mounted plain EROFS build seed at {}",
+            mount_point.display()
+        );
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let detail = stderr.trim();
+    Err(EnvironmentError::Mount(format!(
+        "plain EROFS mount failed for image {}: {}",
+        image_path.display(),
+        if detail.is_empty() {
+            output.status.to_string()
+        } else {
+            detail.to_string()
+        }
+    )))
 }
 
 impl Drop for BuildEnvironment {
@@ -446,6 +526,52 @@ mod tests {
         );
         assert_eq!(env.cas_dir, PathBuf::from("/conary/objects"));
         assert_eq!(env.mount_point, PathBuf::from("/tmp/conary-build-abc123"));
+    }
+
+    #[test]
+    fn seed_mount_kind_is_plain_erofs_without_cas_objects() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(
+            seed_mount_kind(&tmp.path().join("missing-cas")),
+            SeedMountKind::PlainErofs
+        );
+
+        let empty_cas = tmp.path().join("empty-cas");
+        std::fs::create_dir_all(&empty_cas).unwrap();
+        assert_eq!(seed_mount_kind(&empty_cas), SeedMountKind::PlainErofs);
+    }
+
+    #[test]
+    fn seed_mount_kind_is_composefs_with_cas_objects() {
+        let tmp = tempfile::tempdir().unwrap();
+        let object_parent = tmp.path().join("cas/ab");
+        std::fs::create_dir_all(&object_parent).unwrap();
+        std::fs::write(object_parent.join("object"), b"contents").unwrap();
+
+        assert_eq!(
+            seed_mount_kind(&tmp.path().join("cas")),
+            SeedMountKind::Composefs
+        );
+    }
+
+    #[test]
+    fn plain_erofs_mount_args_use_loop_readonly() {
+        let args = plain_erofs_mount_args(
+            &PathBuf::from("/seed/seed.erofs"),
+            &PathBuf::from("/mnt/seed"),
+        );
+
+        assert_eq!(
+            args,
+            vec![
+                "-t".to_owned(),
+                "erofs".to_owned(),
+                "-o".to_owned(),
+                "loop,ro".to_owned(),
+                "/seed/seed.erofs".to_owned(),
+                "/mnt/seed".to_owned(),
+            ]
+        );
     }
 
     // --- MutableEnvironment tests ---

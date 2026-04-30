@@ -7,7 +7,7 @@ use axum::{
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
-use conary_core::db::models::RepositoryPackage;
+use conary_core::db::models::{CONVERSION_VERSION, RepositoryPackage};
 use rusqlite::Connection;
 use serde::Serialize;
 use std::collections::HashSet;
@@ -122,6 +122,7 @@ fn build_metadata(
             repo_packages.extend(RepositoryPackage::find_by_repository(&conn, id)?);
         }
     }
+    repo_packages.retain(|pkg| pkg.size > 0);
 
     // Query converted packages once so we can both mark repo-backed entries as
     // converted and surface packages that exist only in Remi's CCS store.
@@ -206,11 +207,14 @@ fn build_converted_packages(
 ) -> Result<Vec<PackageEntry>, anyhow::Error> {
     let mut stmt = conn.prepare(
         "SELECT package_name, package_version, package_architecture, original_format FROM converted_packages
-         WHERE distro = ?1 AND package_name IS NOT NULL AND package_version IS NOT NULL",
+         WHERE distro = ?1
+           AND package_name IS NOT NULL
+           AND package_version IS NOT NULL
+           AND conversion_version >= ?2",
     )?;
 
     let mut packages = Vec::new();
-    let mut rows = stmt.query([distro])?;
+    let mut rows = stmt.query(rusqlite::params![distro, CONVERSION_VERSION])?;
 
     while let Some(row) = rows.next()? {
         let name: String = row.get(0)?;
@@ -415,6 +419,53 @@ mod tests {
         let serialized = serde_json::to_value(qemu_img).unwrap();
 
         assert_eq!(serialized["architecture"], "x86_64");
+    }
+
+    #[test]
+    fn test_build_metadata_ignores_zero_sized_repository_rows() {
+        let (temp_file, conn) = create_test_db();
+
+        let mut repo = Repository::new("fedora".to_string(), "https://example.com".to_string());
+        repo.default_strategy_distro = Some("fedora".to_string());
+        let repo_id = repo.insert(&conn).unwrap();
+
+        let mut placeholder = RepositoryPackage::new(
+            repo_id,
+            "qemu-img".to_string(),
+            "10.1.0-7.fc43".to_string(),
+            "sha256:placeholder".to_string(),
+            0,
+            "".to_string(),
+        );
+        placeholder.architecture = Some("x86_64".to_string());
+        placeholder.insert(&conn).unwrap();
+
+        let mut real_package = RepositoryPackage::new(
+            repo_id,
+            "qemu-img".to_string(),
+            "2:10.1.0-7.fc43".to_string(),
+            "sha256:qemu-img".to_string(),
+            4096,
+            "https://example.com/qemu-img.rpm".to_string(),
+        );
+        real_package.architecture = Some("x86_64".to_string());
+        real_package.insert(&conn).unwrap();
+
+        let metadata = build_metadata(temp_file.path(), "fedora").unwrap();
+
+        assert_eq!(metadata.package_count, 1);
+        assert!(
+            metadata
+                .packages
+                .iter()
+                .any(|p| p.name == "qemu-img" && p.version == "2:10.1.0-7.fc43")
+        );
+        assert!(
+            !metadata
+                .packages
+                .iter()
+                .any(|p| p.name == "qemu-img" && p.version == "10.1.0-7.fc43")
+        );
     }
 
     #[test]

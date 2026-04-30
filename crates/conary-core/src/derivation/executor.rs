@@ -184,7 +184,7 @@ pub struct DerivationExecutor {
     /// Content-addressable store for build outputs.
     cas: CasStore,
     /// Root directory for CAS objects (needed for building Kitchen paths).
-    cas_dir: PathBuf,
+    _cas_dir: PathBuf,
     /// Executor configuration (logging, shell-on-failure, etc.).
     config: ExecutorConfig,
 }
@@ -195,7 +195,7 @@ impl DerivationExecutor {
     pub fn new(cas: CasStore, cas_dir: PathBuf, config: ExecutorConfig) -> Self {
         Self {
             cas,
-            cas_dir,
+            _cas_dir: cas_dir,
             config,
         }
     }
@@ -349,8 +349,8 @@ impl DerivationExecutor {
 
         // Create a Cook that installs to a temporary DESTDIR.
         // The CleanupGuard ensures the directory is removed on any error path.
-        let destdir = self
-            .cas_dir
+        let destdir = sysroot
+            .join("var/tmp/conary-derivation-dest")
             .join(format!("build-{}", &derivation_id.as_str()[..16]));
         std::fs::create_dir_all(&destdir).map_err(|e| ExecutorError::Io(e.to_string()))?;
         let mut destdir_guard = CleanupGuard::new(destdir.clone());

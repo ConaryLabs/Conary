@@ -61,6 +61,40 @@ fn chroot_env_args(env: &[(&str, String)], jobs: u32) -> Vec<String> {
     env_args
 }
 
+fn translate_path_for_chroot(path: &Path, sysroot: &Path) -> PathBuf {
+    match path.strip_prefix(sysroot) {
+        Ok(relative) => Path::new("/").join(relative),
+        Err(_) => path.to_path_buf(),
+    }
+}
+
+fn translate_env_for_chroot<'a>(
+    env: &'a [(&'a str, String)],
+    sysroot: &Path,
+) -> Vec<(&'a str, String)> {
+    env.iter()
+        .map(|(key, value)| {
+            let translated = if Path::new(value).is_absolute() {
+                translate_path_for_chroot(Path::new(value), sysroot)
+                    .to_string_lossy()
+                    .to_string()
+            } else {
+                value.clone()
+            };
+            (*key, translated)
+        })
+        .collect()
+}
+
+fn translate_command_for_chroot(command: &str, sysroot: &Path) -> String {
+    let prefix = sysroot.to_string_lossy();
+    let prefix = prefix.trim_end_matches('/');
+    if prefix.is_empty() {
+        return command.to_string();
+    }
+    command.replace(prefix, "")
+}
+
 /// A single cook operation
 pub struct Cook<'a> {
     pub(super) kitchen: &'a Kitchen,
@@ -124,8 +158,20 @@ impl<'a> Cook<'a> {
         recipe: &'a Recipe,
         dest_dir: &Path,
     ) -> Result<Self> {
-        let build_dir = TempDir::new()
-            .map_err(|e| Error::IoError(format!("Failed to create build directory: {}", e)))?;
+        let build_dir = if let Some(sysroot) = &kitchen.config.sysroot {
+            let parent = sysroot.join("var/tmp/conary-derivation-build");
+            fs::create_dir_all(&parent)?;
+            TempDir::new_in(&parent).map_err(|e| {
+                Error::IoError(format!(
+                    "Failed to create build directory in {}: {}",
+                    parent.display(),
+                    e
+                ))
+            })?
+        } else {
+            TempDir::new()
+                .map_err(|e| Error::IoError(format!("Failed to create build directory: {}", e)))?
+        };
         let build_path = build_dir.path().to_path_buf();
         let source_dir = build_path.join("source");
 
@@ -566,13 +612,15 @@ impl<'a> Cook<'a> {
         // compatibility issues (e.g., Python 3.14 + host GCC 15 -Werror).
         let output = if let Some(sysroot) = &self.kitchen.config.sysroot {
             // Convert workdir to be relative to the sysroot
-            let chroot_workdir = workdir.strip_prefix(sysroot).unwrap_or(workdir);
+            let chroot_workdir = translate_path_for_chroot(workdir, sysroot);
 
             // Build env string for chroot (env -i clears host env)
+            let chroot_env = translate_env_for_chroot(env, sysroot);
             let env_args = chroot_env_args(
-                env,
+                &chroot_env,
                 self.recipe.build.jobs.unwrap_or(self.kitchen.config.jobs),
             );
+            let command = translate_command_for_chroot(command, sysroot);
 
             // Shell-escape the chroot workdir to prevent injection from
             // paths with spaces or special characters, matching the
@@ -837,5 +885,29 @@ mod tests {
         assert!(!args.iter().any(|arg| arg.starts_with("LD_LIBRARY_PATH=")));
         assert!(args.iter().any(|arg| arg == "CUSTOM=value"));
         assert!(args.iter().any(|arg| arg == "MAKEFLAGS=-j8"));
+    }
+
+    #[test]
+    fn test_chroot_path_translation_maps_sysroot_paths_inside_chroot() {
+        let sysroot = Path::new("/tmp/conary-seed/sysroot");
+        assert_eq!(
+            translate_path_for_chroot(Path::new("/tmp/conary-seed/sysroot/var/tmp/build"), sysroot),
+            PathBuf::from("/var/tmp/build")
+        );
+        assert_eq!(
+            translate_path_for_chroot(Path::new("/outside/build"), sysroot),
+            PathBuf::from("/outside/build")
+        );
+    }
+
+    #[test]
+    fn test_chroot_command_translation_maps_destdir_substitutions() {
+        let sysroot = Path::new("/tmp/conary-seed/sysroot");
+        let command = "mkdir -p /tmp/conary-seed/sysroot/var/tmp/dest && touch /tmp/conary-seed/sysroot/var/tmp/dest/ok";
+
+        assert_eq!(
+            translate_command_for_chroot(command, sysroot),
+            "mkdir -p /var/tmp/dest && touch /var/tmp/dest/ok"
+        );
     }
 }

@@ -11,6 +11,7 @@
 use crate::error::{Error, Result};
 use crate::hash::verify_sha256;
 use async_trait::async_trait;
+use reqwest::header;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -202,10 +203,13 @@ impl ChunkFetcher for HttpChunkFetcher {
         let url = format!("{}/v1/chunks/{}", self.base_url, hash);
         debug!("Fetching chunk via HTTP: {}", hash);
 
-        let response =
-            self.client.get(&url).send().await.map_err(|e| {
-                Error::DownloadError(format!("Failed to fetch chunk {}: {e}", hash))
-            })?;
+        let response = self
+            .client
+            .get(&url)
+            .header(header::ACCEPT_ENCODING, "identity")
+            .send()
+            .await
+            .map_err(|e| Error::DownloadError(format!("Failed to fetch chunk {}: {e}", hash)))?;
 
         if !response.status().is_success() {
             return Err(Error::DownloadError(format!(
@@ -311,6 +315,7 @@ impl HttpChunkFetcher {
         let response = self
             .client
             .post(&url)
+            .header(header::ACCEPT_ENCODING, "identity")
             .json(&request)
             .send()
             .await
@@ -791,5 +796,52 @@ mod tests {
 
         let err = cache.fetch(&expected_hash).await.unwrap_err();
         assert!(matches!(err, Error::ChecksumMismatch { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_http_chunk_fetcher_requests_identity_encoding() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let body = b"test chunk data";
+        let hash = sha256(body);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buf = [0_u8; 1024];
+            loop {
+                let read = socket.read(&mut buf).await.unwrap();
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buf[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+
+            let mut response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .into_bytes();
+            response.extend_from_slice(body);
+            socket.write_all(&response).await.unwrap();
+
+            String::from_utf8(request).unwrap()
+        });
+
+        let fetcher = HttpChunkFetcher::new(&base_url).unwrap();
+        let fetched = fetcher.fetch(&hash).await.unwrap();
+        assert_eq!(fetched, body);
+
+        let request = server.await.unwrap().to_ascii_lowercase();
+        assert!(
+            request.contains("accept-encoding: identity"),
+            "chunk request did not force identity encoding:\n{request}"
+        );
     }
 }

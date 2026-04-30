@@ -534,7 +534,12 @@ async fn proxy_pass_through(state: Arc<RwLock<ProxyState>>, path: &str) -> Respo
 
     debug!("[remi-lite] Proxying: {} -> {}", path, fetch_url);
 
-    let response = match http_client.get(&fetch_url).send().await {
+    let response = match http_client
+        .get(&fetch_url)
+        .header("accept-encoding", "identity")
+        .send()
+        .await
+    {
         Ok(r) => r,
         Err(e) => {
             warn!("[remi-lite] Upstream fetch failed: {} ({})", fetch_url, e);

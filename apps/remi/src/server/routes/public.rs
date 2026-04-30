@@ -38,7 +38,9 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
 
     let public_cors = create_cors_layer(&config, false);
     let restricted_cors = create_cors_layer(&config, true);
-    let compression = CompressionLayer::new();
+    let compression = CompressionLayer::new().compress_when(
+        DefaultPredicate::new().and(NotForContentType::const_new("application/octet-stream")),
+    );
 
     let chunk_routes = Router::new()
         .route("/v1/chunks/{hash}", head(chunks::head_chunk))

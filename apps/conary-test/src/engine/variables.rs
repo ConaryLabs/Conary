@@ -166,6 +166,15 @@ pub fn expand_qemu_boot(config: &QemuBoot, vars: &HashMap<String, String>) -> Qe
             .as_ref()
             .map(|path| expand_variables(path, vars)),
         stage_conary: config.stage_conary,
+        scratch_disk_mb: config.scratch_disk_mb,
+        copy_to_guest: config
+            .copy_to_guest
+            .iter()
+            .map(|copy| QemuGuestCopy {
+                source: expand_variables(&copy.source, vars),
+                dest: expand_variables(&copy.dest, vars),
+            })
+            .collect(),
         copy_from_guest: config
             .copy_from_guest
             .iter()
@@ -403,6 +412,8 @@ mod tests {
                 image: "${IMG}".to_string(),
                 local_image_path: None,
                 stage_conary: false,
+                scratch_disk_mb: None,
+                copy_to_guest: Vec::new(),
                 copy_from_guest: Vec::new(),
                 memory_mb: 1024,
                 timeout_seconds: 120,
@@ -426,12 +437,21 @@ mod tests {
             "HOST_OUT".to_string(),
             "/tmp/conary-generation-export/generated.qcow2".to_string(),
         );
+        vars.insert(
+            "FIXTURE_ROOT".to_string(),
+            "/opt/remi-tests/fixtures".to_string(),
+        );
 
         let expanded = expand_qemu_boot(
             &QemuBoot {
                 image: "${IMG}".to_string(),
                 local_image_path: Some("${HOST_OUT}".to_string()),
                 stage_conary: true,
+                scratch_disk_mb: Some(4096),
+                copy_to_guest: vec![QemuGuestCopy {
+                    source: "${FIXTURE_ROOT}/bootstrap-generation-export".to_string(),
+                    dest: "/var/lib/conary/${IMG}".to_string(),
+                }],
                 copy_from_guest: vec![QemuGuestCopy {
                     source: "/tmp/${IMG}.qcow2".to_string(),
                     dest: "${HOST_OUT}".to_string(),
@@ -451,6 +471,15 @@ mod tests {
             Some("/tmp/conary-generation-export/generated.qcow2")
         );
         assert!(expanded.stage_conary);
+        assert_eq!(expanded.scratch_disk_mb, Some(4096));
+        assert_eq!(
+            expanded.copy_to_guest[0].source,
+            "/opt/remi-tests/fixtures/bootstrap-generation-export"
+        );
+        assert_eq!(
+            expanded.copy_to_guest[0].dest,
+            "/var/lib/conary/minimal-boot-v2"
+        );
         assert_eq!(
             expanded.copy_from_guest[0].source,
             "/tmp/minimal-boot-v2.qcow2"

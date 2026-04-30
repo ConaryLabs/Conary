@@ -29,6 +29,7 @@ sha2.workspace = true
 hex.workspace = true
 futures.workspace = true
 tar.workspace = true
+tempfile.workspace = true
 
 # SQLite (WAL buffer)
 rusqlite.workspace = true
@@ -53,9 +54,6 @@ tokio-stream.workspace = true
 # MCP
 rmcp = { workspace = true, features = ["server", "macros", "transport-streamable-http-server"] }
 schemars.workspace = true
-
-[dev-dependencies]
-tempfile.workspace = true
 
 [[bin]]
 name = "conary-test"

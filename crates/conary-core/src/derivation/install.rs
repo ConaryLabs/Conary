@@ -208,13 +208,59 @@ pub fn run_ldconfig_if_needed(manifest: &OutputManifest, sysroot: &Path) {
 // Private helpers
 // ---------------------------------------------------------------------------
 
-/// Resolve a manifest-absolute path into a real filesystem path under `sysroot`.
+/// Resolve a manifest-absolute path into a replacement path under `sysroot`.
 ///
-/// Uses `safe_join` to strip leading `/` and reject `..` components, preventing
-/// path traversal attacks from malicious manifests.
+/// The installer removes any existing final entry before writing, so the final
+/// component may be a dangling symlink. Existing symlink ancestors still must
+/// resolve inside `sysroot`, otherwise creating the replacement would write
+/// outside the installation root.
 fn sysroot_path(sysroot: &Path, manifest_path: &str) -> Result<PathBuf, InstallError> {
-    crate::filesystem::path::safe_join(sysroot, manifest_path)
-        .map_err(|e| InstallError::PathTraversal(e.to_string()))
+    let sanitized = crate::filesystem::path::sanitize_path(manifest_path)
+        .map_err(|e| InstallError::PathTraversal(e.to_string()))?;
+    validate_existing_parent_path(sysroot, &sanitized)?;
+    Ok(sysroot.join(sanitized))
+}
+
+fn validate_existing_parent_path(sysroot: &Path, sanitized: &Path) -> Result<(), InstallError> {
+    let canonical_root = sysroot.canonicalize().map_err(|e| {
+        InstallError::PathTraversal(format!(
+            "Failed to canonicalize root {}: {}",
+            sysroot.display(),
+            e
+        ))
+    })?;
+
+    let Some(parent) = sanitized.parent() else {
+        return Ok(());
+    };
+
+    let mut check = sysroot.to_path_buf();
+    for component in parent.components() {
+        check.push(component);
+        match check.symlink_metadata() {
+            Ok(meta) if meta.is_symlink() => match check.canonicalize() {
+                Ok(resolved) if !resolved.starts_with(&canonical_root) => {
+                    return Err(InstallError::PathTraversal(format!(
+                        "Symlink at {} escapes root {}",
+                        check.display(),
+                        sysroot.display()
+                    )));
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    return Err(InstallError::PathTraversal(format!(
+                        "Dangling symlink at {} under root {}",
+                        check.display(),
+                        sysroot.display()
+                    )));
+                }
+            },
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+
+    Ok(())
 }
 
 /// Return the CAS object path for `hash` under `cas_dir`.
@@ -333,6 +379,60 @@ mod tests {
 
         let installed = fs::read(sysroot.path().join("usr/bin/hello")).unwrap();
         assert_eq!(installed, new_content, "old content must be replaced");
+    }
+
+    #[test]
+    fn test_install_replaces_existing_dangling_symlink_destination() {
+        let cas = TempDir::new().unwrap();
+        let sysroot = TempDir::new().unwrap();
+
+        let link_dir = sysroot.path().join("usr/lib/environment.d");
+        fs::create_dir_all(&link_dir).unwrap();
+        unix_fs::symlink(
+            "../../../etc/environment",
+            link_dir.join("99-environment.conf"),
+        )
+        .unwrap();
+
+        let symlinks = vec![OutputSymlink {
+            path: "/usr/lib/environment.d/99-environment.conf".to_owned(),
+            target: "../../../etc/environment".to_owned(),
+        }];
+        let manifest = make_manifest(vec![], symlinks);
+
+        let count = install_to_sysroot(&manifest, sysroot.path(), cas.path())
+            .expect("install must replace a final dangling symlink");
+        assert_eq!(count, 1);
+        assert_eq!(
+            fs::read_link(link_dir.join("99-environment.conf")).unwrap(),
+            PathBuf::from("../../../etc/environment")
+        );
+    }
+
+    #[test]
+    fn test_install_rejects_symlink_ancestor_escape() {
+        let cas = TempDir::new().unwrap();
+        let sysroot = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+
+        unix_fs::symlink(outside.path(), sysroot.path().join("usr")).unwrap();
+        let content = b"outside write must not happen";
+        let file_hash = write_cas_object(cas.path(), content);
+        let files = vec![OutputFile {
+            path: "/usr/bin/hello".to_owned(),
+            hash: file_hash,
+            size: content.len() as u64,
+            mode: 0o755,
+        }];
+        let manifest = make_manifest(files, vec![]);
+
+        let err = install_to_sysroot(&manifest, sysroot.path(), cas.path())
+            .expect_err("symlink ancestors escaping sysroot must be rejected");
+        assert!(
+            matches!(err, InstallError::PathTraversal(_)),
+            "expected path traversal error, got {err:?}"
+        );
+        assert!(!outside.path().join("bin/hello").exists());
     }
 
     #[test]
