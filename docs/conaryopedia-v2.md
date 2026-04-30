@@ -186,7 +186,7 @@ The three parts:
 | **Namespace** | A grouping within the repository | `fc` |
 | **Tag** | The branch or release identifier | `43` |
 
-Full example: `fedora.conary.io@fc:43` means "Fedora 43 packages from fedora.conary.io."
+Full example: `fedora.conary.io@fc:44` means "Fedora 44 packages from fedora.conary.io."
 
 #### Label Path
 
@@ -195,7 +195,7 @@ The **label path** is an ordered list of labels that defines where Conary search
 ```bash
 conary query label path                  # Show current search order
 conary query label add local@dev:main    # Add a label
-conary query label add fedora@fc:43      # Add another
+conary query label add fedora@fc:44      # Add another
 ```
 
 #### Label Delegation
@@ -203,15 +203,15 @@ conary query label add fedora@fc:43      # Add another
 Labels can **delegate** to other labels, creating chains:
 
 ```bash
-conary query label delegate local@dev:main fedora@fc:43
+conary query label delegate local@dev:main fedora@fc:44
 ```
 
-This means: "When resolving packages via `local@dev:main`, if the package isn't found locally, try `fedora@fc:43`." Delegation chains are followed with cycle detection.
+This means: "When resolving packages via `local@dev:main`, if the package isn't found locally, try `fedora@fc:44`." Delegation chains are followed with cycle detection.
 
 Labels can also be **linked** to repositories, allowing a label to serve as a named alias for a repository's package set:
 
 ```bash
-conary query label link fedora@fc:43 fedora-43
+conary query label link fedora@fc:44 fedora-44
 ```
 
 ### 1.5 Flavors
@@ -446,7 +446,7 @@ The `install` command accepts three types of targets:
 ```bash
 conary install nginx --allow-live-system-mutation                     # From repository
 conary install nginx --version 1.24.0 --allow-live-system-mutation    # Specific version
-conary install nginx --repo fedora-43 --allow-live-system-mutation    # From specific repository
+conary install nginx --repo fedora-44 --allow-live-system-mutation    # From specific repository
 conary install ./package.rpm --allow-live-system-mutation             # Local file
 conary install @web-stack --allow-live-system-mutation                # Collection
 ```
@@ -794,8 +794,8 @@ Repositories are where Conary finds packages to install and update.
 #### Adding Repositories
 
 ```bash
-conary repo add fedora-43 https://mirrors.fedoraproject.org/metalink
-conary repo add fedora-43 https://mirror.example.com/fedora/43 \
+conary repo add fedora-44 https://mirrors.fedoraproject.org/metalink
+conary repo add fedora-44 https://mirror.example.com/fedora/44 \
     --priority 100
 conary repo add custom https://repo.example.com/metadata \
     --content-url https://cdn.example.com/packages \
@@ -809,26 +809,26 @@ The `--content-url` flag enables the **reference mirror** pattern: metadata is f
 ```bash
 conary repo list                     # List enabled repositories
 conary repo list --all               # Include disabled repositories
-conary repo enable fedora-43         # Enable a repository
-conary repo disable fedora-43        # Disable a repository
-conary repo remove fedora-43         # Delete a repository
+conary repo enable fedora-44         # Enable a repository
+conary repo disable fedora-44        # Disable a repository
+conary repo remove fedora-44         # Delete a repository
 ```
 
 #### Syncing Metadata
 
 ```bash
 conary repo sync                     # Sync all enabled repositories
-conary repo sync fedora-43           # Sync one repository
+conary repo sync fedora-44           # Sync one repository
 conary repo sync --force             # Force re-sync even if recent
 ```
 
 #### GPG Key Management
 
 ```bash
-conary repo key-import fedora-43 /path/to/RPM-GPG-KEY-fedora
-conary repo key-import fedora-43 https://keys.fedoraproject.org/key.pub
+conary repo key-import fedora-44 /path/to/RPM-GPG-KEY-fedora
+conary repo key-import fedora-44 https://keys.fedoraproject.org/key.pub
 conary repo key-list
-conary repo key-remove fedora-43
+conary repo key-remove fedora-44
 ```
 
 When GPG checking is enabled, every package from the repository is verified against the imported key. Use `--gpg-strict` when adding a repo to require valid signatures on all packages.
@@ -857,7 +857,7 @@ distros or repositories are eligible and how allowed candidates should be
 ranked:
 
 ```bash
-conary distro set fedora-43 --mixing guarded
+conary distro set fedora-44 --mixing guarded
 conary distro mixing permissive
 conary distro selection-mode latest
 conary distro info
@@ -909,12 +909,12 @@ Labels track package provenance (see Chapter 1.4). The query subcommand manages 
 ```bash
 conary query label list                  # List all labels
 conary query label list --verbose        # With descriptions and counts
-conary query label add fedora@fc:43      # Create a label
-conary query label add fedora@fc:43 --description "Fedora 43 packages"
-conary query label remove fedora@fc:43   # Remove a label
+conary query label add fedora@fc:44      # Create a label
+conary query label add fedora@fc:44 --description "Fedora 44 packages"
+conary query label remove fedora@fc:44   # Remove a label
 conary query label show nginx            # Show label for a package
-conary query label set nginx fedora@fc:43  # Set label for a package
-conary query label query fedora@fc:43    # Find packages with this label
+conary query label set nginx fedora@fc:44  # Set label for a package
+conary query label query fedora@fc:44    # Find packages with this label
 ```
 
 #### Label Path
@@ -928,9 +928,9 @@ conary query label path --remove old@label:name
 #### Label Federation
 
 ```bash
-conary query label link fedora@fc:43 fedora-43    # Link label to repository
-conary query label link fedora@fc:43 --unlink     # Remove link
-conary query label delegate local@dev:main fedora@fc:43  # Set delegation
+conary query label link fedora@fc:44 fedora-44    # Link label to repository
+conary query label link fedora@fc:44 --unlink     # Remove link
+conary query label delegate local@dev:main fedora@fc:44  # Set delegation
 conary query label delegate local@dev:main --undelegate  # Remove delegation
 ```
 
@@ -1054,7 +1054,7 @@ version = 1
 
 # Package search path (checked in order)
 search = [
-    "fedora@fc:43",
+    "fedora@fc:44",
     "conary@extras:stable",
 ]
 
@@ -1086,11 +1086,11 @@ packages = ["nginx-module-geoip", "redis-sentinel"]
 [system]
 profile = "balanced/latest-anywhere"
 selection_mode = "latest"
-allowed_distros = ["fedora-43", "arch"]
+allowed_distros = ["fedora-44", "arch"]
 convergence = "track-only"
 
 [system.pin]
-distro = "fedora-43"
+distro = "fedora-44"
 strength = "guarded"
 ```
 
@@ -1121,9 +1121,9 @@ Output shows what needs to change to reach the desired state:
 
 ```
 Install:
-  + nginx (from fedora@fc:43)
-  + postgresql (from fedora@fc:43)
-  + redis (from fedora@fc:43)
+  + nginx (from fedora@fc:44)
+  + postgresql (from fedora@fc:44)
+  + redis (from fedora@fc:44)
 
 Remove:
   - sendmail 8.17.1 (excluded by model)

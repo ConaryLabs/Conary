@@ -13,6 +13,13 @@ release = "2024-10-10"
 eol = "2025-07-10"
 
 [[distros]]
+name = "fedora-44"
+display = "Fedora 44"
+format = "rpm"
+release = "2026-04-28"
+eol = "2027-06-02"
+
+[[distros]]
 name = "fedora-43"
 display = "Fedora 43"
 format = "rpm"

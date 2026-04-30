@@ -90,7 +90,7 @@ pub(crate) fn validate_canonical_mapping<'a>(
 pub struct RepoPackageInfo {
     /// Distro package name (e.g., "httpd", "apache2").
     pub name: String,
-    /// Distro identifier (e.g., "fedora-43", "ubuntu-noble").
+    /// Distro identifier (e.g., "fedora-44", "ubuntu-noble").
     pub distro: String,
     /// Virtual provides / capabilities declared by this package.
     pub provides: Vec<String>,

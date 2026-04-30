@@ -375,7 +375,7 @@ impl ConversionService {
         use conary_core::repository::versioning::{VersionScheme, compare_repo_versions};
 
         // Map distro to repository name pattern.
-        // Match both bare name (e.g. "fedora") and suffixed (e.g. "fedora-43").
+        // Match both bare name (e.g. "fedora") and suffixed (e.g. "fedora-44").
         let (repo_pattern, scheme) = match distro {
             "arch" => ("arch%", VersionScheme::Arch),
             "fedora" => ("fedora%", VersionScheme::Rpm),

@@ -6,7 +6,7 @@ Conary validation and test-harness operations.
 ## Server Details
 
 - **SSH:** `ssh peter@forge.conarylabs.com`
-- **OS:** Fedora 43
+- **OS:** Fedora 44
 - **RAM:** 8GB
 - **Disk:** 151GB
 - **Role:** self-hosted GitHub Actions runner plus local `conary-test` service
@@ -139,5 +139,5 @@ sudo -u peter -H bash -lc 'cargo --version && podman --version'
 **Container builds fail locally:**
 ```bash
 podman system prune -a
-podman build -f apps/conary/tests/integration/remi/containers/Containerfile.fedora43 apps/conary/tests/integration/remi/
+podman build -f apps/conary/tests/integration/remi/containers/Containerfile.fedora44 apps/conary/tests/integration/remi/
 ```

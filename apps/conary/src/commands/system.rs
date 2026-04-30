@@ -52,10 +52,10 @@ pub async fn cmd_init(db_path: &str) -> Result<()> {
                 "Arch Linux",
             ),
             (
-                "fedora-43",
-                "https://dl.fedoraproject.org/pub/fedora/linux/releases/43/Everything/x86_64/os",
+                "fedora-44",
+                "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/x86_64/os",
                 90,
-                "Fedora 43",
+                "Fedora 44",
             ),
             (
                 "arch-multilib",

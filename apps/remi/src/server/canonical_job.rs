@@ -423,14 +423,14 @@ mod tests {
         // Insert a test repository
         conn.execute(
             "INSERT INTO repositories (name, url, enabled, default_strategy_distro)
-             VALUES ('fedora-43', 'https://example.com/fedora', 1, 'fedora')",
+             VALUES ('fedora-44', 'https://example.com/fedora', 1, 'fedora')",
             [],
         )
         .unwrap();
 
         let repo_id: i64 = conn
             .query_row(
-                "SELECT id FROM repositories WHERE name = 'fedora-43'",
+                "SELECT id FROM repositories WHERE name = 'fedora-44'",
                 [],
                 |r| r.get(0),
             )

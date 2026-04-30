@@ -59,7 +59,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        distro: [fedora43, ubuntu-noble, arch]
+        distro: [fedora44, ubuntu-noble, arch]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Build deep-validation binaries
@@ -104,4 +104,4 @@ jobs:
       - name: Build QEMU validation binaries
         run: cargo build -p conary -p conary-test --verbose
       - name: Run Group N QEMU tests
-        run: cargo run -p conary-test -- run --distro fedora43 --suite tests/integration/remi/manifests/phase3-group-n-qemu.toml
+        run: cargo run -p conary-test -- run --distro fedora44 --suite tests/integration/remi/manifests/phase3-group-n-qemu.toml

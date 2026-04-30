@@ -616,7 +616,7 @@ mod tests {
         let run = TestRun::create(
             &conn,
             "phase1-core",
-            "fedora43",
+            "fedora44",
             1,
             Some("ci"),
             Some("abc123"),
@@ -624,7 +624,7 @@ mod tests {
         .expect("create run");
 
         assert_eq!(run.suite, "phase1-core");
-        assert_eq!(run.distro, "fedora43");
+        assert_eq!(run.distro, "fedora44");
         assert_eq!(run.phase, 1);
         assert_eq!(run.status, "pending");
         assert!(run.completed_at.is_none());
@@ -664,7 +664,7 @@ mod tests {
         // Insert 5 runs
         let mut ids = Vec::new();
         for i in 0..5 {
-            let run = TestRun::create(&conn, &format!("suite-{i}"), "fedora43", 1, None, None)
+            let run = TestRun::create(&conn, &format!("suite-{i}"), "fedora44", 1, None, None)
                 .expect("create run");
             ids.push(run.id);
         }
@@ -700,7 +700,7 @@ mod tests {
 
         // Create run -> result -> step -> log
         let run =
-            TestRun::create(&conn, "phase1-core", "fedora43", 1, None, None).expect("create run");
+            TestRun::create(&conn, "phase1-core", "fedora44", 1, None, None).expect("create run");
 
         let result = TestResult::insert(
             &conn,
@@ -781,13 +781,13 @@ mod tests {
         // Create a run with a timestamp well in the past
         conn.execute(
             "INSERT INTO test_runs (suite, distro, phase, status, started_at)
-             VALUES ('old-suite', 'fedora43', 1, 'passed', '2020-01-01T00:00:00Z')",
+             VALUES ('old-suite', 'fedora44', 1, 'passed', '2020-01-01T00:00:00Z')",
             [],
         )
         .expect("insert old run");
 
         // Create a recent run (default timestamp is now)
-        let _recent = TestRun::create(&conn, "new-suite", "fedora43", 1, None, None)
+        let _recent = TestRun::create(&conn, "new-suite", "fedora44", 1, None, None)
             .expect("create recent run");
 
         // GC with 30-day window should remove the old run

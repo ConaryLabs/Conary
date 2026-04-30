@@ -1,9 +1,9 @@
 # packaging/rpm/Containerfile.build
 #
-# Fedora 43 build container for Conary RPMs.
+# Fedora 44 build container for Conary RPMs.
 # Uses rustup for a current toolchain (distro Rust may lag behind MSRV).
 
-FROM registry.fedoraproject.org/fedora:43
+FROM registry.fedoraproject.org/fedora:44
 
 RUN dnf install -y \
         rpm-build \

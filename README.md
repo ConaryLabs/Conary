@@ -190,10 +190,10 @@ openssl = "3.0.*"
 
 [system]
 selection_mode = "latest"
-allowed_distros = ["fedora-43", "arch"]
+allowed_distros = ["fedora-44", "arch"]
 
 [system.pin]
-distro = "fedora-43"
+distro = "fedora-44"
 strength = "guarded"
 ```
 
@@ -507,7 +507,7 @@ conary federation stats --days 7      # Bandwidth savings report
 The `conary-test` Rust engine runs container-backed integration suites against real distros and a live Remi deployment:
 
 ```bash
-cargo run -p conary-test -- run --suite phase1-core --distro fedora43 --phase 1
+cargo run -p conary-test -- run --suite phase1-core --distro fedora44 --phase 1
 cargo run -p conary-test -- health    # Service health check
 cargo run -p conary-test -- logs T42  # Retrieve test logs
 ```
