@@ -1007,6 +1007,60 @@ mod tests {
         (tmp, conn, generations_root, boot_root)
     }
 
+    #[cfg(feature = "composefs-rs")]
+    fn runtime_generation_db_with_missing_regular_file_cas_object() -> (
+        tempfile::TempDir,
+        rusqlite::Connection,
+        PathBuf,
+        PathBuf,
+        String,
+    ) {
+        use crate::db::models::{FileEntry, Trove, TroveType};
+        use crate::db::schema::migrate;
+        use crate::filesystem::CasStore;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let generations_root = tmp.path().join("generations");
+        let objects_dir = tmp.path().join("objects");
+        let boot_root = tmp.path().join("boot");
+        std::fs::create_dir_all(&generations_root).unwrap();
+        std::fs::create_dir_all(boot_root.join("EFI/BOOT")).unwrap();
+        std::fs::write(boot_root.join("vmlinuz-6.19.8-conary"), b"kernel").unwrap();
+        std::fs::write(boot_root.join("initramfs-6.19.8-conary.img"), b"initramfs").unwrap();
+        std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"efi").unwrap();
+
+        let cas = CasStore::new(&objects_dir).unwrap();
+        let init_hash = cas.store(b"init").unwrap();
+        let missing_hash = CasStore::compute_sha256(b"missing");
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let mut trove = Trove::new(
+            "kernel-core".to_string(),
+            "6.19.8-conary".to_string(),
+            TroveType::Package,
+        );
+        trove.architecture = Some("x86_64".to_string());
+        let trove_id = trove.insert(&conn).unwrap();
+        let mut missing = FileEntry::new(
+            "/usr/bin/missing".to_string(),
+            missing_hash.clone(),
+            b"missing".len() as i64,
+            0o100755,
+            trove_id,
+        );
+        missing.insert(&conn).unwrap();
+        let mut init = FileEntry::new(
+            "/usr/sbin/init".to_string(),
+            init_hash,
+            b"init".len() as i64,
+            0o100755,
+            trove_id,
+        );
+        init.insert(&conn).unwrap();
+
+        (tmp, conn, generations_root, boot_root, missing_hash)
+    }
+
     fn assert_invalid_runtime_input_error(error: &str) {
         for snippet in [
             "exportable runtime generation is not self-contained",
@@ -1016,6 +1070,15 @@ mod tests {
             "conary system adopt --system --full",
             "conary system takeover --up-to cas",
         ] {
+            assert!(
+                error.contains(snippet),
+                "expected error to contain {snippet:?}; got {error}"
+            );
+        }
+    }
+
+    fn assert_missing_cas_object_error(error: &str, hash: &str) {
+        for snippet in ["missing CAS object", hash] {
             assert!(
                 error.contains(snippet),
                 "expected error to contain {snippet:?}; got {error}"
@@ -1127,6 +1190,47 @@ mod tests {
 
         assert_invalid_runtime_input_error(&error);
         assert!(!generations_root.join("7/.conary-artifact.json").exists());
+    }
+
+    #[cfg(feature = "composefs-rs")]
+    #[test]
+    fn build_generation_from_db_rejects_missing_regular_file_cas_object() {
+        let (_tmp, conn, generations_root, boot_root, missing_hash) =
+            runtime_generation_db_with_missing_regular_file_cas_object();
+
+        let error = build_generation_from_db_with_boot_root(
+            &conn,
+            &generations_root,
+            "missing runtime CAS object",
+            &boot_root,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert_missing_cas_object_error(&error, &missing_hash);
+        assert!(!generations_root.join("0/.conary-artifact.json").exists());
+        assert!(!generations_root.join("0/cas-manifest.json").exists());
+    }
+
+    #[cfg(feature = "composefs-rs")]
+    #[test]
+    fn rebuild_generation_image_rejects_missing_regular_file_cas_object() {
+        let (_tmp, conn, generations_root, boot_root, missing_hash) =
+            runtime_generation_db_with_missing_regular_file_cas_object();
+
+        let error = rebuild_generation_image_with_boot_root(
+            &conn,
+            &generations_root,
+            7,
+            "missing runtime CAS object",
+            &boot_root,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert_missing_cas_object_error(&error, &missing_hash);
+        assert!(!generations_root.join("7/.conary-artifact.json").exists());
+        assert!(!generations_root.join("7/cas-manifest.json").exists());
     }
 
     #[cfg(feature = "composefs-rs")]
