@@ -78,7 +78,9 @@ pub use final_system::{FinalSystemBuilder, FinalSystemError, SYSTEM_BUILD_ORDER}
 pub use guest_profile::{GuestProfileError, apply_guest_profile};
 pub use image::{ImageBuilder, ImageError, ImageFormat, ImageResult, ImageSize, ImageTools};
 pub use stages::{BootstrapStage, StageManager, StageState};
-pub use system_config::{SystemConfigError, configure_system};
+pub use system_config::{
+    SystemConfigError, bootstrap_initramfs_input_paths, configure_system, write_bootstrap_initramfs,
+};
 pub use temp_tools::{TempToolsBuilder, TempToolsError};
 pub use tier2::{Tier2Builder, Tier2Error};
 pub use toolchain::{Toolchain, ToolchainKind};

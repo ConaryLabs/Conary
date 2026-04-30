@@ -6,6 +6,7 @@
 //! autocomplete suggestions.
 
 use anyhow::{Context, Result};
+use conary_core::db::models::CONVERSION_VERSION;
 use serde::Serialize;
 use std::path::Path;
 use tantivy::collector::TopDocs;
@@ -240,17 +241,25 @@ impl SearchEngine {
              LEFT JOIN converted_packages cp
                  ON cp.package_name = rp.name
                     AND cp.distro = COALESCE(r.default_strategy_distro, r.name)
+                    AND cp.package_version = rp.version
+                    AND (
+                        cp.package_architecture = rp.architecture
+                        OR cp.package_architecture IS NULL
+                    )
+                    AND cp.conversion_version >= ?1
              WHERE r.enabled = 1
+               AND rp.size > 0
                AND rp.id = (
                    SELECT rp2.id FROM repository_packages rp2
                    WHERE rp2.repository_id = rp.repository_id AND rp2.name = rp.name
+                    AND rp2.size > 0
                    ORDER BY rp2.synced_at DESC LIMIT 1
                )
              ORDER BY rp.name",
         )?;
 
         let mut count = 0;
-        let rows = stmt.query_map([], |row| {
+        let rows = stmt.query_map([CONVERSION_VERSION], |row| {
             Ok(PackageSearchDoc {
                 name: row.get(0)?,
                 version: row.get(1)?,

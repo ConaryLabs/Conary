@@ -179,6 +179,18 @@ const INITRAMFS_LIBRARIES: &[&str] = &[
     "usr/lib/libreadline.so.8",
 ];
 
+/// Paths from a sysroot that are embedded into the bootstrap initramfs.
+///
+/// Callers that build a generation artifact from CAS-backed manifests can use
+/// this list to materialize the minimal input tree before calling
+/// [`write_bootstrap_initramfs`].
+pub fn bootstrap_initramfs_input_paths() -> impl Iterator<Item = &'static str> {
+    INITRAMFS_BINARIES
+        .iter()
+        .chain(INITRAMFS_LIBRARIES.iter())
+        .copied()
+}
+
 const INITRAMFS_INIT: &str = r#"#!/bin/sh
 PATH=/usr/bin:/usr/sbin:/bin:/sbin
 export PATH
@@ -243,8 +255,16 @@ exec switch_root /sysroot /usr/lib/systemd/systemd
 fail "switch_root failed"
 "#;
 
+/// Write the Conary bootstrap initramfs used by generation-aware boot entries.
+///
+/// The generated archive mounts the carrier ext4 root, mounts the selected
+/// composefs generation from `/conary/generations/<N>/root.erofs`, then
+/// switches into `/usr/lib/systemd/systemd`.
 #[cfg(unix)]
-fn write_bootstrap_initramfs(root: &Path, initramfs_dest: &Path) -> Result<(), SystemConfigError> {
+pub fn write_bootstrap_initramfs(
+    root: &Path,
+    initramfs_dest: &Path,
+) -> Result<(), SystemConfigError> {
     let mut archive = Vec::new();
     let mut seen = HashSet::new();
 
@@ -287,7 +307,7 @@ fn write_bootstrap_initramfs(root: &Path, initramfs_dest: &Path) -> Result<(), S
 }
 
 #[cfg(not(unix))]
-fn write_bootstrap_initramfs(
+pub fn write_bootstrap_initramfs(
     _root: &Path,
     _initramfs_dest: &Path,
 ) -> Result<(), SystemConfigError> {

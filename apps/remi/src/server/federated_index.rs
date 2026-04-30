@@ -13,6 +13,7 @@
 
 use crate::server::handlers::sparse::{SparseIndexEntry, SparseVersionEntry};
 use anyhow::{Context, Result};
+use conary_core::db::models::CONVERSION_VERSION;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
@@ -314,6 +315,7 @@ fn build_local_sparse_entry(
                 is_security_update, severity, cve_ids, advisory_id, advisory_url
          FROM repository_packages
          WHERE repository_id IN ({placeholders}) AND name = ?{name_idx}
+         AND size > 0
          ORDER BY version"
     );
 
@@ -356,25 +358,30 @@ fn build_local_sparse_entry(
         return Ok(None);
     }
 
-    // Build converted lookup
+    // Build converted lookup keyed by version and architecture. Stale rows are
+    // hidden so a conversion-version bump does not keep advertising old
+    // converted-only identities to clients.
     let mut converted_stmt = conn.prepare(
-        "SELECT package_version, content_hash FROM converted_packages
+        "SELECT package_version, package_architecture, content_hash FROM converted_packages
          WHERE distro = ?1 AND package_name = ?2
-         AND package_version IS NOT NULL",
+         AND package_version IS NOT NULL
+         AND conversion_version >= ?3",
     )?;
 
     let mut converted_map = HashMap::new();
-    let mut rows = converted_stmt.query(rusqlite::params![distro, name])?;
+    let mut rows = converted_stmt.query(rusqlite::params![distro, name, CONVERSION_VERSION])?;
     while let Some(row) = rows.next()? {
         let version: String = row.get(0)?;
-        let content_hash: Option<String> = row.get(1)?;
-        converted_map.insert(version, content_hash);
+        let architecture: Option<String> = row.get(1)?;
+        let content_hash: Option<String> = row.get(2)?;
+        converted_map.insert((version, architecture), content_hash);
     }
 
     let versions = packages
         .into_iter()
         .map(|pkg| {
-            let converted_info = converted_map.get(&pkg.version);
+            let converted_info =
+                converted_map.get(&(pkg.version.clone(), pkg.architecture.clone()));
             SparseVersionEntry {
                 version: pkg.version,
                 dependencies: pkg.dependencies,

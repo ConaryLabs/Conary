@@ -1,0 +1,14 @@
+# apps/conary/tests/fixtures/bootstrap-generation-export/conaryos.toml
+#
+# Minimal bootstrap-run manifest for the generation export QEMU suite.
+
+[system]
+name = "conaryos-generation-export-fixture"
+target = "x86_64-conary-linux-gnu"
+
+[seed]
+source = "local:seed"
+
+[packages]
+include = ["generation-fixture-rootfs"]
+exclude = []

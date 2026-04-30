@@ -307,6 +307,7 @@ impl RepositoryClient {
         let response = self
             .client
             .get(url)
+            .header(header::ACCEPT_ENCODING, "identity")
             .timeout(byte_download_timeout(&self.timeouts))
             .send()
             .await
@@ -426,7 +427,11 @@ impl RepositoryClient {
             // Check for existing partial download
             let existing_len = fs::metadata(&temp_path).map(|m| m.len()).unwrap_or(0);
 
-            let mut request = self.client.get(url).timeout(self.timeouts.download);
+            let mut request = self
+                .client
+                .get(url)
+                .header(header::ACCEPT_ENCODING, "identity")
+                .timeout(self.timeouts.download);
             if existing_len > 0 {
                 debug!(
                     "Found partial download ({} bytes), requesting resume",
@@ -715,5 +720,93 @@ mod tests {
         };
 
         assert_eq!(byte_download_timeout(&timeouts), Duration::from_secs(300));
+    }
+
+    #[tokio::test]
+    async fn test_download_to_bytes_requests_identity_encoding() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buf = [0u8; 1024];
+            loop {
+                let read = stream.read(&mut buf).await.unwrap();
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buf[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .await
+                .unwrap();
+            String::from_utf8(request).unwrap()
+        });
+
+        let client = RepositoryClient::new().unwrap();
+        let bytes = client
+            .download_to_bytes(&format!("http://{addr}/metadata"))
+            .await
+            .unwrap();
+        assert_eq!(bytes, b"ok");
+
+        let request = server.await.unwrap().to_ascii_lowercase();
+        assert!(
+            request.contains("accept-encoding: identity"),
+            "request headers did not force identity encoding:\n{request}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_download_file_requests_identity_encoding() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buf = [0u8; 1024];
+            loop {
+                let read = stream.read(&mut buf).await.unwrap();
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buf[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .await
+                .unwrap();
+            String::from_utf8(request).unwrap()
+        });
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let dest_path = temp_dir.path().join("package.ccs");
+        let client = RepositoryClient::new().unwrap();
+        client
+            .download_file(&format!("http://{addr}/package.ccs"), &dest_path)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&dest_path).unwrap(), b"ok");
+
+        let request = server.await.unwrap().to_ascii_lowercase();
+        assert!(
+            request.contains("accept-encoding: identity"),
+            "file download request did not force identity encoding:\n{request}"
+        );
     }
 }

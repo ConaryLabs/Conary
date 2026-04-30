@@ -13,8 +13,11 @@ use crate::error::Result;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 /// Current conversion algorithm version
-/// Bump this when making changes that require re-conversion of existing packages
-pub const CONVERSION_VERSION: i32 = 2;
+/// Bump this when making changes that require re-conversion of existing packages.
+///
+/// v3 invalidates Remi artifacts produced before RPM symlink targets and
+/// architecture-specific CCS filenames were enforced in the server cache.
+pub const CONVERSION_VERSION: i32 = 3;
 
 /// A converted package record
 #[derive(Debug, Clone)]

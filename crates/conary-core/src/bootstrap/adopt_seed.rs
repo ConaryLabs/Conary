@@ -8,6 +8,24 @@ use std::process::Command;
 use crate::derivation::compose::erofs_image_hash;
 use crate::derivation::seed::{SeedMetadata, SeedSource, SeedValidation};
 
+const ADOPTED_SEED_EXCLUDE_REGEXES: &[&str] = &[
+    "^/?proc(/|$)",
+    "^/?sys(/|$)",
+    "^/?dev/.+",
+    "^/?run/.+",
+    "^/?tmp/.+",
+    "^/?var/tmp/.+",
+    "^/?var/cache/.+",
+    "^/?var/log/.+",
+    "^/?var/lib/conary(/|$)",
+    "^/?conary(/|$)",
+    "^/?root/.cache(/|$)",
+    "^/?home/.+",
+    "^/?mnt(/|$)",
+    "^/?media(/|$)",
+    "^/?lost\\+found(/|$)",
+];
+
 #[derive(Debug, thiserror::Error)]
 pub enum AdoptSeedError {
     #[error("seed validation failed, missing: {0:?}")]
@@ -27,9 +45,9 @@ pub enum AdoptSeedError {
 ///    required build tools. Returns [`AdoptSeedError::ValidationFailed`] with
 ///    the list of missing tools if any are absent.
 /// 2. Creates `output_dir` on disk.
-/// 3. Runs `mkfs.erofs` with `/` as the single source directory so that
-///    `/usr`, `/bin`, `/lib`, `/sbin`, and `/etc` are all captured in
-///    `output_dir/seed.erofs`.
+/// 3. Runs `mkfs.erofs` with `/` as the single source directory, compression
+///    enabled, and live-runtime/cache/output paths pruned so the seed captures
+///    the build environment without recursively packaging its own output.
 /// 4. Hashes the resulting image with [`erofs_image_hash`].
 /// 5. Writes `output_dir/seed.toml` containing the computed [`SeedMetadata`].
 /// 6. Returns the metadata.
@@ -54,13 +72,15 @@ pub fn build_adopted_seed(
         .map_err(|e| AdoptSeedError::Io(format!("create {}: {e}", output_dir.display())))?;
 
     let image_path = output_dir.join("seed.erofs");
+    let output_dir_for_exclude =
+        std::fs::canonicalize(output_dir).unwrap_or_else(|_| output_dir.to_path_buf());
 
     // mkfs.erofs takes exactly one source directory; passing multiple
     // directories is not supported and silently uses only the first.
     // Use "/" so that /usr, /bin, /lib, /sbin, and /etc are all captured.
+    let args = build_mkfs_erofs_args(&image_path, Path::new("/"), &output_dir_for_exclude);
     let status = Command::new("mkfs.erofs")
-        .arg(&image_path)
-        .arg("/")
+        .args(&args)
         .status()
         .map_err(|e| AdoptSeedError::ErofsBuild(format!("failed to spawn mkfs.erofs: {e}")))?;
 
@@ -97,6 +117,67 @@ pub fn build_adopted_seed(
     Ok(metadata)
 }
 
+fn build_mkfs_erofs_args(image_path: &Path, source_root: &Path, output_dir: &Path) -> Vec<String> {
+    let mut args = vec![
+        "-zlz4".to_owned(),
+        // Adopted seeds are built from a live root. Skipping xattrs avoids
+        // races in mkfs.erofs' shared-xattr scan when runtime files change.
+        "-x-1".to_owned(),
+    ];
+    let mut exclude_regexes: Vec<String> = ADOPTED_SEED_EXCLUDE_REGEXES
+        .iter()
+        .map(|regex| (*regex).to_owned())
+        .collect();
+
+    if let Some(output_regex) = erofs_root_relative_subtree_regex(output_dir)
+        && !exclude_regexes.contains(&output_regex)
+    {
+        exclude_regexes.push(output_regex);
+    }
+
+    for regex in exclude_regexes {
+        args.push(format!("--exclude-regex={regex}"));
+    }
+
+    args.push(image_path.to_string_lossy().to_string());
+    args.push(source_root.to_string_lossy().to_string());
+    args
+}
+
+fn erofs_root_relative_subtree_regex(path: &Path) -> Option<String> {
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Prefix(_) | std::path::Component::RootDir => {}
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => return None,
+            std::path::Component::Normal(part) => {
+                parts.push(escape_erofs_regex_literal(&part.to_string_lossy()));
+            }
+        }
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(format!("^/?{}(/|$)", parts.join("/")))
+    }
+}
+
+fn escape_erofs_regex_literal(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '.' | '[' | ']' | '(' | ')' | '{' | '}' | '+' | '*' | '?' | '^' | '$' | '|' | '\\' => {
+                escaped.push('\\');
+                escaped.push(ch);
+            }
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -131,5 +212,31 @@ mod tests {
         // Should not panic and should produce a valid display string.
         let msg = err.to_string();
         assert!(msg.contains("missing"));
+    }
+
+    #[test]
+    fn mkfs_erofs_args_prune_live_runtime_and_output_paths() {
+        let args = build_mkfs_erofs_args(
+            Path::new("/var/lib/conary/bootstrap-inputs/seed/seed.erofs"),
+            Path::new("/"),
+            Path::new("/var/lib/conary/bootstrap-inputs/seed"),
+        );
+
+        assert!(args.contains(&"-zlz4".to_owned()));
+        assert!(args.contains(&"-x-1".to_owned()));
+        assert!(args.contains(&"--exclude-regex=^/?proc(/|$)".to_owned()));
+        assert!(args.contains(&"--exclude-regex=^/?sys(/|$)".to_owned()));
+        assert!(args.contains(&"--exclude-regex=^/?dev/.+".to_owned()));
+        assert!(args.contains(&"--exclude-regex=^/?var/lib/conary(/|$)".to_owned()));
+        assert!(
+            args.contains(
+                &"--exclude-regex=^/?var/lib/conary/bootstrap-inputs/seed(/|$)".to_owned()
+            )
+        );
+        assert_eq!(
+            args[args.len() - 2],
+            "/var/lib/conary/bootstrap-inputs/seed/seed.erofs"
+        );
+        assert_eq!(args[args.len() - 1], "/");
     }
 }

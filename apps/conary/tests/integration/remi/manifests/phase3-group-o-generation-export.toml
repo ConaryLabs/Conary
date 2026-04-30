@@ -44,16 +44,20 @@ exit_code = 0
 id = "TGE02"
 name = "bootstrap_run_generation_export_boots"
 description = "Export a bootstrap-run generation artifact to qcow2, copy it to the host, then boot it under UEFI"
-timeout = 1800
+timeout = 7200
 group = "generation-export"
 
 [[test.step]]
 [test.step.qemu_boot]
 image = "minimal-boot-v2"
 memory_mb = 2048
-timeout_seconds = 900
+timeout_seconds = 5400
 ssh_port = 2242
 stage_conary = true
+scratch_disk_mb = 65536
+copy_to_guest = [
+    { source = "apps/conary/tests/fixtures/bootstrap-generation-export", dest = "/var/lib/conary/bootstrap-inputs" },
+]
 commands = [
     "conary system init",
     "conary repo remove remi || true",
@@ -61,17 +65,29 @@ commands = [
     "conary repo sync remi --force",
     "conary install dosfstools --repo remi --yes --sandbox never --allow-live-system-mutation",
     "conary install qemu-img --repo remi --yes --sandbox never --allow-live-system-mutation",
+    "conary install erofs-utils --repo remi --yes --sandbox never --allow-live-system-mutation",
+    "command -v mkfs.erofs",
     "test -d /var/lib/conary/bootstrap-inputs",
     "test -f /var/lib/conary/bootstrap-inputs/conaryos.toml",
-    "test -d /var/lib/conary/bootstrap-inputs/seed",
-    "mkdir -p /var/tmp/conary-generation-export",
-    "conary bootstrap run /var/lib/conary/bootstrap-inputs/conaryos.toml --seed /var/lib/conary/bootstrap-inputs/seed --work-dir /var/tmp/bootstrap-run --up-to system",
-    "conary system generation export --path /var/tmp/bootstrap-run/output/generations/1 --format qcow2 --output /var/tmp/conary-generation-export/bootstrap-run-generation.qcow2",
-    "test -s /var/tmp/conary-generation-export/bootstrap-run-generation.qcow2",
+    "test -d /var/lib/conary/bootstrap-inputs/recipes",
+    "for i in $(seq 1 20); do test -b /dev/disk/by-id/virtio-conary-scratch && exit 0; sleep 1; done; ls -l /dev/disk/by-id /dev/vd*; false",
+    "mkfs.ext4 -F /dev/disk/by-id/virtio-conary-scratch",
+    "mkdir -p /mnt/conary-scratch",
+    "mount -o noatime /dev/disk/by-id/virtio-conary-scratch /mnt/conary-scratch",
+    "mkdir -p /mnt/conary-scratch/seed /mnt/conary-scratch/bootstrap-run /mnt/conary-scratch/export",
+    "conary bootstrap seed --from-adopted --distro conaryos --distro-version qemu-fixture --output /mnt/conary-scratch/seed --allow-live-system-mutation",
+    "test -f /mnt/conary-scratch/seed/seed.erofs",
+    "mkdir -p /var/cache/conary/sources /tmp/conary-fixture-source/generation-fixture-rootfs-1.0.0",
+    "printf '%s\\n' 'generation export fixture source' > /tmp/conary-fixture-source/generation-fixture-rootfs-1.0.0/README",
+    "tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner -cf /var/cache/conary/sources/sha256_d11cfc8fb74688f2141ba2975d17bcd16762f07dbdcb97ac3a572961701addb8 -C /tmp/conary-fixture-source generation-fixture-rootfs-1.0.0",
+    "printf '%s  %s\\n' 'd11cfc8fb74688f2141ba2975d17bcd16762f07dbdcb97ac3a572961701addb8' '/var/cache/conary/sources/sha256_d11cfc8fb74688f2141ba2975d17bcd16762f07dbdcb97ac3a572961701addb8' | sha256sum -c -",
+    "conary bootstrap run /var/lib/conary/bootstrap-inputs/conaryos.toml --seed /mnt/conary-scratch/seed --recipe-dir /var/lib/conary/bootstrap-inputs/recipes --work-dir /mnt/conary-scratch/bootstrap-run --up-to system",
+    "conary system generation export --path /mnt/conary-scratch/bootstrap-run/output/current --format qcow2 --output /mnt/conary-scratch/export/bootstrap-run-generation.qcow2",
+    "test -s /mnt/conary-scratch/export/bootstrap-run-generation.qcow2",
     "echo bootstrap-run-generation-export-ok",
 ]
 copy_from_guest = [
-    { source = "/var/tmp/conary-generation-export/bootstrap-run-generation.qcow2", dest = "/tmp/conary-generation-export/bootstrap-run-generation.qcow2" },
+    { source = "/mnt/conary-scratch/export/bootstrap-run-generation.qcow2", dest = "/tmp/conary-generation-export/bootstrap-run-generation.qcow2" },
 ]
 expect_output = [
     "bootstrap-run-generation-export-ok",

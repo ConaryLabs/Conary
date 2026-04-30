@@ -436,7 +436,12 @@ async fn pull_through_fetch(
 
     // Fetch from upstream
     let client = &state_guard.http_client;
-    let response = match client.get(&fetch_url).send().await {
+    let response = match client
+        .get(&fetch_url)
+        .header("accept-encoding", "identity")
+        .send()
+        .await
+    {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!("Failed to fetch chunk {} from upstream: {}", hash, e);

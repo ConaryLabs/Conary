@@ -1,0 +1,102 @@
+# apps/conary/tests/fixtures/bootstrap-generation-export/recipes/system/generation-fixture-rootfs.toml
+#
+# QEMU-only bootstrap-run fixture. The adopted source image is already a
+# bootable conaryOS root, so this recipe captures that seed root as one
+# derivation output. The generation export suite then validates the normal
+# bootstrap-run artifact writer and disk exporter against that self-contained
+# output. The source archive is preseeded by the QEMU manifest into Kitchen's
+# checksum-addressed cache so the fixture does not depend on external network
+# availability.
+
+[package]
+name = "generation-fixture-rootfs"
+version = "1.0.0"
+release = "1"
+summary = "Generation export QEMU rootfs fixture"
+description = "Copies the adopted QEMU source root into a bootstrap-run derivation output."
+license = "MIT"
+homepage = "https://github.com/conaryos/conary"
+
+[source]
+archive = "https://example.invalid/conary/generation-fixture-rootfs-1.0.0.tar"
+checksum = "sha256:d11cfc8fb74688f2141ba2975d17bcd16762f07dbdcb97ac3a572961701addb8"
+
+[build]
+requires = []
+makedepends = []
+chroot = true
+
+install = """
+set -eu
+dest="%(destdir)s"
+mkdir -p "$dest"
+
+# The source root is an overlay-backed build chroot. GNU tar's delayed
+# directory status handling is brittle there, so copy the stable seed-owned
+# top-level entries directly and recreate runtime trees as empty directories.
+set --
+for entry in /*; do
+  base="${entry#/}"
+  case "$base" in
+    dev|proc|run|sys|tmp|var|mnt|media|lost+found)
+      continue
+      ;;
+  esac
+  set -- "$@" "$entry"
+done
+
+if [ "$#" -gt 0 ]; then
+  cp -a --one-file-system "$@" "$dest/"
+fi
+
+# The bootstrap-run artifact writer generates the boot initramfs from the
+# CAS-backed output root. The fixture root only needs to provide the kernel,
+# systemd-boot EFI binary, and initramfs input binaries/libraries.
+mkdir -p "$dest/boot"
+
+# The exported carrier root has /lib64 -> usr/lib64. LFS-style roots store the
+# x86_64 dynamic loader in /usr/lib, while the adopted source may already have
+# a populated /usr/lib64 for other libraries. Ensure the interpreter itself
+# resolves before the initramfs bind-mounts the generation's /usr and executes
+# systemd.
+if [ ! -e "$dest/usr/lib64/ld-linux-x86-64.so.2" ] && [ -e "$dest/usr/lib/ld-linux-x86-64.so.2" ]; then
+  mkdir -p "$dest/usr/lib64"
+  ln -s ../lib/ld-linux-x86-64.so.2 "$dest/usr/lib64/ld-linux-x86-64.so.2"
+fi
+
+# /root is intentionally outside the immutable generation contract, so expose
+# the QEMU test public key through generation-owned /etc instead. The adopted
+# test image's generated sshd_config does not Include sshd_config.d/*.conf, so
+# place the AuthorizedKeysFile override at the top of the main config.
+mkdir -p "$dest/etc/ssh/authorized_keys" "$dest/etc/ssh/sshd_config.d"
+cat > "$dest/etc/ssh/authorized_keys/root" <<'KEY'
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOecLi4OI3cU2UfbmkwCdsxHQFUqf17093qkq6g1fx6W conary-selfhost-vm
+KEY
+chmod 0644 "$dest/etc/ssh/authorized_keys/root"
+sshd_config="$dest/etc/ssh/sshd_config"
+sshd_config_tmp="$dest/etc/ssh/sshd_config.conary-test"
+if [ -f "$sshd_config" ]; then
+  {
+    printf '%s\n' 'AuthorizedKeysFile .ssh/authorized_keys /etc/ssh/authorized_keys/%u'
+    cat "$sshd_config"
+  } > "$sshd_config_tmp"
+  mv "$sshd_config_tmp" "$sshd_config"
+else
+  printf '%s\n' 'AuthorizedKeysFile .ssh/authorized_keys /etc/ssh/authorized_keys/%u' > "$sshd_config"
+fi
+cat > "$dest/etc/ssh/sshd_config.d/90-conary-test-authorized-keys.conf" <<'CONF'
+AuthorizedKeysFile .ssh/authorized_keys /etc/ssh/authorized_keys/%u
+CONF
+
+mkdir -p \
+  "$dest/dev" \
+  "$dest/proc" \
+  "$dest/run" \
+  "$dest/sys" \
+  "$dest/tmp" \
+  "$dest/var/cache" \
+  "$dest/var/lib" \
+  "$dest/var/log" \
+  "$dest/var/tmp"
+chmod 1777 "$dest/tmp" "$dest/var/tmp"
+"""

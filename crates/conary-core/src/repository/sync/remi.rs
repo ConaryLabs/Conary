@@ -6,9 +6,10 @@ use crate::db::models::{
 };
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
+use crate::repository::retry::RetryConfig;
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::native::{
     SyncedPackageRow, extract_extra_metadata_provides, persist_native_sync_rows,
@@ -168,13 +169,8 @@ pub(super) async fn sync_repository_remi(
     );
 
     let client = RepositoryClient::new()?;
-    let bytes = client.download_to_bytes(&metadata_url).await?;
-    let response: RemiMetadataResponse = serde_json::from_slice(&bytes).map_err(|error| {
-        Error::ParseError(format!(
-            "Failed to parse Remi metadata from {}: {}",
-            metadata_url, error
-        ))
-    })?;
+    let response =
+        fetch_remi_metadata_with_retry(&client, &metadata_url, &RetryConfig::quick()).await?;
 
     let repo_id = repo
         .id
@@ -213,6 +209,51 @@ pub(super) async fn sync_repository_remi(
         count, repo.name
     );
     Ok(count)
+}
+
+async fn fetch_remi_metadata_with_retry(
+    client: &RepositoryClient,
+    metadata_url: &str,
+    retry_policy: &RetryConfig,
+) -> Result<RemiMetadataResponse> {
+    let max_attempts = retry_policy.max_attempts.max(1);
+    let mut last_error = None;
+
+    for attempt in 1..=max_attempts {
+        match fetch_remi_metadata_once(client, metadata_url).await {
+            Ok(response) => return Ok(response),
+            Err(error) => {
+                if attempt < max_attempts {
+                    let delay = retry_policy.delay_for_attempt(attempt);
+                    warn!(
+                        "Remi metadata fetch attempt {}/{} failed: {}; retrying in {:?}",
+                        attempt, max_attempts, error, delay
+                    );
+                    tokio::time::sleep(delay).await;
+                }
+                last_error = Some(error);
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        Error::DownloadError(format!(
+            "Failed to fetch Remi metadata from {metadata_url}: no attempts were made"
+        ))
+    }))
+}
+
+async fn fetch_remi_metadata_once(
+    client: &RepositoryClient,
+    metadata_url: &str,
+) -> Result<RemiMetadataResponse> {
+    let bytes = client.download_to_bytes(metadata_url).await?;
+    serde_json::from_slice(&bytes).map_err(|error| {
+        Error::ParseError(format!(
+            "Failed to parse Remi metadata from {}: {}",
+            metadata_url, error
+        ))
+    })
 }
 
 /// Fetch the canonical package map from a Remi endpoint and persist it locally.
@@ -280,5 +321,72 @@ mod tests {
         );
 
         assert_eq!(row.package.architecture.as_deref(), Some("x86_64"));
+    }
+
+    #[tokio::test]
+    async fn remi_metadata_fetch_retries_truncated_json() {
+        use crate::repository::retry::RetryConfig;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        use std::time::Duration;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let server_attempts = attempts.clone();
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut buf = [0u8; 1024];
+                loop {
+                    let read = stream.read(&mut buf).await.unwrap();
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buf[..read]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+
+                let attempt = server_attempts.fetch_add(1, Ordering::SeqCst);
+                let body = if attempt == 0 {
+                    r#"{"packages":[{"name":"qemu-img""#
+                } else {
+                    r#"{"packages":[{"name":"qemu-img","version":"2:10.1.0-7.fc43","converted":false,"architecture":"x86_64"}]}"#
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+
+        let retry = RetryConfig {
+            max_attempts: 2,
+            base_delay: Duration::ZERO,
+            max_delay: Duration::ZERO,
+            jitter_factor: 0.0,
+        };
+        let client = RepositoryClient::new().unwrap();
+        let metadata = fetch_remi_metadata_with_retry(
+            &client,
+            &format!("http://{addr}/v1/fedora/metadata"),
+            &retry,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(metadata.packages.len(), 1);
+        assert_eq!(metadata.packages[0].name, "qemu-img");
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        server.await.unwrap();
     }
 }

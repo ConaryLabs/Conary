@@ -7,6 +7,7 @@ use std::process::Stdio;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+use tempfile::TempDir;
 use tokio::process::{Child, Command};
 use tokio::time::{Instant, sleep};
 
@@ -19,6 +20,11 @@ const GUEST_CONARY_INSTALL_PATH: &str = "/usr/bin/conary";
 
 /// Well-known filename for the conaryOS test SSH private key.
 const TEST_SSH_KEY_NAME: &str = "conaryos-test-key";
+
+struct ScratchDisk {
+    path: PathBuf,
+    _temp_dir: TempDir,
+}
 
 pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
     let required_tools = required_qemu_tools(config);
@@ -48,6 +54,10 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
             )));
         }
     }
+    let scratch_disk = match config.scratch_disk_mb {
+        Some(size_mb) => Some(prepare_scratch_disk(size_mb)?),
+        None => None,
+    };
 
     let accel = if Path::new("/dev/kvm").exists() {
         "kvm"
@@ -79,6 +89,9 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
         accel,
     ]);
     qemu.args(qemu_image_args(&image_path));
+    if let Some(disk) = &scratch_disk {
+        qemu.args(qemu_scratch_disk_args(&disk.path));
+    }
     // Add UEFI firmware if available (required for GPT/EFI boot images)
     if let Some(fw) = ovmf_code {
         qemu.args(["-bios", fw]);
@@ -128,6 +141,40 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
                     stderr.push('\n');
                 }
                 stderr.push_str(&format!("failed to stage host conary binary: {err:#}"));
+            }
+        }
+    }
+
+    if exit_code == 0 {
+        for copy in &config.copy_to_guest {
+            let prepare = prepare_guest_copy_target(
+                config.ssh_port,
+                &copy.dest,
+                key_path.as_deref(),
+                command_timeout,
+            )
+            .await?;
+            if let Some(result) = prepare {
+                append_command_output(&mut stdout, &mut stderr, &result.0, &result.1);
+                if result.1.exit_code != 0 {
+                    exit_code = result.1.exit_code;
+                    break;
+                }
+            }
+
+            let source = Path::new(&copy.source);
+            let result = copy_file_to_guest(
+                config.ssh_port,
+                source,
+                &copy.dest,
+                key_path.as_deref(),
+                command_timeout,
+            )
+            .await?;
+            append_host_copy_output(&mut stdout, &mut stderr, source, &copy.dest, &result);
+            if result.exit_code != 0 {
+                exit_code = result.exit_code;
+                break;
             }
         }
     }
@@ -210,6 +257,9 @@ fn required_qemu_tools(config: &QemuBoot) -> Vec<&'static str> {
     if !config.copy_from_guest.is_empty() {
         tools.push("scp");
     }
+    if !config.copy_to_guest.is_empty() && !tools.contains(&"scp") {
+        tools.push("scp");
+    }
     if config.stage_conary && !tools.contains(&"scp") {
         tools.push("scp");
     }
@@ -222,6 +272,58 @@ fn qemu_image_args(image_path: &Path) -> [String; 3] {
         "-drive".to_string(),
         format!("file={},format=qcow2", image_path.display()),
     ]
+}
+
+fn qemu_scratch_disk_args(image_path: &Path) -> [String; 4] {
+    [
+        "-drive".to_string(),
+        format!(
+            "file={},format=raw,if=none,id=conary-scratch",
+            image_path.display()
+        ),
+        "-device".to_string(),
+        "virtio-blk-pci,drive=conary-scratch,serial=conary-scratch".to_string(),
+    ]
+}
+
+fn prepare_scratch_disk(size_mb: u64) -> Result<ScratchDisk> {
+    prepare_scratch_disk_in(size_mb, &scratch_disk_parent_dir())
+}
+
+fn scratch_disk_parent_dir() -> PathBuf {
+    cache_dir().join("qemu-scratch")
+}
+
+fn prepare_scratch_disk_in(size_mb: u64, parent_dir: &Path) -> Result<ScratchDisk> {
+    anyhow::ensure!(size_mb > 0, "scratch_disk_mb must be greater than zero");
+    let size_bytes = size_mb
+        .checked_mul(1024)
+        .and_then(|value| value.checked_mul(1024))
+        .context("scratch_disk_mb is too large")?;
+    fs::create_dir_all(parent_dir).with_context(|| {
+        format!(
+            "failed to create QEMU scratch disk parent {}",
+            parent_dir.display()
+        )
+    })?;
+    let temp_dir = tempfile::Builder::new()
+        .prefix("scratch-")
+        .tempdir_in(parent_dir)
+        .with_context(|| {
+            format!(
+                "failed to create QEMU scratch disk tempdir in {}",
+                parent_dir.display()
+            )
+        })?;
+    let path = temp_dir.path().join("scratch.raw");
+    let file = fs::File::create(&path)
+        .with_context(|| format!("failed to create scratch disk {}", path.display()))?;
+    file.set_len(size_bytes)
+        .with_context(|| format!("failed to size scratch disk {}", path.display()))?;
+    Ok(ScratchDisk {
+        path,
+        _temp_dir: temp_dir,
+    })
 }
 
 fn resolve_qemu_image_path(config: &QemuBoot) -> Result<PathBuf> {
@@ -519,12 +621,23 @@ async fn copy_file_to_guest(
     key_path: Option<&Path>,
     timeout: Duration,
 ) -> Result<ExecResult> {
+    if !source.exists() {
+        return Ok(ExecResult {
+            exit_code: 1,
+            stdout: String::new(),
+            stderr: format!("host copy source does not exist: {}", source.display()),
+        });
+    }
+
     let remote = format!("root@127.0.0.1:{dest}");
     let mut scp = Command::new("scp");
     if let Some(key) = key_path {
         scp.args(["-i", &key.display().to_string()]);
     } else {
         scp.args(["-o", "BatchMode=yes"]);
+    }
+    if source.is_dir() {
+        scp.arg("-r");
     }
     scp.args([
         "-o",
@@ -544,9 +657,33 @@ async fn copy_file_to_guest(
     run_command_with_timeout(
         scp,
         timeout,
-        &format!("copy host conary binary {} to QEMU guest", source.display()),
+        &format!("copy host path {} to QEMU guest", source.display()),
     )
     .await
+}
+
+async fn prepare_guest_copy_target(
+    ssh_port: u16,
+    dest: &str,
+    key_path: Option<&Path>,
+    timeout: Duration,
+) -> Result<Option<(String, ExecResult)>> {
+    let Some(parent) = guest_copy_parent(dest) else {
+        return Ok(None);
+    };
+    let command = format!("mkdir -p {}", shell_quote(&parent));
+    let result = run_ssh_command(ssh_port, &command, key_path, timeout).await?;
+    Ok(Some((command, result)))
+}
+
+fn guest_copy_parent(dest: &str) -> Option<String> {
+    let trimmed = dest.trim_end_matches('/');
+    let (parent, _) = trimmed.rsplit_once('/')?;
+    if parent.is_empty() {
+        Some("/".to_string())
+    } else {
+        Some(parent.to_string())
+    }
 }
 
 async fn run_command_with_timeout(
@@ -590,6 +727,7 @@ impl Drop for PreparedHostConary {
 }
 
 fn prepare_host_conary_for_guest() -> Result<PreparedHostConary> {
+    ensure_default_host_conary_built()?;
     let source = crate::paths::host_conary_binary()?;
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -609,6 +747,29 @@ fn prepare_host_conary_for_guest() -> Result<PreparedHostConary> {
     let _ = std::process::Command::new("strip").arg(&path).status();
 
     Ok(PreparedHostConary { path, temp_dir })
+}
+
+fn ensure_default_host_conary_built() -> Result<()> {
+    if std::env::var_os("CONARY_HOST_BIN").is_some() || std::env::var_os("CONARY_BIN").is_some() {
+        return Ok(());
+    }
+
+    let project_root = crate::paths::project_dir()?;
+    let status = std::process::Command::new("cargo")
+        .args(["build", "-p", "conary"])
+        .current_dir(&project_root)
+        .status()
+        .with_context(|| {
+            format!(
+                "failed to run cargo build -p conary in {}",
+                project_root.display()
+            )
+        })?;
+    if !status.success() {
+        anyhow::bail!("cargo build -p conary failed with {status}");
+    }
+
+    Ok(())
 }
 
 async fn stage_conary_binary(
@@ -739,6 +900,8 @@ mod tests {
             image: "local-image".to_string(),
             local_image_path: Some(missing.display().to_string()),
             stage_conary: false,
+            scratch_disk_mb: None,
+            copy_to_guest: Vec::new(),
             copy_from_guest: Vec::new(),
             memory_mb: 1024,
             timeout_seconds: 120,
@@ -773,6 +936,16 @@ mod tests {
     }
 
     #[test]
+    fn test_guest_copy_parent_handles_absolute_targets() {
+        assert_eq!(
+            guest_copy_parent("/var/lib/conary/bootstrap-inputs"),
+            Some("/var/lib/conary".to_string())
+        );
+        assert_eq!(guest_copy_parent("/tmp/"), Some("/".to_string()));
+        assert_eq!(guest_copy_parent("relative-file"), None);
+    }
+
+    #[test]
     fn test_qemu_image_args_use_snapshot_overlay() {
         let args = qemu_image_args(Path::new("/tmp/minimal-boot-v2.qcow2"));
 
@@ -782,16 +955,81 @@ mod tests {
     }
 
     #[test]
+    fn test_scratch_disk_args_attach_raw_virtio_disk() {
+        let args = qemu_scratch_disk_args(Path::new("/tmp/conary-qemu-scratch.raw"));
+
+        assert_eq!(args[0], "-drive");
+        assert_eq!(
+            args[1],
+            "file=/tmp/conary-qemu-scratch.raw,format=raw,if=none,id=conary-scratch"
+        );
+        assert_eq!(args[2], "-device");
+        assert_eq!(
+            args[3],
+            "virtio-blk-pci,drive=conary-scratch,serial=conary-scratch"
+        );
+    }
+
+    #[test]
+    fn test_prepare_scratch_disk_creates_sparse_raw_file() {
+        let disk = prepare_scratch_disk(64).expect("scratch disk");
+
+        assert!(disk.path.is_file());
+        assert_eq!(
+            std::fs::metadata(&disk.path).unwrap().len(),
+            64 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    fn test_prepare_scratch_disk_uses_persistent_parent_directory() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let parent = dir.path().join("cache/qemu-scratch");
+        let disk = prepare_scratch_disk_in(64, &parent).expect("scratch disk");
+
+        assert!(disk.path.starts_with(&parent));
+        assert!(disk.path.is_file());
+        assert_eq!(
+            std::fs::metadata(&disk.path).unwrap().len(),
+            64 * 1024 * 1024
+        );
+    }
+
+    #[test]
     fn test_required_qemu_tools_include_scp_when_staging_conary() {
         let config = QemuBoot {
             image: "minimal-boot-v2".to_string(),
             local_image_path: None,
             stage_conary: true,
+            scratch_disk_mb: None,
+            copy_to_guest: Vec::new(),
             copy_from_guest: Vec::new(),
             memory_mb: 1024,
             timeout_seconds: 120,
             ssh_port: 2222,
             commands: vec!["conary --version".to_string()],
+            expect_output: Vec::new(),
+        };
+
+        assert!(required_qemu_tools(&config).contains(&"scp"));
+    }
+
+    #[test]
+    fn test_required_qemu_tools_include_scp_when_copying_to_guest() {
+        let config = QemuBoot {
+            image: "minimal-boot-v2".to_string(),
+            local_image_path: None,
+            stage_conary: false,
+            scratch_disk_mb: None,
+            copy_to_guest: vec![QemuGuestCopy {
+                source: "fixtures/bootstrap".to_string(),
+                dest: "/var/lib/conary/bootstrap-inputs".to_string(),
+            }],
+            copy_from_guest: Vec::new(),
+            memory_mb: 1024,
+            timeout_seconds: 120,
+            ssh_port: 2222,
+            commands: vec!["true".to_string()],
             expect_output: Vec::new(),
         };
 

@@ -6,7 +6,7 @@
 
 use crate::server::conversion::ConversionService;
 use anyhow::{Context, Result};
-use conary_core::db::models::RepositoryPackage;
+use conary_core::db::models::{CONVERSION_VERSION, RepositoryPackage};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, info, warn};
@@ -227,7 +227,8 @@ fn get_packages_to_convert(
                 rp.description, rp.size, rp.checksum, rp.download_url, rp.dependencies
          FROM repository_packages rp
          JOIN repositories r ON rp.repository_id = r.id
-         WHERE r.name LIKE ?1 OR r.url LIKE ?2
+         WHERE (r.name LIKE ?1 OR r.url LIKE ?2)
+         AND rp.size > 0
          ORDER BY rp.name, rp.version DESC",
     )?;
 
@@ -306,8 +307,11 @@ fn is_already_converted(
     let count: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM converted_packages
-             WHERE package_name = ?1 AND package_version = ?2 AND distro = ?3",
-            rusqlite::params![name, version, distro],
+             WHERE package_name = ?1
+               AND package_version = ?2
+               AND distro = ?3
+               AND conversion_version >= ?4",
+            rusqlite::params![name, version, distro, CONVERSION_VERSION],
             |row| row.get(0),
         )
         .unwrap_or(0);
@@ -321,8 +325,10 @@ fn is_already_converted(
         .query_row(
             "SELECT COUNT(*) FROM converted_packages cp
              JOIN troves t ON cp.trove_id = t.id
-             WHERE t.name = ?1 AND t.version = ?2",
-            rusqlite::params![name, version],
+             WHERE t.name = ?1
+               AND t.version = ?2
+               AND cp.conversion_version >= ?3",
+            rusqlite::params![name, version, CONVERSION_VERSION],
             |row| row.get(0),
         )
         .unwrap_or(0);

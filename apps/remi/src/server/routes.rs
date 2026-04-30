@@ -39,7 +39,10 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
 use tower::Service;
-use tower_http::compression::CompressionLayer;
+use tower_http::compression::{
+    CompressionLayer,
+    predicate::{DefaultPredicate, NotForContentType, Predicate},
+};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, info, warn};
 
@@ -362,6 +365,8 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use std::net::Ipv4Addr;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
     use tower::ServiceExt;
 
     #[test]
@@ -515,5 +520,88 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn package_downloads_are_not_content_encoded() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let storage_root = temp.path().join("storage");
+        let db_path = storage_root.join("metadata/conary.db");
+        let chunk_dir = storage_root.join("chunks");
+        let cache_dir = storage_root.join("cache");
+        let ccs_path = cache_dir.join("packages/qemu-img-210.1.0-7.fc43-x86_64.ccs");
+
+        std::fs::create_dir_all(ccs_path.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(&chunk_dir).unwrap();
+        conary_core::db::init(&db_path).unwrap();
+
+        let ccs_bytes = [0x1f, 0x8b, 0x08, 0x00]
+            .into_iter()
+            .chain(std::iter::repeat_n(0x42, 128))
+            .collect::<Vec<_>>();
+        std::fs::write(&ccs_path, &ccs_bytes).unwrap();
+
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let mut converted = conary_core::db::models::ConvertedPackage::new_server(
+            "fedora".to_string(),
+            "qemu-img".to_string(),
+            "2:10.1.0-7.fc43".to_string(),
+            "rpm".to_string(),
+            "sha256:native".to_string(),
+            "high".to_string(),
+            &[],
+            ccs_bytes.len() as i64,
+            "sha256:ccs".to_string(),
+            ccs_path.to_string_lossy().to_string(),
+        );
+        converted.package_architecture = Some("x86_64".to_string());
+        converted.insert(&conn).unwrap();
+        drop(conn);
+
+        let state = Arc::new(RwLock::new(
+            ServerState::new(ServerConfig {
+                db_path,
+                chunk_dir,
+                cache_dir,
+                enable_rate_limit: false,
+                enable_bloom_filter: false,
+                ..ServerConfig::default()
+            })
+            .expect("test server state"),
+        ));
+        let app = create_router(state).await;
+
+        let mut request = Request::builder()
+            .uri("/v1/fedora/packages/qemu-img/download?version=2%3A10.1.0-7.fc43&arch=x86_64")
+            .header(header::ACCEPT_ENCODING, "gzip")
+            .body(Body::empty())
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(axum::extract::ConnectInfo(SocketAddr::from((
+                [127, 0, 0, 1],
+                49152,
+            ))));
+
+        let response = app.oneshot(request).await.unwrap();
+
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "unexpected body: {}",
+            String::from_utf8_lossy(&body)
+        );
+        assert!(
+            !headers.contains_key(header::CONTENT_ENCODING),
+            "CCS package downloads are already gzip archives and must not be HTTP content-encoded"
+        );
+
+        assert_eq!(body.as_ref(), ccs_bytes.as_slice());
     }
 }

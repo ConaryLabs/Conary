@@ -96,7 +96,7 @@ impl RepartDefinition {
             exclude_files: vec!["/boot".to_string()],
             make_directories: vec!["/boot".to_string()],
             label: Some(ROOT_PARTITION_LABEL.to_string()),
-            minimize: true,
+            minimize: false,
         }
     }
 }
@@ -213,8 +213,19 @@ mod tests {
         assert!(content.contains("ExcludeFiles=/boot"));
         assert!(content.contains("MakeDirectories=/boot"));
         assert!(content.contains("Label=CONARY_ROOT"));
-        assert!(content.contains("Minimize=guess"));
         assert!(!content.contains("SizeMinBytes"));
+        assert!(!content.contains("Minimize=guess"));
+    }
+
+    #[test]
+    fn root_definition_does_not_request_repart_minimize_guess() {
+        let def = RepartDefinition::root(TargetArch::X86_64, Path::new("/staged-root"));
+        let content = def.to_string();
+
+        assert!(
+            !content.contains("Minimize=guess"),
+            "generation exports pass a bounded --size to systemd-repart; asking repart to guess can create a huge temporary ext4 filesystem during pre-population"
+        );
     }
 
     #[test]

@@ -122,7 +122,10 @@ fn generate_index_for_distro(config: &IndexGenConfig, distro: &str) -> Result<In
     let conn = conary_core::db::open(&config.db_path)?;
 
     // Get all converted packages
-    let converted = ConvertedPackage::list_all(&conn)?;
+    let converted = ConvertedPackage::list_all(&conn)?
+        .into_iter()
+        .filter(|converted| !converted.needs_reconversion())
+        .collect::<Vec<_>>();
     debug!("Found {} converted packages total", converted.len());
 
     // Get package metadata from repository_packages table
@@ -191,7 +194,8 @@ fn get_packages_for_distro(
         "SELECT rp.name, rp.version, r.name as repo_name, rp.checksum
          FROM repository_packages rp
          JOIN repositories r ON rp.repository_id = r.id
-         WHERE r.name LIKE ?1 OR r.url LIKE ?2
+         WHERE (r.name LIKE ?1 OR r.url LIKE ?2)
+         AND rp.size > 0
          ORDER BY rp.name, rp.version DESC",
     )?;
 

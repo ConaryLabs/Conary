@@ -422,6 +422,7 @@ impl ConversionService {
                      AND r.name LIKE ?2
                      AND rp.version = ?3
                      AND rp.architecture = ?4
+                     AND rp.size > 0
                      LIMIT 1",
                 )?;
 
@@ -451,6 +452,7 @@ impl ConversionService {
                  WHERE rp.name = ?1
                  AND r.name LIKE ?2
                  AND rp.version = ?3
+                 AND rp.size > 0
                  LIMIT 1",
             )?;
 
@@ -478,7 +480,8 @@ impl ConversionService {
              JOIN repositories r ON rp.repository_id = r.id
              WHERE rp.name = ?1
              AND r.name LIKE ?2
-             AND (?3 IS NULL OR rp.architecture = ?3)",
+             AND (?3 IS NULL OR rp.architecture = ?3)
+             AND rp.size > 0",
         )?;
 
         let candidates: Vec<RepositoryPackage> = stmt

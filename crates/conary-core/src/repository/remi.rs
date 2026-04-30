@@ -17,7 +17,7 @@ use crate::error::{Error, Result};
 use crate::filesystem::path::sanitize_filename;
 use crate::repository::error_helpers::ResultExt;
 use indicatif::{ProgressBar, ProgressStyle};
-use reqwest::Client;
+use reqwest::{Client, header};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Write;
@@ -46,6 +46,12 @@ const CHUNK_TIMEOUT: Duration = Duration::from_secs(60);
 /// Maximum total chunk bytes accepted from a single Remi package download.
 const MAX_TOTAL_CHUNK_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
+#[derive(Debug)]
+enum ReadyPackageDownload {
+    Downloaded(PathBuf),
+    Accepted(ConversionAccepted),
+}
+
 fn check_total_chunk_bytes(current: u64, next: u64) -> Result<u64> {
     let total = current
         .checked_add(next)
@@ -56,6 +62,41 @@ fn check_total_chunk_bytes(current: u64, next: u64) -> Result<u64> {
         )));
     }
     Ok(total)
+}
+
+fn identity_get(client: &Client, url: &str) -> reqwest::RequestBuilder {
+    client.get(url).header(header::ACCEPT_ENCODING, "identity")
+}
+
+fn is_transient_package_status(status: u16) -> bool {
+    status == 408 || status == 429 || (500..=599).contains(&status)
+}
+
+fn retryable_ready_download_error(error: &Error) -> bool {
+    match error {
+        Error::DownloadError(message) => {
+            message.starts_with("Failed to download ")
+                || message.starts_with("response stream:")
+                || message.starts_with("Remi returned transient HTTP ")
+        }
+        Error::TimeoutError(_) => true,
+        _ => false,
+    }
+}
+
+#[cfg(not(test))]
+fn ready_download_retry_config() -> crate::repository::retry::RetryConfig {
+    crate::repository::retry::RetryConfig::quick()
+}
+
+#[cfg(test)]
+fn ready_download_retry_config() -> crate::repository::retry::RetryConfig {
+    crate::repository::retry::RetryConfig {
+        max_attempts: 3,
+        base_delay: Duration::from_millis(1),
+        max_delay: Duration::from_millis(5),
+        jitter_factor: 0.0,
+    }
 }
 
 #[cfg(not(test))]
@@ -275,7 +316,10 @@ impl RemiClient {
         distro: &str,
     ) -> Result<reqwest::Response> {
         for attempt in 0..=QUEUE_FULL_MAX_RETRIES {
-            let response = self.client.get(url).send().await.download_context(url)?;
+            let response = identity_get(&self.client, url)
+                .send()
+                .await
+                .download_context(url)?;
             let status = response.status().as_u16();
             if status != 503 {
                 return Ok(response);
@@ -491,6 +535,7 @@ impl RemiClient {
                     let response = self
                         .client
                         .get(url.as_str())
+                        .header(header::ACCEPT_ENCODING, "identity")
                         .timeout(CHUNK_TIMEOUT)
                         .send()
                         .await
@@ -600,6 +645,74 @@ impl RemiClient {
         Ok(())
     }
 
+    async fn download_ready_package_once(
+        &self,
+        url: &str,
+        name: &str,
+        distro: &str,
+        output_dir: &Path,
+    ) -> Result<ReadyPackageDownload> {
+        let response = self
+            .send_download_request_with_queue_retry(url, name, distro)
+            .await?;
+
+        match response.status().as_u16() {
+            200 => self
+                .download_ccs_response(response, name, output_dir)
+                .await
+                .map(ReadyPackageDownload::Downloaded),
+            202 => {
+                let accepted: ConversionAccepted =
+                    response.json().await.parse_context("202 response")?;
+                Ok(ReadyPackageDownload::Accepted(accepted))
+            }
+            status if is_transient_package_status(status) => {
+                let body = response.text().await.unwrap_or_default();
+                Err(Error::DownloadError(format!(
+                    "Remi returned transient HTTP {}: {}",
+                    status, body
+                )))
+            }
+            status => {
+                let body = response.text().await.unwrap_or_default();
+                Err(self.core.map_http_error(status, body, name, distro))
+            }
+        }
+    }
+
+    async fn download_ready_package_with_retry(
+        &self,
+        url: &str,
+        name: &str,
+        distro: &str,
+        output_dir: &Path,
+    ) -> Result<ReadyPackageDownload> {
+        let retry_config = ready_download_retry_config();
+        let max_attempts = retry_config.max_attempts.max(1);
+        let mut last_error = None;
+
+        for attempt in 1..=max_attempts {
+            match self
+                .download_ready_package_once(url, name, distro, output_dir)
+                .await
+            {
+                Ok(download) => return Ok(download),
+                Err(error) if attempt < max_attempts && retryable_ready_download_error(&error) => {
+                    let delay = retry_config.delay_for_attempt(attempt);
+                    warn!(
+                        "Remi download attempt {}/{} for {} failed: {}; retrying in {:?}",
+                        attempt, max_attempts, name, error, delay
+                    );
+                    last_error = Some(error);
+                    tokio::time::sleep(delay).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        Err(last_error.expect("max_attempts is clamped to >= 1, so at least one iteration ran"))
+    }
+
     /// High-level: Fetch a package from Remi and save to disk
     ///
     /// This is the main entry point for downloading CCS packages.
@@ -620,19 +733,13 @@ impl RemiClient {
 
         info!("Downloading CCS package from Remi: {}", url);
 
-        let response = self
-            .send_download_request_with_queue_retry(&url, name, distro)
-            .await?;
-
-        match response.status().as_u16() {
-            200 => {
-                // Package ready - download it
-                self.download_ccs_response(response, name, output_dir).await
-            }
-            202 => {
+        match self
+            .download_ready_package_with_retry(&url, name, distro, output_dir)
+            .await?
+        {
+            ReadyPackageDownload::Downloaded(path) => Ok(path),
+            ReadyPackageDownload::Accepted(accepted) => {
                 // Conversion in progress - poll then retry download
-                let accepted: ConversionAccepted =
-                    response.json().await.parse_context("202 response")?;
                 info!(
                     "Package conversion queued (job {}), ETA: {:?}s",
                     accepted.job_id, accepted.eta_seconds
@@ -644,43 +751,30 @@ impl RemiClient {
                 info!("Conversion complete, downloading CCS package");
 
                 let max_retries = 5;
-                let mut last_status = 0;
+                let last_status = 202;
 
                 for attempt in 1..=max_retries {
                     // Brief delay before retry (increases with each attempt)
                     tokio::time::sleep(Duration::from_millis(200 * attempt as u64)).await;
 
-                    let retry_response =
-                        self.client.get(&url).send().await.download_context(&url)?;
-
-                    last_status = retry_response.status().as_u16();
-
-                    if last_status == 200 {
-                        return self
-                            .download_ccs_response(retry_response, name, output_dir)
-                            .await;
-                    } else if last_status != 202 {
-                        // Unexpected status - fail immediately
-                        return Err(Error::DownloadError(format!(
-                            "Download after conversion returned HTTP {}",
-                            retry_response.status()
-                        )));
+                    match self
+                        .download_ready_package_with_retry(&url, name, distro, output_dir)
+                        .await?
+                    {
+                        ReadyPackageDownload::Downloaded(path) => return Ok(path),
+                        ReadyPackageDownload::Accepted(_) => {
+                            debug!(
+                                "Download returned 202, retrying ({}/{})",
+                                attempt, max_retries
+                            );
+                        }
                     }
-
-                    debug!(
-                        "Download returned 202, retrying ({}/{})",
-                        attempt, max_retries
-                    );
                 }
 
                 Err(Error::DownloadError(format!(
                     "Download after conversion still returned HTTP {} after {} retries",
                     last_status, max_retries
                 )))
-            }
-            status => {
-                let body = response.text().await.unwrap_or_default();
-                Err(self.core.map_http_error(status, body, name, distro))
             }
         }
     }
@@ -1214,6 +1308,125 @@ mod tests {
             )
             .await
             .expect("queue-full response should be retried");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(std::fs::read(path).unwrap(), [0x1f, 0x8b]);
+    }
+
+    #[tokio::test]
+    async fn fetch_package_requests_identity_encoding() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buf = [0_u8; 1024];
+            loop {
+                let read = socket.read(&mut buf).await.unwrap();
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buf[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+
+            let mut response = b"HTTP/1.1 200 OK\r\n\
+                                 Content-Disposition: attachment; filename=\"qemu-img.ccs\"\r\n\
+                                 Content-Length: 2\r\n\
+                                 Connection: close\r\n\
+                                 \r\n"
+                .to_vec();
+            response.extend_from_slice(&[0x1f, 0x8b]);
+            socket.write_all(&response).await.unwrap();
+
+            String::from_utf8(request).unwrap()
+        });
+
+        let output = tempfile::tempdir().unwrap();
+        let client = RemiClient::new(&base_url).unwrap();
+        client
+            .fetch_package(
+                "fedora",
+                "qemu-img",
+                Some("2:10.1.0-7.fc43"),
+                None,
+                output.path(),
+            )
+            .await
+            .expect("download should succeed");
+
+        let request = server.await.unwrap().to_ascii_lowercase();
+        assert!(
+            request.contains("accept-encoding: identity"),
+            "package download request did not force identity encoding:\n{request}"
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_package_retries_transient_body_stream_failure() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let server_attempts = attempts.clone();
+
+        tokio::spawn(async move {
+            for n in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 1024];
+                let _ = socket.read(&mut request).await.unwrap();
+                server_attempts.fetch_add(1, Ordering::SeqCst);
+
+                if n == 0 {
+                    socket
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\n\
+                              Content-Disposition: attachment; filename=\"qemu-img.ccs\"\r\n\
+                              Content-Length: 4\r\n\
+                              Connection: close\r\n\
+                              \r\n\x1f\x8b",
+                        )
+                        .await
+                        .unwrap();
+                } else {
+                    socket
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\n\
+                              Content-Disposition: attachment; filename=\"qemu-img.ccs\"\r\n\
+                              Content-Length: 2\r\n\
+                              Connection: close\r\n\
+                              \r\n\x1f\x8b",
+                        )
+                        .await
+                        .unwrap();
+                }
+            }
+        });
+
+        let output = tempfile::tempdir().unwrap();
+        let client = RemiClient::new(&base_url).unwrap();
+        let path = client
+            .fetch_package(
+                "fedora",
+                "qemu-img",
+                Some("2:10.1.0-7.fc43"),
+                None,
+                output.path(),
+            )
+            .await
+            .expect("transient body stream failure should be retried");
 
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
         assert_eq!(std::fs::read(path).unwrap(), [0x1f, 0x8b]);
