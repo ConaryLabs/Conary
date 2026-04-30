@@ -30,6 +30,7 @@ use crate::generation::metadata::{
     mark_generation_pending,
 };
 mod erofs;
+mod runtime_inputs;
 
 pub use erofs::{BuildResult, FileEntryRef, SymlinkEntryRef, build_erofs_image, hex_to_digest};
 
