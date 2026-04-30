@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-04-25
-revision: 12
-summary: Align integration-testing guidance with generation export QEMU validation and the virtual workspace package layout
+last_updated: 2026-04-30
+revision: 13
+summary: Record generation export QEMU validation and keep integration-testing guidance aligned with the virtual workspace package layout
 ---
 
 # Integration Testing
@@ -42,10 +42,12 @@ cargo run -p conary-test -- run --distro fedora43 --phase 1
 cargo run -p conary-test -- list
 ```
 
-The generation artifact export QEMU suite is the remaining operational proof
-for the 2026-04-22 generation-export unification slice. It should pass or
-produce a narrowly scoped remote fixture/tooling blocker before that slice is
-treated as fully validated in operations.
+The generation artifact export QEMU suite is the operational proof for the
+2026-04-22 generation-export unification slice. It passed on 2026-04-30 with
+`TGE01` and `TGE02` green, validating both installed-generation fail-closed
+behavior and a bootable bootstrap-run qcow2 export. Keep this suite in the
+Phase 3 rotation for regressions in generation artifact export, QEMU fixture
+copying, scratch-disk handling, and exported-image boot.
 
 ## CLI Subcommands
 
