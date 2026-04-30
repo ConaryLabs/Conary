@@ -5,6 +5,7 @@
 //! This module provides the ability to import packages already installed
 //! by the system package manager (RPM, dpkg, pacman) into Conary's tracking database.
 
+pub(crate) mod cas_capture;
 mod conflicts;
 mod convert;
 mod hooks;

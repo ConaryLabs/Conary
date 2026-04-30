@@ -7,6 +7,7 @@
 use super::super::create_state_snapshot;
 use super::super::open_db;
 use super::super::progress::{AdoptPhase, AdoptProgress};
+use super::cas_capture::prepare_cas_backed_package_files;
 use anyhow::Result;
 use conary_core::db::models::{
     Changeset, ChangesetStatus, DependencyEntry, FileEntry, InstallReason, InstallSource,
@@ -296,20 +297,32 @@ pub async fn cmd_adopt_system(
         };
 
         // Perform CAS writes (hardlinks) OUTSIDE the transaction.
-        let files_with_hashes: Vec<(FileInfoTuple, String)> = files
-            .into_iter()
-            .map(|f| {
-                let hash = compute_file_hash(
-                    &f.0,
-                    f.2,
-                    f.3.as_deref(),
-                    f.6.as_deref(),
-                    full,
-                    cas.as_ref(),
-                );
-                (f, hash)
-            })
-            .collect();
+        let files_with_hashes: Vec<(FileInfoTuple, String)> = if full {
+            progress.set_phase(name, AdoptPhase::CasStorage);
+            match prepare_cas_backed_package_files(
+                name,
+                &files,
+                cas.as_ref()
+                    .expect("CAS store must be available for full adoption"),
+            ) {
+                Ok(files) => files,
+                Err(e) => {
+                    warn!("Failed to prepare CAS-backed files for '{}': {}", name, e);
+                    progress.fail_package(name, &e.to_string());
+                    error_count += 1;
+                    continue;
+                }
+            }
+        } else {
+            files
+                .into_iter()
+                .map(|f| {
+                    let hash =
+                        compute_file_hash(&f.0, f.2, f.3.as_deref(), f.6.as_deref(), false, None);
+                    (f, hash)
+                })
+                .collect()
+        };
 
         let is_dependency = has_install_reason_data && !user_installed.contains(name);
 
