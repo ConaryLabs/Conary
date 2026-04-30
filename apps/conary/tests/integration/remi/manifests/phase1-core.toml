@@ -29,7 +29,7 @@ run = "${CONARY_BIN} repo remove arch-extra --db-path ${DB_PATH}"
 run = "${CONARY_BIN} repo remove arch-multilib --db-path ${DB_PATH}"
 
 [[suite.setup]]
-run = "${CONARY_BIN} repo remove fedora-43 --db-path ${DB_PATH}"
+run = "${CONARY_BIN} repo remove fedora-44 --db-path ${DB_PATH}"
 
 [[suite.setup]]
 run = "${CONARY_BIN} repo remove ubuntu-noble --db-path ${DB_PATH}"

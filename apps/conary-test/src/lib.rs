@@ -35,14 +35,14 @@ pub mod test_fixtures {
         }
     }
 
-    /// GlobalConfig with a fedora43 distro entry.
+    /// GlobalConfig with a fedora44 distro entry.
     pub fn test_global_config_with_fedora() -> GlobalConfig {
         let mut config = test_global_config();
         config.distros.insert(
-            "fedora43".to_string(),
+            "fedora44".to_string(),
             DistroConfig {
-                remi_distro: "fedora43".to_string(),
-                repo_name: "conary-fedora43".to_string(),
+                remi_distro: "fedora".to_string(),
+                repo_name: "conary-fedora44".to_string(),
                 containerfile: None,
                 test_packages: Vec::new(),
             },
@@ -50,7 +50,7 @@ pub mod test_fixtures {
         config
     }
 
-    /// AppState with fedora43 distro and a temp manifest dir.
+    /// AppState with fedora44 distro and a temp manifest dir.
     pub fn test_app_state() -> AppState {
         AppState::new(
             test_global_config_with_fedora(),

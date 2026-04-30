@@ -421,7 +421,7 @@ mod tests {
             .uri("/v1/runs")
             .header("content-type", "application/json")
             .body(Body::from(
-                r#"{"suite":"smoke","distro":"fedora43","phase":1}"#,
+                r#"{"suite":"smoke","distro":"fedora44","phase":1}"#,
             ))
             .unwrap();
 
@@ -477,7 +477,7 @@ mod tests {
             .unwrap();
         let arr: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
         assert_eq!(arr.len(), 1);
-        assert_eq!(arr[0]["name"], "fedora43");
+        assert_eq!(arr[0]["name"], "fedora44");
     }
 
     #[tokio::test]

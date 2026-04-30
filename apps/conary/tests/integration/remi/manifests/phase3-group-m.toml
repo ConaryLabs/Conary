@@ -13,7 +13,7 @@
 name = "Phase 3 Group M: Real-World Operations"
 phase = 3
 
-[distro_overrides.fedora43]
+[distro_overrides.fedora44]
 small_package = "tree"
 dep_heavy_package = "jq"
 distro_repo = "fedora-remi"
