@@ -41,6 +41,41 @@ expect_output = [
 exit_code = 0
 
 [[test]]
+id = "TGE03"
+name = "installed_generation_build_rejects_missing_runtime_cas_object"
+description = "A CAS-backed installed runtime generation fails before artifact publication if an included regular-file CAS object disappears"
+timeout = 1800
+group = "generation-export"
+
+[[test.step]]
+[test.step.qemu_boot]
+image = "minimal-boot-v2"
+memory_mb = 2048
+timeout_seconds = 1500
+ssh_port = 2244
+stage_conary = true
+commands = [
+    "conary system init",
+    "conary repo remove remi || true",
+    "conary repo add remi ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check",
+    "conary repo sync remi --force",
+    "command -v sqlite3 || conary install sqlite --repo remi --yes --sandbox never --allow-live-system-mutation",
+    "conary system adopt --system --full",
+    "DB=/var/lib/conary/conary.db; HASH=$(sqlite3 \"$DB\" \"select f.sha256_hash from files f join troves t on t.id = f.trove_id where t.install_source in ('adopted-full','taken','repository','file') and f.symlink_target is null and length(f.sha256_hash) = 64 and f.sha256_hash not glob '*[^0-9a-f]*' and ((f.permissions & 61440) = 0 or (f.permissions & 61440) = 32768) and f.path not like '/var/%' and f.path not like '/tmp/%' and f.path not like '/run/%' and f.path not like '/home/%' and f.path not like '/root/%' and f.path not like '/srv/%' and f.path not like '/opt/%' and f.path not like '/proc/%' and f.path not like '/sys/%' and f.path not like '/dev/%' and f.path not like '/mnt/%' and f.path not like '/media/%' limit 1\"); test -n \"$HASH\"; PREFIX=$(printf '%s' \"$HASH\" | cut -c1-2); SUFFIX=$(printf '%s' \"$HASH\" | cut -c3-); OBJ=/var/lib/conary/objects/$PREFIX/$SUFFIX; test -f \"$OBJ\"; rm -f \"$OBJ\"; echo \"$HASH\" > /var/tmp/missing-cas.hash",
+    "conary system generation build --allow-live-system-mutation > /var/tmp/missing-cas.log 2>&1; code=$?; cat /var/tmp/missing-cas.log; test \"$code\" -ne 0",
+    "grep -Eq 'missing CAS object|Checksum mismatch|size mismatch' /var/tmp/missing-cas.log",
+    "test ! -e /conary/generations/0/.conary-artifact.json",
+    "echo installed-runtime-missing-cas-rejected",
+]
+expect_output = [
+    "installed-runtime-missing-cas-rejected",
+]
+
+[test.step.assert]
+exit_code = 0
+
+
+[[test]]
 id = "TGE02"
 name = "bootstrap_run_generation_export_boots"
 description = "Export a bootstrap-run generation artifact to qcow2, copy it to the host, then boot it under UEFI"
