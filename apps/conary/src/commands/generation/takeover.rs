@@ -16,7 +16,7 @@ use super::takeover_state::{
     BootEntryOutcome, TakeoverInventory, TakeoverPhase, TakeoverRecord, TakeoverStatus,
 };
 use crate::cli::TakeoverLevel;
-use crate::commands::adopt::{FileInfoTuple, compute_file_hash};
+use crate::commands::adopt::{FileInfoTuple, cas_capture::prepare_cas_backed_package_files};
 use crate::commands::install::is_package_blocked;
 use anyhow::{Context, Result, anyhow};
 use conary_core::db::models::{Changeset, ChangesetStatus, FileEntry, InstallSource, Trove};
@@ -56,6 +56,18 @@ pub struct TakeoverPlan {
 struct OwnershipTransferReport {
     query_failures: Vec<String>,
     pm_removal_failures: Vec<String>,
+}
+
+#[derive(Debug)]
+struct CasUpgradeEntry {
+    name: String,
+    files_with_hashes: Vec<(FileInfoTuple, String)>,
+}
+
+#[derive(Debug)]
+struct OwnershipEntry {
+    name: String,
+    files_with_hashes: Vec<(FileInfoTuple, String)>,
 }
 
 // ---------------------------------------------------------------------------
@@ -470,6 +482,30 @@ pub async fn cmd_system_takeover(
 // Phase helpers
 // ---------------------------------------------------------------------------
 
+fn prepare_cas_upgrade_entry(
+    name: &str,
+    files: Vec<FileInfoTuple>,
+    cas: &CasStore,
+) -> Result<CasUpgradeEntry> {
+    let files_with_hashes = prepare_cas_backed_package_files(name, &files, cas)?;
+    Ok(CasUpgradeEntry {
+        name: name.to_string(),
+        files_with_hashes,
+    })
+}
+
+fn prepare_ownership_entry(
+    name: &str,
+    files: Vec<FileInfoTuple>,
+    cas: &CasStore,
+) -> Result<OwnershipEntry> {
+    let files_with_hashes = prepare_cas_backed_package_files(name, &files, cas)?;
+    Ok(OwnershipEntry {
+        name: name.to_string(),
+        files_with_hashes,
+    })
+}
+
 /// Upgrade `AdoptedTrack` packages to `AdoptedFull` by hardlinking their
 /// files into the CAS and updating the DB.
 fn upgrade_to_cas_backed(
@@ -478,14 +514,6 @@ fn upgrade_to_cas_backed(
     pm: &SystemPackageManager,
 ) -> Result<Vec<String>> {
     let cas = CasStore::new(objects_dir(db_path))?;
-
-    // Pre-fetch file lists and perform CAS writes (hardlinks) OUTSIDE the
-    // transaction. Any CAS objects written before a DB failure become
-    // GC-reclaimable orphans -- the same trade-off the install pipeline makes.
-    struct CasUpgradeEntry {
-        name: String,
-        files_with_hashes: Vec<(FileInfoTuple, String)>,
-    }
 
     let mut entries: Vec<CasUpgradeEntry> = Vec::with_capacity(packages.len());
     let mut skipped = Vec::new();
@@ -499,19 +527,13 @@ fn upgrade_to_cas_backed(
             }
         };
 
-        let files_with_hashes: Vec<(FileInfoTuple, String)> = files
-            .into_iter()
-            .map(|f| {
-                let hash =
-                    compute_file_hash(&f.0, f.2, f.3.as_deref(), f.6.as_deref(), true, Some(&cas));
-                (f, hash)
-            })
-            .collect();
-
-        entries.push(CasUpgradeEntry {
-            name: name.clone(),
-            files_with_hashes,
-        });
+        match prepare_cas_upgrade_entry(name, files, &cas) {
+            Ok(entry) => entries.push(entry),
+            Err(e) => {
+                warn!("Skipping CAS upgrade for '{name}': {e}");
+                skipped.push(name.clone());
+            }
+        }
     }
 
     // DB-only transaction: all PM queries and CAS writes are already done.
@@ -574,40 +596,17 @@ fn take_ownership(
 ) -> Result<OwnershipTransferReport> {
     let cas = CasStore::new(objects_dir(db_path))?;
 
-    // Pre-capture file lists and perform CAS writes OUTSIDE the transaction.
-    // Packages whose file query fails are skipped with a warning.
-    // Any CAS objects written before a DB failure become GC-reclaimable orphans.
-    struct OwnershipEntry {
-        name: String,
-        files_with_hashes: Vec<(FileInfoTuple, String)>,
-    }
-
     let mut entries: Vec<OwnershipEntry> = Vec::with_capacity(packages.len());
     let mut report = OwnershipTransferReport::default();
     for name in packages {
         match query_package_files(pm, name) {
-            Ok(files) => {
-                let files_with_hashes: Vec<(FileInfoTuple, String)> = files
-                    .into_iter()
-                    .map(|f| {
-                        // Always compute CAS hash: track-only packages need
-                        // CAS-backing here and full packages get hash refresh.
-                        let hash = compute_file_hash(
-                            &f.0,
-                            f.2,
-                            f.3.as_deref(),
-                            f.6.as_deref(),
-                            true,
-                            Some(&cas),
-                        );
-                        (f, hash)
-                    })
-                    .collect();
-                entries.push(OwnershipEntry {
-                    name: name.clone(),
-                    files_with_hashes,
-                });
-            }
+            Ok(files) => match prepare_ownership_entry(name, files, &cas) {
+                Ok(entry) => entries.push(entry),
+                Err(e) => {
+                    warn!("Skipping ownership transfer for '{name}': {e}");
+                    report.query_failures.push(name.clone());
+                }
+            },
             Err(e) => {
                 warn!("Skipping ownership transfer for '{name}': {e}");
                 report.query_failures.push(name.clone());
@@ -948,5 +947,85 @@ mod tests {
     fn test_takeover_level_default_is_generation() {
         let level = TakeoverLevel::default();
         assert!(matches!(level, TakeoverLevel::Generation));
+    }
+
+    fn file_tuple(
+        path: &str,
+        size: i64,
+        mode: i32,
+        digest: Option<&str>,
+        link_target: Option<&str>,
+    ) -> FileInfoTuple {
+        (
+            path.to_string(),
+            size,
+            mode,
+            digest.map(str::to_string),
+            Some("root".to_string()),
+            Some("root".to_string()),
+            link_target.map(str::to_string),
+        )
+    }
+
+    #[test]
+    fn cas_upgrade_entry_rejects_missing_regular_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cas = CasStore::new(tmp.path().join("objects")).unwrap();
+        let files = vec![file_tuple(
+            "/usr/bin/missing",
+            7,
+            0o100755,
+            Some("package-manager-digest"),
+            None,
+        )];
+
+        let error = prepare_cas_upgrade_entry("broken", files, &cas)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("package broken"));
+        assert!(error.contains("/usr/bin/missing"));
+        assert!(error.contains("regular file must be readable"));
+    }
+
+    #[test]
+    fn ownership_entry_rejects_missing_regular_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cas = CasStore::new(tmp.path().join("objects")).unwrap();
+        let files = vec![file_tuple(
+            "/usr/bin/missing",
+            7,
+            0o100755,
+            Some("package-manager-digest"),
+            None,
+        )];
+
+        let error = prepare_ownership_entry("broken", files, &cas)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("package broken"));
+        assert!(error.contains("/usr/bin/missing"));
+        assert!(error.contains("regular file must be readable"));
+    }
+
+    #[test]
+    fn takeover_cas_capture_uses_canonical_symlink_hash() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cas = CasStore::new(tmp.path().join("objects")).unwrap();
+        let files = vec![file_tuple(
+            "/usr/lib/libfoo.so",
+            0,
+            0o120777,
+            Some("package-manager-digest"),
+            Some("libfoo.so.1"),
+        )];
+
+        let entry = prepare_cas_upgrade_entry("glibc", files, &cas).unwrap();
+
+        assert_eq!(
+            entry.files_with_hashes[0].1,
+            CasStore::compute_symlink_hash("libfoo.so.1")
+        );
     }
 }
