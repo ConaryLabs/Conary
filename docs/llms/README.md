@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-04-22
-revision: 3
+last_updated: 2026-04-30
+revision: 4
 summary: Vendor-neutral map for coding assistants working in the Conary repository and the compatibility layer around the canonical doc system
 ---
 
@@ -32,6 +32,46 @@ root guidance into a manual.
   back to this layered doc system instead of becoming parallel manuals.
 - If a subtree later needs materially different durable instructions, prefer a
   nested `AGENTS.md` scoped to that subtree over bloating the root guidance.
+
+## OpenAI GPT-5.5 Notes
+
+This repo should keep durable guidance model-neutral, but OpenAI/Codex prompt
+and harness changes should be checked against current OpenAI docs:
+
+- [Prompt guidance](https://developers.openai.com/api/docs/guides/prompt-guidance)
+- [Using GPT-5.5](https://developers.openai.com/api/docs/guides/latest-model#using-reasoning-models)
+
+For Codex or other OpenAI agents, keep stable repo policy near the top of the
+prompt by pointing to `AGENTS.md` and linked canonical docs. Put dynamic context
+such as branch state, failing commands, run IDs, and one-off user notes near the
+end so repeated prompts stay cache-friendly and less prone to stale copied
+lore.
+
+State the desired mode plainly: plan, design, implement, review, debug, or
+verify. Include acceptance criteria and exact verification commands when they
+are known, while leaving room for the agent to inspect the codebase and adjust
+the path. Prefer outcome-focused constraints over long, brittle scripts.
+
+Treat output length and reasoning depth as separate concerns. Use harness
+controls such as `text.verbosity` and `reasoning.effort` when available; in repo
+prompts, ask for concrete budgets, section counts, or machine-readable output
+only when the workflow needs them.
+
+For tool-heavy sessions, short tool preambles are useful. If a future harness
+manages Responses API state directly, preserve returned assistant output item
+metadata such as `phase`, use `previous_response_id` where appropriate, and make
+compaction summaries preserve completed actions, active assumptions, IDs, tool
+outcomes, unresolved blockers, and the next concrete goal.
+
+Keep tool-specific behavior in tool descriptions, MCP schemas, or harness
+configuration when possible. `AGENTS.md` and this directory should carry
+cross-tool policy, source-of-truth pointers, and durable repo workflow
+expectations. Use structured outputs or schema validation in a harness instead
+of prose-only JSON schema instructions.
+
+Do not bake a "current date" into durable assistant docs. Add explicit dates or
+time zones only when a workflow needs user-local, release, policy-effective, or
+other non-UTC context.
 
 ## Core Docs
 
