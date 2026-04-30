@@ -1,9 +1,10 @@
 # Generation Artifact Export Unification Implementation Plan
 
 > **Historical execution plan:** This plan drove the generation artifact export
-> unification slice that landed on `main` in
-> `3df9716f feat(generation): unify artifact image export`. The checkboxes
-> below were planning scaffolding, not an authoritative post-merge ledger.
+> unification slice that landed on `main` and was QEMU-validated at
+> `065cf795 fix(generation): stabilize artifact export validation`. The
+> checkboxes below were planning scaffolding, not an authoritative post-merge
+> ledger.
 
 **Goal:** Replace the false legacy generation image path with one validated generation-artifact export pipeline that emits raw/qcow2 images through `systemd-repart` and reserves ISO on the same contract.
 
@@ -32,17 +33,18 @@ Implemented and merged:
 - the `Generation Artifact Export QEMU` suite exists and appears in
   `cargo run -p conary-test -- list`
 
-Still pending before closing the slice operationally:
+Operational validation recorded:
 
-- run and record:
+- command:
 
 ```bash
 cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora43 --phase 3
 ```
 
-- if that suite exposes a remote image/tooling/bootstrap fixture blocker, fix
-  the blocker directly or record it as a narrow follow-up with maintainer
-  approval
+- result on 2026-04-30: `TGE01` and `TGE02` passed, 2 passed / 0 failed
+- installed runtime generations still intentionally fail closed unless their
+  root is self-contained; the follow-up is tracked in
+  `docs/operations/post-generation-export-follow-up-roadmap.md`
 
 Follow-up design work after this slice is tracked in
 `docs/operations/post-generation-export-follow-up-roadmap.md`.

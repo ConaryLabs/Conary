@@ -129,9 +129,12 @@ rootfs and ESP staging trees, then uses the same shared systemd-repart raw
 backend. It does not scrape `/boot`, `/conary`, or other live-host paths while
 exporting.
 
-The generation artifact export implementation is merged. The remaining
-operational validation is the `Generation Artifact Export QEMU` suite described
-in [docs/INTEGRATION-TESTING.md](/docs/INTEGRATION-TESTING.md).
+The generation artifact export implementation is merged and was validated with
+the `Generation Artifact Export QEMU` suite described in
+[docs/INTEGRATION-TESTING.md](/docs/INTEGRATION-TESTING.md). Installed runtime
+generations still fail closed unless their CAS-backed root is self-contained;
+that follow-up is tracked in
+[docs/operations/post-generation-export-follow-up-roadmap.md](/docs/operations/post-generation-export-follow-up-roadmap.md).
 
 ## Architecture Context
 

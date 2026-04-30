@@ -1,14 +1,14 @@
 ---
-last_updated: 2026-04-25
-revision: 3
-summary: Design for replacing legacy generation image export with one canonical generation-artifact-to-image pipeline
+last_updated: 2026-04-30
+revision: 4
+summary: Implemented and QEMU-validated design for replacing legacy generation image export with one canonical generation-artifact-to-image pipeline
 ---
 
 # Generation Artifact Export Unification: Design Spec
 
 **Date:** 2026-04-22
-**Status:** Implemented on `main`; full generation-export QEMU suite execution
-pending
+**Status:** Implemented on `main`; full generation-export QEMU suite passed on
+2026-04-30
 **Goal:** Replace the legacy generation-derived image path with one truthful
 generation-artifact export contract that emits `raw` and `qcow2` disk images
 through a shared declarative image backend and reserves the same contract for
@@ -18,8 +18,8 @@ future `iso` output.
 
 ## Current Implementation State
 
-The implementation for this slice landed on `main` in commit
-`3df9716f feat(generation): unify artifact image export`.
+The implementation for this slice landed on `main`; the QEMU-validated tip for
+the slice is `065cf795 fix(generation): stabilize artifact export validation`.
 
 Code-level acceptance is implemented:
 
@@ -35,12 +35,16 @@ Code-level acceptance is implemented:
 - ISO is accepted by the contract but fails closed with the reserved
   not-implemented error
 
-The remaining validation item is operational, not design-shape work: run the
-full `Generation Artifact Export QEMU` suite from
-[`docs/INTEGRATION-TESTING.md`](../../INTEGRATION-TESTING.md) against the
-remote/QEMU environment and record the result. The suite manifest exists and is
-visible to `conary-test`, but the exact end-to-end suite command has not yet
-been recorded as passing in this doc.
+The operational validation item is complete. The full `Generation Artifact
+Export QEMU` suite from
+[`docs/INTEGRATION-TESTING.md`](../../INTEGRATION-TESTING.md) passed on
+2026-04-30:
+
+```bash
+cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora43 --phase 3
+```
+
+Result: `TGE01` and `TGE02` passed, 2 passed / 0 failed.
 
 Deferred work after this slice is tracked in
 [`docs/operations/post-generation-export-follow-up-roadmap.md`](../../operations/post-generation-export-follow-up-roadmap.md).
@@ -776,9 +780,8 @@ is required.
 
 Current status: all code-level criteria below are implemented. The QEMU boot
 criterion is represented by
-`apps/conary/tests/integration/remi/manifests/phase3-group-o-generation-export.toml`,
-but still needs an end-to-end remote/QEMU run recorded before this slice should
-be considered fully validated in operations.
+`apps/conary/tests/integration/remi/manifests/phase3-group-o-generation-export.toml`
+and passed in the end-to-end remote/QEMU validation run recorded on 2026-04-30.
 
 - `conary bootstrap image --from-generation` is gone.
 - `conary system generation export` is the only disk-image export surface for

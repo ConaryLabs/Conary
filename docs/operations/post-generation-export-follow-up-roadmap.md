@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-04-25
-revision: 2
-summary: Follow-up roadmap for bootstrap and generation architecture work after the generation export unification slice
+last_updated: 2026-04-30
+revision: 3
+summary: Follow-up roadmap after the implemented and QEMU-validated generation export unification slice
 ---
 
 # Post-Generation-Export Follow-Up Roadmap
@@ -23,13 +23,14 @@ Completed first slice:
 - remove the legacy imperative generation image path
 - stage explicit boot assets next to generation artifacts
 - reserve ISO on the same artifact contract
+- validate the generation export path with the remote/QEMU suite
 
-Operational validation still to run before we call the slice fully proven:
+Operational validation recorded:
 
-- run the `Generation Artifact Export QEMU` suite against the remote/QEMU
-  environment and record the result
-- keep the existing fail-closed behavior if the runtime-generation path is not
-  yet self-contained
+- `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora43 --phase 3`
+- result on 2026-04-30: `TGE01` and `TGE02` passed, 2 passed / 0 failed
+- the installed-runtime path still intentionally fails closed when the runtime
+  generation is not self-contained
 
 Everything below remains deferred follow-up work.
 
