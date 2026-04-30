@@ -21,5 +21,5 @@ pub use hooks::cmd_sync_hook_install;
 pub use packages::cmd_adopt;
 pub use refresh::cmd_adopt_refresh;
 pub use status::cmd_adopt_status;
+pub use system::FileInfoTuple;
 pub use system::cmd_adopt_system;
-pub use system::{FileInfoTuple, compute_file_hash};
