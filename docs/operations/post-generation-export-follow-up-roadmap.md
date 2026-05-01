@@ -25,7 +25,7 @@ Completed first slice:
 - reserve ISO on the same artifact contract
 - validate the generation export path with the remote/QEMU suite
 
-Operational validation recorded:
+Historical operational validation recorded for the landed Fedora 43 baseline:
 
 - `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora43 --phase 3`
 - result on 2026-04-30: `TGE01` and `TGE02` passed, 2 passed / 0 failed
