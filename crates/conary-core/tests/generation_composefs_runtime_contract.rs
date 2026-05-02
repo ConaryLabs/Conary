@@ -83,6 +83,66 @@ fn generation_switch_does_not_force_verity_when_metadata_says_it_is_unavailable(
 }
 
 #[test]
+fn generation_switch_does_not_retry_requested_verity_as_plain_composefs() {
+    let switch_rs = fs::read_to_string(app_source("commands/generation/switch.rs"))
+        .expect("failed to read commands/generation/switch.rs");
+
+    let requested_verity_branch = switch_rs
+        .split("let mount_outcome = if requested_verity {")
+        .nth(1)
+        .and_then(|rest| rest.split("} else {").next())
+        .expect("failed to find requested-verity mount branch");
+
+    assert!(
+        !requested_verity_branch.contains(".or_else("),
+        "requested fs-verity mounts must fail closed instead of retrying as plain composefs"
+    );
+    assert!(
+        !requested_verity_branch.contains("retrying without"),
+        "requested fs-verity mounts must not log or perform a downgrade retry"
+    );
+    assert!(
+        switch_rs.contains("} else {\n        mount_generation(&opts_plain)"),
+        "plain composefs remains valid only when persisted metadata says fs-verity is unavailable"
+    );
+}
+
+#[test]
+fn composefs_apply_prints_etc_overlay_failures_to_stderr() {
+    let composefs_ops_rs = fs::read_to_string(app_source("commands/composefs_ops.rs"))
+        .expect("failed to read commands/composefs_ops.rs");
+
+    assert!(
+        composefs_ops_rs
+            .contains("warn!(\"Failed to mount /etc overlay: {e}; /etc may be stale\");"),
+        "composefs apply must keep logging /etc overlay mount failures"
+    );
+    assert!(
+        composefs_ops_rs.contains(
+            "eprintln!(\"Warning: Failed to mount /etc overlay: {e}; /etc may be stale\");"
+        ),
+        "composefs apply must also print /etc overlay mount failures to stderr"
+    );
+}
+
+#[test]
+fn generation_switch_prints_etc_overlay_failures_to_stderr() {
+    let switch_rs = fs::read_to_string(app_source("commands/generation/switch.rs"))
+        .expect("failed to read commands/generation/switch.rs");
+
+    assert!(
+        switch_rs.contains("warn!(\"Failed to mount /etc overlay: {e}; /etc may be stale\");"),
+        "generation switch must keep logging /etc overlay mount failures"
+    );
+    assert!(
+        switch_rs.contains(
+            "eprintln!(\"Warning: Failed to mount /etc overlay: {e}; /etc may be stale\");"
+        ),
+        "generation switch must also print /etc overlay mount failures to stderr"
+    );
+}
+
+#[test]
 fn initramfs_generation_mounts_have_empty_usr_symlink_fallback() {
     let dracut_generator = fs::read_to_string(workspace_file(
         "packaging/dracut/90conary/conary-generator.sh",
