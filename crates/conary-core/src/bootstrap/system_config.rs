@@ -200,6 +200,37 @@ fail() {
     exec /bin/sh
 }
 
+expose_generation_usr() {
+    usr_source="/sysroot/conary/mnt/usr"
+    usr_target="/sysroot/usr"
+
+    mkdir -p "$usr_target"
+    if mount --bind "$usr_source" "$usr_target"; then
+        mount -o remount,ro "$usr_target" 2>/dev/null || true
+        return 0
+    fi
+
+    # composefs is overlay-backed; some initramfs environments cannot bind a
+    # subdirectory from that mount. Exported generation images create /usr as
+    # an empty carrier-root placeholder, so replace only that empty directory.
+    if rmdir "$usr_target" 2>/dev/null && ln -s conary/mnt/usr "$usr_target"; then
+        return 0
+    fi
+
+    fail "failed to expose generation /usr"
+}
+
+ensure_root_symlink() {
+    link_path="/sysroot/$1"
+    link_target="$2"
+
+    if [ -e "$link_path" ] || [ -L "$link_path" ]; then
+        return 0
+    fi
+
+    ln -s "$link_target" "$link_path" || fail "failed to create $link_path -> $link_target"
+}
+
 mkdir -p /proc /sys /dev /sysroot
 mount -t proc proc /proc || fail "failed to mount /proc"
 mount -t sysfs sysfs /sys || fail "failed to mount /sys"
@@ -232,10 +263,13 @@ if [ -n "$CONARY_GEN" ]; then
         fail "composefs mount failed for generation $CONARY_GEN"
 
     if [ -d /sysroot/conary/mnt/usr ]; then
-        mkdir -p /sysroot/usr
-        mount --bind /sysroot/conary/mnt/usr /sysroot/usr || fail "failed to bind generation /usr"
-        mount -o remount,ro /sysroot/usr 2>/dev/null || true
+        expose_generation_usr
     fi
+
+    ensure_root_symlink bin usr/bin
+    ensure_root_symlink lib usr/lib
+    ensure_root_symlink lib64 usr/lib64
+    ensure_root_symlink sbin usr/sbin
 
     if [ -d /sysroot/conary/mnt/etc ]; then
         ETC_UPPER="/sysroot/conary/etc-state/$CONARY_GEN"

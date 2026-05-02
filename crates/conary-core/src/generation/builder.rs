@@ -591,19 +591,31 @@ fn runtime_boot_asset_sources_for_release(
     depmod: &Path,
     cpio: &Path,
 ) -> crate::Result<RuntimeBootAssetSources> {
-    let kernel = boot_root.join(format!("vmlinuz-{release}"));
-    let kernel = if regular_file_exists(&kernel) {
-        kernel
+    let versioned_kernel = boot_root.join(format!("vmlinuz-{release}"));
+    let unversioned_kernel = boot_root.join("vmlinuz");
+    let kernel = if regular_file_exists(&versioned_kernel) {
+        versioned_kernel
     } else {
-        module_kernel_path(system_root, release).ok_or_else(|| {
-            crate::error::Error::NotFound(format!(
-                "missing required boot asset kernel for {release}; expected {} or a module kernel at lib/modules/{release}/vmlinuz",
-                boot_root.join(format!("vmlinuz-{release}")).display()
-            ))
-        })?
+        module_kernel_path(system_root, release)
+            .or_else(|| regular_file_exists(&unversioned_kernel).then_some(unversioned_kernel))
+            .ok_or_else(|| {
+                crate::error::Error::NotFound(format!(
+                    "missing required boot asset kernel for {release}; expected {}, {}, or a module kernel at lib/modules/{release}/vmlinuz",
+                    boot_root.join(format!("vmlinuz-{release}")).display(),
+                    boot_root.join("vmlinuz").display()
+                ))
+            })?
     };
 
-    let initramfs = boot_root.join(format!("initramfs-{release}.img"));
+    let versioned_initramfs = boot_root.join(format!("initramfs-{release}.img"));
+    let unversioned_initramfs = boot_root.join("initramfs.img");
+    let initramfs = if regular_file_exists(&versioned_initramfs) {
+        versioned_initramfs
+    } else if regular_file_exists(&unversioned_initramfs) {
+        unversioned_initramfs
+    } else {
+        versioned_initramfs
+    };
     if !regular_file_exists(&initramfs) {
         generate_runtime_initramfs(dracut, depmod, cpio, system_root, release, &initramfs)?;
     }
@@ -1343,6 +1355,31 @@ mod tests {
             sources.initramfs,
             boot_root.join(format!("initramfs-{release}.img"))
         );
+    }
+
+    #[test]
+    fn runtime_boot_asset_resolution_accepts_unversioned_boot_fixture_assets() {
+        use crate::db::models::TroveType;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let boot_root = tmp.path().join("boot");
+        let release = "6.19.8";
+        std::fs::create_dir_all(boot_root.join("EFI/BOOT")).unwrap();
+        std::fs::write(boot_root.join("vmlinuz"), b"kernel").unwrap();
+        std::fs::write(boot_root.join("initramfs.img"), b"initramfs").unwrap();
+        std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"efi").unwrap();
+
+        let troves = vec![Trove::new(
+            "kernel-core".to_string(),
+            release.to_string(),
+            TroveType::Package,
+        )];
+
+        let sources = resolve_runtime_boot_asset_sources(&troves, &boot_root).unwrap();
+
+        assert_eq!(sources.kernel_version, release);
+        assert_eq!(sources.kernel, boot_root.join("vmlinuz"));
+        assert_eq!(sources.initramfs, boot_root.join("initramfs.img"));
     }
 
     #[cfg(unix)]

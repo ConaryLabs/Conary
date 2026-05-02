@@ -12,6 +12,9 @@ const S_IFMT: i32 = 0o170000;
 const S_IFREG: i32 = 0o100000;
 const S_IFDIR: i32 = 0o040000;
 const S_IFLNK: i32 = 0o120000;
+const X86_64_LFS_LOADER: &str = "/usr/lib/ld-linux-x86-64.so.2";
+const X86_64_LIB64_LOADER: &str = "/usr/lib64/ld-linux-x86-64.so.2";
+const X86_64_LIB64_LOADER_TARGET: &str = "../lib/ld-linux-x86-64.so.2";
 
 #[derive(Debug, Clone)]
 enum ValidatedRuntimeEntry {
@@ -93,11 +96,35 @@ pub(super) fn collect_runtime_generation_inputs(
         }
     }
 
+    add_abi_compat_symlinks(&file_refs, &mut symlink_refs);
+
     Ok(RuntimeGenerationInputs {
         file_refs,
         symlink_refs,
         adopted_track_count,
     })
+}
+
+fn add_abi_compat_symlinks(file_refs: &[FileEntryRef], symlink_refs: &mut Vec<SymlinkEntryRef>) {
+    let has_lfs_loader = file_refs.iter().any(|file| file.path == X86_64_LFS_LOADER);
+    if !has_lfs_loader {
+        return;
+    }
+
+    let has_lib64_loader_file = file_refs
+        .iter()
+        .any(|file| file.path == X86_64_LIB64_LOADER);
+    let has_lib64_loader_symlink = symlink_refs
+        .iter()
+        .any(|symlink| symlink.path == X86_64_LIB64_LOADER);
+    if has_lib64_loader_file || has_lib64_loader_symlink {
+        return;
+    }
+
+    symlink_refs.push(SymlinkEntryRef {
+        path: X86_64_LIB64_LOADER.to_string(),
+        target: X86_64_LIB64_LOADER_TARGET.to_string(),
+    });
 }
 
 fn classify_file_entry(file: &FileEntry) -> Result<RuntimeEntryKind, RuntimeEntryProblem> {
@@ -439,5 +466,48 @@ mod tests {
             collect_runtime_generation_inputs(&troves, files),
             &["orphaned file entry", "trove_id 99", "/usr/bin/orphan"],
         );
+    }
+
+    #[test]
+    fn collect_runtime_generation_inputs_adds_lib64_loader_bridge_for_lfs_roots() {
+        let troves = vec![trove(1, "glibc", InstallSource::AdoptedFull)];
+        let files = vec![file_entry(X86_64_LFS_LOADER, &"4".repeat(64), 0o100755, 1)];
+
+        let inputs = collect_runtime_generation_inputs(&troves, files).unwrap();
+
+        assert_eq!(inputs.file_refs.len(), 1);
+        assert!(
+            inputs
+                .symlink_refs
+                .iter()
+                .any(|symlink| symlink.path == X86_64_LIB64_LOADER
+                    && symlink.target == X86_64_LIB64_LOADER_TARGET),
+            "expected runtime generation inputs to bridge /lib64's dynamic loader lookup"
+        );
+    }
+
+    #[test]
+    fn collect_runtime_generation_inputs_does_not_duplicate_existing_lib64_loader() {
+        let troves = vec![trove(1, "glibc", InstallSource::AdoptedFull)];
+        let existing_target = "../lib/ld-linux-x86-64.so.2";
+        let files = vec![
+            file_entry(X86_64_LFS_LOADER, &"5".repeat(64), 0o100755, 1),
+            symlink_entry(
+                X86_64_LIB64_LOADER,
+                existing_target,
+                &CasStore::compute_symlink_hash(existing_target),
+                0o120777,
+                1,
+            ),
+        ];
+
+        let inputs = collect_runtime_generation_inputs(&troves, files).unwrap();
+        let loader_symlinks = inputs
+            .symlink_refs
+            .iter()
+            .filter(|symlink| symlink.path == X86_64_LIB64_LOADER)
+            .count();
+
+        assert_eq!(loader_symlinks, 1);
     }
 }
