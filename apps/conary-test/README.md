@@ -94,6 +94,7 @@ apps/conary/tests/integration/remi/manifests/
   phase3-group-m.toml       # Adversarial tests
   phase3-group-n-container.toml  # Container-based adversarial
   phase3-group-n-qemu.toml       # QEMU boot tests
+  phase3-group-o-generation-export.toml  # Generation export QEMU tests
   phase4-group-a.toml       # T160-T176 (Config/Distro/Canonical/Groups/Registry)
   phase4-group-b.toml       # T177-T195 (Label/Model/Collection/Derive)
   phase4-group-c.toml       # T196-T220 (CCS ops / query / repo management)

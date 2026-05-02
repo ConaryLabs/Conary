@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-04-17
-revision: 4
-summary: Non-secret infrastructure, MCP, and deployment guidance for Conary contributors and coding assistants
+last_updated: 2026-05-01
+revision: 5
+summary: Non-secret infrastructure, MCP, release, Remi deploy, and Forge staging guidance for Conary contributors and coding assistants
 ---
 
 # Infrastructure Overview
@@ -13,8 +13,9 @@ summary: Non-secret infrastructure, MCP, and deployment guidance for Conary cont
   simple external health-check hostname for that same Remi service.
 - Direct SSH access for the Remi host uses `ssh.conary.io`, not the proxied
   public HTTPS hostnames.
-- Remi currently runs Arch Linux, so host-level package-manager notes should
-  assume `pacman` rather than Debian or Ubuntu tooling.
+- Remi currently runs Ubuntu 24.04 on the Hetzner origin, so host-level
+  package-manager notes should assume `apt` unless a future migration updates
+  this document.
 - Forge is the trusted GitHub runner host used for `conary-test` validation,
   test-harness service work, and source-sync validation.
 - Forge also serves as the current local-only staging host for `conaryd`
@@ -39,9 +40,9 @@ task or when you are debugging the underlying service path itself.
 - Public package API and compatibility health alias:
   `https://packages.conary.io`
 - Direct SSH hostname for the Remi origin host: `ssh.conary.io`
-- Remi admin origin API: `https://localhost:8082` via SSH tunnel or direct
+- Remi admin origin API: `http://localhost:8082` via SSH tunnel or direct
   origin access
-- Remi OpenAPI spec: `https://localhost:8082/v1/admin/openapi.json` via SSH
+- Remi OpenAPI spec: `http://localhost:8082/v1/admin/openapi.json` via SSH
   tunnel or direct origin access
 - Forge-local `conary-test` health endpoint: `http://127.0.0.1:9090/v1/health`
 - Forge-local `conary-test` deploy-status endpoint: `http://127.0.0.1:9090/v1/deploy/status`

@@ -7,11 +7,15 @@ summary: Forge-first local-only staging deployment design for conaryd
 # Conaryd Forge Staging Deployment: Design Spec
 
 **Date:** 2026-04-10  
-**Status:** Draft for user review (design approved in conversation)  
+**Status:** Implemented; retained as historical design context
 **Goal:** Define the first truthful deployment target for `conaryd` by
 deploying it to Forge as a local-only staging daemon, aligning the GitHub
 release deploy lane with that host reality, and removing the false assumption
 that `conaryd` already has a public production endpoint.
+
+> Current operator guidance lives in `deploy/FORGE.md` and
+> `docs/operations/infrastructure.md`; this file records the design that led to
+> that path.
 
 ---
 

@@ -53,8 +53,9 @@ If you work with an LLM coding tool, start with:
 3. `docs/INTEGRATION-TESTING.md` when validation spans `conary-test`
 4. `docs/operations/infrastructure.md` for MCP, deploy, and host workflow notes
 
-Tool-specific files such as `CLAUDE.md` are compatibility shims. Prefer the
-linked canonical docs over copied instructions or stale local lore.
+Tool-specific files such as `CLAUDE.md`, `GEMINI.md`, and
+`.github/copilot-instructions.md` are compatibility shims. Prefer the linked
+canonical docs over copied instructions or stale local lore.
 
 ## Building from Source
 
@@ -202,7 +203,7 @@ and three shared crates.
 | `crates/conary-core/src/provenance/` | Package DNA and provenance tracking |
 | `crates/conary-core/src/automation/` | Automated maintenance (security updates, orphan cleanup) |
 | `crates/conary-core/src/bootstrap/` | Bootstrap a complete Conary system from scratch |
-| `crates/conary-core/src/generation/` | EROFS generation building, composefs mounting, CAS GC |
+| `crates/conary-core/src/generation/` | EROFS generation building, composefs mounting, artifact export, CAS GC |
 | `crates/conary-core/src/derivation/` | CAS-layered derivation engine for bootstrap |
 | `crates/conary-core/src/trust/` | TUF supply chain trust |
 | `crates/conary-core/src/canonical/` | Cross-distro canonical name mapping (AppStream, Repology) |
@@ -296,7 +297,7 @@ Conary has a few core design principles that inform how contributions should be 
 
 - **Database-first**: SQLite is the single source of truth for all package state. Do not introduce config files, caches outside the database, or in-memory-only state for data that should persist.
 - **Content-addressable storage**: Files are stored by hash, enabling deduplication and efficient delta updates.
-- **Atomic transactions**: Package operations use journaled changesets for crash safety. Partial installs should never leave the system in a broken state.
+- **Atomic transactions**: Package operations commit durable state to SQLite, then rebuild or remount EROFS generations from that source of truth after crashes. Partial installs should never leave the system in a broken state.
 - **Package-owned service surfaces**: Remi and conaryd live in their own app crates and should be built and tested directly with `cargo build -p remi`, `cargo build -p conaryd`, `cargo test -p remi`, and `cargo test -p conaryd`.
 
 Before proposing significant architectural changes, please open an issue to discuss the approach. This helps avoid wasted effort and ensures alignment with the project direction.

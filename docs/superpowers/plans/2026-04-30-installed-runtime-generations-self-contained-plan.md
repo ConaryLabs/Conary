@@ -1,6 +1,12 @@
 # Installed Runtime Generations Self-Contained Implementation Plan
 
-> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Historical execution plan:** This plan drove the Fedora 44 migration and
+> self-contained installed-runtime generation export slice that landed on
+> `main`. Keep it as an implementation record; use
+> `docs/operations/post-generation-export-follow-up-roadmap.md` and
+> `docs/INTEGRATION-TESTING.md` for current follow-up and validation guidance.
+
+> **Original agentic-worker instruction:** Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make installed runtime generation qcow2 export boot from explicit CAS-backed package inputs, after migrating the active Fedora integration baseline from Fedora 43 to Fedora 44.
 
@@ -12,7 +18,10 @@
 
 ---
 
-## Current State
+## Plan-Time Starting State
+
+These bullets describe the state when this plan was written, not the current
+state after the slice landed.
 
 - `main` contains the reviewed design spec at commit `7eb1f0d3`.
 - `conary system generation export` is the raw/qcow2 generation disk export surface.

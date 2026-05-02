@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-04-25
-revision: 7
-summary: Document the current bootstrap command surface, generation artifact export split, self-host VM overlay, focused operator docs, and manifest comparison commands
+last_updated: 2026-05-01
+revision: 8
+summary: Document the current bootstrap command surface, generation artifact export split, self-host VM overlay, runtime-export validation, and manifest comparison commands
 ---
 
 # Bootstrap Module (conary-core/src/bootstrap/)
@@ -129,11 +129,13 @@ rootfs and ESP staging trees, then uses the same shared systemd-repart raw
 backend. It does not scrape `/boot`, `/conary`, or other live-host paths while
 exporting.
 
-The generation artifact export implementation is merged and was validated with
-the `Generation Artifact Export QEMU` suite described in
-[docs/INTEGRATION-TESTING.md](/docs/INTEGRATION-TESTING.md). Installed runtime
-generations still fail closed unless their CAS-backed root is self-contained;
-that follow-up is tracked in
+The generation artifact export implementation is merged and validated by the
+`Generation Artifact Export QEMU` suite described in
+[docs/INTEGRATION-TESTING.md](/docs/INTEGRATION-TESTING.md). The suite now
+covers both bootstrap-run exports and full CAS-backed installed runtime
+generations that export to qcow2 and boot under UEFI. Metadata-only or partial
+installed generations still fail closed before artifact publication. Remaining
+image-projection follow-ups are tracked in
 [docs/operations/post-generation-export-follow-up-roadmap.md](/docs/operations/post-generation-export-follow-up-roadmap.md).
 
 ## Architecture Context

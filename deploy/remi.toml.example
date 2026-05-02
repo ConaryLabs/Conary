@@ -3,8 +3,8 @@
 # Deploy at: /etc/conary/remi.toml
 #
 # This is a complete example showing all configuration sections
-# with recommended production values for a Hetzner CX32 deployment
-# behind Cloudflare.
+# with recommended production values for the current Hetzner origin behind
+# Cloudflare. Tune storage limits to the actual host capacity.
 
 [server]
 # Public API address - bind to localhost when behind nginx/Cloudflare
@@ -37,7 +37,8 @@ eviction_min_age = "1h"
 negative_cache_ttl = "15m"
 
 # Maximum cache size
-# On Hetzner CX32 with 160GB SSD, use ~130GB; scale up for dedicated storage
+# Tune this to the mounted /conary capacity; the production origin currently
+# has dedicated storage, while smaller test hosts should use a lower limit.
 max_cache_size = "700GB"
 
 # Upstream repository definitions
@@ -45,7 +46,7 @@ max_cache_size = "700GB"
 
 [upstream.fedora]
 metalink = "https://mirrors.fedoraproject.org/metalink"
-releases = ["43"]
+releases = ["44"]
 arches = ["x86_64"]
 metadata_refresh = "6h"
 priority = 100

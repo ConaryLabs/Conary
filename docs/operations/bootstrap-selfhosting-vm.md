@@ -1,14 +1,16 @@
 ---
-last_updated: 2026-04-21
-revision: 2
-summary: Operator flow for building and validating the x86_64 self-hosting bootstrap VM
+last_updated: 2026-05-01
+revision: 3
+summary: Operator flow and current caveats for building and validating the x86_64 self-hosting bootstrap VM
 ---
 
 # Bootstrap Self-Hosting VM
 
 ## Purpose
 
-This is the first truthful self-hosting VM path for Conary bootstrap.
+This is the first truthful self-hosting VM path for Conary bootstrap. The
+checked-in wrapper path is the supported operator flow for this milestone; do
+not treat older ad hoc image commands as equivalent validation.
 
 It is intentionally:
 
@@ -206,3 +208,10 @@ VMware conversion and import are follow-up work after this path is stable. That
 follow-up may document `qemu-img` conversion, OVF packaging, or manual import
 steps, but those artifacts are intentionally not part of the first self-hosting
 acceptance contract.
+
+## Follow-Up: Pristine Reruns
+
+The remaining validation hygiene work is to make reruns pristine by default:
+the wrapper should eventually fail closed if the staged workspace tarball is
+stale, and validation should boot through an overlay or snapshot mode so a
+previous run cannot mutate the next run's starting point.

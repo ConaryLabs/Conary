@@ -1,16 +1,20 @@
 ---
-last_updated: 2026-04-30
-revision: 3
-summary: Design for making installed runtime generation exports boot from CAS-backed package inputs after migrating the active Fedora baseline to Fedora 44
+last_updated: 2026-05-01
+revision: 4
+summary: Implemented design record for installed runtime generation exports booting from CAS-backed package inputs after the Fedora 44 migration
 ---
 
 # Installed Runtime Generations Self-Contained: Design Spec
 
 **Date:** 2026-04-30
-**Status:** Draft for user review (design direction approved in conversation)
+**Status:** Implemented on `main`; retained as historical design context
 **Goal:** Make installed runtime generation export bootable from explicit
 CAS-backed generation inputs while keeping metadata-only and partial
 generations fail-closed.
+
+> Current follow-up guidance lives in
+> `docs/operations/post-generation-export-follow-up-roadmap.md`; current test
+> guidance lives in `docs/INTEGRATION-TESTING.md`.
 
 ---
 

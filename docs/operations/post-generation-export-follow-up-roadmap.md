@@ -1,22 +1,25 @@
 ---
-last_updated: 2026-04-30
-revision: 3
-summary: Follow-up roadmap after the implemented and QEMU-validated generation export unification slice
+last_updated: 2026-05-01
+revision: 4
+summary: Remaining follow-up roadmap after generation export unification and self-contained installed-runtime export validation
 ---
 
 # Post-Generation-Export Follow-Up Roadmap
 
 ## Purpose
 
-This roadmap preserves the work we did **not** tackle in the first
-generation-export unification slice.
+This roadmap preserves the generation/image work that remains after two landed
+slices:
+
+1. generation artifact export unification
+2. self-contained installed-runtime generation export
 
 The original parking-lot note remains
 [`docs/operations/bootstrap-follow-up-investigations.md`](bootstrap-follow-up-investigations.md).
-This document is the cleaned-up handoff list to use now that the current slice
-has landed.
+This document is the cleaned-up handoff list for the remaining image,
+provenance, sandbox, and projection work.
 
-Completed first slice:
+Completed generation export unification:
 
 - unify generation-derived raw/qcow2 export around the canonical generation
   directory contract
@@ -25,33 +28,44 @@ Completed first slice:
 - reserve ISO on the same artifact contract
 - validate the generation export path with the remote/QEMU suite
 
-Historical operational validation recorded for the landed Fedora 43 baseline:
+Completed self-contained installed-runtime export:
+
+- migrate the active Fedora integration baseline to Fedora 44
+- bulk-adopt installed packages into CAS with `conary system adopt --system --full`
+- validate runtime generation inputs before publishing `.conary-artifact.json`
+- preserve fail-closed behavior for metadata-only or partial installed roots
+- boot a full CAS-backed installed runtime generation exported to qcow2 under UEFI
+
+Historical operational validation:
 
 - `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora43 --phase 3`
 - result on 2026-04-30: `TGE01` and `TGE02` passed, 2 passed / 0 failed
-- the installed-runtime path still intentionally fails closed when the runtime
-  generation is not self-contained
+- that Fedora 43 run is now historical; Fedora 44 is the active baseline
+
+Current active validation:
+
+- `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`
+- covered cases: `TGE01`, `TGE03`, `TGE04`, and `TGE02`
+- `TGE04` proves installed-runtime qcow2 export boots under UEFI
 
 Everything below remains deferred follow-up work.
 
 ## Follow-Up Slices
 
-### 1. Make Installed Runtime Generations Self-Contained
+### 1. Keep Installed Runtime Generations Self-Contained
 
-The landed slice fails closed when an installed runtime generation has
-boot assets but its root filesystem is not represented fully in Conary CAS. A
-follow-up should make installed-generation export bootable without scraping the
-live host root.
+The first follow-up landed. Installed runtime generation export now works when
+the root filesystem is represented by Conary-owned CAS objects, and it fails
+closed before artifact publication when the runtime root is partial or
+metadata-only.
 
-Likely work:
+Remaining work is maintenance, not first implementation:
 
-- define how a running ConaryOS base is adopted or imported into Conary-owned
-  CAS identity
-- ensure `/sbin/init` resolves through usr-merge and package symlinks to a
-  CAS-backed executable in runtime generations
-- make installed-generation QEMU export validation boot a truly self-contained
-  runtime generation
-- keep the fail-closed behavior for partial or metadata-only generations
+- keep `TGE01`, `TGE03`, and `TGE04` in the active Phase 3 rotation
+- preserve usr-merge and package symlink handling for runtime generations
+- keep missing-CAS and checksum/size mismatch failures before artifact
+  publication
+- avoid reintroducing live-host scraping into runtime export
 
 ### 2. Finish ISO Export On The Generation Artifact Contract
 
@@ -187,27 +201,27 @@ Likely work:
 
 ## Suggested Order
 
-After the current generation-export unification slice lands, the likely
-highest-leverage order is:
+After self-contained installed-runtime export, the likely highest-leverage
+order is:
 
-1. make installed runtime generations self-contained
-2. finish ISO export on the same generation artifact contract
-3. move OCI generation export onto the same artifact loader
-4. introduce signed portable generation bundles
-5. extend trust and provenance to bootable artifacts
-6. remove the dracut legacy bind-mount fallback
-7. make self-host validation pristine by default
-8. finish live-root sandbox/no-host-mutation work
-9. simplify CCS/CAS compatibility projections
-10. add VMware and other provider-specific image projections
+1. finish ISO export on the same generation artifact contract
+2. move OCI generation export onto the same artifact loader
+3. introduce signed portable generation bundles
+4. extend trust and provenance to bootable artifacts
+5. remove the dracut legacy bind-mount fallback
+6. make self-host validation pristine by default
+7. finish live-root sandbox/no-host-mutation work
+8. simplify CCS/CAS compatibility projections
+9. add VMware and other provider-specific image projections
 
 ## Scope Guard
 
-Do not start these follow-ups until the remaining QEMU-suite validation from
-the generation-export unification slice has either passed or produced a
-narrowly scoped blocker. The completed slice established:
+Do not widen these follow-ups without keeping the existing QEMU proof green.
+The completed slices established:
 
 - one generation artifact contract
 - no legacy generation image path
 - truthful raw/qcow2 export
 - ISO reserved on the same contract
+- self-contained installed-runtime qcow2 export and boot validation
+- fail-closed handling for partial runtime roots and missing CAS objects

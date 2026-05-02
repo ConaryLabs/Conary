@@ -7,11 +7,16 @@ summary: QEMU-first self-hosting bootstrap design for end-to-end Conary VM testi
 # Bootstrap Self-Hosting VM Validation: Design Spec
 
 **Date:** 2026-04-16  
-**Status:** Draft for user review (design approved in conversation)  
+**Status:** Implemented for the first x86_64/QEMU self-hosting milestone;
+retained as historical design context
 **Goal:** Finish the bootstrap pipeline far enough to produce a QEMU-validated,
 self-hosting VM image that lets an operator test `conary` top to bottom inside
 the guest, including package operations, recipe cooking, and rebuilding
 `conary` itself.
+
+> Current operator guidance lives in
+> `docs/operations/bootstrap-selfhosting-vm.md`; remaining investigation items
+> live in `docs/operations/bootstrap-follow-up-investigations.md`.
 
 ---
 

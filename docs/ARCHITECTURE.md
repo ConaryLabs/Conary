@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-04-22
-revision: 12
-summary: Refresh workspace layout for generation artifact export, shared operation vocabulary, source-selection policy flow, and current service boundaries
+last_updated: 2026-05-01
+revision: 13
+summary: Refresh workspace layout for self-contained runtime generation export, shared operation vocabulary, source-selection policy flow, and current service boundaries
 ---
 
 # Conary Architecture
@@ -90,14 +90,15 @@ crates/conary-core/      Core library crate
     +-- lib.rs           Public API surface
     +-- operations.rs    Shared operation vocabulary across CLI and daemon boundaries
     +-- db/              Database layer
-    |   +-- schema.rs    Schema v66, migration dispatcher
+    |   +-- schema.rs    Schema v67, migration dispatcher
     |   +-- migrations/  Migration functions grouped into v1_v20.rs, v21_v40.rs, v41_current.rs
     |   +-- models/      ORM-style model structs
     +-- transaction/     Composefs-native transaction engine
     |   +-- mod.rs       TransactionEngine, state machine (resolve/fetch/commit/build/mount)
     |   +-- planner.rs   VFS preflight conflict detection
     +-- generation/      EROFS generation building and composefs mounting
-    |   +-- builder.rs   Build EROFS images from DB state (uses composefs-rs)
+    |   +-- builder.rs   Build EROFS images from DB/adopted runtime state
+    |   +-- builder/runtime_inputs.rs CAS-backed runtime input classification and validation
     |   +-- artifact.rs  Generation artifact contract, CAS manifest, and boot assets
     |   +-- export.rs    Raw/qcow2 generation artifact disk export
     |   +-- mount.rs     composefs mount/unmount, current symlink
@@ -332,16 +333,16 @@ Current System State
   | Mount    |-- CAS objects referenced by content hash
   +----+----+
        |
-  Generation N (immutable, verified)
+ Generation N (immutable, verified)
        |
   conary system generation export --format raw|qcow2
        |
-  validated artifact contract -> staged ESP/rootfs -> systemd-repart
+  validated self-contained artifact contract -> staged ESP/rootfs -> systemd-repart
 ```
 
 ### Generation Lifecycle
 
-1. **Build**: Snapshot current troves, construct EROFS image from CAS
+1. **Build**: Snapshot current troves, validate runtime inputs, construct EROFS image from CAS
 2. **Store**: Save generation metadata (number, timestamp, summary, trove list)
 3. **Switch**: Mount new generation via composefs, update boot entries
 4. **Rollback**: Switch back to any previous generation
@@ -350,12 +351,14 @@ Current System State
 ### Generation Module (`crates/conary-core/src/generation/`)
 
 The primary builder for composefs generations. Uses the composefs-rs crate
-(v0.3.0) to produce EROFS images from the current DB state. Submodules:
-builder.rs (EROFS image construction), artifact.rs (exportable generation
-contract and boot assets), export.rs (raw/qcow2 disk export from validated
-artifacts), mount.rs (composefs mount/unmount), metadata.rs (JSON metadata),
-gc.rs (old generation cleanup), etc_merge.rs (three-way /etc merge), delta.rs
-(EROFS image deltas), composefs.rs (runtime feature detection).
+(v0.3.0) to produce EROFS images from DB state or validated installed-runtime
+inputs. Submodules: builder.rs (EROFS image construction),
+builder/runtime_inputs.rs (CAS-backed runtime classification and validation),
+artifact.rs (exportable generation contract and boot assets), export.rs
+(raw/qcow2 disk export from validated artifacts), mount.rs (composefs
+mount/unmount), metadata.rs (JSON metadata), gc.rs (old generation cleanup),
+etc_merge.rs (three-way /etc merge), delta.rs (EROFS image deltas),
+composefs.rs (runtime feature detection).
 
 ### composefs Integration
 
@@ -399,8 +402,10 @@ Do not treat this section as the authoritative version inventory. Use
 specs/plans when exact package versions or intentional divergences matter.
 Tier 2 recipes and self-host-specific staged inputs enforce SHA-256 checksums;
 earlier bootstrap phases still carry legacy MD5 recipe entries in the current
-tree. All stages run in sandboxed containers via
-`ContainerConfig::pristine_for_bootstrap()`.
+tree. Recipe execution uses the bootstrap container configuration where the
+phase supports it; the self-hosting VM wrapper deliberately runs chroot-owning
+phases through a rootful handoff so the Rust bootstrap code owns `/dev`,
+`/proc`, `/sys`, `/run`, and `chroot` setup.
 
 Bootstrap trust has a TOFU boundary: the first trusted TUF root metadata and
 bootstrap source manifests must arrive through an authenticated out-of-band
@@ -411,7 +416,7 @@ itself.
 Supports x86_64, aarch64, and riscv64 targets. Dry-run mode
 (`--dry-run`) validates the full pipeline without building.
 
-## Database Schema (v66)
+## Database Schema (v67)
 
 All runtime state lives in SQLite, and migrations are dispatched from
 `crates/conary-core/src/db/schema.rs`.

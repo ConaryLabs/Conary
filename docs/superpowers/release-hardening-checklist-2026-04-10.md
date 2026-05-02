@@ -1,5 +1,9 @@
 # Release Hardening Checklist - 2026-04-10
 
+> **Historical execution record:** This checklist records the 2026-04-10
+> four-track release hardening run. Use `docs/operations/infrastructure.md` and
+> the checked-in release scripts for current release procedure.
+
 ## Scope
 
 Execution artifact root:

@@ -14,7 +14,7 @@ Inspired by the [original Conary](https://en.wikipedia.org/wiki/Conary_(package_
 
 ## Why Conary
 
-**Immutable system generations.** Build read-only EROFS images of your entire system and mount them via composefs. Switch between complete system states live, without rebooting. Every generation is a self-contained snapshot -- rollback means switching a mount, not undoing thousands of file operations.
+**Immutable system generations.** Build read-only EROFS images of your entire system and mount them via composefs. Switch between complete system states live or export them as bootable raw/qcow2 artifacts. Exportable runtime generations are self-contained CAS-backed snapshots -- rollback means switching a generation, not undoing thousands of file operations.
 
 ```bash
 conary system generation build --summary "After nginx setup"
@@ -55,7 +55,7 @@ conary repo sync
 conary install nginx
 ```
 
-**Current focus: hardening and developer experience.** The core install, rollback, generation, bootstrap, and server paths are in place; the project is now spending more time on verification, operational polish, and documentation than on first-pass scaffolding.
+**Current focus: hardening and developer experience.** The core install, rollback, generation, bootstrap, and server paths are in place. Recent work made installed-runtime generation export bootable under QEMU, tightened release/deploy flows, and moved the project toward verification, operational polish, and documentation accuracy rather than first-pass scaffolding.
 
 ---
 
@@ -84,7 +84,7 @@ conary install nginx
 
 Conary is strongest where traditional package managers are weakest: atomic operations, cross-format support, immutable system images, and fine-grained component control. Nix shares several of Conary's design principles but uses a custom language (Nix expressions) where Conary uses TOML, and Nix does not handle RPM/DEB/Arch formats natively.
 
-The honest gap: ecosystem maturity. apt and dnf have decades of packages and integration. Conary bridges this through format conversion (install .rpm/.deb/.pkg.tar.zst directly) and the Remi server (which converts upstream repos to CCS on the fly), but native CCS packages are still early. Immutable generations are a recent addition and are under active development.
+The honest gap: ecosystem maturity. apt and dnf have decades of packages and integration. Conary bridges this through format conversion (install .rpm/.deb/.pkg.tar.zst directly) and the Remi server (which converts upstream repos to CCS on the fly), but native CCS packages are still early. Immutable generations and raw/qcow2 export are working, with ISO/OCI convergence and signed portable bundles still active follow-up areas.
 
 ---
 
@@ -127,7 +127,7 @@ cargo build -p conary
 
 ### System Generations
 
-Build immutable EROFS images of your entire system and mount them via composefs. Each generation is a complete, read-only system snapshot. Switch between generations live without rebooting -- the active generation is swapped atomically. Old generations can be garbage collected to reclaim space.
+Build immutable EROFS images of your entire system and mount them via composefs. Each generation is a complete, read-only system snapshot. Switch between generations live without rebooting, or export a complete generation artifact to raw/qcow2 for QEMU and image validation. Old generations can be garbage collected to reclaim space.
 
 Requires Linux 6.2+ with composefs support.
 
@@ -138,6 +138,7 @@ conary system generation switch 3    # Switch to generation 3
 conary system generation rollback    # Revert to previous generation
 conary system generation gc --keep 3 # Keep only the 3 most recent
 conary system generation info 2      # Detailed info about generation 2
+conary system generation export --path /conary/generations/3 --format qcow2 --output gen3.qcow2
 ```
 
 ### System Takeover
@@ -237,7 +238,7 @@ conary install openssl:devel      # Headers and libs for building
 
 ### Bootstrap System
 
-Build a complete Conary-managed Linux system from scratch. The current public command surface is `cross-tools`, `temp-tools`, `system`, `config`, `image`, and optional `tier2`, with `bootstrap run` available for manifest-driven derivation pipelines. Completed manifest-driven runs now persist operation-scoped artifacts under `<work_dir>/operations/<op-id>/`, and the comparison commands operate on those completed run workdirs. Targets x86_64, aarch64, and riscv64. `conary derivation build` is now wired to the single-recipe executor path, while the broader derivation/profile pipeline is still evolving.
+Build a complete Conary-managed Linux system from scratch. The current public command surface is `cross-tools`, `temp-tools`, `system`, `config`, `image`, and optional `tier2`, with `bootstrap run` available for manifest-driven derivation pipelines. Completed manifest-driven runs persist operation-scoped artifacts under `<work_dir>/operations/<op-id>/`, and the comparison commands operate on those completed run workdirs. The checked-in self-hosting VM wrapper builds and validates an x86_64 Tier-2 qcow2 under QEMU. Targets are x86_64, aarch64, and riscv64, though the first self-hosting VM path is x86_64-first.
 
 ```bash
 conary bootstrap init --target x86_64
@@ -255,6 +256,7 @@ conary bootstrap system --skip-verify   # Skip checksum enforcement
 conary bootstrap run conaryos.toml --seed ./seed    # Manifest-driven derivation pipeline
 conary bootstrap verify-convergence --run-a ./bootstrap-a --run-b ./bootstrap-b
 conary bootstrap diff-seeds ./seed-a ./seed-b
+scripts/bootstrap-vm/build-selfhost-qcow2.sh --work-dir /tmp/conary-selfhost-vm --image-size 32G
 ```
 
 ### Derived Packages
@@ -331,8 +333,8 @@ Route packages through label chains with delegation. Inspired by the original Co
 
 ```bash
 conary query label add local@devel:main
-conary query label add fedora@f43:stable
-conary query label delegate local@devel:main fedora@f43:stable
+conary query label add fedora@f44:stable
+conary query label delegate local@devel:main fedora@f44:stable
 ```
 
 </details>
@@ -547,7 +549,7 @@ cargo build --profile fast-release   # Faster compile, still optimized
 
 ## Project Status
 
-**Version 0.8.0** -- The project has a working end-to-end stack: multi-format installs, atomic changesets, immutable generations, takeover/bootstrap flows, Remi conversion and serving, federation, and capability-restricted runtime execution. Recent work has focused on tightening trust defaults, transaction atomicity, daemon/server auth, scriptlet isolation, and integrity verification across retrieval and generation paths.
+**Version 0.8.0** -- The project has a working end-to-end stack: multi-format installs, atomic changesets, immutable generations, takeover/bootstrap flows, Remi conversion and serving, federation, and capability-restricted runtime execution. Recent work has focused on release hardening, conaryd Forge staging, the truthful self-hosting VM path, generation artifact export, self-contained installed-runtime exports, Remi deploy/conversion robustness, Fedora 44 validation, and integrity verification across retrieval and generation paths.
 
 See [ROADMAP.md](ROADMAP.md) for what we're building next.
 
@@ -557,10 +559,11 @@ See [ROADMAP.md](ROADMAP.md) for what we're building next.
 
 The next milestone is the current **developer-experience and validation** push -- see [ROADMAP.md](ROADMAP.md) for the full plan. Near-term priorities:
 
-- Shell integration and smoother day-to-day developer workflows
-- Bootstrap and takeover validation on real systems
-- Better operational docs, release hygiene, and contributor onboarding
-- Continued hardening around trust, federation, and rollback behavior
+- Keep the Fedora 44 and QEMU generation-export suites in regular rotation
+- Finish ISO export and OCI convergence on the same generation artifact loader
+- Make self-host VM validation pristine-by-default on reruns
+- Improve shell integration, contributor onboarding, and operator diagnostics
+- Continue hardening trust, federation, release, and rollback behavior
 
 ---
 
@@ -585,6 +588,7 @@ For the repo-level documentation system:
 | [docs/INTEGRATION-TESTING.md](docs/INTEGRATION-TESTING.md) | Integration-test suites, phases, and runtime expectations |
 | [docs/modules/bootstrap.md](docs/modules/bootstrap.md) | Bootstrap pipeline and command-surface reference |
 | [docs/operations/bootstrap-selfhosting-vm.md](docs/operations/bootstrap-selfhosting-vm.md) | Truthful operator flow for the current self-hosting VM path |
+| [docs/operations/post-generation-export-follow-up-roadmap.md](docs/operations/post-generation-export-follow-up-roadmap.md) | Remaining generation export, image projection, and provenance follow-ups |
 | [docs/operations/bootstrap-follow-up-investigations.md](docs/operations/bootstrap-follow-up-investigations.md) | Deferred bootstrap architecture follow-ups to revisit later |
 | [docs/operations/infrastructure.md](docs/operations/infrastructure.md) | MCP, deploy, and host workflow notes |
 | [docs/conaryopedia-v2.md](docs/conaryopedia-v2.md) | Comprehensive technical guide |
