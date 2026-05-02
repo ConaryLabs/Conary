@@ -1548,114 +1548,38 @@ mod tests {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
-    // -- POST /v1/packages/install (valid) ------------------------------------
+    // -- POST /v1/packages/* (501) --------------------------------------------
 
     #[tokio::test]
-    async fn test_handler_install_packages_creates_transaction() {
+    async fn test_package_routes_return_not_implemented() {
         let (state, _dir) = create_test_state();
         let root_creds = current_process_creds();
         let app = test_router(state, root_creds);
 
-        // Install kind is not yet supported -- rejected at API boundary
-        let body = serde_json::json!({
-            "packages": ["nginx", "curl"]
-        });
+        for (path, operation) in [
+            ("/v1/packages/install", "install"),
+            ("/v1/packages/remove", "remove"),
+            ("/v1/packages/update", "update"),
+        ] {
+            let request = axum::http::Request::builder()
+                .method("POST")
+                .uri(path)
+                .body(Body::empty())
+                .unwrap();
 
-        let request = axum::http::Request::builder()
-            .method("POST")
-            .uri("/v1/packages/install")
-            .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_string(&body).unwrap()))
-            .unwrap();
+            let response = app.clone().oneshot(request).await.unwrap();
 
-        let response = app.oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
 
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-
-        let json = body_json(response).await;
-        assert!(
-            json["detail"]
-                .as_str()
-                .unwrap()
-                .contains("not yet supported")
-        );
-    }
-
-    // -- POST /v1/packages/install (empty packages = 400) ---------------------
-
-    #[tokio::test]
-    async fn test_handler_install_packages_empty_list() {
-        let (state, _dir) = create_test_state();
-        let root_creds = current_process_creds();
-        let app = test_router(state, root_creds);
-
-        let body = serde_json::json!({
-            "packages": []
-        });
-
-        let request = axum::http::Request::builder()
-            .method("POST")
-            .uri("/v1/packages/install")
-            .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_string(&body).unwrap()))
-            .unwrap();
-
-        let response = app.oneshot(request).await.unwrap();
-
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-
-        let json = body_json(response).await;
-        assert_eq!(json["status"], 400);
-        assert!(json["detail"].as_str().unwrap().contains("package"));
-    }
-
-    // -- POST /v1/packages/remove (empty packages = 400) ----------------------
-
-    #[tokio::test]
-    async fn test_handler_remove_packages_empty_list() {
-        let (state, _dir) = create_test_state();
-        let root_creds = current_process_creds();
-        let app = test_router(state, root_creds);
-
-        let body = serde_json::json!({
-            "packages": []
-        });
-
-        let request = axum::http::Request::builder()
-            .method("POST")
-            .uri("/v1/packages/remove")
-            .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_string(&body).unwrap()))
-            .unwrap();
-
-        let response = app.oneshot(request).await.unwrap();
-
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    }
-
-    // -- POST /v1/packages/update (empty packages = allowed) ------------------
-
-    #[tokio::test]
-    async fn test_handler_update_packages_empty_list_allowed() {
-        let (state, _dir) = create_test_state();
-        let root_creds = current_process_creds();
-        let app = test_router(state, root_creds);
-
-        // Update kind is not yet supported -- rejected at API boundary
-        let body = serde_json::json!({
-            "packages": []
-        });
-
-        let request = axum::http::Request::builder()
-            .method("POST")
-            .uri("/v1/packages/update")
-            .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_string(&body).unwrap()))
-            .unwrap();
-
-        let response = app.oneshot(request).await.unwrap();
-
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let json = body_json(response).await;
+            assert_eq!(json["status"], 501);
+            assert_eq!(
+                json["detail"],
+                format!(
+                    "Daemon package {operation} jobs are not implemented yet. Use the CLI directly."
+                )
+            );
+        }
     }
 
     // -- GET /v1/depends/:name (404) ------------------------------------------
