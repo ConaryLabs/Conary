@@ -21,6 +21,10 @@ fn app_source(path: &str) -> PathBuf {
     workspace_root().join("apps/conary/src").join(path)
 }
 
+fn workspace_file(path: &str) -> PathBuf {
+    workspace_root().join(path)
+}
+
 #[test]
 fn composefs_preflight_requires_the_mount_helper_and_overlay_stack() {
     let composefs_rs = fs::read_to_string(core_source("generation/composefs.rs"))
@@ -76,4 +80,36 @@ fn generation_switch_does_not_force_verity_when_metadata_says_it_is_unavailable(
         !switch_rs.contains("verity: true,"),
         "generation switching must respect persisted fs-verity readiness instead of unconditionally retrying root.erofs with verity"
     );
+}
+
+#[test]
+fn initramfs_generation_mounts_have_empty_usr_symlink_fallback() {
+    let dracut_generator = fs::read_to_string(workspace_file(
+        "packaging/dracut/90conary/conary-generator.sh",
+    ))
+    .expect("failed to read conary dracut generator");
+    let bootstrap_config = fs::read_to_string(core_source("bootstrap/system_config.rs"))
+        .expect("failed to read bootstrap system config");
+
+    for (label, source) in [
+        ("dracut generator", dracut_generator.as_str()),
+        ("bootstrap initramfs", bootstrap_config.as_str()),
+    ] {
+        assert!(
+            source.contains("expose_generation_usr"),
+            "{label} must route generation /usr exposure through the shared fallback shape"
+        );
+        assert!(
+            source.contains("rmdir \"$usr_target\""),
+            "{label} must only replace an empty carrier-root /usr placeholder"
+        );
+        assert!(
+            source.contains("ln -s conary/mnt/usr \"$usr_target\""),
+            "{label} must fall back to a relative /usr symlink into the mounted generation"
+        );
+        assert!(
+            source.contains("ensure_root_symlink sbin usr/sbin"),
+            "{label} must ensure /sbin resolves through usr-merge before switch_root"
+        );
+    }
 }

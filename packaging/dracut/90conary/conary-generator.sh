@@ -5,6 +5,41 @@
 SYSROOT="${CONARY_SYSROOT:-/sysroot}"
 CMDLINE_FILE="${CONARY_CMDLINE_FILE:-/proc/cmdline}"
 
+expose_generation_usr() {
+    usr_source="${SYSROOT}/conary/mnt/usr"
+    usr_target="${SYSROOT}/usr"
+
+    mkdir -p "$usr_target"
+    if mount --bind "$usr_source" "$usr_target"; then
+        mount -o remount,ro "$usr_target" 2>/dev/null || true
+        return 0
+    fi
+
+    # composefs is overlay-backed; some initramfs environments cannot bind a
+    # subdirectory from that mount. Exported generation images create /usr as
+    # an empty carrier-root placeholder, so replace only that empty directory.
+    if rmdir "$usr_target" 2>/dev/null && ln -s conary/mnt/usr "$usr_target"; then
+        return 0
+    fi
+
+    echo "conary: failed to expose generation /usr at $usr_target" >&2
+    return 1
+}
+
+ensure_root_symlink() {
+    link_path="${SYSROOT}/$1"
+    link_target="$2"
+
+    if [ -e "$link_path" ] || [ -L "$link_path" ]; then
+        return 0
+    fi
+
+    ln -s "$link_target" "$link_path" || {
+        echo "conary: failed to create $link_path -> $link_target" >&2
+        return 1
+    }
+}
+
 read_kernel_generation() {
     if [ ! -r "$CMDLINE_FILE" ]; then
         return 0
@@ -72,9 +107,13 @@ mount -t composefs "$EROFS_IMG" "${SYSROOT}/conary/mnt" \
 
 # Bind-mount /usr from composefs tree (read-only)
 if [ -d "${SYSROOT}/conary/mnt/usr" ]; then
-    mount --bind "${SYSROOT}/conary/mnt/usr" "${SYSROOT}/usr"
-    mount -o remount,ro "${SYSROOT}/usr"
+    expose_generation_usr || exit 1
 fi
+
+ensure_root_symlink bin usr/bin || exit 1
+ensure_root_symlink lib usr/lib || exit 1
+ensure_root_symlink lib64 usr/lib64 || exit 1
+ensure_root_symlink sbin usr/sbin || exit 1
 
 # Overlayfs for /etc (writable upper on immutable composefs lower)
 if [ -d "${SYSROOT}/conary/mnt/etc" ]; then
