@@ -136,11 +136,14 @@ pub fn create_parser(
         }
         RepositoryFormat::Debian => {
             let distribution = if let Some(suffix) = repo_name.strip_prefix("ubuntu-") {
-                suffix.to_string()
+                match suffix {
+                    "26.04" => "resolute".to_string(),
+                    _ => suffix.to_string(),
+                }
             } else if let Some(suffix) = repo_name.strip_prefix("debian-") {
                 suffix.to_string()
             } else {
-                "noble".to_string()
+                "resolute".to_string()
             };
 
             let arch = arch_to_debian(&detect_system_arch());

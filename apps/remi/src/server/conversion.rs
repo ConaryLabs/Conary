@@ -371,16 +371,18 @@ impl ConversionService {
         version: Option<&str>,
         architecture: Option<&str>,
     ) -> Result<RepositoryPackage> {
-        use conary_core::repository::versioning::{VersionScheme, compare_repo_versions};
+        use conary_core::repository::dependency_model::RepositoryDependencyFlavor;
+        use conary_core::repository::distro::{flavor_from_distro_name, flavor_to_version_scheme};
+        use conary_core::repository::versioning::compare_repo_versions;
 
-        // Map distro to repository name pattern.
-        // Match both bare name (e.g. "fedora") and suffixed (e.g. "fedora-44").
-        let (repo_pattern, scheme) = match distro {
-            "arch" => ("arch%", VersionScheme::Arch),
-            "fedora" => ("fedora%", VersionScheme::Rpm),
-            "ubuntu" | "debian" => ("ubuntu%", VersionScheme::Debian),
-            _ => return Err(anyhow!("Unknown distribution: {}", distro)),
+        let flavor = flavor_from_distro_name(distro)
+            .ok_or_else(|| anyhow!("Unknown distribution: {}", distro))?;
+        let repo_pattern = match flavor {
+            RepositoryDependencyFlavor::Rpm => "fedora%",
+            RepositoryDependencyFlavor::Deb => "ubuntu%",
+            RepositoryDependencyFlavor::Arch => "arch%",
         };
+        let scheme = flavor_to_version_scheme(flavor);
 
         let row_mapper = |row: &rusqlite::Row| {
             Ok(RepositoryPackage {
@@ -1446,10 +1448,8 @@ mod tests {
     }
 
     #[test]
-    fn test_find_package_debian_uses_ubuntu_repos() {
+    fn test_find_package_debian_is_not_supported_distro() {
         let (temp_file, conn) = create_test_db();
-        let repo_id = insert_repo(&conn, "ubuntu-main", "debian");
-        insert_package(&conn, repo_id, "apt", "2.7.0", 512);
 
         let service = ConversionService::new(
             PathBuf::from("/tmp/chunks"),
@@ -1458,11 +1458,11 @@ mod tests {
             None,
         );
 
-        // debian maps to "ubuntu-%" repo pattern
-        let pkg = service
+        let err = service
             .find_package(&conn, "debian", "apt", None, None)
-            .unwrap();
-        assert_eq!(pkg.name, "apt");
+            .expect_err("debian is not a supported Remi distro")
+            .to_string();
+        assert!(err.contains("Unknown distribution"));
     }
 
     // --- build_result_from_existing tests ---
@@ -1958,7 +1958,7 @@ mod tests {
         assert!(
             service
                 .find_package(&conn, "debian", "vim", None, None)
-                .is_ok()
+                .is_err()
         );
     }
 

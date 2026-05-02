@@ -11,6 +11,7 @@ use crate::db::models::{
 };
 use crate::error::{Error, Result};
 use crate::repository::LatestSignal;
+use crate::repository::distro::flavor_matches_distro_name;
 use crate::repository::resolution_policy::{RequestScope, ResolutionPolicy};
 use chrono::Utc;
 use rusqlite::Connection;
@@ -248,8 +249,8 @@ impl<'db> CanonicalResolver<'db> {
                     }
                 }
                 RequestScope::DistroFlavor(flavor) => {
-                    let a_match = distro_matches_flavor(&a.distro, *flavor);
-                    let b_match = distro_matches_flavor(&b.distro, *flavor);
+                    let a_match = flavor_matches_distro_name(&a.distro, *flavor);
+                    let b_match = flavor_matches_distro_name(&b.distro, *flavor);
                     if a_match != b_match {
                         return b_match.cmp(&a_match);
                     }
@@ -361,24 +362,6 @@ impl<'db> CanonicalResolver<'db> {
     }
 }
 
-/// Check whether a distro identifier matches a `RepositoryDependencyFlavor`.
-fn distro_matches_flavor(
-    distro: &str,
-    flavor: crate::repository::dependency_model::RepositoryDependencyFlavor,
-) -> bool {
-    use crate::repository::dependency_model::RepositoryDependencyFlavor;
-    let d = distro.to_lowercase();
-    match flavor {
-        RepositoryDependencyFlavor::Rpm => {
-            d.contains("fedora") || d.contains("rhel") || d.contains("centos") || d.contains("suse")
-        }
-        RepositoryDependencyFlavor::Deb => {
-            d.contains("ubuntu") || d.contains("debian") || d.contains("mint")
-        }
-        RepositoryDependencyFlavor::Arch => d.contains("arch") || d.contains("manjaro"),
-    }
-}
-
 fn candidate_allowed_by_policy(candidate: &ResolverCandidate, policy: &ResolutionPolicy) -> bool {
     if policy.allowed_distros.is_empty() {
         return true;
@@ -409,11 +392,11 @@ mod tests {
         let mut pkg = CanonicalPackage::new("apache-httpd".into(), "package".into());
         let cid = pkg.insert(&conn).unwrap();
         let mut i1 =
-            PackageImplementation::new(cid, "fedora-41".into(), "httpd".into(), "curated".into());
+            PackageImplementation::new(cid, "fedora-44".into(), "httpd".into(), "curated".into());
         i1.insert_or_ignore(&conn).unwrap();
         let mut i2 = PackageImplementation::new(
             cid,
-            "ubuntu-noble".into(),
+            "ubuntu-26.04".into(),
             "apache2".into(),
             "curated".into(),
         );
@@ -432,11 +415,11 @@ mod tests {
         let mut pkg = CanonicalPackage::new("apache-httpd".into(), "package".into());
         let cid = pkg.insert(&conn).unwrap();
         let mut i1 =
-            PackageImplementation::new(cid, "fedora-41".into(), "httpd".into(), "curated".into());
+            PackageImplementation::new(cid, "fedora-44".into(), "httpd".into(), "curated".into());
         i1.insert_or_ignore(&conn).unwrap();
         let mut i2 = PackageImplementation::new(
             cid,
-            "ubuntu-noble".into(),
+            "ubuntu-26.04".into(),
             "apache2".into(),
             "curated".into(),
         );
@@ -450,18 +433,18 @@ mod tests {
     #[test]
     fn test_rank_pinned() {
         let (_t, conn) = create_test_db();
-        DistroPin::set(&conn, "ubuntu-noble", "guarded").unwrap();
+        DistroPin::set(&conn, "ubuntu-26.04", "guarded").unwrap();
 
         let candidates = vec![
             ResolverCandidate {
                 distro_name: "httpd".into(),
-                distro: "fedora-41".into(),
+                distro: "fedora-44".into(),
                 canonical_id: 1,
                 repository_name: None,
             },
             ResolverCandidate {
                 distro_name: "apache2".into(),
-                distro: "ubuntu-noble".into(),
+                distro: "ubuntu-26.04".into(),
                 canonical_id: 1,
                 repository_name: None,
             },
@@ -469,14 +452,14 @@ mod tests {
 
         let resolver = CanonicalResolver::new(&conn);
         let ranked = resolver.rank_candidates(&candidates).unwrap();
-        assert_eq!(ranked[0].distro, "ubuntu-noble");
+        assert_eq!(ranked[0].distro, "ubuntu-26.04");
     }
 
     #[test]
     fn test_rank_affinity() {
         let (_t, conn) = create_test_db();
         conn.execute(
-            "INSERT INTO system_affinity (distro, package_count, percentage, updated_at) VALUES ('ubuntu-noble', 80, 80.0, '2026-03-05')",
+            "INSERT INTO system_affinity (distro, package_count, percentage, updated_at) VALUES ('ubuntu-26.04', 80, 80.0, '2026-03-05')",
             [],
         )
         .unwrap();
@@ -484,13 +467,13 @@ mod tests {
         let candidates = vec![
             ResolverCandidate {
                 distro_name: "curl".into(),
-                distro: "fedora-41".into(),
+                distro: "fedora-44".into(),
                 canonical_id: 1,
                 repository_name: None,
             },
             ResolverCandidate {
                 distro_name: "curl".into(),
-                distro: "ubuntu-noble".into(),
+                distro: "ubuntu-26.04".into(),
                 canonical_id: 1,
                 repository_name: None,
             },
@@ -498,24 +481,24 @@ mod tests {
 
         let resolver = CanonicalResolver::new(&conn);
         let ranked = resolver.rank_candidates(&candidates).unwrap();
-        assert_eq!(ranked[0].distro, "ubuntu-noble");
+        assert_eq!(ranked[0].distro, "ubuntu-26.04");
     }
 
     #[test]
     fn test_strict_rejects() {
         let (_t, conn) = create_test_db();
-        DistroPin::set(&conn, "ubuntu-noble", "strict").unwrap();
+        DistroPin::set(&conn, "ubuntu-26.04", "strict").unwrap();
         let resolver = CanonicalResolver::new(&conn);
-        let result = resolver.check_mixing_policy("fedora-41");
+        let result = resolver.check_mixing_policy("fedora-44");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_guarded_warns() {
         let (_t, conn) = create_test_db();
-        DistroPin::set(&conn, "ubuntu-noble", "guarded").unwrap();
+        DistroPin::set(&conn, "ubuntu-26.04", "guarded").unwrap();
         let resolver = CanonicalResolver::new(&conn);
-        let result = resolver.check_mixing_policy("fedora-41").unwrap();
+        let result = resolver.check_mixing_policy("fedora-44").unwrap();
         assert!(result.has_warning());
     }
 
@@ -524,11 +507,11 @@ mod tests {
         let (_t, conn) = create_test_db();
         let mut pkg = CanonicalPackage::new("mesa".into(), "package".into());
         let cid = pkg.insert(&conn).unwrap();
-        PackageOverride::set(&conn, cid, "fedora-41", None).unwrap();
+        PackageOverride::set(&conn, cid, "fedora-44", None).unwrap();
         let resolver = CanonicalResolver::new(&conn);
         assert_eq!(
             resolver.get_override(cid).unwrap().as_deref(),
-            Some("fedora-41")
+            Some("fedora-44")
         );
     }
 
@@ -538,11 +521,11 @@ mod tests {
         let mut pkg = CanonicalPackage::new("apache-httpd".into(), "package".into());
         let cid = pkg.insert(&conn).unwrap();
         let mut i1 =
-            PackageImplementation::new(cid, "fedora-41".into(), "httpd".into(), "curated".into());
+            PackageImplementation::new(cid, "fedora-44".into(), "httpd".into(), "curated".into());
         i1.insert_or_ignore(&conn).unwrap();
         let mut i2 = PackageImplementation::new(
             cid,
-            "ubuntu-noble".into(),
+            "ubuntu-26.04".into(),
             "apache2".into(),
             "curated".into(),
         );
@@ -581,22 +564,22 @@ mod tests {
         let mut pkg = CanonicalPackage::new("curl".into(), "package".into());
         let cid = pkg.insert(&conn).unwrap();
         let mut i1 =
-            PackageImplementation::new(cid, "fedora-41".into(), "curl".into(), "auto".into());
+            PackageImplementation::new(cid, "fedora-44".into(), "curl".into(), "auto".into());
         i1.insert_or_ignore(&conn).unwrap();
         let mut i2 =
-            PackageImplementation::new(cid, "ubuntu-noble".into(), "curl".into(), "auto".into());
+            PackageImplementation::new(cid, "ubuntu-26.04".into(), "curl".into(), "auto".into());
         i2.insert_or_ignore(&conn).unwrap();
 
         let resolver = CanonicalResolver::new(&conn);
         let candidates = resolver.expand("curl").unwrap();
 
-        // Policy scope: prefer ubuntu-noble
+        // Policy scope: prefer ubuntu-26.04
         let policy =
-            ResolutionPolicy::new().with_scope(RequestScope::Repository("ubuntu-noble".into()));
+            ResolutionPolicy::new().with_scope(RequestScope::Repository("ubuntu-26.04".into()));
         let ranked = resolver
             .rank_candidates_with_policy(&candidates, &policy)
             .unwrap();
-        assert_eq!(ranked[0].distro, "ubuntu-noble");
+        assert_eq!(ranked[0].distro, "ubuntu-26.04");
     }
 
     #[test]
@@ -606,10 +589,10 @@ mod tests {
         let mut pkg = CanonicalPackage::new("curl".into(), "package".into());
         let cid = pkg.insert(&conn).unwrap();
         let mut i1 =
-            PackageImplementation::new(cid, "fedora-41".into(), "curl".into(), "auto".into());
+            PackageImplementation::new(cid, "fedora-44".into(), "curl".into(), "auto".into());
         i1.insert_or_ignore(&conn).unwrap();
         let mut i2 =
-            PackageImplementation::new(cid, "ubuntu-noble".into(), "curl".into(), "auto".into());
+            PackageImplementation::new(cid, "ubuntu-26.04".into(), "curl".into(), "auto".into());
         i2.insert_or_ignore(&conn).unwrap();
 
         let resolver = CanonicalResolver::new(&conn);
@@ -621,27 +604,27 @@ mod tests {
         let ranked = resolver
             .rank_candidates_with_policy(&candidates, &policy)
             .unwrap();
-        assert_eq!(ranked[0].distro, "ubuntu-noble");
+        assert_eq!(ranked[0].distro, "ubuntu-26.04");
     }
 
     #[test]
     fn test_rank_override_beats_pin() {
         let (_t, conn) = create_test_db();
 
-        // Pin to ubuntu-noble
-        DistroPin::set(&conn, "ubuntu-noble", "guarded").unwrap();
+        // Pin to ubuntu-26.04
+        DistroPin::set(&conn, "ubuntu-26.04", "guarded").unwrap();
 
         let mut pkg = CanonicalPackage::new("mesa".into(), "package".into());
         let cid = pkg.insert(&conn).unwrap();
         let mut i1 =
-            PackageImplementation::new(cid, "fedora-41".into(), "mesa".into(), "auto".into());
+            PackageImplementation::new(cid, "fedora-44".into(), "mesa".into(), "auto".into());
         i1.insert_or_ignore(&conn).unwrap();
         let mut i2 =
-            PackageImplementation::new(cid, "ubuntu-noble".into(), "mesa".into(), "auto".into());
+            PackageImplementation::new(cid, "ubuntu-26.04".into(), "mesa".into(), "auto".into());
         i2.insert_or_ignore(&conn).unwrap();
 
         // Override mesa to fedora
-        PackageOverride::set(&conn, cid, "fedora-41", None).unwrap();
+        PackageOverride::set(&conn, cid, "fedora-44", None).unwrap();
 
         let resolver = CanonicalResolver::new(&conn);
         let candidates = resolver.expand("mesa").unwrap();
@@ -651,7 +634,7 @@ mod tests {
             .rank_candidates_with_policy(&candidates, &policy)
             .unwrap();
         // Override should beat pin
-        assert_eq!(ranked[0].distro, "fedora-41");
+        assert_eq!(ranked[0].distro, "fedora-44");
     }
 
     #[test]
@@ -754,20 +737,20 @@ mod tests {
 
     #[test]
     fn test_distro_matches_flavor() {
-        assert!(distro_matches_flavor(
-            "fedora-41",
+        assert!(flavor_matches_distro_name(
+            "fedora-44",
             RepositoryDependencyFlavor::Rpm
         ));
-        assert!(distro_matches_flavor(
-            "ubuntu-noble",
+        assert!(flavor_matches_distro_name(
+            "ubuntu-26.04",
             RepositoryDependencyFlavor::Deb
         ));
-        assert!(distro_matches_flavor(
+        assert!(flavor_matches_distro_name(
             "arch",
             RepositoryDependencyFlavor::Arch
         ));
-        assert!(!distro_matches_flavor(
-            "fedora-41",
+        assert!(!flavor_matches_distro_name(
+            "fedora-44",
             RepositoryDependencyFlavor::Deb
         ));
     }
@@ -782,7 +765,7 @@ mod tests {
         // Two repos for the same distro, different priorities
         conn.execute(
             "INSERT INTO repositories (name, url, enabled, priority, default_strategy_distro)
-             VALUES ('fedora-base', 'https://base.com', 1, 10, 'fedora-41')",
+             VALUES ('fedora-base', 'https://base.com', 1, 10, 'fedora-44')",
             [],
         )
         .unwrap();
@@ -790,7 +773,7 @@ mod tests {
 
         conn.execute(
             "INSERT INTO repositories (name, url, enabled, priority, default_strategy_distro)
-             VALUES ('fedora-updates', 'https://updates.com', 1, 20, 'fedora-41')",
+             VALUES ('fedora-updates', 'https://updates.com', 1, 20, 'fedora-44')",
             [],
         )
         .unwrap();
@@ -812,7 +795,7 @@ mod tests {
 
         // Create the implementation so expand() finds it
         let mut impl1 =
-            PackageImplementation::new(cid, "fedora-41".into(), "httpd".into(), "auto".into());
+            PackageImplementation::new(cid, "fedora-44".into(), "httpd".into(), "auto".into());
         impl1.insert_or_ignore(&conn).unwrap();
 
         let resolver = CanonicalResolver::new(&conn);

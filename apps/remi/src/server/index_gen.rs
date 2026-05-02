@@ -97,7 +97,6 @@ pub fn generate_indices(config: &IndexGenConfig) -> Result<Vec<IndexGenResult>> 
             "arch".to_string(),
             "fedora".to_string(),
             "ubuntu".to_string(),
-            "debian".to_string(),
         ],
     };
 
@@ -305,8 +304,8 @@ fn get_packages_for_distro(
 fn distro_to_format(distro: &str) -> String {
     match distro {
         "arch" => "arch".to_string(),
-        "fedora" | "centos" | "rhel" => "rpm".to_string(),
-        "ubuntu" | "debian" => "deb".to_string(),
+        "fedora" => "rpm".to_string(),
+        "ubuntu" => "deb".to_string(),
         _ => "unknown".to_string(),
     }
 }
@@ -315,7 +314,7 @@ fn distro_to_format(distro: &str) -> String {
 fn format_matches_distro(format: &str, distro: &str) -> bool {
     matches!(
         (format, distro),
-        ("arch", "arch") | ("rpm", "fedora" | "centos" | "rhel") | ("deb", "ubuntu" | "debian")
+        ("arch", "arch") | ("rpm", "fedora") | ("deb", "ubuntu")
     )
 }
 
@@ -401,7 +400,7 @@ mod tests {
         assert_eq!(distro_to_format("arch"), "arch");
         assert_eq!(distro_to_format("fedora"), "rpm");
         assert_eq!(distro_to_format("ubuntu"), "deb");
-        assert_eq!(distro_to_format("debian"), "deb");
+        assert_eq!(distro_to_format("debian"), "unknown");
     }
 
     #[test]
@@ -409,7 +408,7 @@ mod tests {
         assert!(format_matches_distro("arch", "arch"));
         assert!(format_matches_distro("rpm", "fedora"));
         assert!(format_matches_distro("deb", "ubuntu"));
-        assert!(format_matches_distro("deb", "debian"));
+        assert!(!format_matches_distro("deb", "debian"));
         assert!(!format_matches_distro("rpm", "arch"));
         assert!(!format_matches_distro("deb", "fedora"));
     }

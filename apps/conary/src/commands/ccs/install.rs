@@ -431,7 +431,7 @@ fn version_satisfies_constraint(
     constraint: &str,
 ) -> bool {
     repo_constraint_set_satisfied(
-        parse_version_scheme(version_scheme).unwrap_or(VersionScheme::Rpm),
+        conary_core::repository::distro::version_scheme_or_rpm(version_scheme),
         version,
         constraint,
     )
@@ -445,17 +445,12 @@ fn installed_package_version_scheme(
     Ok(
         conary_core::db::models::Trove::find_by_name(conn, package_name)?
             .into_iter()
-            .find_map(|trove| parse_version_scheme(trove.version_scheme.as_deref())),
+            .find_map(|trove| {
+                conary_core::repository::distro::version_scheme_from_db(
+                    trove.version_scheme.as_deref(),
+                )
+            }),
     )
-}
-
-fn parse_version_scheme(raw: Option<&str>) -> Option<VersionScheme> {
-    match raw {
-        Some("rpm") => Some(VersionScheme::Rpm),
-        Some("debian") => Some(VersionScheme::Debian),
-        Some("arch") => Some(VersionScheme::Arch),
-        _ => None,
-    }
 }
 
 #[derive(Debug, Clone)]

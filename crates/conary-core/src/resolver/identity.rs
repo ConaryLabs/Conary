@@ -8,6 +8,7 @@
 //! repositories, and canonical_packages.
 
 use crate::error::Result;
+use crate::repository::distro::{version_scheme_from_db, version_scheme_from_distro_name};
 use crate::repository::versioning::VersionScheme;
 use rusqlite::{Connection, params};
 
@@ -91,17 +92,13 @@ impl PackageIdentity {
 
 /// Parse version_scheme string with fallback to distro inference.
 fn parse_version_scheme(explicit: Option<&str>, distro: Option<&str>) -> VersionScheme {
-    match explicit {
-        Some("debian") => VersionScheme::Debian,
-        Some("arch") => VersionScheme::Arch,
-        Some("rpm") => VersionScheme::Rpm,
-        Some(_) => VersionScheme::Rpm,
-        None => match distro {
-            Some(d) if d.starts_with("debian") || d.starts_with("ubuntu") => VersionScheme::Debian,
-            Some(d) if d.starts_with("arch") => VersionScheme::Arch,
-            _ => VersionScheme::Rpm,
-        },
+    if explicit.is_some() {
+        return version_scheme_from_db(explicit).unwrap_or(VersionScheme::Rpm);
     }
+
+    distro
+        .and_then(version_scheme_from_distro_name)
+        .unwrap_or(VersionScheme::Rpm)
 }
 
 #[cfg(test)]
@@ -115,7 +112,7 @@ mod tests {
 
         conn.execute(
             "INSERT INTO repositories (name, url, enabled, priority, default_strategy_distro)
-             VALUES ('fedora-41', 'https://example.com', 1, 10, 'fedora-41')",
+             VALUES ('fedora-44', 'https://example.com', 1, 10, 'fedora-44')",
             [],
         )
         .unwrap();
@@ -136,8 +133,8 @@ mod tests {
         assert_eq!(id.version, "1.24.0");
         assert_eq!(id.architecture.as_deref(), Some("x86_64"));
         assert_eq!(id.version_scheme, VersionScheme::Rpm);
-        assert_eq!(id.repository_name, "fedora-41");
-        assert_eq!(id.repository_distro.as_deref(), Some("fedora-41"));
+        assert_eq!(id.repository_name, "fedora-44");
+        assert_eq!(id.repository_distro.as_deref(), Some("fedora-44"));
         assert_eq!(id.repository_priority, 10);
         assert!(id.canonical_id.is_none());
     }
@@ -155,7 +152,7 @@ mod tests {
 
         conn.execute(
             "INSERT INTO repositories (name, url, enabled, priority)
-             VALUES ('fedora-41', 'https://example.com', 1, 10)",
+             VALUES ('fedora-44', 'https://example.com', 1, 10)",
             [],
         )
         .unwrap();
@@ -177,10 +174,10 @@ mod tests {
     fn test_find_all_by_name_version_scheme_inference() {
         let (_temp, conn) = create_test_db();
 
-        // Repo with debian distro, no explicit version_scheme on package
+        // Repo with Ubuntu distro, no explicit version_scheme on package
         conn.execute(
             "INSERT INTO repositories (name, url, enabled, priority, default_strategy_distro)
-             VALUES ('debian-bookworm', 'https://example.com', 1, 10, 'debian-bookworm')",
+             VALUES ('ubuntu-main', 'https://example.com', 1, 10, 'ubuntu-26.04')",
             [],
         )
         .unwrap();

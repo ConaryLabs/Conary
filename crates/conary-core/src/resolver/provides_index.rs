@@ -9,6 +9,7 @@
 //! 3. `appstream_provides` (cross-distro provides from AppStream)
 
 use crate::error::Result;
+use crate::repository::distro::version_scheme_or_rpm;
 use crate::repository::versioning::{RepoVersionConstraint, VersionScheme, repo_version_satisfies};
 use rusqlite::Connection;
 use std::collections::HashMap;
@@ -61,7 +62,7 @@ impl ProvidesIndex {
                         installed_trove_id: None,
                         canonical_id: None,
                         provide_version: version,
-                        version_scheme: parse_scheme(scheme_str.as_deref()),
+                        version_scheme: version_scheme_or_rpm(scheme_str.as_deref()),
                     },
                 ))
             })?;
@@ -89,7 +90,7 @@ impl ProvidesIndex {
                         installed_trove_id: Some(trove_id),
                         canonical_id: None,
                         provide_version: version,
-                        version_scheme: parse_scheme(scheme_str.as_deref()),
+                        version_scheme: version_scheme_or_rpm(scheme_str.as_deref()),
                     },
                 ))
             })?;
@@ -156,14 +157,6 @@ impl ProvidesIndex {
     /// Total number of provider entries across all capabilities.
     pub fn provider_count(&self) -> usize {
         self.providers.values().map(|v| v.len()).sum()
-    }
-}
-
-fn parse_scheme(s: Option<&str>) -> VersionScheme {
-    match s {
-        Some("debian") => VersionScheme::Debian,
-        Some("arch") => VersionScheme::Arch,
-        _ => VersionScheme::Rpm,
     }
 }
 

@@ -76,13 +76,13 @@ pub(super) fn remi_sync_row(
 
     let metadata = entry.metadata.unwrap_or(serde_json::Value::Null);
 
-    let scheme_str = match distro.as_str() {
-        distro if distro.starts_with("ubuntu") || distro.starts_with("debian") => {
-            Some("debian".to_string())
-        }
-        distro if distro.starts_with("arch") => Some("arch".to_string()),
-        _ => Some("rpm".to_string()),
-    };
+    let scheme = crate::repository::distro::version_scheme_from_distro_name(&distro)
+        .unwrap_or(crate::repository::versioning::VersionScheme::Rpm);
+    let scheme_str = Some(match scheme {
+        crate::repository::versioning::VersionScheme::Rpm => "rpm".to_string(),
+        crate::repository::versioning::VersionScheme::Debian => "debian".to_string(),
+        crate::repository::versioning::VersionScheme::Arch => "arch".to_string(),
+    });
 
     let mut self_provide = RepositoryProvide::new(
         0,

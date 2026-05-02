@@ -12,6 +12,7 @@
 
 mod client;
 mod dependencies;
+pub mod distro;
 mod download;
 pub(crate) mod error_helpers;
 mod management;

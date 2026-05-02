@@ -149,17 +149,7 @@ impl InstallSemantics {
 fn distro_name_to_flavor(
     distro: &str,
 ) -> Option<conary_core::repository::dependency_model::RepositoryDependencyFlavor> {
-    use conary_core::repository::dependency_model::RepositoryDependencyFlavor;
-    let d = distro.to_lowercase();
-    if d.contains("fedora") || d.contains("rhel") || d.contains("centos") || d.contains("suse") {
-        Some(RepositoryDependencyFlavor::Rpm)
-    } else if d.contains("ubuntu") || d.contains("debian") || d.contains("mint") {
-        Some(RepositoryDependencyFlavor::Deb)
-    } else if d.contains("arch") || d.contains("manjaro") {
-        Some(RepositoryDependencyFlavor::Arch)
-    } else {
-        None
-    }
+    conary_core::repository::distro::flavor_from_distro_name(distro)
 }
 
 pub(super) fn run_triggers(
@@ -1840,11 +1830,11 @@ mod tests {
     fn distro_name_to_flavor_known() {
         use conary_core::repository::dependency_model::RepositoryDependencyFlavor;
         assert_eq!(
-            distro_name_to_flavor("fedora44"),
+            distro_name_to_flavor("fedora-44"),
             Some(RepositoryDependencyFlavor::Rpm)
         );
         assert_eq!(
-            distro_name_to_flavor("ubuntu-noble"),
+            distro_name_to_flavor("ubuntu-26.04"),
             Some(RepositoryDependencyFlavor::Deb)
         );
         assert_eq!(
