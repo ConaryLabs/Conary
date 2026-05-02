@@ -384,6 +384,7 @@ pub fn rebuild_and_mount(
         &etc_work,
     ) {
         warn!("Failed to mount /etc overlay: {e}; /etc may be stale");
+        eprintln!("Warning: Failed to mount /etc overlay: {e}; /etc may be stale");
     }
 
     conary_core::generation::mount::update_current_symlink(&conary_root, gen_num)

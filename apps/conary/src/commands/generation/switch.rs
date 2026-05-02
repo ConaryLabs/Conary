@@ -83,15 +83,15 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
     };
 
     let mount_outcome = if requested_verity {
-        mount_generation(&opts_verity)
-            .or_else(|error| {
-                if matches!(error, conary_core::Error::ChecksumMismatch { .. }) {
-                    return Err(anyhow!("EROFS verity digest mismatch: {error}"));
-                }
-                warn!("composefs mount with verity failed, retrying without");
-                mount_generation(&opts_plain).map_err(anyhow::Error::from)
-            })
-            .map_err(|e| anyhow!("Failed to mount composefs image: {e}"))?
+        mount_generation(&opts_verity).map_err(|error| {
+            if matches!(&error, conary_core::Error::ChecksumMismatch { .. }) {
+                anyhow!("EROFS verity digest mismatch: {error}")
+            } else {
+                anyhow!(
+                    "Failed to mount composefs image with requested fs-verity; no plain composefs downgrade attempted: {error}"
+                )
+            }
+        })?
     } else {
         mount_generation(&opts_plain)
             .map_err(|e| anyhow!("Failed to mount composefs image: {e}"))?
@@ -140,6 +140,7 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
         Ok(()) => info!("Mounted /etc overlay with composefs lower"),
         Err(e) => {
             warn!("Failed to mount /etc overlay: {e}; /etc may be stale");
+            eprintln!("Warning: Failed to mount /etc overlay: {e}; /etc may be stale");
             // Non-fatal — /etc is still readable from the old generation
         }
     }
