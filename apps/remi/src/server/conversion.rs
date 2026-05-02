@@ -21,64 +21,6 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tracing::{debug, info};
 
-/// Critical system packages that should not be converted.
-/// Defense-in-depth: even if the client doesn't check, the server refuses.
-///
-/// This list MUST stay in sync with `src/commands/install/blocklist.rs`.
-fn is_critical_system_package(name: &str) -> bool {
-    const BLOCKED: &[&str] = &[
-        // Core C runtime
-        "glibc",
-        "glibc-common",
-        "glibc-minimal-langpack",
-        "glibc-all-langpacks",
-        "glibc-devel",
-        "libc6",
-        "libc6-dev",
-        "libc-bin",
-        "gcc-libs",
-        // Dynamic linker
-        "ld-linux",
-        "binutils",
-        // Init system
-        "systemd",
-        "systemd-libs",
-        "systemd-udev",
-        "systemd-resolved",
-        "libsystemd0",
-        // Authentication
-        "pam",
-        "linux-pam",
-        "libpam-modules",
-        "libpam-runtime",
-        "shadow-utils",
-        // Core utilities
-        "util-linux",
-        "util-linux-core",
-        "coreutils",
-        // Crypto libraries
-        "openssl-libs",
-        "openssl",
-        "libssl3",
-        "libssl3t64",
-        "libssl1.1",
-        "libcrypto",
-        // Kernel interface
-        "linux-api-headers",
-        "kernel-headers",
-        "linux-libc-dev",
-        // Privilege escalation
-        "sudo",
-        "polkit",
-        "polkit-libs",
-        // NSS/DNS
-        "nss-softokn",
-        "nspr",
-        "ca-certificates",
-    ];
-    BLOCKED.contains(&name)
-}
-
 /// Result of a server-side conversion
 #[derive(Debug)]
 pub struct ServerConversionResult {
@@ -168,6 +110,66 @@ impl ConversionService {
         }
     }
 
+    fn ensure_package_name_not_critical(package_name: &str) -> Result<()> {
+        if conary_core::critical_packages::is_critical_package_name(package_name) {
+            anyhow::bail!(
+                "Refusing to convert critical system package '{}'",
+                package_name
+            );
+        }
+        Ok(())
+    }
+
+    fn metadata_provides_critical_runtime(metadata: &PackageMetadata) -> Option<&str> {
+        metadata
+            .provides
+            .iter()
+            .map(|provide| provide.name.as_str())
+            .find(|name| conary_core::critical_packages::is_critical_runtime_capability(name))
+    }
+
+    fn ensure_metadata_not_critical(metadata: &PackageMetadata) -> Result<()> {
+        if let Some(capability) = Self::metadata_provides_critical_runtime(metadata) {
+            anyhow::bail!(
+                "Refusing to convert critical runtime capability '{}' provided by package '{}'",
+                capability,
+                metadata.name
+            );
+        }
+        Ok(())
+    }
+
+    fn repository_package_provides_critical_runtime(
+        conn: &rusqlite::Connection,
+        repo_pkg: &RepositoryPackage,
+    ) -> Result<Option<String>> {
+        let Some(repository_package_id) = repo_pkg.id else {
+            return Ok(None);
+        };
+
+        let provides = RepositoryProvide::find_by_repository_package(conn, repository_package_id)?;
+        Ok(provides
+            .into_iter()
+            .map(|provide| provide.capability)
+            .find(|name| conary_core::critical_packages::is_critical_runtime_capability(name)))
+    }
+
+    fn ensure_repository_package_not_critical(
+        conn: &rusqlite::Connection,
+        repo_pkg: &RepositoryPackage,
+    ) -> Result<()> {
+        if let Some(capability) =
+            Self::repository_package_provides_critical_runtime(conn, repo_pkg)?
+        {
+            anyhow::bail!(
+                "Refusing to convert critical runtime capability '{}' provided by package '{}'",
+                capability,
+                repo_pkg.name
+            );
+        }
+        Ok(())
+    }
+
     /// Convert a package from a repository
     ///
     /// 1. Find package in repository metadata
@@ -196,12 +198,7 @@ impl ConversionService {
         architecture: Option<&str>,
     ) -> Result<ServerConversionResult> {
         // Refuse to convert critical system packages
-        if is_critical_system_package(package_name) {
-            return Err(anyhow!(
-                "Refusing to convert critical system package '{}'",
-                package_name
-            ));
-        }
+        Self::ensure_package_name_not_critical(package_name)?;
 
         info!(
             "Converting package: {}:{} (version: {:?})",
@@ -212,6 +209,7 @@ impl ConversionService {
         let conn = conary_core::db::open(&self.db_path)?;
 
         let repo_pkg = self.find_package(&conn, distro, package_name, version, architecture)?;
+        Self::ensure_repository_package_not_critical(&conn, &repo_pkg)?;
         info!(
             "Found package: {} {} from repo {}",
             repo_pkg.name, repo_pkg.version, repo_pkg.repository_id
@@ -266,6 +264,7 @@ impl ConversionService {
         let (mut metadata, files, format) = self.parse_package(&pkg_path, distro)?;
         Self::apply_repository_identity(&mut metadata, &repo_pkg);
         Self::merge_repository_provides(&conn, &repo_pkg, &mut metadata)?;
+        Self::ensure_metadata_not_critical(&metadata)?;
         info!(
             "Parsed: {} v{} ({} files, {} native provides)",
             metadata.name,
@@ -1965,21 +1964,89 @@ mod tests {
 
     #[test]
     fn test_critical_packages_blocked() {
-        assert!(is_critical_system_package("glibc"));
-        assert!(is_critical_system_package("systemd"));
-        assert!(is_critical_system_package("openssl-libs"));
-        assert!(is_critical_system_package("sudo"));
-        assert!(is_critical_system_package("coreutils"));
-        assert!(is_critical_system_package("ca-certificates"));
+        for package_name in [
+            "glibc",
+            "systemd",
+            "openssl-libs",
+            "sudo",
+            "coreutils",
+            "ca-certificates",
+        ] {
+            assert!(ConversionService::ensure_package_name_not_critical(package_name).is_err());
+        }
+    }
+
+    #[test]
+    fn shared_critical_package_names_are_refused_by_conversion_guard() {
+        for package_name in ["bash", "filesystem", "setup", "GLIBC"] {
+            let err = ConversionService::ensure_package_name_not_critical(package_name)
+                .expect_err("critical package should be refused")
+                .to_string();
+            assert!(err.contains("Refusing to convert critical system package"));
+            assert!(err.contains(package_name));
+        }
+
+        ConversionService::ensure_package_name_not_critical("nginx").unwrap();
+    }
+
+    #[test]
+    fn metadata_provides_critical_runtime_capabilities_are_detected() {
+        let mut metadata = PackageMetadata::new(
+            PathBuf::from("/tmp/alt-libc.rpm"),
+            "alt-libc".to_string(),
+            "1.0".to_string(),
+        );
+        metadata.provides.push(Dependency {
+            name: "libc.so.6()(64bit)".to_string(),
+            version: None,
+            dep_type: DependencyType::Runtime,
+            description: None,
+        });
+
+        assert_eq!(
+            ConversionService::metadata_provides_critical_runtime(&metadata),
+            Some("libc.so.6()(64bit)")
+        );
+    }
+
+    #[test]
+    fn repository_provides_guard_blocks_cached_conversion_path() {
+        let (temp_file, conn) = create_test_db();
+        let repo_id = insert_repo(&conn, "fedora-base", "fedora");
+        insert_package(&conn, repo_id, "alt-libc", "1.0", 1024);
+
+        let service = ConversionService::new(
+            PathBuf::from("/tmp/chunks"),
+            PathBuf::from("/tmp/cache"),
+            temp_file.path().to_path_buf(),
+            None,
+        );
+        let repo_pkg = service
+            .find_package(&conn, "fedora", "alt-libc", None, None)
+            .unwrap();
+        let repo_pkg_id = repo_pkg.id.unwrap();
+        RepositoryProvide::new(
+            repo_pkg_id,
+            "ld-linux-x86-64.so.2()(64bit)".to_string(),
+            None,
+            "virtual".to_string(),
+            None,
+        )
+        .insert(&conn)
+        .unwrap();
+
+        let err = ConversionService::ensure_repository_package_not_critical(&conn, &repo_pkg)
+            .expect_err("critical repository provide should be refused")
+            .to_string();
+        assert!(err.contains("Refusing to convert critical runtime capability"));
+        assert!(err.contains("ld-linux-x86-64.so.2()(64bit)"));
     }
 
     #[test]
     fn test_normal_packages_not_blocked() {
-        assert!(!is_critical_system_package("nginx"));
-        assert!(!is_critical_system_package("tree"));
-        assert!(!is_critical_system_package("curl"));
-        assert!(!is_critical_system_package("jq"));
-        assert!(!is_critical_system_package("vim"));
+        for package_name in ["nginx", "tree", "curl", "jq", "vim"] {
+            ConversionService::ensure_package_name_not_critical(package_name).unwrap();
+        }
     }
 
     #[test]

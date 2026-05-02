@@ -14,6 +14,7 @@ mod child_wait;
 pub mod components;
 pub mod compression;
 pub mod container;
+pub mod critical_packages;
 pub mod db;
 pub mod delta;
 pub mod dependencies;

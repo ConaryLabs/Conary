@@ -1,99 +1,15 @@
-// src/commands/install/blocklist.rs
+// apps/conary/src/commands/install/blocklist.rs
 //! Critical system package blocklist
 //!
 //! Packages on this list cannot be overlaid or taken over by Conary,
 //! regardless of `--dep-mode`. These are packages where CCS conversion
 //! fidelity loss can render the system unbootable.
 
-/// Packages that must never be overlaid or taken over.
-///
-/// In `satisfy` and `adopt` modes, these are always treated as satisfied
-/// by the system. In `takeover` mode, Conary refuses to take ownership.
-const CRITICAL_PACKAGES: &[&str] = &[
-    // Core C runtime — replacing these can brick the system
-    "glibc",
-    "glibc-common",
-    "glibc-minimal-langpack",
-    "glibc-all-langpacks",
-    "glibc-devel",
-    "libc6",     // Debian/Ubuntu
-    "libc6-dev", // Debian/Ubuntu
-    "libc-bin",  // Debian/Ubuntu
-    "gcc-libs",  // Arch
-    // Dynamic linker
-    "ld-linux",
-    "binutils",
-    // Init system
-    "systemd",
-    "systemd-libs",
-    "systemd-udev",
-    "systemd-resolved",
-    "libsystemd0", // Debian/Ubuntu
-    // Authentication
-    "pam",
-    "linux-pam",      // Arch
-    "libpam-modules", // Debian/Ubuntu
-    "libpam-runtime", // Debian/Ubuntu
-    "shadow-utils",
-    // Core utilities (running system depends on these)
-    "bash",
-    "filesystem",
-    "setup",
-    "util-linux",
-    "util-linux-core",
-    "coreutils",
-    // Crypto libraries (in-use by running processes including conary itself)
-    "openssl-libs",
-    "openssl",
-    "libssl3",    // Debian/Ubuntu
-    "libssl3t64", // Debian/Ubuntu (time64)
-    "libssl1.1",  // Older Debian
-    "libcrypto",
-    // Kernel interface
-    "linux-api-headers", // Arch
-    "kernel-headers",    // Fedora
-    "linux-libc-dev",    // Debian/Ubuntu
-    // Privilege escalation
-    "sudo",
-    "polkit",
-    "polkit-libs",
-    // NSS/DNS (system DNS resolution)
-    "nss-softokn",
-    "nspr",
-    "ca-certificates",
-];
-
-/// Runtime capabilities that are expected to be satisfied by the live system
-/// for critical packages we never want to overlay from Remi during a
-/// live-root install.
-const CRITICAL_RUNTIME_CAPABILITY_PREFIXES: &[&str] = &[
-    "libc.so.6",
-    "ld-linux",
-    "rtld(",
-    "libcrypto.so.",
-    "libssl.so.",
-    "libgcc_s.so.",
-    "libpam.so.",
-    "libpcre2-8.so.",
-    "libm.so.6",
-    "filesystem(",
-    "group(",
-];
-
-fn is_blocked_package(name: &str) -> bool {
-    CRITICAL_PACKAGES
-        .iter()
-        .any(|p| p.eq_ignore_ascii_case(name))
-}
-
 /// Check if a dependency string is a live runtime capability for a blocked
 /// system package such as glibc or the dynamic linker.
 #[must_use]
 pub fn is_critical_runtime_capability(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    CRITICAL_RUNTIME_CAPABILITY_PREFIXES
-        .iter()
-        .any(|prefix| lower.starts_with(prefix))
+    conary_core::critical_packages::is_critical_runtime_capability(name)
 }
 
 /// Check if a package name is on the critical blocklist.
@@ -102,14 +18,14 @@ pub fn is_critical_runtime_capability(name: &str) -> bool {
 /// They are always treated as satisfied by the system package manager.
 #[must_use]
 pub fn is_blocked(name: &str) -> bool {
-    is_blocked_package(name) || is_critical_runtime_capability(name)
+    conary_core::critical_packages::is_blocked(name)
 }
 
 /// Return the full blocklist for display purposes.
 #[must_use]
 #[allow(dead_code)]
 pub fn blocked_packages() -> &'static [&'static str] {
-    CRITICAL_PACKAGES
+    conary_core::critical_packages::blocked_packages()
 }
 
 #[cfg(test)]
