@@ -224,21 +224,17 @@ pub fn compute_deltas_for_package(
     distro: &str,
     package_name: &str,
 ) -> Result<Vec<DeltaManifest>> {
+    use conary_core::repository::distro::version_scheme_from_distro_name;
     use conary_core::repository::versioning::{VersionScheme, compare_repo_versions};
 
     // Determine the version comparison scheme from the distro.
-    let scheme = match distro {
-        "arch" => VersionScheme::Arch,
-        "fedora" | "centos" | "rhel" => VersionScheme::Rpm,
-        "ubuntu" | "debian" => VersionScheme::Debian,
-        _ => {
-            warn!(
-                "Unknown distro '{}' for delta computation, using RPM ordering",
-                distro
-            );
-            VersionScheme::Rpm
-        }
-    };
+    let scheme = version_scheme_from_distro_name(distro).unwrap_or_else(|| {
+        warn!(
+            "Unknown distro '{}' for delta computation, using RPM ordering",
+            distro
+        );
+        VersionScheme::Rpm
+    });
 
     // Get all converted versions for this package (unordered from DB).
     let mut stmt = conn.prepare(

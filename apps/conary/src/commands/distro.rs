@@ -98,11 +98,8 @@ pub fn render_distro_info(conn: &Connection) -> Result<String> {
 // This static list must be kept in sync with supported distros manually.
 pub async fn cmd_distro_list() -> Result<()> {
     println!("Available distros:");
-    println!("  ubuntu-noble     Ubuntu 24.04 LTS (Noble Numbat)");
-    println!("  ubuntu-plucky    Ubuntu 25.04 (Plucky Puffin)");
     println!("  fedora-44        Fedora 44");
-    println!("  fedora-43        Fedora 43 (previous release)");
-    println!("  debian-12        Debian 12 (Bookworm)");
+    println!("  ubuntu-26.04     Ubuntu 26.04 LTS (Resolute Raccoon)");
     println!("  arch             Arch Linux (rolling)");
     Ok(())
 }

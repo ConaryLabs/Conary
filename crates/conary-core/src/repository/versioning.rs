@@ -7,7 +7,7 @@
 //! versioning substrate.
 
 use crate::db::models::{Repository, RepositoryPackage};
-use crate::repository::registry::{RepositoryFormat, detect_repository_format};
+use crate::repository::distro::{version_scheme_from_db, version_scheme_from_repository};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 
@@ -151,25 +151,7 @@ pub fn repo_version_satisfies(
 }
 
 pub fn infer_version_scheme(repo: &Repository) -> Option<VersionScheme> {
-    match detect_repository_format(&repo.name, &repo.url) {
-        RepositoryFormat::Fedora => Some(VersionScheme::Rpm),
-        RepositoryFormat::Debian => Some(VersionScheme::Debian),
-        RepositoryFormat::Arch => Some(VersionScheme::Arch),
-        RepositoryFormat::Json => None,
-    }
-}
-
-/// Parse a stored version_scheme string into a `VersionScheme`.
-///
-/// Returns `None` for unrecognised values so callers can fall back to
-/// name-based inference.
-fn parse_db_version_scheme(s: &str) -> Option<VersionScheme> {
-    match s {
-        "rpm" => Some(VersionScheme::Rpm),
-        "debian" => Some(VersionScheme::Debian),
-        "arch" => Some(VersionScheme::Arch),
-        _ => None,
-    }
+    version_scheme_from_repository(repo)
 }
 
 /// Resolve the `VersionScheme` for a `RepositoryPackage`.
@@ -181,10 +163,7 @@ pub fn resolve_package_version_scheme(
     pkg: &RepositoryPackage,
     repo: &Repository,
 ) -> Option<VersionScheme> {
-    pkg.version_scheme
-        .as_deref()
-        .and_then(parse_db_version_scheme)
-        .or_else(|| infer_version_scheme(repo))
+    version_scheme_from_db(pkg.version_scheme.as_deref()).or_else(|| infer_version_scheme(repo))
 }
 
 pub fn compare_repo_package_versions(

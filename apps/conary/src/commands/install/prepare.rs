@@ -132,11 +132,7 @@ fn compare_installed_and_incoming_versions(
 }
 
 fn installed_version_scheme(trove: &Trove) -> VersionScheme {
-    trove
-        .version_scheme
-        .as_deref()
-        .and_then(parse_version_scheme)
-        .unwrap_or(VersionScheme::Rpm)
+    conary_core::repository::distro::version_scheme_or_rpm(trove.version_scheme.as_deref())
 }
 
 pub(super) fn version_scheme_for_format(format: PackageFormatType) -> VersionScheme {
@@ -144,15 +140,6 @@ pub(super) fn version_scheme_for_format(format: PackageFormatType) -> VersionSch
         PackageFormatType::Rpm => VersionScheme::Rpm,
         PackageFormatType::Deb => VersionScheme::Debian,
         PackageFormatType::Arch => VersionScheme::Arch,
-    }
-}
-
-fn parse_version_scheme(raw: &str) -> Option<VersionScheme> {
-    match raw {
-        "rpm" => Some(VersionScheme::Rpm),
-        "debian" => Some(VersionScheme::Debian),
-        "arch" => Some(VersionScheme::Arch),
-        _ => None,
     }
 }
 

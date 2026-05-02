@@ -156,7 +156,7 @@ pub(crate) fn human_bytes(bytes: u64) -> String {
 }
 
 /// Supported distribution names for validation
-pub const SUPPORTED_DISTROS: &[&str] = &["arch", "fedora", "ubuntu", "debian"];
+pub const SUPPORTED_DISTROS: &[&str] = &["arch", "fedora", "ubuntu"];
 
 /// Validate a package or distro name: no path traversal, no null bytes, reasonable length
 #[allow(clippy::result_large_err)]

@@ -64,10 +64,10 @@ pub async fn cmd_init(db_path: &str) -> Result<()> {
                 "Arch Linux",
             ),
             (
-                "ubuntu-noble",
+                "ubuntu-26.04",
                 "http://archive.ubuntu.com/ubuntu",
                 80,
-                "Ubuntu 24.04 LTS",
+                "Ubuntu 26.04 LTS",
             ),
         ];
 

@@ -16,6 +16,7 @@ use super::{InstalledPackageRef, PendingAction};
 use crate::error::Result;
 use crate::hash::verify_file_sha256;
 use crate::model::AutomationConfig;
+use crate::repository::distro::version_scheme_or_rpm;
 use crate::repository::versioning::{VersionScheme, compare_repo_versions};
 use chrono::{Duration, Utc};
 use rusqlite::Connection;
@@ -26,15 +27,6 @@ use tracing::trace;
 use tracing::{debug, warn};
 
 type SecurityUpdateCandidate = (String, String, Vec<String>, String);
-
-/// Parse a stored version_scheme string into the enum, defaulting to RPM.
-fn parse_version_scheme(s: Option<&str>) -> VersionScheme {
-    match s {
-        Some("debian") => VersionScheme::Debian,
-        Some("arch") => VersionScheme::Arch,
-        _ => VersionScheme::Rpm,
-    }
-}
 
 /// Results from an automation check run
 #[derive(Debug, Default)]
@@ -182,7 +174,7 @@ impl<'a> AutomationChecker<'a> {
 
         for row in rows {
             let (name, installed_ver, repo_ver, cves_str, severity, scheme_str) = row?;
-            let scheme = parse_version_scheme(scheme_str.as_deref());
+            let scheme = version_scheme_or_rpm(scheme_str.as_deref());
 
             // Use the package's native version scheme for comparison
             let cmp = compare_repo_versions(scheme, &installed_ver, &repo_ver);
@@ -450,7 +442,7 @@ impl<'a> AutomationChecker<'a> {
                 continue;
             }
 
-            let scheme = parse_version_scheme(scheme_str.as_deref());
+            let scheme = version_scheme_or_rpm(scheme_str.as_deref());
             let cmp = compare_repo_versions(scheme, &current, &repo_ver);
             if !matches!(cmp, Some(std::cmp::Ordering::Less)) {
                 continue;

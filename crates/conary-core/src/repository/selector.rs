@@ -153,8 +153,9 @@ impl PackageSelector {
 
                 let mut policy_without_allowlist = policy.clone();
                 policy_without_allowlist.allowed_distros.clear();
-                let flavor = infer_repo_flavor(&repo);
-                let scheme = flavor_to_scheme(flavor);
+                let flavor = crate::repository::distro::flavor_from_repository(&repo)
+                    .unwrap_or(RepositoryDependencyFlavor::Rpm);
+                let scheme = crate::repository::distro::flavor_to_version_scheme(flavor);
                 if !policy_without_allowlist.accepts_candidate(
                     &repo.name,
                     scheme,
@@ -409,52 +410,6 @@ pub fn normalize_arch(arch: &str) -> &str {
         // ppc64le aliases
         "ppc64el" => "ppc64le",
         other => other,
-    }
-}
-
-/// Convert a `RepositoryDependencyFlavor` to the corresponding `VersionScheme`.
-///
-/// This bridges `infer_repo_flavor` output to the `VersionScheme` that
-/// `ResolutionPolicy::accepts_candidate` now expects.
-fn flavor_to_scheme(
-    flavor: RepositoryDependencyFlavor,
-) -> crate::repository::versioning::VersionScheme {
-    use crate::repository::versioning::VersionScheme;
-    match flavor {
-        RepositoryDependencyFlavor::Rpm => VersionScheme::Rpm,
-        RepositoryDependencyFlavor::Deb => VersionScheme::Debian,
-        RepositoryDependencyFlavor::Arch => VersionScheme::Arch,
-    }
-}
-
-/// Infer the distro flavor of a repository from its name and URL.
-///
-/// This bridges the gap between the repository model (which stores name/URL)
-/// and the policy model (which operates on `RepositoryDependencyFlavor`).
-fn infer_repo_flavor(repo: &Repository) -> RepositoryDependencyFlavor {
-    use crate::repository::registry::{RepositoryFormat, detect_repository_format};
-    match detect_repository_format(&repo.name, &repo.url) {
-        RepositoryFormat::Fedora => RepositoryDependencyFlavor::Rpm,
-        RepositoryFormat::Debian => RepositoryDependencyFlavor::Deb,
-        RepositoryFormat::Arch => RepositoryDependencyFlavor::Arch,
-        RepositoryFormat::Json => {
-            // Best-effort: check name patterns
-            let name = repo.name.to_lowercase();
-            if name.contains("fedora")
-                || name.contains("rhel")
-                || name.contains("centos")
-                || name.contains("suse")
-            {
-                RepositoryDependencyFlavor::Rpm
-            } else if name.contains("ubuntu") || name.contains("debian") || name.contains("mint") {
-                RepositoryDependencyFlavor::Deb
-            } else if name.contains("arch") || name.contains("manjaro") {
-                RepositoryDependencyFlavor::Arch
-            } else {
-                // Default to RPM as the most common
-                RepositoryDependencyFlavor::Rpm
-            }
-        }
     }
 }
 

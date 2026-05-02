@@ -3,6 +3,7 @@
 //! Shared runtime source-policy loading.
 
 use super::dependency_model::RepositoryDependencyFlavor;
+use super::distro::flavor_from_distro_name;
 use super::resolution_policy::{
     DependencyMixingPolicy, RequestScope, ResolutionPolicy, SelectionMode,
 };
@@ -30,7 +31,7 @@ pub fn load_effective_policy(
         .unwrap_or(DependencyMixingPolicy::Strict);
     let primary_flavor = pin
         .as_ref()
-        .and_then(|pin| distro_name_to_flavor(&pin.distro));
+        .and_then(|pin| flavor_from_distro_name(&pin.distro));
 
     let selection_mode = settings::get(conn, SETTINGS_KEY_SELECTION_MODE)?
         .as_deref()
@@ -69,23 +70,6 @@ fn mixing_policy_from_string(raw: &str) -> DependencyMixingPolicy {
         "guarded" => DependencyMixingPolicy::Guarded,
         "permissive" => DependencyMixingPolicy::Permissive,
         _ => DependencyMixingPolicy::Strict,
-    }
-}
-
-fn distro_name_to_flavor(distro: &str) -> Option<RepositoryDependencyFlavor> {
-    let distro = distro.to_lowercase();
-    if distro.contains("fedora")
-        || distro.contains("rhel")
-        || distro.contains("centos")
-        || distro.contains("suse")
-    {
-        Some(RepositoryDependencyFlavor::Rpm)
-    } else if distro.contains("ubuntu") || distro.contains("debian") || distro.contains("mint") {
-        Some(RepositoryDependencyFlavor::Deb)
-    } else if distro.contains("arch") || distro.contains("manjaro") {
-        Some(RepositoryDependencyFlavor::Arch)
-    } else {
-        None
     }
 }
 
