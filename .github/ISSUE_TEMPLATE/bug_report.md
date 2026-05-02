@@ -9,7 +9,7 @@ assignees: ''
 ## Environment
 
 - **Conary version**: (output of `conary --version`)
-- **Distribution**: (e.g., Fedora 41, Ubuntu 24.04, Arch Linux)
+- **Distribution**: (e.g., Fedora 44, Ubuntu 24.04, Arch Linux)
 - **Kernel version**: (output of `uname -r`)
 
 ## Description

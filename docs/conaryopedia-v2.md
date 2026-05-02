@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-04-09
-revision: 13
-summary: Refresh daemon and database reference details while preserving the current deployment guidance
+last_updated: 2026-05-01
+revision: 14
+summary: Refresh Fedora 44 examples, bootstrap/generation export details, Remi config snippets, and transaction wording
 ---
 
 # Conaryopedia v2
@@ -55,7 +55,7 @@ A **trove** is the fundamental unit in Conary. Every piece of managed software -
 A trove has:
 
 - A **name** (e.g., `nginx`, `openssl:devel`, `@web-stack`)
-- A **version** (e.g., `1.24.0-2.fc43`)
+- A **version** (e.g., `1.24.0-2.fc44`)
 - A **type** -- one of four kinds:
 
 | Type | Description | Example |
@@ -253,13 +253,13 @@ Conary handles version strings from multiple packaging ecosystems. The primary f
 |-----------|-------------|---------|
 | **Epoch** | Numeric override for ordering (optional, default 0) | `2:` |
 | **Version** | The upstream version string | `1.24.0` |
-| **Release** | The distribution release (optional) | `2.fc43` |
+| **Release** | The distribution release (optional) | `2.fc44` |
 
 Examples:
 
 ```
 1.24.0                   # Simple version
-1.24.0-2.fc43            # Version with release
+1.24.0-2.fc44            # Version with release
 2:1.0.0-1.el9            # Epoch override (2: beats any 1.x)
 ```
 
@@ -271,7 +271,7 @@ Dependencies can specify version constraints:
 |------------|---------|
 | `>= 1.0` | Version 1.0 or later |
 | `< 2.0` | Any version before 2.0 |
-| `= 1.24.0-2.fc43` | Exactly this version |
+| `= 1.24.0-2.fc44` | Exactly this version |
 | `>= 1.0, < 2.0` | Range constraint |
 | *(none)* | Any version satisfies |
 
@@ -423,7 +423,7 @@ Before Conary can manage packages, its database must be initialized:
 conary system init
 ```
 
-This creates the SQLite database at `/var/lib/conary/conary.db` and sets up all tables (currently schema v65). The database is the single source of truth for all package state -- there are no configuration files for runtime state.
+This creates the SQLite database at `/var/lib/conary/conary.db` and sets up all tables (currently schema v67). The database is the single source of truth for all package state -- there are no configuration files for runtime state.
 
 You can specify an alternate database path with `-d`:
 
@@ -2145,24 +2145,29 @@ When a `[cross]` section is present, the Kitchen sets cross-compilation environm
 
 ### 5.9 Bootstrap Stages
 
-Conary supports multi-stage bootstrap builds following the LFS 12.4 methodology. The pipeline proceeds through a well-defined sequence, with optional stages that can be skipped for faster iteration:
+Conary's active bootstrap command surface follows the LFS 13.0-systemd phase
+model used by `crates/conary-core/src/bootstrap/`. The public stages are:
 
 ```
-Stage 0 --> Stage 1 --> Stage 2 (optional) --> BaseSystem --> Conary (optional) --> Image
+CrossTools -> TempTools -> FinalSystem -> SystemConfig -> BootableImage -> Tier2
 ```
 
 | Stage | Description | Example |
 |-------|-------------|---------|
-| `stage0` | Cross-compiled from host toolchain | Minimal binutils 2.45 + GCC 15.2.0 targeting new system |
-| `stage1` | Built with stage0 tools, runs on target | Self-hosted compiler, may still link some host libs |
-| `stage2` | Pure rebuild with stage1 compiler (optional) | Eliminates all host contamination |
-| `base` | Core userspace with per-package checkpointing | coreutils, bash, util-linux, systemd |
-| `conary` | Build Conary itself for self-hosting (optional) | Self-managing system |
-| `image` | Bootable disk image via systemd-repart | Raw, qcow2, or ISO output |
+| `cross-tools` | Cross-toolchain from the host compiler | binutils/GCC/glibc/libstdc++ for the target |
+| `temp-tools` | Temporary tools for the chroot handoff | Cross-built tools plus chroot-built basics |
+| `system` | Final LFS Chapter 8 system | Core userspace with per-package checkpointing |
+| `config` | System configuration | network, fstab, kernel, and systemd-boot setup |
+| `image` | Disk image or generation artifact | raw, qcow2, ISO, or EROFS artifact output |
+| `tier2` | BLFS + Conary self-hosting | PAM, OpenSSH, curl, Rust, Conary |
 
-Stage 2 is optional but recommended for production images -- it guarantees that every binary was compiled by a Conary-native compiler with no host system contamination. The Conary stage builds Conary itself using the Rust toolchain from earlier stages, producing a self-managing system.
+The current self-hosting milestone is x86_64/QEMU-first. The checked-in
+wrapper builds through Tier 2, applies the guest profile, emits a 32G qcow2,
+and validates the guest with explicit Remi/repository inputs.
 
-All source downloads enforce SHA-256 checksum verification. Placeholder checksums are no longer accepted.
+Tier 2 recipes and self-host staged inputs enforce SHA-256 checksums. Earlier
+bootstrap phases still carry some legacy checksum compatibility while the
+bootstrap source contract continues to tighten.
 
 The **`StageRegistry`** holds configurations for all stages, with a convenience constructor for standard bootstrap layouts:
 
@@ -2174,7 +2179,12 @@ let registry = StageRegistry::bootstrap_standard(
 );
 ```
 
-Build sandboxing uses `ContainerConfig::pristine_for_bootstrap()` to create a minimal namespace environment with no host filesystem leakage. The `RecipeGraph` determines build order with automatic cycle detection and breaking (e.g., the gcc/glibc circular dependency).
+Bootstrap recipe execution uses `ContainerConfig::pristine_for_bootstrap()`
+where the phase can run in that namespace shape. The self-hosting VM wrapper
+routes chroot-owning phases through a rootful handoff so the Rust bootstrap
+code owns device, proc, sysfs, run, and chroot setup. The `RecipeGraph`
+determines build order with automatic cycle detection and breaking (e.g., the
+gcc/glibc circular dependency).
 
 A **dry-run** mode validates the entire pipeline -- checking prerequisites, verifying checksums, and confirming dependency ordering -- without writing any files:
 
@@ -2391,7 +2401,7 @@ apps/remi/src/server/
 Remi runs two Axum HTTP servers concurrently:
 
 - **Public API** (default `0.0.0.0:8080`): Chunk serving, package metadata, sparse index, search, OCI, federation, health checks, Prometheus metrics.
-- **Admin API** (default `127.0.0.1:8081` internal + `127.0.0.1:8082` external origin): Internal routes (conversion triggers, cache management, Bloom filter rebuild) stay on localhost-only :8081 without auth. External admin routes (token management, repository/federation management, SSE events, MCP, and test-data APIs) live on the admin origin listener with bearer token auth, per-IP rate limiting, and audit logging. In production behind the reverse proxy, the authenticated MCP surface is exposed on standard HTTPS at `https://remi.conary.io/mcp` instead of asking clients to connect to `:8082` directly.
+- **Admin API** (internal `127.0.0.1:8081` + recommended production external origin `127.0.0.1:8082`): Internal routes (conversion triggers, cache management, Bloom filter rebuild) stay on localhost-only :8081 without auth. External admin routes (token management, repository/federation management, SSE events, MCP, and test-data APIs) live on the admin origin listener with bearer token auth, per-IP rate limiting, and audit logging. In production behind the reverse proxy, the authenticated MCP surface is exposed on standard HTTPS at `https://remi.conary.io/mcp` instead of asking clients to connect to `:8082` directly.
 
 Both servers share a single `ServerState` behind `Arc<RwLock<>>`:
 
@@ -2471,7 +2481,7 @@ negative_cache_ttl = "15m"
 
 [upstream.fedora]
 metalink = "https://mirrors.fedoraproject.org/metalink"
-releases = ["43"]
+releases = ["44"]
 arches = ["x86_64"]
 metadata_refresh = "6h"
 
@@ -2827,7 +2837,7 @@ Returns a `SparseIndexEntry`:
   "distro": "fedora",
   "versions": [
     {
-      "version": "1.24.0-3.fc43",
+      "version": "1.24.0-3.fc44",
       "deps": ["openssl", "pcre2", "zlib"],
       "provides": ["webserver", "nginx"],
       "arch": "x86_64",
@@ -2836,7 +2846,7 @@ Returns a `SparseIndexEntry`:
       "content_hash": "sha256:abcdef..."
     },
     {
-      "version": "1.26.0-1.fc43",
+      "version": "1.26.0-1.fc44",
       "deps": ["openssl", "pcre2", "zlib"],
       "provides": ["webserver", "nginx"],
       "arch": "x86_64",
@@ -3130,8 +3140,8 @@ GET /v1/fedora/packages/nginx/delta?from=1.24.0-3&to=1.26.0-1
 
 ```json
 {
-  "from_version": "1.24.0-3.fc43",
-  "to_version": "1.26.0-1.fc43",
+  "from_version": "1.24.0-3.fc44",
+  "to_version": "1.26.0-1.fc44",
   "new_chunks": ["abc123...", "def456..."],
   "removed_chunks": ["old789..."],
   "download_size": 131072,
@@ -3281,7 +3291,14 @@ The production deployment at `remi.conary.io` uses Cloudflare for DNS, CDN cachi
 
 ### Admin API Access
 
-The admin listener binds to `127.0.0.1:8081` and is never exposed externally. Access via SSH tunnel:
+Remi has two admin surfaces. The internal admin listener binds to
+`127.0.0.1:8081`, stays host-local, and is used for low-level conversion/cache
+operations. The external admin origin listener binds separately, usually on
+`127.0.0.1:8082`, and carries bearer-authenticated repository, federation,
+test-data, OpenAPI, and MCP routes. In production, only selected external
+admin paths such as `/mcp` are proxied onto the public HTTPS hostname.
+
+Internal admin access via SSH tunnel:
 
 ```bash
 ssh -L 8081:localhost:8081 remi
@@ -4110,8 +4127,8 @@ pub struct BuildProvenance {
 ```rust
 pub struct HostAttestation {
     pub arch: String,           // "x86_64"
-    pub kernel: Option<String>, // "6.18.13-200.fc43.x86_64" (from /proc/version)
-    pub distro: Option<String>, // "Fedora Linux 43" (from /etc/os-release)
+    pub kernel: Option<String>, // "6.18.13-200.fc44.x86_64" (from /proc/version)
+    pub distro: Option<String>, // "Fedora Linux 44" (from /etc/os-release)
     pub tpm_quote: Option<String>, // TPM 2.0 attestation quote
     pub secure_boot: Option<bool>, // EFI secure boot state
     pub hostname: Option<String>,
@@ -4479,7 +4496,13 @@ This chapter covers the systems that make Conary more than a package manager: bo
 
 ### 8.1 Bootstrap: Building an OS from Nothing
 
-The bootstrap system (`src/bootstrap/`) builds a complete Conary-managed Linux distribution from source, starting with nothing but a host compiler. It follows the LFS 12.4 methodology (binutils 2.45, GCC 15.2.0, glibc 2.42, kernel 6.16.1) but automated and resumable.
+The bootstrap system (`crates/conary-core/src/bootstrap/`) builds a complete
+Conary-managed Linux distribution from source, starting with nothing but a host
+compiler. The active package selection tracks LFS 13.0-systemd with
+Conary-specific deviations documented in recipes and module docs. The
+checked-in self-hosting VM flow is x86_64/QEMU-first: it builds through Tier 2,
+applies a guest profile, emits a qcow2, and validates that the guest can query,
+install, remove, cook, and rebuild Conary inside itself.
 
 #### Target Architecture
 
@@ -4520,7 +4543,10 @@ pub struct BootstrapConfig {
 }
 ```
 
-Source tarballs are cached locally so repeated bootstrap attempts don't re-download. All source archives require valid SHA-256 checksums -- placeholder checksums are rejected at download time.
+Source tarballs are cached locally so repeated bootstrap attempts do not
+re-download. Tier 2 and self-host-specific inputs require SHA-256 checksums;
+earlier bootstrap phases still carry a legacy checksum-compatibility boundary
+that should keep shrinking as the bootstrap source contract matures.
 
 #### The Pipeline
 
@@ -4544,7 +4570,7 @@ Phase 2: Temporary Tools (LFS Ch6-7)
   Result: Complete temporary build environment (Phase 1 + Phase 2 = self-hosting seed)
 
 Phase 3: Final System (LFS Ch8)
-  77 core system packages built inside chroot against immutable LFS root.
+  80 core system packages built inside chroot against immutable LFS root.
   Order defined by SYSTEM_BUILD_ORDER constant.
   Per-package checkpointing enables resume at package granularity.
   Result: A complete Linux system
@@ -4554,9 +4580,9 @@ Phase 4: System Configuration (LFS Ch9)
   Result: A configured system ready for imaging
 
 Phase 5: Bootable Image (LFS Ch10)
-  systemd-repart for rootless image generation (fallback to sfdisk/mkfs).
-  Formats: raw (dd-able), qcow2 (KVM/QEMU), ISO (USB/optical), EROFS.
-  Result: A deployable OS image
+  systemd-repart for raw/qcow2 bootstrap sysroot images.
+  Formats: raw (dd-able), qcow2 (KVM/QEMU), ISO, or EROFS generation artifact.
+  Result: A deployable OS image or exportable generation artifact
 
 Phase 6: Tier-2 (BLFS + Conary self-hosting, optional)
   PAM, OpenSSH, make-ca, curl, sudo, nano, Rust, Conary.
@@ -4612,13 +4638,18 @@ Missing tools produce a clear error listing what to install.
 
 #### Image Generation
 
-The `ImageBuilder` produces bootable disk images using systemd-repart for rootless image generation. On systems without systemd-repart, it falls back to sfdisk/mkfs. UKI (Unified Kernel Image) support is available via ukify for direct-boot configurations without a separate bootloader.
+The `ImageBuilder` produces bootstrap sysroot disk images and EROFS generation
+artifacts. Raw images are created with the shared systemd-repart backend, qcow2
+is converted with `qemu-img`, ISO remains a bootstrap image format, and EROFS
+produces the same generation artifact contract consumed by
+`conary system generation export`.
 
 ```rust
 pub enum ImageFormat {
     Raw,    // Direct dd to disk
     Qcow2,  // KVM/QEMU virtual machines
     Iso,    // USB/optical boot media
+    Erofs,  // Exportable generation artifact
 }
 ```
 
@@ -4638,6 +4669,20 @@ Partition 2: Root filesystem
   Flags: Linux root (auto-detected by systemd-gpt-auto)
 ```
 
+Generation artifact disk export is intentionally separate from bootstrap image
+creation:
+
+```bash
+conary bootstrap image --format erofs
+conary system generation export --path ./output/generations/1 --format qcow2 --output gen1.qcow2
+```
+
+The export command validates the generation artifact contract, scoped CAS
+manifest, and boot assets before it stages a root filesystem and ESP for
+systemd-repart. Installed runtime generations are exportable when their root
+filesystem is fully CAS-backed; partial roots and missing CAS objects fail
+closed before `.conary-artifact.json` is published.
+
 #### CLI
 
 ```bash
@@ -4648,10 +4693,13 @@ conary bootstrap temp-tools              # Phase 2: temporary tools (LFS Ch6-7)
 conary bootstrap system                  # Phase 3: final system (LFS Ch8)
 conary bootstrap config                  # Phase 4: system configuration (LFS Ch9)
 conary bootstrap image --format qcow2    # Phase 5: bootable image
+conary bootstrap image --format erofs    # Phase 5: generation artifact
 conary bootstrap tier2                   # Phase 6: BLFS + self-hosting
+conary bootstrap guest-profile --public-key /tmp/selfhost_ed25519.pub
 conary bootstrap seed --from /path       # Package phase output as seed
 conary bootstrap seed --from-adopted     # Adopt current system as seed
 conary bootstrap run conaryos.toml --seed /path  # Derivation pipeline
+conary system generation export --path ./output/generations/1 --format qcow2 --output gen1.qcow2
 conary bootstrap verify-convergence --run-a ./bootstrap-a --run-b ./bootstrap-b
 conary bootstrap diff-seeds ./seed-a ./seed-b
 conary bootstrap dry-run                 # Validate pipeline without building

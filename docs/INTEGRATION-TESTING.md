@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-04-30
-revision: 13
-summary: Record generation export QEMU validation and keep integration-testing guidance aligned with the virtual workspace package layout
+last_updated: 2026-05-01
+revision: 14
+summary: Record Fedora 44 generation export QEMU validation, including self-contained installed runtime exports
 ---
 
 # Integration Testing
@@ -42,12 +42,19 @@ cargo run -p conary-test -- run --distro fedora44 --phase 1
 cargo run -p conary-test -- list
 ```
 
-The generation artifact export QEMU suite is the operational proof for the
-2026-04-22 generation-export unification slice. It passed on 2026-04-30 with
-`TGE01` and `TGE02` green, validating both installed-generation fail-closed
-behavior and a bootable bootstrap-run qcow2 export. Keep this suite in the
-Phase 3 rotation for regressions in generation artifact export, QEMU fixture
-copying, scratch-disk handling, and exported-image boot.
+The generation artifact export QEMU suite is the operational proof for both
+the 2026-04-22 generation-export unification slice and the later
+self-contained installed-runtime export slice. The historical Fedora 43 run on
+2026-04-30 covered `TGE01` and `TGE02`. The active Fedora 44 suite now covers:
+
+- `TGE01`: metadata-only installed generations fail closed before artifact publication
+- `TGE03`: CAS-backed installed generations fail closed when an included CAS object is missing
+- `TGE04`: full CAS-backed installed runtime generation exports to qcow2 and boots under UEFI
+- `TGE02`: bootstrap-run generation artifact exports to qcow2 and boots under UEFI
+
+Keep this suite in the Phase 3 rotation for regressions in generation artifact
+export, QEMU fixture copying, scratch-disk handling, CAS integrity checks,
+guest SSH access, and exported-image boot.
 
 ## CLI Subcommands
 
@@ -140,7 +147,7 @@ Requires test fixture packages published to Remi.
 | E | T67-T71 | Remi client (sparse index, chunk fetch, OCI manifests) |
 | F | T72-T76 | Self-update (channel get/set/reset, version check, mock server) |
 
-### Phase 3: Adversarial (Groups G-N)
+### Phase 3: Adversarial (Groups G-O)
 
 Adversarial and stress tests.
 
@@ -207,14 +214,18 @@ expect_output = ["vmlinuz"]
 
 QEMU images are downloaded from `https://remi.conary.io/test-artifacts/` and cached locally. Tests gracefully skip when QEMU tools are unavailable.
 
-Generated-image suites can boot a host-local qcow2 and copy files out of a
-guest before shutdown:
+Generated-image suites can attach a scratch disk, copy files into or out of a
+guest, and then boot a host-local qcow2 produced by an earlier step:
 
 ```toml
 [[test.step]]
 [test.step.qemu_boot]
 image = "minimal-boot-v2"
+scratch_disk_mb = 65536
 local_image_path = "/tmp/conary-generation-export/generated.qcow2"
+copy_to_guest = [
+  { source = "/tmp/input.txt", dest = "/tmp/input.txt" },
+]
 copy_from_guest = [
   { source = "/tmp/out.qcow2", dest = "/tmp/conary-generation-export/out.qcow2" },
 ]
@@ -223,7 +234,8 @@ commands = ["true"]
 
 When `local_image_path` is set, `image` remains a required logical name but the
 engine uses the local path directly instead of downloading a cached Remi
-artifact. `copy_from_guest.dest` parent directories are created automatically.
+artifact. `scratch_disk_mb` adds a virtio scratch disk for large exports, and
+`copy_from_guest.dest` parent directories are created automatically.
 
 ## Configuration
 

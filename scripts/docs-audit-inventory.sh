@@ -13,7 +13,7 @@ classify_family() {
     local path="$1"
 
     case "$path" in
-        README.md|ROADMAP.md|CONTRIBUTING.md|SECURITY.md|CHANGELOG.md|AGENTS.md|CLAUDE.md)
+        README.md|ROADMAP.md|CONTRIBUTING.md|SECURITY.md|CHANGELOG.md|AGENTS.md|CLAUDE.md|GEMINI.md)
             echo "root"
             ;;
         .github/*|*.example.md)
@@ -87,6 +87,6 @@ while IFS= read -r path; do
     printf '%s\t%s\t%s\n' "$path" "$family" "$audience"
 done < <(
     git ls-files \
-        | rg '(^|/)(README\.md|AGENTS\.md|CONTRIBUTING\.md|ROADMAP\.md|CHANGELOG\.md|SECURITY\.md|CLAUDE\.md|.*\.md|.*\.mdx|.*\.rst|.*\.adoc)$' \
+        | rg '(^|/)(README\.md|AGENTS\.md|CONTRIBUTING\.md|ROADMAP\.md|CHANGELOG\.md|SECURITY\.md|CLAUDE\.md|.*\.md|.*\.mdx|.*\.rst|.*\.adoc|.*\.toml\.example)$' \
         | sort
 )

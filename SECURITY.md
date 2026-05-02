@@ -36,8 +36,8 @@ We will coordinate disclosure with you. You will be credited in the advisory unl
 
 | Version | Supported |
 |---------|-----------|
-| 0.7.x   | Yes       |
-| < 0.7   | No        |
+| 0.8.x   | Yes       |
+| < 0.8   | No        |
 
 Only the latest release receives security updates. We recommend always running the most recent version.
 
@@ -53,7 +53,7 @@ Conary is a system-level package manager that executes with elevated privileges.
 - **Seccomp-BPF syscall filtering** -- restrict which system calls scriptlets can make
 - **TUF trust metadata** -- repository metadata follows The Update Framework for supply chain integrity
 - **Content-addressable storage** -- files stored by cryptographic hash, preventing tampering
-- **Atomic transactions** -- journaled changesets prevent partial installs from leaving the system in a broken state
+- **Atomic transactions** -- database-first transactions rebuild or remount EROFS generations after crashes instead of leaving partial installs behind
 - **Peer credential authentication** -- daemon API uses SO_PEERCRED to verify caller identity
 - **Pinned federation peer identity** -- HTTPS federation peers are bound to pinned TLS certificate fingerprints
 - **Rate limiting and CORS** -- server endpoints are protected against abuse

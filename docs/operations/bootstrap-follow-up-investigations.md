@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-04-22
-revision: 1
-summary: Deferred architecture follow-ups to revisit after the bootstrap self-hosting path is stable
+last_updated: 2026-05-01
+revision: 2
+summary: Deferred architecture follow-ups after the initial bootstrap self-hosting and generation-export milestones
 ---
 
 # Bootstrap Follow-Up Investigations
@@ -11,10 +11,10 @@ summary: Deferred architecture follow-ups to revisit after the bootstrap self-ho
 This note records forward-looking cleanup and architecture opportunities that
 became visible while fixing the truthful bootstrap self-hosting VM path.
 
-These are intentionally **deferred** until the current bootstrap milestone is
-stable. They are not approval to expand scope mid-debugging, and they should
-not distract from getting the bootstrap image, boot path, and validation flow
-green first.
+These are intentionally **deferred** beyond the initial self-hosting VM and
+generation-export milestones. They are not approval to expand scope
+mid-debugging, and they should not distract from keeping the checked-in
+bootstrap image, boot path, generation export, and validation flows green.
 
 ## Working Principle
 
@@ -63,20 +63,21 @@ Relevant files:
 
 ### 2. Unify Disk And Export Artifacts Around One Canonical Generation Source
 
-Generation-derived disk export is now tracked by
-`docs/superpowers/specs/2026-04-22-generation-artifact-export-unification-design.md`
-and
-`docs/superpowers/plans/2026-04-22-generation-artifact-export-unification-plan.md`.
-That slice removes the old imperative generation-image path and moves raw/qcow2
-export onto the same declarative `systemd-repart` direction as bootstrap
-sysroot images.
+Generation-derived disk export is now implemented and the remaining follow-up
+work is tracked by
+[`docs/operations/post-generation-export-follow-up-roadmap.md`](post-generation-export-follow-up-roadmap.md).
+The landed slices removed the old imperative generation-image path, moved
+raw/qcow2 export onto the declarative `systemd-repart` direction shared with
+bootstrap sysroot images, and proved self-contained installed runtime qcow2
+export under QEMU.
 
 Today:
 
 - bootstrap sysroot raw/qcow2 uses `systemd-repart`
-- generation raw/qcow2 export is being unified around explicit generation
-  artifacts, scoped CAS manifests, staged boot assets, and the shared repart
-  backend
+- generation raw/qcow2 export uses explicit generation artifacts, scoped CAS
+  manifests, staged boot assets, and the shared repart backend
+- installed runtime generations are exportable when their root filesystem is
+  fully CAS-backed, and partial roots fail closed before artifact publication
 - CCS export treats OCI as real while `vmdk` and other platform images remain
   future formats
 
@@ -196,30 +197,28 @@ Relevant files:
 - `scripts/bootstrap-vm/validate-selfhost-vm.sh`
 - `scripts/bootstrap-vm/guest-validate.sh`
 
-## Suggested Order After Bootstrap Stabilizes
+## Suggested Order After Initial Stabilization
 
-If we revisit these after the current bootstrap work is green, the likely
-highest-leverage order is:
+The likely highest-leverage order is:
 
-1. unify generation-derived image creation with the new declarative image
-   contract
-2. remove the dracut legacy generation fallback once the canonical boot path is
+1. remove the dracut legacy generation fallback once the canonical boot path is
    proven
-3. make self-host validation inputs and guest state truthful by default so
+2. make self-host validation inputs and guest state truthful by default so
    bootstrap reruns are not silently stateful or stale
-4. finish the live-root sandbox/tmpfs overlay work so live mutation paths are
+3. finish the live-root sandbox/tmpfs overlay work so live mutation paths are
    narrower and more honest
-5. extend signing/attestation from packages and generation metadata to bootable
+4. extend signing/attestation from packages and generation metadata to bootable
    system artifacts
-6. simplify export and compatibility surfaces around one canonical CCS/CAS
+5. simplify export and compatibility surfaces around one canonical CCS/CAS
    identity model
+6. finish ISO/OCI/VMware projection work under the post-generation-export
+   roadmap
 
 ## Scope Reminder
 
-Until the bootstrap VM path is fully stable, this document is only a parking
-lot for deliberate follow-up investigation. The active critical path remains:
+This document is still a parking lot for deliberate follow-up investigation.
+Before widening any item, keep these proofs green:
 
-- complete the truthful bootstrap image
-- boot it successfully under validation
-- clear the current runtime blocker
-- verify the guest can exercise the intended self-host flow
+- the checked-in self-hosting VM build and validation wrappers
+- the Fedora 44 `phase3-group-o-generation-export` QEMU suite
+- package/service tests for the subsystem being touched

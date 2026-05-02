@@ -2,123 +2,88 @@
 
 ## Scope
 
+This refresh updates the documentation baseline after the previous full audit
+closed at `d65a5651 docs: complete documentation accuracy audit`.
+
 Audited every tracked documentation-like file returned by
-`bash scripts/docs-audit-inventory.sh`: 61 tracked files spanning root docs,
-GitHub templates, canonical docs under `docs/`, deploy/operator docs, app-local
-READMEs, active planning/design docs, historical/archive docs, and the
-`site/`/`web/` frontend READMEs.
+`bash scripts/docs-audit-inventory.sh`: 65 tracked files spanning root docs,
+assistant shims, GitHub templates, canonical docs under `docs/`,
+deploy/operator docs, `deploy/remi.toml.example`, app-local READMEs, active
+planning/design records, historical/archive docs, and the `site/`/`web`
+frontend READMEs.
 
-Ignored local trees such as `docs/plans/archive/` and
-`docs/superpowers/reviews/` were intentionally excluded because they are not
-tracked repository docs.
+Ignored local or credential-bearing files were reviewed only as scan findings
+and were not edited. That includes `deploy/.credentials.toml`,
+`docs/operations/LOCAL_ACCESS.md`, and local ignored plan/spec archives.
 
-## Verification Commands
+## Why This Refresh Happened
 
-- `cargo build -p conary-test`
-- `cargo test -p conary-test --quiet`
-- `cargo run -p conary -- --help`
-- `cargo run -p conary-test -- --help`
-- `cargo run -p conary-test -- list`
-- `target/debug/conary bootstrap --help`
-- `target/debug/conary query --help`
-- `target/debug/conary query scripts --help`
-- `target/debug/conary-test deploy rollout --help`
-- `target/debug/conary-test fixtures build --help`
-- `target/debug/conary-test images --help`
-- `target/debug/conary-test manifests reload --help`
-- `target/debug/conary-test health --help`
-- `target/debug/conary-test deploy status --help`
-- `bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --allow-pending`
-- `bash -n scripts/docs-audit-inventory.sh scripts/check-doc-audit-ledger.sh`
-- `bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete`
-- `git diff --check`
+The repo moved materially after the last audit:
+
+- four-track release hardening and releases (`conary`, `remi`, `conaryd`,
+  `conary-test`)
+- conaryd Forge-local staging deployment
+- bootstrap self-hosting VM flow with rootful handoff and QEMU validation
+- generation artifact export unification
+- self-contained installed-runtime generation exports with Fedora 44 QEMU
+  validation
+- Remi deploy/access and conversion-burst hardening
+- schema v67 and architecture-aware conversion cache migration
 
 ## Major Corrections
 
-- Root README badge now points at the real `pr-gate` workflow instead of a
-  removed `ci.yml` workflow.
-- Root source-build quick start now uses `./target/debug/conary` instead of
-  assuming the freshly built CLI is already on `PATH`.
-- README and CONTRIBUTING now describe the workspace correctly as seven members,
-  including `crates/conary-bootstrap`.
-- CONTRIBUTING and the PR template now use current verification commands and PR
-  expectations instead of stale `cargo clippy -- -D warnings` /
-  `cargo fmt -- --check` guidance.
-- CHANGELOG now explains that legacy `server-v*` and `test-v*` headings are
-  historical continuity markers, not current canonical release tags.
-- SECURITY now describes the disclosure/triage process without unverifiable SLA
-  promises.
-- ARCHITECTURE now reflects schema v66 and includes `crates/conary-bootstrap`
-  in both the system overview and workspace package map.
-- The query module guide now reflects the real user-facing surface:
-  `label` remains nested under `conary query`, while SBOM is a top-level
-  `conary sbom` command backed by the query module internals.
-- The CCS format spec now uses the current `conary ccs keygen/sign/verify`
-  command names instead of the old standalone `ccs-*` tooling names.
-- `docs/INTEGRATION-TESTING.md` and `apps/conary-test/README.md` now point at
-  the workspace-correct `apps/conary/tests/integration/remi/...` paths, current
-  Phase 2/4 suite coverage, and `<distro>-phase<N>.json` result filenames.
-- `docs/SCRIPTLET_SECURITY.md` now reflects the current scriptlet executor:
-  `crates/` paths, `RLIMIT_NPROC=1024`, target-root execution, and the modern
-  `conary query scripts` inspection command.
-- `docs/conaryopedia-v2.md` now matches the current Remi admin surface:
-  loopback external admin bind on `127.0.0.1:8082`, unauthenticated `/health`
-  and `/v1/admin/openapi.json`, and the real repo/federation/test-data/MCP
-  endpoints.
-- `deploy/CLOUDFLARE.md` and `deploy/FORGE.md` now use the current health-check
-  behavior and workspace-correct container troubleshooting paths.
-- The scriptlet harness and adversarial fixture READMEs now use
-  workspace-correct paths and describe the current contained/live-root and
-  tracked-large-fixture behavior.
+- Refreshed user-facing status in `README.md` and `ROADMAP.md` around Fedora
+  44, self-hosting VM validation, raw/qcow2 generation export, and ISO/OCI
+  follow-ups.
+- Updated `SECURITY.md` to 0.8.x support and replaced stale journal language
+  with the current database/EROFS generation model.
+- Updated deploy/operator docs and `deploy/remi.toml.example` for Fedora 44,
+  Remi admin-origin access, current host assumptions, and Forge/conaryd paths.
+- Updated `docs/ARCHITECTURE.md` and `docs/conaryopedia-v2.md` for schema v67,
+  runtime generation input validation, LFS 13.0 bootstrap phases, and
+  self-contained generation export.
+- Updated integration docs and `apps/conary-test/README.md` to include the
+  Phase 3 Group O generation-export QEMU suite and the TGE04 installed-runtime
+  qcow2 boot proof.
+- Refreshed assistant-facing docs to route broad doc work through the inventory
+  and ledger checker, and added the post-generation export roadmap to the map.
+- Reframed active dated plans/specs as historical implementation records so
+  their old step-by-step instructions are not mistaken for current guidance.
 
-## WIP Clarifications
+## Archive Decisions
 
-- `bootstrap/stage0/README.md` now explicitly marks the checked-in
-  `crosstool-ng` config as a historical reference. The supported bootstrap
-  workflow is the `conary bootstrap ...` CLI surface, not `ct-ng build` in the
-  `bootstrap/stage0/` directory.
+- Existing archive docs and recipe READMEs were retained as historical
+  reference material.
+- Completed but still tracked superpowers plans/specs were not moved in this
+  pass; they now carry explicit historical banners and current-doc pointers.
+- No tracked documentation files were deleted.
 
-## Archive/Delete Decisions
+## Verification Commands
 
-- Archived recent completed planning/design artifacts into tracked archive
-  subtrees:
-  - `docs/superpowers/plans/archive/2026-04-07-docs-source-selection-refresh-plan.md`
-  - `docs/superpowers/plans/archive/2026-04-07-source-selection-program-plan.md`
-  - `docs/superpowers/plans/archive/2026-04-09-forge-integration-hardening-plan.md`
-  - `docs/superpowers/plans/archive/2026-04-09-release-matrix-realignment-plan.md`
-  - `docs/superpowers/specs/archive/2026-04-07-source-selection-policy-design.md`
-  - `docs/superpowers/specs/archive/2026-04-09-forge-integration-hardening-design.md`
-  - `docs/superpowers/specs/archive/2026-04-09-release-matrix-realignment-design.md`
-- Added explicit historical banners to the retained archived plans/specs so
-  their step-by-step instructions and design language are not mistaken for
-  current execution guidance.
-- Retained the archived recipe READMEs as historical reference material; their
-  existing archive notes already redirect readers to current bootstrap commands
-  and version sources.
-- No tracked planning/spec files were deleted in Chunk 1.
-- A later repo hygiene pass on 2026-04-10 moved all dated
-  `docs/superpowers/plans/*.md` and `docs/superpowers/specs/*.md` files into
-  ignored local archive directories and removed them from Git tracking so they
-  no longer ship on GitHub.
+- `bash scripts/docs-audit-inventory.sh`
+- `bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete`
+- `bash -n scripts/docs-audit-inventory.sh scripts/check-doc-audit-ledger.sh`
+- `cargo fmt --check`
+- `cargo run -p conary-test -- list`
+- `git diff --check`
+
+The `conary-test` manifest listing includes `Generation Artifact Export QEMU`
+with 4 tests.
 
 ## Residual Risks
 
-- `apps/conary/tests/scriptlet_harness/test_scriptlets.py` still emits an old
-  temp-root warning string that can read more pessimistically than the current
-  target-root executor behavior documented in the README. The docs are now
-  truthful, but the harness message itself should be cleaned up in code.
+- `deploy/.credentials.toml` and `docs/operations/LOCAL_ACCESS.md` contain
+  local-only stale operational notes, but they are ignored/untracked local files
+  and should not be normalized in public docs.
+- A future hygiene pass can physically archive or untrack the newly completed
+  dated superpowers plans/specs. This pass made them safe to read in place by
+  adding historical framing.
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 61
-- `verified-no-change`: 21
-- `corrected`: 18
-- `clarified-as-wip`: 1
+- Total tracked doc-like files audited: 65
+- `verified-no-change`: 24
+- `corrected`: 19
+- `reframed-as-historical`: 8
 - `retained-historical`: 14
-- `archived`: 7
-- `deleted`: 0
 - Remaining pending rows: 0
-
-These counts reflect the original audit close-out. The later 2026-04-10 repo
-hygiene pass removed the dated superpowers plan/spec docs from Git tracking
-while preserving local ignored archive copies.

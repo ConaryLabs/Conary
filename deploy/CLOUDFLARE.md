@@ -340,6 +340,6 @@ After completing setup, verify:
 
 1. `curl -fsS https://remi.conary.io/health` returns `OK`
 2. `curl -I https://remi.conary.io/v1/chunks/HASH` returns `cf-cache-status: HIT` on second request
-3. `curl -I https://remi.conary.io/v1/index/fedora/43/x86_64` returns short-TTL cache headers
+3. `curl -I https://remi.conary.io/v1/index/fedora/44/x86_64` returns short-TTL cache headers
 4. R2 dashboard shows objects being written (if write-through is enabled)
 5. WAF dashboard shows no false positives on legitimate traffic

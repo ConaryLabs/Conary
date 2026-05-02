@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-04-30
-revision: 4
-summary: Vendor-neutral map for coding assistants working in the Conary repository and the compatibility layer around the canonical doc system
+last_updated: 2026-05-01
+revision: 5
+summary: Vendor-neutral map for coding assistants working in the Conary repository, current validation docs, and compatibility shims
 ---
 
 # Conary For Coding Assistants
@@ -89,6 +89,7 @@ other non-UTC context.
 ## Focused Docs
 
 - [`docs/operations/bootstrap-selfhosting-vm.md`](../operations/bootstrap-selfhosting-vm.md): truthful operator flow for the current bootstrap self-hosting VM path
+- [`docs/operations/post-generation-export-follow-up-roadmap.md`](../operations/post-generation-export-follow-up-roadmap.md): remaining image projection, ISO/OCI, bundle, and boot-artifact provenance work
 - [`docs/operations/bootstrap-follow-up-investigations.md`](../operations/bootstrap-follow-up-investigations.md): deferred architecture and cleanup ideas to revisit after bootstrap is stable
 
 ## Working Rules
@@ -113,3 +114,6 @@ other non-UTC context.
 - Do not duplicate schema counts, workflow counts, or host-specific trivia here.
 - If a detail cannot be kept fresh realistically, omit it instead of preserving
   stale lore.
+- For broad documentation work, use `scripts/docs-audit-inventory.sh` and
+  `scripts/check-doc-audit-ledger.sh` so the tracked doc set, audit ledger, and
+  current repo shape stay aligned.

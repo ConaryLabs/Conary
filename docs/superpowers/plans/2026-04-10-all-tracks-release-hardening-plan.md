@@ -1,6 +1,12 @@
 # All-Tracks Release Hardening Implementation Plan
 
-> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Historical execution plan:** This plan drove the 2026-04-10 four-track
+> release hardening and release cut. Keep it as an implementation record; use
+> `docs/operations/infrastructure.md`,
+> `docs/superpowers/release-hardening-checklist-2026-04-10.md`, and the
+> checked-in release scripts for current release operations.
+
+> **Original agentic-worker instruction:** Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Execute an evidence-backed, ship-blocker-only release-hardening pass for the `conary`, `remi`, `conaryd`, and `conary-test` release tracks, fix release-surface blockers, narrow the release if needed, and then run the approved `version bump -> tag -> push` flow.
 

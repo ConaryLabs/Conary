@@ -7,11 +7,15 @@ summary: Ship-blocker-only hardening design for a coordinated Conary, Remi, cona
 # All-Tracks Release Hardening: Design Spec
 
 **Date:** 2026-04-10  
-**Status:** Draft for user review (design approved in conversation)  
+**Status:** Implemented; retained as historical design context
 **Goal:** Define a release-hardening pass for a coordinated `all` release that
 stops on real ship blockers, rehearses the GitHub release and deploy control
 plane in dry-run mode, and leaves the repo ready for `version bump -> tag ->
 push`.
+
+> Current release guidance lives in `docs/operations/infrastructure.md`; the
+> execution record for this design is
+> `docs/superpowers/release-hardening-checklist-2026-04-10.md`.
 
 ---
 

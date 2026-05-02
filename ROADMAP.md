@@ -1,6 +1,6 @@
 # Conary Roadmap
 
-Conary already has working installs, rollback, immutable generations, Remi conversion/serving, federation, bootstrap, and a large integration test surface. This roadmap is intentionally forward-looking: it tracks the next areas to polish, validate, and expand rather than repeating the historical build-out.
+Conary already has working installs, rollback, immutable generations, Remi conversion/serving, federation, bootstrap, generation artifact export, self-hosting VM validation, and a large integration test surface. This roadmap is intentionally forward-looking: it tracks the next areas to polish, validate, and expand rather than repeating the historical build-out.
 
 For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). For shipped changes, see [CHANGELOG.md](CHANGELOG.md).
 
@@ -17,9 +17,10 @@ For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 
 
 ### 2. System Validation
 
+- Keep the Fedora 44 generation-export QEMU suite green, including installed-runtime export
 - Broader takeover validation on Fedora, Ubuntu, Arch, and real-world mixed systems
-- QEMU boot verification for bootstrap-generated images
-- More end-to-end coverage for generation switching and rollback under failure
+- Pristine-by-default QEMU validation for the self-hosting bootstrap VM
+- More end-to-end coverage for generation activation and rollback under failure
 - Better release-time validation of docs, trust roots, and self-update flows
 
 ### 3. Composable Systems
@@ -33,17 +34,20 @@ For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 
 
 - Federation tuning for larger peer topologies
 - Optional alternative chunk transports and mirror strategies
+- ISO export and OCI convergence on the shared generation artifact contract
+- Signed portable generation bundles and boot-artifact provenance
 - More source-oriented workflows around recipes, factories, and remote cooking
 
 ---
 
 ## Near-Term Priorities
 
-1. QEMU-backed bootstrap verification
-2. Shell integration for project and dev environments
-3. Group/package composition workflows
-4. Release and operational polish for Remi and conaryd
-5. Documentation and contributor-experience cleanup
+1. Keep generation export and installed-runtime QEMU validation in rotation
+2. Make self-host VM validation inputs pristine by default
+3. Finish ISO export and OCI convergence on the generation artifact contract
+4. Shell integration for project and dev environments
+5. Release and operational polish for Remi and conaryd
+6. Documentation and contributor-experience cleanup
 
 ---
 

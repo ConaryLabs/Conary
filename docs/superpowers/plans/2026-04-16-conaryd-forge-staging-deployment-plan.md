@@ -1,6 +1,11 @@
 # Conaryd Forge Staging Deployment Implementation Plan
 
-> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Historical execution plan:** This plan drove the landed Forge-local
+> `conaryd` staging deployment path. Keep it as an implementation record; use
+> `deploy/FORGE.md` and `docs/operations/infrastructure.md` for current
+> operator guidance.
+
+> **Original agentic-worker instruction:** Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Land the direct GitHub-driven Forge staging deployment for `conaryd`, rerun `deploy-and-verify` against the already-published `conaryd-v0.6.0` release, and move `conaryd` from release-published/deployment-blocked to Forge staging deployment verified.
 

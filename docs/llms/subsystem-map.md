@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-04-22
-revision: 5
-summary: Stable subsystem pointers and durable assistant-facing guidance for the Conary workspace after generation artifact export and the documentation-system refresh
+last_updated: 2026-05-01
+revision: 6
+summary: Stable subsystem pointers and durable assistant-facing guidance for the Conary workspace after self-contained runtime generation export and the documentation-system refresh
 ---
 
 # Assistant Subsystem Map
@@ -36,6 +36,7 @@ summary: Stable subsystem pointers and durable assistant-facing guidance for the
   `crates/conary-core/src/transaction/planner.rs`
 - Generation building, artifact export, composefs mounting, `/etc` merge, and GC:
   `crates/conary-core/src/generation/builder.rs`,
+  `crates/conary-core/src/generation/builder/runtime_inputs.rs`,
   `crates/conary-core/src/generation/artifact.rs`,
   `crates/conary-core/src/generation/export.rs`,
   `crates/conary-core/src/image/repart.rs`,
@@ -93,6 +94,7 @@ summary: Stable subsystem pointers and durable assistant-facing guidance for the
 - [`docs/modules/ccs.md`](../modules/ccs.md) for CCS format and conversion context
 - [`docs/modules/bootstrap.md`](../modules/bootstrap.md) for bootstrap and stage flows
 - [`docs/operations/bootstrap-selfhosting-vm.md`](../operations/bootstrap-selfhosting-vm.md) for the truthful self-hosting VM build and validation path
+- [`docs/operations/post-generation-export-follow-up-roadmap.md`](../operations/post-generation-export-follow-up-roadmap.md) for remaining generation export and image projection follow-ups
 - [`docs/modules/recipe.md`](../modules/recipe.md) for recipe/build-system behavior
 - [`docs/modules/query.md`](../modules/query.md) for query-oriented CLI flows
 - [`docs/modules/source-selection.md`](../modules/source-selection.md) for source-policy, ranking, and replatform behavior
