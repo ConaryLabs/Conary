@@ -442,70 +442,34 @@ async fn dry_run_handler(
     Ok(Json(response))
 }
 
-async fn forward_package_operation(
-    state: State<SharedState>,
-    creds: Extension<Option<PeerCredentials>>,
-    headers: axum::http::HeaderMap,
-    request: PackageOperationRequest,
-    require_packages: bool,
-    to_operation: impl FnOnce(PackageOperationRequest) -> TransactionOperation,
-) -> TransactionResult {
-    if require_packages && request.packages.is_empty() {
-        return Err(bad_request_error("At least one package name is required"));
-    }
-
-    let tx_request = CreateTransactionRequest {
-        operations: vec![to_operation(request)],
-    };
-
-    create_transaction_handler(state, creds, headers, Json(tx_request)).await
+fn package_jobs_not_implemented(operation: &str) -> ApiError {
+    not_implemented_error(&format!(
+        "Daemon package {operation} jobs are not implemented yet. Use the CLI directly."
+    ))
 }
 
 async fn install_packages_handler(
-    state: State<SharedState>,
-    creds: Extension<Option<PeerCredentials>>,
-    headers: axum::http::HeaderMap,
-    Json(request): Json<PackageOperationRequest>,
-) -> TransactionResult {
-    forward_package_operation(state, creds, headers, request, true, |r| {
-        TransactionOperation::Install {
-            packages: r.packages,
-            allow_downgrade: r.options.allow_downgrade,
-            skip_deps: r.options.skip_deps,
-        }
-    })
-    .await
+    State(state): State<SharedState>,
+    Extension(creds): Extension<Option<PeerCredentials>>,
+) -> ApiResult<()> {
+    require_auth(&state.auth_checker, &creds, Action::Install)?;
+    Err(package_jobs_not_implemented("install"))
 }
 
 async fn remove_packages_handler(
-    state: State<SharedState>,
-    creds: Extension<Option<PeerCredentials>>,
-    headers: axum::http::HeaderMap,
-    Json(request): Json<PackageOperationRequest>,
-) -> TransactionResult {
-    forward_package_operation(state, creds, headers, request, true, |r| {
-        TransactionOperation::Remove {
-            packages: r.packages,
-            cascade: r.options.cascade,
-            remove_orphans: r.options.remove_orphans,
-        }
-    })
-    .await
+    State(state): State<SharedState>,
+    Extension(creds): Extension<Option<PeerCredentials>>,
+) -> ApiResult<()> {
+    require_auth(&state.auth_checker, &creds, Action::Remove)?;
+    Err(package_jobs_not_implemented("remove"))
 }
 
 async fn update_packages_handler(
-    state: State<SharedState>,
-    creds: Extension<Option<PeerCredentials>>,
-    headers: axum::http::HeaderMap,
-    Json(request): Json<PackageOperationRequest>,
-) -> TransactionResult {
-    forward_package_operation(state, creds, headers, request, false, |r| {
-        TransactionOperation::Update {
-            packages: r.packages,
-            security_only: r.options.security_only,
-        }
-    })
-    .await
+    State(state): State<SharedState>,
+    Extension(creds): Extension<Option<PeerCredentials>>,
+) -> ApiResult<()> {
+    require_auth(&state.auth_checker, &creds, Action::Update)?;
+    Err(package_jobs_not_implemented("update"))
 }
 
 async fn enhance_handler(

@@ -1,12 +1,16 @@
 // apps/conaryd/src/daemon/mod.rs
 
-//! Conary Daemon (conaryd) - REST API for package operations
+//! Conary Daemon (conaryd) - lock owner, API surface, and job queue
 //!
 //! The daemon provides:
 //! - Exclusive ownership of the transaction lock
-//! - REST API for package operations (install, remove, update)
+//! - Authenticated REST and SSE scaffolding for daemon-managed work
 //! - SSE event streaming for progress updates
-//! - Background automation (security updates, orphan cleanup)
+//! - Background package enhancement jobs
+//!
+//! Today, only enhance jobs execute inside the daemon. Package install,
+//! remove, and update operations should use the CLI directly until daemon
+//! executors for those job kinds are implemented.
 //!
 //! # Architecture
 //!
