@@ -2,9 +2,10 @@
 //! Distro pinning command implementations
 
 use super::open_db;
-use anyhow::Result;
-use conary_core::db::models::{DistroPin, SystemAffinity, settings};
+use anyhow::{Context, Result};
+use conary_core::db::models::{DistroPin, Repository, SystemAffinity, settings};
 use conary_core::model::parser::SourcePinConfig;
+use conary_core::repository::distro::supported_user_distros;
 use conary_core::repository::resolution_policy::{RequestScope, SelectionMode};
 use conary_core::repository::{SETTINGS_KEY_SELECTION_MODE, load_effective_policy};
 use rusqlite::Connection;
@@ -94,14 +95,55 @@ pub fn render_distro_info(conn: &Connection) -> Result<String> {
     Ok(output)
 }
 
-// TODO: Drive this list from the database or registry instead of hardcoding.
-// This static list must be kept in sync with supported distros manually.
-pub async fn cmd_distro_list() -> Result<()> {
-    println!("Available distros:");
-    println!("  fedora-44        Fedora 44");
-    println!("  ubuntu-26.04     Ubuntu 26.04 LTS (Resolute Raccoon)");
-    println!("  arch             Arch Linux (rolling)");
+pub async fn cmd_distro_list(db_path: &str) -> Result<()> {
+    match conary_core::db::open(db_path) {
+        Ok(conn) => print!("{}", render_distro_list(&conn)?),
+        Err(conary_core::Error::DatabaseNotFound(_)) => {
+            print!("{}", render_distro_list_for_repos(&[]));
+        }
+        Err(error) => Err(error).context("Failed to open package database")?,
+    }
     Ok(())
+}
+
+pub fn render_distro_list(conn: &Connection) -> Result<String> {
+    let repos = Repository::list_all(conn)?;
+    Ok(render_distro_list_for_repos(&repos))
+}
+
+fn render_distro_list_for_repos(repos: &[Repository]) -> String {
+    let mut output = String::from("Available distros:\n");
+
+    for distro in supported_user_distros() {
+        let matching_repos: Vec<_> = repos
+            .iter()
+            .filter(|repo| {
+                repo.name == distro.id || repo.default_strategy_distro.as_deref() == Some(distro.id)
+            })
+            .collect();
+        let enabled_count = matching_repos.iter().filter(|repo| repo.enabled).count();
+        let status = match (matching_repos.len(), enabled_count) {
+            (0, _) => "not configured".to_string(),
+            (total, 0) => format!("configured/disabled ({total} repo{})", plural(total)),
+            (total, enabled) if total == enabled => {
+                format!("configured/enabled ({enabled} repo{})", plural(enabled))
+            }
+            (total, enabled) => format!(
+                "configured/enabled ({enabled}/{total} repo{} enabled)",
+                plural(total)
+            ),
+        };
+        output.push_str(&format!(
+            "  {:<15} {:<24} {}\n",
+            distro.id, distro.display_name, status
+        ));
+    }
+
+    output
+}
+
+fn plural(count: usize) -> &'static str {
+    if count == 1 { "" } else { "s" }
 }
 
 pub async fn cmd_distro_mixing(db_path: &str, policy: &str) -> Result<()> {
@@ -194,5 +236,67 @@ mod tests {
 
         let rendered = render_distro_info(&conn).unwrap();
         assert!(rendered.contains("Selection mode: latest"));
+    }
+
+    #[test]
+    fn test_render_distro_list_uses_supported_catalog() {
+        let (_temp, _db_path, conn) = create_test_db();
+
+        let rendered = render_distro_list(&conn).unwrap();
+
+        assert!(rendered.contains("fedora-44"));
+        assert!(rendered.contains("Fedora 44"));
+        assert!(rendered.contains("ubuntu-26.04"));
+        assert!(rendered.contains("Ubuntu 26.04 LTS"));
+        assert!(rendered.contains("arch"));
+        assert!(!rendered.contains("linux-mint"));
+        assert!(!rendered.contains("Debian"));
+    }
+
+    #[test]
+    fn test_render_distro_list_marks_exact_supported_repos() {
+        let (_temp, _db_path, conn) = create_test_db();
+        let mut fedora = Repository::new(
+            "fedora-main".to_string(),
+            "https://example.com/fedora".to_string(),
+        );
+        fedora.default_strategy_distro = Some("fedora-44".to_string());
+        fedora.insert(&conn).unwrap();
+
+        let mut arch = Repository::new("arch".to_string(), "https://example.com/arch".to_string());
+        arch.enabled = false;
+        arch.insert(&conn).unwrap();
+
+        let rendered = render_distro_list(&conn).unwrap();
+
+        assert!(rendered.contains("fedora-44"));
+        assert!(rendered.contains("configured/enabled (1 repo)"));
+        assert!(rendered.contains("arch"));
+        assert!(rendered.contains("configured/disabled (1 repo)"));
+    }
+
+    #[test]
+    fn test_render_distro_list_does_not_infer_from_parser_families() {
+        let (_temp, _db_path, conn) = create_test_db();
+        let mut debian = Repository::new(
+            "debian-bookworm".to_string(),
+            "https://deb.debian.org/debian".to_string(),
+        );
+        debian.default_strategy_distro = Some("debian".to_string());
+        debian.insert(&conn).unwrap();
+
+        let mut mint = Repository::new(
+            "linux-mint".to_string(),
+            "https://packages.linuxmint.com".to_string(),
+        );
+        mint.insert(&conn).unwrap();
+
+        let rendered = render_distro_list(&conn).unwrap();
+
+        let ubuntu_line = rendered
+            .lines()
+            .find(|line| line.contains("ubuntu-26.04"))
+            .unwrap();
+        assert!(ubuntu_line.contains("not configured"));
     }
 }

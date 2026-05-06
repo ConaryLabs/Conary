@@ -1854,7 +1854,7 @@ async fn dispatch_distro_command(distro_cmd: cli::DistroCommands) -> Result<()> 
         cli::DistroCommands::Remove { db } => {
             commands::distro::cmd_distro_remove(&db.db_path).await
         }
-        cli::DistroCommands::List => commands::distro::cmd_distro_list().await,
+        cli::DistroCommands::List { db } => commands::distro::cmd_distro_list(&db.db_path).await,
         cli::DistroCommands::Info { db } => commands::distro::cmd_distro_info(&db.db_path).await,
         cli::DistroCommands::Mixing { policy, db } => {
             commands::distro::cmd_distro_mixing(&db.db_path, &policy).await
