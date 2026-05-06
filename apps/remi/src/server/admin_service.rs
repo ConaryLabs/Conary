@@ -9,6 +9,7 @@
 //! The service layer is also the integration point for MCP tool handlers,
 //! which need the same business logic without HTTP framing.
 
+use futures::StreamExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::{net::IpAddr, str::FromStr};
@@ -564,6 +565,12 @@ pub struct RepoRefreshResult {
     pub skipped: bool,
 }
 
+enum RepoRefreshPlan {
+    Missing,
+    Skipped(RepoRefreshResult),
+    Sync(Box<Repository>),
+}
+
 /// Update an existing repository by name.  Returns `None` if not found.
 pub async fn update_repo(
     state: &Arc<RwLock<ServerState>>,
@@ -639,25 +646,33 @@ pub async fn repo_exists(
     Ok(repo.is_some())
 }
 
+async fn refresh_loaded_repo(
+    db: PathBuf,
+    repo: Repository,
+) -> Result<RepoRefreshResult, ServiceError> {
+    let keyring_dir = conary_core::db::paths::keyring_dir(&db.display().to_string());
+
+    if repo.gpg_check
+        && let Err(e) = conary_core::repository::maybe_fetch_gpg_key(&repo, &keyring_dir).await
+    {
+        tracing::warn!("Failed to fetch GPG key for repo {}: {e}", repo.name);
+    }
+
+    let name = repo.name.clone();
+    let packages_synced = conary_core::repository::sync_repository_from_db_path(db, repo)
+        .await
+        .map_err(ServiceError::from)?;
+
+    Ok(RepoRefreshResult {
+        name,
+        packages_synced,
+        skipped: false,
+    })
+}
+
 /// Synchronize a single repository by name.
 ///
 /// Returns `Ok(None)` if the repository does not exist.
-///
-/// # Deadlock risk (documented)
-///
-/// This function uses `Handle::block_on()` inside `spawn_blocking` to call
-/// async operations (`sync_repository`, `maybe_fetch_gpg_key`) while holding
-/// a `rusqlite::Connection` (which is `!Send` and cannot cross `.await`).
-///
-/// If the Tokio blocking thread pool is saturated, `block_on` will wait for
-/// an async task that itself may need a blocking thread, creating a potential
-/// deadlock. In practice this is safe because:
-/// 1. `sync_repo` is called infrequently (admin API, background refresh)
-/// 2. The default blocking pool (512 threads) is never near saturation
-/// 3. Restructuring would require `sync_repository` to not take `&Connection`
-///
-/// If this becomes a problem, increase `max_blocking_threads` in the Tokio
-/// runtime builder or restructure `sync_repository` to separate DB and HTTP.
 pub async fn sync_repo(
     state: &Arc<RwLock<ServerState>>,
     name: &str,
@@ -665,93 +680,69 @@ pub async fn sync_repo(
 ) -> Result<Option<RepoRefreshResult>, ServiceError> {
     let db = db_path(state).await;
     let name_owned = name.to_string();
-    blocking_anyhow(move || {
-        let handle = tokio::runtime::Handle::current();
+    let db_for_lookup = db.clone();
+    let plan = blocking_anyhow(move || {
         let conn = conary_core::db::open_fast(&db).map_err(|e| anyhow::anyhow!("{e}"))?;
-        let keyring_dir = conary_core::db::paths::keyring_dir(&db.display().to_string());
-        let mut repo = match Repository::find_by_name(&conn, &name_owned)
+        let repo = match Repository::find_by_name(&conn, &name_owned)
             .map_err(|e| anyhow::anyhow!("{e}"))?
         {
             Some(repo) => repo,
-            None => return Ok(None),
+            None => return Ok(RepoRefreshPlan::Missing),
         };
 
         if !force && !conary_core::repository::needs_sync(&repo) {
-            return Ok(Some(RepoRefreshResult {
+            return Ok(RepoRefreshPlan::Skipped(RepoRefreshResult {
                 name: repo.name,
                 packages_synced: 0,
                 skipped: true,
             }));
         }
 
-        if repo.gpg_check
-            && let Err(e) = handle.block_on(conary_core::repository::maybe_fetch_gpg_key(
-                &repo,
-                &keyring_dir,
-            ))
-        {
-            tracing::warn!("Failed to fetch GPG key for repo {}: {e}", repo.name);
-        }
-
-        let packages_synced = handle
-            .block_on(conary_core::repository::sync_repository(&conn, &mut repo))
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-        Ok(Some(RepoRefreshResult {
-            name: repo.name,
-            packages_synced,
-            skipped: false,
-        }))
+        Ok(RepoRefreshPlan::Sync(Box::new(repo)))
     })
-    .await
+    .await?;
+
+    match plan {
+        RepoRefreshPlan::Missing => Ok(None),
+        RepoRefreshPlan::Skipped(result) => Ok(Some(result)),
+        RepoRefreshPlan::Sync(repo) => refresh_loaded_repo(db_for_lookup, *repo).await.map(Some),
+    }
 }
 
 /// Synchronize all enabled repositories.
-///
-/// See [`sync_repo`] for the `Handle::block_on` deadlock risk documentation.
 pub async fn refresh_repositories(
     state: &Arc<RwLock<ServerState>>,
     force: bool,
 ) -> Result<Vec<RepoRefreshResult>, ServiceError> {
     let db = db_path(state).await;
-    let results = blocking_anyhow(move || {
-        let handle = tokio::runtime::Handle::current();
-        let conn = conary_core::db::open_fast(&db).map_err(|e| anyhow::anyhow!("{e}"))?;
-        let keyring_dir = conary_core::db::paths::keyring_dir(&db.display().to_string());
-        let repos = Repository::list_enabled(&conn).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let repos = blocking_anyhow({
+        let db = db.clone();
+        move || {
+            let conn = conary_core::db::open_fast(&db).map_err(|e| anyhow::anyhow!("{e}"))?;
+            Repository::list_enabled(&conn).map_err(|e| anyhow::anyhow!("{e}"))
+        }
+    })
+    .await?;
 
-        let mut refreshed = Vec::new();
-
-        for mut repo in repos {
+    let mut refresh_stream = futures::stream::iter(repos.into_iter().map(|repo| {
+        let db = db.clone();
+        async move {
             if !force && !conary_core::repository::needs_sync(&repo) {
-                refreshed.push(RepoRefreshResult {
+                return Ok(RepoRefreshResult {
                     name: repo.name,
                     packages_synced: 0,
                     skipped: true,
                 });
-                continue;
             }
-
-            if repo.gpg_check {
-                let _ = handle.block_on(conary_core::repository::maybe_fetch_gpg_key(
-                    &repo,
-                    &keyring_dir,
-                ));
-            }
-
-            let packages_synced = handle
-                .block_on(conary_core::repository::sync_repository(&conn, &mut repo))
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
-            refreshed.push(RepoRefreshResult {
-                name: repo.name,
-                packages_synced,
-                skipped: false,
-            });
+            refresh_loaded_repo(db, repo).await
         }
+    }))
+    .buffer_unordered(4);
 
-        Ok(refreshed)
-    })
-    .await?;
+    let mut results = Vec::new();
+    while let Some(result) = refresh_stream.next().await {
+        results.push(result?);
+    }
 
     // After successful sync, trigger canonical rebuild if cooldown elapsed.
     // Failures here are non-fatal -- the sync result is returned regardless.

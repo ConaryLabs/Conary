@@ -34,6 +34,27 @@ pub struct TufClient {
     tuf_base_url: String,
 }
 
+/// Blocking DB state required before an async TUF update.
+pub(crate) struct TufUpdateState {
+    trusted_root: Signed<RootMetadata>,
+    stored_timestamp_version: Option<u64>,
+    stored_snapshot_version: Option<u64>,
+    stored_targets_version: Option<u64>,
+    stored_snapshot: Option<Signed<SnapshotMetadata>>,
+    stored_targets: Option<Signed<TargetsMetadata>>,
+}
+
+/// Fully verified TUF metadata ready to persist in a blocking DB phase.
+pub(crate) struct TufUpdateSnapshot {
+    current_root: Signed<RootMetadata>,
+    rotated_roots: Vec<Signed<RootMetadata>>,
+    signed_timestamp: Signed<TimestampMetadata>,
+    signed_snapshot: Signed<SnapshotMetadata>,
+    signed_targets: Signed<TargetsMetadata>,
+    snapshot_changed: bool,
+    targets_changed: bool,
+}
+
 impl TufClient {
     /// Create a new TUF client for a repository
     pub fn new(repo_id: i64, repo_url: &str, tuf_root_url: Option<&str>) -> TrustResult<Self> {
@@ -52,14 +73,42 @@ impl TufClient {
     /// Fetches and verifies all TUF metadata in the correct order,
     /// checking freshness, version monotonicity, and signature thresholds.
     pub async fn update(&self, conn: &Connection) -> TrustResult<VerifiedTufState> {
-        // Load trusted root from database
-        let trusted_root = self.load_trusted_root(conn)?;
+        let state = self.load_update_state(conn)?;
+        let snapshot = self.fetch_update_snapshot(state).await?;
+        self.persist_update_snapshot(conn, snapshot)
+    }
+
+    /// Load the DB-backed state needed before performing async TUF fetches.
+    pub(crate) fn load_update_state(&self, conn: &Connection) -> TrustResult<TufUpdateState> {
+        Ok(TufUpdateState {
+            trusted_root: self.load_trusted_root(conn)?,
+            stored_timestamp_version: self.load_metadata_version(conn, "timestamp")?,
+            stored_snapshot_version: self.load_metadata_version(conn, "snapshot")?,
+            stored_targets_version: self.load_metadata_version(conn, "targets")?,
+            stored_snapshot: self.load_stored_snapshot_optional(conn)?,
+            stored_targets: self.load_stored_targets_optional(conn)?,
+        })
+    }
+
+    /// Fetch and verify TUF metadata using owned state only.
+    pub(crate) async fn fetch_update_snapshot(
+        &self,
+        state: TufUpdateState,
+    ) -> TrustResult<TufUpdateSnapshot> {
+        let TufUpdateState {
+            trusted_root,
+            stored_timestamp_version,
+            stored_snapshot_version,
+            stored_targets_version,
+            stored_snapshot,
+            stored_targets,
+        } = state;
 
         // Step 1: Check for root rotation BEFORE any other metadata verification
         // (TUF spec 5.3). Probe for {version+1}.root.json and walk the chain
         // until no newer root is available. This ensures all subsequent metadata
         // is verified against the latest root keys.
-        let current_root = self.check_root_rotation(conn, &trusted_root).await?;
+        let (current_root, rotated_roots) = self.check_root_rotation(&trusted_root).await?;
 
         // Step 2: Fetch and verify timestamp using (possibly updated) root keys
         let timestamp_bytes = self.fetch_metadata("timestamp.json").await?;
@@ -71,8 +120,7 @@ impl TufClient {
         verify_not_expired(Role::Timestamp, &signed_timestamp.signed.expires)?;
 
         // Check version monotonicity against stored timestamp
-        let stored_ts_version = self.load_metadata_version(conn, "timestamp")?;
-        if let Some(stored_v) = stored_ts_version {
+        if let Some(stored_v) = stored_timestamp_version {
             verify_version_increase(Role::Timestamp, signed_timestamp.signed.version, stored_v)?;
         }
 
@@ -87,7 +135,6 @@ impl TufClient {
                 )
             })?;
 
-        let stored_snapshot_version = self.load_metadata_version(conn, "snapshot")?;
         let snapshot_changed = stored_snapshot_version.is_none_or(|v| snapshot_ref.version > v);
 
         let signed_snapshot = if snapshot_changed {
@@ -107,13 +154,13 @@ impl TufClient {
 
             signed
         } else {
-            // Load from database
-            self.load_stored_snapshot(conn)?
+            stored_snapshot.ok_or_else(|| {
+                TrustError::ConsistencyError("No stored snapshot found".to_string())
+            })?
         };
 
         // Step 4: Check if targets needs updating
         let targets_ref = signed_snapshot.signed.meta.get("targets.json");
-        let stored_targets_version = self.load_metadata_version(conn, "targets")?;
 
         let targets_changed =
             targets_ref.is_some_and(|tr| stored_targets_version.is_none_or(|v| tr.version > v));
@@ -136,7 +183,9 @@ impl TufClient {
 
             signed
         } else {
-            self.load_stored_targets(conn)?
+            stored_targets.ok_or_else(|| {
+                TrustError::ConsistencyError("No stored targets found".to_string())
+            })?
         };
 
         // Verify snapshot consistency
@@ -146,33 +195,57 @@ impl TufClient {
             Some(signed_targets.signed.version),
         )?;
 
-        // Persist verified state in a single transaction to prevent
-        // inconsistent TUF state if the process crashes mid-persist.
+        Ok(TufUpdateSnapshot {
+            current_root,
+            rotated_roots,
+            signed_timestamp,
+            signed_snapshot,
+            signed_targets,
+            snapshot_changed,
+            targets_changed,
+        })
+    }
+
+    /// Persist a verified TUF update in a single transaction.
+    pub(crate) fn persist_update_snapshot(
+        &self,
+        conn: &Connection,
+        snapshot: TufUpdateSnapshot,
+    ) -> TrustResult<VerifiedTufState> {
         let tx = conn.unchecked_transaction()?;
-        self.persist_metadata(&tx, "timestamp", &signed_timestamp)?;
-        if snapshot_changed {
-            self.persist_metadata(&tx, "snapshot", &signed_snapshot)?;
+
+        for root in &snapshot.rotated_roots {
+            self.persist_root(&tx, root)?;
+            self.persist_root_keys(&tx, &root.signed)?;
         }
-        if targets_changed {
-            self.persist_metadata(&tx, "targets", &signed_targets)?;
-            self.persist_targets(&tx, &signed_targets.signed)?;
+        if !snapshot.rotated_roots.is_empty() {
+            self.persist_metadata(&tx, "root", &snapshot.current_root)?;
+        }
+
+        self.persist_metadata(&tx, "timestamp", &snapshot.signed_timestamp)?;
+        if snapshot.snapshot_changed {
+            self.persist_metadata(&tx, "snapshot", &snapshot.signed_snapshot)?;
+        }
+        if snapshot.targets_changed {
+            self.persist_metadata(&tx, "targets", &snapshot.signed_targets)?;
+            self.persist_targets(&tx, &snapshot.signed_targets.signed)?;
         }
         tx.commit()?;
 
         info!(
             "TUF update complete: root v{}, targets v{}, snapshot v{}, timestamp v{}",
-            current_root.signed.version,
-            signed_targets.signed.version,
-            signed_snapshot.signed.version,
-            signed_timestamp.signed.version,
+            snapshot.current_root.signed.version,
+            snapshot.signed_targets.signed.version,
+            snapshot.signed_snapshot.signed.version,
+            snapshot.signed_timestamp.signed.version,
         );
 
         Ok(VerifiedTufState {
-            root_version: current_root.signed.version,
-            targets_version: signed_targets.signed.version,
-            snapshot_version: signed_snapshot.signed.version,
-            timestamp_version: signed_timestamp.signed.version,
-            targets: signed_targets.signed.targets,
+            root_version: snapshot.current_root.signed.version,
+            targets_version: snapshot.signed_targets.signed.version,
+            snapshot_version: snapshot.signed_snapshot.signed.version,
+            timestamp_version: snapshot.signed_timestamp.signed.version,
+            targets: snapshot.signed_targets.signed.targets,
         })
     }
 
@@ -211,10 +284,10 @@ impl TufClient {
     /// until no newer version is found (HTTP 404 or fetch error).
     async fn check_root_rotation(
         &self,
-        conn: &Connection,
         trusted_root: &Signed<RootMetadata>,
-    ) -> TrustResult<Signed<RootMetadata>> {
+    ) -> TrustResult<(Signed<RootMetadata>, Vec<Signed<RootMetadata>>)> {
         let mut current = trusted_root.clone();
+        let mut rotated_roots = Vec::new();
 
         loop {
             let next_version = current.signed.version + 1;
@@ -238,19 +311,11 @@ impl TufClient {
                 current.signed.version, new_root.signed.version
             );
 
-            // Store the new root
-            self.persist_root(conn, &new_root)?;
-            self.persist_root_keys(conn, &new_root.signed)?;
-
             current = new_root;
+            rotated_roots.push(current.clone());
         }
 
-        // If we rotated, persist the final root as current metadata
-        if current.signed.version > trusted_root.signed.version {
-            self.persist_metadata(conn, "root", &current)?;
-        }
-
-        Ok(current)
+        Ok((current, rotated_roots))
     }
 
     /// Maximum size for TUF metadata files (10 MB)
@@ -392,6 +457,19 @@ impl TufClient {
         Ok(signed)
     }
 
+    fn load_stored_snapshot_optional(
+        &self,
+        conn: &Connection,
+    ) -> TrustResult<Option<Signed<SnapshotMetadata>>> {
+        match self.load_stored_snapshot(conn) {
+            Ok(snapshot) => Ok(Some(snapshot)),
+            Err(TrustError::ConsistencyError(message)) if message == "No stored snapshot found" => {
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     /// Load stored targets metadata from the database
     fn load_stored_targets(&self, conn: &Connection) -> TrustResult<Signed<TargetsMetadata>> {
         let json: String = conn
@@ -410,6 +488,19 @@ impl TufClient {
 
         let signed: Signed<TargetsMetadata> = serde_json::from_str(&json)?;
         Ok(signed)
+    }
+
+    fn load_stored_targets_optional(
+        &self,
+        conn: &Connection,
+    ) -> TrustResult<Option<Signed<TargetsMetadata>>> {
+        match self.load_stored_targets(conn) {
+            Ok(targets) => Ok(Some(targets)),
+            Err(TrustError::ConsistencyError(message)) if message == "No stored targets found" => {
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Persist signed metadata to the tuf_metadata table

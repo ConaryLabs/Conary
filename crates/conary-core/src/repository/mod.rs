@@ -73,6 +73,7 @@ pub use selector::{PackageSelector, PackageWithRepo, SelectionOptions};
 pub use substituter::{SubstituterChain, SubstituterResult, SubstituterSource};
 pub use sync::{
     current_timestamp, maybe_fetch_gpg_key, needs_sync, parse_timestamp, sync_repository,
+    sync_repository_from_db_path,
 };
 
 pub use chunk_fetcher::{
