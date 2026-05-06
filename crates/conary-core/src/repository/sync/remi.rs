@@ -8,47 +8,15 @@ use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
 use crate::repository::retry::RetryConfig;
 use rusqlite::Connection;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use tracing::{debug, info, warn};
 
 use super::native::{
-    SyncedPackageRow, extract_extra_metadata_provides, persist_native_sync_rows,
-    split_on_version_op,
+    extract_extra_metadata_provides, persist_native_sync_rows, split_on_version_op,
 };
-/// Response from Remi metadata API (`GET /v1/{distro}/metadata`)
-#[derive(Debug, serde::Deserialize)]
-pub(super) struct RemiMetadataResponse {
-    packages: Vec<RemiPackageEntry>,
-}
-
-/// Individual package entry from Remi metadata
-#[derive(Debug, serde::Deserialize)]
-pub(super) struct RemiPackageEntry {
-    pub(super) name: String,
-    pub(super) version: String,
-    #[allow(dead_code)] // Present in wire format; not used by sync logic
-    pub(super) converted: bool,
-    pub(super) architecture: Option<String>,
-    pub(super) dependencies: Option<Vec<String>>,
-    pub(super) metadata: Option<serde_json::Value>,
-}
-
-/// Response from Remi canonical map API (`GET /v1/canonical/map`)
-#[derive(Debug, serde::Deserialize)]
-pub(super) struct CanonicalMapResponse {
-    #[allow(dead_code)] // Wire format field; only entries is consumed
-    pub(super) version: u32,
-    #[allow(dead_code)] // Wire format field; only entries is consumed
-    pub(super) generated_at: String,
-    pub(super) entries: Vec<CanonicalMapEntry>,
-}
-
-/// A single entry in the canonical map response
-#[derive(Debug, serde::Deserialize)]
-pub(super) struct CanonicalMapEntry {
-    pub(super) canonical: String,
-    pub(super) implementations: HashMap<String, String>,
-}
+use super::types::{
+    CanonicalMapSnapshot, RemiMetadataResponse, RemiPackageEntry, SyncedPackageRow,
+};
 
 pub(super) fn remi_sync_row(
     repo_id: i64,
@@ -145,10 +113,7 @@ pub(super) fn parse_raw_dependency_entry(entry: &str) -> (String, Option<String>
 /// For repos with `default_strategy = "remi"`, fetches the package index from
 /// the Remi server's `/v1/{distro}/metadata` endpoint instead of parsing
 /// traditional repo formats (repomd.xml, Packages, etc.).
-pub(super) async fn sync_repository_remi(
-    conn: &Connection,
-    repo: &mut Repository,
-) -> Result<usize> {
+pub(super) async fn fetch_remi_sync_rows(repo: &Repository) -> Result<Vec<SyncedPackageRow>> {
     let distro = repo.default_strategy_distro.as_deref().ok_or_else(|| {
         Error::ConfigError(format!(
             "Repository '{}' has strategy 'remi' but no distro configured (use --remi-distro)",
@@ -198,6 +163,14 @@ pub(super) async fn sync_repository_remi(
         })
         .collect();
 
+    Ok(synced_packages)
+}
+
+pub(super) fn persist_remi_sync_rows(
+    conn: &Connection,
+    repo: &mut Repository,
+    synced_packages: Vec<SyncedPackageRow>,
+) -> Result<usize> {
     let mut repo_packages: Vec<RepositoryPackage> = synced_packages
         .iter()
         .map(|row| row.package.clone())
@@ -209,6 +182,14 @@ pub(super) async fn sync_repository_remi(
         count, repo.name
     );
     Ok(count)
+}
+
+pub(super) async fn sync_repository_remi(
+    conn: &Connection,
+    repo: &mut Repository,
+) -> Result<usize> {
+    let synced_packages = fetch_remi_sync_rows(repo).await?;
+    persist_remi_sync_rows(conn, repo, synced_packages)
 }
 
 async fn fetch_remi_metadata_with_retry(
@@ -261,20 +242,19 @@ async fn fetch_remi_metadata_once(
 /// Downloads the full canonical map from `{endpoint}/v1/canonical/map` and upserts
 /// each entry into `canonical_packages` and `package_implementations`. This is
 /// non-fatal: callers should log failures at debug level and continue.
-pub(super) async fn fetch_and_persist_canonical_map(
-    conn: &Connection,
-    endpoint: &str,
-) -> Result<u64> {
+pub(super) async fn fetch_canonical_map_snapshot(endpoint: &str) -> Result<CanonicalMapSnapshot> {
     let url = format!("{}/v1/canonical/map", endpoint.trim_end_matches('/'));
     debug!("Fetching canonical map from {}", url);
 
     let client = RepositoryClient::new()?;
     let bytes = client.download_to_bytes(&url).await?;
 
-    let map: CanonicalMapResponse = serde_json::from_slice(&bytes).map_err(|error| {
+    serde_json::from_slice(&bytes).map_err(|error| {
         Error::ParseError(format!("Failed to parse canonical map from {url}: {error}"))
-    })?;
+    })
+}
 
+pub(super) fn persist_canonical_map(conn: &Connection, map: &CanonicalMapSnapshot) -> Result<u64> {
     let tx = conn.unchecked_transaction()?;
     let mut count = 0u64;
 
@@ -298,6 +278,14 @@ pub(super) async fn fetch_and_persist_canonical_map(
 
     tx.commit()?;
     Ok(count)
+}
+
+pub(super) async fn fetch_and_persist_canonical_map(
+    conn: &Connection,
+    endpoint: &str,
+) -> Result<u64> {
+    let map = fetch_canonical_map_snapshot(endpoint).await?;
+    persist_canonical_map(conn, &map)
 }
 
 #[cfg(test)]

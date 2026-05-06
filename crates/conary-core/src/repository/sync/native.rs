@@ -13,17 +13,8 @@ use crate::repository::parsers::{DependencyType, PackageMetadata};
 use crate::repository::versioning::VersionScheme;
 use rusqlite::Connection;
 
+use super::types::SyncedPackageRow;
 use super::{current_timestamp, link_canonical_ids};
-
-/// A single synced package row with all its normalized capability data.
-#[derive(Debug, Clone)]
-pub(super) struct SyncedPackageRow {
-    pub(super) package: RepositoryPackage,
-    pub(super) provides: Vec<RepositoryProvide>,
-    pub(super) requirements: Vec<RepositoryRequirement>,
-    pub(super) requirement_groups: Vec<DbRequirementGroup>,
-    pub(super) requirement_group_clauses: Vec<Vec<RepositoryRequirement>>,
-}
 
 pub(super) fn persist_native_sync_rows(
     conn: &Connection,

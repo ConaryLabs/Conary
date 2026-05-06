@@ -322,22 +322,19 @@ async fn run_conversion(state: Arc<RwLock<ServerState>>, job_id: JobId) {
             .update_status(&job_id, JobStatus::Converting);
     }
 
-    // Run the actual conversion in a blocking task (convert_package uses
-    // rusqlite::Connection which is !Send, so it cannot live across .await).
     let distro = job.distro.clone();
     let package_name = job.package_name.clone();
     let version = job.version.clone();
     let architecture = job.architecture.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        conversion_service.convert_package(
+    let result = conversion_service
+        .convert_package_async(
             &distro,
             &package_name,
             version.as_deref(),
             architecture.as_deref(),
         )
-    })
-    .await
-    .unwrap_or_else(|e| Err(anyhow::anyhow!("conversion task panicked: {e}")));
+        .await
+        .map_err(|e| anyhow::anyhow!("conversion failed: {e}"));
 
     // Update job status based on result
     {

@@ -61,17 +61,20 @@ pub struct PackagePopularity {
 }
 
 /// Run pre-warming job
-pub fn run_prewarm(config: &PrewarmConfig) -> Result<PrewarmResult> {
+pub async fn run_prewarm(config: &PrewarmConfig) -> Result<PrewarmResult> {
     info!(
         "Starting pre-warm for {} (max {} packages)",
         config.distro, config.max_packages
     );
 
-    // Open database
-    let conn = conary_core::db::open(&config.db_path)?;
-
-    // Get packages to convert
-    let packages = get_packages_to_convert(&conn, config)?;
+    let db_path = config.db_path.clone();
+    let config_for_lookup = config.clone();
+    let packages = tokio::task::spawn_blocking(move || {
+        let conn = conary_core::db::open(&db_path)?;
+        get_packages_to_convert(&conn, &config_for_lookup)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("prewarm package lookup task panicked: {e}"))??;
     info!("Found {} packages to potentially convert", packages.len());
 
     if config.dry_run {
@@ -110,7 +113,9 @@ pub fn run_prewarm(config: &PrewarmConfig) -> Result<PrewarmResult> {
         result.packages_processed += 1;
 
         // Check if already converted
-        if is_already_converted(&conn, &pkg.name, &pkg.version, &config.distro)? {
+        if is_already_converted_async(&config.db_path, &pkg.name, &pkg.version, &config.distro)
+            .await?
+        {
             debug!("Skipping {} {} - already converted", pkg.name, pkg.version);
             result.packages_skipped += 1;
             continue;
@@ -118,13 +123,15 @@ pub fn run_prewarm(config: &PrewarmConfig) -> Result<PrewarmResult> {
 
         info!("Converting {} {}...", pkg.name, pkg.version);
 
-        // Run conversion (blocking -- convert_package uses Handle::block_on internally)
-        match conversion_service.convert_package(
-            &config.distro,
-            &pkg.name,
-            Some(&pkg.version),
-            pkg.architecture.as_deref(),
-        ) {
+        match conversion_service
+            .convert_package_async(
+                &config.distro,
+                &pkg.name,
+                Some(&pkg.version),
+                pkg.architecture.as_deref(),
+            )
+            .await
+        {
             Ok(conv_result) => {
                 info!(
                     "Converted {} {}: {} chunks, {} bytes",
@@ -336,6 +343,25 @@ fn is_already_converted(
     Ok(trove_count > 0)
 }
 
+async fn is_already_converted_async(
+    db_path: &str,
+    name: &str,
+    version: &str,
+    distro: &str,
+) -> Result<bool> {
+    let db_path = db_path.to_string();
+    let name = name.to_string();
+    let version = version.to_string();
+    let distro = distro.to_string();
+
+    tokio::task::spawn_blocking(move || {
+        let conn = conary_core::db::open(&db_path)?;
+        is_already_converted(&conn, &name, &version, &distro)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("prewarm cache lookup task panicked: {e}"))?
+}
+
 /// Background pre-warming task
 ///
 /// Runs periodically to convert popular packages that haven't been requested yet.
@@ -367,19 +393,15 @@ pub async fn run_prewarm_background(
             dry_run: false,
         };
 
-        // Run in blocking task
-        match tokio::task::spawn_blocking(move || run_prewarm(&config)).await {
-            Ok(Ok(result)) => {
+        match run_prewarm(&config).await {
+            Ok(result) => {
                 info!(
                     "Background pre-warm complete: {} converted, {} failed",
                     result.packages_converted, result.packages_failed
                 );
             }
-            Ok(Err(e)) => {
-                warn!("Background pre-warm failed: {}", e);
-            }
             Err(e) => {
-                warn!("Background pre-warm task panicked: {}", e);
+                warn!("Background pre-warm failed: {}", e);
             }
         }
     }

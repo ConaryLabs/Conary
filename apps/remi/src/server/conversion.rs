@@ -41,6 +41,7 @@ pub struct ServerConversionResult {
 }
 
 /// Conversion service for Remi
+#[derive(Clone)]
 pub struct ConversionService {
     /// Path to chunk storage
     chunk_dir: PathBuf,
@@ -59,6 +60,24 @@ struct PackageDownloadRefresh<'a> {
     architecture: Option<&'a str>,
     repo_pkg: RepositoryPackage,
     dest_dir: &'a Path,
+}
+
+struct ParsedConversion {
+    metadata: PackageMetadata,
+    format: &'static str,
+    original_checksum: String,
+    conversion_result: ConversionResult,
+    repo_pkg: RepositoryPackage,
+}
+
+struct PersistConversionInput {
+    distro: String,
+    metadata: PackageMetadata,
+    format: &'static str,
+    original_checksum: String,
+    conversion_result: ConversionResult,
+    repo_pkg: RepositoryPackage,
+    chunk_hashes: Vec<String>,
 }
 
 impl ConversionService {
@@ -170,27 +189,8 @@ impl ConversionService {
         Ok(())
     }
 
-    /// Convert a package from a repository
-    ///
-    /// 1. Find package in repository metadata
-    /// 2. Download from upstream
-    /// 3. Parse and extract files
-    /// 4. Convert to CCS
-    /// 5. Store chunks in CAS
-    /// 6. Record in database
-    ///
     /// Convert a package from a repository.
-    ///
-    /// This is a blocking function that internally uses `Handle::block_on` for
-    /// async operations (HTTP downloads, tokio::fs). Callers in async contexts
-    /// should wrap in `spawn_blocking`. This design avoids holding
-    /// `rusqlite::Connection` (which is !Send) across `.await` points.
-    ///
-    /// **Deadlock risk:** If the blocking thread pool is saturated, `block_on`
-    /// can deadlock waiting for async work that needs a blocking thread. This
-    /// is mitigated by the server's `max_concurrent_conversions` semaphore,
-    /// which keeps blocking thread usage well below the pool limit (512).
-    pub fn convert_package(
+    pub async fn convert_package_async(
         &self,
         distro: &str,
         package_name: &str,
@@ -205,62 +205,163 @@ impl ConversionService {
             distro, package_name, version
         );
 
-        // Step 1: Find package in repository
-        let conn = conary_core::db::open(&self.db_path)?;
-
-        let repo_pkg = self.find_package(&conn, distro, package_name, version, architecture)?;
-        Self::ensure_repository_package_not_critical(&conn, &repo_pkg)?;
+        let repo_pkg = self
+            .find_package_for_conversion_async(distro, package_name, version, architecture)
+            .await?;
         info!(
             "Found package: {} {} from repo {}",
             repo_pkg.name, repo_pkg.version, repo_pkg.repository_id
         );
 
-        // Step 2: Download package
-        let temp_dir =
-            TempDir::new_in(&self.cache_dir).context("Failed to create temp directory")?;
+        let cache_dir = self
+            .cache_dir
+            .canonicalize()
+            .unwrap_or_else(|_| self.cache_dir.clone());
+        let temp_dir = TempDir::new_in(&cache_dir).context("Failed to create temp directory")?;
 
         let (repo_pkg, pkg_path) = self
-            .download_package_with_refresh(
-                &conn,
-                PackageDownloadRefresh {
-                    distro,
-                    package_name,
-                    version,
-                    architecture,
-                    repo_pkg,
-                    dest_dir: temp_dir.path(),
-                },
-            )
+            .download_package_with_refresh_async(PackageDownloadRefresh {
+                distro,
+                package_name,
+                version,
+                architecture,
+                repo_pkg,
+                dest_dir: temp_dir.path(),
+            })
+            .await
             .map_err(|e| anyhow!("Failed to download package: {}", e))?;
         info!("Downloaded to: {:?}", pkg_path);
 
-        // Calculate checksum of original package
-        let original_checksum = Self::calculate_checksum(&pkg_path)?;
+        let checksum_path = pkg_path.clone();
+        let original_checksum =
+            tokio::task::spawn_blocking(move || Self::calculate_checksum(&checksum_path))
+                .await
+                .map_err(|e| anyhow!("checksum task panicked: {e}"))??;
 
-        // Check if already converted AND the CCS file still exists
-        if let Some(existing) = ConvertedPackage::find_by_checksum(&conn, &original_checksum)? {
+        if let Some(existing) = self
+            .cached_conversion_result_async(distro, &repo_pkg, &original_checksum)
+            .await?
+        {
+            return Ok(existing);
+        }
+
+        let parse_service = self.clone();
+        let distro_owned = distro.to_string();
+        let output_dir = temp_dir.path().join("output");
+        let parsed = tokio::task::spawn_blocking(move || {
+            parse_service.parse_and_convert_package(
+                &distro_owned,
+                repo_pkg,
+                pkg_path,
+                output_dir,
+                original_checksum,
+            )
+        })
+        .await
+        .map_err(|e| anyhow!("conversion task panicked: {e}"))??;
+
+        let chunk_hashes = self.store_chunks(&parsed.conversion_result).await?;
+        info!("Stored {} chunks/blobs", chunk_hashes.len());
+
+        let persist_service = self.clone();
+        let distro_owned = distro.to_string();
+        tokio::task::spawn_blocking(move || {
+            persist_service.persist_conversion_result(PersistConversionInput {
+                distro: distro_owned,
+                metadata: parsed.metadata,
+                format: parsed.format,
+                original_checksum: parsed.original_checksum,
+                conversion_result: parsed.conversion_result,
+                repo_pkg: parsed.repo_pkg,
+                chunk_hashes,
+            })
+        })
+        .await
+        .map_err(|e| anyhow!("conversion persistence task panicked: {e}"))?
+    }
+
+    async fn find_package_for_conversion_async(
+        &self,
+        distro: &str,
+        package_name: &str,
+        version: Option<&str>,
+        architecture: Option<&str>,
+    ) -> Result<RepositoryPackage> {
+        let service = self.clone();
+        let distro = distro.to_string();
+        let package_name = package_name.to_string();
+        let version = version.map(ToString::to_string);
+        let architecture = architecture.map(ToString::to_string);
+
+        tokio::task::spawn_blocking(move || {
+            let conn = conary_core::db::open(&service.db_path)?;
+            let repo_pkg = service.find_package(
+                &conn,
+                &distro,
+                &package_name,
+                version.as_deref(),
+                architecture.as_deref(),
+            )?;
+            Self::ensure_repository_package_not_critical(&conn, &repo_pkg)?;
+            Ok(repo_pkg)
+        })
+        .await
+        .map_err(|e| anyhow!("package lookup task panicked: {e}"))?
+    }
+
+    async fn cached_conversion_result_async(
+        &self,
+        distro: &str,
+        repo_pkg: &RepositoryPackage,
+        original_checksum: &str,
+    ) -> Result<Option<ServerConversionResult>> {
+        let service = self.clone();
+        let distro = distro.to_string();
+        let repo_pkg = repo_pkg.clone();
+        let original_checksum = original_checksum.to_string();
+
+        tokio::task::spawn_blocking(move || {
+            let conn = conary_core::db::open(&service.db_path)?;
+            let Some(existing) = ConvertedPackage::find_by_checksum(&conn, &original_checksum)?
+            else {
+                return Ok(None);
+            };
+
             let ccs_filename = Self::safe_ccs_filename_with_arch(
                 &repo_pkg.name,
                 &repo_pkg.version,
                 repo_pkg.architecture.as_deref(),
             )?;
-            let ccs_path = self.cache_dir.join("packages").join(&ccs_filename);
+            let ccs_path = service.cache_dir.join("packages").join(&ccs_filename);
             if !existing.needs_reconversion() && ccs_path.exists() {
                 info!(
                     "Package already converted (checksum: {})",
                     original_checksum
                 );
-                // Return cached result
-                return self.build_result_from_existing(&existing, distro, &repo_pkg);
+                return service
+                    .build_result_from_existing(&existing, &distro, &repo_pkg)
+                    .map(Some);
             }
-            // Delete stale conversion record and proceed with fresh conversion
+
             info!(
                 "Stale conversion record (CCS file missing or needs reconversion), re-converting"
             );
             ConvertedPackage::delete_by_checksum(&conn, &original_checksum)?;
-        }
+            Ok(None)
+        })
+        .await
+        .map_err(|e| anyhow!("conversion cache lookup task panicked: {e}"))?
+    }
 
-        // Step 3: Parse package based on distro
+    fn parse_and_convert_package(
+        &self,
+        distro: &str,
+        repo_pkg: RepositoryPackage,
+        pkg_path: PathBuf,
+        output_dir: PathBuf,
+        original_checksum: String,
+    ) -> Result<ParsedConversion> {
+        let conn = conary_core::db::open(&self.db_path)?;
         let (mut metadata, files, format) = self.parse_package(&pkg_path, distro)?;
         Self::apply_repository_identity(&mut metadata, &repo_pkg);
         Self::merge_repository_provides(&conn, &repo_pkg, &mut metadata)?;
@@ -273,13 +374,12 @@ impl ConversionService {
             metadata.provides.len()
         );
 
-        // Step 4: Convert to CCS
-        let output_dir = temp_dir.path().join("output");
         std::fs::create_dir_all(&output_dir)?;
+        let output_dir = output_dir.canonicalize().unwrap_or(output_dir);
 
         let options = ConversionOptions {
             enable_chunking: true,
-            output_dir: output_dir.clone(),
+            output_dir,
             auto_classify: true,
             ..Default::default()
         };
@@ -294,12 +394,30 @@ impl ConversionService {
             conversion_result.fidelity.level
         );
 
-        // Step 5: Store chunks in CAS
-        let handle = tokio::runtime::Handle::current();
-        let chunk_hashes = handle.block_on(self.store_chunks(&conversion_result))?;
-        info!("Stored {} chunks/blobs", chunk_hashes.len());
+        Ok(ParsedConversion {
+            metadata,
+            format,
+            original_checksum,
+            conversion_result,
+            repo_pkg,
+        })
+    }
 
-        // Step 6: Record in database
+    fn persist_conversion_result(
+        &self,
+        input: PersistConversionInput,
+    ) -> Result<ServerConversionResult> {
+        let PersistConversionInput {
+            distro,
+            metadata,
+            format,
+            original_checksum,
+            conversion_result,
+            repo_pkg,
+            chunk_hashes,
+        } = input;
+
+        let conn = conary_core::db::open(&self.db_path)?;
         let ccs_path = conversion_result
             .package_path
             .as_ref()
@@ -308,7 +426,6 @@ impl ConversionService {
         let content_hash = Self::calculate_checksum(ccs_path)?;
         let total_size = std::fs::metadata(ccs_path)?.len();
 
-        // Copy CCS package to persistent location first (need path for DB record)
         let package_architecture = repo_pkg
             .architecture
             .clone()
@@ -325,9 +442,8 @@ impl ConversionService {
         }
         std::fs::copy(ccs_path, &final_ccs_path)?;
 
-        // Create and insert the converted package record with server-side fields
         let mut converted = ConvertedPackage::new_server(
-            distro.to_string(),
+            distro.clone(),
             metadata.name.clone(),
             metadata.version.clone(),
             format.to_string(),
@@ -350,7 +466,7 @@ impl ConversionService {
         Ok(ServerConversionResult {
             name: metadata.name,
             version: metadata.version,
-            distro: distro.to_string(),
+            distro,
             chunk_hashes,
             total_size,
             content_hash,
@@ -514,9 +630,8 @@ impl ConversionService {
         Ok(latest)
     }
 
-    fn download_package_with_refresh(
+    async fn download_package_with_refresh_async(
         &self,
-        conn: &rusqlite::Connection,
         request: PackageDownloadRefresh<'_>,
     ) -> Result<(RepositoryPackage, PathBuf)> {
         let PackageDownloadRefresh {
@@ -527,8 +642,7 @@ impl ConversionService {
             repo_pkg,
             dest_dir,
         } = request;
-        let handle = tokio::runtime::Handle::current();
-        match handle.block_on(download_package(&repo_pkg, dest_dir)) {
+        match download_package(&repo_pkg, dest_dir).await {
             Ok(path) => return Ok((repo_pkg, path)),
             Err(err) if !Self::is_upstream_not_found(&err) => return Err(err.into()),
             Err(err) => {
@@ -539,21 +653,25 @@ impl ConversionService {
             }
         }
 
-        let mut repo =
-            conary_core::db::models::Repository::find_by_id(conn, repo_pkg.repository_id)?
-                .ok_or_else(|| {
-                    anyhow!(
-                        "Repository {} not found during refresh",
-                        repo_pkg.repository_id
-                    )
-                })?;
-        handle
-            .block_on(conary_core::repository::sync_repository(conn, &mut repo))
-            .map_err(|e| anyhow!("Repository refresh failed for {}: {}", repo.name, e))?;
+        let db_path = self.db_path.clone();
+        let repo_id = repo_pkg.repository_id;
+        let repo = tokio::task::spawn_blocking(move || {
+            let conn = conary_core::db::open(&db_path)?;
+            conary_core::db::models::Repository::find_by_id(&conn, repo_id)?
+                .ok_or_else(|| anyhow!("Repository {} not found during refresh", repo_id))
+        })
+        .await
+        .map_err(|e| anyhow!("repository refresh lookup task panicked: {e}"))??;
+        let repo_name = repo.name.clone();
+        conary_core::repository::sync_repository_from_db_path(self.db_path.clone(), repo)
+            .await
+            .map_err(|e| anyhow!("Repository refresh failed for {}: {}", repo_name, e))?;
 
-        let refreshed_pkg = self.find_package(conn, distro, package_name, version, architecture)?;
-        let path = handle
-            .block_on(download_package(&refreshed_pkg, dest_dir))
+        let refreshed_pkg = self
+            .find_package_for_conversion_async(distro, package_name, version, architecture)
+            .await?;
+        let path = download_package(&refreshed_pkg, dest_dir)
+            .await
             .map_err(|e| anyhow!("Retry after refresh failed: {}", e))?;
         Ok((refreshed_pkg, path))
     }
@@ -1127,6 +1245,8 @@ mod tests {
     };
     use conary_core::db::schema;
     use conary_core::packages::common::PackageMetadata;
+    use std::fs;
+    use std::path::Path;
     use tempfile::NamedTempFile;
 
     fn create_test_db() -> (NamedTempFile, rusqlite::Connection) {
@@ -1161,6 +1281,63 @@ mod tests {
         pkg.architecture = Some("x86_64".to_string());
         pkg.dependencies = Some(r#"["glibc","openssl"]"#.to_string());
         pkg.insert(conn).unwrap();
+    }
+
+    fn production_source_without_comments(relative_path: &str) -> String {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path);
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+        let mut stripped = String::new();
+        let mut in_block_comment = false;
+
+        for line in source.lines() {
+            if line.trim_start().starts_with("#[cfg(test)]") {
+                break;
+            }
+
+            let mut chars = line.chars().peekable();
+            while let Some(ch) = chars.next() {
+                if in_block_comment {
+                    if ch == '*' && chars.peek() == Some(&'/') {
+                        let _ = chars.next();
+                        in_block_comment = false;
+                    }
+                    continue;
+                }
+
+                if ch == '/' && chars.peek() == Some(&'/') {
+                    break;
+                }
+
+                if ch == '/' && chars.peek() == Some(&'*') {
+                    let _ = chars.next();
+                    in_block_comment = true;
+                    continue;
+                }
+
+                stripped.push(ch);
+            }
+
+            stripped.push('\n');
+        }
+
+        stripped
+    }
+
+    #[test]
+    fn remi_server_conversion_paths_do_not_block_on_async_work() {
+        for relative_path in [
+            "src/server/admin_service.rs",
+            "src/server/conversion.rs",
+            "src/server/handlers/packages.rs",
+            "src/server/prewarm.rs",
+        ] {
+            let source = production_source_without_comments(relative_path);
+            assert!(
+                !source.contains(".block_on("),
+                "{relative_path} must not call Handle::block_on in production Remi server paths"
+            );
+        }
     }
 
     // --- safe_ccs_filename tests ---

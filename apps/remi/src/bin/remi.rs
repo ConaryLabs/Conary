@@ -357,29 +357,31 @@ fn run_prewarm_command(args: PrewarmArgs) -> Result<()> {
         dry_run: args.dry_run,
     };
 
-    let result = run_prewarm(&config)?;
-    println!("Pre-warm complete:");
-    println!("  Processed:  {}", result.packages_processed);
-    println!("  Converted:  {}", result.packages_converted);
-    println!("  Skipped:    {}", result.packages_skipped);
-    println!("  Failed:     {}", result.packages_failed);
-    println!("  Total size: {} bytes", result.total_bytes);
+    conary_bootstrap::run_with_runtime(move || async move {
+        let result = run_prewarm(&config).await?;
+        println!("Pre-warm complete:");
+        println!("  Processed:  {}", result.packages_processed);
+        println!("  Converted:  {}", result.packages_converted);
+        println!("  Skipped:    {}", result.packages_skipped);
+        println!("  Failed:     {}", result.packages_failed);
+        println!("  Total size: {} bytes", result.total_bytes);
 
-    if !result.converted.is_empty() {
-        println!("\nConverted packages:");
-        for package in &result.converted {
-            println!("  {}", package);
+        if !result.converted.is_empty() {
+            println!("\nConverted packages:");
+            for package in &result.converted {
+                println!("  {}", package);
+            }
         }
-    }
 
-    if !result.failed.is_empty() {
-        println!("\nFailed packages:");
-        for (package, error) in &result.failed {
-            println!("  {}: {}", package, error);
+        if !result.failed.is_empty() {
+            println!("\nFailed packages:");
+            for (package, error) in &result.failed {
+                println!("  {}: {}", package, error);
+            }
         }
-    }
 
-    Ok(())
+        Ok(())
+    })
 }
 
 fn run_trust_command(command: TrustCommand) -> Result<()> {

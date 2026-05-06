@@ -16,15 +16,24 @@ use super::client::RepositoryClient;
 use super::gpg::{GpgVerifier, MetadataSignatureVerifier};
 use super::registry::{self, RepositoryFormat};
 use native::{
-    SyncedPackageRow, convert_requirement_groups, distro_flavor_to_db,
-    normalized_repository_capabilities, persist_native_sync_rows, version_scheme_to_db,
+    convert_requirement_groups, distro_flavor_to_db, normalized_repository_capabilities,
+    persist_native_sync_rows, version_scheme_to_db,
 };
 #[cfg(test)]
-use remi::{CanonicalMapResponse, RemiPackageEntry, remi_sync_row};
-use remi::{fetch_and_persist_canonical_map, sync_repository_remi};
+use remi::remi_sync_row;
+use remi::{
+    fetch_and_persist_canonical_map, fetch_canonical_map_snapshot, fetch_remi_sync_rows,
+    persist_canonical_map, sync_repository_remi,
+};
+#[cfg(test)]
+use types::{CanonicalMapResponse, RemiPackageEntry};
+use types::{
+    JsonPackageDelta, JsonRepositorySyncSnapshot, RepositorySyncSnapshot, SyncedPackageRow,
+};
 
 mod native;
 mod remi;
+mod types;
 
 /// Get current timestamp as ISO 8601 string
 pub fn current_timestamp() -> String {
@@ -44,6 +53,16 @@ pub fn parse_timestamp(timestamp: &str) -> Result<u64> {
             "Timestamp is before Unix epoch (negative): {timestamp}"
         ))
     })
+}
+
+async fn run_blocking_sync<F, T>(f: F) -> Result<T>
+where
+    F: FnOnce() -> Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|error| Error::InternalError(format!("blocking sync task failed: {error}")))?
 }
 
 /// Rebase a download URL from metadata source to content source
@@ -88,12 +107,11 @@ fn rebase_download_url(
     }
 }
 
-/// Synchronize repository using native metadata format parsers
-async fn sync_repository_native(
-    conn: &Connection,
-    repo: &mut Repository,
+async fn fetch_repository_native_snapshot(
+    repo: &Repository,
     format: RepositoryFormat,
-) -> Result<usize> {
+    keyring_dir: &Path,
+) -> Result<RepositorySyncSnapshot> {
     info!(
         "Syncing repository {} using native {:?} format",
         repo.name, format
@@ -102,7 +120,7 @@ async fn sync_repository_native(
     // Create and use parser from registry
     let metadata_signature_verifier = if repo.gpg_check {
         Some(MetadataSignatureVerifier::new(
-            keyring_dir_for_connection(conn)?,
+            keyring_dir.to_path_buf(),
             repo.name.clone(),
             true,
         ))
@@ -188,12 +206,18 @@ async fn sync_repository_native(
             }
         })
         .collect();
-    let mut repo_packages: Vec<RepositoryPackage> = synced_packages
-        .iter()
-        .map(|row| row.package.clone())
-        .collect();
+    Ok(RepositorySyncSnapshot::NativeRows(synced_packages))
+}
 
-    let count = persist_native_sync_rows(conn, repo, &mut repo_packages, synced_packages)?;
+/// Synchronize repository using native metadata format parsers
+async fn sync_repository_native(
+    conn: &Connection,
+    repo: &mut Repository,
+    format: RepositoryFormat,
+) -> Result<usize> {
+    let keyring_dir = keyring_dir_for_connection(conn)?;
+    let snapshot = fetch_repository_native_snapshot(repo, format, &keyring_dir).await?;
+    let count = persist_repository_sync_snapshot(conn, repo, snapshot)?;
 
     info!(
         "Synchronized {} packages from repository {}",
@@ -216,6 +240,122 @@ fn keyring_dir_for_connection(conn: &Connection) -> Result<PathBuf> {
     }
 
     Ok(crate::db::paths::keyring_dir("/var/lib/conary/conary.db"))
+}
+
+async fn fetch_repository_sync_snapshot(
+    repo: &Repository,
+    keyring_dir: &Path,
+) -> Result<RepositorySyncSnapshot> {
+    if repo.default_strategy.as_deref() == Some("remi") {
+        return fetch_remi_sync_rows(repo)
+            .await
+            .map(RepositorySyncSnapshot::NativeRows);
+    }
+
+    let format = registry::detect_repository_format(&repo.name, &repo.url);
+
+    if format != RepositoryFormat::Json {
+        match fetch_repository_native_snapshot(repo, format, keyring_dir).await {
+            Ok(snapshot) => return Ok(snapshot),
+            Err(e) => {
+                warn!("Native format sync failed: {}, falling back to JSON", e);
+            }
+        }
+    }
+
+    fetch_repository_json_snapshot(repo).await
+}
+
+/// Synchronize repository metadata by opening short-lived database connections
+/// around blocking persistence phases.
+pub async fn sync_repository_from_db_path(db_path: PathBuf, repo: Repository) -> Result<usize> {
+    info!("Synchronizing repository: {}", repo.name);
+
+    if repo.tuf_enabled {
+        let repo_id = repo
+            .id
+            .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
+        let tuf_client =
+            crate::trust::client::TufClient::new(repo_id, &repo.url, repo.tuf_root_url.as_deref())
+                .map_err(|e| Error::TrustError(e.to_string()))?;
+
+        let state_db_path = db_path.clone();
+        let update_state = run_blocking_sync(move || {
+            let conn = crate::db::open_fast(&state_db_path)?;
+            tuf_client
+                .load_update_state(&conn)
+                .map_err(|e| Error::TrustError(e.to_string()))
+        })
+        .await?;
+
+        let tuf_client =
+            crate::trust::client::TufClient::new(repo_id, &repo.url, repo.tuf_root_url.as_deref())
+                .map_err(|e| Error::TrustError(e.to_string()))?;
+        let update_snapshot = tuf_client
+            .fetch_update_snapshot(update_state)
+            .await
+            .map_err(|e| Error::TrustError(e.to_string()))?;
+
+        let persist_db_path = db_path.clone();
+        let verified = run_blocking_sync(move || {
+            let conn = crate::db::open_fast(&persist_db_path)?;
+            tuf_client
+                .persist_update_snapshot(&conn, update_snapshot)
+                .map_err(|e| Error::TrustError(e.to_string()))
+        })
+        .await?;
+
+        info!(
+            "TUF verified: root v{}, targets v{}, {} targets",
+            verified.root_version,
+            verified.targets_version,
+            verified.targets.len()
+        );
+    }
+
+    let keyring_dir = crate::db::paths::keyring_dir(&db_path.display().to_string());
+    let snapshot = fetch_repository_sync_snapshot(&repo, &keyring_dir).await?;
+
+    let persist_repo_id = repo
+        .id
+        .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
+    let persist_db_path = db_path.clone();
+    let count = run_blocking_sync(move || {
+        let conn = crate::db::open_fast(&persist_db_path)?;
+        let mut repo = Repository::find_by_id(&conn, persist_repo_id)?.ok_or_else(|| {
+            Error::NotFound(format!(
+                "Repository {persist_repo_id} not found during sync"
+            ))
+        })?;
+        persist_repository_sync_snapshot(&conn, &mut repo, snapshot)
+    })
+    .await?;
+
+    if let Some(ref remi_endpoint) = repo.default_strategy_endpoint {
+        match fetch_canonical_map_snapshot(remi_endpoint).await {
+            Ok(map) => {
+                let canonical_db_path = db_path.clone();
+                match run_blocking_sync(move || {
+                    let conn = crate::db::open_fast(&canonical_db_path)?;
+                    persist_canonical_map(&conn, &map)
+                })
+                .await
+                {
+                    Ok(mapping_count) => {
+                        info!("Synced {} canonical mappings from Remi", mapping_count);
+                    }
+                    Err(e) => {
+                        debug!("Failed to persist canonical map: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                debug!("Failed to fetch canonical map: {}", e);
+            }
+        }
+    }
+
+    Ok(count)
 }
 
 /// Synchronize repository metadata with the database
@@ -288,8 +428,7 @@ pub async fn sync_repository(conn: &Connection, repo: &mut Repository) -> Result
     Ok(count)
 }
 
-/// JSON metadata fallback sync path (used when native format sync is unavailable)
-async fn sync_repository_json_fallback(conn: &Connection, repo: &mut Repository) -> Result<usize> {
+async fn fetch_repository_json_snapshot(repo: &Repository) -> Result<RepositorySyncSnapshot> {
     let client = RepositoryClient::new()?;
     let metadata = client.fetch_metadata(&repo.url).await?;
 
@@ -297,15 +436,8 @@ async fn sync_repository_json_fallback(conn: &Connection, repo: &mut Repository)
         .id
         .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
 
-    // Use a transaction for the delete + insert (atomic fallback sync)
-    let tx = conn.unchecked_transaction()?;
-
-    // Delete old package entries for this repository
-    RepositoryPackage::delete_by_repository(&tx, repo_id)?;
-
-    // Insert new package metadata
-    let mut count = 0;
-    let mut delta_count = 0;
+    let mut packages = Vec::new();
+    let mut delta_rows = Vec::new();
 
     for pkg_meta in metadata.packages {
         let deps_json = pkg_meta
@@ -333,44 +465,98 @@ async fn sync_repository_json_fallback(conn: &Connection, repo: &mut Repository)
         repo_pkg.description = pkg_meta.description;
         repo_pkg.dependencies = deps_json;
 
-        repo_pkg.insert(&tx)?;
-        count += 1;
+        packages.push(repo_pkg);
 
         // Store delta metadata if available
-        if let Some(deltas) = pkg_meta.delta_from {
-            for delta_info in deltas {
-                let mut delta = PackageDelta::new(
-                    pkg_meta.name.clone(),
-                    delta_info.from_version,
-                    pkg_meta.version.clone(),
-                    delta_info.from_hash,
-                    pkg_meta.checksum.clone(),
-                    delta_info.delta_url,
-                    delta_info.delta_size,
-                    delta_info.delta_checksum,
-                    pkg_meta.size,
-                );
-
-                delta.insert(&tx)?;
-                delta_count += 1;
+        if let Some(delta_infos) = pkg_meta.delta_from {
+            for delta_info in delta_infos {
+                delta_rows.push(JsonPackageDelta {
+                    package_name: pkg_meta.name.clone(),
+                    from_version: delta_info.from_version,
+                    to_version: pkg_meta.version.clone(),
+                    from_hash: delta_info.from_hash,
+                    to_hash: pkg_meta.checksum.clone(),
+                    delta_url: delta_info.delta_url,
+                    delta_size: delta_info.delta_size,
+                    delta_checksum: delta_info.delta_checksum,
+                    target_size: pkg_meta.size,
+                });
             }
         }
     }
 
-    // Link packages to canonical identity
-    link_canonical_ids(&tx, repo_id)?;
+    Ok(RepositorySyncSnapshot::JsonFallback(
+        JsonRepositorySyncSnapshot {
+            packages,
+            deltas: delta_rows,
+        },
+    ))
+}
 
-    // Update last_sync timestamp
-    repo.last_sync = Some(current_timestamp());
-    repo.update(&tx)?;
+fn persist_repository_sync_snapshot(
+    conn: &Connection,
+    repo: &mut Repository,
+    snapshot: RepositorySyncSnapshot,
+) -> Result<usize> {
+    match snapshot {
+        RepositorySyncSnapshot::NativeRows(synced_packages) => {
+            let mut repo_packages: Vec<RepositoryPackage> = synced_packages
+                .iter()
+                .map(|row| row.package.clone())
+                .collect();
+            persist_native_sync_rows(conn, repo, &mut repo_packages, synced_packages)
+        }
+        RepositorySyncSnapshot::JsonFallback(snapshot) => {
+            let repo_id = repo
+                .id
+                .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
+            let count = snapshot.packages.len();
 
-    tx.commit()?;
+            let tx = conn.unchecked_transaction()?;
 
-    info!(
-        "Synchronized {} packages and {} deltas from repository {}",
-        count, delta_count, repo.name
-    );
-    Ok(count)
+            RepositoryPackage::delete_by_repository(&tx, repo_id)?;
+
+            for mut repo_pkg in snapshot.packages {
+                repo_pkg.insert(&tx)?;
+            }
+
+            let mut delta_count = 0;
+            for delta in snapshot.deltas {
+                let mut db_delta = PackageDelta::new(
+                    delta.package_name,
+                    delta.from_version,
+                    delta.to_version,
+                    delta.from_hash,
+                    delta.to_hash,
+                    delta.delta_url,
+                    delta.delta_size,
+                    delta.delta_checksum,
+                    delta.target_size,
+                );
+                db_delta.insert(&tx)?;
+                delta_count += 1;
+            }
+
+            link_canonical_ids(&tx, repo_id)?;
+
+            repo.last_sync = Some(current_timestamp());
+            repo.update(&tx)?;
+
+            tx.commit()?;
+
+            info!(
+                "Synchronized {} packages and {} deltas from repository {}",
+                count, delta_count, repo.name
+            );
+            Ok(count)
+        }
+    }
+}
+
+/// JSON metadata fallback sync path (used when native format sync is unavailable)
+async fn sync_repository_json_fallback(conn: &Connection, repo: &mut Repository) -> Result<usize> {
+    let snapshot = fetch_repository_json_snapshot(repo).await?;
+    persist_repository_sync_snapshot(conn, repo, snapshot)
 }
 
 /// Check if repository metadata needs refresh
