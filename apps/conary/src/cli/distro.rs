@@ -24,7 +24,10 @@ pub enum DistroCommands {
         db: DbArgs,
     },
     /// Show available distros
-    List,
+    List {
+        #[command(flatten)]
+        db: DbArgs,
+    },
     /// Show current compatibility pin and affinity stats
     Info {
         #[command(flatten)]

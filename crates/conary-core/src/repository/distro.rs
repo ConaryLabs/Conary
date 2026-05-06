@@ -8,7 +8,42 @@ use crate::repository::registry::{RepositoryFormat, detect_repository_format};
 use crate::repository::versioning::VersionScheme;
 
 pub const SUPPORTED_USER_DISTROS: &[&str] = &["fedora-44", "ubuntu-26.04", "arch"];
+pub const SUPPORTED_USER_DISTRO_CATALOG: &[SupportedDistro] = &[
+    SupportedDistro {
+        id: "fedora-44",
+        display_name: "Fedora 44",
+    },
+    SupportedDistro {
+        id: "ubuntu-26.04",
+        display_name: "Ubuntu 26.04 LTS",
+    },
+    SupportedDistro {
+        id: "arch",
+        display_name: "Arch Linux (rolling)",
+    },
+];
 pub const INTERNAL_DISTRO_FAMILIES: &[&str] = &["fedora", "ubuntu", "arch"];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SupportedDistro {
+    pub id: &'static str,
+    pub display_name: &'static str,
+}
+
+/// Return the user-facing distro catalog supported by this release.
+#[must_use]
+pub fn supported_user_distros() -> &'static [SupportedDistro] {
+    SUPPORTED_USER_DISTRO_CATALOG
+}
+
+/// Look up a user-facing supported distro by exact ID.
+#[must_use]
+pub fn supported_distro(id: &str) -> Option<&'static SupportedDistro> {
+    let id = id.trim();
+    SUPPORTED_USER_DISTRO_CATALOG
+        .iter()
+        .find(|distro| distro.id == id)
+}
 
 /// Infer the dependency flavor from a supported distro name or internal family
 /// label.
@@ -94,6 +129,12 @@ mod tests {
 
     #[test]
     fn supported_user_distro_names_map_to_flavors_and_schemes() {
+        let catalog_ids: Vec<_> = supported_user_distros()
+            .iter()
+            .map(|distro| distro.id)
+            .collect();
+        assert_eq!(catalog_ids.as_slice(), SUPPORTED_USER_DISTROS);
+
         for (name, flavor, scheme) in [
             (
                 "fedora-44",
@@ -116,6 +157,16 @@ mod tests {
             assert!(flavor_matches_distro_name(name, flavor));
             assert_eq!(flavor_to_version_scheme(flavor), scheme);
         }
+    }
+
+    #[test]
+    fn supported_distro_lookup_is_exact_and_narrow() {
+        assert_eq!(
+            supported_distro("fedora-44").map(|distro| distro.display_name),
+            Some("Fedora 44")
+        );
+        assert_eq!(supported_distro("linux-mint"), None);
+        assert_eq!(supported_distro("debian"), None);
     }
 
     #[test]
