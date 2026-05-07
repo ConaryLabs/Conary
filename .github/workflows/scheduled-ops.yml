@@ -52,10 +52,24 @@ jobs:
       - name: Run security audit
         run: bash scripts/release-cargo-audit.sh
 
+  forge-storage-cleanup:
+    name: forge-storage-cleanup
+    if: ${{ (github.event_name == 'schedule' && github.event.schedule == '30 6 * * *') || (github.event_name == 'workflow_dispatch' && (github.event.inputs.run_deep_validation == 'true' || github.event.inputs.run_qemu == 'true')) }}
+    runs-on: [self-hosted, forge-trusted]
+    env:
+      DOCKER_HOST: unix:///run/user/1000/podman/podman.sock
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Forge preflight
+        run: bash scripts/forge-preflight.sh --mode container
+      - name: Reclaim Forge container storage
+        run: bash scripts/forge-container-cleanup.sh
+
   deep-validation:
     name: deep-validation (${{ matrix.distro }})
     if: ${{ (github.event_name == 'schedule' && github.event.schedule == '30 6 * * *') || (github.event_name == 'workflow_dispatch' && github.event.inputs.run_deep_validation == 'true') }}
     runs-on: [self-hosted, forge-trusted]
+    needs: forge-storage-cleanup
     env:
       DOCKER_HOST: unix:///run/user/1000/podman/podman.sock
     strategy:
@@ -101,6 +115,7 @@ jobs:
     name: qemu
     if: ${{ (github.event_name == 'schedule' && github.event.schedule == '30 6 * * *') || (github.event_name == 'workflow_dispatch' && github.event.inputs.run_qemu == 'true') }}
     runs-on: [self-hosted, forge-trusted]
+    needs: forge-storage-cleanup
     env:
       DOCKER_HOST: unix:///run/user/1000/podman/podman.sock
     steps:

@@ -107,6 +107,9 @@ bash scripts/forge-preflight.sh --mode container
 # Read-only runner preflight for QEMU suites:
 bash scripts/forge-preflight.sh --mode qemu
 
+# Reclaim inactive rootless Podman storage before container-heavy suites:
+bash scripts/forge-container-cleanup.sh
+
 # Supported Forge control-plane smoke:
 bash scripts/forge-smoke.sh
 
@@ -167,6 +170,6 @@ bash scripts/forge-preflight.sh --mode container
 
 **Container builds fail locally:**
 ```bash
-podman system prune -a
+bash scripts/forge-container-cleanup.sh
 podman build -f apps/conary/tests/integration/remi/containers/Containerfile.fedora44 apps/conary/tests/integration/remi/
 ```

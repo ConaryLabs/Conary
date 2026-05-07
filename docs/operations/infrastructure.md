@@ -70,6 +70,9 @@ task or when you are debugging the underlying service path itself.
 - For trusted-runner runtime verification, run
   `bash scripts/forge-preflight.sh --mode container` before container suites
   and `bash scripts/forge-preflight.sh --mode qemu` before QEMU suites
+- Container-heavy Forge validation should reclaim inactive rootless Podman
+  storage with `bash scripts/forge-container-cleanup.sh`; scheduled deep/QEMU
+  CI does this before starting the matrix.
 - Port resolution for CLI and smoke checks is `--port` > `CONARY_TEST_PORT` >
   `9090`
 - Forge runtime repair should use
