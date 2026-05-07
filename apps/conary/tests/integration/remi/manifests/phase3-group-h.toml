@@ -271,7 +271,7 @@ retries = 3
 
 [[test.step]]
 [test.step.kill_after_log]
-conary = "env CONARY_TEST_HOLD_DURING_ROLLBACK_MS=1500 system state rollback 1"
+conary = "env CONARY_TEST_HOLD_DURING_ROLLBACK_MS=1500 system state rollback 1 --allow-live-system-mutation"
 pattern = "Rolling back changeset"
 timeout_seconds = 30
 
