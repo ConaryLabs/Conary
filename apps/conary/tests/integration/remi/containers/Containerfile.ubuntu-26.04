@@ -10,7 +10,7 @@
 FROM docker.io/library/ubuntu:26.04 AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential pkg-config libssl-dev curl ca-certificates \
+    build-essential cmake pkg-config libssl-dev curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Rust
