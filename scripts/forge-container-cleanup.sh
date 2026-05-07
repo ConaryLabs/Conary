@@ -52,8 +52,20 @@ else
   echo "[forge-container-cleanup] no stale conary-test containers found"
 fi
 
+echo "[forge-container-cleanup] removing stale Podman build-storage containers"
+mapfile -t STALE_STORAGE_CONTAINERS < <(
+  DOCKER_HOST="unix://${PODMAN_SOCKET}" podman ps -a --external --format '{{.ID}}' 2>/dev/null || true
+)
+if (( ${#STALE_STORAGE_CONTAINERS[@]} > 0 )); then
+  DOCKER_HOST="unix://${PODMAN_SOCKET}" podman rm -f "${STALE_STORAGE_CONTAINERS[@]}"
+else
+  echo "[forge-container-cleanup] no stale build-storage containers found"
+fi
+
 echo "[forge-container-cleanup] pruning inactive images, containers, and volumes"
-DOCKER_HOST="unix://${PODMAN_SOCKET}" podman system prune -af --volumes
+if ! DOCKER_HOST="unix://${PODMAN_SOCKET}" podman system prune -af --volumes; then
+  echo "[forge-container-cleanup] warning: podman system prune was incomplete" >&2
+fi
 
 echo "[forge-container-cleanup] podman usage after cleanup"
 DOCKER_HOST="unix://${PODMAN_SOCKET}" podman system df || true
