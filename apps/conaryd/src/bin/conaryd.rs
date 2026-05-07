@@ -8,8 +8,9 @@ use std::path::PathBuf;
 
 /// conaryd — Conary system daemon
 ///
-/// Provides a REST API for package operations with SSE progress
-/// streaming and job queue management.
+/// Local Conary daemon with job queue, SSE progress streaming, and enhance-job
+/// support. Install/remove/update package jobs are accepted only as explicit
+/// Not Implemented responses until the daemon package executor is built.
 #[derive(Parser)]
 #[command(name = "conaryd", version, about)]
 struct Args {

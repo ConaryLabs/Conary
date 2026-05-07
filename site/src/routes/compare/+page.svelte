@@ -154,10 +154,10 @@
 		<!-- Detailed comparisons -->
 		<div class="details">
 			<div class="detail-card animate-in" style="--stagger: 5">
-				<h2>vs. apt <span class="detail-distro">(Debian / Ubuntu)</span></h2>
+				<h2>vs. apt <span class="detail-distro">(Ubuntu LTS)</span></h2>
 				<p>
-					apt is the workhorse of the Debian ecosystem -- battle-tested and reliable. Conary
-					doesn't replace apt on Debian systems; it sits alongside it. The key differences:
+					apt is the workhorse of the DEB ecosystem -- battle-tested and reliable. Conary
+					doesn't replace apt on Ubuntu LTS systems; it sits alongside it. The key differences:
 					Conary builds immutable EROFS generations with kernel-enforced integrity (fs-verity),
 					adds content-addressable storage for deduplication, binary delta updates to
 					reduce bandwidth, and the ability to manage Fedora or Arch packages on the same machine.

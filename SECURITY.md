@@ -36,10 +36,10 @@ We will coordinate disclosure with you. You will be credited in the advisory unl
 
 | Version | Supported |
 |---------|-----------|
-| 0.8.x   | Yes       |
+| 0.8.x limited preview | Yes |
 | < 0.8   | No        |
 
-Only the latest release receives security updates. We recommend always running the most recent version.
+Only the latest release receives security updates. The preview support matrix is Fedora 44, Ubuntu 26.04 LTS, and Arch Linux on Linux kernels with the required composefs, fs-verity, namespace, landlock, and seccomp support. We recommend always running the most recent version.
 
 ## Security Architecture
 

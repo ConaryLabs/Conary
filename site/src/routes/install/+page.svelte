@@ -1,6 +1,6 @@
 <svelte:head>
 	<title>Install - Conary</title>
-	<meta name="description" content="Install Conary on Fedora, Arch Linux, or Ubuntu in under a minute." />
+	<meta name="description" content="Install Conary on Fedora 44, Ubuntu 26.04 LTS, or Arch Linux in under a minute." />
 </svelte:head>
 
 <section class="page-hero">
@@ -105,15 +105,15 @@
 			<div class="distro-cards">
 				<div class="distro-card distro-fedora">
 					<div class="distro-badge">Fedora</div>
-					<p class="distro-note">Fedora 44+ / RPM-based</p>
+					<p class="distro-note">Fedora 44 / RPM-based</p>
 				</div>
 				<div class="distro-card distro-arch">
 					<div class="distro-badge">Arch Linux</div>
 					<p class="distro-note">PKGBUILD package</p>
 				</div>
 				<div class="distro-card distro-ubuntu">
-					<div class="distro-badge">Ubuntu / Debian</div>
-					<p class="distro-note">Ubuntu 24.04+ / Debian 12+</p>
+					<div class="distro-badge">Ubuntu</div>
+					<p class="distro-note">Ubuntu 26.04 LTS / DEB-based</p>
 				</div>
 			</div>
 		</div>

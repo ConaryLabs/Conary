@@ -149,8 +149,9 @@ Arguments are integer counts of package versions remaining:
 - `$1 = 1`: Upgrade removal (old package scripts) - NOT 0!
 - `$1 = 0`: Complete removal
 
-### DEB (Debian, Ubuntu)
-Arguments are action words per Debian Policy:
+### DEB-family packages
+Arguments are action words per Debian Policy; Ubuntu packages use these DEB
+scriptlet semantics in the current public support matrix:
 - preinst: `install` or `upgrade <old-version>`
 - postinst: `configure [<old-version>]`
 - prerm: `remove` or `upgrade <new-version>`
