@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-05-01
-revision: 5
+last_updated: 2026-05-06
+revision: 6
 summary: Non-secret infrastructure, MCP, release, Remi deploy, and Forge staging guidance for Conary contributors and coding assistants
 ---
 
@@ -13,9 +13,11 @@ summary: Non-secret infrastructure, MCP, release, Remi deploy, and Forge staging
   simple external health-check hostname for that same Remi service.
 - Direct SSH access for the Remi host uses `ssh.conary.io`, not the proxied
   public HTTPS hostnames.
-- Remi currently runs Ubuntu 24.04 on the Hetzner origin, so host-level
-  package-manager notes should assume `apt` unless a future migration updates
-  this document.
+- Remi currently runs Arch Linux on the Hetzner origin. Host-level
+  package-manager notes should assume `pacman` unless a future migration
+  updates this document. The Remi host OS is independent of the public client
+  distro support matrix, which is Fedora 44, Ubuntu 26.04 LTS, and Arch Linux
+  for the limited preview.
 - Forge is the trusted GitHub runner host used for `conary-test` validation,
   test-harness service work, and source-sync validation.
 - Forge also serves as the current local-only staging host for `conaryd`

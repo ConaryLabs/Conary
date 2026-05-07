@@ -1086,7 +1086,7 @@ packages = ["nginx-module-geoip", "redis-sentinel"]
 [system]
 profile = "balanced/latest-anywhere"
 selection_mode = "latest"
-allowed_distros = ["fedora-44", "arch"]
+allowed_distros = ["fedora-44", "ubuntu-26.04", "arch"]
 convergence = "track-only"
 
 [system.pin]
@@ -2583,7 +2583,7 @@ pub struct ConversionService {
 }
 ```
 
-Package type detection uses the distro name: `fedora` -> RPM, `ubuntu`/`debian` -> DEB, `arch` -> Arch. Each format's parser (`RpmPackage`, `DebPackage`, `ArchPackage`) implements the `PackageFormat` trait, producing a `PackageMetadata` with files, dependencies, and scripts. The `LegacyConverter` then chunks the content using FastCDC boundaries (16 KB min, 64 KB avg, 256 KB max).
+Package type detection uses the supported public distro family: `fedora` -> RPM, `ubuntu` -> DEB, `arch` -> Arch. The parser layer still understands DEB-family package metadata internally, but Debian is not part of the limited public support matrix. Each format's parser (`RpmPackage`, `DebPackage`, `ArchPackage`) implements the `PackageFormat` trait, producing a `PackageMetadata` with files, dependencies, and scripts. The `LegacyConverter` then chunks the content using FastCDC boundaries (16 KB min, 64 KB avg, 256 KB max).
 
 Filename sanitization prevents path traversal -- `safe_ccs_filename()` passes both the package name and version through `sanitize_filename()` before constructing the output path.
 

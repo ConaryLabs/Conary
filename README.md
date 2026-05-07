@@ -10,6 +10,8 @@ A cross-distribution Linux system manager with immutable generations, atomic tra
 
 Inspired by the [original Conary](https://en.wikipedia.org/wiki/Conary_(package_manager)) from rPath, which pioneered concepts like troves, changesets, flavors, and components that were ahead of their time. This project carries those ideas forward with a modern implementation.
 
+**Release status:** Conary is being prepared as a limited public preview for Fedora 44, Ubuntu 26.04 LTS, and Arch Linux. The CLI install/remove/update path, immutable generations, raw/qcow2 generation export, Remi conversion, and Forge validation lanes are the supported preview surface. conaryd package execution, ISO generation export, generation-to-OCI convergence, and non-x86_64 generation boot assets remain follow-up work.
+
 ---
 
 ## Why Conary
@@ -55,7 +57,7 @@ conary repo sync
 conary install nginx
 ```
 
-**Current focus: hardening and developer experience.** The core install, rollback, generation, bootstrap, and server paths are in place. Recent work made installed-runtime generation export bootable under QEMU, tightened release/deploy flows, and moved the project toward verification, operational polish, and documentation accuracy rather than first-pass scaffolding.
+**Current focus: limited public preview readiness.** The core install, rollback, generation, bootstrap, and server paths are in place. Recent work made installed-runtime generation export bootable under QEMU, tightened release/deploy flows, restored Forge validation, refreshed security gates, and moved the project toward operational polish and documentation accuracy rather than first-pass scaffolding.
 
 ---
 
@@ -75,7 +77,7 @@ conary install nginx
 | Content-addressable storage | No | No | Yes | Yes |
 | Hermetic builds | No | No | Yes | Partial (experimental) |
 | Dev shells | No | No | Yes | Yes |
-| OCI container export | No | No | Yes | Yes (experimental) |
+| CCS package OCI export | No | No | Yes | Yes (experimental) |
 | Capability enforcement (landlock/seccomp) | No | No | No | Yes |
 | Scriptlet sandboxing | No | No | N/A | Yes |
 | Single binary, no daemon required | Yes | Yes | No | Yes |
@@ -99,7 +101,7 @@ cargo build -p conary
 # Use the freshly built CLI directly from target/
 ./target/debug/conary system init
 
-# Add the Remi package server (Fedora, Arch, Ubuntu, Debian)
+# Add the Remi package server (Fedora 44, Ubuntu 26.04 LTS, Arch)
 ./target/debug/conary repo add remi https://remi.conary.io
 ./target/debug/conary repo sync
 
@@ -191,7 +193,7 @@ openssl = "3.0.*"
 
 [system]
 selection_mode = "latest"
-allowed_distros = ["fedora-44", "arch"]
+allowed_distros = ["fedora-44", "ubuntu-26.04", "arch"]
 
 [system.pin]
 distro = "fedora-44"
@@ -476,7 +478,7 @@ cargo run -p remi -- --bind 0.0.0.0:8080
 
 ## conaryd Daemon
 
-A local daemon that provides a REST API for package operations over a Unix socket, with SSE event streaming for real-time progress. Integrates with systemd for socket activation and watchdog support.
+A local daemon with Unix-socket REST scaffolding, a persistent job queue, SSE event streaming, read/query routes, and enhance-job support. Package install/remove/update routes intentionally return `501 Not Implemented` until the shared daemon package executor is built; use the CLI directly for package operations in the limited preview.
 
 ```bash
 # Build the daemon crate
@@ -549,7 +551,7 @@ cargo build --profile fast-release   # Faster compile, still optimized
 
 ## Project Status
 
-**Version 0.8.0** -- The project has a working end-to-end stack: multi-format installs, atomic changesets, immutable generations, takeover/bootstrap flows, Remi conversion and serving, federation, and capability-restricted runtime execution. Recent work has focused on release hardening, conaryd Forge staging, the truthful self-hosting VM path, generation artifact export, self-contained installed-runtime exports, Remi deploy/conversion robustness, Fedora 44 validation, and integrity verification across retrieval and generation paths.
+**Version 0.8.0** -- The project has a working end-to-end stack: multi-format installs, atomic changesets, immutable generations, takeover/bootstrap flows, Remi conversion and serving, federation, and capability-restricted runtime execution. The current release-readiness pass is narrowing the public preview to Fedora 44, Ubuntu 26.04 LTS, and Arch Linux; keeping Forge validation and security gates green; and documenting remaining gaps such as conaryd package execution, ISO generation export, generation OCI convergence, and non-x86_64 generation boot assets.
 
 See [ROADMAP.md](ROADMAP.md) for what we're building next.
 
@@ -559,8 +561,8 @@ See [ROADMAP.md](ROADMAP.md) for what we're building next.
 
 The next milestone is the current **developer-experience and validation** push -- see [ROADMAP.md](ROADMAP.md) for the full plan. Near-term priorities:
 
-- Keep the Fedora 44 and QEMU generation-export suites in regular rotation
-- Finish ISO export and OCI convergence on the same generation artifact loader
+- Keep the Fedora 44, Ubuntu 26.04 LTS, Arch, and QEMU generation-export suites in regular rotation
+- Finish ISO generation export and OCI convergence on the same generation artifact loader
 - Make self-host VM validation pristine-by-default on reruns
 - Improve shell integration, contributor onboarding, and operator diagnostics
 - Continue hardening trust, federation, release, and rollback behavior

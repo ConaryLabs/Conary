@@ -32,7 +32,7 @@ crates/conary-core/
 
 Supporting workspace members
   apps/remi/         public/admin package service, search, federation, MCP
-  apps/conaryd/      local daemon, auth, job queue, REST/SSE routes
+  apps/conaryd/      local daemon, auth, job queue, REST/SSE routes; package execution deferred
   apps/conary-test/  integration harness, HTTP API, MCP, container runners
   crates/conary-bootstrap/ shared tracing/runtime/exit helpers for workspace binaries
   crates/conary-mcp/ shared transport-agnostic MCP helpers
@@ -440,7 +440,7 @@ The root manifest is now a virtual workspace. Build the owning crate directly:
 |---------|---------|-----------------|
 | `conary` | Package-manager CLI | `cargo build -p conary` |
 | `remi` | Remi conversion/proxy service | `cargo build -p remi` |
-| `conaryd` | Local daemon | `cargo build -p conaryd` |
+| `conaryd` | Local daemon: query/enhance routes; install/remove/update return 501 | `cargo build -p conaryd` |
 | `conary-test` | Test harness | `cargo build -p conary-test` |
 | `conary-bootstrap` | Shared binary bootstrap helpers | `cargo build -p conary-bootstrap` |
 | `conary-core` | Shared library | `cargo build -p conary-core` |

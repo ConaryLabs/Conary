@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup-remi.sh - Deploy Remi server on Ubuntu 24.04 (Hetzner)
+# setup-remi.sh - Legacy Remi host bootstrap helper
 #
 # Usage:
 #   sudo ./setup-remi.sh [--zfs]

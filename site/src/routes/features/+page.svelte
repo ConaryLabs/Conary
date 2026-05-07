@@ -72,7 +72,7 @@
 					<code>conary bootstrap dry-run</code>
 					<code>conary bootstrap status</code>
 				</div>
-				<p class="feature-note">RecipeGraph handles dependency ordering with automatic cycle breaking. SHA-256 checksum enforcement on all source downloads.</p>
+				<p class="feature-note">RecipeGraph handles dependency ordering with automatic cycle breaking. SHA-256 checksum enforcement on all source downloads. Generation artifact export is x86_64-first today; aarch64/riscv64 boot assets are reserved for follow-up work.</p>
 			</div>
 
 			<div class="feature-card">
@@ -226,11 +226,11 @@
 			<div class="feature-card">
 				<h3>OCI Export</h3>
 				<p>
-					Export any generation or package set as an OCI container image compatible
-					with podman and docker. Ship your exact verified system state as a container.
+					Export CCS packages as OCI artifacts compatible with OCI registries and
+					container tooling. Generation-to-OCI export is reserved for the shared
+					generation artifact follow-up.
 				</p>
 				<div class="feature-code">
-					<code>conary export --output ./my-image</code>
 					<code>conary ccs export ./package.ccs --output ./package.oci</code>
 				</div>
 			</div>

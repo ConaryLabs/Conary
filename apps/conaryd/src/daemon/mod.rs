@@ -15,8 +15,9 @@
 //! # Architecture
 //!
 //! The daemon is the "Guardian of State" - it holds the exclusive write lock
-//! for package operations. The CLI checks for a running daemon and forwards
-//! commands via the Unix socket.
+//! for daemon-managed jobs. Today that means enhance jobs plus read/query API
+//! plumbing; package install/remove/update execution remains on the CLI path
+//! until the shared daemon package executor is implemented.
 //!
 //! ```text
 //! CLI (thin client)                     conaryd

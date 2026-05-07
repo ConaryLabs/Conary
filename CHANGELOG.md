@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+- Prepared the limited public preview support matrix around Fedora 44, Ubuntu 26.04 LTS, and Arch Linux.
+- Refreshed Remi conversion and repository sync paths to avoid holding SQLite connections across async HTTP work.
+- Moved distro listing to the shared supported-distro catalog instead of hard-coded CLI output.
+- Restored Forge trusted-runner preflight checks and aligned integration tests with the preview distro matrix.
+- Updated cargo dependencies and the release cargo-audit gate to use the latest feasible package versions with a documented advisory waiver.
+- Refreshed site lockfile dependencies to clear high and moderate npm audit findings.
+- Clarified that conaryd package install/remove/update routes return `501 Not Implemented`; daemon package execution remains future work.
+
 ## [conary-test-v0.8.0] - 2026-04-10
 
 ### Other
@@ -787,7 +798,7 @@ that was the name in use at the time.
 - fix(capability): reject port 0 in validate_port_spec
 - security(recipe): warn on remote patches without checksums
 - security(packages): reduce CPIO max file size allocation
-- security(packages): add package size validation to Arch and Debian parsers
+- security(packages): add package size validation to Arch and DEB parsers
 - security(repository): add path traversal validation to Arch package parser
 - security(ccs): validate sysctl key and value before writing config
 - security(ccs): validate alternative name and path in hooks
@@ -1103,7 +1114,7 @@ Major release covering 10 months of development. Every subsystem listed below is
 - Podman-based integration test harness
 
 #### conaryd Daemon (feature-gated: `--features server`)
-- Local REST API for package operations over Unix socket (`/run/conary/conaryd.sock`)
+- Local REST API scaffolding over Unix socket (`/run/conary/conaryd.sock`)
 - Optional TCP listener for remote management
 - SO_PEERCRED peer credential authentication with permission checking
 - Auth gate middleware rejecting unauthenticated POST/PUT/DELETE on v1 router
