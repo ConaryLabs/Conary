@@ -25,6 +25,13 @@ pub fn load_global_config(path: &Path) -> Result<GlobalConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    fn remi_manifest_path(file_name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../conary/tests/integration/remi/manifests")
+            .join(file_name)
+    }
 
     #[test]
     fn test_parse_minimal_manifest() {
@@ -193,9 +200,9 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
 
     #[test]
     fn test_load_phase1_advanced_manifest() {
-        let path = std::path::Path::new("../tests/integration/remi/manifests/phase1-advanced.toml");
+        let path = remi_manifest_path("phase1-advanced.toml");
         if path.exists() {
-            let manifest = load_manifest(path).unwrap();
+            let manifest = load_manifest(&path).unwrap();
             assert!(
                 manifest.test.len() >= 27,
                 "Expected at least 27 tests (T11-T37), got {}",
@@ -209,6 +216,11 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
             let t11 = manifest.test.iter().find(|t| t.id == "T11").unwrap();
             assert_eq!(t11.name, "remove_package");
             assert_eq!(t11.timeout, 60);
+            let t11_remove = t11.step[0].conary.as_deref().unwrap();
+            assert!(
+                t11_remove.contains("--allow-live-system-mutation"),
+                "T11 remove must include the live-mutation guard"
+            );
 
             // Verify T15 uses stdout_contains_all
             let t15 = manifest.test.iter().find(|t| t.id == "T15").unwrap();
@@ -225,6 +237,32 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
             let a27 = t27.step[0].assert.as_ref().unwrap();
             let all27 = a27.stdout_contains_all.as_ref().unwrap();
             assert_eq!(all27.len(), 3);
+
+            // Verify dep-mode install tests are independent of earlier installs.
+            for (id, package, dep_mode) in [
+                ("T28", "${TEST_PACKAGE_1}", "--dep-mode satisfy"),
+                ("T29", "${TEST_PACKAGE_2}", "--dep-mode adopt"),
+                ("T30", "${TEST_PACKAGE_3}", "--dep-mode takeover"),
+            ] {
+                let test = manifest.test.iter().find(|t| t.id == id).unwrap();
+                let pre_remove = test.step[0].run.as_deref().unwrap_or("");
+                assert!(
+                    pre_remove.contains(" remove ") && pre_remove.contains(package),
+                    "{id} should remove {package} before reinstalling"
+                );
+                assert!(
+                    pre_remove.contains("--allow-live-system-mutation")
+                        && pre_remove.contains("--db-path ${DB_PATH}")
+                        && pre_remove.contains("|| true"),
+                    "{id} pre-remove should be best-effort and use the test DB"
+                );
+
+                let install = test.step[1].conary.as_deref().unwrap_or("");
+                assert!(
+                    install.contains(dep_mode),
+                    "{id} should keep its dep-mode install assertion"
+                );
+            }
 
             // Verify T33 uses run (no_db generation command)
             let t33 = manifest.test.iter().find(|t| t.id == "T33").unwrap();
@@ -263,9 +301,9 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
 
     #[test]
     fn test_load_phase1_core_manifest() {
-        let path = std::path::Path::new("../tests/integration/remi/manifests/phase1-core.toml");
+        let path = remi_manifest_path("phase1-core.toml");
         if path.exists() {
-            let manifest = load_manifest(path).unwrap();
+            let manifest = load_manifest(&path).unwrap();
             assert!(
                 manifest.test.len() >= 10,
                 "Expected at least 10 tests, got {}",
@@ -303,9 +341,9 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
 
     #[test]
     fn test_load_phase2_group_a_manifest() {
-        let path = std::path::Path::new("../tests/integration/remi/manifests/phase2-group-a.toml");
+        let path = remi_manifest_path("phase2-group-a.toml");
         if path.exists() {
-            let manifest = load_manifest(path).unwrap();
+            let manifest = load_manifest(&path).unwrap();
             assert_eq!(manifest.suite.phase, 2);
             assert!(
                 manifest.test.len() >= 13,
@@ -353,9 +391,9 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
 
     #[test]
     fn test_load_phase2_group_b_manifest() {
-        let path = std::path::Path::new("../tests/integration/remi/manifests/phase2-group-b.toml");
+        let path = remi_manifest_path("phase2-group-b.toml");
         if path.exists() {
-            let manifest = load_manifest(path).unwrap();
+            let manifest = load_manifest(&path).unwrap();
             assert_eq!(manifest.suite.phase, 2);
             assert!(
                 manifest.test.len() >= 7,
@@ -372,18 +410,29 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
             assert_eq!(t51.group.as_deref(), Some("B"));
             assert!(t51.step[0].run.is_some(), "T51 should use run (no_db)");
 
-            // Verify T57 checks for no panic
+            // Verify T57 exercises takeover through ready-to-activate state.
             let t57 = manifest.test.iter().find(|t| t.id == "T57").unwrap();
             let a57 = t57.step[0].assert.as_ref().unwrap();
-            assert_eq!(a57.stdout_not_contains.as_deref(), Some("panic"));
+            assert_eq!(a57.exit_code, Some(0));
+            assert!(
+                t57.step[0]
+                    .conary
+                    .as_deref()
+                    .is_some_and(|cmd| cmd.contains("system takeover --up-to generation"))
+            );
+            let all57 = a57.stdout_contains_all.as_ref().unwrap();
+            assert!(
+                all57.contains(&"ready to activate".to_string())
+                    && all57.contains(&"conary system generation switch".to_string())
+            );
         }
     }
 
     #[test]
     fn test_load_phase2_group_c_manifest() {
-        let path = std::path::Path::new("../tests/integration/remi/manifests/phase2-group-c.toml");
+        let path = remi_manifest_path("phase2-group-c.toml");
         if path.exists() {
-            let manifest = load_manifest(path).unwrap();
+            let manifest = load_manifest(&path).unwrap();
             assert_eq!(manifest.suite.phase, 2);
             assert!(
                 manifest.test.len() >= 4,
@@ -411,9 +460,9 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
 
     #[test]
     fn test_load_phase2_group_d_manifest() {
-        let path = std::path::Path::new("../tests/integration/remi/manifests/phase2-group-d.toml");
+        let path = remi_manifest_path("phase2-group-d.toml");
         if path.exists() {
-            let manifest = load_manifest(path).unwrap();
+            let manifest = load_manifest(&path).unwrap();
             assert_eq!(manifest.suite.phase, 2);
             assert!(
                 manifest.test.len() >= 5,
@@ -445,9 +494,9 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
 
     #[test]
     fn test_load_phase2_group_e_manifest() {
-        let path = std::path::Path::new("../tests/integration/remi/manifests/phase2-group-e.toml");
+        let path = remi_manifest_path("phase2-group-e.toml");
         if path.exists() {
-            let manifest = load_manifest(path).unwrap();
+            let manifest = load_manifest(&path).unwrap();
             assert_eq!(manifest.suite.phase, 2);
             assert!(
                 manifest.test.len() >= 5,
@@ -484,9 +533,9 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
 
     #[test]
     fn test_load_phase2_group_f_manifest() {
-        let path = std::path::Path::new("../tests/integration/remi/manifests/phase2-group-f.toml");
+        let path = remi_manifest_path("phase2-group-f.toml");
         if path.exists() {
-            let manifest = load_manifest(path).unwrap();
+            let manifest = load_manifest(&path).unwrap();
             assert_eq!(manifest.suite.phase, 2);
             assert!(
                 manifest.test.len() >= 5,

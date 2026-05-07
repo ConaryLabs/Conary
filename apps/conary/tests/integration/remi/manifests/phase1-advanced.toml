@@ -56,7 +56,7 @@ timeout = 60
 depends_on = ["T10a"]
 
 [[test.step]]
-conary = "remove ${TEST_PACKAGE_1} --no-scripts"
+conary = "remove ${TEST_PACKAGE_1} --no-scripts --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
@@ -366,6 +366,9 @@ timeout = 300
 depends_on = ["T04"]
 
 [[test.step]]
+run = "${CONARY_BIN} remove ${TEST_PACKAGE_1} --no-scripts --allow-live-system-mutation --db-path ${DB_PATH} >/dev/null 2>&1 || true"
+
+[[test.step]]
 conary = "install ${TEST_PACKAGE_1} --no-scripts --dep-mode satisfy --yes --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
@@ -373,7 +376,7 @@ exit_code = 0
 
 # Cleanup: remove the package for later tests
 [[test.step]]
-conary = "remove ${TEST_PACKAGE_1} --no-scripts"
+run = "${CONARY_BIN} remove ${TEST_PACKAGE_1} --no-scripts --allow-live-system-mutation --db-path ${DB_PATH} >/dev/null 2>&1 || true"
 
 # --------------------------------------------------------------------------
 # T29: Dep Mode Adopt
@@ -385,6 +388,9 @@ name = "dep_mode_adopt"
 description = "Install with --dep-mode adopt succeeds"
 timeout = 300
 depends_on = ["T04"]
+
+[[test.step]]
+run = "${CONARY_BIN} remove ${TEST_PACKAGE_2} --no-scripts --allow-live-system-mutation --db-path ${DB_PATH} >/dev/null 2>&1 || true"
 
 [[test.step]]
 conary = "install ${TEST_PACKAGE_2} --no-scripts --dep-mode adopt --yes --sandbox never --allow-live-system-mutation"
@@ -405,6 +411,9 @@ name = "dep_mode_takeover"
 description = "Install with --dep-mode takeover succeeds"
 timeout = 300
 depends_on = ["T04"]
+
+[[test.step]]
+run = "${CONARY_BIN} remove ${TEST_PACKAGE_3} --no-scripts --allow-live-system-mutation --db-path ${DB_PATH} >/dev/null 2>&1 || true"
 
 [[test.step]]
 conary = "install ${TEST_PACKAGE_3} --no-scripts --dep-mode takeover --yes --sandbox never --allow-live-system-mutation"
