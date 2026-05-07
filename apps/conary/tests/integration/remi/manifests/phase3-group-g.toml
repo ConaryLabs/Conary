@@ -12,7 +12,7 @@ phase = 3
 [distro_overrides.fedora44]
 NATIVE_CORRUPTED_PKG = "/opt/remi-tests/fixtures/adversarial/corrupted/native/output/native-package-corrupted.rpm"
 
-[distro_overrides.ubuntu-noble]
+[distro_overrides."ubuntu-26.04"]
 NATIVE_CORRUPTED_PKG = "/opt/remi-tests/fixtures/adversarial/corrupted/native/output/native-package-corrupted.deb"
 
 [distro_overrides.arch]

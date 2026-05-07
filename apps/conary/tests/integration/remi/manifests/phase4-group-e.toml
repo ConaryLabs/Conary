@@ -49,7 +49,7 @@ replatform_remi_distro = "fedora"
 local_native_target = "arch"
 local_native_glob = "*.pkg.tar.zst"
 
-[distro_overrides.ubuntu-noble]
+[distro_overrides."ubuntu-26.04"]
 distro_repo = "ubuntu-remi"
 native_pkg = "python3"
 canonical_pkg = "python"

@@ -11,6 +11,7 @@ set -euo pipefail
 
 ENDPOINT="${REMI_ENDPOINT:-https://packages.conary.io}"
 MODE="smoke"
+EXPECTED_UBUNTU_RELEASE="${REMI_EXPECTED_UBUNTU_RELEASE:-resolute}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -53,6 +54,34 @@ check_contains() {
     fi
 }
 
+check_ubuntu_release_metadata() {
+    local name="ubuntu release metadata"
+    local url="$ENDPOINT/v1/ubuntu/metadata"
+    local body
+    body=$(curl -sf --max-time 30 "$url" 2>/dev/null || echo "")
+
+    if [[ -z "$body" ]]; then
+        printf "  [FAIL] %-40s no metadata response\n" "$name"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+
+    if grep -qF '"distribution":"noble"' <<<"$body"; then
+        printf "  [FAIL] %-40s still contains Noble metadata\n" "$name"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+
+    if ! grep -qF "\"distribution\":\"$EXPECTED_UBUNTU_RELEASE\"" <<<"$body"; then
+        printf "  [FAIL] %-40s missing distribution '%s'\n" "$name" "$EXPECTED_UBUNTU_RELEASE"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+
+    printf "  [PASS] %-40s distribution '%s'\n" "$name" "$EXPECTED_UBUNTU_RELEASE"
+    PASS=$((PASS + 1))
+}
+
 echo "Remi Health Check ($MODE)"
 echo "Endpoint: $ENDPOINT"
 echo ""
@@ -73,6 +102,10 @@ if [[ "$MODE" == "full" ]]; then
     echo ""
     echo "=== Sparse Index ==="
     check "sparse index (curl)" "$ENDPOINT/v1/packages/curl"
+
+    echo ""
+    echo "=== Release Metadata ==="
+    check_ubuntu_release_metadata
 
     echo ""
     echo "=== Search ==="

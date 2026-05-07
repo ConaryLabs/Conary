@@ -29,7 +29,7 @@ test_binary_2 = "/usr/bin/tree"
 test_package_3 = "jq"
 test_binary_3 = "/usr/bin/jq"
 
-[distros.ubuntu-noble]
+[distros."ubuntu-26.04"]
 remi_distro = "ubuntu"
 repo_name = "ubuntu-remi"
 test_package = "patch"
@@ -53,7 +53,7 @@ test_binary_3 = "/usr/bin/jq"
 [setup]
 remove_default_repos = [
     "arch-core", "arch-extra", "arch-multilib",
-    "fedora-44", "ubuntu-noble",
+    "fedora-44", "ubuntu-26.04",
 ]
 
 # Test fixture packages (Phase 2)
