@@ -49,6 +49,8 @@ const SERVICE_TYPE: &str = "_conary-cas._tcp.local.";
 
 /// Protocol version for compatibility checking
 const PROTOCOL_VERSION: &str = "1";
+const MDNS_RECV_TIMEOUT: &str = "timed out waiting on a channel";
+const MDNS_RECV_DISCONNECTED: &str = "channel is empty and closed";
 
 /// Unique peer identifier derived from mDNS properties.
 pub type PeerId = String;
@@ -303,11 +305,15 @@ impl MdnsDiscovery {
                             callback(mdns_event);
                         }
                     }
-                    Err(flume::RecvTimeoutError::Timeout) => {
+                    Err(err) if is_mdns_recv_timeout(&err) => {
                         // Continue checking running flag
                     }
-                    Err(flume::RecvTimeoutError::Disconnected) => {
+                    Err(err) if is_mdns_recv_disconnected(&err) => {
                         warn!("[mdns] Browse receiver disconnected");
+                        break;
+                    }
+                    Err(err) => {
+                        warn!("[mdns] Browse receiver error: {err}");
                         break;
                     }
                 }
@@ -368,8 +374,8 @@ impl MdnsDiscovery {
                         }
                     }
                 }
-                Err(flume::RecvTimeoutError::Timeout) => continue,
-                Err(flume::RecvTimeoutError::Disconnected) => break,
+                Err(err) if is_mdns_recv_timeout(&err) => continue,
+                Err(_err) => break,
             }
         }
 
@@ -399,6 +405,14 @@ impl Drop for MdnsDiscovery {
         let _ = self.unregister();
         // Note: daemon.shutdown() consumes self, so we can't call it here
     }
+}
+
+fn is_mdns_recv_timeout(err: &impl std::fmt::Display) -> bool {
+    err.to_string() == MDNS_RECV_TIMEOUT
+}
+
+fn is_mdns_recv_disconnected(err: &impl std::fmt::Display) -> bool {
+    err.to_string() == MDNS_RECV_DISCONNECTED
 }
 
 /// Process a ServiceEvent into an MdnsEvent

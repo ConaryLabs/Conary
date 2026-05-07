@@ -41,7 +41,7 @@ dashmap.workspace = true
 async-stream.workspace = true
 
 # Container management
-bollard = "0.20"
+bollard = "0.21.0"
 bytes = "1"
 
 # HTTP server + client

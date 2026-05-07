@@ -224,9 +224,9 @@ impl Hasher {
     /// Finalize and return the hash
     pub fn finalize(self) -> Hash {
         let value = match self.state {
-            HasherState::Sha256(hasher) => format!("{:x}", hasher.finalize()),
+            HasherState::Sha256(hasher) => hex::encode(hasher.finalize()),
             HasherState::Xxh128(hasher) => format!("{:032x}", hasher.digest128()),
-            HasherState::Md5(hasher) => format!("{:x}", hasher.finalize()),
+            HasherState::Md5(hasher) => hex::encode(hasher.finalize()),
         };
         Hash::new_unchecked(self.algorithm, value)
     }
@@ -244,7 +244,7 @@ pub fn hash_bytes(algorithm: HashAlgorithm, data: &[u8]) -> Hash {
         HashAlgorithm::Sha256 => {
             let mut hasher = Sha256::new();
             hasher.update(data);
-            format!("{:x}", hasher.finalize())
+            hex::encode(hasher.finalize())
         }
         HashAlgorithm::Xxh128 => {
             format!("{:032x}", xxh3_128(data))
@@ -252,7 +252,7 @@ pub fn hash_bytes(algorithm: HashAlgorithm, data: &[u8]) -> Hash {
         HashAlgorithm::Md5 => {
             let mut hasher = Md5::new();
             hasher.update(data);
-            format!("{:x}", hasher.finalize())
+            hex::encode(hasher.finalize())
         }
     };
     Hash::new_unchecked(algorithm, value)

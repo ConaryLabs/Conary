@@ -418,7 +418,7 @@ fn sha256_file(path: &Path) -> crate::Result<String> {
 }
 
 fn sha256_bytes(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex::encode(Sha256::digest(bytes))
 }
 
 fn validate_sha256_hex(field: &str, value: &str) -> crate::Result<()> {
@@ -756,7 +756,7 @@ mod tests {
     }
 
     fn digest_bytes(bytes: &[u8]) -> String {
-        format!("{:x}", Sha256::digest(bytes))
+        hex::encode(Sha256::digest(bytes))
     }
 
     fn digest_file(path: &std::path::Path) -> String {
