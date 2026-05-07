@@ -2,14 +2,15 @@
 //! System management commands (init, verify, rollback)
 
 use super::open_db;
-use super::{RevertMetadata, TroveSnapshot};
-use anyhow::Result;
+use super::{FileSnapshot, RevertMetadata, TroveSnapshot};
+use anyhow::{Context, Result};
 use conary_core::db::paths::objects_dir;
 use conary_core::filesystem::CasStore;
+use std::cell::{Cell, RefCell};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tracing::info;
+use tracing::{info, warn};
 
 /// Initialize the Conary database and add default repositories
 pub async fn cmd_init(db_path: &str) -> Result<()> {
@@ -112,7 +113,7 @@ fn is_rollback_eligible_status(status: &conary_core::db::models::ChangesetStatus
 }
 
 /// Rollback a changeset
-pub async fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Result<()> {
+pub async fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Result<()> {
     info!("Rolling back changeset: {}", changeset_id);
     println!("Rolling back changeset: {}", changeset_id);
     std::io::stdout().flush()?;
@@ -224,13 +225,16 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Resu
             &mut conn,
             &changeset,
             db_path,
+            root,
         )
         .inspect_err(|_| clear_claim(&conn));
     }
 
     // Otherwise, this is a fresh install - remove the installed packages
-    let files_to_rollback = std::cell::RefCell::new(Vec::new());
-    let removed_messages = std::cell::RefCell::new(Vec::new());
+    let files_to_rollback = RefCell::new(Vec::new());
+    let removed_messages = RefCell::new(Vec::new());
+    let removed_snapshots = RefCell::new(Vec::new());
+    let rollback_changeset_id = Cell::new(0_i64);
 
     conary_core::db::transaction(&mut conn, |tx| {
         // Read file history inside the transaction to ensure consistency (TOCTOU)
@@ -330,10 +334,14 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Resu
             "Rollback of changeset {} ({})",
             changeset_id, changeset.description
         ));
-        let rollback_changeset_id = rollback_changeset.insert(tx)?;
+        let rollback_id = rollback_changeset.insert(tx)?;
+        rollback_changeset_id.set(rollback_id);
 
         for trove in &troves {
             if let Some(trove_id) = trove.id {
+                removed_snapshots
+                    .borrow_mut()
+                    .push(snapshot_trove(tx, trove)?);
                 conary_core::db::models::Trove::delete(tx, trove_id)?;
                 removed_messages
                     .borrow_mut()
@@ -346,7 +354,7 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Resu
         tx.execute(
             "UPDATE changesets SET status = 'rolled_back', rolled_back_at = CURRENT_TIMESTAMP,
              reversed_by_changeset_id = ?1 WHERE id = ?2",
-            [rollback_changeset_id, changeset_id],
+            [rollback_id, changeset_id],
         )?;
 
         Ok(troves.len())
@@ -355,14 +363,21 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, _root: &str) -> Resu
 
     let files_to_rollback = files_to_rollback.into_inner();
     let removed_messages = removed_messages.into_inner();
+    let removed_snapshots = removed_snapshots.into_inner();
 
-    // Composefs-native: rebuild EROFS image from updated DB state and remount
-    let _gen_num = crate::commands::composefs_ops::rebuild_and_mount(
-        &conn,
-        db_path,
-        &format!("Rollback changeset {}", changeset_id),
-        None,
-    )?;
+    let summary = format!("Rollback changeset {}", changeset_id);
+    if has_active_generation(db_path) {
+        // Composefs-native: rebuild EROFS image from updated DB state and remount
+        let _gen_num =
+            crate::commands::composefs_ops::rebuild_and_mount(&conn, db_path, &summary, None)?;
+    } else {
+        let stats = remove_snapshots_from_live_root(Path::new(root), &removed_snapshots)?;
+        info!(
+            "Removed {} file(s) and {} directories directly during rollback because no active generation exists",
+            stats.files_removed, stats.dirs_removed
+        );
+        super::create_state_snapshot(&conn, rollback_changeset_id.get(), &summary)?;
+    }
 
     for message in &removed_messages {
         println!("{message}");
@@ -381,6 +396,215 @@ fn parse_rollback_snapshots(snapshot_json: &str) -> Result<Vec<TroveSnapshot>> {
         return Ok(wrapper.removed_troves);
     }
     Ok(vec![serde_json::from_str(snapshot_json)?])
+}
+
+fn has_active_generation(db_path: &str) -> bool {
+    let conary_root = conary_core::db::paths::db_dir(db_path);
+    conary_core::generation::mount::current_generation(&conary_root)
+        .unwrap_or(None)
+        .is_some()
+}
+
+fn snapshot_trove(
+    conn: &rusqlite::Connection,
+    trove: &conary_core::db::models::Trove,
+) -> conary_core::Result<TroveSnapshot> {
+    let trove_id = trove.id.ok_or_else(|| {
+        conary_core::Error::MissingId("Cannot snapshot trove without ID".to_string())
+    })?;
+    let files = conary_core::db::models::FileEntry::find_by_trove(conn, trove_id)?;
+    Ok(TroveSnapshot {
+        name: trove.name.clone(),
+        version: trove.version.clone(),
+        architecture: trove.architecture.clone(),
+        description: trove.description.clone(),
+        install_source: trove.install_source.as_str().to_string(),
+        installed_from_repository_id: trove.installed_from_repository_id,
+        files: files
+            .iter()
+            .map(|file| FileSnapshot {
+                path: file.path.clone(),
+                sha256_hash: file.sha256_hash.clone(),
+                size: file.size,
+                permissions: file.permissions,
+                symlink_target: file.symlink_target.clone(),
+            })
+            .collect(),
+    })
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct LiveRootRollbackStats {
+    files_removed: usize,
+    dirs_removed: usize,
+    files_restored: usize,
+    dirs_restored: usize,
+}
+
+fn snapshot_path_under_root(root: &Path, path: &str) -> PathBuf {
+    root.join(path.strip_prefix('/').unwrap_or(path))
+}
+
+fn snapshot_entry_is_dir(file: &FileSnapshot) -> bool {
+    file.path.ends_with('/') || (file.permissions as u32 & 0o170000) == 0o040000
+}
+
+fn snapshot_entry_is_symlink(file: &FileSnapshot) -> bool {
+    file.symlink_target.is_some() || (file.permissions as u32 & 0o170000) == 0o120000
+}
+
+fn remove_snapshots_from_live_root(
+    root: &Path,
+    snapshots: &[TroveSnapshot],
+) -> Result<LiveRootRollbackStats> {
+    let mut stats = LiveRootRollbackStats::default();
+    let mut dirs = Vec::new();
+
+    for snapshot in snapshots {
+        for file in &snapshot.files {
+            let path = snapshot_path_under_root(root, &file.path);
+            if snapshot_entry_is_dir(file) {
+                dirs.push(path);
+                continue;
+            }
+
+            match std::fs::symlink_metadata(&path) {
+                Ok(metadata) if metadata.is_dir() => {
+                    dirs.push(path);
+                }
+                Ok(_) => {
+                    std::fs::remove_file(&path).with_context(|| {
+                        format!("Failed to remove rollback file {}", path.display())
+                    })?;
+                    stats.files_removed += 1;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    warn!(
+                        "Rollback file {} was already absent during direct live-root removal",
+                        path.display()
+                    );
+                }
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!("Failed to inspect rollback file {}", path.display())
+                    });
+                }
+            }
+        }
+    }
+
+    dirs.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+    dirs.dedup();
+    for dir in dirs {
+        match std::fs::remove_dir(&dir) {
+            Ok(()) => stats.dirs_removed += 1,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+                ) => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("Failed to remove rollback dir {}", dir.display()));
+            }
+        }
+    }
+
+    Ok(stats)
+}
+
+fn remove_existing_leaf_for_restore(path: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() => {
+            std::fs::remove_dir(path)
+                .with_context(|| format!("Failed to replace directory {}", path.display()))?;
+        }
+        Ok(_) => {
+            std::fs::remove_file(path)
+                .with_context(|| format!("Failed to replace file {}", path.display()))?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("Failed to inspect restore path {}", path.display()));
+        }
+    }
+    Ok(())
+}
+
+fn restore_snapshots_to_live_root(
+    root: &Path,
+    db_path: &str,
+    snapshots: &[TroveSnapshot],
+) -> Result<LiveRootRollbackStats> {
+    let mut stats = LiveRootRollbackStats::default();
+    let cas = CasStore::new(objects_dir(db_path))?;
+
+    for snapshot in snapshots {
+        for file in &snapshot.files {
+            let path = snapshot_path_under_root(root, &file.path);
+
+            if snapshot_entry_is_dir(file) {
+                std::fs::create_dir_all(&path)
+                    .with_context(|| format!("Failed to restore directory {}", path.display()))?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let mode = (file.permissions as u32) & 0o7777;
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
+                        .with_context(|| {
+                            format!("Failed to set permissions on {}", path.display())
+                        })?;
+                }
+                stats.dirs_restored += 1;
+                continue;
+            }
+
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).with_context(|| {
+                    format!("Failed to create parent directory {}", parent.display())
+                })?;
+            }
+            remove_existing_leaf_for_restore(&path)?;
+
+            if snapshot_entry_is_symlink(file) {
+                #[cfg(unix)]
+                {
+                    let target = match file.symlink_target.as_deref() {
+                        Some(target) => target.to_string(),
+                        None => cas.retrieve_symlink(&file.sha256_hash).with_context(|| {
+                            format!("Failed to retrieve symlink target for {}", file.path)
+                        })?,
+                    };
+                    std::os::unix::fs::symlink(&target, &path).with_context(|| {
+                        format!("Failed to restore symlink {} -> {}", path.display(), target)
+                    })?;
+                }
+                #[cfg(not(unix))]
+                {
+                    anyhow::bail!("Cannot restore symlink {} on this platform", file.path);
+                }
+            } else {
+                let content = cas
+                    .retrieve(&file.sha256_hash)
+                    .with_context(|| format!("Failed to retrieve CAS object for {}", file.path))?;
+                std::fs::write(&path, content)
+                    .with_context(|| format!("Failed to restore file {}", path.display()))?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let mode = (file.permissions as u32) & 0o7777;
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
+                        .with_context(|| {
+                            format!("Failed to set permissions on {}", path.display())
+                        })?;
+                }
+            }
+            stats.files_restored += 1;
+        }
+    }
+
+    Ok(stats)
 }
 
 fn restore_snapshot(
@@ -447,6 +671,7 @@ fn rollback_changeset_with_snapshots(
     conn: &mut rusqlite::Connection,
     changeset: &conary_core::db::models::Changeset,
     db_path: &str,
+    root: &str,
 ) -> Result<()> {
     if snapshots.is_empty() {
         anyhow::bail!(
@@ -455,29 +680,36 @@ fn rollback_changeset_with_snapshots(
         );
     }
 
-    let removed_messages = std::cell::RefCell::new(Vec::new());
+    let removed_messages = RefCell::new(Vec::new());
+    let removed_snapshots = RefCell::new(Vec::new());
+    let rollback_changeset_id = Cell::new(0_i64);
 
     conary_core::db::transaction(conn, |tx| {
         if remove_new_troves {
-            let new_troves: Vec<(i64, String, String)> = {
-                let mut stmt = tx.prepare(
-                    "SELECT id, name, version FROM troves WHERE installed_by_changeset_id = ?1",
-                )?;
-                stmt.query_map([changeset_id], |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                    ))
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?
+            let new_trove_ids: Vec<i64> = {
+                let mut stmt =
+                    tx.prepare("SELECT id FROM troves WHERE installed_by_changeset_id = ?1")?;
+                stmt.query_map([changeset_id], |row| row.get::<_, i64>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?
             };
 
-            for (trove_id, name, version) in &new_troves {
-                conary_core::db::models::Trove::delete(tx, *trove_id)?;
-                removed_messages
+            for trove_id in &new_trove_ids {
+                let trove = conary_core::db::models::Trove::find_by_id(tx, *trove_id)?.ok_or_else(
+                    || {
+                        conary_core::Error::InitError(format!(
+                            "Trove {} disappeared during rollback",
+                            trove_id
+                        ))
+                    },
+                )?;
+                removed_snapshots
                     .borrow_mut()
-                    .push(format!("  Removed reverted package {} {}", name, version));
+                    .push(snapshot_trove(tx, &trove)?);
+                conary_core::db::models::Trove::delete(tx, *trove_id)?;
+                removed_messages.borrow_mut().push(format!(
+                    "  Removed reverted package {} {}",
+                    trove.name, trove.version
+                ));
             }
         }
 
@@ -485,17 +717,18 @@ fn rollback_changeset_with_snapshots(
             "Rollback of changeset {} ({})",
             changeset_id, changeset.description
         ));
-        let rollback_changeset_id = rollback_changeset.insert(tx)?;
+        let rollback_id = rollback_changeset.insert(tx)?;
+        rollback_changeset_id.set(rollback_id);
 
         for snapshot in snapshots {
-            restore_snapshot(tx, rollback_changeset_id, snapshot)?;
+            restore_snapshot(tx, rollback_id, snapshot)?;
         }
 
         rollback_changeset.update_status(tx, conary_core::db::models::ChangesetStatus::Applied)?;
         tx.execute(
             "UPDATE changesets SET status = 'rolled_back', rolled_back_at = CURRENT_TIMESTAMP,
              reversed_by_changeset_id = ?1 WHERE id = ?2",
-            [rollback_changeset_id, changeset_id],
+            [rollback_id, changeset_id],
         )?;
 
         Ok(())
@@ -506,8 +739,20 @@ fn rollback_changeset_with_snapshots(
     } else {
         format!("Rollback removal of {}", snapshots[0].name)
     };
-    let _gen_num =
-        crate::commands::composefs_ops::rebuild_and_mount(conn, db_path, &summary, None)?;
+    if has_active_generation(db_path) {
+        let _gen_num =
+            crate::commands::composefs_ops::rebuild_and_mount(conn, db_path, &summary, None)?;
+    } else {
+        let root_path = Path::new(root);
+        let remove_stats =
+            remove_snapshots_from_live_root(root_path, &removed_snapshots.into_inner())?;
+        let restore_stats = restore_snapshots_to_live_root(root_path, db_path, snapshots)?;
+        info!(
+            "Applied rollback directly because no active generation exists: removed {} file(s), restored {} file(s)",
+            remove_stats.files_removed, restore_stats.files_restored
+        );
+        super::create_state_snapshot(conn, rollback_changeset_id.get(), &summary)?;
+    }
 
     let removed_messages = removed_messages.into_inner();
     let restored_file_count: usize = snapshots.iter().map(|snapshot| snapshot.files.len()).sum();
@@ -1033,8 +1278,18 @@ use super::format_bytes;
 
 #[cfg(test)]
 mod tests {
-    use super::{cmd_init, parse_rollback_snapshots, rollback_claim_statuses};
+    use super::{
+        cmd_init, cmd_rollback, parse_rollback_snapshots, restore_snapshots_to_live_root,
+        rollback_claim_statuses,
+    };
     use crate::commands::{FileSnapshot, RevertMetadata, TroveSnapshot};
+    use conary_core::db::models::{
+        Changeset, ChangesetStatus, FileEntry, InstallSource, Trove, TroveType,
+    };
+    use conary_core::db::paths::objects_dir;
+    use conary_core::filesystem::CasStore;
+    use rusqlite::params;
+    use std::path::Path;
 
     #[tokio::test]
     async fn init_adds_remi_with_strategy_defaults() {
@@ -1106,5 +1361,209 @@ mod tests {
         assert_eq!(parsed_wrapper.len(), 2);
         assert_eq!(parsed_wrapper[0].name, "nginx");
         assert_eq!(parsed_wrapper[1].name, "vim");
+    }
+
+    fn store_test_object(conn: &rusqlite::Connection, db_path: &Path, content: &[u8]) -> String {
+        let cas = CasStore::new(objects_dir(&db_path.to_string_lossy())).unwrap();
+        let hash = cas.store(content).unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO file_contents (sha256_hash, content_path, size)
+             VALUES (?1, ?2, ?3)",
+            params![
+                &hash,
+                format!("objects/{}/{}", &hash[0..2], &hash[2..]),
+                content.len() as i64
+            ],
+        )
+        .unwrap();
+        hash
+    }
+
+    fn insert_test_trove(
+        conn: &rusqlite::Connection,
+        changeset_id: i64,
+        name: &str,
+        version: &str,
+        files: &[(&str, &str, i64)],
+    ) {
+        let mut trove = Trove::new_with_source(
+            name.to_string(),
+            version.to_string(),
+            TroveType::Package,
+            InstallSource::File,
+        );
+        trove.installed_by_changeset_id = Some(changeset_id);
+        let trove_id = trove.insert(conn).unwrap();
+
+        for (path, hash, size) in files {
+            let mut file = FileEntry::new(
+                (*path).to_string(),
+                (*hash).to_string(),
+                *size,
+                0o100644,
+                trove_id,
+            );
+            file.insert(conn).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn rollback_update_without_active_generation_mutates_live_root_directly() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_string_lossy().to_string();
+        conary_core::db::init(&db_path_str).unwrap();
+        let conn = conary_core::db::open(&db_path_str).unwrap();
+
+        let root = temp_dir.path().join("root");
+        std::fs::create_dir_all(root.join("usr/share/conary-test")).unwrap();
+        let hello_path = root.join("usr/share/conary-test/hello.txt");
+        let added_path = root.join("usr/share/conary-test/added.txt");
+        std::fs::write(&hello_path, b"hello from v2\n").unwrap();
+        std::fs::write(&added_path, b"added in v2\n").unwrap();
+
+        let v1_hash = store_test_object(&conn, &db_path, b"hello from v1\n");
+        let v2_hash = store_test_object(&conn, &db_path, b"hello from v2\n");
+        let added_hash = store_test_object(&conn, &db_path, b"added in v2\n");
+
+        let old_snapshot = TroveSnapshot {
+            name: "conary-test-fixture".to_string(),
+            version: "1.0.0".to_string(),
+            architecture: Some("x86_64".to_string()),
+            description: None,
+            install_source: InstallSource::File.as_str().to_string(),
+            installed_from_repository_id: None,
+            files: vec![FileSnapshot {
+                path: "/usr/share/conary-test/hello.txt".to_string(),
+                sha256_hash: v1_hash,
+                size: "hello from v1\n".len() as i64,
+                permissions: 0o100644,
+                symlink_target: None,
+            }],
+        };
+
+        let mut update_changeset =
+            Changeset::new("CCS upgrade conary-test-fixture 1.0.0 -> 2.0.0".to_string());
+        let update_changeset_id = update_changeset.insert(&conn).unwrap();
+        conn.execute(
+            "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
+            params![
+                serde_json::to_string(&old_snapshot).unwrap(),
+                update_changeset_id
+            ],
+        )
+        .unwrap();
+        update_changeset
+            .update_status(&conn, ChangesetStatus::Applied)
+            .unwrap();
+
+        insert_test_trove(
+            &conn,
+            update_changeset_id,
+            "conary-test-fixture",
+            "2.0.0",
+            &[
+                (
+                    "/usr/share/conary-test/hello.txt",
+                    &v2_hash,
+                    "hello from v2\n".len() as i64,
+                ),
+                (
+                    "/usr/share/conary-test/added.txt",
+                    &added_hash,
+                    "added in v2\n".len() as i64,
+                ),
+            ],
+        );
+        drop(conn);
+
+        cmd_rollback(
+            update_changeset_id,
+            &db_path_str,
+            root.to_string_lossy().as_ref(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&hello_path).unwrap(),
+            "hello from v1\n"
+        );
+        assert!(!added_path.exists());
+
+        let conn = conary_core::db::open(&db_path_str).unwrap();
+        let troves = Trove::find_by_name(&conn, "conary-test-fixture").unwrap();
+        assert_eq!(troves.len(), 1);
+        assert_eq!(troves[0].version, "1.0.0");
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM changesets WHERE id = ?1",
+                [update_changeset_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "rolled_back");
+    }
+
+    #[test]
+    fn direct_live_root_restore_recreates_regular_files_and_symlinks() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_string_lossy().to_string();
+        conary_core::db::init(&db_path_str).unwrap();
+        let conn = conary_core::db::open(&db_path_str).unwrap();
+        let file_hash = store_test_object(&conn, &db_path, b"restored\n");
+        let link_hash = {
+            let cas = CasStore::new(objects_dir(&db_path_str)).unwrap();
+            cas.store_symlink("tool").unwrap()
+        };
+        conn.execute(
+            "INSERT OR IGNORE INTO file_contents (sha256_hash, content_path, size)
+             VALUES (?1, ?2, ?3)",
+            params![
+                &link_hash,
+                format!("objects/{}/{}", &link_hash[0..2], &link_hash[2..]),
+                "tool".len() as i64
+            ],
+        )
+        .unwrap();
+
+        let root = temp_dir.path().join("root");
+        let snapshot = TroveSnapshot {
+            name: "fixture".to_string(),
+            version: "1.0.0".to_string(),
+            architecture: None,
+            description: None,
+            install_source: InstallSource::File.as_str().to_string(),
+            installed_from_repository_id: None,
+            files: vec![
+                FileSnapshot {
+                    path: "/usr/bin/tool".to_string(),
+                    sha256_hash: file_hash,
+                    size: "restored\n".len() as i64,
+                    permissions: 0o100755,
+                    symlink_target: None,
+                },
+                FileSnapshot {
+                    path: "/usr/bin/tool-link".to_string(),
+                    sha256_hash: link_hash,
+                    size: "tool".len() as i64,
+                    permissions: 0o120777,
+                    symlink_target: Some("tool".to_string()),
+                },
+            ],
+        };
+
+        let stats = restore_snapshots_to_live_root(&root, &db_path_str, &[snapshot]).unwrap();
+
+        assert_eq!(stats.files_restored, 2);
+        assert_eq!(
+            std::fs::read_to_string(root.join("usr/bin/tool")).unwrap(),
+            "restored\n"
+        );
+        assert_eq!(
+            std::fs::read_link(root.join("usr/bin/tool-link")).unwrap(),
+            Path::new("tool")
+        );
     }
 }
