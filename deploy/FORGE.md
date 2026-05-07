@@ -127,6 +127,10 @@ bash scripts/forge-smoke.sh --expected-commit "$(git rev-parse HEAD)"
 bash scripts/conaryd-health.sh --expected-version 0.6.0
 ```
 
+The QEMU preflight requires `/dev/kvm`. A runner without exposed KVM support is
+not a valid scheduled QEMU gate because the boot suites otherwise degrade into
+slow SSH timeouts instead of useful validation.
+
 `forge-smoke.sh` resolves the local port with `--port` > `CONARY_TEST_PORT` >
 `9090`, runs the container-mode Forge preflight unless
 `CONARY_FORGE_SKIP_PREFLIGHT=1`, prefers `target/debug/conary-test` when

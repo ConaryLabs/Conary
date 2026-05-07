@@ -24,6 +24,15 @@ timeout = 300
 fatal = true
 
 [[test.step]]
+run = "${CONARY_BIN} repo remove ${REPO_NAME} --db-path ${DB_PATH} >/dev/null 2>&1 || true"
+
+[[test.step]]
+conary = "repo add ${REPO_NAME} ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
 conary = "repo sync ${REPO_NAME} --force"
 
 [test.step.assert]
