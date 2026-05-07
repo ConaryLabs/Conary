@@ -302,4 +302,17 @@ mod tests {
 
         fs::remove_dir_all(workspace_root).expect("cleanup workspace root");
     }
+
+    #[test]
+    fn ubuntu_source_builder_installs_native_crypto_build_tools() {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let containerfile = manifest_dir
+            .join("../conary/tests/integration/remi/containers/Containerfile.ubuntu-26.04");
+        let contents = fs::read_to_string(&containerfile).expect("read ubuntu containerfile");
+
+        assert!(
+            contents.contains("cmake"),
+            "Ubuntu source-build image must install cmake for aws-lc-sys"
+        );
+    }
 }
