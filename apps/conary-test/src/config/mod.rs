@@ -33,14 +33,34 @@ mod tests {
             .join(file_name)
     }
 
-    fn package_remove_segments(command: &str) -> impl Iterator<Item = &str> {
+    fn is_package_remove_segment(segment: &str) -> bool {
+        segment.starts_with("remove ")
+            || segment.contains("${CONARY_BIN} remove ")
+            || (segment.starts_with("env ") && segment.contains(" remove "))
+    }
+
+    fn is_system_mutation_segment(segment: &str) -> bool {
+        [
+            "system state rollback",
+            "system generation build",
+            "system generation switch",
+            "system generation gc",
+            "system generation rollback",
+            "system generation recover",
+        ]
+        .iter()
+        .any(|command| {
+            segment.starts_with(command)
+                || segment.contains(&format!(" {command} "))
+                || segment.contains(&format!("${{CONARY_BIN}} {command}"))
+        })
+    }
+
+    fn live_mutation_segments(command: &str) -> impl Iterator<Item = &str> {
         command.split(';').filter_map(|segment| {
             let segment = segment.trim();
-            let is_package_remove = segment.starts_with("remove ")
-                || segment.contains("${CONARY_BIN} remove ")
-                || (segment.starts_with("env ") && segment.contains(" remove "));
-
-            is_package_remove.then_some(segment)
+            (is_package_remove_segment(segment) || is_system_mutation_segment(segment))
+                .then_some(segment)
         })
     }
 
@@ -311,7 +331,7 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
     }
 
     #[test]
-    fn active_manifest_package_removes_acknowledge_live_mutation() {
+    fn active_manifest_live_mutation_commands_acknowledge_live_mutation() {
         let manifest_dir = remi_manifest_path("");
         if !manifest_dir.exists() {
             return;
@@ -333,24 +353,26 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
                         .chain(step.run.iter())
                         .chain(step.kill_after_log.iter().map(|kill| &kill.conary))
                     {
-                        for segment in package_remove_segments(command) {
+                        for segment in live_mutation_segments(command) {
                             assert!(
                                 segment.contains("--allow-live-system-mutation"),
-                                "{}:{} step {} remove command must acknowledge live mutation: {}",
+                                "{}:{} step {} mutation command must acknowledge live mutation: {}",
                                 path.display(),
                                 test.id,
                                 index + 1,
                                 segment
                             );
-                            assert!(
-                                segment.contains("--no-scripts")
-                                    || segment.contains("--sandbox never"),
-                                "{}:{} step {} scripted remove command must disable sandboxing in rootless validation containers: {}",
-                                path.display(),
-                                test.id,
-                                index + 1,
-                                segment
-                            );
+                            if is_package_remove_segment(segment) {
+                                assert!(
+                                    segment.contains("--no-scripts")
+                                        || segment.contains("--sandbox never"),
+                                    "{}:{} step {} scripted remove command must disable sandboxing in rootless validation containers: {}",
+                                    path.display(),
+                                    test.id,
+                                    index + 1,
+                                    segment
+                                );
+                            }
                         }
                     }
                 }
