@@ -1,13 +1,13 @@
-# tests/integration/remi/containers/Containerfile.ubuntu-noble
-# Ubuntu Noble (24.04) container for Remi integration testing
+# tests/integration/remi/containers/Containerfile.ubuntu-26.04
+# Ubuntu 26.04 LTS container for Remi integration testing
 #
 # Modes:
 #   binary  - builds from source in-container (avoids OpenSSL ABI mismatch)
 #   package - installs from DEB via apt
 
-# ── Builder stage: compile from source (binary mode only) ─────────────────
+# -- Builder stage: compile from source (binary mode only) -----------------
 # In package mode, source/ contains only a placeholder; the build is skipped.
-FROM docker.io/library/ubuntu:24.04 AS builder
+FROM docker.io/library/ubuntu:26.04 AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential pkg-config libssl-dev curl ca-certificates \
@@ -29,8 +29,8 @@ RUN if [ "$INSTALL_MODE" = "binary" ] && [ -f Cargo.toml ]; then \
         mkdir -p target/release && touch target/release/conary; \
     fi
 
-# ── Runtime stage ───────────────────────────────────────────────────────────
-FROM docker.io/library/ubuntu:24.04
+# -- Runtime stage ----------------------------------------------------------
+FROM docker.io/library/ubuntu:26.04
 
 ARG INSTALL_MODE=binary
 
@@ -61,7 +61,7 @@ COPY fixtures/ /opt/remi-tests/fixtures/
 
 RUN mkdir -p /var/lib/conary /results
 
-ENV DISTRO=ubuntu-noble
+ENV DISTRO=ubuntu-26.04
 ENV DB_PATH=/var/lib/conary/conary.db
 ENV RESULTS_DIR=/results
 ENV CONARY_BIN=/usr/bin/conary

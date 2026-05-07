@@ -109,7 +109,7 @@ For managed Forge deployments from an operator workstation, prefer:
 | Distro | Container | Base |
 |--------|-----------|------|
 | `fedora44` | `Containerfile.fedora44` | Fedora 44 |
-| `ubuntu-noble` | `Containerfile.ubuntu-noble` | Ubuntu 24.04 LTS |
+| `ubuntu-26.04` | `Containerfile.ubuntu-26.04` | Ubuntu 26.04 LTS |
 | `arch` | `Containerfile.arch` | Arch Linux (rolling) |
 
 ## Test Structure

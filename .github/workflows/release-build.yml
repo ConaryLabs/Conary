@@ -203,7 +203,7 @@ jobs:
     needs: prepare
     runs-on: ubuntu-latest
     container:
-      image: docker.io/library/ubuntu:24.04
+      image: docker.io/library/ubuntu:26.04
     steps:
       - name: Install build dependencies
         env:

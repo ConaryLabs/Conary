@@ -2492,7 +2492,7 @@ arches = ["x86_64"]
 
 [upstream.ubuntu]
 base_url = "http://archive.ubuntu.com/ubuntu"
-releases = ["noble"]
+releases = ["resolute"]
 arches = ["amd64"]
 
 [conversion]

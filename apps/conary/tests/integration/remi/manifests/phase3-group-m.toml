@@ -18,7 +18,7 @@ small_package = "tree"
 dep_heavy_package = "jq"
 distro_repo = "fedora-remi"
 
-[distro_overrides.ubuntu-noble]
+[distro_overrides."ubuntu-26.04"]
 small_package = "tree"
 dep_heavy_package = "vim"
 distro_repo = "ubuntu-remi"

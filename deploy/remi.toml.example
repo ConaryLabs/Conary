@@ -60,7 +60,7 @@ priority = 100
 
 [upstream.ubuntu]
 base_url = "http://archive.ubuntu.com/ubuntu"
-releases = ["noble"]
+releases = ["resolute"]
 arches = ["amd64"]
 metadata_refresh = "6h"
 priority = 100

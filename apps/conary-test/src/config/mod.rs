@@ -148,9 +148,9 @@ containerfile = "Containerfile.fedora44"
 test_package = "tree"
 test_binary = "/usr/bin/tree"
 
-[distros.ubuntu-noble]
-remi_distro = "ubuntu-noble"
-repo_name = "conary-ubuntu-noble"
+[distros."ubuntu-26.04"]
+remi_distro = "ubuntu"
+repo_name = "conary-ubuntu-26.04"
 test_package = "tree"
 test_binary = "/usr/bin/tree"
 

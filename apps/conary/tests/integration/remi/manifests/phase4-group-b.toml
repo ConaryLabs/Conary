@@ -33,7 +33,7 @@ conary = "system init"
 exit_code = 0
 
 [[test.step]]
-run = "${CONARY_BIN} repo remove arch-core --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-extra --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-multilib --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove fedora-44 --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove ubuntu-noble --db-path ${DB_PATH} 2>/dev/null; true"
+run = "${CONARY_BIN} repo remove arch-core --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-extra --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-multilib --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove fedora-44 --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove ubuntu-26.04 --db-path ${DB_PATH} 2>/dev/null; true"
 
 [[test.step]]
 conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --reinstall --allow-live-system-mutation"

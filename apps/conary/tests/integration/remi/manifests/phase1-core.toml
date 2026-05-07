@@ -32,7 +32,7 @@ run = "${CONARY_BIN} repo remove arch-multilib --db-path ${DB_PATH}"
 run = "${CONARY_BIN} repo remove fedora-44 --db-path ${DB_PATH}"
 
 [[suite.setup]]
-run = "${CONARY_BIN} repo remove ubuntu-noble --db-path ${DB_PATH}"
+run = "${CONARY_BIN} repo remove ubuntu-26.04 --db-path ${DB_PATH}"
 
 # --------------------------------------------------------------------------
 # T01: Health Check
