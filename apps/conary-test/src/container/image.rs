@@ -169,8 +169,28 @@ pub async fn build_distro_image(
     containerfile: &Path,
     distro: &str,
 ) -> Result<String> {
-    let staged = stage_build_context(containerfile, distro)?;
     let tag = format!("conary-test-{distro}:latest");
+    let force_rebuild = std::env::var("CONARY_TEST_REBUILD_IMAGE")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false);
+
+    if !force_rebuild {
+        match tokio::process::Command::new("podman")
+            .args(["image", "exists", &tag])
+            .output()
+            .await
+        {
+            Ok(output) if output.status.success() => {
+                tracing::info!(image = %tag, "reusing existing distro test image");
+                return Ok(tag);
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e).context("failed to check existing distro test image"),
+        }
+    }
+
+    let staged = stage_build_context(containerfile, distro)?;
     backend
         .build_image(&staged.dockerfile, &tag, HashMap::new())
         .await
