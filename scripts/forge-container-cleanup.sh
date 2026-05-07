@@ -41,6 +41,17 @@ command -v podman >/dev/null 2>&1 || fail "podman is not installed"
 echo "[forge-container-cleanup] podman usage before cleanup"
 DOCKER_HOST="unix://${PODMAN_SOCKET}" podman system df || true
 
+echo "[forge-container-cleanup] removing stale conary-test containers"
+mapfile -t STALE_CONARY_TEST_CONTAINERS < <(
+  DOCKER_HOST="unix://${PODMAN_SOCKET}" podman ps -a --format '{{.ID}} {{.Image}}' |
+    awk '$2 ~ /(^|\/)conary-test-/ { print $1 }'
+)
+if (( ${#STALE_CONARY_TEST_CONTAINERS[@]} > 0 )); then
+  DOCKER_HOST="unix://${PODMAN_SOCKET}" podman rm -f "${STALE_CONARY_TEST_CONTAINERS[@]}"
+else
+  echo "[forge-container-cleanup] no stale conary-test containers found"
+fi
+
 echo "[forge-container-cleanup] pruning inactive images, containers, and volumes"
 DOCKER_HOST="unix://${PODMAN_SOCKET}" podman system prune -af --volumes
 
