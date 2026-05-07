@@ -313,7 +313,7 @@ exit_code = 0
 
 [[test.step]]
 [test.step.kill_after_log]
-conary = "env CONARY_TEST_HOLD_DURING_REMOVE_MS=1500 remove conary-test-fixture --no-scripts"
+conary = "env CONARY_TEST_HOLD_DURING_REMOVE_MS=1500 remove conary-test-fixture --no-scripts --allow-live-system-mutation"
 pattern = "Removing package"
 timeout_seconds = 30
 

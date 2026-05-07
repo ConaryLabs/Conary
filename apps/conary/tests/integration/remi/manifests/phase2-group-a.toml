@@ -92,7 +92,7 @@ group = "A"
 depends_on = ["T38"]
 
 [[test.step]]
-conary = "remove ${FIXTURE_PKG_NAME}"
+conary = "remove ${FIXTURE_PKG_NAME} --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
@@ -267,7 +267,7 @@ depends_on = ["T43"]
 
 # Remove the package (may already be removed, check=False equivalent)
 [[test.step]]
-conary = "remove ${FIXTURE_PKG_NAME} --no-scripts"
+conary = "remove ${FIXTURE_PKG_NAME} --no-scripts --allow-live-system-mutation"
 
 # List orphans -- just verify no crash
 [[test.step]]

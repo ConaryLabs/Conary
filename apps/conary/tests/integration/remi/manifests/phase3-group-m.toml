@@ -179,7 +179,7 @@ depends_on = ["T139", "T140"]
 
 # Clean up from prior tests, then reinstall fresh
 [[test.step]]
-run = "${CONARY_BIN} remove ${small_package} --no-scripts --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} remove ${dep_heavy_package} --no-scripts --db-path ${DB_PATH} 2>/dev/null; true"
+run = "${CONARY_BIN} remove ${small_package} --no-scripts --allow-live-system-mutation --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} remove ${dep_heavy_package} --no-scripts --allow-live-system-mutation --db-path ${DB_PATH} 2>/dev/null; true"
 
 [[test.step]]
 conary = "install ${small_package} --repo ${distro_repo} --no-deps --yes --sandbox never --allow-live-system-mutation"
@@ -194,7 +194,7 @@ conary = "install ${dep_heavy_package} --repo ${distro_repo} --no-deps --yes --s
 exit_code = 0
 
 [[test.step]]
-conary = "remove ${small_package} --no-scripts"
+conary = "remove ${small_package} --no-scripts --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
@@ -290,7 +290,7 @@ group = "M"
 
 # Remove first in case already installed from earlier tests
 [[test.step]]
-run = "${CONARY_BIN} remove ${small_package} --no-scripts --db-path ${DB_PATH} 2>/dev/null; true"
+run = "${CONARY_BIN} remove ${small_package} --no-scripts --allow-live-system-mutation --db-path ${DB_PATH} 2>/dev/null; true"
 
 [[test.step]]
 conary = "install ${small_package} --repo ${distro_repo} --no-deps --yes --sandbox never --allow-live-system-mutation"
@@ -299,7 +299,7 @@ conary = "install ${small_package} --repo ${distro_repo} --no-deps --yes --sandb
 exit_code = 0
 
 [[test.step]]
-conary = "remove ${small_package} --no-scripts"
+conary = "remove ${small_package} --no-scripts --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
@@ -386,7 +386,7 @@ timeout = 300
 group = "M"
 
 [[test.step]]
-run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --no-scripts --db-path ${DB_PATH} >/dev/null 2>&1 || true"
+run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --no-scripts --allow-live-system-mutation --db-path ${DB_PATH} >/dev/null 2>&1 || true"
 
 [test.step.assert]
 exit_code = 0
@@ -399,7 +399,7 @@ exit_code = 0
 
 # Remove small_package if it exists from prior tests, then reinstall
 [[test.step]]
-run = "${CONARY_BIN} remove ${small_package} --no-scripts --db-path ${DB_PATH} 2>/dev/null; true"
+run = "${CONARY_BIN} remove ${small_package} --no-scripts --allow-live-system-mutation --db-path ${DB_PATH} 2>/dev/null; true"
 
 [[test.step]]
 conary = "install ${small_package} --repo ${distro_repo} --no-deps --yes --sandbox never --allow-live-system-mutation"
@@ -428,7 +428,7 @@ fatal = true
 
 # Remove fixture from prior tests, sync, and install fresh
 [[test.step]]
-run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --no-scripts --db-path ${DB_PATH} 2>/dev/null; true"
+run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --no-scripts --allow-live-system-mutation --db-path ${DB_PATH} 2>/dev/null; true"
 
 [[test.step]]
 conary = "repo sync ${REPO_NAME} --force"
@@ -472,7 +472,7 @@ conary = "unpin ${FIXTURE_PKG_NAME}"
 exit_code = 0
 
 [[test.step]]
-conary = "remove ${FIXTURE_PKG_NAME} --no-scripts"
+conary = "remove ${FIXTURE_PKG_NAME} --no-scripts --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
