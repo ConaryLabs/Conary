@@ -95,6 +95,66 @@ fn copy_dir_filtered(src: &Path, dst: &Path, skip_names: &[&str]) -> Result<()> 
     Ok(())
 }
 
+fn ensure_phase2_fixture_outputs(fixtures_root: &Path, conary_bin: &Path) -> Result<()> {
+    let fixture_root = fixtures_root.join("conary-test-fixture");
+    if !fixture_root.is_dir() {
+        return Ok(());
+    }
+
+    for version in ["v1", "v2"] {
+        let version_root = fixture_root.join(version);
+        let manifest = version_root.join("ccs.toml");
+        let source = version_root.join("stage");
+        if !manifest.is_file() || !source.is_dir() {
+            continue;
+        }
+
+        let output_dir = version_root.join("output");
+        fs::create_dir_all(&output_dir)
+            .with_context(|| format!("failed to create {}", output_dir.display()))?;
+
+        let has_fixture = fs::read_dir(&output_dir)
+            .with_context(|| format!("failed to read {}", output_dir.display()))?
+            .any(|entry| {
+                entry
+                    .map(|entry| entry.path().extension().is_some_and(|ext| ext == "ccs"))
+                    .unwrap_or(false)
+            });
+        if has_fixture {
+            continue;
+        }
+
+        let output = std::process::Command::new(conary_bin)
+            .args(["ccs", "build"])
+            .arg(&manifest)
+            .arg("--source")
+            .arg(&source)
+            .arg("--output")
+            .arg(&output_dir)
+            .output()
+            .with_context(|| {
+                format!(
+                    "failed to build Phase 2 fixture {} with {}",
+                    manifest.display(),
+                    conary_bin.display()
+                )
+            })?;
+
+        if !output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!(
+                "failed to build Phase 2 fixture {}\nstdout:\n{}\nstderr:\n{}",
+                manifest.display(),
+                stdout.trim_end(),
+                stderr.trim_end()
+            );
+        }
+    }
+
+    Ok(())
+}
+
 fn stage_build_context(containerfile: &Path, distro: &str) -> Result<StagedBuildContext> {
     let integration_root = containerfile
         .parent()
@@ -146,6 +206,8 @@ fn stage_build_context(containerfile: &Path, distro: &str) -> Result<StagedBuild
     let _ = std::process::Command::new("strip")
         .arg(&staged_binary)
         .status();
+
+    ensure_phase2_fixture_outputs(&root.join("fixtures"), &binary)?;
 
     if distro.starts_with("ubuntu-") {
         copy_dir_filtered(
@@ -269,6 +331,87 @@ mod tests {
         assert!(staged.root.join("conary").is_file());
         assert!(!staged.root.join("target").exists());
         assert!(!staged.root.join("source").exists());
+
+        drop(staged);
+        fs::remove_dir_all(project_root).expect("cleanup project root");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn stage_build_context_generates_missing_phase2_fixture_outputs() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let project_root =
+            std::env::temp_dir().join(format!("conary-test-phase2-fixtures-{unique}"));
+        let remi_root = project_root.join("tests/integration/remi");
+        let fixture_root = project_root.join("tests/fixtures/conary-test-fixture");
+        let containerfile = remi_root.join("containers/Containerfile.arch");
+        let conary = project_root.join("conary");
+
+        fs::create_dir_all(remi_root.join("containers")).expect("create containers");
+        fs::create_dir_all(fixture_root.join("v1/stage/usr/share/conary-test"))
+            .expect("create v1 fixture source");
+        fs::create_dir_all(fixture_root.join("v2/stage/usr/share/conary-test"))
+            .expect("create v2 fixture source");
+        fs::write(
+            project_root.join("Cargo.toml"),
+            "[workspace]\nmembers = []\n",
+        )
+        .expect("write cargo");
+        fs::write(&containerfile, "FROM scratch\n").expect("write containerfile");
+        fs::write(remi_root.join("config.toml"), "[paths]\n").expect("write config");
+        fs::write(fixture_root.join("v1/ccs.toml"), "[package]\n").expect("write v1 ccs");
+        fs::write(fixture_root.join("v2/ccs.toml"), "[package]\n").expect("write v2 ccs");
+        fs::write(
+            fixture_root.join("v1/stage/usr/share/conary-test/hello.txt"),
+            "hello v1\n",
+        )
+        .expect("write v1 source");
+        fs::write(
+            fixture_root.join("v2/stage/usr/share/conary-test/hello.txt"),
+            "hello v2\n",
+        )
+        .expect("write v2 source");
+        fs::write(
+            &conary,
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+manifest="$3"
+output="${!#}"
+case "$manifest" in
+  */v1/ccs.toml) file="conary-test-fixture-1.0.0.ccs" ;;
+  */v2/ccs.toml) file="conary-test-fixture-2.0.0.ccs" ;;
+  *) echo "unexpected manifest: $manifest" >&2; exit 2 ;;
+esac
+mkdir -p "$output"
+printf 'fixture\n' > "$output/$file"
+"#,
+        )
+        .expect("write fake conary");
+        let mut permissions = fs::metadata(&conary)
+            .expect("fake conary metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&conary, permissions).expect("make fake conary executable");
+
+        let staged = stage_build_context(&containerfile, "arch").expect("stage build context");
+
+        assert!(
+            staged
+                .root
+                .join("fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs")
+                .is_file()
+        );
+        assert!(
+            staged
+                .root
+                .join("fixtures/conary-test-fixture/v2/output/conary-test-fixture-2.0.0.ccs")
+                .is_file()
+        );
 
         drop(staged);
         fs::remove_dir_all(project_root).expect("cleanup project root");
