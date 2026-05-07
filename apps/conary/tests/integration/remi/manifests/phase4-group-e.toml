@@ -132,7 +132,7 @@ group = "E"
 depends_on = ["T231"]
 
 [[test.step]]
-conary = "remove conary-test-fixture --no-scripts"
+conary = "remove conary-test-fixture --no-scripts --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
@@ -192,7 +192,7 @@ stdout_contains_all = ["phase4-runtime-fixture", "1.0.0"]
 file_exists = "/usr/bin/phase4-runtime-fixture"
 
 [[test.step]]
-conary = "remove phase4-runtime-fixture --no-scripts"
+conary = "remove phase4-runtime-fixture --no-scripts --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
@@ -359,7 +359,7 @@ stdout_contains_all = ["conary-test-fixture", "tree"]
 
 # Remove CCS, native should remain
 [[test.step]]
-conary = "remove conary-test-fixture --no-scripts"
+conary = "remove conary-test-fixture --no-scripts --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
@@ -418,7 +418,7 @@ stdout_contains = "Generation"
 
 # Clean up
 [[test.step]]
-run = "${CONARY_BIN} remove conary-test-fixture --no-scripts --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} remove tree --no-scripts --db-path ${DB_PATH} 2>/dev/null; true"
+run = "${CONARY_BIN} remove conary-test-fixture --no-scripts --allow-live-system-mutation --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} remove tree --no-scripts --allow-live-system-mutation --db-path ${DB_PATH} 2>/dev/null; true"
 
 # ==========================================================================
 # Distro Replatforming Tests (T242-T249)

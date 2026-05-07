@@ -58,7 +58,7 @@ file_exists = "${FIXTURE_FILE}"
 
 # Clean up
 [[test.step]]
-conary = "remove ${FIXTURE_PKG_NAME} --no-scripts"
+conary = "remove ${FIXTURE_PKG_NAME} --no-scripts --allow-live-system-mutation"
 
 # --------------------------------------------------------------------------
 # T69: OCI manifest

@@ -33,6 +33,17 @@ mod tests {
             .join(file_name)
     }
 
+    fn package_remove_segments(command: &str) -> impl Iterator<Item = &str> {
+        command.split(';').filter_map(|segment| {
+            let segment = segment.trim();
+            let is_package_remove = segment.starts_with("remove ")
+                || segment.contains("${CONARY_BIN} remove ")
+                || (segment.starts_with("env ") && segment.contains(" remove "));
+
+            is_package_remove.then_some(segment)
+        })
+    }
+
     #[test]
     fn test_parse_minimal_manifest() {
         let toml = r#"
@@ -296,6 +307,45 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
                 a37.stdout_contains_any_if_success.is_some(),
                 "T37 should use stdout_contains_any_if_success"
             );
+        }
+    }
+
+    #[test]
+    fn active_manifest_package_removes_acknowledge_live_mutation() {
+        let manifest_dir = remi_manifest_path("");
+        if !manifest_dir.exists() {
+            return;
+        }
+
+        for entry in std::fs::read_dir(&manifest_dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
+                continue;
+            }
+
+            let manifest = load_manifest(&path).unwrap();
+            for test in &manifest.test {
+                for (index, step) in test.step.iter().enumerate() {
+                    for command in step
+                        .conary
+                        .iter()
+                        .chain(step.run.iter())
+                        .chain(step.kill_after_log.iter().map(|kill| &kill.conary))
+                    {
+                        for segment in package_remove_segments(command) {
+                            assert!(
+                                segment.contains("--allow-live-system-mutation"),
+                                "{}:{} step {} remove command must acknowledge live mutation: {}",
+                                path.display(),
+                                test.id,
+                                index + 1,
+                                segment
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 

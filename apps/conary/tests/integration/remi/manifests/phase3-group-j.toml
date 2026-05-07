@@ -200,7 +200,7 @@ timeout = 60
 group = "J"
 
 [[test.step]]
-conary = "remove dep-app --no-scripts"
+conary = "remove dep-app --no-scripts --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
@@ -284,7 +284,7 @@ conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-or-consumer-
 exit_code = 0
 
 [[test.step]]
-conary = "remove dep-or-a --no-scripts"
+conary = "remove dep-or-a --no-scripts --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
@@ -321,7 +321,7 @@ exit_code = 0
 stdout_contains_any = ["dep-app", "dep-libb"]
 
 [[test.step]]
-conary = "remove dep-liba --no-scripts"
+conary = "remove dep-liba --no-scripts --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code_not = 0
