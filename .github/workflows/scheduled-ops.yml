@@ -1,11 +1,17 @@
 name: scheduled-ops
 
+run-name: ${{ github.workflow }} ${{ github.event.inputs.run_label || github.run_id }}
+
 on:
   schedule:
     - cron: '0 */6 * * *'
     - cron: '30 6 * * *'
   workflow_dispatch:
     inputs:
+      run_label:
+        description: Unique label for deterministic release-readiness run lookup.
+        required: false
+        default: ""
       run_deep_validation:
         description: Run the nightly deep-validation matrix.
         required: false
@@ -62,6 +68,8 @@ jobs:
         distro: [fedora44, ubuntu-noble, arch]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Forge preflight
+        run: bash scripts/forge-preflight.sh --mode container
       - name: Build deep-validation binaries
         run: cargo build -p conary -p conary-test --verbose
       - name: Run Phase 1 suites
@@ -101,7 +109,19 @@ jobs:
       DOCKER_HOST: unix:///run/user/1000/podman/podman.sock
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Forge preflight
+        run: bash scripts/forge-preflight.sh --mode qemu
       - name: Build QEMU validation binaries
         run: cargo build -p conary -p conary-test --verbose
       - name: Run Group N QEMU tests
-        run: cargo run -p conary-test -- run --distro fedora44 --suite tests/integration/remi/manifests/phase3-group-n-qemu.toml
+        run: |
+          set -euo pipefail
+          cargo run -p conary-test -- run --distro fedora44 --suite phase3-group-n-qemu | tee /tmp/conary-group-n-qemu.log
+          ! rg -i 'qemu.*skipped|boot skipped|skipping qemu' /tmp/conary-group-n-qemu.log
+          rg 'boot-verified|generation-a|generation-b|kernel-update-active|fallback-generation' /tmp/conary-group-n-qemu.log
+      - name: Run Group O generation-export QEMU tests
+        run: |
+          set -euo pipefail
+          cargo run -p conary-test -- run --distro fedora44 --suite phase3-group-o-generation-export | tee /tmp/conary-group-o-qemu.log
+          ! rg -i 'qemu.*skipped|boot skipped|skipping qemu' /tmp/conary-group-o-qemu.log
+          rg 'installed-runtime-generation-export-booted|bootstrap-run-generation-export-booted' /tmp/conary-group-o-qemu.log

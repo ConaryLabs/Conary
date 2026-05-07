@@ -3,9 +3,13 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: forge-smoke.sh [--port PORT]
+Usage: forge-smoke.sh [--port PORT] [--expected-commit COMMIT]
 
 Lightweight Forge control-plane smoke check for conary-test.
+
+Options:
+  --port PORT               Probe an alternate local service port.
+  --expected-commit COMMIT  Require the running conary-test binary to report COMMIT.
 
 Port resolution:
   1. --port PORT
@@ -15,10 +19,15 @@ EOF
 }
 
 PORT=""
+EXPECTED_COMMIT=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --port)
       PORT="${2:-}"
+      shift 2
+      ;;
+    --expected-commit)
+      EXPECTED_COMMIT="${2:-}"
       shift 2
       ;;
     -h|--help)
@@ -35,6 +44,10 @@ done
 
 if [[ -z "${PORT}" ]]; then
   PORT="${CONARY_TEST_PORT:-9090}"
+fi
+
+if [[ "${CONARY_FORGE_SKIP_PREFLIGHT:-0}" != "1" ]]; then
+  bash scripts/forge-preflight.sh --mode container
 fi
 
 if [[ -x "target/debug/conary-test" ]]; then
@@ -82,17 +95,24 @@ PY
 
 echo "[forge-smoke] checking conary-test deploy status --json"
 DEPLOY_JSON="$("${CONARY_TEST_BIN}" --json deploy status --port "${PORT}")"
-python3 - "${DEPLOY_JSON}" <<'PY'
+python3 - "${DEPLOY_JSON}" "${EXPECTED_COMMIT}" <<'PY'
 import json
 import sys
 
 payload = json.loads(sys.argv[1])
-for key in ("checkout", "degraded", "reason"):
+expected_commit = sys.argv[2]
+for key in ("binary", "checkout", "degraded", "reason"):
     if key not in payload:
         raise SystemExit(f"missing deploy status key: {key}")
 for key in ("git_branch", "git_commit"):
     if key not in payload["checkout"]:
         raise SystemExit(f"missing checkout key: {key}")
+if expected_commit:
+    actual_commit = payload["binary"].get("git_commit")
+    if actual_commit != expected_commit:
+        raise SystemExit(
+            f"running binary commit mismatch: expected {expected_commit}, got {actual_commit}"
+        )
 PY
 
 echo "[forge-smoke] ok"

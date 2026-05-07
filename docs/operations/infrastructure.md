@@ -65,8 +65,15 @@ task or when you are debugging the underlying service path itself.
 - `conary-test deploy status --json` now reports both live binary truth and the
   last successful managed rollout, including explicit drift flags
 - For supported control-plane verification, run `bash scripts/forge-smoke.sh`
+- For trusted-runner runtime verification, run
+  `bash scripts/forge-preflight.sh --mode container` before container suites
+  and `bash scripts/forge-preflight.sh --mode qemu` before QEMU suites
 - Port resolution for CLI and smoke checks is `--port` > `CONARY_TEST_PORT` >
   `9090`
+- Forge runtime repair should use
+  `sudo bash /home/peter/Conary/deploy/repair-forge-runtime.sh`; this refreshes
+  Podman/QEMU tooling and the rootless Podman socket without re-registering the
+  GitHub Actions runner
 - `conaryd` is not yet a managed rollout unit here; its release deployment path
   is the GitHub `deploy-and-verify` workflow plus the checked-in Forge helper
   assets
