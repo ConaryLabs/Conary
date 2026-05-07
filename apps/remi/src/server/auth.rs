@@ -10,7 +10,7 @@ use axum::http::HeaderMap;
 use axum::http::Request;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use rand::Rng;
+use rand::RngExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;

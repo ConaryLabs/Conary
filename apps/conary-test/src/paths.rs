@@ -1,7 +1,10 @@
 // conary-test/src/paths.rs
 
 use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 const WORKSPACE_REMI_ROOT: &str = "apps/conary/tests/integration/remi";
 const LEGACY_REMI_ROOT: &str = "tests/integration/remi";
@@ -12,12 +15,25 @@ const ROLLOUT_PROVENANCE_FILE: &str = "forge-rollout.json";
 
 fn find_workspace_root_from(start: &Path) -> Option<PathBuf> {
     let mut candidate = start.to_path_buf();
+    let mut first_manifest_root = None;
+
     loop {
-        if candidate.join("Cargo.toml").is_file() {
-            return Some(candidate);
+        let manifest = candidate.join("Cargo.toml");
+        if manifest.is_file() {
+            if fs::read_to_string(&manifest)
+                .map(|contents| contents.contains("[workspace]"))
+                .unwrap_or(false)
+            {
+                return Some(candidate);
+            }
+
+            if first_manifest_root.is_none() {
+                first_manifest_root = Some(candidate.clone());
+            }
         }
+
         if !candidate.pop() {
-            return None;
+            return first_manifest_root;
         }
     }
 }

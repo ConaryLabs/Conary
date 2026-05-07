@@ -124,7 +124,12 @@ impl Chunker {
 
     /// Chunk a byte slice
     pub fn chunk_bytes(&self, data: &[u8]) -> Vec<Chunk> {
-        let chunker = FastCDC::new(data, self.min_size, self.avg_size, self.max_size);
+        let chunker = FastCDC::new(
+            data,
+            self.min_size as usize,
+            self.avg_size as usize,
+            self.max_size as usize,
+        );
         let mut chunks = Vec::new();
 
         for entry in chunker {

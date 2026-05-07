@@ -362,8 +362,7 @@ fn set_executable(path: &Path) -> Result<()> {
 /// Compute MD5 hash of content (for md5sums file)
 fn compute_md5(content: &[u8]) -> String {
     use md5::{Digest, Md5};
-    let hash = Md5::digest(content);
-    format!("{:x}", hash)
+    hex::encode(Md5::digest(content))
 }
 
 #[cfg(test)]

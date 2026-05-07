@@ -95,11 +95,7 @@ impl RpmPackage {
                 // FileDigest can be formatted as hex string
                 let sha256 = entry.digest.as_ref().map(|d| format!("{}", d));
 
-                let symlink_target = if entry.linkto.is_empty() {
-                    None
-                } else {
-                    Some(entry.linkto.clone())
-                };
+                let symlink_target = entry.linkto.clone();
                 files.push(PackageFile {
                     path: entry.path.to_string_lossy().to_string(),
                     size: i64::try_from(entry.size).unwrap_or(i64::MAX),
@@ -360,7 +356,7 @@ impl PackageFormat for RpmPackage {
             .map_err(|e| Error::InitError(format!("Failed to parse RPM: {}", e)))?;
 
         // Get the compressed payload from the Package struct
-        let payload = &pkg.content;
+        let payload = &pkg.payload;
         if payload.is_empty() {
             // Check if we expected files from metadata
             let expected_file_count = self

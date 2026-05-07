@@ -19,7 +19,7 @@ thiserror = "2.0"
 anyhow = "1.0"
 
 # Hashing
-sha2 = "0.10"
+sha2 = "0.11.0"
 
 # Logging
 tracing = "0.1"
@@ -52,7 +52,7 @@ hex = "0.4"
 pem = "3.0"
 
 # HTTP
-reqwest = { version = "0.13", features = ["rustls", "webpki-roots", "json"] }
+reqwest = { version = "0.13.3", features = ["rustls", "json"] }
 url = "2.5"
 
 # File system
@@ -83,14 +83,14 @@ async-stream = "0.3"
 
 # Crypto
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
-rand = "0.9"
+rand = "0.10.1"
 
 # Web framework
 axum = "0.8"
 tower = "0.5"
 tower-http = "0.6"
 tokio-stream = "0.1"
-mdns-sd = "0.18"
+mdns-sd = "0.19.1"
 dashmap = "6.0"
 
 # MCP
