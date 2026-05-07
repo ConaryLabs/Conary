@@ -69,7 +69,9 @@ task or when you are debugging the underlying service path itself.
 - For supported control-plane verification, run `bash scripts/forge-smoke.sh`
 - For trusted-runner runtime verification, run
   `bash scripts/forge-preflight.sh --mode container` before container suites
-  and `bash scripts/forge-preflight.sh --mode qemu` before QEMU suites
+  and `bash scripts/forge-preflight.sh --mode qemu` before QEMU suites.
+  QEMU mode requires `/dev/kvm`; Forge runners without exposed KVM are infra
+  blockers for scheduled QEMU validation, not product pass evidence.
 - Container-heavy Forge validation should reclaim inactive rootless Podman
   storage with `bash scripts/forge-container-cleanup.sh`; scheduled deep/QEMU
   CI does this before starting the matrix.

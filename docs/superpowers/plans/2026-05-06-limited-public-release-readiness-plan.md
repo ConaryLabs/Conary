@@ -152,7 +152,7 @@ if [[ "${MODE}" == "qemu" ]]; then
   command -v qemu-img >/dev/null 2>&1 || fail "qemu-img is not installed"
   command -v scp >/dev/null 2>&1 || fail "scp is not installed"
   command -v rg >/dev/null 2>&1 || fail "ripgrep is not installed"
-  test -e /dev/kvm || echo "[forge-preflight] warning: /dev/kvm missing; QEMU tests may be slow or fail" >&2
+  test -e /dev/kvm || fail "/dev/kvm is missing; scheduled QEMU gates require a KVM-capable Forge runner"
 fi
 
 echo "[forge-preflight] ok"
