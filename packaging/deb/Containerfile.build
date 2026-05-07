@@ -1,9 +1,9 @@
 # packaging/deb/Containerfile.build
 #
-# Ubuntu Noble (24.04) build container for Conary DEBs.
+# Ubuntu 26.04 LTS build container for Conary DEBs.
 # Uses rustup for a current toolchain (distro Rust is too old for MSRV 1.93).
 
-FROM docker.io/library/ubuntu:24.04
+FROM docker.io/library/ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
