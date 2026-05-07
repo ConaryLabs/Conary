@@ -5,7 +5,7 @@
 #
 # Usage:
 #   ./packaging/deb/build.sh           # Build locally (needs cargo + dpkg-buildpackage)
-#   ./packaging/deb/build.sh --podman  # Build inside an Ubuntu Noble container
+#   ./packaging/deb/build.sh --podman  # Build inside an Ubuntu 26.04 LTS container
 
 set -euo pipefail
 

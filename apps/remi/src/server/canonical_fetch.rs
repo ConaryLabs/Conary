@@ -73,7 +73,7 @@ pub async fn fetch_appstream_data(db_path: &Path) -> Result<usize> {
 
     let mut total = 0;
 
-    // Ubuntu Noble DEP-11 YAML
+    // Ubuntu 26.04 LTS DEP-11 YAML
     match fetch_ubuntu_appstream(&client, db_path).await {
         Ok(n) => {
             info!("Cached {n} AppStream components from Ubuntu");
@@ -90,7 +90,7 @@ pub async fn fetch_appstream_data(db_path: &Path) -> Result<usize> {
 }
 
 async fn fetch_ubuntu_appstream(client: &reqwest::Client, db_path: &Path) -> Result<usize> {
-    let url = "http://archive.ubuntu.com/ubuntu/dists/noble/main/dep11/Components-amd64.yml.gz";
+    let url = "http://archive.ubuntu.com/ubuntu/dists/resolute/main/dep11/Components-amd64.yml.gz";
 
     let response = client.get(url).send().await?;
     if !response.status().is_success() {
@@ -107,7 +107,7 @@ async fn fetch_ubuntu_appstream(client: &reqwest::Client, db_path: &Path) -> Res
 
     let components = conary_core::canonical::appstream::parse_appstream_yaml(&yaml)?;
     info!(
-        "Parsed {} AppStream components from Ubuntu Noble",
+        "Parsed {} AppStream components from Ubuntu 26.04 LTS",
         components.len()
     );
 
@@ -117,7 +117,7 @@ async fn fetch_ubuntu_appstream(client: &reqwest::Client, db_path: &Path) -> Res
         conary_core::canonical::appstream::cache_components_to_db(
             &conn,
             &components,
-            "ubuntu-noble",
+            "ubuntu-26.04",
         )
         .map_err(Into::into)
     })

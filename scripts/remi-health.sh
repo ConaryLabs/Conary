@@ -29,7 +29,9 @@ FAIL=0
 check() {
     local name="$1" url="$2" expect="${3:-200}"
     local http_code
-    http_code=$(curl -sf -o /dev/null -w '%{http_code}' --max-time 10 "$url" 2>/dev/null || echo "000")
+    if ! http_code=$(curl -sfI -o /dev/null -w '%{http_code}' --max-time 30 "$url" 2>/dev/null); then
+        http_code="000"
+    fi
 
     if [[ "$http_code" == "$expect" ]]; then
         printf "  [PASS] %-40s %s\n" "$name" "$http_code"
@@ -117,8 +119,10 @@ if [[ "$MODE" == "full" ]]; then
 
     echo ""
     echo "=== Package Metadata / Conversion ==="
-    conv_code=$(curl -sf -o /dev/null -w '%{http_code}' --max-time 30 \
-        "$ENDPOINT/v1/fedora/packages/curl" 2>/dev/null || echo "000")
+    if ! conv_code=$(curl -sfI -o /dev/null -w '%{http_code}' --max-time 30 \
+        "$ENDPOINT/v1/fedora/packages/curl" 2>/dev/null); then
+        conv_code="000"
+    fi
     if [[ "$conv_code" == "200" ]] || [[ "$conv_code" == "202" ]]; then
         printf "  [PASS] %-40s %s\n" "package metadata / conversion" "$conv_code"
         PASS=$((PASS + 1))

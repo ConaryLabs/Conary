@@ -110,6 +110,7 @@ pub fn parse_projects_batch(json: &str) -> Result<Vec<RepologyProject>> {
 pub fn distro_to_repo(distro: &str) -> Option<String> {
     match distro {
         "arch" => return Some("arch".to_string()),
+        "ubuntu-26.04" => return Some("ubuntu_26_04".to_string()),
         "ubuntu-noble" => return Some("ubuntu_24_04".to_string()),
         "ubuntu-jammy" => return Some("ubuntu_22_04".to_string()),
         "debian-bookworm" => return Some("debian_12".to_string()),
@@ -156,6 +157,7 @@ pub fn repo_to_distro(repo: &str) -> Option<String> {
     // Exact matches first
     match repo {
         "arch" => return Some("arch".to_string()),
+        "ubuntu_26_04" => return Some("ubuntu-26.04".to_string()),
         "ubuntu_24_04" => return Some("ubuntu-noble".to_string()),
         "ubuntu_22_04" => return Some("ubuntu-jammy".to_string()),
         "debian_12" => return Some("debian-bookworm".to_string()),
@@ -462,7 +464,7 @@ mod tests {
             ],
             "wget": [
                 {"repo": "fedora_41", "visiblename": "wget", "version": "1.24.5", "status": "newest"},
-                {"repo": "ubuntu_24_04", "visiblename": "wget", "version": "1.21.4", "status": "outdated"}
+                {"repo": "ubuntu_26_04", "visiblename": "wget", "version": "1.21.4", "status": "outdated"}
             ]
         }"#;
         let projects = parse_projects_batch(json).unwrap();
@@ -473,8 +475,8 @@ mod tests {
     fn test_repo_id_to_distro() {
         assert_eq!(repo_to_distro("fedora_41"), Some("fedora-41".to_string()));
         assert_eq!(
-            repo_to_distro("ubuntu_24_04"),
-            Some("ubuntu-noble".to_string())
+            repo_to_distro("ubuntu_26_04"),
+            Some("ubuntu-26.04".to_string())
         );
         assert_eq!(repo_to_distro("arch"), Some("arch".to_string()));
         assert_eq!(repo_to_distro("unknown_repo_xyz"), None);

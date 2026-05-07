@@ -1,18 +1,4 @@
 [[distros]]
-name = "ubuntu-noble"
-display = "Ubuntu 24.04 LTS (Noble Numbat)"
-format = "deb"
-release = "2024-04-25"
-eol = "2029-04-25"
-
-[[distros]]
-name = "ubuntu-oracular"
-display = "Ubuntu 24.10 (Oracular Oriole)"
-format = "deb"
-release = "2024-10-10"
-eol = "2025-07-10"
-
-[[distros]]
 name = "fedora-44"
 display = "Fedora 44"
 format = "rpm"
@@ -20,18 +6,11 @@ release = "2026-04-28"
 eol = "2027-06-02"
 
 [[distros]]
-name = "fedora-43"
-display = "Fedora 43"
-format = "rpm"
-release = "2025-10-14"
-eol = "2026-11-15"
-
-[[distros]]
-name = "debian-12"
-display = "Debian 12 (Bookworm)"
+name = "ubuntu-26.04"
+display = "Ubuntu 26.04 LTS"
 format = "deb"
-release = "2023-06-10"
-eol = "2028-06-10"
+release = "2026-04-23"
+eol = "2031-05-31"
 
 [[distros]]
 name = "arch"
