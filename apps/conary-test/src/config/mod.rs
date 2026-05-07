@@ -342,6 +342,15 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
                                 index + 1,
                                 segment
                             );
+                            assert!(
+                                segment.contains("--no-scripts")
+                                    || segment.contains("--sandbox never"),
+                                "{}:{} step {} scripted remove command must disable sandboxing in rootless validation containers: {}",
+                                path.display(),
+                                test.id,
+                                index + 1,
+                                segment
+                            );
                         }
                     }
                 }

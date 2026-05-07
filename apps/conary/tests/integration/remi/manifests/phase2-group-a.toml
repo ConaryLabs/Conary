@@ -92,7 +92,7 @@ group = "A"
 depends_on = ["T38"]
 
 [[test.step]]
-conary = "remove ${FIXTURE_PKG_NAME} --allow-live-system-mutation"
+conary = "remove ${FIXTURE_PKG_NAME} --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
