@@ -29,12 +29,23 @@ systemctl status github-actions-runner --no-pager
 ```
 
 `deploy/setup-forge.sh` installs Podman, ensures the Rust toolchain is present
-for the runner user, downloads the GitHub Actions runner binaries, registers a
-single trusted runner, and installs the checked-in systemd unit from
-`deploy/systemd/github-actions-runner.service`.
+for the runner user, enables the rootless Podman socket, installs QEMU tooling
+for virtualization suites, downloads the GitHub Actions runner binaries,
+registers a single trusted runner, and installs the checked-in systemd unit
+from `deploy/systemd/github-actions-runner.service`.
 
 If you prefer a persistent GitHub CLI login on Forge, the script still supports
 that path when `GITHUB_RUNNER_REGISTRATION_TOKEN` is not provided.
+
+For routine runtime repair, prefer the non-disruptive helper:
+
+```bash
+sudo bash /home/peter/Conary/deploy/repair-forge-runtime.sh
+```
+
+That helper installs or refreshes Podman/QEMU/OpenSSH/ripgrep dependencies,
+enables linger for the runner user, and starts `podman.socket` without stopping
+or re-registering the GitHub Actions runner.
 
 ## Runner Role
 
@@ -90,11 +101,20 @@ system unit `conaryd.service`. This is intentionally separate from the managed
 ## Supported Validation Commands
 
 ```bash
+# Read-only runner preflight for container suites:
+bash scripts/forge-preflight.sh --mode container
+
+# Read-only runner preflight for QEMU suites:
+bash scripts/forge-preflight.sh --mode qemu
+
 # Supported Forge control-plane smoke:
 bash scripts/forge-smoke.sh
 
 # Or point at an alternate local service port:
 bash scripts/forge-smoke.sh --port 9099
+
+# Require a specific running conary-test commit:
+bash scripts/forge-smoke.sh --expected-commit "$(git rev-parse HEAD)"
 
 # Run Remi health checks:
 ./scripts/remi-health.sh --smoke
@@ -105,8 +125,9 @@ bash scripts/conaryd-health.sh --expected-version 0.6.0
 ```
 
 `forge-smoke.sh` resolves the local port with `--port` > `CONARY_TEST_PORT` >
-`9090`, prefers `target/debug/conary-test` when present, and falls back to
-`conary-test` on `$PATH`.
+`9090`, runs the container-mode Forge preflight unless
+`CONARY_FORGE_SKIP_PREFLIGHT=1`, prefers `target/debug/conary-test` when
+present, and falls back to `conary-test` on `$PATH`.
 
 Raw `cargo run -p conary-test -- run ...` remains useful for deeper manual
 debugging, but it is no longer the main supported Forge smoke path.
@@ -133,7 +154,15 @@ ssh peter@forge.conarylabs.com 'sudo -E bash /home/peter/Conary/deploy/setup-for
 
 **Local validation tools are missing:**
 ```bash
-sudo -u peter -H bash -lc 'cargo --version && podman --version'
+sudo -u peter -H bash -lc 'cargo --version && podman --version && qemu-system-x86_64 --version'
+sudo bash /home/peter/Conary/deploy/repair-forge-runtime.sh
+```
+
+**Rootless Podman socket is missing:**
+```bash
+sudo -u peter -H systemctl --user status podman.socket --no-pager
+ls -l /run/user/1000/podman/podman.sock
+bash scripts/forge-preflight.sh --mode container
 ```
 
 **Container builds fail locally:**

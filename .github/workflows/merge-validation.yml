@@ -1,10 +1,16 @@
 name: merge-validation
 
+run-name: ${{ github.workflow }} ${{ github.event.inputs.run_label || github.run_id }}
+
 on:
   push:
     branches: [main]
   workflow_dispatch:
     inputs:
+      run_label:
+        description: Unique label for deterministic release-readiness run lookup.
+        required: false
+        default: ""
       smoke_distro:
         description: Distro for the smoke validation run.
         required: false
@@ -26,6 +32,8 @@ jobs:
       SMOKE_DISTRO: ${{ github.event.inputs.smoke_distro || 'fedora44' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Forge preflight
+        run: bash scripts/forge-preflight.sh --mode container
       - name: Build trusted-lane binaries
         run: cargo build -p conary -p remi -p conaryd -p conary-test --verbose
       - name: Run Forge control-plane smoke

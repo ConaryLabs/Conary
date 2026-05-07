@@ -76,7 +76,9 @@ runner_url() {
 
 install_packages() {
     log "Installing host dependencies..."
-    dnf install -y podman git curl tar jq gh ca-certificates
+    dnf install -y \
+        podman git curl tar jq gh ca-certificates \
+        qemu-system-x86 qemu-img openssh-clients edk2-ovmf ripgrep
 }
 
 ensure_runner_user() {
@@ -91,6 +93,23 @@ ensure_rust() {
 
     log "Installing Rust toolchain for ${RUNNER_USER}..."
     runner_shell "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal"
+}
+
+ensure_podman_socket() {
+    local runner_uid runtime_dir podman_socket
+
+    runner_uid="$(id -u "$RUNNER_USER")"
+    runtime_dir="/run/user/${runner_uid}"
+    podman_socket="${runtime_dir}/podman/podman.sock"
+
+    log "Enabling rootless Podman socket for ${RUNNER_USER}..."
+    loginctl enable-linger "$RUNNER_USER"
+    systemctl start "user@${runner_uid}.service"
+    runner_shell "XDG_RUNTIME_DIR='${runtime_dir}' systemctl --user enable --now podman.socket"
+    runner_shell "test -S '${podman_socket}'"
+    runner_shell "DOCKER_HOST='unix://${podman_socket}' podman info >/dev/null"
+    curl --unix-socket "$podman_socket" -fsS http://d/v1.41/_ping >/dev/null \
+        || curl --unix-socket "$podman_socket" -fsS http://d/_ping >/dev/null
 }
 
 install_runner_files() {
@@ -180,6 +199,7 @@ verify_setup() {
 install_packages
 ensure_runner_user
 ensure_rust
+ensure_podman_socket
 install_runner_files
 configure_runner
 install_service
