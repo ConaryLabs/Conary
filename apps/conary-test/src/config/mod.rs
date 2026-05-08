@@ -768,6 +768,48 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
     }
 
     #[test]
+    fn test_load_phase3_group_h_manifest_post_install_failure_expectations() {
+        let path = remi_manifest_path("phase3-group-h.toml");
+        if path.exists() {
+            let manifest = load_manifest(&path).unwrap();
+            assert_eq!(manifest.suite.phase, 3);
+
+            let t93 = manifest.test.iter().find(|test| test.id == "T93").unwrap();
+            let install_assertion = t93.step[0].assert.as_ref().unwrap();
+            assert_eq!(
+                install_assertion.exit_code,
+                Some(0),
+                "T93 should expect post-install script failures to be committed with warnings"
+            );
+            assert_eq!(
+                install_assertion.stderr_contains.as_deref(),
+                Some("Post-install script failed")
+            );
+
+            let status_step = t93.step[1]
+                .run
+                .as_deref()
+                .expect("T93 should query the changeset status after install");
+            assert!(
+                status_step.contains("sqlite3 ${DB_PATH}")
+                    && status_step.contains("SELECT status FROM changesets"),
+                "T93 should verify the degraded changeset status in the DB"
+            );
+            let status_assertion = t93.step[1].assert.as_ref().unwrap();
+            assert_eq!(
+                status_assertion.stdout_contains.as_deref(),
+                Some("post_hooks_failed")
+            );
+
+            assert_eq!(
+                t93.step[2].file_exists.as_deref(),
+                Some("/usr/bin/failing-scriptlet"),
+                "T93 should verify the package payload remains installed"
+            );
+        }
+    }
+
+    #[test]
     fn test_load_phase3_group_l_manifest_self_update_http_mocks_seed_db_directly() {
         let path = remi_manifest_path("phase3-group-l.toml");
         if path.exists() {
