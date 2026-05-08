@@ -628,6 +628,29 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
                 t68.step.iter().any(|s| s.file_exists.is_some()),
                 "T68 should verify file exists after install"
             );
+            let install_step = t68
+                .step
+                .iter()
+                .filter_map(|step| step.conary.as_deref())
+                .find(|command| command.starts_with("install "))
+                .expect("T68 should install a package");
+            assert!(
+                install_step.contains("${TEST_PACKAGE_3}"),
+                "T68 should install a distro-backed Remi package"
+            );
+            assert!(
+                !install_step.contains("${FIXTURE_PKG_NAME}"),
+                "T68 should not install the local CCS fixture by Remi package name"
+            );
+            let file_check = t68
+                .step
+                .iter()
+                .find_map(|step| step.file_exists.as_deref())
+                .expect("T68 should verify an installed file");
+            assert_eq!(
+                file_check, "${TEST_BINARY_3}",
+                "T68 should verify the selected distro package binary"
+            );
 
             // Verify T69 uses stdout_contains_any for HTTP code check
             let t69 = manifest.test.iter().find(|t| t.id == "T69").unwrap();

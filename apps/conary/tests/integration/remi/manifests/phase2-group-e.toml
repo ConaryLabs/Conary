@@ -5,7 +5,7 @@
 #
 # Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}
 # Distro variables: ${REMI_DISTRO}
-# Fixture variables: ${FIXTURE_PKG_NAME}, ${FIXTURE_FILE}
+# Distro package variables: ${TEST_PACKAGE_3}, ${TEST_BINARY_3}
 
 [suite]
 name = "Phase 2, Group E: Remi Client (T67-T71)"
@@ -45,20 +45,20 @@ conary = "repo sync ${REPO_NAME} --force"
 [test.step.assert]
 exit_code = 0
 
-# Install the fixture package via Remi
+# Install a distro-backed package via Remi
 [[test.step]]
-conary = "install ${FIXTURE_PKG_NAME} --dep-mode takeover --yes --sandbox never --allow-live-system-mutation"
+conary = "install ${TEST_PACKAGE_3} --dep-mode takeover --yes --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
 
 # Verify the file was deployed
 [[test.step]]
-file_exists = "${FIXTURE_FILE}"
+file_exists = "${TEST_BINARY_3}"
 
 # Clean up
 [[test.step]]
-conary = "remove ${FIXTURE_PKG_NAME} --no-scripts --allow-live-system-mutation"
+conary = "remove ${TEST_PACKAGE_3} --no-scripts --allow-live-system-mutation"
 
 # --------------------------------------------------------------------------
 # T69: OCI manifest
