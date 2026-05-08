@@ -942,17 +942,84 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
                 Some("jq"),
                 "Arch should use a smaller dependency-heavy package than vim to keep Forge runtime bounded"
             );
-
-            let t141 = manifest.test.iter().find(|test| test.id == "T141").unwrap();
-            let cleanup_step = t141.step[0]
-                .run
-                .as_deref()
-                .expect("T141 should remove any fixture left by earlier tests");
-            assert!(
-                cleanup_step.contains("remove ${FIXTURE_PKG_NAME}")
-                    && cleanup_step.contains("--db-path ${DB_PATH}"),
-                "T141 should start from a clean fixture install state"
+            assert_eq!(
+                manifest
+                    .distro_overrides
+                    .get("ubuntu-26.04")
+                    .and_then(|overrides| overrides.get("small_package"))
+                    .map(String::as_str),
+                Some("patch"),
+                "Ubuntu should use a package present in ubuntu-remi"
             );
+            assert_eq!(
+                manifest
+                    .distro_overrides
+                    .get("ubuntu-26.04")
+                    .and_then(|overrides| overrides.get("small_binary"))
+                    .map(String::as_str),
+                Some("/usr/bin/patch"),
+                "Ubuntu should verify the binary for its selected small package"
+            );
+
+            for id in ["T141", "T144", "T147", "T148", "T149"] {
+                let test = manifest.test.iter().find(|test| test.id == id).unwrap();
+                let cleanup_step = test.step[0].run.as_deref().unwrap_or_else(|| {
+                    panic!("{id} should remove any fixture left by earlier tests")
+                });
+                assert!(
+                    cleanup_step.contains("remove ${FIXTURE_PKG_NAME}")
+                        && cleanup_step.contains("--db-path ${DB_PATH}"),
+                    "{id} should start from a clean fixture install state"
+                );
+            }
+
+            for id in ["T144", "T147", "T149"] {
+                let test = manifest.test.iter().find(|test| test.id == id).unwrap();
+                let install_step = test
+                    .step
+                    .iter()
+                    .filter_map(|step| step.conary.as_deref())
+                    .find(|command| command.contains("install "))
+                    .expect("fixture lifecycle test should install the fixture");
+                assert!(
+                    install_step.contains("ccs install ${FIXTURE_V1_CCS}"),
+                    "{id} should install the local CCS fixture instead of resolving fixture metadata from Remi"
+                );
+                assert!(
+                    !install_step.contains("${FIXTURE_PKG_NAME} --repo"),
+                    "{id} should not ask Remi metadata for the local fixture package"
+                );
+            }
+
+            let uses_small_binary = manifest
+                .test
+                .iter()
+                .flat_map(|test| &test.step)
+                .any(|step| {
+                    step.file_exists.as_deref() == Some("${small_binary}")
+                        || step.file_not_exists.as_deref() == Some("${small_binary}")
+                        || step
+                            .run
+                            .as_deref()
+                            .is_some_and(|script| script.contains("${small_binary}"))
+                });
+            assert!(
+                uses_small_binary,
+                "Group M should verify distro-specific binaries via small_binary rather than hard-coded /usr/bin/tree"
+            );
+
+            for assertion in manifest
+                .test
+                .iter()
+                .flat_map(|test| &test.step)
+                .filter_map(|step| step.assert.as_ref())
+            {
+                assert_ne!(
+                    assertion.stdout_not_contains.as_deref(),
+                    Some("panic"),
+                    "Group M should avoid bare panic checks that match package filenames such as pvpanic.h"
+                );
+            }
         }
     }
 }

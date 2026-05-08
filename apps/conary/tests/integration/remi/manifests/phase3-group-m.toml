@@ -15,16 +15,19 @@ phase = 3
 
 [distro_overrides.fedora44]
 small_package = "tree"
+small_binary = "/usr/bin/tree"
 dep_heavy_package = "jq"
 distro_repo = "fedora-remi"
 
 [distro_overrides."ubuntu-26.04"]
-small_package = "tree"
-dep_heavy_package = "vim"
+small_package = "patch"
+small_binary = "/usr/bin/patch"
+dep_heavy_package = "jq"
 distro_repo = "ubuntu-remi"
 
 [distro_overrides.arch]
 small_package = "tree"
+small_binary = "/usr/bin/tree"
 dep_heavy_package = "jq"
 distro_repo = "arch-remi"
 
@@ -86,14 +89,14 @@ conary = "install ${small_package} --repo ${distro_repo} --dep-mode takeover --y
 exit_code = 0
 
 [[test.step]]
-file_exists = "/usr/bin/tree"
+file_exists = "${small_binary}"
 
 [[test.step]]
-run = "/usr/bin/tree --version || /usr/bin/tree /tmp | head -1"
+run = "${small_binary} --version || ${small_binary} /tmp | head -1"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "tree"
+stdout_contains = "${small_package}"
 
 # --------------------------------------------------------------------------
 # T140: Install dependency-heavy package
@@ -224,13 +227,13 @@ exit_code = 0
 conary = "update --yes --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
-stdout_not_contains = "panic"
+stdout_not_contains = "panicked at"
 
 [[test.step]]
 conary = "system verify"
 
 [test.step.assert]
-stdout_not_contains = "panic"
+stdout_not_contains = "panicked at"
 
 # --------------------------------------------------------------------------
 # T144: Pin blocks update
@@ -244,7 +247,10 @@ timeout = 180
 group = "M"
 
 [[test.step]]
-conary = "install ${FIXTURE_PKG_NAME} --repo ${REPO_NAME} --dep-mode takeover --yes --sandbox never --allow-live-system-mutation"
+run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --no-scripts --allow-live-system-mutation --db-path ${DB_PATH} 2>/dev/null || true"
+
+[[test.step]]
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
@@ -259,7 +265,7 @@ exit_code = 0
 conary = "update --yes --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
-stdout_not_contains = "panic"
+stdout_not_contains = "panicked at"
 
 [[test.step]]
 conary = "list ${FIXTURE_PKG_NAME} --info"
@@ -302,7 +308,7 @@ conary = "remove ${small_package} --no-scripts --allow-live-system-mutation"
 exit_code = 0
 
 [[test.step]]
-file_not_exists = "/usr/bin/tree"
+file_not_exists = "${small_binary}"
 
 [[test.step]]
 conary = "list"
@@ -346,6 +352,9 @@ description = "Install a CCS package, update it, roll back, and verify the origi
 timeout = 300
 group = "M"
 fatal = true
+
+[[test.step]]
+run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --no-scripts --allow-live-system-mutation --db-path ${DB_PATH} 2>/dev/null || true"
 
 [[test.step]]
 conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --allow-live-system-mutation"
@@ -434,7 +443,7 @@ conary = "repo sync ${REPO_NAME} --force"
 exit_code = 0
 
 [[test.step]]
-conary = "install ${FIXTURE_PKG_NAME} --repo ${REPO_NAME} --no-deps --yes --sandbox never --allow-live-system-mutation"
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
