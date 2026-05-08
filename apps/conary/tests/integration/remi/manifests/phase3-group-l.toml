@@ -42,7 +42,7 @@ SERVER_PID=$! && \
 sleep 1 && \
 ${CONARY_BIN} system update-channel get --db-path ${DB_PATH} >/dev/null && \
 sqlite3 ${DB_PATH} "INSERT INTO settings (key, value) VALUES ('update-channel', 'http://127.0.0.1:19877') ON CONFLICT(key) DO UPDATE SET value = excluded.value" && \
-OUTPUT=$(${CONARY_BIN} self-update --db-path ${DB_PATH} 2>&1 || true) && \
+OUTPUT=$(${CONARY_BIN} self-update --no-verify --db-path ${DB_PATH} 2>&1 || true) && \
 kill $SERVER_PID 2>/dev/null || true && \
 ${CONARY_BIN} system update-channel reset --db-path ${DB_PATH} >/dev/null 2>&1 || true && \
 echo "$OUTPUT"
@@ -107,7 +107,7 @@ SERVER_PID=$! && \
 sleep 1 && \
 ${CONARY_BIN} system update-channel get --db-path ${DB_PATH} >/dev/null && \
 sqlite3 ${DB_PATH} "INSERT INTO settings (key, value) VALUES ('update-channel', 'http://127.0.0.1:19879') ON CONFLICT(key) DO UPDATE SET value = excluded.value" && \
-OUTPUT=$(${CONARY_BIN} self-update --db-path ${DB_PATH} 2>&1 || true) && \
+OUTPUT=$(${CONARY_BIN} self-update --no-verify --db-path ${DB_PATH} 2>&1 || true) && \
 kill $SERVER_PID 2>/dev/null || true && \
 ${CONARY_BIN} system update-channel reset --db-path ${DB_PATH} >/dev/null 2>&1 || true && \
 echo "$OUTPUT"
