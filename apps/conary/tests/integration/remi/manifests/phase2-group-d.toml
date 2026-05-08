@@ -10,6 +10,14 @@
 name = "Phase 2, Group D: Recipe & Build (T62-T66)"
 phase = 2
 
+[suite.mock_server]
+port = 18083
+
+[[suite.mock_server.routes]]
+path = "/source.tar.gz"
+status = 200
+body_file = "/opt/remi-tests/fixtures/recipes/simple-hello/source.tar.gz"
+
 # Setup: create output and cache directories
 [[suite.setup]]
 run = "mkdir -p /tmp/conary-recipe-output /tmp/conary-recipe-cache /tmp/conary-hermetic-output"
