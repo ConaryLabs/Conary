@@ -729,6 +729,14 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
             let manifest = load_manifest(&path).unwrap();
             assert_eq!(manifest.suite.phase, 3);
 
+            let t81 = manifest.test.iter().find(|test| test.id == "T81").unwrap();
+            let native_assertion = t81.step[0].assert.as_ref().unwrap();
+            assert_eq!(
+                native_assertion.stderr_contains.as_deref(),
+                Some("Failed"),
+                "T81 should assert the corrupted native package is rejected without depending on parser-specific wording"
+            );
+
             let t83 = manifest.test.iter().find(|test| test.id == "T83").unwrap();
             let corrupt_step = t83.step[1]
                 .run
