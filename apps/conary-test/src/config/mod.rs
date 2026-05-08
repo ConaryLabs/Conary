@@ -909,4 +909,29 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
             }
         }
     }
+
+    #[test]
+    fn test_load_phase3_group_m_manifest_installs_local_fixture_ccs() {
+        let path = remi_manifest_path("phase3-group-m.toml");
+        if path.exists() {
+            let manifest = load_manifest(&path).unwrap();
+            assert_eq!(manifest.suite.phase, 3);
+
+            let t138 = manifest.test.iter().find(|test| test.id == "T138").unwrap();
+            let install_step = t138
+                .step
+                .iter()
+                .filter_map(|step| step.conary.as_deref())
+                .find(|command| command.contains("install "))
+                .expect("T138 should install the local fixture CCS");
+            assert!(
+                install_step.contains("ccs install ${FIXTURE_V1_CCS}"),
+                "T138 should install the generated local CCS fixture"
+            );
+            assert!(
+                !install_step.contains("${FIXTURE_PKG_NAME} --repo"),
+                "T138 should not ask Remi metadata for the local fixture package"
+            );
+        }
+    }
 }
