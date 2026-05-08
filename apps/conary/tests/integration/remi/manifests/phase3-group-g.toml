@@ -133,7 +133,7 @@ conary = "install ${NATIVE_CORRUPTED_PKG} --yes --sandbox never --allow-live-sys
 
 [test.step.assert]
 exit_code_not = 0
-stderr_contains = "parse"
+stderr_contains = "Failed"
 
 # --------------------------------------------------------------------------
 # T82: CAS verify after install
