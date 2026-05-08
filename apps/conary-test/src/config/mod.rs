@@ -33,6 +33,12 @@ mod tests {
             .join(file_name)
     }
 
+    fn conary_fixture_path(path: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../conary/tests/fixtures")
+            .join(path)
+    }
+
     fn is_package_remove_segment(segment: &str) -> bool {
         segment.starts_with("remove ")
             || segment.contains("${CONARY_BIN} remove ")
@@ -555,6 +561,32 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
             let t62 = manifest.test.iter().find(|t| t.id == "T62").unwrap();
             assert_eq!(t62.fatal, Some(true));
             assert_eq!(t62.group.as_deref(), Some("D"));
+
+            let mock_server = manifest
+                .suite
+                .mock_server
+                .as_ref()
+                .expect("phase2 group D should serve recipe fixture sources over HTTP");
+            assert!(
+                mock_server.routes.iter().any(|route| {
+                    route.path == "/source.tar.gz"
+                        && route.body_file.as_deref()
+                            == Some("/opt/remi-tests/fixtures/recipes/simple-hello/source.tar.gz")
+                }),
+                "phase2 group D should expose source.tar.gz via mock HTTP server"
+            );
+
+            let recipe =
+                std::fs::read_to_string(conary_fixture_path("recipes/simple-hello/recipe.toml"))
+                    .expect("read simple hello recipe fixture");
+            assert!(
+                recipe.contains("archive = \"http://127.0.0.1:18083/source.tar.gz\""),
+                "simple hello recipe should use the phase2 group D mock HTTP source"
+            );
+            assert!(
+                !recipe.contains("archive = \"file://"),
+                "simple hello recipe should not use file:// sources"
+            );
 
             // Verify T66 uses exit_code_not and stdout_contains_any
             let t66 = manifest.test.iter().find(|t| t.id == "T66").unwrap();
