@@ -177,7 +177,7 @@ run = "if ! test -f /usr/share/conary-test/hello.txt; then ${CONARY_BIN} ccs ins
 exit_code = 0
 
 [[test.step]]
-run = "OBJ=$(find /var/lib/conary/objects -type f | head -1) && rm -f \"$OBJ\""
+run = "HASH=$(sqlite3 ${DB_PATH} \"SELECT sha256_hash FROM files WHERE path = '/usr/share/conary-test/hello.txt' LIMIT 1\") && test -n \"$HASH\" && PREFIX=$(printf '%s' \"$HASH\" | cut -c1-2) && SUFFIX=$(printf '%s' \"$HASH\" | cut -c3-) && OBJ=$(dirname \"${DB_PATH}\")/objects/$PREFIX/$SUFFIX && test -f \"$OBJ\" && rm -f \"$OBJ\""
 
 [test.step.assert]
 exit_code = 0

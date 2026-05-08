@@ -739,6 +739,15 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
                 "T83 should remove a CAS object because system verify checks object presence"
             );
             assert!(
+                corrupt_step.contains("sqlite3 ${DB_PATH}")
+                    && corrupt_step.contains("/usr/share/conary-test/hello.txt"),
+                "T83 should remove the CAS object referenced by the installed fixture file"
+            );
+            assert!(
+                !corrupt_step.contains("find /var/lib/conary/objects"),
+                "T83 should not delete an arbitrary first CAS object"
+            );
+            assert!(
                 !corrupt_step.contains("printf 'corrupt'"),
                 "T83 should not overwrite CAS object contents when verify only checks presence"
             );
