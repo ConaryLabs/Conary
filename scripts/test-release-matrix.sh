@@ -210,6 +210,12 @@ test_field_conary_test_deploy_mode() {
     assert_eq "none" "$output" "conary-test should not deploy automatically"
 }
 
+test_field_conaryd_deploy_mode_paused() {
+    local output
+    output="$(run_matrix field conaryd deploy_mode)"
+    assert_eq "none" "$output" "conaryd staging deploy should remain paused while Forge is retired"
+}
+
 test_field_conary_bundle_name() {
     local output
     output="$(run_matrix field conary bundle_name)"
@@ -311,6 +317,7 @@ main() {
         test_resolve_tag_conary_test_legacy
         test_latest_version_from_list_mixed_prefixes
         test_field_conary_test_deploy_mode
+        test_field_conaryd_deploy_mode_paused
         test_field_conary_bundle_name
         test_unknown_tag_prefix_fails
         test_latest_version_from_git_in_fixture

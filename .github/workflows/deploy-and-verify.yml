@@ -193,7 +193,7 @@ jobs:
           [[ -n "$ARTIFACT_PATTERNS" && "$ARTIFACT_PATTERNS" != "null" ]] || { echo "artifact_patterns output missing" >&2; exit 1; }
 
           case "$PRODUCT:$DEPLOY_MODE" in
-            conary:release_bundle|remi:remote_bundle|conaryd:remote_bundle|conary-test:none)
+            conary:release_bundle|remi:remote_bundle|conaryd:none|conary-test:none)
               ;;
             *)
               echo "No deploy lane defined for product=${PRODUCT} deploy_mode=${DEPLOY_MODE}" >&2

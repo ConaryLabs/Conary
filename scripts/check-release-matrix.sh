@@ -58,6 +58,7 @@ require_match "$deploy_workflow" 'validate-routing:' 'deploy routing validation 
 require_match "$deploy_workflow" 'No deploy lane defined for product=' 'explicit unmatched deploy failure'
 require_match "$deploy_workflow" 'no-deploy-required:' 'explicit no-deploy lane'
 require_match "$deploy_workflow" "needs\\.resolve\\.outputs\\.deploy_mode == 'none'" 'deploy_mode none handling'
+require_match "$deploy_workflow" 'conaryd:none' 'temporary conaryd no-deploy route'
 require_match "$deploy_workflow" 'BUNDLE_NAME: \$\{\{ needs\.resolve\.outputs\.bundle_name \}\}' 'bundle_name-driven artifact lookup'
 require_match "$deploy_workflow" 'deploy_asset_ref' 'bootstrap-only deploy asset ref input'
 require_match "$deploy_workflow" 'bootstrap_exception' 'bootstrap exception resolve output'
@@ -74,11 +75,14 @@ require_match "$deploy_workflow" 'gh api "repos/\$\{?GH_REPO\}?/actions/runs/\$\
 require_match "$deploy_workflow" 'gh release download "\$source_tag"' 'release-asset fallback for expired source-run artifacts'
 forbid_match "$deploy_workflow" 'CONARYD_VERIFY_URL' 'legacy public verify URL'
 
-for product in conary remi conaryd; do
+for product in conary remi; do
     deploy_mode="$(bash scripts/release-matrix.sh field "$product" deploy_mode)"
     [[ "$deploy_mode" != "none" ]] || fail "$product unexpectedly marked non-deployable"
     require_match "$deploy_workflow" "needs\\.resolve\\.outputs\\.product == '${product}'" "${product} deploy lane"
 done
+
+conaryd_deploy_mode="$(bash scripts/release-matrix.sh field conaryd deploy_mode)"
+[[ "$conaryd_deploy_mode" == "none" ]] || fail "conaryd should be deploy_mode=none while Forge staging is paused"
 
 conary_test_deploy_mode="$(bash scripts/release-matrix.sh field conary-test deploy_mode)"
 [[ "$conary_test_deploy_mode" == "none" ]] || fail "conary-test should be deploy_mode=none"

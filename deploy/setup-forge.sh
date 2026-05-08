@@ -2,7 +2,7 @@
 # deploy/setup-forge.sh -- Configure Forge as a trusted GitHub Actions runner host
 #
 # Usage:
-#   ssh peter@forge.conarylabs.com
+#   ssh peter@replacement.example
 #   gh auth login --hostname github.com
 #   sudo bash /home/peter/Conary/deploy/setup-forge.sh
 #

@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED: Use superpowers:executing-plans to implement this plan. If the user explicitly authorizes subagents, use superpowers:subagent-driven-development for independent chunks. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Bring Conary to a truthful, limited public preview state with green trusted validation, current Forge integration testing, resolved release-facing security alerts, aligned supported-distro coverage, and accurate public/assistant/operator documentation.
+**Goal:** Bring Conary to a truthful, limited public preview state with green trusted validation, current local QEMU evidence, resolved release-facing security alerts, aligned supported-distro coverage, and accurate public/assistant/operator documentation.
 
-**Architecture:** Treat release readiness as a sequence of gates, not one large cleanup. Restore the trusted Forge validation lane first because later claims depend on it; then clear security/dependency alerts, align distro test coverage with the public support matrix, refresh docs, and run the final release dry run. conaryd package execution, ISO export, OCI convergence, production-wide unwrap cleanup, and broad redesign work are out of scope for this release gate and should be documented honestly as future work.
+**Architecture:** Treat release readiness as a sequence of gates, not one large cleanup. The original remote Forge validation lane is paused because the old VPS runner does not expose `/dev/kvm`; keep hosted health/audit/build/list checks active and use local KVM-backed QEMU evidence until a replacement runner exists. Then clear security/dependency alerts, align distro test coverage with the public support matrix, refresh docs, and run the final release dry run. conaryd package execution, ISO export, OCI convergence, production-wide unwrap cleanup, and broad redesign work are out of scope for this release gate and should be documented honestly as future work.
 
 **Tech Stack:** Rust/Cargo workspace, Tokio services, rusqlite, conary-test integration harness, GitHub Actions, Forge self-hosted runner, Podman, QEMU, npm/Svelte/Vite, existing release scripts.
 
@@ -16,10 +16,10 @@ This plan targets a limited public preview, not a broad stable release.
 
 Release-ready means:
 
-- `main` is green for `merge-validation`.
-- `scheduled-ops` health, audit, deep validation, and QEMU jobs are green from a manual dispatch after the fixes.
-- Forge runs a current `conary-test` service built from `main`, not the stale April 9 detached checkout.
-- Rootless Podman is enabled and verified for the Forge runner user.
+- `main` is green for the hosted `merge-validation` build/list/Remi smoke lane.
+- `scheduled-ops` hosted health, audit, and manifest-inventory jobs are green.
+- Local KVM-backed QEMU validation passes with `scripts/local-qemu-validation.sh`, and logs are recorded in the readiness note.
+- Remote Forge-backed deep validation, QEMU, and conaryd staging are explicitly paused until a replacement KVM-capable runner exists.
 - Public supported distros are exactly Fedora 44, Ubuntu 26.04 LTS, and Arch.
 - Ubuntu 26.04 validation proves both the container image and Remi upstream package source are 26.04/`resolute`, not merely the family-level `ubuntu` route backed by Noble metadata.
 - Noble/Ubuntu 24.04 is legacy for this release target. It must not remain in active build, test, release, Remi, site, or user-facing documentation paths except as an explicitly quarantined historical/internal note.
@@ -31,14 +31,29 @@ Stop the plan if any critical validation cannot be made green. Record the blocke
 
 ## Remote Validation Discipline
 
-Do local implementation on a release-readiness branch. Remote commands that use GitHub Actions or `deploy-forge.sh --ref main` only validate pushed Git refs, not unpushed local commits.
+Do local implementation on a release-readiness branch. Remote commands that use GitHub Actions only validate pushed Git refs, not unpushed local commits.
 
 - Before remote validation, push the branch and use `--ref <branch>` for rehearsal runs when possible.
-- Before claiming release readiness, merge the branch to `main`, `git fetch origin main`, redeploy Forge from `origin/main`, and rerun the final remote gates on `main`.
+- Before claiming release readiness, merge the branch to `main`, `git fetch origin main`, rerun the hosted remote gates on `main`, and rerun local QEMU validation against the exact `main` commit.
 - Capture the exact GitHub Actions run ID after every `gh workflow run`, then watch that run ID with `gh run watch <run-id> --exit-status`.
 - Every workflow-dispatch validation must pass a unique `run_label` input and find the run by that label, not by "latest run on branch".
 - Push the branch after every commit and before every remote workflow/deploy rehearsal.
 - Record run IDs and URLs in the final readiness note.
+
+## Temporary Forge Carve-Out
+
+As of 2026-05-08, the old Forge VPS is retired and must not be used as release
+evidence. The active temporary contract is:
+
+- GitHub-hosted `merge-validation`: build release-facing binaries, list
+  integration manifests, and run Remi smoke health.
+- GitHub-hosted `scheduled-ops`: keep Remi full health, cargo audit, and
+  manifest inventory alive; log an explicit warning that remote deep/QEMU is
+  paused.
+- Local QEMU release gate: run `scripts/local-qemu-validation.sh` on a
+  development machine with `/dev/kvm`; preserve the log directory in the final
+  readiness note.
+- conaryd deploy mode is `none` until a replacement staging host exists.
 
 ## File Map
 
@@ -294,8 +309,8 @@ Expected: no trusted Forge jobs are in progress, or the user explicitly approves
 Run on the local machine:
 
 ```bash
-rsync -az deploy/repair-forge-runtime.sh peter@forge.conarylabs.com:/tmp/conary-repair-forge-runtime.sh
-ssh peter@forge.conarylabs.com 'sudo bash /tmp/conary-repair-forge-runtime.sh'
+rsync -az deploy/repair-forge-runtime.sh peter@replacement.example:/tmp/conary-repair-forge-runtime.sh
+ssh peter@replacement.example 'sudo bash /tmp/conary-repair-forge-runtime.sh'
 ```
 
 Expected:
@@ -308,7 +323,7 @@ Expected:
 - [ ] **Step 4: Verify rootless Podman directly**
 
 ```bash
-ssh peter@forge.conarylabs.com 'systemctl --user is-enabled podman.socket && systemctl --user is-active podman.socket && test -S /run/user/1000/podman/podman.sock && DOCKER_HOST=unix:///run/user/1000/podman/podman.sock podman info >/dev/null && curl --unix-socket /run/user/1000/podman/podman.sock -fsS http://d/v1.41/_ping >/dev/null && echo ok'
+ssh peter@replacement.example 'systemctl --user is-enabled podman.socket && systemctl --user is-active podman.socket && test -S /run/user/1000/podman/podman.sock && DOCKER_HOST=unix:///run/user/1000/podman/podman.sock podman info >/dev/null && curl --unix-socket /run/user/1000/podman/podman.sock -fsS http://d/v1.41/_ping >/dev/null && echo ok'
 ```
 
 Expected: `enabled`, `active`, then `ok`.
@@ -317,7 +332,7 @@ Expected: `enabled`, `active`, then `ok`.
 
 ```bash
 branch="$(git branch --show-current)"
-./scripts/deploy-forge.sh --group control_plane --ref "${branch}"
+FORGE_HOST=peter@replacement.example ./scripts/deploy-forge.sh --group control_plane --ref "${branch}"
 ```
 
 Expected: rollout completes and restarts the `conary-test` service.
@@ -328,7 +343,7 @@ Expected: rollout completes and restarts the `conary-test` service.
 branch="$(git branch --show-current)"
 git fetch origin "${branch}"
 expected_commit="$(git rev-parse "origin/${branch}")"
-ssh peter@forge.conarylabs.com "cd /home/peter/Conary && bash scripts/forge-smoke.sh --expected-commit ${expected_commit}"
+ssh peter@replacement.example "cd /home/peter/Conary && bash scripts/forge-smoke.sh --expected-commit ${expected_commit}"
 ```
 
 Expected: smoke passes and the running binary commit matches `origin/${branch}`.
@@ -338,7 +353,7 @@ Expected: smoke passes and the running binary commit matches `origin/${branch}`.
 Capture the non-secret fields from:
 
 ```bash
-ssh peter@forge.conarylabs.com 'cd /home/peter/Conary && target/debug/conary-test --json deploy status --port 9090'
+ssh peter@replacement.example 'cd /home/peter/Conary && target/debug/conary-test --json deploy status --port 9090'
 ```
 
 Expected:
@@ -793,13 +808,13 @@ gh run view "${run_id}" --json conclusion,url
 Also run targeted suites that had Ubuntu-specific overrides:
 
 ```bash
-./scripts/deploy-forge.sh --group control_plane --ref "${branch}"
-ssh peter@forge.conarylabs.com 'cd /home/peter/Conary && cargo run -p conary-test -- run --suite phase3-group-g --distro ubuntu-26.04 --phase 3'
-ssh peter@forge.conarylabs.com 'cd /home/peter/Conary && cargo run -p conary-test -- run --suite phase3-group-m --distro ubuntu-26.04 --phase 3'
-ssh peter@forge.conarylabs.com 'cd /home/peter/Conary && cargo run -p conary-test -- run --suite phase4-group-b --distro ubuntu-26.04 --phase 4'
-ssh peter@forge.conarylabs.com 'cd /home/peter/Conary && cargo run -p conary-test -- run --suite phase4-group-c --distro ubuntu-26.04 --phase 4'
-ssh peter@forge.conarylabs.com 'cd /home/peter/Conary && cargo run -p conary-test -- run --suite phase4-group-d --distro ubuntu-26.04 --phase 4'
-ssh peter@forge.conarylabs.com 'cd /home/peter/Conary && cargo run -p conary-test -- run --suite phase4-group-e --distro ubuntu-26.04 --phase 4'
+FORGE_HOST=peter@replacement.example ./scripts/deploy-forge.sh --group control_plane --ref "${branch}"
+ssh peter@replacement.example 'cd /home/peter/Conary && cargo run -p conary-test -- run --suite phase3-group-g --distro ubuntu-26.04 --phase 3'
+ssh peter@replacement.example 'cd /home/peter/Conary && cargo run -p conary-test -- run --suite phase3-group-m --distro ubuntu-26.04 --phase 3'
+ssh peter@replacement.example 'cd /home/peter/Conary && cargo run -p conary-test -- run --suite phase4-group-b --distro ubuntu-26.04 --phase 4'
+ssh peter@replacement.example 'cd /home/peter/Conary && cargo run -p conary-test -- run --suite phase4-group-c --distro ubuntu-26.04 --phase 4'
+ssh peter@replacement.example 'cd /home/peter/Conary && cargo run -p conary-test -- run --suite phase4-group-d --distro ubuntu-26.04 --phase 4'
+ssh peter@replacement.example 'cd /home/peter/Conary && cargo run -p conary-test -- run --suite phase4-group-e --distro ubuntu-26.04 --phase 4'
 ```
 
 Expected: smoke and targeted suites pass against Ubuntu 26.04. If they fail because Ubuntu 26.04 image or upstream packages are unavailable, stop and mark Ubuntu 26.04 as a release blocker. Do not ship claiming Ubuntu 26.04 support until this passes.
@@ -1193,21 +1208,22 @@ gh run view "${run_id}" --json conclusion,url
 
 Expected: smoke passes.
 
-- [ ] **Step 3: Run scheduled deep/QEMU validation**
+- [ ] **Step 3: Run hosted scheduled checks and local QEMU validation**
 
 ```bash
 branch="$(git branch --show-current)"
 git push origin "${branch}"
 label="release-readiness-scheduled-$(date +%Y%m%d%H%M%S)-${RANDOM}"
-gh workflow run scheduled-ops.yml --ref "${branch}" -f run_label="${label}" -f run_deep_validation=true -f run_qemu=true
+gh workflow run scheduled-ops.yml --ref "${branch}" -f run_label="${label}" -f run_deep_validation=true -f run_qemu=false
 sleep 10
 run_id="$(gh run list --workflow scheduled-ops.yml --branch "${branch}" --event workflow_dispatch --limit 20 --json databaseId,displayTitle --jq ".[] | select(.displayTitle | contains(\"${label}\")) | .databaseId" | head -n1)"
 test -n "${run_id}"
 gh run watch "${run_id}" --exit-status
 gh run view "${run_id}" --json conclusion,url
+CONARY_LOCAL_VALIDATION_RUN_ID="release-readiness-${branch}-$(date +%Y%m%d%H%M%S)" scripts/local-qemu-validation.sh
 ```
 
-Expected: health, audit, deep-validation for Fedora 44/Ubuntu 26.04/Arch, Group N QEMU, and Group O generation-export QEMU all pass. QEMU logs must show expected boot markers and must not contain skip messages.
+Expected: hosted health, audit, and manifest-inventory checks pass. The local QEMU script runs Group N and Group O on a KVM-capable development machine, emits expected boot markers, and fails on any skip message. Record the local log directory in the readiness note.
 
 - [ ] **Step 4: Verify recent run list**
 
@@ -1258,18 +1274,17 @@ git tag --points-at HEAD
 
 Expected: clean working tree except intentional plan/docs changes already committed; no new release tag unless approved.
 
-- [ ] **Step 4: Merge to main and repeat remote gates**
+- [ ] **Step 4: Merge to main and repeat hosted/local gates**
 
-Only after branch validation passes, merge to `main` through the repo's normal process, fetch the final state, redeploy Forge from main, and rerun Task 5.2 on `main`:
+Only after branch validation passes, merge to `main` through the repo's normal process, fetch the final state, and rerun Task 5.2 on `main`:
 
 ```bash
 git fetch origin main
 git switch main
 git pull --ff-only origin main
-./scripts/deploy-forge.sh --group control_plane --ref main
 ```
 
-Expected: Forge service commit matches `origin/main`, and the final `merge-validation`/`scheduled-ops` manual runs are green on `main`.
+Expected: final hosted `merge-validation`/`scheduled-ops` manual runs are green on `main`, and local QEMU evidence was generated from the exact `main` commit.
 
 - [ ] **Step 5: Repeat release dry runs on main**
 
@@ -1301,8 +1316,8 @@ Create a short readiness note only after all gates pass. Include:
 - exact commit,
 - local verification commands,
 - GitHub run IDs,
-- manual Forge Phase 4 suite results and log locations,
-- Forge service commit,
+- local QEMU log directory and boot-marker evidence,
+- explicit note that Forge-backed remote validation/conaryd staging is paused,
 - remaining known limitations,
 - release recommendation.
 

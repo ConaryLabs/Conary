@@ -18,10 +18,15 @@ summary: Non-secret infrastructure, MCP, release, Remi deploy, and Forge staging
   updates this document. The Remi host OS is independent of the public client
   distro support matrix, which is Fedora 44, Ubuntu 26.04 LTS, and Arch Linux
   for the limited preview.
-- Forge is the trusted GitHub runner host used for `conary-test` validation,
-  test-harness service work, and source-sync validation.
-- Forge also serves as the current local-only staging host for `conaryd`
-  release deployment verification.
+- Forge remote validation is temporarily paused. The old VPS runner is being
+  retired because it did not expose `/dev/kvm`, which made it unusable for
+  scheduled QEMU release evidence.
+- Until a replacement KVM-capable runner is registered, hosted CI keeps Remi
+  health/audit/build/list checks active, and QEMU release evidence comes from
+  `scripts/local-qemu-validation.sh` on a local development machine with
+  `/dev/kvm`.
+- Forge-local `conaryd` staging deployment is also paused while there is no
+  active Forge host.
 - Sensitive usernames, credentials, or workstation-only shortcuts belong in the
   ignored `docs/operations/LOCAL_ACCESS.md`, not in tracked docs.
 
@@ -46,18 +51,25 @@ task or when you are debugging the underlying service path itself.
   origin access
 - Remi OpenAPI spec: `http://localhost:8082/v1/admin/openapi.json` via SSH
   tunnel or direct origin access
-- Forge-local `conary-test` health endpoint: `http://127.0.0.1:9090/v1/health`
-- Forge-local `conary-test` deploy-status endpoint: `http://127.0.0.1:9090/v1/deploy/status`
+- Forge-local `conary-test` health endpoint, when a replacement runner exists:
+  `http://127.0.0.1:9090/v1/health`
+- Forge-local `conary-test` deploy-status endpoint, when a replacement runner
+  exists: `http://127.0.0.1:9090/v1/deploy/status`
 
 ## Source Deploy Patterns
 
 ### Forge
 
+- **Paused:** these commands describe the next Forge runner, not an active host.
+  Do not treat them as release evidence until a KVM-capable runner with
+  `/dev/kvm` is registered.
 - Preferred deployment path is managed rollout orchestration through
   `conary-test deploy rollout`
 - From an operator workstation, use
-  `./scripts/deploy-forge.sh --group control_plane --ref main` for the trusted
-  default path
+  `FORGE_HOST=peter@replacement.example ./scripts/deploy-forge.sh --group control_plane --ref main`
+  for the trusted default path after a replacement host exists
+- `scripts/deploy-forge.sh` currently requires `FORGE_HOST`; it has no default
+  while the old Forge host is retired
 - `--ref` is the normal supported source mode and resolves an exact GitHub ref
   on Forge before build/restart/verify
 - `--path` remains available for debug/local-snapshot deploys; the wrapper keeps
@@ -81,12 +93,11 @@ task or when you are debugging the underlying service path itself.
   `sudo bash /home/peter/Conary/deploy/repair-forge-runtime.sh`; this refreshes
   Podman/QEMU tooling and the rootless Podman socket without re-registering the
   GitHub Actions runner
-- `conaryd` is not yet a managed rollout unit here; its release deployment path
-  is the GitHub `deploy-and-verify` workflow plus the checked-in Forge helper
-  assets
-- `conaryd` deployment verification is Forge-local over
-  `scripts/conaryd-health.sh`, which probes `/run/conary/conaryd.sock` rather
-  than a public network endpoint
+- `conaryd` staging deployment is paused while Forge is retired. The release
+  matrix marks `conaryd` as `deploy_mode=none` until a replacement staging host
+  is available.
+- The dormant Forge-local verifier is `scripts/conaryd-health.sh`, which probes
+  `/run/conary/conaryd.sock` rather than a public network endpoint.
 - The tracked Forge bootstrap trust for that path lives in
   `deploy/ssh/forge-known-hosts` and `deploy/sudoers/conaryd-forge`
 

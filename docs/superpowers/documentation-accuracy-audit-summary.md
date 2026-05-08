@@ -38,9 +38,9 @@ The repo moved materially after the last audit:
 ## Major Corrections
 
 - Refreshed user-facing status in `README.md` and `ROADMAP.md` around the
-  Fedora 44, Ubuntu 26.04 LTS, and Arch Linux limited preview; Forge/security
-  gates; conaryd package-executor gaps; raw/qcow2 generation export; and
-  ISO/OCI follow-ups.
+  Fedora 44, Ubuntu 26.04 LTS, and Arch Linux limited preview; local
+  QEMU/security gates; the temporary Forge validation pause; conaryd
+  package-executor gaps; raw/qcow2 generation export; and ISO/OCI follow-ups.
 - Updated `SECURITY.md` to 0.8.x support and replaced stale journal language
   with the current database/EROFS generation model and preview distro scope.
 - Updated deploy/operator docs and `deploy/remi.toml.example` for Fedora 44,
@@ -55,8 +55,8 @@ The repo moved materially after the last audit:
 - Updated conaryd CLI help and public docs so package install/remove/update
   routes are described as explicit `501 Not Implemented` responses.
 - Updated integration docs and `apps/conary-test/README.md` to include the
-  Phase 3 Group O generation-export QEMU suite and the TGE04 installed-runtime
-  qcow2 boot proof.
+  Phase 3 Group O generation-export QEMU suite, temporary local QEMU release
+  gate, and the TGE04 installed-runtime qcow2 boot proof.
 - Refreshed assistant-facing docs to route broad doc work through the inventory
   and ledger checker, and added the post-generation export roadmap to the map.
 - Reframed active dated plans/specs as historical implementation records so
