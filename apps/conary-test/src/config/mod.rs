@@ -932,6 +932,27 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
                 !install_step.contains("${FIXTURE_PKG_NAME} --repo"),
                 "T138 should not ask Remi metadata for the local fixture package"
             );
+
+            assert_eq!(
+                manifest
+                    .distro_overrides
+                    .get("arch")
+                    .and_then(|overrides| overrides.get("dep_heavy_package"))
+                    .map(String::as_str),
+                Some("jq"),
+                "Arch should use a smaller dependency-heavy package than vim to keep Forge runtime bounded"
+            );
+
+            let t141 = manifest.test.iter().find(|test| test.id == "T141").unwrap();
+            let cleanup_step = t141.step[0]
+                .run
+                .as_deref()
+                .expect("T141 should remove any fixture left by earlier tests");
+            assert!(
+                cleanup_step.contains("remove ${FIXTURE_PKG_NAME}")
+                    && cleanup_step.contains("--db-path ${DB_PATH}"),
+                "T141 should start from a clean fixture install state"
+            );
         }
     }
 }

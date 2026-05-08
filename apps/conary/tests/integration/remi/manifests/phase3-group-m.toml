@@ -25,7 +25,7 @@ distro_repo = "ubuntu-remi"
 
 [distro_overrides.arch]
 small_package = "tree"
-dep_heavy_package = "vim"
+dep_heavy_package = "jq"
 distro_repo = "arch-remi"
 
 # --------------------------------------------------------------------------
@@ -137,6 +137,9 @@ description = "Install a package, update to a newer version, and verify files ch
 timeout = 300
 group = "M"
 fatal = true
+
+[[test.step]]
+run = "${CONARY_BIN} remove ${FIXTURE_PKG_NAME} --no-scripts --allow-live-system-mutation --db-path ${DB_PATH} 2>/dev/null || true"
 
 [[test.step]]
 conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --allow-live-system-mutation"
