@@ -218,13 +218,13 @@ conary = "search ${REPO_NAME}"
 stdout_not_contains = "panic"
 
 # --------------------------------------------------------------------------
-# T93: Scriptlet non-zero rollback
+# T93: Post-install scriptlet degraded success
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T93"
-name = "scriptlet_nonzero_rollback"
-description = "A failing scriptlet should abort install and roll back deployed files"
+name = "scriptlet_post_commit_warning"
+description = "A failing post-install scriptlet should leave the package installed and mark the changeset degraded"
 timeout = 60
 group = "H"
 
@@ -232,11 +232,18 @@ group = "H"
 conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/failing-scriptlet/output/failing-scriptlet-1.0.0.ccs --allow-unsigned --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
-exit_code_not = 0
-stderr_contains = "script"
+exit_code = 0
+stderr_contains = "Post-install script failed"
 
 [[test.step]]
-file_not_exists = "/etc/conary-hostile-scriptlet"
+run = "sqlite3 ${DB_PATH} \"SELECT status FROM changesets ORDER BY id DESC LIMIT 1\""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "post_hooks_failed"
+
+[[test.step]]
+file_exists = "/usr/bin/failing-scriptlet"
 
 # --------------------------------------------------------------------------
 # T94: Concurrent install contention
