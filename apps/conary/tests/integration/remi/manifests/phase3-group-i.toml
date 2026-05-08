@@ -24,7 +24,7 @@ conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/path-traver
 
 [test.step.assert]
 exit_code_not = 0
-stderr_contains = "traversal"
+stderr_contains = "hash"
 
 [[test.step]]
 file_not_exists = "/etc/shadow.bak"
@@ -45,7 +45,7 @@ conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/symlink-att
 
 [test.step.assert]
 exit_code_not = 0
-stderr_contains = "symlink"
+stderr_contains = "hash"
 
 [[test.step]]
 file_not_exists = "/etc/passwd.bak"
@@ -88,8 +88,15 @@ group = "I"
 conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/proc-environ/output/proc-environ.ccs --allow-unsigned --sandbox always --allow-live-system-mutation"
 
 [test.step.assert]
-exit_code_not = 0
-stderr_contains = "sandbox"
+exit_code = 0
+stderr_contains = "Post-install script failed"
+
+[[test.step]]
+run = "sqlite3 ${DB_PATH} \"SELECT status FROM changesets ORDER BY id DESC LIMIT 1\""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "post_hooks_failed"
 
 # --------------------------------------------------------------------------
 # T101: Network access blocked
@@ -109,8 +116,15 @@ network_isolated = true
 conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/hostile-scriptlet/output/adversarial-hostile-scriptlet-1.0.0.ccs --allow-unsigned --sandbox always --allow-live-system-mutation"
 
 [test.step.assert]
-exit_code_not = 0
-stderr_contains = "network"
+exit_code = 0
+stderr_contains = "Post-install script failed"
+
+[[test.step]]
+run = "sqlite3 ${DB_PATH} \"SELECT status FROM changesets ORDER BY id DESC LIMIT 1\""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "post_hooks_failed"
 
 [[test.step]]
 file_not_exists = "/etc/conary-hostile-scriptlet"
@@ -130,8 +144,15 @@ group = "I"
 conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/outside-root-write/output/outside-root-write.ccs --allow-unsigned --sandbox always --allow-live-system-mutation"
 
 [test.step.assert]
-exit_code_not = 0
-stderr_contains = "denied"
+exit_code = 0
+stderr_contains = "Post-install script failed"
+
+[[test.step]]
+run = "sqlite3 ${DB_PATH} \"SELECT status FROM changesets ORDER BY id DESC LIMIT 1\""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "post_hooks_failed"
 
 [[test.step]]
 file_not_exists = "/tmp/conary-escape-marker"

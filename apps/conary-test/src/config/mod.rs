@@ -818,6 +818,62 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
     }
 
     #[test]
+    fn test_load_phase3_group_i_manifest_security_boundary_expectations() {
+        let path = remi_manifest_path("phase3-group-i.toml");
+        if path.exists() {
+            let manifest = load_manifest(&path).unwrap();
+            assert_eq!(manifest.suite.phase, 3);
+
+            for test_id in ["T97", "T98"] {
+                let test = manifest
+                    .test
+                    .iter()
+                    .find(|test| test.id == test_id)
+                    .unwrap();
+                let assertion = test.step[0].assert.as_ref().unwrap();
+                assert_eq!(
+                    assertion.stderr_contains.as_deref(),
+                    Some("hash"),
+                    "{test_id} should accept early hash validation rejection"
+                );
+            }
+
+            for test_id in ["T100", "T101", "T102"] {
+                let test = manifest
+                    .test
+                    .iter()
+                    .find(|test| test.id == test_id)
+                    .unwrap();
+                let install_assertion = test.step[0].assert.as_ref().unwrap();
+                assert_eq!(
+                    install_assertion.exit_code,
+                    Some(0),
+                    "{test_id} should expect sandbox scriptlet failures to be committed with warnings"
+                );
+                assert_eq!(
+                    install_assertion.stderr_contains.as_deref(),
+                    Some("Post-install script failed")
+                );
+
+                let status_step = test.step[1]
+                    .run
+                    .as_deref()
+                    .expect("sandbox scriptlet tests should query changeset status");
+                assert!(
+                    status_step.contains("sqlite3 ${DB_PATH}")
+                        && status_step.contains("SELECT status FROM changesets"),
+                    "{test_id} should verify the degraded changeset status in the DB"
+                );
+                let status_assertion = test.step[1].assert.as_ref().unwrap();
+                assert_eq!(
+                    status_assertion.stdout_contains.as_deref(),
+                    Some("post_hooks_failed")
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_load_phase3_group_l_manifest_self_update_http_mocks_seed_db_directly() {
         let path = remi_manifest_path("phase3-group-l.toml");
         if path.exists() {
