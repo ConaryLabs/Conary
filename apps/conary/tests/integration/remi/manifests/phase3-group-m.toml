@@ -35,19 +35,13 @@ distro_repo = "arch-remi"
 [[test]]
 id = "T138"
 name = "install_real_ccs_package"
-description = "Sync Remi, install real CCS package, and verify files deployed"
+description = "Install a generated local CCS package and verify files deployed"
 timeout = 120
 group = "M"
 fatal = true
 
 [[test.step]]
-conary = "repo sync ${REPO_NAME} --force"
-
-[test.step.assert]
-exit_code = 0
-
-[[test.step]]
-conary = "install ${FIXTURE_PKG_NAME} --repo ${REPO_NAME} --dep-mode takeover --yes --sandbox never --allow-live-system-mutation"
+conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --allow-live-system-mutation"
 
 [test.step.assert]
 exit_code = 0
