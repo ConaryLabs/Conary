@@ -22,6 +22,7 @@ name = "kernel_update_new_generation"
 description = "Updating the kernel should create a new generation while preserving the old one"
 timeout = 300
 group = "N"
+requires = ["composefs_runtime"]
 
 [[test.step]]
 run = "${CONARY_BIN} system generation build --allow-live-system-mutation && ${CONARY_BIN} system generation build --allow-live-system-mutation"
