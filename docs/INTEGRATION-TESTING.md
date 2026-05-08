@@ -77,7 +77,19 @@ Every MCP tool has a CLI equivalent for human use:
 
 Add `--json` to any command for machine-readable output.
 
-For supported Forge control-plane validation, prefer:
+Remote Forge control-plane validation is temporarily paused while Conary
+replaces the old VPS runner with a KVM-capable host. The Forge scripts remain
+checked in for the next runner, but they are not active release evidence today.
+
+For the temporary local QEMU release gate, run this on a development machine
+with `/dev/kvm`:
+
+```bash
+scripts/local-qemu-validation.sh
+```
+
+For supported Forge control-plane validation after a new runner is registered,
+prefer:
 
 ```bash
 bash scripts/forge-smoke.sh
@@ -90,16 +102,19 @@ pretending to be a full integration suite.
 For managed Forge deployments from an operator workstation, prefer:
 
 ```bash
-./scripts/deploy-forge.sh --group control_plane --ref main
+FORGE_HOST=peter@replacement.example ./scripts/deploy-forge.sh --group control_plane --ref main
 ```
 
 ## Validation Modes
 
 - `merge-validation` is the trusted on-merge lane. It now runs the Forge
   control-plane smoke against a freshly started `conary-test` server on a
-  dedicated test port before the package-manager smoke and Remi smoke.
-- `scheduled-ops` remains the place for broader Phase 1-3 validation and other
-  deeper operational checks.
+  dedicated test port before the package-manager smoke and Remi smoke. This
+  remote path is paused until a new KVM-capable runner is available; the
+  workflow currently runs hosted build/list/Remi smoke checks instead.
+- `scheduled-ops` keeps hosted Remi health, audit, and manifest-inventory
+  checks active. Forge-backed Phase 1-3 and QEMU jobs are paused rather than
+  queued against a missing runner.
 - Raw `cargo run -p conary-test -- run ...` from an SSH shell is still useful
   for debugging, but it is no longer the main supported Forge control-plane
   check.

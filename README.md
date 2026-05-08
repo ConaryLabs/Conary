@@ -10,7 +10,7 @@ A cross-distribution Linux system manager with immutable generations, atomic tra
 
 Inspired by the [original Conary](https://en.wikipedia.org/wiki/Conary_(package_manager)) from rPath, which pioneered concepts like troves, changesets, flavors, and components that were ahead of their time. This project carries those ideas forward with a modern implementation.
 
-**Release status:** Conary is being prepared as a limited public preview for Fedora 44, Ubuntu 26.04 LTS, and Arch Linux. The CLI install/remove/update path, immutable generations, raw/qcow2 generation export, Remi conversion, and Forge validation lanes are the supported preview surface. conaryd package execution, ISO generation export, generation-to-OCI convergence, and non-x86_64 generation boot assets remain follow-up work.
+**Release status:** Conary is being prepared as a limited public preview for Fedora 44, Ubuntu 26.04 LTS, and Arch Linux. The CLI install/remove/update path, immutable generations, raw/qcow2 generation export, Remi conversion, and local QEMU validation are the supported preview surface. Remote Forge validation is temporarily paused while the project replaces the old runner with a KVM-capable host. conaryd package execution, ISO generation export, generation-to-OCI convergence, and non-x86_64 generation boot assets remain follow-up work.
 
 ---
 
@@ -57,7 +57,7 @@ conary repo sync
 conary install nginx
 ```
 
-**Current focus: limited public preview readiness.** The core install, rollback, generation, bootstrap, and server paths are in place. Recent work made installed-runtime generation export bootable under QEMU, tightened release/deploy flows, restored Forge validation, refreshed security gates, and moved the project toward operational polish and documentation accuracy rather than first-pass scaffolding.
+**Current focus: limited public preview readiness.** The core install, rollback, generation, bootstrap, and server paths are in place. Recent work made installed-runtime generation export bootable under QEMU, tightened release/deploy flows, refreshed security gates, and moved the project toward operational polish and documentation accuracy rather than first-pass scaffolding. Remote Forge validation is paused pending a new KVM-capable runner; QEMU release evidence should come from `scripts/local-qemu-validation.sh` on a local machine with `/dev/kvm`.
 
 ---
 

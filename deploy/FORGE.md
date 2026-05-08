@@ -1,18 +1,28 @@
 # Forge Server Setup
 
-Forge (`forge.conarylabs.com`) is the trusted GitHub Actions runner host for
-Conary validation and test-harness operations.
+Forge (`forge.conarylabs.com`) was the trusted GitHub Actions runner host for
+Conary validation and test-harness operations. The old VPS runner is retired
+because it did not expose `/dev/kvm`; scheduled remote QEMU validation is
+paused until a replacement KVM-capable runner is provisioned.
 
 ## Server Details
 
-- **SSH:** `ssh peter@forge.conarylabs.com`
-- **OS:** Fedora 44
+- **SSH:** replacement host TBD
+- **OS:** replacement host TBD
 - **RAM:** 8GB
 - **Disk:** 151GB
 - **Role:** self-hosted GitHub Actions runner plus local `conary-test` service
   and control-plane validation
 
-## Quick Setup
+## Quick Setup For The Next Runner
+
+Do not use the retired VPS as release evidence. On any replacement host, verify
+KVM before installing the runner:
+
+```bash
+test -e /dev/kvm
+grep -E 'vmx|svm' /proc/cpuinfo | head
+```
 
 ```bash
 # From an admin workstation, mint a short-lived registration token:
@@ -51,7 +61,7 @@ or re-registering the GitHub Actions runner.
 
 - The first rollout uses one runner with the custom label `forge-trusted`.
 - Trusted lanes such as `merge-validation` and `scheduled-ops` should target
-  this host explicitly.
+  this host explicitly after a replacement KVM-capable runner is available.
 - `pr-gate` stays on GitHub-hosted runners.
 - No separate source-control or CI service is part of the target setup.
 
@@ -61,17 +71,19 @@ Trusted/default deploys should now go through the managed rollout wrapper:
 
 ```bash
 # Trusted default: fetch and deploy an exact GitHub ref on Forge
-./scripts/deploy-forge.sh --group control_plane --ref main
+FORGE_HOST=peter@replacement.example ./scripts/deploy-forge.sh --group control_plane --ref main
 
 # Roll out a broader named group from a specific commit
-./scripts/deploy-forge.sh --group all_forge_tooling --ref 78e7194e
+FORGE_HOST=peter@replacement.example ./scripts/deploy-forge.sh --group all_forge_tooling --ref 78e7194e
 
 # Debug-only local snapshot deploy over the active Forge checkout
-./scripts/deploy-forge.sh --unit conary_test --path "$(pwd)"
+FORGE_HOST=peter@replacement.example ./scripts/deploy-forge.sh --unit conary_test --path "$(pwd)"
 ```
 
 Under the hood:
 
+- `FORGE_HOST` is required while the old Forge host is retired; there is no
+  default host to avoid accidental deploys to stale infrastructure
 - `--ref` runs the managed `conary-test deploy rollout ... --ref ...` flow on
   Forge and is the normal supported mode
 - `--path` keeps the `rsync` boundary, syncing directly over `~/Conary` before
@@ -84,9 +96,11 @@ brain. Build/restart/verify ordering lives in `conary-test deploy rollout`.
 
 ## Conaryd Staging Service
 
-Forge also hosts `conaryd` as a local-only staging daemon managed as the
-system unit `conaryd.service`. This is intentionally separate from the managed
-`conary-test` rollout groups above.
+Forge previously hosted `conaryd` as a local-only staging daemon managed as the
+system unit `conaryd.service`. That staging lane is paused while Forge is
+retired; `scripts/release-matrix.sh` marks `conaryd` as `deploy_mode=none`
+until a replacement staging host exists. This is intentionally separate from
+the managed `conary-test` rollout groups above.
 
 - Deploys come from the GitHub `deploy-and-verify` workflow, not from ad hoc
   SSH copy/paste or public endpoint curls
@@ -156,7 +170,7 @@ sudo -u peter -H gh auth login --hostname github.com
 **Runner registration without persistent `gh` auth:**
 ```bash
 export GITHUB_RUNNER_REGISTRATION_TOKEN="$(gh api -X POST repos/ConaryLabs/Conary/actions/runners/registration-token --jq .token)"
-ssh peter@forge.conarylabs.com 'sudo -E bash /home/peter/Conary/deploy/setup-forge.sh'
+ssh peter@replacement.example 'sudo -E bash /home/peter/Conary/deploy/setup-forge.sh'
 ```
 
 **Local validation tools are missing:**

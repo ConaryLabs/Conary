@@ -12,7 +12,7 @@ on:
         required: false
         default: ""
       smoke_distro:
-        description: Distro for the smoke validation run.
+        description: Reserved for the future remote smoke lane.
         required: false
         default: fedora44
 
@@ -24,35 +24,23 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  smoke:
-    name: smoke
-    runs-on: [self-hosted, forge-trusted]
-    env:
-      DOCKER_HOST: unix:///run/user/1000/podman/podman.sock
-      SMOKE_DISTRO: ${{ github.event.inputs.smoke_distro || 'fedora44' }}
+  local-smoke:
+    name: local-smoke
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - name: Forge preflight
-        run: bash scripts/forge-preflight.sh --mode container
-      - name: Reclaim Forge container storage
-        run: bash scripts/forge-container-cleanup.sh
-      - name: Build trusted-lane binaries
+      - uses: ./.github/actions/setup-rust-workspace
+      - name: Build release-facing binaries
         run: cargo build -p conary -p remi -p conaryd -p conary-test --verbose
-      - name: Run Forge control-plane smoke
-        run: |
-          target/debug/conary-test serve --port 9099 > /tmp/conary-test-smoke.log 2>&1 &
-          smoke_pid=$!
-          trap 'kill "${smoke_pid}" 2>/dev/null || true' EXIT
-
-          for _ in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:9099/v1/health >/dev/null; then
-              break
-            fi
-            sleep 1
-          done
-
-          bash scripts/forge-smoke.sh --port 9099
-      - name: Run conary-test smoke subset
-        run: cargo run -p conary-test -- run --suite phase1-core --distro "${SMOKE_DISTRO}" --phase 1
+      - name: Check integration-test manifest inventory
+        run: cargo run -p conary-test -- list
       - name: Run Remi smoke health check
         run: ./scripts/remi-health.sh --smoke
+      - name: Explain paused remote validation
+        run: |
+          cat <<'EOF'
+          Forge-backed container and QEMU validation is temporarily paused while
+          Conary replaces the old Forge runner with a KVM-capable host. Use
+          scripts/local-qemu-validation.sh on a local KVM-capable machine for
+          the QEMU release gate.
+          EOF

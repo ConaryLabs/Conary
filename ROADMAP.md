@@ -1,6 +1,6 @@
 # Conary Roadmap
 
-Conary already has working installs, rollback, immutable generations, Remi conversion/serving, federation, bootstrap, generation artifact export, self-hosting VM validation, and a large integration test surface. The limited public preview target is Fedora 44, Ubuntu 26.04 LTS, and Arch Linux, with Forge validation and security gates treated as release criteria. This roadmap is intentionally forward-looking: it tracks the next areas to polish, validate, and expand rather than repeating the historical build-out.
+Conary already has working installs, rollback, immutable generations, Remi conversion/serving, federation, bootstrap, generation artifact export, self-hosting VM validation, and a large integration test surface. The limited public preview target is Fedora 44, Ubuntu 26.04 LTS, and Arch Linux, with security gates and local QEMU validation treated as release criteria while remote Forge validation is paused pending a KVM-capable runner. This roadmap is intentionally forward-looking: it tracks the next areas to polish, validate, and expand rather than repeating the historical build-out.
 
 For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). For shipped changes, see [CHANGELOG.md](CHANGELOG.md).
 
@@ -22,6 +22,7 @@ For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 
 - Pristine-by-default QEMU validation for the self-hosting bootstrap VM
 - More end-to-end coverage for generation activation and rollback under failure
 - Better release-time validation of docs, trust roots, and self-update flows
+- Restore scheduled remote Forge validation on a KVM-capable runner; the old VPS runner is retired because it did not expose `/dev/kvm`.
 
 ### 3. Composable Systems
 

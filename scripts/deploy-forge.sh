@@ -2,7 +2,7 @@
 # scripts/deploy-forge.sh -- Managed Forge rollout wrapper
 #
 # Usage:
-#   ./scripts/deploy-forge.sh (--unit NAME | --group NAME) [--ref REF | --path PATH]
+#   FORGE_HOST=peter@replacement.example ./scripts/deploy-forge.sh (--unit NAME | --group NAME) [--ref REF | --path PATH]
 #
 # Source selection:
 #   --ref REF   Trusted/default mode. Fetch REF from GitHub on Forge (default: main)
@@ -10,8 +10,9 @@
 #               then invoke the managed rollout against that active checkout.
 set -euo pipefail
 
-FORGE_HOST="${FORGE_HOST:-peter@forge.conarylabs.com}"
+FORGE_HOST="${FORGE_HOST:-}"
 FORGE_DEST="${FORGE_DEST:-/home/peter/Conary}"
+RETIRED_FORGE_HOST="${CONARY_RETIRED_FORGE_HOST:-peter@forge.conarylabs.com}"
 TARGET_FLAG=""
 TARGET_VALUE=""
 SOURCE_MODE="ref"
@@ -20,7 +21,7 @@ SOURCE_VALUE="main"
 usage() {
     cat <<'EOF'
 Usage:
-  ./scripts/deploy-forge.sh (--unit NAME | --group NAME) [--ref REF | --path PATH]
+  FORGE_HOST=peter@replacement.example ./scripts/deploy-forge.sh (--unit NAME | --group NAME) [--ref REF | --path PATH]
 
 Managed Forge rollout wrapper. Trusted/default mode is --ref (default: main).
 Debug/local-snapshot mode is --path, which rsyncs directly over the active
@@ -34,8 +35,8 @@ Options:
   --help           Show this help text
 
 Examples:
-  ./scripts/deploy-forge.sh --group control_plane --ref main
-  ./scripts/deploy-forge.sh --unit conary_test --path "$(pwd)"
+  FORGE_HOST=peter@replacement.example ./scripts/deploy-forge.sh --group control_plane --ref main
+  FORGE_HOST=peter@replacement.example ./scripts/deploy-forge.sh --unit conary_test --path "$(pwd)"
 EOF
 }
 
@@ -134,6 +135,18 @@ done
 if [[ -z "$TARGET_FLAG" || -z "$TARGET_VALUE" ]]; then
     echo "One of --unit or --group is required." >&2
     usage >&2
+    exit 1
+fi
+
+if [[ -z "$FORGE_HOST" ]]; then
+    echo "FORGE_HOST is not set because remote Forge validation is paused." >&2
+    echo "Set FORGE_HOST to a replacement KVM-capable runner before using this wrapper." >&2
+    exit 1
+fi
+
+if [[ "$FORGE_HOST" == "$RETIRED_FORGE_HOST" && "${CONARY_ALLOW_RETIRED_FORGE_HOST:-0}" != "1" ]]; then
+    echo "FORGE_HOST points at retired Forge host ${RETIRED_FORGE_HOST}." >&2
+    echo "Set FORGE_HOST to a replacement KVM-capable runner, or set CONARY_ALLOW_RETIRED_FORGE_HOST=1 for one-off recovery work." >&2
     exit 1
 fi
 

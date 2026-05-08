@@ -64,7 +64,7 @@ deploy_mode_for() {
     case "$1" in
         conary) printf '%s\n' 'release_bundle' ;;
         remi) printf '%s\n' 'remote_bundle' ;;
-        conaryd) printf '%s\n' 'remote_bundle' ;;
+        conaryd) printf '%s\n' 'none' ;;
         conary-test) printf '%s\n' 'none' ;;
         *) return 1 ;;
     esac

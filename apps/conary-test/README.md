@@ -40,10 +40,12 @@ cargo run -p conary-test -- run --suite phase1-core --all-distros --phase 1
 # Start the HTTP/MCP server
 cargo run -p conary-test -- serve --port 9090
 
-# Run a managed Forge rollout from a trusted GitHub ref
+# Run a managed Forge rollout from a trusted GitHub ref after a replacement
+# Forge host exists
 cargo run -p conary-test -- deploy rollout --group control_plane --ref main
 
-# Run the supported Forge control-plane smoke
+# Run the supported Forge control-plane smoke after a replacement Forge host
+# exists
 bash scripts/forge-smoke.sh
 
 # List available test suites
@@ -151,6 +153,10 @@ The MCP endpoint is mounted at `/mcp` (Streamable HTTP transport).
 | `publish_fixtures` | Publish test fixtures to Remi repository |
 | `deploy_status` | Get service-owned deployment status (binary provenance, runtime, WAL pending, service state) |
 | `flush_pending` | Flush pending WAL items to Remi |
+
+Remote Forge validation is temporarily paused while Conary replaces the old VPS
+runner with a KVM-capable host. Use `scripts/local-qemu-validation.sh` on a
+local KVM-capable development machine for temporary QEMU release evidence.
 
 `conary-test deploy status --json` now separates the running binary identity
 from the local checkout branch/commit and now also reports the last successful

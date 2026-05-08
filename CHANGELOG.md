@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Refreshed Remi conversion and repository sync paths to avoid holding SQLite connections across async HTTP work.
 - Moved distro listing to the shared supported-distro catalog instead of hard-coded CLI output.
 - Restored Forge trusted-runner preflight checks and aligned integration tests with the preview distro matrix.
+- Paused Forge-backed validation and conaryd staging after discovering the old VPS runner lacked `/dev/kvm`; added a local QEMU release gate script for temporary evidence.
 - Updated cargo dependencies and the release cargo-audit gate to use the latest feasible package versions with a documented advisory waiver.
 - Refreshed site lockfile dependencies to clear high and moderate npm audit findings.
 - Clarified that conaryd package install/remove/update routes return `501 Not Implemented`; daemon package execution remains future work.
