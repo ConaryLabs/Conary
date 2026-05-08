@@ -8,6 +8,11 @@
 # `run` steps for those operations. Several tests are environment-sensitive
 # and therefore assert "no panic / meaningful output" rather than strict
 # success in unprivileged containers.
+#
+# The self-update mock tests seed HTTP channels directly into the test DB so
+# they can exercise lower-level download failure paths. The user-facing
+# `system update-channel set` command rejects plain HTTP; Phase 2 covers that
+# CLI guard explicitly.
 
 [suite]
 name = "Phase 3 Group L: Lifecycle Robustness"
@@ -35,7 +40,8 @@ printf '{"version":"99.0.0","download_url":"http://127.0.0.1:19877/conary-99.0.0
 python3 -m http.server 19877 --directory "$MOCK_DIR" >/tmp/t128-server.log 2>&1 & \
 SERVER_PID=$! && \
 sleep 1 && \
-${CONARY_BIN} system update-channel set http://127.0.0.1:19877 --db-path ${DB_PATH} >/dev/null && \
+${CONARY_BIN} system update-channel get --db-path ${DB_PATH} >/dev/null && \
+sqlite3 ${DB_PATH} "INSERT INTO settings (key, value) VALUES ('update-channel', 'http://127.0.0.1:19877') ON CONFLICT(key) DO UPDATE SET value = excluded.value" && \
 OUTPUT=$(${CONARY_BIN} self-update --db-path ${DB_PATH} 2>&1 || true) && \
 kill $SERVER_PID 2>/dev/null || true && \
 ${CONARY_BIN} system update-channel reset --db-path ${DB_PATH} >/dev/null 2>&1 || true && \
@@ -67,7 +73,8 @@ printf '{"version":"0.0.1","download_url":"http://127.0.0.1:19878/conary-0.0.1.c
 python3 -m http.server 19878 --directory "$MOCK_DIR" >/tmp/t129-server.log 2>&1 & \
 SERVER_PID=$! && \
 sleep 1 && \
-${CONARY_BIN} system update-channel set http://127.0.0.1:19878 --db-path ${DB_PATH} >/dev/null && \
+${CONARY_BIN} system update-channel get --db-path ${DB_PATH} >/dev/null && \
+sqlite3 ${DB_PATH} "INSERT INTO settings (key, value) VALUES ('update-channel', 'http://127.0.0.1:19878') ON CONFLICT(key) DO UPDATE SET value = excluded.value" && \
 OUTPUT=$(${CONARY_BIN} self-update --check --db-path ${DB_PATH} 2>&1 || true) && \
 kill $SERVER_PID 2>/dev/null || true && \
 ${CONARY_BIN} system update-channel reset --db-path ${DB_PATH} >/dev/null 2>&1 || true && \
@@ -98,7 +105,8 @@ printf '{"version":"99.0.1","download_url":"http://127.0.0.1:19879/conary-99.0.1
 python3 -m http.server 19879 --directory "$MOCK_DIR" >/tmp/t130-server.log 2>&1 & \
 SERVER_PID=$! && \
 sleep 1 && \
-${CONARY_BIN} system update-channel set http://127.0.0.1:19879 --db-path ${DB_PATH} >/dev/null && \
+${CONARY_BIN} system update-channel get --db-path ${DB_PATH} >/dev/null && \
+sqlite3 ${DB_PATH} "INSERT INTO settings (key, value) VALUES ('update-channel', 'http://127.0.0.1:19879') ON CONFLICT(key) DO UPDATE SET value = excluded.value" && \
 OUTPUT=$(${CONARY_BIN} self-update --db-path ${DB_PATH} 2>&1 || true) && \
 kill $SERVER_PID 2>/dev/null || true && \
 ${CONARY_BIN} system update-channel reset --db-path ${DB_PATH} >/dev/null 2>&1 || true && \
@@ -127,7 +135,8 @@ printf '{"version":"99.1.0","download_url":"/v1/ccs/conary/99.1.0/download","sha
 python3 -m http.server 19880 --directory "$MOCK_DIR" >/tmp/t138-server.log 2>&1 & \
 SERVER_PID=$! && \
 sleep 1 && \
-${CONARY_BIN} system update-channel set http://127.0.0.1:19880 --db-path ${DB_PATH} >/dev/null && \
+${CONARY_BIN} system update-channel get --db-path ${DB_PATH} >/dev/null && \
+sqlite3 ${DB_PATH} "INSERT INTO settings (key, value) VALUES ('update-channel', 'http://127.0.0.1:19880') ON CONFLICT(key) DO UPDATE SET value = excluded.value" && \
 OUTPUT=$(${CONARY_BIN} self-update --check --version 99.1.0 --db-path ${DB_PATH} 2>&1 || true) && \
 kill $SERVER_PID 2>/dev/null || true && \
 ${CONARY_BIN} system update-channel reset --db-path ${DB_PATH} >/dev/null 2>&1 || true && \

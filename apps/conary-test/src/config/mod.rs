@@ -699,13 +699,57 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
             assert!(all75.contains(&"Current version:".to_string()));
             assert!(all75.contains(&"Update channel:".to_string()));
 
-            // Verify T76 uses run (complex mock server script)
+            // Verify T76 exercises the HTTPS-only update-channel guard.
             let t76 = manifest.test.iter().find(|t| t.id == "T76").unwrap();
-            assert!(t76.step[0].run.is_some(), "T76 should use run");
+            let t76_command = t76.step[0]
+                .conary
+                .as_deref()
+                .expect("T76 should use a conary command");
+            assert!(
+                t76_command.contains("system update-channel set http://"),
+                "T76 should attempt a plain HTTP update channel"
+            );
             let a76 = t76.step[0].assert.as_ref().unwrap();
-            let all76 = a76.stdout_contains_all.as_ref().unwrap();
-            assert!(all76.contains(&"Update available".to_string()));
-            assert!(all76.contains(&"99.0.0".to_string()));
+            assert_eq!(
+                a76.exit_code_not,
+                Some(0),
+                "T76 should require update-channel rejection"
+            );
+            assert_eq!(
+                a76.stderr_contains.as_deref(),
+                Some("Update channel URL must use https://")
+            );
+        }
+    }
+
+    #[test]
+    fn test_load_phase3_group_l_manifest_self_update_http_mocks_seed_db_directly() {
+        let path = remi_manifest_path("phase3-group-l.toml");
+        if path.exists() {
+            let manifest = load_manifest(&path).unwrap();
+            assert_eq!(manifest.suite.phase, 3);
+
+            for id in ["T128", "T129", "T130", "T138"] {
+                let test = manifest
+                    .test
+                    .iter()
+                    .find(|test| test.id == id)
+                    .expect("expected self-update lifecycle test");
+                let script = test.step[0]
+                    .run
+                    .as_deref()
+                    .expect("self-update lifecycle tests should use shell orchestration");
+                assert!(
+                    script.contains("INSERT INTO settings")
+                        && script.contains("'update-channel'")
+                        && script.contains("http://127.0.0.1:"),
+                    "{id} should seed the mock HTTP update channel directly into the test DB"
+                );
+                assert!(
+                    !script.contains("system update-channel set http://"),
+                    "{id} should not ask the HTTPS-only CLI to accept a plain HTTP channel"
+                );
+            }
         }
     }
 }
