@@ -900,6 +900,12 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
                     !script.contains("system update-channel set http://"),
                     "{id} should not ask the HTTPS-only CLI to accept a plain HTTP channel"
                 );
+                if matches!(id, "T128" | "T130") {
+                    assert!(
+                        script.contains("self-update --no-verify --db-path"),
+                        "{id} should bypass signature checks to exercise the checksum/download failure path"
+                    );
+                }
             }
         }
     }
