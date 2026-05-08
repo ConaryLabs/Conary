@@ -117,6 +117,7 @@ name = "cas_deleted_breaks_generation_mount"
 description = "Install a package, build a generation, delete CAS, verify generation switch fails (composefs needs CAS at mount time)"
 timeout = 120
 group = "H"
+requires = ["composefs_runtime"]
 
 # Step 1: Install a package (populates CAS + DB)
 [[test.step]]

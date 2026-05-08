@@ -247,6 +247,32 @@ impl TestRunner {
                 continue;
             }
 
+            if let Some(reason) = self
+                .missing_runtime_requirement(test_def, backend, container_id)
+                .await?
+            {
+                let msg = format!("skipped: {reason}");
+                info!("[{}] {}: {msg}", test_def.id, test_def.name);
+                suite.record(TestResult {
+                    id: test_def.id.clone(),
+                    name: test_def.name.clone(),
+                    status: TestStatus::Skipped,
+                    duration_ms: 0,
+                    message: Some(msg.clone()),
+                    stdout: None,
+                    stderr: None,
+                    attempts: Vec::new(),
+                });
+                if let Some((run_id, ref tx)) = event_tx {
+                    let _ = tx.send(TestEvent::TestSkipped {
+                        run_id,
+                        test_id: test_def.id.clone(),
+                        message: msg,
+                    });
+                }
+                continue;
+            }
+
             // Check dependencies -- skip if any dependency failed.
             if suite.should_skip(&test_def.depends_on) {
                 let dep_names: Vec<&str> = test_def
@@ -394,6 +420,52 @@ impl TestRunner {
         }
 
         Ok(suite)
+    }
+
+    async fn missing_runtime_requirement(
+        &self,
+        test_def: &TestDef,
+        backend: &dyn ContainerBackend,
+        container_id: &ContainerId,
+    ) -> Result<Option<String>> {
+        for requirement in &test_def.requires {
+            match requirement.as_str() {
+                "composefs_runtime" => {
+                    if !self
+                        .composefs_runtime_available(backend, container_id)
+                        .await?
+                    {
+                        return Ok(Some(
+                            "missing composefs runtime support (overlayfs, EROFS, loop devices, or mount.composefs)"
+                                .to_string(),
+                        ));
+                    }
+                }
+                other => bail!(
+                    "test {} has unknown runtime requirement `{}`",
+                    test_def.id,
+                    other
+                ),
+            }
+        }
+
+        Ok(None)
+    }
+
+    async fn composefs_runtime_available(
+        &self,
+        backend: &dyn ContainerBackend,
+        container_id: &ContainerId,
+    ) -> Result<bool> {
+        let probe = "grep -qw erofs /proc/filesystems && \
+             grep -qw overlay /proc/filesystems && \
+             test -e /dev/loop-control && \
+             command -v mount.composefs >/dev/null 2>&1";
+        let result = backend
+            .exec(container_id, &["sh", "-c", probe], Duration::from_secs(10))
+            .await?;
+
+        Ok(result.exit_code == 0)
     }
 
     async fn run_resource_scoped_test(
@@ -774,6 +846,7 @@ mod tests {
             fatal: None,
             group: None,
             skip: None,
+            requires: Vec::new(),
         }]);
 
         let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
@@ -812,6 +885,7 @@ mod tests {
             fatal: None,
             group: None,
             skip: None,
+            requires: Vec::new(),
         }]);
 
         let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
@@ -859,6 +933,7 @@ mod tests {
                 fatal: None,
                 group: None,
                 skip: None,
+                requires: Vec::new(),
             },
             TestDef {
                 id: "T02".to_string(),
@@ -874,6 +949,7 @@ mod tests {
                 fatal: None,
                 group: None,
                 skip: None,
+                requires: Vec::new(),
             },
         ]);
 
@@ -887,6 +963,53 @@ mod tests {
         assert_eq!(suite.skipped(), 1);
         assert_eq!(suite.results[1].status, TestStatus::Skipped);
         assert!(suite.results[1].message.as_ref().unwrap().contains("T01"));
+    }
+
+    #[tokio::test]
+    async fn test_runner_skips_when_composefs_runtime_requirement_is_missing() {
+        let backend = MockBackend::new(vec![ExecResult {
+            exit_code: 1,
+            stdout: String::new(),
+            stderr: "missing erofs".to_string(),
+        }]);
+
+        let manifest = make_manifest(vec![TestDef {
+            id: "T51".to_string(),
+            name: "build_generation".to_string(),
+            description: "requires composefs".to_string(),
+            timeout: 30,
+            flaky: None,
+            retries: None,
+            retry_delay_ms: None,
+            step: vec![simple_step_run(
+                "conary system generation build",
+                Some(make_assertion(Some(0), None)),
+            )],
+            resources: None,
+            depends_on: None,
+            fatal: None,
+            group: None,
+            skip: None,
+            requires: vec!["composefs_runtime".to_string()],
+        }]);
+
+        let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
+        let suite = runner
+            .run(&manifest, &backend, &"ctr-1".to_string(), None)
+            .await
+            .unwrap();
+
+        assert_eq!(suite.failed(), 0);
+        assert_eq!(suite.skipped(), 1);
+        assert_eq!(suite.results[0].status, TestStatus::Skipped);
+        assert!(
+            suite.results[0]
+                .message
+                .as_ref()
+                .unwrap()
+                .contains("composefs runtime")
+        );
+        assert_eq!(backend.exec_calls().len(), 1, "only the probe should run");
     }
 
     #[tokio::test]
@@ -925,6 +1048,7 @@ mod tests {
             fatal: None,
             group: None,
             skip: None,
+            requires: Vec::new(),
         }]);
 
         let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
@@ -992,6 +1116,7 @@ mod tests {
             fatal: None,
             group: None,
             skip: None,
+            requires: Vec::new(),
         }]);
 
         let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
@@ -1048,6 +1173,7 @@ mod tests {
             fatal: None,
             group: None,
             skip: None,
+            requires: Vec::new(),
         }]);
 
         let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
@@ -1131,6 +1257,7 @@ mod tests {
                 fatal: None,
                 group: None,
                 skip: None,
+                requires: Vec::new(),
             }],
             distro_overrides: HashMap::new(),
         };
@@ -1312,6 +1439,7 @@ mod tests {
             fatal: None,
             group: None,
             skip: None,
+            requires: Vec::new(),
         }]);
 
         let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
@@ -1408,6 +1536,7 @@ mod tests {
                 fatal: None,
                 group: None,
                 skip: None,
+                requires: Vec::new(),
             },
             TestDef {
                 id: "T02".to_string(),
@@ -1423,6 +1552,7 @@ mod tests {
                 fatal: None,
                 group: None,
                 skip: None,
+                requires: Vec::new(),
             },
         ]);
 
@@ -1477,6 +1607,7 @@ mod tests {
                     fatal: None,
                     group: None,
                     skip: None,
+                    requires: Vec::new(),
                 },
                 TestDef {
                     id: "T02".to_string(),
@@ -1492,6 +1623,7 @@ mod tests {
                     fatal: None,
                     group: None,
                     skip: None,
+                    requires: Vec::new(),
                 },
             ],
             distro_overrides: HashMap::new(),
@@ -1552,6 +1684,7 @@ mod tests {
             fatal: None,
             group: None,
             skip: None,
+            requires: Vec::new(),
         }]);
 
         let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
@@ -1595,6 +1728,7 @@ mod tests {
             fatal: None,
             group: None,
             skip: None,
+            requires: Vec::new(),
         }]);
 
         let manifest_b = make_manifest(vec![TestDef {
@@ -1614,6 +1748,7 @@ mod tests {
             fatal: None,
             group: None,
             skip: None,
+            requires: Vec::new(),
         }]);
 
         let (suite_a, suite_b) = tokio::join!(

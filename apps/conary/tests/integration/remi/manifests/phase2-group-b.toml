@@ -6,8 +6,9 @@
 # Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}
 # Fixture variables: ${FIXTURE_V1_CCS}, ${FIXTURE_V2_CCS}
 #
-# NOTE: T51-T56 require composefs/EROFS kernel support. The runner should
-# check /proc/filesystems for "erofs" and skip this group if unavailable.
+# NOTE: T51-T56 require composefs/EROFS kernel support. Tests that need it use
+# requires = ["composefs_runtime"], so rootless containers without the kernel
+# features report skipped instead of false product failures.
 
 [suite]
 name = "Phase 2, Group B: Generation Lifecycle (T51-T57)"
@@ -28,9 +29,8 @@ description = "Build a composefs generation from current package state"
 timeout = 120
 group = "B"
 fatal = true
-# Skip condition: requires EROFS kernel support (/proc/filesystems must contain "erofs").
-# The engine does not yet support skip_if conditions; this must be checked at runtime
-# or by a setup step that aborts the suite if EROFS is unavailable.
+requires = ["composefs_runtime"]
+# Skip condition: requires composefs runtime support in the container.
 
 # Generation commands do not accept --db-path
 [[test.step]]
@@ -90,6 +90,7 @@ timeout = 300
 group = "B"
 depends_on = ["T51"]
 fatal = true
+requires = ["composefs_runtime"]
 
 # Install v2 and build a new generation
 [[test.step]]
@@ -162,6 +163,7 @@ description = "System takeover builds a generation, records the result, and stop
 timeout = 300
 group = "B"
 fatal = true
+requires = ["composefs_runtime"]
 
 [[test.step]]
 conary = "system takeover --up-to generation --yes --allow-live-system-mutation"

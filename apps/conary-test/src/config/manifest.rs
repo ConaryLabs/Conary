@@ -53,6 +53,9 @@ pub struct TestDef {
     /// When set, the test is skipped with this reason string.
     #[serde(default)]
     pub skip: Option<String>,
+    /// Runtime capabilities required inside the test container.
+    #[serde(default)]
+    pub requires: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -332,6 +335,15 @@ impl TestManifest {
     /// Validate all assertions in the manifest for conflicting fields.
     pub fn validate(&self) -> Result<()> {
         for test in &self.test {
+            for requirement in &test.requires {
+                if requirement != "composefs_runtime" {
+                    bail!(
+                        "test {} has unknown runtime requirement `{}`",
+                        test.id,
+                        requirement
+                    );
+                }
+            }
             for (i, step) in test.step.iter().enumerate() {
                 if let Some(ref assertion) = step.assert {
                     assertion.validate(&test.id, i)?;
@@ -433,6 +445,29 @@ stdout_not_contains = "hello"
         let manifest: TestManifest = toml::from_str(toml).unwrap();
         let err = manifest.validate().unwrap_err();
         assert!(err.to_string().contains("conflicting"));
+        assert!(err.to_string().contains("T01"));
+    }
+
+    #[test]
+    fn test_manifest_validate_rejects_unknown_requirement() {
+        let toml = r#"
+[suite]
+name = "bad-requirement"
+phase = 1
+
+[[test]]
+id = "T01"
+name = "requires"
+description = "Has an unknown requirement"
+timeout = 10
+requires = ["missing-magic"]
+
+[[test.step]]
+run = "echo hello"
+"#;
+        let manifest: TestManifest = toml::from_str(toml).unwrap();
+        let err = manifest.validate().unwrap_err();
+        assert!(err.to_string().contains("unknown runtime requirement"));
         assert!(err.to_string().contains("T01"));
     }
 

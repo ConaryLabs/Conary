@@ -149,6 +149,7 @@ description = "Build multiple generations and switch among them without panickin
 timeout = 300
 group = "L"
 fatal = true
+requires = ["composefs_runtime"]
 
 [[test.step]]
 run = "${CONARY_BIN} system generation build --allow-live-system-mutation"
@@ -185,6 +186,7 @@ name = "generation_gc_keep_two"
 description = "Build five generations, garbage-collect with keep=2, and preserve the active set"
 timeout = 300
 group = "L"
+requires = ["composefs_runtime"]
 
 [[test.step]]
 run = "for _ in 1 2 3 4 5; do ${CONARY_BIN} system generation build --allow-live-system-mutation >/tmp/t132-build.log 2>&1 || exit 1; done"
@@ -232,6 +234,7 @@ name = "generation_recover_from_current_symlink"
 description = "Generation recover completes cleanly when the synthetic root DB matches the existing /conary current symlink"
 timeout = 180
 group = "L"
+requires = ["composefs_runtime"]
 
 [[test.step]]
 run = "mkdir -p /conary && cp ${DB_PATH} /conary/conary.db && umount /conary/mnt 2>/dev/null || true && ${CONARY_BIN} system generation recover --db-path /conary/conary.db --allow-live-system-mutation 2>&1"
@@ -250,6 +253,7 @@ name = "generation_recover_falls_back_cleanly"
 description = "Generation recover falls back cleanly when the DB has no active state but another intact generation exists"
 timeout = 180
 group = "L"
+requires = ["composefs_runtime"]
 
 [[test.step]]
 run = """mkdir -p /conary && \
@@ -277,6 +281,7 @@ name = "corrupt_generation_metadata_refused"
 description = "Corrupt generation metadata should be detected before switch"
 timeout = 60
 group = "L"
+requires = ["composefs_runtime"]
 
 [[test.step]]
 run = "META=$(find /var/lib/conary -path '*/generations/*/metadata*' -type f 2>/dev/null | head -1); [ -n \"$META\" ] && printf 'corrupt' > \"$META\" || true"
@@ -301,6 +306,7 @@ name = "generation_build_db_locking"
 description = "Building a generation while another process touches the DB should avoid corruption"
 timeout = 120
 group = "L"
+requires = ["composefs_runtime"]
 
 [[test.step]]
 run = "(sqlite3 ${DB_PATH} 'BEGIN EXCLUSIVE; SELECT 1; .timeout 5000' >/tmp/t135-db.log 2>&1 &) ; LOCK_PID=$!; sleep 1; OUTPUT=$(${CONARY_BIN} system generation build --allow-live-system-mutation 2>&1 || true); kill $LOCK_PID 2>/dev/null || true; echo \"$OUTPUT\""
