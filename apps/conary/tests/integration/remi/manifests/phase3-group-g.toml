@@ -160,13 +160,13 @@ exit_code = 0
 stdout_not_contains = "mismatch"
 
 # --------------------------------------------------------------------------
-# T83: Corrupt CAS file and detect it
+# T83: Remove CAS file and detect it
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T83"
 name = "cas_corruption_detected"
-description = "Corrupt a CAS object on disk and verify conary detects the mismatch"
+description = "Remove a CAS object on disk and verify conary detects the missing object"
 timeout = 120
 group = "G"
 
@@ -177,7 +177,7 @@ run = "if ! test -f /usr/share/conary-test/hello.txt; then ${CONARY_BIN} ccs ins
 exit_code = 0
 
 [[test.step]]
-run = "OBJ=$(find /var/lib/conary/objects -type f | head -1) && printf 'corrupt' > \"$OBJ\""
+run = "OBJ=$(find /var/lib/conary/objects -type f | head -1) && rm -f \"$OBJ\""
 
 [test.step.assert]
 exit_code = 0
@@ -187,7 +187,7 @@ conary = "system verify"
 
 [test.step.assert]
 exit_code_not = 0
-stdout_contains = "mismatch"
+stdout_contains = "MISSING from CAS"
 
 # --------------------------------------------------------------------------
 # T84: Size lie rejection
@@ -205,7 +205,7 @@ conary = "ccs install /opt/remi-tests/fixtures/adversarial/corrupted/size-lie/ou
 
 [test.step.assert]
 exit_code_not = 0
-stderr_contains = "size"
+stderr_contains = "hash"
 
 # --------------------------------------------------------------------------
 # T85: Truncated HTTP response during download

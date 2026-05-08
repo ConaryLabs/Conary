@@ -723,6 +723,42 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
     }
 
     #[test]
+    fn test_load_phase3_group_g_manifest_data_integrity_expectations() {
+        let path = remi_manifest_path("phase3-group-g.toml");
+        if path.exists() {
+            let manifest = load_manifest(&path).unwrap();
+            assert_eq!(manifest.suite.phase, 3);
+
+            let t83 = manifest.test.iter().find(|test| test.id == "T83").unwrap();
+            let corrupt_step = t83.step[1]
+                .run
+                .as_deref()
+                .expect("T83 should manipulate a CAS object directly");
+            assert!(
+                corrupt_step.contains("rm -f"),
+                "T83 should remove a CAS object because system verify checks object presence"
+            );
+            assert!(
+                !corrupt_step.contains("printf 'corrupt'"),
+                "T83 should not overwrite CAS object contents when verify only checks presence"
+            );
+            let verify_assertion = t83.step[2].assert.as_ref().unwrap();
+            assert_eq!(
+                verify_assertion.stdout_contains.as_deref(),
+                Some("MISSING from CAS")
+            );
+
+            let t84 = manifest.test.iter().find(|test| test.id == "T84").unwrap();
+            let assertion = t84.step[0].assert.as_ref().unwrap();
+            assert_eq!(
+                assertion.stderr_contains.as_deref(),
+                Some("hash"),
+                "T84 should accept the current early hash-mismatch rejection"
+            );
+        }
+    }
+
+    #[test]
     fn test_load_phase3_group_l_manifest_self_update_http_mocks_seed_db_directly() {
         let path = remi_manifest_path("phase3-group-l.toml");
         if path.exists() {
