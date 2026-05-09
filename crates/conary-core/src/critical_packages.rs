@@ -23,6 +23,7 @@ pub const CRITICAL_PACKAGES: &[&str] = &[
     "systemd-libs",
     "systemd-udev",
     "systemd-resolved",
+    "udev",
     "libsystemd0",
     // Authentication
     "pam",
@@ -68,6 +69,7 @@ pub const CRITICAL_RUNTIME_CAPABILITY_PREFIXES: &[&str] = &[
     "libssl.so.",
     "libgcc_s.so.",
     "libpam.so.",
+    "libudev.so.",
     "libpcre2-8.so.",
     "libm.so.6",
     "filesystem(",
@@ -111,7 +113,7 @@ mod tests {
 
     #[test]
     fn critical_package_names_are_blocked() {
-        for name in ["glibc", "bash", "filesystem", "setup"] {
+        for name in ["glibc", "bash", "filesystem", "setup", "udev"] {
             assert!(is_critical_package_name(name), "{name} should be critical");
             assert!(is_blocked(name), "{name} should be blocked");
         }
@@ -129,6 +131,7 @@ mod tests {
             "libc.so.6()(64bit)",
             "ld-linux-x86-64.so.2()(64bit)",
             "libssl.so.3()(64bit)",
+            "libudev.so.1()(64bit)",
             "group(mail)",
         ] {
             assert!(

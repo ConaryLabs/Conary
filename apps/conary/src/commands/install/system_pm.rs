@@ -96,6 +96,7 @@ fn live_runtime_soname(name: &str) -> Option<&str> {
         || lower.starts_with("libssl.so.")
         || lower.starts_with("libgcc_s.so.")
         || lower.starts_with("libpam.so.")
+        || lower.starts_with("libudev.so.")
         || lower.starts_with("libpcre2-8.so.")
         || lower.starts_with("libm.so.6")
     {
@@ -135,6 +136,15 @@ fn live_runtime_soname_probe_paths(soname: &str) -> &'static [&'static str] {
             "/usr/lib/x86_64-linux-gnu/libpam.so.0",
             "/lib/x86_64-linux-gnu/libpam.so.0",
         ]
+    } else if lower.starts_with("libudev.so.") {
+        &[
+            "/usr/lib64/libudev.so.1",
+            "/lib64/libudev.so.1",
+            "/usr/lib/libudev.so.1",
+            "/lib/libudev.so.1",
+            "/usr/lib/x86_64-linux-gnu/libudev.so.1",
+            "/lib/x86_64-linux-gnu/libudev.so.1",
+        ]
     } else if lower.starts_with("libpcre2-8.so.") {
         &[
             "/usr/lib64/libpcre2-8.so.0",
@@ -172,6 +182,14 @@ fn live_runtime_package_probe_paths(name: &str) -> Option<&'static [&'static str
         "sed" => Some(&["/usr/bin/sed", "/bin/sed"]),
         "xz" => Some(&["/usr/bin/xz", "/bin/xz"]),
         "zstd" => Some(&["/usr/bin/zstd"]),
+        "systemd-udev" | "udev" => Some(&[
+            "/usr/bin/udevadm",
+            "/bin/udevadm",
+            "/usr/sbin/udevadm",
+            "/sbin/udevadm",
+            "/usr/lib/systemd/systemd-udevd",
+            "/lib/systemd/systemd-udevd",
+        ]),
         "pcre2" => Some(&[
             "/usr/lib64/libpcre2-8.so.0",
             "/lib64/libpcre2-8.so.0",
@@ -298,6 +316,19 @@ mod tests {
                 ][..]
             )
         );
+        assert_eq!(
+            live_runtime_package_probe_paths("udev"),
+            Some(
+                &[
+                    "/usr/bin/udevadm",
+                    "/bin/udevadm",
+                    "/usr/sbin/udevadm",
+                    "/sbin/udevadm",
+                    "/usr/lib/systemd/systemd-udevd",
+                    "/lib/systemd/systemd-udevd",
+                ][..]
+            )
+        );
         assert!(live_runtime_package_probe_paths("nginx").is_none());
     }
 
@@ -327,6 +358,10 @@ mod tests {
             Some("libpam.so.0")
         );
         assert_eq!(
+            live_runtime_soname("libudev.so.1()(64bit)"),
+            Some("libudev.so.1")
+        );
+        assert_eq!(
             live_runtime_soname("libpcre2-8.so.0()(64bit)"),
             Some("libpcre2-8.so.0")
         );
@@ -338,6 +373,7 @@ mod tests {
         assert!(!live_runtime_soname_probe_paths("libcrypto.so.3").is_empty());
         assert!(!live_runtime_soname_probe_paths("libgcc_s.so.1").is_empty());
         assert!(!live_runtime_soname_probe_paths("libpam.so.0").is_empty());
+        assert!(!live_runtime_soname_probe_paths("libudev.so.1").is_empty());
         assert!(!live_runtime_soname_probe_paths("libpcre2-8.so.0").is_empty());
         assert!(!live_runtime_soname_probe_paths("libm.so.6").is_empty());
     }

@@ -971,19 +971,7 @@ async fn handle_dependencies(ctx: &DepAnalysisContext<'_>) -> Result<()> {
         ));
     }
 
-    // Build list of missing dependencies from SAT results.
-    // Packages the SAT solver says come from a Repository are the ones
-    // that need to be fetched/installed.
-    let missing: Vec<MissingDependency> = sat_result
-        .install_order
-        .iter()
-        .filter(|p| p.source == conary_core::resolver::SatSource::Repository)
-        .map(|p| MissingDependency {
-            name: p.name.clone(),
-            constraint: conary_core::version::VersionConstraint::Any,
-            required_by: vec![ctx.pkg.name().to_string()],
-        })
-        .collect();
+    let missing = missing_repository_deps_from_sat_result(&sat_result, ctx.pkg.name());
 
     // Handle missing dependencies with dep-mode awareness
     if missing.is_empty() {
@@ -1055,6 +1043,23 @@ async fn handle_dependencies(ctx: &DepAnalysisContext<'_>) -> Result<()> {
     check_unresolvable_deps(ctx, &dep_plan, &convergence_intent)?;
 
     Ok(())
+}
+
+fn missing_repository_deps_from_sat_result(
+    sat_result: &conary_core::resolver::SatResolution,
+    required_by: &str,
+) -> Vec<MissingDependency> {
+    sat_result
+        .install_order
+        .iter()
+        .filter(|p| p.source == conary_core::resolver::SatSource::Repository)
+        .map(|p| MissingDependency {
+            name: p.name.clone(),
+            constraint: conary_core::version::VersionConstraint::parse(&format!("= {}", p.version))
+                .unwrap_or(conary_core::version::VersionConstraint::Any),
+            required_by: vec![required_by.to_string()],
+        })
+        .collect()
 }
 
 /// Handle auto-adoption of dependencies (adopt mode).
@@ -1846,5 +1851,31 @@ mod tests {
     #[test]
     fn distro_name_to_flavor_unknown() {
         assert_eq!(distro_name_to_flavor("nixos"), None);
+    }
+
+    #[test]
+    fn missing_repository_deps_preserve_sat_selected_version() {
+        let sat_result = conary_core::resolver::SatResolution {
+            install_order: vec![
+                conary_core::resolver::SatPackage {
+                    name: "kernel-core".to_string(),
+                    version: "6.19.10-300.fc44".to_string(),
+                    source: conary_core::resolver::SatSource::Repository,
+                },
+                conary_core::resolver::SatPackage {
+                    name: "glibc".to_string(),
+                    version: "2.43-2.fc44".to_string(),
+                    source: conary_core::resolver::SatSource::Installed,
+                },
+            ],
+            conflict_message: None,
+        };
+
+        let missing = missing_repository_deps_from_sat_result(&sat_result, "kernel");
+
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0].name, "kernel-core");
+        assert_eq!(missing[0].constraint.to_string(), "= 6.19.10-300.fc44");
+        assert_eq!(missing[0].required_by, vec!["kernel"]);
     }
 }

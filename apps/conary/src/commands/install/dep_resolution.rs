@@ -10,6 +10,7 @@ use super::dep_mode::DepMode;
 use super::system_pm;
 use conary_core::db::models::Trove;
 use conary_core::resolver::MissingDependency;
+use conary_core::version::VersionConstraint;
 use tracing::debug;
 
 /// A dependency that needs to be installed from a repository
@@ -152,7 +153,7 @@ where
                     );
                     plan.to_install.push(ResolvedDep {
                         name: dep.name.clone(),
-                        version: None,
+                        version: dependency_version_constraint(dep),
                         required_by: dep.required_by.clone(),
                     });
                     continue;
@@ -192,7 +193,7 @@ where
                     );
                     plan.to_install.push(ResolvedDep {
                         name: dep.name.clone(),
-                        version: None,
+                        version: dependency_version_constraint(dep),
                         required_by: dep.required_by.clone(),
                     });
                 }
@@ -205,7 +206,7 @@ where
                 );
                 plan.to_install.push(ResolvedDep {
                     name: dep.name.clone(),
-                    version: None,
+                    version: dependency_version_constraint(dep),
                     required_by: dep.required_by.clone(),
                 });
             }
@@ -222,6 +223,14 @@ where
     );
 
     plan
+}
+
+fn dependency_version_constraint(dep: &MissingDependency) -> Option<String> {
+    if matches!(dep.constraint, VersionConstraint::Any) {
+        None
+    } else {
+        Some(dep.constraint.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -259,6 +268,14 @@ mod tests {
         MissingDependency {
             name: name.to_string(),
             constraint: VersionConstraint::Any,
+            required_by: required_by.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    fn make_versioned_dep(name: &str, version: &str, required_by: &[&str]) -> MissingDependency {
+        MissingDependency {
+            name: name.to_string(),
+            constraint: VersionConstraint::parse(&format!("= {version}")).unwrap(),
             required_by: required_by.iter().map(|s| s.to_string()).collect(),
         }
     }
@@ -346,6 +363,31 @@ mod tests {
         assert_eq!(plan.to_install.len(), 1);
         assert_eq!(plan.to_install[0].name, "pcre2");
         assert!(plan.blocked.is_empty());
+    }
+
+    #[test]
+    fn test_takeover_mode_preserves_versioned_dependency_constraint() {
+        let conn = test_db();
+        let missing = vec![make_versioned_dep(
+            "kernel-core-uname-r",
+            "6.19.10-300.fc44.x86_64",
+            &["kernel"],
+        )];
+
+        let plan = resolve_missing_deps_with_probes(
+            &conn,
+            &missing,
+            DepMode::Takeover,
+            |_| false,
+            |_| false,
+        );
+
+        assert_eq!(plan.to_install.len(), 1);
+        assert_eq!(plan.to_install[0].name, "kernel-core-uname-r");
+        assert_eq!(
+            plan.to_install[0].version.as_deref(),
+            Some("= 6.19.10-300.fc44.x86_64")
+        );
     }
 
     #[test]
@@ -441,6 +483,46 @@ mod tests {
         );
 
         assert_eq!(plan.blocked, vec!["libc.so.6(GLIBC_2.34)(64bit)"]);
+        assert!(plan.to_install.is_empty());
+        assert!(plan.to_adopt.is_empty());
+        assert!(plan.satisfied.is_empty());
+        assert!(plan.unresolvable.is_empty());
+    }
+
+    #[test]
+    fn test_libudev_runtime_capability_blocks_systemd_libs_conversion() {
+        let conn = test_db();
+        let missing = vec![make_dep("libudev.so.1()(64bit)", &["device-mapper"])];
+
+        let plan = resolve_missing_deps_with_probes(
+            &conn,
+            &missing,
+            DepMode::Satisfy,
+            |_| false,
+            |dep| dep.starts_with("libudev.so."),
+        );
+
+        assert_eq!(plan.blocked, vec!["libudev.so.1()(64bit)"]);
+        assert!(plan.to_install.is_empty());
+        assert!(plan.to_adopt.is_empty());
+        assert!(plan.satisfied.is_empty());
+        assert!(plan.unresolvable.is_empty());
+    }
+
+    #[test]
+    fn test_udev_virtual_dependency_blocks_systemd_udev_conversion() {
+        let conn = test_db();
+        let missing = vec![make_dep("udev", &["grub2-tools-minimal"])];
+
+        let plan = resolve_missing_deps_with_probes(
+            &conn,
+            &missing,
+            DepMode::Satisfy,
+            |_| false,
+            |dep| dep == "udev",
+        );
+
+        assert_eq!(plan.blocked, vec!["udev"]);
         assert!(plan.to_install.is_empty());
         assert!(plan.to_adopt.is_empty());
         assert!(plan.satisfied.is_empty());

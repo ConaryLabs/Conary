@@ -386,18 +386,18 @@ In `.github/workflows/scheduled-ops.yml`, keep Group N and add a separate step:
         run: cargo run -p conary-test -- run --distro fedora44 --suite phase3-group-o-generation-export
 ```
 
-- [ ] **Step 3: Add explicit not-skipped QEMU assertions**
+- [ ] **Step 3: Add explicit not-skipped QEMU result assertions**
 
-Wrap the QEMU commands with `tee` and check the logs for expected boot markers and absence of skip text. For Group O, the workflow step should include checks equivalent to:
+Wrap the QEMU commands with `tee` and check the logs for expected boot markers and absence of skipped test results. Raw guest boot logs can include benign systemd "skipped" unit messages, so the release-gate check should inspect structured result status/count fields rather than every free-text boot line. For Group O, the workflow step should include checks equivalent to:
 
 ```bash
 set -euo pipefail
 cargo run -p conary-test -- run --distro fedora44 --suite phase3-group-o-generation-export | tee /tmp/conary-group-o-qemu.log
-! rg -i 'qemu.*skipped|boot skipped|skipping qemu' /tmp/conary-group-o-qemu.log
+! rg '"status"[[:space:]]*:[[:space:]]*"skipped"|"skipped"[[:space:]]*:[[:space:]]*[1-9][0-9]*' /tmp/conary-group-o-qemu.log
 rg 'installed-runtime-generation-export-booted|bootstrap-run-generation-export-booted' /tmp/conary-group-o-qemu.log
 ```
 
-Add a matching not-skipped check for Group N using expected markers from `apps/conary/tests/integration/remi/manifests/phase3-group-n-qemu.toml`, such as `boot-verified`, `generation-a`, `generation-b`, `kernel-update-active`, and `fallback-generation`.
+Add a matching not-skipped check for Group N using expected markers from `apps/conary/tests/integration/remi/manifests/phase3-group-n-qemu.toml`, such as `kernel-deploy-ok`, `bls-check-done`, `rollback-check-done`, `bootloader-config-ok`, and `boot-verified`.
 
 - [ ] **Step 4: Verify manifest inventory**
 
@@ -1223,7 +1223,7 @@ gh run view "${run_id}" --json conclusion,url
 CONARY_LOCAL_VALIDATION_RUN_ID="release-readiness-${branch}-$(date +%Y%m%d%H%M%S)" scripts/local-qemu-validation.sh
 ```
 
-Expected: hosted health, audit, and manifest-inventory checks pass. The local QEMU script runs Group N and Group O on a KVM-capable development machine, emits expected boot markers, and fails on any skip message. Record the local log directory in the readiness note.
+Expected: hosted health, audit, and manifest-inventory checks pass. The local QEMU script runs Group N and Group O on a KVM-capable development machine, emits expected boot markers, and fails on skipped QEMU test results. Record the local log directory in the readiness note.
 
 - [ ] **Step 4: Verify recent run list**
 
