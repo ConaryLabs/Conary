@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-01
-revision: 14
-summary: Record Fedora 44 generation export QEMU validation, including self-contained installed runtime exports
+last_updated: 2026-05-09
+revision: 15
+summary: Record the local QEMU release gate pass after blocker fixes
 ---
 
 # Integration Testing
@@ -87,6 +87,13 @@ with `/dev/kvm`:
 ```bash
 scripts/local-qemu-validation.sh
 ```
+
+The current local release evidence is
+`target/local-validation/qemu-blocker-fix-20260509-201100`, recorded on
+2026-05-09. Group N passed `T150`, `T151`, `T153`, `T154`, and `T156` with
+0 failures and 0 skipped results. Group O passed `TGE01`, `TGE02`, `TGE03`,
+and `TGE04` with 0 failures and 0 skipped results. The wrapper emitted the
+required boot/export markers and finished with `[local-qemu-validation] ok`.
 
 For supported Forge control-plane validation after a new runner is registered,
 prefer:
@@ -227,7 +234,12 @@ commands = ["uname -r", "ls /boot/vmlinuz*"]
 expect_output = ["vmlinuz"]
 ```
 
-QEMU images are downloaded from `https://remi.conary.io/test-artifacts/` and cached locally. Tests gracefully skip when QEMU tools are unavailable.
+QEMU images are downloaded from `https://remi.conary.io/test-artifacts/` and
+cached locally. Plain `conary-test` runs can report QEMU skips when host tools
+or remote images are unavailable, but `scripts/local-qemu-validation.sh` treats
+any skipped QEMU test result as a failed release gate and separately requires
+boot/export markers in the logs. Keep that wrapper pointed only at published or
+generated fixtures that must be reproducible on a KVM-capable development host.
 
 Generated-image suites can attach a scratch disk, copy files into or out of a
 guest, and then boot a host-local qcow2 produced by an earlier step:

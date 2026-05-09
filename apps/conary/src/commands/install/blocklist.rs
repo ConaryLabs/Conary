@@ -43,6 +43,8 @@ mod tests {
         assert!(is_blocked("linux-pam"));
         assert!(is_blocked("bash"));
         assert!(is_blocked("filesystem"));
+        assert!(is_blocked("systemd-udev"));
+        assert!(is_blocked("udev"));
     }
 
     #[test]

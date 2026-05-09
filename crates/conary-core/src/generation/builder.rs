@@ -949,6 +949,16 @@ fn system_root_for_boot_root(boot_root: &Path) -> PathBuf {
 /// the running kernel version from `/proc/version`.
 pub fn detect_kernel_version_from_troves(troves: &[Trove]) -> Option<String> {
     for trove in troves {
+        if matches!(
+            trove.name.as_str(),
+            "kernel-core" | "kernel-modules-core" | "kernel-modules"
+        ) || trove.name.starts_with("linux-image")
+        {
+            return Some(trove.version.clone());
+        }
+    }
+
+    for trove in troves {
         if trove.name.starts_with("kernel") || trove.name.starts_with("linux-image") {
             return Some(trove.version.clone());
         }
@@ -1354,6 +1364,29 @@ mod tests {
         assert_eq!(
             sources.initramfs,
             boot_root.join(format!("initramfs-{release}.img"))
+        );
+    }
+
+    #[test]
+    fn detect_kernel_version_prefers_payload_kernel_over_meta_package() {
+        use crate::db::models::TroveType;
+
+        let troves = vec![
+            Trove::new(
+                "kernel".to_string(),
+                "6.17.1-300.fc43".to_string(),
+                TroveType::Package,
+            ),
+            Trove::new(
+                "kernel-core".to_string(),
+                "6.19.10-300.fc44".to_string(),
+                TroveType::Package,
+            ),
+        ];
+
+        assert_eq!(
+            detect_kernel_version_from_troves(&troves).as_deref(),
+            Some("6.19.10-300.fc44")
         );
     }
 

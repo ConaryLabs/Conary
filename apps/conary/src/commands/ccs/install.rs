@@ -142,12 +142,15 @@ fn deploy_symlink_idempotent(dest_path: &Path, relative_path: &Path, target: &st
             if existing == Path::new(target) {
                 return Ok(());
             }
-            anyhow::bail!(
-                "symlink deployment path collision detected for {}: existing target {} != package target {}",
-                relative_path.display(),
-                existing.display(),
-                target
-            );
+            std::fs::remove_file(dest_path).with_context(|| {
+                format!(
+                    "failed to replace symlink {}: existing target {} != package target {}",
+                    relative_path.display(),
+                    existing.display(),
+                    target
+                )
+            })?;
+            symlink(target, dest_path)?;
         }
         Ok(_) => {
             anyhow::bail!(
@@ -1888,6 +1891,91 @@ mod tests {
             )
             .unwrap();
         assert_eq!(symlink_target, "bash");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ccs_install_replaces_existing_leaf_symlink_destination() {
+        use conary_core::ccs::builder::write_ccs_package;
+        use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
+        use conary_core::filesystem::CasStore;
+        use std::path::PathBuf;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let package_path = temp_dir.path().join("library-link.ccs");
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+
+        std::fs::create_dir_all(install_root.join("usr/lib64")).unwrap();
+        std::os::unix::fs::symlink(
+            "libtasn1.so.6.6.4",
+            install_root.join("usr/lib64/libtasn1.so.6"),
+        )
+        .unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+
+        let target = "libtasn1.so.6.6.5".to_string();
+        let symlink_hash = CasStore::compute_symlink_hash(&target);
+        let files = vec![FileEntry {
+            path: "/usr/lib64/libtasn1.so.6".to_string(),
+            hash: symlink_hash.clone(),
+            size: target.len() as u64,
+            mode: 0o120777,
+            component: "runtime".to_string(),
+            file_type: FileType::Symlink,
+            target: Some(target.clone()),
+            chunks: None,
+        }];
+        let result = BuildResult {
+            manifest: CcsManifest::new_minimal("library-link", "1.0.0"),
+            components: HashMap::from([(
+                "runtime".to_string(),
+                ComponentData {
+                    name: "runtime".to_string(),
+                    files: files.clone(),
+                    hash: "runtime".to_string(),
+                    size: target.len() as u64,
+                },
+            )]),
+            files,
+            blobs: HashMap::from([(symlink_hash, target.as_bytes().to_vec())]),
+            total_size: target.len() as u64,
+            chunked: false,
+            chunk_stats: None,
+        };
+        write_ccs_package(&result, &package_path).unwrap();
+
+        super::cmd_ccs_install(
+            package_path.to_str().unwrap(),
+            db_path_str,
+            install_root.to_str().unwrap(),
+            false,
+            true,
+            None,
+            None,
+            crate::commands::SandboxMode::None,
+            true,
+            false,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_link(install_root.join("usr/lib64/libtasn1.so.6")).unwrap(),
+            PathBuf::from("libtasn1.so.6.6.5")
+        );
+        let conn = conary_core::db::open(db_path_str).unwrap();
+        let symlink_target: String = conn
+            .query_row(
+                "SELECT symlink_target FROM files WHERE path = '/usr/lib64/libtasn1.so.6'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(symlink_target, "libtasn1.so.6.6.5");
     }
 
     #[tokio::test]
