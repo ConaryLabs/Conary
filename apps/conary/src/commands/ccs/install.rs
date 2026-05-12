@@ -316,6 +316,8 @@ pub(crate) fn normalize_ccs_extracted_files(
         deployment.file.path = deployment_path_to_package_path(&deployment.relative_path)?;
         if deployment.symlink_target.is_some() {
             deployment.file.symlink_target = deployment.symlink_target;
+        } else {
+            deployment.file.mode = deployed_mode(deployment.file.mode).0;
         }
         normalized.push(deployment.file);
     }
@@ -1252,6 +1254,98 @@ mod tests {
             current.is_ok(),
             "test-mode composefs apply must still publish an active generation pointer"
         );
+    }
+
+    #[tokio::test]
+    async fn ccs_install_strips_special_permission_bits_from_db_metadata() {
+        use conary_core::ccs::builder::write_ccs_package;
+        use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
+        use conary_core::hash;
+
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let package_path = temp_dir.path().join("special-mode.ccs");
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+
+        std::fs::create_dir_all(&install_root).unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+        stage_test_boot_assets(temp_dir.path());
+
+        let content = b"setid tool".to_vec();
+        let file_hash = hash::sha256(&content);
+        let init_content = b"#!/bin/sh\nexec true\n".to_vec();
+        let init_hash = hash::sha256(&init_content);
+        let total_size = (content.len() + init_content.len()) as u64;
+        let files = vec![
+            FileEntry {
+                path: "/usr/bin/setid-tool".to_string(),
+                hash: file_hash.clone(),
+                size: content.len() as u64,
+                mode: 0o106755,
+                component: "runtime".to_string(),
+                file_type: FileType::Regular,
+                target: None,
+                chunks: None,
+            },
+            FileEntry {
+                path: "/usr/sbin/init".to_string(),
+                hash: init_hash.clone(),
+                size: init_content.len() as u64,
+                mode: 0o100755,
+                component: "runtime".to_string(),
+                file_type: FileType::Regular,
+                target: None,
+                chunks: None,
+            },
+        ];
+        let result = BuildResult {
+            manifest: CcsManifest::new_minimal("special-mode", "1.0.0"),
+            components: HashMap::from([(
+                "runtime".to_string(),
+                ComponentData {
+                    name: "runtime".to_string(),
+                    files: files.clone(),
+                    hash: "runtime".to_string(),
+                    size: total_size,
+                },
+            )]),
+            files,
+            blobs: HashMap::from([(file_hash, content), (init_hash, init_content)]),
+            total_size,
+            chunked: false,
+            chunk_stats: None,
+        };
+        write_ccs_package(&result, &package_path).unwrap();
+
+        super::cmd_ccs_install(
+            package_path.to_str().unwrap(),
+            db_path_str,
+            install_root.to_str().unwrap(),
+            false,
+            true,
+            None,
+            None,
+            crate::commands::SandboxMode::None,
+            true,
+            false,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let conn = conary_core::db::open(db_path_str).unwrap();
+        let permissions: i32 = conn
+            .query_row(
+                "SELECT permissions FROM files WHERE path = '/usr/bin/setid-tool'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(permissions, 0o100755);
+        assert_eq!(permissions & 0o6000, 0);
     }
 
     #[tokio::test]
