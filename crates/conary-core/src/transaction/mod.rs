@@ -625,8 +625,8 @@ mod tests {
     }
 
     #[test]
-    fn test_recover_with_valid_generation() {
-        // Arrange: set up a generations directory with a valid EROFS image and
+    fn test_recover_does_not_promote_magic_only_generation() {
+        // Arrange: set up a generations directory with an EROFS-like image and
         // a `current` symlink pointing to generation 2.
         let tmp = TempDir::new().unwrap();
         let root = tmp.path().to_path_buf();
@@ -668,14 +668,10 @@ mod tests {
             lock_file: None,
         };
 
-        // The current symlink points to generation 2 which has a valid image.
-        // find_latest_intact_generation should return Some(2).
+        // EROFS magic alone is not enough; recovery scanning now requires the
+        // generation artifact contract and metadata.
         let found = engine.find_latest_intact_generation();
-        assert_eq!(
-            found,
-            Some(2),
-            "should find generation 2 as the latest intact"
-        );
+        assert!(found.is_none(), "magic-only generation must be skipped");
     }
 
     #[test]
@@ -719,8 +715,8 @@ mod tests {
         };
 
         let found = engine.find_latest_intact_generation();
-        assert_eq!(
-            found, None,
+        assert!(
+            found.is_none(),
             "no intact image should result in None from find_latest_intact_generation"
         );
     }
@@ -758,6 +754,6 @@ mod tests {
             lock_file: None,
         };
 
-        assert_eq!(engine.find_latest_intact_generation(), None);
+        assert!(engine.find_latest_intact_generation().is_none());
     }
 }

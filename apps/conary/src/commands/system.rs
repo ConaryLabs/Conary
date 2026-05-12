@@ -1,17 +1,21 @@
 // src/commands/system.rs
 //! System management commands (init, verify, rollback)
 
+#[cfg(test)]
+use super::FileSnapshot;
 use super::open_db;
-use super::{FileSnapshot, RevertMetadata, TroveSnapshot};
-use anyhow::{Context, Result};
+use super::{RevertMetadata, TroveSnapshot};
+#[cfg(test)]
+use anyhow::Context;
+use anyhow::Result;
 use conary_core::db::paths::objects_dir;
 use conary_core::filesystem::CasStore;
 use conary_core::runtime_root::ConaryRuntimeRoot;
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Initialize the Conary database and add default repositories
 pub async fn cmd_init(db_path: &str) -> Result<()> {
@@ -126,6 +130,7 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Resul
     }
 
     let mut conn = open_db(db_path)?;
+    require_active_generation_for_rollback(changeset_id, db_path)?;
 
     // All preflight checks run inside a transaction to eliminate the TOCTOU gap
     // that would allow two concurrent rollbacks to both pass checks.
@@ -234,8 +239,6 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Resul
     // Otherwise, this is a fresh install - remove the installed packages
     let files_to_rollback = RefCell::new(Vec::new());
     let removed_messages = RefCell::new(Vec::new());
-    let removed_snapshots = RefCell::new(Vec::new());
-    let rollback_changeset_id = Cell::new(0_i64);
 
     conary_core::db::transaction(&mut conn, |tx| {
         // Read file history inside the transaction to ensure consistency (TOCTOU)
@@ -336,13 +339,9 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Resul
             changeset_id, changeset.description
         ));
         let rollback_id = rollback_changeset.insert(tx)?;
-        rollback_changeset_id.set(rollback_id);
 
         for trove in &troves {
             if let Some(trove_id) = trove.id {
-                removed_snapshots
-                    .borrow_mut()
-                    .push(snapshot_trove(tx, trove)?);
                 conary_core::db::models::Trove::delete(tx, trove_id)?;
                 removed_messages
                     .borrow_mut()
@@ -364,21 +363,11 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Resul
 
     let files_to_rollback = files_to_rollback.into_inner();
     let removed_messages = removed_messages.into_inner();
-    let removed_snapshots = removed_snapshots.into_inner();
 
     let summary = format!("Rollback changeset {}", changeset_id);
-    if has_active_generation(db_path) {
-        // Composefs-native: rebuild EROFS image from updated DB state and remount
-        let _gen_num =
-            crate::commands::composefs_ops::rebuild_and_mount(&conn, db_path, &summary, None)?;
-    } else {
-        let stats = remove_snapshots_from_live_root(Path::new(root), &removed_snapshots)?;
-        info!(
-            "Removed {} file(s) and {} directories directly during rollback because no active generation exists",
-            stats.files_removed, stats.dirs_removed
-        );
-        super::create_state_snapshot(&conn, rollback_changeset_id.get(), &summary)?;
-    }
+    // Composefs-native: rebuild EROFS image from updated DB state and remount.
+    let _gen_num =
+        crate::commands::composefs_ops::rebuild_and_mount(&conn, db_path, &summary, None)?;
 
     for message in &removed_messages {
         println!("{message}");
@@ -406,114 +395,39 @@ fn has_active_generation(db_path: &str) -> bool {
         .is_some()
 }
 
-fn snapshot_trove(
-    conn: &rusqlite::Connection,
-    trove: &conary_core::db::models::Trove,
-) -> conary_core::Result<TroveSnapshot> {
-    let trove_id = trove.id.ok_or_else(|| {
-        conary_core::Error::MissingId("Cannot snapshot trove without ID".to_string())
-    })?;
-    let files = conary_core::db::models::FileEntry::find_by_trove(conn, trove_id)?;
-    Ok(TroveSnapshot {
-        name: trove.name.clone(),
-        version: trove.version.clone(),
-        architecture: trove.architecture.clone(),
-        description: trove.description.clone(),
-        install_source: trove.install_source.as_str().to_string(),
-        installed_from_repository_id: trove.installed_from_repository_id,
-        files: files
-            .iter()
-            .map(|file| FileSnapshot {
-                path: file.path.clone(),
-                sha256_hash: file.sha256_hash.clone(),
-                size: file.size,
-                permissions: file.permissions,
-                symlink_target: file.symlink_target.clone(),
-            })
-            .collect(),
-    })
+fn require_active_generation_for_rollback(changeset_id: i64, db_path: &str) -> Result<()> {
+    if !has_active_generation(db_path) {
+        anyhow::bail!(
+            "Cannot roll back changeset {changeset_id} without an active composefs generation. \
+             Build or activate a generation first, then retry rollback."
+        );
+    }
+    Ok(())
 }
 
+#[cfg(test)]
 #[derive(Debug, Default, PartialEq, Eq)]
 struct LiveRootRollbackStats {
-    files_removed: usize,
-    dirs_removed: usize,
     files_restored: usize,
     dirs_restored: usize,
 }
 
+#[cfg(test)]
 fn snapshot_path_under_root(root: &Path, path: &str) -> PathBuf {
     root.join(path.strip_prefix('/').unwrap_or(path))
 }
 
+#[cfg(test)]
 fn snapshot_entry_is_dir(file: &FileSnapshot) -> bool {
     file.path.ends_with('/') || (file.permissions as u32 & 0o170000) == 0o040000
 }
 
+#[cfg(test)]
 fn snapshot_entry_is_symlink(file: &FileSnapshot) -> bool {
     file.symlink_target.is_some() || (file.permissions as u32 & 0o170000) == 0o120000
 }
 
-fn remove_snapshots_from_live_root(
-    root: &Path,
-    snapshots: &[TroveSnapshot],
-) -> Result<LiveRootRollbackStats> {
-    let mut stats = LiveRootRollbackStats::default();
-    let mut dirs = Vec::new();
-
-    for snapshot in snapshots {
-        for file in &snapshot.files {
-            let path = snapshot_path_under_root(root, &file.path);
-            if snapshot_entry_is_dir(file) {
-                dirs.push(path);
-                continue;
-            }
-
-            match std::fs::symlink_metadata(&path) {
-                Ok(metadata) if metadata.is_dir() => {
-                    dirs.push(path);
-                }
-                Ok(_) => {
-                    std::fs::remove_file(&path).with_context(|| {
-                        format!("Failed to remove rollback file {}", path.display())
-                    })?;
-                    stats.files_removed += 1;
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    warn!(
-                        "Rollback file {} was already absent during direct live-root removal",
-                        path.display()
-                    );
-                }
-                Err(error) => {
-                    return Err(error).with_context(|| {
-                        format!("Failed to inspect rollback file {}", path.display())
-                    });
-                }
-            }
-        }
-    }
-
-    dirs.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
-    dirs.dedup();
-    for dir in dirs {
-        match std::fs::remove_dir(&dir) {
-            Ok(()) => stats.dirs_removed += 1,
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
-                ) => {}
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("Failed to remove rollback dir {}", dir.display()));
-            }
-        }
-    }
-
-    Ok(stats)
-}
-
+#[cfg(test)]
 fn remove_existing_leaf_for_restore(path: &Path) -> Result<()> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_dir() => {
@@ -533,6 +447,7 @@ fn remove_existing_leaf_for_restore(path: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn restore_snapshots_to_live_root(
     root: &Path,
     db_path: &str,
@@ -672,7 +587,7 @@ fn rollback_changeset_with_snapshots(
     conn: &mut rusqlite::Connection,
     changeset: &conary_core::db::models::Changeset,
     db_path: &str,
-    root: &str,
+    _root: &str,
 ) -> Result<()> {
     if snapshots.is_empty() {
         anyhow::bail!(
@@ -682,8 +597,6 @@ fn rollback_changeset_with_snapshots(
     }
 
     let removed_messages = RefCell::new(Vec::new());
-    let removed_snapshots = RefCell::new(Vec::new());
-    let rollback_changeset_id = Cell::new(0_i64);
 
     conary_core::db::transaction(conn, |tx| {
         if remove_new_troves {
@@ -703,9 +616,6 @@ fn rollback_changeset_with_snapshots(
                         ))
                     },
                 )?;
-                removed_snapshots
-                    .borrow_mut()
-                    .push(snapshot_trove(tx, &trove)?);
                 conary_core::db::models::Trove::delete(tx, *trove_id)?;
                 removed_messages.borrow_mut().push(format!(
                     "  Removed reverted package {} {}",
@@ -719,7 +629,6 @@ fn rollback_changeset_with_snapshots(
             changeset_id, changeset.description
         ));
         let rollback_id = rollback_changeset.insert(tx)?;
-        rollback_changeset_id.set(rollback_id);
 
         for snapshot in snapshots {
             restore_snapshot(tx, rollback_id, snapshot)?;
@@ -740,20 +649,9 @@ fn rollback_changeset_with_snapshots(
     } else {
         format!("Rollback removal of {}", snapshots[0].name)
     };
-    if has_active_generation(db_path) {
-        let _gen_num =
-            crate::commands::composefs_ops::rebuild_and_mount(conn, db_path, &summary, None)?;
-    } else {
-        let root_path = Path::new(root);
-        let remove_stats =
-            remove_snapshots_from_live_root(root_path, &removed_snapshots.into_inner())?;
-        let restore_stats = restore_snapshots_to_live_root(root_path, db_path, snapshots)?;
-        info!(
-            "Applied rollback directly because no active generation exists: removed {} file(s), restored {} file(s)",
-            remove_stats.files_removed, restore_stats.files_restored
-        );
-        super::create_state_snapshot(conn, rollback_changeset_id.get(), &summary)?;
-    }
+    require_active_generation_for_rollback(changeset_id, db_path)?;
+    let _gen_num =
+        crate::commands::composefs_ops::rebuild_and_mount(conn, db_path, &summary, None)?;
 
     let removed_messages = removed_messages.into_inner();
     let restored_file_count: usize = snapshots.iter().map(|snapshot| snapshot.files.len()).sum();
@@ -1319,6 +1217,22 @@ mod tests {
     }
 
     #[test]
+    fn rollback_requires_active_generation_before_live_root_mutation() {
+        let source = std::fs::read_to_string("apps/conary/src/commands/system.rs")
+            .unwrap_or_else(|_| include_str!("system.rs").to_string());
+        let forbidden_restore = ["restore_snapshots_to_live_root", "(root_path"].concat();
+        let forbidden_remove = ["remove_snapshots_from_live_root", "(root_path"].concat();
+        assert!(
+            !source.contains(&forbidden_restore),
+            "rollback must not restore package payloads directly into the live root"
+        );
+        assert!(
+            !source.contains(&forbidden_remove),
+            "rollback must not remove package payloads directly from the live root"
+        );
+    }
+
+    #[test]
     fn rollback_metadata_parser_accepts_legacy_and_revert_wrapper_formats() {
         let single = TroveSnapshot {
             name: "nginx".to_string(),
@@ -1409,7 +1323,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rollback_update_without_active_generation_mutates_live_root_directly() {
+    async fn rollback_update_without_active_generation_fails_closed() {
         let temp_dir = tempfile::tempdir().unwrap();
         let db_path = temp_dir.path().join("conary.db");
         let db_path_str = db_path.to_string_lossy().to_string();
@@ -1478,24 +1392,28 @@ mod tests {
         );
         drop(conn);
 
-        cmd_rollback(
+        let err = cmd_rollback(
             update_changeset_id,
             &db_path_str,
             root.to_string_lossy().as_ref(),
         )
         .await
-        .unwrap();
+        .unwrap_err()
+        .to_string();
 
+        assert!(err.contains(&format!(
+            "Cannot roll back changeset {update_changeset_id} without an active composefs generation"
+        )));
         assert_eq!(
             std::fs::read_to_string(&hello_path).unwrap(),
-            "hello from v1\n"
+            "hello from v2\n"
         );
-        assert!(!added_path.exists());
+        assert!(added_path.exists());
 
         let conn = conary_core::db::open(&db_path_str).unwrap();
         let troves = Trove::find_by_name(&conn, "conary-test-fixture").unwrap();
         assert_eq!(troves.len(), 1);
-        assert_eq!(troves[0].version, "1.0.0");
+        assert_eq!(troves[0].version, "2.0.0");
         let status: String = conn
             .query_row(
                 "SELECT status FROM changesets WHERE id = ?1",
@@ -1503,7 +1421,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(status, "rolled_back");
+        assert_eq!(status, "applied");
     }
 
     #[test]

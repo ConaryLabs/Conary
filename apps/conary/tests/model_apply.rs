@@ -3,6 +3,8 @@
 mod common;
 
 use conary_core::db::models::Trove;
+use conary_core::runtime_root::ConaryRuntimeRoot;
+use std::path::PathBuf;
 use std::process::Command;
 
 fn run_conary(args: &[&str]) -> std::process::Output {
@@ -16,6 +18,10 @@ fn run_conary(args: &[&str]) -> std::process::Output {
 #[test]
 fn model_apply_executes_remove_actions() {
     let (_dir, db_path) = common::setup_command_test_db();
+    let runtime_root = ConaryRuntimeRoot::from_db_path(PathBuf::from(&db_path));
+    std::fs::create_dir_all(runtime_root.generations_dir().join("1")).unwrap();
+    conary_core::generation::mount::update_current_symlink(runtime_root.root(), 1).unwrap();
+
     let root = tempfile::tempdir().unwrap();
     let model_dir = tempfile::tempdir().unwrap();
     let model_path = model_dir.path().join("system.toml");

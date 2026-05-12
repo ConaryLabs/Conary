@@ -2,7 +2,8 @@
 
 use super::TransactionEngine;
 use crate::Result;
-use crate::generation::metadata::{EROFS_IMAGE_NAME, is_generation_pending};
+use crate::generation::artifact::{GenerationArtifact, load_generation_artifact};
+use crate::generation::metadata::GenerationMetadata;
 use rusqlite::Connection;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
@@ -19,12 +20,12 @@ impl TransactionEngine {
     ///
     /// Uses a 4-step fallback strategy to restore a bootable system state:
     ///
-    /// 1. Read `/conary/current` symlink; if the target EROFS image is valid,
-    ///    mount that generation (no rebuild needed).
-    /// 2. If the current image is missing or truncated, rebuild from DB state.
+    /// 1. Read `/conary/current` symlink; if the target generation artifact is
+    ///    valid, mount that generation (no rebuild needed).
+    /// 2. If the current artifact is missing or invalid, rebuild from DB state.
     /// 3. If the DB is corrupted or has no active state, scan
-    ///    `/conary/generations/` by number descending and try each intact EROFS
-    ///    image.
+    ///    `/conary/generations/` by number descending and try each valid
+    ///    generation artifact.
     /// 4. If nothing works, return `RecoveryFailed`.
     ///
     /// This replaces the old journal-based roll-forward/roll-back recovery.
@@ -35,41 +36,44 @@ impl TransactionEngine {
 
         if let Ok(Some(current_num)) = current_generation(&self.config.root) {
             saw_current_generation = true;
-            let image_path = self
-                .config
-                .generations_dir
-                .join(current_num.to_string())
-                .join(EROFS_IMAGE_NAME);
+            let gen_dir = self.config.generations_dir.join(current_num.to_string());
 
-            if is_valid_erofs_image(&image_path) {
-                let is_mounted = crate::generation::mount::is_generation_mounted(
-                    &self.config.mount_point,
-                    &image_path,
-                )
-                .unwrap_or(false);
+            match load_generation_artifact_for_number(current_num, &gen_dir) {
+                Ok(artifact) => {
+                    let is_mounted = crate::generation::mount::is_generation_mounted(
+                        &self.config.mount_point,
+                        &artifact.erofs_path,
+                    )
+                    .unwrap_or(false);
 
-                if is_mounted {
-                    tracing::debug!(
-                        "Recovery: generation {} is valid and mounted, no action needed",
+                    if is_mounted {
+                        tracing::debug!(
+                            "Recovery: generation {} artifact is valid and mounted, no action needed",
+                            current_num
+                        );
+                        return Ok(());
+                    }
+
+                    tracing::info!(
+                        "Recovery: generation {} has valid artifact but is not mounted, mounting",
                         current_num
                     );
-                    return Ok(());
+                    return self.mount_artifact_and_link(current_num, &artifact);
                 }
-
-                tracing::info!(
-                    "Recovery: generation {} has valid image but is not mounted, mounting",
-                    current_num
-                );
-                return self.mount_and_link(current_num);
+                Err(error) => {
+                    tracing::warn!(
+                        "Recovery: active generation {} failed artifact validation: {}",
+                        current_num,
+                        error
+                    );
+                }
             }
-
-            tracing::warn!(
-                "Recovery: current generation {} image is missing or invalid at {}",
-                current_num,
-                image_path.display()
-            );
         }
 
+        self.rebuild_or_scan(conn, saw_current_generation)
+    }
+
+    fn rebuild_or_scan(&self, conn: &Connection, saw_current_generation: bool) -> Result<()> {
         let db_gen: Option<i64> = match conn.query_row(
             "SELECT MAX(state_number) FROM system_states WHERE is_active = 1",
             [],
@@ -78,7 +82,7 @@ impl TransactionEngine {
             Ok(val) => val,
             Err(rusqlite::Error::QueryReturnedNoRows) => None,
             Err(e) => {
-                tracing::warn!("Recovery: DB query failed ({}), trying step 3", e);
+                tracing::warn!("Recovery: DB query failed ({}), scanning artifacts", e);
                 None
             }
         };
@@ -96,10 +100,15 @@ impl TransactionEngine {
                 &format!("Recovery rebuild of generation {expected}"),
             ) {
                 Ok(_build_result) => {
-                    return self.mount_and_link(expected);
+                    let gen_dir = self.config.generations_dir.join(expected.to_string());
+                    let artifact = load_generation_artifact_for_number(expected, &gen_dir)?;
+                    return self.mount_artifact_and_link(expected, &artifact);
                 }
                 Err(e) => {
-                    tracing::warn!("Recovery: rebuild from DB failed ({}), trying step 3", e);
+                    tracing::warn!(
+                        "Recovery: rebuild from DB failed ({}), scanning artifacts",
+                        e
+                    );
                 }
             }
         } else {
@@ -110,19 +119,20 @@ impl TransactionEngine {
                 );
                 return Ok(());
             }
-            tracing::warn!("Recovery: no active generation in DB, trying step 3");
+            tracing::warn!("Recovery: no active generation in DB, scanning artifacts");
         }
 
-        if let Some(gen_num) = self.find_latest_intact_generation() {
+        if let Some(artifact) = self.find_latest_intact_generation() {
+            let gen_num = artifact.generation;
             tracing::info!(
-                "Recovery: found intact EROFS image for generation {}, mounting",
+                "Recovery: found valid generation artifact for generation {}, mounting",
                 gen_num
             );
-            return self.mount_and_link(gen_num);
+            return self.mount_artifact_and_link(gen_num, &artifact);
         }
 
         Err(crate::Error::RecoveryFailed(
-            "All recovery strategies exhausted: no valid EROFS image found and \
+            "All recovery strategies exhausted: no valid generation artifact found and \
              DB rebuild failed. Manual intervention required."
                 .to_string(),
         ))
@@ -134,16 +144,21 @@ impl TransactionEngine {
     /// overlay is NOT set up here -- it requires distinct lower/target paths
     /// that depend on the calling context (boot vs live-switch). CLI callers
     /// (switch.rs, composefs_ops.rs) handle the /etc overlay themselves.
-    fn mount_and_link(&self, gen_num: i64) -> Result<()> {
-        let gen_dir = self.config.generations_dir.join(gen_num.to_string());
+    fn mount_artifact_and_link(&self, gen_num: i64, artifact: &GenerationArtifact) -> Result<()> {
+        let metadata = GenerationMetadata::read_from(&artifact.generation_dir)?;
+        let requested_verity = metadata.fsverity_enabled && metadata.erofs_verity_digest.is_some();
 
         let _mount_outcome =
             crate::generation::mount::mount_generation(&crate::generation::mount::MountOptions {
-                image_path: gen_dir.join(EROFS_IMAGE_NAME),
-                basedir: self.config.objects_dir.clone(),
+                image_path: artifact.erofs_path.clone(),
+                basedir: artifact.cas_dir.clone(),
                 mount_point: self.config.mount_point.clone(),
-                verity: false,
-                digest: None,
+                verity: requested_verity,
+                digest: if requested_verity {
+                    metadata.erofs_verity_digest.clone()
+                } else {
+                    None
+                },
                 upperdir: None,
                 workdir: None,
             })?;
@@ -158,8 +173,8 @@ impl TransactionEngine {
     }
 
     /// Scan the generations directory descending by number and return the
-    /// highest generation whose `root.erofs` passes EROFS magic validation.
-    pub(super) fn find_latest_intact_generation(&self) -> Option<i64> {
+    /// highest generation whose artifact manifest and metadata validate.
+    pub(super) fn find_latest_intact_generation(&self) -> Option<GenerationArtifact> {
         if !self.config.generations_dir.exists() {
             return None;
         }
@@ -174,28 +189,16 @@ impl TransactionEngine {
 
         for gen_num in candidates {
             let gen_dir = self.config.generations_dir.join(gen_num.to_string());
-            if is_generation_pending(&gen_dir) {
-                tracing::debug!(
-                    "Recovery: generation {} is still pending, skipping",
-                    gen_num
-                );
-                continue;
+            match load_generation_artifact_for_number(gen_num, &gen_dir) {
+                Ok(artifact) => return Some(artifact),
+                Err(error) => {
+                    tracing::debug!(
+                        "Recovery: generation {} failed artifact validation, skipping: {}",
+                        gen_num,
+                        error
+                    );
+                }
             }
-
-            let image_path = self
-                .config
-                .generations_dir
-                .join(gen_num.to_string())
-                .join(EROFS_IMAGE_NAME);
-
-            if is_valid_erofs_image(&image_path) {
-                return Some(gen_num);
-            }
-
-            tracing::debug!(
-                "Recovery: generation {} image invalid or missing, skipping",
-                gen_num
-            );
         }
 
         None
@@ -213,6 +216,17 @@ fn generations_dir_has_entries(path: &Path) -> bool {
         .ok()
         .and_then(|mut entries| entries.next())
         .is_some()
+}
+
+fn load_generation_artifact_for_number(gen_num: i64, gen_dir: &Path) -> Result<GenerationArtifact> {
+    let artifact = load_generation_artifact(gen_dir)?;
+    if artifact.generation != gen_num {
+        return Err(crate::Error::InvalidPath(format!(
+            "generation directory {} contains artifact for generation {}",
+            gen_num, artifact.generation
+        )));
+    }
+    Ok(artifact)
 }
 
 /// Return `true` if `path` looks like a valid EROFS image.
