@@ -6,14 +6,14 @@
 //! the actual EROFS image building to the core library.
 
 use super::composefs::preflight_composefs;
-use super::metadata::{GenerationMetadata, generation_path, generations_dir};
+use super::metadata::GenerationMetadata;
 use anyhow::{Context, Result, anyhow};
 use conary_core::db::models::{InstallSource, Trove};
-use conary_core::db::paths::objects_dir;
 use conary_core::filesystem::fsverity::{FsVerityError, enable_fsverity};
 use conary_core::generation::builder as core_builder;
 use conary_core::model;
 use conary_core::model::ConvergenceIntent;
+use conary_core::runtime_root::ConaryRuntimeRoot;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
@@ -273,8 +273,9 @@ pub fn build_generation(conn: &rusqlite::Connection, db_path: &str, summary: &st
     }
 
     // Step 1: Composefs preflight check
-    let obj_dir = objects_dir(db_path);
-    let generations_root = generations_dir();
+    let runtime_root = ConaryRuntimeRoot::from_db_path(PathBuf::from(db_path));
+    let obj_dir = runtime_root.objects_dir();
+    let generations_root = runtime_root.generations_dir();
     ensure_generation_cas_layout(&generations_root, &obj_dir)
         .context("Failed to prepare generation CAS layout")?;
     let caps = preflight_composefs(&obj_dir).context("Composefs preflight failed")?;
@@ -289,7 +290,7 @@ pub fn build_generation(conn: &rusqlite::Connection, db_path: &str, summary: &st
         result.image_size, result.cas_objects_referenced
     );
 
-    let gen_dir = generation_path(gen_number);
+    let gen_dir = runtime_root.generation_path(gen_number);
     enable_generation_rootfs_verity(&gen_dir, &result.image_path).with_context(|| {
         format!(
             "Failed to finalize fs-verity on generation image {}",

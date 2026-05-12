@@ -37,6 +37,7 @@ pub mod provenance;
 pub mod recipe;
 pub mod repository;
 pub mod resolver;
+pub mod runtime_root;
 pub mod scriptlet;
 pub mod self_update;
 pub mod transaction;
