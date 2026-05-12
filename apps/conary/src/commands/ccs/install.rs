@@ -41,6 +41,57 @@ fn package_self_provides(ccs_pkg: &CcsPackage, dep_name: &str) -> bool {
     false
 }
 
+pub(crate) fn enforce_ccs_capability_policy(
+    ccs_pkg: &CcsPackage,
+    allow_capabilities: bool,
+    capability_policy: Option<&str>,
+) -> Result<()> {
+    let Some(cap_decl) = ccs_pkg.manifest().capabilities.as_ref() else {
+        return Ok(());
+    };
+
+    use conary_core::capability::policy::{
+        CapabilityPolicy, PolicyDecision, infer_linux_capabilities,
+    };
+
+    let cap_policy = CapabilityPolicy::load(capability_policy)?;
+    let required_caps = infer_linux_capabilities(cap_decl);
+
+    // Evaluate all caps, checking denied first so a denied capability is not
+    // masked by an earlier prompted capability bailing first.
+    for cap in &required_caps {
+        if let PolicyDecision::Denied(msg) = cap_policy.evaluate(cap) {
+            anyhow::bail!(
+                "Package {} capability policy rejected: {} -- {}",
+                ccs_pkg.name(),
+                cap,
+                msg,
+            );
+        }
+    }
+
+    for cap in &required_caps {
+        match cap_policy.evaluate(cap) {
+            PolicyDecision::Allowed | PolicyDecision::Denied(_) => {}
+            PolicyDecision::Prompt(msg) => {
+                if allow_capabilities {
+                    println!("Capability {cap} approved via --allow-capabilities");
+                } else {
+                    anyhow::bail!(
+                        "Package {} requires capability {}: {}. \
+                         Use --allow-capabilities to approve.",
+                        ccs_pkg.name(),
+                        cap,
+                        msg,
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 pub(super) fn sanitize_package_relative_path(path: &str) -> Result<PathBuf> {
     let candidate = path.strip_prefix('/').unwrap_or(path);
     let mut normalized = PathBuf::new();
@@ -707,45 +758,7 @@ pub async fn cmd_ccs_install(
         );
     }
 
-    if let Some(ref cap_decl) = ccs_pkg.manifest().capabilities {
-        use conary_core::capability::policy::{
-            CapabilityPolicy, PolicyDecision, infer_linux_capabilities,
-        };
-
-        let cap_policy = CapabilityPolicy::load(capability_policy.as_deref())?;
-        let required_caps = infer_linux_capabilities(cap_decl);
-
-        // Evaluate all caps, checking denied first (so a denied cap isn't
-        // masked by an earlier prompted cap bailing first).
-        for cap in &required_caps {
-            if let PolicyDecision::Denied(msg) = cap_policy.evaluate(cap) {
-                anyhow::bail!(
-                    "Package {} capability policy rejected: {} -- {}",
-                    ccs_pkg.name(),
-                    cap,
-                    msg,
-                );
-            }
-        }
-        for cap in &required_caps {
-            match cap_policy.evaluate(cap) {
-                PolicyDecision::Allowed | PolicyDecision::Denied(_) => {}
-                PolicyDecision::Prompt(msg) => {
-                    if allow_capabilities {
-                        println!("Capability {cap} approved via --allow-capabilities");
-                    } else {
-                        anyhow::bail!(
-                            "Package {} requires capability {}: {}. \
-                             Use --allow-capabilities to approve.",
-                            ccs_pkg.name(),
-                            cap,
-                            msg,
-                        );
-                    }
-                }
-            }
-        }
-    }
+    enforce_ccs_capability_policy(&ccs_pkg, allow_capabilities, capability_policy.as_deref())?;
 
     // Step 3: Check for existing installation
     let mut conn = open_db(db_path)?;

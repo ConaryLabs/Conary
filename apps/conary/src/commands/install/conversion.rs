@@ -469,10 +469,11 @@ async fn install_converted_ccs_with_pending(
         dependency_passes_remaining,
     } = opts;
 
+    let ccs_pkg = CcsPackage::parse(ccs_path).context("Failed to parse converted CCS package")?;
+    crate::commands::ccs::enforce_ccs_capability_policy(&ccs_pkg, false, None)?;
+
     if !no_deps {
         let conn = open_db(db_path)?;
-        let ccs_pkg =
-            CcsPackage::parse(ccs_path).context("Failed to parse converted CCS package")?;
         let mut scoped_pending_providers = pending_providers;
         scoped_pending_providers.push(PendingCcsProvider::from_package(&ccs_pkg));
         let missing: Vec<MissingDependency> = ccs_pkg
@@ -703,7 +704,6 @@ async fn install_converted_ccs_with_pending(
 
     println!("Installing converted CCS package...");
     let mut conn = open_db(db_path)?;
-    let ccs_pkg = CcsPackage::parse(ccs_path).context("Failed to parse converted CCS package")?;
     super::install_ccs_package_transactionally(
         &mut conn,
         &ccs_pkg,
@@ -726,6 +726,9 @@ async fn install_converted_ccs_with_pending(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conary_core::capability::{
+        CapabilityDeclaration, FilesystemCapabilities, NetworkCapabilities, SyscallCapabilities,
+    };
     use conary_core::ccs::builder::write_ccs_package;
     use conary_core::ccs::manifest::{DirectoryHook, ScriptHook};
     use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
@@ -1102,6 +1105,73 @@ mod tests {
             )
             .unwrap();
         assert_eq!(persisted, 0);
+    }
+
+    #[tokio::test]
+    async fn converted_ccs_install_rejects_prompted_capabilities_before_db_mutation() {
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+
+        std::fs::create_dir_all(&install_root).unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+        stage_test_boot_assets(temp_dir.path());
+
+        let mut manifest = CcsManifest::new_minimal("converted-prompted-capability", "1.0.0");
+        manifest.capabilities = Some(CapabilityDeclaration {
+            version: 1,
+            rationale: Some("binds a privileged test port".to_string()),
+            network: NetworkCapabilities {
+                outbound: Vec::new(),
+                listen: vec!["80".to_string()],
+                none: false,
+            },
+            filesystem: FilesystemCapabilities::default(),
+            syscalls: SyscallCapabilities::default(),
+        });
+        let package_path =
+            write_runtime_ccs_package(temp_dir.path(), "converted-prompted-capability", manifest);
+
+        let err = install_converted_ccs(ConvertedCcsInstallOptions {
+            ccs_path: package_path.to_str().unwrap(),
+            db_path: db_path_str,
+            root: install_root.to_str().unwrap(),
+            dry_run: false,
+            sandbox_mode: SandboxMode::None,
+            no_deps: true,
+            no_scripts: true,
+            allow_downgrade: false,
+            dep_mode: None,
+            yes: true,
+            dependency_passes_remaining: 0,
+        })
+        .await
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("requires capability cap-net-bind-service"),
+            "converted CCS install should fail closed for prompted capabilities: {err:?}"
+        );
+        let conn = conary_core::db::open(db_path_str).unwrap();
+        let trove_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM troves WHERE name = 'converted-prompted-capability'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let changeset_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM changesets", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(trove_count, 0);
+        assert_eq!(changeset_count, 0);
+        assert!(
+            std::fs::read_link(temp_dir.path().join("current")).is_err(),
+            "capability rejection must happen before generation activation"
+        );
     }
 
     #[test]
