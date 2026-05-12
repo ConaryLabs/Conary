@@ -596,6 +596,7 @@ fn rollback_changeset_with_snapshots(
         );
     }
 
+    require_active_generation_for_rollback(changeset_id, db_path)?;
     let removed_messages = RefCell::new(Vec::new());
 
     conary_core::db::transaction(conn, |tx| {
@@ -649,7 +650,6 @@ fn rollback_changeset_with_snapshots(
     } else {
         format!("Rollback removal of {}", snapshots[0].name)
     };
-    require_active_generation_for_rollback(changeset_id, db_path)?;
     let _gen_num =
         crate::commands::composefs_ops::rebuild_and_mount(conn, db_path, &summary, None)?;
 
@@ -1229,6 +1229,27 @@ mod tests {
         assert!(
             !source.contains(&forbidden_remove),
             "rollback must not remove package payloads directly from the live root"
+        );
+        let helper_start = source
+            .find("fn rollback_changeset_with_snapshots")
+            .expect("rollback snapshot helper missing");
+        let helper = &source[helper_start..];
+        let tx_start = helper
+            .find("conary_core::db::transaction(conn")
+            .expect("rollback helper transaction missing");
+        let rebuild_start = helper
+            .find("rebuild_and_mount")
+            .expect("rollback helper rebuild missing");
+        let guard_start = helper
+            .find("require_active_generation_for_rollback")
+            .expect("rollback helper active-generation guard missing");
+        assert!(
+            guard_start < tx_start,
+            "rollback snapshot helper must check active generation before mutating the DB"
+        );
+        assert!(
+            !helper[tx_start..rebuild_start].contains("require_active_generation_for_rollback"),
+            "rollback snapshot helper must not fail its active-generation guard after DB mutation"
         );
     }
 
