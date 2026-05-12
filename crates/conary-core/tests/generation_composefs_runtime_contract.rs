@@ -144,20 +144,30 @@ fn generation_switch_does_not_retry_requested_verity_as_plain_composefs() {
 fn release_generation_commands_do_not_expose_live_switch_as_normal_activation() {
     let commands_rs = fs::read_to_string(app_source("commands/generation/commands.rs"))
         .expect("failed to read generation commands");
+    let dispatch_rs = fs::read_to_string(workspace_file("apps/conary/src/dispatch.rs"))
+        .expect("failed to read dispatch");
     let cli_rs = fs::read_to_string(workspace_file("apps/conary/src/cli/generation.rs"))
         .expect("failed to read generation cli");
 
     assert!(
-        !commands_rs.contains("switch_live(number)?;"),
-        "release-facing generation switch must not call live switch directly"
+        !commands_rs.contains("switch_live("),
+        "release-facing generation commands must not call live switch directly"
     );
     assert!(
-        !commands_rs.contains("switch_live(*previous)?;"),
-        "release-facing rollback must not call live switch directly"
+        !dispatch_rs.contains("switch_live("),
+        "release-facing dispatch must not wire generation commands to live switch"
     );
     assert!(
-        cli_rs.contains("debug") || !cli_rs.contains("Switch"),
-        "live switching must be removed from public CLI or explicitly labeled debug/unsafe"
+        cli_rs.contains("Select a specific generation for next boot"),
+        "generation switch CLI help must describe next-boot selection, not live activation"
+    );
+    assert!(
+        cli_rs.contains("Select the previous generation for next boot"),
+        "generation rollback CLI help must describe next-boot selection, not live activation"
+    );
+    assert!(
+        !cli_rs.contains("Switch to a specific generation"),
+        "generation switch CLI help must not preserve live activation wording"
     );
 }
 
