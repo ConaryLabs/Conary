@@ -488,6 +488,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         selection_reason,
         old_trove_to_upgrade: old_trove_to_upgrade.as_deref(),
         ccs_manifest_provides: None,
+        ccs_capabilities: None,
     };
     let tx_result =
         execute_install_transaction(&mut conn, pkg.as_ref(), &extraction, &tx_ctx, &progress)?;
@@ -577,6 +578,7 @@ struct TransactionContext<'a> {
     selection_reason: Option<&'a str>,
     old_trove_to_upgrade: Option<&'a conary_core::db::models::Trove>,
     ccs_manifest_provides: Option<&'a conary_core::ccs::manifest::Provides>,
+    ccs_capabilities: Option<&'a conary_core::capability::CapabilityDeclaration>,
 }
 
 /// Result from a successful transaction execution.
@@ -1786,6 +1788,9 @@ fn execute_install_transaction(
     if let Some(provides) = ctx.ccs_manifest_provides {
         persist_ccs_manifest_provides(&tx, inner_result.trove_id, pkg.name(), provides)?;
     }
+    if let Some(capabilities) = ctx.ccs_capabilities {
+        conary_core::capability::store_capabilities(&tx, inner_result.trove_id, capabilities)?;
+    }
 
     tx.commit()?;
     info!(
@@ -1924,6 +1929,7 @@ pub(crate) fn install_ccs_package_transactionally(
         selection_reason: opts.selection_reason,
         old_trove_to_upgrade: old_trove,
         ccs_manifest_provides: Some(&pkg.manifest().provides),
+        ccs_capabilities: pkg.manifest().capabilities.as_ref(),
     };
     let tx_result = match execute_install_transaction(conn, pkg, &extraction, &tx_ctx, &progress) {
         Ok(result) => result,
