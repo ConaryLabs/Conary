@@ -915,6 +915,81 @@ mod tests {
         std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"test-efi").unwrap();
     }
 
+    fn seed_test_init_trove(db_path: &str, db_dir: &std::path::Path) {
+        use conary_core::db::models::{
+            Changeset, ChangesetStatus, Component, FileEntry, ProvideEntry, Trove, TroveType,
+        };
+
+        let cas = conary_core::filesystem::CasStore::new(db_dir.join("objects")).unwrap();
+        let init_content = b"#!/bin/sh\nexec true\n";
+        let init_hash = cas.store(init_content).unwrap();
+        let init_size = i64::try_from(init_content.len()).unwrap();
+        let mut conn = conary_core::db::open(db_path).unwrap();
+
+        conary_core::db::transaction(&mut conn, |tx| {
+            let mut changeset = Changeset::new("Install test-init-1.0.0".to_string());
+            let changeset_id = changeset.insert(tx)?;
+
+            let mut trove = Trove::new(
+                "test-init".to_string(),
+                "1.0.0".to_string(),
+                TroveType::Package,
+            );
+            trove.installed_by_changeset_id = Some(changeset_id);
+            let trove_id = trove.insert(tx)?;
+
+            let mut component = Component::new(trove_id, "runtime".to_string());
+            let component_id = component.insert(tx)?;
+
+            tx.execute(
+                "INSERT OR IGNORE INTO file_contents (sha256_hash, content_path, size) VALUES (?1, ?2, ?3)",
+                rusqlite::params![
+                    &init_hash,
+                    format!("objects/{}/{}", &init_hash[0..2], &init_hash[2..]),
+                    init_size
+                ],
+            )?;
+
+            let mut init = FileEntry::new(
+                "/usr/sbin/init".to_string(),
+                init_hash,
+                init_size,
+                0o755,
+                trove_id,
+            );
+            init.component_id = Some(component_id);
+            init.insert(tx)?;
+
+            let mut provide = ProvideEntry::new(trove_id, "test-init".to_string(), Some("1.0.0".to_string()));
+            provide.insert(tx)?;
+            changeset.update_status(tx, ChangesetStatus::Applied)?;
+
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    fn ccs_init_file() -> (conary_core::ccs::FileEntry, Vec<u8>, String) {
+        use conary_core::ccs::{FileEntry, FileType};
+
+        let init_content = b"#!/bin/sh\nexec true\n".to_vec();
+        let init_hash = conary_core::hash::sha256(&init_content);
+        (
+            FileEntry {
+                path: "/usr/sbin/init".to_string(),
+                hash: init_hash.clone(),
+                size: init_content.len() as u64,
+                mode: 0o100755,
+                component: "runtime".to_string(),
+                file_type: FileType::Regular,
+                target: None,
+                chunks: None,
+            },
+            init_content,
+            init_hash,
+        )
+    }
+
     #[test]
     fn installed_versions_respect_version_constraints() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -2745,6 +2820,7 @@ mod tests {
         use conary_core::ccs::builder::write_ccs_package;
         use conary_core::ccs::{BuildResult, CcsManifest};
 
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
         let temp_dir = tempfile::tempdir().unwrap();
         let install_root = temp_dir.path().join("root");
         let package_path = temp_dir.path().join("metadata-only.ccs");
@@ -2753,6 +2829,8 @@ mod tests {
 
         std::fs::create_dir_all(&install_root).unwrap();
         conary_core::db::init(db_path_str).unwrap();
+        stage_test_boot_assets(temp_dir.path());
+        seed_test_init_trove(db_path_str, temp_dir.path());
 
         let result = BuildResult {
             manifest: CcsManifest::new_minimal("metadata-only", "1.0.0"),
@@ -2791,7 +2869,14 @@ mod tests {
             )
             .unwrap();
         let file_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))
+            .query_row(
+                "SELECT COUNT(*) \
+                 FROM files f \
+                 JOIN troves t ON t.id = f.trove_id \
+                 WHERE t.name = 'metadata-only'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(trove_count, 1);
         assert_eq!(file_count, 0);
@@ -2803,6 +2888,7 @@ mod tests {
         use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
         use conary_core::hash;
 
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
         let temp_dir = tempfile::tempdir().unwrap();
         let install_root = temp_dir.path().join("root");
         let package_path = temp_dir.path().join("shared-lib.ccs");
@@ -2811,10 +2897,12 @@ mod tests {
 
         std::fs::create_dir_all(&install_root).unwrap();
         conary_core::db::init(db_path_str).unwrap();
+        stage_test_boot_assets(temp_dir.path());
 
         let content = b"not a real elf; trigger matching is path-based".to_vec();
         let file_hash = hash::sha256(&content);
-        let files = vec![FileEntry {
+        let (init_file, init_content, init_hash) = ccs_init_file();
+        let lib_file = FileEntry {
             path: "/usr/lib64/libtrigger-test.so.1".to_string(),
             hash: file_hash.clone(),
             size: content.len() as u64,
@@ -2823,21 +2911,33 @@ mod tests {
             file_type: FileType::Regular,
             target: None,
             chunks: None,
-        }];
+        };
+        let files = vec![lib_file.clone(), init_file.clone()];
 
         let result = BuildResult {
             manifest: CcsManifest::new_minimal("shared-lib", "1.0.0"),
-            components: HashMap::from([(
-                "lib".to_string(),
-                ComponentData {
-                    name: "lib".to_string(),
-                    files: files.clone(),
-                    hash: "lib".to_string(),
-                    size: content.len() as u64,
-                },
-            )]),
+            components: HashMap::from([
+                (
+                    "lib".to_string(),
+                    ComponentData {
+                        name: "lib".to_string(),
+                        files: vec![lib_file],
+                        hash: "lib".to_string(),
+                        size: content.len() as u64,
+                    },
+                ),
+                (
+                    "runtime".to_string(),
+                    ComponentData {
+                        name: "runtime".to_string(),
+                        files: vec![init_file],
+                        hash: "runtime".to_string(),
+                        size: init_content.len() as u64,
+                    },
+                ),
+            ]),
             files,
-            blobs: HashMap::from([(file_hash, content)]),
+            blobs: HashMap::from([(file_hash, content), (init_hash, init_content)]),
             total_size: 0,
             chunked: false,
             chunk_stats: None,
@@ -2883,19 +2983,22 @@ mod tests {
         use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
         use conary_core::hash;
 
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
         let temp_dir = tempfile::tempdir().unwrap();
+        let install_root = temp_dir.path().join("root");
         let package_path = temp_dir.path().join("post-hook-fails.ccs");
         let db_path = temp_dir.path().join("conary.db");
         let db_path_str = db_path.to_str().unwrap();
-        let deployed_file = temp_dir.path().join("installed").join("hello");
 
+        std::fs::create_dir_all(&install_root).unwrap();
         conary_core::db::init(db_path_str).unwrap();
-        std::fs::create_dir_all(deployed_file.parent().unwrap()).unwrap();
+        stage_test_boot_assets(temp_dir.path());
 
         let content = b"hello".to_vec();
         let hash = hash::sha256(&content);
-        let files = vec![FileEntry {
-            path: deployed_file.to_string_lossy().to_string(),
+        let (init_file, init_content, init_hash) = ccs_init_file();
+        let payload_file = FileEntry {
+            path: "/usr/bin/post-hook-fails".to_string(),
             hash: hash.clone(),
             size: content.len() as u64,
             mode: 0o100755,
@@ -2903,7 +3006,8 @@ mod tests {
             file_type: FileType::Regular,
             target: None,
             chunks: None,
-        }];
+        };
+        let files = vec![payload_file.clone(), init_file.clone()];
 
         let mut manifest = CcsManifest::new_minimal("post-hook-fails", "1.0.0");
         manifest.hooks.post_install = Some(ScriptHook {
@@ -2918,12 +3022,12 @@ mod tests {
                     name: "runtime".to_string(),
                     files: files.clone(),
                     hash: "runtime".to_string(),
-                    size: content.len() as u64,
+                    size: (content.len() + init_content.len()) as u64,
                 },
             )]),
             files,
-            blobs: HashMap::from([(hash, content)]),
-            total_size: 5,
+            blobs: HashMap::from([(hash, content), (init_hash, init_content)]),
+            total_size: 5 + init_file.size,
             chunked: false,
             chunk_stats: None,
         };
@@ -2932,7 +3036,7 @@ mod tests {
         super::cmd_ccs_install(
             package_path.to_str().unwrap(),
             db_path_str,
-            "/",
+            install_root.to_str().unwrap(),
             false,
             true,
             None,
@@ -3055,6 +3159,7 @@ mod tests {
         use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
         use conary_core::hash;
 
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
         let temp_dir = tempfile::tempdir().unwrap();
         let install_root = temp_dir.path().join("root");
         let package_path = temp_dir.path().join("devel-only.ccs");
@@ -3064,6 +3169,8 @@ mod tests {
 
         std::fs::create_dir_all(&install_root).unwrap();
         conary_core::db::init(db_path_str).unwrap();
+        stage_test_boot_assets(temp_dir.path());
+        seed_test_init_trove(db_path_str, temp_dir.path());
 
         let runtime_content = b"#!/bin/sh\necho runtime\n".to_vec();
         let runtime_hash = hash::sha256(&runtime_content);
