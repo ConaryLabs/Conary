@@ -43,6 +43,7 @@ impl TransactionEngine {
                     let is_mounted = crate::generation::mount::is_generation_mounted(
                         &self.config.mount_point,
                         &artifact.erofs_path,
+                        &artifact.cas_dir,
                         required_verity,
                         expected_digest.as_deref(),
                     )

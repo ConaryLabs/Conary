@@ -337,6 +337,12 @@ pub(crate) fn rebuild_generation_image_with_boot_root(
     metadata.write_to(&gen_dir).map_err(|e| {
         crate::error::Error::IoError(format!("Failed to write generation metadata: {e}"))
     })?;
+    clear_generation_pending(&gen_dir).map_err(|e| {
+        crate::error::Error::IoError(format!(
+            "Failed to clear pending marker for generation {}: {e}",
+            gen_dir.display()
+        ))
+    })?;
 
     info!(
         "Generation {} rebuilt in place: {} CAS objects, {} packages ({} metadata-only)",
@@ -1253,6 +1259,71 @@ mod tests {
         assert_missing_cas_object_error(&error, &missing_hash);
         assert!(!generations_root.join("7/.conary-artifact.json").exists());
         assert!(!generations_root.join("7/cas-manifest.json").exists());
+    }
+
+    #[cfg(feature = "composefs-rs")]
+    #[test]
+    fn rebuild_generation_image_clears_stale_pending_marker() {
+        use crate::db::models::{FileEntry, Trove, TroveType};
+        use crate::db::schema::migrate;
+        use crate::filesystem::CasStore;
+        use crate::generation::metadata::{is_generation_pending, mark_generation_pending};
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let generations_root = tmp.path().join("generations");
+        let objects_dir = tmp.path().join("objects");
+        let boot_root = tmp.path().join("boot");
+        let gen_dir = generations_root.join("7");
+        std::fs::create_dir_all(&gen_dir).unwrap();
+        mark_generation_pending(&gen_dir).unwrap();
+        std::fs::create_dir_all(boot_root.join("EFI/BOOT")).unwrap();
+        std::fs::write(boot_root.join("vmlinuz-6.19.8-conary"), b"kernel").unwrap();
+        std::fs::write(boot_root.join("initramfs-6.19.8-conary.img"), b"initramfs").unwrap();
+        std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"efi").unwrap();
+
+        let cas = CasStore::new(&objects_dir).unwrap();
+        let hello_hash = cas.store(b"hello").unwrap();
+        let init_hash = cas.store(b"init").unwrap();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let mut trove = Trove::new(
+            "kernel-core".to_string(),
+            "6.19.8-conary".to_string(),
+            TroveType::Package,
+        );
+        trove.architecture = Some("x86_64".to_string());
+        let trove_id = trove.insert(&conn).unwrap();
+        let mut file = FileEntry::new(
+            "/usr/bin/hello".to_string(),
+            hello_hash,
+            b"hello".len() as i64,
+            0o100755,
+            trove_id,
+        );
+        file.insert(&conn).unwrap();
+        let mut init = FileEntry::new(
+            "/usr/sbin/init".to_string(),
+            init_hash,
+            b"init".len() as i64,
+            0o100755,
+            trove_id,
+        );
+        init.insert(&conn).unwrap();
+
+        rebuild_generation_image_with_boot_root(
+            &conn,
+            &generations_root,
+            7,
+            "recovery rebuild",
+            &boot_root,
+        )
+        .unwrap();
+
+        assert!(
+            !is_generation_pending(&gen_dir),
+            "successful recovery rebuild must clear a stale pending marker"
+        );
+        crate::generation::artifact::load_generation_artifact(&gen_dir).unwrap();
     }
 
     #[cfg(feature = "composefs-rs")]
