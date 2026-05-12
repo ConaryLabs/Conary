@@ -239,9 +239,10 @@ pub async fn cmd_remove(
 
     // Composefs-native: rebuild EROFS image and remount to reflect removal
     progress.set_phase(RemovePhase::RemovingFiles);
-    let conary_root = conary_core::db::paths::db_dir(db_path);
+    let runtime_root =
+        conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(PathBuf::from(db_path));
     let active_generation =
-        conary_core::generation::mount::current_generation(&conary_root).unwrap_or(None);
+        conary_core::generation::mount::current_generation(runtime_root.root()).unwrap_or(None);
     let post_commit_result = (|| -> Result<()> {
         if active_generation.is_some() {
             crate::commands::composefs_ops::rebuild_and_mount(

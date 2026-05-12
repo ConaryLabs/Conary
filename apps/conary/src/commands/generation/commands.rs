@@ -201,7 +201,7 @@ fn cmd_generation_gc_locked(
     }
 
     // Protect the currently-booted generation (may differ from current)
-    if let Some(booted) = booted_generation() {
+    if let Some(booted) = booted_generation(runtime_root) {
         keep_set.insert(booted);
     }
 
@@ -364,9 +364,8 @@ fn cas_gc(
 /// Read the currently-booted generation from `/proc/cmdline`.
 ///
 /// Returns `None` if no `conary.generation=N` parameter is present.
-fn booted_generation() -> Option<i64> {
+fn booted_generation(runtime_root: &ConaryRuntimeRoot) -> Option<i64> {
     let cmdline = std::fs::read_to_string("/proc/cmdline").ok()?;
-    let runtime_root = default_runtime_root();
     booted_generation_from_cmdline(&cmdline, runtime_root.root())
 }
 

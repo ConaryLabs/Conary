@@ -6,6 +6,7 @@ use super::{FileSnapshot, RevertMetadata, TroveSnapshot};
 use anyhow::{Context, Result};
 use conary_core::db::paths::objects_dir;
 use conary_core::filesystem::CasStore;
+use conary_core::runtime_root::ConaryRuntimeRoot;
 use std::cell::{Cell, RefCell};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -399,8 +400,8 @@ fn parse_rollback_snapshots(snapshot_json: &str) -> Result<Vec<TroveSnapshot>> {
 }
 
 fn has_active_generation(db_path: &str) -> bool {
-    let conary_root = conary_core::db::paths::db_dir(db_path);
-    conary_core::generation::mount::current_generation(&conary_root)
+    let runtime_root = ConaryRuntimeRoot::from_db_path(PathBuf::from(db_path));
+    conary_core::generation::mount::current_generation(runtime_root.root())
         .unwrap_or(None)
         .is_some()
 }
