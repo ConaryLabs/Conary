@@ -295,7 +295,11 @@ pub(crate) fn validate_ccs_payload_paths(
         });
     }
 
-    let mut created_symlinks = HashSet::new();
+    let created_symlinks: HashSet<PathBuf> = deployment_files
+        .iter()
+        .filter(|deployment| deployment.symlink_target.is_some())
+        .map(|deployment| deployment.relative_path.clone())
+        .collect();
     for deployment in &deployment_files {
         let current_is_symlink = deployment.symlink_target.is_some();
         ensure_no_symlink_ancestor(
@@ -304,9 +308,6 @@ pub(crate) fn validate_ccs_payload_paths(
             &created_symlinks,
             !current_is_symlink,
         )?;
-        if current_is_symlink {
-            created_symlinks.insert(deployment.relative_path.clone());
-        }
     }
 
     Ok(())
@@ -1881,6 +1882,122 @@ mod tests {
             "unexpected error: {err:#}"
         );
         assert!(!outside_root.join("cron.d/persist").exists());
+    }
+
+    #[tokio::test]
+    async fn ccs_install_rejects_child_before_package_symlink() {
+        use conary_core::ccs::builder::write_ccs_package;
+        use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
+        use conary_core::filesystem::CasStore;
+        use conary_core::hash;
+
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let outside_root = temp_dir.path().join("outside");
+        let package_path = temp_dir.path().join("reversed-symlink-escape.ccs");
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+
+        std::fs::create_dir_all(&install_root).unwrap();
+        std::fs::create_dir_all(&outside_root).unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+        stage_test_boot_assets(temp_dir.path());
+
+        let symlink_target = outside_root.to_string_lossy().to_string();
+        let symlink_hash = CasStore::compute_symlink_hash(&symlink_target);
+        let child_path = "/usr/lib/link/cron.d/persist".to_string();
+        let child_content = b"persist".to_vec();
+        let child_hash = hash::sha256(&child_content);
+        let init_content = b"#!/bin/sh\nexec true\n".to_vec();
+        let init_hash = hash::sha256(&init_content);
+
+        let files = vec![
+            FileEntry {
+                path: child_path.clone(),
+                hash: child_hash.clone(),
+                size: child_content.len() as u64,
+                mode: 0o100644,
+                component: "runtime".to_string(),
+                file_type: FileType::Regular,
+                target: None,
+                chunks: None,
+            },
+            FileEntry {
+                path: "/usr/lib/link".to_string(),
+                hash: symlink_hash.clone(),
+                size: symlink_target.len() as u64,
+                mode: 0o120777,
+                component: "runtime".to_string(),
+                file_type: FileType::Symlink,
+                target: Some(symlink_target.clone()),
+                chunks: None,
+            },
+            FileEntry {
+                path: "/usr/sbin/init".to_string(),
+                hash: init_hash.clone(),
+                size: init_content.len() as u64,
+                mode: 0o100755,
+                component: "runtime".to_string(),
+                file_type: FileType::Regular,
+                target: None,
+                chunks: None,
+            },
+        ];
+
+        let result = BuildResult {
+            manifest: CcsManifest::new_minimal("reversed-symlink-escape", "1.0.0"),
+            components: HashMap::from([(
+                "runtime".to_string(),
+                ComponentData {
+                    name: "runtime".to_string(),
+                    files: files.clone(),
+                    hash: "test-runtime".to_string(),
+                    size: (symlink_target.len() + child_content.len() + init_content.len()) as u64,
+                },
+            )]),
+            files,
+            blobs: HashMap::from([
+                (child_hash, child_content.clone()),
+                (symlink_hash, symlink_target.as_bytes().to_vec()),
+                (init_hash, init_content),
+            ]),
+            total_size: (symlink_target.len() + child_content.len()) as u64,
+            chunked: false,
+            chunk_stats: None,
+        };
+        write_ccs_package(&result, &package_path).unwrap();
+
+        let err = super::cmd_ccs_install(
+            package_path.to_str().unwrap(),
+            db_path_str,
+            install_root.to_str().unwrap(),
+            false,
+            true,
+            None,
+            None,
+            crate::commands::SandboxMode::None,
+            true,
+            false,
+            false,
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("path traversal") || err.to_string().contains("symlink"),
+            "unexpected error: {err:#}"
+        );
+        let conn = conary_core::db::open(db_path_str).unwrap();
+        let persisted: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM files WHERE path = ?1",
+                [&child_path],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(persisted, 0);
     }
 
     #[tokio::test]
