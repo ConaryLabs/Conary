@@ -141,6 +141,27 @@ fn generation_switch_does_not_retry_requested_verity_as_plain_composefs() {
 }
 
 #[test]
+fn release_generation_commands_do_not_expose_live_switch_as_normal_activation() {
+    let commands_rs = fs::read_to_string(app_source("commands/generation/commands.rs"))
+        .expect("failed to read generation commands");
+    let cli_rs = fs::read_to_string(workspace_file("apps/conary/src/cli/generation.rs"))
+        .expect("failed to read generation cli");
+
+    assert!(
+        !commands_rs.contains("switch_live(number)?;"),
+        "release-facing generation switch must not call live switch directly"
+    );
+    assert!(
+        !commands_rs.contains("switch_live(*previous)?;"),
+        "release-facing rollback must not call live switch directly"
+    );
+    assert!(
+        cli_rs.contains("debug") || !cli_rs.contains("Switch"),
+        "live switching must be removed from public CLI or explicitly labeled debug/unsafe"
+    );
+}
+
+#[test]
 fn composefs_apply_prints_etc_overlay_failures_to_stderr() {
     let composefs_ops_rs = fs::read_to_string(app_source("commands/composefs_ops.rs"))
         .expect("failed to read commands/composefs_ops.rs");
@@ -159,19 +180,21 @@ fn composefs_apply_prints_etc_overlay_failures_to_stderr() {
 }
 
 #[test]
-fn generation_switch_prints_etc_overlay_failures_to_stderr() {
+fn generation_switch_fails_hard_on_etc_overlay_failures() {
     let switch_rs = fs::read_to_string(app_source("commands/generation/switch.rs"))
         .expect("failed to read commands/generation/switch.rs");
 
     assert!(
-        switch_rs.contains("warn!(\"Failed to mount /etc overlay: {e}; /etc may be stale\");"),
-        "generation switch must keep logging /etc overlay mount failures"
+        switch_rs.contains("Failed to mount /etc overlay for live debug switch"),
+        "debug live switch must fail hard on /etc overlay mount failures"
     );
     assert!(
-        switch_rs.contains(
-            "eprintln!(\"Warning: Failed to mount /etc overlay: {e}; /etc may be stale\");"
-        ),
-        "generation switch must also print /etc overlay mount failures to stderr"
+        switch_rs.contains("let _ = unmount_generation(&staging);"),
+        "debug live switch must clean up the PathBuf staging mount when /etc overlay setup fails"
+    );
+    assert!(
+        !switch_rs.contains("eprintln!(\"Warning: Failed to mount /etc overlay: {e};"),
+        "debug live switch must not treat /etc overlay failures as warning-only"
     );
 }
 

@@ -42,17 +42,17 @@ pub enum GenerationCommands {
         size: Option<String>,
     },
 
-    /// Switch to a specific generation
+    /// Select a specific generation for next boot; live switching is debug-only
     Switch {
-        /// Generation number to switch to
+        /// Generation number to select for next boot
         number: i64,
 
-        /// Reboot after switching
+        /// Reboot after selecting the generation
         #[arg(long)]
         reboot: bool,
     },
 
-    /// Roll back to the previous generation
+    /// Select the previous generation for next boot
     Rollback,
 
     /// Remove old generations and unreferenced CAS objects
