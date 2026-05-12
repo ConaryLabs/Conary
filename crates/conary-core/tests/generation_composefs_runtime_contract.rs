@@ -176,7 +176,7 @@ fn generation_switch_prints_etc_overlay_failures_to_stderr() {
 }
 
 #[test]
-fn initramfs_generation_mounts_have_empty_usr_symlink_fallback() {
+fn initramfs_generation_mounts_expose_usr_without_partial_generation_fallback() {
     let dracut_generator = fs::read_to_string(workspace_file(
         "packaging/dracut/90conary/conary-generator.sh",
     ))
@@ -184,21 +184,26 @@ fn initramfs_generation_mounts_have_empty_usr_symlink_fallback() {
     let bootstrap_config = fs::read_to_string(core_source("bootstrap/system_config.rs"))
         .expect("failed to read bootstrap system config");
 
+    assert!(
+        !dracut_generator.contains("Fall back to legacy bind-mount"),
+        "dracut must not describe missing root.erofs as a compatibility path"
+    );
+    assert!(
+        !dracut_generator.contains("mount --bind \"${GEN_DIR}/${dir}\""),
+        "dracut must not bind-mount usr/etc from partial generation directories"
+    );
+    assert!(
+        dracut_generator.contains("[ -f \"$EROFS_IMG\" ] ||"),
+        "dracut must hard-fail when root.erofs is absent"
+    );
+
     for (label, source) in [
         ("dracut generator", dracut_generator.as_str()),
         ("bootstrap initramfs", bootstrap_config.as_str()),
     ] {
         assert!(
             source.contains("expose_generation_usr"),
-            "{label} must route generation /usr exposure through the shared fallback shape"
-        );
-        assert!(
-            source.contains("rmdir \"$usr_target\""),
-            "{label} must only replace an empty carrier-root /usr placeholder"
-        );
-        assert!(
-            source.contains("ln -s conary/mnt/usr \"$usr_target\""),
-            "{label} must fall back to a relative /usr symlink into the mounted generation"
+            "{label} must route generation /usr exposure through the shared post-composefs helper"
         );
         assert!(
             source.contains("ensure_root_symlink sbin usr/sbin"),

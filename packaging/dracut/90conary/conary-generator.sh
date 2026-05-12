@@ -81,19 +81,10 @@ EROFS_IMG="${GEN_DIR}/root.erofs"
 CAS_DIR="${SYSROOT}/conary/objects"
 
 # Check for EROFS image (composefs format)
-if [ ! -f "$EROFS_IMG" ]; then
-    # Fall back to legacy bind-mount if generation dir exists but has no EROFS image
-    if [ -d "$GEN_DIR" ]; then
-        for dir in usr etc; do
-            if [ -d "${GEN_DIR}/${dir}" ]; then
-                mount --bind "${GEN_DIR}/${dir}" "${SYSROOT}/${dir}"
-            fi
-        done
-    else
-        echo "conary: generation not found at $GEN_DIR" >&2
-    fi
-    exit 0
-fi
+[ -f "$EROFS_IMG" ] || {
+    echo "conary: generation ${CONARY_GEN} is missing root.erofs at ${EROFS_IMG}" >&2
+    exit 1
+}
 
 # Mount composefs at staging point
 mkdir -p "${SYSROOT}/conary/mnt"
