@@ -14,7 +14,7 @@ pub fn db_dir(db_path: &str) -> PathBuf {
 
 /// Get the objects (CAS) directory
 pub fn objects_dir(db_path: &str) -> PathBuf {
-    db_dir(db_path).join("objects")
+    crate::runtime_root::ConaryRuntimeRoot::from_db_path(PathBuf::from(db_path)).objects_dir()
 }
 
 /// Get the keyring directory for GPG keys
@@ -46,7 +46,11 @@ mod tests {
     fn test_objects_dir() {
         assert_eq!(
             objects_dir("/var/lib/conary/conary.db"),
-            PathBuf::from("/var/lib/conary/objects")
+            PathBuf::from("/conary/objects")
+        );
+        assert_eq!(
+            objects_dir("/tmp/conary-test/conary.db"),
+            PathBuf::from("/tmp/conary-test/objects")
         );
     }
 
