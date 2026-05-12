@@ -109,19 +109,37 @@ pub fn install_inner(
 
         let trove_id = trove.insert(tx)?;
 
-        let mut component_ids: HashMap<ComponentType, i64> = HashMap::new();
-        for comp_type in classified.keys() {
-            let mut component = Component::from_type(trove_id, *comp_type);
-            component.description = Some(format!("{} files", comp_type.as_str()));
-            let comp_id = component.insert(tx)?;
-            component_ids.insert(*comp_type, comp_id);
-        }
-
         let mut path_to_component: HashMap<&str, i64> = HashMap::new();
-        for (comp_type, files) in classified {
-            if let Some(&comp_id) = component_ids.get(comp_type) {
-                for path in files {
+        if let (Some(component_names), Some(component_names_by_path)) = (
+            extraction.installed_component_names.as_ref(),
+            extraction.component_names_by_path.as_ref(),
+        ) {
+            let mut component_ids: HashMap<&str, i64> = HashMap::new();
+            for component_name in component_names {
+                let mut component = Component::new(trove_id, component_name.clone());
+                component.description = Some(format!("{component_name} files"));
+                let comp_id = component.insert(tx)?;
+                component_ids.insert(component_name.as_str(), comp_id);
+            }
+            for (path, component_name) in component_names_by_path {
+                if let Some(&comp_id) = component_ids.get(component_name.as_str()) {
                     path_to_component.insert(path.as_str(), comp_id);
+                }
+            }
+        } else {
+            let mut component_ids: HashMap<ComponentType, i64> = HashMap::new();
+            for comp_type in classified.keys() {
+                let mut component = Component::from_type(trove_id, *comp_type);
+                component.description = Some(format!("{} files", comp_type.as_str()));
+                let comp_id = component.insert(tx)?;
+                component_ids.insert(*comp_type, comp_id);
+            }
+
+            for (comp_type, files) in classified {
+                if let Some(&comp_id) = component_ids.get(comp_type) {
+                    for path in files {
+                        path_to_component.insert(path.as_str(), comp_id);
+                    }
                 }
             }
         }
@@ -171,6 +189,17 @@ pub fn install_inner(
                     super::PreparedSourceKind::Legacy { format } => format.as_str(),
                     super::PreparedSourceKind::Ccs => "ccs",
                 },
+            );
+            entry.insert(tx)?;
+        }
+
+        if let Some(script) = extraction.ccs_pre_remove_script.as_deref() {
+            let mut entry = ScriptletEntry::new(
+                trove_id,
+                "pre-remove".to_string(),
+                "/bin/sh".to_string(),
+                script.to_string(),
+                "ccs",
             );
             entry.insert(tx)?;
         }
