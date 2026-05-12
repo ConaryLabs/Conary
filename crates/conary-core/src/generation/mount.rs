@@ -369,6 +369,7 @@ pub fn is_overlay_mount(path: &Path) -> crate::Result<bool> {
 pub(crate) fn is_generation_mounted(
     mount_point: &Path,
     expected_image: &Path,
+    expected_basedir: &Path,
     required_verity: bool,
     expected_digest: Option<&str>,
 ) -> crate::Result<bool> {
@@ -379,6 +380,7 @@ pub(crate) fn is_generation_mounted(
         &mounts,
         mount_point,
         expected_image,
+        expected_basedir,
         required_verity,
         expected_digest,
     ))
@@ -388,6 +390,7 @@ fn generation_mount_entry_matches(
     mounts: &str,
     mount_point: &Path,
     expected_image: &Path,
+    expected_basedir: &Path,
     required_verity: bool,
     expected_digest: Option<&str>,
 ) -> bool {
@@ -417,19 +420,30 @@ fn generation_mount_entry_matches(
         };
 
         image_matches
-            && mount_options_satisfy_artifact_policy(options, required_verity, expected_digest)
+            && mount_options_satisfy_artifact_policy(
+                options,
+                expected_basedir,
+                required_verity,
+                expected_digest,
+            )
     })
 }
 
 fn mount_options_satisfy_artifact_policy(
     options: &str,
+    expected_basedir: &Path,
     required_verity: bool,
     expected_digest: Option<&str>,
 ) -> bool {
+    let expected_basedir = expected_basedir.to_string_lossy();
+    let mut saw_basedir = false;
     let mut saw_verity = false;
     let mut saw_digest = false;
 
     for option in options.split(',') {
+        if option.strip_prefix("basedir=") == Some(expected_basedir.as_ref()) {
+            saw_basedir = true;
+        }
         if option == "verity" {
             saw_verity = true;
         }
@@ -440,7 +454,7 @@ fn mount_options_satisfy_artifact_policy(
         }
     }
 
-    (!required_verity || saw_verity) && (expected_digest.is_none() || saw_digest)
+    saw_basedir && (!required_verity || saw_verity) && (expected_digest.is_none() || saw_digest)
 }
 
 #[cfg(test)]
@@ -534,6 +548,7 @@ mod tests {
                 mounts,
                 Path::new("/conary/mnt"),
                 Path::new("/conary/generations/5/root.erofs"),
+                Path::new("/conary/objects"),
                 true,
                 Some("abc123")
             ),
@@ -549,9 +564,27 @@ mod tests {
             mounts,
             Path::new("/conary/mnt"),
             Path::new("/conary/generations/5/root.erofs"),
+            Path::new("/conary/objects"),
             true,
             Some("abc123")
         ));
+    }
+
+    #[test]
+    fn mounted_generation_policy_rejects_wrong_cas_basedir() {
+        let mounts = "/conary/generations/5/root.erofs /conary/mnt composefs rw,basedir=/tmp/wrong-objects,verity,digest=abc123 0 0";
+
+        assert!(
+            !generation_mount_entry_matches(
+                mounts,
+                Path::new("/conary/mnt"),
+                Path::new("/conary/generations/5/root.erofs"),
+                Path::new("/conary/objects"),
+                true,
+                Some("abc123")
+            ),
+            "recovery must not accept a mounted composefs image with a CAS basedir that differs from the artifact"
+        );
     }
 
     #[cfg(feature = "composefs-rs")]
