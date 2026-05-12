@@ -892,6 +892,112 @@ mod tests {
         assert_eq!(status, "post_hooks_failed");
     }
 
+    #[tokio::test]
+    async fn converted_ccs_install_rejects_symlink_child_payload() {
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+
+        std::fs::create_dir_all(&install_root).unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+        stage_test_boot_assets(temp_dir.path());
+
+        let package_path = temp_dir.path().join("converted-symlink-child.ccs");
+        let link_target = "/tmp/converted-escape".to_string();
+        let link_hash = conary_core::filesystem::CasStore::compute_symlink_hash(&link_target);
+        let child_content = b"should not persist".to_vec();
+        let child_hash = hash::sha256(&child_content);
+        let init_content = b"#!/bin/sh\nexec true\n".to_vec();
+        let init_hash = hash::sha256(&init_content);
+        let files = vec![
+            FileEntry {
+                path: "/usr/lib/link".to_string(),
+                hash: link_hash.clone(),
+                size: link_target.len() as u64,
+                mode: 0o120777,
+                component: "runtime".to_string(),
+                file_type: FileType::Symlink,
+                target: Some(link_target.clone()),
+                chunks: None,
+            },
+            FileEntry {
+                path: "/usr/lib/link/child".to_string(),
+                hash: child_hash.clone(),
+                size: child_content.len() as u64,
+                mode: 0o100644,
+                component: "runtime".to_string(),
+                file_type: FileType::Regular,
+                target: None,
+                chunks: None,
+            },
+            FileEntry {
+                path: "/usr/sbin/init".to_string(),
+                hash: init_hash.clone(),
+                size: init_content.len() as u64,
+                mode: 0o100755,
+                component: "runtime".to_string(),
+                file_type: FileType::Regular,
+                target: None,
+                chunks: None,
+            },
+        ];
+        let manifest = CcsManifest::new_minimal("converted-symlink-child", "1.0.0");
+        let result = BuildResult {
+            manifest,
+            components: HashMap::from([(
+                "runtime".to_string(),
+                ComponentData {
+                    name: "runtime".to_string(),
+                    files: files.clone(),
+                    hash: "runtime".to_string(),
+                    size: (link_target.len() + child_content.len() + init_content.len()) as u64,
+                },
+            )]),
+            files,
+            blobs: HashMap::from([
+                (link_hash, link_target.into_bytes()),
+                (child_hash, child_content),
+                (init_hash, init_content),
+            ]),
+            total_size: 0,
+            chunked: false,
+            chunk_stats: None,
+        };
+        write_ccs_package(&result, &package_path).unwrap();
+
+        let err = install_converted_ccs(ConvertedCcsInstallOptions {
+            ccs_path: package_path.to_str().unwrap(),
+            db_path: db_path_str,
+            root: install_root.to_str().unwrap(),
+            dry_run: false,
+            sandbox_mode: SandboxMode::None,
+            no_deps: true,
+            no_scripts: true,
+            allow_downgrade: false,
+            dep_mode: None,
+            yes: true,
+            dependency_passes_remaining: 0,
+        })
+        .await
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("symlink"),
+            "converted CCS shared install path should reject child payloads beneath package symlinks: {err:?}"
+        );
+        let conn = conary_core::db::open(db_path_str).unwrap();
+        let persisted: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM files WHERE path = '/usr/lib/link/child'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(persisted, 0);
+    }
+
     #[test]
     fn detects_conditional_rpm_dependencies() {
         assert!(is_conditional_rpm_dependency(

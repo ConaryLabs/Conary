@@ -1571,34 +1571,47 @@ fn persist_ccs_manifest_provides(
     }
 
     for soname in &provides.sonames {
-        let mut provide = conary_core::db::models::ProvideEntry::new_typed(
-            trove_id,
-            DependencyClass::Soname.prefix(),
-            soname.clone(),
-            None,
-        );
-        provide.insert_or_ignore(tx)?;
+        insert_ccs_manifest_typed_provide(tx, trove_id, DependencyClass::Soname.prefix(), soname)?;
     }
 
     for binary in &provides.binaries {
-        let mut provide = conary_core::db::models::ProvideEntry::new_typed(
-            trove_id,
-            DependencyClass::Binary.prefix(),
-            binary.clone(),
-            None,
-        );
-        provide.insert_or_ignore(tx)?;
+        insert_ccs_manifest_typed_provide(tx, trove_id, DependencyClass::Binary.prefix(), binary)?;
     }
 
     for module in &provides.pkgconfig {
-        let mut provide = conary_core::db::models::ProvideEntry::new_typed(
+        insert_ccs_manifest_typed_provide(
+            tx,
             trove_id,
             DependencyClass::PkgConfig.prefix(),
-            module.clone(),
-            None,
-        );
-        provide.insert_or_ignore(tx)?;
+            module,
+        )?;
     }
+
+    Ok(())
+}
+
+fn insert_ccs_manifest_typed_provide(
+    tx: &rusqlite::Transaction<'_>,
+    trove_id: i64,
+    kind: &str,
+    capability: &str,
+) -> Result<()> {
+    let mut provide = conary_core::db::models::ProvideEntry::new_typed(
+        trove_id,
+        kind,
+        capability.to_string(),
+        None,
+    );
+    provide.insert_or_ignore(tx)?;
+
+    tx.execute(
+        "UPDATE provides
+         SET kind = ?3
+         WHERE trove_id = ?1
+           AND capability = ?2
+           AND kind = 'package'",
+        rusqlite::params![trove_id, capability, kind],
+    )?;
 
     Ok(())
 }
@@ -1837,6 +1850,20 @@ pub(crate) fn install_ccs_package_transactionally(
             extraction.installed_component_types
         );
     }
+
+    let selected_component_names =
+        if let Some(selected) = opts.selected_manifest_components.as_ref() {
+            selected.clone()
+        } else {
+            let mut names: Vec<String> = pkg.components().keys().cloned().collect();
+            names.sort();
+            names
+        };
+    crate::commands::ccs::validate_ccs_payload_paths(
+        Path::new(opts.root),
+        pkg,
+        &selected_component_names,
+    )?;
 
     let mut hook_executor = conary_core::ccs::HookExecutor::new(Path::new(opts.root));
     let mut pre_hooks_ran = false;
