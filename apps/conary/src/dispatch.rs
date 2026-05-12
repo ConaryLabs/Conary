@@ -377,13 +377,11 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             generation,
             output,
             objects_dir,
-            db,
         }) => {
             commands::export_oci(
                 generation,
                 std::path::Path::new(&objects_dir),
                 std::path::Path::new(&output),
-                &db,
             )
             .await
         }
