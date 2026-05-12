@@ -453,13 +453,11 @@ fn test_ccs_install_components_only_installs_requested_component() {
     use std::collections::HashMap;
     use std::process::Command;
 
-    let temp_dir = tempfile::tempdir().unwrap();
+    let (temp_dir, db_path) = common::setup_command_test_db();
     let install_root = temp_dir.path().join("root");
-    let db_path = temp_dir.path().join("conary.db");
     let package_path = temp_dir.path().join("component-fixture.ccs");
 
     std::fs::create_dir_all(&install_root).unwrap();
-    conary_core::db::init(db_path.to_str().unwrap()).unwrap();
 
     let runtime_content = b"#!/bin/sh\necho runtime\n".to_vec();
     let runtime_hash = hash::sha256(&runtime_content);
@@ -547,6 +545,7 @@ fn test_ccs_install_components_only_installs_requested_component() {
     write_ccs_package(&result, &package_path).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_conary"))
+        .env("CONARY_TEST_SKIP_GENERATION_MOUNT", "1")
         .arg("--allow-live-system-mutation")
         .arg("ccs")
         .arg("install")
@@ -557,7 +556,7 @@ fn test_ccs_install_components_only_installs_requested_component() {
         .arg("--sandbox")
         .arg("never")
         .arg("--db-path")
-        .arg(db_path.to_str().unwrap())
+        .arg(&db_path)
         .arg("--root")
         .arg(install_root.to_str().unwrap())
         .output()
@@ -570,7 +569,7 @@ fn test_ccs_install_components_only_installs_requested_component() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let conn = db::open(db_path.to_str().unwrap()).unwrap();
+    let conn = db::open(&db_path).unwrap();
     let trove = Trove::find_by_name(&conn, "component-fixture")
         .unwrap()
         .pop()
@@ -589,10 +588,12 @@ fn test_ccs_install_components_only_installs_requested_component() {
     assert!(!file_paths.contains(&"/etc/component-fixture/app.conf"));
 
     assert!(
-        install_root
+        !install_root
             .join("usr/include/component-fixture/api.h")
-            .exists()
+            .exists(),
+        "CCS install should record selected payloads for generation build, not write live root"
     );
     assert!(!install_root.join("usr/bin/component-fixture").exists());
     assert!(!install_root.join("etc/component-fixture/app.conf").exists());
+    assert!(std::fs::read_link(temp_dir.path().join("current")).is_ok());
 }
