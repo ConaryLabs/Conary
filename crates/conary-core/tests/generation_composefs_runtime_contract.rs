@@ -72,6 +72,39 @@ fn live_generation_mounts_do_not_request_verity_from_digest_presence_alone() {
 }
 
 #[test]
+fn runtime_generation_paths_are_routed_through_runtime_root_contract() {
+    let transaction_rs = fs::read_to_string(core_source("transaction/mod.rs"))
+        .expect("failed to read transaction/mod.rs");
+    let composefs_ops_rs = fs::read_to_string(app_source("commands/composefs_ops.rs"))
+        .expect("failed to read commands/composefs_ops.rs");
+    let generation_commands_rs = fs::read_to_string(app_source("commands/generation/commands.rs"))
+        .expect("failed to read commands/generation/commands.rs");
+    let generation_switch_rs = fs::read_to_string(app_source("commands/generation/switch.rs"))
+        .expect("failed to read commands/generation/switch.rs");
+
+    assert!(
+        transaction_rs.contains("ConaryRuntimeRoot"),
+        "TransactionConfig must derive runtime generation paths through ConaryRuntimeRoot"
+    );
+    assert!(
+        composefs_ops_rs.contains("ConaryRuntimeRoot::from_db_path"),
+        "composefs apply must use ConaryRuntimeRoot when deriving generation paths from a DB path"
+    );
+    assert!(
+        generation_commands_rs.contains("ConaryRuntimeRoot"),
+        "generation commands must use ConaryRuntimeRoot for current, generation, and GC paths"
+    );
+    assert!(
+        generation_switch_rs.contains("ConaryRuntimeRoot"),
+        "generation switch orchestration must use ConaryRuntimeRoot for CAS, mount, and current paths"
+    );
+    assert!(
+        !generation_commands_rs.contains("GENERATION_DB_CANDIDATES"),
+        "generation commands must not retain mixed /conary and /var/lib/conary DB discovery"
+    );
+}
+
+#[test]
 fn generation_switch_does_not_force_verity_when_metadata_says_it_is_unavailable() {
     let switch_rs = fs::read_to_string(app_source("commands/generation/switch.rs"))
         .expect("failed to read commands/generation/switch.rs");

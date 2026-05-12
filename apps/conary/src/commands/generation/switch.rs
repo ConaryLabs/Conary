@@ -5,13 +5,14 @@
 //! logic lives in the core crate; this file handles CLI output and the
 //! step-by-step orchestration that is specific to live system switching.
 
-use super::metadata::{GenerationMetadata, generation_path};
+use super::metadata::GenerationMetadata;
 use crate::commands::generation::builder::requested_generation_verity;
 use anyhow::{Context, Result, anyhow};
 use conary_core::generation::mount::{
     MountOptions, is_overlay_mount, mount_generation, unmount_generation, update_current_symlink,
     verity_downgrade_warning,
 };
+use conary_core::runtime_root::ConaryRuntimeRoot;
 use std::path::Path;
 use std::process::Command;
 use tracing::{info, warn};
@@ -23,7 +24,8 @@ use tracing::{info, warn};
 /// 3. Rebuild /etc overlay with new composefs lower
 /// 4. Update /conary/current symlink
 pub fn switch_live(gen_number: i64) -> Result<()> {
-    let gen_dir = generation_path(gen_number);
+    let runtime_root = ConaryRuntimeRoot::default();
+    let gen_dir = runtime_root.generation_path(gen_number);
     if !gen_dir.exists() {
         return Err(anyhow!(
             "Generation {gen_number} does not exist at {}",
@@ -43,19 +45,21 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
         ));
     }
 
-    let cas_dir = "/conary/objects";
-    let old_mnt = "/conary/mnt";
-    let staging = "/conary/mnt-new";
+    let cas_dir = runtime_root.objects_dir();
+    let old_mnt = runtime_root.mount_dir();
+    let staging = runtime_root.root().join("mnt-new");
+    let old_mnt_display = old_mnt.display().to_string();
+    let staging_display = staging.display().to_string();
 
     // Step 0: Unmount old composefs mount if present
-    if Path::new(old_mnt).exists()
-        && let Err(e) = unmount_generation(Path::new(old_mnt))
+    if old_mnt.exists()
+        && let Err(e) = unmount_generation(&old_mnt)
     {
-        warn!("Failed to unmount old composefs at {old_mnt}: {e}");
+        warn!("Failed to unmount old composefs at {old_mnt_display}: {e}");
     }
 
     // Step 1: Mount new generation's composefs at staging point
-    std::fs::create_dir_all(staging).context("Failed to create composefs staging directory")?;
+    std::fs::create_dir_all(&staging).context("Failed to create composefs staging directory")?;
 
     let requested_verity = requested_generation_verity(
         metadata.erofs_verity_digest.as_deref(),
@@ -65,8 +69,8 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
     // Try with verity first when the generation metadata proves the image is ready.
     let opts_verity = MountOptions {
         image_path: erofs_img.clone(),
-        basedir: cas_dir.into(),
-        mount_point: staging.into(),
+        basedir: cas_dir,
+        mount_point: staging.clone(),
         verity: requested_verity,
         digest: if requested_verity {
             metadata.erofs_verity_digest.clone()
@@ -105,21 +109,21 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
     // WARNING: This overwrites the live /usr. Processes with open file descriptors
     // under /usr may crash or fail to load libraries. A reboot is recommended
     // for full consistency (printed at the end of this function).
-    let mnt_usr = format!("{staging}/usr");
+    let mnt_usr = staging.join("usr").display().to_string();
     if let Err(e) = run_command("mount", &["--bind", &mnt_usr, "/usr"]) {
-        let _ = unmount_generation(Path::new(staging));
+        let _ = unmount_generation(&staging);
         return Err(e).context("Failed to bind-mount /usr from composefs");
     }
     if let Err(e) = run_command("mount", &["-o", "remount,ro", "/usr"]) {
         let _ = run_command("umount", &["/usr"]);
-        let _ = unmount_generation(Path::new(staging));
+        let _ = unmount_generation(&staging);
         return Err(e).context("Failed to remount /usr read-only");
     }
 
     info!("Bind-mounted /usr from generation {gen_number} (read-only)");
 
     // Step 3: Rebuild /etc overlay with new lower
-    let staging_etc = format!("{staging}/etc");
+    let staging_etc = staging.join("etc").display().to_string();
     // Unmount existing /etc overlay only if it is currently an overlay mount.
     // If /etc is not an overlay, unmounting it would leave the system with no /etc.
     let etc_is_overlay = is_overlay_mount(Path::new("/etc")).unwrap_or(false);
@@ -127,8 +131,16 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
         let _ = run_command("umount", &["/etc"]);
     }
 
-    let etc_upper = format!("/conary/etc-state/{gen_number}");
-    let etc_work = format!("/conary/etc-state/{gen_number}-work");
+    let etc_upper = runtime_root
+        .etc_state_dir()
+        .join(gen_number.to_string())
+        .display()
+        .to_string();
+    let etc_work = runtime_root
+        .etc_state_dir()
+        .join(format!("{gen_number}-work"))
+        .display()
+        .to_string();
     std::fs::create_dir_all(&etc_upper).context("Failed to create /etc overlay upper dir")?;
     std::fs::create_dir_all(&etc_work).context("Failed to create /etc overlay work dir")?;
 
@@ -146,15 +158,15 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
     }
 
     // Step 4: Move staging mount to permanent mount point
-    std::fs::create_dir_all(old_mnt).context("Failed to create permanent composefs mount dir")?;
-    if let Err(e) = run_command("mount", &["--move", staging, old_mnt]) {
+    std::fs::create_dir_all(&old_mnt).context("Failed to create permanent composefs mount dir")?;
+    if let Err(e) = run_command("mount", &["--move", &staging_display, &old_mnt_display]) {
         let _ = run_command("umount", &["/usr"]);
-        let _ = unmount_generation(Path::new(staging));
+        let _ = unmount_generation(&staging);
         return Err(e).context("Failed to move composefs mount to permanent location");
     }
 
     // Step 5: Update current symlink (delegates to conary-core)
-    update_current_symlink(Path::new("/conary"), gen_number)
+    update_current_symlink(runtime_root.root(), gen_number)
         .map_err(|e| anyhow!("Failed to update current generation symlink: {e}"))?;
 
     info!("Switched to generation {gen_number} (composefs)");

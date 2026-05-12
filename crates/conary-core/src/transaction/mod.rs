@@ -27,6 +27,7 @@ pub use recovery::is_valid_erofs_image;
 use crate::Result;
 use crate::filesystem::CasStore;
 use crate::hash::HashAlgorithm;
+use crate::runtime_root::ConaryRuntimeRoot;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
@@ -139,17 +140,18 @@ impl TransactionConfig {
 
     /// Create a config from explicit root and db_path.
     ///
-    /// This constructor derives `objects_dir` and `generations_dir` from the
-    /// database directory, matching the layout used by `conary system init`.
-    pub fn from_paths(root: PathBuf, db_path: PathBuf) -> Self {
-        let db_dir = db_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    /// This constructor derives runtime generation state from the canonical
+    /// runtime root. The default DB lives under `/var/lib/conary`, but CAS,
+    /// generation, mount, and `/etc` state live under `/conary`.
+    pub fn from_paths(_root: PathBuf, db_path: PathBuf) -> Self {
+        let runtime_root = ConaryRuntimeRoot::from_db_path(db_path);
         Self {
-            root,
-            db_path,
-            objects_dir: db_dir.join("objects"),
-            generations_dir: db_dir.join("generations"),
-            etc_state_dir: db_dir.join("etc-state"),
-            mount_point: PathBuf::from("/"),
+            root: runtime_root.root().to_path_buf(),
+            db_path: runtime_root.db_path().to_path_buf(),
+            objects_dir: runtime_root.objects_dir(),
+            generations_dir: runtime_root.generations_dir(),
+            etc_state_dir: runtime_root.etc_state_dir(),
+            mount_point: runtime_root.mount_dir(),
             hash_algorithm: HashAlgorithm::Sha256,
             lock_timeout_secs: Self::DEFAULT_LOCK_TIMEOUT_SECS,
         }
@@ -458,17 +460,60 @@ mod tests {
     }
 
     #[test]
-    fn transaction_config_from_paths() {
+    fn transaction_config_from_paths_keeps_default_runtime_state_under_conary() {
         let config = TransactionConfig::from_paths(
             PathBuf::from("/"),
             PathBuf::from("/var/lib/conary/conary.db"),
         );
-        assert_eq!(config.root, PathBuf::from("/"));
-        assert_eq!(config.objects_dir, PathBuf::from("/var/lib/conary/objects"));
+        assert_eq!(config.root, PathBuf::from("/conary"));
+        assert_eq!(config.db_path, PathBuf::from("/var/lib/conary/conary.db"));
+        assert_eq!(config.objects_dir, PathBuf::from("/conary/objects"));
+        assert_eq!(config.generations_dir, PathBuf::from("/conary/generations"));
+        assert_eq!(config.etc_state_dir, PathBuf::from("/conary/etc-state"));
+        assert_eq!(config.mount_point, PathBuf::from("/conary/mnt"));
+    }
+
+    #[test]
+    fn transaction_config_from_paths_keeps_explicit_test_root_self_contained() {
+        let config = TransactionConfig::from_paths(
+            PathBuf::from("/tmp/conary-test"),
+            PathBuf::from("/tmp/conary-test/conary.db"),
+        );
+
+        assert_eq!(config.root, PathBuf::from("/tmp/conary-test"));
+        assert_eq!(config.db_path, PathBuf::from("/tmp/conary-test/conary.db"));
+        assert_eq!(
+            config.objects_dir,
+            PathBuf::from("/tmp/conary-test/objects")
+        );
         assert_eq!(
             config.generations_dir,
-            PathBuf::from("/var/lib/conary/generations")
+            PathBuf::from("/tmp/conary-test/generations")
         );
+        assert_eq!(
+            config.etc_state_dir,
+            PathBuf::from("/tmp/conary-test/etc-state")
+        );
+        assert_eq!(config.mount_point, PathBuf::from("/tmp/conary-test/mnt"));
+    }
+
+    #[test]
+    fn transaction_config_from_paths_uses_test_db_parent_not_install_root() {
+        let config = TransactionConfig::from_paths(
+            PathBuf::from("/tmp/install-root"),
+            PathBuf::from("/tmp/conary-runtime/conary.db"),
+        );
+
+        assert_eq!(config.root, PathBuf::from("/tmp/conary-runtime"));
+        assert_eq!(
+            config.objects_dir,
+            PathBuf::from("/tmp/conary-runtime/objects")
+        );
+        assert_eq!(
+            config.generations_dir,
+            PathBuf::from("/tmp/conary-runtime/generations")
+        );
+        assert_eq!(config.mount_point, PathBuf::from("/tmp/conary-runtime/mnt"));
     }
 
     #[test]
