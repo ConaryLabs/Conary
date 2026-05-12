@@ -53,7 +53,7 @@ use conary_core::components::{
 };
 use conary_core::db::models::{Changeset, ChangesetStatus, DerivedPackage};
 use conary_core::db::paths::keyring_dir;
-use conary_core::dependencies::LanguageDepDetector;
+use conary_core::dependencies::{DependencyClass, LanguageDepDetector};
 use conary_core::packages::PackageFormat;
 use conary_core::repository;
 use conary_core::repository::versioning::VersionScheme;
@@ -487,6 +487,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         semantics,
         selection_reason,
         old_trove_to_upgrade: old_trove_to_upgrade.as_deref(),
+        ccs_manifest_provides: None,
     };
     let tx_result =
         execute_install_transaction(&mut conn, pkg.as_ref(), &extraction, &tx_ctx, &progress)?;
@@ -575,6 +576,7 @@ struct TransactionContext<'a> {
     semantics: InstallSemantics,
     selection_reason: Option<&'a str>,
     old_trove_to_upgrade: Option<&'a conary_core::db::models::Trove>,
+    ccs_manifest_provides: Option<&'a conary_core::ccs::manifest::Provides>,
 }
 
 /// Result from a successful transaction execution.
@@ -1553,6 +1555,54 @@ fn check_ccs_upgrade_status(
     check_upgrade_status(conn, pkg, semantics, allow_downgrade)
 }
 
+fn persist_ccs_manifest_provides(
+    tx: &rusqlite::Transaction<'_>,
+    trove_id: i64,
+    package_name: &str,
+    provides: &conary_core::ccs::manifest::Provides,
+) -> Result<()> {
+    for capability in &provides.capabilities {
+        if capability == package_name {
+            continue;
+        }
+        let mut provide =
+            conary_core::db::models::ProvideEntry::new(trove_id, capability.clone(), None);
+        provide.insert_or_ignore(tx)?;
+    }
+
+    for soname in &provides.sonames {
+        let mut provide = conary_core::db::models::ProvideEntry::new_typed(
+            trove_id,
+            DependencyClass::Soname.prefix(),
+            soname.clone(),
+            None,
+        );
+        provide.insert_or_ignore(tx)?;
+    }
+
+    for binary in &provides.binaries {
+        let mut provide = conary_core::db::models::ProvideEntry::new_typed(
+            trove_id,
+            DependencyClass::Binary.prefix(),
+            binary.clone(),
+            None,
+        );
+        provide.insert_or_ignore(tx)?;
+    }
+
+    for module in &provides.pkgconfig {
+        let mut provide = conary_core::db::models::ProvideEntry::new_typed(
+            trove_id,
+            DependencyClass::PkgConfig.prefix(),
+            module.clone(),
+            None,
+        );
+        provide.insert_or_ignore(tx)?;
+    }
+
+    Ok(())
+}
+
 fn mark_ccs_changeset_post_hooks_failed(
     conn: &rusqlite::Connection,
     changeset_id: i64,
@@ -1712,6 +1762,9 @@ fn execute_install_transaction(
             return Err(e);
         }
     };
+    if let Some(provides) = ctx.ccs_manifest_provides {
+        persist_ccs_manifest_provides(&tx, inner_result.trove_id, pkg.name(), provides)?;
+    }
 
     tx.commit()?;
     info!(
@@ -1822,6 +1875,7 @@ pub(crate) fn install_ccs_package_transactionally(
         semantics,
         selection_reason: opts.selection_reason,
         old_trove_to_upgrade: old_trove,
+        ccs_manifest_provides: Some(&pkg.manifest().provides),
     };
     let tx_result = match execute_install_transaction(conn, pkg, &extraction, &tx_ctx, &progress) {
         Ok(result) => result,
