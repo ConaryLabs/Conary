@@ -3,7 +3,6 @@
 use super::TransactionEngine;
 use crate::Result;
 use crate::generation::artifact::{GenerationArtifact, load_generation_artifact};
-use crate::generation::metadata::GenerationMetadata;
 use rusqlite::Connection;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
@@ -40,9 +39,12 @@ impl TransactionEngine {
 
             match load_generation_artifact_for_number(current_num, &gen_dir) {
                 Ok(artifact) => {
+                    let (required_verity, expected_digest) = artifact_mount_policy(&artifact);
                     let is_mounted = crate::generation::mount::is_generation_mounted(
                         &self.config.mount_point,
                         &artifact.erofs_path,
+                        required_verity,
+                        expected_digest.as_deref(),
                     )
                     .unwrap_or(false);
 
@@ -145,8 +147,7 @@ impl TransactionEngine {
     /// that depend on the calling context (boot vs live-switch). CLI callers
     /// (switch.rs, composefs_ops.rs) handle the /etc overlay themselves.
     fn mount_artifact_and_link(&self, gen_num: i64, artifact: &GenerationArtifact) -> Result<()> {
-        let metadata = GenerationMetadata::read_from(&artifact.generation_dir)?;
-        let requested_verity = metadata.fsverity_enabled && metadata.erofs_verity_digest.is_some();
+        let (requested_verity, digest) = artifact_mount_policy(artifact);
 
         let _mount_outcome =
             crate::generation::mount::mount_generation(&crate::generation::mount::MountOptions {
@@ -154,11 +155,7 @@ impl TransactionEngine {
                 basedir: artifact.cas_dir.clone(),
                 mount_point: self.config.mount_point.clone(),
                 verity: requested_verity,
-                digest: if requested_verity {
-                    metadata.erofs_verity_digest.clone()
-                } else {
-                    None
-                },
+                digest,
                 upperdir: None,
                 workdir: None,
             })?;
@@ -227,6 +224,17 @@ fn load_generation_artifact_for_number(gen_num: i64, gen_dir: &Path) -> Result<G
         )));
     }
     Ok(artifact)
+}
+
+fn artifact_mount_policy(artifact: &GenerationArtifact) -> (bool, Option<String>) {
+    let requested_verity =
+        artifact.metadata.fsverity_enabled && artifact.metadata.erofs_verity_digest.is_some();
+    let digest = if requested_verity {
+        artifact.metadata.erofs_verity_digest.clone()
+    } else {
+        None
+    };
+    (requested_verity, digest)
 }
 
 /// Return `true` if `path` looks like a valid EROFS image.

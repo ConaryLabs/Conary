@@ -887,7 +887,8 @@ Run:
 
 ```bash
 cargo test -p conary-core recovery_does_not_promote_generations_by_erofs_magic_only -- --nocapture
-cargo test -p conary-core transaction::recovery -- --nocapture
+cargo test -p conary-core recover -- --nocapture
+cargo test -p conary-core mounted_generation_policy -- --nocapture
 ```
 
 Expected: all pass.
