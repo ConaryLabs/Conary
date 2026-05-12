@@ -369,14 +369,32 @@ pub fn is_overlay_mount(path: &Path) -> crate::Result<bool> {
 pub(crate) fn is_generation_mounted(
     mount_point: &Path,
     expected_image: &Path,
+    required_verity: bool,
+    expected_digest: Option<&str>,
 ) -> crate::Result<bool> {
     let mounts = std::fs::read_to_string("/proc/mounts")
         .map_err(|e| Error::IoError(format!("Failed to read /proc/mounts: {e}")))?;
 
+    Ok(generation_mount_entry_matches(
+        &mounts,
+        mount_point,
+        expected_image,
+        required_verity,
+        expected_digest,
+    ))
+}
+
+fn generation_mount_entry_matches(
+    mounts: &str,
+    mount_point: &Path,
+    expected_image: &Path,
+    required_verity: bool,
+    expected_digest: Option<&str>,
+) -> bool {
     let mp_str: &str = &mount_point.to_string_lossy();
     let image_str: &str = &expected_image.to_string_lossy();
 
-    let found = mounts.lines().any(|line| {
+    mounts.lines().any(|line| {
         let mut parts = line.split_whitespace();
         let device = parts.next().unwrap_or("");
         let mp = parts.next().unwrap_or("");
@@ -387,7 +405,7 @@ pub(crate) fn is_generation_mounted(
             return false;
         }
 
-        match fs_type {
+        let image_matches = match fs_type {
             // composefs mount: device is the EROFS image path
             "composefs" => device == image_str,
             // erofs loopback: device is the image path (or a loop device,
@@ -396,10 +414,33 @@ pub(crate) fn is_generation_mounted(
             // overlay: the image path appears in lowerdir= options
             "overlay" => options.contains(image_str),
             _ => false,
-        }
-    });
+        };
 
-    Ok(found)
+        image_matches
+            && mount_options_satisfy_artifact_policy(options, required_verity, expected_digest)
+    })
+}
+
+fn mount_options_satisfy_artifact_policy(
+    options: &str,
+    required_verity: bool,
+    expected_digest: Option<&str>,
+) -> bool {
+    let mut saw_verity = false;
+    let mut saw_digest = false;
+
+    for option in options.split(',') {
+        if option == "verity" {
+            saw_verity = true;
+        }
+        if let Some(expected) = expected_digest
+            && option.strip_prefix("digest=") == Some(expected)
+        {
+            saw_digest = true;
+        }
+    }
+
+    (!required_verity || saw_verity) && (expected_digest.is_none() || saw_digest)
 }
 
 #[cfg(test)]
@@ -481,6 +522,36 @@ mod tests {
             !opts_str.contains("verity"),
             "verity must be absent when not requested"
         );
+    }
+
+    #[test]
+    fn mounted_generation_policy_rejects_plain_mount_when_verity_required() {
+        let mounts =
+            "/conary/generations/5/root.erofs /conary/mnt composefs rw,basedir=/conary/objects 0 0";
+
+        assert!(
+            !generation_mount_entry_matches(
+                mounts,
+                Path::new("/conary/mnt"),
+                Path::new("/conary/generations/5/root.erofs"),
+                true,
+                Some("abc123")
+            ),
+            "recovery must not accept a plain mounted composefs image when metadata requests verity"
+        );
+    }
+
+    #[test]
+    fn mounted_generation_policy_accepts_matching_verity_digest() {
+        let mounts = "/conary/generations/5/root.erofs /conary/mnt composefs rw,basedir=/conary/objects,verity,digest=abc123 0 0";
+
+        assert!(generation_mount_entry_matches(
+            mounts,
+            Path::new("/conary/mnt"),
+            Path::new("/conary/generations/5/root.erofs"),
+            true,
+            Some("abc123")
+        ));
     }
 
     #[cfg(feature = "composefs-rs")]
