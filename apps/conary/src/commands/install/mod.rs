@@ -116,6 +116,7 @@ pub(crate) struct CcsTransactionInstallOptions<'a> {
     pub no_scripts: bool,
     pub sandbox_mode: SandboxMode,
     pub allow_downgrade: bool,
+    pub reinstall: bool,
     pub selection_reason: Option<&'a str>,
     pub component_selection: ComponentSelection,
     pub selected_manifest_components: Option<Vec<String>>,
@@ -123,6 +124,7 @@ pub(crate) struct CcsTransactionInstallOptions<'a> {
 
 pub(crate) struct CcsTransactionInstallResult {
     pub changeset_id: i64,
+    pub post_commit_warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1522,6 +1524,77 @@ fn extract_and_classify_ccs_manifest_files(
     })
 }
 
+fn check_ccs_upgrade_status(
+    conn: &rusqlite::Connection,
+    pkg: &conary_core::ccs::CcsPackage,
+    semantics: &InstallSemantics,
+    allow_downgrade: bool,
+    reinstall: bool,
+) -> Result<UpgradeCheck> {
+    let existing = conary_core::db::models::Trove::find_by_name(conn, pkg.name())?;
+
+    for trove in &existing {
+        if trove.architecture == pkg.architecture().map(|s: &str| s.to_string())
+            && trove.version == pkg.version()
+        {
+            if reinstall {
+                info!("Reinstalling {} version {}", pkg.name(), pkg.version());
+                return Ok(UpgradeCheck::Upgrade(Box::new(trove.clone())));
+            }
+            return Err(anyhow::anyhow!(
+                "Package {} version {} ({}) is already installed",
+                pkg.name(),
+                pkg.version(),
+                pkg.architecture().unwrap_or("no-arch")
+            ));
+        }
+    }
+
+    check_upgrade_status(conn, pkg, semantics, allow_downgrade)
+}
+
+fn mark_ccs_changeset_post_hooks_failed(
+    conn: &rusqlite::Connection,
+    changeset_id: i64,
+    warning: &str,
+) {
+    match Changeset::find_by_id(conn, changeset_id) {
+        Ok(Some(mut changeset)) => {
+            if let Err(error) = changeset.update_status(conn, ChangesetStatus::PostHooksFailed) {
+                warn!(
+                    changeset_id,
+                    "Failed to mark changeset after CCS post-install hook failure: {}", error
+                );
+            } else {
+                warn!(
+                    changeset_id,
+                    "Marked applied changeset as post_hooks_failed: {}", warning
+                );
+            }
+        }
+        Ok(None) => warn!(
+            changeset_id,
+            "Could not mark CCS post-hook failure because the changeset no longer exists"
+        ),
+        Err(error) => warn!(
+            changeset_id,
+            "Failed to load changeset after CCS post-install hook failure: {}", error
+        ),
+    }
+}
+
+fn ccs_has_pre_hooks(hooks: &conary_core::ccs::manifest::Hooks) -> bool {
+    !hooks.users.is_empty() || !hooks.groups.is_empty() || !hooks.directories.is_empty()
+}
+
+fn ccs_has_post_hooks(hooks: &conary_core::ccs::manifest::Hooks) -> bool {
+    !hooks.systemd.is_empty()
+        || !hooks.tmpfiles.is_empty()
+        || !hooks.sysctl.is_empty()
+        || !hooks.alternatives.is_empty()
+        || hooks.post_install.is_some()
+}
+
 /// Run pre-install scriptlets and query old package scriptlets for upgrades.
 fn run_pre_install_phase(
     conn: &rusqlite::Connection,
@@ -1671,7 +1744,8 @@ pub(crate) fn install_ccs_package_transactionally(
 ) -> Result<CcsTransactionInstallResult> {
     let progress = InstallProgress::single("Installing");
     let semantics = InstallSemantics::ccs();
-    let upgrade = check_upgrade_status(conn, pkg, &semantics, opts.allow_downgrade)?;
+    let upgrade =
+        check_ccs_upgrade_status(conn, pkg, &semantics, opts.allow_downgrade, opts.reinstall)?;
     let old_trove = match &upgrade {
         UpgradeCheck::FreshInstall => None,
         UpgradeCheck::Upgrade(trove) | UpgradeCheck::Downgrade(trove) => Some(trove.as_ref()),
@@ -1692,7 +1766,39 @@ pub(crate) fn install_ccs_package_transactionally(
 
     if opts.dry_run {
         show_dry_run_summary(pkg, &opts.component_selection);
-        return Ok(CcsTransactionInstallResult { changeset_id: 0 });
+        return Ok(CcsTransactionInstallResult {
+            changeset_id: 0,
+            post_commit_warnings: Vec::new(),
+        });
+    }
+
+    let hooks = &pkg.manifest().hooks;
+    let should_run_ccs_hooks =
+        !opts.no_scripts && should_run_scriptlets(&extraction.installed_component_types);
+    if !opts.no_scripts
+        && !should_run_ccs_hooks
+        && (ccs_has_pre_hooks(hooks) || ccs_has_post_hooks(hooks))
+    {
+        info!(
+            "Skipping CCS install hooks for non-runtime component selection: {:?}",
+            extraction.installed_component_types
+        );
+    }
+
+    let mut hook_executor = conary_core::ccs::HookExecutor::new(Path::new(opts.root));
+    let mut pre_hooks_ran = false;
+    if should_run_ccs_hooks && ccs_has_pre_hooks(hooks) {
+        info!("Executing CCS pre-install hooks");
+        pre_hooks_ran = true;
+        if let Err(error) = hook_executor.execute_pre_hooks(hooks) {
+            if let Err(revert_error) = hook_executor.revert_pre_hooks() {
+                warn!(
+                    "Failed to revert CCS pre-install hooks after pre-hook error: {}",
+                    revert_error
+                );
+            }
+            return Err(error).context("CCS pre-install hook failed");
+        }
     }
 
     let scriptlet_ctx = ScriptletContext {
@@ -1717,7 +1823,18 @@ pub(crate) fn install_ccs_package_transactionally(
         selection_reason: opts.selection_reason,
         old_trove_to_upgrade: old_trove,
     };
-    let tx_result = execute_install_transaction(conn, pkg, &extraction, &tx_ctx, &progress)?;
+    let tx_result = match execute_install_transaction(conn, pkg, &extraction, &tx_ctx, &progress) {
+        Ok(result) => result,
+        Err(error) => {
+            if pre_hooks_ran && let Err(revert_error) = hook_executor.revert_pre_hooks() {
+                warn!(
+                    "Failed to revert CCS pre-install hooks after install failure: {}",
+                    revert_error
+                );
+            }
+            return Err(error);
+        }
+    };
 
     finalize_install_without_snapshot(
         conn,
@@ -1729,8 +1846,44 @@ pub(crate) fn install_ccs_package_transactionally(
         &progress,
     )?;
 
+    let mut post_commit_warnings = Vec::new();
+    if should_run_ccs_hooks && ccs_has_post_hooks(hooks) {
+        info!("Executing CCS post-install hooks");
+        let results = hook_executor.execute_post_hooks_with_results(hooks);
+        let failures = results
+            .failures()
+            .map(|failure| {
+                format!(
+                    "{} '{}' failed: {}",
+                    failure.hook_type,
+                    failure.name,
+                    failure.error.as_deref().unwrap_or("unknown error")
+                )
+            })
+            .collect::<Vec<_>>();
+        if !failures.is_empty() {
+            let warning = format!(
+                "Post-install hooks failed for {} {} after commit: {}",
+                pkg.name(),
+                pkg.version(),
+                failures.join("; ")
+            );
+            warn!(
+                changeset_id = tx_result.changeset_id,
+                package = pkg.name(),
+                version = pkg.version(),
+                "CCS post-install hooks failed after DB commit: {}",
+                warning
+            );
+            mark_ccs_changeset_post_hooks_failed(conn, tx_result.changeset_id, &warning);
+            eprintln!("WARNING: {warning}");
+            post_commit_warnings.push(warning);
+        }
+    }
+
     Ok(CcsTransactionInstallResult {
         changeset_id: tx_result.changeset_id,
+        post_commit_warnings,
     })
 }
 
