@@ -1454,6 +1454,7 @@ fn extract_and_classify_files(
 fn extract_and_classify_ccs_manifest_files(
     pkg: &conary_core::ccs::CcsPackage,
     selected_component_names: &[String],
+    root_path: &Path,
     progress: &InstallProgress,
 ) -> Result<ExtractionResult> {
     progress.set_phase(pkg.name(), InstallPhase::Extracting);
@@ -1491,10 +1492,17 @@ fn extract_and_classify_ccs_manifest_files(
         );
     }
 
-    let component_names_by_path: HashMap<String, String> = selected_entries
-        .iter()
-        .map(|file| (file.path.clone(), file.component.clone()))
-        .collect();
+    let extracted_files =
+        crate::commands::ccs::normalize_ccs_extracted_files(root_path, extracted_files)?;
+
+    let mut component_names_by_path = HashMap::new();
+    for file in &selected_entries {
+        let normalized_path =
+            crate::commands::ccs::normalize_ccs_package_path(root_path, file.path.as_str())?;
+        component_names_by_path
+            .entry(normalized_path)
+            .or_insert_with(|| file.component.clone());
+    }
 
     let file_paths: Vec<String> = extracted_files.iter().map(|f| f.path.clone()).collect();
     let classified = ComponentClassifier::classify_all(&file_paths);
@@ -1819,9 +1827,22 @@ pub(crate) fn install_ccs_package_transactionally(
 
     let mut extraction =
         if let Some(selected_manifest_components) = opts.selected_manifest_components.as_deref() {
-            extract_and_classify_ccs_manifest_files(pkg, selected_manifest_components, &progress)?
+            extract_and_classify_ccs_manifest_files(
+                pkg,
+                selected_manifest_components,
+                Path::new(opts.root),
+                &progress,
+            )?
         } else {
-            extract_and_classify_files(pkg, &opts.component_selection, &progress)?
+            let mut selected_manifest_components: Vec<String> =
+                pkg.components().keys().cloned().collect();
+            selected_manifest_components.sort();
+            extract_and_classify_ccs_manifest_files(
+                pkg,
+                &selected_manifest_components,
+                Path::new(opts.root),
+                &progress,
+            )?
         };
     extraction.ccs_pre_remove_script = pkg
         .manifest()
