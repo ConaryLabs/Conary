@@ -160,15 +160,29 @@ fn recovery_does_not_promote_generations_by_erofs_magic_only() {
 fn oci_generation_export_uses_generation_artifact_loader() {
     let export_rs = fs::read_to_string(app_source("commands/export.rs"))
         .expect("failed to read commands/export.rs");
+    let cli_rs = fs::read_to_string(app_source("cli/mod.rs")).expect("failed to read cli/mod.rs");
 
     assert!(
-        export_rs.contains("load_generation_artifact")
-            || export_rs.contains("load_installed_generation_artifact"),
-        "OCI export must use the same GenerationArtifact loader as raw/qcow2 export"
+        export_rs.contains("load_installed_generation_artifact(n)"),
+        "explicit-generation OCI export must load the installed GenerationArtifact contract"
+    );
+    assert!(
+        export_rs.contains("load_generation_artifact(current_path)"),
+        "current-generation OCI export must load the GenerationArtifact contract from the current pointer"
+    );
+    assert!(
+        export_rs.contains("Path::new(\"/conary/current\")"),
+        "default OCI export must use /conary/current as the current-generation artifact pointer"
     );
     assert!(
         !export_rs.contains("let gen_dir = generation_path(gen_number);"),
         "OCI export must not independently resolve generation paths"
+    );
+    assert!(
+        !export_rs.contains("_db_path")
+            && !cli_rs.contains("db: String")
+            && !cli_rs.contains("Path to the Conary database"),
+        "OCI export must not retain DB-scoped compatibility arguments after artifact CAS scope becomes authoritative"
     );
 }
 

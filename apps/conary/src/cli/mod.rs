@@ -637,13 +637,9 @@ pub enum Commands {
         #[arg(short, long)]
         output: String,
 
-        /// Path to the CAS objects directory
+        /// Expected CAS objects directory; the generation artifact is authoritative
         #[arg(long, default_value = "/conary/objects")]
         objects_dir: String,
-
-        /// Path to the Conary database (used to scope CAS objects to the generation)
-        #[arg(long, default_value = "/conary/conary.db")]
-        db: String,
         // NOTE: OCI is the only supported export format. No format flag is needed.
     },
 }
@@ -679,6 +675,21 @@ mod tests {
             }
             _ => panic!("expected update command"),
         }
+    }
+
+    #[test]
+    fn export_rejects_legacy_db_argument() {
+        let err = match Cli::try_parse_from([
+            "conary", "export", "--output", "oci-out", "--db", "old.db",
+        ]) {
+            Ok(_) => panic!("legacy export --db argument should be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains("unexpected argument '--db'"),
+            "legacy export --db argument should be rejected, got {err}"
+        );
     }
 
     #[test]

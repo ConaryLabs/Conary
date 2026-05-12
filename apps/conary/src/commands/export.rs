@@ -15,7 +15,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use conary_core::filesystem::object_path;
-use conary_core::generation::artifact::CasObjectRef;
+use conary_core::generation::artifact::{CasObjectRef, GenerationArtifact};
 use conary_core::generation::metadata::{
     EROFS_IMAGE_NAME, GENERATION_METADATA_FILE, GenerationMetadata,
 };
@@ -49,23 +49,38 @@ pub async fn export_oci(
     generation: Option<i64>,
     objects_dir: &Path,
     output_dir: &Path,
-    _db_path: &str,
 ) -> Result<()> {
+    let artifact = load_oci_generation_artifact(generation)?;
+
+    export_oci_artifact(&artifact, objects_dir, output_dir)
+}
+
+fn load_oci_generation_artifact(generation: Option<i64>) -> Result<GenerationArtifact> {
     let artifact = match generation {
         Some(n) => conary_core::generation::artifact::load_installed_generation_artifact(n)
             .with_context(|| format!("Failed to load artifact for generation {n}"))?,
-        None => conary_core::generation::artifact::load_generation_artifact(Path::new(
-            "/conary/current",
-        ))
-        .context("Failed to load current generation artifact")?,
+        None => load_current_oci_generation_artifact(Path::new("/conary/current"))?,
     };
 
+    Ok(artifact)
+}
+
+fn load_current_oci_generation_artifact(current_path: &Path) -> Result<GenerationArtifact> {
+    conary_core::generation::artifact::load_generation_artifact(current_path)
+        .context("Failed to load current generation artifact")
+}
+
+fn export_oci_artifact(
+    artifact: &GenerationArtifact,
+    objects_dir: &Path,
+    output_dir: &Path,
+) -> Result<()> {
     let gen_number = artifact.generation;
-    let gen_dir = artifact.generation_dir.clone();
-    let erofs_path = artifact.erofs_path.clone();
-    let metadata = artifact.metadata.clone();
-    let cas_dir = artifact.cas_dir.clone();
-    let cas_objects = artifact.cas_objects.clone();
+    let gen_dir = &artifact.generation_dir;
+    let erofs_path = &artifact.erofs_path;
+    let metadata = &artifact.metadata;
+    let cas_dir = &artifact.cas_dir;
+    let cas_objects = &artifact.cas_objects;
 
     if cas_dir.as_path() != objects_dir {
         warn!(
@@ -95,14 +110,14 @@ pub async fn export_oci(
 
     // Step 1: Build the layer tar.gz
     let (layer_digest, layer_size, diff_id) =
-        build_layer_tar_gz(&erofs_path, &cas_dir, &gen_dir, &blobs_dir, &cas_objects)?;
+        build_layer_tar_gz(erofs_path, cas_dir, gen_dir, &blobs_dir, cas_objects)?;
     info!(
         "Layer: sha256:{} ({} bytes, diffID: sha256:{})",
         layer_digest, layer_size, diff_id
     );
 
     // Step 2: Build the config JSON
-    let config_json = build_config_json(&metadata, gen_number, &diff_id);
+    let config_json = build_config_json(metadata, gen_number, &diff_id);
     let (config_digest, config_size) = write_blob(&blobs_dir, config_json.as_bytes())?;
     info!("Config: sha256:{} ({} bytes)", config_digest, config_size);
 
@@ -240,20 +255,23 @@ fn build_layer_tar(
 
     // Also include the generation metadata
     let meta_path = gen_dir.join(GENERATION_METADATA_FILE);
-    if meta_path.exists() {
-        let meta_data = fs::read(&meta_path).context("Failed to read generation metadata")?;
-        let mut meta_header = tar::Header::new_gnu();
-        meta_header.set_size(meta_data.len() as u64);
-        meta_header.set_mode(0o644);
-        meta_header.set_cksum();
-        tar_builder
-            .append_data(
-                &mut meta_header,
-                GENERATION_METADATA_FILE,
-                meta_data.as_slice(),
-            )
-            .context("Failed to add generation metadata to tar")?;
-    }
+    let meta_data = fs::read(&meta_path).with_context(|| {
+        format!(
+            "Failed to read generation metadata at {}",
+            meta_path.display()
+        )
+    })?;
+    let mut meta_header = tar::Header::new_gnu();
+    meta_header.set_size(meta_data.len() as u64);
+    meta_header.set_mode(0o644);
+    meta_header.set_cksum();
+    tar_builder
+        .append_data(
+            &mut meta_header,
+            GENERATION_METADATA_FILE,
+            meta_data.as_slice(),
+        )
+        .context("Failed to add generation metadata to tar")?;
 
     let bytes = tar_builder
         .into_inner()
@@ -370,19 +388,68 @@ fn build_index_json(manifest_digest: &str, manifest_size: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conary_core::generation::artifact::{
+        ArtifactWriteInputs, BOOT_ASSETS_DIR, BootAssetsManifest, GenerationArtifact,
+        load_generation_artifact, write_generation_artifact,
+    };
     use conary_core::generation::metadata::GENERATION_FORMAT;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
-    /// Create a minimal generation directory for testing.
-    fn create_test_generation(tmp: &Path) -> (PathBuf, PathBuf, Vec<CasObjectRef>) {
-        // Generation directory with EROFS image and metadata
-        let gen_dir = tmp.join("generation");
-        fs::create_dir_all(&gen_dir).unwrap();
+    fn write_cas_object(objects_dir: &Path, bytes: &[u8]) -> CasObjectRef {
+        let sha256 = hex_digest(bytes);
+        let object_path = object_path(objects_dir, &sha256).unwrap();
+        fs::create_dir_all(object_path.parent().unwrap()).unwrap();
+        fs::write(object_path, bytes).unwrap();
+        CasObjectRef {
+            sha256,
+            size: bytes.len() as u64,
+        }
+    }
+
+    /// Create a minimal artifact-backed generation directory for testing.
+    fn create_test_generation(tmp: &Path) -> GenerationArtifact {
+        let gen_dir = tmp.join("generations/5");
+        let objects_dir = tmp.join("objects");
+        let boot_assets_dir = gen_dir.join(BOOT_ASSETS_DIR);
+        fs::create_dir_all(boot_assets_dir.join("EFI/BOOT")).unwrap();
+        fs::create_dir_all(&objects_dir).unwrap();
 
         // Write a fake EROFS image (just some bytes for testing)
         let erofs_data = b"EROFS-IMAGE-PLACEHOLDER-DATA-FOR-TESTING";
         fs::write(gen_dir.join(EROFS_IMAGE_NAME), erofs_data).unwrap();
+
+        fs::write(boot_assets_dir.join("vmlinuz"), b"kernel").unwrap();
+        fs::write(boot_assets_dir.join("initramfs.img"), b"initramfs").unwrap();
+        fs::write(boot_assets_dir.join("EFI/BOOT/BOOTX64.EFI"), b"efi").unwrap();
+
+        let object_one = write_cas_object(&objects_dir, b"file-content-one");
+        let object_two = write_cas_object(&objects_dir, b"file-content-two");
+
+        let boot_assets = BootAssetsManifest {
+            version: 1,
+            generation: 5,
+            architecture: "x86_64".to_string(),
+            kernel_version: "6.12.1-conary".to_string(),
+            kernel: "vmlinuz".to_string(),
+            kernel_sha256: hex_digest(b"kernel"),
+            initramfs: "initramfs.img".to_string(),
+            initramfs_sha256: hex_digest(b"initramfs"),
+            efi_bootloader: "EFI/BOOT/BOOTX64.EFI".to_string(),
+            efi_bootloader_sha256: hex_digest(b"efi"),
+            created_at: "2026-03-17T12:00:00Z".to_string(),
+        };
+
+        let artifact_digest = write_generation_artifact(ArtifactWriteInputs {
+            generation_dir: &gen_dir,
+            generation: 5,
+            architecture: "x86_64",
+            erofs_path: &gen_dir.join(EROFS_IMAGE_NAME),
+            cas_base_rel: "../../objects",
+            cas_objects: vec![object_one, object_two],
+            boot_assets,
+        })
+        .unwrap();
 
         // Write generation metadata
         let metadata = GenerationMetadata {
@@ -392,7 +459,7 @@ mod tests {
             cas_objects_referenced: Some(2),
             fsverity_enabled: false,
             erofs_verity_digest: None,
-            artifact_manifest_sha256: None,
+            artifact_manifest_sha256: Some(artifact_digest),
             created_at: "2026-03-17T12:00:00Z".to_string(),
             package_count: 42,
             kernel_version: Some("6.12.1-conary".to_string()),
@@ -400,65 +467,16 @@ mod tests {
         };
         metadata.write_to(&gen_dir).unwrap();
 
-        // CAS objects directory
-        let objects_dir = tmp.join("objects");
-        fs::create_dir_all(objects_dir.join("ab")).unwrap();
-        fs::create_dir_all(objects_dir.join("cd")).unwrap();
-        let object_one = CasObjectRef {
-            sha256: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567".to_string(),
-            size: b"file-content-one".len() as u64,
-        };
-        let object_two = CasObjectRef {
-            sha256: "cdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".to_string(),
-            size: b"file-content-two".len() as u64,
-        };
-        fs::write(
-            object_path(&objects_dir, &object_one.sha256).unwrap(),
-            b"file-content-one",
-        )
-        .unwrap();
-        fs::write(
-            object_path(&objects_dir, &object_two.sha256).unwrap(),
-            b"file-content-two",
-        )
-        .unwrap();
-
-        (gen_dir, objects_dir, vec![object_one, object_two])
+        load_generation_artifact(&gen_dir).unwrap()
     }
 
-    /// Helper: export from a test generation directory to OCI.
-    fn export_test_generation(
-        gen_dir: &Path,
-        objects_dir: &Path,
-        cas_objects: &[CasObjectRef],
-    ) -> (TempDir, PathBuf) {
+    /// Helper: export from a test generation artifact to OCI.
+    fn export_test_generation(artifact: &GenerationArtifact) -> (TempDir, PathBuf) {
         let output_tmp = TempDir::new().unwrap();
         let output_dir = output_tmp.path().join("oci-out");
         fs::create_dir_all(&output_dir).unwrap();
 
-        // Build layer, config, manifest, index manually since export_oci
-        // expects real installed generation paths.
-        let metadata = GenerationMetadata::read_from(gen_dir).unwrap();
-        let erofs_path = gen_dir.join(EROFS_IMAGE_NAME);
-        let blobs_dir = output_dir.join("blobs/sha256");
-        fs::create_dir_all(&blobs_dir).unwrap();
-
-        let (layer_digest, layer_size, diff_id) =
-            build_layer_tar_gz(&erofs_path, objects_dir, gen_dir, &blobs_dir, cas_objects).unwrap();
-
-        let config_json = build_config_json(&metadata, 5, &diff_id);
-        let (config_digest, config_size) = write_blob(&blobs_dir, config_json.as_bytes()).unwrap();
-
-        let manifest_json =
-            build_manifest_json(&config_digest, config_size, &layer_digest, layer_size);
-        let (manifest_digest, manifest_size) =
-            write_blob(&blobs_dir, manifest_json.as_bytes()).unwrap();
-
-        let index_json = build_index_json(&manifest_digest, manifest_size);
-        fs::write(output_dir.join("index.json"), &index_json).unwrap();
-
-        let oci_layout = r#"{"imageLayoutVersion":"1.0.0"}"#;
-        fs::write(output_dir.join("oci-layout"), oci_layout).unwrap();
+        export_oci_artifact(artifact, &artifact.cas_dir, &output_dir).unwrap();
 
         (output_tmp, output_dir)
     }
@@ -466,9 +484,8 @@ mod tests {
     #[test]
     fn test_oci_layout_structure() {
         let tmp = TempDir::new().unwrap();
-        let (gen_dir, objects_dir, cas_objects) = create_test_generation(tmp.path());
-        let (_output_tmp, output_dir) =
-            export_test_generation(&gen_dir, &objects_dir, &cas_objects);
+        let artifact = create_test_generation(tmp.path());
+        let (_output_tmp, output_dir) = export_test_generation(&artifact);
 
         // Verify all expected files exist
         assert!(output_dir.join("oci-layout").exists(), "oci-layout missing");
@@ -496,9 +513,8 @@ mod tests {
     #[test]
     fn test_oci_manifest_valid_json() {
         let tmp = TempDir::new().unwrap();
-        let (gen_dir, objects_dir, cas_objects) = create_test_generation(tmp.path());
-        let (_output_tmp, output_dir) =
-            export_test_generation(&gen_dir, &objects_dir, &cas_objects);
+        let artifact = create_test_generation(tmp.path());
+        let (_output_tmp, output_dir) = export_test_generation(&artifact);
 
         // Read index.json to find the manifest digest
         let index_str = fs::read_to_string(output_dir.join("index.json")).unwrap();
@@ -538,9 +554,8 @@ mod tests {
     #[test]
     fn test_oci_layer_contains_erofs() {
         let tmp = TempDir::new().unwrap();
-        let (gen_dir, objects_dir, cas_objects) = create_test_generation(tmp.path());
-        let (_output_tmp, output_dir) =
-            export_test_generation(&gen_dir, &objects_dir, &cas_objects);
+        let artifact = create_test_generation(tmp.path());
+        let (_output_tmp, output_dir) = export_test_generation(&artifact);
 
         // Find the layer blob via manifest -> layers[0].digest
         let index_str = fs::read_to_string(output_dir.join("index.json")).unwrap();
@@ -612,9 +627,8 @@ mod tests {
     #[test]
     fn test_oci_config_labels() {
         let tmp = TempDir::new().unwrap();
-        let (gen_dir, objects_dir, cas_objects) = create_test_generation(tmp.path());
-        let (_output_tmp, output_dir) =
-            export_test_generation(&gen_dir, &objects_dir, &cas_objects);
+        let artifact = create_test_generation(tmp.path());
+        let (_output_tmp, output_dir) = export_test_generation(&artifact);
 
         // Find config blob via manifest
         let index_str = fs::read_to_string(output_dir.join("index.json")).unwrap();
@@ -651,9 +665,8 @@ mod tests {
     #[test]
     fn test_oci_blob_integrity() {
         let tmp = TempDir::new().unwrap();
-        let (gen_dir, objects_dir, cas_objects) = create_test_generation(tmp.path());
-        let (_output_tmp, output_dir) =
-            export_test_generation(&gen_dir, &objects_dir, &cas_objects);
+        let artifact = create_test_generation(tmp.path());
+        let (_output_tmp, output_dir) = export_test_generation(&artifact);
 
         // Every blob file should have a name that matches its SHA-256 digest
         for entry in fs::read_dir(output_dir.join("blobs/sha256")).unwrap() {
@@ -688,9 +701,10 @@ mod tests {
     #[test]
     fn test_oci_layer_uses_manifest_cas_scope() {
         let tmp = TempDir::new().unwrap();
-        let (gen_dir, objects_dir, cas_objects) = create_test_generation(tmp.path());
-        let (_output_tmp, output_dir) =
-            export_test_generation(&gen_dir, &objects_dir, &cas_objects[..1]);
+        let artifact = create_test_generation(tmp.path());
+        let mut scoped_artifact = artifact.clone();
+        scoped_artifact.cas_objects = vec![artifact.cas_objects[0].clone()];
+        let (_output_tmp, output_dir) = export_test_generation(&scoped_artifact);
 
         let index_str = fs::read_to_string(output_dir.join("index.json")).unwrap();
         let index: serde_json::Value = serde_json::from_str(&index_str).unwrap();
@@ -724,13 +738,13 @@ mod tests {
 
         let included = format!(
             "objects/{}/{}",
-            &cas_objects[0].sha256[..2],
-            &cas_objects[0].sha256[2..]
+            &artifact.cas_objects[0].sha256[..2],
+            &artifact.cas_objects[0].sha256[2..]
         );
         let excluded = format!(
             "objects/{}/{}",
-            &cas_objects[1].sha256[..2],
-            &cas_objects[1].sha256[2..]
+            &artifact.cas_objects[1].sha256[..2],
+            &artifact.cas_objects[1].sha256[2..]
         );
 
         assert!(
@@ -741,6 +755,86 @@ mod tests {
             !object_entries.contains(&excluded),
             "unlisted CAS object must not be exported from the CAS directory walk"
         );
+    }
+
+    #[test]
+    fn test_oci_export_uses_artifact_cas_dir_when_cli_dir_differs() {
+        let tmp = TempDir::new().unwrap();
+        let artifact = create_test_generation(tmp.path());
+        let requested_objects_dir = tmp.path().join("empty-requested-objects");
+        fs::create_dir_all(&requested_objects_dir).unwrap();
+        let output_tmp = TempDir::new().unwrap();
+        let output_dir = output_tmp.path().join("oci-out");
+        fs::create_dir_all(&output_dir).unwrap();
+
+        export_oci_artifact(&artifact, &requested_objects_dir, &output_dir).unwrap();
+
+        let index_str = fs::read_to_string(output_dir.join("index.json")).unwrap();
+        let index: serde_json::Value = serde_json::from_str(&index_str).unwrap();
+        let manifest_digest = index["manifests"][0]["digest"]
+            .as_str()
+            .unwrap()
+            .strip_prefix("sha256:")
+            .unwrap();
+        let manifest_str =
+            fs::read_to_string(output_dir.join("blobs/sha256").join(manifest_digest)).unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(&manifest_str).unwrap();
+        let layer_digest = manifest["layers"][0]["digest"]
+            .as_str()
+            .unwrap()
+            .strip_prefix("sha256:")
+            .unwrap();
+
+        let compressed_data = fs::read(output_dir.join("blobs/sha256").join(layer_digest)).unwrap();
+        let decoder = flate2::read::GzDecoder::new(compressed_data.as_slice());
+        let mut archive = tar::Archive::new(decoder);
+        let object_count = archive
+            .entries()
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .path()
+                    .map(|path| path.to_string_lossy().starts_with("objects/"))
+                    .unwrap_or(false)
+            })
+            .count();
+
+        assert_eq!(
+            object_count, 2,
+            "artifact CAS directory must remain authoritative even when the CLI requested directory is empty"
+        );
+    }
+
+    #[test]
+    fn test_oci_artifact_export_requires_generation_metadata_file() {
+        let tmp = TempDir::new().unwrap();
+        let artifact = create_test_generation(tmp.path());
+        fs::remove_file(artifact.generation_dir.join(GENERATION_METADATA_FILE)).unwrap();
+        let output_tmp = TempDir::new().unwrap();
+        let output_dir = output_tmp.path().join("oci-out");
+        fs::create_dir_all(&output_dir).unwrap();
+
+        let err = export_oci_artifact(&artifact, &artifact.cas_dir, &output_dir).unwrap_err();
+
+        assert!(
+            err.to_string().contains("generation metadata"),
+            "expected metadata failure, got {err:#}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_current_oci_loader_follows_current_symlink_to_artifact() {
+        let tmp = TempDir::new().unwrap();
+        let artifact = create_test_generation(tmp.path());
+        std::os::unix::fs::symlink("generations/5", tmp.path().join("current")).unwrap();
+
+        let loaded = load_current_oci_generation_artifact(&tmp.path().join("current")).unwrap();
+
+        assert_eq!(loaded.generation, artifact.generation);
+        assert_eq!(loaded.generation_dir, tmp.path().join("current"));
+        assert_eq!(loaded.cas_objects, artifact.cas_objects);
     }
 
     #[test]
