@@ -202,36 +202,9 @@ impl LegacyConverter {
             );
         }
 
-        // Step 3: Build CCS manifest from metadata
-        let manifest = self.build_manifest(&final_metadata, &final_files, &detected_hooks)?;
-
-        // Step 4: Create temporary directory with file structure
-        let temp_dir = TempDir::new()
-            .map_err(|e| ConversionError::IoError(format!("Failed to create temp dir: {}", e)))?;
-
-        // Write files to temp directory
-        self.write_files_to_temp(&final_files, temp_dir.path())?;
-
-        // Write manifest
-        let manifest_path = temp_dir.path().join("ccs.toml");
-        let manifest_toml = toml::to_string_pretty(&manifest).map_err(|e| {
-            ConversionError::ManifestError(format!("Failed to serialize manifest: {}", e))
-        })?;
-        std::fs::write(&manifest_path, manifest_toml)
-            .map_err(|e| ConversionError::IoError(format!("Failed to write manifest: {}", e)))?;
-
-        // Step 5: Build CCS package using CcsBuilder
-        let mut builder = CcsBuilder::new(manifest.clone(), temp_dir.path());
-
-        if self.options.enable_chunking {
-            builder = builder.with_chunking();
-        }
-
-        let build_result = builder
-            .build()
-            .map_err(|e| ConversionError::BuildError(format!("CCS build failed: {}", e)))?;
-
-        // Step 5.5: Infer capabilities if enabled
+        // Step 3: Infer capabilities before building the CCS package so the
+        // generated manifest carries the same declaration that conversion
+        // records for audit.
         let (inferred_capabilities, inference_error) = if self.options.enable_inference {
             let inference_files: Vec<InferencePackageFile> = final_files
                 .iter()
@@ -289,7 +262,39 @@ impl LegacyConverter {
             (None, None)
         };
 
-        // Step 6: Write the package file
+        // Step 4: Build CCS manifest from metadata
+        let mut manifest = self.build_manifest(&final_metadata, &final_files, &detected_hooks)?;
+        manifest.capabilities = inferred_capabilities
+            .as_ref()
+            .map(InferredCapabilities::to_declaration);
+
+        // Step 5: Create temporary directory with file structure
+        let temp_dir = TempDir::new()
+            .map_err(|e| ConversionError::IoError(format!("Failed to create temp dir: {}", e)))?;
+
+        // Write files to temp directory
+        self.write_files_to_temp(&final_files, temp_dir.path())?;
+
+        // Write manifest
+        let manifest_path = temp_dir.path().join("ccs.toml");
+        let manifest_toml = toml::to_string_pretty(&manifest).map_err(|e| {
+            ConversionError::ManifestError(format!("Failed to serialize manifest: {}", e))
+        })?;
+        std::fs::write(&manifest_path, manifest_toml)
+            .map_err(|e| ConversionError::IoError(format!("Failed to write manifest: {}", e)))?;
+
+        // Step 6: Build CCS package using CcsBuilder
+        let mut builder = CcsBuilder::new(manifest.clone(), temp_dir.path());
+
+        if self.options.enable_chunking {
+            builder = builder.with_chunking();
+        }
+
+        let build_result = builder
+            .build()
+            .map_err(|e| ConversionError::BuildError(format!("CCS build failed: {}", e)))?;
+
+        // Step 7: Write the package file
         std::fs::create_dir_all(&self.options.output_dir)
             .map_err(|e| ConversionError::IoError(format!("Failed to create output dir: {}", e)))?;
 
@@ -302,7 +307,7 @@ impl LegacyConverter {
         write_ccs_package(&build_result, &package_path)
             .map_err(|e| ConversionError::BuildError(format!("Failed to write package: {}", e)))?;
 
-        // Step 7: Extract legacy provenance information
+        // Step 8: Extract legacy provenance information
         let legacy_provenance = if metadata.package_path.exists() {
             let prov =
                 LegacyProvenance::extract_from_path(format, checksum, &metadata.package_path);
@@ -642,6 +647,49 @@ mod tests {
     fn test_converter_creation() {
         let converter = LegacyConverter::with_defaults();
         assert!(converter.options.enable_chunking);
+    }
+
+    #[test]
+    fn convert_embeds_inferred_capabilities_in_generated_manifest() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let options = ConversionOptions {
+            enable_chunking: false,
+            output_dir: temp_dir.path().to_path_buf(),
+            auto_classify: true,
+            min_fidelity: FidelityLevel::Low,
+            capture_scriptlets: false,
+            enable_inference: true,
+            inference_options: InferenceOptions::fast(),
+        };
+        let converter = LegacyConverter::new(options);
+        let mut metadata = make_test_metadata();
+        metadata.name = "nginx".to_string();
+        metadata.package_path = temp_dir.path().join("nginx.rpm");
+        std::fs::write(&metadata.package_path, b"fake rpm").unwrap();
+        let files = vec![ExtractedFile {
+            path: "/usr/sbin/nginx".to_string(),
+            content: b"#!/bin/sh\nexec true\n".to_vec(),
+            size: 20,
+            mode: 0o100755,
+            sha256: Some("nginx".to_string()),
+            symlink_target: None,
+        }];
+
+        let result = converter
+            .convert(&metadata, &files, "rpm", "sha256:nginx")
+            .unwrap();
+
+        assert!(result.inferred_capabilities.is_some());
+        let declaration = result
+            .build_result
+            .manifest
+            .capabilities
+            .expect("generated CCS manifest should carry inferred capabilities");
+        assert!(
+            declaration.network.listen.contains(&"80".to_string())
+                || !declaration.filesystem.write.is_empty(),
+            "nginx inference should produce policy-relevant capabilities"
+        );
     }
 
     #[test]

@@ -396,6 +396,12 @@ pub async fn try_convert_to_ccs(
         .package_path
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("Conversion succeeded but no package path returned"))?;
+    let converted_ccs_path = ccs_package_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Converted CCS path is not valid UTF-8"))?;
+    let converted_ccs_pkg = CcsPackage::parse(converted_ccs_path)
+        .context("Failed to parse converted CCS package for capability policy")?;
+    crate::commands::ccs::enforce_ccs_capability_policy(&converted_ccs_pkg, false, None)?;
 
     info!(
         "Converted {} to CCS format: {} (fidelity: {})",
@@ -732,11 +738,106 @@ mod tests {
     use conary_core::ccs::builder::write_ccs_package;
     use conary_core::ccs::manifest::{DirectoryHook, ScriptHook};
     use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
-    use conary_core::db::models::{Repository, RepositoryPackage, RepositoryProvide};
+    use conary_core::db::models::{Repository, RepositoryPackage, RepositoryProvide, Trove};
     use conary_core::db::schema;
     use conary_core::hash;
+    use conary_core::packages::traits::{
+        Dependency, ExtractedFile, PackageFile, PackageFormat, Scriptlet,
+    };
     use conary_core::version::VersionConstraint;
     use std::collections::HashMap;
+
+    struct FakeLegacyPackage {
+        name: String,
+        version: String,
+        description: Option<String>,
+        files: Vec<PackageFile>,
+        extracted_files: Vec<ExtractedFile>,
+        dependencies: Vec<Dependency>,
+        provides: Vec<Dependency>,
+        scriptlets: Vec<Scriptlet>,
+    }
+
+    impl FakeLegacyPackage {
+        fn nginx() -> Self {
+            let content = b"#!/bin/sh\nexec true\n".to_vec();
+            let size = content.len() as i64;
+            let hash = hash::sha256(&content);
+            Self {
+                name: "nginx".to_string(),
+                version: "1.0.0".to_string(),
+                description: Some("fake nginx legacy package".to_string()),
+                files: vec![PackageFile {
+                    path: "/usr/sbin/nginx".to_string(),
+                    size,
+                    mode: 0o100755,
+                    sha256: Some(hash.clone()),
+                    symlink_target: None,
+                }],
+                extracted_files: vec![ExtractedFile {
+                    path: "/usr/sbin/nginx".to_string(),
+                    content,
+                    size,
+                    mode: 0o100755,
+                    sha256: Some(hash),
+                    symlink_target: None,
+                }],
+                dependencies: Vec::new(),
+                provides: Vec::new(),
+                scriptlets: Vec::new(),
+            }
+        }
+    }
+
+    impl PackageFormat for FakeLegacyPackage {
+        fn parse(_path: &str) -> conary_core::Result<Self> {
+            unimplemented!("test fake package is constructed directly")
+        }
+
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn version(&self) -> &str {
+            &self.version
+        }
+
+        fn architecture(&self) -> Option<&str> {
+            Some("x86_64")
+        }
+
+        fn description(&self) -> Option<&str> {
+            self.description.as_deref()
+        }
+
+        fn files(&self) -> &[PackageFile] {
+            &self.files
+        }
+
+        fn dependencies(&self) -> &[Dependency] {
+            &self.dependencies
+        }
+
+        fn provides(&self) -> &[Dependency] {
+            &self.provides
+        }
+
+        fn extract_file_contents(&self) -> conary_core::Result<Vec<ExtractedFile>> {
+            Ok(self.extracted_files.clone())
+        }
+
+        fn scriptlets(&self) -> &[Scriptlet] {
+            &self.scriptlets
+        }
+
+        fn to_trove(&self) -> Trove {
+            Trove::new(
+                self.name.clone(),
+                self.version.clone(),
+                conary_core::db::models::TroveType::Package,
+            )
+        }
+    }
 
     fn test_db() -> rusqlite::Connection {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -806,6 +907,56 @@ mod tests {
         };
         write_ccs_package(&result, &package_path).unwrap();
         package_path
+    }
+
+    #[tokio::test]
+    async fn try_convert_to_ccs_rejects_inferred_prompted_capabilities_before_db_mutation() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+        let legacy_path = temp_dir.path().join("nginx.rpm");
+
+        conary_core::db::init(db_path_str).unwrap();
+        std::fs::write(&legacy_path, b"fake legacy package bytes").unwrap();
+
+        let package = FakeLegacyPackage::nginx();
+        let err = match try_convert_to_ccs(
+            &package,
+            &legacy_path,
+            PackageFormatType::Rpm,
+            db_path_str,
+            false,
+        )
+        .await
+        {
+            Ok(_) => panic!("conversion unexpectedly succeeded"),
+            Err(error) => error,
+        };
+
+        assert!(
+            err.to_string().contains("requires capability"),
+            "conversion should fail closed on inferred prompted capabilities before metadata writes: {err:?}"
+        );
+
+        let conn = conary_core::db::open(db_path_str).unwrap();
+        let converted_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM converted_packages", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let trove_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM troves", [], |row| row.get(0))
+            .unwrap();
+        let changeset_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM changesets", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(converted_count, 0);
+        assert_eq!(trove_count, 0);
+        assert_eq!(changeset_count, 0);
+        assert!(
+            std::fs::read_link(temp_dir.path().join("current")).is_err(),
+            "conversion policy rejection must happen before generation activation"
+        );
     }
 
     #[tokio::test]
