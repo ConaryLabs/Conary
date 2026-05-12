@@ -225,13 +225,12 @@ fn ensure_no_symlink_ancestor(
     Ok(())
 }
 
-fn validate_selected_payload_paths(
+pub(crate) fn validate_ccs_payload_paths(
     root_path: &Path,
     ccs_pkg: &CcsPackage,
-    selected_components: &SelectedCcsComponents,
+    selected_component_names: &[String],
 ) -> Result<()> {
-    let selected_component_set: HashSet<&str> = selected_components
-        .names
+    let selected_component_set: HashSet<&str> = selected_component_names
         .iter()
         .map(String::as_str)
         .collect();
@@ -257,7 +256,7 @@ fn validate_selected_payload_paths(
     if extracted_files.is_empty() && !selected_file_entries.is_empty() {
         anyhow::bail!(
             "No files matched the selected components: {}",
-            selected_components.names.join(", ")
+            selected_component_names.join(", ")
         );
     }
 
@@ -830,7 +829,7 @@ pub async fn cmd_ccs_install(
         return Ok(());
     }
 
-    validate_selected_payload_paths(Path::new(root), &ccs_pkg, &selected_components)?;
+    validate_ccs_payload_paths(Path::new(root), &ccs_pkg, &selected_components.names)?;
 
     let tx_result = super::super::install::install_ccs_package_transactionally(
         &mut conn,
@@ -1616,6 +1615,113 @@ mod tests {
         assert!(
             rows.contains(&("pkgconfig".to_string(), "manifest".to_string())),
             "manifest pkgconfig provides must be persisted"
+        );
+    }
+
+    #[tokio::test]
+    async fn ccs_install_persists_typed_provide_when_name_collides() {
+        use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
+        use conary_core::hash;
+        use flate2::Compression;
+        use flate2::write::GzEncoder;
+        use tar::Builder;
+
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let package_path = temp_dir.path().join("collision-tool.ccs");
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+
+        std::fs::create_dir_all(&install_root).unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+        stage_test_boot_assets(temp_dir.path());
+
+        let init_content = b"#!/bin/sh\nexec true\n".to_vec();
+        let init_hash = hash::sha256(&init_content);
+        let files = vec![FileEntry {
+            path: "/usr/sbin/init".to_string(),
+            hash: init_hash.clone(),
+            size: init_content.len() as u64,
+            mode: 0o100755,
+            component: "runtime".to_string(),
+            file_type: FileType::Regular,
+            target: None,
+            chunks: None,
+        }];
+
+        let mut manifest = CcsManifest::new_minimal("collision-tool", "1.0.0");
+        manifest.provides.binaries = vec!["collision-tool".to_string()];
+
+        let result = BuildResult {
+            manifest,
+            components: HashMap::from([(
+                "runtime".to_string(),
+                ComponentData {
+                    name: "runtime".to_string(),
+                    files: files.clone(),
+                    hash: "runtime".to_string(),
+                    size: init_content.len() as u64,
+                },
+            )]),
+            files,
+            blobs: HashMap::from([(init_hash.clone(), init_content.clone())]),
+            total_size: 0,
+            chunked: false,
+            chunk_stats: None,
+        };
+
+        let package_root = temp_dir.path().join("package-root");
+        let components_dir = package_root.join("components");
+        let object_path = package_root
+            .join("objects")
+            .join(&init_hash[..2])
+            .join(&init_hash[2..]);
+        std::fs::create_dir_all(&components_dir).unwrap();
+        std::fs::create_dir_all(object_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            package_root.join("MANIFEST.toml"),
+            result.manifest.to_toml().unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            components_dir.join("runtime.json"),
+            serde_json::to_string_pretty(result.components.get("runtime").unwrap()).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(object_path, &init_content).unwrap();
+
+        let output = std::fs::File::create(&package_path).unwrap();
+        let encoder = GzEncoder::new(output, Compression::default());
+        let mut archive = Builder::new(encoder);
+        archive.append_dir_all(".", &package_root).unwrap();
+        let encoder = archive.into_inner().unwrap();
+        encoder.finish().unwrap();
+
+        super::cmd_ccs_install(
+            package_path.to_str().unwrap(),
+            db_path_str,
+            install_root.to_str().unwrap(),
+            false,
+            true,
+            None,
+            None,
+            crate::commands::SandboxMode::None,
+            true,
+            false,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let conn = conary_core::db::open(db_path_str).unwrap();
+        let typed =
+            conary_core::db::models::ProvideEntry::find_typed(&conn, "binary", "collision-tool")
+                .unwrap();
+        assert!(
+            typed.is_some(),
+            "typed manifest provide must remain resolvable when its raw capability equals the package name"
         );
     }
 

@@ -18,5 +18,6 @@ pub use enhance::cmd_ccs_enhance;
 pub use init::cmd_ccs_init;
 pub use inspect::{cmd_ccs_inspect, cmd_ccs_verify};
 pub use install::cmd_ccs_install;
+pub(crate) use install::validate_ccs_payload_paths;
 pub use runtime::{cmd_ccs_export, cmd_ccs_run, cmd_ccs_shell};
 pub use signing::{cmd_ccs_keygen, cmd_ccs_sign};
