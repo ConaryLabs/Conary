@@ -35,7 +35,8 @@ For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 
 
 - Federation tuning for larger peer topologies
 - Optional alternative chunk transports and mirror strategies
-- ISO generation export and OCI convergence on the shared generation artifact contract
+- ISO generation export on the shared generation artifact contract
+- OCI export hardening and registry workflow polish on the shared generation artifact source
 - Signed portable generation bundles and boot-artifact provenance
 - More source-oriented workflows around recipes, factories, and remote cooking
 
@@ -43,7 +44,7 @@ For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 
 
 - conaryd has queue/SSE/read-route plumbing and enhance-job execution, but install/remove/update package routes intentionally return `501 Not Implemented`.
 - Generation export is release-ready for x86_64 raw/qcow2 validation first; aarch64/riscv64 boot assets remain reserved follow-up work.
-- ISO generation export and generation-to-OCI convergence are not part of the limited public preview.
+- ISO generation export is not part of the limited public preview. OCI export uses the shared generation artifact source, but registry workflow polish remains follow-up.
 
 ---
 
@@ -51,7 +52,7 @@ For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 
 
 1. Keep generation export and installed-runtime QEMU validation in rotation
 2. Make self-host VM validation inputs pristine by default
-3. Finish ISO generation export and OCI convergence on the generation artifact contract
+3. Finish ISO generation export on the generation artifact contract
 4. Shell integration for project and dev environments
 5. Release and operational polish for Remi and conaryd
 6. Documentation and contributor-experience cleanup

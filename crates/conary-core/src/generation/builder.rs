@@ -1096,7 +1096,7 @@ mod tests {
             "/usr/bin/bad",
             "invalid SHA-256 digest for regular file",
             "conary system adopt --system --full",
-            "conary system takeover --up-to cas",
+            "conary system takeover --up-to generation",
         ] {
             assert!(
                 error.contains(snippet),

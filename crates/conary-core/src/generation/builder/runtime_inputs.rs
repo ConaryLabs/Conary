@@ -214,7 +214,7 @@ fn runtime_input_error(
     detail: impl std::fmt::Display,
 ) -> crate::Error {
     crate::Error::InvalidPath(format!(
-        "exportable runtime generation is not self-contained: package {package_name} has unresolved CAS-backed path {path}: {detail}. Run conary system adopt --system --full for bulk adoption, conary system adopt <pkg> --full for a single package, or conary system takeover --up-to cas before building this generation."
+        "exportable runtime generation is not self-contained: package {package_name} has unresolved CAS-backed path {path}: {detail}. Run conary system adopt --system --full for bulk adoption, conary system adopt <pkg> --full for a single package, or conary system takeover --up-to generation for full generation takeover."
     ))
 }
 
@@ -297,7 +297,7 @@ mod tests {
                 "/usr/lib/libfoo.so",
                 "symlink entry is missing symlink_target",
                 "conary system adopt --system --full",
-                "conary system takeover --up-to cas",
+                "conary system takeover --up-to generation",
             ],
         );
     }

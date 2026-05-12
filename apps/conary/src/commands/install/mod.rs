@@ -207,6 +207,17 @@ pub(super) fn run_triggers(
     }
 }
 
+pub(crate) fn resolve_default_dep_mode_from_model() -> DepMode {
+    let convergence = if conary_core::model::model_exists(None) {
+        conary_core::model::load_model(None)
+            .map(|model| model.system.convergence)
+            .unwrap_or_default()
+    } else {
+        conary_core::model::ConvergenceIntent::default()
+    };
+    DepMode::from_convergence_intent(&convergence)
+}
+
 pub(super) fn mark_upgraded_parent_deriveds_stale(
     conn: &rusqlite::Connection,
     parent_name: &str,
@@ -340,16 +351,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
 
     // Resolve dep_mode: if the user explicitly set --dep-mode use that,
     // otherwise derive from the system model convergence intent.
-    let effective_dep_mode = dep_mode.unwrap_or_else(|| {
-        if conary_core::model::model_exists(None) {
-            conary_core::model::load_model(None)
-                .ok()
-                .map(|m| DepMode::from_convergence_intent(&m.system.convergence))
-                .unwrap_or(DepMode::Satisfy)
-        } else {
-            DepMode::Satisfy
-        }
-    });
+    let effective_dep_mode = dep_mode.unwrap_or_else(resolve_default_dep_mode_from_model);
 
     // --- Phase 1: Component parsing + canonical resolution + policy ---
     //
@@ -2280,6 +2282,11 @@ mod tests {
     #[test]
     fn distro_name_to_flavor_unknown() {
         assert_eq!(distro_name_to_flavor("nixos"), None);
+    }
+
+    #[test]
+    fn missing_model_uses_preview_convergence_dep_mode() {
+        assert_eq!(resolve_default_dep_mode_from_model(), DepMode::Adopt);
     }
 
     #[test]

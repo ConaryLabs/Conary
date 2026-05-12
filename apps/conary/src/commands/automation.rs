@@ -125,7 +125,7 @@ async fn execute_planned_op(
                     convert_to_ccs: false,
                     no_capture: false,
                     force: false,
-                    dep_mode: Some(super::DepMode::default()),
+                    dep_mode: None,
                     yes: true,
                     from_distro: None,
                 },
@@ -1018,6 +1018,22 @@ mod tests {
 
         let json = build_status_json(&summary, &config);
         assert_eq!(json["major_upgrades"], 2);
+    }
+
+    #[test]
+    fn automation_install_leaves_dependency_mode_model_derived() {
+        let source = include_str!("automation.rs");
+        let model_derived_dep_mode = ["dep_mode: ", "None,"].concat();
+        let hard_coded_default = ["dep_mode: Some(super::DepMode", "::default()),"].concat();
+
+        assert!(
+            source.contains(&model_derived_dep_mode),
+            "automation installs must leave dep_mode unset so install derives it from the model"
+        );
+        assert!(
+            !source.contains(&hard_coded_default),
+            "automation installs must not force the legacy satisfy default"
+        );
     }
 
     #[tokio::test]

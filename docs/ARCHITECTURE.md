@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-01
-revision: 13
-summary: Refresh workspace layout for self-contained runtime generation export, shared operation vocabulary, source-selection policy flow, and current service boundaries
+last_updated: 2026-05-12
+revision: 14
+summary: Refresh workspace layout, generation-first runtime mutation, source-selection policy flow, and current service boundaries
 ---
 
 # Conary Architecture
@@ -457,6 +457,8 @@ pipeline: resolve -> fetch -> DB commit -> EROFS build -> mount. The DB commit
 is the point of no return. Recovery is simple: if the DB says generation N
 should be active but the mount does not match, rebuild the EROFS image from DB
 state and remount. No journal, no backup phase, no staging directory.
+Runtime mutation is DB/CAS/generation/active-pointer first; direct mutation of
+the live root is not a supported release path.
 
 **Content-addressable storage**: Files are stored by SHA-256 hash in a flat
 CAS directory. This enables deduplication across packages, instant rollback

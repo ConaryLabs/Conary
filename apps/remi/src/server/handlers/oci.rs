@@ -1,5 +1,5 @@
 // apps/remi/src/server/handlers/oci.rs
-//! OCI Distribution Spec v2 compatibility layer
+//! OCI Distribution Spec v2 package registry surface
 //!
 //! Exposes CCS packages as OCI artifacts so any OCI-compatible tool
 //! (Harbor, Zot, ORAS, crane) can interact with Conary's package store.

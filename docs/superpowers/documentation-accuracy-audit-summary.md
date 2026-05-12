@@ -6,7 +6,7 @@ This refresh updates the documentation baseline after the limited public release
 readiness pass.
 
 Audited every tracked documentation-like file returned by
-`bash scripts/docs-audit-inventory.sh`: 69 tracked files spanning root docs,
+`bash scripts/docs-audit-inventory.sh`: 71 tracked files spanning root docs,
 assistant shims, GitHub templates, canonical docs under `docs/`,
 deploy/operator docs, `deploy/remi.toml.example`, app-local READMEs, active
 planning/design records, historical/archive docs, release security waivers, and
@@ -40,7 +40,8 @@ The repo moved materially after the last audit:
 - Refreshed user-facing status in `README.md` and `ROADMAP.md` around the
   Fedora 44, Ubuntu 26.04 LTS, and Arch Linux limited preview; local
   QEMU/security gates; the temporary Forge validation pause; conaryd
-  package-executor gaps; raw/qcow2 generation export; and ISO/OCI follow-ups.
+  package-executor gaps; raw/qcow2 generation export; OCI artifact-source
+  alignment; and remaining ISO/bundle follow-ups.
 - Updated `SECURITY.md` to 0.8.x support and replaced stale journal language
   with the current database/EROFS generation model and preview distro scope.
 - Updated deploy/operator docs and `deploy/remi.toml.example` for Fedora 44,
@@ -50,8 +51,9 @@ The repo moved materially after the last audit:
   runtime generation input validation, LFS 13.0 bootstrap phases, and
   self-contained generation export.
 - Updated site install/features/compare copy to remove Debian as a public
-  support claim and to clarify that generation-to-OCI export and non-x86_64
-  generation boot assets remain follow-up work.
+  support claim and to clarify that non-x86_64 generation boot assets remain
+  follow-up work while OCI export source loading has moved onto the generation
+  artifact contract.
 - Updated conaryd CLI help and public docs so package install/remove/update
   routes are described as explicit `501 Not Implemented` responses.
 - Updated integration docs and `apps/conary-test/README.md` to include the
@@ -59,16 +61,17 @@ The repo moved materially after the last audit:
   gate, and the TGE04 installed-runtime qcow2 boot proof.
 - Refreshed assistant-facing docs to route broad doc work through the inventory
   and ledger checker, and added the post-generation export roadmap to the map.
-- Reframed active dated plans/specs as historical implementation records so
-  their old step-by-step instructions are not mistaken for current guidance.
+- Reframed completed dated plans/specs as historical implementation records,
+  while keeping the active limited-preview readiness and composefs atomic
+  modernization plan/spec entries available as current planning guidance.
 
 ## Archive Decisions
 
 - Existing archive docs and recipe READMEs were retained as historical
   reference material.
 - Completed top-level superpowers plans were moved to
-  `docs/superpowers/plans/archive/`, leaving only the limited public release
-  readiness plan active at the top level.
+  `docs/superpowers/plans/archive/`; the limited public release readiness plan
+  and composefs atomic modernization plan/spec remain active at the top level.
 - No tracked documentation files were deleted.
 
 ## Verification Commands
@@ -96,9 +99,9 @@ The final release-readiness verification gate is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 69
-- `verified-no-change`: 21
-- `corrected`: 23
+- Total tracked doc-like files audited: 71
+- `verified-no-change`: 20
+- `corrected`: 26
 - `reframed-as-historical`: 5
 - `archived`: 6
 - `retained-historical`: 14

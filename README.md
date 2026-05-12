@@ -10,13 +10,13 @@ A cross-distribution Linux system manager with immutable generations, atomic tra
 
 Inspired by the [original Conary](https://en.wikipedia.org/wiki/Conary_(package_manager)) from rPath, which pioneered concepts like troves, changesets, flavors, and components that were ahead of their time. This project carries those ideas forward with a modern implementation.
 
-**Release status:** Conary is being prepared as a limited public preview for Fedora 44, Ubuntu 26.04 LTS, and Arch Linux. The CLI install/remove/update path, immutable generations, raw/qcow2 generation export, Remi conversion, and local QEMU validation are the supported preview surface. Remote Forge validation is temporarily paused while the project replaces the old runner with a KVM-capable host. conaryd package execution, ISO generation export, generation-to-OCI convergence, and non-x86_64 generation boot assets remain follow-up work.
+**Release status:** Conary is being prepared as a limited public preview for Fedora 44, Ubuntu 26.04 LTS, and Arch Linux. The CLI install/remove/update path, immutable generations, raw/qcow2 generation export, Remi conversion, and local QEMU validation are the supported preview surface. Remote Forge validation is temporarily paused while the project replaces the old runner with a KVM-capable host. OCI export now loads the same generation artifact contract as disk export, while conaryd package execution, ISO generation export, portable bundle signing, and non-x86_64 generation boot assets remain follow-up work.
 
 ---
 
 ## Why Conary
 
-**Immutable system generations.** Build read-only EROFS images of your entire system and mount them via composefs. Switch between complete system states live or export them as bootable raw/qcow2 artifacts. Exportable runtime generations are self-contained CAS-backed snapshots -- rollback means switching a generation, not undoing thousands of file operations.
+**Immutable system generations.** Build read-only EROFS images of your entire system and mount them via composefs. Select complete system states for the next boot or export them as bootable raw/qcow2 artifacts. Exportable runtime generations are self-contained CAS-backed snapshots -- rollback means switching a generation, not undoing thousands of file operations.
 
 ```bash
 conary system generation build --summary "After nginx setup"
@@ -86,7 +86,7 @@ conary install nginx
 
 Conary is strongest where traditional package managers are weakest: atomic operations, cross-format support, immutable system images, and fine-grained component control. Nix shares several of Conary's design principles but uses a custom language (Nix expressions) where Conary uses TOML, and Nix does not handle RPM/DEB/Arch formats natively.
 
-The honest gap: ecosystem maturity. apt and dnf have decades of packages and integration. Conary bridges this through format conversion (install .rpm/.deb/.pkg.tar.zst directly) and the Remi server (which converts upstream repos to CCS on the fly), but native CCS packages are still early. Immutable generations and raw/qcow2 export are working, with ISO/OCI convergence and signed portable bundles still active follow-up areas.
+The honest gap: ecosystem maturity. apt and dnf have decades of packages and integration. Conary bridges this through format conversion (install .rpm/.deb/.pkg.tar.zst directly) and the Remi server (which converts upstream repos to CCS on the fly), but native CCS packages are still early. Immutable generations and raw/qcow2 export are working, OCI export uses the same generation artifact source, and ISO export plus signed portable bundles remain active follow-up areas.
 
 ---
 
@@ -115,7 +115,7 @@ cargo build -p conary
 ./target/debug/conary query whatprovides libc.so.6
 
 # Adopt packages already on the system
-./target/debug/conary system adopt --system     # Track everything installed by the native package manager
+./target/debug/conary system adopt --system --full # CAS-back packages from the native package manager
 
 # Build a generation from current system state
 ./target/debug/conary system generation build --summary "Initial setup"
@@ -129,15 +129,15 @@ cargo build -p conary
 
 ### System Generations
 
-Build immutable EROFS images of your entire system and mount them via composefs. Each generation is a complete, read-only system snapshot. Switch between generations live without rebooting, or export a complete generation artifact to raw/qcow2 for QEMU and image validation. Old generations can be garbage collected to reclaim space.
+Build immutable EROFS images of your entire system and mount them via composefs. Each generation is a complete, read-only system snapshot. Select generations for next boot, or export a complete generation artifact to raw/qcow2 for QEMU and image validation. Old generations can be garbage collected to reclaim space.
 
 Requires Linux 6.2+ with composefs support.
 
 ```bash
 conary system generation build --summary "Post-update"
 conary system generation list        # Show all generations
-conary system generation switch 3    # Switch to generation 3
-conary system generation rollback    # Revert to previous generation
+conary system generation switch 3    # Select generation 3 for next boot
+conary system generation rollback    # Select previous generation for next boot
 conary system generation gc --keep 3 # Keep only the 3 most recent
 conary system generation info 2      # Detailed info about generation 2
 conary system generation export --path /conary/generations/3 --format qcow2 --output gen3.qcow2
@@ -145,15 +145,13 @@ conary system generation export --path /conary/generations/3 --format qcow2 --ou
 
 ### System Takeover
 
-Convert an existing Linux installation into a Conary-managed system. The stable adoption path today is `conary system adopt --system --full`, which bulk-imports packages into Conary with CAS backing. The progressive `system takeover` pipeline now supports `--up-to cas|owned|generation`; the `generation` level builds a bootable generation and boot entry, then stops ready to activate instead of switching live automatically.
+Convert an existing Linux installation into a Conary-managed system. The stable adoption path today is `conary system adopt --system --full`, which bulk-imports packages into Conary with CAS backing. The `system takeover` release path is generation-level takeover: it builds a bootable generation and boot entry, then stops ready to activate instead of switching live automatically. The lower `cas` and `owned` stop-points still exist as internal/debug checkpoints, not normal preview workflows.
 
 ```bash
 conary system adopt --system --full  # Bulk adoption with CAS backing
 conary system takeover --dry-run     # Preview the takeover plan
-conary system takeover --up-to cas   # Adopt + CAS-back packages (PM untouched)
-conary system takeover --up-to owned # Remove non-blocked packages from the system PM
 conary system takeover --up-to generation --yes
-conary system generation switch 1    # Activate the prepared generation explicitly
+conary system generation switch 1    # Select the prepared generation for next boot
 ```
 
 ### Atomic Transactions
@@ -551,7 +549,7 @@ cargo build --profile fast-release   # Faster compile, still optimized
 
 ## Project Status
 
-**Version 0.8.0** -- The project has a working end-to-end stack: multi-format installs, atomic changesets, immutable generations, takeover/bootstrap flows, Remi conversion and serving, federation, and capability-restricted runtime execution. The current release-readiness pass is narrowing the public preview to Fedora 44, Ubuntu 26.04 LTS, and Arch Linux; keeping Forge validation and security gates green; and documenting remaining gaps such as conaryd package execution, ISO generation export, generation OCI convergence, and non-x86_64 generation boot assets.
+**Version 0.8.0** -- The project has a working end-to-end stack: multi-format installs, atomic changesets, immutable generations, takeover/bootstrap flows, Remi conversion and serving, federation, and capability-restricted runtime execution. The current release-readiness pass is narrowing the public preview to Fedora 44, Ubuntu 26.04 LTS, and Arch Linux; keeping local QEMU validation and security gates green; and documenting remaining gaps such as conaryd package execution, ISO generation export, portable bundle signing, and non-x86_64 generation boot assets.
 
 See [ROADMAP.md](ROADMAP.md) for what we're building next.
 
@@ -562,7 +560,8 @@ See [ROADMAP.md](ROADMAP.md) for what we're building next.
 The next milestone is the current **developer-experience and validation** push -- see [ROADMAP.md](ROADMAP.md) for the full plan. Near-term priorities:
 
 - Keep the Fedora 44, Ubuntu 26.04 LTS, Arch, and QEMU generation-export suites in regular rotation
-- Finish ISO generation export and OCI convergence on the same generation artifact loader
+- Finish ISO generation export on the same generation artifact contract
+- Introduce signed portable generation bundles and boot-artifact provenance
 - Make self-host VM validation pristine-by-default on reruns
 - Improve shell integration, contributor onboarding, and operator diagnostics
 - Continue hardening trust, federation, release, and rollback behavior

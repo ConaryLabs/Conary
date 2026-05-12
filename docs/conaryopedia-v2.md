@@ -671,18 +671,16 @@ conary system adopt --convert --no-chunking  # Skip CDC chunking
 
 #### Takeover
 
-For full Conary management, you can **take over** packages from the system package manager using the progressive pipeline:
+For full Conary management, you can **take over** packages from the system package manager using the generation-level pipeline:
 
 ```bash
-conary system takeover --up-to cas --allow-live-system-mutation        # Adopt + CAS-back all packages (PM untouched)
-conary system takeover --up-to owned --allow-live-system-mutation      # CAS + remove from system PM database
 conary system takeover --allow-live-system-mutation                    # Default: build generation + boot entry, then stop ready to activate
 conary system takeover --dry-run          # Preview what would happen
 conary system takeover --yes --allow-live-system-mutation              # Skip confirmation after explicit acknowledgment
-conary system generation switch 1 --allow-live-system-mutation         # Activate a prepared takeover generation
+conary system generation switch 1 --allow-live-system-mutation         # Select a prepared takeover generation for next boot
 ```
 
-The pipeline is progressive: each level includes all previous levels. After the `owned` level, the system package manager will no longer track those packages. The `generation` level (default) builds an EROFS generation and boot entry, then stops ready to activate. Activation is an explicit follow-up via `conary system generation switch <N> --allow-live-system-mutation`.
+The pipeline is internally progressive, but the supported release path is the `generation` level. The lower `cas` and `owned` stop-points are internal/debug checkpoints for development and diagnosis. The `generation` level (default) builds an EROFS generation and boot entry, then stops ready to activate. Activation is an explicit next-boot follow-up via `conary system generation switch <N> --allow-live-system-mutation`.
 `--yes` skips interactive prompts, but it does not replace `--allow-live-system-mutation`.
 
 #### Sync Hooks
@@ -2379,7 +2377,7 @@ apps/remi/src/server/
     chunks.rs         HEAD/GET/batch chunk serving, pull-through caching
     packages.rs       Package metadata + on-demand conversion trigger
     sparse.rs         Sparse HTTP index (crates.io-style)
-    oci.rs            OCI Distribution Spec v2 compatibility layer
+    oci.rs            OCI Distribution Spec v2 package registry surface
     ...               federation, search, models, tuf, detail, recipes
   r2.rs               Cloudflare R2 object storage
   search.rs           Tantivy full-text search engine

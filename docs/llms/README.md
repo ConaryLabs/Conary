@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-01
-revision: 5
-summary: Vendor-neutral map for coding assistants working in the Conary repository, current validation docs, and compatibility shims
+last_updated: 2026-05-12
+revision: 6
+summary: Vendor-neutral map for coding assistants working in the Conary repository, current validation docs, and tool-specific entrypoints
 ---
 
 # Conary For Coding Assistants
@@ -27,7 +27,7 @@ root guidance into a manual.
 - Canonical subsystem and operations detail belongs in human-readable docs such
   as `docs/ARCHITECTURE.md`, `docs/modules/*.md`, and
   `docs/operations/*.md`.
-- Compatibility shims such as `CLAUDE.md`, `GEMINI.md`, and
+- Tool-specific entrypoints such as `CLAUDE.md`, `GEMINI.md`, and
   `.github/copilot-instructions.md` should stay intentionally thin and point
   back to this layered doc system instead of becoming parallel manuals.
 - If a subtree later needs materially different durable instructions, prefer a
@@ -89,7 +89,7 @@ other non-UTC context.
 ## Focused Docs
 
 - [`docs/operations/bootstrap-selfhosting-vm.md`](../operations/bootstrap-selfhosting-vm.md): truthful operator flow for the current bootstrap self-hosting VM path
-- [`docs/operations/post-generation-export-follow-up-roadmap.md`](../operations/post-generation-export-follow-up-roadmap.md): remaining image projection, ISO/OCI, bundle, and boot-artifact provenance work
+- [`docs/operations/post-generation-export-follow-up-roadmap.md`](../operations/post-generation-export-follow-up-roadmap.md): remaining image projection, ISO, bundle, and boot-artifact provenance work
 - [`docs/operations/bootstrap-follow-up-investigations.md`](../operations/bootstrap-follow-up-investigations.md): deferred architecture and cleanup ideas to revisit after bootstrap is stable
 
 ## Working Rules
@@ -99,8 +99,8 @@ other non-UTC context.
   it.
 - Keep tool-specific files such as `CLAUDE.md`, `GEMINI.md`, or
   `.github/copilot-instructions.md` short and pointed back at `AGENTS.md`.
-- Avoid duplicating or conflicting repo-wide guidance across compatibility
-  shims or tool-specific path rules.
+- Avoid duplicating or conflicting repo-wide guidance across tool-specific
+  entrypoints or path rules.
 - Prefer MCP tools over ad hoc SSH or curl when the MCP surface already covers
   the workflow.
 - When version-specific library behavior matters, check current external

@@ -13,11 +13,11 @@ use super::{CommonArgs, DbArgs};
 /// How far the takeover pipeline should go
 #[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
 pub enum TakeoverLevel {
-    /// Adopt + CAS-back all packages (PM untouched)
+    /// Internal/debug: adopt and CAS-back packages without PM removal
     Cas,
-    /// CAS + remove from system PM
+    /// Internal/debug: CAS-back packages and remove them from the system PM
     Owned,
-    /// CAS + PM removal + build generation + boot entry, then stop ready to activate
+    /// Supported path: build generation + boot entry, then stop ready to activate
     #[default]
     Generation,
 }
@@ -210,7 +210,7 @@ pub enum SystemCommands {
 
     /// Convert entire system to Conary-managed generations
     Takeover {
-        /// How far to go: cas, owned, or generation (default: generation)
+        /// How far to go: generation by default; cas/owned are internal debug checkpoints
         #[arg(long, default_value = "generation")]
         up_to: TakeoverLevel,
 

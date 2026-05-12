@@ -1096,12 +1096,22 @@ git commit -m "refactor(export): load OCI generations from artifacts"
 
 **Files:**
 - Modify: `crates/conary-core/src/model/parser.rs`
+- Modify: `apps/conary/src/cli/mod.rs`
 - Modify: `apps/conary/src/commands/install/dep_mode.rs`
+- Modify: `apps/conary/src/commands/install/mod.rs`
+- Modify: `apps/conary/src/commands/update.rs`
 - Modify: `apps/conary/src/commands/generation/takeover.rs`
+- Modify: `AGENTS.md`
+- Modify: `README.md`
+- Modify: `ROADMAP.md`
 - Modify: `docs/ARCHITECTURE.md`
+- Modify: `docs/conaryopedia-v2.md`
 - Modify: `docs/modules/bootstrap.md`
+- Modify: `docs/operations/bootstrap-follow-up-investigations.md`
 - Modify: `docs/operations/post-generation-export-follow-up-roadmap.md`
 - Modify: `docs/llms/README.md`
+- Modify: `docs/superpowers/documentation-accuracy-audit-*.tsv`
+- Modify: `docs/superpowers/documentation-accuracy-audit-summary.md`
 
 - [ ] **Step 1: Decide default convergence for preview**
 
@@ -1121,11 +1131,14 @@ In `apps/conary/src/commands/install/dep_mode.rs`, add:
 #[test]
 fn preview_default_convergence_uses_adopt_dep_mode() {
     assert_eq!(
-        DepMode::from_convergence_intent(&ConvergenceIntent::CasBacked),
+        DepMode::from_convergence_intent(&ConvergenceIntent::default()),
         DepMode::Adopt
     );
 }
 ```
+
+In `apps/conary/src/cli/mod.rs`, add a failing check that omitted `conary update --dep-mode`
+does not advertise or parse as a hard-coded `satisfy` default.
 
 - [ ] **Step 3: Run tests and confirm RED**
 
@@ -1134,9 +1147,11 @@ Run:
 ```bash
 cargo test -p conary-core convergence -- --nocapture
 cargo test -p conary preview_default_convergence_uses_adopt_dep_mode -- --nocapture
+cargo test -p conary update_dep_mode -- --nocapture
 ```
 
-Expected: parser default test fails until the enum default moves.
+Expected: parser default test fails until the enum default moves, and update
+help/parse tests fail until the CLI no longer hard-codes `satisfy`.
 
 - [ ] **Step 4: Change the enum default**
 
@@ -1152,6 +1167,11 @@ pub enum ConvergenceIntent {
 ```
 
 Update nearby comments to say non-interactive preview flows default to CAS-backed content, while `TrackOnly` remains an explicit low-disruption mode.
+
+Make omitted install/update dependency modes derive through the model convergence
+intent. If no model exists yet, use `ConvergenceIntent::default()` rather than
+falling back to `DepMode::Satisfy`, so first-run preview behavior follows the
+same CAS-backed default.
 
 - [ ] **Step 5: Keep takeover generation as the public path**
 
@@ -1171,7 +1191,7 @@ Update docs with these exact truths:
 - `docs/ARCHITECTURE.md`: runtime mutation is DB/CAS/generation/active-pointer first; direct live-root mutation is not a supported release path.
 - `docs/modules/bootstrap.md`: bootstrap can build mutable inputs, but published runtime output is a complete generation artifact.
 - `docs/operations/post-generation-export-follow-up-roadmap.md`: remove completed dracut fallback and OCI artifact-loader items after those phases are merged.
-- `docs/llms/README.md`: remove wording that says compatibility shims are desired if the root `AGENTS.md` no longer asks for them.
+- `docs/llms/README.md`: use tool-specific entrypoint wording if the root `AGENTS.md` no longer asks for compatibility shims.
 
 - [ ] **Step 7: Run docs and focused tests**
 
@@ -1180,17 +1200,22 @@ Run:
 ```bash
 cargo test -p conary-core convergence -- --nocapture
 cargo test -p conary dep_mode -- --nocapture
+cargo test -p conary update_dep_mode -- --nocapture
+cargo test -p conary missing_model_uses_preview_convergence_dep_mode -- --nocapture
+cargo test -p conary automation_install_leaves_dependency_mode_model_derived -- --nocapture
+bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete
 rg -n "legacy bind-mount fallback|OCI should use that same loader|TrackOnly.*default|compatibility shims" docs apps crates packaging
 ```
 
-Expected: tests pass. The `rg` output contains only historical/archive references or no matches.
+Expected: tests pass. The audit ledger is complete. The `rg` output contains
+only historical/archive/planning references or no matches.
 
 - [ ] **Step 8: Commit Phase 6**
 
 Run:
 
 ```bash
-git add crates/conary-core/src/model/parser.rs apps/conary/src/commands/install/dep_mode.rs apps/conary/src/commands/generation/takeover.rs docs/ARCHITECTURE.md docs/modules/bootstrap.md docs/operations/post-generation-export-follow-up-roadmap.md docs/llms/README.md
+git add AGENTS.md README.md ROADMAP.md apps/conary/src/cli/mod.rs apps/conary/src/cli/system.rs apps/conary/src/commands/automation.rs apps/conary/src/commands/generation/takeover.rs apps/conary/src/commands/install/dep_mode.rs apps/conary/src/commands/install/mod.rs apps/conary/src/commands/mod.rs apps/conary/src/commands/update.rs apps/remi/src/server/handlers/oci.rs crates/conary-core/src/generation/builder.rs crates/conary-core/src/generation/builder/runtime_inputs.rs crates/conary-core/src/model/parser.rs crates/conary-core/src/repository/parsers/mod.rs docs/ARCHITECTURE.md docs/conaryopedia-v2.md docs/llms/README.md docs/modules/bootstrap.md docs/operations/bootstrap-follow-up-investigations.md docs/operations/post-generation-export-follow-up-roadmap.md docs/superpowers/documentation-accuracy-audit-inventory.tsv docs/superpowers/documentation-accuracy-audit-ledger.tsv docs/superpowers/documentation-accuracy-audit-summary.md docs/superpowers/plans/2026-05-06-limited-public-release-readiness-plan.md docs/superpowers/plans/2026-05-12-composefs-atomic-modernization-plan.md
 git commit -m "docs: align preview defaults with generation ownership"
 ```
 

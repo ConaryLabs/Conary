@@ -210,14 +210,14 @@ pub enum Commands {
         #[arg(long)]
         force: bool,
 
-        /// How to handle dependencies: satisfy (default), adopt, takeover
+        /// How to handle dependencies: satisfy, adopt, takeover
         ///
         /// satisfy:  dependencies on disk satisfy requirements without changes
         /// adopt:    auto-adopt system dependencies into Conary tracking
         /// takeover: download CCS versions from Remi and fully own dependencies
         ///
         /// When omitted, the system model's convergence intent supplies the
-        /// default; if no model exists, defaults to satisfy.
+        /// default; if no model exists, uses the preview cas-backed default.
         #[arg(long, value_enum)]
         dep_mode: Option<crate::commands::DepMode>,
 
@@ -279,9 +279,16 @@ pub enum Commands {
         #[arg(long, value_enum, default_value_t = CliSandboxMode::Always)]
         sandbox: CliSandboxMode,
 
-        /// How to handle dependencies: satisfy (default), adopt, takeover
-        #[arg(long, value_enum, default_value_t = crate::commands::DepMode::Satisfy)]
-        dep_mode: crate::commands::DepMode,
+        /// How to handle dependencies: satisfy, adopt, takeover
+        ///
+        /// satisfy:  dependencies on disk satisfy requirements without changes
+        /// adopt:    auto-adopt system dependencies into Conary tracking
+        /// takeover: download CCS versions from Remi and fully own dependencies
+        ///
+        /// When omitted, the system model's convergence intent supplies the
+        /// default; if no model exists, uses the preview cas-backed default.
+        #[arg(long, value_enum)]
+        dep_mode: Option<crate::commands::DepMode>,
 
         /// Assume yes to all prompts
         #[arg(short = 'y', long)]
@@ -647,7 +654,7 @@ pub enum Commands {
 #[cfg(test)]
 mod tests {
     use super::{Cli, CliSandboxMode, Commands, GenerationCommands, SystemCommands};
-    use clap::Parser;
+    use clap::{CommandFactory, Parser};
 
     #[test]
     fn cli_accepts_seccomp_warn_flag() {
@@ -675,6 +682,33 @@ mod tests {
             }
             _ => panic!("expected update command"),
         }
+    }
+
+    #[test]
+    fn update_dep_mode_omission_is_model_derived() {
+        let cli = Cli::try_parse_from(["conary", "update"]).unwrap();
+        match cli.command {
+            Some(Commands::Update { dep_mode, .. }) => {
+                assert_eq!(dep_mode, None);
+            }
+            _ => panic!("expected update command"),
+        }
+    }
+
+    #[test]
+    fn update_dep_mode_help_is_model_derived() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("update")
+            .expect("update subcommand should exist")
+            .render_long_help()
+            .to_string();
+        let hard_coded_default = ["[default: ", "satisfy]"].concat();
+
+        assert!(
+            !help.contains(&hard_coded_default),
+            "update dep-mode must not hard-code satisfy as its CLI default:\n{help}"
+        );
     }
 
     #[test]
