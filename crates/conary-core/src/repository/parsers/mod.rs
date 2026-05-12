@@ -78,7 +78,7 @@ pub struct PackageMetadata {
     /// Normalized requirement groups (alternatives, conditional markers).
     ///
     /// Empty until the parser populates them; the legacy `dependencies` field
-    /// remains as a transition compatibility layer.
+    /// remains as the flat dependency projection for older parser outputs.
     pub requirements: Vec<RepositoryRequirementGroup>,
 
     /// Normalized provides (package name, virtual caps, sonames, files).

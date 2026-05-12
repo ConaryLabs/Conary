@@ -7,8 +7,8 @@ use conary_core::model::parser::ConvergenceIntent;
 
 /// Controls how Conary handles dependencies during install and update.
 ///
-/// - `Satisfy`: Dependencies already on the system satisfy requirements (default)
-/// - `Adopt`: Auto-adopt system dependencies as AdoptedTrack
+/// - `Satisfy`: Dependencies already on the system satisfy requirements
+/// - `Adopt`: Auto-adopt system dependencies into CAS-backed tracking
 /// - `Takeover`: Download CCS from Remi, fully own all dependencies
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
 pub enum DepMode {
@@ -29,7 +29,9 @@ impl DepMode {
     /// - `CasBacked` -> `Adopt` (auto-adopt so content enters CAS)
     /// - `FullOwnership` -> `Takeover` (download and fully own everything)
     ///
-    /// If no convergence intent is set, the default remains `Satisfy`.
+    /// The preview default convergence intent is `CasBacked`, so omitted
+    /// `--dep-mode` follows the `Adopt` path unless the model explicitly
+    /// requests lower-disruption `TrackOnly` behavior.
     pub fn from_convergence_intent(intent: &ConvergenceIntent) -> Self {
         match intent {
             ConvergenceIntent::TrackOnly => Self::Satisfy,
@@ -92,6 +94,14 @@ mod tests {
     fn test_dep_mode_from_convergence_cas_backed() {
         assert_eq!(
             DepMode::from_convergence_intent(&ConvergenceIntent::CasBacked),
+            DepMode::Adopt
+        );
+    }
+
+    #[test]
+    fn preview_default_convergence_uses_adopt_dep_mode() {
+        assert_eq!(
+            DepMode::from_convergence_intent(&ConvergenceIntent::default()),
             DepMode::Adopt
         );
     }

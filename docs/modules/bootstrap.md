@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-01
-revision: 8
-summary: Document the current bootstrap command surface, generation artifact export split, self-host VM overlay, runtime-export validation, and manifest comparison commands
+last_updated: 2026-05-12
+revision: 9
+summary: Document bootstrap inputs, complete generation artifact output, self-host VM overlay, runtime-export validation, and manifest comparison commands
 ---
 
 # Bootstrap Module (conary-core/src/bootstrap/)
@@ -114,6 +114,10 @@ and ISO remains a bootstrap-image format. EROFS is different: `conary bootstrap
 image --format erofs` produces a self-contained generation artifact contract
 (`root.erofs`, scoped CAS manifest, boot assets, and `.conary-artifact.json`)
 instead of directly wrapping that generation in a disk image.
+
+Bootstrap may build mutable sysroot inputs while assembling the system, but the
+published runtime output is a complete generation artifact. Partial or
+metadata-only generation directories must fail before publication.
 
 Generation artifact disk export is a separate system command:
 

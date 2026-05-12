@@ -1,7 +1,7 @@
 // src/commands/update.rs
 //! Update, pinning, and delta statistics commands
 
-use super::install::DepMode;
+use super::install::{DepMode, resolve_default_dep_mode_from_model};
 use super::open_db;
 use super::progress::{UpdatePhase, UpdateProgress};
 use super::{SandboxMode, cmd_install};
@@ -484,7 +484,7 @@ pub async fn cmd_update(
     security_only: bool,
     dry_run: bool,
     sandbox_mode: SandboxMode,
-    dep_mode: DepMode,
+    dep_mode: Option<DepMode>,
     yes: bool,
 ) -> Result<()> {
     if security_only {
@@ -492,6 +492,8 @@ pub async fn cmd_update(
     } else {
         info!("Checking for package updates");
     }
+
+    let dep_mode = dep_mode.unwrap_or_else(resolve_default_dep_mode_from_model);
 
     let mut conn = open_db(db_path)?;
     let effective_source_policy = conary_core::repository::load_effective_policy(
@@ -1150,10 +1152,11 @@ pub async fn cmd_update_group(
     security_only: bool,
     dry_run: bool,
     sandbox_mode: SandboxMode,
-    dep_mode: DepMode,
+    dep_mode: Option<DepMode>,
     yes: bool,
 ) -> Result<()> {
     info!("Updating collection: {}", name);
+    let dep_mode = dep_mode.unwrap_or_else(resolve_default_dep_mode_from_model);
     let conn = open_db(db_path)?;
     let effective_source_policy = conary_core::repository::load_effective_policy(
         &conn,
@@ -1244,7 +1247,7 @@ pub async fn cmd_update_group(
             security_only,
             dry_run,
             sandbox_mode,
-            dep_mode,
+            Some(dep_mode),
             yes,
         )
         .await

@@ -4,8 +4,8 @@
 //! Replaces the old all-or-nothing takeover with a three-level progressive
 //! pipeline controlled by `--up-to`:
 //!
-//! * **cas**        -- Adopt + CAS-back all packages (PM untouched)
-//! * **owned**      -- CAS + remove from system PM database
+//! * **cas**        -- Internal/debug checkpoint: adopt + CAS-back packages
+//! * **owned**      -- Internal/debug checkpoint: CAS + remove from system PM
 //! * **generation** -- CAS + PM removal + build generation + boot entry + ready to activate
 
 use super::super::open_db;
@@ -360,11 +360,8 @@ pub async fn cmd_system_takeover(
         println!("All system packages are now adopted and CAS-backed.");
         println!("System PM databases are untouched.");
         println!();
-        println!("Next steps:");
-        println!("  conary system takeover --up-to owned   - Remove packages from system PM");
-        println!(
-            "  conary system takeover --up-to generation - Build generation and prepare activation"
-        );
+        println!("CAS is an internal/debug stop-point, not the supported release path.");
+        println!("Run generation-level takeover to publish a bootable generation artifact.");
         return Ok(());
     }
 
@@ -398,10 +395,8 @@ pub async fn cmd_system_takeover(
         println!("[COMPLETE] Phase 2 (Owned) finished.");
         println!("Conary now owns all non-blocked packages. System PM records removed.");
         println!();
-        println!("Next steps:");
-        println!(
-            "  conary system takeover --up-to generation - Build generation and prepare activation"
-        );
+        println!("Owned is an internal/debug stop-point, not the supported release path.");
+        println!("Run generation-level takeover to publish a bootable generation artifact.");
         return Ok(());
     }
 
@@ -706,7 +701,7 @@ fn print_dry_run(plan: &TakeoverPlan, pm: &SystemPackageManager, level: Takeover
     );
     println!();
 
-    println!("Level: cas");
+    println!("Level: cas (internal/debug checkpoint)");
     println!(
         "  Already CAS-backed              : {}",
         plan.already_cas_backed.len()
@@ -726,7 +721,7 @@ fn print_dry_run(plan: &TakeoverPlan, pm: &SystemPackageManager, level: Takeover
 
     if matches!(level, TakeoverLevel::Owned | TakeoverLevel::Generation) {
         println!();
-        println!("Level: owned");
+        println!("Level: owned (internal/debug checkpoint)");
         println!(
             "  Already owned                   : {}",
             plan.already_owned.len()

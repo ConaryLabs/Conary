@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-01
-revision: 2
-summary: Deferred architecture follow-ups after the initial bootstrap self-hosting and generation-export milestones
+last_updated: 2026-05-12
+revision: 3
+summary: Deferred architecture follow-ups after composefs atomic activation, bootstrap self-hosting, and generation-export milestones
 ---
 
 # Bootstrap Follow-Up Investigations
@@ -32,27 +32,21 @@ duplicate paths.
 
 ## Deferred Investigation Areas
 
-### 1. Make Boot-Time Activation The Canonical Generation Contract
+### 1. Keep Boot-Time Activation The Canonical Generation Contract
 
-The repo's composefs/EROFS generation model is modern, but the edges still show
-legacy escape hatches:
+The repo's composefs/EROFS generation model is now the supported activation
+contract. The atomic-modernization slice removed the old `root.erofs`-missing
+boot fallback, keeps release-facing switching on next-boot activation, and
+fails closed when requested verity cannot be honored.
 
-- `packaging/dracut/90conary/conary-generator.sh` still falls back to a legacy
-  bind-mount path when `root.erofs` is absent
-- `apps/conary/src/commands/generation/switch.rs` still performs direct live
-  remount work on `/usr` and `/etc`
-- live generation switching can downgrade from verity to non-verity retry
+Remaining work is maintenance and hardening:
 
 Questions to revisit:
 
-- should boot-time composefs activation become the only fully-supported
-  activation contract?
-- should live generation switching be narrowed to a convenience/debug path
-  rather than the primary truth path?
-- can we remove the dracut legacy bind-mount fallback once generation images
-  are always authoritative?
 - can generation activation become strictly verity-backed once the kernel and
   image pipeline are aligned?
+- should the developer-only live switch helper be removed entirely once boot
+  activation has enough daily-use validation?
 
 Relevant files:
 
@@ -76,17 +70,18 @@ Today:
 - bootstrap sysroot raw/qcow2 uses `systemd-repart`
 - generation raw/qcow2 export uses explicit generation artifacts, scoped CAS
   manifests, staged boot assets, and the shared repart backend
+- OCI export also loads the same generation artifact contract and scopes CAS
+  objects from the artifact manifest
 - installed runtime generations are exportable when their root filesystem is
   fully CAS-backed, and partial roots fail closed before artifact publication
-- CCS export treats OCI as real while `vmdk` and other platform images remain
-  future formats
+- ISO, VMDK, and other platform images remain future projections
 
 Questions to revisit:
 
 - should raw, qcow2, ISO, and later VMware all derive from the same generation
   artifact and partition contract?
-- can OCI export, disk-image export, and generation metadata share more of the
-  same identity/signing model instead of behaving like separate products?
+- can OCI export, disk-image export, and generation metadata share one
+  identity/signing model without collapsing their different media backends?
 
 Relevant files:
 
@@ -201,18 +196,15 @@ Relevant files:
 
 The likely highest-leverage order is:
 
-1. remove the dracut legacy generation fallback once the canonical boot path is
-   proven
-2. make self-host validation inputs and guest state truthful by default so
+1. make self-host validation inputs and guest state truthful by default so
    bootstrap reruns are not silently stateful or stale
-3. finish the live-root sandbox/tmpfs overlay work so live mutation paths are
+2. finish the live-root sandbox/tmpfs overlay work so live mutation paths are
    narrower and more honest
-4. extend signing/attestation from packages and generation metadata to bootable
+3. extend signing/attestation from packages and generation metadata to bootable
    system artifacts
-5. simplify export and compatibility surfaces around one canonical CCS/CAS
+4. simplify export and compatibility surfaces around one canonical CCS/CAS
    identity model
-6. finish ISO/OCI/VMware projection work under the post-generation-export
-   roadmap
+5. finish ISO/VMware projection work under the post-generation-export roadmap
 
 ## Scope Reminder
 

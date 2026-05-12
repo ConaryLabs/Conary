@@ -744,17 +744,19 @@ pub struct SourcePinConfig {
 /// - `CasBacked` -> `AdoptedFull` (tracked + CAS-backed content)
 /// - `FullOwnership` -> `Taken` / `Repository` (Conary fully owns the package)
 ///
-/// The default for non-interactive flows is `TrackOnly`, which provides
-/// visibility and dependency accounting without disrupting system packages.
+/// Non-interactive preview flows default to `CasBacked`, so package content
+/// enters CAS and can participate in generation-backed runtime output.
+/// `TrackOnly` remains available as an explicit low-disruption mode when
+/// operators only want visibility and dependency accounting.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ConvergenceIntent {
     /// Track packages for visibility and dependency bookkeeping.
     /// Maps to `InstallSource::AdoptedTrack`.
-    #[default]
     TrackOnly,
     /// Track packages and back content with CAS storage.
     /// Maps to `InstallSource::AdoptedFull`. Required for generation-building.
+    #[default]
     CasBacked,
     /// Fully take over package ownership via Remi install or takeover.
     /// Maps to `InstallSource::Taken` or `InstallSource::Repository`.
@@ -915,7 +917,7 @@ impl SystemConfig {
     ///
     /// Returns `true` if any of the following are set to non-default values:
     /// - `distro` or `pin` (explicit source pin)
-    /// - `convergence` is not `TrackOnly`
+    /// - `convergence` differs from the preview default (`CasBacked`)
     /// - `allowed_distros` is non-empty
     ///
     /// When this returns `false`, the system is running with default source
@@ -928,7 +930,7 @@ impl SystemConfig {
 
         self.pin.is_some()
             || self.distro.is_some()
-            || self.convergence != ConvergenceIntent::TrackOnly
+            || self.convergence != ConvergenceIntent::default()
             || self.selection_mode.is_some()
             || !self.allowed_distros.is_empty()
             || self.profile_explicit
@@ -1603,13 +1605,13 @@ version = 1
     }
 
     #[test]
-    fn test_convergence_intent_defaults_to_track_only() {
+    fn test_convergence_intent_defaults_to_cas_backed() {
         let input = r#"
 [model]
 version = 1
 "#;
         let model: SystemModel = toml::from_str(input).unwrap();
-        assert_eq!(model.system.convergence, ConvergenceIntent::TrackOnly);
+        assert_eq!(model.system.convergence, ConvergenceIntent::CasBacked);
     }
 
     #[test]
@@ -1851,9 +1853,9 @@ mesa = { from = "fedora-41" }
     }
 
     #[test]
-    fn test_source_policy_with_convergence_is_configured() {
+    fn test_source_policy_with_track_only_convergence_is_configured() {
         let config = SystemConfig {
-            convergence: ConvergenceIntent::CasBacked,
+            convergence: ConvergenceIntent::TrackOnly,
             ..SystemConfig::default()
         };
         assert!(config.is_source_policy_configured());

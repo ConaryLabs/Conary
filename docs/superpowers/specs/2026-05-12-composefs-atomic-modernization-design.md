@@ -409,10 +409,16 @@ The modernization is complete when:
   `cargo clippy --workspace --all-targets -- -D warnings`, and the active
   generation export QEMU gate pass from the final integrated branch
 
-## Open Decisions For Implementation Planning
+## Implementation Planning Decisions
 
 These are narrow implementation choices, not open questions about the target
 contract:
+
+- Phase 6 resolves the preview system model default to
+  `ConvergenceIntent::CasBacked`; `FullOwnership` remains available as an
+  explicit stronger ownership intent.
+
+Remaining choices for later slices:
 
 - whether CCS declarative hooks become shared scriptlets or a separate
   post-generation hook phase
@@ -420,7 +426,6 @@ contract:
   an explicit debug/unsafe command
 - whether OCI stays at `conary export` or moves under
   `conary system generation export --format oci`
-- whether `ConvergenceIntent::CasBacked` or `FullOwnership` is the best default
-  for the preview system model
 
-The implementation plan should resolve each choice before code changes begin.
+The implementation plan should resolve each remaining choice before code
+changes begin.

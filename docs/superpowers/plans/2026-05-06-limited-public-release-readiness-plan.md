@@ -4,7 +4,7 @@
 
 **Goal:** Bring Conary to a truthful, limited public preview state with green trusted validation, current local QEMU evidence, resolved release-facing security alerts, aligned supported-distro coverage, and accurate public/assistant/operator documentation.
 
-**Architecture:** Treat release readiness as a sequence of gates, not one large cleanup. The original remote Forge validation lane is paused because the old VPS runner does not expose `/dev/kvm`; keep hosted health/audit/build/list checks active and use local KVM-backed QEMU evidence until a replacement runner exists. Then clear security/dependency alerts, align distro test coverage with the public support matrix, refresh docs, and run the final release dry run. conaryd package execution, ISO export, OCI convergence, production-wide unwrap cleanup, and broad redesign work are out of scope for this release gate and should be documented honestly as future work.
+**Architecture:** Treat release readiness as a sequence of gates, not one large cleanup. The original remote Forge validation lane is paused because the old VPS runner does not expose `/dev/kvm`; keep hosted health/audit/build/list checks active and use local KVM-backed QEMU evidence until a replacement runner exists. Then clear security/dependency alerts, align distro test coverage with the public support matrix, refresh docs, and run the final release dry run. conaryd package execution, ISO export, OCI registry workflow polish, production-wide unwrap cleanup, and broad redesign work are out of scope for this release gate and should be documented honestly as future work.
 
 **Tech Stack:** Rust/Cargo workspace, Tokio services, rusqlite, conary-test integration harness, GitHub Actions, Forge self-hosted runner, Podman, QEMU, npm/Svelte/Vite, existing release scripts.
 
@@ -909,7 +909,7 @@ Explicitly update:
 In `README.md` and `ROADMAP.md`, describe the project as a limited public preview candidate once this plan passes, with these caveats:
 
 - conaryd package execution is not implemented and package routes return 501.
-- ISO export and OCI convergence remain future work.
+- ISO export remains future work, and OCI export still needs registry workflow polish.
 - aarch64/riscv64 generation export boot assets remain future work.
 - Forge validation and security gates are part of the release criteria.
 
@@ -1040,7 +1040,7 @@ If the files are identical, remove only the top-level duplicate with `git rm doc
 - For the May 2 plans, leave remaining future work called out as:
   - production unwrap cleanup,
   - conaryd package executor dedicated plan,
-  - broader ISO/OCI/generation export follow-ups.
+  - broader ISO/generation export and OCI registry follow-ups.
 
 - [ ] **Step 2: Verify active plan tree**
 
