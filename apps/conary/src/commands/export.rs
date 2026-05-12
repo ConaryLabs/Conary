@@ -9,22 +9,19 @@
 //! OCI Image Layout Specification:
 //!   https://github.com/opencontainers/image-spec/blob/main/image-layout.md
 
-use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-use anyhow::{Context, Result, anyhow, bail};
-use conary_core::filesystem::CasStore;
+use anyhow::{Context, Result, bail};
+use conary_core::filesystem::object_path;
+use conary_core::generation::artifact::CasObjectRef;
+use conary_core::generation::metadata::{
+    EROFS_IMAGE_NAME, GENERATION_METADATA_FILE, GenerationMetadata,
+};
 use flate2::Compression;
 use flate2::write::GzEncoder;
-use tracing::info;
-
-use super::generation::metadata::{GenerationMetadata, generation_path};
-use conary_core::db::models::SystemState;
-use conary_core::generation::gc::live_cas_hashes;
-use conary_core::generation::metadata::{EROFS_IMAGE_NAME, GENERATION_METADATA_FILE};
-use conary_core::generation::mount::current_generation;
+use tracing::{info, warn};
 
 /// OCI media types used in the manifest and config.
 const MANIFEST_MEDIA_TYPE: &str = "application/vnd.oci.image.manifest.v1+json";
@@ -46,38 +43,35 @@ fn oci_arch() -> &'static str {
 ///
 /// The generation is identified by number.  Pass `None` to use the
 /// currently active generation.  The `objects_dir` points to the CAS
-/// store (typically `/conary/objects`).  The `db_path` is used to
-/// scope the exported CAS objects to only those referenced by the
-/// generation's system state.
+/// store requested by the CLI, but the loaded generation artifact is
+/// authoritative and may redirect the export to its persisted CAS base.
 pub async fn export_oci(
     generation: Option<i64>,
     objects_dir: &Path,
     output_dir: &Path,
-    db_path: &str,
+    _db_path: &str,
 ) -> Result<()> {
-    // Resolve generation number
-    let gen_number = match generation {
-        Some(n) => n,
-        None => current_generation(Path::new("/conary"))?
-            .ok_or_else(|| anyhow!("No active generation found"))?,
+    let artifact = match generation {
+        Some(n) => conary_core::generation::artifact::load_installed_generation_artifact(n)
+            .with_context(|| format!("Failed to load artifact for generation {n}"))?,
+        None => conary_core::generation::artifact::load_generation_artifact(Path::new(
+            "/conary/current",
+        ))
+        .context("Failed to load current generation artifact")?,
     };
 
-    let gen_dir = generation_path(gen_number);
-    if !gen_dir.exists() {
-        bail!(
-            "Generation {gen_number} does not exist at {}",
-            gen_dir.display()
-        );
-    }
+    let gen_number = artifact.generation;
+    let gen_dir = artifact.generation_dir.clone();
+    let erofs_path = artifact.erofs_path.clone();
+    let metadata = artifact.metadata.clone();
+    let cas_dir = artifact.cas_dir.clone();
+    let cas_objects = artifact.cas_objects.clone();
 
-    let metadata = GenerationMetadata::read_from(&gen_dir)
-        .with_context(|| format!("Failed to read metadata for generation {gen_number}"))?;
-
-    let erofs_path = gen_dir.join(EROFS_IMAGE_NAME);
-    if !erofs_path.exists() {
-        bail!(
-            "Generation {gen_number} has no EROFS image at {}",
-            erofs_path.display()
+    if cas_dir.as_path() != objects_dir {
+        warn!(
+            requested = %objects_dir.display(),
+            artifact = %cas_dir.display(),
+            "Using CAS object directory from generation artifact"
         );
     }
 
@@ -85,13 +79,9 @@ pub async fn export_oci(
         "Exporting generation {gen_number} as OCI image to {}",
         output_dir.display()
     );
-
-    // Scope CAS objects to the generation by querying the database for
-    // the generation's state_id and collecting only referenced hashes.
-    let scoped_hashes = scope_cas_hashes_for_generation(db_path, gen_number, objects_dir)?;
     info!(
         "Generation {gen_number} references {} CAS objects",
-        scoped_hashes.len()
+        cas_objects.len()
     );
 
     // Create OCI directory structure
@@ -104,13 +94,8 @@ pub async fn export_oci(
     })?;
 
     // Step 1: Build the layer tar.gz
-    let (layer_digest, layer_size, diff_id) = build_layer_tar_gz(
-        &erofs_path,
-        objects_dir,
-        &gen_dir,
-        &blobs_dir,
-        &scoped_hashes,
-    )?;
+    let (layer_digest, layer_size, diff_id) =
+        build_layer_tar_gz(&erofs_path, &cas_dir, &gen_dir, &blobs_dir, &cas_objects)?;
     info!(
         "Layer: sha256:{} ({} bytes, diffID: sha256:{})",
         layer_digest, layer_size, diff_id
@@ -170,14 +155,14 @@ fn build_layer_tar_gz(
     objects_dir: &Path,
     gen_dir: &Path,
     blobs_dir: &Path,
-    scoped_hashes: &HashSet<String>,
+    cas_objects: &[CasObjectRef],
 ) -> Result<(String, u64, String)> {
     // We need both compressed digest (for the manifest) and uncompressed
     // digest (for the config's diff_id).  Build the tar in memory first
     // to compute the uncompressed hash, then gzip-compress and hash again.
 
     // Build uncompressed tar
-    let tar_bytes = build_layer_tar(erofs_path, objects_dir, gen_dir, scoped_hashes)?;
+    let tar_bytes = build_layer_tar(erofs_path, objects_dir, gen_dir, cas_objects)?;
 
     // Compute uncompressed (diffID) digest
     let diff_id = hex_digest(&tar_bytes);
@@ -212,7 +197,7 @@ fn build_layer_tar(
     erofs_path: &Path,
     objects_dir: &Path,
     gen_dir: &Path,
-    scoped_hashes: &HashSet<String>,
+    cas_objects: &[CasObjectRef],
 ) -> Result<Vec<u8>> {
     let buf = Vec::new();
     let mut tar_builder = tar::Builder::new(buf);
@@ -228,18 +213,14 @@ fn build_layer_tar(
         .append_data(&mut header, EROFS_IMAGE_NAME, erofs_data.as_slice())
         .context("Failed to add EROFS image to tar")?;
 
-    // Use the pre-scoped CAS hashes (from the generation's DB state) to include
-    // only objects referenced by this generation, not the entire CAS store.
-    let cas = CasStore::new(objects_dir)
-        .with_context(|| format!("Failed to open CAS directory {}", objects_dir.display()))?;
-
-    for hash in scoped_hashes {
-        let obj_path = cas
-            .hash_to_path(hash)
-            .with_context(|| format!("Invalid CAS hash {hash}"))?;
+    // The generation artifact's CAS manifest is the export scope.
+    for object in cas_objects {
+        let hash = &object.sha256;
+        let obj_path =
+            object_path(objects_dir, hash).with_context(|| format!("Invalid CAS hash {hash}"))?;
 
         if !obj_path.exists() {
-            continue;
+            bail!("Generation artifact references missing CAS object {hash}");
         }
 
         let prefix = &hash[..2];
@@ -279,73 +260,6 @@ fn build_layer_tar(
         .context("Failed to finalize tar archive")?;
 
     Ok(bytes)
-}
-
-/// Get the set of CAS hashes referenced by a specific generation.
-///
-/// Opens the database, looks up the generation's `system_state` by
-/// `state_number`, and calls `live_cas_hashes()` to get only the
-/// hashes referenced by that state.  Falls back to walking all CAS
-/// objects if the database is unavailable or the generation has no
-/// matching state (e.g., bootstrapped generation without a DB).
-fn scope_cas_hashes_for_generation(
-    db_path: &str,
-    gen_number: i64,
-    objects_dir: &Path,
-) -> Result<HashSet<String>> {
-    // Try to open the database and look up the generation's state
-    let conn = match conary_core::db::open(db_path) {
-        Ok(c) => c,
-        Err(e) => {
-            info!(
-                "Database not available at {db_path} ({e}), \
-                 falling back to full CAS walk for export"
-            );
-            return fallback_all_cas_hashes(objects_dir);
-        }
-    };
-
-    let state = match SystemState::find_by_number(&conn, gen_number) {
-        Ok(Some(s)) => s,
-        Ok(None) => {
-            info!(
-                "No system state found for generation {gen_number}, \
-                 falling back to full CAS walk for export"
-            );
-            return fallback_all_cas_hashes(objects_dir);
-        }
-        Err(e) => {
-            info!(
-                "Failed to query system state for generation {gen_number}: {e}, \
-                 falling back to full CAS walk for export"
-            );
-            return fallback_all_cas_hashes(objects_dir);
-        }
-    };
-
-    let state_id = state.id.ok_or_else(|| anyhow!("System state has no ID"))?;
-    let hashes = live_cas_hashes(&conn, &[state_id])
-        .with_context(|| format!("Failed to query live CAS hashes for generation {gen_number}"))?;
-
-    Ok(hashes)
-}
-
-/// Fallback: collect all CAS object hashes when the database is not available.
-fn fallback_all_cas_hashes(objects_dir: &Path) -> Result<HashSet<String>> {
-    if !objects_dir.exists() {
-        return Ok(HashSet::new());
-    }
-
-    let cas = CasStore::new(objects_dir)
-        .with_context(|| format!("Failed to open CAS directory {}", objects_dir.display()))?;
-
-    let hashes: HashSet<String> = cas
-        .iter_objects()
-        .map(|r| r.map(|(hash, _path)| hash))
-        .collect::<std::result::Result<HashSet<_>, _>>()
-        .with_context(|| "Failed to iterate CAS objects")?;
-
-    Ok(hashes)
 }
 
 /// Write a blob to the blobs directory, returning (hex_digest, size).
@@ -461,7 +375,7 @@ mod tests {
     use tempfile::TempDir;
 
     /// Create a minimal generation directory for testing.
-    fn create_test_generation(tmp: &Path) -> (PathBuf, PathBuf) {
+    fn create_test_generation(tmp: &Path) -> (PathBuf, PathBuf, Vec<CasObjectRef>) {
         // Generation directory with EROFS image and metadata
         let gen_dir = tmp.join("generation");
         fs::create_dir_all(&gen_dir).unwrap();
@@ -490,41 +404,47 @@ mod tests {
         let objects_dir = tmp.join("objects");
         fs::create_dir_all(objects_dir.join("ab")).unwrap();
         fs::create_dir_all(objects_dir.join("cd")).unwrap();
+        let object_one = CasObjectRef {
+            sha256: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567".to_string(),
+            size: b"file-content-one".len() as u64,
+        };
+        let object_two = CasObjectRef {
+            sha256: "cdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".to_string(),
+            size: b"file-content-two".len() as u64,
+        };
         fs::write(
-            objects_dir
-                .join("ab")
-                .join("cdef0123456789abcdef0123456789abcdef0123456789abcdef01234567"),
+            object_path(&objects_dir, &object_one.sha256).unwrap(),
             b"file-content-one",
         )
         .unwrap();
         fs::write(
-            objects_dir
-                .join("cd")
-                .join("ef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"),
+            object_path(&objects_dir, &object_two.sha256).unwrap(),
             b"file-content-two",
         )
         .unwrap();
 
-        (gen_dir, objects_dir)
+        (gen_dir, objects_dir, vec![object_one, object_two])
     }
 
     /// Helper: export from a test generation directory to OCI.
-    fn export_test_generation(gen_dir: &Path, objects_dir: &Path) -> (TempDir, PathBuf) {
+    fn export_test_generation(
+        gen_dir: &Path,
+        objects_dir: &Path,
+        cas_objects: &[CasObjectRef],
+    ) -> (TempDir, PathBuf) {
         let output_tmp = TempDir::new().unwrap();
         let output_dir = output_tmp.path().join("oci-out");
         fs::create_dir_all(&output_dir).unwrap();
 
         // Build layer, config, manifest, index manually since export_oci
-        // expects real /conary paths. Use fallback_all_cas_hashes since
-        // these tests don't have a database.
-        let all_hashes = fallback_all_cas_hashes(objects_dir).unwrap();
+        // expects real installed generation paths.
         let metadata = GenerationMetadata::read_from(gen_dir).unwrap();
         let erofs_path = gen_dir.join(EROFS_IMAGE_NAME);
         let blobs_dir = output_dir.join("blobs/sha256");
         fs::create_dir_all(&blobs_dir).unwrap();
 
         let (layer_digest, layer_size, diff_id) =
-            build_layer_tar_gz(&erofs_path, objects_dir, gen_dir, &blobs_dir, &all_hashes).unwrap();
+            build_layer_tar_gz(&erofs_path, objects_dir, gen_dir, &blobs_dir, cas_objects).unwrap();
 
         let config_json = build_config_json(&metadata, 5, &diff_id);
         let (config_digest, config_size) = write_blob(&blobs_dir, config_json.as_bytes()).unwrap();
@@ -546,8 +466,9 @@ mod tests {
     #[test]
     fn test_oci_layout_structure() {
         let tmp = TempDir::new().unwrap();
-        let (gen_dir, objects_dir) = create_test_generation(tmp.path());
-        let (_output_tmp, output_dir) = export_test_generation(&gen_dir, &objects_dir);
+        let (gen_dir, objects_dir, cas_objects) = create_test_generation(tmp.path());
+        let (_output_tmp, output_dir) =
+            export_test_generation(&gen_dir, &objects_dir, &cas_objects);
 
         // Verify all expected files exist
         assert!(output_dir.join("oci-layout").exists(), "oci-layout missing");
@@ -575,8 +496,9 @@ mod tests {
     #[test]
     fn test_oci_manifest_valid_json() {
         let tmp = TempDir::new().unwrap();
-        let (gen_dir, objects_dir) = create_test_generation(tmp.path());
-        let (_output_tmp, output_dir) = export_test_generation(&gen_dir, &objects_dir);
+        let (gen_dir, objects_dir, cas_objects) = create_test_generation(tmp.path());
+        let (_output_tmp, output_dir) =
+            export_test_generation(&gen_dir, &objects_dir, &cas_objects);
 
         // Read index.json to find the manifest digest
         let index_str = fs::read_to_string(output_dir.join("index.json")).unwrap();
@@ -616,8 +538,9 @@ mod tests {
     #[test]
     fn test_oci_layer_contains_erofs() {
         let tmp = TempDir::new().unwrap();
-        let (gen_dir, objects_dir) = create_test_generation(tmp.path());
-        let (_output_tmp, output_dir) = export_test_generation(&gen_dir, &objects_dir);
+        let (gen_dir, objects_dir, cas_objects) = create_test_generation(tmp.path());
+        let (_output_tmp, output_dir) =
+            export_test_generation(&gen_dir, &objects_dir, &cas_objects);
 
         // Find the layer blob via manifest -> layers[0].digest
         let index_str = fs::read_to_string(output_dir.join("index.json")).unwrap();
@@ -689,8 +612,9 @@ mod tests {
     #[test]
     fn test_oci_config_labels() {
         let tmp = TempDir::new().unwrap();
-        let (gen_dir, objects_dir) = create_test_generation(tmp.path());
-        let (_output_tmp, output_dir) = export_test_generation(&gen_dir, &objects_dir);
+        let (gen_dir, objects_dir, cas_objects) = create_test_generation(tmp.path());
+        let (_output_tmp, output_dir) =
+            export_test_generation(&gen_dir, &objects_dir, &cas_objects);
 
         // Find config blob via manifest
         let index_str = fs::read_to_string(output_dir.join("index.json")).unwrap();
@@ -727,8 +651,9 @@ mod tests {
     #[test]
     fn test_oci_blob_integrity() {
         let tmp = TempDir::new().unwrap();
-        let (gen_dir, objects_dir) = create_test_generation(tmp.path());
-        let (_output_tmp, output_dir) = export_test_generation(&gen_dir, &objects_dir);
+        let (gen_dir, objects_dir, cas_objects) = create_test_generation(tmp.path());
+        let (_output_tmp, output_dir) =
+            export_test_generation(&gen_dir, &objects_dir, &cas_objects);
 
         // Every blob file should have a name that matches its SHA-256 digest
         for entry in fs::read_dir(output_dir.join("blobs/sha256")).unwrap() {
@@ -761,66 +686,61 @@ mod tests {
     }
 
     #[test]
-    fn test_fallback_cas_hashes_empty() {
+    fn test_oci_layer_uses_manifest_cas_scope() {
         let tmp = TempDir::new().unwrap();
-        let objects_dir = tmp.path().join("objects");
-        // objects_dir does not exist
-        let hashes = fallback_all_cas_hashes(&objects_dir).unwrap();
-        assert!(hashes.is_empty());
-    }
+        let (gen_dir, objects_dir, cas_objects) = create_test_generation(tmp.path());
+        let (_output_tmp, output_dir) =
+            export_test_generation(&gen_dir, &objects_dir, &cas_objects[..1]);
 
-    #[test]
-    fn test_fallback_cas_hashes_with_objects() {
-        let tmp = TempDir::new().unwrap();
-        let objects_dir = tmp.path().join("objects");
-        fs::create_dir_all(objects_dir.join("ab")).unwrap();
-        fs::create_dir_all(objects_dir.join("ff")).unwrap();
-        fs::write(
-            objects_dir
-                .join("ab")
-                .join("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd"),
-            b"data",
-        )
-        .unwrap();
-        fs::write(
-            objects_dir
-                .join("ff")
-                .join("0000000000000000000000000000000000000000000000000000000000000000"),
-            b"data2",
-        )
-        .unwrap();
+        let index_str = fs::read_to_string(output_dir.join("index.json")).unwrap();
+        let index: serde_json::Value = serde_json::from_str(&index_str).unwrap();
+        let manifest_digest = index["manifests"][0]["digest"]
+            .as_str()
+            .unwrap()
+            .strip_prefix("sha256:")
+            .unwrap();
 
-        // Also add a temp file that should be skipped
-        fs::write(objects_dir.join("ab").join(".tmp_in_progress"), b"skip").unwrap();
+        let manifest_str =
+            fs::read_to_string(output_dir.join("blobs/sha256").join(manifest_digest)).unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(&manifest_str).unwrap();
+        let layer_digest = manifest["layers"][0]["digest"]
+            .as_str()
+            .unwrap()
+            .strip_prefix("sha256:")
+            .unwrap();
 
-        let hashes = fallback_all_cas_hashes(&objects_dir).unwrap();
-        assert_eq!(hashes.len(), 2);
-        let sorted: Vec<&String> = {
-            let mut v: Vec<&String> = hashes.iter().collect();
-            v.sort();
-            v
-        };
-        assert!(sorted[0].starts_with("ab"));
-        assert!(sorted[1].starts_with("ff"));
-    }
+        let compressed_data = fs::read(output_dir.join("blobs/sha256").join(layer_digest)).unwrap();
+        let decoder = flate2::read::GzDecoder::new(compressed_data.as_slice());
+        let mut archive = tar::Archive::new(decoder);
+        let mut object_entries = Vec::new();
 
-    #[test]
-    fn test_scope_cas_hashes_falls_back_on_missing_db() {
-        let tmp = TempDir::new().unwrap();
-        let objects_dir = tmp.path().join("objects");
-        fs::create_dir_all(objects_dir.join("ab")).unwrap();
-        fs::write(
-            objects_dir
-                .join("ab")
-                .join("cdef0123456789abcdef0123456789abcdef0123456789abcdef01234567"),
-            b"data",
-        )
-        .unwrap();
+        for entry in archive.entries().unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path().unwrap().to_string_lossy().to_string();
+            if path.starts_with("objects/") {
+                object_entries.push(path);
+            }
+        }
 
-        // Non-existent DB path -- should fall back to full CAS walk
-        let hashes =
-            scope_cas_hashes_for_generation("/nonexistent/conary.db", 1, &objects_dir).unwrap();
-        assert_eq!(hashes.len(), 1);
+        let included = format!(
+            "objects/{}/{}",
+            &cas_objects[0].sha256[..2],
+            &cas_objects[0].sha256[2..]
+        );
+        let excluded = format!(
+            "objects/{}/{}",
+            &cas_objects[1].sha256[..2],
+            &cas_objects[1].sha256[2..]
+        );
+
+        assert!(
+            object_entries.contains(&included),
+            "manifest-listed CAS object missing from layer: {object_entries:?}"
+        );
+        assert!(
+            !object_entries.contains(&excluded),
+            "unlisted CAS object must not be exported from the CAS directory walk"
+        );
     }
 
     #[test]

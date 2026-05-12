@@ -157,6 +157,22 @@ fn recovery_does_not_promote_generations_by_erofs_magic_only() {
 }
 
 #[test]
+fn oci_generation_export_uses_generation_artifact_loader() {
+    let export_rs = fs::read_to_string(app_source("commands/export.rs"))
+        .expect("failed to read commands/export.rs");
+
+    assert!(
+        export_rs.contains("load_generation_artifact")
+            || export_rs.contains("load_installed_generation_artifact"),
+        "OCI export must use the same GenerationArtifact loader as raw/qcow2 export"
+    );
+    assert!(
+        !export_rs.contains("let gen_dir = generation_path(gen_number);"),
+        "OCI export must not independently resolve generation paths"
+    );
+}
+
+#[test]
 fn release_generation_commands_do_not_expose_live_switch_as_normal_activation() {
     let commands_rs = fs::read_to_string(app_source("commands/generation/commands.rs"))
         .expect("failed to read generation commands");
