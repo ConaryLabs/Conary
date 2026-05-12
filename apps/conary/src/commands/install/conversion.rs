@@ -714,6 +714,7 @@ async fn install_converted_ccs_with_pending(
             no_scripts,
             sandbox_mode,
             allow_downgrade,
+            reinstall: false,
             selection_reason: None,
             component_selection: ComponentSelection::All,
             selected_manifest_components: None,
@@ -725,9 +726,14 @@ async fn install_converted_ccs_with_pending(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conary_core::ccs::builder::write_ccs_package;
+    use conary_core::ccs::manifest::{DirectoryHook, ScriptHook};
+    use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
     use conary_core::db::models::{Repository, RepositoryPackage, RepositoryProvide};
     use conary_core::db::schema;
+    use conary_core::hash;
     use conary_core::version::VersionConstraint;
+    use std::collections::HashMap;
 
     fn test_db() -> rusqlite::Connection {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -738,6 +744,152 @@ mod tests {
         .unwrap();
         schema::migrate(&conn).unwrap();
         conn
+    }
+
+    fn stage_test_boot_assets(root: &std::path::Path) {
+        let kernel_version =
+            conary_core::generation::builder::detect_kernel_version_from_troves(&[])
+                .unwrap_or_else(|| "test-kernel".to_string());
+        let boot_root = root.join("boot");
+        std::fs::create_dir_all(boot_root.join("EFI/BOOT")).unwrap();
+        std::fs::write(
+            boot_root.join(format!("vmlinuz-{kernel_version}")),
+            b"test-kernel",
+        )
+        .unwrap();
+        std::fs::write(
+            boot_root.join(format!("initramfs-{kernel_version}.img")),
+            b"test-initramfs",
+        )
+        .unwrap();
+        std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"test-efi").unwrap();
+    }
+
+    fn write_runtime_ccs_package(
+        temp_dir: &std::path::Path,
+        name: &str,
+        mut manifest: CcsManifest,
+    ) -> std::path::PathBuf {
+        let package_path = temp_dir.join(format!("{name}.ccs"));
+        let init_content = b"#!/bin/sh\nexec true\n".to_vec();
+        let init_hash = hash::sha256(&init_content);
+        let files = vec![FileEntry {
+            path: "/usr/sbin/init".to_string(),
+            hash: init_hash.clone(),
+            size: init_content.len() as u64,
+            mode: 0o100755,
+            component: "runtime".to_string(),
+            file_type: FileType::Regular,
+            target: None,
+            chunks: None,
+        }];
+        manifest.components.default = vec!["runtime".to_string()];
+        let result = BuildResult {
+            manifest,
+            components: HashMap::from([(
+                "runtime".to_string(),
+                ComponentData {
+                    name: "runtime".to_string(),
+                    files: files.clone(),
+                    hash: "runtime".to_string(),
+                    size: init_content.len() as u64,
+                },
+            )]),
+            files,
+            blobs: HashMap::from([(init_hash, init_content)]),
+            total_size: 0,
+            chunked: false,
+            chunk_stats: None,
+        };
+        write_ccs_package(&result, &package_path).unwrap();
+        package_path
+    }
+
+    #[tokio::test]
+    async fn converted_ccs_install_executes_directory_hooks() {
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+
+        std::fs::create_dir_all(&install_root).unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+        stage_test_boot_assets(temp_dir.path());
+
+        let mut manifest = CcsManifest::new_minimal("converted-hooked", "1.0.0");
+        manifest.hooks.directories.push(DirectoryHook {
+            path: "/var/lib/converted-hooked".to_string(),
+            mode: "0755".to_string(),
+            owner: "root".to_string(),
+            group: "root".to_string(),
+            cleanup: None,
+        });
+        let package_path = write_runtime_ccs_package(temp_dir.path(), "converted-hooked", manifest);
+
+        install_converted_ccs(ConvertedCcsInstallOptions {
+            ccs_path: package_path.to_str().unwrap(),
+            db_path: db_path_str,
+            root: install_root.to_str().unwrap(),
+            dry_run: false,
+            sandbox_mode: SandboxMode::None,
+            no_deps: true,
+            no_scripts: false,
+            allow_downgrade: false,
+            dep_mode: None,
+            yes: true,
+            dependency_passes_remaining: 0,
+        })
+        .await
+        .unwrap();
+
+        assert!(install_root.join("var/lib/converted-hooked").is_dir());
+    }
+
+    #[tokio::test]
+    async fn converted_ccs_install_marks_post_hook_failure() {
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+
+        std::fs::create_dir_all(&install_root).unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+        stage_test_boot_assets(temp_dir.path());
+
+        let mut manifest = CcsManifest::new_minimal("converted-post-hook-fails", "1.0.0");
+        manifest.hooks.post_install = Some(ScriptHook {
+            script: "exit 31".to_string(),
+        });
+        let package_path =
+            write_runtime_ccs_package(temp_dir.path(), "converted-post-hook-fails", manifest);
+
+        install_converted_ccs(ConvertedCcsInstallOptions {
+            ccs_path: package_path.to_str().unwrap(),
+            db_path: db_path_str,
+            root: install_root.to_str().unwrap(),
+            dry_run: false,
+            sandbox_mode: SandboxMode::None,
+            no_deps: true,
+            no_scripts: false,
+            allow_downgrade: false,
+            dep_mode: None,
+            yes: true,
+            dependency_passes_remaining: 0,
+        })
+        .await
+        .unwrap();
+
+        let conn = conary_core::db::open(db_path_str).unwrap();
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM changesets ORDER BY id DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "post_hooks_failed");
     }
 
     #[test]

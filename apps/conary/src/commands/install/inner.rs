@@ -48,10 +48,17 @@ pub fn install_inner(
     let mut file_hashes: Vec<(String, String, i64, i32, Option<String>)> =
         Vec::with_capacity(extraction.extracted_files.len());
     for file in &extraction.extracted_files {
-        let hash = engine
-            .cas()
-            .store(&file.content)
-            .with_context(|| format!("Failed to store {} in CAS", file.path))?;
+        let hash = if let Some(target) = file.symlink_target.as_deref() {
+            engine
+                .cas()
+                .store_symlink(target)
+                .with_context(|| format!("Failed to store symlink {} in CAS", file.path))?
+        } else {
+            engine
+                .cas()
+                .store(&file.content)
+                .with_context(|| format!("Failed to store {} in CAS", file.path))?
+        };
         file_hashes.push((
             file.path.clone(),
             hash,

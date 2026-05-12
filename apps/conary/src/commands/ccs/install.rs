@@ -7,21 +7,15 @@
 
 use super::super::open_db;
 use anyhow::{Context, Result};
-use conary_core::ccs::{CcsPackage, HookExecutor, TrustPolicy, verify};
-use conary_core::components::{ComponentType, should_run_scriptlets};
+use conary_core::ccs::{CcsPackage, TrustPolicy, verify};
+use conary_core::components::ComponentType;
 use conary_core::db::models::generate_capability_variations;
-use conary_core::db::models::{Changeset, ChangesetStatus};
 use conary_core::packages::traits::{ExtractedFile, PackageFormat};
-use conary_core::packages::traits::{Scriptlet, ScriptletPhase};
 use conary_core::repository::versioning::{
     RepoVersionConstraint, VersionScheme, parse_repo_constraint, repo_version_satisfies,
 };
-use conary_core::scriptlet::{
-    ExecutionMode, PackageFormat as ScriptletPackageFormat, ScriptletExecutor,
-};
 use std::collections::{HashMap, HashSet};
 use std::path::{Component as PathComponent, Path, PathBuf};
-use tracing::warn;
 
 fn package_provided_names(ccs_pkg: &CcsPackage) -> std::collections::HashSet<String> {
     std::iter::once(ccs_pkg.name().to_string())
@@ -45,32 +39,6 @@ fn package_self_provides(ccs_pkg: &CcsPackage, dep_name: &str) -> bool {
     }
 
     false
-}
-
-fn mark_changeset_post_hooks_failed(conn: &rusqlite::Connection, changeset_id: i64, warning: &str) {
-    match Changeset::find_by_id(conn, changeset_id) {
-        Ok(Some(mut changeset)) => {
-            if let Err(error) = changeset.update_status(conn, ChangesetStatus::PostHooksFailed) {
-                warn!(
-                    changeset_id,
-                    "Failed to mark changeset after post-install hook failure: {}", error
-                );
-            } else {
-                warn!(
-                    changeset_id,
-                    "Marked applied changeset as post_hooks_failed: {}", warning
-                );
-            }
-        }
-        Ok(None) => warn!(
-            changeset_id,
-            "Could not mark post-hook failure because the changeset no longer exists"
-        ),
-        Err(error) => warn!(
-            changeset_id,
-            "Failed to load changeset after post-install hook failure: {}", error
-        ),
-    }
 }
 
 pub(super) fn sanitize_package_relative_path(path: &str) -> Result<PathBuf> {
@@ -780,10 +748,6 @@ pub async fn cmd_ccs_install(
                     ccs_pkg.name(),
                     ccs_pkg.version()
                 );
-                // Delete existing trove so install can proceed cleanly
-                if let Some(id) = old.id {
-                    conary_core::db::models::Trove::delete(&conn, id)?;
-                }
             } else {
                 anyhow::bail!(
                     "Package {} version {} is already installed",
@@ -857,6 +821,7 @@ pub async fn cmd_ccs_install(
                     }
                 },
                 allow_downgrade: false,
+                reinstall,
                 selection_reason: None,
                 component_selection,
                 selected_manifest_components: Some(selected_components.names.clone()),
@@ -867,43 +832,7 @@ pub async fn cmd_ccs_install(
 
     validate_selected_payload_paths(Path::new(root), &ccs_pkg, &selected_components)?;
 
-    // Step 5: Execute pre-hooks
-    let mut hook_executor = HookExecutor::new(Path::new(root));
-    let hooks = &ccs_pkg.manifest().hooks;
-    let should_run_component_hooks = should_run_scriptlets(&selected_components.recognized_types);
-    let has_hooks = !hooks.users.is_empty()
-        || !hooks.groups.is_empty()
-        || !hooks.directories.is_empty()
-        || !hooks.systemd.is_empty()
-        || !hooks.tmpfiles.is_empty()
-        || !hooks.sysctl.is_empty()
-        || !hooks.alternatives.is_empty()
-        || hooks.post_install.is_some();
-    if has_hooks && !should_run_component_hooks {
-        println!(
-            "Skipping install hooks for non-runtime component selection: {}",
-            selected_components.names.join(", ")
-        );
-    }
-
-    let mut pre_hooks_ran = false;
-    if should_run_component_hooks
-        && (!hooks.users.is_empty() || !hooks.groups.is_empty() || !hooks.directories.is_empty())
-    {
-        println!("Executing pre-install hooks...");
-        pre_hooks_ran = true;
-        if let Err(e) = hook_executor.execute_pre_hooks(hooks) {
-            if let Err(revert_err) = hook_executor.revert_pre_hooks() {
-                warn!(
-                    "Failed to revert pre-install hooks after pre-hook error: {}",
-                    revert_err
-                );
-            }
-            anyhow::bail!("Pre-install hook failed: {}", e);
-        }
-    }
-
-    let install_result = super::super::install::install_ccs_package_transactionally(
+    let tx_result = super::super::install::install_ccs_package_transactionally(
         &mut conn,
         &ccs_pkg,
         super::super::install::CcsTransactionInstallOptions {
@@ -917,112 +846,14 @@ pub async fn cmd_ccs_install(
                 crate::commands::SandboxMode::Always => conary_core::scriptlet::SandboxMode::Always,
             },
             allow_downgrade: false,
+            reinstall,
             selection_reason: None,
             component_selection,
             selected_manifest_components: Some(selected_components.names.clone()),
         },
-    );
-
-    let tx_result = match install_result {
-        Ok(result) => result,
-        Err(error) => {
-            if pre_hooks_ran && let Err(revert_err) = hook_executor.revert_pre_hooks() {
-                warn!(
-                    "Failed to revert pre-install hooks after install failure: {}",
-                    revert_err
-                );
-            }
-            return Err(error);
-        }
-    };
-
-    let applied_changeset_id = tx_result.changeset_id;
-    let mut post_commit_warnings = Vec::new();
-
-    // Step 6: Execute post-hooks (including post_install script)
-    // Note: the DB transaction is already committed at this point. If post-hooks
-    // fail the package is installed but hooks did not complete -- log a warning
-    // with the changeset ID so the operator can identify the partial state.
-    if should_run_component_hooks
-        && (!hooks.systemd.is_empty()
-            || !hooks.tmpfiles.is_empty()
-            || !hooks.sysctl.is_empty()
-            || !hooks.alternatives.is_empty())
-    {
-        let mut non_script_hooks = hooks.clone();
-        non_script_hooks.post_install = None;
-        println!("Executing post-install hooks...");
-        let results = hook_executor.execute_post_hooks_with_results(&non_script_hooks);
-        let failures = results
-            .failures()
-            .map(|failure| {
-                format!(
-                    "{} '{}' failed: {}",
-                    failure.hook_type,
-                    failure.name,
-                    failure.error.as_deref().unwrap_or("unknown error")
-                )
-            })
-            .collect::<Vec<_>>();
-        if !failures.is_empty() {
-            let warning = format!(
-                "Post-install hooks failed for {} {} after commit: {}",
-                ccs_pkg.name(),
-                ccs_pkg.version(),
-                failures.join("; ")
-            );
-            warn!(
-                changeset_id = applied_changeset_id,
-                package = ccs_pkg.name(),
-                version = ccs_pkg.version(),
-                "Post-install hooks failed after DB commit (package is installed, hooks incomplete): {}",
-                warning
-            );
-            mark_changeset_post_hooks_failed(&conn, applied_changeset_id, &warning);
-            eprintln!("WARNING: {warning}");
-            post_commit_warnings.push(warning);
-        }
-    }
-
-    if should_run_component_hooks && let Some(ref hook) = hooks.post_install {
-        println!("Executing post-install hooks...");
-        let scriptlet = Scriptlet {
-            phase: ScriptletPhase::PostInstall,
-            interpreter: "/bin/sh".to_string(),
-            content: hook.script.clone(),
-            flags: None,
-        };
-        let sandbox_mode = match sandbox {
-            crate::commands::SandboxMode::None => conary_core::scriptlet::SandboxMode::None,
-            crate::commands::SandboxMode::Auto => conary_core::scriptlet::SandboxMode::Auto,
-            crate::commands::SandboxMode::Always => conary_core::scriptlet::SandboxMode::Always,
-        };
-        let executor = ScriptletExecutor::new(
-            Path::new(root),
-            ccs_pkg.name(),
-            ccs_pkg.version(),
-            ScriptletPackageFormat::Rpm,
-        )
-        .with_sandbox_mode(sandbox_mode);
-        if let Err(error) = executor.execute(&scriptlet, &ExecutionMode::Install) {
-            let warning = format!(
-                "Post-install script failed for {} {} after commit: {}",
-                ccs_pkg.name(),
-                ccs_pkg.version(),
-                error
-            );
-            warn!(
-                changeset_id = applied_changeset_id,
-                package = ccs_pkg.name(),
-                version = ccs_pkg.version(),
-                "Post-install script failed after DB commit (package is installed, script incomplete): {}",
-                error
-            );
-            mark_changeset_post_hooks_failed(&conn, applied_changeset_id, &warning);
-            eprintln!("WARNING: {warning}");
-            post_commit_warnings.push(warning);
-        }
-    }
+    )?;
+    let _changeset_id = tx_result.changeset_id;
+    let post_commit_warnings = tx_result.post_commit_warnings;
 
     println!();
     if post_commit_warnings.is_empty() {
@@ -1660,6 +1491,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ccs_install_reinstall_dry_run_does_not_mutate_db() {
+        use conary_core::ccs::builder::write_ccs_package;
+        use conary_core::ccs::{BuildResult, CcsManifest};
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let package_path = temp_dir.path().join("reinstall-dry-run.ccs");
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+
+        std::fs::create_dir_all(&install_root).unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+        let conn = conary_core::db::open(db_path_str).unwrap();
+        let mut existing = conary_core::db::models::Trove::new(
+            "reinstall-dry-run".to_string(),
+            "1.0.0".to_string(),
+            conary_core::db::models::TroveType::Package,
+        );
+        let existing_id = existing.insert(&conn).unwrap();
+        drop(conn);
+
+        let result = BuildResult {
+            manifest: CcsManifest::new_minimal("reinstall-dry-run", "1.0.0"),
+            components: HashMap::new(),
+            files: Vec::new(),
+            blobs: HashMap::new(),
+            total_size: 0,
+            chunked: false,
+            chunk_stats: None,
+        };
+        write_ccs_package(&result, &package_path).unwrap();
+
+        super::cmd_ccs_install(
+            package_path.to_str().unwrap(),
+            db_path_str,
+            install_root.to_str().unwrap(),
+            true,
+            true,
+            None,
+            None,
+            crate::commands::SandboxMode::None,
+            true,
+            true,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let conn = conary_core::db::open(db_path_str).unwrap();
+        let (trove_count, retained_id): (i64, i64) = conn
+            .query_row(
+                "SELECT COUNT(*), COALESCE(MAX(id), -1) FROM troves WHERE name = 'reinstall-dry-run'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(trove_count, 1);
+        assert_eq!(
+            retained_id, existing_id,
+            "dry-run reinstall must not delete the existing installed trove"
+        );
+    }
+
+    #[tokio::test]
     async fn ccs_install_rejects_child_write_beneath_package_symlink() {
         use conary_core::ccs::builder::write_ccs_package;
         use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
@@ -1859,6 +1755,7 @@ mod tests {
         use conary_core::filesystem::CasStore;
         use std::path::PathBuf;
 
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
         let temp_dir = tempfile::tempdir().unwrap();
         let install_root = temp_dir.path().join("root");
         let package_path = temp_dir.path().join("bash-link.ccs");
@@ -1868,19 +1765,34 @@ mod tests {
         std::fs::create_dir_all(install_root.join("usr/bin")).unwrap();
         std::os::unix::fs::symlink("bash", install_root.join("usr/bin/sh")).unwrap();
         conary_core::db::init(db_path_str).unwrap();
+        stage_test_boot_assets(temp_dir.path());
 
         let target = "bash".to_string();
         let symlink_hash = CasStore::compute_symlink_hash(&target);
-        let files = vec![FileEntry {
-            path: "/usr/bin/sh".to_string(),
-            hash: symlink_hash.clone(),
-            size: target.len() as u64,
-            mode: 0o120777,
-            component: "runtime".to_string(),
-            file_type: FileType::Symlink,
-            target: Some(target.clone()),
-            chunks: None,
-        }];
+        let init_content = b"#!/bin/sh\nexec true\n".to_vec();
+        let init_hash = conary_core::hash::sha256(&init_content);
+        let files = vec![
+            FileEntry {
+                path: "/usr/bin/sh".to_string(),
+                hash: symlink_hash.clone(),
+                size: target.len() as u64,
+                mode: 0o120777,
+                component: "runtime".to_string(),
+                file_type: FileType::Symlink,
+                target: Some(target.clone()),
+                chunks: None,
+            },
+            FileEntry {
+                path: "/usr/sbin/init".to_string(),
+                hash: init_hash.clone(),
+                size: init_content.len() as u64,
+                mode: 0o100755,
+                component: "runtime".to_string(),
+                file_type: FileType::Regular,
+                target: None,
+                chunks: None,
+            },
+        ];
         let result = BuildResult {
             manifest: CcsManifest::new_minimal("bash-link", "1.0.0"),
             components: HashMap::from([(
@@ -1889,12 +1801,15 @@ mod tests {
                     name: "runtime".to_string(),
                     files: files.clone(),
                     hash: "runtime".to_string(),
-                    size: target.len() as u64,
+                    size: (target.len() + init_content.len()) as u64,
                 },
             )]),
             files,
-            blobs: HashMap::from([(symlink_hash, target.as_bytes().to_vec())]),
-            total_size: target.len() as u64,
+            blobs: HashMap::from([
+                (symlink_hash, target.as_bytes().to_vec()),
+                (init_hash, init_content),
+            ]),
+            total_size: 0,
             chunked: false,
             chunk_stats: None,
         };
@@ -1940,6 +1855,7 @@ mod tests {
         use conary_core::filesystem::CasStore;
         use std::path::PathBuf;
 
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
         let temp_dir = tempfile::tempdir().unwrap();
         let install_root = temp_dir.path().join("root");
         let package_path = temp_dir.path().join("library-link.ccs");
@@ -1953,19 +1869,34 @@ mod tests {
         )
         .unwrap();
         conary_core::db::init(db_path_str).unwrap();
+        stage_test_boot_assets(temp_dir.path());
 
         let target = "libtasn1.so.6.6.5".to_string();
         let symlink_hash = CasStore::compute_symlink_hash(&target);
-        let files = vec![FileEntry {
-            path: "/usr/lib64/libtasn1.so.6".to_string(),
-            hash: symlink_hash.clone(),
-            size: target.len() as u64,
-            mode: 0o120777,
-            component: "runtime".to_string(),
-            file_type: FileType::Symlink,
-            target: Some(target.clone()),
-            chunks: None,
-        }];
+        let init_content = b"#!/bin/sh\nexec true\n".to_vec();
+        let init_hash = conary_core::hash::sha256(&init_content);
+        let files = vec![
+            FileEntry {
+                path: "/usr/lib64/libtasn1.so.6".to_string(),
+                hash: symlink_hash.clone(),
+                size: target.len() as u64,
+                mode: 0o120777,
+                component: "runtime".to_string(),
+                file_type: FileType::Symlink,
+                target: Some(target.clone()),
+                chunks: None,
+            },
+            FileEntry {
+                path: "/usr/sbin/init".to_string(),
+                hash: init_hash.clone(),
+                size: init_content.len() as u64,
+                mode: 0o100755,
+                component: "runtime".to_string(),
+                file_type: FileType::Regular,
+                target: None,
+                chunks: None,
+            },
+        ];
         let result = BuildResult {
             manifest: CcsManifest::new_minimal("library-link", "1.0.0"),
             components: HashMap::from([(
@@ -1974,12 +1905,15 @@ mod tests {
                     name: "runtime".to_string(),
                     files: files.clone(),
                     hash: "runtime".to_string(),
-                    size: target.len() as u64,
+                    size: (target.len() + init_content.len()) as u64,
                 },
             )]),
             files,
-            blobs: HashMap::from([(symlink_hash, target.as_bytes().to_vec())]),
-            total_size: target.len() as u64,
+            blobs: HashMap::from([
+                (symlink_hash, target.as_bytes().to_vec()),
+                (init_hash, init_content),
+            ]),
+            total_size: 0,
             chunked: false,
             chunk_stats: None,
         };
@@ -2004,7 +1938,7 @@ mod tests {
 
         assert_eq!(
             std::fs::read_link(install_root.join("usr/lib64/libtasn1.so.6")).unwrap(),
-            PathBuf::from("libtasn1.so.6.6.5")
+            PathBuf::from("libtasn1.so.6.6.4")
         );
         let conn = conary_core::db::open(db_path_str).unwrap();
         let symlink_target: String = conn
