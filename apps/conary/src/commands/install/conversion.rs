@@ -716,6 +716,7 @@ async fn install_converted_ccs_with_pending(
             allow_downgrade,
             selection_reason: None,
             component_selection: ComponentSelection::All,
+            selected_manifest_components: None,
         },
     )?;
     Ok(())

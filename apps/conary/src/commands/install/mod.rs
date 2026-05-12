@@ -54,6 +54,7 @@ use conary_core::components::{
 use conary_core::db::models::{Changeset, ChangesetStatus, DerivedPackage};
 use conary_core::db::paths::keyring_dir;
 use conary_core::dependencies::LanguageDepDetector;
+use conary_core::packages::PackageFormat;
 use conary_core::repository;
 use conary_core::repository::versioning::VersionScheme;
 use conary_core::resolver::MissingDependency;
@@ -117,6 +118,7 @@ pub(crate) struct CcsTransactionInstallOptions<'a> {
     pub allow_downgrade: bool,
     pub selection_reason: Option<&'a str>,
     pub component_selection: ComponentSelection,
+    pub selected_manifest_components: Option<Vec<String>>,
 }
 
 pub(crate) struct CcsTransactionInstallResult {
@@ -556,6 +558,9 @@ struct PreScriptletState {
 struct ExtractionResult {
     extracted_files: Vec<conary_core::packages::traits::ExtractedFile>,
     classified: HashMap<ComponentType, Vec<String>>,
+    component_names_by_path: Option<HashMap<String, String>>,
+    installed_component_names: Option<Vec<String>>,
+    ccs_pre_remove_script: Option<String>,
     installed_component_types: Vec<ComponentType>,
     skipped_components: Vec<&'static str>,
     language_provides: Vec<conary_core::dependencies::LanguageDep>,
@@ -1433,8 +1438,86 @@ fn extract_and_classify_files(
     Ok(ExtractionResult {
         extracted_files,
         classified,
+        component_names_by_path: None,
+        installed_component_names: None,
+        ccs_pre_remove_script: None,
         installed_component_types,
         skipped_components,
+        language_provides,
+    })
+}
+
+fn extract_and_classify_ccs_manifest_files(
+    pkg: &conary_core::ccs::CcsPackage,
+    selected_component_names: &[String],
+    progress: &InstallProgress,
+) -> Result<ExtractionResult> {
+    progress.set_phase(pkg.name(), InstallPhase::Extracting);
+    info!(
+        "Extracting CCS file contents for manifest components: {:?}",
+        selected_component_names
+    );
+
+    let selected_component_set: std::collections::HashSet<&str> = selected_component_names
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let selected_entries: Vec<_> = pkg
+        .file_entries()
+        .iter()
+        .filter(|file| selected_component_set.contains(file.component.as_str()))
+        .collect();
+    let selected_paths: std::collections::HashSet<&str> = selected_entries
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect();
+
+    let extracted_files: Vec<_> = if selected_paths.is_empty() {
+        Vec::new()
+    } else {
+        pkg.extract_file_contents()?
+            .into_iter()
+            .filter(|file| selected_paths.contains(file.path.as_str()))
+            .collect()
+    };
+    if extracted_files.is_empty() && !selected_entries.is_empty() {
+        anyhow::bail!(
+            "No files matched the selected CCS components: {}",
+            selected_component_names.join(", ")
+        );
+    }
+
+    let component_names_by_path: HashMap<String, String> = selected_entries
+        .iter()
+        .map(|file| (file.path.clone(), file.component.clone()))
+        .collect();
+
+    let file_paths: Vec<String> = extracted_files.iter().map(|f| f.path.clone()).collect();
+    let classified = ComponentClassifier::classify_all(&file_paths);
+    let installed_component_types: Vec<ComponentType> = classified.keys().copied().collect();
+    let mut installed_component_names: Vec<String> = selected_entries
+        .iter()
+        .map(|file| file.component.clone())
+        .collect();
+    installed_component_names.sort();
+    installed_component_names.dedup();
+
+    let language_provides = LanguageDepDetector::detect_all_provides(&file_paths);
+    if !language_provides.is_empty() {
+        info!(
+            "Detected {} language-specific provides from CCS components",
+            language_provides.len()
+        );
+    }
+
+    Ok(ExtractionResult {
+        extracted_files,
+        classified,
+        component_names_by_path: Some(component_names_by_path),
+        installed_component_names: Some(installed_component_names),
+        ccs_pre_remove_script: None,
+        installed_component_types,
+        skipped_components: Vec::new(),
         language_provides,
     })
 }
@@ -1594,7 +1677,18 @@ pub(crate) fn install_ccs_package_transactionally(
         UpgradeCheck::Upgrade(trove) | UpgradeCheck::Downgrade(trove) => Some(trove.as_ref()),
     };
 
-    let extraction = extract_and_classify_files(pkg, &opts.component_selection, &progress)?;
+    let mut extraction =
+        if let Some(selected_manifest_components) = opts.selected_manifest_components.as_deref() {
+            extract_and_classify_ccs_manifest_files(pkg, selected_manifest_components, &progress)?
+        } else {
+            extract_and_classify_files(pkg, &opts.component_selection, &progress)?
+        };
+    extraction.ccs_pre_remove_script = pkg
+        .manifest()
+        .hooks
+        .pre_remove
+        .as_ref()
+        .map(|hook| hook.script.clone());
 
     if opts.dry_run {
         show_dry_run_summary(pkg, &opts.component_selection);
