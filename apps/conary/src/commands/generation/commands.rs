@@ -5,7 +5,7 @@
 use super::metadata::{GenerationMetadata, is_generation_pending};
 use crate::commands::format_bytes;
 use anyhow::{Result, anyhow};
-use conary_core::generation::mount::current_generation;
+use conary_core::generation::mount::{current_generation, update_current_symlink};
 use conary_core::runtime_root::ConaryRuntimeRoot;
 use conary_core::transaction::{TransactionConfig, TransactionEngine};
 use rusqlite::Connection;
@@ -640,17 +640,28 @@ pub fn cmd_generation_build(db_path: &str, summary: &str) -> Result<()> {
     Ok(())
 }
 
-/// Switch the live system to `number`, update the boot entry, and optionally reboot.
+/// Select `number` as the next boot generation, update the boot entry, and optionally reboot.
 pub fn cmd_generation_switch(number: i64, reboot: bool) -> Result<()> {
     let runtime_root = default_runtime_root();
     let current = current_generation(runtime_root.root())?;
-    super::switch::switch_live(number)?;
+    let gen_dir = runtime_root.generation_path(number);
+    if !gen_dir.exists() {
+        return Err(anyhow!(
+            "Generation {number} does not exist at {}",
+            gen_dir.display()
+        ));
+    }
+
+    update_current_symlink(runtime_root.root(), number)
+        .map_err(|e| anyhow!("Failed to update current generation symlink: {e}"))?;
     if let Err(e) = super::boot::write_boot_entry(number) {
         eprintln!("Boot entry skipped: {}", e);
     }
     if let Some(current) = current {
         warn_removed_side_effect_packages(current, number);
     }
+    println!("Generation {number} selected for next boot.");
+    println!("Reboot to activate the selected composefs generation.");
     if reboot {
         println!("Rebooting...");
         std::process::Command::new("systemctl")
@@ -660,7 +671,7 @@ pub fn cmd_generation_switch(number: i64, reboot: bool) -> Result<()> {
     Ok(())
 }
 
-/// Roll back to the highest-numbered generation below the currently active one.
+/// Roll back to the highest-numbered generation below the currently selected one.
 pub fn cmd_generation_rollback() -> Result<()> {
     let runtime_root = default_runtime_root();
     let current =
@@ -684,12 +695,14 @@ pub fn cmd_generation_rollback() -> Result<()> {
         .last()
         .ok_or_else(|| anyhow!("No previous generation to roll back to"))?;
 
-    super::switch::switch_live(*previous)?;
+    update_current_symlink(runtime_root.root(), *previous)
+        .map_err(|e| anyhow!("Failed to update current generation symlink: {e}"))?;
     if let Err(e) = super::boot::write_boot_entry(*previous) {
         eprintln!("Boot entry skipped: {}", e);
     }
     warn_removed_side_effect_packages(current, *previous);
-    println!("Rolled back to generation {previous}");
+    println!("Generation {previous} selected for next boot.");
+    println!("Reboot to activate the rollback generation.");
     Ok(())
 }
 

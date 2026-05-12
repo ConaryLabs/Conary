@@ -17,12 +17,16 @@ use std::path::Path;
 use std::process::Command;
 use tracing::{info, warn};
 
-/// Switch the live system to the specified generation using composefs mounts.
+/// Developer-only live switch helper.
+///
+/// Release-facing generation activation selects the next boot generation
+/// instead of attempting to make a running process tree coherent in place.
 ///
 /// 1. Mount the new generation's EROFS image via composefs
 /// 2. Bind-mount /usr from the composefs tree (read-only)
 /// 3. Rebuild /etc overlay with new composefs lower
 /// 4. Update /conary/current symlink
+#[allow(dead_code)]
 pub fn switch_live(gen_number: i64) -> Result<()> {
     let runtime_root = ConaryRuntimeRoot::default();
     let gen_dir = runtime_root.generation_path(gen_number);
@@ -151,9 +155,9 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
     ) {
         Ok(()) => info!("Mounted /etc overlay with composefs lower"),
         Err(e) => {
-            warn!("Failed to mount /etc overlay: {e}; /etc may be stale");
-            eprintln!("Warning: Failed to mount /etc overlay: {e}; /etc may be stale");
-            // Non-fatal — /etc is still readable from the old generation
+            let _ = run_command("umount", &["/usr"]);
+            let _ = unmount_generation(&staging);
+            return Err(e).context("Failed to mount /etc overlay for live debug switch");
         }
     }
 
@@ -179,6 +183,7 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
 }
 
 /// Run a simple command, returning Ok on success.
+#[allow(dead_code)]
 fn run_command(cmd: &str, args: &[&str]) -> Result<()> {
     let status = Command::new(cmd)
         .args(args)
