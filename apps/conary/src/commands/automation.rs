@@ -1027,6 +1027,13 @@ mod tests {
         let _guard = test_mount_skip_guard();
 
         let conn = crate::commands::open_db(&db_path).unwrap();
+        crate::commands::composefs_ops::rebuild_and_mount(
+            &conn,
+            &db_path,
+            "Initial automation cleanup generation",
+            None,
+        )
+        .unwrap();
         conn.execute(
             "UPDATE troves
              SET install_reason = 'dependency',

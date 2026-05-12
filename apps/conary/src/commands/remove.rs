@@ -25,6 +25,7 @@ pub(crate) struct RemoveInnerResult {
     dirs_removed: usize,
 }
 
+#[cfg(test)]
 #[derive(Debug, Default, PartialEq, Eq)]
 struct DirectRemovalStats {
     files_removed: usize,
@@ -200,6 +201,18 @@ pub async fn cmd_remove(
         );
     }
 
+    let runtime_root =
+        conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(PathBuf::from(db_path));
+    let active_generation =
+        conary_core::generation::mount::current_generation(runtime_root.root()).unwrap_or(None);
+    if active_generation.is_none() {
+        engine.release_lock();
+        anyhow::bail!(
+            "Cannot remove {package_name} without an active composefs generation. \
+             Build or activate a generation first, then retry the remove operation."
+        );
+    }
+
     // DB-first approach: commit the DB transaction before removing files from disk.
     // If a crash occurs after the DB commit but before file removal completes, the
     // package is already correctly marked as removed. Leftover files on disk are
@@ -239,30 +252,13 @@ pub async fn cmd_remove(
 
     // Composefs-native: rebuild EROFS image and remount to reflect removal
     progress.set_phase(RemovePhase::RemovingFiles);
-    let runtime_root =
-        conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(PathBuf::from(db_path));
-    let active_generation =
-        conary_core::generation::mount::current_generation(runtime_root.root()).unwrap_or(None);
     let post_commit_result = (|| -> Result<()> {
-        if active_generation.is_some() {
-            crate::commands::composefs_ops::rebuild_and_mount(
-                &conn,
-                db_path,
-                &format!("Remove {}", package_name),
-                Some(prev_etc),
-            )?;
-        } else {
-            let stats = remove_files_from_live_root(Path::new(root), &remove_result.snapshot)?;
-            info!(
-                "Removed {} file(s) and {} directories directly because no active generation exists",
-                stats.files_removed, stats.dirs_removed
-            );
-            create_state_snapshot(
-                &conn,
-                remove_changeset_id,
-                &format!("Remove {}", package_name),
-            )?;
-        }
+        crate::commands::composefs_ops::rebuild_and_mount(
+            &conn,
+            db_path,
+            &format!("Remove {}", package_name),
+            Some(prev_etc),
+        )?;
         changeset.update_status(&conn, conary_core::db::models::ChangesetStatus::Applied)?;
         Ok(())
     })();
@@ -323,14 +319,17 @@ pub async fn cmd_remove(
     Ok(())
 }
 
+#[cfg(test)]
 fn snapshot_path_under_root(root: &Path, path: &str) -> PathBuf {
     root.join(path.strip_prefix('/').unwrap_or(path))
 }
 
+#[cfg(test)]
 fn snapshot_entry_is_dir(file: &FileSnapshot) -> bool {
     file.path.ends_with('/') || (file.permissions as u32 & 0o170000) == 0o040000
 }
 
+#[cfg(test)]
 fn remove_files_from_live_root(
     root: &Path,
     snapshot: &TroveSnapshot,
@@ -647,6 +646,17 @@ mod tests {
             installed_from_repository_id: None,
             files,
         }
+    }
+
+    #[test]
+    fn remove_requires_active_generation_before_live_root_mutation() {
+        let source = std::fs::read_to_string("apps/conary/src/commands/remove.rs")
+            .unwrap_or_else(|_| include_str!("remove.rs").to_string());
+        let forbidden = ["remove_files_from_live_root", "(Path::new(root)"].concat();
+        assert!(
+            !source.contains(&forbidden),
+            "remove must not fall back to direct live-root mutation when no active generation exists"
+        );
     }
 
     #[test]

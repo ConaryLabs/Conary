@@ -141,6 +141,22 @@ fn generation_switch_does_not_retry_requested_verity_as_plain_composefs() {
 }
 
 #[test]
+fn recovery_does_not_promote_generations_by_erofs_magic_only() {
+    let recovery_rs = fs::read_to_string(core_source("transaction/recovery.rs"))
+        .expect("failed to read recovery.rs");
+
+    assert!(
+        recovery_rs.contains("load_installed_generation_artifact")
+            || recovery_rs.contains("load_generation_artifact"),
+        "recovery must load the generation artifact contract before promoting a generation"
+    );
+    assert!(
+        !recovery_rs.contains("verity: false,\n                digest: None,"),
+        "recovery must not hard-code plain composefs when metadata requests verity"
+    );
+}
+
+#[test]
 fn release_generation_commands_do_not_expose_live_switch_as_normal_activation() {
     let commands_rs = fs::read_to_string(app_source("commands/generation/commands.rs"))
         .expect("failed to read generation commands");
