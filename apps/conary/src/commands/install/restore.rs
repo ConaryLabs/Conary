@@ -356,6 +356,7 @@ pub(crate) fn install_prepared_inner(
         selection_reason: execution.prepared.selection_reason.as_deref(),
         old_trove_to_upgrade: execution.prepared.old_trove_to_upgrade.as_ref(),
         ccs_manifest_provides: None,
+        ccs_capabilities: None,
     };
     install_inner(
         tx,
