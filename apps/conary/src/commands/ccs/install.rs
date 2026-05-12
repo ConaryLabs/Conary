@@ -86,8 +86,8 @@ fn symlink_target_for_file(file: &ExtractedFile) -> Result<String> {
     String::from_utf8(file.content.clone()).context("invalid symlink target in package payload")
 }
 
-struct DeploymentFile<'a> {
-    file: &'a ExtractedFile,
+struct DeploymentFile {
+    file: ExtractedFile,
     relative_path: PathBuf,
     symlink_target: Option<String>,
 }
@@ -102,14 +102,7 @@ fn standard_usrmerge_target(component: &str) -> Option<&'static str> {
     }
 }
 
-fn is_standard_usrmerge_link(actual: &Path, expected: &str) -> bool {
-    actual == Path::new(expected) || actual == Path::new("/").join(expected)
-}
-
-fn rewrite_standard_usrmerge_root_symlink(
-    root_path: &Path,
-    relative_path: &Path,
-) -> Result<PathBuf> {
+fn rewrite_standard_usrmerge_root_symlink(relative_path: &Path) -> Result<PathBuf> {
     let mut components = relative_path.components();
     let Some(first) = components.next() else {
         return Ok(relative_path.to_path_buf());
@@ -131,32 +124,31 @@ fn rewrite_standard_usrmerge_root_symlink(
         return Ok(relative_path.to_path_buf());
     }
 
-    let link_path = root_path.join(first);
-    match std::fs::symlink_metadata(&link_path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            let actual = std::fs::read_link(&link_path)
-                .with_context(|| format!("failed to read symlink {}", link_path.display()))?;
-            if is_standard_usrmerge_link(&actual, target) {
-                let mut rewritten = PathBuf::from(target);
-                for component in remaining {
-                    rewritten.push(component.as_os_str());
-                }
-                return Ok(rewritten);
-            }
-        }
-        Ok(_) => {}
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(err) => {
-            return Err(err).with_context(|| format!("failed to inspect {}", link_path.display()));
-        }
+    let mut rewritten = PathBuf::from(target);
+    for component in remaining {
+        rewritten.push(component.as_os_str());
     }
-
-    Ok(relative_path.to_path_buf())
+    Ok(rewritten)
 }
 
-fn package_deployment_relative_path(root_path: &Path, package_path: &str) -> Result<PathBuf> {
+fn deployment_path_to_package_path(relative_path: &Path) -> Result<String> {
+    let path = relative_path.to_str().ok_or_else(|| {
+        anyhow::anyhow!(
+            "invalid non-UTF8 package path after normalization: {}",
+            relative_path.display()
+        )
+    })?;
+    Ok(format!("/{path}"))
+}
+
+pub(crate) fn normalize_ccs_package_path(root_path: &Path, package_path: &str) -> Result<String> {
+    let relative_path = package_deployment_relative_path(root_path, package_path)?;
+    deployment_path_to_package_path(&relative_path)
+}
+
+fn package_deployment_relative_path(_root_path: &Path, package_path: &str) -> Result<PathBuf> {
     let relative_path = sanitize_package_relative_path(package_path)?;
-    rewrite_standard_usrmerge_root_symlink(root_path, &relative_path)
+    rewrite_standard_usrmerge_root_symlink(&relative_path)
 }
 
 fn identical_regular_deployment(existing: &ExtractedFile, current: &ExtractedFile) -> bool {
@@ -260,18 +252,27 @@ pub(crate) fn validate_ccs_payload_paths(
         );
     }
 
-    let mut deployment_files: Vec<DeploymentFile<'_>> = Vec::new();
+    normalize_ccs_extracted_files(root_path, extracted_files)?;
+
+    Ok(())
+}
+
+pub(crate) fn normalize_ccs_extracted_files(
+    root_path: &Path,
+    extracted_files: Vec<ExtractedFile>,
+) -> Result<Vec<ExtractedFile>> {
+    let mut deployment_files: Vec<DeploymentFile> = Vec::new();
     let mut seen_indexes: HashMap<PathBuf, usize> = HashMap::new();
-    for file in &extracted_files {
+    for file in extracted_files {
         let relative_path = package_deployment_relative_path(root_path, &file.path)?;
-        let current_is_symlink = is_extracted_symlink(file);
+        let current_is_symlink = is_extracted_symlink(&file);
         let symlink_target = if current_is_symlink {
-            Some(symlink_target_for_file(file)?)
+            Some(symlink_target_for_file(&file)?)
         } else {
             None
         };
         if let Some(existing_index) = seen_indexes.get(&relative_path).copied() {
-            let existing = deployment_files[existing_index].file;
+            let existing = &deployment_files[existing_index].file;
             let existing_is_symlink = is_extracted_symlink(existing);
             if existing_is_symlink || current_is_symlink {
                 anyhow::bail!(
@@ -279,7 +280,7 @@ pub(crate) fn validate_ccs_payload_paths(
                     relative_path.display()
                 );
             }
-            if identical_regular_deployment(existing, file) {
+            if identical_regular_deployment(existing, &file) {
                 continue;
             }
             anyhow::bail!(
@@ -310,7 +311,16 @@ pub(crate) fn validate_ccs_payload_paths(
         )?;
     }
 
-    Ok(())
+    let mut normalized = Vec::with_capacity(deployment_files.len());
+    for mut deployment in deployment_files {
+        deployment.file.path = deployment_path_to_package_path(&deployment.relative_path)?;
+        if deployment.symlink_target.is_some() {
+            deployment.file.symlink_target = deployment.symlink_target;
+        }
+        normalized.push(deployment.file);
+    }
+
+    Ok(normalized)
 }
 
 fn installed_versions_satisfying_constraint(
@@ -2001,7 +2011,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ccs_install_allows_standard_usrmerge_root_symlink_ancestor() {
+    async fn ccs_install_persists_usrmerge_payload_under_usr_path() {
         use conary_core::ccs::builder::write_ccs_package;
         use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
         use conary_core::hash;
@@ -2013,9 +2023,7 @@ mod tests {
         let db_path = temp_dir.path().join("conary.db");
         let db_path_str = db_path.to_str().unwrap();
 
-        std::fs::create_dir_all(install_root.join("usr/bin")).unwrap();
-        #[cfg(unix)]
-        std::os::unix::fs::symlink("usr/bin", install_root.join("bin")).unwrap();
+        std::fs::create_dir_all(&install_root).unwrap();
         conary_core::db::init(db_path_str).unwrap();
         stage_test_boot_assets(temp_dir.path());
 
@@ -2090,12 +2098,20 @@ mod tests {
         let conn = conary_core::db::open(db_path_str).unwrap();
         let stored_path: String = conn
             .query_row(
-                "SELECT path FROM files WHERE path = 'bin/chkconfig'",
+                "SELECT path FROM files WHERE path = '/usr/bin/chkconfig'",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(stored_path, "bin/chkconfig");
+        assert_eq!(stored_path, "/usr/bin/chkconfig");
+        let legacy_path_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM files WHERE path = 'bin/chkconfig'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(legacy_path_count, 0);
         assert!(std::fs::read_link(temp_dir.path().join("current")).is_ok());
     }
 
@@ -2309,6 +2325,7 @@ mod tests {
         use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
         use conary_core::hash;
 
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
         let temp_dir = tempfile::tempdir().unwrap();
         let install_root = temp_dir.path().join("root");
         let package_path = temp_dir.path().join("usrmerge-duplicate.ccs");
@@ -2319,9 +2336,12 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink("usr/bin", install_root.join("bin")).unwrap();
         conary_core::db::init(db_path_str).unwrap();
+        stage_test_boot_assets(temp_dir.path());
 
         let content = b"chkconfig".to_vec();
         let file_hash = hash::sha256(&content);
+        let init_content = b"#!/bin/sh\nexec true\n".to_vec();
+        let init_hash = hash::sha256(&init_content);
         let files = vec![
             FileEntry {
                 path: "bin/chkconfig".to_string(),
@@ -2343,6 +2363,16 @@ mod tests {
                 target: None,
                 chunks: None,
             },
+            FileEntry {
+                path: "/usr/sbin/init".to_string(),
+                hash: init_hash.clone(),
+                size: init_content.len() as u64,
+                mode: 0o100755,
+                component: "runtime".to_string(),
+                file_type: FileType::Regular,
+                target: None,
+                chunks: None,
+            },
         ];
 
         let result = BuildResult {
@@ -2353,11 +2383,11 @@ mod tests {
                     name: "runtime".to_string(),
                     files: files.clone(),
                     hash: "runtime".to_string(),
-                    size: content.len() as u64 * 2,
+                    size: content.len() as u64 * 2 + init_content.len() as u64,
                 },
             )]),
             files,
-            blobs: HashMap::from([(file_hash, content.clone())]),
+            blobs: HashMap::from([(file_hash, content.clone()), (init_hash, init_content)]),
             total_size: content.len() as u64 * 2,
             chunked: false,
             chunk_stats: None,
@@ -2381,15 +2411,125 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(
-            std::fs::read(install_root.join("usr/bin/chkconfig")).unwrap(),
-            content
-        );
         let conn = conary_core::db::open(db_path_str).unwrap();
-        let file_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))
+        let chkconfig_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM files WHERE path = '/usr/bin/chkconfig'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
-        assert_eq!(file_count, 1);
+        assert_eq!(chkconfig_count, 1);
+        let legacy_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM files WHERE path IN ('bin/chkconfig', 'usr/bin/chkconfig')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(legacy_count, 0);
+    }
+
+    #[tokio::test]
+    async fn ccs_install_rejects_conflicting_usrmerge_duplicate_files() {
+        use conary_core::ccs::builder::write_ccs_package;
+        use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
+        use conary_core::hash;
+
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let install_root = temp_dir.path().join("root");
+        let package_path = temp_dir.path().join("usrmerge-conflict.ccs");
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+
+        std::fs::create_dir_all(&install_root).unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+        stage_test_boot_assets(temp_dir.path());
+
+        let bin_content = b"from-bin".to_vec();
+        let bin_hash = hash::sha256(&bin_content);
+        let usr_content = b"from-usr".to_vec();
+        let usr_hash = hash::sha256(&usr_content);
+        let init_content = b"#!/bin/sh\nexec true\n".to_vec();
+        let init_hash = hash::sha256(&init_content);
+        let files = vec![
+            FileEntry {
+                path: "bin/chkconfig".to_string(),
+                hash: bin_hash.clone(),
+                size: bin_content.len() as u64,
+                mode: 0o100755,
+                component: "runtime".to_string(),
+                file_type: FileType::Regular,
+                target: None,
+                chunks: None,
+            },
+            FileEntry {
+                path: "usr/bin/chkconfig".to_string(),
+                hash: usr_hash.clone(),
+                size: usr_content.len() as u64,
+                mode: 0o100755,
+                component: "runtime".to_string(),
+                file_type: FileType::Regular,
+                target: None,
+                chunks: None,
+            },
+            FileEntry {
+                path: "/usr/sbin/init".to_string(),
+                hash: init_hash.clone(),
+                size: init_content.len() as u64,
+                mode: 0o100755,
+                component: "runtime".to_string(),
+                file_type: FileType::Regular,
+                target: None,
+                chunks: None,
+            },
+        ];
+
+        let result = BuildResult {
+            manifest: CcsManifest::new_minimal("usrmerge-conflict", "1.0.0"),
+            components: HashMap::from([(
+                "runtime".to_string(),
+                ComponentData {
+                    name: "runtime".to_string(),
+                    files: files.clone(),
+                    hash: "runtime".to_string(),
+                    size: (bin_content.len() + usr_content.len() + init_content.len()) as u64,
+                },
+            )]),
+            files,
+            blobs: HashMap::from([
+                (bin_hash, bin_content),
+                (usr_hash, usr_content),
+                (init_hash, init_content),
+            ]),
+            total_size: 0,
+            chunked: false,
+            chunk_stats: None,
+        };
+        write_ccs_package(&result, &package_path).unwrap();
+
+        let err = super::cmd_ccs_install(
+            package_path.to_str().unwrap(),
+            db_path_str,
+            install_root.to_str().unwrap(),
+            false,
+            true,
+            None,
+            None,
+            crate::commands::SandboxMode::None,
+            true,
+            false,
+            false,
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("duplicate deployment path"),
+            "unexpected error: {err:#}"
+        );
     }
 
     #[tokio::test]
