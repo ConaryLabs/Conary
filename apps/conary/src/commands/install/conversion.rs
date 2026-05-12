@@ -12,6 +12,7 @@ use super::blocklist;
 use super::dep_mode::DepMode;
 use super::dep_resolution;
 use super::resolve::check_provides_dependencies;
+use super::{CcsTransactionInstallOptions, ComponentSelection};
 use anyhow::{Context, Result};
 use conary_core::capability::inference::InferenceOptions;
 use conary_core::ccs::CcsPackage;
@@ -701,21 +702,23 @@ async fn install_converted_ccs_with_pending(
     }
 
     println!("Installing converted CCS package...");
-    super::super::ccs::cmd_ccs_install(
-        ccs_path,
-        db_path,
-        root,
-        dry_run,
-        true, // allow_unsigned - converted packages aren't signed yet
-        None, // policy
-        None, // components - install all
-        sandbox_mode,
-        true,  // deps already handled above; skip redundant check in cmd_ccs_install
-        false, // reinstall - not applicable for conversions
-        false, // allow_capabilities - not applicable for conversions
-        None,  // capability_policy - use default
-    )
-    .await
+    let mut conn = open_db(db_path)?;
+    let ccs_pkg = CcsPackage::parse(ccs_path).context("Failed to parse converted CCS package")?;
+    super::install_ccs_package_transactionally(
+        &mut conn,
+        &ccs_pkg,
+        CcsTransactionInstallOptions {
+            db_path,
+            root,
+            dry_run,
+            no_scripts,
+            sandbox_mode,
+            allow_downgrade,
+            selection_reason: None,
+            component_selection: ComponentSelection::All,
+        },
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]

@@ -108,6 +108,21 @@ pub struct InstallOptions<'a> {
     pub from_distro: Option<String>,
 }
 
+pub(crate) struct CcsTransactionInstallOptions<'a> {
+    pub db_path: &'a str,
+    pub root: &'a str,
+    pub dry_run: bool,
+    pub no_scripts: bool,
+    pub sandbox_mode: SandboxMode,
+    pub allow_downgrade: bool,
+    pub selection_reason: Option<&'a str>,
+    pub component_selection: ComponentSelection,
+}
+
+pub(crate) struct CcsTransactionInstallResult {
+    pub changeset_id: i64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PreparedSourceKind {
     Legacy { format: PackageFormatType },
@@ -1564,6 +1579,65 @@ fn execute_install_transaction(
     post_commit_result?;
 
     Ok(InstallTransactionResult { changeset_id })
+}
+
+pub(crate) fn install_ccs_package_transactionally(
+    conn: &mut rusqlite::Connection,
+    pkg: &conary_core::ccs::CcsPackage,
+    opts: CcsTransactionInstallOptions<'_>,
+) -> Result<CcsTransactionInstallResult> {
+    let progress = InstallProgress::single("Installing");
+    let semantics = InstallSemantics::ccs();
+    let upgrade = check_upgrade_status(conn, pkg, &semantics, opts.allow_downgrade)?;
+    let old_trove = match &upgrade {
+        UpgradeCheck::FreshInstall => None,
+        UpgradeCheck::Upgrade(trove) | UpgradeCheck::Downgrade(trove) => Some(trove.as_ref()),
+    };
+
+    let extraction = extract_and_classify_files(pkg, &opts.component_selection, &progress)?;
+
+    if opts.dry_run {
+        show_dry_run_summary(pkg, &opts.component_selection);
+        return Ok(CcsTransactionInstallResult { changeset_id: 0 });
+    }
+
+    let scriptlet_ctx = ScriptletContext {
+        root: opts.root,
+        no_scripts: opts.no_scripts,
+        sandbox_mode: opts.sandbox_mode,
+        semantics,
+        old_trove,
+    };
+    let pre_state = run_pre_install_phase(
+        conn,
+        pkg,
+        &extraction.installed_component_types,
+        &scriptlet_ctx,
+        &progress,
+    )?;
+
+    let tx_ctx = TransactionContext {
+        db_path: opts.db_path,
+        root: opts.root,
+        semantics,
+        selection_reason: opts.selection_reason,
+        old_trove_to_upgrade: old_trove,
+    };
+    let tx_result = execute_install_transaction(conn, pkg, &extraction, &tx_ctx, &progress)?;
+
+    finalize_install_without_snapshot(
+        conn,
+        pkg,
+        &extraction,
+        &scriptlet_ctx,
+        &pre_state,
+        &tx_result,
+        &progress,
+    )?;
+
+    Ok(CcsTransactionInstallResult {
+        changeset_id: tx_result.changeset_id,
+    })
 }
 
 /// Run post-install scriptlets, triggers, and print the final summary.
