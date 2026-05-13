@@ -299,6 +299,7 @@ fn test_derive_build_cli_surfaces_persisted_artifact() {
 #[test]
 fn test_parent_upgrade_marks_built_derived_package_stale_via_install_cli() {
     use conary_core::ccs::builder::write_ccs_package;
+    use conary_core::ccs::manifest::Platform;
     use conary_core::ccs::{
         BuildResult, CcsManifest, ComponentData, FileEntry as CcsFileEntry, FileType,
     };
@@ -361,8 +362,15 @@ fn test_parent_upgrade_marks_built_derived_package_stale_via_install_cli() {
         },
     ];
     let package_path = install_temp.path().join("nginx-1.25.0.ccs");
+    let mut manifest = CcsManifest::new_minimal("nginx", "1.25.0");
+    manifest.package.platform = Some(Platform {
+        os: "linux".to_string(),
+        arch: Some("x86_64".to_string()),
+        libc: "gnu".to_string(),
+        abi: None,
+    });
     let result = BuildResult {
-        manifest: CcsManifest::new_minimal("nginx", "1.25.0"),
+        manifest,
         components: HashMap::from([(
             "runtime".to_string(),
             ComponentData {
@@ -381,6 +389,7 @@ fn test_parent_upgrade_marks_built_derived_package_stale_via_install_cli() {
     write_ccs_package(&result, &package_path).unwrap();
 
     let install_output = Command::new(env!("CARGO_BIN_EXE_conary"))
+        .env("CONARY_TEST_SKIP_GENERATION_MOUNT", "1")
         .arg("--allow-live-system-mutation")
         .arg("install")
         .arg(package_path.to_str().unwrap())
@@ -424,17 +433,15 @@ fn test_capability_run_uses_installed_package_declaration() {
     use std::path::PathBuf;
     use std::process::Command;
 
-    let temp_dir = tempfile::tempdir().unwrap();
+    let (temp_dir, db_path) = common::setup_command_test_db();
     let install_root = temp_dir.path().join("root");
     std::fs::create_dir_all(&install_root).unwrap();
-
-    let db_path = temp_dir.path().join("capability.db");
-    conary_core::db::init(db_path.to_str().unwrap()).unwrap();
 
     let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/adversarial/malicious/cap-net-raw/output/cap-net-raw.ccs");
 
     let install_output = Command::new(env!("CARGO_BIN_EXE_conary"))
+        .env("CONARY_TEST_SKIP_GENERATION_MOUNT", "1")
         .arg("--allow-live-system-mutation")
         .arg("ccs")
         .arg("install")
@@ -445,7 +452,7 @@ fn test_capability_run_uses_installed_package_declaration() {
         .arg("never")
         .arg("--reinstall")
         .arg("--db-path")
-        .arg(db_path.to_str().unwrap())
+        .arg(&db_path)
         .arg("--root")
         .arg(install_root.to_str().unwrap())
         .output()
@@ -463,7 +470,7 @@ fn test_capability_run_uses_installed_package_declaration() {
         .arg("show")
         .arg("cap-net-raw")
         .arg("--db-path")
-        .arg(db_path.to_str().unwrap())
+        .arg(&db_path)
         .output()
         .unwrap();
 
@@ -477,7 +484,7 @@ fn test_capability_run_uses_installed_package_declaration() {
         .arg("run")
         .arg("cap-net-raw")
         .arg("--db-path")
-        .arg(db_path.to_str().unwrap())
+        .arg(&db_path)
         .arg("--")
         .arg("/bin/echo")
         .arg("capability-ok")
