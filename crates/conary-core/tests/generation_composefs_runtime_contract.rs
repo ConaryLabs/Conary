@@ -116,6 +116,56 @@ fn generation_switch_does_not_force_verity_when_metadata_says_it_is_unavailable(
 }
 
 #[test]
+fn generation_activation_validates_artifacts_before_pointer_updates() {
+    let commands_rs = fs::read_to_string(app_source("commands/generation/commands.rs"))
+        .expect("failed to read commands/generation/commands.rs");
+    let switch_rs = fs::read_to_string(app_source("commands/generation/switch.rs"))
+        .expect("failed to read commands/generation/switch.rs");
+
+    assert!(
+        commands_rs.contains("load_generation_artifact(&gen_dir)"),
+        "next-boot activation must load the generation artifact contract before selecting a generation"
+    );
+
+    let switch_body = commands_rs
+        .split("pub fn cmd_generation_switch")
+        .nth(1)
+        .and_then(|rest| rest.split("/// Roll back").next())
+        .expect("failed to isolate cmd_generation_switch body");
+    let switch_validate = switch_body
+        .find("validate_generation_activation_artifact(&runtime_root, number)?;")
+        .expect("generation switch must validate artifact contract");
+    let switch_update = switch_body
+        .find("update_current_symlink")
+        .expect("generation switch must update current pointer");
+    assert!(
+        switch_validate < switch_update,
+        "generation switch must validate the artifact before updating /conary/current"
+    );
+
+    let rollback_body = commands_rs
+        .split("pub fn cmd_generation_rollback")
+        .nth(1)
+        .and_then(|rest| rest.split("/// Recover").next())
+        .expect("failed to isolate cmd_generation_rollback body");
+    let rollback_validate = rollback_body
+        .find("validate_generation_activation_artifact(&runtime_root, *previous)?;")
+        .expect("generation rollback must validate artifact contract");
+    let rollback_update = rollback_body
+        .find("update_current_symlink")
+        .expect("generation rollback must update current pointer");
+    assert!(
+        rollback_validate < rollback_update,
+        "generation rollback must validate the artifact before updating /conary/current"
+    );
+
+    assert!(
+        switch_rs.contains("load_generation_artifact(&gen_dir)"),
+        "debug live switch must also validate the artifact contract before mounting"
+    );
+}
+
+#[test]
 fn generation_switch_does_not_retry_requested_verity_as_plain_composefs() {
     let switch_rs = fs::read_to_string(app_source("commands/generation/switch.rs"))
         .expect("failed to read commands/generation/switch.rs");
@@ -149,6 +199,10 @@ fn recovery_does_not_promote_generations_by_erofs_magic_only() {
         recovery_rs.contains("load_installed_generation_artifact")
             || recovery_rs.contains("load_generation_artifact"),
         "recovery must load the generation artifact contract before promoting a generation"
+    );
+    assert!(
+        !recovery_rs.contains("is_valid_erofs_image"),
+        "recovery must not retain the old EROFS magic-number promotion helper"
     );
     assert!(
         !recovery_rs.contains("verity: false,\n                digest: None,"),
@@ -218,20 +272,21 @@ fn release_generation_commands_do_not_expose_live_switch_as_normal_activation() 
 }
 
 #[test]
-fn composefs_apply_prints_etc_overlay_failures_to_stderr() {
+fn composefs_apply_fails_hard_on_etc_overlay_failures() {
     let composefs_ops_rs = fs::read_to_string(app_source("commands/composefs_ops.rs"))
         .expect("failed to read commands/composefs_ops.rs");
 
     assert!(
-        composefs_ops_rs
-            .contains("warn!(\"Failed to mount /etc overlay: {e}; /etc may be stale\");"),
-        "composefs apply must keep logging /etc overlay mount failures"
+        composefs_ops_rs.contains("Failed to mount /etc overlay for generation {gen_num}"),
+        "composefs apply must fail hard on /etc overlay mount failures"
     );
     assert!(
-        composefs_ops_rs.contains(
-            "eprintln!(\"Warning: Failed to mount /etc overlay: {e}; /etc may be stale\");"
-        ),
-        "composefs apply must also print /etc overlay mount failures to stderr"
+        composefs_ops_rs.contains("unmount_generation(&staging_mount)"),
+        "composefs apply must clean up the staged generation mount when /etc overlay setup fails"
+    );
+    assert!(
+        !composefs_ops_rs.contains("may be stale"),
+        "composefs apply must not continue with a stale /etc overlay"
     );
 }
 
@@ -251,6 +306,27 @@ fn generation_switch_fails_hard_on_etc_overlay_failures() {
     assert!(
         !switch_rs.contains("eprintln!(\"Warning: Failed to mount /etc overlay: {e};"),
         "debug live switch must not treat /etc overlay failures as warning-only"
+    );
+}
+
+#[test]
+fn generation_recovery_fails_hard_on_etc_overlay_failures() {
+    let commands_rs = fs::read_to_string(app_source("commands/generation/commands.rs"))
+        .expect("failed to read commands/generation/commands.rs");
+
+    assert!(
+        commands_rs
+            .contains("Failed to restore /etc overlay after recovery for generation {gen_num}"),
+        "generation recovery must fail hard on /etc overlay mount failures"
+    );
+    assert!(
+        commands_rs.contains("unmount_generation(&staging)"),
+        "generation recovery must clean up the staged generation mount when /etc overlay setup fails"
+    );
+    assert!(
+        !commands_rs
+            .contains("tracing::warn!(\"Failed to restore /etc overlay after recovery: {e}\");"),
+        "generation recovery must not keep warning-only /etc overlay behavior"
     );
 }
 

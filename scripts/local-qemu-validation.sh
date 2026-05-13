@@ -44,6 +44,11 @@ echo "[local-qemu-validation] logs: ${LOG_DIR}"
 cargo build -p conary -p conary-test --verbose
 
 run_suite \
+    phase3-composefs-modernization \
+    "${LOG_DIR}/composefs-modernization.log" \
+    'partial-generation-artifacts-rejected|no-active-generation-rollback-rejected'
+
+run_suite \
     phase3-group-n-qemu \
     "${LOG_DIR}/group-n-qemu.log" \
     'kernel-deploy-ok|bls-check-done|rollback-check-done|bootloader-config-ok|boot-verified'

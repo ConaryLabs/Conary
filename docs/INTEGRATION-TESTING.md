@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-09
-revision: 15
-summary: Record the local QEMU release gate pass after blocker fixes
+last_updated: 2026-05-13
+revision: 17
+summary: Record composefs modernization validation and the QEMU fixture refresh gap
 ---
 
 # Integration Testing
@@ -35,6 +35,9 @@ cargo run -p conary-test -- run --suite phase2-group-a --distro fedora44 --phase
 # Run generation artifact export QEMU validation
 cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3
 
+# Run focused composefs atomic modernization QEMU validation
+cargo run -p conary-test -- run --suite phase3-composefs-modernization --distro fedora44 --phase 3
+
 # Run all tests for a phase
 cargo run -p conary-test -- run --distro fedora44 --phase 1
 
@@ -54,7 +57,24 @@ self-contained installed-runtime export slice. The historical Fedora 43 run on
 
 Keep this suite in the Phase 3 rotation for regressions in generation artifact
 export, QEMU fixture copying, scratch-disk handling, CAS integrity checks,
-guest SSH access, and exported-image boot.
+guest SSH access, and exported-image boot. The source QEMU image for Groups N
+and O must already include the runtime generation toolchain (`cpio`, `dracut`,
+`depmod`, `systemd-repart`, `qemu-img`, FAT/ext4 mkfs tools, and composefs
+inspection tools as needed). The manifests intentionally do not install those
+helpers through Conary on a partial live root before the system is
+generation-owned.
+
+The focused composefs atomic modernization suite covers the stricter runtime
+contract added on 2026-05-13:
+
+- `TCM01`: OCI export and generation switching reject a generation artifact
+  after `root.erofs` is removed
+- `TCM02`: rollback fails before mutating state when no active composefs
+  generation exists
+
+`scripts/local-qemu-validation.sh` runs this focused suite before the broader
+Group N and Group O gates so fail-closed composefs behavior is recorded even
+when a source-image fixture preflight blocks the longer boot/export suites.
 
 ## CLI Subcommands
 
@@ -88,12 +108,34 @@ with `/dev/kvm`:
 scripts/local-qemu-validation.sh
 ```
 
-The current local release evidence is
+Historical local release evidence is
 `target/local-validation/qemu-blocker-fix-20260509-201100`, recorded on
-2026-05-09. Group N passed `T150`, `T151`, `T153`, `T154`, and `T156` with
-0 failures and 0 skipped results. Group O passed `TGE01`, `TGE02`, `TGE03`,
-and `TGE04` with 0 failures and 0 skipped results. The wrapper emitted the
-required boot/export markers and finished with `[local-qemu-validation] ok`.
+2026-05-09. That run predates the stricter composefs install and activation
+contract. It passed Group N (`T150`, `T151`, `T153`, `T154`, `T156`) and
+Group O (`TGE01`, `TGE02`, `TGE03`, `TGE04`) with 0 failures and 0 skipped
+results, emitted the required boot/export markers, and finished with
+`[local-qemu-validation] ok`.
+
+Current composefs modernization evidence from 2026-05-13:
+
+- `cargo run -p conary-test -- list`: passed; includes
+  `phase3-composefs-modernization`
+- `cargo run -p conary-test -- run --suite phase3-composefs-modernization --distro fedora44 --phase 3`:
+  passed `TCM01` and `TCM02`, 2 passed / 0 failed / 0 skipped
+- `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`:
+  passed `TGE01`, then failed `TGE03`, `TGE04`, and `TGE02` because
+  the fixture preflight reports `generation-builder-ready QEMU fixture missing
+  cpio`; `minimal-boot-v2` lacks the toolchain now required by the forward
+  composefs model, so do not treat the May 9 Group O pass as current release
+  evidence until the QEMU source image is refreshed and the suite is rerun
+
+Fast workspace verification from 2026-05-13:
+
+- `cargo fmt --check`: passed
+- `cargo test -p conary-core`: passed
+- `cargo test -p conary`: passed
+- `cargo clippy --workspace --all-targets -- -D warnings`: passed
+- `git diff --check`: passed
 
 For supported Forge control-plane validation after a new runner is registered,
 prefer:
@@ -179,6 +221,7 @@ Adversarial and stress tests.
 | N (container) | Container-based adversarial tests |
 | N (QEMU) | Kernel and boot QEMU tests |
 | O (QEMU) | Generation artifact export QEMU tests |
+| Composefs modernization (QEMU) | Focused atomic-generation fail-closed checks |
 
 ### Phase 4: Feature Validation (Groups A-E)
 

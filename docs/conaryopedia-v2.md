@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-05-01
+last_updated: 2026-05-13
 revision: 14
 summary: Refresh Fedora 44 examples, bootstrap/generation export details, Remi config snippets, and transaction wording
 ---
@@ -110,14 +110,19 @@ A changeset records:
 ```
 1. User runs: conary install nginx --allow-live-system-mutation
 2. Conary creates a changeset (status: pending)
-3. Files are staged to a temporary directory
-4. The database transaction begins
-5. Files are deployed to their final locations
-6. The changeset is marked "applied"
-7. A system state snapshot is created
+3. Package content is verified and stored in CAS
+4. The database transaction records the package/file ownership state
+5. A complete composefs generation artifact is built from CAS and DB state
+6. The active generation pointer and boot state are updated atomically
+7. The changeset is marked "applied" with the matching system state snapshot
 ```
 
-If *anything* fails at steps 3-6, the entire operation is rolled back -- files are restored from CAS, database changes are reverted, and the changeset is marked accordingly. The `tx_uuid` ensures that even if the process crashes mid-transaction, recovery can identify and clean up incomplete work.
+If *anything* fails at steps 3-6, the operation fails closed -- partial
+generation artifacts are removed, database changes are reverted, and the
+changeset is marked accordingly. Public runtime mutation does not fall back to
+direct live-root file deployment. The `tx_uuid` ensures that even if the
+process crashes mid-transaction, recovery can identify and clean up incomplete
+work.
 
 #### Rollback
 
@@ -488,12 +493,13 @@ This enables CAS deduplication, component selection, and atomic transactions for
 1. **Resolution**: The package name is resolved through redirects, labels, and repositories
 2. **Dependency solving**: The SAT solver builds a complete dependency graph
 3. **Download**: Packages are fetched (from repository, CAS federation, or local file)
-4. **Staging**: Files are extracted to a temporary directory
+4. **CAS storage**: File content is stored under the runtime CAS
 5. **Changeset creation**: An atomic changeset is opened (status: `pending`)
-6. **Deployment**: Files are moved to their final locations
-7. **Scriptlets**: Package install hooks run (optionally sandboxed)
-8. **Triggers**: File-pattern triggers fire (e.g., `ldconfig` for new `.so` files)
-9. **Commit**: The changeset is marked `applied` and a system state snapshot is created
+6. **Generation build**: A complete composefs artifact is built from CAS and DB state
+7. **Activation**: The active generation pointer and boot entry are updated atomically
+8. **Scriptlets**: Package install hooks run (optionally sandboxed)
+9. **Triggers**: File-pattern triggers fire (e.g., `ldconfig` for new `.so` files)
+10. **Commit**: The changeset is marked `applied` with the matching system state snapshot
 
 If any step fails, the entire operation rolls back automatically.
 
@@ -505,7 +511,7 @@ conary remove nginx --version 1.24.0     # Remove specific version
 conary remove nginx --purge-files        # Also delete files for adopted packages
 ```
 
-By default, removing a package that was adopted from the system package manager (`adopted-track` or `adopted-full`) only removes Conary's tracking metadata -- the files remain on disk because the system package manager still owns them. Use `--purge-files` to also delete the files.
+By default, removing a package that was adopted from the system package manager (`adopted-track` or `adopted-full`) only removes Conary's tracking metadata -- the files remain on disk because the system package manager still owns them. Use `--purge-files` to remove those files through a new composefs generation. Purge removal requires an active composefs generation and will fail before touching files if the system has not been initialized into the generation model.
 
 Removal respects dependencies: if other packages depend on the one being removed, Conary will refuse unless `--no-deps` is specified.
 
@@ -1750,7 +1756,11 @@ conary ccs install ./myapp-1.2.3.ccs --allow-live-system-mutation --policy trust
 conary ccs install ./myapp-1.2.3.ccs --dry-run
 ```
 
-CCS installation verifies the package signature and Merkle root before extracting any files. Component selection lets you install only what you need -- for example, install `:runtime` and `:lib` on a server, and add `:devel` only on build machines.
+CCS installation verifies the package signature and Merkle root before storing
+content in CAS and building the same generation artifact used by repository and
+converted-package installs. Component selection lets you install only what you
+need -- for example, install `:runtime` and `:lib` on a server, and add
+`:devel` only on build machines.
 
 ### 4.6 Signing and Verification
 
@@ -5450,11 +5460,11 @@ The point of no return is `Committed` -- once the SQLite database has the new pa
 
 #### Recovery Strategy
 
-If the system crashes, the next Conary operation uses a 4-step fallback:
+If the system crashes, the next Conary operation uses an ordered 4-step recovery:
 
-1. **Check current symlink**: Read `/conary/current`; if the target EROFS image passes magic-number validation, mount it directly.
+1. **Check current symlink**: Read `/conary/current`; if the target generation artifact passes manifest, metadata, and content validation, mount it directly.
 2. **Rebuild from DB**: If the image is missing or truncated, query the DB for the expected active generation and rebuild the EROFS image via `build_generation_from_db()`.
-3. **Scan generations**: If the DB is corrupted, scan `/conary/generations/` by number descending and try each intact EROFS image.
+3. **Scan generations**: If the DB is corrupted, scan `/conary/generations/` by number descending and try each valid generation artifact.
 4. **Fail**: If nothing works, return `RecoveryFailed` requiring manual intervention.
 
 This replaces the old journal-based roll-forward/roll-back system. There is no journal, no backup directory, and no staging area. The database is the single source of truth, and EROFS images are re-derivable from it.

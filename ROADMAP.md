@@ -17,7 +17,7 @@ For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 
 
 ### 2. System Validation
 
-- Keep the Fedora 44 generation-export QEMU suite green, including installed-runtime export
+- Refresh the Fedora 44 QEMU source image so generation-export validation starts from a generation-builder-ready fixture, then keep installed-runtime export green
 - Broader takeover validation on Fedora 44, Ubuntu 26.04 LTS, Arch, and real-world mixed systems
 - Pristine-by-default QEMU validation for the self-hosting bootstrap VM
 - More end-to-end coverage for generation activation and rollback under failure

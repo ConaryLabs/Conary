@@ -22,7 +22,6 @@ mod recovery;
 pub use planner::{
     BackupInfo, ConflictInfo, PlannedOperation, StageInfo, TransactionPlan, TransactionPlanner,
 };
-pub use recovery::is_valid_erofs_image;
 
 use crate::Result;
 use crate::filesystem::CasStore;
@@ -439,7 +438,6 @@ mod integration_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::recovery::EROFS_MAGIC;
     use super::*;
     use crate::generation::metadata::EROFS_IMAGE_NAME;
     use tempfile::TempDir;
@@ -615,9 +613,9 @@ mod tests {
         assert!(err.contains("Wait for the active transaction to finish"));
     }
 
-    /// Write a minimal valid EROFS image stub: at least EROFS_MIN_SIZE bytes
-    /// with the EROFS magic at offset 1024.
+    /// Write an EROFS-looking image stub with only the magic at offset 1024.
     fn write_stub_erofs(path: &std::path::Path) {
+        const EROFS_MAGIC: u32 = 0xE0F5_E1E2;
         let mut data = vec![0u8; 4096];
         let magic = EROFS_MAGIC.to_le_bytes();
         data[1024..1028].copy_from_slice(&magic);
@@ -639,12 +637,6 @@ mod tests {
         // Create `current -> generations/2`
         let link = root.join("current");
         std::os::unix::fs::symlink("generations/2", &link).unwrap();
-
-        // is_valid_erofs_image should return true for this stub
-        assert!(
-            is_valid_erofs_image(&image_path),
-            "stub EROFS image must pass validation"
-        );
 
         // Act: call find_latest_intact_generation directly (mount would fail in test)
         let config = TransactionConfig {
@@ -682,14 +674,6 @@ mod tests {
         let generations_dir = root.join("generations");
         // Create generation 5 directory without an EROFS image
         std::fs::create_dir_all(generations_dir.join("5")).unwrap();
-
-        let missing_image = generations_dir.join("5").join(EROFS_IMAGE_NAME);
-
-        // Confirm validation fails for missing file
-        assert!(
-            !is_valid_erofs_image(&missing_image),
-            "missing image must fail validation"
-        );
 
         // find_latest_intact_generation should return None (no intact image)
         let config = TransactionConfig {

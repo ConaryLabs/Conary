@@ -4,8 +4,10 @@
 
 use super::metadata::{GenerationMetadata, is_generation_pending};
 use crate::commands::format_bytes;
-use anyhow::{Result, anyhow};
-use conary_core::generation::mount::{current_generation, update_current_symlink};
+use anyhow::{Context, Result, anyhow};
+use conary_core::generation::mount::{
+    current_generation, unmount_generation, update_current_symlink,
+};
 use conary_core::runtime_root::ConaryRuntimeRoot;
 use conary_core::transaction::{TransactionConfig, TransactionEngine};
 use rusqlite::Connection;
@@ -27,6 +29,22 @@ fn default_runtime_root() -> ConaryRuntimeRoot {
 
 fn runtime_root_for_generation_db_path(db_path: &str) -> ConaryRuntimeRoot {
     ConaryRuntimeRoot::from_db_path(PathBuf::from(db_path))
+}
+
+fn validate_generation_activation_artifact(
+    runtime_root: &ConaryRuntimeRoot,
+    number: i64,
+) -> Result<()> {
+    let gen_dir = runtime_root.generation_path(number);
+    let artifact = conary_core::generation::artifact::load_generation_artifact(&gen_dir)
+        .with_context(|| format!("Generation {number} is not an activatable composefs artifact"))?;
+    if artifact.generation != number {
+        return Err(anyhow!(
+            "Generation artifact mismatch: requested {number}, artifact declares {}",
+            artifact.generation
+        ));
+    }
+    Ok(())
 }
 
 /// List all generations with a summary table.
@@ -651,6 +669,7 @@ pub fn cmd_generation_switch(number: i64, reboot: bool) -> Result<()> {
             gen_dir.display()
         ));
     }
+    validate_generation_activation_artifact(&runtime_root, number)?;
 
     update_current_symlink(runtime_root.root(), number)
         .map_err(|e| anyhow!("Failed to update current generation symlink: {e}"))?;
@@ -694,6 +713,7 @@ pub fn cmd_generation_rollback() -> Result<()> {
     let previous = candidates
         .last()
         .ok_or_else(|| anyhow!("No previous generation to roll back to"))?;
+    validate_generation_activation_artifact(&runtime_root, *previous)?;
 
     update_current_symlink(runtime_root.root(), *previous)
         .map_err(|e| anyhow!("Failed to update current generation symlink: {e}"))?;
@@ -731,14 +751,16 @@ pub fn cmd_generation_recover(db_path: &str) -> Result<()> {
         let staging_etc = staging.join("etc");
         let upper = runtime_root.etc_state_dir().join(gen_num.to_string());
         let work = runtime_root.etc_state_dir().join(format!("{gen_num}-work"));
-        if let Err(e) = conary_core::generation::mount::mount_etc_overlay(
+        conary_core::generation::mount::mount_etc_overlay(
             &staging_etc,
             Path::new("/etc"),
             &upper,
             &work,
-        ) {
-            tracing::warn!("Failed to restore /etc overlay after recovery: {e}");
-        }
+        )
+        .map_err(|e| {
+            let _ = unmount_generation(&staging);
+            anyhow!("Failed to restore /etc overlay after recovery for generation {gen_num}: {e}")
+        })?;
     }
 
     println!("Recovery complete.");
