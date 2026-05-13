@@ -1,0 +1,1 @@
+{"generation":42,"format":"composefs","erofs_size":11,"cas_objects_referenced":1,"fsverity_enabled":false,"artifact_manifest_sha256":"b20871d065221e09afd049d390c2b3cbeccfc0a67708e24863d02fef3fa53205","created_at":"2026-05-13T00:00:00Z","package_count":1,"kernel_version":"6.19.8-conary","summary":"fixture generation"}

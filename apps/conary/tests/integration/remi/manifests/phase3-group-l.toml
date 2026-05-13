@@ -253,13 +253,13 @@ stdout_contains = "Recovery complete."
 stdout_not_contains = "panic"
 
 # --------------------------------------------------------------------------
-# T133c: Generation recover fallback
+# T133c: Generation recover rejects missing root.erofs
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T133c"
-name = "generation_recover_falls_back_cleanly"
-description = "Generation recover falls back cleanly when the DB has no active state but another intact generation exists"
+name = "generation_recover_rejects_missing_root_erofs"
+description = "Generation recover fails closed when the only candidate generation is missing root.erofs"
 timeout = 180
 group = "L"
 requires = ["composefs_runtime"]
@@ -273,11 +273,12 @@ mv "/conary/generations/$CUR/root.erofs" "/conary/generations/$CUR/root.erofs.ba
 sqlite3 /conary/conary.db 'UPDATE system_states SET is_active = 0;' && \
 OUTPUT=$(${CONARY_BIN} system generation recover --db-path /conary/conary.db --allow-live-system-mutation 2>&1 || true) && \
 mv "/conary/generations/$CUR/root.erofs.bak" "/conary/generations/$CUR/root.erofs" && \
+echo "$OUTPUT" | grep -q 'Recovery complete.' && exit 1 || true && \
 echo "$OUTPUT"
 """
 
 [test.step.assert]
-stdout_contains_any = ["Recovery complete.", "recover", "generation"]
+stdout_contains_any = ["Recovery failed", "no valid generation artifact", "Manual intervention"]
 stdout_not_contains = "panic"
 
 # --------------------------------------------------------------------------

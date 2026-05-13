@@ -11,7 +11,9 @@
 #
 # T150-T154 were moved here from the container manifest because kernel RPM install
 # scripts skip boot file deployment in containers. A real VM with bootloader
-# context is required for these tests.
+# context is required for these tests. The source image must already include the
+# initramfs toolchain; these tests intentionally avoid installing builder tools
+# through Conary on a partial live root before the system is generation-owned.
 
 [suite]
 name = "Phase 3 Group N: Kernel & Boot Verification (QEMU)"
@@ -38,9 +40,13 @@ ssh_port = 2230
 stage_conary = true
 commands = [
     "conary system init",
+    "for cmd in sqlite3 cpio dracut depmod; do command -v \"$cmd\" >/dev/null || { echo \"generation-builder-ready QEMU fixture missing $cmd\"; exit 1; }; done",
+    "test -d /usr/lib/dracut || { echo 'generation-builder-ready QEMU fixture missing /usr/lib/dracut'; exit 1; }",
     "conary repo remove remi || true",
     "conary repo add remi ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check",
     "conary repo sync remi --force",
+    "conary system adopt --system --full",
+    "conary system generation build --allow-live-system-mutation",
     "conary install kernel --repo remi --yes --sandbox never --allow-live-system-mutation",
     "ls /boot/vmlinuz* /boot/init* 2>/dev/null | wc -l",
     "find /lib/modules /usr/lib/modules -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l",
@@ -74,11 +80,14 @@ ssh_port = 2231
 stage_conary = true
 commands = [
     "conary system init",
+    "for cmd in sqlite3 cpio dracut depmod; do command -v \"$cmd\" >/dev/null || { echo \"generation-builder-ready QEMU fixture missing $cmd\"; exit 1; }; done",
+    "test -d /usr/lib/dracut || { echo 'generation-builder-ready QEMU fixture missing /usr/lib/dracut'; exit 1; }",
     "conary repo remove remi || true",
     "conary repo add remi ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check",
     "conary repo sync remi --force",
-    "conary install kernel --repo remi --yes --sandbox never --allow-live-system-mutation",
     "conary system adopt --system --full",
+    "conary system generation build --allow-live-system-mutation",
+    "conary install kernel --repo remi --yes --sandbox never --allow-live-system-mutation",
     "conary system generation build --allow-live-system-mutation",
     "find /boot/loader/entries -maxdepth 1 -name '*.conf' 2>/dev/null || true",
     "echo bls-check-done",
@@ -111,11 +120,14 @@ ssh_port = 2232
 stage_conary = true
 commands = [
     "conary system init",
+    "for cmd in sqlite3 cpio dracut depmod; do command -v \"$cmd\" >/dev/null || { echo \"generation-builder-ready QEMU fixture missing $cmd\"; exit 1; }; done",
+    "test -d /usr/lib/dracut || { echo 'generation-builder-ready QEMU fixture missing /usr/lib/dracut'; exit 1; }",
     "conary repo remove remi || true",
     "conary repo add remi ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check",
     "conary repo sync remi --force",
-    "conary install kernel --repo remi --yes --sandbox never --allow-live-system-mutation",
     "conary system adopt --system --full",
+    "conary system generation build --allow-live-system-mutation",
+    "conary install kernel --repo remi --yes --sandbox never --allow-live-system-mutation",
     "conary system generation build --allow-live-system-mutation",
     "conary system generation rollback --allow-live-system-mutation 2>&1 || true",
     "find /boot/loader/entries -maxdepth 1 -name '*.conf' 2>/dev/null | sort || true",
@@ -149,9 +161,13 @@ ssh_port = 2233
 stage_conary = true
 commands = [
     "conary system init",
+    "for cmd in sqlite3 cpio dracut depmod; do command -v \"$cmd\" >/dev/null || { echo \"generation-builder-ready QEMU fixture missing $cmd\"; exit 1; }; done",
+    "test -d /usr/lib/dracut || { echo 'generation-builder-ready QEMU fixture missing /usr/lib/dracut'; exit 1; }",
     "conary repo remove remi || true",
     "conary repo add remi ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check",
     "conary repo sync remi --force",
+    "conary system adopt --system --full",
+    "conary system generation build --allow-live-system-mutation",
     "conary install kernel --repo remi --yes --sandbox never --allow-live-system-mutation",
     "conary install grub2 --repo remi --yes --sandbox never --allow-live-system-mutation",
     "ls /etc/grub.d /boot/grub /boot/grub2 /boot/loader 2>/dev/null || true",

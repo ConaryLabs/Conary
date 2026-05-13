@@ -79,8 +79,8 @@ enables delta-efficient distribution via the Remi server.
 ## Install
 
 CCS packages are installed via `conary ccs install`. The installer verifies
-signatures, evaluates capability policy, deploys files to CAS, and runs
-declarative hooks.
+signatures, evaluates capability policy, stores content in CAS, reuses the
+shared composefs generation transaction, and runs declarative hooks.
 
 ```bash
 conary ccs install package.ccs --allow-live-system-mutation               # Standard install

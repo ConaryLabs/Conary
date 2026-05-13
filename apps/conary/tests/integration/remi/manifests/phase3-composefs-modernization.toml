@@ -1,0 +1,84 @@
+# tests/integration/remi/manifests/phase3-composefs-modernization.toml
+#
+# Phase 3 focused checks for the composefs atomic modernization slice.
+#
+# These QEMU tests keep the release-facing contract narrow: generation artifacts
+# are authoritative, missing generation content fails closed, and live-root
+# mutation fallback paths are not available when no active generation exists.
+
+[suite]
+name = "Phase 3 Composefs Atomic Modernization"
+phase = 3
+
+[[test]]
+id = "TCM01"
+name = "partial_generation_artifacts_rejected"
+description = "OCI export and generation switch reject a generation artifact once root.erofs is missing"
+timeout = 2400
+group = "composefs-modernization"
+fatal = true
+
+[[test.step]]
+[test.step.qemu_boot]
+image = "minimal-boot-v2"
+memory_mb = 2048
+timeout_seconds = 2100
+ssh_port = 2250
+stage_conary = true
+copy_to_guest = [
+    { source = "apps/conary/tests/fixtures/synthetic-generation-artifact", dest = "/var/tmp/synthetic-generation-artifact" },
+]
+commands = [
+    "conary system init",
+    "rm -rf /conary/generations/42 /conary/objects/47 /conary/current /var/tmp/conary-oci-good /var/tmp/conary-oci-broken",
+    "mkdir -p /conary/objects",
+    "cp -a /var/tmp/synthetic-generation-artifact/generations /conary/",
+    "cp -a /var/tmp/synthetic-generation-artifact/objects/47 /conary/objects/",
+    "ln -s generations/42 /conary/current",
+    "test -f /conary/generations/42/root.erofs; test -f /conary/generations/42/.conary-artifact.json; test -f /conary/generations/42/cas-manifest.json; test -f /conary/generations/42/boot-assets/manifest.json",
+    "conary export --generation 42 --output /var/tmp/conary-oci-good",
+    "test -f /var/tmp/conary-oci-good/oci-layout",
+    "mv /conary/generations/42/root.erofs /conary/generations/42/root.erofs.missing",
+    "conary export --generation 42 --output /var/tmp/conary-oci-broken > /var/tmp/composefs-modernization-export.log 2>&1; code=$?; cat /var/tmp/composefs-modernization-export.log; test \"$code\" -ne 0",
+    "grep -Eq 'root\\.erofs|Failed to load artifact|generation artifact|No such file' /var/tmp/composefs-modernization-export.log",
+    "test ! -f /var/tmp/conary-oci-broken/oci-layout",
+    "conary system generation switch --allow-live-system-mutation 42 > /var/tmp/composefs-modernization-switch.log 2>&1; code=$?; cat /var/tmp/composefs-modernization-switch.log; test \"$code\" -ne 0",
+    "grep -Eq 'root\\.erofs|artifact|No such file|failed|Failed|EROFS image not found' /var/tmp/composefs-modernization-switch.log",
+    "mv /conary/generations/42/root.erofs.missing /conary/generations/42/root.erofs",
+    "echo partial-generation-artifacts-rejected",
+]
+expect_output = [
+    "partial-generation-artifacts-rejected",
+]
+
+[test.step.assert]
+exit_code = 0
+
+[[test]]
+id = "TCM02"
+name = "no_active_generation_rollback_rejected"
+description = "Rollback fails before mutating state when no active composefs generation exists"
+timeout = 900
+group = "composefs-modernization"
+fatal = true
+
+[[test.step]]
+[test.step.qemu_boot]
+image = "minimal-boot-v2"
+memory_mb = 2048
+timeout_seconds = 420
+ssh_port = 2251
+stage_conary = true
+commands = [
+    "conary system init",
+    "rm -f /conary/current",
+    "conary system state rollback 424242 --allow-live-system-mutation > /var/tmp/composefs-modernization-rollback.log 2>&1; code=$?; cat /var/tmp/composefs-modernization-rollback.log; test \"$code\" -ne 0",
+    "grep -q 'without an active composefs generation' /var/tmp/composefs-modernization-rollback.log",
+    "echo no-active-generation-rollback-rejected",
+]
+expect_output = [
+    "no-active-generation-rollback-rejected",
+]
+
+[test.step.assert]
+exit_code = 0

@@ -1,13 +1,13 @@
 ---
-last_updated: 2026-05-12
-revision: 1
+last_updated: 2026-05-13
+revision: 2
 summary: Repo-wide design for making composefs atomic generations the single runtime mutation, activation, recovery, export, and bootstrap contract before limited public release
 ---
 
 # Composefs Atomic Modernization: Design Spec
 
 **Date:** 2026-05-12
-**Status:** Written for review after approved outline
+**Status:** Updated after implementation and validation follow-up
 **Goal:** Make composefs atomic generations the only supported runtime contract
 for Conary's package mutation, activation, recovery, export, and bootstrap
 paths, removing legacy live-root and compatibility behavior that is no longer
@@ -111,11 +111,12 @@ Decision:
 This keeps boot artifacts stable at `/conary` while avoiding accidental
 `/var/lib/conary/generations` generation trees.
 
-### Live Switch Is A Competing Activation Model
+### Live Switch Is Debug-Only
 
-`switch_live()` bind-mounts `/usr`, treats `/etc` overlay failure as a warning,
-then updates `/conary/current`. That is a separate activation shape from the
-composefs apply step used by package mutation.
+Release-facing generation switching selects a complete generation artifact for
+the next boot. The remaining `switch_live()` path is debug/unsafe machinery: it
+loads the same generation artifact contract, uses the same runtime root and
+verity policy, and fails hard if `/etc` overlay setup fails.
 
 Decision:
 
@@ -156,10 +157,12 @@ Decision:
 - all image projections must derive identity labels and source digests from the
   same generation artifact fields
 
-### Recovery Mounts By EROFS Magic Only
+### Recovery Promotes Generation Artifacts
 
-Transaction recovery currently accepts any generation whose `root.erofs` passes
-an EROFS magic-number check, then mounts it with `verity: false`.
+Transaction recovery promotes only valid generation artifacts. The old
+magic-number promotion helper is gone; recovery now validates artifact metadata,
+content hashes, CAS scope, and verity policy before mounting or scanning a
+generation.
 
 Decision:
 

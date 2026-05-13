@@ -376,16 +376,18 @@ pub fn rebuild_and_mount(
     );
 
     // Step 7: Set up /etc overlay -- lower from staging, target at live /etc.
+    // Do not publish the generation pointer unless the complete mounted view is ready.
     let etc_work = runtime_root.etc_state_dir().join(format!("{gen_num}-work"));
-    if let Err(e) = conary_core::generation::mount::mount_etc_overlay(
+    conary_core::generation::mount::mount_etc_overlay(
         &staging_mount.join("etc"),
         Path::new("/etc"),
         &upper_dir,
         &etc_work,
-    ) {
-        warn!("Failed to mount /etc overlay: {e}; /etc may be stale");
-        eprintln!("Warning: Failed to mount /etc overlay: {e}; /etc may be stale");
-    }
+    )
+    .map_err(|e| {
+        let _ = conary_core::generation::mount::unmount_generation(&staging_mount);
+        anyhow::anyhow!("Failed to mount /etc overlay for generation {gen_num}: {e}")
+    })?;
 
     conary_core::generation::mount::update_current_symlink(runtime_root.root(), gen_num)
         .map_err(|e| anyhow::anyhow!("Failed to update current symlink: {e}"))?;

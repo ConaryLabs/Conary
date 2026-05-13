@@ -73,10 +73,10 @@ pub enum GenerationCommands {
 
     /// Recover the system to a bootable generation
     ///
-    /// Implements a 4-step fallback:
-    ///   1. Mount the generation pointed to by /conary/current if its EROFS image is valid.
+    /// Implements an ordered 4-step recovery:
+    ///   1. Mount the generation pointed to by /conary/current if its artifact is valid.
     ///   2. Rebuild the EROFS image from DB state if the current image is missing/truncated.
-    ///   3. Scan /conary/generations/ descending and try each intact EROFS image.
+    ///   3. Scan /conary/generations/ descending and try each valid generation artifact.
     ///   4. Return an error if nothing works.
     ///
     /// Intended for use from the initramfs (Dracut hook) and as a manual repair tool.

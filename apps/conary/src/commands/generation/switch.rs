@@ -5,9 +5,9 @@
 //! logic lives in the core crate; this file handles CLI output and the
 //! step-by-step orchestration that is specific to live system switching.
 
-use super::metadata::GenerationMetadata;
 use crate::commands::generation::builder::requested_generation_verity;
 use anyhow::{Context, Result, anyhow};
+use conary_core::generation::artifact::load_generation_artifact;
 use conary_core::generation::mount::{
     MountOptions, is_overlay_mount, mount_generation, unmount_generation, update_current_symlink,
     verity_downgrade_warning,
@@ -37,19 +37,13 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
         ));
     }
 
-    let metadata = GenerationMetadata::read_from(&gen_dir)
-        .with_context(|| format!("Failed to read metadata for generation {gen_number}"))?;
+    let artifact = load_generation_artifact(&gen_dir).with_context(|| {
+        format!("Generation {gen_number} is not an activatable composefs artifact")
+    })?;
+    let metadata = artifact.metadata;
 
-    let erofs_img = gen_dir.join(conary_core::generation::metadata::EROFS_IMAGE_NAME);
-    if !erofs_img.exists() {
-        return Err(anyhow!(
-            "EROFS image not found at {} (format: {})",
-            erofs_img.display(),
-            metadata.format
-        ));
-    }
-
-    let cas_dir = runtime_root.objects_dir();
+    let erofs_img = artifact.erofs_path;
+    let cas_dir = artifact.cas_dir;
     let old_mnt = runtime_root.mount_dir();
     let staging = runtime_root.root().join("mnt-new");
     let old_mnt_display = old_mnt.display().to_string();

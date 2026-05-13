@@ -4,20 +4,12 @@ use super::TransactionEngine;
 use crate::Result;
 use crate::generation::artifact::{GenerationArtifact, load_generation_artifact};
 use rusqlite::Connection;
-use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
-
-/// EROFS superblock magic number (little-endian u32 at byte offset 1024).
-pub(crate) const EROFS_MAGIC: u32 = 0xE0F5_E1E2;
-
-/// Minimum plausible EROFS image size in bytes (one superblock page).
-const EROFS_MIN_SIZE: u64 = 4096;
 
 impl TransactionEngine {
     /// Recover from an interrupted transaction.
     ///
-    /// Uses a 4-step fallback strategy to restore a bootable system state:
+    /// Uses an ordered 4-step recovery strategy to restore a bootable system state:
     ///
     /// 1. Read `/conary/current` symlink; if the target generation artifact is
     ///    valid, mount that generation (no rebuild needed).
@@ -236,39 +228,4 @@ fn artifact_mount_policy(artifact: &GenerationArtifact) -> (bool, Option<String>
         None
     };
     (requested_verity, digest)
-}
-
-/// Return `true` if `path` looks like a valid EROFS image.
-///
-/// Checks:
-/// 1. File exists and is at least `EROFS_MIN_SIZE` bytes.
-/// 2. The 4-byte EROFS magic is present at byte offset 1024.
-///
-/// This is a lightweight sanity check; it does not verify the full image
-/// structure or any checksums.
-pub fn is_valid_erofs_image(path: &Path) -> bool {
-    let meta = match fs::metadata(path) {
-        Ok(m) => m,
-        Err(_) => return false,
-    };
-
-    if !meta.is_file() || meta.len() < EROFS_MIN_SIZE {
-        return false;
-    }
-
-    let mut file = match File::open(path) {
-        Ok(f) => f,
-        Err(_) => return false,
-    };
-
-    if file.seek(SeekFrom::Start(1024)).is_err() {
-        return false;
-    }
-
-    let mut buf = [0u8; 4];
-    if file.read_exact(&mut buf).is_err() {
-        return false;
-    }
-
-    u32::from_le_bytes(buf) == EROFS_MAGIC
 }

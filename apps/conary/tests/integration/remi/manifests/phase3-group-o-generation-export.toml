@@ -4,6 +4,11 @@
 #
 # These tests build generation-derived qcow2 images, copy them out of the
 # source guest, then boot the generated images as local QEMU inputs.
+#
+# The source image must already be generation-builder-ready: cpio, dracut,
+# depmod, systemd-repart, qemu-img, mkfs tools, and composefs inspection tools
+# are fixture inputs. The suite must not install those helper tools through
+# Conary on a partial live root before the system is generation-owned.
 
 [suite]
 name = "Generation Artifact Export QEMU"
@@ -56,12 +61,8 @@ ssh_port = 2244
 stage_conary = true
 commands = [
     "conary system init",
-    "conary repo remove remi || true",
-    "conary repo add remi ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check",
-    "conary repo sync remi --force",
-    "command -v sqlite3 || conary install sqlite --repo remi --yes --sandbox never --allow-live-system-mutation",
-    "command -v cpio || conary install cpio --repo remi --yes --sandbox never --allow-live-system-mutation",
-    "command -v dracut || conary install dracut --repo remi --yes --sandbox never --allow-live-system-mutation",
+    "for cmd in sqlite3 cpio dracut depmod; do command -v \"$cmd\" >/dev/null || { echo \"generation-builder-ready QEMU fixture missing $cmd\"; exit 1; }; done",
+    "test -d /usr/lib/dracut || { echo 'generation-builder-ready QEMU fixture missing /usr/lib/dracut'; exit 1; }",
     "conary system adopt --system --full",
     "DB=/var/lib/conary/conary.db; HASH=$(sqlite3 \"$DB\" \"select f.sha256_hash from files f join troves t on t.id = f.trove_id where t.install_source in ('adopted-full','taken','repository','file') and f.symlink_target is null and length(f.sha256_hash) = 64 and f.sha256_hash not glob '*[^0-9a-f]*' and ((f.permissions & 61440) = 0 or (f.permissions & 61440) = 32768) and f.path not like '/var/%' and f.path not like '/tmp/%' and f.path not like '/run/%' and f.path not like '/home/%' and f.path not like '/root/%' and f.path not like '/srv/%' and f.path not like '/opt/%' and f.path not like '/proc/%' and f.path not like '/sys/%' and f.path not like '/dev/%' and f.path not like '/mnt/%' and f.path not like '/media/%' limit 1\"); test -n \"$HASH\"; PREFIX=$(printf '%s' \"$HASH\" | cut -c1-2); SUFFIX=$(printf '%s' \"$HASH\" | cut -c3-); OBJ=/var/lib/conary/objects/$PREFIX/$SUFFIX; test -f \"$OBJ\"; rm -f \"$OBJ\"; echo \"$HASH\" > /var/tmp/missing-cas.hash",
     "conary system generation build --allow-live-system-mutation > /var/tmp/missing-cas.log 2>&1; code=$?; cat /var/tmp/missing-cas.log; test \"$code\" -ne 0",
@@ -93,14 +94,8 @@ stage_conary = true
 scratch_disk_mb = 65536
 commands = [
     "conary system init",
-    "conary repo remove remi || true",
-    "conary repo add remi ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check",
-    "conary repo sync remi --force",
-    "conary install dosfstools --repo remi --yes --sandbox never --allow-live-system-mutation",
-    "conary install qemu-img --repo remi --yes --sandbox never --allow-live-system-mutation",
-    "conary install erofs-utils --repo remi --yes --sandbox never --allow-live-system-mutation",
-    "command -v cpio || conary install cpio --repo remi --yes --sandbox never --allow-live-system-mutation",
-    "command -v dracut || conary install dracut --repo remi --yes --sandbox never --allow-live-system-mutation",
+    "for cmd in sqlite3 cpio dracut depmod systemd-repart qemu-img mkfs.ext4 mkfs.vfat composefs-info; do command -v \"$cmd\" >/dev/null || { echo \"generation-builder-ready QEMU fixture missing $cmd\"; exit 1; }; done",
+    "test -d /usr/lib/dracut || { echo 'generation-builder-ready QEMU fixture missing /usr/lib/dracut'; exit 1; }",
     "mkdir -p /etc/ssh/authorized_keys /etc/ssh/sshd_config.d; if test -s /root/.ssh/authorized_keys; then cp /root/.ssh/authorized_keys /etc/ssh/authorized_keys/root; else printf '%s\\n' 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOecLi4OI3cU2UfbmkwCdsxHQFUqf17093qkq6g1fx6W conary-selfhost-vm' > /etc/ssh/authorized_keys/root; fi; chmod 0644 /etc/ssh/authorized_keys/root; printf '%s\\n' 'AuthorizedKeysFile .ssh/authorized_keys /etc/ssh/authorized_keys/%u' > /etc/ssh/sshd_config.d/90-conary-test-authorized-keys.conf; sshd_config=/etc/ssh/sshd_config; sshd_config_tmp=/etc/ssh/sshd_config.conary-test; if ! grep -q '/etc/ssh/authorized_keys/%u' \"$sshd_config\"; then { printf '%s\\n' 'AuthorizedKeysFile .ssh/authorized_keys /etc/ssh/authorized_keys/%u'; cat \"$sshd_config\"; } > \"$sshd_config_tmp\"; mv \"$sshd_config_tmp\" \"$sshd_config\"; fi",
     "conary system adopt --system --full",
     "for i in $(seq 1 20); do test -b /dev/disk/by-id/virtio-conary-scratch && exit 0; sleep 1; done; ls -l /dev/disk/by-id /dev/vd*; false",
@@ -169,13 +164,8 @@ copy_to_guest = [
 ]
 commands = [
     "conary system init",
-    "conary repo remove remi || true",
-    "conary repo add remi ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check",
-    "conary repo sync remi --force",
-    "conary install dosfstools --repo remi --yes --sandbox never --allow-live-system-mutation",
-    "conary install qemu-img --repo remi --yes --sandbox never --allow-live-system-mutation",
-    "conary install erofs-utils --repo remi --yes --sandbox never --allow-live-system-mutation",
-    "command -v mkfs.erofs",
+    "for cmd in sqlite3 cpio dracut depmod systemd-repart qemu-img mkfs.ext4 mkfs.vfat composefs-info; do command -v \"$cmd\" >/dev/null || { echo \"generation-builder-ready QEMU fixture missing $cmd\"; exit 1; }; done",
+    "test -d /usr/lib/dracut || { echo 'generation-builder-ready QEMU fixture missing /usr/lib/dracut'; exit 1; }",
     "test -d /var/lib/conary/bootstrap-inputs",
     "test -f /var/lib/conary/bootstrap-inputs/conaryos.toml",
     "test -d /var/lib/conary/bootstrap-inputs/recipes",

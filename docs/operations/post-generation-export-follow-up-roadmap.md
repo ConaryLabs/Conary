@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-12
-revision: 5
-summary: Remaining follow-up roadmap after generation export, OCI loader, boot activation, and installed-runtime validation work
+last_updated: 2026-05-13
+revision: 7
+summary: Remaining follow-up roadmap after generation export, OCI loader, boot activation, installed-runtime validation, and composefs modernization work
 ---
 
 # Post-Generation-Export Follow-Up Roadmap
@@ -49,6 +49,9 @@ Completed composefs-only boot activation cleanup:
 
 - require `root.erofs` for boot activation
 - fail closed when an installed generation is incomplete
+- validate generation artifacts before switch, rollback, recovery, and export
+- fail closed instead of publishing an active generation when `/etc` overlay
+  setup fails
 - keep live generation switching out of the supported release path
 
 Historical operational validation:
@@ -61,7 +64,22 @@ Current active validation:
 
 - `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`
 - covered cases: `TGE01`, `TGE03`, `TGE04`, and `TGE02`
-- `TGE04` proves installed-runtime qcow2 export boots under UEFI
+- when the source fixture is generation-builder-ready, `TGE04` proves
+  installed-runtime qcow2 export boots under UEFI
+- as of 2026-05-13 this suite requires a generation-builder-ready source
+  image; `minimal-boot-v2` still lacks `cpio`/`dracut` and related export
+  helpers, so the current suite fails after `TGE01` until that fixture is
+  refreshed
+
+Current composefs modernization validation:
+
+- `cargo run -p conary-test -- run --suite phase3-composefs-modernization --distro fedora44 --phase 3`
+- result on 2026-05-13: `TCM01` and `TCM02` passed, 2 passed / 0 failed / 0 skipped
+- covered cases: OCI export rejects partial generation artifacts, generation
+  switch validates artifacts before pointer updates, and rollback refuses to
+  mutate without an active composefs generation; source-contract coverage also
+  requires package-mutation apply and recovery to fail closed on `/etc` overlay
+  failures
 
 Everything below remains deferred follow-up work.
 
@@ -76,6 +94,9 @@ metadata-only.
 
 Remaining work is maintenance, not first implementation:
 
+- refresh the QEMU source image used by Groups N and O so it already contains
+  the runtime generation toolchain instead of relying on Conary to install
+  helper tools on a partial live root
 - keep `TGE01`, `TGE03`, and `TGE04` in the active Phase 3 rotation
 - preserve usr-merge and package symlink handling for runtime generations
 - keep missing-CAS and checksum/size mismatch failures before artifact

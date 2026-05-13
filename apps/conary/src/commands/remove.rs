@@ -696,4 +696,51 @@ mod tests {
         assert_eq!(stats.files_removed, 0);
         assert_eq!(stats.dirs_removed, 0);
     }
+
+    #[tokio::test]
+    async fn purge_remove_requires_active_generation_before_touching_files() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let db_path = root.join("conary.db");
+        conary_core::db::init(&db_path).unwrap();
+
+        let payload = root.join("usr/bin/fixture");
+        std::fs::create_dir_all(payload.parent().unwrap()).unwrap();
+        std::fs::write(&payload, "fixture").unwrap();
+
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let mut trove = conary_core::db::models::Trove::new_with_source(
+            "fixture".to_string(),
+            "1.0.0".to_string(),
+            conary_core::db::models::TroveType::Package,
+            conary_core::db::models::InstallSource::Repository,
+        );
+        let trove_id = trove.insert(&conn).unwrap();
+        let mut file = conary_core::db::models::FileEntry::new(
+            "/usr/bin/fixture".to_string(),
+            "0".repeat(64),
+            "fixture".len() as i64,
+            0o100755,
+            trove_id,
+        );
+        file.insert(&conn).unwrap();
+        drop(conn);
+
+        let err = cmd_remove(
+            "fixture",
+            db_path.to_string_lossy().as_ref(),
+            root.to_string_lossy().as_ref(),
+            None,
+            None,
+            true,
+            SandboxMode::None,
+            true,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("Cannot remove fixture without an active composefs generation"));
+        assert_eq!(std::fs::read_to_string(&payload).unwrap(), "fixture");
+    }
 }

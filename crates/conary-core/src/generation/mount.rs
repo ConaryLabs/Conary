@@ -172,7 +172,7 @@ pub fn verity_downgrade_warning(
     match outcome {
         GenerationMountOutcome::ComposefsVerity => None,
         GenerationMountOutcome::ComposefsPlain => Some(format!(
-            "Mounted generation image {} without fs-verity enforcement after a fallback retry. Integrity protection is downgraded until composefs verity can be restored.",
+            "Mounted generation image {} without fs-verity enforcement despite metadata requesting it. Integrity protection is downgraded until composefs verity can be restored.",
             image_path.display()
         )),
     }
