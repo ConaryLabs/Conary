@@ -12,16 +12,18 @@ use conary_core::db::models::{
     ResolutionStrategy, Trove, TroveType,
 };
 use conary_core::db::schema;
-use tempfile::{NamedTempFile, TempDir};
+use tempfile::TempDir;
 
-pub(crate) fn create_test_db() -> (NamedTempFile, String) {
-    let temp_file = NamedTempFile::new().unwrap();
-    let db_path = temp_file.path().display().to_string();
-    let conn = rusqlite::Connection::open(temp_file.path()).unwrap();
+pub(crate) fn create_test_db() -> (TempDir, String) {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let db_path = temp_dir.path().join("conary.db");
+    let db_path_string = db_path.display().to_string();
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
     conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
     schema::migrate(&conn).unwrap();
     drop(conn);
-    (temp_file, db_path)
+    stage_test_boot_assets(temp_dir.path());
+    (temp_dir, db_path_string)
 }
 
 pub(crate) fn setup_command_test_db() -> (TempDir, String) {

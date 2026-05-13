@@ -1013,35 +1013,58 @@ mod tests {
 
     fn build_test_ccs_package(dir: &Path, name: &str, version: &str) -> PathBuf {
         use conary_core::ccs::builder::write_ccs_package;
+        use conary_core::ccs::manifest::Platform;
         use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
         use conary_core::hash;
 
         let binary_content = format!("#!/bin/sh\necho {name} {version}\n").into_bytes();
         let binary_hash = hash::sha256(&binary_content);
-        let files = vec![FileEntry {
-            path: format!("/usr/bin/{name}"),
-            hash: binary_hash.clone(),
-            size: binary_content.len() as u64,
-            mode: 0o100755,
-            component: "runtime".to_string(),
-            file_type: FileType::Regular,
-            target: None,
-            chunks: None,
-        }];
+        let init_content = format!("#!/bin/sh\nexec /usr/bin/{name}\n").into_bytes();
+        let init_hash = hash::sha256(&init_content);
+        let files = vec![
+            FileEntry {
+                path: format!("/usr/bin/{name}"),
+                hash: binary_hash.clone(),
+                size: binary_content.len() as u64,
+                mode: 0o100755,
+                component: "runtime".to_string(),
+                file_type: FileType::Regular,
+                target: None,
+                chunks: None,
+            },
+            FileEntry {
+                path: "/usr/sbin/init".to_string(),
+                hash: init_hash.clone(),
+                size: init_content.len() as u64,
+                mode: 0o100755,
+                component: "runtime".to_string(),
+                file_type: FileType::Regular,
+                target: None,
+                chunks: None,
+            },
+        ];
+        let component_size = files.iter().map(|file| file.size).sum();
         let package_path = dir.join(format!("{name}-{version}.ccs"));
+        let mut manifest = CcsManifest::new_minimal(name, version);
+        manifest.package.platform = Some(Platform {
+            os: "linux".to_string(),
+            arch: Some("x86_64".to_string()),
+            libc: "gnu".to_string(),
+            abi: None,
+        });
         let result = BuildResult {
-            manifest: CcsManifest::new_minimal(name, version),
+            manifest,
             components: HashMap::from([(
                 "runtime".to_string(),
                 ComponentData {
                     name: "runtime".to_string(),
                     files: files.clone(),
                     hash: format!("{name}-runtime"),
-                    size: binary_content.len() as u64,
+                    size: component_size,
                 },
             )]),
             files,
-            blobs: HashMap::from([(binary_hash, binary_content)]),
+            blobs: HashMap::from([(binary_hash, binary_content), (init_hash, init_content)]),
             total_size: 0,
             chunked: false,
             chunk_stats: None,
@@ -1844,8 +1867,10 @@ strength = "strict"
             strict: false,
             autoremove: false,
             offline: true,
-        })
-        .await;
+        });
+
+        let _mount_skip = crate::commands::composefs_ops::test_mount_skip_guard();
+        let result = result.await;
 
         result.unwrap();
 
@@ -1970,6 +1995,7 @@ strength = "strict"
         let _reset = ReplatformMetadataFailpointReset;
 
         let action_refs = diff.actions.iter().collect::<Vec<_>>();
+        let _mount_skip = crate::commands::composefs_ops::test_mount_skip_guard();
         let (executed, errors) =
             apply_replatform_changes(&db_path, install_root.to_str().unwrap(), &action_refs)
                 .await
