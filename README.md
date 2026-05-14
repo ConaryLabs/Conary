@@ -19,33 +19,33 @@ Inspired by the [original Conary](https://en.wikipedia.org/wiki/Conary_(package_
 **Immutable system generations.** Build read-only EROFS images of your entire system and mount them via composefs. Select complete system states for the next boot or export them as bootable raw/qcow2 artifacts. Exportable runtime generations are self-contained CAS-backed snapshots -- rollback means switching a generation, not undoing thousands of file operations.
 
 ```bash
-conary system generation build --summary "After nginx setup"
+conary --allow-live-system-mutation system generation build --summary "After nginx setup"
 conary system generation list
-conary system generation switch 2
-conary system generation rollback
+conary --allow-live-system-mutation system generation switch 2
+conary --allow-live-system-mutation system generation rollback
 ```
 
 **Atomic operations.** Every install, remove, and update is a changeset -- an all-or-nothing transaction. If something fails, your system stays exactly as it was. Rollback is not an afterthought; it is core to how the system works. Generations extend this further: the entire system state is atomic.
 
 ```bash
-conary install nginx postgresql redis
+conary --allow-live-system-mutation install nginx postgresql redis
 conary system state list
-conary system state revert 5
+conary --allow-live-system-mutation system state revert 5
 ```
 
 **Format-agnostic.** RPM, DEB, Arch packages, and Conary's native CCS format are all first-class. One tool handles them all.
 
 ```bash
-conary install ./package.rpm
-conary install ./package.deb
-conary install ./package.pkg.tar.zst
+conary --allow-live-system-mutation install ./package.rpm
+conary --allow-live-system-mutation install ./package.deb
+conary --allow-live-system-mutation install ./package.pkg.tar.zst
 ```
 
 **Declarative state.** Define your system in TOML and let Conary compute the diff. Drift detection, state snapshots, and full rollback come built in.
 
 ```bash
 conary model diff     # What needs to change?
-conary model apply    # Make it so
+conary --allow-live-system-mutation model apply    # Make it so
 conary model check    # Drift detection (CI/CD friendly, uses exit codes)
 ```
 
@@ -54,7 +54,7 @@ conary model check    # Drift detection (CI/CD friendly, uses exit codes)
 ```bash
 conary repo add remi https://remi.conary.io
 conary repo sync
-conary install nginx
+conary --allow-live-system-mutation install nginx
 ```
 
 **Current focus: limited public preview readiness.** The core install, rollback, generation, bootstrap, and server paths are in place. Recent work made installed-runtime generation export bootable under QEMU, tightened release/deploy flows, refreshed security gates, and moved the project toward operational polish and documentation accuracy rather than first-pass scaffolding. Remote Forge validation is paused pending a new KVM-capable runner; QEMU release evidence should come from `scripts/local-qemu-validation.sh` on a local machine with `/dev/kvm`.
@@ -104,10 +104,14 @@ cargo build -p conary
 # Add the Remi package server (Fedora 44, Ubuntu 26.04 LTS, Arch)
 ./target/debug/conary repo add remi https://remi.conary.io
 ./target/debug/conary repo sync
+```
 
+Commands that mutate the active host require the explicit `--allow-live-system-mutation` acknowledgement; dry-run commands remain the safest first pass.
+
+```bash
 # Install a package
 ./target/debug/conary install nginx --dry-run   # Preview changes
-./target/debug/conary install nginx             # Apply atomically
+./target/debug/conary --allow-live-system-mutation install nginx             # Apply atomically
 
 # Query your system
 ./target/debug/conary list                      # All installed packages
@@ -115,12 +119,12 @@ cargo build -p conary
 ./target/debug/conary query whatprovides libc.so.6
 
 # Adopt packages already on the system
-./target/debug/conary system adopt --system --full # CAS-back packages from the native package manager
+./target/debug/conary --allow-live-system-mutation system adopt --system --full # CAS-back packages from the native package manager
 
 # Build a generation from current system state
-./target/debug/conary system generation build --summary "Initial setup"
+./target/debug/conary --allow-live-system-mutation system generation build --summary "Initial setup"
 ./target/debug/conary system generation list
-./target/debug/conary system generation switch 1
+./target/debug/conary --allow-live-system-mutation system generation switch 1
 ```
 
 ---
@@ -134,24 +138,24 @@ Build immutable EROFS images of your entire system and mount them via composefs.
 Requires Linux 6.2+ with composefs support.
 
 ```bash
-conary system generation build --summary "Post-update"
+conary --allow-live-system-mutation system generation build --summary "Post-update"
 conary system generation list        # Show all generations
-conary system generation switch 3    # Select generation 3 for next boot
-conary system generation rollback    # Select previous generation for next boot
-conary system generation gc --keep 3 # Keep only the 3 most recent
+conary --allow-live-system-mutation system generation switch 3    # Select generation 3 for next boot
+conary --allow-live-system-mutation system generation rollback    # Select previous generation for next boot
+conary --allow-live-system-mutation system generation gc --keep 3 # Keep only the 3 most recent
 conary system generation info 2      # Detailed info about generation 2
 conary system generation export --path /conary/generations/3 --format qcow2 --output gen3.qcow2
 ```
 
 ### System Takeover
 
-Convert an existing Linux installation into a Conary-managed system. The stable adoption path today is `conary system adopt --system --full`, which bulk-imports packages into Conary with CAS backing. The `system takeover` release path is generation-level takeover: it builds a bootable generation and boot entry, then stops ready to activate instead of switching live automatically. The lower `cas` and `owned` stop-points still exist as internal/debug checkpoints, not normal preview workflows.
+Convert an existing Linux installation into a Conary-managed system. The stable adoption path today is `conary --allow-live-system-mutation system adopt --system --full`, which bulk-imports packages into Conary with CAS backing. The `system takeover` release path is generation-level takeover: it builds a bootable generation and boot entry, then stops ready to activate instead of switching live automatically. The lower `cas` and `owned` stop-points still exist as internal/debug checkpoints, not normal preview workflows.
 
 ```bash
-conary system adopt --system --full  # Bulk adoption with CAS backing
+conary --allow-live-system-mutation system adopt --system --full  # Bulk adoption with CAS backing
 conary system takeover --dry-run     # Preview the takeover plan
-conary system takeover --up-to generation --yes
-conary system generation switch 1    # Select the prepared generation for next boot
+conary --allow-live-system-mutation system takeover --up-to generation --yes
+conary --allow-live-system-mutation system generation switch 1    # Select the prepared generation for next boot
 ```
 
 ### Atomic Transactions
@@ -159,10 +163,10 @@ conary system generation switch 1    # Select the prepared generation for next b
 Every operation produces a changeset. It applies completely or not at all. The full history is retained for rollback.
 
 ```bash
-conary install nginx postgresql redis
+conary --allow-live-system-mutation install nginx postgresql redis
 conary system state list          # See all system snapshots
 conary system state diff 5 8      # Compare two snapshots
-conary system state revert 5      # Revert to snapshot 5
+conary --allow-live-system-mutation system state revert 5      # Revert to snapshot 5
 ```
 
 ### Multi-Format Support
@@ -170,9 +174,9 @@ conary system state revert 5      # Revert to snapshot 5
 Install packages from any major Linux format. Conary parses metadata, dependencies, and scriptlets from all of them.
 
 ```bash
-conary install ./package.rpm
-conary install ./package.deb
-conary install ./package.pkg.tar.zst
+conary --allow-live-system-mutation install ./package.rpm
+conary --allow-live-system-mutation install ./package.deb
+conary --allow-live-system-mutation install ./package.pkg.tar.zst
 ```
 
 ### Declarative System Model
@@ -200,7 +204,7 @@ strength = "guarded"
 
 ```bash
 conary model diff     # What needs to change?
-conary model apply    # Make it so
+conary --allow-live-system-mutation model apply    # Make it so
 conary model check    # Drift detection (CI/CD friendly, uses exit codes)
 conary distro info
 conary distro selection-mode latest
@@ -212,7 +216,7 @@ Files are stored by SHA-256 hash with automatic deduplication. Content-defined c
 
 ```bash
 conary system verify nginx      # Integrity check against CAS
-conary system restore nginx     # Restore files from CAS
+conary --allow-live-system-mutation system restore nginx     # Restore files from CAS
 conary system gc                # Garbage collect unreferenced objects
 ```
 
@@ -232,8 +236,8 @@ conary query deptree nginx          # Full dependency tree
 Packages are automatically split into components: `:runtime`, `:lib`, `:devel`, `:doc`, `:config`, `:debuginfo`. Install only what you need.
 
 ```bash
-conary install nginx:runtime      # Binaries only
-conary install openssl:devel      # Headers and libs for building
+conary --allow-live-system-mutation install nginx:runtime      # Binaries only
+conary --allow-live-system-mutation install openssl:devel      # Headers and libs for building
 ```
 
 ### Bootstrap System
@@ -278,8 +282,8 @@ Conary's native format uses content-addressable chunked storage, CBOR manifests 
 
 ```bash
 conary ccs build .                   # Build from ccs.toml
-conary ccs install package.ccs       # Install a CCS package
-conary ccs install package.ccs --reinstall    # Reinstall same version
+conary --allow-live-system-mutation ccs install package.ccs       # Install a CCS package
+conary --allow-live-system-mutation ccs install package.ccs --reinstall    # Reinstall same version
 conary ccs sign package.ccs          # Ed25519 signatures
 conary ccs verify package.ccs        # Verify integrity
 conary ccs export package.ccs --output ./package.oci  # Export to container image
@@ -319,7 +323,7 @@ Group packages into named sets for bulk operations.
 
 ```bash
 conary collection create web-stack --members nginx,postgresql,redis
-conary install @web-stack
+conary --allow-live-system-mutation install @web-stack
 conary collection show web-stack
 conary collection add web-stack haproxy
 ```
@@ -345,8 +349,8 @@ conary query label delegate local@devel:main fedora@f44:stable
 Package install scripts run in namespace isolation with resource limits. Dangerous scripts are detected automatically.
 
 ```bash
-conary install pkg --sandbox=always   # Force sandboxing
-conary install pkg --sandbox=never    # Trust the scripts
+conary --allow-live-system-mutation install pkg --sandbox=always   # Force sandboxing
+conary --allow-live-system-mutation install pkg --sandbox=never    # Trust the scripts
 ```
 
 </details>
@@ -373,8 +377,8 @@ CCS packages declaring capabilities are evaluated against a three-tier policy:
 | **Denied** | Always rejected | `cap-sys-admin`, `cap-sys-rawio` |
 
 ```bash
-conary ccs install package.ccs --allow-capabilities    # Approve prompted caps
-conary ccs install package.ccs --capability-policy /path/to/policy.toml
+conary --allow-live-system-mutation ccs install package.ccs --allow-capabilities    # Approve prompted caps
+conary --allow-live-system-mutation ccs install package.ccs --capability-policy /path/to/policy.toml
 ```
 
 Custom policy file (`/etc/conary/capability-policy.toml`):
@@ -413,7 +417,8 @@ Full supply chain metadata for every package. Provenance tracks where a package 
 conary provenance show nginx         # Origin, build info, signatures
 conary provenance verify nginx       # Verify signatures and attestations
 conary provenance diff nginx openssl # Compare provenance between packages
-conary system sbom nginx --format spdx  # Generate SBOM
+conary system sbom nginx --format cyclonedx        # Generate runtime SBOM
+conary provenance export nginx --format spdx       # Export provenance SBOM
 ```
 
 </details>

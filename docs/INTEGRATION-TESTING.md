@@ -269,8 +269,8 @@ Phase 4 is intentionally mixed:
   diff, pinned-fingerprint federation peers, model-driven replatform apply,
   ready-to-activate takeover, and the cross-distro takeover ownership ladder.
 - Preview-only flows are still exercised, but the assertions check for the
-  expected explanatory output. Current examples are automation history and
-  persisting automation configuration changes.
+  expected explanatory output. Current examples include empty automation
+  history and persisting automation configuration changes.
 
 Group E is intentionally richer than a simple “portability” smoke test. It
 covers canonical mapping, distro pinning and mixing behavior, source-policy

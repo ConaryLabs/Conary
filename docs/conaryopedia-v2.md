@@ -2166,7 +2166,7 @@ CrossTools -> TempTools -> FinalSystem -> SystemConfig -> BootableImage -> Tier2
 | `temp-tools` | Temporary tools for the chroot handoff | Cross-built tools plus chroot-built basics |
 | `system` | Final LFS Chapter 8 system | Core userspace with per-package checkpointing |
 | `config` | System configuration | network, fstab, kernel, and systemd-boot setup |
-| `image` | Disk image or generation artifact | raw, qcow2, ISO, or EROFS artifact output |
+| `image` | Disk image or generation artifact | raw, qcow2, non-bootable preview ISO scaffolding, or EROFS artifact output |
 | `tier2` | BLFS + Conary self-hosting | PAM, OpenSSH, curl, Rust, Conary |
 
 The current self-hosting milestone is x86_64/QEMU-first. The checked-in
@@ -4589,7 +4589,8 @@ Phase 4: System Configuration (LFS Ch9)
 
 Phase 5: Bootable Image (LFS Ch10)
   systemd-repart for raw/qcow2 bootstrap sysroot images.
-  Formats: raw (dd-able), qcow2 (KVM/QEMU), ISO, or EROFS generation artifact.
+  Formats: raw (dd-able), qcow2 (KVM/QEMU), non-bootable preview ISO
+  scaffolding, or EROFS generation artifact.
   Result: A deployable OS image or exportable generation artifact
 
 Phase 6: Tier-2 (BLFS + Conary self-hosting, optional)
@@ -4648,7 +4649,7 @@ Missing tools produce a clear error listing what to install.
 
 The `ImageBuilder` produces bootstrap sysroot disk images and EROFS generation
 artifacts. Raw images are created with the shared systemd-repart backend, qcow2
-is converted with `qemu-img`, ISO remains a bootstrap image format, and EROFS
+is converted with `qemu-img`, ISO is non-bootable preview scaffolding, and EROFS
 produces the same generation artifact contract consumed by
 `conary system generation export`.
 
@@ -4656,7 +4657,7 @@ produces the same generation artifact contract consumed by
 pub enum ImageFormat {
     Raw,    // Direct dd to disk
     Qcow2,  // KVM/QEMU virtual machines
-    Iso,    // USB/optical boot media
+    Iso,    // Non-bootable preview scaffolding
     Erofs,  // Exportable generation artifact
 }
 ```
@@ -5434,9 +5435,11 @@ conary automation apply --dry-run --yes   # Preview pending safe actions
 conary automation configure --show        # Show effective defaults / current file path
 ```
 
-`automation history`, background daemon mode, and persisting configuration
-changes are still preview-only surfaces and currently return explicit
-"not yet implemented" guidance rather than mutating state.
+`automation history` reads records written by `conary automation apply` and
+prints `No automation history.` when none are present. `automation daemon` runs
+the scheduler in the foreground for preview use; use systemd or another
+supervisor for background operation. `automation configure` persists settings to
+the active model/config file path and prints the file it changed.
 
 ### 8.7 Transaction Engine: Composefs-Native Operations
 

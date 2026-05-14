@@ -35,7 +35,7 @@ impl FromStr for GenerationExportFormat {
             "qcow2" => Ok(Self::Qcow2),
             "iso" => Ok(Self::Iso),
             other => Err(crate::Error::InvalidPath(format!(
-                "invalid generation export format {other}; expected raw, qcow2, or iso"
+                "invalid generation export format {other}; expected raw, qcow2, or reserved iso"
             ))),
         }
     }
@@ -681,7 +681,7 @@ mod tests {
     #[test]
     fn export_format_parsing_reports_allowed_values() {
         let err = GenerationExportFormat::from_str("vmdk").unwrap_err();
-        assert!(err.to_string().contains("raw, qcow2, or iso"));
+        assert!(err.to_string().contains("raw, qcow2, or reserved iso"));
         assert_eq!(
             GenerationExportFormat::from_str("raw").unwrap(),
             GenerationExportFormat::Raw

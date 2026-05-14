@@ -893,15 +893,17 @@ stdout_not_contains = "panic"
 [[test]]
 id = "T254"
 name = "automation_history"
-description = "Explain that automation history is not implemented until actions are recorded"
+description = "Show empty automation history before actions are recorded"
 timeout = 30
 group = "D"
 
 [[test.step]]
-run = "${CONARY_BIN} automation history --db-path ${DB_PATH} 2>&1; true"
+run = "${CONARY_BIN} automation history --db-path ${DB_PATH} 2>&1"
 
 [test.step.assert]
-stdout_contains_all = ["automation history is not yet implemented", "conary automation apply"]
+exit_code = 0
+stdout_contains_all = ["No automation history."]
+stdout_not_contains = "panic"
 
 # --------------------------------------------------------------------------
 # T255: Automation apply --dry-run

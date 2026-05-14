@@ -29,7 +29,7 @@ pub enum GenerationCommands {
         #[arg(long)]
         path: Option<String>,
 
-        /// Output format: raw, qcow2, or iso.
+        /// Output format: raw or qcow2. ISO is reserved and returns a preview NotImplemented error.
         #[arg(long, default_value = "qcow2")]
         format: String,
 
