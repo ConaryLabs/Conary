@@ -60,14 +60,20 @@ async fn create_transaction_handler(
     headers: axum::http::HeaderMap,
     Json(request): Json<CreateTransactionRequest>,
 ) -> TransactionResult {
+    let job_kind = determine_job_kind(&request.operations);
+
     require_auth(
         &state.auth_checker,
         &creds,
-        action_for_job_kind(determine_job_kind(&request.operations)),
+        action_for_job_kind(job_kind),
     )?;
 
     if request.operations.is_empty() {
         return Err(bad_request_error("At least one operation is required"));
+    }
+
+    if !matches!(job_kind, crate::daemon::JobKind::Enhance) {
+        return Err(package_jobs_not_implemented(job_kind.as_str()));
     }
 
     let idempotency_key = get_idempotency_key(&headers);
@@ -96,16 +102,6 @@ async fn create_transaction_handler(
                 Json(response),
             ));
         }
-    }
-
-    let job_kind = determine_job_kind(&request.operations);
-
-    if !matches!(job_kind, crate::daemon::JobKind::Enhance) {
-        return Err(ApiError(Box::new(DaemonError::bad_request(&format!(
-            "Job kind '{}' is not yet supported by the daemon. \
-             Use the CLI directly for install/remove/update operations.",
-            job_kind.as_str()
-        )))));
     }
 
     let spec = serde_json::to_value(&request.operations)
@@ -407,6 +403,11 @@ async fn dry_run_handler(
 
     if request.operations.is_empty() {
         return Err(bad_request_error("At least one operation is required"));
+    }
+
+    let job_kind = determine_job_kind(&request.operations);
+    if !matches!(job_kind, crate::daemon::JobKind::Enhance) {
+        return Err(package_jobs_not_implemented(job_kind.as_str()));
     }
 
     let mut install = Vec::new();
