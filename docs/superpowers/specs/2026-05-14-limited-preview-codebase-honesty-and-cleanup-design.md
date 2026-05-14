@@ -7,7 +7,7 @@ summary: Fresh design for a limited-preview codebase honesty, cleanup, deduplica
 # Limited Preview Codebase Honesty And Cleanup: Design Spec
 
 **Date:** 2026-05-14
-**Status:** Draft design for user review; DeepSeek feedback pending
+**Status:** Draft design for user review; DeepSeek feedback reconciled
 **Goal:** Prepare Conary for a limited public preview by reviewing the
 release-facing codebase with fresh eyes, removing misleading surfaces,
 reducing targeted duplication, simplifying large modules where it helps
@@ -132,6 +132,17 @@ Each finding in the implementation plan should be classified as one of:
 - `conary bootstrap image --format iso` can produce an ISO-shaped artifact, but
   the implementation warns that boot artifact population is not implemented and
   reports it is not EFI/BIOS bootable.
+- The README provenance/SBOM example currently shows
+  `conary system sbom nginx --format spdx`, but `system sbom` only supports
+  CycloneDX. SPDX output belongs to `conary provenance export`.
+- The top-level `conary export` command produces an OCI image layout, while
+  `conary system generation export` produces raw/qcow2 disk images. The names
+  are technically distinct but easy to confuse.
+- `conary system state revert` and `conary system state rollback` both expose
+  rollback-like wording with different identifiers. The help text should make
+  the state-number versus changeset distinction obvious.
+- `conary system generation recover` should be described as a manual/initramfs
+  recovery helper if it remains user-facing.
 - `docs/conaryopedia-v2.md` says automation history, daemon mode, and config
   persistence return explicit "not yet implemented" guidance, but
   `apps/conary/src/commands/automation.rs` now contains real history/config
@@ -142,6 +153,7 @@ Each finding in the implementation plan should be classified as one of:
 
 - CLI help and command behavior agree for every release-facing command touched.
 - Preview-only features fail explicitly and are tested as such.
+- Copy/paste README examples run against the documented format support.
 - No command succeeds silently when it did not perform or clearly preview the
   requested operation.
 
@@ -212,7 +224,10 @@ Each finding in the implementation plan should be classified as one of:
 - Bootstrap ISO image creation warns that boot artifact population is missing;
   public help should not imply this is a normal bootable release artifact.
 - Current Tier 2 implementation appears more real than stale docs/comments that
-  previously called it unused or stubbed, so active docs should be checked.
+  previously called it unused or stubbed, so active docs and code comments
+  should be checked. External audit feedback repeated the stale-comment claim;
+  local inspection shows `Tier2Builder::build_all()` now sets up the chroot and
+  iterates `TIER2_ORDER`.
 - Non-x86_64 boot assets return explicit `NotImplemented`, which matches the
   preview contract.
 
@@ -257,6 +272,9 @@ Each finding in the implementation plan should be classified as one of:
 - `handlers/mod.rs` documents split public/admin error formats and includes a
   code note about later unification; this is a valid later cleanup if kept
   deliberate.
+- Some Remi MCP operations appear to access state directly where adjacent MCP
+  tools delegate through `admin_service.rs`; verify whether service-layer
+  ownership should be restored for consistency.
 
 **Acceptance criteria:**
 
@@ -297,6 +315,9 @@ Each finding in the implementation plan should be classified as one of:
   supported.
 - `allow(dead_code)` annotations in install/update helpers should be reviewed
   for stale "future unification" scaffolding.
+- install/remove/update appear to repeat transaction lifecycle setup and finish
+  boilerplate. A shared helper may reduce drift, but only after verifying that
+  recovery and snapshot behavior is truly identical across the three flows.
 
 **Acceptance criteria:**
 
@@ -326,6 +347,15 @@ Each finding in the implementation plan should be classified as one of:
 
 - Phase 4 docs correctly say preview-only features should fail cleanly, but
   specific automation assertions appear stale.
+- conary-test repeats Remi-proxy fallback logic across HTTP handlers and MCP
+  tools; the shared service layer is the likely owner if verification confirms
+  the paths are equivalent.
+- The Fedora 44 distro key appears throughout conary-test and Remi test
+  fixtures. A shared default-test-distro constant or fixture helper would
+  reduce future distro-matrix churn, but manifest data should remain explicit
+  where the distro value is part of the scenario.
+- The integration `config.toml` and embedded/default test config share a schema
+  and should be reviewed for drift-prone duplication.
 - `conary-test` has multiple 1000+ line files that deserve focused review:
   CLI, config, runner, QEMU, service, MCP, and handlers.
 
@@ -407,7 +437,31 @@ independent responsibilities that are actively being touched.
 
 ## DeepSeek Feedback Integration
 
-DeepSeek is expected to produce an independent findings pass. When that arrives:
+DeepSeek produced an independent findings pass on 2026-05-14. Treat it as
+review input, not an authority. Verified additions from that pass are folded
+into the slices above:
+
+- README SBOM example mismatch.
+- SBOM command-surface fragmentation across system, provenance, and derivation
+  data sources.
+- `conary export` versus `conary system generation export` naming ambiguity.
+- conary-test Remi-proxy fallback duplication.
+- install/remove/update transaction-lifecycle boilerplate.
+- Fedora 44 fixture/default duplication.
+- Remi MCP operations that should be checked for admin-service delegation.
+
+Corrections and cautions:
+
+- The Tier 2 bootstrap finding in the external report is stale. Current code no
+  longer has `build_all()` returning `NotImplemented`; the stale comment is the
+  issue.
+- The external report says all tests pass. Do not reuse that as current
+  evidence unless this session reruns the commands.
+- The suggested `conary export` rename should be treated as an API design
+  question. A compatibility alias or help-text clarification may be safer than
+  a hard rename before preview.
+
+When more external findings arrive:
 
 1. Compare each DeepSeek finding against this design's categories.
 2. Add new concrete findings to the relevant slice.
@@ -421,11 +475,16 @@ If DeepSeek finds a release blocker, prioritize it ahead of cleanup-only work.
 
 After this design is approved, the first implementation plan should cover:
 
-1. CLI/public-surface honesty fixes for ISO/export/bootstrap/automation drift.
+1. CLI/public-surface honesty fixes for README SBOM, ISO/export/bootstrap,
+   automation drift, and command-help clarity.
 2. conaryd route honesty cleanup for empty successful stubs.
-3. Remi CAS/chunk helper deduplication if the local verification confirms a
+3. conary-test Remi-proxy fallback deduplication if local verification confirms
+   HTTP and MCP paths are equivalent.
+4. Remi CAS/chunk helper deduplication if the local verification confirms a
    safe shared owner.
-4. Documentation alignment for the changed behavior and audit ledger updates.
+5. Transaction-lifecycle helper design for install/remove/update, with a
+   stronger compatibility check before implementation.
+6. Documentation alignment for the changed behavior and audit ledger updates.
 
 Defer broader large-file decomposition until the owning slice is actively under
 review.
@@ -474,6 +533,13 @@ change touches generation export, boot activation, QEMU fixtures, or
   behavior, or reworded as experimental until service integration exists?
 - Should Remi's public-path write endpoints move under admin routes now, or get
   equivalent inline rate limiting first?
+- Should SBOM output be unified under one command group, or should the current
+  system/provenance/derivation split stay but get clearer names and examples?
+- Should `conary export` remain as the OCI command with clearer help, gain a
+  more explicit alias, or move under generation commands in a compatibility
+  preserving way?
+- Should `system state revert` and `system state rollback` remain separate
+  commands with sharper help text, or converge around one public verb?
 - Should this design replace the old active release-readiness plan as the next
   execution target, or live beside it as a cleanup track feeding that final
   gate?
