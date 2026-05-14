@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-13
-revision: 7
-summary: Remaining follow-up roadmap after generation export, OCI loader, boot activation, installed-runtime validation, and composefs modernization work
+last_updated: 2026-05-14
+revision: 8
+summary: Follow-up roadmap after composefs atomic runtime activation validation
 ---
 
 # Post-Generation-Export Follow-Up Roadmap
@@ -53,6 +53,10 @@ Completed composefs-only boot activation cleanup:
 - fail closed instead of publishing an active generation when `/etc` overlay
   setup fails
 - keep live generation switching out of the supported release path
+- publish package-mutation results by selecting `/conary/current` for the next
+  boot instead of live-mounting the newly built generation
+- keep ordinary transaction recovery selected-generation-only; explicit boot
+  selection recovery remains the path that scans, promotes, and remounts
 
 Historical operational validation:
 
@@ -66,10 +70,12 @@ Current active validation:
 - covered cases: `TGE01`, `TGE03`, `TGE04`, and `TGE02`
 - when the source fixture is generation-builder-ready, `TGE04` proves
   installed-runtime qcow2 export boots under UEFI
-- as of 2026-05-13 this suite requires a generation-builder-ready source
-  image; `minimal-boot-v2` still lacks `cpio`/`dracut` and related export
-  helpers, so the current suite fails after `TGE01` until that fixture is
-  refreshed
+- the active manifests use the generation-builder-ready `minimal-boot-v3`
+  source image; they no longer install `cpio`, `dracut`, `qemu-img`,
+  `dosfstools`, or related helper libraries through Conary before the runtime
+  is generation-owned
+- current local Group O evidence remains the 2026-05-09 pass of `TGE01`,
+  `TGE02`, `TGE03`, and `TGE04` with 0 failures and 0 skipped results
 
 Current composefs modernization validation:
 
@@ -80,8 +86,14 @@ Current composefs modernization validation:
   mutate without an active composefs generation; source-contract coverage also
   requires package-mutation apply and recovery to fail closed on `/etc` overlay
   failures
+- `cargo run -p conary-test -- run --suite phase3-group-n-qemu --distro fedora44 --phase 3`
+- result on 2026-05-14: `T150`, `T151`, `T153`, `T154`, and `T156` passed,
+  5 passed / 0 failed / 0 skipped against `minimal-boot-v3`
+- `T154` covers bootloader deployment after full CAS-backed live-root adoption
+  and versioned critical runtime dependency satisfaction through
+  `conary-live-root` identity provides for `glibc`/`libc6`
 
-Everything below remains deferred follow-up work.
+Everything below is deferred follow-up or maintenance work.
 
 ## Follow-Up Slices
 
@@ -94,9 +106,9 @@ metadata-only.
 
 Remaining work is maintenance, not first implementation:
 
-- refresh the QEMU source image used by Groups N and O so it already contains
-  the runtime generation toolchain instead of relying on Conary to install
-  helper tools on a partial live root
+- keep the `minimal-boot-v3` QEMU source image generation-builder-ready so
+  Groups N and O do not rely on Conary-installed helper tools on a partial
+  live root
 - keep `TGE01`, `TGE03`, and `TGE04` in the active Phase 3 rotation
 - preserve usr-merge and package symlink handling for runtime generations
 - keep missing-CAS and checksum/size mismatch failures before artifact

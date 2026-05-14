@@ -827,8 +827,8 @@ fn write_bootstrap_run_generation_artifact(
     use conary_core::derivation::compose::compose_entries;
     use conary_core::filesystem::CasStore;
     use conary_core::generation::artifact::{
-        ArtifactWriteInputs, BootAssetSources, CasObjectRef, deduplicate_sort_cas_objects,
-        stage_boot_assets, write_generation_artifact,
+        ArtifactWriteInputs, BootAssetSources, CasObjectRef, CasObjectVerification,
+        deduplicate_sort_cas_objects, stage_boot_assets, write_generation_artifact,
     };
     use conary_core::generation::metadata::{GENERATION_FORMAT, GenerationMetadata};
 
@@ -903,6 +903,7 @@ fn write_bootstrap_run_generation_artifact(
         erofs_path: &erofs_path,
         cas_base_rel: "../../objects",
         cas_objects,
+        cas_verification: CasObjectVerification::Deep,
         boot_assets,
     })
     .context("Failed to write bootstrap-run generation artifact")?;

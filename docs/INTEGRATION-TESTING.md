@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-13
-revision: 17
-summary: Record composefs modernization validation and the QEMU fixture refresh gap
+last_updated: 2026-05-14
+revision: 18
+summary: Record composefs atomic runtime activation validation and refreshed QEMU fixture evidence
 ---
 
 # Integration Testing
@@ -122,16 +122,38 @@ Current composefs modernization evidence from 2026-05-13:
   `phase3-composefs-modernization`
 - `cargo run -p conary-test -- run --suite phase3-composefs-modernization --distro fedora44 --phase 3`:
   passed `TCM01` and `TCM02`, 2 passed / 0 failed / 0 skipped
-- `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`:
-  passed `TGE01`, then failed `TGE03`, `TGE04`, and `TGE02` because
-  the fixture preflight reports `generation-builder-ready QEMU fixture missing
-  cpio`; `minimal-boot-v2` lacks the toolchain now required by the forward
-  composefs model, so do not treat the May 9 Group O pass as current release
-  evidence until the QEMU source image is refreshed and the suite is rerun
 
-Fast workspace verification from 2026-05-13:
+Current Group N QEMU evidence from 2026-05-14:
+
+- `minimal-boot-v3`: active source fixture with the generation-builder
+  toolchain baked in, so Groups N and O no longer install helper tools through
+  Conary before the runtime is generation-owned
+- `cargo run -p conary-test -- run --suite phase3-group-n-qemu --distro fedora44 --phase 3`:
+  passed 5 / failed 0 / skipped 0
+- Passed cases:
+  - `T150` `kernel_file_deployment`: 809502ms
+  - `T151` `bls_entry_created`: 816190ms
+  - `T153` `kernel_generation_rollback`: 1020480ms
+  - `T154` `bootloader_config_deployed`: 1128817ms
+  - `T156` `boot_minimal_image`: 20362ms
+- `T154` validates `grub2` installation after full CAS-backed live-root
+  adoption, including versioned critical runtime dependency satisfaction
+  through `conary-live-root` identity provides for `glibc`/`libc6`
+- Results file: `apps/conary/tests/integration/remi/results/fedora44-phase3.json`
+
+Current Group O QEMU export evidence remains the 2026-05-09 local run under
+`target/local-validation/qemu-blocker-fix-20260509-201100/group-o-generation-export.log`.
+That run passed `TGE01`, `TGE02`, `TGE03`, and `TGE04` with 0 failures and 0
+skips. Keep Group O in the release-candidate rotation because it is still the
+full boot/export proof for installed runtime and bootstrap generation artifacts.
+
+Fast workspace verification from 2026-05-14:
 
 - `cargo fmt --check`: passed
+- `cargo run -p conary-test -- list`: passed
+- `cargo test -p remi`: passed
+- `cargo test -p conary-core --test generation_composefs_runtime_contract -- --nocapture`: passed
+- `cargo test -p conary-core missing_regular_file_cas_object -- --nocapture`: passed
 - `cargo test -p conary-core`: passed
 - `cargo test -p conary`: passed
 - `cargo clippy --workspace --all-targets -- -D warnings`: passed
@@ -290,7 +312,7 @@ guest, and then boot a host-local qcow2 produced by an earlier step:
 ```toml
 [[test.step]]
 [test.step.qemu_boot]
-image = "minimal-boot-v2"
+image = "minimal-boot-v3"
 scratch_disk_mb = 65536
 local_image_path = "/tmp/conary-generation-export/generated.qcow2"
 copy_to_guest = [

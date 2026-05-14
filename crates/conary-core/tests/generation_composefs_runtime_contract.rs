@@ -67,7 +67,101 @@ fn live_generation_mounts_do_not_request_verity_from_digest_presence_alone() {
     assert!(
         !composefs_ops_rs
             .contains("let requested_verity = build_result.erofs_verity_digest.is_some();"),
-        "live generation remounts must not request composefs verity from the digest alone; they must require proof that root.erofs actually has Linux fs-verity enabled"
+        "runtime generation publication must not request composefs verity from the digest alone; it must require proof that root.erofs actually has Linux fs-verity enabled"
+    );
+}
+
+#[test]
+fn generation_builder_stages_boot_assets_from_cas_sysroot_for_default_runtime_builds() {
+    let builder_rs = fs::read_to_string(core_source("generation/builder.rs"))
+        .expect("failed to read generation/builder.rs");
+
+    assert!(
+        builder_rs.contains("resolve_generation_boot_asset_sources("),
+        "runtime generation builds must route boot asset resolution through the generation-aware resolver"
+    );
+    assert!(
+        builder_rs.contains("materialize_runtime_generation_sysroot"),
+        "default runtime builds must materialize boot inputs from CAS-backed generation contents"
+    );
+    assert!(
+        builder_rs.contains(".arg(\"--sysroot\")") && builder_rs.contains(".arg(\"--kmoddir\")"),
+        "dracut must build initramfs content from the materialized generation sysroot, not the live root"
+    );
+}
+
+#[test]
+fn runtime_generation_artifact_write_reuses_preverified_cas_inputs() {
+    let builder_rs = fs::read_to_string(core_source("generation/builder.rs"))
+        .expect("failed to read generation/builder.rs");
+    let artifact_rs = fs::read_to_string(core_source("generation/artifact.rs"))
+        .expect("failed to read generation/artifact.rs");
+
+    assert!(
+        builder_rs.contains(
+            "verify_runtime_generation_cas_object_presence(generations_root, &cas_objects)?;"
+        ),
+        "runtime generation builds must check CAS object presence and size without rehashing every adopted object"
+    );
+    assert!(
+        builder_rs.contains("cas_verification: CasObjectVerification::AlreadyVerified"),
+        "runtime generation artifact writing must reuse the checked CAS set instead of hashing every object a second time"
+    );
+    assert!(
+        artifact_rs.contains("CasObjectVerification::AlreadyVerified")
+            && artifact_rs
+                .contains("pub(crate) fn verify_cas_object_files_exist_with_expected_sizes"),
+        "the artifact writer must have an explicit prechecked path that avoids duplicate deep CAS hashing"
+    );
+    assert!(
+        artifact_rs
+            .contains("load_generation_artifact_with_cas_verification(generation_dir, CasObjectVerification::Deep)")
+            && artifact_rs
+                .contains("CasObjectVerification::Deep => verify_cas_objects(&cas_dir, &cas_manifest.objects)?"),
+        "export/import artifact loading must remain the deep verification point"
+    );
+    assert!(
+        artifact_rs.contains("pub fn load_generation_artifact_for_activation")
+            && artifact_rs.contains("CasObjectVerification::AlreadyVerified"),
+        "local activation must validate the artifact contract without rehashing every CAS object"
+    );
+}
+
+#[test]
+fn recursive_ccs_dependency_installs_defer_generation_publication_until_root_package() {
+    let conversion_rs = fs::read_to_string(app_source("commands/install/conversion.rs"))
+        .expect("failed to read commands/install/conversion.rs");
+    let install_rs = fs::read_to_string(app_source("commands/install/mod.rs"))
+        .expect("failed to read commands/install/mod.rs");
+
+    assert!(
+        conversion_rs.contains("install_converted_ccs_with_pending(opts, Vec::new(), false)"),
+        "root converted CCS installs must retain responsibility for publishing the generation"
+    );
+    assert!(
+        conversion_rs
+            .contains("child_pending_providers,\n                                    true,"),
+        "recursive CCS dependency installs must defer generation publication until the root dependency closure is installed"
+    );
+    assert!(
+        install_rs.contains("pub defer_generation: bool")
+            && install_rs.contains("defer_generation: opts.defer_generation"),
+        "CCS transaction options must carry the generation-publication boundary into transaction execution"
+    );
+
+    let transaction_body = install_rs
+        .split("fn execute_install_transaction")
+        .nth(1)
+        .expect("failed to isolate execute_install_transaction body");
+    let deferred_branch = transaction_body
+        .find("if ctx.defer_generation")
+        .expect("deferred CCS dependencies must skip generation rebuild");
+    let rebuild_generation = transaction_body
+        .find("composefs_ops::rebuild_and_mount")
+        .expect("root installs must still publish a composefs generation");
+    assert!(
+        deferred_branch < rebuild_generation,
+        "deferred dependency commits must return before rebuilding and selecting a generation"
     );
 }
 
@@ -121,10 +215,12 @@ fn generation_activation_validates_artifacts_before_pointer_updates() {
         .expect("failed to read commands/generation/commands.rs");
     let switch_rs = fs::read_to_string(app_source("commands/generation/switch.rs"))
         .expect("failed to read commands/generation/switch.rs");
+    let builder_rs = fs::read_to_string(app_source("commands/generation/builder.rs"))
+        .expect("failed to read commands/generation/builder.rs");
 
     assert!(
-        commands_rs.contains("load_generation_artifact(&gen_dir)"),
-        "next-boot activation must load the generation artifact contract before selecting a generation"
+        commands_rs.contains("load_generation_artifact_for_activation"),
+        "next-boot activation must validate the generation artifact contract before selecting a generation without rehashing every local CAS object"
     );
 
     let switch_body = commands_rs
@@ -142,6 +238,10 @@ fn generation_activation_validates_artifacts_before_pointer_updates() {
         switch_validate < switch_update,
         "generation switch must validate the artifact before updating /conary/current"
     );
+    assert!(
+        switch_body.contains("mark_generation_state_active(&runtime_root, number)?;"),
+        "generation switch must mark the matching DB state active when it publishes /conary/current"
+    );
 
     let rollback_body = commands_rs
         .split("pub fn cmd_generation_rollback")
@@ -158,10 +258,18 @@ fn generation_activation_validates_artifacts_before_pointer_updates() {
         rollback_validate < rollback_update,
         "generation rollback must validate the artifact before updating /conary/current"
     );
+    assert!(
+        rollback_body.contains("mark_generation_state_active(&runtime_root, *previous)?;"),
+        "generation rollback must mark the matching DB state active when it publishes /conary/current"
+    );
 
     assert!(
-        switch_rs.contains("load_generation_artifact(&gen_dir)"),
-        "debug live switch must also validate the artifact contract before mounting"
+        switch_rs.contains("load_generation_artifact_for_activation(&gen_dir)"),
+        "debug live switch must also validate the local artifact contract before mounting"
+    );
+    assert!(
+        builder_rs.contains("GenerationActivation::Inactive"),
+        "manual generation build must prepare an inactive generation; activation belongs to generation switch"
     );
 }
 
@@ -194,10 +302,11 @@ fn generation_switch_does_not_retry_requested_verity_as_plain_composefs() {
 fn recovery_does_not_promote_generations_by_erofs_magic_only() {
     let recovery_rs = fs::read_to_string(core_source("transaction/recovery.rs"))
         .expect("failed to read recovery.rs");
+    let transaction_rs =
+        fs::read_to_string(core_source("transaction/mod.rs")).expect("failed to read mod.rs");
 
     assert!(
-        recovery_rs.contains("load_installed_generation_artifact")
-            || recovery_rs.contains("load_generation_artifact"),
+        recovery_rs.contains("load_generation_artifact_for_activation"),
         "recovery must load the generation artifact contract before promoting a generation"
     );
     assert!(
@@ -207,6 +316,19 @@ fn recovery_does_not_promote_generations_by_erofs_magic_only() {
     assert!(
         !recovery_rs.contains("verity: false,\n                digest: None,"),
         "recovery must not hard-code plain composefs when metadata requests verity"
+    );
+    assert!(
+        recovery_rs.contains("SelectedGenerationOnly"),
+        "transaction recovery must not auto-promote unselected build-only generations"
+    );
+    assert!(
+        recovery_rs.contains("leaving boot selection unmounted"),
+        "ordinary transaction recovery must repair /conary/current selection without live-mounting it"
+    );
+    assert!(
+        transaction_rs.contains("BUILT -> SELECTED -> DONE")
+            && !transaction_rs.contains("BUILT -> MOUNTED -> DONE"),
+        "transaction lifecycle docs must describe atomic generation selection, not legacy live mounting"
     );
 }
 
@@ -272,21 +394,31 @@ fn release_generation_commands_do_not_expose_live_switch_as_normal_activation() 
 }
 
 #[test]
-fn composefs_apply_fails_hard_on_etc_overlay_failures() {
+fn composefs_apply_publishes_next_boot_generation_without_live_mounting() {
     let composefs_ops_rs = fs::read_to_string(app_source("commands/composefs_ops.rs"))
         .expect("failed to read commands/composefs_ops.rs");
+    let rebuild_body = composefs_ops_rs
+        .split("pub fn rebuild_and_mount")
+        .nth(1)
+        .expect("failed to isolate rebuild_and_mount body");
 
     assert!(
-        composefs_ops_rs.contains("Failed to mount /etc overlay for generation {gen_num}"),
-        "composefs apply must fail hard on /etc overlay mount failures"
+        rebuild_body
+            .contains("enable_generation_rootfs_verity(&gen_dir, &build_result.image_path)"),
+        "runtime package mutation must preserve the fs-verity enablement step before generation selection"
     );
     assert!(
-        composefs_ops_rs.contains("unmount_generation(&staging_mount)"),
-        "composefs apply must clean up the staged generation mount when /etc overlay setup fails"
+        rebuild_body.contains("update_current_symlink(runtime_root.root(), gen_num)"),
+        "runtime package mutation must publish the generated artifact by updating /conary/current"
     );
     assert!(
-        !composefs_ops_rs.contains("may be stale"),
-        "composefs apply must not continue with a stale /etc overlay"
+        !rebuild_body.contains("mount_generation("),
+        "runtime package mutation must not attempt live composefs remounts; activation is atomic next-boot selection"
+    );
+    assert!(
+        !rebuild_body.contains("mount_etc_overlay(")
+            && !rebuild_body.contains("Path::new(\"/etc\")"),
+        "runtime package mutation must not remount the live /etc overlay during package installs or removes"
     );
 }
 

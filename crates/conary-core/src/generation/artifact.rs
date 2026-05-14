@@ -85,7 +85,14 @@ pub struct ArtifactWriteInputs<'a> {
     pub erofs_path: &'a Path,
     pub cas_base_rel: &'a str,
     pub cas_objects: Vec<CasObjectRef>,
+    pub cas_verification: CasObjectVerification,
     pub boot_assets: BootAssetsManifest,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CasObjectVerification {
+    Deep,
+    AlreadyVerified,
 }
 
 pub fn stage_boot_assets(inputs: BootAssetSources<'_>) -> crate::Result<BootAssetsManifest> {
@@ -136,7 +143,12 @@ pub fn write_generation_artifact(inputs: ArtifactWriteInputs<'_>) -> crate::Resu
     )?;
     verify_boot_assets(inputs.generation_dir, &inputs.boot_assets)?;
     let cas_objects = deduplicate_sort_cas_objects(inputs.cas_objects)?;
-    verify_cas_objects(&cas_dir, &cas_objects)?;
+    match inputs.cas_verification {
+        CasObjectVerification::Deep => verify_cas_objects(&cas_dir, &cas_objects)?,
+        CasObjectVerification::AlreadyVerified => {
+            verify_cas_object_files_exist_with_expected_sizes(&cas_dir, &cas_objects)?
+        }
+    }
 
     let cas_manifest = CasManifest {
         version: 1,
@@ -198,6 +210,22 @@ pub fn deduplicate_sort_cas_objects(
 }
 
 pub fn load_generation_artifact(generation_dir: &Path) -> crate::Result<GenerationArtifact> {
+    load_generation_artifact_with_cas_verification(generation_dir, CasObjectVerification::Deep)
+}
+
+pub fn load_generation_artifact_for_activation(
+    generation_dir: &Path,
+) -> crate::Result<GenerationArtifact> {
+    load_generation_artifact_with_cas_verification(
+        generation_dir,
+        CasObjectVerification::AlreadyVerified,
+    )
+}
+
+fn load_generation_artifact_with_cas_verification(
+    generation_dir: &Path,
+    cas_verification: CasObjectVerification,
+) -> crate::Result<GenerationArtifact> {
     if super::metadata::is_generation_pending(generation_dir) {
         return Err(crate::Error::NotFound(format!(
             "generation at {} is pending and cannot be exported",
@@ -283,7 +311,12 @@ pub fn load_generation_artifact(generation_dir: &Path) -> crate::Result<Generati
         cas_manifest.generation,
         &cas_manifest.architecture,
     )?;
-    verify_cas_objects(&cas_dir, &cas_manifest.objects)?;
+    match cas_verification {
+        CasObjectVerification::Deep => verify_cas_objects(&cas_dir, &cas_manifest.objects)?,
+        CasObjectVerification::AlreadyVerified => {
+            verify_cas_object_files_exist_with_expected_sizes(&cas_dir, &cas_manifest.objects)?
+        }
+    }
 
     let boot_manifest_rel =
         validate_generation_relative_path("boot_assets", &artifact_manifest.boot_assets)?;
@@ -438,7 +471,7 @@ fn validate_sha256_hex(field: &str, value: &str) -> crate::Result<()> {
     Ok(())
 }
 
-fn verify_cas_objects(cas_dir: &Path, objects: &[CasObjectRef]) -> crate::Result<()> {
+pub(crate) fn verify_cas_objects(cas_dir: &Path, objects: &[CasObjectRef]) -> crate::Result<()> {
     let mut seen = HashSet::new();
     for object in objects {
         validate_sha256_hex("CAS object sha256", &object.sha256)?;
@@ -471,6 +504,31 @@ fn verify_cas_objects(cas_dir: &Path, objects: &[CasObjectRef]) -> crate::Result
                 expected: format!("CAS object SHA-256 {}", object.sha256),
                 actual,
             });
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn verify_cas_object_files_exist_with_expected_sizes(
+    cas_dir: &Path,
+    objects: &[CasObjectRef],
+) -> crate::Result<()> {
+    for object in objects {
+        let object_path = crate::filesystem::object_path(cas_dir, &object.sha256)?;
+        let metadata = std::fs::metadata(&object_path).map_err(|e| {
+            crate::Error::NotFound(format!(
+                "missing CAS object {} at {}: {e}",
+                object.sha256,
+                object_path.display()
+            ))
+        })?;
+        if metadata.len() != object.size {
+            return Err(crate::Error::InvalidPath(format!(
+                "CAS object {} size mismatch: expected {}, got {}",
+                object.sha256,
+                object.size,
+                metadata.len()
+            )));
         }
     }
     Ok(())
@@ -1128,6 +1186,7 @@ mod tests {
             erofs_path: &erofs_path,
             cas_base_rel: "../../objects",
             cas_objects: vec![object_b.clone(), object_a.clone(), object_b],
+            cas_verification: CasObjectVerification::Deep,
             boot_assets,
         })
         .unwrap();
@@ -1142,6 +1201,74 @@ mod tests {
         assert!(cas_manifest.objects[0].sha256 < cas_manifest.objects[1].sha256);
 
         load_generation_artifact(&generation_dir).unwrap();
+    }
+
+    #[test]
+    fn preverified_artifact_write_skips_deep_cas_hashing_but_loader_verifies() {
+        let tmp = TempDir::new().unwrap();
+        let artifact_root = tmp.path().join("output");
+        let generation_dir = artifact_root.join("generations/1");
+        let objects_dir = artifact_root.join("objects");
+        fs::create_dir_all(generation_dir.join(BOOT_ASSETS_DIR).join("EFI/BOOT")).unwrap();
+        fs::create_dir_all(&objects_dir).unwrap();
+
+        let erofs_path = generation_dir.join("root.erofs");
+        fs::write(&erofs_path, b"root-erofs").unwrap();
+        fs::write(generation_dir.join("boot-assets/vmlinuz"), b"kernel").unwrap();
+        fs::write(
+            generation_dir.join("boot-assets/initramfs.img"),
+            b"initramfs",
+        )
+        .unwrap();
+        fs::write(
+            generation_dir.join("boot-assets/EFI/BOOT/BOOTX64.EFI"),
+            b"efi",
+        )
+        .unwrap();
+
+        let expected_hash = digest_bytes(b"right");
+        let object_path = crate::filesystem::object_path(&objects_dir, &expected_hash).unwrap();
+        fs::create_dir_all(object_path.parent().unwrap()).unwrap();
+        fs::write(object_path, b"wrong").unwrap();
+        let boot_assets = BootAssetsManifest {
+            version: 1,
+            generation: 1,
+            architecture: "x86_64".to_string(),
+            kernel_version: "6.19.8-conary".to_string(),
+            kernel: "vmlinuz".to_string(),
+            kernel_sha256: digest_file(&generation_dir.join("boot-assets/vmlinuz")),
+            initramfs: "initramfs.img".to_string(),
+            initramfs_sha256: digest_file(&generation_dir.join("boot-assets/initramfs.img")),
+            efi_bootloader: "EFI/BOOT/BOOTX64.EFI".to_string(),
+            efi_bootloader_sha256: digest_file(
+                &generation_dir.join("boot-assets/EFI/BOOT/BOOTX64.EFI"),
+            ),
+            created_at: "2026-04-22T00:00:00Z".to_string(),
+        };
+
+        let artifact_digest = write_generation_artifact(ArtifactWriteInputs {
+            generation_dir: &generation_dir,
+            generation: 1,
+            architecture: "x86_64",
+            erofs_path: &erofs_path,
+            cas_base_rel: "../../objects",
+            cas_objects: vec![CasObjectRef {
+                sha256: expected_hash,
+                size: 5,
+            }],
+            cas_verification: CasObjectVerification::AlreadyVerified,
+            boot_assets,
+        })
+        .unwrap();
+        metadata_for_fixture(1, Some(artifact_digest))
+            .write_to(&generation_dir)
+            .unwrap();
+
+        let artifact = load_generation_artifact_for_activation(&generation_dir).unwrap();
+        assert_eq!(artifact.cas_objects.len(), 1);
+
+        let err = load_generation_artifact(&generation_dir).unwrap_err();
+        assert!(err.to_string().contains("CAS object SHA-256"));
     }
 
     #[cfg(unix)]

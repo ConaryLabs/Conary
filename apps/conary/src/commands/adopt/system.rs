@@ -16,6 +16,7 @@ use conary_core::db::models::{
 use conary_core::packages::{
     DependencyInfo, SystemPackageManager, dpkg_query, pacman_query, rpm_query,
 };
+use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 use tracing::{debug, warn};
 use walkdir::WalkDir;
@@ -81,7 +82,7 @@ pub async fn cmd_adopt_system(
     let mut conn = open_db(db_path)?;
 
     // Get list of already-tracked packages to avoid duplicates
-    let tracked_packages: std::collections::HashSet<String> = Trove::list_all(&conn)?
+    let tracked_packages: HashSet<String> = Trove::list_all(&conn)?
         .into_iter()
         .map(|t| t.name)
         .collect();
@@ -486,6 +487,215 @@ pub async fn cmd_adopt_system(
 
 const LIVE_ROOT_PACKAGE_NAME: &str = "conary-live-root";
 
+const LIVE_ROOT_CRITICAL_PACKAGE_MARKERS: &[(&str, &[&str])] = &[
+    ("bash", &["/usr/bin/bash", "/bin/bash"]),
+    (
+        "coreutils",
+        &[
+            "/usr/bin/coreutils",
+            "/usr/bin/ls",
+            "/bin/ls",
+            "/usr/bin/cp",
+            "/bin/cp",
+            "/usr/bin/true",
+            "/bin/true",
+        ],
+    ),
+    (
+        "filesystem",
+        &["/usr", "/etc", "/var", "/usr/lib", "/usr/bin"],
+    ),
+    ("setup", &["/etc/passwd", "/etc/group"]),
+    (
+        "systemd",
+        &[
+            "/usr/lib/systemd/systemd",
+            "/lib/systemd/systemd",
+            "/usr/sbin/init",
+            "/sbin/init",
+        ],
+    ),
+    (
+        "systemd-libs",
+        &[
+            "/usr/lib64/libsystemd.so.0",
+            "/lib64/libsystemd.so.0",
+            "/usr/lib/x86_64-linux-gnu/libsystemd.so.0",
+            "/lib/x86_64-linux-gnu/libsystemd.so.0",
+        ],
+    ),
+    (
+        "systemd-udev",
+        &[
+            "/usr/bin/udevadm",
+            "/bin/udevadm",
+            "/usr/sbin/udevadm",
+            "/sbin/udevadm",
+            "/usr/lib/systemd/systemd-udevd",
+            "/lib/systemd/systemd-udevd",
+        ],
+    ),
+    (
+        "udev",
+        &[
+            "/usr/bin/udevadm",
+            "/bin/udevadm",
+            "/usr/sbin/udevadm",
+            "/sbin/udevadm",
+            "/usr/lib/systemd/systemd-udevd",
+            "/lib/systemd/systemd-udevd",
+        ],
+    ),
+    (
+        "util-linux",
+        &[
+            "/usr/bin/mount",
+            "/bin/mount",
+            "/usr/bin/umount",
+            "/bin/umount",
+        ],
+    ),
+    (
+        "util-linux-core",
+        &[
+            "/usr/bin/mount",
+            "/bin/mount",
+            "/usr/bin/umount",
+            "/bin/umount",
+        ],
+    ),
+    (
+        "glibc",
+        &[
+            "/usr/lib64/libc.so.6",
+            "/lib64/libc.so.6",
+            "/usr/lib/libc.so.6",
+            "/lib/libc.so.6",
+            "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "/lib/x86_64-linux-gnu/libc.so.6",
+            "/usr/lib/aarch64-linux-gnu/libc.so.6",
+            "/lib/aarch64-linux-gnu/libc.so.6",
+            "/usr/lib/riscv64-linux-gnu/libc.so.6",
+            "/lib/riscv64-linux-gnu/libc.so.6",
+        ],
+    ),
+    (
+        "libc6",
+        &[
+            "/usr/lib64/libc.so.6",
+            "/lib64/libc.so.6",
+            "/usr/lib/libc.so.6",
+            "/lib/libc.so.6",
+            "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "/lib/x86_64-linux-gnu/libc.so.6",
+            "/usr/lib/aarch64-linux-gnu/libc.so.6",
+            "/lib/aarch64-linux-gnu/libc.so.6",
+            "/usr/lib/riscv64-linux-gnu/libc.so.6",
+            "/lib/riscv64-linux-gnu/libc.so.6",
+        ],
+    ),
+    (
+        "gcc-libs",
+        &[
+            "/usr/lib64/libgcc_s.so.1",
+            "/lib64/libgcc_s.so.1",
+            "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+        ],
+    ),
+    (
+        "openssl-libs",
+        &[
+            "/usr/lib64/libssl.so.3",
+            "/lib64/libssl.so.3",
+            "/usr/lib64/libcrypto.so.3",
+            "/lib64/libcrypto.so.3",
+            "/usr/lib/x86_64-linux-gnu/libssl.so.3",
+            "/lib/x86_64-linux-gnu/libssl.so.3",
+            "/usr/lib/x86_64-linux-gnu/libcrypto.so.3",
+            "/lib/x86_64-linux-gnu/libcrypto.so.3",
+        ],
+    ),
+    ("openssl", &["/usr/bin/openssl", "/bin/openssl"]),
+    (
+        "pam",
+        &[
+            "/usr/lib64/security/pam_unix.so",
+            "/lib64/security/pam_unix.so",
+            "/usr/lib/x86_64-linux-gnu/security/pam_unix.so",
+            "/lib/x86_64-linux-gnu/security/pam_unix.so",
+        ],
+    ),
+    (
+        "linux-pam",
+        &[
+            "/usr/lib64/security/pam_unix.so",
+            "/lib64/security/pam_unix.so",
+            "/usr/lib/x86_64-linux-gnu/security/pam_unix.so",
+            "/lib/x86_64-linux-gnu/security/pam_unix.so",
+        ],
+    ),
+    (
+        "shadow-utils",
+        &["/usr/sbin/useradd", "/sbin/useradd", "/usr/bin/passwd"],
+    ),
+    ("sudo", &["/usr/bin/sudo", "/bin/sudo"]),
+    (
+        "polkit",
+        &[
+            "/usr/lib/polkit-1/polkitd",
+            "/usr/libexec/polkitd",
+            "/usr/lib/policykit-1/polkitd",
+        ],
+    ),
+    (
+        "polkit-libs",
+        &[
+            "/usr/lib64/libpolkit-gobject-1.so.0",
+            "/lib64/libpolkit-gobject-1.so.0",
+            "/usr/lib/x86_64-linux-gnu/libpolkit-gobject-1.so.0",
+            "/lib/x86_64-linux-gnu/libpolkit-gobject-1.so.0",
+        ],
+    ),
+    (
+        "nss-softokn",
+        &[
+            "/usr/lib64/libsoftokn3.so",
+            "/lib64/libsoftokn3.so",
+            "/usr/lib/x86_64-linux-gnu/nss/libsoftokn3.so",
+        ],
+    ),
+    (
+        "nspr",
+        &[
+            "/usr/lib64/libnspr4.so",
+            "/lib64/libnspr4.so",
+            "/usr/lib/x86_64-linux-gnu/libnspr4.so",
+            "/lib/x86_64-linux-gnu/libnspr4.so",
+        ],
+    ),
+    (
+        "ca-certificates",
+        &[
+            "/etc/pki/tls/certs/ca-bundle.crt",
+            "/etc/ssl/certs/ca-certificates.crt",
+        ],
+    ),
+];
+
+fn live_root_critical_identity_provides(files: &[FileInfoTuple]) -> Vec<&'static str> {
+    let file_paths: HashSet<&str> = files.iter().map(|(path, ..)| path.as_str()).collect();
+    let mut provides = BTreeSet::new();
+
+    for (name, marker_paths) in LIVE_ROOT_CRITICAL_PACKAGE_MARKERS {
+        if marker_paths.iter().any(|path| file_paths.contains(path)) {
+            provides.insert(*name);
+        }
+    }
+
+    provides.into_iter().collect()
+}
+
 fn adopt_live_root_as_full_package(
     db_path: &str,
     dry_run: bool,
@@ -525,6 +735,7 @@ fn adopt_live_root_as_full_package(
     let objects_dir = conary_core::db::paths::objects_dir(db_path);
     let cas = conary_core::filesystem::CasStore::new(&objects_dir)?;
     let files_with_hashes = prepare_cas_backed_package_files(LIVE_ROOT_PACKAGE_NAME, &files, &cas)?;
+    let live_root_identity_provides = live_root_critical_identity_provides(&files);
 
     let mut changeset = Changeset::new(format!(
         "Adopt live root as CAS-backed package ({LIVE_ROOT_PACKAGE_NAME})"
@@ -572,6 +783,15 @@ fn adopt_live_root_as_full_package(
             Some(live_root_adoption_version()),
         );
         provide.insert_or_ignore(tx)?;
+
+        for provide_name in &live_root_identity_provides {
+            let mut provide = ProvideEntry::new(
+                trove_id,
+                (*provide_name).to_string(),
+                Some(live_root_adoption_version()),
+            );
+            provide.insert_or_ignore(tx)?;
+        }
 
         changeset.update_status(tx, ChangesetStatus::Applied)?;
         Ok(changeset_id)
@@ -875,5 +1095,58 @@ mod tests {
             live_root_db_path(root, &path).unwrap(),
             "/usr/sbin/init".to_string()
         );
+    }
+
+    fn live_root_test_file(path: &str) -> FileInfoTuple {
+        (
+            path.to_string(),
+            0,
+            0o100644,
+            None,
+            Some("root".to_string()),
+            Some("root".to_string()),
+            None,
+        )
+    }
+
+    #[test]
+    fn live_root_adoption_derives_critical_package_identity_provides() {
+        let files = vec![
+            live_root_test_file("/usr/lib/systemd/systemd"),
+            live_root_test_file("/usr/bin/ls"),
+            live_root_test_file("/etc/passwd"),
+            live_root_test_file("/usr/bin/sudo"),
+        ];
+
+        let provides = live_root_critical_identity_provides(&files);
+
+        assert!(provides.contains(&"systemd"));
+        assert!(provides.contains(&"coreutils"));
+        assert!(provides.contains(&"setup"));
+        assert!(provides.contains(&"sudo"));
+        assert!(!provides.contains(&"openssl"));
+    }
+
+    #[test]
+    fn live_root_adoption_derives_glibc_identity_from_usr_lib_libc() {
+        let files = vec![live_root_test_file("/usr/lib/libc.so.6")];
+
+        let provides = live_root_critical_identity_provides(&files);
+
+        assert!(provides.contains(&"glibc"));
+        assert!(provides.contains(&"libc6"));
+    }
+
+    #[test]
+    fn live_root_adoption_identity_provides_are_deduplicated_and_ordered() {
+        let files = vec![
+            live_root_test_file("/usr/bin/ls"),
+            live_root_test_file("/usr/bin/cp"),
+            live_root_test_file("/bin/true"),
+        ];
+
+        let provides = live_root_critical_identity_provides(&files);
+
+        assert_eq!(provides, vec!["coreutils"]);
     }
 }

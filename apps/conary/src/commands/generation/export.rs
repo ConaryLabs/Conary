@@ -61,7 +61,8 @@ mod tests {
     use super::*;
     use conary_core::filesystem::object_path;
     use conary_core::generation::artifact::{
-        ArtifactWriteInputs, BootAssetsManifest, CasObjectRef, write_generation_artifact,
+        ArtifactWriteInputs, BootAssetsManifest, CasObjectRef, CasObjectVerification,
+        write_generation_artifact,
     };
     use conary_core::generation::metadata::{GENERATION_FORMAT, GenerationMetadata};
     use conary_core::hash::sha256;
@@ -119,6 +120,7 @@ mod tests {
                 erofs_path: &generation_dir.join("root.erofs"),
                 cas_base_rel: "../../objects",
                 cas_objects: vec![cas_object],
+                cas_verification: CasObjectVerification::Deep,
                 boot_assets,
             })
             .unwrap();

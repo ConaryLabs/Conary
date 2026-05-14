@@ -3,26 +3,24 @@
 //! Shared composefs-native operations for CLI commands.
 //!
 //! Every package mutation (install, remove, restore, rollback) ends with
-//! the same four-step apply sequence:
+//! the same atomic generation publication sequence:
 //!
 //! 1. `build_generation_from_db` -- build EROFS image from current DB state
 //! 2. Three-way `/etc` merge -- compare prev generation, new generation, and
-//!    user overlay; resolve non-conflicts and warn on real conflicts
-//! 3. `mount_generation` -- mount it via composefs with `/etc` overlay
-//! 4. `update_current_symlink` -- point `/conary/current` at the new generation
+//!    generation-local user overlay; resolve non-conflicts and warn on real conflicts
+//! 3. `enable_generation_rootfs_verity` -- make runtime metadata truthful when
+//!    the backing filesystem supports fs-verity
+//! 4. `update_current_symlink` -- point `/conary/current` at the next-boot generation
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use rusqlite::Connection;
 use tracing::{debug, info, warn};
 
-use crate::commands::generation::builder::{
-    enable_generation_rootfs_verity, requested_generation_verity,
-};
+use crate::commands::generation::builder::enable_generation_rootfs_verity;
 use conary_core::db::models::FileEntry;
 use conary_core::generation::etc_merge::{self, MergeAction};
-use conary_core::generation::mount::{GenerationMountOutcome, verity_downgrade_warning};
 use conary_core::runtime_root::ConaryRuntimeRoot;
 
 /// Collect a `HashMap<relative_path, sha256_hash>` for all /etc files in the DB.
@@ -95,33 +93,10 @@ fn current_base_generation_for_merge(
     Ok(state.and_then(|state| state.base_generation))
 }
 
-fn emit_verity_downgrade_warning(
-    gen_num: i64,
-    requested_verity: bool,
-    mount_outcome: GenerationMountOutcome,
-    image_path: &Path,
-) {
-    if let Some(message) = verity_downgrade_warning(requested_verity, mount_outcome, image_path) {
-        warn!(generation = gen_num, "{message}");
-        eprintln!("Warning: {message}");
-    }
-}
-
-fn ensure_staging_mount_dir(runtime_root: &ConaryRuntimeRoot) -> anyhow::Result<PathBuf> {
-    let staging_mount = runtime_root.mount_dir();
-    std::fs::create_dir_all(&staging_mount).map_err(|e| {
-        anyhow::anyhow!(
-            "Failed to create composefs staging mount directory {}: {e}",
-            staging_mount.display()
-        )
-    })?;
-    Ok(staging_mount)
-}
-
-/// Rebuild the EROFS generation from current DB state and mount it.
+/// Rebuild the EROFS generation from current DB state and publish it.
 ///
-/// This is the composefs-native "apply" step that follows every DB mutation
-/// (install, remove, restore, rollback).  It:
+/// This is the composefs-native publication step that follows every DB
+/// mutation (install, remove, restore, rollback).  It:
 ///
 /// 1. Snapshots the previous generation's /etc file hashes from the DB
 /// 2. Builds a new EROFS image from all installed packages in the DB
@@ -129,8 +104,8 @@ fn ensure_staging_mount_dir(runtime_root: &ConaryRuntimeRoot) -> anyhow::Result<
 /// 4. For `AcceptPackage` actions, removes the upper layer copy so the new
 ///    EROFS lower shows through
 /// 5. Warns on conflicts (user must resolve manually)
-/// 6. Mounts it via composefs with `/etc` overlay
-/// 7. Updates the `/conary/current` symlink
+/// 6. Enables fs-verity for the generation image when not explicitly skipped
+/// 7. Updates the `/conary/current` symlink for next boot
 ///
 /// `prev_etc_snapshot` must be captured **before** the mutating DB transaction
 /// so the three-way merge can distinguish pre- from post-transaction state.
@@ -336,7 +311,9 @@ pub fn rebuild_and_mount(
     if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
         conary_core::generation::mount::update_current_symlink(runtime_root.root(), gen_num)
             .map_err(|e| anyhow::anyhow!("Failed to update current symlink: {e}"))?;
-        info!("Skipping generation mount because CONARY_TEST_SKIP_GENERATION_MOUNT is set");
+        info!(
+            "Skipping generation fs-verity enablement because CONARY_TEST_SKIP_GENERATION_MOUNT is set"
+        );
         return Ok(gen_num);
     }
 
@@ -348,51 +325,10 @@ pub fn rebuild_and_mount(
         )
     })?;
 
-    // Step 6: Mount the new generation at the staging point.
-    let staging_mount = ensure_staging_mount_dir(&runtime_root)?;
-    let requested_verity =
-        requested_generation_verity(build_result.erofs_verity_digest.as_deref(), true);
-    let mount_outcome = conary_core::generation::mount::mount_generation(
-        &conary_core::generation::mount::MountOptions {
-            image_path: build_result.image_path.clone(),
-            basedir: runtime_root.objects_dir(),
-            mount_point: staging_mount.clone(),
-            verity: requested_verity,
-            digest: if requested_verity {
-                build_result.erofs_verity_digest.clone()
-            } else {
-                None
-            },
-            upperdir: None,
-            workdir: None,
-        },
-    )
-    .map_err(|e| anyhow::anyhow!("Failed to mount generation {gen_num}: {e}"))?;
-    emit_verity_downgrade_warning(
-        gen_num,
-        requested_verity,
-        mount_outcome,
-        &build_result.image_path,
-    );
-
-    // Step 7: Set up /etc overlay -- lower from staging, target at live /etc.
-    // Do not publish the generation pointer unless the complete mounted view is ready.
-    let etc_work = runtime_root.etc_state_dir().join(format!("{gen_num}-work"));
-    conary_core::generation::mount::mount_etc_overlay(
-        &staging_mount.join("etc"),
-        Path::new("/etc"),
-        &upper_dir,
-        &etc_work,
-    )
-    .map_err(|e| {
-        let _ = conary_core::generation::mount::unmount_generation(&staging_mount);
-        anyhow::anyhow!("Failed to mount /etc overlay for generation {gen_num}: {e}")
-    })?;
-
     conary_core::generation::mount::update_current_symlink(runtime_root.root(), gen_num)
         .map_err(|e| anyhow::anyhow!("Failed to update current symlink: {e}"))?;
 
-    info!("Generation {gen_num} mounted and active");
+    info!("Generation {gen_num} built and selected for next boot");
     Ok(gen_num)
 }
 
@@ -427,6 +363,7 @@ mod tests {
     use super::*;
     use crate::commands::test_helpers::create_test_db;
     use conary_core::db::models::SystemState;
+    use std::path::Path;
 
     #[test]
     fn current_base_generation_for_merge_reads_db_column() {
@@ -446,6 +383,8 @@ mod tests {
 
     #[test]
     fn verity_warning_text_is_backed_by_mount_helper() {
+        use conary_core::generation::mount::{GenerationMountOutcome, verity_downgrade_warning};
+
         let warning = verity_downgrade_warning(
             true,
             GenerationMountOutcome::ComposefsPlain,
@@ -483,13 +422,15 @@ mod tests {
     }
 
     #[test]
-    fn ensure_staging_mount_dir_creates_mountpoint_under_conary_root() {
+    fn boot_root_for_generation_build_prefers_self_contained_test_boot_when_requested() {
+        let _guard = test_mount_skip_guard();
         let temp = tempfile::TempDir::new().unwrap();
         let runtime_root = conary_core::runtime_root::ConaryRuntimeRoot::for_test_root(temp.path());
+        std::fs::create_dir_all(temp.path().join("boot")).unwrap();
 
-        let staging_mount = ensure_staging_mount_dir(&runtime_root).unwrap();
-
-        assert_eq!(staging_mount, temp.path().join("mnt"));
-        assert!(staging_mount.is_dir());
+        assert_eq!(
+            boot_root_for_generation_build(&runtime_root),
+            temp.path().join("boot")
+        );
     }
 }

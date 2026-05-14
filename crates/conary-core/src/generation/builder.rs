@@ -22,8 +22,9 @@ use tracing::{info, warn};
 
 use crate::db::models::{FileEntry, StateEngine, SystemState, Trove};
 use crate::generation::artifact::{
-    ArtifactWriteInputs, BootAssetSources, CasObjectRef, stage_boot_assets,
-    write_generation_artifact,
+    ArtifactWriteInputs, BootAssetSources, CasObjectRef, CasObjectVerification,
+    deduplicate_sort_cas_objects, stage_boot_assets,
+    verify_cas_object_files_exist_with_expected_sizes, write_generation_artifact,
 };
 use crate::generation::metadata::{
     GENERATION_FORMAT, GenerationMetadata, ROOT_SYMLINKS, clear_generation_pending,
@@ -40,6 +41,24 @@ const CONARY_DRACUT_GENERATOR: &str =
     include_str!("../../../../packaging/dracut/90conary/conary-generator.sh");
 const RUNTIME_DRACUT_ADD_MODULES: &str = "conary";
 const RUNTIME_DRACUT_OMIT_MODULES: &str = "systemd";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GenerationActivation {
+    /// Publish the generated DB snapshot as the active state immediately.
+    ///
+    /// Use only for paths that also publish/mount the generation in the same
+    /// operation, such as composefs-native package mutation.
+    Active,
+    /// Leave the generated DB snapshot inactive until an explicit generation
+    /// switch selects it for the next boot.
+    Inactive,
+}
+
+impl GenerationActivation {
+    fn activates_state(self) -> bool {
+        matches!(self, Self::Active)
+    }
+}
 
 /// Build a complete generation from the current database state.
 ///
@@ -59,7 +78,27 @@ pub fn build_generation_from_db(
     generations_root: &Path,
     summary: &str,
 ) -> crate::Result<(i64, BuildResult)> {
-    build_generation_from_db_with_boot_root(conn, generations_root, summary, Path::new("/boot"))
+    build_generation_from_db_with_activation(
+        conn,
+        generations_root,
+        summary,
+        GenerationActivation::Active,
+    )
+}
+
+pub fn build_generation_from_db_with_activation(
+    conn: &rusqlite::Connection,
+    generations_root: &Path,
+    summary: &str,
+    activation: GenerationActivation,
+) -> crate::Result<(i64, BuildResult)> {
+    build_generation_from_db_with_boot_root_and_activation(
+        conn,
+        generations_root,
+        summary,
+        Path::new("/boot"),
+        activation,
+    )
 }
 
 pub fn build_generation_from_db_with_boot_root(
@@ -67,6 +106,22 @@ pub fn build_generation_from_db_with_boot_root(
     generations_root: &Path,
     summary: &str,
     boot_root: &Path,
+) -> crate::Result<(i64, BuildResult)> {
+    build_generation_from_db_with_boot_root_and_activation(
+        conn,
+        generations_root,
+        summary,
+        boot_root,
+        GenerationActivation::Active,
+    )
+}
+
+pub fn build_generation_from_db_with_boot_root_and_activation(
+    conn: &rusqlite::Connection,
+    generations_root: &Path,
+    summary: &str,
+    boot_root: &Path,
+    activation: GenerationActivation,
 ) -> crate::Result<(i64, BuildResult)> {
     struct PendingGenerationGuard {
         gen_dir: PathBuf,
@@ -174,6 +229,9 @@ pub fn build_generation_from_db_with_boot_root(
         &runtime_inputs.file_refs,
         &runtime_inputs.symlink_refs,
     )?;
+    let cas_objects =
+        deduplicate_sort_cas_objects(cas_objects_from_file_refs(&runtime_inputs.file_refs))?;
+    verify_runtime_generation_cas_object_presence(generations_root, &cas_objects)?;
     let result = build_erofs_image(
         &runtime_inputs.file_refs,
         &runtime_inputs.symlink_refs,
@@ -183,7 +241,12 @@ pub fn build_generation_from_db_with_boot_root(
     // Step 5: Stage boot assets and write the export artifact contract before
     // committing metadata. Export must not scrape live /boot later.
     let architecture = runtime_generation_architecture()?;
-    let boot_asset_sources = resolve_runtime_boot_asset_sources(&troves, boot_root)?;
+    let boot_asset_sources = resolve_generation_boot_asset_sources(
+        &troves,
+        &runtime_inputs,
+        generations_root,
+        boot_root,
+    )?;
     let kernel_version = boot_asset_sources.kernel_version.clone();
     let boot_assets = stage_runtime_boot_assets_from_sources(
         &gen_dir,
@@ -197,7 +260,8 @@ pub fn build_generation_from_db_with_boot_root(
         architecture,
         erofs_path: &result.image_path,
         cas_base_rel: "../../objects",
-        cas_objects: cas_objects_from_file_refs(&runtime_inputs.file_refs),
+        cas_objects,
+        cas_verification: CasObjectVerification::AlreadyVerified,
         boot_assets,
     })?;
 
@@ -206,13 +270,14 @@ pub fn build_generation_from_db_with_boot_root(
     // on build failure. Using create_snapshot_at() ensures the DB state
     // number matches the directory number we already created.
     let engine = StateEngine::new(conn);
-    let _state = engine
-        .create_snapshot_at(gen_number, summary, None, None)
-        .map_err(|e| {
-            crate::error::Error::InternalError(format!(
-                "Failed to create system state snapshot: {e}"
-            ))
-        })?;
+    let _state = if activation.activates_state() {
+        engine.create_snapshot_at(gen_number, summary, None, None)
+    } else {
+        engine.create_inactive_snapshot_at(gen_number, summary, None, None)
+    }
+    .map_err(|e| {
+        crate::error::Error::InternalError(format!("Failed to create system state snapshot: {e}"))
+    })?;
 
     // Step 7: Write generation metadata
     #[allow(clippy::cast_possible_wrap)]
@@ -296,13 +361,21 @@ pub(crate) fn rebuild_generation_image_with_boot_root(
         &runtime_inputs.file_refs,
         &runtime_inputs.symlink_refs,
     )?;
+    let cas_objects =
+        deduplicate_sort_cas_objects(cas_objects_from_file_refs(&runtime_inputs.file_refs))?;
+    verify_runtime_generation_cas_object_presence(generations_root, &cas_objects)?;
     let result = build_erofs_image(
         &runtime_inputs.file_refs,
         &runtime_inputs.symlink_refs,
         &gen_dir,
     )?;
     let architecture = runtime_generation_architecture()?;
-    let boot_asset_sources = resolve_runtime_boot_asset_sources(&troves, boot_root)?;
+    let boot_asset_sources = resolve_generation_boot_asset_sources(
+        &troves,
+        &runtime_inputs,
+        generations_root,
+        boot_root,
+    )?;
     let kernel_version = boot_asset_sources.kernel_version.clone();
     let boot_assets = stage_runtime_boot_assets_from_sources(
         &gen_dir,
@@ -316,7 +389,8 @@ pub(crate) fn rebuild_generation_image_with_boot_root(
         architecture,
         erofs_path: &result.image_path,
         cas_base_rel: "../../objects",
-        cas_objects: cas_objects_from_file_refs(&runtime_inputs.file_refs),
+        cas_objects,
+        cas_verification: CasObjectVerification::AlreadyVerified,
         boot_assets,
     })?;
 
@@ -483,6 +557,153 @@ fn cas_objects_from_file_refs(file_refs: &[FileEntryRef]) -> Vec<CasObjectRef> {
         .collect()
 }
 
+fn verify_runtime_generation_cas_object_presence(
+    generations_root: &Path,
+    cas_objects: &[CasObjectRef],
+) -> crate::Result<()> {
+    let artifact_root = artifact_root_for_generations_root(generations_root)?;
+    verify_cas_object_files_exist_with_expected_sizes(&artifact_root.join("objects"), cas_objects)
+}
+
+fn artifact_root_for_generations_root(generations_root: &Path) -> crate::Result<PathBuf> {
+    generations_root
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| {
+            crate::error::Error::InvalidPath(format!(
+                "generation root {} has no parent artifact root",
+                generations_root.display()
+            ))
+        })
+}
+
+fn materialize_runtime_generation_sysroot(
+    runtime_inputs: &runtime_inputs::RuntimeGenerationInputs,
+    objects_dir: &Path,
+    artifact_root: &Path,
+) -> crate::Result<tempfile::TempDir> {
+    let sysroot = tempfile::Builder::new()
+        .prefix(".generation-sysroot-")
+        .tempdir_in(artifact_root)
+        .map_err(|e| {
+            crate::error::Error::IoError(format!(
+                "failed to create temporary generation sysroot under {}: {e}",
+                artifact_root.display()
+            ))
+        })?;
+
+    for file in &runtime_inputs.file_refs {
+        materialize_runtime_regular_file(sysroot.path(), objects_dir, file)?;
+    }
+    for symlink in &runtime_inputs.symlink_refs {
+        materialize_runtime_symlink(sysroot.path(), symlink)?;
+    }
+    materialize_root_symlinks(sysroot.path())?;
+    materialize_runtime_sysroot_base_dirs(sysroot.path())?;
+
+    Ok(sysroot)
+}
+
+fn materialize_runtime_regular_file(
+    sysroot: &Path,
+    objects_dir: &Path,
+    file: &FileEntryRef,
+) -> crate::Result<()> {
+    let rel_path = relative_runtime_path(&file.path)?;
+    let dest = sysroot.join(rel_path);
+    let source = crate::filesystem::object_path(objects_dir, &file.sha256_hash)?;
+
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    match std::fs::hard_link(&source, &dest) {
+        Ok(()) => Ok(()),
+        Err(_) => std::fs::copy(&source, &dest)
+            .map(|_| ())
+            .map_err(crate::error::Error::Io),
+    }
+}
+
+fn materialize_runtime_symlink(sysroot: &Path, symlink: &SymlinkEntryRef) -> crate::Result<()> {
+    let rel_path = relative_runtime_path(&symlink.path)?;
+    let dest = sysroot.join(rel_path);
+
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    if dest.exists() || dest.is_symlink() {
+        std::fs::remove_file(&dest)?;
+    }
+
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&symlink.target, &dest)?;
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    {
+        Err(crate::error::Error::NotImplemented(
+            "runtime generation sysroot materialization requires Unix symlinks".to_string(),
+        ))
+    }
+}
+
+fn materialize_root_symlinks(sysroot: &Path) -> crate::Result<()> {
+    for (link, target) in ROOT_SYMLINKS {
+        let dest = sysroot.join(link);
+        if dest.exists() || dest.is_symlink() {
+            continue;
+        }
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, dest)?;
+        }
+
+        #[cfg(not(unix))]
+        {
+            return Err(crate::error::Error::NotImplemented(
+                "runtime generation sysroot materialization requires Unix symlinks".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn materialize_runtime_sysroot_base_dirs(sysroot: &Path) -> crate::Result<()> {
+    for dir in ["dev", "proc", "run", "sys", "tmp", "var", "var/tmp"] {
+        std::fs::create_dir_all(sysroot.join(dir))?;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        for dir in ["tmp", "var/tmp"] {
+            std::fs::set_permissions(sysroot.join(dir), std::fs::Permissions::from_mode(0o1777))?;
+        }
+    }
+
+    Ok(())
+}
+
+fn relative_runtime_path(path: &str) -> crate::Result<&Path> {
+    let rel = path.strip_prefix('/').ok_or_else(|| {
+        crate::error::Error::InvalidPath(format!(
+            "runtime generation path must be absolute: {path}"
+        ))
+    })?;
+    if rel.is_empty() || rel.split('/').any(|component| component == "..") {
+        return Err(crate::error::Error::InvalidPath(format!(
+            "runtime generation path escapes root: {path}"
+        )));
+    }
+    Ok(Path::new(rel))
+}
+
 fn runtime_generation_architecture() -> crate::Result<&'static str> {
     match std::env::consts::ARCH {
         "x86_64" => Ok("x86_64"),
@@ -498,12 +719,13 @@ fn runtime_generation_architecture() -> crate::Result<&'static str> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 struct RuntimeBootAssetSources {
     kernel_version: String,
     kernel: PathBuf,
     initramfs: PathBuf,
     efi_bootloader: PathBuf,
+    _sysroot_workspace: Option<tempfile::TempDir>,
 }
 
 fn stage_runtime_boot_assets_from_sources(
@@ -541,6 +763,26 @@ fn resolve_runtime_boot_asset_sources(
         Path::new("depmod"),
         Path::new("cpio"),
     )
+}
+
+fn resolve_generation_boot_asset_sources(
+    troves: &[Trove],
+    runtime_inputs: &runtime_inputs::RuntimeGenerationInputs,
+    generations_root: &Path,
+    boot_root: &Path,
+) -> crate::Result<RuntimeBootAssetSources> {
+    if boot_root != Path::new("/boot") {
+        return resolve_runtime_boot_asset_sources(troves, boot_root);
+    }
+
+    let artifact_root = artifact_root_for_generations_root(generations_root)?;
+    let objects_dir = artifact_root.join("objects");
+    let sysroot_workspace =
+        materialize_runtime_generation_sysroot(runtime_inputs, &objects_dir, &artifact_root)?;
+    let generation_boot_root = sysroot_workspace.path().join("boot");
+    let mut sources = resolve_runtime_boot_asset_sources(troves, &generation_boot_root)?;
+    sources._sysroot_workspace = Some(sysroot_workspace);
+    Ok(sources)
 }
 
 fn resolve_runtime_boot_asset_sources_with_tools(
@@ -645,6 +887,7 @@ fn runtime_boot_asset_sources_for_release(
         kernel,
         initramfs,
         efi_bootloader,
+        _sysroot_workspace: None,
     })
 }
 
@@ -665,6 +908,12 @@ fn generate_runtime_initramfs(
     std::fs::create_dir_all(parent)?;
     ensure_initramfs_tool_available(cpio, "cpio")?;
     ensure_kernel_module_metadata(depmod, system_root, release)?;
+    let (runtime_module_dir, _module_dir_arg) =
+        kernel_module_dir(system_root, release).ok_or_else(|| {
+            crate::error::Error::NotFound(format!(
+                "missing kernel module directory for {release}; expected lib/modules/{release} or usr/lib/modules/{release}"
+            ))
+        })?;
 
     let modules_workspace = tempfile::Builder::new()
         .prefix("conary-dracut-")
@@ -694,6 +943,10 @@ fn generate_runtime_initramfs(
         .arg(RUNTIME_DRACUT_OMIT_MODULES)
         .arg("--add")
         .arg(RUNTIME_DRACUT_ADD_MODULES)
+        .arg("--sysroot")
+        .arg(system_root)
+        .arg("--kmoddir")
+        .arg(&runtime_module_dir)
         .arg(initramfs)
         .arg(release)
         .output()
@@ -1484,6 +1737,77 @@ mod tests {
         assert_eq!(sources.kernel_version, release);
         assert_eq!(sources.kernel, boot_root.join("vmlinuz"));
         assert_eq!(sources.initramfs, boot_root.join("initramfs.img"));
+    }
+
+    #[test]
+    fn generation_boot_asset_resolution_materializes_default_boot_from_cas_inputs() {
+        use crate::db::models::TroveType;
+        use crate::filesystem::CasStore;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let generations_root = tmp.path().join("generations");
+        let objects_dir = tmp.path().join("objects");
+        std::fs::create_dir_all(&generations_root).unwrap();
+        let cas = CasStore::new(&objects_dir).unwrap();
+
+        let release = "6.20.0-conary";
+        let kernel_hash = cas.store(b"cas-kernel").unwrap();
+        let initramfs_hash = cas.store(b"cas-initramfs").unwrap();
+        let efi_hash = cas.store(b"cas-efi").unwrap();
+        let runtime_inputs = runtime_inputs::RuntimeGenerationInputs {
+            file_refs: vec![
+                FileEntryRef {
+                    path: format!("/boot/vmlinuz-{release}"),
+                    sha256_hash: kernel_hash,
+                    size: b"cas-kernel".len() as u64,
+                    permissions: 0o100644,
+                    owner: None,
+                    group_name: None,
+                },
+                FileEntryRef {
+                    path: format!("/boot/initramfs-{release}.img"),
+                    sha256_hash: initramfs_hash,
+                    size: b"cas-initramfs".len() as u64,
+                    permissions: 0o100644,
+                    owner: None,
+                    group_name: None,
+                },
+                FileEntryRef {
+                    path: "/boot/EFI/BOOT/BOOTX64.EFI".to_string(),
+                    sha256_hash: efi_hash,
+                    size: b"cas-efi".len() as u64,
+                    permissions: 0o100644,
+                    owner: None,
+                    group_name: None,
+                },
+            ],
+            symlink_refs: Vec::new(),
+            adopted_track_count: 0,
+        };
+        let troves = vec![Trove::new(
+            "kernel-core".to_string(),
+            release.to_string(),
+            TroveType::Package,
+        )];
+
+        let sources = resolve_generation_boot_asset_sources(
+            &troves,
+            &runtime_inputs,
+            &generations_root,
+            Path::new("/boot"),
+        )
+        .unwrap();
+
+        assert!(sources.kernel.starts_with(tmp.path()));
+        let sysroot = sources
+            ._sysroot_workspace
+            .as_ref()
+            .expect("default runtime boot assets should retain their sysroot workspace");
+        assert!(sysroot.path().join("tmp").is_dir());
+        assert!(sysroot.path().join("var/tmp").is_dir());
+        assert_eq!(std::fs::read(sources.kernel).unwrap(), b"cas-kernel");
+        assert_eq!(std::fs::read(sources.initramfs).unwrap(), b"cas-initramfs");
+        assert_eq!(std::fs::read(sources.efi_bootloader).unwrap(), b"cas-efi");
     }
 
     #[cfg(unix)]

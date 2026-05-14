@@ -198,6 +198,18 @@ fn live_runtime_package_probe_paths(name: &str) -> Option<&'static [&'static str
             "/usr/lib/x86_64-linux-gnu/libpcre2-8.so.0",
             "/lib/x86_64-linux-gnu/libpcre2-8.so.0",
         ]),
+        "glibc" | "libc6" => Some(&[
+            "/usr/lib64/libc.so.6",
+            "/lib64/libc.so.6",
+            "/usr/lib/libc.so.6",
+            "/lib/libc.so.6",
+            "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "/lib/x86_64-linux-gnu/libc.so.6",
+            "/usr/lib/aarch64-linux-gnu/libc.so.6",
+            "/lib/aarch64-linux-gnu/libc.so.6",
+            "/usr/lib/riscv64-linux-gnu/libc.so.6",
+            "/lib/riscv64-linux-gnu/libc.so.6",
+        ]),
         _ => None,
     }
 }
@@ -315,6 +327,27 @@ mod tests {
                     "/lib/x86_64-linux-gnu/libpcre2-8.so.0",
                 ][..]
             )
+        );
+        assert_eq!(
+            live_runtime_package_probe_paths("glibc"),
+            Some(
+                &[
+                    "/usr/lib64/libc.so.6",
+                    "/lib64/libc.so.6",
+                    "/usr/lib/libc.so.6",
+                    "/lib/libc.so.6",
+                    "/usr/lib/x86_64-linux-gnu/libc.so.6",
+                    "/lib/x86_64-linux-gnu/libc.so.6",
+                    "/usr/lib/aarch64-linux-gnu/libc.so.6",
+                    "/lib/aarch64-linux-gnu/libc.so.6",
+                    "/usr/lib/riscv64-linux-gnu/libc.so.6",
+                    "/lib/riscv64-linux-gnu/libc.so.6",
+                ][..]
+            )
+        );
+        assert_eq!(
+            live_runtime_package_probe_paths("libc6"),
+            live_runtime_package_probe_paths("glibc")
         );
         assert_eq!(
             live_runtime_package_probe_paths("udev"),

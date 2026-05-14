@@ -7,7 +7,7 @@
 
 use crate::commands::generation::builder::requested_generation_verity;
 use anyhow::{Context, Result, anyhow};
-use conary_core::generation::artifact::load_generation_artifact;
+use conary_core::generation::artifact::load_generation_artifact_for_activation;
 use conary_core::generation::mount::{
     MountOptions, is_overlay_mount, mount_generation, unmount_generation, update_current_symlink,
     verity_downgrade_warning,
@@ -37,7 +37,7 @@ pub fn switch_live(gen_number: i64) -> Result<()> {
         ));
     }
 
-    let artifact = load_generation_artifact(&gen_dir).with_context(|| {
+    let artifact = load_generation_artifact_for_activation(&gen_dir).with_context(|| {
         format!("Generation {gen_number} is not an activatable composefs artifact")
     })?;
     let metadata = artifact.metadata;

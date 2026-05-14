@@ -541,6 +541,7 @@ mod tests {
                 erofs_path: &generation_dir.join("root.erofs"),
                 cas_base_rel: "../../objects",
                 cas_objects: vec![cas_object],
+                cas_verification: crate::generation::artifact::CasObjectVerification::Deep,
                 boot_assets,
             })
             .unwrap();

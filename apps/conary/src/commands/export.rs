@@ -389,8 +389,8 @@ fn build_index_json(manifest_digest: &str, manifest_size: u64) -> String {
 mod tests {
     use super::*;
     use conary_core::generation::artifact::{
-        ArtifactWriteInputs, BOOT_ASSETS_DIR, BootAssetsManifest, GenerationArtifact,
-        load_generation_artifact, write_generation_artifact,
+        ArtifactWriteInputs, BOOT_ASSETS_DIR, BootAssetsManifest, CasObjectVerification,
+        GenerationArtifact, load_generation_artifact, write_generation_artifact,
     };
     use conary_core::generation::metadata::GENERATION_FORMAT;
     use std::path::PathBuf;
@@ -447,6 +447,7 @@ mod tests {
             erofs_path: &gen_dir.join(EROFS_IMAGE_NAME),
             cas_base_rel: "../../objects",
             cas_objects: vec![object_one, object_two],
+            cas_verification: CasObjectVerification::Deep,
             boot_assets,
         })
         .unwrap();

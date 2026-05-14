@@ -481,8 +481,8 @@ impl ImageBuilder {
         use crate::db::schema::migrate;
         use crate::filesystem::CasStore;
         use crate::generation::artifact::{
-            ArtifactWriteInputs, BootAssetSources, CasObjectRef, stage_boot_assets,
-            write_generation_artifact,
+            ArtifactWriteInputs, BootAssetSources, CasObjectRef, CasObjectVerification,
+            stage_boot_assets, write_generation_artifact,
         };
         use crate::generation::builder::{FileEntryRef, SymlinkEntryRef, build_erofs_image};
         use crate::generation::metadata::{GENERATION_FORMAT, GenerationMetadata};
@@ -614,6 +614,7 @@ impl ImageBuilder {
             erofs_path: &gen_dir.join("root.erofs"),
             cas_base_rel: "../../objects",
             cas_objects,
+            cas_verification: CasObjectVerification::AlreadyVerified,
             boot_assets,
         })
         .map_err(|e| {

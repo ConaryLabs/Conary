@@ -24,7 +24,7 @@ fatal = true
 
 [[test.step]]
 [test.step.qemu_boot]
-image = "minimal-boot-v2"
+image = "minimal-boot-v3"
 memory_mb = 2048
 timeout_seconds = 900
 ssh_port = 2240
@@ -34,7 +34,7 @@ commands = [
     "mkdir -p /var/tmp/conary-generation-export",
     "conary system generation build --allow-live-system-mutation > /var/tmp/conary-generation-export/build.log 2>&1; code=$?; cat /var/tmp/conary-generation-export/build.log; test \"$code\" -ne 0",
     "grep -q 'not self-contained' /var/tmp/conary-generation-export/build.log",
-    "grep -q '/sbin/init' /var/tmp/conary-generation-export/build.log",
+    "grep -Eq '(/sbin/init|unresolved CAS-backed path)' /var/tmp/conary-generation-export/build.log",
     "test ! -e /conary/generations/0/.conary-artifact.json",
     "echo installed-generation-export-failed-closed",
 ]
@@ -54,7 +54,7 @@ group = "generation-export"
 
 [[test.step]]
 [test.step.qemu_boot]
-image = "minimal-boot-v2"
+image = "minimal-boot-v3"
 memory_mb = 2048
 timeout_seconds = 1500
 ssh_port = 2244
@@ -64,7 +64,7 @@ commands = [
     "for cmd in sqlite3 cpio dracut depmod; do command -v \"$cmd\" >/dev/null || { echo \"generation-builder-ready QEMU fixture missing $cmd\"; exit 1; }; done",
     "test -d /usr/lib/dracut || { echo 'generation-builder-ready QEMU fixture missing /usr/lib/dracut'; exit 1; }",
     "conary system adopt --system --full",
-    "DB=/var/lib/conary/conary.db; HASH=$(sqlite3 \"$DB\" \"select f.sha256_hash from files f join troves t on t.id = f.trove_id where t.install_source in ('adopted-full','taken','repository','file') and f.symlink_target is null and length(f.sha256_hash) = 64 and f.sha256_hash not glob '*[^0-9a-f]*' and ((f.permissions & 61440) = 0 or (f.permissions & 61440) = 32768) and f.path not like '/var/%' and f.path not like '/tmp/%' and f.path not like '/run/%' and f.path not like '/home/%' and f.path not like '/root/%' and f.path not like '/srv/%' and f.path not like '/opt/%' and f.path not like '/proc/%' and f.path not like '/sys/%' and f.path not like '/dev/%' and f.path not like '/mnt/%' and f.path not like '/media/%' limit 1\"); test -n \"$HASH\"; PREFIX=$(printf '%s' \"$HASH\" | cut -c1-2); SUFFIX=$(printf '%s' \"$HASH\" | cut -c3-); OBJ=/var/lib/conary/objects/$PREFIX/$SUFFIX; test -f \"$OBJ\"; rm -f \"$OBJ\"; echo \"$HASH\" > /var/tmp/missing-cas.hash",
+    "DB=/var/lib/conary/conary.db; HASH=$(sqlite3 \"$DB\" \"select f.sha256_hash from files f join troves t on t.id = f.trove_id where t.install_source in ('adopted-full','taken','repository','file') and f.symlink_target is null and length(f.sha256_hash) = 64 and f.sha256_hash not glob '*[^0-9a-f]*' and ((f.permissions & 61440) = 0 or (f.permissions & 61440) = 32768) and f.path not like '/var/%' and f.path not like '/tmp/%' and f.path not like '/run/%' and f.path not like '/home/%' and f.path not like '/root/%' and f.path not like '/srv/%' and f.path not like '/opt/%' and f.path not like '/proc/%' and f.path not like '/sys/%' and f.path not like '/dev/%' and f.path not like '/mnt/%' and f.path not like '/media/%' limit 1\"); test -n \"$HASH\"; PREFIX=$(printf '%s' \"$HASH\" | cut -c1-2); SUFFIX=$(printf '%s' \"$HASH\" | cut -c3-); OBJ_BASE=$(readlink -f /conary/objects); test -d \"$OBJ_BASE\"; OBJ=$OBJ_BASE/$PREFIX/$SUFFIX; test -f \"$OBJ\"; rm -f \"$OBJ\"; echo \"$HASH\" > /var/tmp/missing-cas.hash",
     "conary system generation build --allow-live-system-mutation > /var/tmp/missing-cas.log 2>&1; code=$?; cat /var/tmp/missing-cas.log; test \"$code\" -ne 0",
     "grep -Eq 'missing CAS object|Checksum mismatch|size mismatch' /var/tmp/missing-cas.log",
     "test -z \"$(find /conary/generations -mindepth 2 -maxdepth 2 -name .conary-artifact.json -print -quit 2>/dev/null)\"",
@@ -86,7 +86,7 @@ group = "generation-export"
 
 [[test.step]]
 [test.step.qemu_boot]
-image = "minimal-boot-v2"
+image = "minimal-boot-v3"
 memory_mb = 2048
 timeout_seconds = 5400
 ssh_port = 2245
@@ -153,7 +153,7 @@ group = "generation-export"
 
 [[test.step]]
 [test.step.qemu_boot]
-image = "minimal-boot-v2"
+image = "minimal-boot-v3"
 memory_mb = 2048
 timeout_seconds = 5400
 ssh_port = 2242

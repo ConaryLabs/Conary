@@ -281,9 +281,13 @@ pub fn build_generation(conn: &rusqlite::Connection, db_path: &str, summary: &st
     let caps = preflight_composefs(&obj_dir).context("Composefs preflight failed")?;
 
     // Step 2: Delegate to core builder
-    let (gen_number, result) =
-        core_builder::build_generation_from_db(conn, &generations_root, summary)
-            .map_err(|e| anyhow!("Generation build failed: {e}"))?;
+    let (gen_number, result) = core_builder::build_generation_from_db_with_activation(
+        conn,
+        &generations_root,
+        summary,
+        core_builder::GenerationActivation::Inactive,
+    )
+    .map_err(|e| anyhow!("Generation build failed: {e}"))?;
 
     info!(
         "EROFS image built: {} bytes, {} CAS objects",

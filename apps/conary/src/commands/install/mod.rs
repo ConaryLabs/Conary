@@ -113,6 +113,7 @@ pub(crate) struct CcsTransactionInstallOptions<'a> {
     pub db_path: &'a str,
     pub root: &'a str,
     pub dry_run: bool,
+    pub defer_generation: bool,
     pub no_scripts: bool,
     pub sandbox_mode: SandboxMode,
     pub allow_downgrade: bool,
@@ -491,6 +492,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         old_trove_to_upgrade: old_trove_to_upgrade.as_deref(),
         ccs_manifest_provides: None,
         ccs_capabilities: None,
+        defer_generation: false,
     };
     let tx_result =
         execute_install_transaction(&mut conn, pkg.as_ref(), &extraction, &tx_ctx, &progress)?;
@@ -581,6 +583,7 @@ struct TransactionContext<'a> {
     old_trove_to_upgrade: Option<&'a conary_core::db::models::Trove>,
     ccs_manifest_provides: Option<&'a conary_core::ccs::manifest::Provides>,
     ccs_capabilities: Option<&'a conary_core::capability::CapabilityDeclaration>,
+    defer_generation: bool,
 }
 
 /// Result from a successful transaction execution.
@@ -1800,6 +1803,13 @@ fn execute_install_transaction(
         changeset_id, inner_result.trove_id
     );
 
+    if ctx.defer_generation {
+        let deferred_status = changeset.update_status(conn, ChangesetStatus::Applied);
+        engine.release_lock();
+        deferred_status?;
+        return Ok(InstallTransactionResult { changeset_id });
+    }
+
     let post_commit_result = (|| -> Result<()> {
         crate::commands::composefs_ops::rebuild_and_mount(
             conn,
@@ -1932,6 +1942,7 @@ pub(crate) fn install_ccs_package_transactionally(
         old_trove_to_upgrade: old_trove,
         ccs_manifest_provides: Some(&pkg.manifest().provides),
         ccs_capabilities: pkg.manifest().capabilities.as_ref(),
+        defer_generation: opts.defer_generation,
     };
     let tx_result = match execute_install_transaction(conn, pkg, &extraction, &tx_ctx, &progress) {
         Ok(result) => result,
