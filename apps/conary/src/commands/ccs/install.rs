@@ -837,6 +837,7 @@ pub async fn cmd_ccs_install(
                 db_path,
                 root,
                 dry_run,
+                defer_generation: false,
                 no_scripts: false,
                 sandbox_mode: match sandbox {
                     crate::commands::SandboxMode::None => conary_core::scriptlet::SandboxMode::None,
@@ -864,6 +865,7 @@ pub async fn cmd_ccs_install(
             db_path,
             root,
             dry_run,
+            defer_generation: false,
             no_scripts: false,
             sandbox_mode: match sandbox {
                 crate::commands::SandboxMode::None => conary_core::scriptlet::SandboxMode::None,

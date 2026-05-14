@@ -16,13 +16,23 @@ use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 
-/// Maximum allowed upload size (512 MB).
-const MAX_UPLOAD_SIZE: u64 = 512 * 1024 * 1024;
+/// Maximum allowed fixture upload size (512 MiB).
+const MAX_FIXTURE_UPLOAD_SIZE: u64 = 512 * 1024 * 1024;
+
+/// Maximum allowed test-artifact upload size (8 GiB).
+const MAX_TEST_ARTIFACT_UPLOAD_SIZE: u64 = 8 * 1024 * 1024 * 1024;
 
 #[derive(Serialize)]
 struct UploadResponse {
     path: String,
     size: u64,
+}
+
+fn max_upload_size(root: ArtifactRoot) -> u64 {
+    match root {
+        ArtifactRoot::Fixtures => MAX_FIXTURE_UPLOAD_SIZE,
+        ArtifactRoot::Artifacts => MAX_TEST_ARTIFACT_UPLOAD_SIZE,
+    }
 }
 
 async fn upload_artifact(
@@ -80,17 +90,18 @@ async fn upload_artifact(
         }
     };
 
+    let max_size = max_upload_size(root);
     let mut size = 0u64;
     let mut stream = request.into_body().into_data_stream();
     while let Some(chunk) = stream.next().await {
         match chunk {
             Ok(bytes) => {
                 size += bytes.len() as u64;
-                if size > MAX_UPLOAD_SIZE {
+                if size > max_size {
                     let _ = tokio::fs::remove_file(&temp_path).await;
                     return json_error(
                         413,
-                        "Upload exceeds maximum size (512 MB)",
+                        "Upload exceeds maximum size for artifact type",
                         "PAYLOAD_TOO_LARGE",
                     );
                 }
@@ -160,10 +171,21 @@ pub async fn upload_test_artifact(
 
 #[cfg(test)]
 mod tests {
+    use super::max_upload_size;
+    use crate::server::artifact_paths::ArtifactRoot;
     use crate::server::handlers::admin::test_helpers::test_app;
     use axum::body::Body;
     use axum::http::{Method, Request, StatusCode};
     use tower::ServiceExt;
+
+    #[test]
+    fn test_artifact_upload_limit_allows_qemu_images() {
+        assert_eq!(max_upload_size(ArtifactRoot::Fixtures), 512 * 1024 * 1024);
+        assert_eq!(
+            max_upload_size(ArtifactRoot::Artifacts),
+            8 * 1024 * 1024 * 1024
+        );
+    }
 
     #[tokio::test]
     async fn test_upload_fixture_writes_file() {

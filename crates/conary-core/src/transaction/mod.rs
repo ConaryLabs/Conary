@@ -2,19 +2,20 @@
 
 //! Composefs-native transaction engine.
 //!
-//! Every transaction follows: resolve -> fetch -> DB commit -> EROFS build -> mount.
+//! Every transaction follows: resolve -> fetch -> DB commit -> EROFS build -> select.
 //! No journal, no backup phase, no staging. Database is the source of truth.
 //! Everything after DB commit is re-derivable from the DB state.
 //!
 //! # Transaction Lifecycle
 //!
 //! ```text
-//! NEW -> RESOLVED -> FETCHED -> COMMITTED -> BUILT -> MOUNTED -> DONE
+//! NEW -> RESOLVED -> FETCHED -> COMMITTED -> BUILT -> SELECTED -> DONE
 //! ```
 //!
 //! The point of no return is `Committed` — at that point the DB has the new
-//! package state. Building the EROFS image and mounting it are idempotent
-//! recovery operations that can be retried if they fail.
+//! package state. Building the EROFS image and selecting it via
+//! `/conary/current` are idempotent recovery operations that can be retried if
+//! they fail.
 
 pub mod planner;
 mod recovery;
@@ -35,8 +36,9 @@ use std::path::{Path, PathBuf};
 /// Transaction state machine phases.
 ///
 /// The composefs-native lifecycle replaces the old 10-state journal-based
-/// state machine. Recovery is simple: if the DB says generation N should be
-/// active but the mount does not match, rebuild the EROFS image and remount.
+/// state machine. Recovery is simple: if `/conary/current` points to generation
+/// N but the artifact is missing or invalid, rebuild the EROFS image and repair
+/// the selected boot generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TransactionState {
     /// Transaction created, nothing resolved yet
@@ -49,8 +51,8 @@ pub enum TransactionState {
     Committed,
     /// EROFS image built for the new generation
     Built,
-    /// New generation mounted and symlink updated
-    Mounted,
+    /// New generation artifact built and selected via /conary/current
+    Selected,
     /// Transaction complete
     Done,
 }
@@ -64,8 +66,8 @@ impl TransactionState {
                 | (Self::Resolved, Self::Fetched)
                 | (Self::Fetched, Self::Committed)
                 | (Self::Committed, Self::Built)
-                | (Self::Built, Self::Mounted)
-                | (Self::Mounted, Self::Done)
+                | (Self::Built, Self::Selected)
+                | (Self::Selected, Self::Done)
         )
     }
 
@@ -76,11 +78,12 @@ impl TransactionState {
     }
 
     /// Returns true if the transaction is past the point of no return.
-    /// After commit, recovery means re-deriving the EROFS image and remounting.
+    /// After commit, recovery means re-deriving the EROFS image and repairing
+    /// the selected boot generation.
     pub fn is_committed(&self) -> bool {
         matches!(
             self,
-            Self::Committed | Self::Built | Self::Mounted | Self::Done
+            Self::Committed | Self::Built | Self::Selected | Self::Done
         )
     }
 }
@@ -439,8 +442,84 @@ mod integration_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::generation::artifact::{
+        ArtifactWriteInputs, BootAssetSources, CasObjectRef, CasObjectVerification,
+        stage_boot_assets, write_generation_artifact,
+    };
     use crate::generation::metadata::EROFS_IMAGE_NAME;
+    use crate::generation::metadata::{
+        GENERATION_FORMAT, GENERATION_METADATA_FILE, GenerationMetadata,
+    };
     use tempfile::TempDir;
+
+    fn write_valid_generation_artifact(root: &Path, generation: i64) {
+        let generations_dir = root.join("generations");
+        let generation_dir = generations_dir.join(generation.to_string());
+        let objects_dir = root.join("objects");
+        let boot_source = root.join("boot-source");
+        std::fs::create_dir_all(&generation_dir).unwrap();
+        std::fs::create_dir_all(&objects_dir).unwrap();
+        std::fs::create_dir_all(boot_source.join("EFI/BOOT")).unwrap();
+
+        let cas_bytes = b"selected-generation-cas";
+        let cas_hash = crate::filesystem::CasStore::new(&objects_dir)
+            .unwrap()
+            .store(cas_bytes)
+            .unwrap();
+        let cas_objects = vec![CasObjectRef {
+            sha256: cas_hash,
+            size: cas_bytes.len() as u64,
+        }];
+
+        let erofs_path = generation_dir.join(EROFS_IMAGE_NAME);
+        std::fs::write(&erofs_path, b"root-erofs").unwrap();
+        let kernel = boot_source.join("vmlinuz");
+        let initramfs = boot_source.join("initramfs.img");
+        let efi = boot_source.join("EFI/BOOT/BOOTX64.EFI");
+        std::fs::write(&kernel, b"kernel").unwrap();
+        std::fs::write(&initramfs, b"initramfs").unwrap();
+        std::fs::write(&efi, b"efi").unwrap();
+
+        let boot_assets = stage_boot_assets(BootAssetSources {
+            generation_dir: &generation_dir,
+            generation,
+            architecture: "x86_64",
+            kernel_version: "6.19.8-conary",
+            kernel: &kernel,
+            initramfs: &initramfs,
+            efi_bootloader: &efi,
+        })
+        .unwrap();
+        let artifact_manifest_sha256 = write_generation_artifact(ArtifactWriteInputs {
+            generation_dir: &generation_dir,
+            generation,
+            architecture: "x86_64",
+            erofs_path: &erofs_path,
+            cas_base_rel: "../../objects",
+            cas_objects,
+            cas_verification: CasObjectVerification::AlreadyVerified,
+            boot_assets,
+        })
+        .unwrap();
+
+        GenerationMetadata {
+            generation,
+            format: GENERATION_FORMAT.to_string(),
+            erofs_size: Some(std::fs::metadata(&erofs_path).unwrap().len() as i64),
+            cas_objects_referenced: Some(1),
+            fsverity_enabled: false,
+            erofs_verity_digest: None,
+            artifact_manifest_sha256: Some(artifact_manifest_sha256),
+            created_at: "2026-05-14T00:00:00Z".to_string(),
+            package_count: 1,
+            kernel_version: Some("6.19.8-conary".to_string()),
+            summary: "selected generation fixture".to_string(),
+        }
+        .write_to(&generation_dir)
+        .unwrap();
+
+        assert!(generation_dir.join(GENERATION_METADATA_FILE).is_file());
+    }
 
     #[test]
     fn transaction_config_new_defaults() {
@@ -520,15 +599,15 @@ mod tests {
         assert!(TransactionState::Resolved.can_transition_to(&TransactionState::Fetched));
         assert!(TransactionState::Fetched.can_transition_to(&TransactionState::Committed));
         assert!(TransactionState::Committed.can_transition_to(&TransactionState::Built));
-        assert!(TransactionState::Built.can_transition_to(&TransactionState::Mounted));
-        assert!(TransactionState::Mounted.can_transition_to(&TransactionState::Done));
+        assert!(TransactionState::Built.can_transition_to(&TransactionState::Selected));
+        assert!(TransactionState::Selected.can_transition_to(&TransactionState::Done));
     }
 
     #[test]
     fn state_invalid_transitions() {
         assert!(!TransactionState::New.can_transition_to(&TransactionState::Built));
         assert!(!TransactionState::New.can_transition_to(&TransactionState::Committed));
-        assert!(!TransactionState::Fetched.can_transition_to(&TransactionState::Mounted));
+        assert!(!TransactionState::Fetched.can_transition_to(&TransactionState::Selected));
         assert!(!TransactionState::Done.can_transition_to(&TransactionState::New));
     }
 
@@ -548,7 +627,7 @@ mod tests {
         assert!(!TransactionState::Fetched.is_committed());
         assert!(TransactionState::Committed.is_committed());
         assert!(TransactionState::Built.is_committed());
-        assert!(TransactionState::Mounted.is_committed());
+        assert!(TransactionState::Selected.is_committed());
         assert!(TransactionState::Done.is_committed());
     }
 
@@ -664,6 +743,62 @@ mod tests {
         // generation artifact contract and metadata.
         let found = engine.find_latest_intact_generation();
         assert!(found.is_none(), "magic-only generation must be skipped");
+    }
+
+    #[test]
+    fn test_transaction_recover_does_not_promote_db_active_without_current_symlink() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().to_path_buf();
+        let db_path = root.join("conary.db");
+        crate::db::init(&db_path).unwrap();
+        let conn = crate::db::open(&db_path).unwrap();
+
+        let mut state = crate::db::models::SystemState::new(7, "build-only state".to_string());
+        state.insert(&conn).unwrap();
+        state.set_active(&conn).unwrap();
+
+        let config = TransactionConfig::new(&root);
+        let engine = TransactionEngine::new(config).unwrap();
+
+        engine.recover(&conn).unwrap();
+
+        assert!(
+            !root.join("current").exists(),
+            "transaction recovery must not promote DB-active build-only states without /conary/current"
+        );
+    }
+
+    #[test]
+    fn test_transaction_recover_accepts_valid_selected_artifact_without_live_mounting() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().to_path_buf();
+        let db_path = root.join("conary.db");
+        crate::db::init(&db_path).unwrap();
+        let conn = crate::db::open(&db_path).unwrap();
+
+        let generation = 1;
+        let mut state =
+            crate::db::models::SystemState::new(generation, "selected generation".to_string());
+        state.insert(&conn).unwrap();
+        write_valid_generation_artifact(&root, generation);
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("generations/1", root.join("current")).unwrap();
+
+        let mut config = TransactionConfig::new(&root);
+        config.mount_point = root.join("mount-should-not-be-used");
+        let engine = TransactionEngine::new(config).unwrap();
+
+        engine.recover(&conn).unwrap();
+
+        assert!(
+            !root.join("mount-should-not-be-used").exists(),
+            "ordinary transaction recovery must not live-mount the selected generation"
+        );
+        assert_eq!(
+            std::fs::read_link(root.join("current")).unwrap(),
+            PathBuf::from("generations/1")
+        );
     }
 
     #[test]

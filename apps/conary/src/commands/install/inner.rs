@@ -7,10 +7,10 @@
 //! create a changeset, or call `rebuild_and_mount()`.
 //! The caller handles all of those.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use conary_core::components::ComponentType;
 use conary_core::db::models::{
-    Component, DependencyEntry, FileEntry, ProvideEntry, ScriptletEntry,
+    Component, DependencyEntry, FileEntry, ProvideEntry, ScriptletEntry, Trove,
 };
 use conary_core::dependencies::DependencyClass;
 use conary_core::transaction::TransactionEngine;
@@ -165,7 +165,7 @@ pub fn install_inner(
             let mut file_entry = FileEntry::new(path.clone(), hash.clone(), *size, *mode, trove_id);
             file_entry.component_id = component_id;
             file_entry.symlink_target = symlink_target.clone();
-            file_entry.insert(tx)?;
+            insert_file_entry_claiming_live_root_overlap(tx, &mut file_entry, pkg.name())?;
 
             let action = if is_upgrade { "modify" } else { "add" };
             tx.execute(
@@ -245,4 +245,204 @@ pub fn install_inner(
     }
 
     Ok(InnerInstallResult { trove_id })
+}
+
+fn insert_file_entry_claiming_live_root_overlap(
+    tx: &Transaction<'_>,
+    file_entry: &mut FileEntry,
+    package_name: &str,
+) -> Result<i64> {
+    const LIVE_ROOT_PACKAGE_NAME: &str = "conary-live-root";
+
+    let Some(existing) = FileEntry::find_by_path(tx, &file_entry.path)? else {
+        return Ok(file_entry.insert(tx)?);
+    };
+
+    let owner = Trove::find_by_id(tx, existing.trove_id)?.ok_or_else(|| {
+        anyhow!(
+            "Path {} is already tracked by missing trove {}",
+            file_entry.path,
+            existing.trove_id
+        )
+    })?;
+
+    if owner.name == LIVE_ROOT_PACKAGE_NAME || owner.name == package_name {
+        info!(
+            "Claiming {} from tracked package {} for {}",
+            file_entry.path, owner.name, package_name
+        );
+        return Ok(file_entry.insert_or_replace(tx)?);
+    }
+
+    Err(anyhow!(
+        "Path {} is already tracked by package {}",
+        file_entry.path,
+        owner.name
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::install::{ExtractionResult, InstallSemantics, TransactionContext};
+    use conary_core::db::models::{Changeset, FileEntry, Trove, TroveType};
+    use conary_core::packages::traits::{
+        Dependency, ExtractedFile, PackageFile, PackageFormat, Scriptlet,
+    };
+    use conary_core::transaction::{TransactionConfig, TransactionEngine};
+    use std::collections::HashMap;
+
+    struct FakePackage {
+        name: String,
+        version: String,
+        files: Vec<PackageFile>,
+        extracted_files: Vec<ExtractedFile>,
+        dependencies: Vec<Dependency>,
+        scriptlets: Vec<Scriptlet>,
+    }
+
+    impl FakePackage {
+        fn with_file(name: &str, path: &str, content: &[u8]) -> Self {
+            let size = content.len() as i64;
+            Self {
+                name: name.to_string(),
+                version: "1.0.0".to_string(),
+                files: vec![PackageFile {
+                    path: path.to_string(),
+                    size,
+                    mode: 0o100644,
+                    sha256: None,
+                    symlink_target: None,
+                }],
+                extracted_files: vec![ExtractedFile {
+                    path: path.to_string(),
+                    content: content.to_vec(),
+                    size,
+                    mode: 0o100644,
+                    sha256: None,
+                    symlink_target: None,
+                }],
+                dependencies: Vec::new(),
+                scriptlets: Vec::new(),
+            }
+        }
+    }
+
+    impl PackageFormat for FakePackage {
+        fn parse(_path: &str) -> conary_core::Result<Self> {
+            unimplemented!("test package is constructed directly")
+        }
+
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn version(&self) -> &str {
+            &self.version
+        }
+
+        fn architecture(&self) -> Option<&str> {
+            Some("x86_64")
+        }
+
+        fn description(&self) -> Option<&str> {
+            None
+        }
+
+        fn files(&self) -> &[PackageFile] {
+            &self.files
+        }
+
+        fn dependencies(&self) -> &[Dependency] {
+            &self.dependencies
+        }
+
+        fn extract_file_contents(&self) -> conary_core::Result<Vec<ExtractedFile>> {
+            Ok(self.extracted_files.clone())
+        }
+
+        fn scriptlets(&self) -> &[Scriptlet] {
+            &self.scriptlets
+        }
+
+        fn to_trove(&self) -> Trove {
+            Trove::new(self.name.clone(), self.version.clone(), TroveType::Package)
+        }
+    }
+
+    #[test]
+    fn install_inner_replaces_live_root_owned_overlapping_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let db_path = temp.path().join("conary.db");
+        std::fs::create_dir_all(&root).unwrap();
+        conary_core::db::init(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+
+        let mut live_root = Trove::new(
+            "conary-live-root".to_string(),
+            "2026.05.14".to_string(),
+            TroveType::Package,
+        );
+        let live_root_id = live_root.insert(&conn).unwrap();
+        let mut live_file = FileEntry::new(
+            "/boot/grub2/grub.cfg".to_string(),
+            "old-live-root-hash".to_string(),
+            4,
+            0o100644,
+            live_root_id,
+        );
+        live_file.insert(&conn).unwrap();
+
+        let package = FakePackage::with_file("grub2", "/boot/grub2/grub.cfg", b"new-grub");
+        let extraction = ExtractionResult {
+            extracted_files: package.extracted_files.clone(),
+            classified: HashMap::from([(
+                conary_core::components::ComponentType::Runtime,
+                vec!["/boot/grub2/grub.cfg".to_string()],
+            )]),
+            component_names_by_path: None,
+            installed_component_names: None,
+            ccs_pre_remove_script: None,
+            installed_component_types: vec![conary_core::components::ComponentType::Runtime],
+            skipped_components: Vec::new(),
+            language_provides: Vec::new(),
+        };
+        let db_path_string = db_path.to_string_lossy().into_owned();
+        let root_string = root.to_string_lossy().into_owned();
+        let ctx = TransactionContext {
+            db_path: &db_path_string,
+            root: &root_string,
+            semantics: InstallSemantics::ccs(),
+            selection_reason: None,
+            old_trove_to_upgrade: None,
+            ccs_manifest_provides: None,
+            ccs_capabilities: None,
+            defer_generation: true,
+        };
+        let tx_config = TransactionConfig::from_paths(root.clone(), db_path.clone());
+        let mut engine = TransactionEngine::new(tx_config).unwrap();
+        let tx = conn.unchecked_transaction().unwrap();
+        let changeset_id = Changeset::new("Install grub2-1.0.0".to_string())
+            .insert(&tx)
+            .unwrap();
+
+        install_inner(
+            &tx,
+            &mut engine,
+            changeset_id,
+            &package,
+            &extraction,
+            &ctx,
+            &InstallProgress::single("Installing"),
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        let owner = FileEntry::find_by_path(&conn, "/boot/grub2/grub.cfg")
+            .unwrap()
+            .and_then(|file| Trove::find_by_id(&conn, file.trove_id).unwrap())
+            .unwrap();
+        assert_eq!(owner.name, "grub2");
+    }
 }

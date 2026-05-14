@@ -9,6 +9,7 @@ use crate::server::ServerState;
 use std::path::{Path, PathBuf};
 
 /// Which artifact tree to resolve against.
+#[derive(Clone, Copy)]
 pub enum ArtifactRoot {
     Fixtures,
     Artifacts,

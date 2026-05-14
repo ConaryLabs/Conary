@@ -413,6 +413,42 @@ impl<'a> StateEngine<'a> {
         description: Option<&str>,
         changeset_id: Option<i64>,
     ) -> Result<SystemState> {
+        self.create_snapshot_at_with_activation(
+            state_number,
+            summary,
+            description,
+            changeset_id,
+            true,
+        )
+    }
+
+    /// Create a system state snapshot at a specific number without marking it
+    /// active. Generation build-only paths use this so activation stays tied to
+    /// the atomic generation switch/current-pointer update.
+    pub fn create_inactive_snapshot_at(
+        &self,
+        state_number: i64,
+        summary: &str,
+        description: Option<&str>,
+        changeset_id: Option<i64>,
+    ) -> Result<SystemState> {
+        self.create_snapshot_at_with_activation(
+            state_number,
+            summary,
+            description,
+            changeset_id,
+            false,
+        )
+    }
+
+    fn create_snapshot_at_with_activation(
+        &self,
+        state_number: i64,
+        summary: &str,
+        description: Option<&str>,
+        changeset_id: Option<i64>,
+        activate: bool,
+    ) -> Result<SystemState> {
         let tx = self.conn.unchecked_transaction()?;
         let base_generation = SystemState::get_active(&tx)?.map(|state| state.state_number);
 
@@ -453,9 +489,10 @@ impl<'a> StateEngine<'a> {
             params![state_id],
         )?;
 
-        // Set as active state
-        state.set_active_inner(&tx)?;
-        state.is_active = true;
+        if activate {
+            state.set_active_inner(&tx)?;
+            state.is_active = true;
+        }
 
         tx.commit()?;
         Ok(state)
@@ -740,5 +777,36 @@ mod tests {
 
         assert_eq!(first.base_generation, None);
         assert_eq!(second.base_generation, Some(first.state_number));
+    }
+
+    #[test]
+    fn test_create_inactive_snapshot_at_preserves_active_state() {
+        let (_temp, conn) = create_test_db();
+
+        conn.execute("DELETE FROM system_states", []).unwrap();
+        conn.execute("DELETE FROM troves", []).unwrap();
+        conn.execute(
+            "INSERT INTO troves (name, version, type, architecture, install_reason)
+             VALUES ('pkg-a', '1.0', 'package', 'x86_64', 'explicit')",
+            [],
+        )
+        .unwrap();
+
+        let engine = StateEngine::new(&conn);
+        let active = engine
+            .create_snapshot("Selected generation", None, None)
+            .unwrap();
+        let inactive = engine
+            .create_inactive_snapshot_at(7, "Prepared generation", None, None)
+            .unwrap();
+
+        assert!(
+            !inactive.is_active,
+            "build-only snapshots must not become active before generation switch"
+        );
+        assert_eq!(inactive.base_generation, Some(active.state_number));
+
+        let still_active = SystemState::get_active(&conn).unwrap().unwrap();
+        assert_eq!(still_active.state_number, active.state_number);
     }
 }

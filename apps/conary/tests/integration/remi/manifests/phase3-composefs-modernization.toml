@@ -20,7 +20,7 @@ fatal = true
 
 [[test.step]]
 [test.step.qemu_boot]
-image = "minimal-boot-v2"
+image = "minimal-boot-v3"
 memory_mb = 2048
 timeout_seconds = 2100
 ssh_port = 2250
@@ -64,7 +64,7 @@ fatal = true
 
 [[test.step]]
 [test.step.qemu_boot]
-image = "minimal-boot-v2"
+image = "minimal-boot-v3"
 memory_mb = 2048
 timeout_seconds = 420
 ssh_port = 2251

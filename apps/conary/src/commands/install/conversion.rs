@@ -454,12 +454,13 @@ pub async fn try_convert_to_ccs(
 ///
 /// This is a wrapper that calls the CCS installer with appropriate options.
 pub async fn install_converted_ccs(opts: ConvertedCcsInstallOptions<'_>) -> Result<()> {
-    install_converted_ccs_with_pending(opts, Vec::new()).await
+    install_converted_ccs_with_pending(opts, Vec::new(), false).await
 }
 
 async fn install_converted_ccs_with_pending(
     opts: ConvertedCcsInstallOptions<'_>,
     pending_providers: Vec<PendingCcsProvider>,
+    defer_generation: bool,
 ) -> Result<()> {
     let ConvertedCcsInstallOptions {
         ccs_path,
@@ -633,6 +634,7 @@ async fn install_converted_ccs_with_pending(
                                         dependency_passes_remaining: nested_dependency_passes,
                                     },
                                     child_pending_providers,
+                                    true,
                                 ))
                                 .await;
                                 match install_result {
@@ -717,6 +719,7 @@ async fn install_converted_ccs_with_pending(
             db_path,
             root,
             dry_run,
+            defer_generation,
             no_scripts,
             sandbox_mode,
             allow_downgrade,

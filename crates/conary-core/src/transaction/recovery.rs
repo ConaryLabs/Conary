@@ -2,35 +2,61 @@
 
 use super::TransactionEngine;
 use crate::Result;
-use crate::generation::artifact::{GenerationArtifact, load_generation_artifact};
+use crate::db::models::SystemState;
+use crate::generation::artifact::{GenerationArtifact, load_generation_artifact_for_activation};
 use rusqlite::Connection;
 use std::path::Path;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecoveryScanPolicy {
+    SelectedGenerationOnly,
+    SelectedOrLatestArtifact,
+}
 
 impl TransactionEngine {
     /// Recover from an interrupted transaction.
     ///
-    /// Uses an ordered 4-step recovery strategy to restore a bootable system state:
+    /// Uses an ordered recovery strategy to keep the selected boot generation
+    /// coherent without doing live-root compatibility mounting during ordinary
+    /// transactions:
     ///
     /// 1. Read `/conary/current` symlink; if the target generation artifact is
-    ///    valid, mount that generation (no rebuild needed).
-    /// 2. If the current artifact is missing or invalid, rebuild from DB state.
-    /// 3. If the DB is corrupted or has no active state, scan
-    ///    `/conary/generations/` by number descending and try each valid
-    ///    generation artifact.
+    ///    valid, mark the selected DB state active and return.
+    /// 2. If the selected artifact is missing or invalid, rebuild that selected
+    ///    generation from DB state.
+    /// 3. For explicit boot-selection recovery, scan `/conary/generations/` by
+    ///    number descending and try each valid generation artifact, mounting the
+    ///    selected generation only for that explicit recovery command.
     /// 4. If nothing works, return `RecoveryFailed`.
     ///
     /// This replaces the old journal-based roll-forward/roll-back recovery.
     pub fn recover(&self, conn: &Connection) -> Result<()> {
+        self.recover_with_policy(conn, RecoveryScanPolicy::SelectedGenerationOnly)
+    }
+
+    /// Recover the selected boot generation, allowing the explicit recovery
+    /// command to promote the latest valid artifact when `/conary/current` is
+    /// missing or invalid.
+    pub fn recover_boot_selection(&self, conn: &Connection) -> Result<()> {
+        self.recover_with_policy(conn, RecoveryScanPolicy::SelectedOrLatestArtifact)
+    }
+
+    fn recover_with_policy(&self, conn: &Connection, policy: RecoveryScanPolicy) -> Result<()> {
         use crate::generation::mount::current_generation;
 
-        let mut saw_current_generation = false;
-
         if let Ok(Some(current_num)) = current_generation(&self.config.root) {
-            saw_current_generation = true;
             let gen_dir = self.config.generations_dir.join(current_num.to_string());
 
             match load_generation_artifact_for_number(current_num, &gen_dir) {
                 Ok(artifact) => {
+                    if policy == RecoveryScanPolicy::SelectedGenerationOnly {
+                        tracing::debug!(
+                            "Recovery: selected generation {} artifact is valid; leaving boot selection unmounted",
+                            current_num
+                        );
+                        return mark_generation_state_active_if_present(conn, current_num);
+                    }
+
                     let (required_verity, expected_digest) = artifact_mount_policy(&artifact);
                     let is_mounted = crate::generation::mount::is_generation_mounted(
                         &self.config.mount_point,
@@ -53,7 +79,7 @@ impl TransactionEngine {
                         "Recovery: generation {} has valid artifact but is not mounted, mounting",
                         current_num
                     );
-                    return self.mount_artifact_and_link(current_num, &artifact);
+                    return self.mount_artifact_and_link(conn, current_num, &artifact);
                 }
                 Err(error) => {
                     tracing::warn!(
@@ -63,28 +89,22 @@ impl TransactionEngine {
                     );
                 }
             }
+
+            return self.rebuild_or_scan(conn, Some(current_num), policy);
         }
 
-        self.rebuild_or_scan(conn, saw_current_generation)
+        self.rebuild_or_scan(conn, None, policy)
     }
 
-    fn rebuild_or_scan(&self, conn: &Connection, saw_current_generation: bool) -> Result<()> {
-        let db_gen: Option<i64> = match conn.query_row(
-            "SELECT MAX(state_number) FROM system_states WHERE is_active = 1",
-            [],
-            |row| row.get(0),
-        ) {
-            Ok(val) => val,
-            Err(rusqlite::Error::QueryReturnedNoRows) => None,
-            Err(e) => {
-                tracing::warn!("Recovery: DB query failed ({}), scanning artifacts", e);
-                None
-            }
-        };
-
-        if let Some(expected) = db_gen {
+    fn rebuild_or_scan(
+        &self,
+        conn: &Connection,
+        selected_generation: Option<i64>,
+        policy: RecoveryScanPolicy,
+    ) -> Result<()> {
+        if let Some(expected) = selected_generation {
             tracing::info!(
-                "Recovery: DB says generation {} should be active, rebuilding in place",
+                "Recovery: selected generation {} needs artifact repair, rebuilding in place",
                 expected
             );
 
@@ -97,9 +117,21 @@ impl TransactionEngine {
                 Ok(_build_result) => {
                     let gen_dir = self.config.generations_dir.join(expected.to_string());
                     let artifact = load_generation_artifact_for_number(expected, &gen_dir)?;
-                    return self.mount_artifact_and_link(expected, &artifact);
+                    if policy == RecoveryScanPolicy::SelectedGenerationOnly {
+                        tracing::info!(
+                            "Recovery: rebuilt selected generation {} artifact; leaving boot selection unmounted",
+                            expected
+                        );
+                        return mark_generation_state_active_if_present(conn, expected);
+                    }
+                    return self.mount_artifact_and_link(conn, expected, &artifact);
                 }
                 Err(e) => {
+                    if policy == RecoveryScanPolicy::SelectedGenerationOnly {
+                        return Err(crate::Error::RecoveryFailed(format!(
+                            "Selected generation {expected} could not be repaired from DB state: {e}"
+                        )));
+                    }
                     tracing::warn!(
                         "Recovery: rebuild from DB failed ({}), scanning artifacts",
                         e
@@ -107,14 +139,17 @@ impl TransactionEngine {
                 }
             }
         } else {
-            if !saw_current_generation && !generations_dir_has_entries(&self.config.generations_dir)
-            {
+            if policy == RecoveryScanPolicy::SelectedGenerationOnly {
                 tracing::debug!(
-                    "Recovery: no active generation recorded and no generation images exist yet"
+                    "Recovery: no selected generation; leaving inactive generation artifacts untouched"
                 );
                 return Ok(());
             }
-            tracing::warn!("Recovery: no active generation in DB, scanning artifacts");
+            if !generations_dir_has_entries(&self.config.generations_dir) {
+                tracing::debug!("Recovery: no selected generation and no generation images exist");
+                return Ok(());
+            }
+            tracing::warn!("Recovery: no selected generation, scanning artifacts");
         }
 
         if let Some(artifact) = self.find_latest_intact_generation() {
@@ -123,7 +158,7 @@ impl TransactionEngine {
                 "Recovery: found valid generation artifact for generation {}, mounting",
                 gen_num
             );
-            return self.mount_artifact_and_link(gen_num, &artifact);
+            return self.mount_artifact_and_link(conn, gen_num, &artifact);
         }
 
         Err(crate::Error::RecoveryFailed(
@@ -139,7 +174,12 @@ impl TransactionEngine {
     /// overlay is NOT set up here -- it requires distinct lower/target paths
     /// that depend on the calling context (boot vs live-switch). CLI callers
     /// (switch.rs, composefs_ops.rs) handle the /etc overlay themselves.
-    fn mount_artifact_and_link(&self, gen_num: i64, artifact: &GenerationArtifact) -> Result<()> {
+    fn mount_artifact_and_link(
+        &self,
+        conn: &Connection,
+        gen_num: i64,
+        artifact: &GenerationArtifact,
+    ) -> Result<()> {
         let (requested_verity, digest) = artifact_mount_policy(artifact);
 
         let _mount_outcome =
@@ -154,6 +194,7 @@ impl TransactionEngine {
             })?;
 
         crate::generation::mount::update_current_symlink(&self.config.root, gen_num)?;
+        mark_generation_state_active_if_present(conn, gen_num)?;
 
         tracing::info!(
             "Recovery: generation {} mounted and symlink updated",
@@ -195,6 +236,19 @@ impl TransactionEngine {
     }
 }
 
+fn mark_generation_state_active_if_present(conn: &Connection, gen_num: i64) -> Result<()> {
+    match SystemState::find_by_number(conn, gen_num)? {
+        Some(state) => state.set_active(conn),
+        None => {
+            tracing::warn!(
+                "Recovery: generation {} has no DB state snapshot to mark active",
+                gen_num
+            );
+            Ok(())
+        }
+    }
+}
+
 impl Drop for TransactionEngine {
     fn drop(&mut self) {
         self.release_lock();
@@ -209,7 +263,7 @@ fn generations_dir_has_entries(path: &Path) -> bool {
 }
 
 fn load_generation_artifact_for_number(gen_num: i64, gen_dir: &Path) -> Result<GenerationArtifact> {
-    let artifact = load_generation_artifact(gen_dir)?;
+    let artifact = load_generation_artifact_for_activation(gen_dir)?;
     if artifact.generation != gen_num {
         return Err(crate::Error::InvalidPath(format!(
             "generation directory {} contains artifact for generation {}",

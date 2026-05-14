@@ -31,13 +31,28 @@ fn runtime_root_for_generation_db_path(db_path: &str) -> ConaryRuntimeRoot {
     ConaryRuntimeRoot::from_db_path(PathBuf::from(db_path))
 }
 
+fn mark_generation_state_active(runtime_root: &ConaryRuntimeRoot, number: i64) -> Result<()> {
+    let db_path = runtime_root
+        .db_path()
+        .to_str()
+        .ok_or_else(|| anyhow!("Generation database path is not valid UTF-8"))?;
+    let conn = crate::commands::open_db(db_path)?;
+    let state = conary_core::db::models::SystemState::find_by_number(&conn, number)?
+        .ok_or_else(|| anyhow!("Generation {number} has no DB state snapshot"))?;
+    state.set_active(&conn)?;
+    Ok(())
+}
+
 fn validate_generation_activation_artifact(
     runtime_root: &ConaryRuntimeRoot,
     number: i64,
 ) -> Result<()> {
     let gen_dir = runtime_root.generation_path(number);
-    let artifact = conary_core::generation::artifact::load_generation_artifact(&gen_dir)
-        .with_context(|| format!("Generation {number} is not an activatable composefs artifact"))?;
+    let artifact =
+        conary_core::generation::artifact::load_generation_artifact_for_activation(&gen_dir)
+            .with_context(|| {
+                format!("Generation {number} is not an activatable composefs artifact")
+            })?;
     if artifact.generation != number {
         return Err(anyhow!(
             "Generation artifact mismatch: requested {number}, artifact declares {}",
@@ -673,6 +688,7 @@ pub fn cmd_generation_switch(number: i64, reboot: bool) -> Result<()> {
 
     update_current_symlink(runtime_root.root(), number)
         .map_err(|e| anyhow!("Failed to update current generation symlink: {e}"))?;
+    mark_generation_state_active(&runtime_root, number)?;
     if let Err(e) = super::boot::write_boot_entry(number) {
         eprintln!("Boot entry skipped: {}", e);
     }
@@ -717,6 +733,7 @@ pub fn cmd_generation_rollback() -> Result<()> {
 
     update_current_symlink(runtime_root.root(), *previous)
         .map_err(|e| anyhow!("Failed to update current generation symlink: {e}"))?;
+    mark_generation_state_active(&runtime_root, *previous)?;
     if let Err(e) = super::boot::write_boot_entry(*previous) {
         eprintln!("Boot entry skipped: {}", e);
     }
@@ -742,7 +759,7 @@ pub fn cmd_generation_recover(db_path: &str) -> Result<()> {
     );
     config.mount_point = staging.clone();
     let engine = conary_core::transaction::TransactionEngine::new(config)?;
-    engine.recover(&conn)?;
+    engine.recover_boot_selection(&conn)?;
 
     // Restore the /etc overlay after recovery mounts the generation.
     // recover() mounts the composefs image at <root>/mnt; the writable
