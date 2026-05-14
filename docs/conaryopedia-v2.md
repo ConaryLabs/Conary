@@ -130,7 +130,7 @@ Because every changeset records what it changed, any changeset can be reversed:
 
 ```bash
 conary system state list         # Show all state snapshots
-conary system state rollback 5   # Reverse all changes since state 5
+conary system state rollback 5 --allow-live-system-mutation  # Reverse all changes since state 5
 ```
 
 Rollback creates a *new* changeset that undoes the effects of previous ones. This means rollbacks themselves can be rolled back -- there is no destructive operation.
@@ -336,7 +336,7 @@ A **system state** is a snapshot of every package installed on the system at a p
 conary system state list          # Show all snapshots
 conary system state show 12       # Details of state 12
 conary system state diff 5 8      # What changed between states 5 and 8
-conary system state rollback 5    # Return to state 5
+conary system state rollback 5 --allow-live-system-mutation   # Return to state 5
 ```
 
 Each state records:
@@ -506,9 +506,9 @@ If any step fails, the entire operation rolls back automatically.
 ### 2.3 Removing Packages
 
 ```bash
-conary remove nginx                      # Remove nginx
-conary remove nginx --version 1.24.0     # Remove specific version
-conary remove nginx --purge-files        # Also delete files for adopted packages
+conary remove nginx --allow-live-system-mutation                      # Remove nginx
+conary remove nginx --version 1.24.0 --allow-live-system-mutation     # Remove specific version
+conary remove nginx --purge-files --allow-live-system-mutation        # Also delete files for adopted packages
 ```
 
 By default, removing a package that was adopted from the system package manager (`adopted-track` or `adopted-full`) only removes Conary's tracking metadata -- the files remain on disk because the system package manager still owns them. Use `--purge-files` to remove those files through a new composefs generation. Purge removal requires an active composefs generation and will fail before touching files if the system has not been initialized into the generation model.
@@ -525,8 +525,8 @@ Removal respects dependencies: if other packages depend on the one being removed
 ### 2.4 Updating Packages
 
 ```bash
-conary update                    # Update all packages
-conary update --dry-run          # Preview updates and any source switches
+conary update --allow-live-system-mutation                    # Update all packages
+conary update --dry-run                                      # Preview updates and any source switches
 conary update nginx --allow-live-system-mutation              # Update just nginx
 conary update @web-stack --allow-live-system-mutation         # Update all members of a collection
 conary update --security --allow-live-system-mutation         # Only security updates (critical/important)
@@ -621,8 +621,8 @@ Pinned packages are skipped during `conary update` and protected from `conary re
 When a package is removed, any packages that were only installed as its dependencies become orphans. The `autoremove` command cleans these up:
 
 ```bash
-conary autoremove                # Remove orphaned packages
-conary autoremove --dry-run      # Preview what would be removed
+conary autoremove --allow-live-system-mutation  # Remove orphaned packages
+conary autoremove --dry-run                     # Preview what would be removed
 ```
 
 This relies on the `install_reason` tracking from Chapter 1 -- only packages with reason `dependency` whose parent is no longer installed are candidates.
@@ -730,8 +730,8 @@ Shows packages added, removed, and version-changed between two states.
 #### Rolling Back
 
 ```bash
-conary system state revert 5         # Return to state 5
-conary system state revert 5 --dry-run  # Preview the rollback
+conary system state revert 5 --allow-live-system-mutation  # Return to state 5
+conary system state revert 5 --dry-run                     # Preview the rollback
 ```
 
 Reverting creates a new changeset that undoes all changes since state 5. This means the revert itself can be reverted -- no operation is destructive.
@@ -739,7 +739,7 @@ Reverting creates a new changeset that undoes all changes since state 5. This me
 You can also roll back a specific changeset:
 
 ```bash
-conary system state rollback 42      # Undo changeset #42
+conary system state rollback 42 --allow-live-system-mutation  # Undo changeset #42
 ```
 
 #### Creating Manual Snapshots
@@ -785,10 +785,10 @@ Verification recomputes file hashes and compares them against the CAS. Any modif
 If verification finds problems, restore files from the CAS:
 
 ```bash
-conary system restore nginx              # Restore missing/modified files
-conary system restore nginx --force      # Overwrite even if files exist
-conary system restore nginx --dry-run    # Preview restoration
-conary system restore all                # Check and restore all packages
+conary system restore nginx --allow-live-system-mutation          # Restore missing/modified files
+conary system restore nginx --force --allow-live-system-mutation  # Overwrite even if files exist
+conary system restore nginx --dry-run                             # Preview restoration
+conary system restore all --allow-live-system-mutation            # Check and restore all packages
 ```
 
 ### 2.13 Repository Management
@@ -1162,12 +1162,12 @@ The diff engine computes these action types:
 ### 3.3 Apply: Sync System to Model
 
 ```bash
-conary model apply                         # Apply the model
-conary model apply --dry-run               # Preview without changes
-conary model apply --strict                # Remove packages not in model
-conary model apply --skip-optional         # Skip optional packages
-conary model apply --no-autoremove         # Don't clean up orphans after
-conary model apply --offline               # Use cached remote data only
+conary model apply --allow-live-system-mutation                 # Apply the model
+conary model apply --dry-run                                    # Preview without changes
+conary model apply --strict --allow-live-system-mutation        # Remove packages not in model
+conary model apply --skip-optional --allow-live-system-mutation # Skip optional packages
+conary model apply --no-autoremove --allow-live-system-mutation # Don't clean up orphans after
+conary model apply --offline --allow-live-system-mutation       # Use cached remote data only
 ```
 
 Apply performs the diff and then executes all actions as a single atomic changeset. If anything fails, the entire operation rolls back.
@@ -1444,7 +1444,7 @@ The typical model workflow:
 2. Edit the model:            vim /etc/conary/system.toml
 3. Preview changes:           conary model diff
 4. Lock remote includes:      conary model lock
-5. Apply:                     conary model apply
+5. Apply:                     conary model apply --allow-live-system-mutation
 6. Verify:                    conary model check
 7. Monitor drift:             conary model check (via cron/systemd timer)
 8. Publish for others:        conary model publish --name my-stack --version 1.0
@@ -5111,7 +5111,7 @@ hash = "sha256:789abc..."
 
 ```bash
 conary model diff        # Show what would change
-conary model apply       # Converge to desired state
+conary model apply --allow-live-system-mutation  # Converge to desired state
 conary model lock        # Generate/update lockfile
 conary model check       # Detect drift (lockfile vs actual)
 conary model export      # Export current state as system.toml
@@ -5435,11 +5435,12 @@ conary automation apply --dry-run --yes   # Preview pending safe actions
 conary automation configure --show        # Show effective defaults / current file path
 ```
 
-`automation history` reads records written by `conary automation apply` and
-prints `No automation history.` when none are present. `automation daemon` runs
-the scheduler in the foreground for preview use; use systemd or another
-supervisor for background operation. `automation configure` persists settings to
-the active model/config file path and prints the file it changed.
+`automation history` reads records written by
+`conary automation apply --allow-live-system-mutation` and prints
+`No automation history.` when none are present. `automation daemon` runs the
+scheduler in the foreground for preview use; use systemd or another supervisor
+for background operation. `automation configure` persists settings to the active
+model/config file path and prints the file it changed.
 
 ### 8.7 Transaction Engine: Composefs-Native Operations
 
@@ -5519,7 +5520,7 @@ These systems compose into workflows that span the entire lifecycle:
 **Air-gapped deployment**:
 1. On an internet-connected machine, `conary model lock` resolves and downloads everything (8.4)
 2. Copy the lockfile and chunk cache to removable media
-3. On the air-gapped machine, `conary model apply --offline` installs from the local cache
+3. On the air-gapped machine, `conary model apply --offline --allow-live-system-mutation` installs from the local cache
 4. No network access needed -- all chunks are content-addressed and pre-verified
 
 ---

@@ -249,7 +249,8 @@ crates/conary-mcp/       Shared MCP helpers
 
 ## Data Flow: Package Installation
 
-This is the primary operation. The flow from `conary install nginx`:
+This is the primary operation. The flow from
+`conary install nginx --allow-live-system-mutation`:
 
 ```
 1. RESOLVE
@@ -321,7 +322,7 @@ generations using EROFS images and Linux composefs.
 ```
 Current System State
        |
-  conary system generation build
+  conary system generation build --allow-live-system-mutation
        |
   +----+----+
   | Snapshot |-- Capture all installed troves from SQLite
