@@ -1,5 +1,9 @@
 # Composefs Atomic Modernization Implementation Plan
 
+> **Historical status:** Completed and archived on 2026-05-14 after composefs
+> atomic switching was implemented, validated, merged to `main`, and pushed as
+> `db938294`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make composefs atomic generations the single supported runtime contract for package mutation, activation, recovery, export, and bootstrap paths before Conary's limited public release.
@@ -1215,7 +1219,7 @@ only historical/archive/planning references or no matches.
 Run:
 
 ```bash
-git add AGENTS.md README.md ROADMAP.md apps/conary/src/cli/mod.rs apps/conary/src/cli/system.rs apps/conary/src/commands/automation.rs apps/conary/src/commands/generation/takeover.rs apps/conary/src/commands/install/dep_mode.rs apps/conary/src/commands/install/mod.rs apps/conary/src/commands/mod.rs apps/conary/src/commands/update.rs apps/remi/src/server/handlers/oci.rs crates/conary-core/src/generation/builder.rs crates/conary-core/src/generation/builder/runtime_inputs.rs crates/conary-core/src/model/parser.rs crates/conary-core/src/repository/parsers/mod.rs docs/ARCHITECTURE.md docs/conaryopedia-v2.md docs/llms/README.md docs/modules/bootstrap.md docs/operations/bootstrap-follow-up-investigations.md docs/operations/post-generation-export-follow-up-roadmap.md docs/superpowers/documentation-accuracy-audit-inventory.tsv docs/superpowers/documentation-accuracy-audit-ledger.tsv docs/superpowers/documentation-accuracy-audit-summary.md docs/superpowers/plans/2026-05-06-limited-public-release-readiness-plan.md docs/superpowers/plans/2026-05-12-composefs-atomic-modernization-plan.md
+git add AGENTS.md README.md ROADMAP.md apps/conary/src/cli/mod.rs apps/conary/src/cli/system.rs apps/conary/src/commands/automation.rs apps/conary/src/commands/generation/takeover.rs apps/conary/src/commands/install/dep_mode.rs apps/conary/src/commands/install/mod.rs apps/conary/src/commands/mod.rs apps/conary/src/commands/update.rs apps/remi/src/server/handlers/oci.rs crates/conary-core/src/generation/builder.rs crates/conary-core/src/generation/builder/runtime_inputs.rs crates/conary-core/src/model/parser.rs crates/conary-core/src/repository/parsers/mod.rs docs/ARCHITECTURE.md docs/conaryopedia-v2.md docs/llms/README.md docs/modules/bootstrap.md docs/operations/bootstrap-follow-up-investigations.md docs/operations/post-generation-export-follow-up-roadmap.md docs/superpowers/documentation-accuracy-audit-inventory.tsv docs/superpowers/documentation-accuracy-audit-ledger.tsv docs/superpowers/documentation-accuracy-audit-summary.md docs/superpowers/plans/2026-05-06-limited-public-release-readiness-plan.md docs/superpowers/plans/archive/2026-05-12-composefs-atomic-modernization-plan.md
 git commit -m "docs: align preview defaults with generation ownership"
 ```
 
@@ -1378,4 +1382,4 @@ git status --short
 git log --oneline -8
 ```
 
-Then compare the actual repo state against the acceptance criteria in `docs/superpowers/specs/2026-05-12-composefs-atomic-modernization-design.md`. If any requirement is missing or weakly verified, keep the goal active and create a follow-up task instead of marking it complete.
+Then compare the actual repo state against the acceptance criteria in `docs/superpowers/specs/archive/2026-05-12-composefs-atomic-modernization-design.md`. If any requirement is missing or weakly verified, keep the goal active and create a follow-up task instead of marking it complete.

@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-12
-revision: 14
-summary: Refresh workspace layout, generation-first runtime mutation, source-selection policy flow, and current service boundaries
+last_updated: 2026-05-14
+revision: 15
+summary: Refresh composefs atomic selection, recovery wording, and current service boundaries
 ---
 
 # Conary Architecture
@@ -94,7 +94,7 @@ crates/conary-core/      Core library crate
     |   +-- migrations/  Migration functions grouped into v1_v20.rs, v21_v40.rs, v41_current.rs
     |   +-- models/      ORM-style model structs
     +-- transaction/     Composefs-native transaction engine
-    |   +-- mod.rs       TransactionEngine, state machine (resolve/fetch/commit/build/mount)
+    |   +-- mod.rs       TransactionEngine, state machine (resolve/fetch/commit/build/select)
     |   +-- planner.rs   VFS preflight conflict detection
     +-- generation/      EROFS generation building and composefs mounting
     |   +-- builder.rs   Build EROFS images from DB/adopted runtime state
@@ -269,15 +269,15 @@ This is the primary operation. The flow from `conary install nginx`:
    +-- FETCH: Store package content in CAS
    +-- DB_COMMIT: Record trove, files, components, dependencies in SQLite
    |   (Point of no return)
-   +-- BUILD: Construct EROFS image from DB state (composefs-rs)
-   +-- MOUNT: Mount new generation via composefs, update /conary/current symlink
-   +-- POST_SCRIPTS: Run post-install scriptlets (sandboxed against composefs mount)
+   +-- BUILD: Construct complete generation artifact from DB/CAS state
+   +-- SELECT: Update /conary/current for next boot
+   +-- POST_SCRIPTS: Run post-install scriptlets under the transaction policy
    +-- TRIGGERS: Fire matching triggers (ldconfig, mime, icons, etc.)
 
 4. RECOVERY (on crash)
-   +-- Check /conary/current symlink for valid EROFS image
-   +-- If invalid: rebuild EROFS from DB state and remount
-   +-- If DB corrupted: scan generations/ for latest intact image
+   +-- Check /conary/current for a valid generation artifact
+   +-- If invalid: rebuild the selected artifact from DB/CAS state
+   +-- If explicit boot-selection recovery is requested: scan generations/
 ```
 
 ## Data Flow: Remi Server Request
@@ -344,8 +344,8 @@ Current System State
 
 1. **Build**: Snapshot current troves, validate runtime inputs, construct EROFS image from CAS
 2. **Store**: Save generation metadata (number, timestamp, summary, trove list)
-3. **Switch**: Mount new generation via composefs, update boot entries
-4. **Rollback**: Switch back to any previous generation
+3. **Switch**: Validate artifact, update `/conary/current`, and write boot entries
+4. **Rollback**: Select the previous valid generation for next boot
 5. **GC**: Remove old generations, keeping N most recent
 
 ### Generation Module (`crates/conary-core/src/generation/`)
@@ -453,10 +453,12 @@ config files for runtime state. The database is the single source of truth,
 queryable with standard SQL tools.
 
 **Composefs-native transactions**: The transaction engine follows a linear
-pipeline: resolve -> fetch -> DB commit -> EROFS build -> mount. The DB commit
-is the point of no return. Recovery is simple: if the DB says generation N
-should be active but the mount does not match, rebuild the EROFS image from DB
-state and remount. No journal, no backup phase, no staging directory.
+pipeline: resolve -> fetch -> DB commit -> EROFS build -> select. The DB commit
+is the point of no return. Recovery is simple: if `/conary/current` points at a
+selected generation whose artifact is missing or invalid, rebuild that artifact
+from DB/CAS state and leave the boot selection intact. Explicit boot-selection
+recovery is the path that scans, promotes, and remounts. No journal, no backup
+phase, no staging directory.
 Runtime mutation is DB/CAS/generation/active-pointer first; direct mutation of
 the live root is not a supported release path.
 

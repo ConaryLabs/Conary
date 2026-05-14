@@ -297,7 +297,7 @@ Conary has a few core design principles that inform how contributions should be 
 
 - **Database-first**: SQLite is the single source of truth for all package state. Do not introduce config files, caches outside the database, or in-memory-only state for data that should persist.
 - **Content-addressable storage**: Files are stored by hash, enabling deduplication and efficient delta updates.
-- **Atomic transactions**: Package operations commit durable state to SQLite, then rebuild or remount EROFS generations from that source of truth after crashes. Partial installs should never leave the system in a broken state.
+- **Atomic transactions**: Package operations commit durable state to SQLite, then rebuild or reselect complete EROFS generation artifacts from DB/CAS state after crashes. Partial installs should never leave the system in a broken state.
 - **Package-owned service surfaces**: Remi and conaryd live in their own app crates and should be built and tested directly with `cargo build -p remi`, `cargo build -p conaryd`, `cargo test -p remi`, and `cargo test -p conaryd`.
 
 Before proposing significant architectural changes, please open an issue to discuss the approach. This helps avoid wasted effort and ensures alignment with the project direction.

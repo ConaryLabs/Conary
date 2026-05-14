@@ -1,19 +1,25 @@
 ---
-last_updated: 2026-05-13
-revision: 2
-summary: Repo-wide design for making composefs atomic generations the single runtime mutation, activation, recovery, export, and bootstrap contract before limited public release
+last_updated: 2026-05-14
+revision: 3
+summary: Historical design record for the completed composefs atomic switching modernization
 ---
 
 # Composefs Atomic Modernization: Design Spec
 
 **Date:** 2026-05-12
-**Status:** Updated after implementation and validation follow-up
+**Status:** Completed and archived on 2026-05-14 after implementation,
+validation, merge, and push to `main` as `db938294`.
 **Goal:** Make composefs atomic generations the only supported runtime contract
 for Conary's package mutation, activation, recovery, export, and bootstrap
 paths, removing legacy live-root and compatibility behavior that is no longer
 needed before the limited public release.
 
 ---
+
+> **Historical note:** Current active docs such as `docs/ARCHITECTURE.md`,
+> `docs/conaryopedia-v2.md`, and
+> `docs/operations/post-generation-export-follow-up-roadmap.md` are
+> authoritative for the implemented next-boot selection model.
 
 ## Scope
 

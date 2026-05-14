@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Changed
+- Completed composefs atomic switching so package mutation and transaction
+  recovery build and select complete generation artifacts for the next boot
+  instead of relying on live generation remounts.
 - Prepared the limited public preview support matrix around Fedora 44, Ubuntu 26.04 LTS, and Arch Linux.
 - Refreshed Remi conversion and repository sync paths to avoid holding SQLite connections across async HTTP work.
 - Moved distro listing to the shared supported-distro catalog instead of hard-coded CLI output.
