@@ -13,6 +13,7 @@
     "@sveltejs/adapter-static": "^3.0.8",
     "@sveltejs/kit": "^2.16.0",
     "@sveltejs/vite-plugin-svelte": "^5.0.0",
+    "@types/node": "^20.19.41",
     "svelte": "^5.0.0",
     "svelte-check": "^4.0.0",
     "typescript": "^5.7.0",
@@ -20,6 +21,9 @@
   },
   "dependencies": {
     "chart.js": "^4.4.7"
+  },
+  "overrides": {
+    "cookie": "0.7.2"
   },
   "type": "module"
 }
