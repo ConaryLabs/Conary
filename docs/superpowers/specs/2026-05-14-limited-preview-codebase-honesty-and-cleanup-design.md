@@ -1,13 +1,14 @@
 ---
 last_updated: 2026-05-14
-revision: 1
-summary: Fresh design for a limited-preview codebase honesty, cleanup, deduplication, and documentation alignment pass
+revision: 2
+summary: Fresh design for a limited-preview codebase honesty, cleanup, deduplication, documentation alignment, and agentic-review reconciliation pass
 ---
 
 # Limited Preview Codebase Honesty And Cleanup: Design Spec
 
 **Date:** 2026-05-14
-**Status:** Draft design for user review; DeepSeek feedback reconciled
+**Status:** Draft design for user review; DeepSeek and agentic review feedback
+reconciled
 **Goal:** Prepare Conary for a limited public preview by reviewing the
 release-facing codebase with fresh eyes, removing misleading surfaces,
 reducing targeted duplication, simplifying large modules where it helps
@@ -103,6 +104,24 @@ Each finding in the implementation plan should be classified as one of:
 - **Deferred but honest:** intentionally not implemented and already clearly
   represented.
 
+## Review Coverage Ledger
+
+Because this pass is intended to support a thorough line-by-line review, each
+execution plan should create or update a review coverage ledger for its slice.
+The ledger may live beside the active implementation plan and should include at
+least:
+
+- file path
+- owning slice
+- reviewer or agent
+- review status (`pending`, `reviewed`, `changed`, `deferred`)
+- finding category
+- decision
+- verification command or reason verification is not applicable
+
+A file is not considered reviewed until the ledger records either a concrete
+finding with a decision or an explicit "reviewed, no change" disposition.
+
 ## Proposed Review Slices
 
 ### Slice 1: CLI And Public Surface Honesty
@@ -126,6 +145,11 @@ Each finding in the implementation plan should be classified as one of:
 
 **Initial findings to resolve or explicitly classify:**
 
+- README quick-start and feature examples show copy/paste install, generation,
+  takeover, and state-revert commands without the required
+  `--allow-live-system-mutation` acknowledgement. These examples should either
+  include the flag, use `--dry-run`, or clearly explain why the release-preview
+  safety guard will stop direct mutation.
 - `conary system generation export --format iso` is advertised in CLI help, but
   `crates/conary-core/src/generation/export.rs` returns
   `Error::NotImplemented` for ISO.
@@ -183,6 +207,13 @@ Each finding in the implementation plan should be classified as one of:
 - Package install/remove/update routes already return explicit 501 responses.
 - Job execution has a defense-in-depth `not implemented` fallback for job kinds
   rejected at the API boundary.
+- `POST /v1/transactions/dry-run` currently returns `200 OK` with a synthetic
+  count of requested package names. Unless this becomes a real resolver/planner
+  route, it is a successful package-operation stub and should return explicit
+  preview/deferred guidance.
+- Generic `POST /v1/transactions` rejects install/remove/update operations as
+  `400 Bad Request`, while the direct package routes use 501. Deferred package
+  executor surfaces should use one consistent not-implemented response shape.
 - `/v1/system/states` currently returns an empty `200 OK` list, which may be
   less honest than a typed response or explicit 501 unless it is genuinely a
   supported empty read route.
@@ -251,6 +282,13 @@ Each finding in the implementation plan should be classified as one of:
 - `apps/remi/src/server/handlers/profiles.rs`
 - `apps/remi/src/server/handlers/seeds.rs`
 - `apps/remi/src/server/handlers/mod.rs`
+- `apps/remi/src/server/routes/public.rs`
+- `apps/remi/src/server/routes/admin.rs`
+- `apps/remi/src/server/routes/mcp.rs`
+- `apps/remi/src/server/auth.rs`
+- `apps/remi/src/server/rate_limit.rs`
+- `apps/remi/src/server/admin_service.rs`
+- `apps/remi/src/server/mcp.rs`
 - `apps/remi/src/server/mod.rs`
 
 **Review questions:**
@@ -267,22 +305,27 @@ Each finding in the implementation plan should be classified as one of:
   though `conary_core::filesystem::object_path` exists.
 - `scan_chunk_hashes` and `extract_hash_from_path` are duplicated between
   `chunk_gc.rs` and `handlers/chunks.rs`.
-- seeds/profiles/derivations PUT endpoints authenticate inline and explicitly
-  bypass admin-router rate limiting.
+- seeds/profiles/derivations PUT endpoints are mounted on the public router,
+  authenticate inline, and explicitly bypass admin-router rate limiting. Treat
+  this as a release/security decision: either move them under admin protections
+  or document and test equivalent public-path controls.
 - `handlers/mod.rs` documents split public/admin error formats and includes a
   code note about later unification; this is a valid later cleanup if kept
   deliberate.
-- Some Remi MCP operations appear to access state directly where adjacent MCP
-  tools delegate through `admin_service.rs`; verify whether service-layer
-  ownership should be restored for consistency.
+- Remi MCP operations such as `chunk_gc`, `canonical_rebuild`, and
+  `canonical_fetch` appear to access lower-level modules/state directly where
+  adjacent MCP tools delegate through `admin_service.rs`; verify whether
+  service-layer ownership should be restored for consistency.
 
 **Acceptance criteria:**
 
 - Chunk path and hash-scan helpers have one owner per crate or use the core
-  helper where appropriate.
+  helper when that preserves the chunk-dir versus objects-dir contract.
 - Write endpoints are either routed through the admin protections or clearly
   documented and tested as intentionally public-path writes with equivalent
   controls.
+- Any preview decision to keep public-path write endpoints must include the
+  exact auth/rate-limit/audit contract in docs or tests.
 - No broad Remi architecture refactor is introduced without a narrow need.
 
 ### Slice 5: Package Mutation And Source Selection Core
@@ -350,6 +393,10 @@ Each finding in the implementation plan should be classified as one of:
 - conary-test repeats Remi-proxy fallback logic across HTTP handlers and MCP
   tools; the shared service layer is the likely owner if verification confirms
   the paths are equivalent.
+- Current conary-test HTTP and MCP fallback paths are not yet equivalent: HTTP
+  list fallback preserves ascending compatibility ordering, while service/MCP
+  paths use the newer service ordering. Do not deduplicate this mechanically
+  until the canonical response shape is chosen.
 - The Fedora 44 distro key appears throughout conary-test and Remi test
   fixtures. A shared default-test-distro constant or fixture helper would
   reduce future distro-matrix churn, but manifest data should remain explicit
@@ -410,6 +457,8 @@ Each finding in the implementation plan should be classified as one of:
 - `bash scripts/check-doc-audit-ledger.sh ... --require-complete` passes after
   ledger updates.
 - Stale active-doc phrases are removed or reframed as historical.
+- Each documentation slice records the targeted stale-claim sweep used for the
+  changed surface, not just the inventory/ledger result.
 
 ## Large File Review Queue
 
@@ -471,23 +520,48 @@ When more external findings arrive:
 
 If DeepSeek finds a release blocker, prioritize it ahead of cleanup-only work.
 
+## Agentic Review Integration
+
+An agentic review pass on 2026-05-14 validated the design and added several
+important amendments:
+
+- README examples must account for the live-system mutation guard.
+- conaryd transaction dry-run and generic transaction creation need the same
+  honesty treatment as direct package routes.
+- Remi public-path write endpoints are a preview security decision, not merely
+  a cleanup note.
+- conary-test HTTP/MCP fallback deduplication cannot be mechanical until the
+  canonical ordering and response shape are chosen.
+- A line-by-line cleanup pass needs a review coverage ledger with explicit
+  per-file dispositions.
+- Documentation verification needs targeted stale-claim sweeps in addition to
+  audit inventory and ledger checks.
+
+The same review found that several existing design findings are already well
+grounded: README SBOM mismatch, bootstrap/generation ISO overpromise, stale
+automation docs and Phase 4 assertion, and architecture resolver-map drift.
+
 ## Proposed First Implementation Plan
 
 After this design is approved, the first implementation plan should cover:
 
-1. CLI/public-surface honesty fixes for README SBOM, ISO/export/bootstrap,
-   automation drift, and command-help clarity.
-2. conaryd route honesty cleanup for empty successful stubs.
-3. conary-test Remi-proxy fallback deduplication if local verification confirms
-   HTTP and MCP paths are equivalent.
-4. Remi CAS/chunk helper deduplication if the local verification confirms a
-   safe shared owner.
-5. Transaction-lifecycle helper design for install/remove/update, with a
-   stronger compatibility check before implementation.
-6. Documentation alignment for the changed behavior and audit ledger updates.
+1. Create the first review coverage ledger and seed it with the files touched
+   by this implementation slice.
+2. CLI/public-surface honesty fixes for README live-mutation examples, README
+   SBOM, generation/bootstrap ISO wording, automation drift, Phase 4 automation
+   expectations, and command-help clarity.
+3. conaryd route honesty cleanup for empty successful stubs, package-operation
+   dry-run, and generic transaction creation response shape.
+4. Remi public-path write endpoint decision and service-boundary classification
+   before any broad handler movement.
+5. conary-test Phase 4 truth fixes and Remi fallback response-shape decision;
+   defer fallback deduplication until equivalence is proven.
+6. Documentation alignment for the changed behavior, targeted stale-claim
+   sweeps, and audit ledger updates.
 
-Defer broader large-file decomposition until the owning slice is actively under
-review.
+Defer broader large-file decomposition, Remi CAS/chunk helper consolidation,
+and install/remove/update transaction-lifecycle helper work until the owning
+slice is actively under review and the public-surface honesty fixes are done.
 
 ## Verification Strategy
 
@@ -508,6 +582,7 @@ Docs checks:
 ```bash
 bash scripts/docs-audit-inventory.sh
 bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete
+rg -n "not yet implemented|not yet recorded|still to run|ISO|SPDX|Forge|QEMU|remaining" README.md ROADMAP.md docs apps/conary/tests/integration/remi/manifests
 ```
 
 Owning package checks:
@@ -518,6 +593,16 @@ cargo test -p conary-core
 cargo test -p remi
 cargo test -p conaryd
 ```
+
+Manifest checks:
+
+```bash
+cargo run -p conary-test -- run --suite phase4-group-d --distro fedora44 --phase 4
+```
+
+Run the owning Phase 4 group whenever a Phase 4 manifest expectation changes.
+If the group is not run, record the reason in the implementation plan and the
+review coverage ledger.
 
 QEMU checks stay release-gate work, not default cleanup verification, unless a
 change touches generation export, boot activation, QEMU fixtures, or
