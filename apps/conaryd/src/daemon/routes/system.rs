@@ -74,7 +74,9 @@ conary_sse_connections {}
 }
 
 async fn list_states_handler(State(_state): State<SharedState>) -> ApiResult<Json<Vec<()>>> {
-    Ok(Json(vec![]))
+    Err(not_implemented_error(
+        "System state listing is not implemented in conaryd preview. Use the CLI directly.",
+    ))
 }
 
 async fn rollback_handler(

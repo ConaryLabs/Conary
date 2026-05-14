@@ -8,9 +8,9 @@ docs/ARCHITECTURE.md	3,7	agent	changed	documentation-drift	ISO wording corrected
 docs/modules/bootstrap.md	3,7	agent	changed	documentation-drift	bootstrap ISO wording corrected as non-bootable preview scaffolding	rg -n "iso|ISO|output format" docs/modules/bootstrap.md
 docs/conaryopedia-v2.md	1,3,7	agent	changed	documentation-drift	automation expectation and ISO wording corrected	rg -n "automation history|daemon mode|persisting configuration|ISO|USB|optical" docs/conaryopedia-v2.md
 apps/conary/tests/integration/remi/manifests/phase4-group-d.toml	1,6	agent	changed	documentation-drift	empty automation history expectation corrected	cargo run -p conary-test -- run --suite phase4-group-d --distro fedora44 --phase 4
-apps/conaryd/src/daemon/routes.rs	2	agent	pending	misleading-public-surface	review conaryd route tests	cargo test -p conaryd daemon::routes
-apps/conaryd/src/daemon/routes/system.rs	2	agent	pending	misleading-public-surface	review system state route honesty	cargo test -p conaryd daemon::routes
-apps/conaryd/src/daemon/routes/transactions.rs	2	agent	pending	misleading-public-surface	review generic transaction and dry-run honesty	cargo test -p conaryd daemon::routes
+apps/conaryd/src/daemon/routes.rs	2	agent	changed	misleading-public-surface	route tests assert 501 preview honesty for deferred package jobs and system state listing	cargo test -p conaryd daemon::routes
+apps/conaryd/src/daemon/routes/system.rs	2	agent	changed	misleading-public-surface	system state listing now returns explicit 501 preview guidance	cargo test -p conaryd daemon::routes
+apps/conaryd/src/daemon/routes/transactions.rs	2	agent	changed	misleading-public-surface	generic transaction and dry-run package jobs now return explicit 501 preview guidance	cargo test -p conaryd daemon::routes
 apps/remi/src/server/handlers/derivations.rs	4	agent	pending	release-blocker	review public write auth/rate-limit comment	cargo test -p remi
 apps/remi/src/server/handlers/seeds.rs	4	agent	pending	release-blocker	review public write auth/rate-limit comment	cargo test -p remi
 apps/remi/src/server/handlers/profiles.rs	4	agent	pending	release-blocker	review public write auth/rate-limit comment	cargo test -p remi
