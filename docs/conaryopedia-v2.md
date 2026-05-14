@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-13
-revision: 14
-summary: Refresh Fedora 44 examples, bootstrap/generation export details, Remi config snippets, and transaction wording
+last_updated: 2026-05-14
+revision: 15
+summary: Refresh composefs atomic generation selection, recovery, and validation wording
 ---
 
 # Conaryopedia v2
@@ -113,7 +113,7 @@ A changeset records:
 3. Package content is verified and stored in CAS
 4. The database transaction records the package/file ownership state
 5. A complete composefs generation artifact is built from CAS and DB state
-6. The active generation pointer and boot state are updated atomically
+6. `/conary/current` and boot state are updated atomically for the next boot
 7. The changeset is marked "applied" with the matching system state snapshot
 ```
 
@@ -496,7 +496,7 @@ This enables CAS deduplication, component selection, and atomic transactions for
 4. **CAS storage**: File content is stored under the runtime CAS
 5. **Changeset creation**: An atomic changeset is opened (status: `pending`)
 6. **Generation build**: A complete composefs artifact is built from CAS and DB state
-7. **Activation**: The active generation pointer and boot entry are updated atomically
+7. **Selection**: `/conary/current` and boot entries are updated atomically for the next boot
 8. **Scriptlets**: Package install hooks run (optionally sandboxed)
 9. **Triggers**: File-pattern triggers fire (e.g., `ldconfig` for new `.so` files)
 10. **Commit**: The changeset is marked `applied` with the matching system state snapshot
@@ -5452,19 +5452,22 @@ RESOLVED   Dependencies resolved, install plan computed
 FETCHED    Package content fetched into CAS
 COMMITTED  Database transaction committed              <-- Point of no return
 BUILT      EROFS image built for the new generation
-MOUNTED    New generation mounted and symlink updated
+SELECTED   New generation artifact selected through /conary/current
 DONE       Transaction complete
 ```
 
-The point of no return is `Committed` -- once the SQLite database has the new package state, everything after it (building the EROFS image, mounting it) is idempotent and can be retried on failure.
+The point of no return is `Committed` -- once the SQLite database has the new
+package state, everything after it (building the EROFS image and selecting the
+boot generation) is idempotent and can be retried on failure.
 
 #### Recovery Strategy
 
-If the system crashes, the next Conary operation uses an ordered 4-step recovery:
+If the system crashes, the next Conary operation uses an ordered recovery
+strategy:
 
-1. **Check current symlink**: Read `/conary/current`; if the target generation artifact passes manifest, metadata, and content validation, mount it directly.
-2. **Rebuild from DB**: If the image is missing or truncated, query the DB for the expected active generation and rebuild the EROFS image via `build_generation_from_db()`.
-3. **Scan generations**: If the DB is corrupted, scan `/conary/generations/` by number descending and try each valid generation artifact.
+1. **Check current symlink**: Read `/conary/current`; if the target generation artifact passes manifest, metadata, and content validation, leave the boot selection unmounted and mark the matching DB state active.
+2. **Rebuild selected artifact**: If the selected image is missing or truncated, query the DB for that generation and rebuild the EROFS artifact via `build_generation_from_db()`.
+3. **Explicit boot-selection recovery**: The operator-facing recovery command may scan `/conary/generations/` by number descending, select a valid artifact, and remount it.
 4. **Fail**: If nothing works, return `RecoveryFailed` requiring manual intervention.
 
 This replaces the old journal-based roll-forward/roll-back system. There is no journal, no backup directory, and no staging area. The database is the single source of truth, and EROFS images are re-derivable from it.
@@ -5478,7 +5481,7 @@ pub struct TransactionConfig {
     pub objects_dir: PathBuf,   // CAS objects directory
     pub generations_dir: PathBuf, // EROFS generation images
     pub etc_state_dir: PathBuf, // /etc merge state
-    pub mount_point: PathBuf,   // Mount point for active generation
+    pub mount_point: PathBuf,   // Composefs mount point for explicit recovery/live debug paths
     pub hash_algorithm: HashAlgorithm,
     pub lock_timeout_secs: u64, // How long to wait for the transaction lock
 }
@@ -5507,7 +5510,7 @@ These systems compose into workflows that span the entire lifecycle:
 1. Automation detects available security patches (8.6)
 2. Delta generation computes minimal downloads (8.3)
 3. The transaction engine commits new state to the DB and builds a new generation (8.7)
-4. If the EROFS build fails, the previous generation remains mounted; recovery rebuilds from DB (8.7)
+4. If the EROFS build fails, the previous `/conary/current` selection remains in place; recovery rebuilds the selected artifact from DB/CAS state (8.7)
 5. The lockfile records the new resolved state (8.4)
 
 **Air-gapped deployment**:

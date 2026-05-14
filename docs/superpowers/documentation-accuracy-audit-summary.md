@@ -2,8 +2,9 @@
 
 ## Scope
 
-This refresh updates the documentation baseline after the limited public release
-readiness pass.
+This refresh updates the documentation baseline after the limited public
+release readiness pass and the completed composefs atomic switching
+modernization.
 
 Audited every tracked documentation-like file returned by
 `bash scripts/docs-audit-inventory.sh`: 71 tracked files spanning root docs,
@@ -34,6 +35,9 @@ The repo moved materially after the last audit:
 - conaryd package route honesty (`501 Not Implemented` until executor support)
 - live Remi metadata realignment to 26.04/`resolute` while keeping host OS
   claims separate from client distro support
+- composefs atomic switching completion, with ordinary package mutation and
+  transaction recovery selecting complete generation artifacts for the next
+  boot instead of relying on live generation remounts
 
 ## Major Corrections
 
@@ -49,7 +53,12 @@ The repo moved materially after the last audit:
   Forge/conaryd paths.
 - Updated `docs/ARCHITECTURE.md` and `docs/conaryopedia-v2.md` for schema v67,
   runtime generation input validation, LFS 13.0 bootstrap phases, and
-  self-contained generation export.
+  self-contained generation export; refreshed them again after composefs atomic
+  switching landed so transaction and recovery wording reflects next-boot
+  selection through `/conary/current`.
+- Updated `CHANGELOG.md`, `CONTRIBUTING.md`, and `SECURITY.md` so public and
+  developer-facing docs describe rebuild/reselect semantics rather than older
+  live remount recovery language.
 - Updated site install/features/compare copy to remove Debian as a public
   support claim and to clarify that non-x86_64 generation boot assets remain
   follow-up work while OCI export source loading has moved onto the generation
@@ -61,9 +70,9 @@ The repo moved materially after the last audit:
   gate, and the TGE04 installed-runtime qcow2 boot proof.
 - Refreshed assistant-facing docs to route broad doc work through the inventory
   and ledger checker, and added the post-generation export roadmap to the map.
-- Reframed completed dated plans/specs as historical implementation records,
-  while keeping the active limited-preview readiness and composefs atomic
-  modernization plan/spec entries available as current planning guidance.
+- Reframed completed dated plans/specs as historical implementation records
+  and archived the completed 2026-05-12 composefs modernization plan/spec after
+  validation landed on `main`.
 
 ## Archive Decisions
 
@@ -71,7 +80,8 @@ The repo moved materially after the last audit:
   reference material.
 - Completed top-level superpowers plans were moved to
   `docs/superpowers/plans/archive/`; the limited public release readiness plan
-  and composefs atomic modernization plan/spec remain active at the top level.
+  remains active at the top level, and the completed composefs atomic
+  modernization plan/spec moved to archive paths.
 - No tracked documentation files were deleted.
 
 ## Verification Commands
@@ -79,6 +89,7 @@ The repo moved materially after the last audit:
 - `bash scripts/docs-audit-inventory.sh`
 - `bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete`
 - `bash -n scripts/docs-audit-inventory.sh scripts/check-doc-audit-ledger.sh`
+- `rg -n "rebuild or remoun[t]|MOUNTE[D]|refresh the Fedora 44 QEMU source imag[e]|active execution pla[n]|active umbrella desig[n]|remain active at the top leve[l]" README.md ROADMAP.md CHANGELOG.md CONTRIBUTING.md SECURITY.md AGENTS.md CLAUDE.md GEMINI.md docs apps/conary-test deploy site web .github`
 - `cargo test -p conaryd test_package_routes_return_not_implemented`
 - `cargo test -p conaryd package_routes`
 - `cargo run -p conaryd -- --help`
@@ -101,8 +112,8 @@ The final release-readiness verification gate is tracked by
 
 - Total tracked doc-like files audited: 71
 - `verified-no-change`: 20
-- `corrected`: 26
+- `corrected`: 24
 - `reframed-as-historical`: 5
-- `archived`: 6
+- `archived`: 8
 - `retained-historical`: 14
 - Remaining pending rows: 0

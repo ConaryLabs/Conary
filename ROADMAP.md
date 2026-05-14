@@ -17,10 +17,10 @@ For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 
 
 ### 2. System Validation
 
-- Refresh the Fedora 44 QEMU source image so generation-export validation starts from a generation-builder-ready fixture, then keep installed-runtime export green
+- Keep the `minimal-boot-v3` Fedora 44 QEMU source fixture generation-builder-ready and keep installed-runtime export green
 - Broader takeover validation on Fedora 44, Ubuntu 26.04 LTS, Arch, and real-world mixed systems
 - Pristine-by-default QEMU validation for the self-hosting bootstrap VM
-- More end-to-end coverage for generation activation and rollback under failure
+- More end-to-end coverage for selected next-boot generation activation and rollback under failure
 - Better release-time validation of docs, trust roots, and self-update flows
 - Restore scheduled remote Forge validation on a KVM-capable runner; the old VPS runner is retired because it did not expose `/dev/kvm`.
 
