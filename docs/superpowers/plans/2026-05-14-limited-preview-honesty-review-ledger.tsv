@@ -11,9 +11,9 @@ apps/conary/tests/integration/remi/manifests/phase4-group-d.toml	1,6	agent	chang
 apps/conaryd/src/daemon/routes.rs	2	agent	changed	misleading-public-surface	route tests assert 501 preview honesty for deferred package jobs and system state listing	cargo test -p conaryd daemon::routes
 apps/conaryd/src/daemon/routes/system.rs	2	agent	changed	misleading-public-surface	system state listing now returns explicit 501 preview guidance	cargo test -p conaryd daemon::routes
 apps/conaryd/src/daemon/routes/transactions.rs	2	agent	changed	misleading-public-surface	generic transaction and dry-run package jobs now return explicit 501 preview guidance	cargo test -p conaryd daemon::routes
-apps/remi/src/server/handlers/derivations.rs	4	agent	pending	release-blocker	review public write auth/rate-limit comment	cargo test -p remi
-apps/remi/src/server/handlers/seeds.rs	4	agent	pending	release-blocker	review public write auth/rate-limit comment	cargo test -p remi
-apps/remi/src/server/handlers/profiles.rs	4	agent	pending	release-blocker	review public write auth/rate-limit comment	cargo test -p remi
+apps/remi/src/server/handlers/derivations.rs	4	agent	changed	release-blocker	kept public content-addressed write path; documented inline admin-token auth, public-router rate/ban/body controls, and missing audit coverage; admin-router movement remains outside this first pass	cargo test -p remi
+apps/remi/src/server/handlers/seeds.rs	4	agent	changed	release-blocker	kept public content-addressed write path; documented inline admin-token auth, public-router rate/ban/body controls, and missing audit coverage; admin-router movement remains outside this first pass	cargo test -p remi
+apps/remi/src/server/handlers/profiles.rs	4	agent	changed	release-blocker	kept public content-addressed write path; documented inline admin-token auth, public-router rate/ban/body controls, and missing audit coverage; admin-router movement remains outside this first pass	cargo test -p remi
 apps/conary-test/src/server/handlers.rs	6	agent	pending	duplication-consolidation	record HTTP fallback ordering decision	cargo test -p conary-test
 apps/conary-test/src/server/mcp.rs	6	agent	pending	duplication-consolidation	record MCP fallback response-shape decision	cargo test -p conary-test
 apps/conary-test/src/server/service.rs	6	agent	pending	duplication-consolidation	record service fallback ordering decision	cargo test -p conary-test
