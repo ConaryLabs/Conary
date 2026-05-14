@@ -109,10 +109,14 @@ crates/conary-core/      Core library crate
     |   +-- delta.rs     EROFS image delta computation
     |   +-- composefs_rs_eval.rs composefs-rs evaluation (feature-gated)
     +-- resolver/        Dependency resolution
-    |   +-- graph.rs     Directed dependency graph
-    |   +-- engine.rs    Resolution algorithm
-    |   +-- sat.rs       SAT-based conflict resolution
-    |   +-- plan.rs      Resolution plan output
+    |   +-- sat.rs       SAT-backed solver and transaction plan construction
+    |   +-- plan.rs      Resolution plan output types and helpers
+    |   +-- provides_index.rs Provider index construction for dependency matching
+    |   +-- provider/    Provider loading, matching, traits, and shared types
+    |   +-- canonical.rs Canonical package identity helpers
+    |   +-- component_resolver.rs Component-aware resolution helpers
+    |   +-- conflict.rs  Conflict reporting and policy support
+    |   +-- identity.rs  Dependency identity normalization
     +-- repository/      Remote package sources
     |   +-- metadata.rs  Index parsing (RPM repodata, DEB Packages, Arch DB)
     |   +-- remi.rs      Remi client (CCS chunk fetcher)
@@ -158,7 +162,7 @@ crates/conary-core/      Core library crate
     |   +-- format.rs    Recipe format types and build-stage definitions
     |   +-- parser.rs    TOML recipe parser
     |   +-- kitchen/     Build environment (cook, fetch, provenance)
-    |   +-- graph.rs     Multi-recipe build ordering
+    |   +-- build graph  Multi-recipe build ordering
     |   +-- cache.rs     Build artifact cache
     |   +-- pkgbuild.rs  Arch PKGBUILD converter
     +-- trust/           TUF supply chain trust

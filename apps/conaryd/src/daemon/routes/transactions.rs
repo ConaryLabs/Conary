@@ -62,11 +62,7 @@ async fn create_transaction_handler(
 ) -> TransactionResult {
     let job_kind = determine_job_kind(&request.operations);
 
-    require_auth(
-        &state.auth_checker,
-        &creds,
-        action_for_job_kind(job_kind),
-    )?;
+    require_auth(&state.auth_checker, &creds, action_for_job_kind(job_kind))?;
 
     if request.operations.is_empty() {
         return Err(bad_request_error("At least one operation is required"));
