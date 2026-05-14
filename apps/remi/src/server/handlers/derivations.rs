@@ -193,10 +193,11 @@ pub async fn head_derivation(
 ///
 /// Returns 201 Created on success.
 ///
-/// NOTE: Auth is checked inline via `require_admin_token` rather than the admin
-/// router's middleware so that GET/HEAD on the same path stay public. This means
-/// the admin rate limiters (governor-based) do not apply here.
-// TODO: Move write endpoints to the admin router to get rate limiting for free.
+/// NOTE: Auth is checked inline via `require_admin_token` because this write
+/// route lives on the public content-addressed API path for preview clients.
+/// The public router's rate-limit, ban, and body-limit middleware apply when
+/// enabled in Remi config; these paths are not covered by the current audit
+/// middleware filter, and the separate admin-router governor does not apply.
 pub async fn put_derivation(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(derivation_id): Path<String>,
