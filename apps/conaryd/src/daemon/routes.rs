@@ -1283,7 +1283,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handler_create_transaction_package_jobs_ignore_existing_enhance_idempotency_key() {
+    async fn test_handler_create_transaction_package_jobs_ignore_existing_enhance_idempotency_key()
+    {
         let (state, _dir) = create_test_state();
         let root_creds = current_process_creds();
         let idempotency_key = "shared-enhance-key";
