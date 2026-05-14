@@ -55,6 +55,7 @@ docs/superpowers/specs/2026-04-10-conaryd-forge-staging-deployment-design.md	pla
 docs/superpowers/specs/2026-04-16-bootstrap-self-hosting-vm-design.md	planning	maintainer
 docs/superpowers/specs/2026-04-22-generation-artifact-export-unification-design.md	planning	maintainer
 docs/superpowers/specs/2026-04-30-installed-runtime-generations-self-contained-design.md	planning	maintainer
+docs/superpowers/specs/2026-05-14-limited-preview-codebase-honesty-and-cleanup-design.md	planning	maintainer
 docs/superpowers/specs/archive/2026-05-12-composefs-atomic-modernization-design.md	historical	historical
 recipes/archive/core/README.md	historical	historical
 recipes/archive/core/archive/README.md	historical	historical
