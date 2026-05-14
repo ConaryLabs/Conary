@@ -34,7 +34,8 @@ Host System (any Linux with gcc)
   ImageBuilder -- Phase 5: Bootable image / generation artifact (LFS Ch10)
      |             systemd-repart
      |             GPT: 512MB ESP (FAT32) + root (ext4) for disk images
-     |             Output: raw, qcow2, ISO, or EROFS generation artifact
+     |             Output: raw/qcow2 disk image, non-bootable preview ISO
+     |             scaffolding, or EROFS generation artifact
      |
   Tier2Builder -- Phase 6: BLFS + Conary
      |             PAM, OpenSSH, curl, Rust, Conary self-hosting
@@ -59,7 +60,7 @@ Host System (any Linux with gcc)
 | `TempToolsBuilder` | temp_tools.rs | Phase 2: temporary tools (cross + chroot packages) |
 | `FinalSystemBuilder` | final_system.rs | Phase 3: complete system build (SYSTEM_BUILD_ORDER) |
 | `configure_system()` | system_config.rs | Phase 4: system configuration |
-| `ImageBuilder` | image.rs | Phase 5: disk image generation (raw, qcow2, ISO, EROFS) |
+| `ImageBuilder` | image.rs | Phase 5: disk image generation (raw, qcow2, non-bootable preview ISO, EROFS) |
 | `ImageFormat` | image.rs | Enum: Raw, Qcow2, Iso, Erofs |
 | `ImageSize` | image.rs / `image/size.rs` | Parsed size specification for disk images |
 | `ImageTools` | image.rs | Host tool availability check for imaging |
@@ -110,10 +111,11 @@ on a stage clears it and all subsequent stages.
 
 `ImageBuilder` still owns bootstrap sysroot image production: raw images are
 created with the shared systemd-repart backend, qcow2 uses qemu-img conversion,
-and ISO remains a bootstrap-image format. EROFS is different: `conary bootstrap
-image --format erofs` produces a self-contained generation artifact contract
-(`root.erofs`, scoped CAS manifest, boot assets, and `.conary-artifact.json`)
-instead of directly wrapping that generation in a disk image.
+and ISO is non-bootable preview scaffolding rather than release media. EROFS is
+different: `conary bootstrap image --format erofs` produces a self-contained
+generation artifact contract (`root.erofs`, scoped CAS manifest, boot assets,
+and `.conary-artifact.json`) instead of directly wrapping that generation in a
+disk image.
 
 Bootstrap may build mutable sysroot inputs while assembling the system, but the
 published runtime output is a complete generation artifact. Partial or

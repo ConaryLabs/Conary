@@ -150,7 +150,7 @@ mod tests {
     #[test]
     fn format_parse_errors_list_allowed_values() {
         let err = parse_generation_export_format("vmdk").unwrap_err();
-        assert!(err.to_string().contains("raw, qcow2, or iso"));
+        assert!(err.to_string().contains("raw, qcow2, or reserved iso"));
     }
 
     #[test]

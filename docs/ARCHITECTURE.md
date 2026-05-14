@@ -391,7 +391,8 @@ Phase 4: SystemConfig (LFS Ch9)
        |
 Phase 5: BootableImage (LFS Ch10)
   systemd-repart for bootstrap sysroot disk images
-  Output formats: raw, qcow2, ISO, or EROFS generation artifact
+  Output formats: raw/qcow2 disk images, non-bootable preview ISO scaffolding,
+  or EROFS generation artifact
        |
 Phase 6: Tier2 (BLFS + Conary)
   PAM, OpenSSH, curl, Rust, Conary self-hosting
