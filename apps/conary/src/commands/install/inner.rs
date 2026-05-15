@@ -312,7 +312,7 @@ pub(super) fn preflight_live_root_file_ownership(
     Ok(())
 }
 
-fn insert_file_entry_claiming_live_root_overlap(
+pub(super) fn insert_file_entry_claiming_live_root_overlap(
     tx: &Transaction<'_>,
     file_entry: &mut FileEntry,
     package_name: &str,
