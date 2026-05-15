@@ -25,6 +25,8 @@ pub mod generation;
 pub mod groups;
 mod install;
 mod label;
+#[allow(dead_code)]
+mod live_root;
 mod model;
 mod operation_records;
 mod package_parsing;
@@ -101,6 +103,10 @@ pub use install::{DepMode, InstallOptions, cmd_install};
 pub use label::{
     cmd_label_add, cmd_label_delegate, cmd_label_link, cmd_label_list, cmd_label_path,
     cmd_label_query, cmd_label_remove, cmd_label_set, cmd_label_show,
+};
+#[allow(unused_imports)]
+pub(crate) use live_root::{
+    LiveRootFile, LiveRootStats, LiveRootTransaction, recover_pending_journals, target_path,
 };
 pub use model::{
     ApplyOptions, cmd_model_apply, cmd_model_check, cmd_model_diff, cmd_model_lock,
