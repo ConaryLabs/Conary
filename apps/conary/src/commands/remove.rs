@@ -304,12 +304,34 @@ pub async fn cmd_remove(
     // Composefs-native: rebuild EROFS image and remount to reflect removal
     progress.set_phase(RemovePhase::RemovingFiles);
     let post_commit_result = (|| -> Result<()> {
-        crate::commands::composefs_ops::rebuild_and_mount(
+        let rebuild_result = crate::commands::composefs_ops::rebuild_and_mount(
             &conn,
             db_path,
             &format!("Remove {}", package_name),
             Some(prev_etc),
-        )?;
+        );
+        if let Err(error) = rebuild_result {
+            crate::commands::append_deferred_follow_up_metadata(
+                &conn,
+                remove_changeset_id,
+                crate::commands::DeferredFollowUp {
+                    kind: "generation_rebuild".to_string(),
+                    status: "failed".to_string(),
+                    message: error.to_string(),
+                    retry_command: Some(
+                        "conary --allow-live-system-mutation system generation build --summary \"Retry deferred package follow-up\""
+                            .to_string(),
+                    ),
+                },
+            )?;
+            warn!(
+                changeset_id = remove_changeset_id,
+                "Package mutation completed, but generation rebuild was deferred: {}", error
+            );
+            eprintln!(
+                "WARNING: package mutation completed, but generation rebuild was deferred: {error}"
+            );
+        }
         changeset.update_status(&conn, conary_core::db::models::ChangesetStatus::Applied)?;
         Ok(())
     })();
