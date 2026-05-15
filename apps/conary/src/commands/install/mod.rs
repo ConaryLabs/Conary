@@ -228,6 +228,25 @@ fn recover_mutable_journals_before_scriptlets(
     Ok(())
 }
 
+fn preflight_extracted_live_root_file_ownership(
+    conn: &rusqlite::Connection,
+    pkg: &dyn conary_core::packages::PackageFormat,
+    extraction: &ExtractionResult,
+    execution_path: PackageExecutionPath,
+) -> Result<()> {
+    if execution_path == PackageExecutionPath::MutableLiveRoot {
+        inner::preflight_live_root_file_ownership(
+            conn,
+            extraction
+                .extracted_files
+                .iter()
+                .map(|file| file.path.as_str()),
+            pkg.name(),
+        )?;
+    }
+    Ok(())
+}
+
 fn live_root_files_from_stored_files(
     cas: &conary_core::filesystem::CasStore,
     stored_files: &[inner::StoredInstallFile],
@@ -572,6 +591,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
     // --- Phase 7: File extraction + component classification ---
     let progress = InstallProgress::single("Installing");
     let extraction = extract_and_classify_files(pkg.as_ref(), &component_selection, &progress)?;
+    preflight_extracted_live_root_file_ownership(&conn, pkg.as_ref(), &extraction, execution_path)?;
 
     // --- Phase 8: Scriptlet execution (pre-install) ---
     let old_trove_to_upgrade =
@@ -2135,6 +2155,7 @@ pub(crate) fn install_ccs_package_transactionally(
     )?;
     let execution_path =
         prepare_install_environment_before_scriptlets(conn, opts.db_path, opts.root)?;
+    preflight_extracted_live_root_file_ownership(conn, pkg, &extraction, execution_path)?;
 
     let mut hook_executor = conary_core::ccs::HookExecutor::new(Path::new(opts.root));
     let mut pre_hooks_ran = false;
@@ -2821,6 +2842,66 @@ mod tests {
         assert!(
             execution_path_pos < dependency_pos,
             "cmd_install must fail closed and recover mutable journals before dependency installs can run scriptlets"
+        );
+    }
+
+    #[test]
+    fn direct_install_preflights_live_root_ownership_before_scriptlets() {
+        let source = include_str!("mod.rs");
+        let cmd_install_start = source
+            .find("pub async fn cmd_install")
+            .expect("cmd_install should exist");
+        let helper_section_start = source[cmd_install_start..]
+            .find("// ---------------------------------------------------------------------------")
+            .expect("cmd_install helper boundary should exist");
+        let cmd_install_source =
+            &source[cmd_install_start..cmd_install_start + helper_section_start];
+
+        let extraction_pos = cmd_install_source
+            .find("let extraction = extract_and_classify_files")
+            .expect("cmd_install should extract files");
+        let preflight_pos = cmd_install_source
+            .find("preflight_extracted_live_root_file_ownership(")
+            .expect("cmd_install should preflight live-root ownership");
+        let scriptlet_pos = cmd_install_source
+            .find("run_pre_install_phase(")
+            .expect("cmd_install should run pre-install scriptlets");
+
+        assert!(
+            extraction_pos < preflight_pos && preflight_pos < scriptlet_pos,
+            "direct installs must preflight live-root ownership after extraction and before scriptlets"
+        );
+    }
+
+    #[test]
+    fn ccs_transaction_install_preflights_live_root_ownership_before_hooks_and_scriptlets() {
+        let source = include_str!("mod.rs");
+        let install_start = source
+            .find("pub(crate) fn install_ccs_package_transactionally")
+            .expect("install_ccs_package_transactionally should exist");
+        let finalizer_start = source[install_start..]
+            .find("fn finalize_install_without_snapshot")
+            .expect("CCS transaction helper boundary should exist");
+        let install_source = &source[install_start..install_start + finalizer_start];
+
+        let extraction_pos = install_source
+            .find("extract_and_classify_ccs_manifest_files")
+            .expect("CCS transaction install should extract files");
+        let preflight_pos = install_source
+            .find("preflight_extracted_live_root_file_ownership(")
+            .expect("CCS transaction install should preflight live-root ownership");
+        let ccs_hook_pos = install_source
+            .find("hook_executor.execute_pre_hooks")
+            .expect("CCS transaction install should run pre-hooks");
+        let scriptlet_pos = install_source
+            .find("run_pre_install_phase(")
+            .expect("CCS transaction install should run pre-install scriptlets");
+
+        assert!(
+            extraction_pos < preflight_pos
+                && preflight_pos < ccs_hook_pos
+                && preflight_pos < scriptlet_pos,
+            "CCS transaction installs must preflight live-root ownership before hooks and scriptlets"
         );
     }
 
