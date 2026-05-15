@@ -3,7 +3,7 @@
 #[cfg(test)]
 use super::FileSnapshot;
 use super::{RevertMetadata, TroveSnapshot};
-use anyhow::Result;
+use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
 pub(crate) const CHANGESET_METADATA_SCHEMA: &str = "conary.changeset.metadata.v1";
@@ -47,9 +47,21 @@ pub(crate) fn metadata_with_deferred_follow_up(
 }
 
 pub(crate) fn parse_rollback_snapshots(snapshot_json: &str) -> Result<Vec<TroveSnapshot>> {
-    if let Ok(envelope) = serde_json::from_str::<ChangesetMetadataEnvelope>(snapshot_json)
-        && envelope.schema == CHANGESET_METADATA_SCHEMA
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(snapshot_json)
+        && let Some(schema_value) = value.get("schema")
     {
+        let Some(schema) = schema_value.as_str() else {
+            bail!(
+                "Unsupported changeset metadata schema: non-string schema; expected {CHANGESET_METADATA_SCHEMA}"
+            );
+        };
+        if schema != CHANGESET_METADATA_SCHEMA {
+            bail!(
+                "Unsupported changeset metadata schema {schema}; expected {CHANGESET_METADATA_SCHEMA}"
+            );
+        }
+
+        let envelope: ChangesetMetadataEnvelope = serde_json::from_value(value)?;
         return Ok(envelope.removed_troves);
     }
     if let Ok(wrapper) = serde_json::from_str::<RevertMetadata>(snapshot_json) {
@@ -134,6 +146,20 @@ mod tests {
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].name, "fixture");
         assert_eq!(deferred, vec![warning]);
+    }
+
+    #[test]
+    fn rejects_unknown_schema_without_legacy_fallback() {
+        let raw = serde_json::json!({
+            "schema": "conary.changeset.metadata.v2",
+            "removed_troves": [snapshot("fixture")],
+        })
+        .to_string();
+
+        let err = parse_rollback_snapshots(&raw).unwrap_err().to_string();
+
+        assert!(err.contains("Unsupported changeset metadata schema"));
+        assert!(err.contains("conary.changeset.metadata.v2"));
     }
 
     #[test]
