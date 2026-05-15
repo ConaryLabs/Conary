@@ -78,6 +78,31 @@ pub(crate) fn deferred_follow_up(snapshot_json: Option<&str>) -> Vec<DeferredFol
         .unwrap_or_default()
 }
 
+pub(crate) fn append_deferred_follow_up_metadata(
+    conn: &rusqlite::Connection,
+    changeset_id: i64,
+    follow_up: DeferredFollowUp,
+) -> Result<()> {
+    let existing: Option<String> = conn.query_row(
+        "SELECT metadata FROM changesets WHERE id = ?1",
+        [changeset_id],
+        |row| row.get(0),
+    )?;
+    let mut removed_troves = existing
+        .as_deref()
+        .map(parse_rollback_snapshots)
+        .transpose()?
+        .unwrap_or_default();
+    let mut deferred = deferred_follow_up(existing.as_deref());
+    deferred.push(follow_up);
+    let metadata = metadata_with_deferred_follow_up(std::mem::take(&mut removed_troves), deferred)?;
+    conn.execute(
+        "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
+        rusqlite::params![metadata, changeset_id],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,5 +194,43 @@ mod tests {
         assert!(deferred_follow_up(Some(&raw)).is_empty());
         assert!(deferred_follow_up(Some("not-json")).is_empty());
         assert!(deferred_follow_up(None).is_empty());
+    }
+
+    #[test]
+    fn append_deferred_follow_up_preserves_removed_troves() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("conary.db");
+        conary_core::db::init(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let mut changeset = conary_core::db::models::Changeset::new("Remove fixture".to_string());
+        let changeset_id = changeset.insert(&conn).unwrap();
+        let initial = metadata_with_removed_troves(vec![snapshot("fixture")]).unwrap();
+        conn.execute(
+            "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
+            rusqlite::params![initial, changeset_id],
+        )
+        .unwrap();
+
+        append_deferred_follow_up_metadata(
+            &conn,
+            changeset_id,
+            DeferredFollowUp {
+                kind: "state_snapshot".to_string(),
+                status: "failed".to_string(),
+                message: "snapshot failed".to_string(),
+                retry_command: Some("conary system state create \"Remove fixture\"".to_string()),
+            },
+        )
+        .unwrap();
+
+        let raw: String = conn
+            .query_row(
+                "SELECT metadata FROM changesets WHERE id = ?1",
+                [changeset_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(parse_rollback_snapshots(&raw).unwrap()[0].name, "fixture");
+        assert_eq!(deferred_follow_up(Some(&raw)).len(), 1);
     }
 }

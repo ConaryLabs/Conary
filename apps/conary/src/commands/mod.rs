@@ -78,8 +78,9 @@ pub use capability::{
 };
 #[allow(unused_imports)]
 pub(crate) use changeset_metadata::{
-    ChangesetMetadataEnvelope, DeferredFollowUp, deferred_follow_up,
-    metadata_with_deferred_follow_up, metadata_with_removed_troves, parse_rollback_snapshots,
+    ChangesetMetadataEnvelope, DeferredFollowUp, append_deferred_follow_up_metadata,
+    deferred_follow_up, metadata_with_deferred_follow_up, metadata_with_removed_troves,
+    parse_rollback_snapshots,
 };
 pub use collection::{
     cmd_collection_add, cmd_collection_create, cmd_collection_delete, cmd_collection_install,

@@ -1978,17 +1978,37 @@ fn execute_install_transaction(
     }
 
     let post_commit_result = (|| -> Result<()> {
-        crate::commands::composefs_ops::rebuild_and_mount(
+        let rebuild_result = crate::commands::composefs_ops::rebuild_and_mount(
             conn,
             ctx.db_path,
             &tx_description,
             Some(prev_etc),
-        )?;
-
+        );
+        if let Err(error) = rebuild_result {
+            crate::commands::append_deferred_follow_up_metadata(
+                conn,
+                changeset_id,
+                crate::commands::DeferredFollowUp {
+                    kind: "generation_rebuild".to_string(),
+                    status: "failed".to_string(),
+                    message: error.to_string(),
+                    retry_command: Some(
+                        "conary --allow-live-system-mutation system generation build --summary \"Retry deferred package follow-up\""
+                            .to_string(),
+                    ),
+                },
+            )?;
+            warn!(
+                changeset_id,
+                "Package mutation completed, but generation rebuild was deferred: {}", error
+            );
+            eprintln!(
+                "WARNING: package mutation completed, but generation rebuild was deferred: {error}"
+            );
+        }
         changeset.update_status(conn, ChangesetStatus::Applied)?;
         Ok(())
     })();
-
     engine.release_lock();
     post_commit_result?;
 
@@ -2284,11 +2304,30 @@ fn finalize_install(
         tx_result,
         progress,
     )?;
-    create_state_snapshot(
+    if let Err(error) = create_state_snapshot(
         conn,
         tx_result.changeset_id,
         &format!("Install {}", pkg.name()),
-    )?;
+    ) {
+        crate::commands::append_deferred_follow_up_metadata(
+            conn,
+            tx_result.changeset_id,
+            crate::commands::DeferredFollowUp {
+                kind: "state_snapshot".to_string(),
+                status: "failed".to_string(),
+                message: error.to_string(),
+                retry_command: Some(format!(
+                    "conary system state create \"Install {}\"",
+                    pkg.name()
+                )),
+            },
+        )?;
+        warn!(
+            changeset_id = tx_result.changeset_id,
+            "Package mutation completed, but state snapshot was deferred: {}", error
+        );
+        eprintln!("WARNING: package mutation completed, but state snapshot was deferred: {error}");
+    }
     Ok(())
 }
 
