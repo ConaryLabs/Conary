@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-05-14
-revision: 1
-summary: Design for Conary's adoption-led, risk-free trial path with native package-manager authority and one-command unadoption
+revision: 2
+summary: Design for Conary's adoption-led, risk-free trial path with native package-manager authority, one-command unadoption, and active-generation fail-closed safety
 ---
 
 # Adopt Without Regret: Design Spec
@@ -17,7 +17,7 @@ summary: Design for Conary's adoption-led, risk-free trial path with native pack
 Use this objective when launching the implementation with `/goal`:
 
 ```text
-/goal Implement Conary Adopt Without Regret: adoption mode preserves dnf/apt/pacman authority for RPM, DEB, and Arch systems; `conary system unadopt` provides a tested one-command non-destructive escape hatch; update paths cannot silently take over adopted packages; roadmap/docs/tests prove the contract.
+/goal Implement Conary Adopt Without Regret: adoption mode preserves dnf/apt/pacman authority for RPM, DEB, and Arch systems; `conary system unadopt` provides a tested one-command non-destructive escape hatch when no Conary generation is selected and fails closed otherwise; update/install paths cannot silently take over adopted packages; roadmap/docs/tests prove the contract.
 ```
 
 This is intentionally narrow enough for `/goal`: it has a clear target, a validation loop, and concrete stopping conditions.
@@ -26,9 +26,9 @@ This is intentionally narrow enough for `/goal`: it has a clear target, a valida
 
 Conary's limited public preview should be adoption-led, not takeover-led:
 
-> Adopt your existing system into Conary, get CAS-backed state and generation tooling, try Conary safely, and leave with one command if it is not for you.
+> Adopt your existing system into Conary, get CAS-backed state and generation tooling, try Conary safely, and leave the native-root adoption lane with one command if it is not for you.
 
-The preview must not ask a normal Linux user to gamble their daily package-manager authority. In adoption mode, dnf, apt, and pacman remain the source of truth for packages they already own.
+The preview must not ask a normal Linux user to gamble their daily package-manager authority. In adoption mode, dnf, apt, and pacman remain the source of truth for packages they already own. If a host has already selected or booted a Conary generation, unadoption must fail closed until a safe generation-to-native handoff exists.
 
 ## Core Rules
 
@@ -36,17 +36,29 @@ The preview must not ask a normal Linux user to gamble their daily package-manag
 
 Packages with `InstallSource::AdoptedTrack` or `InstallSource::AdoptedFull` are still native-package-manager packages. Conary may track them, CAS-back their files, verify them, build generations from them, and detect drift, but it must not quietly replace them with Conary-owned files.
 
+Conary must record or reliably derive the native package-manager authority for each adopted package. Prefer a persisted per-trove identity such as `rpm`, `dpkg`, or `pacman` rather than live tool detection alone. Live detection that only checks whether package-manager binaries are installed is not enough because a host can have multiple tools present.
+
 ### Explicit Takeover Boundary
 
 Conary-owned packages use `InstallSource::File`, `InstallSource::Repository`, or `InstallSource::Taken`. Moving an adopted package into this lane is takeover. Takeover must require an explicit command or explicit `--dep-mode takeover` acknowledgement and must not be part of the risk-free trial promise.
 
+Any other code path that replaces an adopted trove with a Conary-owned trove is takeover-shaped too. In particular, `conary install --force` over an adopted package must either be rejected or documented and tested as explicit takeover with the same warnings and acknowledgement boundary.
+
 ### One-Command Escape
 
-`conary system unadopt --all` is the public escape hatch. It removes Conary tracking for adopted packages and disables adoption sync hooks by default. It leaves package files and native package-manager state intact.
+`conary --allow-live-system-mutation system unadopt --all` is the public apply-mode escape hatch. It removes Conary tracking for adopted packages and disables adoption sync hooks by default. It leaves package files and native package-manager state intact.
 
 ### Non-Destructive By Default
 
 `unadopt` must never delete package files by default. It may leave CAS objects behind for normal garbage collection. Any future destructive cleanup needs a separate explicit flag and must not be part of the first release slice.
+
+### Generation Handoff Safety
+
+The first `unadopt` slice must fail closed when a Conary generation is currently selected for the runtime root. Deleting adopted troves while `/conary/current` points at a generation can make future generated roots omit packages that the native package manager still believes are installed.
+
+Before apply-mode DB mutation, `unadopt` must check the runtime root derived from the DB path and refuse when `current_generation(runtime_root.root())` returns a generation number. Dry-run may still report the planned package and hook changes, but apply mode must leave the database untouched and print a concrete message that active-generation handoff is not implemented in this slice.
+
+Supporting one-command unadoption from an already-selected or already-booted Conary generation is a separate handoff design, not implicit row deletion.
 
 ### All Three Package Types
 
@@ -83,22 +95,26 @@ Argument rules:
 - require at least one package name or `--all`
 - reject package names combined with `--all`
 - require `--allow-live-system-mutation` unless `--dry-run` is set
+- refuse apply mode if a Conary generation is currently selected for the runtime root
 
 Behavior:
 
 1. Open the Conary database.
-2. Select matching packages whose source is `AdoptedTrack` or `AdoptedFull`.
-3. Report packages that are already Conary-owned and leave them untouched.
-4. In dry-run mode, print the planned adopted-package removals and hook action.
-5. In apply mode, delete adopted troves from Conary tracking. Existing cascade behavior removes file, dependency, and provide rows.
-6. Record a changeset and state snapshot for the tracking removal.
-7. For `--all`, remove native PM sync hooks unless `--keep-hooks` is set.
-8. Print a summary that says native package files were not deleted.
+2. Resolve the runtime root from the DB path.
+3. Select matching packages whose source is `AdoptedTrack` or `AdoptedFull`.
+4. Report packages that are already Conary-owned and leave them untouched.
+5. In dry-run mode, print the planned adopted-package removals and hook action.
+6. In apply mode, fail before DB mutation when a Conary generation is selected.
+7. In apply mode without a selected generation, delete adopted troves from Conary tracking. Existing cascade behavior removes file, dependency, and provide rows.
+8. Record a changeset and state snapshot for the tracking removal.
+9. For `--all`, remove native PM sync hooks unless `--keep-hooks` is set.
+10. Print a summary that says native package files were not deleted.
 
 Exit behavior:
 
 - success when at least one adopted package was unadopted or the dry-run plan is valid
 - non-zero when a named package does not exist, is not adopted, or the arguments are invalid
+- non-zero when apply mode would mutate tracking while a Conary generation is selected
 - `--all` may succeed while reporting Conary-owned packages that were intentionally skipped
 
 ## Update Boundary
@@ -107,11 +123,11 @@ The risk-free adoption lane requires update behavior to stay native-authoritativ
 
 For adopted packages:
 
-- `--dep-mode satisfy`: leave updates to the native PM and print the native command.
-- `--dep-mode adopt`: do not write package files. Either delegate to the native PM and refresh adoption state, or explicitly report that native update delegation is not implemented yet.
+- `--dep-mode satisfy`: leave updates to the native PM and print the native command derived from the package's recorded native manager.
+- `--dep-mode adopt`: do not write package files. Either delegate to the recorded native PM and refresh adoption state, or explicitly report that native update delegation is not implemented yet.
 - `--dep-mode takeover`: allow Conary ownership only after the explicit takeover mode is visible to the user.
 
-The first implementation plan may choose the smaller safe step: prevent silent takeover and make adopted-package updates explicit. Native PM delegation can then be the next slice, but the command must not imply that Conary updated adopted packages when it only refreshed metadata.
+The first implementation plan may choose the smaller safe step: prevent silent takeover and make adopted-package updates explicit. Native PM delegation can then be the next slice, but the command must not imply that Conary updated adopted packages when it only refreshed metadata. If every update candidate was skipped because native authority remains in effect, output must not end with generic "all packages are up to date" wording.
 
 ## Documentation Shape
 
@@ -134,9 +150,15 @@ Add Rust tests proving:
 - Conary-owned sources are not unadopted
 - dry-run does not mutate the database
 - `--all` removes all adopted troves and leaves Conary-owned troves
+- apply-mode `--all` removes sync hooks by default and `--keep-hooks` preserves them
+- apply mode refuses before DB mutation when a Conary generation is selected
 - file, dependency, and provide rows for unadopted troves disappear through cascade
 - update classification for adopted packages does not select Conary file writes except under explicit takeover
+- update behavior tests prove adopted packages do not enter the apply list under `satisfy` or `adopt`
+- update messaging tests prove skipped adopted updates do not print misleading success
 - native PM command guidance exists for RPM, DEB, and Arch
+- native package-manager authority is recorded or derived per adopted trove, including a multi-tool-installed case
+- `install --force` over an adopted package is rejected or treated as explicit takeover
 
 ### CLI Help Tests
 
@@ -163,15 +185,20 @@ The integration suite must prove:
 - a native package can be adopted
 - `system unadopt <package> --dry-run` reports the tracking removal
 - `system unadopt <package>` removes Conary tracking
+- `system unadopt --all --dry-run` reports every adopted package to be untracked
+- `system unadopt --all` removes all adopted tracking on a host without a selected Conary generation
 - the native package binary still exists and runs after unadoption
 - adoption status no longer counts the package
 
 ## Acceptance Criteria
 
 - `conary system unadopt` exists and is discoverable from help.
-- `conary system unadopt --all` is the one-command escape hatch for adopted packages.
+- `conary --allow-live-system-mutation system unadopt --all` is the one-command apply-mode escape hatch for adopted packages on hosts without a selected Conary generation.
 - Unadoption never deletes package files by default.
+- Unadoption refuses before DB mutation when a Conary generation is selected.
 - Adopted-package update behavior cannot silently take over native-owned packages.
+- Adopted-package update output is truthful when native delegation is not implemented.
+- `install --force` cannot silently cross the adoption/takeover boundary.
 - RPM, DEB, and Arch paths have real tests, not just doc promises.
 - Roadmap/README copy presents adoption as the preview path and takeover as explicit follow-up/opt-in.
 
@@ -179,6 +206,7 @@ The integration suite must prove:
 
 - Do not implement full native PM update delegation unless the implementation plan explicitly chooses that sub-slice.
 - Do not implement destructive cleanup of package files.
+- Do not implement active-generation-to-native-root handoff by deleting DB rows alone.
 - Do not make conaryd package execution part of this slice.
 - Do not change generation export, ISO export, or bootstrap scope.
 - Do not hide takeover; make it explicit and separate.
@@ -187,4 +215,5 @@ The integration suite must prove:
 
 - Native PM update delegation after adoption: `conary update` runs dnf/apt/pacman safely, then `system adopt --refresh --full`.
 - `conary system takeover undo` for packages that already crossed into Conary ownership.
+- Active-generation unadoption handoff: safely leave a selected or booted Conary generation and return to native package-manager authority without orphaning the next root.
 - A richer "trial status" summary that reports adopted, Conary-owned, and takeover packages in one screen.
