@@ -29,6 +29,8 @@ Do not launch the full Tier 0 + Tier 1 matrix as a single implementation goal. T
 The slices are intentionally ordered. Slice B depends on Slice A because `update` delegates through install. Slice D depends on A, B, and C because the matrix must prove the final user-facing contract rather than merely compile.
 
 Slice A plan: `docs/superpowers/plans/2026-05-14-native-package-manager-parity-slice-a-plan.md`.
+Slice B plan: `docs/superpowers/plans/2026-05-15-native-package-manager-parity-slice-b-plan.md`.
+Slice C plan: `docs/superpowers/plans/2026-05-15-native-package-manager-parity-slice-c-plan.md`.
 
 ## Product Promise
 

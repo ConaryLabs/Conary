@@ -6,10 +6,11 @@ This refresh updates the documentation baseline after the limited public
 release readiness pass and the completed composefs atomic switching
 modernization, then refreshes the Adopt Without Regret docs/integration proof
 slice, records the Native Package Manager Parity Matrix design, and catches the
-active Slice A/Slice B parity plans plus the Slice B preview-doc refresh.
+active Slice A/Slice B/Slice C parity plans plus the Slice B preview-doc
+refresh.
 
 Audited every tracked documentation-like file returned by
-`bash scripts/docs-audit-inventory.sh`: 78 tracked files spanning root docs,
+`bash scripts/docs-audit-inventory.sh`: 79 tracked files spanning root docs,
 assistant shims, GitHub templates, canonical docs under `docs/`,
 deploy/operator docs, `deploy/remi.toml.example`, app-local READMEs, active
 planning/design records, historical/archive docs, release security waivers, and
@@ -45,9 +46,10 @@ The repo moved materially after the last audit:
   active-generation handoff limits documented for the limited preview
 - Native Package Manager Parity Matrix framing for Tier 0 and Tier 1
   Conary-owned package-manager flows against dnf, apt, and pacman expectations
-- Slice A and Slice B native package-manager parity implementation records,
+- Slice A, Slice B, and Slice C native package-manager parity implementation records,
   including no-generation install/remove/update proof, adopted-package native
-  authority, explicit takeover, and security-advisory support refusal
+  authority, explicit takeover, security-advisory support refusal, and the
+  planned Tier 1 daily-driver command parity work
 
 ## Major Corrections
 
@@ -139,9 +141,9 @@ The final release-readiness verification gate is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 78
+- Total tracked doc-like files audited: 79
 - `verified-no-change`: 19
-- `corrected`: 32
+- `corrected`: 33
 - `reframed-as-historical`: 5
 - `archived`: 8
 - `retained-historical`: 14
