@@ -312,12 +312,15 @@ pub(crate) async fn prepare_install_for_restore(
 
 pub(crate) fn run_pre_install_for_prepared(
     conn: &Connection,
+    db_path: &str,
     root: &str,
     no_scripts: bool,
     sandbox_mode: SandboxMode,
     prepared: PreparedInstall,
 ) -> Result<PreparedInstallExecution> {
     let progress = InstallProgress::single("Restoring");
+    let _execution_path =
+        super::prepare_install_environment_before_scriptlets(conn, db_path, root)?;
     let scriptlet_ctx = ScriptletContext {
         root,
         no_scripts,
@@ -403,4 +406,148 @@ fn should_skip_restore_dependency(name: &str) -> bool {
         || name.contains(" if ")
         || name.contains(" unless ")
         || name.starts_with("((")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::install::{InstallSemantics, PackageFormatType};
+    use conary_core::components::ComponentType;
+    use conary_core::db::models::{Trove, TroveType};
+    use conary_core::packages::traits::{
+        Dependency, ExtractedFile, PackageFile, PackageFormat, Scriptlet,
+    };
+
+    struct FakePackage {
+        scriptlets: Vec<Scriptlet>,
+    }
+
+    impl PackageFormat for FakePackage {
+        fn parse(_path: &str) -> conary_core::Result<Self> {
+            unreachable!("test constructs package directly")
+        }
+
+        fn name(&self) -> &str {
+            "restore-fixture"
+        }
+
+        fn version(&self) -> &str {
+            "1.0.0"
+        }
+
+        fn architecture(&self) -> Option<&str> {
+            Some("x86_64")
+        }
+
+        fn description(&self) -> Option<&str> {
+            None
+        }
+
+        fn files(&self) -> &[PackageFile] {
+            &[]
+        }
+
+        fn dependencies(&self) -> &[Dependency] {
+            &[]
+        }
+
+        fn extract_file_contents(&self) -> conary_core::Result<Vec<ExtractedFile>> {
+            Ok(vec![])
+        }
+
+        fn scriptlets(&self) -> &[Scriptlet] {
+            &self.scriptlets
+        }
+
+        fn to_trove(&self) -> Trove {
+            Trove::new(
+                "restore-fixture".to_string(),
+                "1.0.0".to_string(),
+                TroveType::Package,
+            )
+        }
+    }
+
+    fn prepared_restore_fixture(scriptlets: Vec<Scriptlet>) -> PreparedInstall {
+        PreparedInstall {
+            pkg: Box::new(FakePackage { scriptlets }),
+            extraction: ExtractionResult {
+                extracted_files: Vec::new(),
+                classified: std::collections::HashMap::new(),
+                component_names_by_path: None,
+                installed_component_names: None,
+                ccs_pre_remove_script: None,
+                installed_component_types: vec![ComponentType::Runtime],
+                skipped_components: Vec::new(),
+                language_provides: Vec::new(),
+            },
+            selection_reason: None,
+            old_trove_to_upgrade: None,
+            semantics: InstallSemantics::legacy(PackageFormatType::Rpm),
+            _temp_dir: None,
+        }
+    }
+
+    #[test]
+    fn restore_pre_install_fails_closed_on_dangling_current_before_scriptlets() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let db_path = temp.path().join("conary.db");
+        std::fs::create_dir_all(&root).unwrap();
+        std::os::unix::fs::symlink("generations/7", temp.path().join("current")).unwrap();
+        conary_core::db::init(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let marker = root.join("restore-pre-scriptlet-ran");
+        let prepared = prepared_restore_fixture(vec![Scriptlet {
+            phase: conary_core::packages::traits::ScriptletPhase::PreInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: format!("touch {}", marker.display()),
+            flags: None,
+        }]);
+        let db_path_string = db_path.to_string_lossy().into_owned();
+        let root_string = root.to_string_lossy().into_owned();
+
+        let result = run_pre_install_for_prepared(
+            &conn,
+            &db_path_string,
+            &root_string,
+            false,
+            SandboxMode::Always,
+            prepared,
+        );
+        let error = match result {
+            Ok(_) => panic!("restore pre-install should fail on dangling current"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("dangling"), "{error:#}");
+        assert!(
+            !marker.exists(),
+            "restore pre-install scriptlet must not run when generation state is malformed"
+        );
+    }
+
+    #[test]
+    fn restore_pre_install_preflight_stays_before_scriptlets() {
+        let source = include_str!("restore.rs");
+        let helper_start = source
+            .find("pub(crate) fn run_pre_install_for_prepared")
+            .expect("restore pre-install helper should exist");
+        let helper_end = source[helper_start..]
+            .find("pub(crate) fn install_prepared_inner")
+            .expect("next restore helper should exist");
+        let helper_source = &source[helper_start..helper_start + helper_end];
+
+        let preflight_pos = helper_source
+            .find("prepare_install_environment_before_scriptlets")
+            .expect("restore pre-install helper should fail-closed before scriptlets");
+        let scriptlet_pos = helper_source
+            .find("run_pre_install_phase")
+            .expect("restore pre-install helper should run scriptlet phase");
+
+        assert!(
+            preflight_pos < scriptlet_pos,
+            "restore must fail closed on generation state before pre-install scriptlets"
+        );
+    }
 }

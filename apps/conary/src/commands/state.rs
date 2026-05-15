@@ -302,14 +302,20 @@ async fn execute_restore_plan_with_root(
 
     let mut prepared_executions = Vec::with_capacity(prepared_installs.len());
     for prepared in prepared_installs {
-        let execution =
-            match run_pre_install_for_prepared(&conn, root, false, SandboxMode::Always, prepared) {
-                Ok(execution) => execution,
-                Err(err) => {
-                    engine.release_lock();
-                    return Err(err);
-                }
-            };
+        let execution = match run_pre_install_for_prepared(
+            &conn,
+            db_path,
+            root,
+            false,
+            SandboxMode::Always,
+            prepared,
+        ) {
+            Ok(execution) => execution,
+            Err(err) => {
+                engine.release_lock();
+                return Err(err);
+            }
+        };
         prepared_executions.push(execution);
     }
 
