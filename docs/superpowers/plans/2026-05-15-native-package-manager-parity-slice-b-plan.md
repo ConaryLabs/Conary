@@ -261,7 +261,7 @@ git commit -m "feat(repo): expose security advisory support"
 **Files:**
 - Modify: `apps/conary/src/commands/update.rs`
 
-- [ ] **Step 1: Add candidate classification tests**
+- [x] **Step 1: Add candidate classification tests**
 
 Add tests in `update.rs` proving:
 
@@ -318,7 +318,7 @@ fn security_update_selects_supported_security_candidate() {
 
 Expected: fails before the selection enum and helper exist.
 
-- [ ] **Step 2: Replace `Option<SelectedUpdateCandidate>` with a selection enum**
+- [x] **Step 2: Replace `Option<SelectedUpdateCandidate>` with a selection enum**
 
 Add:
 
@@ -340,7 +340,7 @@ Change `select_update_candidate` to return `Result<UpdateCandidateSelection>`.
 
 For `security_only`, search all newer eligible candidates first. If a newer candidate exists from a repository where `security_advisory_support` is `Unknown` or `Unsupported`, return `SecurityMetadataUnavailable` before selecting or mutating. If support is `Supported`, only select candidates with `is_security_update == true`.
 
-- [ ] **Step 3: Refuse before mutation in `cmd_update` and `cmd_update_group`**
+- [x] **Step 3: Refuse before mutation in `cmd_update` and `cmd_update_group`**
 
 In both loops, collect `SecurityMetadataUnavailable` rows before pushing updates. If any are present, print each source and bail before dry-run/apply:
 
@@ -353,7 +353,7 @@ anyhow::bail!(
 
 Do not print `No security updates available` when this category exists.
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 Run:
 
@@ -364,7 +364,7 @@ cargo test -p conary adopted_update_tests -- --nocapture
 
 Expected: security metadata tests pass and adopted update behavior remains unchanged.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/conary/src/commands/update.rs
