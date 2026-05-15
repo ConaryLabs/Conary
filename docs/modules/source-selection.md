@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-04-07
-revision: 1
+last_updated: 2026-05-15
+revision: 2
 summary: Canonical guide to Conary source-selection inputs, runtime mirrors, and install or replatform behavior
 ---
 
@@ -173,6 +173,21 @@ Update now also loads the shared effective policy.
 
 Source-switching updates must be previewed and confirmed unless `--yes` is
 supplied.
+
+Update also enforces the limited-preview ownership boundary:
+
+- Conary-owned packages may update on a mutable live root without an active
+  Conary generation. The update resolver downloads the target package and then
+  delegates through the same install path used by `conary install`.
+- Adopted packages keep native package-manager authority under the default
+  `satisfy`/`adopt` behavior. Update reports the skip with native-PM guidance
+  instead of silently replacing the package.
+- `--dep-mode takeover` is the explicit package-level ownership crossing.
+  Critical adopted packages remain blocked even under takeover.
+- `--security` only proceeds when each requested Conary-owned update source is
+  marked as publishing supported advisory metadata. Sources marked `unknown` or
+  `unsupported` cause a refusal before mutation, so security-only output never
+  implies completeness for a source that cannot answer advisory questions.
 
 ### Model Diff / Apply
 

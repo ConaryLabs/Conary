@@ -10,7 +10,7 @@ A cross-distribution Linux system manager with immutable generations, atomic tra
 
 Inspired by the [original Conary](https://en.wikipedia.org/wiki/Conary_(package_manager)) from rPath, which pioneered concepts like troves, changesets, flavors, and components that were ahead of their time. This project carries those ideas forward with a modern implementation.
 
-**Release status:** Conary is being prepared as an adoption-led limited public preview for Fedora 44, Ubuntu 26.04 LTS, and Arch Linux. The CLI install/remove/update path, native-package adoption/unadoption, immutable generations, raw/qcow2 generation export, Remi conversion, and local QEMU validation are the supported preview surface. In adoption mode, dnf, apt, and pacman remain authoritative for packages they already own; `conary --allow-live-system-mutation system unadopt --all` is the non-destructive escape hatch on hosts without a selected Conary generation. Takeover is explicit, active-generation handoff back to native authority remains fail-closed follow-up work, and ISO generation export is proof-of-concept follow-up rather than a core preview promise.
+**Release status:** Conary is being prepared as an adoption-led limited public preview for Fedora 44, Ubuntu 26.04 LTS, and Arch Linux. The CLI install/remove/update path, native-package adoption/unadoption, immutable generations, raw/qcow2 generation export, Remi conversion, and local QEMU validation are the supported preview surface. In adoption mode, dnf, apt, and pacman remain authoritative for packages they already own; `conary --allow-live-system-mutation system unadopt --all` is the non-destructive escape hatch on hosts without a selected Conary generation. Conary-owned updates work without requiring a selected generation, adopted packages are skipped unless takeover is explicit, and `update --security` refuses before mutation when a requested Conary-owned source cannot prove advisory metadata support. Takeover is explicit, active-generation handoff back to native authority remains fail-closed follow-up work, and ISO generation export is proof-of-concept follow-up rather than a core preview promise.
 
 ---
 
@@ -125,6 +125,13 @@ Commands that mutate the active host require the explicit `--allow-live-system-m
 # ./target/debug/conary system unadopt --all --dry-run
 # ./target/debug/conary --allow-live-system-mutation system unadopt --all
 
+# Update only Conary-owned packages by default; adopted packages stay native-PM owned
+./target/debug/conary update --dry-run
+./target/debug/conary --allow-live-system-mutation update nginx --yes
+
+# Security-only updates are fail-closed unless the requested source publishes advisories
+./target/debug/conary --allow-live-system-mutation update --security --dry-run
+
 # Build a generation from current system state
 ./target/debug/conary --allow-live-system-mutation system generation build --summary "Initial setup"
 ./target/debug/conary system generation list
@@ -154,6 +161,10 @@ conary system generation export --path /conary/generations/3 --format qcow2 --ou
 ### Adoption And Explicit Takeover
 
 Adopt an existing Linux installation without giving up native package-manager authority. The stable preview path today is `conary --allow-live-system-mutation system adopt --system --full`, which records native packages in Conary with CAS backing while dnf, apt, or pacman remains authoritative for those packages. `conary --allow-live-system-mutation system unadopt --all` removes Conary tracking without deleting native package files on hosts without a selected Conary generation. If a Conary generation is already selected, unadoption fails closed until the active-generation handoff design lands.
+
+Updates follow the same authority boundary. Conary-owned packages can be installed, removed, and updated on a normal mutable host without first selecting a Conary generation. Adopted packages are not silently replaced by Conary during `update`; Conary reports that the native package manager remains authoritative unless you explicitly choose `--dep-mode takeover`. Critical adopted packages remain blocked even under takeover.
+
+Security-only updates are deliberately conservative. A repository added without advisory support metadata is treated as `unknown`, so `conary update --security` refuses before changing requested Conary-owned packages from that source. Only mark a repository `--security-advisories supported` when its metadata really carries advisories that Conary can trust.
 
 Takeover is a separate, explicit step. The `system takeover` release path builds a bootable generation and boot entry, then stops ready to activate instead of switching live automatically. The lower `cas` and `owned` stop-points still exist as internal/debug checkpoints, not normal preview workflows.
 
