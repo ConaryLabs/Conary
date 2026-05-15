@@ -2,7 +2,14 @@
 //! Repository management commands
 
 use super::DbArgs;
-use clap::Subcommand;
+use clap::{Subcommand, ValueEnum};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum CliSecurityAdvisorySupport {
+    Unknown,
+    Unsupported,
+    Supported,
+}
 
 #[derive(Subcommand)]
 pub enum RepoCommands {
@@ -64,6 +71,10 @@ pub enum RepoCommands {
         /// Examples: fedora, arch, debian, ubuntu
         #[arg(long, value_name = "DISTRO")]
         remi_distro: Option<String>,
+
+        /// Whether this repository publishes security-advisory metadata
+        #[arg(long, value_enum, default_value_t = CliSecurityAdvisorySupport::Unknown)]
+        security_advisories: CliSecurityAdvisorySupport,
     },
 
     /// List configured repositories

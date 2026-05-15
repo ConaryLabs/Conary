@@ -858,7 +858,19 @@ async fn dispatch_repo_command(repo_cmd: cli::RepoCommands) -> Result<()> {
             default_strategy,
             remi_endpoint,
             remi_distro,
+            security_advisories,
         } => {
+            let security_advisory_support = match security_advisories {
+                cli::CliSecurityAdvisorySupport::Unknown => {
+                    conary_core::db::models::SecurityAdvisorySupport::Unknown
+                }
+                cli::CliSecurityAdvisorySupport::Unsupported => {
+                    conary_core::db::models::SecurityAdvisorySupport::Unsupported
+                }
+                cli::CliSecurityAdvisorySupport::Supported => {
+                    conary_core::db::models::SecurityAdvisorySupport::Supported
+                }
+            };
             commands::cmd_repo_add(commands::RepoAddOptions {
                 name,
                 url,
@@ -872,6 +884,7 @@ async fn dispatch_repo_command(repo_cmd: cli::RepoCommands) -> Result<()> {
                 default_strategy,
                 remi_endpoint,
                 remi_distro,
+                security_advisory_support,
             })
             .await
         }
