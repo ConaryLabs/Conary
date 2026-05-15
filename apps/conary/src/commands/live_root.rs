@@ -377,6 +377,7 @@ pub(crate) fn recover_pending_journals(runtime_root: &Path, root: &Path) -> Resu
             );
         }
         validate_recovered_journal_tx_uuid(&path, &journal.tx_uuid)?;
+        validate_recovered_backup_records(root, &path, &journal.backups)?;
         if journal.state == "committed" || journal.state == "rolled_back" {
             let _ = fs::remove_file(&path);
             let _ = fs::remove_dir_all(path.with_extension("backups"));
@@ -445,6 +446,40 @@ fn reject_existing_directory_target(target: &Path) -> Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error).with_context(|| format!("Failed to inspect {}", target.display())),
     }
+}
+
+fn validate_recovered_backup_records(
+    root: &Path,
+    journal_path: &Path,
+    backups: &[BackupRecord],
+) -> Result<()> {
+    let backup_dir = journal_path.with_extension("backups");
+    for (index, backup) in backups.iter().enumerate() {
+        let target = PathBuf::from(&backup.path);
+        validate_path_within_root(root, &target)?;
+        let backup_path = PathBuf::from(&backup.backup_path);
+        let expected_backup_path = backup_dir.join(format!("backup-{index}"));
+        if backup_path != expected_backup_path {
+            bail!(
+                "invalid live-root backup path {} for journal {}; expected {}",
+                backup_path.display(),
+                journal_path.display(),
+                expected_backup_path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_path_within_root(root: &Path, target: &Path) -> Result<()> {
+    target.strip_prefix(root).with_context(|| {
+        format!(
+            "live-root path {} is not below target root {}",
+            target.display(),
+            root.display()
+        )
+    })?;
+    validate_existing_parent(root, target)
 }
 
 fn temp_path_for(target: &Path, tx_uuid: &str) -> Result<PathBuf> {
@@ -923,6 +958,41 @@ mod tests {
             .to_string();
 
         assert!(err.contains("does not match journal filename"));
+    }
+
+    #[test]
+    fn recovery_rejects_backup_path_outside_transaction_backup_dir() {
+        let temp = TempDir::new().unwrap();
+        let runtime = temp.path().join("runtime");
+        let root = temp.path().join("root");
+        let outside = temp.path().join("outside-backup");
+        let journal_dir = runtime.join("live-root-journals");
+        fs::create_dir_all(&journal_dir).unwrap();
+        fs::create_dir_all(root.join("usr/bin")).unwrap();
+        fs::write(&outside, "outside").unwrap();
+        let tx_uuid = Uuid::new_v4().to_string();
+        let journal_path = journal_dir.join(format!("{tx_uuid}.json"));
+        let journal = LiveRootJournal {
+            schema: JOURNAL_SCHEMA.to_string(),
+            tx_uuid: tx_uuid.clone(),
+            operation: "remove fixture".to_string(),
+            state: "in_progress".to_string(),
+            backups: vec![BackupRecord {
+                path: root.join("usr/bin/fixture").to_string_lossy().into_owned(),
+                backup_path: outside.to_string_lossy().into_owned(),
+            }],
+            created_paths: Vec::new(),
+            removed_dirs: Vec::new(),
+        };
+        fs::write(&journal_path, serde_json::to_vec_pretty(&journal).unwrap()).unwrap();
+
+        let err = recover_pending_journals(&runtime, &root)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("invalid live-root backup path"));
+        assert_eq!(fs::read_to_string(&outside).unwrap(), "outside");
+        assert!(!root.join("usr/bin/fixture").exists());
     }
 
     #[test]
