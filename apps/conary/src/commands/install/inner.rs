@@ -28,6 +28,15 @@ pub struct InnerInstallResult {
     pub trove_id: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct StoredInstallFile {
+    pub path: String,
+    pub hash: String,
+    pub size: i64,
+    pub mode: i32,
+    pub symlink_target: Option<String>,
+}
+
 /// Execute the install DB operations using a caller-owned DB transaction.
 ///
 /// Stores files in CAS via the provided engine, then inserts the trove,
@@ -42,10 +51,21 @@ pub fn install_inner(
     ctx: &TransactionContext<'_>,
     progress: &InstallProgress,
 ) -> Result<InnerInstallResult> {
-    let is_upgrade = ctx.old_trove_to_upgrade.is_some();
-
     progress.set_phase(pkg.name(), InstallPhase::Deploying);
-    let mut file_hashes: Vec<(String, String, i64, i32, Option<String>)> =
+    let stored_files = store_install_files_in_cas(engine, extraction)?;
+    info!(
+        "Stored {} files in CAS for {}",
+        stored_files.len(),
+        pkg.name()
+    );
+    install_inner_with_stored_files(tx, changeset_id, pkg, extraction, ctx, &stored_files)
+}
+
+pub(super) fn store_install_files_in_cas(
+    engine: &TransactionEngine,
+    extraction: &ExtractionResult,
+) -> Result<Vec<StoredInstallFile>> {
+    let mut stored_files: Vec<StoredInstallFile> =
         Vec::with_capacity(extraction.extracted_files.len());
     for file in &extraction.extracted_files {
         let hash = if let Some(target) = file.symlink_target.as_deref() {
@@ -59,20 +79,27 @@ pub fn install_inner(
                 .store(&file.content)
                 .with_context(|| format!("Failed to store {} in CAS", file.path))?
         };
-        file_hashes.push((
-            file.path.clone(),
+        stored_files.push(StoredInstallFile {
+            path: file.path.clone(),
             hash,
-            file.size,
-            file.mode,
-            file.symlink_target.clone(),
-        ));
+            size: file.size,
+            mode: file.mode,
+            symlink_target: file.symlink_target.clone(),
+        });
     }
 
-    info!(
-        "Stored {} files in CAS for {}",
-        file_hashes.len(),
-        pkg.name()
-    );
+    Ok(stored_files)
+}
+
+pub(super) fn install_inner_with_stored_files(
+    tx: &Transaction<'_>,
+    changeset_id: i64,
+    pkg: &dyn conary_core::packages::PackageFormat,
+    extraction: &ExtractionResult,
+    ctx: &TransactionContext<'_>,
+    stored_files: &[StoredInstallFile],
+) -> Result<InnerInstallResult> {
+    let is_upgrade = ctx.old_trove_to_upgrade.is_some();
 
     let selection_reason = ctx.selection_reason;
     let classified = &extraction.classified;
@@ -151,20 +178,23 @@ pub fn install_inner(
             }
         }
 
-        for (path, hash, size, mode, symlink_target) in &file_hashes {
+        for file in stored_files {
+            let path = &file.path;
+            let hash = &file.hash;
             if hash.len() < 3 {
                 warn!("Skipping file with short hash: {} (hash={})", path, hash);
                 continue;
             }
             tx.execute(
                 "INSERT OR IGNORE INTO file_contents (sha256_hash, content_path, size) VALUES (?1, ?2, ?3)",
-                [hash, &format!("objects/{}/{}", &hash[0..2], &hash[2..]), &size.to_string()],
+                [hash, &format!("objects/{}/{}", &hash[0..2], &hash[2..]), &file.size.to_string()],
             )?;
 
             let component_id = path_to_component.get(path.as_str()).copied();
-            let mut file_entry = FileEntry::new(path.clone(), hash.clone(), *size, *mode, trove_id);
+            let mut file_entry =
+                FileEntry::new(path.clone(), hash.clone(), file.size, file.mode, trove_id);
             file_entry.component_id = component_id;
-            file_entry.symlink_target = symlink_target.clone();
+            file_entry.symlink_target = file.symlink_target.clone();
             insert_file_entry_claiming_live_root_overlap(tx, &mut file_entry, pkg.name())?;
 
             let action = if is_upgrade { "modify" } else { "add" };
@@ -444,5 +474,47 @@ mod tests {
             .and_then(|file| Trove::find_by_id(&conn, file.trove_id).unwrap())
             .unwrap();
         assert_eq!(owner.name, "grub2");
+    }
+
+    #[test]
+    fn store_install_files_in_cas_preserves_symlink_targets() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = TransactionConfig::new(temp.path());
+        let engine = TransactionEngine::new(config).unwrap();
+        let package = FakePackage {
+            name: "fixture".to_string(),
+            version: "1.0.0".to_string(),
+            files: vec![],
+            extracted_files: vec![ExtractedFile {
+                path: "/usr/bin/fixture-link".to_string(),
+                content: Vec::new(),
+                size: 7,
+                mode: 0o120777,
+                sha256: None,
+                symlink_target: Some("fixture".to_string()),
+            }],
+            dependencies: Vec::new(),
+            scriptlets: Vec::new(),
+        };
+        let extraction = ExtractionResult {
+            extracted_files: package.extracted_files.clone(),
+            classified: HashMap::from([(
+                conary_core::components::ComponentType::Runtime,
+                vec!["/usr/bin/fixture-link".to_string()],
+            )]),
+            component_names_by_path: None,
+            installed_component_names: None,
+            ccs_pre_remove_script: None,
+            installed_component_types: vec![conary_core::components::ComponentType::Runtime],
+            skipped_components: Vec::new(),
+            language_provides: Vec::new(),
+        };
+
+        let stored = store_install_files_in_cas(&engine, &extraction).unwrap();
+
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].path, "/usr/bin/fixture-link");
+        assert_eq!(stored[0].symlink_target.as_deref(), Some("fixture"));
+        assert!(!stored[0].hash.is_empty());
     }
 }
