@@ -108,6 +108,7 @@ impl LiveRootTransaction {
         for file in files {
             let target = target_path(&self.root, &file.path)?;
             self.ensure_parent(&target, &mut stats)?;
+            reject_existing_directory_target(&target)?;
             self.backup_existing(&target)?;
 
             let temp = temp_path_for(&target, &self.tx_uuid)?;
@@ -375,6 +376,7 @@ pub(crate) fn recover_pending_journals(runtime_root: &Path, root: &Path) -> Resu
                 path.display()
             );
         }
+        validate_recovered_journal_tx_uuid(&path, &journal.tx_uuid)?;
         if journal.state == "committed" || journal.state == "rolled_back" {
             let _ = fs::remove_file(&path);
             let _ = fs::remove_dir_all(path.with_extension("backups"));
@@ -415,6 +417,34 @@ fn validate_tx_uuid(tx_uuid: &str) -> Result<()> {
         bail!("invalid live-root transaction id {tx_uuid:?}");
     }
     Ok(())
+}
+
+fn validate_recovered_journal_tx_uuid(path: &Path, tx_uuid: &str) -> Result<()> {
+    validate_tx_uuid(tx_uuid)?;
+    let filename_tx_uuid = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .context("live-root journal filename has no valid transaction id")?;
+    if tx_uuid != filename_tx_uuid {
+        bail!(
+            "live-root journal transaction id {tx_uuid:?} does not match journal filename {filename_tx_uuid:?}"
+        );
+    }
+    Ok(())
+}
+
+fn reject_existing_directory_target(target: &Path) -> Result<()> {
+    match fs::symlink_metadata(target) {
+        Ok(meta) if meta.is_dir() => {
+            bail!(
+                "live-root install refuses to replace existing directory {}",
+                target.display()
+            );
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("Failed to inspect {}", target.display())),
+    }
 }
 
 fn temp_path_for(target: &Path, tx_uuid: &str) -> Result<PathBuf> {
@@ -692,6 +722,35 @@ mod tests {
     }
 
     #[test]
+    fn install_rejects_replacing_existing_directory_target() {
+        let temp = TempDir::new().unwrap();
+        let runtime = temp.path().join("runtime");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("usr")).unwrap();
+        fs::create_dir_all(&runtime).unwrap();
+        let mut tx = LiveRootTransaction::begin(
+            &runtime,
+            &root,
+            Uuid::new_v4().to_string(),
+            "install fixture",
+        )
+        .unwrap();
+
+        let err = tx
+            .apply_install_files(&[LiveRootFile {
+                path: "/usr".to_string(),
+                content: b"not a directory".to_vec(),
+                mode: 0o100755,
+                symlink_target: None,
+            }])
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("refuses to replace existing directory"));
+        assert!(root.join("usr").is_dir());
+    }
+
+    #[test]
     fn rollback_restores_replaced_file() {
         let temp = TempDir::new().unwrap();
         let runtime = temp.path().join("runtime");
@@ -802,6 +861,68 @@ mod tests {
                 .join(format!("{tx_uuid}.json"))
                 .exists()
         );
+    }
+
+    #[test]
+    fn recovery_rejects_malformed_journal_transaction_id() {
+        let temp = TempDir::new().unwrap();
+        let runtime = temp.path().join("runtime");
+        let root = temp.path().join("root");
+        let journal_dir = runtime.join("live-root-journals");
+        fs::create_dir_all(&journal_dir).unwrap();
+        fs::create_dir_all(&root).unwrap();
+        let journal = LiveRootJournal {
+            schema: JOURNAL_SCHEMA.to_string(),
+            tx_uuid: "../escape".to_string(),
+            operation: "remove fixture".to_string(),
+            state: "pending".to_string(),
+            backups: Vec::new(),
+            created_paths: Vec::new(),
+            removed_dirs: Vec::new(),
+        };
+        fs::write(
+            journal_dir.join("safe.json"),
+            serde_json::to_vec_pretty(&journal).unwrap(),
+        )
+        .unwrap();
+
+        let err = recover_pending_journals(&runtime, &root)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("invalid live-root transaction id"));
+    }
+
+    #[test]
+    fn recovery_rejects_journal_transaction_id_mismatched_with_filename() {
+        let temp = TempDir::new().unwrap();
+        let runtime = temp.path().join("runtime");
+        let root = temp.path().join("root");
+        let journal_dir = runtime.join("live-root-journals");
+        fs::create_dir_all(&journal_dir).unwrap();
+        fs::create_dir_all(&root).unwrap();
+        let filename_tx_uuid = Uuid::new_v4().to_string();
+        let journal_tx_uuid = Uuid::new_v4().to_string();
+        let journal = LiveRootJournal {
+            schema: JOURNAL_SCHEMA.to_string(),
+            tx_uuid: journal_tx_uuid,
+            operation: "remove fixture".to_string(),
+            state: "pending".to_string(),
+            backups: Vec::new(),
+            created_paths: Vec::new(),
+            removed_dirs: Vec::new(),
+        };
+        fs::write(
+            journal_dir.join(format!("{filename_tx_uuid}.json")),
+            serde_json::to_vec_pretty(&journal).unwrap(),
+        )
+        .unwrap();
+
+        let err = recover_pending_journals(&runtime, &root)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("does not match journal filename"));
     }
 
     #[test]
