@@ -377,7 +377,7 @@ pub(crate) fn recover_pending_journals(runtime_root: &Path, root: &Path) -> Resu
             );
         }
         validate_recovered_journal_tx_uuid(&path, &journal.tx_uuid)?;
-        validate_recovered_backup_records(root, &path, &journal.backups)?;
+        validate_recovered_backup_records(root, &path, &journal.backups, &journal.removed_dirs)?;
         if journal.state == "committed" || journal.state == "rolled_back" {
             let _ = fs::remove_file(&path);
             let _ = fs::remove_dir_all(path.with_extension("backups"));
@@ -452,11 +452,16 @@ fn validate_recovered_backup_records(
     root: &Path,
     journal_path: &Path,
     backups: &[BackupRecord],
+    removed_dirs: &[String],
 ) -> Result<()> {
     let backup_dir = journal_path.with_extension("backups");
+    let removed_dirs = removed_dirs
+        .iter()
+        .map(PathBuf::from)
+        .collect::<Vec<PathBuf>>();
     for (index, backup) in backups.iter().enumerate() {
         let target = PathBuf::from(&backup.path);
-        validate_path_within_root(root, &target)?;
+        validate_recovered_backup_target(root, &target, &removed_dirs)?;
         let backup_path = PathBuf::from(&backup.backup_path);
         let expected_backup_path = backup_dir.join(format!("backup-{index}"));
         if backup_path != expected_backup_path {
@@ -471,7 +476,11 @@ fn validate_recovered_backup_records(
     Ok(())
 }
 
-fn validate_path_within_root(root: &Path, target: &Path) -> Result<()> {
+fn validate_recovered_backup_target(
+    root: &Path,
+    target: &Path,
+    removed_dirs: &[PathBuf],
+) -> Result<()> {
     target.strip_prefix(root).with_context(|| {
         format!(
             "live-root path {} is not below target root {}",
@@ -479,7 +488,7 @@ fn validate_path_within_root(root: &Path, target: &Path) -> Result<()> {
             root.display()
         )
     })?;
-    validate_existing_parent(root, target)
+    validate_existing_or_removed_parent(root, target, removed_dirs)
 }
 
 fn temp_path_for(target: &Path, tx_uuid: &str) -> Result<PathBuf> {
@@ -529,6 +538,59 @@ fn validate_parent_components(root: &Path, parent: &Path) -> Result<()> {
             .with_context(|| format!("Failed to inspect {}", current.display()))?;
         if meta.file_type().is_symlink() || !meta.is_dir() {
             bail!("unsafe parent {} for live-root path", current.display());
+        }
+    }
+    Ok(())
+}
+
+fn validate_existing_or_removed_parent(
+    root: &Path,
+    target: &Path,
+    removed_dirs: &[PathBuf],
+) -> Result<()> {
+    let Some(parent) = target.parent() else {
+        return Ok(());
+    };
+    let root_meta = fs::symlink_metadata(root)
+        .with_context(|| format!("Failed to inspect target root {}", root.display()))?;
+    if root_meta.file_type().is_symlink() || !root_meta.is_dir() {
+        bail!("unsafe parent {} for live-root path", root.display());
+    }
+    let relative = parent.strip_prefix(root).with_context(|| {
+        format!(
+            "live-root path {} is not below target root {}",
+            parent.display(),
+            root.display()
+        )
+    })?;
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        match component {
+            Component::Normal(part) => current.push(part),
+            Component::CurDir => continue,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                bail!(
+                    "live-root path {} escapes the target root",
+                    parent.display()
+                );
+            }
+        }
+        match fs::symlink_metadata(&current) {
+            Ok(meta) if meta.file_type().is_symlink() || !meta.is_dir() => {
+                bail!("unsafe parent {} for live-root path", current.display());
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if removed_dirs.iter().any(|dir| current.starts_with(dir)) {
+                    return Ok(());
+                }
+                return Err(error)
+                    .with_context(|| format!("Failed to inspect {}", current.display()));
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("Failed to inspect {}", current.display()));
+            }
         }
     }
     Ok(())
@@ -889,6 +951,40 @@ mod tests {
         assert_eq!(
             fs::read_to_string(root.join("usr/bin/fixture")).unwrap(),
             "old"
+        );
+        assert!(
+            !runtime
+                .join("live-root-journals")
+                .join(format!("{tx_uuid}.json"))
+                .exists()
+        );
+    }
+
+    #[test]
+    fn recovery_restores_removed_file_and_empty_parent_dir_from_persisted_journal() {
+        let temp = TempDir::new().unwrap();
+        let runtime = temp.path().join("runtime");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("usr/share/pkg")).unwrap();
+        fs::create_dir_all(&runtime).unwrap();
+        fs::write(root.join("usr/share/pkg/readme"), "fixture").unwrap();
+
+        let tx_uuid = Uuid::new_v4().to_string();
+        let mut tx =
+            LiveRootTransaction::begin(&runtime, &root, tx_uuid.clone(), "remove fixture").unwrap();
+        tx.apply_remove_paths(&[
+            "/usr/share/pkg/readme".to_string(),
+            "/usr/share/pkg".to_string(),
+        ])
+        .unwrap();
+        std::mem::forget(tx);
+
+        assert!(!root.join("usr/share/pkg").exists());
+        recover_pending_journals(&runtime, &root).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(root.join("usr/share/pkg/readme")).unwrap(),
+            "fixture"
         );
         assert!(
             !runtime
