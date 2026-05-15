@@ -216,8 +216,12 @@ impl LiveRootTransaction {
         Ok(())
     }
 
+    pub(crate) fn mark_committed_for_recovery(&mut self) -> Result<()> {
+        self.write_journal("committed")
+    }
+
     pub(crate) fn commit(mut self) -> Result<()> {
-        if let Err(error) = self.write_journal("committed") {
+        if let Err(error) = self.mark_committed_for_recovery() {
             self.committed = true;
             self.cleanup_transaction_files().with_context(|| {
                 format!(
@@ -961,6 +965,42 @@ mod tests {
         assert_eq!(
             fs::read_to_string(root.join("usr/bin/fixture")).unwrap(),
             "old"
+        );
+        assert!(
+            !runtime
+                .join("live-root-journals")
+                .join(format!("{tx_uuid}.json"))
+                .exists()
+        );
+    }
+
+    #[test]
+    fn recovery_does_not_rollback_commit_pending_journal() {
+        let temp = TempDir::new().unwrap();
+        let runtime = temp.path().join("runtime");
+        let root = temp.path().join("root");
+        fs::create_dir_all(&runtime).unwrap();
+        fs::create_dir_all(&root).unwrap();
+
+        let tx_uuid = Uuid::new_v4().to_string();
+        let mut tx =
+            LiveRootTransaction::begin(&runtime, &root, tx_uuid.clone(), "install fixture")
+                .unwrap();
+        tx.apply_install_files(&[LiveRootFile {
+            path: "/usr/bin/fixture".to_string(),
+            content: b"fixture".to_vec(),
+            mode: 0o100755,
+            symlink_target: None,
+        }])
+        .unwrap();
+        tx.mark_committed_for_recovery().unwrap();
+        std::mem::forget(tx);
+
+        recover_pending_journals(&runtime, &root).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(root.join("usr/bin/fixture")).unwrap(),
+            "fixture"
         );
         assert!(
             !runtime
