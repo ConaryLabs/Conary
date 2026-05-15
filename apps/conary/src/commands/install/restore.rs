@@ -319,8 +319,12 @@ pub(crate) fn run_pre_install_for_prepared(
     prepared: PreparedInstall,
 ) -> Result<PreparedInstallExecution> {
     let progress = InstallProgress::single("Restoring");
-    let _execution_path =
-        super::prepare_install_environment_before_scriptlets(conn, db_path, root)?;
+    let execution_path = super::prepare_install_environment_before_scriptlets(conn, db_path, root)?;
+    if execution_path == PackageExecutionPath::MutableLiveRoot {
+        anyhow::bail!(
+            "state restore installs require an active Conary generation; no-generation live-root package install/remove are supported through `conary install` and `conary remove`"
+        );
+    }
     let scriptlet_ctx = ScriptletContext {
         root,
         no_scripts,
@@ -524,6 +528,49 @@ mod tests {
         assert!(
             !marker.exists(),
             "restore pre-install scriptlet must not run when generation state is malformed"
+        );
+    }
+
+    #[test]
+    fn restore_pre_install_refuses_no_generation_before_scriptlets() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let db_path = temp.path().join("conary.db");
+        std::fs::create_dir_all(&root).unwrap();
+        conary_core::db::init(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let marker = root.join("restore-pre-scriptlet-ran");
+        let prepared = prepared_restore_fixture(vec![Scriptlet {
+            phase: conary_core::packages::traits::ScriptletPhase::PreInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: format!("touch {}", marker.display()),
+            flags: None,
+        }]);
+        let db_path_string = db_path.to_string_lossy().into_owned();
+        let root_string = root.to_string_lossy().into_owned();
+
+        let result = run_pre_install_for_prepared(
+            &conn,
+            &db_path_string,
+            &root_string,
+            false,
+            SandboxMode::Always,
+            prepared,
+        );
+        let error = match result {
+            Ok(_) => panic!("restore pre-install should refuse no-generation install"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error
+                .to_string()
+                .contains("state restore installs require an active Conary generation"),
+            "{error:#}"
+        );
+        assert!(
+            !marker.exists(),
+            "restore pre-install scriptlet must not run on no-generation hosts"
         );
     }
 
