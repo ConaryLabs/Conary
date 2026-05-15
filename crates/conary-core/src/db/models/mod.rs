@@ -83,7 +83,7 @@ pub use provide_entry::{ProvideEntry, generate_capability_variations};
 pub use redirect::{Redirect, RedirectType, ResolveResult};
 pub use remote_collection::{DEFAULT_CACHE_TTL_SECS, RemoteCollection};
 pub use repology_cache::RepologyCacheEntry;
-pub use repository::{Repository, RepositoryPackage};
+pub use repository::{Repository, RepositoryPackage, SecurityAdvisorySupport};
 pub use repository_capability::RepositoryProvide;
 pub use repository_requirement::{RepositoryRequirement, RepositoryRequirementGroup};
 pub use resolution::{CacheTier, PackageResolution, PrimaryStrategy, ResolutionStrategy};

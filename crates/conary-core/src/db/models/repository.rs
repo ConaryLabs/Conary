@@ -6,6 +6,35 @@ use crate::error::{Error, Result};
 use crate::version::VersionConstraint;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecurityAdvisorySupport {
+    Unknown,
+    Unsupported,
+    Supported,
+}
+
+impl SecurityAdvisorySupport {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Unsupported => "unsupported",
+            Self::Supported => "supported",
+        }
+    }
+
+    pub fn from_db(value: &str) -> Self {
+        match value {
+            "supported" => Self::Supported,
+            "unsupported" => Self::Unsupported,
+            _ => Self::Unknown,
+        }
+    }
+
+    pub fn is_supported(self) -> bool {
+        self == Self::Supported
+    }
+}
+
 /// Repository represents a remote package source
 #[derive(Debug, Clone)]
 pub struct Repository {
@@ -38,6 +67,8 @@ pub struct Repository {
     pub tuf_root_version: Option<i64>,
     /// URL for fetching TUF root metadata (if different from repo URL)
     pub tuf_root_url: Option<String>,
+    /// Whether this source publishes security-advisory metadata Conary can trust.
+    pub security_advisory_support: SecurityAdvisorySupport,
 }
 
 impl Repository {
@@ -45,7 +76,7 @@ impl Repository {
     const COLUMNS: &'static str = "id, name, url, content_url, enabled, priority, gpg_check, \
          gpg_strict, gpg_key_url, metadata_expire, last_sync, created_at, \
          default_strategy, default_strategy_endpoint, default_strategy_distro, \
-         tuf_enabled, tuf_root_version, tuf_root_url";
+         tuf_enabled, tuf_root_version, tuf_root_url, security_advisory_support";
 
     /// Create a new Repository
     pub fn new(name: String, url: String) -> Self {
@@ -68,6 +99,7 @@ impl Repository {
             tuf_enabled: false,
             tuf_root_version: None,
             tuf_root_url: None,
+            security_advisory_support: SecurityAdvisorySupport::Unknown,
         }
     }
 
@@ -87,8 +119,8 @@ impl Repository {
     /// Insert this repository into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
-            "INSERT INTO repositories (name, url, content_url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, default_strategy, default_strategy_endpoint, default_strategy_distro, tuf_enabled, tuf_root_version, tuf_root_url)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            "INSERT INTO repositories (name, url, content_url, enabled, priority, gpg_check, gpg_strict, gpg_key_url, metadata_expire, default_strategy, default_strategy_endpoint, default_strategy_distro, tuf_enabled, tuf_root_version, tuf_root_url, security_advisory_support)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 &self.name,
                 &self.url,
@@ -105,6 +137,7 @@ impl Repository {
                 self.tuf_enabled as i32,
                 &self.tuf_root_version,
                 &self.tuf_root_url,
+                self.security_advisory_support.as_str(),
             ],
         )?;
 
@@ -165,8 +198,9 @@ impl Repository {
             "UPDATE repositories SET name = ?1, url = ?2, content_url = ?3, enabled = ?4, priority = ?5,
              gpg_check = ?6, gpg_strict = ?7, gpg_key_url = ?8, metadata_expire = ?9, last_sync = ?10,
              default_strategy = ?11, default_strategy_endpoint = ?12, default_strategy_distro = ?13,
-             tuf_enabled = ?14, tuf_root_version = ?15, tuf_root_url = ?16
-             WHERE id = ?17",
+             tuf_enabled = ?14, tuf_root_version = ?15, tuf_root_url = ?16,
+             security_advisory_support = ?17
+             WHERE id = ?18",
             params![
                 &self.name,
                 &self.url,
@@ -184,6 +218,7 @@ impl Repository {
                 self.tuf_enabled as i32,
                 &self.tuf_root_version,
                 &self.tuf_root_url,
+                self.security_advisory_support.as_str(),
                 id,
             ],
         )?;
@@ -218,6 +253,9 @@ impl Repository {
             tuf_enabled: row.get::<_, i32>(15)? != 0,
             tuf_root_version: row.get(16)?,
             tuf_root_url: row.get(17)?,
+            security_advisory_support: SecurityAdvisorySupport::from_db(
+                row.get::<_, String>(18)?.as_str(),
+            ),
         })
     }
 }
@@ -665,6 +703,44 @@ fn is_conditional_rpm_dependency(dep: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::Connection;
+
+    #[test]
+    fn repository_security_advisory_support_defaults_to_unknown() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::schema::migrate(&conn).unwrap();
+
+        let mut repo = Repository::new(
+            "security-default".to_string(),
+            "https://example.test".to_string(),
+        );
+        let id = repo.insert(&conn).unwrap();
+
+        let loaded = Repository::find_by_id(&conn, id).unwrap().unwrap();
+        assert_eq!(
+            loaded.security_advisory_support,
+            SecurityAdvisorySupport::Unknown
+        );
+    }
+
+    #[test]
+    fn repository_security_advisory_support_round_trips() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::schema::migrate(&conn).unwrap();
+
+        let mut repo = Repository::new(
+            "security-supported".to_string(),
+            "https://example.test".to_string(),
+        );
+        repo.security_advisory_support = SecurityAdvisorySupport::Supported;
+        let id = repo.insert(&conn).unwrap();
+
+        let loaded = Repository::find_by_id(&conn, id).unwrap().unwrap();
+        assert_eq!(
+            loaded.security_advisory_support,
+            SecurityAdvisorySupport::Supported
+        );
+    }
 
     #[test]
     fn parse_dependency_requests_preserves_version_constraints() {
