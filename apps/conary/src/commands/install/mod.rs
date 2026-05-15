@@ -164,7 +164,7 @@ impl InstallSemantics {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PackageExecutionPath {
+pub(super) enum PackageExecutionPath {
     GenerationAware,
     MutableLiveRoot,
 }
@@ -543,6 +543,8 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
     // Promote the pre-install connection to mutable for the main install transaction
     let mut conn = conn;
 
+    let execution_path = prepare_install_environment_before_scriptlets(&conn, db_path, root)?;
+
     // --- Phase 5: Dependency analysis ---
     let dep_ctx = DepAnalysisContext {
         conn: &conn,
@@ -557,6 +559,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         sandbox_mode,
         no_scripts,
         policy: &policy,
+        execution_path,
     };
     handle_dependencies(&dep_ctx).await?;
 
@@ -576,7 +579,6 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
             UpgradeCheck::FreshInstall => None,
             UpgradeCheck::Upgrade(trove) | UpgradeCheck::Downgrade(trove) => Some(trove),
         };
-    let execution_path = prepare_install_environment_before_scriptlets(&conn, db_path, root)?;
 
     let scriptlet_ctx = ScriptletContext {
         root,
@@ -654,6 +656,7 @@ struct DepAnalysisContext<'a> {
     sandbox_mode: SandboxMode,
     no_scripts: bool,
     policy: &'a conary_core::repository::resolution_policy::ResolutionPolicy,
+    execution_path: PackageExecutionPath,
 }
 
 /// Context for scriptlet execution phases.
@@ -1353,7 +1356,8 @@ async fn handle_dep_installs(
                         ctx.root,
                         ctx.sandbox_mode,
                         ctx.no_scripts,
-                    );
+                    )
+                    .with_preflighted_execution_path(ctx.execution_path);
                     installer.install_batch(prepared_packages)?;
                     println!("  [OK] Installed {} dependencies", downloaded.len());
                 }
@@ -2793,6 +2797,31 @@ mod tests {
         .unwrap();
 
         assert_eq!(std::fs::read_to_string(&live_file).unwrap(), "before");
+    }
+
+    #[test]
+    fn package_execution_path_is_prepared_before_dependency_handling() {
+        let source = include_str!("mod.rs");
+        let cmd_install_start = source
+            .find("pub async fn cmd_install")
+            .expect("cmd_install should exist");
+        let helper_section_start = source[cmd_install_start..]
+            .find("// ---------------------------------------------------------------------------")
+            .expect("cmd_install helper boundary should exist");
+        let cmd_install_source =
+            &source[cmd_install_start..cmd_install_start + helper_section_start];
+
+        let execution_path_pos = cmd_install_source
+            .find("let execution_path = prepare_install_environment_before_scriptlets")
+            .expect("cmd_install should prepare execution path");
+        let dependency_pos = cmd_install_source
+            .find("handle_dependencies(&dep_ctx).await?")
+            .expect("cmd_install should handle dependencies");
+
+        assert!(
+            execution_path_pos < dependency_pos,
+            "cmd_install must fail closed and recover mutable journals before dependency installs can run scriptlets"
+        );
     }
 
     #[test]

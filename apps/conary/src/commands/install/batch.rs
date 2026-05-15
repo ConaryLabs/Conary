@@ -21,7 +21,7 @@ use super::scriptlets::{
     build_execution_mode, get_old_package_scriptlets, run_old_post_remove, run_old_pre_remove,
     run_post_install, run_pre_install, to_scriptlet_format,
 };
-use super::{InstallSemantics, PackageFormatType, detect_package_format};
+use super::{InstallSemantics, PackageExecutionPath, PackageFormatType, detect_package_format};
 use anyhow::{Context, Result};
 use conary_core::components::{ComponentClassifier, ComponentType, should_run_scriptlets};
 use conary_core::db::models::{
@@ -130,6 +130,7 @@ pub struct BatchInstaller<'a> {
     root: &'a str,
     sandbox_mode: SandboxMode,
     no_scripts: bool,
+    preflighted_execution_path: Option<PackageExecutionPath>,
 }
 
 impl<'a> BatchInstaller<'a> {
@@ -145,7 +146,16 @@ impl<'a> BatchInstaller<'a> {
             root,
             sandbox_mode,
             no_scripts,
+            preflighted_execution_path: None,
         }
+    }
+
+    pub(super) fn with_preflighted_execution_path(
+        mut self,
+        execution_path: PackageExecutionPath,
+    ) -> Self {
+        self.preflighted_execution_path = Some(execution_path);
+        self
     }
 
     /// Install multiple packages atomically
@@ -180,6 +190,15 @@ impl<'a> BatchInstaller<'a> {
         // Open database connection
         let mut conn = open_db(self.db_path)?;
 
+        let execution_path = match self.preflighted_execution_path {
+            Some(execution_path) => execution_path,
+            None => super::prepare_install_environment_before_scriptlets(
+                &conn,
+                self.db_path,
+                self.root,
+            )?,
+        };
+
         // Create composefs-native transaction engine
         let db_path_buf = PathBuf::from(self.db_path);
         let tx_config = TransactionConfig::from_paths(PathBuf::from(self.root), db_path_buf);
@@ -187,7 +206,9 @@ impl<'a> BatchInstaller<'a> {
             TransactionEngine::new(tx_config).context("Failed to create transaction engine")?;
 
         // Recover any incomplete transactions (only if generations exist)
-        if engine.config().generations_dir.exists() {
+        if execution_path == PackageExecutionPath::GenerationAware
+            && engine.config().generations_dir.exists()
+        {
             engine
                 .recover(&conn)
                 .context("Failed to recover incomplete transactions")?;
@@ -928,6 +949,31 @@ mod tests {
         assert_eq!(
             trove.install_reason,
             conary_core::db::models::InstallReason::Dependency
+        );
+    }
+
+    #[test]
+    fn batch_install_preflights_before_pre_scripts() {
+        let source = include_str!("batch.rs");
+        let install_batch_start = source
+            .find("pub fn install_batch")
+            .expect("install_batch should exist");
+        let plan_batch_start = source[install_batch_start..]
+            .find("fn plan_batch")
+            .expect("plan_batch boundary should exist");
+        let install_batch_source =
+            &source[install_batch_start..install_batch_start + plan_batch_start];
+
+        let preflight_pos = install_batch_source
+            .find("prepare_install_environment_before_scriptlets")
+            .expect("install_batch should preflight before scriptlets");
+        let scripts_pos = install_batch_source
+            .find("self.run_pre_scripts(pkg)")
+            .expect("install_batch should run pre-install scripts");
+
+        assert!(
+            preflight_pos < scripts_pos,
+            "batch installs must validate generation state before dependency pre-install scriptlets"
         );
     }
 }
