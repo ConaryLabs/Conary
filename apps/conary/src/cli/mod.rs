@@ -742,6 +742,77 @@ mod tests {
     }
 
     #[test]
+    fn parses_system_unadopt_all() {
+        let cli = Cli::try_parse_from(["conary", "system", "unadopt", "--all"])
+            .expect("system unadopt --all should parse");
+
+        match cli.command {
+            Some(Commands::System(SystemCommands::Unadopt {
+                packages,
+                all,
+                dry_run,
+                keep_hooks,
+                ..
+            })) => {
+                assert!(packages.is_empty());
+                assert!(all);
+                assert!(!dry_run);
+                assert!(!keep_hooks);
+            }
+            _ => panic!("expected system unadopt command"),
+        }
+    }
+
+    #[test]
+    fn parses_system_unadopt_package_dry_run() {
+        let cli = Cli::try_parse_from([
+            "conary",
+            "system",
+            "unadopt",
+            "curl",
+            "--dry-run",
+            "--keep-hooks",
+        ])
+        .expect("system unadopt curl --dry-run should parse");
+
+        match cli.command {
+            Some(Commands::System(SystemCommands::Unadopt {
+                packages,
+                all,
+                dry_run,
+                keep_hooks,
+                ..
+            })) => {
+                assert_eq!(packages, vec!["curl"]);
+                assert!(!all);
+                assert!(dry_run);
+                assert!(keep_hooks);
+            }
+            _ => panic!("expected system unadopt command"),
+        }
+    }
+
+    #[test]
+    fn rejects_system_unadopt_without_scope() {
+        let err = match Cli::try_parse_from(["conary", "system", "unadopt"]) {
+            Ok(_) => panic!("system unadopt must require --all or package names"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn rejects_system_unadopt_all_with_packages() {
+        let err = match Cli::try_parse_from(["conary", "system", "unadopt", "--all", "curl"]) {
+            Ok(_) => panic!("system unadopt --all must reject package names"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
     fn cli_rejects_bootstrap_image_from_generation() {
         let err = match Cli::try_parse_from([
             "conary",

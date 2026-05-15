@@ -10,7 +10,7 @@ A cross-distribution Linux system manager with immutable generations, atomic tra
 
 Inspired by the [original Conary](https://en.wikipedia.org/wiki/Conary_(package_manager)) from rPath, which pioneered concepts like troves, changesets, flavors, and components that were ahead of their time. This project carries those ideas forward with a modern implementation.
 
-**Release status:** Conary is being prepared as a limited public preview for Fedora 44, Ubuntu 26.04 LTS, and Arch Linux. The CLI install/remove/update path, immutable generations, raw/qcow2 generation export, Remi conversion, and local QEMU validation are the supported preview surface. Remote Forge validation is temporarily paused while the project replaces the old runner with a KVM-capable host. OCI export now loads the same generation artifact contract as disk export, while conaryd package execution, ISO generation export, portable bundle signing, and non-x86_64 generation boot assets remain follow-up work.
+**Release status:** Conary is being prepared as an adoption-led limited public preview for Fedora 44, Ubuntu 26.04 LTS, and Arch Linux. The CLI install/remove/update path, native-package adoption/unadoption, immutable generations, raw/qcow2 generation export, Remi conversion, and local QEMU validation are the supported preview surface. In adoption mode, dnf, apt, and pacman remain authoritative for packages they already own; `conary --allow-live-system-mutation system unadopt --all` is the non-destructive escape hatch on hosts without a selected Conary generation. Takeover is explicit, active-generation handoff back to native authority remains fail-closed follow-up work, and ISO generation export is proof-of-concept follow-up rather than a core preview promise.
 
 ---
 
@@ -57,7 +57,7 @@ conary repo sync
 conary --allow-live-system-mutation install nginx
 ```
 
-**Current focus: limited public preview readiness.** The core install, rollback, generation, bootstrap, and server paths are in place. Recent work made installed-runtime generation export bootable under QEMU, tightened release/deploy flows, refreshed security gates, and moved the project toward operational polish and documentation accuracy rather than first-pass scaffolding. Remote Forge validation is paused pending a new KVM-capable runner; QEMU release evidence should come from `scripts/local-qemu-validation.sh` on a local machine with `/dev/kvm`.
+**Current focus: limited public preview readiness.** The core install, rollback, generation, bootstrap, and server paths are in place. The preview path is now adopt-first: users can let Conary observe and CAS-back existing RPM/DEB/Arch packages while the native package manager remains the authority, then unadopt without deleting package files if they decide not to continue. Remote Forge validation is paused pending a new KVM-capable runner; QEMU release evidence should come from `scripts/local-qemu-validation.sh` on a local machine with `/dev/kvm`.
 
 ---
 
@@ -118,8 +118,12 @@ Commands that mutate the active host require the explicit `--allow-live-system-m
 ./target/debug/conary query depends nginx       # Show dependencies
 ./target/debug/conary query whatprovides libc.so.6
 
-# Adopt packages already on the system
-./target/debug/conary --allow-live-system-mutation system adopt --system --full # CAS-back packages from the native package manager
+# Adopt packages already on the system; dnf/apt/pacman remain authoritative
+./target/debug/conary --allow-live-system-mutation system adopt --system --full # CAS-back native packages
+
+# Optional escape hatch before a Conary generation is selected
+# ./target/debug/conary system unadopt --all --dry-run
+# ./target/debug/conary --allow-live-system-mutation system unadopt --all
 
 # Build a generation from current system state
 ./target/debug/conary --allow-live-system-mutation system generation build --summary "Initial setup"
@@ -147,12 +151,19 @@ conary system generation info 2      # Detailed info about generation 2
 conary system generation export --path /conary/generations/3 --format qcow2 --output gen3.qcow2
 ```
 
-### System Takeover
+### Adoption And Explicit Takeover
 
-Convert an existing Linux installation into a Conary-managed system. The stable adoption path today is `conary --allow-live-system-mutation system adopt --system --full`, which bulk-imports packages into Conary with CAS backing. The `system takeover` release path is generation-level takeover: it builds a bootable generation and boot entry, then stops ready to activate instead of switching live automatically. The lower `cas` and `owned` stop-points still exist as internal/debug checkpoints, not normal preview workflows.
+Adopt an existing Linux installation without giving up native package-manager authority. The stable preview path today is `conary --allow-live-system-mutation system adopt --system --full`, which records native packages in Conary with CAS backing while dnf, apt, or pacman remains authoritative for those packages. `conary --allow-live-system-mutation system unadopt --all` removes Conary tracking without deleting native package files on hosts without a selected Conary generation. If a Conary generation is already selected, unadoption fails closed until the active-generation handoff design lands.
+
+Takeover is a separate, explicit step. The `system takeover` release path builds a bootable generation and boot entry, then stops ready to activate instead of switching live automatically. The lower `cas` and `owned` stop-points still exist as internal/debug checkpoints, not normal preview workflows.
 
 ```bash
+# Risk-free adoption lane
 conary --allow-live-system-mutation system adopt --system --full  # Bulk adoption with CAS backing
+conary system unadopt --all --dry-run
+conary --allow-live-system-mutation system unadopt --all
+
+# Explicit takeover lane
 conary system takeover --dry-run     # Preview the takeover plan
 conary --allow-live-system-mutation system takeover --up-to generation --yes
 conary --allow-live-system-mutation system generation switch 1    # Select the prepared generation for next boot
@@ -554,7 +565,7 @@ cargo build --profile fast-release   # Faster compile, still optimized
 
 ## Project Status
 
-**Version 0.8.0** -- The project has a working end-to-end stack: multi-format installs, atomic changesets, immutable generations, takeover/bootstrap flows, Remi conversion and serving, federation, and capability-restricted runtime execution. The current release-readiness pass is narrowing the public preview to Fedora 44, Ubuntu 26.04 LTS, and Arch Linux; keeping local QEMU validation and security gates green; and documenting remaining gaps such as conaryd package execution, ISO generation export, portable bundle signing, and non-x86_64 generation boot assets.
+**Version 0.8.0** -- The project has a working end-to-end stack: multi-format installs, atomic changesets, adoption/unadoption, immutable generations, explicit takeover/bootstrap flows, Remi conversion and serving, federation, and capability-restricted runtime execution. The current release-readiness pass is narrowing the public preview to an adoption-led Fedora 44, Ubuntu 26.04 LTS, and Arch Linux slice; keeping local QEMU validation and security gates green; and documenting remaining gaps such as active-generation handoff back to native authority, conaryd package execution, ISO generation export proof-of-concept work, portable bundle signing, and non-x86_64 generation boot assets.
 
 See [ROADMAP.md](ROADMAP.md) for what we're building next.
 
@@ -562,10 +573,12 @@ See [ROADMAP.md](ROADMAP.md) for what we're building next.
 
 ## What's Next
 
-The next milestone is the current **developer-experience and validation** push -- see [ROADMAP.md](ROADMAP.md) for the full plan. Near-term priorities:
+The next milestone is the current **adoption-led preview and validation** push -- see [ROADMAP.md](ROADMAP.md) for the full plan. Near-term priorities:
 
-- Keep the Fedora 44, Ubuntu 26.04 LTS, Arch, and QEMU generation-export suites in regular rotation
-- Finish ISO generation export on the same generation artifact contract
+- Keep Fedora 44, Ubuntu 26.04 LTS, and Arch adoption/unadoption proof in regular rotation
+- Keep QEMU generation-export validation in regular rotation
+- Design the active-generation handoff for returning a selected Conary generation to native package-manager authority
+- Keep ISO generation export as follow-up/proof-of-concept work on the same generation artifact contract
 - Introduce signed portable generation bundles and boot-artifact provenance
 - Make self-host VM validation pristine-by-default on reruns
 - Improve shell integration, contributor onboarding, and operator diagnostics

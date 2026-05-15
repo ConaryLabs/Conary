@@ -97,7 +97,7 @@ pub struct InstallOptions<'a> {
     /// `--no-capture`; equivalent to "skip scriptlet output capture" in
     /// some package managers but here it controls state snapshots.
     pub no_capture: bool,
-    /// Force install even for adopted packages
+    /// Force install/reinstall checks, but not adopted-package ownership
     pub force: bool,
     /// Dependency handling mode: satisfy, adopt, takeover.
     /// `None` means the user did not explicitly set `--dep-mode`, so the
@@ -733,24 +733,32 @@ fn parse_component_and_validate(
         ));
     }
 
-    // Check if the package is adopted from the system PM
+    // Check if the package is adopted from the system PM. `--force` alone must
+    // not silently convert native-manager ownership into Conary ownership.
     if let Some(existing) = conary_core::db::models::Trove::find_one_by_name(conn, &package_name)?
         && existing.install_source.is_adopted()
     {
-        if !force {
+        if dep_mode == DepMode::Takeover {
+            println!(
+                "[INFO] Package '{}' is adopted -- proceeding with explicit --dep-mode takeover",
+                package_name
+            );
+        } else {
             let pkg_mgr = conary_core::packages::SystemPackageManager::detect();
+            let force_note = if force {
+                " --force does not override adopted package ownership."
+            } else {
+                ""
+            };
             return Err(anyhow::anyhow!(
-                "Package '{}' is adopted from {}. Use 'conary system adopt --takeover {}' \
-                 to take full ownership, or use '--force' to override.",
+                "Package '{}' is adopted from {}.{} Use 'conary install {} --dep-mode takeover' \
+                 for explicit package takeover, or 'conary system takeover' for system takeover.",
                 package_name,
                 pkg_mgr.display_name(),
+                force_note,
                 package_name
             ));
         }
-        println!(
-            "[INFO] Package '{}' is adopted -- proceeding with --force",
-            package_name
-        );
     }
 
     Ok((package_name, component_selection))
@@ -2324,5 +2332,49 @@ mod tests {
         assert_eq!(missing[0].name, "kernel-core");
         assert_eq!(missing[0].constraint.to_string(), "= 6.19.10-300.fc44");
         assert_eq!(missing[0].required_by, vec!["kernel"]);
+    }
+
+    #[test]
+    fn force_install_over_adopted_package_is_not_silent_takeover() {
+        use crate::commands::test_helpers::create_test_db;
+        use conary_core::db::models::{InstallSource, Trove, TroveType};
+
+        let (_tmp, db_path) = create_test_db();
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let mut trove = Trove::new_with_source(
+            "curl".to_string(),
+            "8.0.0".to_string(),
+            TroveType::Package,
+            InstallSource::AdoptedFull,
+        );
+        trove.insert(&conn).unwrap();
+
+        let err = parse_component_and_validate(&conn, "curl", DepMode::Adopt, true).unwrap_err();
+        let message = err.to_string();
+
+        assert!(message.contains("curl"));
+        assert!(message.contains("--dep-mode takeover"));
+        assert!(message.contains("conary system takeover"));
+    }
+
+    #[test]
+    fn explicit_takeover_over_adopted_package_is_allowed() {
+        use crate::commands::test_helpers::create_test_db;
+        use conary_core::db::models::{InstallSource, Trove, TroveType};
+
+        let (_tmp, db_path) = create_test_db();
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let mut trove = Trove::new_with_source(
+            "curl".to_string(),
+            "8.0.0".to_string(),
+            TroveType::Package,
+            InstallSource::AdoptedFull,
+        );
+        trove.insert(&conn).unwrap();
+
+        let (package_name, _component_selection) =
+            parse_component_and_validate(&conn, "curl", DepMode::Takeover, false).unwrap();
+
+        assert_eq!(package_name, "curl");
     }
 }

@@ -151,6 +151,32 @@ pub enum SystemCommands {
         quiet: bool,
     },
 
+    /// Stop Conary tracking adopted native packages without deleting files
+    ///
+    /// Use --all to unadopt every package that is still owned by the native
+    /// package manager, or specify one or more package names. This refuses to
+    /// run while a Conary generation is selected unless --dry-run is used.
+    Unadopt {
+        /// Adopted package name(s) to stop tracking
+        #[arg(required_unless_present = "all", conflicts_with = "all")]
+        packages: Vec<String>,
+
+        #[command(flatten)]
+        db: DbArgs,
+
+        /// Stop tracking every adopted package
+        #[arg(long)]
+        all: bool,
+
+        /// Show what would be unadopted without changing the database
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Leave installed native package manager refresh hooks in place
+        #[arg(long)]
+        keep_hooks: bool,
+    },
+
     /// Garbage collect unreferenced files from CAS storage
     ///
     /// Removes files from the content-addressable store that are no longer

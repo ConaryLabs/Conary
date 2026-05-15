@@ -53,6 +53,7 @@ mod tests {
             "system generation gc",
             "system generation rollback",
             "system generation recover",
+            "system unadopt",
         ]
         .iter()
         .any(|command| {
@@ -68,6 +69,10 @@ mod tests {
             (is_package_remove_segment(segment) || is_system_mutation_segment(segment))
                 .then_some(segment)
         })
+    }
+
+    fn is_dry_run_segment(segment: &str) -> bool {
+        segment.split_whitespace().any(|arg| arg == "--dry-run")
     }
 
     #[test]
@@ -360,6 +365,9 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
                         .chain(step.kill_after_log.iter().map(|kill| &kill.conary))
                     {
                         for segment in live_mutation_segments(command) {
+                            if is_dry_run_segment(segment) {
+                                continue;
+                            }
                             assert!(
                                 segment.contains("--allow-live-system-mutation"),
                                 "{}:{} step {} mutation command must acknowledge live mutation: {}",

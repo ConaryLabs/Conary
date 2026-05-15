@@ -47,6 +47,17 @@ pub struct InstalledSourceIdentity {
 }
 
 impl SystemPackageManager {
+    /// Resolve a system package manager from recorded package version metadata.
+    pub fn from_version_scheme(version_scheme: Option<&str>) -> Option<Self> {
+        let scheme = version_scheme?.trim().to_ascii_lowercase();
+        match scheme.as_str() {
+            "rpm" => Some(Self::Rpm),
+            "debian" | "deb" | "dpkg" => Some(Self::Dpkg),
+            "arch" | "pacman" => Some(Self::Pacman),
+            _ => None,
+        }
+    }
+
     /// Detect the available system package manager
     pub fn detect() -> Self {
         if rpm_query::is_rpm_available() {
@@ -274,5 +285,46 @@ mod tests {
 
         assert_eq!(identity.source_distro.as_deref(), Some("arch"));
         assert_eq!(identity.version_scheme.as_deref(), Some("arch"));
+    }
+
+    #[test]
+    fn native_update_commands_cover_supported_package_managers() {
+        assert_eq!(
+            SystemPackageManager::Rpm.update_command("curl"),
+            "dnf update curl"
+        );
+        assert_eq!(
+            SystemPackageManager::Dpkg.update_command("curl"),
+            "apt upgrade curl"
+        );
+        assert_eq!(
+            SystemPackageManager::Pacman.update_command("curl"),
+            "pacman -Syu curl"
+        );
+    }
+
+    #[test]
+    fn native_manager_identity_comes_from_recorded_version_scheme() {
+        assert_eq!(
+            SystemPackageManager::from_version_scheme(Some("rpm")),
+            Some(SystemPackageManager::Rpm)
+        );
+        assert_eq!(
+            SystemPackageManager::from_version_scheme(Some("debian")),
+            Some(SystemPackageManager::Dpkg)
+        );
+        assert_eq!(
+            SystemPackageManager::from_version_scheme(Some("deb")),
+            Some(SystemPackageManager::Dpkg)
+        );
+        assert_eq!(
+            SystemPackageManager::from_version_scheme(Some("arch")),
+            Some(SystemPackageManager::Pacman)
+        );
+        assert_eq!(SystemPackageManager::from_version_scheme(None), None);
+        assert_eq!(
+            SystemPackageManager::from_version_scheme(Some("unknown")),
+            None
+        );
     }
 }

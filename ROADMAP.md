@@ -1,6 +1,6 @@
 # Conary Roadmap
 
-Conary already has working installs, rollback, immutable generations, Remi conversion/serving, federation, bootstrap, generation artifact export, self-hosting VM validation, and a large integration test surface. The limited public preview target is Fedora 44, Ubuntu 26.04 LTS, and Arch Linux, with security gates and local QEMU validation treated as release criteria while remote Forge validation is paused pending a KVM-capable runner. This roadmap is intentionally forward-looking: it tracks how Conary becomes safe to try on real systems before it asks to become the primary package manager.
+Conary already has working installs, rollback, adoption/unadoption, immutable generations, Remi conversion/serving, federation, bootstrap, generation artifact export, self-hosting VM validation, and a large integration test surface. The limited public preview target is Fedora 44, Ubuntu 26.04 LTS, and Arch Linux, with security gates and local QEMU validation treated as release criteria while remote Forge validation is paused pending a KVM-capable runner. This roadmap is intentionally forward-looking: it tracks how Conary becomes safe to try on real systems before it asks to become the primary package manager.
 
 For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). For shipped changes, see [CHANGELOG.md](CHANGELOG.md).
 
@@ -11,10 +11,11 @@ For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 
 ### 1. Adopt Without Regret
 
 - Keep dnf, apt, and pacman authoritative for packages in adoption mode
-- Add `conary system unadopt` as the one-command escape hatch for adopted packages
+- Keep `conary --allow-live-system-mutation system unadopt --all` as the one-command, non-destructive escape hatch for adopted packages on hosts without a selected Conary generation
 - Prove non-destructive unadoption for RPM, DEB, and Arch systems
 - Ensure Conary update paths never silently turn adopted packages into Conary-owned packages
 - Make takeover an explicit opt-in beyond the risk-free adoption lane
+- Design active-generation handoff back to native package-manager authority as follow-up work instead of deleting tracking rows while a Conary generation is selected
 
 ### 2. No Step Down Package Flows
 
@@ -50,28 +51,30 @@ For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 
 
 - Federation tuning for larger peer topologies
 - Optional alternative chunk transports and mirror strategies
-- ISO generation export on the shared generation artifact contract
+- ISO generation export as proof-of-concept follow-up on the shared generation artifact contract
 - OCI export hardening and registry workflow polish on the shared generation artifact source
 - Signed portable generation bundles and boot-artifact provenance
 - More source-oriented workflows around recipes, factories, and remote cooking
 
 ### Preview Caveats
 
-- The limited preview should be adoption-led, not takeover-led. Native package managers remain the authority for adopted RPM, DEB, and Arch packages until the user explicitly chooses takeover.
+- The limited preview should be adoption-led and risk-free to try, not takeover-led. Native package managers remain the authority for adopted RPM, DEB, and Arch packages until the user explicitly chooses takeover.
+- `conary --allow-live-system-mutation system unadopt --all` is the one-command escape hatch only when no Conary generation is selected; active-generation handoff back to native authority remains fail-closed follow-up work.
 - conaryd has queue/SSE/read-route plumbing and enhance-job execution, but install/remove/update package routes intentionally return `501 Not Implemented`.
 - Generation export is release-ready for x86_64 raw/qcow2 validation first; aarch64/riscv64 boot assets remain reserved follow-up work.
-- ISO generation export is not part of the limited public preview. OCI export uses the shared generation artifact source, but registry workflow polish remains follow-up.
+- ISO generation export is not part of the limited public preview core promise. OCI export uses the shared generation artifact source, but registry workflow polish remains follow-up.
 
 ---
 
 ## Near-Term Priorities
 
-1. Implement `conary system unadopt` and prove adoption escape for RPM, DEB, and Arch
+1. Prove `conary system unadopt` remains the non-destructive adoption escape for RPM, DEB, and Arch
 2. Lock down adopted-package update behavior so native package managers remain authoritative unless takeover is explicit
 3. Refresh quick-start and preview docs around adoption, unadoption, native PM coexistence, and takeover boundaries
-4. Keep generation export and installed-runtime QEMU validation in rotation
-5. Make self-host VM validation inputs pristine by default
-6. Shell integration, release polish, and contributor-experience cleanup
+4. Design active-generation handoff back to native package-manager authority
+5. Keep generation export and installed-runtime QEMU validation in rotation
+6. Make self-host VM validation inputs pristine by default
+7. Shell integration, release polish, and contributor-experience cleanup
 
 ---
 

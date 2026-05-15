@@ -17,6 +17,7 @@ use conary_core::model::{
     DiffAction, capture_current_state, planned_replatform_actions, replatform_execution_plan,
     source_policy_replatform_snapshot,
 };
+use conary_core::packages::SystemPackageManager;
 use conary_core::repository::{
     self, DownloadOptions, LatestSignal, PackageSelector, PackageSource, ResolutionOptions,
     SelectionOptions,
@@ -406,6 +407,82 @@ fn find_installed_trove(conn: &rusqlite::Connection, package_name: &str) -> Resu
     Ok((trove, trove_id))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AdoptedUpdateDecision {
+    SkipNativeAuthority,
+    QueueTakeover,
+    BlockCritical,
+}
+
+fn adopted_update_decision(
+    trove: &Trove,
+    dep_mode: DepMode,
+    requested_dep_mode: Option<DepMode>,
+) -> AdoptedUpdateDecision {
+    let explicit_takeover = matches!(requested_dep_mode, Some(DepMode::Takeover));
+    if dep_mode == DepMode::Takeover && explicit_takeover {
+        if super::install::is_package_blocked(&trove.name) {
+            AdoptedUpdateDecision::BlockCritical
+        } else {
+            AdoptedUpdateDecision::QueueTakeover
+        }
+    } else {
+        AdoptedUpdateDecision::SkipNativeAuthority
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AdoptedUpdateSkipReason {
+    NativeAuthority,
+    CriticalBlocked,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AdoptedUpdateSkip {
+    package: String,
+    manager: SystemPackageManager,
+    reason: AdoptedUpdateSkipReason,
+}
+
+fn native_manager_for_trove(
+    trove: &Trove,
+    fallback_manager: SystemPackageManager,
+) -> SystemPackageManager {
+    SystemPackageManager::from_version_scheme(trove.version_scheme.as_deref())
+        .unwrap_or(fallback_manager)
+}
+
+fn render_adopted_skip_sample(skips: &[&AdoptedUpdateSkip]) -> String {
+    let mut sample: Vec<String> = skips
+        .iter()
+        .take(5)
+        .map(|skip| {
+            format!(
+                "{} ({})",
+                skip.package,
+                skip.manager.update_command(&skip.package)
+            )
+        })
+        .collect();
+    if skips.len() > 5 {
+        sample.push(format!("... and {} more", skips.len() - 5));
+    }
+    sample.join(", ")
+}
+
+fn no_update_message(security_only: bool, adopted_updates_skipped: bool) -> &'static str {
+    match (security_only, adopted_updates_skipped) {
+        (true, true) => {
+            "No Conary-managed security updates available; adopted package updates remain under native package-manager authority"
+        }
+        (false, true) => {
+            "No Conary-managed updates available; adopted package updates remain under native package-manager authority"
+        }
+        (true, false) => "No security updates available",
+        (false, false) => "All packages are up to date",
+    }
+}
+
 /// Pin a package to prevent updates and removal
 pub async fn cmd_pin(package_name: &str, db_path: &str) -> Result<()> {
     info!("Pinning package: {}", package_name);
@@ -493,7 +570,8 @@ pub async fn cmd_update(
         info!("Checking for package updates");
     }
 
-    let dep_mode = dep_mode.unwrap_or_else(resolve_default_dep_mode_from_model);
+    let requested_dep_mode = dep_mode;
+    let dep_mode = requested_dep_mode.unwrap_or_else(resolve_default_dep_mode_from_model);
 
     let mut conn = open_db(db_path)?;
     let effective_source_policy = conary_core::repository::load_effective_policy(
@@ -553,8 +631,8 @@ pub async fn cmd_update(
     let mut updates_available: Vec<(Trove, SelectedUpdateCandidate)> = Vec::new();
     let mut pinned_skipped: Vec<String> = Vec::new();
 
-    let pkg_mgr = conary_core::packages::SystemPackageManager::detect();
-    let mut adopted_skipped: Vec<String> = Vec::new();
+    let detected_pkg_mgr = SystemPackageManager::detect();
+    let mut adopted_skipped: Vec<AdoptedUpdateSkip> = Vec::new();
 
     for trove in &installed_troves {
         // Skip pinned packages
@@ -569,41 +647,42 @@ pub async fn cmd_update(
             continue;
         };
 
-        // For adopted packages, behavior depends on dep-mode.
-        // The ownership ladder: AdoptedTrack -> AdoptedFull -> Taken/Repository.
-        // In satisfy mode, adopted packages are left to the system PM.
-        // In adopt mode, we track the new version metadata.
-        // In takeover mode, we download the CCS from Remi and take full ownership.
+        // For adopted packages, native package-manager authority is preserved
+        // unless the user explicitly asks Conary to take ownership.
         if trove.install_source.is_adopted() {
-            match dep_mode {
-                DepMode::Satisfy => {
+            let native_manager = native_manager_for_trove(trove, detected_pkg_mgr);
+            match adopted_update_decision(trove, dep_mode, requested_dep_mode) {
+                AdoptedUpdateDecision::SkipNativeAuthority => {
                     println!(
-                        "  {} {} -> {} (adopted as {}, use --dep-mode takeover to update via Conary)",
+                        "  {} {} -> {} (adopted as {}, native authority: use '{}')",
                         trove.name,
                         trove.version,
                         selected.package.version,
                         trove.install_source.as_str(),
+                        native_manager.update_command(&trove.name),
                     );
-                    adopted_skipped.push(trove.name.clone());
+                    adopted_skipped.push(AdoptedUpdateSkip {
+                        package: trove.name.clone(),
+                        manager: native_manager,
+                        reason: AdoptedUpdateSkipReason::NativeAuthority,
+                    });
                     continue;
                 }
-                DepMode::Adopt => {
+                AdoptedUpdateDecision::BlockCritical => {
                     println!(
-                        "  {} {} -> {} (adopted, tracking update)",
-                        trove.name, trove.version, selected.package.version
+                        "  {} {} (blocked - critical adopted package remains under native authority: use '{}')",
+                        trove.name,
+                        trove.version,
+                        native_manager.update_command(&trove.name),
                     );
-                    adopted_skipped.push(trove.name.clone());
+                    adopted_skipped.push(AdoptedUpdateSkip {
+                        package: trove.name.clone(),
+                        manager: native_manager,
+                        reason: AdoptedUpdateSkipReason::CriticalBlocked,
+                    });
                     continue;
                 }
-                DepMode::Takeover => {
-                    if super::install::is_package_blocked(&trove.name) {
-                        println!(
-                            "  {} {} (blocked - critical system package, skipping)",
-                            trove.name, trove.version
-                        );
-                        adopted_skipped.push(trove.name.clone());
-                        continue;
-                    }
+                AdoptedUpdateDecision::QueueTakeover => {
                     println!(
                         "  {} {} -> {} (taking over from system PM)",
                         trove.name, trove.version, selected.package.version
@@ -636,50 +715,43 @@ pub async fn cmd_update(
         );
     }
 
-    // Report adopted packages that were skipped (only in satisfy/adopt modes)
+    // Report adopted packages that were skipped because native authority still owns them.
     if !adopted_skipped.is_empty() {
-        let sample: Vec<&str> = adopted_skipped.iter().take(5).map(|s| s.as_str()).collect();
-        let suffix = if adopted_skipped.len() > 5 {
-            format!(", ... and {} more", adopted_skipped.len() - 5)
-        } else {
-            String::new()
-        };
-        match dep_mode {
-            DepMode::Satisfy => {
+        let native_authority: Vec<&AdoptedUpdateSkip> = adopted_skipped
+            .iter()
+            .filter(|skip| skip.reason == AdoptedUpdateSkipReason::NativeAuthority)
+            .collect();
+        if !native_authority.is_empty() {
+            println!(
+                "Skipping {} adopted package(s); native package-manager authority owns updates: {}",
+                native_authority.len(),
+                render_adopted_skip_sample(&native_authority)
+            );
+            if !matches!(requested_dep_mode, Some(DepMode::Takeover)) {
                 println!(
-                    "Skipping {} adopted package(s) (use '{}' or --dep-mode takeover): {}{}",
-                    adopted_skipped.len(),
-                    pkg_mgr.update_command("<package>"),
-                    sample.join(", "),
-                    suffix
+                    "Use --dep-mode takeover to request Conary takeover for non-critical adopted packages."
                 );
             }
-            DepMode::Adopt => {
-                println!(
-                    "Tracking {} adopted package(s) (metadata only): {}{}",
-                    adopted_skipped.len(),
-                    sample.join(", "),
-                    suffix
-                );
-            }
-            DepMode::Takeover => {
-                // In takeover mode, adopted_skipped only contains blocked packages
-                println!(
-                    "Blocked {} critical package(s) from takeover: {}{}",
-                    adopted_skipped.len(),
-                    sample.join(", "),
-                    suffix
-                );
-            }
+        }
+
+        let critical_blocked: Vec<&AdoptedUpdateSkip> = adopted_skipped
+            .iter()
+            .filter(|skip| skip.reason == AdoptedUpdateSkipReason::CriticalBlocked)
+            .collect();
+        if !critical_blocked.is_empty() {
+            println!(
+                "Blocked {} critical adopted package(s) from takeover; native package-manager authority remains required: {}",
+                critical_blocked.len(),
+                render_adopted_skip_sample(&critical_blocked)
+            );
         }
     }
 
     if updates_available.is_empty() {
-        if security_only {
-            println!("No security updates available");
-        } else {
-            println!("All packages are up to date");
-        }
+        println!(
+            "{}",
+            no_update_message(security_only, !adopted_skipped.is_empty())
+        );
         return Ok(());
     }
 
@@ -1156,7 +1228,8 @@ pub async fn cmd_update_group(
     yes: bool,
 ) -> Result<()> {
     info!("Updating collection: {}", name);
-    let dep_mode = dep_mode.unwrap_or_else(resolve_default_dep_mode_from_model);
+    let requested_dep_mode = dep_mode;
+    let effective_dep_mode = requested_dep_mode.unwrap_or_else(resolve_default_dep_mode_from_model);
     let conn = open_db(db_path)?;
     let effective_source_policy = conary_core::repository::load_effective_policy(
         &conn,
@@ -1186,6 +1259,8 @@ pub async fn cmd_update_group(
     // Find installed members that need updates
     let mut updates_to_apply: Vec<String> = Vec::new();
     let mut not_installed: Vec<String> = Vec::new();
+    let mut adopted_updates_skipped = false;
+    let detected_pkg_mgr = SystemPackageManager::detect();
 
     for member in &members {
         let installed = Trove::find_by_name(&conn, &member.member_name)?;
@@ -1198,6 +1273,31 @@ pub async fn cmd_update_group(
         if trove.pinned {
             println!("  {} is pinned, skipping", member.member_name);
             continue;
+        }
+
+        if trove.install_source.is_adopted() {
+            let native_manager = native_manager_for_trove(trove, detected_pkg_mgr);
+            match adopted_update_decision(trove, effective_dep_mode, requested_dep_mode) {
+                AdoptedUpdateDecision::QueueTakeover => {}
+                AdoptedUpdateDecision::SkipNativeAuthority => {
+                    println!(
+                        "  {} is adopted; native authority owns updates: use '{}'",
+                        member.member_name,
+                        native_manager.update_command(&trove.name)
+                    );
+                    adopted_updates_skipped = true;
+                    continue;
+                }
+                AdoptedUpdateDecision::BlockCritical => {
+                    println!(
+                        "  {} is a critical adopted package; native authority remains required: use '{}'",
+                        member.member_name,
+                        native_manager.update_command(&trove.name)
+                    );
+                    adopted_updates_skipped = true;
+                    continue;
+                }
+            }
         }
 
         if select_update_candidate(&conn, trove, security_only, &policy, primary_flavor)?.is_some()
@@ -1217,7 +1317,12 @@ pub async fn cmd_update_group(
     }
 
     if updates_to_apply.is_empty() {
-        if security_only {
+        if adopted_updates_skipped {
+            println!(
+                "No Conary-managed updates available for collection '{}'; adopted package updates remain under native package-manager authority",
+                name
+            );
+        } else if security_only {
             println!("No security updates available for collection '{}'", name);
         } else {
             println!("All members of collection '{}' are up to date", name);
@@ -1247,7 +1352,7 @@ pub async fn cmd_update_group(
             security_only,
             dry_run,
             sandbox_mode,
-            Some(dep_mode),
+            requested_dep_mode,
             yes,
         )
         .await
@@ -1754,5 +1859,85 @@ mod tests {
             changeset.status,
             conary_core::db::models::ChangesetStatus::Applied
         );
+    }
+
+    mod adopted_update_tests {
+        use super::*;
+
+        fn adopted_trove(name: &str) -> Trove {
+            let mut trove = Trove::new_with_source(
+                name.to_string(),
+                "1.0.0".to_string(),
+                TroveType::Package,
+                InstallSource::AdoptedFull,
+            );
+            trove.version_scheme = Some("debian".to_string());
+            trove
+        }
+
+        #[test]
+        fn adopted_updates_do_not_take_over_without_explicit_takeover_mode() {
+            let trove = adopted_trove("curl");
+
+            assert_eq!(
+                adopted_update_decision(&trove, DepMode::Takeover, None),
+                AdoptedUpdateDecision::SkipNativeAuthority
+            );
+        }
+
+        #[test]
+        fn adopted_updates_take_over_only_under_explicit_takeover_mode() {
+            let trove = adopted_trove("curl");
+
+            assert_eq!(
+                adopted_update_decision(&trove, DepMode::Takeover, Some(DepMode::Takeover)),
+                AdoptedUpdateDecision::QueueTakeover
+            );
+            assert_eq!(
+                adopted_update_decision(&trove, DepMode::Takeover, None),
+                AdoptedUpdateDecision::SkipNativeAuthority
+            );
+        }
+
+        #[test]
+        fn critical_adopted_packages_are_blocked_even_under_takeover_mode() {
+            let trove = adopted_trove("glibc");
+
+            assert_eq!(
+                adopted_update_decision(&trove, DepMode::Takeover, Some(DepMode::Takeover)),
+                AdoptedUpdateDecision::BlockCritical
+            );
+        }
+
+        #[test]
+        fn adopted_updates_are_not_queued_under_satisfy_or_adopt() {
+            let trove = adopted_trove("curl");
+
+            for dep_mode in [DepMode::Satisfy, DepMode::Adopt] {
+                assert_eq!(
+                    adopted_update_decision(&trove, dep_mode, Some(dep_mode)),
+                    AdoptedUpdateDecision::SkipNativeAuthority
+                );
+            }
+        }
+
+        #[test]
+        fn adopted_update_guidance_uses_recorded_version_scheme_before_live_detection() {
+            let mut trove = adopted_trove("curl");
+            trove.version_scheme = Some("arch".to_string());
+
+            assert_eq!(
+                native_manager_for_trove(&trove, conary_core::packages::SystemPackageManager::Rpm),
+                conary_core::packages::SystemPackageManager::Pacman
+            );
+        }
+
+        #[test]
+        fn adopted_update_skip_message_is_not_generic_up_to_date_text() {
+            let message = no_update_message(false, true);
+
+            assert!(!message.contains("All packages are up to date"));
+            assert!(message.contains("native package-manager authority"));
+        }
     }
 }
