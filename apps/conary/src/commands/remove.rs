@@ -1,7 +1,6 @@
 // src/commands/remove.rs
 //! Package removal commands
 
-use super::create_state_snapshot;
 use super::open_db;
 use super::progress::{RemovePhase, RemoveProgress};
 use super::{FileSnapshot, TroveSnapshot};
@@ -18,6 +17,15 @@ use tracing::{info, warn};
 
 pub(crate) struct RemoveInnerResult {
     pub(crate) snapshot: TroveSnapshot,
+    trove: Trove,
+    stored_scriptlets: Vec<ScriptletEntry>,
+    scriptlet_format: ScriptletPackageFormat,
+    removed_count: usize,
+    dirs_removed: usize,
+}
+
+struct PreparedRemove {
+    snapshot: TroveSnapshot,
     trove: Trove,
     stored_scriptlets: Vec<ScriptletEntry>,
     scriptlet_format: ScriptletPackageFormat,
@@ -57,7 +65,7 @@ pub async fn cmd_remove(
     // Create progress tracker for removal
     let progress = RemoveProgress::new(package_name);
 
-    let mut conn = open_db(db_path)?;
+    let conn = open_db(db_path)?;
     let troves = conary_core::db::models::Trove::find_by_name(&conn, package_name)
         .with_context(|| format!("Failed to query package '{}'", package_name))?;
 
@@ -115,8 +123,6 @@ pub async fn cmd_remove(
             ));
         }
     };
-    let trove_id = trove.id.ok_or_else(|| anyhow::anyhow!("Trove has no ID"))?;
-
     // Check if package is pinned
     if trove.pinned {
         return Err(anyhow::anyhow!(
@@ -124,6 +130,24 @@ pub async fn cmd_remove(
             package_name,
             package_name
         ));
+    }
+
+    if crate::commands::install::is_package_blocked(&trove.name) {
+        anyhow::bail!(
+            "Refusing to remove critical package '{}'. Use the native package manager for this system package.",
+            trove.name
+        );
+    }
+
+    if trove.install_source.is_adopted() && !purge_files {
+        let pkg_mgr = conary_core::packages::SystemPackageManager::detect();
+        anyhow::bail!(
+            "Refusing to remove adopted package '{}': native package manager authority is preserved. \
+             Use '{}' to uninstall it, or 'conary system unadopt {}' to remove Conary tracking only.",
+            package_name,
+            pkg_mgr.remove_command(package_name),
+            package_name
+        );
     }
 
     // Check dependency breakage BEFORE any removal (including adopted packages)
@@ -155,44 +179,6 @@ pub async fn cmd_remove(
     ))?;
     engine.begin()?;
 
-    // Check if package is adopted from system PM
-    if trove.install_source.is_adopted() && !purge_files {
-        // Remove from Conary tracking only -- don't touch files on disk
-        info!(
-            "Package '{}' is adopted -- removing from Conary tracking only",
-            package_name
-        );
-
-        let remove_changeset_id = conary_core::db::transaction(&mut conn, |tx| {
-            let mut changeset = conary_core::db::models::Changeset::new(format!(
-                "Remove tracking for adopted {}-{}",
-                trove.name, trove.version
-            ));
-            let changeset_id = changeset.insert(tx)?;
-
-            // Remove DB records -- ON DELETE CASCADE handles files, dependencies,
-            // and provides automatically when the trove row is deleted.
-            conary_core::db::models::Trove::delete(tx, trove_id)?;
-            changeset.update_status(tx, conary_core::db::models::ChangesetStatus::Applied)?;
-            Ok(changeset_id)
-        })?;
-
-        let pkg_mgr = conary_core::packages::SystemPackageManager::detect();
-        println!(
-            "Removed '{}' from Conary tracking. Use '{}' to fully uninstall.",
-            package_name,
-            pkg_mgr.remove_command(package_name)
-        );
-
-        create_state_snapshot(
-            &conn,
-            remove_changeset_id,
-            &format!("Remove tracking for {}", trove.name),
-        )?;
-        engine.release_lock();
-        return Ok(());
-    }
-
     if trove.install_source.is_adopted() && purge_files {
         println!(
             "WARNING: --purge-files specified for adopted package '{}'. \
@@ -206,11 +192,72 @@ pub async fn cmd_remove(
     let active_generation =
         conary_core::generation::mount::current_generation(runtime_root.root()).unwrap_or(None);
     if active_generation.is_none() {
+        let result = (|| -> Result<(RemoveInnerResult, crate::commands::LiveRootStats)> {
+            super::live_root::recover_pending_journals_with_changesets(
+                runtime_root.root(),
+                Path::new(root),
+                &conn,
+            )?;
+
+            let tx_uuid = uuid::Uuid::new_v4().to_string();
+            let tx_description = format!("Remove {}-{}", trove.name, trove.version);
+            let mut changeset =
+                conary_core::db::models::Changeset::with_tx_uuid(tx_description, tx_uuid.clone());
+            let remove_changeset_id = changeset.insert(&conn)?;
+
+            let prepared = prepare_remove(&conn, trove, root, no_scripts, sandbox_mode, &progress)?;
+            let remove_paths = prepared
+                .snapshot
+                .files
+                .iter()
+                .map(|file| file.path.clone())
+                .collect::<Vec<_>>();
+            let mut live_tx = crate::commands::LiveRootTransaction::begin(
+                runtime_root.root(),
+                Path::new(root),
+                tx_uuid,
+                format!("Remove {}", package_name),
+            )?;
+            progress.set_phase(RemovePhase::RemovingFiles);
+            let stats = live_tx.apply_remove_paths(&remove_paths)?;
+
+            progress.set_phase(RemovePhase::UpdatingDb);
+            let tx = conn.unchecked_transaction()?;
+            let remove_result = match commit_remove_db(&tx, remove_changeset_id, prepared) {
+                Ok(result) => result,
+                Err(error) => {
+                    live_tx.rollback()?;
+                    return Err(error);
+                }
+            };
+            let snapshot_json = crate::commands::metadata_with_removed_troves(vec![
+                remove_result.snapshot.clone(),
+            ])?;
+            tx.execute(
+                "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
+                rusqlite::params![snapshot_json, remove_changeset_id],
+            )?;
+            changeset.update_status(&tx, conary_core::db::models::ChangesetStatus::Applied)?;
+            if let Err(error) = tx.commit() {
+                if let Err(rollback_error) = live_tx.rollback() {
+                    return Err(error)
+                        .context(format!("Failed to rollback live root: {rollback_error}"));
+                }
+                return Err(error.into());
+            }
+            live_tx.commit()?;
+            Ok((remove_result, stats))
+        })();
         engine.release_lock();
-        anyhow::bail!(
-            "Cannot remove {package_name} without an active composefs generation. \
-             Build or activate a generation first, then retry the remove operation."
-        );
+        let (remove_result, stats) = result?;
+
+        run_post_remove_scriptlet(&remove_result, root, no_scripts, sandbox_mode, &progress);
+        progress.finish(&format!(
+            "Removed {} {}",
+            remove_result.trove.name, remove_result.trove.version
+        ));
+        print_remove_summary(&remove_result, &stats);
+        return Ok(());
     }
 
     // DB-first approach: commit the DB transaction before removing files from disk.
@@ -243,10 +290,11 @@ pub async fn cmd_remove(
             return Err(e);
         }
     };
-    let snapshot_json = serde_json::to_string(&remove_result.snapshot)?;
+    let snapshot_json =
+        crate::commands::metadata_with_removed_troves(vec![remove_result.snapshot.clone()])?;
     tx.execute(
         "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
-        [&snapshot_json, &remove_changeset_id.to_string()],
+        rusqlite::params![snapshot_json, remove_changeset_id],
     )?;
     tx.commit()?;
 
@@ -265,38 +313,63 @@ pub async fn cmd_remove(
     engine.release_lock();
     post_commit_result?;
 
-    // Execute post-remove scriptlet (best effort - warn on failure, don't abort)
-    if !no_scripts && !remove_result.stored_scriptlets.is_empty() {
-        progress.set_phase(RemovePhase::PostScript);
-        let executor = ScriptletExecutor::new(
-            Path::new(root),
-            &remove_result.trove.name,
-            &remove_result.trove.version,
-            remove_result.scriptlet_format,
-        )
-        .with_sandbox_mode(sandbox_mode);
-
-        if let Some(post) = remove_result
-            .stored_scriptlets
-            .iter()
-            .find(|s| s.phase == "post-remove")
-        {
-            info!("Running post-remove scriptlet...");
-            if let Err(e) = executor.execute_entry(post, &ExecutionMode::Remove) {
-                warn!(
-                    "Post-remove scriptlet failed: {}. Package files already removed.",
-                    e
-                );
-                eprintln!("WARNING: Post-remove scriptlet failed: {}", e);
-            }
-        }
-    }
+    run_post_remove_scriptlet(&remove_result, root, no_scripts, sandbox_mode, &progress);
 
     progress.finish(&format!(
         "Removed {} {}",
         remove_result.trove.name, remove_result.trove.version
     ));
 
+    let stats = crate::commands::LiveRootStats {
+        files_removed: remove_result.removed_count,
+        dirs_removed: remove_result.dirs_removed,
+        ..Default::default()
+    };
+    print_remove_summary(&remove_result, &stats);
+    // Note: composefs-native removal rebuilds the entire EROFS image,
+    // so individual file failure tracking is not applicable.
+
+    Ok(())
+}
+
+fn run_post_remove_scriptlet(
+    remove_result: &RemoveInnerResult,
+    root: &str,
+    no_scripts: bool,
+    sandbox_mode: SandboxMode,
+    progress: &RemoveProgress,
+) {
+    // Execute post-remove scriptlet (best effort - warn on failure, don't abort)
+    if no_scripts || remove_result.stored_scriptlets.is_empty() {
+        return;
+    }
+
+    progress.set_phase(RemovePhase::PostScript);
+    let executor = ScriptletExecutor::new(
+        Path::new(root),
+        &remove_result.trove.name,
+        &remove_result.trove.version,
+        remove_result.scriptlet_format,
+    )
+    .with_sandbox_mode(sandbox_mode);
+
+    if let Some(post) = remove_result
+        .stored_scriptlets
+        .iter()
+        .find(|s| s.phase == "post-remove")
+    {
+        info!("Running post-remove scriptlet...");
+        if let Err(e) = executor.execute_entry(post, &ExecutionMode::Remove) {
+            warn!(
+                "Post-remove scriptlet failed: {}. Package files already removed.",
+                e
+            );
+            eprintln!("WARNING: Post-remove scriptlet failed: {}", e);
+        }
+    }
+}
+
+fn print_remove_summary(remove_result: &RemoveInnerResult, stats: &crate::commands::LiveRootStats) {
     println!(
         "Removed package: {} version {}",
         remove_result.trove.name, remove_result.trove.version
@@ -309,14 +382,10 @@ pub async fn cmd_remove(
             .as_deref()
             .unwrap_or("none")
     );
-    println!("  Files removed: {}", remove_result.removed_count);
-    if remove_result.dirs_removed > 0 {
-        println!("  Directories removed: {}", remove_result.dirs_removed);
+    println!("  Files removed: {}", stats.files_removed);
+    if stats.dirs_removed > 0 {
+        println!("  Directories removed: {}", stats.dirs_removed);
     }
-    // Note: composefs-native removal rebuilds the entire EROFS image,
-    // so individual file failure tracking is not applicable.
-
-    Ok(())
 }
 
 #[cfg(test)]
@@ -401,10 +470,22 @@ pub(crate) fn remove_inner(
     sandbox_mode: SandboxMode,
     progress: &RemoveProgress,
 ) -> Result<RemoveInnerResult> {
+    let prepared = prepare_remove(tx, trove, root, no_scripts, sandbox_mode, progress)?;
+    commit_remove_db(tx, changeset_id, prepared)
+}
+
+fn prepare_remove(
+    conn: &rusqlite::Connection,
+    trove: &Trove,
+    root: &str,
+    no_scripts: bool,
+    sandbox_mode: SandboxMode,
+    progress: &RemoveProgress,
+) -> Result<PreparedRemove> {
     let trove_id = trove.id.ok_or_else(|| anyhow::anyhow!("Trove has no ID"))?;
 
-    let files = FileEntry::find_by_trove(tx, trove_id)?;
-    let stored_scriptlets = ScriptletEntry::find_by_trove(tx, trove_id)?;
+    let files = FileEntry::find_by_trove(conn, trove_id)?;
+    let stored_scriptlets = ScriptletEntry::find_by_trove(conn, trove_id)?;
     let scriptlet_format = stored_scriptlets
         .first()
         .and_then(|s| ScriptletPackageFormat::parse(&s.package_format))
@@ -429,30 +510,8 @@ pub(crate) fn remove_inner(
         }
     }
 
-    let snapshot = TroveSnapshot {
-        name: trove.name.clone(),
-        version: trove.version.clone(),
-        architecture: trove.architecture.clone(),
-        description: trove.description.clone(),
-        install_source: trove.install_source.as_str().to_string(),
-        installed_from_repository_id: trove.installed_from_repository_id,
-        files: files
-            .iter()
-            .map(|f| FileSnapshot {
-                path: f.path.clone(),
-                sha256_hash: f.sha256_hash.clone(),
-                size: f.size,
-                permissions: f.permissions,
-                symlink_target: f.symlink_target.clone(),
-            })
-            .collect(),
-    };
-
-    let (directories, regular_files): (Vec<_>, Vec<_>) = files
-        .iter()
-        .partition(|f| f.path.ends_with('/') || (f.permissions & 0o170000) == 0o040000);
-
-    let breaking_now = conary_core::resolver::solve_removal(tx, std::slice::from_ref(&trove.name))?;
+    let breaking_now =
+        conary_core::resolver::solve_removal(conn, std::slice::from_ref(&trove.name))?;
     if !breaking_now.is_empty() {
         return Err(conary_core::Error::IoError(format!(
             "Concurrent change: '{}' now required by: {}",
@@ -462,7 +521,48 @@ pub(crate) fn remove_inner(
         .into());
     }
 
-    for file in &files {
+    let (directories, regular_files): (Vec<_>, Vec<_>) = files
+        .iter()
+        .partition(|f| f.path.ends_with('/') || (f.permissions & 0o170000) == 0o040000);
+
+    Ok(PreparedRemove {
+        snapshot: TroveSnapshot {
+            name: trove.name.clone(),
+            version: trove.version.clone(),
+            architecture: trove.architecture.clone(),
+            description: trove.description.clone(),
+            install_source: trove.install_source.as_str().to_string(),
+            installed_from_repository_id: trove.installed_from_repository_id,
+            files: files
+                .iter()
+                .map(|f| FileSnapshot {
+                    path: f.path.clone(),
+                    sha256_hash: f.sha256_hash.clone(),
+                    size: f.size,
+                    permissions: f.permissions,
+                    symlink_target: f.symlink_target.clone(),
+                })
+                .collect(),
+        },
+        trove: trove.clone(),
+        stored_scriptlets,
+        scriptlet_format,
+        removed_count: regular_files.len(),
+        dirs_removed: directories.len(),
+    })
+}
+
+fn commit_remove_db(
+    tx: &rusqlite::Transaction<'_>,
+    changeset_id: i64,
+    prepared: PreparedRemove,
+) -> Result<RemoveInnerResult> {
+    let trove_id = prepared
+        .trove
+        .id
+        .ok_or_else(|| anyhow::anyhow!("Trove has no ID"))?;
+
+    for file in &prepared.snapshot.files {
         let use_hash = if file.sha256_hash.len() == 64
             && file.sha256_hash.chars().all(|c| c.is_ascii_hexdigit())
         {
@@ -499,12 +599,12 @@ pub(crate) fn remove_inner(
     conary_core::db::models::Trove::delete(tx, trove_id)?;
 
     Ok(RemoveInnerResult {
-        snapshot,
-        trove: trove.clone(),
-        stored_scriptlets,
-        scriptlet_format,
-        removed_count: regular_files.len(),
-        dirs_removed: directories.len(),
+        snapshot: prepared.snapshot,
+        trove: prepared.trove,
+        stored_scriptlets: prepared.stored_scriptlets,
+        scriptlet_format: prepared.scriptlet_format,
+        removed_count: prepared.removed_count,
+        dirs_removed: prepared.dirs_removed,
     })
 }
 
@@ -649,17 +749,6 @@ mod tests {
     }
 
     #[test]
-    fn remove_requires_active_generation_before_live_root_mutation() {
-        let source = std::fs::read_to_string("apps/conary/src/commands/remove.rs")
-            .unwrap_or_else(|_| include_str!("remove.rs").to_string());
-        let forbidden = ["remove_files_from_live_root", "(Path::new(root)"].concat();
-        assert!(
-            !source.contains(&forbidden),
-            "remove must not fall back to direct live-root mutation when no active generation exists"
-        );
-    }
-
-    #[test]
     fn direct_live_root_removal_deletes_files_symlinks_and_empty_dirs() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
@@ -698,7 +787,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn purge_remove_requires_active_generation_before_touching_files() {
+    async fn no_generation_remove_deletes_files_and_db_rows() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         let db_path = root.join("conary.db");
@@ -726,7 +815,7 @@ mod tests {
         file.insert(&conn).unwrap();
         drop(conn);
 
-        let err = cmd_remove(
+        cmd_remove(
             "fixture",
             db_path.to_string_lossy().as_ref(),
             root.to_string_lossy().as_ref(),
@@ -734,13 +823,64 @@ mod tests {
             None,
             true,
             SandboxMode::None,
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert!(!payload.exists());
+        let conn = conary_core::db::open(&db_path).unwrap();
+        assert!(
+            conary_core::db::models::Trove::find_by_name(&conn, "fixture")
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_refuses_critical_package_before_file_mutation() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let db_path = root.join("conary.db");
+        conary_core::db::init(&db_path).unwrap();
+
+        let payload = root.join("usr/bin/bash");
+        std::fs::create_dir_all(payload.parent().unwrap()).unwrap();
+        std::fs::write(&payload, "bash").unwrap();
+
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let mut trove = conary_core::db::models::Trove::new_with_source(
+            "bash".to_string(),
+            "5.2".to_string(),
+            conary_core::db::models::TroveType::Package,
+            conary_core::db::models::InstallSource::Repository,
+        );
+        let trove_id = trove.insert(&conn).unwrap();
+        let mut file = conary_core::db::models::FileEntry::new(
+            "/usr/bin/bash".to_string(),
+            "0".repeat(64),
+            "bash".len() as i64,
+            0o100755,
+            trove_id,
+        );
+        file.insert(&conn).unwrap();
+        drop(conn);
+
+        let err = cmd_remove(
+            "bash",
+            db_path.to_string_lossy().as_ref(),
+            root.to_string_lossy().as_ref(),
+            None,
+            None,
             true,
+            SandboxMode::None,
+            false,
         )
         .await
         .unwrap_err()
         .to_string();
 
-        assert!(err.contains("Cannot remove fixture without an active composefs generation"));
-        assert_eq!(std::fs::read_to_string(&payload).unwrap(), "fixture");
+        assert!(err.contains("critical package"));
+        assert_eq!(std::fs::read_to_string(&payload).unwrap(), "bash");
     }
 }
