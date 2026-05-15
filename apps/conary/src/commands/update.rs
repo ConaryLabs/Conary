@@ -217,6 +217,13 @@ struct SecurityMetadataUnavailable {
     candidate_version: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UpdatePackageFailure {
+    package: String,
+    version: String,
+    reason: String,
+}
+
 #[derive(Debug, Clone)]
 enum UpdateCandidateSelection {
     Selected(SelectedUpdateCandidate),
@@ -540,6 +547,28 @@ fn security_metadata_unavailable_error(count: usize) -> String {
     format!(
         "Cannot run security-only update because {count} source(s) cannot prove security metadata support. Mark the source supported only after its repository metadata publishes advisory data."
     )
+}
+
+fn update_required_failure_message(
+    failures: &[UpdatePackageFailure],
+    total_requested: usize,
+) -> Option<String> {
+    if failures.is_empty() {
+        return None;
+    }
+
+    let sample = failures
+        .iter()
+        .map(|failure| format!("{} {} ({})", failure.package, failure.version, failure.reason))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    Some(format!(
+        "{} of {} requested package update(s) failed: {}",
+        failures.len(),
+        total_requested,
+        sample
+    ))
 }
 
 /// Pin a package to prevent updates and removal
@@ -923,14 +952,15 @@ pub async fn cmd_update(
     let mut deltas_applied = 0i32;
     let mut full_downloads = 0i32;
     let mut delta_failures = 0i32;
-    let mut had_failures = false;
+    let mut required_failures: Vec<UpdatePackageFailure> = Vec::new();
 
     // Save counts before consuming the vectors
     let delta_count = delta_updates.len();
     let initial_full_count = full_updates.len();
+    let total_requested = delta_count + initial_full_count;
 
     // Only create a changeset when there is actual work to do
-    if delta_count + initial_full_count == 0 {
+    if total_requested == 0 {
         println!("No updates to apply.");
         return Ok(());
     }
@@ -938,7 +968,7 @@ pub async fn cmd_update(
     let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
         let mut changeset = conary_core::db::models::Changeset::new(format!(
             "Update {} package(s)",
-            delta_count + initial_full_count
+            total_requested
         ));
         changeset.insert(tx)
     })?;
@@ -1033,11 +1063,17 @@ pub async fn cmd_update(
                             } else {
                                 // Fall back to full download
                                 delta_failures += 1;
-                                had_failures = true;
                                 if let Ok(Some(repo)) =
                                     Repository::find_by_id(&conn, repo_pkg.repository_id)
                                 {
                                     full_updates.push((trove, repo_pkg, repo));
+                                } else {
+                                    required_failures.push(UpdatePackageFailure {
+                                        package: trove.name,
+                                        version: repo_pkg.version,
+                                        reason: "delta failed and fallback repository was not found"
+                                            .to_string(),
+                                    });
                                 }
                             }
                         }
@@ -1047,12 +1083,18 @@ pub async fn cmd_update(
                                 e
                             );
                             delta_failures += 1;
-                            had_failures = true;
                             // Get repository for fallback download
                             if let Ok(Some(repo)) =
                                 Repository::find_by_id(&conn, repo_pkg.repository_id)
                             {
                                 full_updates.push((trove, repo_pkg, repo));
+                            } else {
+                                required_failures.push(UpdatePackageFailure {
+                                    package: trove.name,
+                                    version: repo_pkg.version,
+                                    reason: "delta application failed and fallback repository was not found"
+                                        .to_string(),
+                                });
                             }
                         }
                     }
@@ -1061,10 +1103,16 @@ pub async fn cmd_update(
                 Err(e) => {
                     warn!("  Delta download failed: {}, will download full package", e);
                     delta_failures += 1;
-                    had_failures = true;
                     // Get repository for fallback download
                     if let Ok(Some(repo)) = Repository::find_by_id(&conn, repo_pkg.repository_id) {
                         full_updates.push((trove, repo_pkg, repo));
+                    } else {
+                        required_failures.push(UpdatePackageFailure {
+                            package: trove.name,
+                            version: repo_pkg.version,
+                            reason: "delta download failed and fallback repository was not found"
+                                .to_string(),
+                        });
                     }
                 }
             }
@@ -1111,7 +1159,11 @@ pub async fn cmd_update(
                     Err(e) => {
                         progress.fail_package(&trove.name, &e.to_string());
                         warn!("Failed to resolve {}: {}", trove.name, e);
-                        had_failures = true;
+                        required_failures.push(UpdatePackageFailure {
+                            package: trove.name.clone(),
+                            version: repo_pkg.version.clone(),
+                            reason: e.to_string(),
+                        });
                         continue;
                     }
                 };
@@ -1130,11 +1182,15 @@ pub async fn cmd_update(
                         }
                         // Future: handle actual CAS content hashes
                         progress.fail_package(&trove.name, "LocalCas not yet supported");
-                        had_failures = true;
                         warn!(
                             "LocalCas resolution not yet implemented for {}: {}",
                             trove.name, hash
                         );
+                        required_failures.push(UpdatePackageFailure {
+                            package: trove.name.clone(),
+                            version: repo_pkg.version.clone(),
+                            reason: format!("LocalCas not yet supported: {hash}"),
+                        });
                         continue;
                     }
                 };
@@ -1158,7 +1214,11 @@ pub async fn cmd_update(
                 {
                     progress.fail_package(&trove.name, &e.to_string());
                     warn!("  Package installation failed: {}", e);
-                    had_failures = true;
+                    required_failures.push(UpdatePackageFailure {
+                        package: trove.name.clone(),
+                        version: repo_pkg.version.clone(),
+                        reason: e.to_string(),
+                    });
                     let _ = std::fs::remove_file(&pkg_path);
                     continue;
                 }
@@ -1188,7 +1248,7 @@ pub async fn cmd_update(
             })?;
             if deltas_applied > 0 || full_downloads > 0 {
                 changeset.update_status(tx, conary_core::db::models::ChangesetStatus::Applied)?;
-            } else if had_failures {
+            } else if !required_failures.is_empty() {
                 changeset
                     .update_status(tx, conary_core::db::models::ChangesetStatus::RolledBack)?;
             } else {
@@ -1202,6 +1262,17 @@ pub async fn cmd_update(
         println!("Delta updates: {}", deltas_applied);
         println!("Full downloads: {}", full_downloads);
         println!("Delta failures: {}", delta_failures);
+        if let Some(message) = update_required_failure_message(&required_failures, total_requested)
+        {
+            println!("Required failures: {}", required_failures.len());
+            for failure in &required_failures {
+                println!(
+                    "  {} {}: {}",
+                    failure.package, failure.version, failure.reason
+                );
+            }
+            return Err(anyhow::anyhow!(message));
+        }
         if total_bytes_saved > 0 {
             let saved_mb = total_bytes_saved as f64 / 1_048_576.0;
             println!("Bandwidth saved: {:.2} MB", saved_mb);
@@ -1922,6 +1993,21 @@ mod tests {
         .unwrap();
 
         assert!(matches!(result, UpdateCandidateSelection::NoEligibleUpdate));
+    }
+
+    #[test]
+    fn partial_update_failure_message_is_not_clean_success() {
+        let failures = vec![UpdatePackageFailure {
+            package: "broken".to_string(),
+            version: "2.0.0".to_string(),
+            reason: "resolver failed".to_string(),
+        }];
+
+        let message = update_required_failure_message(&failures, 2).unwrap();
+
+        assert!(message.contains("1 of 2"));
+        assert!(message.contains("broken"));
+        assert!(!message.contains("All packages are up to date"));
     }
 
     #[test]
