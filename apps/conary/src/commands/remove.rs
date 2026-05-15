@@ -33,6 +33,12 @@ struct PreparedRemove {
     dirs_removed: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RemoveExecutionPath {
+    GenerationAware,
+    MutableLiveRoot,
+}
+
 #[cfg(test)]
 #[derive(Debug, Default, PartialEq, Eq)]
 struct DirectRemovalStats {
@@ -189,9 +195,7 @@ pub async fn cmd_remove(
 
     let runtime_root =
         conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(PathBuf::from(db_path));
-    let active_generation =
-        conary_core::generation::mount::current_generation(runtime_root.root()).unwrap_or(None);
-    if active_generation.is_none() {
+    if remove_execution_path(db_path)? == RemoveExecutionPath::MutableLiveRoot {
         let result = (|| -> Result<(RemoveInnerResult, crate::commands::LiveRootStats)> {
             super::live_root::recover_pending_journals_with_changesets(
                 runtime_root.root(),
@@ -201,10 +205,6 @@ pub async fn cmd_remove(
 
             let tx_uuid = uuid::Uuid::new_v4().to_string();
             let tx_description = format!("Remove {}-{}", trove.name, trove.version);
-            let mut changeset =
-                conary_core::db::models::Changeset::with_tx_uuid(tx_description, tx_uuid.clone());
-            let remove_changeset_id = changeset.insert(&conn)?;
-
             let prepared = prepare_remove(&conn, trove, root, no_scripts, sandbox_mode, &progress)?;
             let remove_paths = prepared
                 .snapshot
@@ -215,7 +215,7 @@ pub async fn cmd_remove(
             let mut live_tx = crate::commands::LiveRootTransaction::begin(
                 runtime_root.root(),
                 Path::new(root),
-                tx_uuid,
+                tx_uuid.clone(),
                 format!("Remove {}", package_name),
             )?;
             progress.set_phase(RemovePhase::RemovingFiles);
@@ -223,6 +223,9 @@ pub async fn cmd_remove(
 
             progress.set_phase(RemovePhase::UpdatingDb);
             let tx = conn.unchecked_transaction()?;
+            let mut changeset =
+                conary_core::db::models::Changeset::with_tx_uuid(tx_description, tx_uuid.clone());
+            let remove_changeset_id = changeset.insert(&tx)?;
             let remove_result = match commit_remove_db(&tx, remove_changeset_id, prepared) {
                 Ok(result) => result,
                 Err(error) => {
@@ -330,6 +333,37 @@ pub async fn cmd_remove(
     // so individual file failure tracking is not applicable.
 
     Ok(())
+}
+
+fn remove_execution_path(db_path: &str) -> Result<RemoveExecutionPath> {
+    let runtime_root =
+        conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(PathBuf::from(db_path));
+    let current_link = runtime_root.root().join("current");
+    let has_current_link = match std::fs::symlink_metadata(&current_link) {
+        Ok(metadata) if metadata.file_type().is_symlink() && !current_link.exists() => {
+            let target = std::fs::read_link(&current_link)
+                .with_context(|| format!("Failed to read {}", current_link.display()))?;
+            anyhow::bail!(
+                "current generation symlink {} -> {} is dangling",
+                current_link.display(),
+                target.display()
+            );
+        }
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("Failed to inspect {}", current_link.display()));
+        }
+    };
+    if !has_current_link && std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
+        return Ok(RemoveExecutionPath::GenerationAware);
+    }
+    let current = conary_core::generation::mount::current_generation(runtime_root.root())?;
+    Ok(match current {
+        Some(_) => RemoveExecutionPath::GenerationAware,
+        None => RemoveExecutionPath::MutableLiveRoot,
+    })
 }
 
 fn run_post_remove_scriptlet(
@@ -834,6 +868,114 @@ mod tests {
             conary_core::db::models::Trove::find_by_name(&conn, "fixture")
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn no_generation_remove_fails_closed_on_dangling_current_without_mutation() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let db_path = root.join("conary.db");
+        conary_core::db::init(&db_path).unwrap();
+        std::os::unix::fs::symlink("generations/7", root.join("current")).unwrap();
+
+        let payload = root.join("usr/bin/fixture");
+        std::fs::create_dir_all(payload.parent().unwrap()).unwrap();
+        std::fs::write(&payload, "fixture").unwrap();
+
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let mut trove = conary_core::db::models::Trove::new_with_source(
+            "fixture".to_string(),
+            "1.0.0".to_string(),
+            conary_core::db::models::TroveType::Package,
+            conary_core::db::models::InstallSource::Repository,
+        );
+        let trove_id = trove.insert(&conn).unwrap();
+        let mut file = conary_core::db::models::FileEntry::new(
+            "/usr/bin/fixture".to_string(),
+            "0".repeat(64),
+            "fixture".len() as i64,
+            0o100755,
+            trove_id,
+        );
+        file.insert(&conn).unwrap();
+        drop(conn);
+
+        let err = cmd_remove(
+            "fixture",
+            db_path.to_string_lossy().as_ref(),
+            root.to_string_lossy().as_ref(),
+            None,
+            None,
+            true,
+            SandboxMode::None,
+            false,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("dangling"), "{err}");
+        assert_eq!(std::fs::read_to_string(&payload).unwrap(), "fixture");
+        let conn = conary_core::db::open(&db_path).unwrap();
+        assert_eq!(
+            conary_core::db::models::Trove::find_by_name(&conn, "fixture")
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn no_generation_remove_live_root_failure_leaves_no_pending_changeset() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let db_path = root.join("conary.db");
+        conary_core::db::init(&db_path).unwrap();
+
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let mut trove = conary_core::db::models::Trove::new_with_source(
+            "fixture".to_string(),
+            "1.0.0".to_string(),
+            conary_core::db::models::TroveType::Package,
+            conary_core::db::models::InstallSource::Repository,
+        );
+        let trove_id = trove.insert(&conn).unwrap();
+        let mut file = conary_core::db::models::FileEntry::new(
+            "../escape".to_string(),
+            "0".repeat(64),
+            7,
+            0o100755,
+            trove_id,
+        );
+        file.insert(&conn).unwrap();
+        drop(conn);
+
+        let err = cmd_remove(
+            "fixture",
+            db_path.to_string_lossy().as_ref(),
+            root.to_string_lossy().as_ref(),
+            None,
+            None,
+            true,
+            SandboxMode::None,
+            false,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("escapes the target root"), "{err}");
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let changesets: i64 = conn
+            .query_row("SELECT COUNT(*) FROM changesets", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(changesets, 0);
+        assert_eq!(
+            conary_core::db::models::Trove::find_by_name(&conn, "fixture")
+                .unwrap()
+                .len(),
+            1
         );
     }
 
