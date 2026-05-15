@@ -456,7 +456,7 @@ git commit -m "fix(update): report partial package failures"
 **Files:**
 - Modify: `apps/conary/tests/native_pm_live_root.rs`
 
-- [ ] **Step 1: Add a CLI integration test**
+- [x] **Step 1: Add a CLI integration test**
 
 Use a temporary root and DB with no active generation. Build the existing fixture sources into the tempdir with the CLI:
 
@@ -500,7 +500,7 @@ fn no_generation_update_replaces_conary_owned_ccs_v1_with_v2() {
         String::from_utf8_lossy(&output.stderr));
     assert_eq!(
         std::fs::read_to_string(root.path().join("usr/share/conary-test/hello.txt")).unwrap(),
-        "Hello from Conary test fixture v2!\n"
+        "hello-v2\n"
     );
     assert!(root.path().join("usr/share/conary-test/added.txt").exists());
 }
@@ -508,7 +508,7 @@ fn no_generation_update_replaces_conary_owned_ccs_v1_with_v2() {
 
 The helper must build the package in the test tempdir so the test is hermetic and does not depend on prebuilt fixture artifacts. Do not use `file://` in `repository_packages.download_url`; the repository client expects HTTP(S).
 
-- [ ] **Step 2: Add security refusal CLI proof**
+- [x] **Step 2: Add security refusal CLI proof**
 
 In the same integration file, seed an installed package with a newer candidate from a default `Unknown` repository and run:
 
@@ -518,7 +518,7 @@ conary --allow-live-system-mutation update fixture --security --db-path <db> --r
 
 Expected: nonzero exit, stdout/stderr mention security metadata support, file contents remain v1, and installed trove version remains v1.
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 Run:
 
@@ -528,7 +528,7 @@ cargo test -p conary --test native_pm_live_root -- --nocapture
 
 Expected: all CLI live-root tests pass.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add apps/conary/tests/native_pm_live_root.rs
@@ -540,17 +540,20 @@ git commit -m "test(update): prove no-generation live-root parity"
 **Files:**
 - Modify: this plan checklist if task status changes.
 
-- [ ] **Step 1: Run focused tests**
+- [x] **Step 1: Run focused tests**
 
 ```bash
-cargo test -p conary-core repository_security_advisory_support test_migrate_v68 -- --nocapture
-cargo test -p conary security_update adopted_update_tests partial_update_failure update_required_failure -- --nocapture
+cargo test -p conary-core repository_security_advisory_support -- --nocapture
+cargo test -p conary security_update -- --nocapture
+cargo test -p conary adopted_update_tests -- --nocapture
+cargo test -p conary partial_update_failure -- --nocapture
+cargo test -p conary mark_pending_changeset_rolled_back -- --nocapture
 cargo test -p conary --test native_pm_live_root -- --nocapture
 ```
 
 Expected: all pass.
 
-- [ ] **Step 2: Run inventory and workspace gates**
+- [x] **Step 2: Run inventory and workspace gates**
 
 ```bash
 cargo run -p conary-test -- list
@@ -561,7 +564,7 @@ git diff --check
 
 Expected: all pass.
 
-- [ ] **Step 3: Completion audit against goal**
+- [x] **Step 3: Completion audit against goal**
 
 Confirm with real evidence:
 
@@ -572,7 +575,7 @@ Confirm with real evidence:
 - `update --security` refuses before mutation for `unknown` or `unsupported` security advisory support.
 - Focused tests, `conary-test` inventory, formatting, and Clippy all pass.
 
-- [ ] **Step 4: Commit final plan/checklist updates**
+- [x] **Step 4: Commit final plan/checklist updates**
 
 ```bash
 git add docs/superpowers/plans/2026-05-15-native-package-manager-parity-slice-b-plan.md
