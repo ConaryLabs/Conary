@@ -3,8 +3,8 @@
 
 #[cfg(test)]
 use super::FileSnapshot;
+use super::TroveSnapshot;
 use super::open_db;
-use super::{RevertMetadata, TroveSnapshot};
 #[cfg(test)]
 use anyhow::Context;
 use anyhow::Result;
@@ -216,7 +216,7 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Resul
     };
 
     if let Some(ref json) = metadata {
-        let snapshots = parse_rollback_snapshots(json)?;
+        let snapshots = crate::commands::parse_rollback_snapshots(json)?;
         // Check if this changeset also has installed troves (= upgrade vs removal)
         let has_troves: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM troves WHERE installed_by_changeset_id = ?1)",
@@ -379,13 +379,6 @@ pub async fn cmd_rollback(changeset_id: i64, db_path: &str, root: &str) -> Resul
     println!("  {} files affected by rollback", files_to_rollback.len());
 
     Ok(())
-}
-
-fn parse_rollback_snapshots(snapshot_json: &str) -> Result<Vec<TroveSnapshot>> {
-    if let Ok(wrapper) = serde_json::from_str::<RevertMetadata>(snapshot_json) {
-        return Ok(wrapper.removed_troves);
-    }
-    Ok(vec![serde_json::from_str(snapshot_json)?])
 }
 
 fn has_active_generation(db_path: &str) -> bool {
@@ -1177,11 +1170,8 @@ use super::format_bytes;
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        cmd_init, cmd_rollback, parse_rollback_snapshots, restore_snapshots_to_live_root,
-        rollback_claim_statuses,
-    };
-    use crate::commands::{FileSnapshot, RevertMetadata, TroveSnapshot};
+    use super::{cmd_init, cmd_rollback, restore_snapshots_to_live_root, rollback_claim_statuses};
+    use crate::commands::{FileSnapshot, RevertMetadata, TroveSnapshot, parse_rollback_snapshots};
     use conary_core::db::models::{
         Changeset, ChangesetStatus, FileEntry, InstallSource, Trove, TroveType,
     };
@@ -1254,7 +1244,7 @@ mod tests {
     }
 
     #[test]
-    fn rollback_metadata_parser_accepts_legacy_and_revert_wrapper_formats() {
+    fn parse_rollback_snapshots_accepts_legacy_and_revert_wrapper_formats() {
         let single = TroveSnapshot {
             name: "nginx".to_string(),
             version: "1.24.0".to_string(),
