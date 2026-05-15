@@ -451,6 +451,7 @@ mod tests {
             ccs_manifest_provides: None,
             ccs_capabilities: None,
             execution_path: PackageExecutionPath::MutableLiveRoot,
+            defer_generation: false,
         };
         let tx_config = TransactionConfig::from_paths(root.clone(), db_path.clone());
         let mut engine = TransactionEngine::new(tx_config).unwrap();

@@ -359,6 +359,7 @@ pub(crate) fn install_prepared_inner(
         ccs_manifest_provides: None,
         ccs_capabilities: None,
         execution_path: PackageExecutionPath::GenerationAware,
+        defer_generation: false,
     };
     install_inner(
         tx,
