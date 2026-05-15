@@ -172,11 +172,76 @@ enum PackageExecutionPath {
 fn package_execution_path(db_path: &str) -> Result<PackageExecutionPath> {
     let runtime_root =
         conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(PathBuf::from(db_path));
+    let current_link = runtime_root.root().join("current");
+    let has_current_link = match std::fs::symlink_metadata(&current_link) {
+        Ok(metadata) if metadata.file_type().is_symlink() && !current_link.exists() => {
+            let target = std::fs::read_link(&current_link)
+                .with_context(|| format!("Failed to read {}", current_link.display()))?;
+            anyhow::bail!(
+                "current generation symlink {} -> {} is dangling",
+                current_link.display(),
+                target.display()
+            );
+        }
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("Failed to inspect {}", current_link.display()));
+        }
+    };
+    if !has_current_link && std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
+        return Ok(PackageExecutionPath::GenerationAware);
+    }
     let current = conary_core::generation::mount::current_generation(runtime_root.root())?;
     Ok(match current {
         Some(_) => PackageExecutionPath::GenerationAware,
         None => PackageExecutionPath::MutableLiveRoot,
     })
+}
+
+fn live_root_files_from_stored_files(
+    cas: &conary_core::filesystem::CasStore,
+    stored_files: &[inner::StoredInstallFile],
+) -> Result<Vec<crate::commands::LiveRootFile>> {
+    stored_files
+        .iter()
+        .map(|file| {
+            let content = if let Some(target) = file.symlink_target.as_deref() {
+                let stored_target = cas
+                    .retrieve_symlink(&file.hash)
+                    .with_context(|| format!("Failed to read symlink {} from CAS", file.path))?;
+                if stored_target != target {
+                    anyhow::bail!(
+                        "CAS symlink target mismatch for {}: expected {}, got {}",
+                        file.path,
+                        target,
+                        stored_target
+                    );
+                }
+                Vec::new()
+            } else {
+                let content = cas
+                    .retrieve(&file.hash)
+                    .with_context(|| format!("Failed to read {} from CAS", file.path))?;
+                if content.len() as i64 != file.size {
+                    anyhow::bail!(
+                        "CAS object size mismatch for {}: expected {}, got {}",
+                        file.path,
+                        file.size,
+                        content.len()
+                    );
+                }
+                content
+            };
+            Ok(crate::commands::LiveRootFile {
+                path: file.path.clone(),
+                content,
+                mode: file.mode,
+                symlink_target: file.symlink_target.clone(),
+            })
+        })
+        .collect()
 }
 
 /// Map a distro identifier string to its `RepositoryDependencyFlavor`.
@@ -1803,16 +1868,7 @@ fn execute_install_transaction(
             let tx_uuid = uuid::Uuid::new_v4().to_string();
             let mut changeset = Changeset::with_tx_uuid(tx_description.clone(), tx_uuid.clone());
             let stored_files = inner::store_install_files_in_cas(&engine, extraction)?;
-            let live_files = extraction
-                .extracted_files
-                .iter()
-                .map(|file| crate::commands::LiveRootFile {
-                    path: file.path.clone(),
-                    content: file.content.clone(),
-                    mode: file.mode,
-                    symlink_target: file.symlink_target.clone(),
-                })
-                .collect::<Vec<_>>();
+            let live_files = live_root_files_from_stored_files(engine.cas(), &stored_files)?;
             let mut live_tx = crate::commands::LiveRootTransaction::begin(
                 runtime_root.root(),
                 Path::new(ctx.root),
@@ -1857,8 +1913,15 @@ fn execute_install_transaction(
                     return Err(error);
                 }
             };
+            if let Err(error) = live_tx.mark_committed_for_recovery() {
+                live_tx.rollback()?;
+                return Err(error);
+            }
             if let Err(error) = tx.commit() {
-                let _ = live_tx.rollback();
+                if let Err(rollback_error) = live_tx.rollback() {
+                    return Err(error)
+                        .context(format!("Failed to rollback live root: {rollback_error}"));
+                }
                 return Err(error.into());
             }
             live_tx.commit()?;
@@ -2459,6 +2522,27 @@ mod tests {
     }
 
     #[test]
+    fn live_root_files_are_loaded_from_stored_cas_objects() {
+        let temp = tempfile::tempdir().unwrap();
+        let cas = conary_core::filesystem::CasStore::new(temp.path().join("objects")).unwrap();
+        let hash = cas.store(b"from cas").unwrap();
+        let files = live_root_files_from_stored_files(
+            &cas,
+            &[inner::StoredInstallFile {
+                path: "/usr/bin/fixture".to_string(),
+                hash,
+                size: 8,
+                mode: 0o100755,
+                symlink_target: None,
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].content, b"from cas");
+    }
+
+    #[test]
     fn package_execution_path_fails_closed_on_invalid_generation_state() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(temp.path().join("generations/not-a-generation")).unwrap();
@@ -2475,6 +2559,18 @@ mod tests {
                 .contains("Failed to parse generation number"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn package_execution_path_fails_closed_on_dangling_current_symlink() {
+        let temp = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink("generations/7", temp.path().join("current")).unwrap();
+        let db_path = temp.path().join("conary.db");
+        let db_path_string = db_path.to_string_lossy().into_owned();
+
+        let error = package_execution_path(&db_path_string).unwrap_err();
+
+        assert!(error.to_string().contains("dangling"), "{error}");
     }
 
     #[test]
