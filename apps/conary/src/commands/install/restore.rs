@@ -9,8 +9,9 @@ use super::resolve::{
 };
 use super::{
     ExtractionResult, InstallOptions, InstallPhase, InstallProgress, InstallSemantics,
-    PreScriptletState, ScriptletContext, TransactionContext, build_resolution_policy,
-    extract_and_classify_files, resolve_canonical_name, run_pre_install_phase,
+    PackageExecutionPath, PreScriptletState, ScriptletContext, TransactionContext,
+    build_resolution_policy, extract_and_classify_files, resolve_canonical_name,
+    run_pre_install_phase,
 };
 use anyhow::{Context, Result};
 use conary_core::ccs::CcsPackage;
@@ -357,7 +358,7 @@ pub(crate) fn install_prepared_inner(
         old_trove_to_upgrade: execution.prepared.old_trove_to_upgrade.as_ref(),
         ccs_manifest_provides: None,
         ccs_capabilities: None,
-        defer_generation: false,
+        execution_path: PackageExecutionPath::GenerationAware,
     };
     install_inner(
         tx,

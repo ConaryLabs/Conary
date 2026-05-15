@@ -163,6 +163,21 @@ impl InstallSemantics {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PackageExecutionPath {
+    GenerationAware,
+    MutableLiveRoot,
+}
+
+fn package_execution_path(db_path: &str) -> PackageExecutionPath {
+    let runtime_root =
+        conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(PathBuf::from(db_path));
+    match conary_core::generation::mount::current_generation(runtime_root.root()).unwrap_or(None) {
+        Some(_) => PackageExecutionPath::GenerationAware,
+        None => PackageExecutionPath::MutableLiveRoot,
+    }
+}
+
 /// Map a distro identifier string to its `RepositoryDependencyFlavor`.
 ///
 /// Returns `None` for unrecognised distro names.
@@ -492,7 +507,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         old_trove_to_upgrade: old_trove_to_upgrade.as_deref(),
         ccs_manifest_provides: None,
         ccs_capabilities: None,
-        defer_generation: false,
+        execution_path: package_execution_path(db_path),
     };
     let tx_result =
         execute_install_transaction(&mut conn, pkg.as_ref(), &extraction, &tx_ctx, &progress)?;
@@ -583,7 +598,7 @@ struct TransactionContext<'a> {
     old_trove_to_upgrade: Option<&'a conary_core::db::models::Trove>,
     ccs_manifest_provides: Option<&'a conary_core::ccs::manifest::Provides>,
     ccs_capabilities: Option<&'a conary_core::capability::CapabilityDeclaration>,
-    defer_generation: bool,
+    execution_path: PackageExecutionPath,
 }
 
 /// Result from a successful transaction execution.
@@ -1775,6 +1790,79 @@ fn execute_install_transaction(
     };
     engine.begin().context("Failed to begin transaction")?;
 
+    if ctx.execution_path == PackageExecutionPath::MutableLiveRoot {
+        let result = (|| -> Result<InstallTransactionResult> {
+            let runtime_root = conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(
+                PathBuf::from(ctx.db_path),
+            );
+            crate::commands::recover_pending_journals(runtime_root.root(), Path::new(ctx.root))?;
+
+            let tx_uuid = uuid::Uuid::new_v4().to_string();
+            let mut changeset = Changeset::with_tx_uuid(tx_description.clone(), tx_uuid.clone());
+            let changeset_id = changeset.insert(conn)?;
+            let stored_files = inner::store_install_files_in_cas(&engine, extraction)?;
+            let live_files = extraction
+                .extracted_files
+                .iter()
+                .map(|file| crate::commands::LiveRootFile {
+                    path: file.path.clone(),
+                    content: file.content.clone(),
+                    mode: file.mode,
+                    symlink_target: file.symlink_target.clone(),
+                })
+                .collect::<Vec<_>>();
+            let mut live_tx = crate::commands::LiveRootTransaction::begin(
+                runtime_root.root(),
+                Path::new(ctx.root),
+                tx_uuid,
+                tx_description.clone(),
+            )?;
+            live_tx.apply_install_files(&live_files)?;
+
+            let tx = conn.unchecked_transaction()?;
+            let db_result = (|| -> Result<()> {
+                let inner_result = inner::install_inner_with_stored_files(
+                    &tx,
+                    changeset_id,
+                    pkg,
+                    extraction,
+                    ctx,
+                    &stored_files,
+                )?;
+                if let Some(provides) = ctx.ccs_manifest_provides {
+                    persist_ccs_manifest_provides(
+                        &tx,
+                        inner_result.trove_id,
+                        pkg.name(),
+                        provides,
+                    )?;
+                }
+                if let Some(capabilities) = ctx.ccs_capabilities {
+                    conary_core::capability::store_capabilities(
+                        &tx,
+                        inner_result.trove_id,
+                        capabilities,
+                    )?;
+                }
+                Ok(())
+            })();
+            if let Err(error) = db_result {
+                live_tx.rollback()?;
+                return Err(error);
+            }
+            if let Err(error) = tx.commit() {
+                let _ = live_tx.rollback();
+                return Err(error.into());
+            }
+            changeset.update_status(conn, ChangesetStatus::Applied)?;
+            live_tx.commit()?;
+
+            Ok(InstallTransactionResult { changeset_id })
+        })();
+        engine.release_lock();
+        return result;
+    }
+
     // Capture /etc snapshot BEFORE the DB transaction so the three-way merge
     // can distinguish pre- from post-install state.
     let prev_etc = crate::commands::composefs_ops::collect_etc_files(conn)?;
@@ -1810,13 +1898,6 @@ fn execute_install_transaction(
         "DB commit successful: changeset={}, trove={}",
         changeset_id, inner_result.trove_id
     );
-
-    if ctx.defer_generation {
-        let deferred_status = changeset.update_status(conn, ChangesetStatus::Applied);
-        engine.release_lock();
-        deferred_status?;
-        return Ok(InstallTransactionResult { changeset_id });
-    }
 
     let post_commit_result = (|| -> Result<()> {
         crate::commands::composefs_ops::rebuild_and_mount(
@@ -1950,7 +2031,11 @@ pub(crate) fn install_ccs_package_transactionally(
         old_trove_to_upgrade: old_trove,
         ccs_manifest_provides: Some(&pkg.manifest().provides),
         ccs_capabilities: pkg.manifest().capabilities.as_ref(),
-        defer_generation: opts.defer_generation,
+        execution_path: if opts.defer_generation {
+            PackageExecutionPath::MutableLiveRoot
+        } else {
+            package_execution_path(opts.db_path)
+        },
     };
     let tx_result = match execute_install_transaction(conn, pkg, &extraction, &tx_ctx, &progress) {
         Ok(result) => result,
@@ -2238,6 +2323,125 @@ fn print_package_suggestions(conn: &rusqlite::Connection, package_name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_generation_install_transaction_materializes_live_root_file() {
+        use conary_core::db::models::{Changeset, ChangesetStatus, FileEntry, Trove, TroveType};
+        use conary_core::packages::traits::{
+            Dependency, ExtractedFile, PackageFile, PackageFormat, Scriptlet,
+        };
+        use std::collections::HashMap;
+
+        struct FakePackage;
+
+        impl PackageFormat for FakePackage {
+            fn parse(_path: &str) -> conary_core::Result<Self> {
+                unreachable!("test constructs package directly")
+            }
+
+            fn name(&self) -> &str {
+                "fixture"
+            }
+
+            fn version(&self) -> &str {
+                "1.0.0"
+            }
+
+            fn architecture(&self) -> Option<&str> {
+                Some("x86_64")
+            }
+
+            fn description(&self) -> Option<&str> {
+                None
+            }
+
+            fn files(&self) -> &[PackageFile] {
+                &[]
+            }
+
+            fn dependencies(&self) -> &[Dependency] {
+                &[]
+            }
+
+            fn extract_file_contents(&self) -> conary_core::Result<Vec<ExtractedFile>> {
+                Ok(vec![])
+            }
+
+            fn scriptlets(&self) -> &[Scriptlet] {
+                &[]
+            }
+
+            fn to_trove(&self) -> Trove {
+                Trove::new(
+                    "fixture".to_string(),
+                    "1.0.0".to_string(),
+                    TroveType::Package,
+                )
+            }
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let db_path = temp.path().join("conary.db");
+        std::fs::create_dir_all(&root).unwrap();
+        conary_core::db::init(&db_path).unwrap();
+        let mut conn = conary_core::db::open(&db_path).unwrap();
+        let extraction = ExtractionResult {
+            extracted_files: vec![ExtractedFile {
+                path: "/usr/bin/fixture".to_string(),
+                content: b"fixture".to_vec(),
+                size: 7,
+                mode: 0o100755,
+                sha256: None,
+                symlink_target: None,
+            }],
+            classified: HashMap::from([(
+                conary_core::components::ComponentType::Runtime,
+                vec!["/usr/bin/fixture".to_string()],
+            )]),
+            component_names_by_path: None,
+            installed_component_names: None,
+            ccs_pre_remove_script: None,
+            installed_component_types: vec![conary_core::components::ComponentType::Runtime],
+            skipped_components: Vec::new(),
+            language_provides: Vec::new(),
+        };
+        let db_path_string = db_path.to_string_lossy().into_owned();
+        let root_string = root.to_string_lossy().into_owned();
+        let ctx = TransactionContext {
+            db_path: &db_path_string,
+            root: &root_string,
+            semantics: InstallSemantics::legacy(PackageFormatType::Rpm),
+            selection_reason: None,
+            old_trove_to_upgrade: None,
+            ccs_manifest_provides: None,
+            ccs_capabilities: None,
+            execution_path: PackageExecutionPath::MutableLiveRoot,
+        };
+
+        let result = execute_install_transaction(
+            &mut conn,
+            &FakePackage,
+            &extraction,
+            &ctx,
+            &InstallProgress::single("Installing"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(root.join("usr/bin/fixture")).unwrap(),
+            "fixture"
+        );
+        assert!(
+            FileEntry::find_by_path(&conn, "/usr/bin/fixture")
+                .unwrap()
+                .is_some()
+        );
+        let changeset = Changeset::find_by_id(&conn, result.changeset_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(changeset.status, ChangesetStatus::Applied);
+    }
 
     #[test]
     fn classify_dep_type_packages() {

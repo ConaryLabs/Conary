@@ -314,7 +314,9 @@ fn insert_file_entry_claiming_live_root_overlap(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::install::{ExtractionResult, InstallSemantics, TransactionContext};
+    use crate::commands::install::{
+        ExtractionResult, InstallSemantics, PackageExecutionPath, TransactionContext,
+    };
     use conary_core::db::models::{Changeset, FileEntry, Trove, TroveType};
     use conary_core::packages::traits::{
         Dependency, ExtractedFile, PackageFile, PackageFormat, Scriptlet,
@@ -448,7 +450,7 @@ mod tests {
             old_trove_to_upgrade: None,
             ccs_manifest_provides: None,
             ccs_capabilities: None,
-            defer_generation: true,
+            execution_path: PackageExecutionPath::MutableLiveRoot,
         };
         let tx_config = TransactionConfig::from_paths(root.clone(), db_path.clone());
         let mut engine = TransactionEngine::new(tx_config).unwrap();
