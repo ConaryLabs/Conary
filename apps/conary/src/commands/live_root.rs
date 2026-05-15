@@ -217,8 +217,18 @@ impl LiveRootTransaction {
     }
 
     pub(crate) fn commit(mut self) -> Result<()> {
+        if let Err(error) = self.write_journal("committed") {
+            self.committed = true;
+            self.cleanup_transaction_files().with_context(|| {
+                format!(
+                    "Failed to cleanup live-root recovery journal after committed marker write failed: {error}"
+                )
+            })?;
+            return Err(error).context(
+                "Failed to mark live-root transaction committed; recovery journal was removed",
+            );
+        }
         self.committed = true;
-        self.write_journal("committed")?;
         self.cleanup_transaction_files()?;
         Ok(())
     }
