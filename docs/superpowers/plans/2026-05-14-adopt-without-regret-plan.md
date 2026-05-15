@@ -4,7 +4,7 @@
 
 **Goal:** Implement Conary's adoption-led risk-free trial path with `conary system unadopt`, native package-manager authority safeguards, roadmap/docs alignment, and real RPM/DEB/Arch tests.
 
-**Architecture:** Add `system unadopt` as a focused CLI/command module that removes only `AdoptedTrack` and `AdoptedFull` tracking rows, leaves package files untouched, and removes sync hooks for all-package unadoption. Add update-boundary tests so adopted packages cannot silently cross into Conary-owned writes except under explicit takeover. Extend integration coverage so Fedora 44, Ubuntu 26.04 LTS, and Arch prove the same adoption escape contract.
+**Architecture:** Add `system unadopt` as a focused CLI/command module that removes only `AdoptedTrack` and `AdoptedFull` tracking rows, leaves package files untouched, and removes sync hooks for all-package unadoption. It must be behind the live-mutation acknowledgement gate and must fail closed before DB mutation when a Conary generation is selected for the runtime root. Add native-manager identity and update-boundary tests so adopted packages cannot silently cross into Conary-owned writes except under explicit takeover. Extend integration coverage so Fedora 44, Ubuntu 26.04 LTS, and Arch prove the same adoption escape contract.
 
 **Tech Stack:** Rust, clap, rusqlite, Conary command modules, conary-test TOML manifests, Markdown docs.
 
@@ -15,7 +15,7 @@
 Use this when launching the implementation:
 
 ```text
-/goal Implement Conary Adopt Without Regret: adoption mode preserves dnf/apt/pacman authority for RPM, DEB, and Arch systems; `conary system unadopt` provides a tested one-command non-destructive escape hatch; update paths cannot silently take over adopted packages; roadmap/docs/tests prove the contract.
+/goal Implement Conary Adopt Without Regret: adoption mode preserves dnf/apt/pacman authority for RPM, DEB, and Arch systems; `conary system unadopt` provides a tested one-command non-destructive escape hatch when no Conary generation is selected and fails closed otherwise; update/install paths cannot silently take over adopted packages; roadmap/docs/tests prove the contract.
 ```
 
 The goal is complete only after the final verification block in this plan passes or any skipped validation is recorded with a concrete reason.
@@ -29,7 +29,9 @@ The goal is complete only after the final verification block in this plan passes
 - Modify: `apps/conary/src/commands/adopt/mod.rs`
 - Create: `apps/conary/src/commands/adopt/unadopt.rs`
 - Modify: `apps/conary/src/commands/adopt/hooks.rs`
+- Modify: `apps/conary/src/commands/install/mod.rs`
 - Modify: `apps/conary/src/commands/update.rs`
+- Modify: `apps/conary-test/src/config/mod.rs`
 - Modify: `apps/conary/tests/integration/remi/manifests/phase1-advanced.toml`
 - Modify: `docs/INTEGRATION-TESTING.md`
 - Modify: `docs/superpowers/documentation-accuracy-audit-inventory.tsv`
@@ -154,11 +156,20 @@ git commit -m "feat(cli): add system unadopt surface"
 - Modify: `apps/conary/src/commands/adopt/mod.rs`
 - Create: `apps/conary/src/commands/adopt/unadopt.rs`
 - Modify: `apps/conary/src/dispatch.rs`
+- Modify: `apps/conary-test/src/config/mod.rs`
 - Test: `apps/conary/src/commands/adopt/unadopt.rs`
+- Test: `apps/conary-test/src/config/mod.rs`
 
-- [ ] **Step 1: Add failing unit tests for unadoption**
+- [ ] **Step 1: Add failing unit tests for unadoption and wire the module**
 
-Create `apps/conary/src/commands/adopt/unadopt.rs` with the tests below first. The implementation stubs can be added in Step 3.
+Create `apps/conary/src/commands/adopt/unadopt.rs` with the tests below first. Immediately wire the module in `apps/conary/src/commands/adopt/mod.rs` so Rust compiles and discovers the tests:
+
+```rust
+mod unadopt;
+pub use unadopt::{UnadoptOptions, UnadoptSummary, cmd_unadopt};
+```
+
+The implementation stubs can stay intentionally failing until Step 4.
 
 ```rust
 // src/commands/adopt/unadopt.rs
@@ -303,6 +314,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unadopt_refuses_selected_generation_before_db_mutation() {
+        let (_tmp, db_path) = create_test_db();
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let curl_id = insert_trove(&conn, "curl", InstallSource::AdoptedFull);
+        let runtime_root =
+            conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(&db_path);
+        std::fs::create_dir_all(runtime_root.generation_path(1)).unwrap();
+        std::os::unix::fs::symlink(runtime_root.generation_path(1), runtime_root.current_link())
+            .unwrap();
+
+        let err = cmd_unadopt(
+            &db_path,
+            UnadoptOptions {
+                packages: vec!["curl".to_string()],
+                all: false,
+                dry_run: false,
+                keep_hooks: true,
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("selected Conary generation"));
+        assert!(Trove::find_by_id(&conn, curl_id).unwrap().is_some());
+    }
+
+    #[tokio::test]
     async fn unadopt_named_conary_owned_package_is_rejected() {
         let (_tmp, db_path) = create_test_db();
         let conn = conary_core::db::open(&db_path).unwrap();
@@ -333,18 +371,11 @@ Run:
 cargo test -p conary unadopt_ -- --nocapture
 ```
 
-Expected: tests fail with `cmd_unadopt is not implemented yet`.
+Expected: tests compile and fail with `cmd_unadopt is not implemented yet`.
 
-- [ ] **Step 3: Wire the module and dispatch**
+- [ ] **Step 3: Wire dispatch with live-mutation safety**
 
-In `apps/conary/src/commands/adopt/mod.rs`, add:
-
-```rust
-mod unadopt;
-pub use unadopt::{UnadoptOptions, UnadoptSummary, cmd_unadopt};
-```
-
-In `apps/conary/src/dispatch.rs`, add a `SystemCommands::Unadopt` arm near the adopt arm:
+In `apps/conary/src/dispatch.rs`, add a `SystemCommands::Unadopt` arm near the adopt arm. The live-mutation guard is required for apply mode and dry-run must bypass it:
 
 ```rust
         cli::SystemCommands::Unadopt {
@@ -354,6 +385,12 @@ In `apps/conary/src/dispatch.rs`, add a `SystemCommands::Unadopt` arm near the a
             dry_run,
             keep_hooks,
         } => {
+            require_live_mutation(
+                allow_live_system_mutation,
+                Cow::Borrowed("conary system unadopt"),
+                LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
+                dry_run,
+            )?;
             commands::cmd_unadopt(
                 &db.db_path,
                 commands::UnadoptOptions {
@@ -368,11 +405,15 @@ In `apps/conary/src/dispatch.rs`, add a `SystemCommands::Unadopt` arm near the a
         }
 ```
 
+In `apps/conary-test/src/config/mod.rs`, add `system unadopt` to `is_system_mutation_segment` so manifests that apply unadoption must include `--allow-live-system-mutation`.
+
 - [ ] **Step 4: Implement `cmd_unadopt`**
 
 Replace the stub with implementation that:
 
 - opens the DB with `crate::commands::open_db`
+- derives `ConaryRuntimeRoot::from_db_path(db_path)` and calls `current_generation(runtime_root.root())`
+- returns an error before DB mutation when apply mode sees a selected Conary generation
 - queries `Trove::list_all` for `--all`, or `Trove::find_by_name` for named packages
 - sorts names for stable output
 - deletes only `InstallSource::AdoptedTrack` and `InstallSource::AdoptedFull`
@@ -395,7 +436,7 @@ Expected: all unadopt tests pass.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add apps/conary/src/commands/adopt/mod.rs apps/conary/src/commands/adopt/unadopt.rs apps/conary/src/dispatch.rs
+git add apps/conary/src/commands/adopt/mod.rs apps/conary/src/commands/adopt/unadopt.rs apps/conary/src/dispatch.rs apps/conary-test/src/config/mod.rs
 git commit -m "feat(adopt): add non-destructive unadopt"
 ```
 
@@ -408,7 +449,7 @@ git commit -m "feat(adopt): add non-destructive unadopt"
 
 - [ ] **Step 1: Add hook removal tests**
 
-Add tests in `apps/conary/src/commands/adopt/hooks.rs` proving hook paths exist for all three package managers:
+Add tests in `apps/conary/src/commands/adopt/hooks.rs` proving hook paths exist for all three package managers and that removable hook path pairs remove every file:
 
 ```rust
 #[test]
@@ -418,38 +459,147 @@ fn hook_paths_cover_all_supported_native_package_managers() {
     assert!(hook_paths(SystemPackageManager::Pacman).is_some());
     assert!(hook_paths(SystemPackageManager::Unknown).is_none());
 }
+
+#[test]
+fn remove_hook_path_pair_removes_script_and_optional_filter() {
+    let tmp = tempfile::tempdir().unwrap();
+    let script = tmp.path().join("conary-sync.script");
+    let filter = tmp.path().join("conary-sync.filter");
+    std::fs::write(&script, "script").unwrap();
+    std::fs::write(&filter, "filter").unwrap();
+
+    let removed = remove_hook_path_pair(&script, Some(&filter)).unwrap();
+
+    assert!(removed);
+    assert!(!script.exists());
+    assert!(!filter.exists());
+}
+
+#[test]
+fn remove_hook_path_pair_reports_false_when_nothing_existed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let script = tmp.path().join("missing.script");
+
+    let removed = remove_hook_path_pair(&script, None).unwrap();
+
+    assert!(!removed);
+}
 ```
 
 - [ ] **Step 2: Expose a hook removal helper**
 
-Add a public helper in `hooks.rs`:
+Adjust `remove_file_if_exists` so it returns whether it removed a file, add a testable path-pair helper, then expose a public detected-manager helper:
 
 ```rust
+fn remove_file_if_exists(path: &std::path::Path) -> Result<bool> {
+    if path.exists() {
+        fs::remove_file(path)?;
+        println!("  Removed: {}", path.display());
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+fn remove_hook_path_pair(script: &std::path::Path, filter: Option<&std::path::Path>) -> Result<bool> {
+    let mut removed = remove_file_if_exists(script)?;
+    if let Some(filter) = filter {
+        removed |= remove_file_if_exists(filter)?;
+    }
+    Ok(removed)
+}
+
 pub(crate) async fn remove_detected_sync_hooks() -> Result<bool> {
     let pkg_mgr = SystemPackageManager::detect();
     let Some(paths) = hook_paths(pkg_mgr) else {
         return Ok(false);
     };
 
-    remove_if_exists(&paths.config)?;
-    remove_if_exists(&paths.script)?;
-    Ok(true)
+    remove_hook_path_pair(
+        std::path::Path::new(paths.script),
+        paths.filter.map(std::path::Path::new),
+    )
 }
 ```
 
+Update the existing `cmd_sync_hook_install(remove = true)` call sites in the same file to pass `Path::new(...)` into `remove_file_if_exists`, or keep a tiny string wrapper if that makes the diff cleaner.
+
 - [ ] **Step 3: Use it from `cmd_unadopt --all`**
 
-In `cmd_unadopt`, after successful all-package apply:
+Make the command testable by routing hook removal through a small internal helper. `cmd_unadopt` should call it with `super::hooks::remove_detected_sync_hooks`; unit tests can pass a fake hook remover.
+
+```rust
+async fn cmd_unadopt_with_hook_remover<F, Fut>(
+    db_path: &str,
+    opts: UnadoptOptions,
+    hook_remover: F,
+) -> Result<UnadoptSummary>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<bool>>,
+{
+    // implementation body
+}
+```
+
+Inside that helper, after successful all-package apply:
 
 ```rust
 let hooks_removed = if opts.all && !opts.keep_hooks && !opts.dry_run {
-    super::hooks::remove_detected_sync_hooks().await?
+    hook_remover().await?
 } else {
     false
 };
 ```
 
 Return that value in `UnadoptSummary`.
+
+Add unadopt tests for default hook removal and `--keep-hooks`:
+
+```rust
+#[tokio::test]
+async fn unadopt_all_removes_hooks_by_default() {
+    let (_tmp, db_path) = create_test_db();
+    let conn = conary_core::db::open(&db_path).unwrap();
+    insert_trove(&conn, "curl", InstallSource::AdoptedFull);
+
+    let summary = cmd_unadopt_with_hook_remover(
+        &db_path,
+        UnadoptOptions {
+            packages: Vec::new(),
+            all: true,
+            dry_run: false,
+            keep_hooks: false,
+        },
+        || async { Ok(true) },
+    )
+    .await
+    .unwrap();
+
+    assert!(summary.hooks_removed);
+}
+
+#[tokio::test]
+async fn unadopt_all_keep_hooks_skips_hook_removal() {
+    let (_tmp, db_path) = create_test_db();
+    let conn = conary_core::db::open(&db_path).unwrap();
+    insert_trove(&conn, "curl", InstallSource::AdoptedFull);
+
+    let summary = cmd_unadopt_with_hook_remover(
+        &db_path,
+        UnadoptOptions {
+            packages: Vec::new(),
+            all: true,
+            dry_run: false,
+            keep_hooks: true,
+        },
+        || async { panic!("hook remover should not run with --keep-hooks") },
+    )
+    .await
+    .unwrap();
+
+    assert!(!summary.hooks_removed);
+}
+```
 
 - [ ] **Step 4: Run hook and unadopt tests**
 
@@ -469,29 +619,47 @@ git add apps/conary/src/commands/adopt/hooks.rs apps/conary/src/commands/adopt/u
 git commit -m "feat(adopt): remove sync hooks during full unadopt"
 ```
 
-## Task 4: Guard Adopted Update Behavior
+## Task 4: Guard Adopted Update Behavior And Native Authority
 
 **Files:**
 - Modify: `apps/conary/src/commands/update.rs`
 - Test: `apps/conary/src/commands/update.rs`
 - Test: `crates/conary-core/src/packages/mod.rs`
 
-- [ ] **Step 1: Add package-manager command tests**
+- [ ] **Step 1: Add package-manager identity and command tests**
 
-Add tests in `crates/conary-core/src/packages/mod.rs`:
+Add helpers and tests in `crates/conary-core/src/packages/mod.rs` so adopted packages can prefer their recorded native-manager identity instead of relying only on live binary detection:
 
 ```rust
+impl SystemPackageManager {
+    pub fn from_version_scheme(scheme: Option<&str>) -> Option<Self> {
+        match scheme {
+            Some("rpm") => Some(Self::Rpm),
+            Some("debian") => Some(Self::Dpkg),
+            Some("arch") => Some(Self::Pacman),
+            _ => None,
+        }
+    }
+}
+
 #[test]
 fn native_update_commands_cover_supported_package_managers() {
     assert_eq!(SystemPackageManager::Rpm.update_command("curl"), "dnf update curl");
     assert_eq!(SystemPackageManager::Dpkg.update_command("curl"), "apt upgrade curl");
     assert_eq!(SystemPackageManager::Pacman.update_command("curl"), "pacman -Syu curl");
 }
+
+#[test]
+fn native_manager_identity_comes_from_recorded_version_scheme() {
+    assert_eq!(SystemPackageManager::from_version_scheme(Some("rpm")), Some(SystemPackageManager::Rpm));
+    assert_eq!(SystemPackageManager::from_version_scheme(Some("debian")), Some(SystemPackageManager::Dpkg));
+    assert_eq!(SystemPackageManager::from_version_scheme(Some("arch")), Some(SystemPackageManager::Pacman));
+}
 ```
 
-- [ ] **Step 2: Add adopted update classification tests**
+- [ ] **Step 2: Add adopted update classification and queuing tests**
 
-In `apps/conary/src/commands/update.rs`, extract the adopted-package decision into a small pure helper and test it:
+In `apps/conary/src/commands/update.rs`, extract the adopted-package decision into a small pure helper and use it to gate whether an adopted package can enter the apply list:
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -509,6 +677,10 @@ fn classify_adopted_update(dep_mode: DepMode, is_critical: bool) -> AdoptedUpdat
         DepMode::Takeover if is_critical => AdoptedUpdateDisposition::BlockedCriticalTakeover,
         DepMode::Takeover => AdoptedUpdateDisposition::ExplicitTakeover,
     }
+}
+
+fn should_queue_adopted_update(disposition: AdoptedUpdateDisposition) -> bool {
+    matches!(disposition, AdoptedUpdateDisposition::ExplicitTakeover)
 }
 
 #[cfg(test)]
@@ -542,26 +714,43 @@ mod adopted_update_tests {
             AdoptedUpdateDisposition::BlockedCriticalTakeover
         );
     }
+
+    #[test]
+    fn adopted_updates_are_not_queued_under_satisfy_or_adopt() {
+        assert!(!should_queue_adopted_update(classify_adopted_update(DepMode::Satisfy, false)));
+        assert!(!should_queue_adopted_update(classify_adopted_update(DepMode::Adopt, false)));
+        assert!(should_queue_adopted_update(classify_adopted_update(DepMode::Takeover, false)));
+        assert!(!should_queue_adopted_update(classify_adopted_update(DepMode::Takeover, true)));
+    }
 }
 ```
 
 - [ ] **Step 3: Use the helper in update selection**
 
-Replace the inline adopted-package `match dep_mode` with `classify_adopted_update(dep_mode, super::install::is_package_blocked(&trove.name))`. Preserve the existing messages, but make the `DepMode::Adopt` message explicit:
+Replace the inline adopted-package `match dep_mode` with `classify_adopted_update(dep_mode, super::install::is_package_blocked(&trove.name))`. Only push into `updates_available` when `should_queue_adopted_update(disposition)` is true. Preserve the existing messages, but make the `DepMode::Adopt` message explicit:
 
 ```rust
-"  {} {} -> {} (adopted; native PM remains authoritative, refreshing tracking only)"
+"  {} {} -> {} (adopted; native PM remains authoritative; native update delegation is not implemented yet)"
 ```
 
-Do not write package files for `NativeAuthority` or `TrackOnly`.
+Do not write package files for `NativeAuthority` or `TrackOnly`. For skipped adopted packages, derive the printed native command from `SystemPackageManager::from_version_scheme(trove.version_scheme.as_deref())` before falling back to live detection.
+
+If all candidates were skipped because they are adopted/native-authoritative, do not print `All packages are up to date`. Print a truthful summary such as:
+
+```text
+No Conary-owned packages were updated. Adopted packages remain native-authoritative; use the native package manager or explicit --dep-mode takeover.
+```
+
+Add an output-focused test, or a small extracted summary helper test, proving skipped adopted updates do not end with generic up-to-date wording.
 
 - [ ] **Step 4: Run focused tests**
 
 Run:
 
 ```bash
-cargo test -p conary adopted_updates_ -- --nocapture
+cargo test -p conary adopted_update_tests -- --nocapture
 cargo test -p conary-core native_update_commands_cover_supported_package_managers -- --nocapture
+cargo test -p conary-core native_manager_identity_comes_from_recorded_version_scheme -- --nocapture
 ```
 
 Expected: tests pass.
@@ -573,7 +762,65 @@ git add apps/conary/src/commands/update.rs crates/conary-core/src/packages/mod.r
 git commit -m "fix(update): keep adopted packages native-authoritative"
 ```
 
-## Task 5: Add RPM/DEB/Arch Integration Proof
+## Task 5: Guard Force Install Takeover Boundary
+
+**Files:**
+- Modify: `apps/conary/src/commands/install/mod.rs`
+- Test: `apps/conary/src/commands/install/mod.rs`
+
+- [ ] **Step 1: Add adopted-force boundary tests**
+
+Add tests around the existing adopted-package install validation so `--force` cannot silently turn adopted packages into Conary-owned packages.
+
+Choose one behavior and encode it explicitly:
+
+- preferred first slice: reject `--force` over adopted packages and tell the user to use `--dep-mode takeover` or `system takeover`
+- acceptable alternate: treat `--force` over adopted packages as explicit takeover, but only with takeover wording, blocklist handling, and tests matching `--dep-mode takeover`
+
+For the preferred first slice, add tests like:
+
+```rust
+#[test]
+fn force_install_over_adopted_package_is_not_silent_takeover() {
+    let (_tmp, db_path) = crate::commands::test_helpers::create_test_db();
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let mut trove = conary_core::db::models::Trove::new_with_source(
+        "curl".to_string(),
+        "1.0.0".to_string(),
+        conary_core::db::models::TroveType::Package,
+        conary_core::db::models::InstallSource::AdoptedFull,
+    );
+    trove.insert(&conn).unwrap();
+
+    let err = validate_install_over_existing_adopted_for_tests(&conn, "curl", true).unwrap_err();
+
+    assert!(err.to_string().contains("--dep-mode takeover"));
+    assert!(err.to_string().contains("adopted"));
+}
+```
+
+The exact helper name can follow the local install module patterns; the important part is that the test covers the adopted existing-trove path, not only CLI parsing.
+
+- [ ] **Step 2: Implement the boundary**
+
+Update the existing `force` handling so it no longer acts as silent takeover for adopted packages. If keeping `--force` as a takeover affordance, it must reuse the critical-package blocklist and print takeover-specific language before any old trove is deleted.
+
+- [ ] **Step 3: Run focused tests**
+
+```bash
+cargo test -p conary force_install_over_adopted -- --nocapture
+```
+
+Expected: tests pass.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add apps/conary/src/commands/install/mod.rs
+git commit -m "fix(install): guard adopted force takeover"
+```
+
+## Task 6: Add RPM/DEB/Arch Integration Proof
 
 **Files:**
 - Modify: `apps/conary/tests/integration/remi/manifests/phase1-advanced.toml`
@@ -632,6 +879,50 @@ conary = "list curl"
 [test.step.assert]
 exit_code = 0
 stdout_not_contains = "curl"
+
+# --------------------------------------------------------------------------
+# T21c: Unadopt All
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T21c"
+name = "unadopt_all_packages"
+description = "Unadopt all adopted packages while leaving native package files installed"
+timeout = 90
+depends_on = ["T21b"]
+
+[[test.step]]
+conary = "system adopt curl"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "system unadopt --all --dry-run"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["Would unadopt", "curl"]
+
+[[test.step]]
+conary = "system unadopt --all --allow-live-system-mutation"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["Unadopted", "curl", "Native package files were not deleted"]
+
+[[test.step]]
+run = "curl --version >/dev/null"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "list curl"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "curl"
 ```
 
 Adjust exact assertion strings to match the implementation, but keep the test meaning unchanged.
@@ -644,7 +935,7 @@ Run:
 cargo run -p conary-test -- list
 ```
 
-Expected: command passes and the Phase 1 advanced suite includes `T21a` and `T21b`.
+Expected: command passes and the Phase 1 advanced suite includes `T21a`, `T21b`, and `T21c`.
 
 - [ ] **Step 3: Run all three package-manager proofs**
 
@@ -660,7 +951,7 @@ Expected: all three runs pass. These are the required real tests for RPM, DEB, a
 
 - [ ] **Step 4: Update integration docs**
 
-In `docs/INTEGRATION-TESTING.md`, add a short note under Phase 1 that `T21a`/`T21b` prove non-destructive unadoption across the supported distro matrix when run on `fedora44`, `ubuntu-26.04`, and `arch`.
+In `docs/INTEGRATION-TESTING.md`, add a short note under Phase 1 that `T21a`/`T21b`/`T21c` prove non-destructive single-package and all-package unadoption across the supported distro matrix when run on `fedora44`, `ubuntu-26.04`, and `arch`.
 
 - [ ] **Step 5: Commit**
 
@@ -669,7 +960,7 @@ git add apps/conary/tests/integration/remi/manifests/phase1-advanced.toml docs/I
 git commit -m "test(adopt): prove unadopt across supported distros"
 ```
 
-## Task 6: Refresh User-Facing Docs
+## Task 7: Refresh User-Facing Docs
 
 **Files:**
 - Modify: `README.md`
@@ -679,12 +970,14 @@ git commit -m "test(adopt): prove unadopt across supported distros"
 
 - [ ] **Step 1: Update README preview framing**
 
-In `README.md`, update release-status and quick-start copy so it says:
+In `README.md`, update release-status, quick-start, `System Takeover`, `Project Status`, and `What's Next` copy so it says:
 
 - the limited preview is adoption-led
 - native package managers remain authoritative for adopted packages
-- `system unadopt --all` is the non-destructive escape hatch
+- `conary --allow-live-system-mutation system unadopt --all` is the non-destructive apply-mode escape hatch on hosts without a selected Conary generation
+- active-generation handoff remains a fail-closed limitation until that follow-up lands
 - takeover is explicit and not the risk-free trial path
+- ISO generation export is follow-up, not a near-term release blocker
 
 - [ ] **Step 2: Ensure roadmap matches the implemented priority**
 
@@ -698,7 +991,7 @@ Run:
 bash scripts/docs-audit-inventory.sh
 ```
 
-Then update `docs/superpowers/documentation-accuracy-audit-ledger.tsv` for any new or changed docs so the ledger remains complete.
+Then update `docs/superpowers/documentation-accuracy-audit-ledger.tsv` for any new or changed docs so the ledger remains complete. The README ledger row must mention adoption-led preview, unadoption, explicit takeover, active-generation handoff limits, and ISO export follow-up.
 
 - [ ] **Step 4: Run docs checks**
 
@@ -718,7 +1011,7 @@ git add README.md ROADMAP.md docs/superpowers/documentation-accuracy-audit-inven
 git commit -m "docs: frame preview around adopt without regret"
 ```
 
-## Task 7: Final Verification
+## Task 8: Final Verification
 
 **Files:**
 - No direct edits unless verification exposes a defect.
@@ -728,8 +1021,10 @@ git commit -m "docs: frame preview around adopt without regret"
 ```bash
 cargo test -p conary system_unadopt -- --nocapture
 cargo test -p conary unadopt_ -- --nocapture
-cargo test -p conary adopted_updates_ -- --nocapture
+cargo test -p conary adopted_update_tests -- --nocapture
+cargo test -p conary force_install_over_adopted -- --nocapture
 cargo test -p conary-core native_update_commands_cover_supported_package_managers -- --nocapture
+cargo test -p conary-core native_manager_identity_comes_from_recorded_version_scheme -- --nocapture
 ```
 
 Expected: pass.
@@ -749,6 +1044,7 @@ Expected: pass on all three supported package-manager families.
 ```bash
 cargo fmt --check
 cargo run -p conary-test -- list
+cargo test -p conary-test
 cargo clippy --workspace --all-targets -- -D warnings
 git diff --check
 ```
@@ -773,7 +1069,10 @@ Expected: no commit is needed unless verification found a focused fix.
 
 - `conary system unadopt` exists and is documented.
 - Unadoption removes Conary tracking for adopted packages and leaves native package files intact.
-- `--all` is the one-command escape hatch and removes sync hooks unless `--keep-hooks` is passed.
-- Update tests prove adopted packages remain native-authoritative unless explicit takeover is selected.
+- Apply-mode unadoption refuses before DB mutation when a Conary generation is selected.
+- `--all` is the one-command escape hatch on hosts without a selected Conary generation and removes sync hooks unless `--keep-hooks` is passed.
+- Native package-manager identity is recorded or derived per adopted package instead of relying only on live binary detection.
+- Update tests prove adopted packages remain native-authoritative unless explicit takeover is selected and do not print misleading "up to date" output when skipped.
+- `install --force` cannot silently replace an adopted package with a Conary-owned package.
 - Fedora 44, Ubuntu 26.04 LTS, and Arch integration runs prove the same unadopt behavior for RPM, DEB, and Arch.
 - Roadmap and README present adoption as the limited-preview path and takeover as explicit opt-in.
