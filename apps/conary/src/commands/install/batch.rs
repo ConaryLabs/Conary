@@ -408,9 +408,12 @@ impl<'a> BatchInstaller<'a> {
                 &format!("Batch install: {}", main_pkg_name),
                 None,
             );
-            if let Err(error) = rebuild_result {
+            if let Err(error) = rebuild_result
+                && let Err(metadata_error) =
+                    Self::record_generation_rebuild_failure(&conn, changeset_id, error)
+            {
                 engine.release_lock();
-                return Err(error);
+                return Err(metadata_error);
             }
         }
 
@@ -436,6 +439,34 @@ impl<'a> BatchInstaller<'a> {
             );
         }
 
+        Ok(())
+    }
+
+    fn record_generation_rebuild_failure(
+        conn: &Connection,
+        changeset_id: i64,
+        error: anyhow::Error,
+    ) -> Result<()> {
+        crate::commands::append_deferred_follow_up_metadata(
+            conn,
+            changeset_id,
+            crate::commands::DeferredFollowUp {
+                kind: "generation_rebuild".to_string(),
+                status: "failed".to_string(),
+                message: error.to_string(),
+                retry_command: Some(
+                    "conary --allow-live-system-mutation system generation build --summary \"Retry deferred package follow-up\""
+                        .to_string(),
+                ),
+            },
+        )?;
+        warn!(
+            changeset_id,
+            "Package mutation completed, but generation rebuild was deferred: {}", error
+        );
+        eprintln!(
+            "WARNING: package mutation completed, but generation rebuild was deferred: {error}"
+        );
         Ok(())
     }
 
@@ -964,7 +995,7 @@ pub fn prepare_from_parsed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conary_core::db::models::{ChangesetStatus, FileEntry, Trove, TroveType};
+    use conary_core::db::models::{Changeset, ChangesetStatus, FileEntry, Trove, TroveType};
 
     #[test]
     fn test_batch_plan_detects_cross_package_conflict() {
@@ -1096,6 +1127,43 @@ mod tests {
         assert!(
             preflight_pos < scripts_pos,
             "batch installs must validate generation state before dependency pre-install scriptlets"
+        );
+    }
+
+    #[test]
+    fn generation_rebuild_failure_records_deferred_follow_up_for_applied_batch() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("conary.db");
+        conary_core::db::init(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let mut changeset = Changeset::new("Batch install: fixture".to_string());
+        let changeset_id = changeset.insert(&conn).unwrap();
+        changeset
+            .update_status(&conn, ChangesetStatus::Applied)
+            .unwrap();
+
+        BatchInstaller::record_generation_rebuild_failure(
+            &conn,
+            changeset_id,
+            anyhow::anyhow!("composefs build failed"),
+        )
+        .unwrap();
+
+        let changeset = Changeset::find_by_id(&conn, changeset_id)
+            .unwrap()
+            .expect("changeset should exist");
+        assert_eq!(changeset.status, ChangesetStatus::Applied);
+        let deferred = crate::commands::deferred_follow_up(changeset.metadata.as_deref());
+        assert_eq!(deferred.len(), 1);
+        assert_eq!(deferred[0].kind, "generation_rebuild");
+        assert_eq!(deferred[0].status, "failed");
+        assert!(deferred[0].message.contains("composefs build failed"));
+        assert!(
+            deferred[0]
+                .retry_command
+                .as_deref()
+                .unwrap()
+                .contains("system generation build")
         );
     }
 
