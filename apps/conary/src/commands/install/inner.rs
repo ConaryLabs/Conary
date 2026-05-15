@@ -23,6 +23,8 @@ use super::{
     mark_upgraded_parent_deriveds_stale, scheme_to_string,
 };
 
+const LIVE_ROOT_PACKAGE_NAME: &str = "conary-live-root";
+
 /// Result from `install_inner` -- the trove ID of the installed package.
 pub struct InnerInstallResult {
     pub trove_id: i64,
@@ -277,13 +279,44 @@ pub(super) fn install_inner_with_stored_files(
     Ok(InnerInstallResult { trove_id })
 }
 
+pub(super) fn preflight_live_root_file_ownership(
+    conn: &rusqlite::Connection,
+    paths: impl IntoIterator<Item = impl AsRef<str>>,
+    package_name: &str,
+) -> Result<()> {
+    for path in paths {
+        let path = path.as_ref();
+        let Some(existing) = FileEntry::find_by_path(conn, path)? else {
+            continue;
+        };
+
+        let owner = Trove::find_by_id(conn, existing.trove_id)?.ok_or_else(|| {
+            anyhow!(
+                "Path {} is already tracked by missing trove {}",
+                path,
+                existing.trove_id
+            )
+        })?;
+
+        if owner.name == LIVE_ROOT_PACKAGE_NAME || owner.name == package_name {
+            continue;
+        }
+
+        return Err(anyhow!(
+            "Path {} is already tracked by package {}",
+            path,
+            owner.name
+        ));
+    }
+
+    Ok(())
+}
+
 fn insert_file_entry_claiming_live_root_overlap(
     tx: &Transaction<'_>,
     file_entry: &mut FileEntry,
     package_name: &str,
 ) -> Result<i64> {
-    const LIVE_ROOT_PACKAGE_NAME: &str = "conary-live-root";
-
     let Some(existing) = FileEntry::find_by_path(tx, &file_entry.path)? else {
         return Ok(file_entry.insert(tx)?);
     };
