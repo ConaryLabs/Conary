@@ -30,6 +30,8 @@ mod live_root;
 mod model;
 mod operation_records;
 mod package_parsing;
+#[allow(dead_code)]
+mod package_target;
 mod profile;
 pub mod progress;
 mod provenance;
@@ -112,6 +114,11 @@ pub(crate) use live_root::{
 pub use model::{
     ApplyOptions, cmd_model_apply, cmd_model_check, cmd_model_diff, cmd_model_lock,
     cmd_model_publish, cmd_model_remote_diff, cmd_model_snapshot, cmd_model_update,
+};
+#[allow(unused_imports)]
+pub(crate) use package_target::{
+    InstalledPackageSelector, ResolvedInstalledPackage, format_installed_variant,
+    format_installed_variants, package_authority_label, resolve_installed_package,
 };
 pub use profile::{cmd_profile_diff, cmd_profile_generate, cmd_profile_publish, cmd_profile_show};
 pub use provenance::{
