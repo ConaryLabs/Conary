@@ -1863,7 +1863,11 @@ fn execute_install_transaction(
             let runtime_root = conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(
                 PathBuf::from(ctx.db_path),
             );
-            crate::commands::recover_pending_journals(runtime_root.root(), Path::new(ctx.root))?;
+            super::live_root::recover_pending_journals_with_changesets(
+                runtime_root.root(),
+                Path::new(ctx.root),
+                conn,
+            )?;
 
             let tx_uuid = uuid::Uuid::new_v4().to_string();
             let mut changeset = Changeset::with_tx_uuid(tx_description.clone(), tx_uuid.clone());
@@ -1913,10 +1917,6 @@ fn execute_install_transaction(
                     return Err(error);
                 }
             };
-            if let Err(error) = live_tx.mark_committed_for_recovery() {
-                live_tx.rollback()?;
-                return Err(error);
-            }
             if let Err(error) = tx.commit() {
                 if let Err(rollback_error) = live_tx.rollback() {
                     return Err(error)
