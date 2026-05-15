@@ -372,6 +372,42 @@ impl Drop for LiveRootTransaction {
 }
 
 pub(crate) fn recover_pending_journals(runtime_root: &Path, root: &Path) -> Result<()> {
+    recover_pending_journals_by(runtime_root, root, |_| {
+        Ok(JournalRecoveryDecision::Rollback)
+    })
+}
+
+pub(crate) fn recover_pending_journals_with_changesets(
+    runtime_root: &Path,
+    root: &Path,
+    conn: &rusqlite::Connection,
+) -> Result<()> {
+    use conary_core::db::models::{Changeset, ChangesetStatus};
+
+    recover_pending_journals_by(runtime_root, root, |journal| {
+        let changeset = Changeset::find_by_tx_uuid(conn, &journal.tx_uuid)?;
+        Ok(match changeset.map(|changeset| changeset.status) {
+            Some(ChangesetStatus::Applied | ChangesetStatus::PostHooksFailed) => {
+                JournalRecoveryDecision::Cleanup
+            }
+            Some(ChangesetStatus::Pending | ChangesetStatus::RolledBack) | None => {
+                JournalRecoveryDecision::Rollback
+            }
+        })
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JournalRecoveryDecision {
+    Cleanup,
+    Rollback,
+}
+
+fn recover_pending_journals_by(
+    runtime_root: &Path,
+    root: &Path,
+    decide: impl Fn(&LiveRootJournal) -> Result<JournalRecoveryDecision>,
+) -> Result<()> {
     let journal_dir = runtime_root.join("live-root-journals");
     if !journal_dir.exists() {
         return Ok(());
@@ -393,29 +429,67 @@ pub(crate) fn recover_pending_journals(runtime_root: &Path, root: &Path) -> Resu
         validate_recovered_journal_tx_uuid(&path, &journal.tx_uuid)?;
         validate_recovered_backup_records(root, &path, &journal.backups, &journal.removed_dirs)?;
         if journal.state == "committed" || journal.state == "rolled_back" {
-            let _ = fs::remove_file(&path);
-            let _ = fs::remove_dir_all(path.with_extension("backups"));
+            cleanup_recovered_journal_files(&path)?;
             continue;
         }
-        let mut tx = LiveRootTransaction {
-            root: root.to_path_buf(),
-            journal_path: path,
-            tx_uuid: journal.tx_uuid,
-            operation: journal.operation,
-            backups: journal.backups,
-            created_paths: journal
-                .created_paths
-                .into_iter()
-                .map(PathBuf::from)
-                .collect(),
-            removed_dirs: journal
-                .removed_dirs
-                .into_iter()
-                .map(PathBuf::from)
-                .collect(),
-            committed: false,
-        };
-        tx.rollback()?;
+        match decide(&journal)? {
+            JournalRecoveryDecision::Cleanup => cleanup_recovered_journal_files(&path)?,
+            JournalRecoveryDecision::Rollback => {
+                let mut tx = live_root_transaction_from_journal(root, path, journal);
+                tx.rollback()?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn live_root_transaction_from_journal(
+    root: &Path,
+    journal_path: PathBuf,
+    journal: LiveRootJournal,
+) -> LiveRootTransaction {
+    LiveRootTransaction {
+        root: root.to_path_buf(),
+        journal_path,
+        tx_uuid: journal.tx_uuid,
+        operation: journal.operation,
+        backups: journal.backups,
+        created_paths: journal
+            .created_paths
+            .into_iter()
+            .map(PathBuf::from)
+            .collect(),
+        removed_dirs: journal
+            .removed_dirs
+            .into_iter()
+            .map(PathBuf::from)
+            .collect(),
+        committed: false,
+    }
+}
+
+fn cleanup_recovered_journal_files(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| format!("Failed to remove {}", path.display()));
+        }
+    }
+    match fs::remove_dir_all(path.with_extension("backups")) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "Failed to remove {}",
+                    path.with_extension("backups").display()
+                )
+            });
+        }
+    }
+    if let Some(journal_dir) = path.parent() {
+        sync_directory(journal_dir)?;
     }
     Ok(())
 }
@@ -1006,6 +1080,97 @@ mod tests {
             !runtime
                 .join("live-root-journals")
                 .join(format!("{tx_uuid}.json"))
+                .exists()
+        );
+    }
+
+    #[test]
+    fn recovery_rolls_back_in_progress_journal_without_changeset() {
+        let temp = TempDir::new().unwrap();
+        let runtime = temp.path().join("runtime");
+        let root = temp.path().join("root");
+        let db_path = temp.path().join("conary.db");
+        fs::create_dir_all(root.join("usr/bin")).unwrap();
+        fs::create_dir_all(&runtime).unwrap();
+        fs::write(root.join("usr/bin/fixture"), "old").unwrap();
+        conary_core::db::init(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+
+        let tx_uuid = Uuid::new_v4().to_string();
+        let mut tx =
+            LiveRootTransaction::begin(&runtime, &root, tx_uuid.clone(), "install fixture")
+                .unwrap();
+        tx.apply_install_files(&[LiveRootFile {
+            path: "/usr/bin/fixture".to_string(),
+            content: b"new".to_vec(),
+            mode: 0o100755,
+            symlink_target: None,
+        }])
+        .unwrap();
+        std::mem::forget(tx);
+
+        recover_pending_journals_with_changesets(&runtime, &root, &conn).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(root.join("usr/bin/fixture")).unwrap(),
+            "old"
+        );
+        assert!(
+            !runtime
+                .join("live-root-journals")
+                .join(format!("{tx_uuid}.json"))
+                .exists()
+        );
+    }
+
+    #[test]
+    fn recovery_does_not_rollback_applied_changeset_journal() {
+        use conary_core::db::models::{Changeset, ChangesetStatus};
+
+        let temp = TempDir::new().unwrap();
+        let runtime = temp.path().join("runtime");
+        let root = temp.path().join("root");
+        let db_path = temp.path().join("conary.db");
+        fs::create_dir_all(root.join("usr/bin")).unwrap();
+        fs::create_dir_all(&runtime).unwrap();
+        fs::write(root.join("usr/bin/fixture"), "old").unwrap();
+        conary_core::db::init(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+
+        let tx_uuid = Uuid::new_v4().to_string();
+        let mut tx =
+            LiveRootTransaction::begin(&runtime, &root, tx_uuid.clone(), "install fixture")
+                .unwrap();
+        tx.apply_install_files(&[LiveRootFile {
+            path: "/usr/bin/fixture".to_string(),
+            content: b"new".to_vec(),
+            mode: 0o100755,
+            symlink_target: None,
+        }])
+        .unwrap();
+        let mut changeset = Changeset::with_tx_uuid("Install fixture".to_string(), tx_uuid.clone());
+        changeset.insert(&conn).unwrap();
+        changeset
+            .update_status(&conn, ChangesetStatus::Applied)
+            .unwrap();
+        std::mem::forget(tx);
+
+        recover_pending_journals_with_changesets(&runtime, &root, &conn).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(root.join("usr/bin/fixture")).unwrap(),
+            "new"
+        );
+        assert!(
+            !runtime
+                .join("live-root-journals")
+                .join(format!("{tx_uuid}.json"))
+                .exists()
+        );
+        assert!(
+            !runtime
+                .join("live-root-journals")
+                .join(format!("{tx_uuid}.backups"))
                 .exists()
         );
     }
