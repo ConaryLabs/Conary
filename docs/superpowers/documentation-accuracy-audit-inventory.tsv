@@ -59,6 +59,7 @@ docs/superpowers/specs/2026-04-22-generation-artifact-export-unification-design.
 docs/superpowers/specs/2026-04-30-installed-runtime-generations-self-contained-design.md	planning	maintainer
 docs/superpowers/specs/2026-05-14-adopt-without-regret-design.md	planning	maintainer
 docs/superpowers/specs/2026-05-14-limited-preview-codebase-honesty-and-cleanup-design.md	planning	maintainer
+docs/superpowers/specs/2026-05-14-native-package-manager-parity-matrix-design.md	planning	maintainer
 docs/superpowers/specs/archive/2026-05-12-composefs-atomic-modernization-design.md	historical	historical
 recipes/archive/core/README.md	historical	historical
 recipes/archive/core/archive/README.md	historical	historical
