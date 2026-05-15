@@ -212,13 +212,19 @@ Always runs. Tests basic conary operations against a live Remi server:
 | T07-T12 | Install/Remove | Install, verify files, list, remove, verify cleanup |
 | T13-T17 | Package Info | Version, info, file list, path ownership |
 | T18-T19 | Multi-package | Install second package, verify coexistence |
-| T20-T21 | Adopt | Adopt system package, check status |
+| T20-T21c | Adopt/Unadopt | Adopt system package, check status, dry-run/apply single-package unadopt, re-adopt, dry-run/apply all-package unadopt |
 | T22-T23 | Pin | Pin/unpin package |
 | T24 | History | Changeset history |
 | T25-T27 | Dependencies | Install with deps, verify, multi-package coexist |
 | T28-T31 | Dep modes | Satisfy, adopt, takeover, blocklist |
 | T32 | Update | Update with adopted packages |
 | T33-T37 | Generations | List, GC, info, takeover dry-run, composefs format |
+
+`T21a`, `T21b`, and `T21c` are the Adopt Without Regret proof points for
+Phase 1. When `phase1-advanced` is run on `fedora44`, `ubuntu-26.04`, and
+`arch`, they prove that `curl` can be unadopted one package at a time and with
+`--all` without deleting native package files: `curl --version` still works,
+while `conary list curl` no longer reports Conary tracking.
 
 ### Phase 2: Deep E2E (T38-T76)
 

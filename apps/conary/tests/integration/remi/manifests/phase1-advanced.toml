@@ -240,6 +240,99 @@ exit_code = 0
 stdout_contains_all = ["Conary Adoption Status", "Adopted"]
 
 # --------------------------------------------------------------------------
+# T21a: Unadopt Dry Run
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T21a"
+name = "unadopt_single_package_dry_run"
+description = "Preview unadopting curl without mutating native package files"
+timeout = 30
+depends_on = ["T21"]
+
+[[test.step]]
+conary = "system unadopt curl --dry-run"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["Would unadopt", "curl", "Native package files will not be deleted"]
+
+# --------------------------------------------------------------------------
+# T21b: Unadopt Single Package
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T21b"
+name = "unadopt_single_package"
+description = "Unadopt curl from Conary tracking while leaving the native package installed"
+timeout = 60
+depends_on = ["T21a"]
+
+[[test.step]]
+conary = "--allow-live-system-mutation system unadopt curl"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["Unadopted", "curl", "Native package files were not deleted"]
+
+[[test.step]]
+run = "curl --version >/dev/null"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "list curl"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "curl"
+
+# --------------------------------------------------------------------------
+# T21c: Unadopt All
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "T21c"
+name = "unadopt_all_packages"
+description = "Unadopt all adopted packages while leaving native package files installed"
+timeout = 90
+depends_on = ["T21b"]
+
+[[test.step]]
+conary = "system adopt curl"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "system unadopt --all --dry-run"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["Would unadopt", "curl"]
+
+[[test.step]]
+conary = "--allow-live-system-mutation system unadopt --all"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["Unadopted", "curl", "Native package files were not deleted"]
+
+[[test.step]]
+run = "curl --version >/dev/null"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "list curl"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "curl"
+
+# --------------------------------------------------------------------------
 # T22: Pin Package
 # --------------------------------------------------------------------------
 

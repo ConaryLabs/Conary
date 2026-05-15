@@ -557,6 +557,32 @@ async fn dispatch_system_command(
             }
         }
 
+        cli::SystemCommands::Unadopt {
+            packages,
+            db,
+            all,
+            dry_run,
+            keep_hooks,
+        } => {
+            require_live_mutation(
+                allow_live_system_mutation,
+                Cow::Borrowed("conary system unadopt"),
+                LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
+                dry_run,
+            )?;
+            commands::cmd_unadopt(
+                commands::UnadoptOptions {
+                    packages,
+                    all,
+                    dry_run,
+                    keep_hooks,
+                },
+                &db.db_path,
+            )
+            .await
+            .map(|_| ())
+        }
+
         cli::SystemCommands::Gc {
             db,
             objects_dir,

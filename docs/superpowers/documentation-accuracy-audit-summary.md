@@ -4,7 +4,8 @@
 
 This refresh updates the documentation baseline after the limited public
 release readiness pass and the completed composefs atomic switching
-modernization.
+modernization, then refreshes the Adopt Without Regret docs/integration proof
+slice.
 
 Audited every tracked documentation-like file returned by
 `bash scripts/docs-audit-inventory.sh`: 71 tracked files spanning root docs,
@@ -38,14 +39,18 @@ The repo moved materially after the last audit:
 - composefs atomic switching completion, with ordinary package mutation and
   transaction recovery selecting complete generation artifacts for the next
   boot instead of relying on live generation remounts
+- Adopt Without Regret preview framing, with non-destructive unadoption,
+  native package-manager authority, explicit takeover boundaries, and
+  active-generation handoff limits documented for the limited preview
 
 ## Major Corrections
 
 - Refreshed user-facing status in `README.md` and `ROADMAP.md` around the
-  Fedora 44, Ubuntu 26.04 LTS, and Arch Linux limited preview; local
-  QEMU/security gates; the temporary Forge validation pause; conaryd
-  package-executor gaps; raw/qcow2 generation export; OCI artifact-source
-  alignment; and remaining ISO/bundle follow-ups.
+  Fedora 44, Ubuntu 26.04 LTS, and Arch Linux adoption-led limited preview;
+  native package-manager authority for adopted packages; the non-destructive
+  `system unadopt --all` escape hatch; explicit takeover; active-generation
+  handoff limits; local QEMU/security gates; raw/qcow2 generation export; OCI
+  artifact-source alignment; and ISO/bundle follow-ups.
 - Updated `SECURITY.md` to 0.8.x support and replaced stale journal language
   with the current database/EROFS generation model and preview distro scope.
 - Updated deploy/operator docs and `deploy/remi.toml.example` for Fedora 44,
@@ -66,8 +71,9 @@ The repo moved materially after the last audit:
 - Updated conaryd CLI help and public docs so package install/remove/update
   routes are described as explicit `501 Not Implemented` responses.
 - Updated integration docs and `apps/conary-test/README.md` to include the
-  Phase 3 Group O generation-export QEMU suite, temporary local QEMU release
-  gate, and the TGE04 installed-runtime qcow2 boot proof.
+  Phase 1 `T21a`-`T21c` non-destructive unadoption proof, Phase 3 Group O
+  generation-export QEMU suite, temporary local QEMU release gate, and the
+  TGE04 installed-runtime qcow2 boot proof.
 - Refreshed assistant-facing docs to route broad doc work through the inventory
   and ledger checker, and added the post-generation export roadmap to the map.
 - Reframed completed dated plans/specs as historical implementation records
@@ -89,6 +95,9 @@ The repo moved materially after the last audit:
 - `bash scripts/docs-audit-inventory.sh`
 - `bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete`
 - `bash -n scripts/docs-audit-inventory.sh scripts/check-doc-audit-ledger.sh`
+- `cargo run -p conary-test -- list`
+- `git diff --check`
+- `rg -n "replace dnf|replace apt|replace pacman|risk-free|unadopt|takeover" README.md ROADMAP.md docs`
 - `rg -n "rebuild or remoun[t]|MOUNTE[D]|refresh the Fedora 44 QEMU source imag[e]|active execution pla[n]|active umbrella desig[n]|remain active at the top leve[l]" README.md ROADMAP.md CHANGELOG.md CONTRIBUTING.md SECURITY.md AGENTS.md CLAUDE.md GEMINI.md docs apps/conary-test deploy site web .github`
 - `cargo test -p conaryd test_package_routes_return_not_implemented`
 - `cargo test -p conaryd package_routes`
@@ -107,6 +116,9 @@ The final release-readiness verification gate is tracked by
   ops follow-up if we want the file contents to mirror the DB state.
 - Historical release notes and archived design/spec files may still mention
   older distro names or broad parser support as historical context.
+- Active-generation handoff back to native package-manager authority remains a
+  follow-up; first-slice unadoption intentionally fails closed when a Conary
+  generation is selected.
 
 ## Final Counts
 

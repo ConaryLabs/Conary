@@ -13,6 +13,7 @@ mod packages;
 mod refresh;
 mod status;
 mod system;
+mod unadopt;
 
 // Re-export all public commands
 pub use conflicts::cmd_conflicts;
@@ -23,3 +24,4 @@ pub use refresh::cmd_adopt_refresh;
 pub use status::cmd_adopt_status;
 pub use system::FileInfoTuple;
 pub use system::cmd_adopt_system;
+pub use unadopt::{UnadoptOptions, cmd_unadopt};

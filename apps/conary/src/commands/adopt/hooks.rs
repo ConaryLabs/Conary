@@ -86,12 +86,15 @@ pub async fn cmd_sync_hook_install(remove: bool) -> Result<()> {
     })?;
 
     if remove {
-        // Remove hooks
-        remove_file_if_exists(paths.script)?;
-        if let Some(filter) = paths.filter {
-            remove_file_if_exists(filter)?;
+        let removed = remove_hook_path_pair(Path::new(paths.script), paths.filter.map(Path::new))?;
+        if removed {
+            println!("Removed Conary sync hook for {}.", pkg_mgr.display_name());
+        } else {
+            println!(
+                "No Conary sync hook files found for {}.",
+                pkg_mgr.display_name()
+            );
         }
-        println!("Removed Conary sync hook for {}.", pkg_mgr.display_name());
     } else {
         // Install hooks
         match pkg_mgr {
@@ -138,13 +141,50 @@ pub async fn cmd_sync_hook_install(remove: bool) -> Result<()> {
     Ok(())
 }
 
-/// Remove a file if it exists, printing the path.
-fn remove_file_if_exists(path: &str) -> Result<()> {
-    if Path::new(path).exists() {
-        fs::remove_file(path)?;
-        println!("  Removed: {}", path);
+pub(super) fn remove_detected_sync_hooks() -> Result<bool> {
+    let pkg_mgr = SystemPackageManager::detect();
+    if !pkg_mgr.is_available() {
+        return Err(anyhow::anyhow!(
+            "No supported package manager found. Conary supports RPM, dpkg, and pacman."
+        ));
     }
-    Ok(())
+
+    let paths = hook_paths(pkg_mgr).ok_or_else(|| {
+        anyhow::anyhow!(
+            "No hook configuration for package manager: {}",
+            pkg_mgr.display_name()
+        )
+    })?;
+
+    let removed = remove_hook_path_pair(Path::new(paths.script), paths.filter.map(Path::new))?;
+    if removed {
+        println!("Removed Conary sync hook for {}.", pkg_mgr.display_name());
+    } else {
+        println!(
+            "No Conary sync hook files found for {}.",
+            pkg_mgr.display_name()
+        );
+    }
+    Ok(removed)
+}
+
+fn remove_hook_path_pair(script: &Path, filter: Option<&Path>) -> Result<bool> {
+    let mut removed = false;
+    if let Some(filter) = filter {
+        removed |= remove_file_if_exists(filter)?;
+    }
+    removed |= remove_file_if_exists(script)?;
+    Ok(removed)
+}
+
+/// Remove a file if it exists, printing the path.
+fn remove_file_if_exists(path: &Path) -> Result<bool> {
+    if path.exists() {
+        fs::remove_file(path)?;
+        println!("  Removed: {}", path.display());
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 /// Ensure the parent directory of a path exists.
@@ -212,5 +252,47 @@ mod tests {
     fn test_hook_paths_unknown() {
         let paths = hook_paths(SystemPackageManager::Unknown);
         assert!(paths.is_none());
+    }
+
+    #[test]
+    fn hook_paths_cover_all_supported_native_package_managers() {
+        for pkg_mgr in [
+            SystemPackageManager::Rpm,
+            SystemPackageManager::Dpkg,
+            SystemPackageManager::Pacman,
+        ] {
+            assert!(
+                hook_paths(pkg_mgr).is_some(),
+                "{} should have hook paths",
+                pkg_mgr.display_name()
+            );
+        }
+        assert!(hook_paths(SystemPackageManager::Unknown).is_none());
+    }
+
+    #[test]
+    fn remove_hook_path_pair_removes_script_and_optional_filter() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let script = temp_dir.path().join("conary-sync.script");
+        let filter = temp_dir.path().join("conary-sync.filter");
+        fs::write(&script, "script").unwrap();
+        fs::write(&filter, "filter").unwrap();
+
+        let removed = remove_hook_path_pair(&script, Some(&filter)).unwrap();
+
+        assert!(removed);
+        assert!(!script.exists());
+        assert!(!filter.exists());
+    }
+
+    #[test]
+    fn remove_hook_path_pair_reports_false_when_nothing_existed() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let script = temp_dir.path().join("missing.script");
+        let filter = temp_dir.path().join("missing.filter");
+
+        let removed = remove_hook_path_pair(&script, Some(&filter)).unwrap();
+
+        assert!(!removed);
     }
 }
