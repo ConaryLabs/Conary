@@ -5,10 +5,10 @@
 This refresh updates the documentation baseline after the limited public
 release readiness pass and the completed composefs atomic switching
 modernization, then refreshes the Adopt Without Regret docs/integration proof
-slice.
+slice and records the Native Package Manager Parity Matrix design.
 
 Audited every tracked documentation-like file returned by
-`bash scripts/docs-audit-inventory.sh`: 71 tracked files spanning root docs,
+`bash scripts/docs-audit-inventory.sh`: 72 tracked files spanning root docs,
 assistant shims, GitHub templates, canonical docs under `docs/`,
 deploy/operator docs, `deploy/remi.toml.example`, app-local READMEs, active
 planning/design records, historical/archive docs, release security waivers, and
@@ -42,6 +42,8 @@ The repo moved materially after the last audit:
 - Adopt Without Regret preview framing, with non-destructive unadoption,
   native package-manager authority, explicit takeover boundaries, and
   active-generation handoff limits documented for the limited preview
+- Native Package Manager Parity Matrix framing for Tier 0 and Tier 1
+  Conary-owned package-manager flows against dnf, apt, and pacman expectations
 
 ## Major Corrections
 
@@ -79,6 +81,8 @@ The repo moved materially after the last audit:
 - Reframed completed dated plans/specs as historical implementation records
   and archived the completed 2026-05-12 composefs modernization plan/spec after
   validation landed on `main`.
+- Added the Native Package Manager Parity Matrix design for Conary-owned
+  install/remove/update and adjacent daily package-manager commands.
 
 ## Archive Decisions
 
@@ -122,9 +126,9 @@ The final release-readiness verification gate is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 71
+- Total tracked doc-like files audited: 72
 - `verified-no-change`: 20
-- `corrected`: 24
+- `corrected`: 25
 - `reframed-as-historical`: 5
 - `archived`: 8
 - `retained-historical`: 14
