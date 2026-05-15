@@ -37,7 +37,7 @@
 - Modify: `crates/conary-core/src/db/models/repository.rs`
 - Modify: `crates/conary-core/src/db/models/mod.rs`
 
-- [ ] **Step 1: Write migration/model tests**
+- [x] **Step 1: Write migration/model tests**
 
 Add tests near the repository model and migration tests:
 
@@ -79,7 +79,7 @@ cargo test -p conary-core repository_security_advisory_support -- --nocapture
 
 Expected: fails before implementation because the field and enum do not exist.
 
-- [ ] **Step 2: Add migration v68**
+- [x] **Step 2: Add migration v68**
 
 In `crates/conary-core/src/db/schema.rs`, bump:
 
@@ -138,7 +138,7 @@ fn test_migrate_v68_adds_repository_security_advisory_support() {
 }
 ```
 
-- [ ] **Step 3: Add enum and model field**
+- [x] **Step 3: Add enum and model field**
 
 In `repository.rs`, add:
 
@@ -175,7 +175,7 @@ impl SecurityAdvisorySupport {
 
 Add `pub security_advisory_support: SecurityAdvisorySupport` to `Repository`, default it to `Unknown`, include it in `COLUMNS`, `insert`, `update`, and `from_row`, and export it from `models/mod.rs`.
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 Run:
 
@@ -185,7 +185,7 @@ cargo test -p conary-core repository_security_advisory_support test_migrate_v68 
 
 Expected: model and migration tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/conary-core/src/db/schema.rs crates/conary-core/src/db/migrations/v41_current.rs crates/conary-core/src/db/models/repository.rs crates/conary-core/src/db/models/mod.rs

@@ -952,6 +952,22 @@ pub fn migrate_v67(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 68: Repository security-advisory metadata support
+pub fn migrate_v68(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 68");
+
+    conn.execute_batch(
+        "
+        ALTER TABLE repositories
+            ADD COLUMN security_advisory_support TEXT NOT NULL DEFAULT 'unknown'
+            CHECK(security_advisory_support IN ('unknown', 'unsupported', 'supported'));
+        ",
+    )?;
+
+    info!("Schema version 68 applied successfully (repository security advisory support)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1239,5 +1255,26 @@ mod tests {
         assert_eq!(row.1, "updates");
         assert_eq!(row.2, "[\"openssl\"]");
         assert_eq!(row.3, "applied");
+    }
+
+    #[test]
+    fn test_migrate_v68_adds_repository_security_advisory_support() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO repositories (name, url) VALUES ('security-test', 'https://example.test')",
+            [],
+        )
+        .unwrap();
+
+        let support: String = conn
+            .query_row(
+                "SELECT security_advisory_support FROM repositories WHERE name = 'security-test'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(support, "unknown");
     }
 }
