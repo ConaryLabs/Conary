@@ -3,6 +3,7 @@
 
 use super::open_db;
 use anyhow::Result;
+use conary_core::db::models::SecurityAdvisorySupport;
 use conary_core::db::paths::keyring_dir;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::path::Path;
@@ -23,6 +24,7 @@ pub struct RepoAddOptions {
     pub default_strategy: Option<String>,
     pub remi_endpoint: Option<String>,
     pub remi_distro: Option<String>,
+    pub security_advisory_support: SecurityAdvisorySupport,
 }
 
 /// Add a new repository
@@ -60,6 +62,7 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
     repo.default_strategy = opts.default_strategy;
     repo.default_strategy_endpoint = opts.remi_endpoint;
     repo.default_strategy_distro = opts.remi_distro;
+    repo.security_advisory_support = opts.security_advisory_support;
 
     if let Err(e) = repo.insert(&conn) {
         let msg = e.to_string();
@@ -84,6 +87,10 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
     println!("  Enabled: {}", repo.enabled);
     println!("  Priority: {}", repo.priority);
     println!("  GPG Check: {}", repo.gpg_check);
+    println!(
+        "  Security Advisories: {}",
+        repo.security_advisory_support.as_str()
+    );
     println!(
         "  GPG Strict: {}{}",
         repo.gpg_strict,
@@ -148,6 +155,10 @@ pub async fn cmd_repo_list(db_path: &str, all: bool) -> Result<()> {
             if let Some(ref content) = repo.content_url {
                 println!("      content:  {} (reference mirror)", content);
             }
+            println!(
+                "      security advisories: {}",
+                repo.security_advisory_support.as_str()
+            );
         }
     }
     Ok(())
@@ -445,4 +456,45 @@ pub async fn cmd_key_remove(repository: &str, db_path: &str) -> Result<()> {
     verifier.remove_key(repository)?;
     println!("Removed GPG key for repository '{}'", repository);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use conary_core::db::models::{Repository, SecurityAdvisorySupport};
+
+    #[tokio::test]
+    async fn repo_add_persists_security_advisory_support() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_string = db_path.to_string_lossy().to_string();
+        conary_core::db::init(&db_path).unwrap();
+
+        cmd_repo_add(RepoAddOptions {
+            name: "security-supported".to_string(),
+            url: "https://example.test/repo".to_string(),
+            db_path: db_path_string.clone(),
+            content_url: None,
+            priority: 50,
+            disabled: false,
+            gpg_key: None,
+            no_gpg_check: true,
+            gpg_strict: false,
+            default_strategy: None,
+            remi_endpoint: None,
+            remi_distro: None,
+            security_advisory_support: SecurityAdvisorySupport::Supported,
+        })
+        .await
+        .unwrap();
+
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let repo = Repository::find_by_name(&conn, "security-supported")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            repo.security_advisory_support,
+            SecurityAdvisorySupport::Supported
+        );
+    }
 }

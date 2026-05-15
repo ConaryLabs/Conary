@@ -199,7 +199,7 @@ git commit -m "feat(repo): track security advisory support"
 - Modify: `apps/conary/src/commands/repo.rs`
 - Modify: `apps/conary/src/dispatch.rs`
 
-- [ ] **Step 1: Add a focused command test**
+- [x] **Step 1: Add a focused command test**
 
 Add a focused test in `apps/conary/src/commands/repo.rs` that creates a repository with `SecurityAdvisorySupport::Supported` through `RepoAddOptions`, then reloads the row and verifies the enum.
 
@@ -209,7 +209,7 @@ Expected failing assertion before implementation:
 assert_eq!(repo.security_advisory_support, SecurityAdvisorySupport::Supported);
 ```
 
-- [ ] **Step 2: Add CLI enum and option**
+- [x] **Step 2: Add CLI enum and option**
 
 In `apps/conary/src/cli/repo.rs`, import `clap::ValueEnum` and add:
 
@@ -230,7 +230,7 @@ Add to `RepoCommands::Add`:
 security_advisories: CliSecurityAdvisorySupport,
 ```
 
-- [ ] **Step 3: Persist and render the option**
+- [x] **Step 3: Persist and render the option**
 
 Add `security_advisory_support` to `RepoAddOptions`, map the CLI enum in `dispatch_repo_command`, assign it before `repo.insert`, and print both add/list output:
 
@@ -238,7 +238,7 @@ Add `security_advisory_support` to `RepoAddOptions`, map the CLI enum in `dispat
 println!("  Security Advisories: {}", repo.security_advisory_support.as_str());
 ```
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 Run:
 
@@ -249,7 +249,7 @@ cargo build -p conary
 
 Expected: tests pass and clap compiles with the new option.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/conary/src/cli/repo.rs apps/conary/src/commands/repo.rs apps/conary/src/dispatch.rs

@@ -79,7 +79,7 @@ pub use provenance::ProvenanceCommands;
 pub use query::QueryCommands;
 pub use redirect::RedirectCommands;
 pub use registry::RegistryCommands;
-pub use repo::RepoCommands;
+pub use repo::{CliSecurityAdvisorySupport, RepoCommands};
 pub use state::StateCommands;
 pub use system::{SystemCommands, TakeoverLevel, UpdateChannelAction};
 pub use trigger::TriggerCommands;
