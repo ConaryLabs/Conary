@@ -200,6 +200,34 @@ fn package_execution_path(db_path: &str) -> Result<PackageExecutionPath> {
     })
 }
 
+fn prepare_install_environment_before_scriptlets(
+    conn: &rusqlite::Connection,
+    db_path: &str,
+    root: &str,
+) -> Result<PackageExecutionPath> {
+    let execution_path = package_execution_path(db_path)?;
+    recover_mutable_journals_before_scriptlets(conn, db_path, root, execution_path)?;
+    Ok(execution_path)
+}
+
+fn recover_mutable_journals_before_scriptlets(
+    conn: &rusqlite::Connection,
+    db_path: &str,
+    root: &str,
+    execution_path: PackageExecutionPath,
+) -> Result<()> {
+    if execution_path == PackageExecutionPath::MutableLiveRoot {
+        let runtime_root =
+            conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(PathBuf::from(db_path));
+        super::live_root::recover_pending_journals_with_changesets(
+            runtime_root.root(),
+            Path::new(root),
+            conn,
+        )?;
+    }
+    Ok(())
+}
+
 fn live_root_files_from_stored_files(
     cas: &conary_core::filesystem::CasStore,
     stored_files: &[inner::StoredInstallFile],
@@ -548,6 +576,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
             UpgradeCheck::FreshInstall => None,
             UpgradeCheck::Upgrade(trove) | UpgradeCheck::Downgrade(trove) => Some(trove),
         };
+    let execution_path = prepare_install_environment_before_scriptlets(&conn, db_path, root)?;
 
     let scriptlet_ctx = ScriptletContext {
         root,
@@ -573,7 +602,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         old_trove_to_upgrade: old_trove_to_upgrade.as_deref(),
         ccs_manifest_provides: None,
         ccs_capabilities: None,
-        execution_path: package_execution_path(db_path)?,
+        execution_path,
         defer_generation: false,
     };
     let tx_result =
@@ -1837,6 +1866,17 @@ fn execute_install_transaction(
     ctx: &TransactionContext<'_>,
     progress: &InstallProgress,
 ) -> Result<InstallTransactionResult> {
+    if ctx.execution_path == PackageExecutionPath::MutableLiveRoot {
+        inner::preflight_live_root_file_ownership(
+            conn,
+            extraction
+                .extracted_files
+                .iter()
+                .map(|file| file.path.as_str()),
+            pkg.name(),
+        )?;
+    }
+
     let db_path_buf = PathBuf::from(ctx.db_path);
     let tx_config = TransactionConfig::from_paths(PathBuf::from(ctx.root), db_path_buf);
     let mut engine =
@@ -2089,6 +2129,8 @@ pub(crate) fn install_ccs_package_transactionally(
         pkg,
         &selected_component_names,
     )?;
+    let execution_path =
+        prepare_install_environment_before_scriptlets(conn, opts.db_path, opts.root)?;
 
     let mut hook_executor = conary_core::ccs::HookExecutor::new(Path::new(opts.root));
     let mut pre_hooks_ran = false;
@@ -2129,7 +2171,7 @@ pub(crate) fn install_ccs_package_transactionally(
         old_trove_to_upgrade: old_trove,
         ccs_manifest_provides: Some(&pkg.manifest().provides),
         ccs_capabilities: pkg.manifest().capabilities.as_ref(),
-        execution_path: package_execution_path(opts.db_path)?,
+        execution_path,
         defer_generation: opts.defer_generation,
     };
     let tx_result = match execute_install_transaction(conn, pkg, &extraction, &tx_ctx, &progress) {
@@ -2558,6 +2600,199 @@ mod tests {
         assert_eq!(changeset.status, ChangesetStatus::Applied);
         let journal_dir = temp.path().join("live-root-journals");
         assert!(!journal_dir.exists() || std::fs::read_dir(&journal_dir).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn no_generation_install_conflict_preflight_preserves_live_root_file() {
+        use conary_core::db::models::{FileEntry, Trove, TroveType};
+        use conary_core::packages::traits::{
+            Dependency, ExtractedFile, PackageFile, PackageFormat, Scriptlet,
+        };
+        use std::collections::HashMap;
+        use std::os::unix::fs::PermissionsExt;
+
+        struct FakePackage;
+
+        impl PackageFormat for FakePackage {
+            fn parse(_path: &str) -> conary_core::Result<Self> {
+                unreachable!("test constructs package directly")
+            }
+
+            fn name(&self) -> &str {
+                "fixture"
+            }
+
+            fn version(&self) -> &str {
+                "1.0.0"
+            }
+
+            fn architecture(&self) -> Option<&str> {
+                Some("x86_64")
+            }
+
+            fn description(&self) -> Option<&str> {
+                None
+            }
+
+            fn files(&self) -> &[PackageFile] {
+                &[]
+            }
+
+            fn dependencies(&self) -> &[Dependency] {
+                &[]
+            }
+
+            fn extract_file_contents(&self) -> conary_core::Result<Vec<ExtractedFile>> {
+                Ok(vec![])
+            }
+
+            fn scriptlets(&self) -> &[Scriptlet] {
+                &[]
+            }
+
+            fn to_trove(&self) -> Trove {
+                Trove::new(
+                    "fixture".to_string(),
+                    "1.0.0".to_string(),
+                    TroveType::Package,
+                )
+            }
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let db_path = temp.path().join("conary.db");
+        let live_file = root.join("usr/bin/fixture");
+        std::fs::create_dir_all(live_file.parent().unwrap()).unwrap();
+        std::fs::write(&live_file, "owned elsewhere").unwrap();
+        let mut perms = std::fs::metadata(&live_file).unwrap().permissions();
+        perms.set_mode(0o444);
+        std::fs::set_permissions(&live_file, perms).unwrap();
+
+        conary_core::db::init(&db_path).unwrap();
+        let mut conn = conary_core::db::open(&db_path).unwrap();
+        let mut other_trove = Trove::new(
+            "other-owner".to_string(),
+            "1.0.0".to_string(),
+            TroveType::Package,
+        );
+        let other_trove_id = other_trove.insert(&conn).unwrap();
+        let mut existing = FileEntry::new(
+            "/usr/bin/fixture".to_string(),
+            "other-hash".to_string(),
+            15,
+            0o100755,
+            other_trove_id,
+        );
+        existing.insert(&conn).unwrap();
+        let mut runtime_perms = std::fs::metadata(temp.path()).unwrap().permissions();
+        runtime_perms.set_mode(0o555);
+        std::fs::set_permissions(temp.path(), runtime_perms).unwrap();
+
+        let extraction = ExtractionResult {
+            extracted_files: vec![ExtractedFile {
+                path: "/usr/bin/fixture".to_string(),
+                content: b"replacement".to_vec(),
+                size: 11,
+                mode: 0o100755,
+                sha256: None,
+                symlink_target: None,
+            }],
+            classified: HashMap::from([(
+                conary_core::components::ComponentType::Runtime,
+                vec!["/usr/bin/fixture".to_string()],
+            )]),
+            component_names_by_path: None,
+            installed_component_names: None,
+            ccs_pre_remove_script: None,
+            installed_component_types: vec![conary_core::components::ComponentType::Runtime],
+            skipped_components: Vec::new(),
+            language_provides: Vec::new(),
+        };
+        let db_path_string = db_path.to_string_lossy().into_owned();
+        let root_string = root.to_string_lossy().into_owned();
+        let ctx = TransactionContext {
+            db_path: &db_path_string,
+            root: &root_string,
+            semantics: InstallSemantics::legacy(PackageFormatType::Rpm),
+            selection_reason: None,
+            old_trove_to_upgrade: None,
+            ccs_manifest_provides: None,
+            ccs_capabilities: None,
+            execution_path: PackageExecutionPath::MutableLiveRoot,
+            defer_generation: false,
+        };
+
+        let error = match execute_install_transaction(
+            &mut conn,
+            &FakePackage,
+            &extraction,
+            &ctx,
+            &InstallProgress::single("Installing"),
+        ) {
+            Ok(_) => panic!("conflicting install unexpectedly succeeded"),
+            Err(error) => error,
+        };
+
+        let mut runtime_perms = std::fs::metadata(temp.path()).unwrap().permissions();
+        runtime_perms.set_mode(0o755);
+        std::fs::set_permissions(temp.path(), runtime_perms).unwrap();
+        let mut perms = std::fs::metadata(&live_file).unwrap().permissions();
+        perms.set_mode(0o644);
+        std::fs::set_permissions(&live_file, perms).unwrap();
+        assert!(
+            error
+                .to_string()
+                .contains("Path /usr/bin/fixture is already tracked by package other-owner"),
+            "{error}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("usr/bin/fixture")).unwrap(),
+            "owned elsewhere"
+        );
+    }
+
+    #[test]
+    fn recover_mutable_journals_runs_before_scriptlets() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let db_path = temp.path().join("conary.db");
+        let live_file = root.join("usr/bin/fixture");
+        std::fs::create_dir_all(live_file.parent().unwrap()).unwrap();
+        std::fs::write(&live_file, "before").unwrap();
+        conary_core::db::init(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+
+        let tx_uuid = uuid::Uuid::new_v4().to_string();
+        let mut live_tx = crate::commands::LiveRootTransaction::begin(
+            temp.path(),
+            &root,
+            tx_uuid,
+            "install fixture",
+        )
+        .unwrap();
+        live_tx
+            .apply_install_files(&[crate::commands::LiveRootFile {
+                path: "/usr/bin/fixture".to_string(),
+                content: b"after".to_vec(),
+                mode: 0o100644,
+                symlink_target: None,
+            }])
+            .unwrap();
+        std::mem::forget(live_tx);
+        assert_eq!(std::fs::read_to_string(&live_file).unwrap(), "after");
+
+        let db_path_string = db_path.to_string_lossy().into_owned();
+        let root_string = root.to_string_lossy().into_owned();
+        recover_mutable_journals_before_scriptlets(
+            &conn,
+            &db_path_string,
+            &root_string,
+            PackageExecutionPath::MutableLiveRoot,
+        )
+        .unwrap();
+
+        assert_eq!(std::fs::read_to_string(&live_file).unwrap(), "before");
     }
 
     #[test]
