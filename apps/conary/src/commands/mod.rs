@@ -8,6 +8,8 @@ mod cache;
 pub mod canonical;
 mod capability;
 pub mod ccs;
+#[allow(dead_code)]
+mod changeset_metadata;
 mod collection;
 pub(crate) mod composefs_ops;
 mod config;
@@ -71,6 +73,11 @@ pub use cache::{cmd_cache_populate, cmd_cache_status};
 pub use capability::{
     cmd_capability_audit, cmd_capability_generate, cmd_capability_list, cmd_capability_run,
     cmd_capability_show, cmd_capability_validate,
+};
+#[allow(unused_imports)]
+pub(crate) use changeset_metadata::{
+    ChangesetMetadataEnvelope, DeferredFollowUp, deferred_follow_up,
+    metadata_with_deferred_follow_up, metadata_with_removed_troves, parse_rollback_snapshots,
 };
 pub use collection::{
     cmd_collection_add, cmd_collection_create, cmd_collection_delete, cmd_collection_install,
@@ -177,7 +184,7 @@ impl PackageFormatType {
 }
 
 /// Serializable trove metadata for rollback support
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct TroveSnapshot {
     pub name: String,
     pub version: String,
@@ -192,13 +199,13 @@ pub(crate) struct TroveSnapshot {
 
 /// Rollback metadata for state-revert style changesets that may remove
 /// multiple troves under one wrapping changeset.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct RevertMetadata {
     pub removed_troves: Vec<TroveSnapshot>,
 }
 
 /// Serializable file metadata for rollback support
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct FileSnapshot {
     pub path: String,
     pub sha256_hash: String,
