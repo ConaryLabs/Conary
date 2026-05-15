@@ -265,7 +265,7 @@ pub enum Commands {
         #[command(flatten)]
         common: CommonArgs,
 
-        /// Only apply security updates (critical/important severity)
+        /// Only apply updates with trusted security-advisory metadata
         #[arg(long)]
         security: bool,
 

@@ -651,7 +651,8 @@ pub async fn cmd_list_pinned(db_path: &str) -> Result<()> {
 
 /// Check for and apply package updates
 ///
-/// If `security_only` is true, only applies security updates (critical/important severity).
+/// If `security_only` is true, only applies updates from sources with trusted
+/// advisory metadata that mark the candidate as a security update.
 #[allow(clippy::too_many_arguments)]
 pub async fn cmd_update(
     package: Option<String>,

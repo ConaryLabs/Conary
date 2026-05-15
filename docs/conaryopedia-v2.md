@@ -529,12 +529,17 @@ conary update --allow-live-system-mutation                    # Update all packa
 conary update --dry-run                                      # Preview updates and any source switches
 conary update nginx --allow-live-system-mutation              # Update just nginx
 conary update @web-stack --allow-live-system-mutation         # Update all members of a collection
-conary update --security --allow-live-system-mutation         # Only security updates (critical/important)
+conary update --security --allow-live-system-mutation         # Only trusted advisory-marked security updates
+conary update nginx --dep-mode takeover --allow-live-system-mutation --yes
 ```
 
 The update command checks configured repositories for newer versions of installed packages. When no package is specified, all installed packages are checked.
 
-Security-only updates (`--security`) filter for packages with `critical` or `important` severity advisories, allowing rapid patching without changing other packages.
+Conary-owned packages can be updated on a normal mutable host without first selecting a Conary generation. When no generation is selected, the update path delegates through the mutable live-root install path and records the same package database, file, and history metadata as an install.
+
+Adopted packages keep native package-manager authority. A normal `conary update` or `conary update --dep-mode satisfy|adopt` must not silently replace an adopted RPM/DEB/Arch package with a Conary-owned package. It reports that dnf, apt, or pacman remains authoritative and skips those packages. Crossing that boundary requires explicit `--dep-mode takeover`, and critical adopted packages remain blocked even under takeover.
+
+Security-only updates (`--security`) filter for packages marked as security updates by trusted advisory metadata, allowing rapid patching without changing other packages. This mode is fail-closed for requested Conary-owned sources: if a repository is `unknown` or `unsupported` for security-advisory metadata, Conary refuses before mutation and prints the affected source/package. Mark a repository as advisory-supported only when its synced metadata really publishes advisories that Conary can trust.
 
 Update candidate selection now depends on the effective source policy. In
 `policy` mode, Conary stays biased toward the currently installed source. In
@@ -629,7 +634,7 @@ This relies on the `install_reason` tracking from Chapter 1 -- only packages wit
 
 ### 2.9 System Adoption
 
-Conary can coexist with your system's native package manager (dnf, apt, pacman). **Adoption** imports the system package manager's metadata into Conary's database, giving you unified visibility across both systems.
+Conary can coexist with your system's native package manager (dnf, apt, pacman). **Adoption** imports the system package manager's metadata into Conary's database, giving you unified visibility across both systems while the native package manager remains authoritative.
 
 #### Adopting Individual Packages
 
@@ -665,6 +670,19 @@ If packages have been updated via the system package manager, refresh detects th
 conary system adopt --refresh    # Update adopted packages that changed
 ```
 
+#### Unadopting Without Deleting Files
+
+Unadoption is the limited-preview escape hatch. It removes Conary's adopted-package tracking rows and sync hooks, but it does not remove package files or alter native package-manager state.
+
+```bash
+conary system unadopt curl --dry-run
+conary system unadopt --all --dry-run
+conary --allow-live-system-mutation system unadopt curl
+conary --allow-live-system-mutation system unadopt --all
+```
+
+Apply-mode unadoption fails closed when a Conary generation is currently selected, because deleting tracking rows while `/conary/current` points at a generation can make the next generated root omit packages that the native package manager still believes are installed. Active-generation handoff back to native package-manager authority is separate follow-up work.
+
 #### Converting Adopted Packages to CCS
 
 Bulk convert adopted packages to CCS format for deduplication and atomic transactions:
@@ -688,6 +706,8 @@ conary system generation switch 1 --allow-live-system-mutation         # Select 
 
 The pipeline is internally progressive, but the supported release path is the `generation` level. The lower `cas` and `owned` stop-points are internal/debug checkpoints for development and diagnosis. The `generation` level (default) builds an EROFS generation and boot entry, then stops ready to activate. Activation is an explicit next-boot follow-up via `conary system generation switch <N> --allow-live-system-mutation`.
 `--yes` skips interactive prompts, but it does not replace `--allow-live-system-mutation`.
+
+Do not treat takeover as part of the risk-free adoption lane. Package-level takeover also appears as `conary update --dep-mode takeover`; that is an explicit ownership change and is not used by default for adopted packages.
 
 #### Sync Hooks
 
@@ -804,9 +824,13 @@ conary repo add fedora-44 https://mirror.example.com/fedora/44 \
 conary repo add custom https://repo.example.com/metadata \
     --content-url https://cdn.example.com/packages \
     --gpg-key https://repo.example.com/keys/signing.pub
+conary repo add advisory-fedora https://repo.example.com/fedora \
+    --security-advisories supported
 ```
 
 The `--content-url` flag enables the **reference mirror** pattern: metadata is fetched from the primary URL, but packages are downloaded from the content URL. This allows hosting custom metadata that points to upstream package mirrors.
+
+The `--security-advisories` flag records whether a repository publishes security-advisory metadata that Conary can trust. Valid values are `unknown` (default), `unsupported`, and `supported`. `conary update --security` refuses before mutation for requested Conary-owned packages from `unknown` or `unsupported` sources, so use `supported` only when the source actually carries advisory metadata.
 
 #### Managing Repositories
 

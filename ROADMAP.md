@@ -70,7 +70,7 @@ For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 
 
 1. Prove `conary system unadopt` remains the non-destructive adoption escape for RPM, DEB, and Arch
 2. Lock down adopted-package update behavior so native package managers remain authoritative unless takeover is explicit
-3. Refresh quick-start and preview docs around adoption, unadoption, native PM coexistence, and takeover boundaries
+3. Keep quick-start and preview docs current around adoption, unadoption, native PM coexistence, takeover boundaries, and security-update honesty
 4. Design active-generation handoff back to native package-manager authority
 5. Keep generation export and installed-runtime QEMU validation in rotation
 6. Make self-host VM validation inputs pristine by default

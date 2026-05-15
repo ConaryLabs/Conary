@@ -217,7 +217,7 @@ Always runs. Tests basic conary operations against a live Remi server:
 | T24 | History | Changeset history |
 | T25-T27 | Dependencies | Install with deps, verify, multi-package coexist |
 | T28-T31 | Dep modes | Satisfy, adopt, takeover, blocklist |
-| T32 | Update | Update with adopted packages |
+| T32 | Update | Update with adopted packages; native PM authority remains in effect unless takeover is explicit |
 | T33-T37 | Generations | List, GC, info, takeover dry-run, composefs format |
 
 `T21a`, `T21b`, and `T21c` are the Adopt Without Regret proof points for
@@ -225,6 +225,13 @@ Phase 1. When `phase1-advanced` is run on `fedora44`, `ubuntu-26.04`, and
 `arch`, they prove that `curl` can be unadopted one package at a time and with
 `--all` without deleting native package files: `curl --version` still works,
 while `conary list curl` no longer reports Conary tracking.
+
+The focused CLI integration test
+`apps/conary/tests/native_pm_live_root.rs` complements the manifest matrix for
+Slice B. It proves that a Conary-owned package can update from v1 to v2 on a
+mutable live root with no selected generation, and that `update --security`
+refuses before mutation when the requested repository cannot prove advisory
+metadata support.
 
 ### Phase 2: Deep E2E (T38-T76)
 
