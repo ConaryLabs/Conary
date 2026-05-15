@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use conary_core::db::models::{
     DeltaStats, DistroPin, PackageDelta, RepologyCacheEntry, Repository, RepositoryPackage,
-    SystemAffinity, Trove,
+    SecurityAdvisorySupport, SystemAffinity, Trove,
 };
 use conary_core::db::paths::objects_dir;
 use conary_core::delta::DeltaApplier;
@@ -209,6 +209,31 @@ struct SelectedUpdateCandidate {
     source_switch: Option<UpdateSourceSwitch>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SecurityMetadataUnavailable {
+    package: String,
+    repository: String,
+    support: SecurityAdvisorySupport,
+    candidate_version: String,
+}
+
+#[derive(Debug, Clone)]
+enum UpdateCandidateSelection {
+    Selected(SelectedUpdateCandidate),
+    NoEligibleUpdate,
+    SecurityMetadataUnavailable(SecurityMetadataUnavailable),
+}
+
+impl UpdateCandidateSelection {
+    #[cfg(test)]
+    fn expect(self, message: &str) -> SelectedUpdateCandidate {
+        match self {
+            Self::Selected(selected) => selected,
+            Self::NoEligibleUpdate | Self::SecurityMetadataUnavailable(_) => panic!("{message}"),
+        }
+    }
+}
+
 #[allow(dead_code)]
 fn installed_source_distro(trove: &Trove) -> Option<&str> {
     trove.source_distro.as_deref()
@@ -289,7 +314,7 @@ fn select_update_candidate(
     security_only: bool,
     policy: &ResolutionPolicy,
     primary_flavor: Option<RepositoryDependencyFlavor>,
-) -> Result<Option<SelectedUpdateCandidate>> {
+) -> Result<UpdateCandidateSelection> {
     let options = SelectionOptions {
         version: None,
         repository: None,
@@ -301,10 +326,6 @@ fn select_update_candidate(
 
     let mut eligible = Vec::new();
     for candidate in PackageSelector::search_packages(conn, &trove.name, &options)? {
-        if security_only && !candidate.package.is_security_update {
-            continue;
-        }
-
         let same_source =
             candidate_matches_installed_source(trove, &candidate.package, &candidate.repository);
         let newer_in_scheme =
@@ -318,12 +339,27 @@ fn select_update_candidate(
             )?;
 
         if newer_in_scheme || allow_cross_source_latest {
+            if security_only {
+                if !candidate.repository.security_advisory_support.is_supported() {
+                    return Ok(UpdateCandidateSelection::SecurityMetadataUnavailable(
+                        SecurityMetadataUnavailable {
+                            package: trove.name.clone(),
+                            repository: candidate.repository.name,
+                            support: candidate.repository.security_advisory_support,
+                            candidate_version: candidate.package.version,
+                        },
+                    ));
+                }
+                if !candidate.package.is_security_update {
+                    continue;
+                }
+            }
             eligible.push(candidate);
         }
     }
 
     if eligible.is_empty() {
-        return Ok(None);
+        return Ok(UpdateCandidateSelection::NoEligibleUpdate);
     }
 
     let selected = if policy.selection_mode == SelectionMode::Latest {
@@ -356,7 +392,7 @@ fn select_update_candidate(
             })
         };
 
-    Ok(Some(SelectedUpdateCandidate {
+    Ok(UpdateCandidateSelection::Selected(SelectedUpdateCandidate {
         package: selected.package,
         repository: selected.repository,
         source_switch,
@@ -481,6 +517,29 @@ fn no_update_message(security_only: bool, adopted_updates_skipped: bool) -> &'st
         (true, false) => "No security updates available",
         (false, false) => "All packages are up to date",
     }
+}
+
+fn print_security_metadata_unavailable(unavailable: &[SecurityMetadataUnavailable]) {
+    if unavailable.is_empty() {
+        return;
+    }
+
+    println!("Security metadata unavailable for requested update source(s):");
+    for item in unavailable {
+        println!(
+            "  {} {} from {} ({})",
+            item.package,
+            item.candidate_version,
+            item.repository,
+            item.support.as_str()
+        );
+    }
+}
+
+fn security_metadata_unavailable_error(count: usize) -> String {
+    format!(
+        "Cannot run security-only update because {count} source(s) cannot prove security metadata support. Mark the source supported only after its repository metadata publishes advisory data."
+    )
 }
 
 /// Pin a package to prevent updates and removal
@@ -633,6 +692,7 @@ pub async fn cmd_update(
 
     let detected_pkg_mgr = SystemPackageManager::detect();
     let mut adopted_skipped: Vec<AdoptedUpdateSkip> = Vec::new();
+    let mut security_metadata_unavailable: Vec<SecurityMetadataUnavailable> = Vec::new();
 
     for trove in &installed_troves {
         // Skip pinned packages
@@ -641,17 +701,40 @@ pub async fn cmd_update(
             continue;
         }
 
-        let Some(selected) =
-            select_update_candidate(&conn, trove, security_only, &policy, primary_flavor)?
-        else {
-            continue;
+        let adopted_decision = if trove.install_source.is_adopted() {
+            Some(adopted_update_decision(trove, dep_mode, requested_dep_mode))
+        } else {
+            None
+        };
+        let enforce_security_metadata = security_only
+            && !matches!(
+                adopted_decision,
+                Some(
+                    AdoptedUpdateDecision::SkipNativeAuthority
+                        | AdoptedUpdateDecision::BlockCritical
+                )
+            );
+
+        let selected = match select_update_candidate(
+            &conn,
+            trove,
+            enforce_security_metadata,
+            &policy,
+            primary_flavor,
+        )? {
+            UpdateCandidateSelection::Selected(selected) => selected,
+            UpdateCandidateSelection::NoEligibleUpdate => continue,
+            UpdateCandidateSelection::SecurityMetadataUnavailable(unavailable) => {
+                security_metadata_unavailable.push(unavailable);
+                continue;
+            }
         };
 
         // For adopted packages, native package-manager authority is preserved
         // unless the user explicitly asks Conary to take ownership.
         if trove.install_source.is_adopted() {
             let native_manager = native_manager_for_trove(trove, detected_pkg_mgr);
-            match adopted_update_decision(trove, dep_mode, requested_dep_mode) {
+            match adopted_decision.expect("adopted trove must have an update decision") {
                 AdoptedUpdateDecision::SkipNativeAuthority => {
                     println!(
                         "  {} {} -> {} (adopted as {}, native authority: use '{}')",
@@ -704,6 +787,13 @@ pub async fn cmd_update(
             trove.name, trove.version, selected.package.version, security_marker
         );
         updates_available.push((trove.clone(), selected));
+    }
+
+    if !security_metadata_unavailable.is_empty() {
+        print_security_metadata_unavailable(&security_metadata_unavailable);
+        anyhow::bail!(security_metadata_unavailable_error(
+            security_metadata_unavailable.len()
+        ));
     }
 
     // Report pinned packages that were skipped
@@ -1260,6 +1350,7 @@ pub async fn cmd_update_group(
     let mut updates_to_apply: Vec<String> = Vec::new();
     let mut not_installed: Vec<String> = Vec::new();
     let mut adopted_updates_skipped = false;
+    let mut security_metadata_unavailable: Vec<SecurityMetadataUnavailable> = Vec::new();
     let detected_pkg_mgr = SystemPackageManager::detect();
 
     for member in &members {
@@ -1275,9 +1366,19 @@ pub async fn cmd_update_group(
             continue;
         }
 
+        let adopted_decision = if trove.install_source.is_adopted() {
+            Some(adopted_update_decision(
+                trove,
+                effective_dep_mode,
+                requested_dep_mode,
+            ))
+        } else {
+            None
+        };
+
         if trove.install_source.is_adopted() {
             let native_manager = native_manager_for_trove(trove, detected_pkg_mgr);
-            match adopted_update_decision(trove, effective_dep_mode, requested_dep_mode) {
+            match adopted_decision.expect("adopted trove must have an update decision") {
                 AdoptedUpdateDecision::QueueTakeover => {}
                 AdoptedUpdateDecision::SkipNativeAuthority => {
                     println!(
@@ -1300,13 +1401,37 @@ pub async fn cmd_update_group(
             }
         }
 
-        if select_update_candidate(&conn, trove, security_only, &policy, primary_flavor)?.is_some()
-        {
-            updates_to_apply.push(member.member_name.clone());
+        let enforce_security_metadata = security_only
+            && !matches!(
+                adopted_decision,
+                Some(
+                    AdoptedUpdateDecision::SkipNativeAuthority
+                        | AdoptedUpdateDecision::BlockCritical
+                )
+            );
+        match select_update_candidate(
+            &conn,
+            trove,
+            enforce_security_metadata,
+            &policy,
+            primary_flavor,
+        )? {
+            UpdateCandidateSelection::Selected(_) => updates_to_apply.push(member.member_name.clone()),
+            UpdateCandidateSelection::NoEligibleUpdate => {}
+            UpdateCandidateSelection::SecurityMetadataUnavailable(unavailable) => {
+                security_metadata_unavailable.push(unavailable);
+            }
         }
     }
 
     drop(conn);
+
+    if !security_metadata_unavailable.is_empty() {
+        print_security_metadata_unavailable(&security_metadata_unavailable);
+        anyhow::bail!(security_metadata_unavailable_error(
+            security_metadata_unavailable.len()
+        ));
+    }
 
     if !not_installed.is_empty() {
         println!(
@@ -1479,6 +1604,52 @@ mod tests {
         arch_candidate.version_scheme = Some("arch".to_string());
         arch_candidate.canonical_id = Some(canonical_id);
         arch_candidate.insert(conn).unwrap();
+
+        installed
+    }
+
+    fn seed_security_update_fixture(
+        conn: &rusqlite::Connection,
+        support: SecurityAdvisorySupport,
+        candidate_is_security_update: bool,
+    ) -> Trove {
+        let mut repo = Repository::new(
+            "security-repo".to_string(),
+            "https://example.test/security".to_string(),
+        );
+        repo.default_strategy_distro = Some("fedora-44".to_string());
+        repo.security_advisory_support = support;
+        let repo_id = repo.insert(conn).unwrap();
+
+        let mut installed = Trove::new_with_source(
+            "openssl".to_string(),
+            "1.0.0".to_string(),
+            TroveType::Package,
+            InstallSource::Repository,
+        );
+        installed.architecture = Some("x86_64".to_string());
+        installed.source_distro = Some("fedora-44".to_string());
+        installed.version_scheme = Some("rpm".to_string());
+        installed.installed_from_repository_id = Some(repo_id);
+        installed.insert(conn).unwrap();
+
+        let mut candidate = RepositoryPackage::new(
+            repo_id,
+            "openssl".to_string(),
+            "1.0.1".to_string(),
+            "sha256:openssl".to_string(),
+            123,
+            "https://example.test/security/openssl-1.0.1.ccs".to_string(),
+        );
+        candidate.architecture = Some("x86_64".to_string());
+        candidate.distro = Some("fedora-44".to_string());
+        candidate.version_scheme = Some("rpm".to_string());
+        candidate.is_security_update = candidate_is_security_update;
+        if candidate_is_security_update {
+            candidate.severity = Some("important".to_string());
+            candidate.advisory_id = Some("FEDORA-2026-0001".to_string());
+        }
+        candidate.insert(conn).unwrap();
 
         installed
     }
@@ -1668,6 +1839,89 @@ mod tests {
         assert_eq!(selected.repository.name, "fedora-main");
         assert_eq!(selected.package.version, "1.1.0-1.fc43");
         assert!(selected.source_switch.is_none());
+    }
+
+    #[test]
+    fn security_update_refuses_unknown_source_metadata_before_mutation() {
+        let (_temp, db_path) = create_test_db();
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let trove = seed_security_update_fixture(&conn, SecurityAdvisorySupport::Unknown, false);
+        let policy = ResolutionPolicy::new();
+
+        let result = select_update_candidate(
+            &conn,
+            &trove,
+            true,
+            &policy,
+            Some(RepositoryDependencyFlavor::Rpm),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            result,
+            UpdateCandidateSelection::SecurityMetadataUnavailable(_)
+        ));
+    }
+
+    #[test]
+    fn security_update_refuses_unsupported_source_metadata_before_mutation() {
+        let (_temp, db_path) = create_test_db();
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let trove =
+            seed_security_update_fixture(&conn, SecurityAdvisorySupport::Unsupported, false);
+        let policy = ResolutionPolicy::new();
+
+        let result = select_update_candidate(
+            &conn,
+            &trove,
+            true,
+            &policy,
+            Some(RepositoryDependencyFlavor::Rpm),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            result,
+            UpdateCandidateSelection::SecurityMetadataUnavailable(_)
+        ));
+    }
+
+    #[test]
+    fn security_update_selects_supported_security_candidate() {
+        let (_temp, db_path) = create_test_db();
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let trove = seed_security_update_fixture(&conn, SecurityAdvisorySupport::Supported, true);
+        let policy = ResolutionPolicy::new();
+
+        let result = select_update_candidate(
+            &conn,
+            &trove,
+            true,
+            &policy,
+            Some(RepositoryDependencyFlavor::Rpm),
+        )
+        .unwrap();
+
+        assert!(matches!(result, UpdateCandidateSelection::Selected(_)));
+    }
+
+    #[test]
+    fn security_update_ignores_supported_non_security_candidate() {
+        let (_temp, db_path) = create_test_db();
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let trove = seed_security_update_fixture(&conn, SecurityAdvisorySupport::Supported, false);
+        let policy = ResolutionPolicy::new();
+
+        let result = select_update_candidate(
+            &conn,
+            &trove,
+            true,
+            &policy,
+            Some(RepositoryDependencyFlavor::Rpm),
+        )
+        .unwrap();
+
+        assert!(matches!(result, UpdateCandidateSelection::NoEligibleUpdate));
     }
 
     #[test]
