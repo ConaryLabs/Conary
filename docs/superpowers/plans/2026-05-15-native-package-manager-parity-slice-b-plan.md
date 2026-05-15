@@ -376,7 +376,7 @@ git commit -m "fix(update): refuse unverifiable security metadata"
 **Files:**
 - Modify: `apps/conary/src/commands/update.rs`
 
-- [ ] **Step 1: Add summary tests**
+- [x] **Step 1: Add summary tests**
 
 Extract a small outcome helper rather than testing all network paths directly:
 
@@ -425,15 +425,15 @@ fn partial_update_failure_message_is_not_clean_success() {
 }
 ```
 
-- [ ] **Step 2: Track required failures separately from delta fallback**
+- [x] **Step 2: Track required failures separately from delta fallback**
 
 Replace `had_failures` with `required_failures: Vec<UpdatePackageFailure>`. Delta download/apply failures increment `delta_failures` and fall back to full package download when possible, but do not become required failures if the full install succeeds. Resolver failures, unsupported `LocalCas`, missing fallback repository, and `cmd_install` errors append `UpdatePackageFailure`.
 
-- [ ] **Step 3: Return nonzero for required failures**
+- [x] **Step 3: Return nonzero for required failures**
 
 After inserting `DeltaStats` and printing the update summary, if `required_failures` is not empty, return `Err(anyhow!(...))`. Preserve already-applied package installs and mark the outer update changeset `Applied` when at least one package succeeded, `RolledBack` when no package succeeded and required failures occurred.
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 Run:
 
@@ -444,7 +444,7 @@ cargo test -p conary mark_pending_changeset_rolled_back -- --nocapture
 
 Expected: tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/conary/src/commands/update.rs
