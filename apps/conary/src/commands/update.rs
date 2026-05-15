@@ -226,7 +226,7 @@ struct UpdatePackageFailure {
 
 #[derive(Debug, Clone)]
 enum UpdateCandidateSelection {
-    Selected(SelectedUpdateCandidate),
+    Selected(Box<SelectedUpdateCandidate>),
     NoEligibleUpdate,
     SecurityMetadataUnavailable(SecurityMetadataUnavailable),
 }
@@ -235,7 +235,7 @@ impl UpdateCandidateSelection {
     #[cfg(test)]
     fn expect(self, message: &str) -> SelectedUpdateCandidate {
         match self {
-            Self::Selected(selected) => selected,
+            Self::Selected(selected) => *selected,
             Self::NoEligibleUpdate | Self::SecurityMetadataUnavailable(_) => panic!("{message}"),
         }
     }
@@ -347,7 +347,11 @@ fn select_update_candidate(
 
         if newer_in_scheme || allow_cross_source_latest {
             if security_only {
-                if !candidate.repository.security_advisory_support.is_supported() {
+                if !candidate
+                    .repository
+                    .security_advisory_support
+                    .is_supported()
+                {
                     return Ok(UpdateCandidateSelection::SecurityMetadataUnavailable(
                         SecurityMetadataUnavailable {
                             package: trove.name.clone(),
@@ -399,11 +403,13 @@ fn select_update_candidate(
             })
         };
 
-    Ok(UpdateCandidateSelection::Selected(SelectedUpdateCandidate {
-        package: selected.package,
-        repository: selected.repository,
-        source_switch,
-    }))
+    Ok(UpdateCandidateSelection::Selected(Box::new(
+        SelectedUpdateCandidate {
+            package: selected.package,
+            repository: selected.repository,
+            source_switch,
+        },
+    )))
 }
 
 fn render_source_switch_preview_line(selection: &SelectedUpdateCandidate) -> Option<String> {
@@ -559,7 +565,12 @@ fn update_required_failure_message(
 
     let sample = failures
         .iter()
-        .map(|failure| format!("{} {} ({})", failure.package, failure.version, failure.reason))
+        .map(|failure| {
+            format!(
+                "{} {} ({})",
+                failure.package, failure.version, failure.reason
+            )
+        })
         .collect::<Vec<_>>()
         .join(", ");
 
@@ -751,7 +762,7 @@ pub async fn cmd_update(
             &policy,
             primary_flavor,
         )? {
-            UpdateCandidateSelection::Selected(selected) => selected,
+            UpdateCandidateSelection::Selected(selected) => *selected,
             UpdateCandidateSelection::NoEligibleUpdate => continue,
             UpdateCandidateSelection::SecurityMetadataUnavailable(unavailable) => {
                 security_metadata_unavailable.push(unavailable);
@@ -1487,7 +1498,9 @@ pub async fn cmd_update_group(
             &policy,
             primary_flavor,
         )? {
-            UpdateCandidateSelection::Selected(_) => updates_to_apply.push(member.member_name.clone()),
+            UpdateCandidateSelection::Selected(_) => {
+                updates_to_apply.push(member.member_name.clone())
+            }
             UpdateCandidateSelection::NoEligibleUpdate => {}
             UpdateCandidateSelection::SecurityMetadataUnavailable(unavailable) => {
                 security_metadata_unavailable.push(unavailable);
