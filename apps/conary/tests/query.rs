@@ -5,6 +5,22 @@
 mod common;
 
 use conary_core::db;
+use std::process::{Command, Output};
+
+fn run_conary(args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_conary"))
+        .args(args)
+        .output()
+        .expect("failed to run conary")
+}
+
+fn output_text(output: &Output) -> String {
+    format!(
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
 
 #[test]
 fn test_query_packages() {
@@ -164,6 +180,211 @@ fn test_query_operations() {
         nonexistent.is_empty(),
         "Should not find nonexistent package"
     );
+}
+
+#[test]
+fn list_info_refuses_ambiguous_variants_until_selector_is_given() {
+    use conary_core::db::models::{Trove, TroveType};
+
+    let (_tmp, db_path, conn) = common::create_test_db();
+    for arch in ["x86_64", "aarch64"] {
+        let mut trove = Trove::new(
+            "variant-demo".to_string(),
+            "1.0.0".to_string(),
+            TroveType::Package,
+        );
+        trove.architecture = Some(arch.to_string());
+        trove.insert(&conn).unwrap();
+    }
+
+    let ambiguous = run_conary(&["list", "variant-demo", "--info", "--db-path", &db_path]);
+    assert!(!ambiguous.status.success(), "{}", output_text(&ambiguous));
+    let text = output_text(&ambiguous);
+    assert!(
+        text.contains("Multiple installed variants of 'variant-demo' match"),
+        "{text}"
+    );
+    assert!(text.contains("--arch"), "{text}");
+
+    let selected = run_conary(&[
+        "list",
+        "variant-demo",
+        "--info",
+        "--version",
+        "1.0.0",
+        "--arch",
+        "aarch64",
+        "--db-path",
+        &db_path,
+    ]);
+    assert!(selected.status.success(), "{}", output_text(&selected));
+    let stdout = String::from_utf8_lossy(&selected.stdout);
+    assert!(stdout.contains("Architecture: aarch64"), "{stdout}");
+    assert!(stdout.contains("Authority   : conary-owned"), "{stdout}");
+    assert!(stdout.contains("Source      : file"), "{stdout}");
+
+    let filtered = run_conary(&[
+        "list",
+        "variant-demo",
+        "--version",
+        "1.0.0",
+        "--arch",
+        "aarch64",
+        "--db-path",
+        &db_path,
+    ]);
+    assert!(filtered.status.success(), "{}", output_text(&filtered));
+    let stdout = String::from_utf8_lossy(&filtered.stdout);
+    assert!(stdout.contains("variant-demo 1.0.0"), "{stdout}");
+    assert!(stdout.contains("[aarch64]"), "{stdout}");
+    assert!(!stdout.contains("[x86_64]"), "{stdout}");
+}
+
+#[test]
+fn pin_and_unpin_use_same_variant_selector() {
+    use conary_core::db::models::{Trove, TroveType};
+
+    let (_tmp, db_path, conn) = common::create_test_db();
+    for arch in ["x86_64", "aarch64"] {
+        let mut trove = Trove::new(
+            "pin-demo".to_string(),
+            "1.0.0".to_string(),
+            TroveType::Package,
+        );
+        trove.architecture = Some(arch.to_string());
+        trove.insert(&conn).unwrap();
+    }
+
+    let ambiguous = run_conary(&["pin", "pin-demo", "--db-path", &db_path]);
+    assert!(!ambiguous.status.success(), "{}", output_text(&ambiguous));
+
+    let pin = run_conary(&[
+        "pin",
+        "pin-demo",
+        "--version",
+        "1.0.0",
+        "--arch",
+        "x86_64",
+        "--db-path",
+        &db_path,
+    ]);
+    assert!(pin.status.success(), "{}", output_text(&pin));
+
+    let pinned = run_conary(&["list", "--pinned", "--db-path", &db_path]);
+    assert!(pinned.status.success(), "{}", output_text(&pinned));
+    let stdout = String::from_utf8_lossy(&pinned.stdout);
+    assert!(stdout.contains("pin-demo 1.0.0 [x86_64]"), "{stdout}");
+
+    let unpin = run_conary(&[
+        "unpin",
+        "pin-demo",
+        "--version",
+        "1.0.0",
+        "--arch",
+        "x86_64",
+        "--db-path",
+        &db_path,
+    ]);
+    assert!(unpin.status.success(), "{}", output_text(&unpin));
+}
+
+#[test]
+fn update_package_selector_refuses_ambiguous_variants_at_cli() {
+    use conary_core::db::models::{Trove, TroveType};
+
+    let (_tmp, db_path, conn) = common::create_test_db();
+    for arch in ["x86_64", "aarch64"] {
+        let mut trove = Trove::new(
+            "update-demo".to_string(),
+            "1.0.0".to_string(),
+            TroveType::Package,
+        );
+        trove.architecture = Some(arch.to_string());
+        trove.insert(&conn).unwrap();
+    }
+
+    let ambiguous = run_conary(&[
+        "--allow-live-system-mutation",
+        "update",
+        "update-demo",
+        "--dry-run",
+        "--db-path",
+        &db_path,
+    ]);
+    assert!(!ambiguous.status.success(), "{}", output_text(&ambiguous));
+    let text = output_text(&ambiguous);
+    assert!(
+        text.contains("Multiple installed variants of 'update-demo' match"),
+        "{text}"
+    );
+    assert!(text.contains("--arch"), "{text}");
+
+    let selected = run_conary(&[
+        "--allow-live-system-mutation",
+        "update",
+        "update-demo",
+        "--dry-run",
+        "--version",
+        "1.0.0",
+        "--arch",
+        "aarch64",
+        "--db-path",
+        &db_path,
+    ]);
+    assert!(selected.status.success(), "{}", output_text(&selected));
+}
+
+#[test]
+fn update_collection_refuses_installed_variant_selectors() {
+    let (_tmp, db_path, _conn) = common::create_test_db();
+
+    let output = run_conary(&[
+        "--allow-live-system-mutation",
+        "update",
+        "@base",
+        "--dry-run",
+        "--arch",
+        "x86_64",
+        "--db-path",
+        &db_path,
+    ]);
+
+    assert!(!output.status.success(), "{}", output_text(&output));
+    let text = output_text(&output);
+    assert!(
+        text.contains("cannot be used with collection updates"),
+        "{text}"
+    );
+}
+
+#[test]
+fn list_modes_refuse_ignored_installed_variant_selectors() {
+    let (_tmp, db_path) = common::setup_command_test_db();
+
+    let pinned = run_conary(&[
+        "list",
+        "--pinned",
+        "--arch",
+        "x86_64",
+        "--db-path",
+        &db_path,
+    ]);
+    assert!(!pinned.status.success(), "{}", output_text(&pinned));
+    let text = output_text(&pinned);
+    assert!(text.contains("cannot be used with --pinned"), "{text}");
+
+    let path = run_conary(&[
+        "list",
+        "--path",
+        "/usr/sbin/nginx",
+        "--arch",
+        "x86_64",
+        "--db-path",
+        &db_path,
+    ]);
+    assert!(!path.status.success(), "{}", output_text(&path));
+    let text = output_text(&path);
+    assert!(text.contains("cannot be used with --path"), "{text}");
 }
 
 /// Test dependency query operations (equivalent to cmd_depends/cmd_rdepends)

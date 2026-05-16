@@ -4,12 +4,12 @@
 use super::install::{DepMode, resolve_default_dep_mode_from_model};
 use super::open_db;
 use super::progress::{UpdatePhase, UpdateProgress};
-use super::{SandboxMode, cmd_install};
+use super::{InstalledPackageSelector, SandboxMode, cmd_install, resolve_installed_package};
 use anyhow::{Context, Result};
 use chrono::Utc;
 use conary_core::db::models::{
     DeltaStats, DistroPin, PackageDelta, RepologyCacheEntry, Repository, RepositoryPackage,
-    SecurityAdvisorySupport, SystemAffinity, Trove,
+    SecurityAdvisorySupport, SystemAffinity, Trove, TroveType,
 };
 use conary_core::db::paths::objects_dir;
 use conary_core::delta::DeltaApplier;
@@ -447,15 +447,6 @@ fn print_source_switch_preview(updates: &[(Trove, SelectedUpdateCandidate)]) {
     }
 }
 
-fn find_installed_trove(conn: &rusqlite::Connection, package_name: &str) -> Result<(Trove, i64)> {
-    let trove = Trove::find_one_by_name(conn, package_name)?
-        .ok_or_else(|| anyhow::anyhow!("Package '{}' is not installed", package_name))?;
-    let trove_id = trove
-        .id
-        .ok_or_else(|| anyhow::anyhow!("Package '{}' has no database ID", package_name))?;
-    Ok((trove, trove_id))
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AdoptedUpdateDecision {
     SkipNativeAuthority,
@@ -583,20 +574,22 @@ fn update_required_failure_message(
 }
 
 /// Pin a package to prevent updates and removal
-pub async fn cmd_pin(package_name: &str, db_path: &str) -> Result<()> {
-    info!("Pinning package: {}", package_name);
+pub async fn cmd_pin(selector: InstalledPackageSelector, db_path: &str) -> Result<()> {
+    info!("Pinning package: {}", selector.name);
     let conn = open_db(db_path)?;
-    let (trove, trove_id) = find_installed_trove(&conn, package_name)?;
+    let resolved = resolve_installed_package(&conn, &selector)?;
+    let trove = resolved.trove;
+    let trove_id = resolved.trove_id;
 
     if trove.pinned {
-        println!("Package '{}' is already pinned", package_name);
+        println!("Package '{}' is already pinned", trove.name);
         return Ok(());
     }
 
     Trove::pin(&conn, trove_id)?;
     println!(
         "Pinned package '{}' at version {}",
-        package_name, trove.version
+        trove.name, trove.version
     );
     println!("This package will be skipped during updates and cannot be removed until unpinned.");
 
@@ -604,20 +597,22 @@ pub async fn cmd_pin(package_name: &str, db_path: &str) -> Result<()> {
 }
 
 /// Unpin a package to allow updates and removal
-pub async fn cmd_unpin(package_name: &str, db_path: &str) -> Result<()> {
-    info!("Unpinning package: {}", package_name);
+pub async fn cmd_unpin(selector: InstalledPackageSelector, db_path: &str) -> Result<()> {
+    info!("Unpinning package: {}", selector.name);
     let conn = open_db(db_path)?;
-    let (trove, trove_id) = find_installed_trove(&conn, package_name)?;
+    let resolved = resolve_installed_package(&conn, &selector)?;
+    let trove = resolved.trove;
+    let trove_id = resolved.trove_id;
 
     if !trove.pinned {
-        println!("Package '{}' is not pinned", package_name);
+        println!("Package '{}' is not pinned", trove.name);
         return Ok(());
     }
 
     Trove::unpin(&conn, trove_id)?;
     println!(
         "Unpinned package '{}' (version {})",
-        package_name, trove.version
+        trove.name, trove.version
     );
     println!("This package can now be updated or removed.");
 
@@ -663,6 +658,8 @@ pub async fn cmd_update(
     sandbox_mode: SandboxMode,
     dep_mode: Option<DepMode>,
     yes: bool,
+    package_version: Option<String>,
+    architecture: Option<String>,
 ) -> Result<()> {
     if security_only {
         info!("Checking for security updates only");
@@ -716,11 +713,8 @@ pub async fn cmd_update(
 
     let keyring_dir = conary_core::db::paths::keyring_dir(db_path);
 
-    let installed_troves = if let Some(pkg_name) = package {
-        Trove::find_by_name(&conn, &pkg_name)?
-    } else {
-        Trove::list_all(&conn)?
-    };
+    let installed_troves =
+        installed_troves_for_update(&conn, package, package_version, architecture)?;
 
     if installed_troves.is_empty() {
         println!("No packages to update");
@@ -1383,6 +1377,48 @@ pub async fn cmd_delta_stats(db_path: &str) -> Result<()> {
     Ok(())
 }
 
+fn installed_troves_for_update(
+    conn: &rusqlite::Connection,
+    package: Option<String>,
+    package_version: Option<String>,
+    architecture: Option<String>,
+) -> Result<Vec<Trove>> {
+    if let Some(pkg_name) = package {
+        let selector = InstalledPackageSelector::new(pkg_name, package_version, architecture);
+        return Ok(vec![resolve_installed_package(conn, &selector)?.trove]);
+    }
+
+    if package_version.is_some() || architecture.is_some() {
+        anyhow::bail!("A package name is required with --version or --arch for update");
+    }
+
+    Ok(Trove::list_all(conn)?)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CollectionUpdateTarget {
+    name: String,
+    version: String,
+    architecture: Option<String>,
+}
+
+impl CollectionUpdateTarget {
+    fn from_trove(trove: &Trove) -> Self {
+        Self {
+            name: trove.name.clone(),
+            version: trove.version.clone(),
+            architecture: trove.architecture.clone(),
+        }
+    }
+
+    fn display(&self) -> String {
+        match self.architecture.as_deref() {
+            Some(arch) => format!("{} {} [{}]", self.name, self.version, arch),
+            None => format!("{} {}", self.name, self.version),
+        }
+    }
+}
+
 /// Update all members of a collection/group (best-effort, per-package)
 ///
 /// This updates all installed packages that are members of the specified collection.
@@ -1430,81 +1466,88 @@ pub async fn cmd_update_group(
     }
 
     // Find installed members that need updates
-    let mut updates_to_apply: Vec<String> = Vec::new();
+    let mut updates_to_apply: Vec<CollectionUpdateTarget> = Vec::new();
     let mut not_installed: Vec<String> = Vec::new();
     let mut adopted_updates_skipped = false;
     let mut security_metadata_unavailable: Vec<SecurityMetadataUnavailable> = Vec::new();
     let detected_pkg_mgr = SystemPackageManager::detect();
 
     for member in &members {
-        let installed = Trove::find_by_name(&conn, &member.member_name)?;
+        let installed = Trove::find_by_name(&conn, &member.member_name)?
+            .into_iter()
+            .filter(|trove| trove.trove_type == TroveType::Package)
+            .collect::<Vec<_>>();
         if installed.is_empty() {
             not_installed.push(member.member_name.clone());
             continue;
         }
 
-        let trove = &installed[0];
-        if trove.pinned {
-            println!("  {} is pinned, skipping", member.member_name);
-            continue;
-        }
+        for trove in &installed {
+            if trove.pinned {
+                println!(
+                    "  {} is pinned, skipping",
+                    CollectionUpdateTarget::from_trove(trove).display()
+                );
+                continue;
+            }
 
-        let adopted_decision = if trove.install_source.is_adopted() {
-            Some(adopted_update_decision(
+            let adopted_decision = if trove.install_source.is_adopted() {
+                Some(adopted_update_decision(
+                    trove,
+                    effective_dep_mode,
+                    requested_dep_mode,
+                ))
+            } else {
+                None
+            };
+
+            if trove.install_source.is_adopted() {
+                let native_manager = native_manager_for_trove(trove, detected_pkg_mgr);
+                match adopted_decision.expect("adopted trove must have an update decision") {
+                    AdoptedUpdateDecision::QueueTakeover => {}
+                    AdoptedUpdateDecision::SkipNativeAuthority => {
+                        println!(
+                            "  {} is adopted; native authority owns updates: use '{}'",
+                            CollectionUpdateTarget::from_trove(trove).display(),
+                            native_manager.update_command(&trove.name)
+                        );
+                        adopted_updates_skipped = true;
+                        continue;
+                    }
+                    AdoptedUpdateDecision::BlockCritical => {
+                        println!(
+                            "  {} is a critical adopted package; native authority remains required: use '{}'",
+                            CollectionUpdateTarget::from_trove(trove).display(),
+                            native_manager.update_command(&trove.name)
+                        );
+                        adopted_updates_skipped = true;
+                        continue;
+                    }
+                }
+            }
+
+            let enforce_security_metadata = security_only
+                && !matches!(
+                    adopted_decision,
+                    Some(
+                        AdoptedUpdateDecision::SkipNativeAuthority
+                            | AdoptedUpdateDecision::BlockCritical
+                    )
+                );
+            match select_update_candidate(
+                &conn,
                 trove,
-                effective_dep_mode,
-                requested_dep_mode,
-            ))
-        } else {
-            None
-        };
-
-        if trove.install_source.is_adopted() {
-            let native_manager = native_manager_for_trove(trove, detected_pkg_mgr);
-            match adopted_decision.expect("adopted trove must have an update decision") {
-                AdoptedUpdateDecision::QueueTakeover => {}
-                AdoptedUpdateDecision::SkipNativeAuthority => {
-                    println!(
-                        "  {} is adopted; native authority owns updates: use '{}'",
-                        member.member_name,
-                        native_manager.update_command(&trove.name)
-                    );
-                    adopted_updates_skipped = true;
-                    continue;
+                enforce_security_metadata,
+                &policy,
+                primary_flavor,
+            )? {
+                UpdateCandidateSelection::Selected(_) => {
+                    updates_to_apply.push(CollectionUpdateTarget::from_trove(trove));
                 }
-                AdoptedUpdateDecision::BlockCritical => {
-                    println!(
-                        "  {} is a critical adopted package; native authority remains required: use '{}'",
-                        member.member_name,
-                        native_manager.update_command(&trove.name)
-                    );
-                    adopted_updates_skipped = true;
-                    continue;
+                UpdateCandidateSelection::NoEligibleUpdate => {}
+                UpdateCandidateSelection::SecurityMetadataUnavailable(unavailable) => {
+                    security_metadata_unavailable.push(unavailable);
                 }
-            }
-        }
-
-        let enforce_security_metadata = security_only
-            && !matches!(
-                adopted_decision,
-                Some(
-                    AdoptedUpdateDecision::SkipNativeAuthority
-                        | AdoptedUpdateDecision::BlockCritical
-                )
-            );
-        match select_update_candidate(
-            &conn,
-            trove,
-            enforce_security_metadata,
-            &policy,
-            primary_flavor,
-        )? {
-            UpdateCandidateSelection::Selected(_) => {
-                updates_to_apply.push(member.member_name.clone())
-            }
-            UpdateCandidateSelection::NoEligibleUpdate => {}
-            UpdateCandidateSelection::SecurityMetadataUnavailable(unavailable) => {
-                security_metadata_unavailable.push(unavailable);
             }
         }
     }
@@ -1545,18 +1588,18 @@ pub async fn cmd_update_group(
         updates_to_apply.len(),
         name
     );
-    for pkg in &updates_to_apply {
-        println!("  {}", pkg);
+    for target in &updates_to_apply {
+        println!("  {}", target.display());
     }
 
     // Update each package
     let mut updated_count = 0;
     let mut failed_count = 0;
 
-    for pkg_name in &updates_to_apply {
-        println!("\nUpdating {}...", pkg_name);
+    for target in &updates_to_apply {
+        println!("\nUpdating {}...", target.display());
         match cmd_update(
-            Some(pkg_name.clone()),
+            Some(target.name.clone()),
             db_path,
             root,
             security_only,
@@ -1564,12 +1607,14 @@ pub async fn cmd_update_group(
             sandbox_mode,
             requested_dep_mode,
             yes,
+            Some(target.version.clone()),
+            target.architecture.clone(),
         )
         .await
         {
             Ok(()) => updated_count += 1,
             Err(e) => {
-                eprintln!("  Failed to update {}: {}", pkg_name, e);
+                eprintln!("  Failed to update {}: {}", target.display(), e);
                 failed_count += 1;
             }
         }
@@ -1595,8 +1640,8 @@ mod tests {
     use super::super::test_helpers::{create_test_db, seed_mixed_replatform_fixture};
     use super::*;
     use conary_core::db::models::{
-        CanonicalPackage, DistroPin, InstallSource, RepologyCacheEntry, Repository, Trove,
-        TroveType,
+        CanonicalPackage, CollectionMember, DistroPin, InstallSource, RepologyCacheEntry,
+        Repository, Trove, TroveType,
     };
     use conary_core::filesystem::{CasStore, object_path};
     use conary_core::model::ReplatformBlockedReason;
@@ -1737,6 +1782,117 @@ mod tests {
         candidate.insert(conn).unwrap();
 
         installed
+    }
+
+    #[test]
+    fn package_specific_update_requires_selector_for_ambiguous_variants() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conary_core::db::schema::migrate(&conn).unwrap();
+
+        for arch in ["x86_64", "aarch64"] {
+            let mut trove = Trove::new("demo".to_string(), "1.0.0".to_string(), TroveType::Package);
+            trove.architecture = Some(arch.to_string());
+            trove.insert(&conn).unwrap();
+        }
+
+        let err = installed_troves_for_update(&conn, Some("demo".to_string()), None, None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Multiple installed variants"), "{err}");
+        assert!(err.contains("--arch"), "{err}");
+
+        let selected = installed_troves_for_update(
+            &conn,
+            Some("demo".to_string()),
+            Some("1.0.0".to_string()),
+            Some("aarch64".to_string()),
+        )
+        .unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].architecture.as_deref(), Some("aarch64"));
+    }
+
+    #[test]
+    fn update_selector_without_package_refuses() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conary_core::db::schema::migrate(&conn).unwrap();
+
+        let err = installed_troves_for_update(&conn, None, None, Some("x86_64".to_string()))
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("A package name is required"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn collection_update_preserves_member_variant_selector() {
+        let (_temp, db_path) = create_test_db();
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+
+        let mut repo = Repository::new(
+            "variant-repo".to_string(),
+            "https://example.test/variant".to_string(),
+        );
+        repo.gpg_check = false;
+        repo.gpg_strict = false;
+        repo.default_strategy_distro = Some("fedora-44".to_string());
+        let repo_id = repo.insert(&conn).unwrap();
+
+        let mut collection = Trove::new(
+            "base".to_string(),
+            "1.0.0".to_string(),
+            TroveType::Collection,
+        );
+        let collection_id = collection.insert(&conn).unwrap();
+        CollectionMember::new(collection_id, "demo".to_string())
+            .insert(&conn)
+            .unwrap();
+
+        for arch in ["x86_64", "aarch64"] {
+            let mut installed = Trove::new_with_source(
+                "demo".to_string(),
+                "1.0.0".to_string(),
+                TroveType::Package,
+                InstallSource::Repository,
+            );
+            installed.architecture = Some(arch.to_string());
+            installed.source_distro = Some("fedora-44".to_string());
+            installed.version_scheme = Some("rpm".to_string());
+            installed.installed_from_repository_id = Some(repo_id);
+            installed.insert(&conn).unwrap();
+
+            let mut candidate = RepositoryPackage::new(
+                repo_id,
+                "demo".to_string(),
+                "1.0.1".to_string(),
+                format!("sha256:demo-{arch}"),
+                123,
+                format!("https://example.test/variant/demo-1.0.1-{arch}.ccs"),
+            );
+            candidate.architecture = Some(arch.to_string());
+            candidate.distro = Some("fedora-44".to_string());
+            candidate.version_scheme = Some("rpm".to_string());
+            candidate.insert(&conn).unwrap();
+        }
+        drop(conn);
+
+        let result = cmd_update_group(
+            "base",
+            &db_path,
+            "/",
+            false,
+            true,
+            SandboxMode::None,
+            None,
+            true,
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "collection update should preserve member variant selectors: {:?}",
+            result
+        );
     }
 
     #[test]

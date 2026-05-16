@@ -242,6 +242,10 @@ pub enum Commands {
         #[arg(short, long)]
         version: Option<String>,
 
+        /// Specific architecture to remove when multiple variants are installed
+        #[arg(long = "arch")]
+        architecture: Option<String>,
+
         /// Skip running package scriptlets (install/remove hooks)
         #[arg(long)]
         no_scripts: bool,
@@ -264,6 +268,14 @@ pub enum Commands {
 
         #[command(flatten)]
         common: CommonArgs,
+
+        /// Installed package version to select when multiple variants are installed
+        #[arg(short, long)]
+        version: Option<String>,
+
+        /// Installed package architecture to select when multiple variants are installed
+        #[arg(long = "arch")]
+        architecture: Option<String>,
 
         /// Only apply updates with trusted security-advisory metadata
         #[arg(long)]
@@ -308,6 +320,14 @@ pub enum Commands {
     List {
         /// Optional pattern to filter packages
         pattern: Option<String>,
+
+        /// Installed package version to select when multiple variants are installed
+        #[arg(short, long)]
+        version: Option<String>,
+
+        /// Installed package architecture to select when multiple variants are installed
+        #[arg(long = "arch")]
+        architecture: Option<String>,
 
         #[command(flatten)]
         db: DbArgs,
@@ -358,6 +378,14 @@ pub enum Commands {
         /// Package name to pin
         package_name: String,
 
+        /// Installed package version to select when multiple variants are installed
+        #[arg(short, long)]
+        version: Option<String>,
+
+        /// Installed package architecture to select when multiple variants are installed
+        #[arg(long = "arch")]
+        architecture: Option<String>,
+
         #[command(flatten)]
         db: DbArgs,
     },
@@ -366,6 +394,14 @@ pub enum Commands {
     Unpin {
         /// Package name to unpin
         package_name: String,
+
+        /// Installed package version to select when multiple variants are installed
+        #[arg(short, long)]
+        version: Option<String>,
+
+        /// Installed package architecture to select when multiple variants are installed
+        #[arg(long = "arch")]
+        architecture: Option<String>,
 
         #[command(flatten)]
         db: DbArgs,
@@ -709,6 +745,37 @@ mod tests {
             !help.contains(&hard_coded_default),
             "update dep-mode must not hard-code satisfy as its CLI default:\n{help}"
         );
+    }
+
+    fn command_help(command_name: &str) -> String {
+        let mut command = Cli::command();
+        command
+            .find_subcommand_mut(command_name)
+            .unwrap_or_else(|| panic!("{command_name} subcommand should exist"))
+            .render_long_help()
+            .to_string()
+    }
+
+    #[test]
+    fn installed_package_commands_expose_arch_selector() {
+        for command_name in ["remove", "update", "pin", "unpin", "list"] {
+            let help = command_help(command_name);
+            assert!(
+                help.contains("--arch"),
+                "{command_name} help should expose --arch:\n{help}"
+            );
+        }
+    }
+
+    #[test]
+    fn installed_package_commands_expose_version_selector() {
+        for command_name in ["update", "pin", "unpin", "list"] {
+            let help = command_help(command_name);
+            assert!(
+                help.contains("--version"),
+                "{command_name} help should expose --version:\n{help}"
+            );
+        }
     }
 
     #[test]

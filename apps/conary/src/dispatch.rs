@@ -111,6 +111,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             package_name,
             common,
             version,
+            architecture,
             no_scripts,
             sandbox,
             purge_files,
@@ -126,7 +127,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 &common.db.db_path,
                 &common.root,
                 version,
-                None,
+                architecture,
                 no_scripts,
                 sandbox.into(),
                 purge_files,
@@ -137,6 +138,8 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         Some(Commands::Update {
             package,
             common,
+            version,
+            architecture,
             security,
             dry_run,
             sandbox,
@@ -148,6 +151,11 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             if let Some(ref pkg) = package
                 && pkg.starts_with('@')
             {
+                if version.is_some() || architecture.is_some() {
+                    anyhow::bail!(
+                        "Installed package selectors --version/--arch cannot be used with collection updates"
+                    );
+                }
                 require_live_mutation(
                     allow_live_system_mutation,
                     Cow::Borrowed("conary update @collection"),
@@ -182,6 +190,8 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 sandbox_mode,
                 dep_mode,
                 yes,
+                version,
+                architecture,
             )
             .await
         }
@@ -190,6 +200,8 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
 
         Some(Commands::List {
             pattern,
+            version,
+            architecture,
             db,
             path,
             info,
@@ -198,6 +210,11 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             pinned,
         }) => {
             if pinned {
+                if version.is_some() || architecture.is_some() {
+                    anyhow::bail!(
+                        "Installed package selectors --version/--arch cannot be used with --pinned"
+                    );
+                }
                 commands::cmd_list_pinned(&db.db_path).await
             } else {
                 let options = commands::QueryOptions {
@@ -205,6 +222,8 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                     lsl,
                     path,
                     files,
+                    version,
+                    architecture,
                 };
                 commands::cmd_query(pattern.as_deref(), &db.db_path, options).await
             }
@@ -232,12 +251,26 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             .await
         }
 
-        Some(Commands::Pin { package_name, db }) => {
-            commands::cmd_pin(&package_name, &db.db_path).await
+        Some(Commands::Pin {
+            package_name,
+            version,
+            architecture,
+            db,
+        }) => {
+            let selector =
+                commands::InstalledPackageSelector::new(package_name, version, architecture);
+            commands::cmd_pin(selector, &db.db_path).await
         }
 
-        Some(Commands::Unpin { package_name, db }) => {
-            commands::cmd_unpin(&package_name, &db.db_path).await
+        Some(Commands::Unpin {
+            package_name,
+            version,
+            architecture,
+            db,
+        }) => {
+            let selector =
+                commands::InstalledPackageSelector::new(package_name, version, architecture);
+            commands::cmd_unpin(selector, &db.db_path).await
         }
 
         Some(Commands::Cook {
