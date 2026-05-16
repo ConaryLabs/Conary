@@ -6,7 +6,7 @@ This refresh updates the documentation baseline after the limited public
 release readiness pass and the completed composefs atomic switching
 modernization, then refreshes the Adopt Without Regret docs/integration proof
 slice, records the Native Package Manager Parity Matrix design, and catches the
-active Slice A/Slice B/Slice C parity plans, the Slice B preview-doc refresh,
+active Slice A/Slice B/Slice C/Slice D parity plans, the Slice B preview-doc refresh,
 and the focused Slice C daily-driver/provider-metadata proof.
 
 Audited every tracked documentation-like file returned by
@@ -46,10 +46,11 @@ The repo moved materially after the last audit:
   active-generation handoff limits documented for the limited preview
 - Native Package Manager Parity Matrix framing for Tier 0 and Tier 1
   Conary-owned package-manager flows against dnf, apt, and pacman expectations
-- Slice A, Slice B, and Slice C native package-manager parity implementation records,
+- Slice A, Slice B, Slice C, and Slice D native package-manager parity implementation records,
   including no-generation install/remove/update proof, adopted-package native
   authority, explicit takeover, security-advisory support refusal, and the
-  focused Tier 1 daily-driver command parity and declared-provider matching work
+  focused Tier 1 daily-driver command parity, declared-provider matching work,
+  and the three-distro conary-test matrix plan
 
 ## Major Corrections
 
@@ -141,9 +142,9 @@ The final release-readiness verification gate is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 79
+- Total tracked doc-like files audited: 80
 - `verified-no-change`: 19
-- `corrected`: 33
+- `corrected`: 34
 - `reframed-as-historical`: 5
 - `archived`: 8
 - `retained-historical`: 14

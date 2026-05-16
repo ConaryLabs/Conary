@@ -31,6 +31,7 @@ The slices are intentionally ordered. Slice B depends on Slice A because `update
 Slice A plan: `docs/superpowers/plans/2026-05-14-native-package-manager-parity-slice-a-plan.md`.
 Slice B plan: `docs/superpowers/plans/2026-05-15-native-package-manager-parity-slice-b-plan.md`.
 Slice C plan: `docs/superpowers/plans/2026-05-15-native-package-manager-parity-slice-c-plan.md`.
+Slice D plan: `docs/superpowers/plans/2026-05-16-native-package-manager-parity-slice-d-plan.md`.
 
 ## Product Promise
 
