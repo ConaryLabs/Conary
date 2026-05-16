@@ -10,6 +10,7 @@ use conary_core::scriptlet::{
     ExecutionMode, PackageFormat as ScriptletPackageFormat, SandboxMode, ScriptletExecutor,
 };
 use conary_core::transaction::{TransactionConfig, TransactionEngine};
+use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -37,6 +38,19 @@ struct PreparedRemove {
 enum RemoveExecutionPath {
     GenerationAware,
     MutableLiveRoot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AutoremoveSkipReason {
+    AdoptedNativeAuthority,
+    Pinned,
+    Critical,
+}
+
+#[derive(Debug, Clone)]
+struct AutoremovePlan {
+    removable: Vec<Trove>,
+    skipped: Vec<(Trove, AutoremoveSkipReason)>,
 }
 
 #[cfg(test)]
@@ -630,20 +644,19 @@ pub async fn cmd_autoremove(
     let conn = open_db(db_path)?;
 
     let orphans = conary_core::db::models::Trove::find_orphans(&conn)?;
-
     if orphans.is_empty() {
         println!("No orphaned packages found.");
         return Ok(());
     }
 
-    println!("Found {} orphaned package(s):", orphans.len());
-    for trove in &orphans {
-        print!("  {} {}", trove.name, trove.version);
-        if let Some(arch) = &trove.architecture {
-            print!(" [{}]", arch);
-        }
-        println!();
+    let plan = plan_autoremove(orphans);
+    if plan.removable.is_empty() {
+        println!("No Conary-owned orphaned packages can be autoremoved.");
+        print_autoremove_skips(&plan.skipped);
+        return Ok(());
     }
+    print_autoremove_candidates("Found", &plan.removable);
+    print_autoremove_skips(&plan.skipped);
 
     if dry_run {
         println!("\nDry run - no packages will be removed.");
@@ -656,37 +669,37 @@ pub async fn cmd_autoremove(
     const MAX_ITERATIONS: usize = 100;
     let mut total_removed = 0;
     let mut total_failed = 0;
-    let mut current_orphans = orphans;
+    let mut current_plan = plan;
+    let mut failed_orphans = HashSet::new();
 
     for iteration in 0..MAX_ITERATIONS {
         if iteration > 0 {
             // Re-query orphans after previous round of removals
             let conn = open_db(db_path)?;
-            current_orphans = conary_core::db::models::Trove::find_orphans(&conn)?;
+            let current_orphans = conary_core::db::models::Trove::find_orphans(&conn)?;
             if current_orphans.is_empty() {
                 break;
             }
-            println!(
-                "\nFound {} additional orphan(s) (iteration {}):",
-                current_orphans.len(),
-                iteration + 1
-            );
-            for trove in &current_orphans {
-                print!("  {} {}", trove.name, trove.version);
-                if let Some(arch) = &trove.architecture {
-                    print!(" [{}]", arch);
-                }
-                println!();
+            current_plan = plan_autoremove(current_orphans);
+            current_plan
+                .removable
+                .retain(|trove| !failed_orphans.contains(&autoremove_identity(trove)));
+            if current_plan.removable.is_empty() {
+                println!("\nNo additional Conary-owned orphaned packages can be autoremoved.");
+                print_autoremove_skips(&current_plan.skipped);
+                break;
             }
+            print_autoremove_candidates("Found additional", &current_plan.removable);
+            print_autoremove_skips(&current_plan.skipped);
         } else {
             println!(
                 "\nRemoving {} orphaned package(s)...",
-                current_orphans.len()
+                current_plan.removable.len()
             );
         }
 
         let mut round_removed = 0;
-        for trove in &current_orphans {
+        for trove in &current_plan.removable {
             println!("\nRemoving {} {}...", trove.name, trove.version);
             match cmd_remove(
                 &trove.name,
@@ -705,6 +718,7 @@ pub async fn cmd_autoremove(
                 }
                 Err(e) => {
                     eprintln!("  Failed to remove {}: {}", trove.name, e);
+                    failed_orphans.insert(autoremove_identity(trove));
                     total_failed += 1;
                 }
             }
@@ -722,9 +736,89 @@ pub async fn cmd_autoremove(
     println!("  Removed: {} package(s)", total_removed);
     if total_failed > 0 {
         println!("  Failed: {} package(s)", total_failed);
+        anyhow::bail!(
+            "Autoremove failed for {} package(s); see summary above",
+            total_failed
+        );
     }
 
     Ok(())
+}
+
+fn plan_autoremove(orphaned: Vec<Trove>) -> AutoremovePlan {
+    let mut removable = Vec::new();
+    let mut skipped = Vec::new();
+
+    for trove in orphaned {
+        if trove.install_source.is_adopted() {
+            skipped.push((trove, AutoremoveSkipReason::AdoptedNativeAuthority));
+        } else if trove.pinned {
+            skipped.push((trove, AutoremoveSkipReason::Pinned));
+        } else if crate::commands::install::is_package_blocked(&trove.name) {
+            skipped.push((trove, AutoremoveSkipReason::Critical));
+        } else {
+            removable.push(trove);
+        }
+    }
+
+    AutoremovePlan { removable, skipped }
+}
+
+fn print_autoremove_candidates(prefix: &str, troves: &[Trove]) {
+    println!("{prefix} {} orphaned package(s):", troves.len());
+    for trove in troves {
+        print_autoremove_trove(trove);
+    }
+}
+
+fn print_autoremove_skips(skipped: &[(Trove, AutoremoveSkipReason)]) {
+    if skipped.is_empty() {
+        return;
+    }
+
+    let adopted = skipped
+        .iter()
+        .filter(|(_, reason)| *reason == AutoremoveSkipReason::AdoptedNativeAuthority)
+        .collect::<Vec<_>>();
+    if !adopted.is_empty() {
+        println!(
+            "Skipping adopted orphaned package(s); native package-manager authority is preserved:"
+        );
+        for (trove, _) in adopted {
+            print_autoremove_trove(trove);
+        }
+    }
+
+    let blocked = skipped
+        .iter()
+        .filter(|(_, reason)| *reason != AutoremoveSkipReason::AdoptedNativeAuthority)
+        .collect::<Vec<_>>();
+    if !blocked.is_empty() {
+        println!("Skipping blocked orphaned package(s):");
+        for (trove, reason) in blocked {
+            print!("  {} {}", trove.name, trove.version);
+            if let Some(arch) = &trove.architecture {
+                print!(" [{}]", arch);
+            }
+            println!(" ({:?})", reason);
+        }
+    }
+}
+
+fn print_autoremove_trove(trove: &Trove) {
+    print!("  {} {}", trove.name, trove.version);
+    if let Some(arch) = &trove.architecture {
+        print!(" [{}]", arch);
+    }
+    println!();
+}
+
+fn autoremove_identity(trove: &Trove) -> (String, String, Option<String>) {
+    (
+        trove.name.clone(),
+        trove.version.clone(),
+        trove.architecture.clone(),
+    )
 }
 
 #[cfg(test)]
@@ -752,6 +846,56 @@ mod tests {
             installed_from_repository_id: None,
             files,
         }
+    }
+
+    #[test]
+    fn autoremove_plan_classifies_authority_and_safety_skips() {
+        use conary_core::db::models::{InstallSource, TroveType};
+
+        let owned = Trove::new_with_source(
+            "owned-orphan".to_string(),
+            "1.0.0".to_string(),
+            TroveType::Package,
+            InstallSource::Repository,
+        );
+        let adopted = Trove::new_with_source(
+            "adopted-orphan".to_string(),
+            "1.0.0".to_string(),
+            TroveType::Package,
+            InstallSource::AdoptedTrack,
+        );
+        let mut pinned = Trove::new_with_source(
+            "pinned-orphan".to_string(),
+            "1.0.0".to_string(),
+            TroveType::Package,
+            InstallSource::Repository,
+        );
+        pinned.pinned = true;
+        let critical = Trove::new_with_source(
+            "bash".to_string(),
+            "5.2.0".to_string(),
+            TroveType::Package,
+            InstallSource::Repository,
+        );
+
+        let plan = plan_autoremove(vec![owned, adopted, pinned, critical]);
+
+        assert_eq!(plan.removable.len(), 1);
+        assert_eq!(plan.removable[0].name, "owned-orphan");
+        assert_eq!(
+            plan.skipped
+                .iter()
+                .map(|(trove, reason)| (trove.name.as_str(), reason))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "adopted-orphan",
+                    &AutoremoveSkipReason::AdoptedNativeAuthority
+                ),
+                ("pinned-orphan", &AutoremoveSkipReason::Pinned),
+                ("bash", &AutoremoveSkipReason::Critical),
+            ]
+        );
     }
 
     #[test]
