@@ -26,17 +26,6 @@ impl ProvideEntry {
     /// Column list for SELECT queries.
     const COLUMNS: &'static str = "id, trove_id, capability, version, kind";
 
-    fn soname_base(capability: &str) -> Option<&str> {
-        if capability.contains(".so") {
-            capability
-                .split('(')
-                .next()
-                .filter(|base| *base != capability)
-        } else {
-            None
-        }
-    }
-
     /// Create a new ProvideEntry
     pub fn new(trove_id: i64, capability: String, version: Option<String>) -> Self {
         Self {
@@ -212,8 +201,19 @@ impl ProvideEntry {
         conn: &Connection,
         capability: &str,
     ) -> Result<Option<(String, String)>> {
-        // First try exact match, ordered deterministically
-        let result = conn
+        Self::find_declared_satisfying_provider(conn, capability)
+    }
+
+    /// Find an installed provider only through declared capability metadata.
+    ///
+    /// This intentionally avoids cross-distro/package-name guesses. A query
+    /// matches either the stored capability text exactly or an explicit typed
+    /// query such as `soname(libssl.so.3)` against `(kind, capability)`.
+    pub fn find_declared_satisfying_provider(
+        conn: &Connection,
+        capability: &str,
+    ) -> Result<Option<(String, String)>> {
+        let exact = conn
             .query_row(
                 "SELECT t.name, t.version
                  FROM provides p
@@ -226,91 +226,32 @@ impl ProvideEntry {
             )
             .optional()?;
 
-        if result.is_some() {
-            return Ok(result);
+        if exact.is_some() {
+            return Ok(exact);
         }
 
-        // Try prefix match for capabilities with version suffixes
-        // e.g., "perl(Text::CharWidth)" should match "perl(Text::CharWidth) = 0.04"
-        let prefix_pattern = format!("{} %", capability);
-        let result = conn
+        let Some((kind, name)) = parse_typed_capability_query(capability) else {
+            return Ok(None);
+        };
+
+        let typed = conn
             .query_row(
                 "SELECT t.name, t.version
                  FROM provides p
                  JOIN troves t ON p.trove_id = t.id
-                 WHERE p.capability LIKE ?1
+                 WHERE p.kind = ?1 AND p.capability = ?2
+                 ORDER BY t.id ASC
                  LIMIT 1",
-                [&prefix_pattern],
+                params![kind, name],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
             )
             .optional()?;
 
-        if result.is_some() {
-            return Ok(result);
-        }
+        Ok(typed)
+    }
 
-        // Try prefix match for capabilities with suffix metadata in parentheses.
-        // Example: "libc.so.6" should match "libc.so.6(GLIBC_2.34)(64bit)".
-        let paren_pattern = format!("{}(%", capability);
-        let result = conn
-            .query_row(
-                "SELECT t.name, t.version
-                 FROM provides p
-                 JOIN troves t ON p.trove_id = t.id
-                 WHERE p.capability LIKE ?1
-                 LIMIT 1",
-                [&paren_pattern],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-            )
-            .optional()?;
-
-        if result.is_some() {
-            return Ok(result);
-        }
-
-        // Versioned soname requirements like "libm.so.6(GLIBC_2.0)" should
-        // still match a tracked base soname provider such as "libm.so.6" or
-        // "libm.so.6()(64bit)".  We strip to the base soname once and do a
-        // single non-recursive query (exact + paren-prefix) so there is no
-        // risk of unbounded recursion if soname_base ever returns a value
-        // that itself contains a soname suffix.
-        if let Some(base) = Self::soname_base(capability) {
-            let paren_base_pattern = format!("{}(%", base);
-            let result = conn
-                .query_row(
-                    "SELECT t.name, t.version
-                     FROM provides p
-                     JOIN troves t ON p.trove_id = t.id
-                     WHERE p.capability = ?1
-                        OR p.capability LIKE ?2
-                     LIMIT 1",
-                    rusqlite::params![base, &paren_base_pattern],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-                )
-                .optional()?;
-            if result.is_some() {
-                return Ok(result);
-            }
-        }
-
-        // Try case-insensitive prefix match for cross-distro compatibility
-        // e.g., perl(Text::Charwidth) should match perl(Text::CharWidth) = 0.04
-        let lower_cap = capability.to_lowercase();
-        let result = conn
-            .query_row(
-                "SELECT t.name, t.version
-                 FROM provides p
-                 JOIN troves t ON p.trove_id = t.id
-                 WHERE LOWER(p.capability) LIKE ?1 || ' %'
-                    OR LOWER(p.capability) LIKE ?1 || '(%'
-                    OR LOWER(p.capability) = ?1
-                 LIMIT 1",
-                [&lower_cap],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-            )
-            .optional()?;
-
-        Ok(result)
+    pub fn is_declared_capability_satisfied(conn: &Connection, capability: &str) -> Result<bool> {
+        Ok(Self::find_declared_satisfying_provider(conn, capability)?.is_some())
     }
 
     /// Search for capabilities matching a pattern (using SQL LIKE)
@@ -367,34 +308,6 @@ impl ProvideEntry {
         }
     }
 
-    /// Find a satisfying provider, trying common cross-distro variations
-    ///
-    /// This extends `find_satisfying_provider` by also trying common variations
-    /// of the capability name for cross-distro compatibility.
-    pub fn find_satisfying_provider_fuzzy(
-        conn: &Connection,
-        capability: &str,
-    ) -> Result<Option<(String, String)>> {
-        // First try exact match
-        if let Some(result) = Self::find_satisfying_provider(conn, capability)? {
-            return Ok(Some(result));
-        }
-
-        // Try cross-distro variations
-        for variation in generate_capability_variations(capability) {
-            if let Some(result) = Self::find_satisfying_provider(conn, &variation)? {
-                return Ok(Some(result));
-            }
-        }
-
-        Ok(None)
-    }
-
-    /// Check if a capability is satisfied (with fuzzy cross-distro matching)
-    pub fn is_capability_satisfied_fuzzy(conn: &Connection, capability: &str) -> Result<bool> {
-        Ok(Self::find_satisfying_provider_fuzzy(conn, capability)?.is_some())
-    }
-
     /// Check if a name looks like a virtual provide (capability) rather than a package name
     ///
     /// Virtual provides have patterns like:
@@ -411,113 +324,19 @@ impl ProvideEntry {
     }
 }
 
-/// Generate common variations of a capability name for cross-distro matching
-///
-/// For example:
-/// - perl(Text::CharWidth) might also be: perl-Text-CharWidth
-/// - libc.so.6 might also be: glibc, libc6
-pub fn generate_capability_variations(capability: &str) -> Vec<String> {
-    let mut variations = Vec::new();
-
-    // Perl module variations: perl(Foo::Bar) <-> perl-Foo-Bar
-    if capability.starts_with("perl(") && capability.ends_with(')') {
-        let module = &capability[5..capability.len() - 1];
-        // perl(Foo::Bar) -> perl-Foo-Bar
-        variations.push(format!("perl-{}", module.replace("::", "-")));
-        // Also try lowercase
-        variations.push(format!("perl-{}", module.replace("::", "-").to_lowercase()));
-    } else if let Some(rest) = capability.strip_prefix("perl-") {
-        // perl-Foo-Bar -> perl(Foo::Bar)
-        let module = rest.replace('-', "::");
-        variations.push(format!("perl({})", module));
+fn parse_typed_capability_query(capability: &str) -> Option<(&str, &str)> {
+    let (kind, value) = capability.split_once('(')?;
+    let value = value.strip_suffix(')')?;
+    if kind.is_empty() || value.is_empty() {
+        return None;
     }
-
-    // Python module variations
-    if let Some(module) = capability.strip_prefix("python3-") {
-        variations.push(format!("python3dist({})", module));
-        variations.push(format!("python({})", module));
-    } else if capability.starts_with("python3dist(") && capability.ends_with(')') {
-        let module = &capability[12..capability.len() - 1];
-        variations.push(format!("python3-{}", module));
+    if !kind
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    {
+        return None;
     }
-
-    // Library variations
-    if capability.ends_with(".so") || capability.contains(".so.") {
-        // RPM sonames often carry ABI/version/arch markers while normalized
-        // repository provides may store the plain soname.
-        let plain_soname = capability.split('(').next().unwrap_or(capability);
-        if plain_soname != capability {
-            variations.push(plain_soname.to_string());
-        }
-
-        // libc.so.6 -> glibc, libc6
-        if capability.starts_with("libc.so") {
-            variations.push("glibc".to_string());
-            variations.push("libc6".to_string());
-        }
-        // Extract library name: libfoo.so.1 -> libfoo, foo
-        if let Some(base) = capability.split(".so").next() {
-            variations.push(base.to_string());
-            if let Some(name) = base.strip_prefix("lib") {
-                variations.push(name.to_string());
-            }
-        }
-    }
-
-    // Debian :any suffix (architecture-independent)
-    // perl:any -> perl
-    if let Some(base) = capability.strip_suffix(":any") {
-        variations.push(base.to_string());
-    }
-
-    // Debian perl library naming: libfoo-bar-perl -> perl-Foo-Bar, perl(Foo::Bar)
-    if capability.starts_with("lib") && capability.ends_with("-perl") {
-        // libtext-charwidth-perl -> text-charwidth -> Text::CharWidth
-        let middle = &capability[3..capability.len() - 5]; // strip "lib" and "-perl"
-        // Convert to title case with :: separators
-        let module_name: String = middle
-            .split('-')
-            .map(|part| {
-                let mut chars = part.chars();
-                match chars.next() {
-                    Some(first) => first.to_uppercase().chain(chars).collect(),
-                    None => String::new(),
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("::");
-        variations.push(format!("perl({})", module_name));
-        variations.push(format!(
-            "perl-{}",
-            middle
-                .split('-')
-                .map(|p| {
-                    let mut c = p.chars();
-                    match c.next() {
-                        Some(f) => f.to_uppercase().chain(c).collect(),
-                        None => String::new(),
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("-")
-        ));
-    }
-
-    // Package name might be used directly
-    // Try stripping version suffixes: foo-1.0 -> foo
-    if let Some(pos) = capability.rfind('-') {
-        let potential_name = &capability[..pos];
-        if !potential_name.is_empty()
-            && capability[pos + 1..]
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_ascii_digit())
-        {
-            variations.push(potential_name.to_string());
-        }
-    }
-
-    variations
+    Some((kind, value))
 }
 
 #[cfg(test)]
@@ -628,7 +447,7 @@ mod tests {
     }
 
     #[test]
-    fn test_find_satisfying_provider_matches_soname_suffix_metadata() {
+    fn find_satisfying_provider_does_not_guess_soname_suffix_metadata() {
         let conn = setup_test_db();
 
         conn.execute(
@@ -641,11 +460,11 @@ mod tests {
         provide.insert(&conn).unwrap();
 
         let result = ProvideEntry::find_satisfying_provider(&conn, "libc.so.6").unwrap();
-        assert_eq!(result, Some(("glibc".to_string(), "2.42".to_string())));
+        assert_eq!(result, None);
     }
 
     #[test]
-    fn test_is_capability_satisfied_fuzzy_matches_soname_suffix_metadata() {
+    fn declared_satisfying_provider_accepts_explicit_typed_query() {
         let conn = setup_test_db();
 
         conn.execute(
@@ -654,14 +473,16 @@ mod tests {
         )
         .unwrap();
 
-        let mut provide = ProvideEntry::new(2, "libc.so.6(GLIBC_2.34)(64bit)".to_string(), None);
+        let mut provide = ProvideEntry::new_typed(2, "soname", "libc.so.6".to_string(), None);
         provide.insert(&conn).unwrap();
 
-        assert!(ProvideEntry::is_capability_satisfied_fuzzy(&conn, "libc.so.6").unwrap());
+        let result =
+            ProvideEntry::find_declared_satisfying_provider(&conn, "soname(libc.so.6)").unwrap();
+        assert_eq!(result, Some(("glibc".to_string(), "2.42".to_string())));
     }
 
     #[test]
-    fn test_find_satisfying_provider_matches_versioned_soname_to_base_provider() {
+    fn find_satisfying_provider_does_not_guess_versioned_soname_to_base_provider() {
         let conn = setup_test_db();
 
         conn.execute(
@@ -674,6 +495,6 @@ mod tests {
         provide.insert(&conn).unwrap();
 
         let result = ProvideEntry::find_satisfying_provider(&conn, "libm.so.6(GLIBC_2.0)").unwrap();
-        assert_eq!(result, Some(("glibc".to_string(), "2.42".to_string())));
+        assert_eq!(result, None);
     }
 }

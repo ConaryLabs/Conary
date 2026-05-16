@@ -23,7 +23,6 @@ use tracing::error;
 
 use crate::db::models::{
     DependencyEntry, ProvideEntry, RepologyCacheEntry, RepositoryProvide, Trove,
-    generate_capability_variations,
 };
 use crate::error::{Error, Result};
 use crate::repository::LatestSignal;
@@ -268,10 +267,15 @@ impl<'db> ConaryProvider<'db> {
             let effective_scheme = scheme.unwrap_or(VersionScheme::Rpm);
 
             let provided_capabilities: Vec<(String, Option<String>)> = if let Some(tid) = trove_id {
-                ProvideEntry::find_by_trove(self.conn, tid)?
-                    .into_iter()
-                    .map(|provide| (provide.capability, provide.version))
-                    .collect()
+                let mut capabilities = Vec::new();
+                for provide in ProvideEntry::find_by_trove(self.conn, tid)? {
+                    let typed = provide.to_typed_string();
+                    capabilities.push((provide.capability.clone(), provide.version.clone()));
+                    if typed != provide.capability {
+                        capabilities.push((typed, provide.version));
+                    }
+                }
+                capabilities
             } else {
                 Vec::new()
             };
@@ -748,19 +752,10 @@ impl<'db> ConaryProvider<'db> {
                 continue;
             };
             for (capability, prov_version) in &solvable.provided_capabilities {
-                // Index exact capability name.
                 self.removal_provides_index
                     .entry(capability.clone())
                     .or_default()
                     .push((tid, prov_version.clone()));
-
-                // Also index variations so that fuzzy lookups hit.
-                for variation in generate_capability_variations(capability) {
-                    self.removal_provides_index
-                        .entry(variation)
-                        .or_default()
-                        .push((tid, prov_version.clone()));
-                }
             }
         }
 
@@ -796,31 +791,16 @@ impl<'db> ConaryProvider<'db> {
 
     /// Look up which troves provide a given capability.
     ///
-    /// Returns `(trove_id, optional_version)` pairs.  Tries an exact match
-    /// first, then falls back to `generate_capability_variations()` and
-    /// deduplicates by trove id.
+    /// Returns `(trove_id, optional_version)` pairs for exact declared
+    /// capability keys.
     pub fn find_providers(&self, capability: &str) -> Vec<(i64, Option<String>)> {
         let mut results: Vec<(i64, Option<String>)> = Vec::new();
         let mut seen_ids = HashSet::new();
 
-        // Exact match.
         if let Some(providers) = self.removal_provides_index.get(capability) {
             for &(tid, ref ver) in providers {
                 if seen_ids.insert(tid) {
                     results.push((tid, ver.clone()));
-                }
-            }
-        }
-
-        // If no exact match, try variations of the dep name.
-        if results.is_empty() {
-            for variation in generate_capability_variations(capability) {
-                if let Some(providers) = self.removal_provides_index.get(&variation) {
-                    for &(tid, ref ver) in providers {
-                        if seen_ids.insert(tid) {
-                            results.push((tid, ver.clone()));
-                        }
-                    }
                 }
             }
         }

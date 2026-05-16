@@ -36,6 +36,9 @@ In scope:
 - `conary list --pinned` output that includes enough identity to disambiguate variants.
 - `conary query whatprovides` reporting installed and synced repository providers where metadata exists.
 - `conary query whatbreaks` reporting the same preflight blockers that `remove` would enforce.
+- Exact declared provider matching for package-manager decisions: package names and provider
+  metadata are authoritative; soname stem guesses, package-name lookalikes, case folding, and
+  cross-distro string variations are not used for install/remove/update/query decisions.
 - `conary autoremove --dry-run` and `conary autoremove` classifying Conary-owned orphan candidates and skipped packages truthfully.
 - CLI and unit tests proving selector ambiguity, pin/update/remove consistency, query diagnostics, and autoremove behavior.
 

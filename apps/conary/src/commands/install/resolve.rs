@@ -322,8 +322,9 @@ pub fn check_provides_dependencies(
     let mut unsatisfied = Vec::new();
 
     for dep in missing {
-        // Check if this capability is provided by any tracked package (with fuzzy matching)
-        match ProvideEntry::find_satisfying_provider_fuzzy(conn, &dep.name) {
+        // Check only declared capability metadata. Repository/AppStream sync
+        // owns capability normalization; install should not guess providers.
+        match ProvideEntry::find_declared_satisfying_provider(conn, &dep.name) {
             Ok(Some((provider, version))) => {
                 satisfied.push((dep.name.clone(), provider, Some(version)));
             }
@@ -343,6 +344,22 @@ pub fn check_provides_dependencies(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conary_core::db::models::{ProvideEntry, Trove, TroveType};
+    use conary_core::db::schema;
+    use conary_core::resolver::MissingDependency;
+    use conary_core::version::VersionConstraint;
+    use rusqlite::Connection;
+
+    fn test_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             PRAGMA foreign_keys = ON;",
+        )
+        .unwrap();
+        schema::migrate(&conn).unwrap();
+        conn
+    }
 
     #[test]
     fn test_resolved_source_type_description() {
@@ -375,5 +392,58 @@ mod tests {
         assert_eq!(options.repository.as_deref(), Some("stable"));
         assert_eq!(options.architecture.as_deref(), Some("x86_64"));
         assert!(options.is_root);
+    }
+
+    #[test]
+    fn check_provides_dependencies_does_not_guess_package_name_variations() {
+        let conn = test_db();
+        let mut trove = Trove::new("glibc".to_string(), "2.42".to_string(), TroveType::Package);
+        let trove_id = trove.insert(&conn).unwrap();
+        ProvideEntry::new(trove_id, "glibc".to_string(), Some("2.42".to_string()))
+            .insert(&conn)
+            .unwrap();
+
+        let missing = vec![MissingDependency {
+            name: "libc.so.6".to_string(),
+            constraint: VersionConstraint::Any,
+            required_by: vec!["demo".to_string()],
+        }];
+
+        let (satisfied, unsatisfied) = check_provides_dependencies(&conn, &missing);
+
+        assert!(satisfied.is_empty());
+        assert_eq!(unsatisfied, missing);
+    }
+
+    #[test]
+    fn check_provides_dependencies_accepts_declared_capability_key() {
+        let conn = test_db();
+        let mut trove = Trove::new(
+            "openssl-libs".to_string(),
+            "3.1.0".to_string(),
+            TroveType::Package,
+        );
+        let trove_id = trove.insert(&conn).unwrap();
+        ProvideEntry::new_typed(trove_id, "soname", "libssl.so.3".to_string(), None)
+            .insert(&conn)
+            .unwrap();
+
+        let missing = vec![MissingDependency {
+            name: "libssl.so.3".to_string(),
+            constraint: VersionConstraint::Any,
+            required_by: vec!["demo".to_string()],
+        }];
+
+        let (satisfied, unsatisfied) = check_provides_dependencies(&conn, &missing);
+
+        assert_eq!(
+            satisfied,
+            vec![(
+                "libssl.so.3".to_string(),
+                "openssl-libs".to_string(),
+                Some("3.1.0".to_string())
+            )]
+        );
+        assert!(unsatisfied.is_empty());
     }
 }

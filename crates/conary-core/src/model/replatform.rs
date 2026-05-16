@@ -624,7 +624,8 @@ fn tracked_provider_satisfies(
     constraint: &RepoVersionConstraint,
     requirement_scheme: VersionScheme,
 ) -> bool {
-    let Ok(provider) = ProvideEntry::find_satisfying_provider_fuzzy(conn, dependency_name) else {
+    let Ok(provider) = ProvideEntry::find_declared_satisfying_provider(conn, dependency_name)
+    else {
         return false;
     };
     let Some((_provider_name, provider_version)) = provider else {
@@ -1498,9 +1499,10 @@ mod tests {
         provider_trove.architecture = Some("x86_64".to_string());
         let provider_trove_id = provider_trove.insert(&conn).unwrap();
 
-        let mut provide = ProvideEntry::new(
+        let mut provide = ProvideEntry::new_typed(
             provider_trove_id,
-            "libmagic.so.1()(64bit)".to_string(),
+            "soname",
+            "libmagic.so.1".to_string(),
             None,
         );
         provide.insert(&conn).unwrap();

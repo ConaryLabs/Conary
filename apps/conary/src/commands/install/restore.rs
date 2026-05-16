@@ -15,9 +15,7 @@ use super::{
 };
 use anyhow::{Context, Result};
 use conary_core::ccs::CcsPackage;
-use conary_core::db::models::{
-    ProvideEntry, StateMember, Trove, TroveType, generate_capability_variations,
-};
+use conary_core::db::models::{ProvideEntry, StateMember, Trove, TroveType};
 use conary_core::packages::PackageFormat;
 use conary_core::scriptlet::SandboxMode;
 use conary_core::transaction::TransactionEngine;
@@ -52,59 +50,15 @@ pub(crate) struct TargetStateView {
 #[derive(Debug, Default)]
 struct TargetProvidesView {
     raw: HashSet<String>,
-    lower: HashSet<String>,
 }
 
 impl TargetProvidesView {
     fn insert(&mut self, capability: impl Into<String>) {
-        let capability = capability.into();
-        self.lower.insert(capability.to_lowercase());
-        self.raw.insert(capability);
-    }
-
-    fn contains_like(&self, capability: &str) -> bool {
-        if self.raw.contains(capability) {
-            return true;
-        }
-
-        let prefix_pattern = format!("{capability} ");
-        let paren_pattern = format!("{capability}(");
-        if self.raw.iter().any(|candidate| {
-            candidate.starts_with(&prefix_pattern) || candidate.starts_with(&paren_pattern)
-        }) {
-            return true;
-        }
-
-        if let Some(base) = capability
-            .split('(')
-            .next()
-            .filter(|base| *base != capability)
-            && capability.contains(".so")
-        {
-            let base_paren = format!("{base}(");
-            if self.raw.contains(base)
-                || self
-                    .raw
-                    .iter()
-                    .any(|candidate| candidate.starts_with(&base_paren))
-            {
-                return true;
-            }
-        }
-
-        let lower = capability.to_lowercase();
-        self.lower.contains(&lower)
-            || self.lower.iter().any(|candidate| {
-                candidate.starts_with(&(lower.clone() + " "))
-                    || candidate.starts_with(&(lower.clone() + "("))
-            })
+        self.raw.insert(capability.into());
     }
 
     fn satisfies(&self, capability: &str) -> bool {
-        self.contains_like(capability)
-            || generate_capability_variations(capability)
-                .into_iter()
-                .any(|variation| self.contains_like(&variation))
+        self.raw.contains(capability)
     }
 }
 

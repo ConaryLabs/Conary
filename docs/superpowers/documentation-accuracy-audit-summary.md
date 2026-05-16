@@ -6,8 +6,8 @@ This refresh updates the documentation baseline after the limited public
 release readiness pass and the completed composefs atomic switching
 modernization, then refreshes the Adopt Without Regret docs/integration proof
 slice, records the Native Package Manager Parity Matrix design, and catches the
-active Slice A/Slice B/Slice C parity plans plus the Slice B preview-doc
-refresh.
+active Slice A/Slice B/Slice C parity plans, the Slice B preview-doc refresh,
+and the focused Slice C daily-driver/provider-metadata proof.
 
 Audited every tracked documentation-like file returned by
 `bash scripts/docs-audit-inventory.sh`: 79 tracked files spanning root docs,
@@ -49,7 +49,7 @@ The repo moved materially after the last audit:
 - Slice A, Slice B, and Slice C native package-manager parity implementation records,
   including no-generation install/remove/update proof, adopted-package native
   authority, explicit takeover, security-advisory support refusal, and the
-  planned Tier 1 daily-driver command parity work
+  focused Tier 1 daily-driver command parity and declared-provider matching work
 
 ## Major Corrections
 

@@ -115,8 +115,13 @@ Commands that mutate the active host require the explicit `--allow-live-system-m
 
 # Query your system
 ./target/debug/conary list                      # All installed packages
+./target/debug/conary list nginx --info         # Installed package identity
+./target/debug/conary list nginx --files        # Installed files
+./target/debug/conary list --path /usr/sbin/nginx
 ./target/debug/conary query depends nginx       # Show dependencies
-./target/debug/conary query whatprovides libc.so.6
+./target/debug/conary query whatprovides 'soname(libc.so.6)'
+./target/debug/conary query whatbreaks openssl
+# Add --version and/or --arch when multiple installed variants match.
 
 # Adopt packages already on the system; dnf/apt/pacman remain authoritative
 ./target/debug/conary --allow-live-system-mutation system adopt --system --full # CAS-back native packages
@@ -249,8 +254,13 @@ SAT-based resolver (via [resolvo](https://github.com/prefix-dev/resolvo)) with t
 ```bash
 conary query depends nginx          # Forward dependencies
 conary query rdepends openssl       # Reverse dependencies
-conary query whatprovides libc.so.6 # Capability lookup
+conary query whatprovides 'soname(libssl.so.3)' # Typed capability lookup
+conary query whatbreaks openssl     # Removal preflight explanation
 conary query deptree nginx          # Full dependency tree
+conary pin nginx                    # Hold an installed package
+conary list --pinned                # Show held packages
+conary unpin nginx                  # Release the hold
+conary autoremove --dry-run         # Preview orphan cleanup
 ```
 
 ### Component Model

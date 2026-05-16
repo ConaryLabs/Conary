@@ -45,7 +45,7 @@ pub enum QueryCommands {
 
     /// Find which package provides a capability
     Whatprovides {
-        /// Capability to search for (package name, file path, library, virtual provide)
+        /// Capability to search for (package name, file path, raw native provide, or typed form like soname(libssl.so.3))
         capability: String,
 
         #[command(flatten)]
