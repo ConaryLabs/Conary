@@ -139,6 +139,22 @@ impl ProvideEntry {
         Ok(provides)
     }
 
+    /// Find rows that exactly match a CLI query without interpreting normalized
+    /// non-package capability rows as untyped user input.
+    pub fn find_all_by_cli_exact_query(conn: &Connection, capability: &str) -> Result<Vec<Self>> {
+        let sql = format!(
+            "SELECT {} FROM provides
+             WHERE capability = ?1
+               AND (kind IS NULL OR kind = '' OR kind = 'package')",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let provides = stmt
+            .query_map([capability], Self::from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(provides)
+    }
+
     /// Find all typed provides (by kind and capability)
     pub fn find_all_typed(conn: &Connection, kind: &str, capability: &str) -> Result<Vec<Self>> {
         let sql = format!(
@@ -579,6 +595,22 @@ mod tests {
 
         let results = ProvideEntry::search_typed(&conn, "perl", "Text::%").unwrap();
         assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn cli_exact_query_does_not_match_normalized_non_package_rows() {
+        let conn = setup_test_db();
+
+        let mut typed = ProvideEntry::new_typed(1, "soname", "libssl.so.3".to_string(), None);
+        typed.insert(&conn).unwrap();
+        let mut raw = ProvideEntry::new(1, "soname(libssl.so.3)".to_string(), None);
+        raw.insert(&conn).unwrap();
+
+        let untyped = ProvideEntry::find_all_by_cli_exact_query(&conn, "libssl.so.3").unwrap();
+        assert!(untyped.is_empty());
+
+        let raw = ProvideEntry::find_all_by_cli_exact_query(&conn, "soname(libssl.so.3)").unwrap();
+        assert_eq!(raw.len(), 1);
     }
 
     #[test]

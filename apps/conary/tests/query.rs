@@ -289,6 +289,348 @@ fn pin_and_unpin_use_same_variant_selector() {
 }
 
 #[test]
+fn whatprovides_reports_installed_and_repository_providers() {
+    use conary_core::db::models::{Repository, RepositoryPackage, RepositoryProvide};
+
+    let (_tmp, db_path) = common::setup_command_test_db();
+    let conn = db::open(&db_path).unwrap();
+
+    let mut repo = Repository::new(
+        "daily-driver".to_string(),
+        "https://example.test/repo".to_string(),
+    );
+    repo.gpg_check = false;
+    repo.gpg_strict = false;
+    let repo_id = repo.insert(&conn).unwrap();
+
+    let mut pkg = RepositoryPackage::new(
+        repo_id,
+        "openssl-libs".to_string(),
+        "3.1.0".to_string(),
+        "0".repeat(64),
+        10,
+        "https://example.test/openssl-libs.ccs".to_string(),
+    );
+    pkg.architecture = Some("x86_64".to_string());
+    let repo_pkg_id = pkg.insert(&conn).unwrap();
+
+    RepositoryProvide::new(
+        repo_pkg_id,
+        "libssl.so.3".to_string(),
+        None,
+        "soname".to_string(),
+        Some("libssl.so.3".to_string()),
+    )
+    .insert(&conn)
+    .unwrap();
+
+    let output = run_conary(&[
+        "query",
+        "whatprovides",
+        "soname(libssl.so.3)",
+        "--db-path",
+        &db_path,
+    ]);
+    assert!(output.status.success(), "{}", output_text(&output));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Installed providers:"), "{stdout}");
+    assert!(stdout.contains("openssl 3.0.0"), "{stdout}");
+    assert!(stdout.contains("Repository providers:"), "{stdout}");
+    assert!(
+        stdout.contains("openssl-libs 3.1.0 [x86_64] @daily-driver"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn whatprovides_reads_normalized_repository_provider_metadata() {
+    use conary_core::db::models::{Repository, RepositoryPackage, RepositoryProvide};
+
+    let (_tmp, db_path, conn) = common::create_test_db();
+    let mut repo = Repository::new(
+        "daily-driver".to_string(),
+        "https://example.test/repo".to_string(),
+    );
+    repo.gpg_check = false;
+    repo.gpg_strict = false;
+    let repo_id = repo.insert(&conn).unwrap();
+
+    let mut pkg = RepositoryPackage::new(
+        repo_id,
+        "openssl-libs".to_string(),
+        "3.1.0".to_string(),
+        "0".repeat(64),
+        10,
+        "https://example.test/openssl-libs.ccs".to_string(),
+    );
+    pkg.architecture = Some("x86_64".to_string());
+    let repo_pkg_id = pkg.insert(&conn).unwrap();
+
+    RepositoryProvide::new(
+        repo_pkg_id,
+        "libssl.so.3".to_string(),
+        None,
+        "soname".to_string(),
+        Some("libssl.so.3()(64bit)".to_string()),
+    )
+    .insert(&conn)
+    .unwrap();
+    drop(conn);
+
+    let untyped = run_conary(&[
+        "query",
+        "whatprovides",
+        "libssl.so.3",
+        "--db-path",
+        &db_path,
+    ]);
+    assert!(untyped.status.success(), "{}", output_text(&untyped));
+    let untyped_stdout = String::from_utf8_lossy(&untyped.stdout);
+    assert!(
+        untyped_stdout.contains("No package provides 'libssl.so.3'"),
+        "{untyped_stdout}"
+    );
+
+    let raw = run_conary(&[
+        "query",
+        "whatprovides",
+        "libssl.so.3()(64bit)",
+        "--db-path",
+        &db_path,
+    ]);
+    assert!(raw.status.success(), "{}", output_text(&raw));
+    let raw_stdout = String::from_utf8_lossy(&raw.stdout);
+    assert!(raw_stdout.contains("Repository providers:"), "{raw_stdout}");
+    assert!(
+        raw_stdout.contains("openssl-libs 3.1.0 [x86_64] @daily-driver"),
+        "{raw_stdout}"
+    );
+
+    let output = run_conary(&[
+        "query",
+        "whatprovides",
+        "soname(libssl.so.3)",
+        "--db-path",
+        &db_path,
+    ]);
+    assert!(output.status.success(), "{}", output_text(&output));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Repository providers:"), "{stdout}");
+    assert!(
+        stdout.contains("openssl-libs 3.1.0 [x86_64] @daily-driver"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn whatprovides_reads_normalized_installed_provider_metadata_without_guessing_suffixes() {
+    use conary_core::db::models::{ProvideEntry, Trove, TroveType};
+
+    let (_tmp, db_path, conn) = common::create_test_db();
+
+    let mut openssl = Trove::new(
+        "openssl-libs".to_string(),
+        "3.1.0".to_string(),
+        TroveType::Package,
+    );
+    let openssl_id = openssl.insert(&conn).unwrap();
+    ProvideEntry::new_typed(openssl_id, "soname", "libssl.so.3".to_string(), None)
+        .insert(&conn)
+        .unwrap();
+
+    let mut openssl30 = Trove::new(
+        "openssl30-libs".to_string(),
+        "3.0.0".to_string(),
+        TroveType::Package,
+    );
+    let openssl30_id = openssl30.insert(&conn).unwrap();
+    ProvideEntry::new_typed(openssl30_id, "soname", "libssl.so.30".to_string(), None)
+        .insert(&conn)
+        .unwrap();
+    drop(conn);
+
+    let output = run_conary(&[
+        "query",
+        "whatprovides",
+        "soname(libssl.so.3)",
+        "--db-path",
+        &db_path,
+    ]);
+    assert!(output.status.success(), "{}", output_text(&output));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Installed providers:"), "{stdout}");
+    assert!(stdout.contains("openssl-libs 3.1.0"), "{stdout}");
+    assert!(!stdout.contains("openssl30-libs"), "{stdout}");
+}
+
+#[test]
+fn whatprovides_ignores_repository_prefix_collisions_and_disabled_repos() {
+    use conary_core::db::models::{Repository, RepositoryPackage, RepositoryProvide};
+
+    let (_tmp, db_path, conn) = common::create_test_db();
+
+    let mut enabled_repo = Repository::new(
+        "daily-driver".to_string(),
+        "https://example.test/enabled".to_string(),
+    );
+    enabled_repo.gpg_check = false;
+    enabled_repo.gpg_strict = false;
+    let enabled_repo_id = enabled_repo.insert(&conn).unwrap();
+    let mut enabled_pkg = RepositoryPackage::new(
+        enabled_repo_id,
+        "openssl30-libs".to_string(),
+        "3.0.0".to_string(),
+        "0".repeat(64),
+        10,
+        "https://example.test/openssl30-libs.ccs".to_string(),
+    );
+    let enabled_pkg_id = enabled_pkg.insert(&conn).unwrap();
+    RepositoryProvide::new(
+        enabled_pkg_id,
+        "libssl.so.30".to_string(),
+        None,
+        "soname".to_string(),
+        Some("libssl.so.30()(64bit)".to_string()),
+    )
+    .insert(&conn)
+    .unwrap();
+
+    let mut disabled_repo = Repository::new(
+        "disabled-driver".to_string(),
+        "https://example.test/disabled".to_string(),
+    );
+    disabled_repo.enabled = false;
+    disabled_repo.gpg_check = false;
+    disabled_repo.gpg_strict = false;
+    let disabled_repo_id = disabled_repo.insert(&conn).unwrap();
+    let mut disabled_pkg = RepositoryPackage::new(
+        disabled_repo_id,
+        "openssl-libs".to_string(),
+        "3.1.0".to_string(),
+        "0".repeat(64),
+        10,
+        "https://example.test/openssl-libs.ccs".to_string(),
+    );
+    let disabled_pkg_id = disabled_pkg.insert(&conn).unwrap();
+    RepositoryProvide::new(
+        disabled_pkg_id,
+        "libssl.so.3".to_string(),
+        None,
+        "soname".to_string(),
+        Some("libssl.so.3()(64bit)".to_string()),
+    )
+    .insert(&conn)
+    .unwrap();
+    drop(conn);
+
+    let untyped = run_conary(&[
+        "query",
+        "whatprovides",
+        "libssl.so.3",
+        "--db-path",
+        &db_path,
+    ]);
+    assert!(untyped.status.success(), "{}", output_text(&untyped));
+    let untyped_stdout = String::from_utf8_lossy(&untyped.stdout);
+    assert!(
+        untyped_stdout.contains("No package provides 'libssl.so.3'"),
+        "{untyped_stdout}"
+    );
+
+    let output = run_conary(&[
+        "query",
+        "whatprovides",
+        "soname(libssl.so.3)",
+        "--db-path",
+        &db_path,
+    ]);
+    assert!(output.status.success(), "{}", output_text(&output));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("No package provides 'soname(libssl.so.3)'"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("openssl30-libs"), "{stdout}");
+    assert!(!stdout.contains("openssl-libs 3.1.0"), "{stdout}");
+}
+
+#[test]
+fn whatbreaks_reports_same_dependency_blocker_as_remove() {
+    use conary_core::db::models::{DependencyEntry, FileEntry, InstallSource, Trove, TroveType};
+
+    let (tmp, db_path, conn) = common::create_test_db();
+    let provider_payload = tmp.path().join("usr/bin/provider-demo");
+    std::fs::create_dir_all(provider_payload.parent().unwrap()).unwrap();
+    std::fs::write(&provider_payload, "provider").unwrap();
+
+    let mut provider = Trove::new_with_source(
+        "provider-demo".to_string(),
+        "1.0.0".to_string(),
+        TroveType::Package,
+        InstallSource::Repository,
+    );
+    let provider_id = provider.insert(&conn).unwrap();
+    FileEntry::new(
+        "/usr/bin/provider-demo".to_string(),
+        "0".repeat(64),
+        8,
+        0o100755,
+        provider_id,
+    )
+    .insert(&conn)
+    .unwrap();
+
+    let mut consumer = Trove::new_with_source(
+        "consumer-demo".to_string(),
+        "1.0.0".to_string(),
+        TroveType::Package,
+        InstallSource::Repository,
+    );
+    let consumer_id = consumer.insert(&conn).unwrap();
+    DependencyEntry::new(
+        consumer_id,
+        "provider-demo".to_string(),
+        None,
+        "runtime".to_string(),
+        None,
+    )
+    .insert(&conn)
+    .unwrap();
+    drop(conn);
+
+    let whatbreaks = run_conary(&[
+        "query",
+        "whatbreaks",
+        "provider-demo",
+        "--db-path",
+        &db_path,
+    ]);
+    assert!(whatbreaks.status.success(), "{}", output_text(&whatbreaks));
+    let stdout = String::from_utf8_lossy(&whatbreaks.stdout);
+    assert!(
+        stdout.contains("Removing 'provider-demo' would break"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("consumer-demo"), "{stdout}");
+
+    let remove = run_conary(&[
+        "--allow-live-system-mutation",
+        "remove",
+        "provider-demo",
+        "--db-path",
+        &db_path,
+        "--root",
+        tmp.path().to_str().unwrap(),
+        "--no-scripts",
+        "--sandbox",
+        "never",
+    ]);
+    assert!(!remove.status.success(), "{}", output_text(&remove));
+    assert!(output_text(&remove).contains("consumer-demo"));
+    assert!(output_text(&remove).contains("conary query whatbreaks"));
+}
+
+#[test]
 fn update_package_selector_refuses_ambiguous_variants_at_cli() {
     use conary_core::db::models::{Trove, TroveType};
 
