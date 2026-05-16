@@ -254,6 +254,134 @@ fn no_generation_remove_deletes_file_and_history_records_apply() {
 }
 
 #[test]
+fn remove_arch_selector_targets_one_variant() {
+    let root = tempfile::tempdir().unwrap();
+    let db_path = root.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+
+    let conn = conary_core::db::open(&db_path).unwrap();
+    for arch in ["x86_64", "aarch64"] {
+        let payload = root.path().join(format!("usr/bin/remove-demo-{arch}"));
+        fs::create_dir_all(payload.parent().unwrap()).unwrap();
+        fs::write(&payload, arch).unwrap();
+
+        let mut trove = conary_core::db::models::Trove::new_with_source(
+            "remove-demo".to_string(),
+            "1.0.0".to_string(),
+            conary_core::db::models::TroveType::Package,
+            conary_core::db::models::InstallSource::Repository,
+        );
+        trove.architecture = Some(arch.to_string());
+        let trove_id = trove.insert(&conn).unwrap();
+        conary_core::db::models::FileEntry::new(
+            format!("/usr/bin/remove-demo-{arch}"),
+            "0".repeat(64),
+            arch.len() as i64,
+            0o100755,
+            trove_id,
+        )
+        .insert(&conn)
+        .unwrap();
+    }
+    drop(conn);
+
+    let ambiguous = run_conary(&[
+        "--allow-live-system-mutation",
+        "remove",
+        "remove-demo",
+        "--db-path",
+        db_path.to_str().unwrap(),
+        "--root",
+        root.path().to_str().unwrap(),
+        "--no-scripts",
+        "--sandbox",
+        "never",
+    ]);
+    assert!(!ambiguous.status.success(), "{}", output_text(&ambiguous));
+
+    let selected = run_conary(&[
+        "--allow-live-system-mutation",
+        "remove",
+        "remove-demo",
+        "--version",
+        "1.0.0",
+        "--arch",
+        "aarch64",
+        "--db-path",
+        db_path.to_str().unwrap(),
+        "--root",
+        root.path().to_str().unwrap(),
+        "--no-scripts",
+        "--sandbox",
+        "never",
+    ]);
+    assert_success(&selected);
+    assert!(root.path().join("usr/bin/remove-demo-x86_64").exists());
+    assert!(!root.path().join("usr/bin/remove-demo-aarch64").exists());
+}
+
+#[test]
+fn remove_ignores_non_package_trove_with_same_name() {
+    let root = tempfile::tempdir().unwrap();
+    let db_path = root.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+
+    let payload = root.path().join("usr/bin/remove-shared-selector");
+    fs::create_dir_all(payload.parent().unwrap()).unwrap();
+    fs::write(&payload, "fixture").unwrap();
+
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let mut package = conary_core::db::models::Trove::new_with_source(
+        "remove-shared-selector".to_string(),
+        "1.0.0".to_string(),
+        conary_core::db::models::TroveType::Package,
+        conary_core::db::models::InstallSource::Repository,
+    );
+    let trove_id = package.insert(&conn).unwrap();
+    conary_core::db::models::FileEntry::new(
+        "/usr/bin/remove-shared-selector".to_string(),
+        "0".repeat(64),
+        7,
+        0o100755,
+        trove_id,
+    )
+    .insert(&conn)
+    .unwrap();
+
+    let mut collection = conary_core::db::models::Trove::new(
+        "remove-shared-selector".to_string(),
+        "1.0.0".to_string(),
+        conary_core::db::models::TroveType::Collection,
+    );
+    collection.insert(&conn).unwrap();
+    drop(conn);
+
+    let output = run_conary(&[
+        "--allow-live-system-mutation",
+        "remove",
+        "remove-shared-selector",
+        "--db-path",
+        db_path.to_str().unwrap(),
+        "--root",
+        root.path().to_str().unwrap(),
+        "--no-scripts",
+        "--sandbox",
+        "never",
+    ]);
+
+    assert_success(&output);
+    assert!(!payload.exists());
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let remaining =
+        conary_core::db::models::Trove::find_by_name(&conn, "remove-shared-selector").unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(
+        remaining[0].trove_type,
+        conary_core::db::models::TroveType::Collection
+    );
+}
+
+#[test]
 fn no_generation_update_installs_repository_ccs_into_live_root() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("root");
