@@ -37,6 +37,36 @@ cargo run -p conary-test -- run --suite phase4-native-pm-parity --distro arch --
 
 When using `/goal`, do not mark the goal complete after the first distro passes. Update progress after each task, but call `update_goal(status = complete)` only after the full three-distro matrix and final verification pass on the branch intended for merge.
 
+## `/goal` Operating Model
+
+Run this plan as one active Codex goal with the main session acting as controller. The controller owns goal status, final evidence, merge/push/cleanup, and the decision to split or repair tasks when the matrix exposes a product bug. Worker agents own bounded implementation tasks and commits only.
+
+Before implementation starts, confirm the active goal matches the objective above. If no goal exists, create it with the exact objective. If a different goal exists, stop and ask the user to clear or replace it instead of silently reusing the wrong goal.
+
+Use this progress checklist as the child plan beneath the goal:
+
+- [ ] Foundation: Tasks 1-3 are committed, reviewed, and locally verified.
+- [ ] Manifest: Task 4 creates `phase4-native-pm-parity` and `cargo run -p conary-test -- list` shows the named suite.
+- [ ] Fedora gate: Fedora matrix run passes and `scripts/check-conary-test-result-gate.sh` reports `ok`.
+- [ ] Ubuntu gate: Ubuntu matrix run passes and the result gate reports `ok`.
+- [ ] Arch gate: Arch matrix run passes and the result gate reports `ok`.
+- [ ] Docs and audit: docs name the suite, record real evidence only after it exists, and the audit ledger check passes.
+- [ ] Final verification: formatting, diff check, focused tests, list, three result gates, audit ledger, and clippy pass.
+- [ ] Merge/push/cleanup: branch is fast-forwarded to `main`, pushed, post-merge verification runs from `main`, and local artifacts/processes are cleaned up.
+
+After each committed task, update the child plan with the commit SHA, verification commands, and reviewer outcome. Do not use `update_goal(status = complete)` for progress updates; that call is reserved for the final verification point in Task 7.
+
+When dispatching subagents, include these goal constraints in every prompt:
+
+- The active goal is Slice D native package-manager parity matrix evidence.
+- The worker has exactly one write-ownership slice and must not modify other slices unless explicitly redirected.
+- The worker must commit its own completed task and report the commit SHA.
+- The worker must run the task's verification commands and report exact pass/fail outcomes.
+- The worker must not skip tests, weaken exact metadata assertions, or mark a distro as passing without the result gate.
+- If the task exposes a real package-manager bug, the worker should report `BLOCKED` or `DONE_WITH_CONCERNS` with the smallest observed reproduction instead of papering over it in the manifest.
+
+If a distro failure requires product code, keep the goal active and patch the smallest real root cause. Add focused unit or integration coverage for that bug, rerun the failed distro, then continue the same goal checklist. Do not split the goal unless the fix becomes unrelated to Tier 0/Tier 1 parity evidence.
+
 ## Subagent Boundaries
 
 Use one worker per task when running this plan subagent-driven. Keep write ownership disjoint:
@@ -422,6 +452,7 @@ native_glob = "*.rpm"
 native_arch = "x86_64"
 native_scheme = "rpm"
 native_distro = "fedora"
+native_fixture_version = "1.0.0-1"
 repo_install_pkg = "tree"
 repo_install_path = "/usr/bin/tree"
 
@@ -431,6 +462,7 @@ native_glob = "*.deb"
 native_arch = "amd64"
 native_scheme = "debian"
 native_distro = "ubuntu"
+native_fixture_version = "1.0.0"
 repo_install_pkg = "nano"
 repo_install_path = "/usr/bin/nano"
 
@@ -440,6 +472,7 @@ native_glob = "*.pkg.tar.zst"
 native_arch = "x86_64"
 native_scheme = "arch"
 native_distro = "arch"
+native_fixture_version = "1.0.0-1"
 repo_install_pkg = "tree"
 repo_install_path = "/usr/bin/tree"
 ```
@@ -520,7 +553,13 @@ file_exists = "/usr/bin/phase4-runtime-fixture"
 file_exists = "/etc/phase4-runtime-fixture/app.conf"
 
 [[test.step]]
-run = "test \"$(sha256sum /etc/phase4-runtime-fixture/app.conf | awk '{print $1}')\" = \"357d494bb56837f2a27f0329ccbb921664ec8698be6cc9861767ab72a9a4612e\""
+run = "test \"$(sha256sum /etc/phase4-runtime-fixture/app.conf | awk '{print $1}')\" = \"1da0b50cb027387347265437a11956c1433788d045e4c63b379a1e0740882e7c\""
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "test \"$(sha256sum /usr/bin/phase4-runtime-fixture | awk '{print $1}')\" = \"517631de24336343a6aaf1a8f704d326299c14c619fe8c8d75d17824d074bd7f\""
 
 [test.step.assert]
 exit_code = 0
@@ -533,18 +572,18 @@ timeout = 60
 depends_on = ["TNPM03"]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT name || '|' || version || '|' || COALESCE(architecture, '') || '|' || COALESCE(version_scheme, '') || '|' || COALESCE(source_distro, '') FROM troves WHERE name = 'phase4-runtime-fixture'\""
+run = "sqlite3 ${DB_PATH} \"SELECT name || '|' || version || '|' || COALESCE(architecture, '') || '|' || COALESCE(version_scheme, '') || '|' || COALESCE(install_source, '') || '|' || COALESCE(install_reason, '') FROM troves WHERE name = 'phase4-runtime-fixture'\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "phase4-runtime-fixture|1.0.0|${native_arch}|${native_scheme}|${native_distro}"
+stdout_contains = "phase4-runtime-fixture|${native_fixture_version}|${native_arch}|${native_scheme}|file|explicit"
 
 [[test.step]]
 conary = "list phase4-runtime-fixture --info"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["Name        : phase4-runtime-fixture", "Version     : 1.0.0", "Authority   : conary-owned"]
+stdout_contains_all = ["Name        : phase4-runtime-fixture", "Version     : ${native_fixture_version}", "Authority   : conary-owned"]
 
 [[test.step]]
 conary = "list phase4-runtime-fixture --files"
@@ -558,7 +597,7 @@ conary = "list --path /usr/bin/phase4-runtime-fixture"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "phase4-runtime-fixture 1.0.0 provides /usr/bin/phase4-runtime-fixture"
+stdout_contains = "phase4-runtime-fixture ${native_fixture_version} provides /usr/bin/phase4-runtime-fixture"
 ```
 
 If the exact checksum differs after the fixture is regenerated, update the checksum in the manifest and explain why in the commit. Do not weaken the assertion to "file exists only".
