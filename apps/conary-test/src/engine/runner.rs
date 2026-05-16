@@ -172,6 +172,9 @@ impl TestRunner {
             start_mock_server(backend, container_id, mock_server).await?;
         }
 
+        self.run_setup_steps(manifest, backend, container_id)
+            .await?;
+
         let mut suite = TestSuite::new(&manifest.suite.name, manifest.suite.phase);
         suite.status = crate::engine::suite::RunStatus::Running;
 
@@ -420,6 +423,40 @@ impl TestRunner {
         }
 
         Ok(suite)
+    }
+
+    async fn run_setup_steps(
+        &self,
+        manifest: &TestManifest,
+        backend: &dyn ContainerBackend,
+        container_id: &ContainerId,
+    ) -> Result<()> {
+        let ctx = ExecutionContext {
+            conary_bin: &self.config.paths.conary_bin,
+            db_path: &self.config.paths.db,
+        };
+
+        for step in &manifest.suite.setup {
+            let action = StepAction::from_step(step, &self.vars).ok_or_else(|| {
+                anyhow::anyhow!("suite setup failed: suite setup step has no recognized type")
+            })?;
+            let timeout = Duration::from_secs(step.timeout.unwrap_or(300));
+            let result = execute_step(&action, backend, container_id, &ctx, timeout)
+                .await
+                .map_err(|err| anyhow::anyhow!("suite setup failed: {err}"))?;
+
+            if let Some(msg) = &result.failure {
+                bail!("suite setup failed: {msg}");
+            }
+
+            if let Some(ref assertion) = step.assert {
+                let assertion = self.expand_assertion(assertion);
+                evaluate_assertion(&assertion, result.exit_code, &result.stdout, &result.stderr)
+                    .map_err(|err| anyhow::anyhow!("suite setup assertion failed: {err}"))?;
+            }
+        }
+
+        Ok(())
     }
 
     async fn missing_runtime_requirement(
@@ -858,6 +895,64 @@ mod tests {
         assert_eq!(suite.passed(), 1);
         assert_eq!(suite.failed(), 0);
         assert_eq!(suite.results[0].status, TestStatus::Passed);
+    }
+
+    #[tokio::test]
+    async fn suite_setup_executes_before_tests() {
+        let backend = MockBackend::new(vec![
+            ExecResult {
+                exit_code: 0,
+                stdout: "setup ok".to_string(),
+                stderr: String::new(),
+            },
+            ExecResult {
+                exit_code: 0,
+                stdout: "test ok".to_string(),
+                stderr: String::new(),
+            },
+        ]);
+
+        let manifest = TestManifest {
+            suite: SuiteDef {
+                name: "setup-suite".to_string(),
+                phase: 4,
+                setup: vec![simple_step_run(
+                    "echo setup ok",
+                    Some(make_assertion(Some(0), Some("setup ok"))),
+                )],
+                mock_server: None,
+                timeout: None,
+            },
+            test: vec![TestDef {
+                id: "TSETUP".to_string(),
+                name: "uses_setup".to_string(),
+                description: "setup should run before tests".to_string(),
+                timeout: 30,
+                flaky: None,
+                retries: None,
+                retry_delay_ms: None,
+                step: vec![simple_step_run(
+                    "echo test ok",
+                    Some(make_assertion(Some(0), Some("test ok"))),
+                )],
+                resources: None,
+                depends_on: None,
+                fatal: None,
+                group: None,
+                skip: None,
+                requires: Vec::new(),
+            }],
+            distro_overrides: HashMap::new(),
+        };
+
+        let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
+        let suite = runner
+            .run(&manifest, &backend, &"ctr-setup".to_string(), None)
+            .await
+            .unwrap();
+
+        assert_eq!(suite.passed(), 1);
+        assert_eq!(suite.failed(), 0);
     }
 
     #[tokio::test]
