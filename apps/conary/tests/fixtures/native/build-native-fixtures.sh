@@ -12,6 +12,13 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fixture_dir="${3:-"${script_dir}/../phase4-runtime-fixture"}"
 conary_bin="${CONARY_BIN:-conary}"
 
+shell_quote() {
+  local value="$1"
+  printf "'"
+  printf "%s" "$value" | sed "s/'/'\\\\''/g"
+  printf "'"
+}
+
 case "$target" in
   rpm) expected_suffix=".rpm" ;;
   deb) expected_suffix=".deb" ;;
@@ -29,15 +36,23 @@ mkdir -p "${output_dir}"
   --output "${output_dir}" \
   --source "${fixture_dir}/stage"
 
-if ! find "${output_dir}" -maxdepth 1 -type f -name "*${expected_suffix}" | grep -q .; then
+mapfile -t artifacts < <(find "${output_dir}" -maxdepth 1 -type f -name "*${expected_suffix}" | sort)
+
+if [[ "${#artifacts[@]}" -eq 0 ]]; then
   echo "No ${expected_suffix} artifact was generated in ${output_dir}" >&2
   exit 1
 fi
 
-artifact="$(find "${output_dir}" -maxdepth 1 -type f -name "*${expected_suffix}" | sort | head -1)"
+if [[ "${#artifacts[@]}" -ne 1 ]]; then
+  echo "Expected exactly one ${expected_suffix} artifact in ${output_dir}, found ${#artifacts[@]}" >&2
+  printf '  %s\n' "${artifacts[@]}" >&2
+  exit 1
+fi
+
+artifact="${artifacts[0]}"
 checksum="$(sha256sum "${artifact}" | awk '{print $1}')"
 cat > "${output_dir}/native-fixture.env" <<EOF
-NATIVE_PKG_FILE=${artifact}
-NATIVE_PKG_SHA256=${checksum}
-NATIVE_TARGET=${target}
+NATIVE_PKG_FILE=$(shell_quote "${artifact}")
+NATIVE_PKG_SHA256=$(shell_quote "${checksum}")
+NATIVE_TARGET=$(shell_quote "${target}")
 EOF
