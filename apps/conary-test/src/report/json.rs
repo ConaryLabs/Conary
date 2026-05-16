@@ -20,6 +20,7 @@ struct Summary {
     passed: usize,
     failed: usize,
     skipped: usize,
+    cancelled: usize,
 }
 
 /// Serialize a test suite to a JSON string.
@@ -40,6 +41,7 @@ pub fn to_json_value(suite: &TestSuite) -> Result<serde_json::Value> {
             passed: suite.passed(),
             failed: suite.failed(),
             skipped: suite.skipped(),
+            cancelled: suite.cancelled(),
         },
         results: &suite.results,
     };
@@ -83,6 +85,7 @@ mod tests {
         assert_eq!(parsed["summary"]["passed"], 1);
         assert_eq!(parsed["summary"]["failed"], 0);
         assert_eq!(parsed["summary"]["skipped"], 0);
+        assert_eq!(parsed["summary"]["cancelled"], 0);
         assert_eq!(parsed["results"][0]["id"], "T01");
         assert_eq!(parsed["results"][0]["status"], "passed");
     }
