@@ -118,7 +118,7 @@ pub async fn cmd_remove(
         }
         println!("\nRefusing to remove package with dependencies.");
         println!(
-            "Use 'conary whatbreaks {}' for more information.",
+            "Use 'conary query whatbreaks {}' for more information.",
             package_name
         );
         return Err(anyhow::anyhow!(

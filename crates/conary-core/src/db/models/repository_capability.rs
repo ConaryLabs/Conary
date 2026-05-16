@@ -117,6 +117,31 @@ impl RepositoryProvide {
         Ok(rows)
     }
 
+    /// Find rows that exactly match a CLI query without interpreting normalized
+    /// typed capability rows as untyped user input.
+    pub fn find_by_cli_exact_query(conn: &Connection, capability: &str) -> Result<Vec<Self>> {
+        let mut stmt = conn.prepare(
+            "SELECT rp.id, rp.repository_package_id, rp.capability, rp.version, rp.kind, rp.raw, rp.version_scheme
+             FROM repository_provides rp
+             JOIN repository_packages pkg ON pkg.id = rp.repository_package_id
+             JOIN repositories repo ON repo.id = pkg.repository_id
+             WHERE repo.enabled = 1
+               AND (
+                 rp.raw = ?1
+                 OR (
+                   (rp.raw IS NULL OR rp.raw = '')
+                   AND (rp.kind IS NULL OR rp.kind = '' OR rp.kind = 'package')
+                   AND rp.capability = ?1
+                 )
+               )
+             ORDER BY rp.capability, rp.version",
+        )?;
+        let rows = stmt
+            .query_map([capability], Self::from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// Find provides matching a capability and return each paired with its package name.
     ///
     /// This single JOIN avoids the N+1 pattern of calling `find_by_capability` and then
@@ -290,6 +315,34 @@ mod tests {
             RepositoryProvide::find_by_capability_and_kind(&conn, "foo", "package").unwrap();
         assert_eq!(pkg_only.len(), 1);
         assert_eq!(pkg_only[0].kind, "package");
+    }
+
+    #[test]
+    fn cli_exact_query_matches_raw_or_package_rows_only() {
+        let conn = test_db();
+        seed_repo_and_package(&conn);
+
+        let mut typed = RepositoryProvide::new(
+            1,
+            "libssl.so.3".to_string(),
+            None,
+            "soname".to_string(),
+            Some("libssl.so.3()(64bit)".to_string()),
+        );
+        typed.insert(&conn).unwrap();
+        let mut package =
+            RepositoryProvide::new(1, "openssl".to_string(), None, "package".to_string(), None);
+        package.insert(&conn).unwrap();
+
+        let untyped = RepositoryProvide::find_by_cli_exact_query(&conn, "libssl.so.3").unwrap();
+        assert!(untyped.is_empty());
+
+        let raw =
+            RepositoryProvide::find_by_cli_exact_query(&conn, "libssl.so.3()(64bit)").unwrap();
+        assert_eq!(raw.len(), 1);
+
+        let package = RepositoryProvide::find_by_cli_exact_query(&conn, "openssl").unwrap();
+        assert_eq!(package.len(), 1);
     }
 
     #[test]
