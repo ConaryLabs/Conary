@@ -135,13 +135,15 @@ rootfs and ESP staging trees, then uses the same shared systemd-repart raw
 backend. It does not scrape `/boot`, `/conary`, or other live-host paths while
 exporting.
 
-The generation artifact export implementation is merged and validated by the
+The generation artifact export implementation is merged and covered by the
 `Generation Artifact Export QEMU` suite described in
-[docs/INTEGRATION-TESTING.md](/docs/INTEGRATION-TESTING.md). The suite now
-covers both bootstrap-run exports and full CAS-backed installed runtime
-generations that export to qcow2 and boot under UEFI. Metadata-only or partial
-installed generations still fail closed before artifact publication. Remaining
-image-projection follow-ups are tracked in
+[docs/INTEGRATION-TESTING.md](/docs/INTEGRATION-TESTING.md). The suite covers
+both bootstrap-run exports and full CAS-backed installed runtime generations.
+Bootstrap-run export remains green in the 2026-05-16 checkpoint, while the
+installed-runtime positive boot proof is currently blocked by `TGE04`:
+the exported image boots the kernel and then panics with `No working init
+found`. Metadata-only or partial installed generations still fail closed
+before artifact publication. Remaining image-projection follow-ups are tracked in
 [docs/operations/post-generation-export-follow-up-roadmap.md](/docs/operations/post-generation-export-follow-up-roadmap.md).
 
 ## Architecture Context

@@ -103,6 +103,7 @@ apps/conary/tests/integration/remi/manifests/
   phase4-group-c.toml       # T196-T220 (CCS ops / query / repo management)
   phase4-group-d.toml       # T221-T255 (Provenance/Capability/Trust/System/Federation/Automation)
   phase4-group-e.toml       # T230-T251 (Cross-distro compatibility overlay: distro policy/replatform/takeover)
+  phase4-native-pm-parity.toml  # Three-distro native package-manager parity proof
 ```
 
 ## HTTP API
