@@ -3,7 +3,7 @@
 
 use super::open_db;
 use super::progress::{RemovePhase, RemoveProgress};
-use super::{FileSnapshot, TroveSnapshot};
+use super::{FileSnapshot, InstalledPackageSelector, TroveSnapshot, resolve_installed_package};
 use anyhow::{Context, Result};
 use conary_core::db::models::{FileEntry, ScriptletEntry, Trove};
 use conary_core::scriptlet::{
@@ -72,63 +72,12 @@ pub async fn cmd_remove(
     let progress = RemoveProgress::new(package_name);
 
     let conn = open_db(db_path)?;
-    let troves = conary_core::db::models::Trove::find_by_name(&conn, package_name)
-        .with_context(|| format!("Failed to query package '{}'", package_name))?;
+    let selector =
+        InstalledPackageSelector::new(package_name.to_string(), version.clone(), architecture);
+    let resolved = resolve_installed_package(&conn, &selector)
+        .with_context(|| format!("Failed to select package '{}'", package_name))?;
+    let trove = resolved.trove;
 
-    if troves.is_empty() {
-        return Err(anyhow::anyhow!(
-            "Package '{}' is not installed",
-            package_name
-        ));
-    }
-
-    // Handle version-specific removal
-    let matches: Vec<&Trove> = troves
-        .iter()
-        .filter(|trove| {
-            version.as_ref().is_none_or(|ver| trove.version == *ver)
-                && architecture
-                    .as_deref()
-                    .is_none_or(|arch| trove.architecture.as_deref() == Some(arch))
-        })
-        .collect();
-
-    let trove = match matches.as_slice() {
-        [] => {
-            let installed = troves
-                .iter()
-                .map(|trove| match trove.architecture.as_deref() {
-                    Some(arch) => format!("{} [{}]", trove.version, arch),
-                    None => trove.version.clone(),
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(anyhow::anyhow!(
-                "Package '{}' with selector version={:?} architecture={:?} is not installed. Installed variants: {}",
-                package_name,
-                version,
-                architecture,
-                installed
-            ));
-        }
-        [trove] => *trove,
-        _ => {
-            println!(
-                "Multiple installed variants of '{}' match the selector:",
-                package_name
-            );
-            for trove in &matches {
-                println!(
-                    "  - version {} [{}]",
-                    trove.version,
-                    trove.architecture.as_deref().unwrap_or("none")
-                );
-            }
-            return Err(anyhow::anyhow!(
-                "Multiple installed variants match. Use --version and/or architecture to specify which one to remove."
-            ));
-        }
-    };
     // Check if package is pinned
     if trove.pinned {
         return Err(anyhow::anyhow!(
@@ -205,7 +154,8 @@ pub async fn cmd_remove(
 
             let tx_uuid = uuid::Uuid::new_v4().to_string();
             let tx_description = format!("Remove {}-{}", trove.name, trove.version);
-            let prepared = prepare_remove(&conn, trove, root, no_scripts, sandbox_mode, &progress)?;
+            let prepared =
+                prepare_remove(&conn, &trove, root, no_scripts, sandbox_mode, &progress)?;
             let remove_paths = prepared
                 .snapshot
                 .files
@@ -281,7 +231,7 @@ pub async fn cmd_remove(
     let remove_result = match remove_inner(
         &tx,
         remove_changeset_id,
-        trove,
+        &trove,
         root,
         no_scripts,
         sandbox_mode,
