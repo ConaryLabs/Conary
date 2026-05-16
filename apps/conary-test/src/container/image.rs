@@ -235,8 +235,11 @@ pub async fn build_distro_image(
     let force_rebuild = std::env::var("CONARY_TEST_REBUILD_IMAGE")
         .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
         .unwrap_or(false);
+    let reuse_existing = std::env::var("CONARY_TEST_REUSE_IMAGE")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false);
 
-    if !force_rebuild {
+    if reuse_existing && !force_rebuild {
         match tokio::process::Command::new("podman")
             .args(["image", "exists", &tag])
             .output()

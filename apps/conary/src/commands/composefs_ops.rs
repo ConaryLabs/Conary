@@ -139,6 +139,10 @@ pub fn rebuild_and_mount(
     summary: &str,
     prev_etc_snapshot: Option<HashMap<String, String>>,
 ) -> anyhow::Result<i64> {
+    if let Some(error) = forced_generation_rebuild_failure() {
+        return Err(error);
+    }
+
     let runtime_root = runtime_root_for_db_path(db_path);
 
     // Record the currently active generation before building the new one.
@@ -332,6 +336,17 @@ pub fn rebuild_and_mount(
     Ok(gen_num)
 }
 
+fn forced_generation_rebuild_failure() -> Option<anyhow::Error> {
+    std::env::var_os("CONARY_TEST_FAIL_GENERATION_REBUILD").map(|message| {
+        let message = message.to_string_lossy();
+        if message.is_empty() {
+            anyhow::anyhow!("forced generation rebuild failure for test")
+        } else {
+            anyhow::anyhow!("forced generation rebuild failure for test: {message}")
+        }
+    })
+}
+
 #[cfg(test)]
 pub(crate) struct TestMountSkipGuard {
     _guard: std::sync::MutexGuard<'static, ()>,
@@ -359,11 +374,49 @@ impl Drop for TestMountSkipGuard {
 }
 
 #[cfg(test)]
+pub(crate) struct TestGenerationRebuildFailureGuard {
+    _guard: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+static TEST_GENERATION_REBUILD_FAILURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+pub(crate) fn test_forced_generation_rebuild_failure_guard(
+    message: &str,
+) -> TestGenerationRebuildFailureGuard {
+    let guard = TEST_GENERATION_REBUILD_FAILURE_LOCK.lock().unwrap();
+    unsafe {
+        std::env::set_var("CONARY_TEST_FAIL_GENERATION_REBUILD", message);
+    }
+    TestGenerationRebuildFailureGuard { _guard: guard }
+}
+
+#[cfg(test)]
+impl Drop for TestGenerationRebuildFailureGuard {
+    fn drop(&mut self) {
+        unsafe {
+            std::env::remove_var("CONARY_TEST_FAIL_GENERATION_REBUILD");
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::commands::test_helpers::create_test_db;
     use conary_core::db::models::SystemState;
     use std::path::Path;
+
+    #[test]
+    fn forced_generation_rebuild_failure_reads_test_env_message() {
+        let _guard = test_forced_generation_rebuild_failure_guard("slice-d forced failure");
+
+        let error = forced_generation_rebuild_failure()
+            .expect("test env should force generation rebuild failure");
+
+        assert!(error.to_string().contains("slice-d forced failure"));
+    }
 
     #[test]
     fn current_base_generation_for_merge_reads_db_column() {

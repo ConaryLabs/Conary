@@ -51,12 +51,14 @@ use anyhow::{Context, Result};
 use conary_core::components::{
     ComponentClassifier, ComponentType, parse_component_spec, should_run_scriptlets,
 };
-use conary_core::db::models::{Changeset, ChangesetStatus, DerivedPackage};
+use conary_core::db::models::{
+    Changeset, ChangesetStatus, DerivedPackage, Repository, RepositoryPackage,
+};
 use conary_core::db::paths::keyring_dir;
 use conary_core::dependencies::{DependencyClass, LanguageDepDetector};
 use conary_core::packages::PackageFormat;
 use conary_core::repository;
-use conary_core::repository::versioning::VersionScheme;
+use conary_core::repository::versioning::{VersionScheme, resolve_package_version_scheme};
 use conary_core::resolver::MissingDependency;
 use conary_core::scriptlet::{PackageFormat as ScriptletPackageFormat, SandboxMode};
 use conary_core::transaction::{TransactionConfig, TransactionEngine};
@@ -107,6 +109,9 @@ pub struct InstallOptions<'a> {
     pub yes: bool,
     /// Install from a specific distro (cross-distro canonical resolution)
     pub from_distro: Option<String>,
+    /// Repository provenance supplied by an internal caller that already
+    /// selected and downloaded the package before calling `cmd_install`.
+    pub(crate) repository_provenance: Option<RepositoryInstallProvenance>,
 }
 
 pub(crate) struct CcsTransactionInstallOptions<'a> {
@@ -121,6 +126,39 @@ pub(crate) struct CcsTransactionInstallOptions<'a> {
     pub selection_reason: Option<&'a str>,
     pub component_selection: ComponentSelection,
     pub selected_manifest_components: Option<Vec<String>>,
+    pub repository_provenance: Option<RepositoryInstallProvenance>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RepositoryInstallProvenance {
+    pub repository_id: i64,
+    pub source_distro: Option<String>,
+    pub version_scheme: Option<String>,
+}
+
+pub(crate) fn repository_install_provenance_from_package(
+    package: &RepositoryPackage,
+    repository: &Repository,
+) -> Result<RepositoryInstallProvenance> {
+    let repository_id = repository
+        .id
+        .ok_or_else(|| anyhow::anyhow!("Selected repository has no database ID"))?;
+    let source_distro = package
+        .distro
+        .clone()
+        .or_else(|| repository.default_strategy_distro.clone());
+    let version_scheme =
+        resolve_package_version_scheme(package, repository).map(|scheme| match scheme {
+            VersionScheme::Rpm => "rpm".to_string(),
+            VersionScheme::Debian => "debian".to_string(),
+            VersionScheme::Arch => "arch".to_string(),
+        });
+
+    Ok(RepositoryInstallProvenance {
+        repository_id,
+        source_distro,
+        version_scheme,
+    })
 }
 
 pub(crate) struct CcsTransactionInstallResult {
@@ -468,6 +506,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         dep_mode,
         yes,
         from_distro,
+        repository_provenance: requested_repository_provenance,
     } = opts;
 
     // Hint if source policy is unconfigured (first-run guidance)
@@ -536,9 +575,10 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         allow_downgrade,
         dep_mode: Some(effective_dep_mode),
         yes,
+        repository_provenance: requested_repository_provenance,
     };
 
-    let Some((pkg, format)) = resolve_and_parse_package(
+    let Some((pkg, format, repository_provenance)) = resolve_and_parse_package(
         &conn,
         &package_name,
         package,
@@ -626,6 +666,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         ccs_capabilities: None,
         execution_path,
         defer_generation: false,
+        repository_provenance,
     };
     let tx_result =
         execute_install_transaction(&mut conn, pkg.as_ref(), &extraction, &tx_ctx, &progress)?;
@@ -659,6 +700,7 @@ struct CcsInstallParams<'a> {
     allow_downgrade: bool,
     dep_mode: Option<DepMode>,
     yes: bool,
+    repository_provenance: Option<RepositoryInstallProvenance>,
 }
 
 /// Context for the dependency analysis phase.
@@ -719,6 +761,7 @@ struct TransactionContext<'a> {
     ccs_capabilities: Option<&'a conary_core::capability::CapabilityDeclaration>,
     execution_path: PackageExecutionPath,
     defer_generation: bool,
+    repository_provenance: Option<RepositoryInstallProvenance>,
 }
 
 /// Result from a successful transaction execution.
@@ -958,6 +1001,7 @@ async fn resolve_and_parse_package(
     Option<(
         Box<dyn conary_core::packages::PackageFormat>,
         PackageFormatType,
+        Option<RepositoryInstallProvenance>,
     )>,
 > {
     // Create progress tracker for single package installation
@@ -1023,6 +1067,8 @@ async fn resolve_and_parse_package(
             dep_mode: ccs_opts.dep_mode,
             yes: ccs_opts.yes,
             dependency_passes_remaining: DEFAULT_CCS_DEPENDENCY_PASSES,
+            repository_provenance: install_provenance_from_resolved(&resolved)
+                .or_else(|| ccs_opts.repository_provenance.clone()),
         })
         .await?;
         return Ok(None);
@@ -1048,6 +1094,8 @@ async fn resolve_and_parse_package(
             dep_mode: ccs_opts.dep_mode,
             yes: ccs_opts.yes,
             dependency_passes_remaining: DEFAULT_CCS_DEPENDENCY_PASSES,
+            repository_provenance: install_provenance_from_resolved(&resolved)
+                .or_else(|| ccs_opts.repository_provenance.clone()),
         })
         .await?;
         return Ok(None);
@@ -1057,6 +1105,9 @@ async fn resolve_and_parse_package(
     let format = detect_package_format(path_str)
         .with_context(|| format!("Failed to detect package format for '{}'", path_str))?;
     info!("Detected package format: {:?}", format);
+
+    let repository_provenance = install_provenance_from_resolved(&resolved)
+        .or_else(|| ccs_opts.repository_provenance.clone());
 
     progress.set_phase(package, InstallPhase::Parsing);
     let pkg = parse_package(&resolved.path, format)?;
@@ -1084,6 +1135,8 @@ async fn resolve_and_parse_package(
                     dep_mode: ccs_opts.dep_mode,
                     yes: ccs_opts.yes,
                     dependency_passes_remaining: DEFAULT_CCS_DEPENDENCY_PASSES,
+                    repository_provenance: install_provenance_from_resolved(&resolved)
+                        .or_else(|| ccs_opts.repository_provenance.clone()),
                 })
                 .await?;
                 return Ok(None);
@@ -1094,7 +1147,20 @@ async fn resolve_and_parse_package(
         }
     }
 
-    Ok(Some((pkg, format)))
+    Ok(Some((pkg, format, repository_provenance)))
+}
+
+fn install_provenance_from_resolved(
+    resolved: &resolve::ResolvedPackage,
+) -> Option<RepositoryInstallProvenance> {
+    resolved
+        .repository_provenance
+        .as_ref()
+        .map(|provenance| RepositoryInstallProvenance {
+            repository_id: provenance.repository_id,
+            source_distro: provenance.source_distro.clone(),
+            version_scheme: provenance.version_scheme.clone(),
+        })
 }
 
 /// Handle dependency analysis: resolve, prompt, adopt, install deps.
@@ -1334,6 +1400,16 @@ async fn handle_dep_installs(
                 progress.set_phase(ctx.pkg.name(), InstallPhase::InstallingDeps);
                 let temp_dir = TempDir::new()?;
                 let keyring_dir = keyring_dir(ctx.db_path);
+                let mut provenance_by_dep = HashMap::new();
+                for (dep_name, pkg_with_repo) in &to_download {
+                    provenance_by_dep.insert(
+                        dep_name.clone(),
+                        repository_install_provenance_from_package(
+                            &pkg_with_repo.package,
+                            &pkg_with_repo.repository,
+                        )?,
+                    );
+                }
                 let downloaded = repository::download_dependencies(
                     &to_download,
                     temp_dir.path(),
@@ -1354,6 +1430,9 @@ async fn handle_dep_installs(
                         ctx.allow_downgrade,
                     ) {
                         Ok(prepared) => {
+                            let mut prepared = prepared;
+                            prepared.repository_provenance =
+                                provenance_by_dep.get(dep_name).cloned();
                             prepared_packages.push(prepared);
                         }
                         Err(e) => {
@@ -2198,6 +2277,7 @@ pub(crate) fn install_ccs_package_transactionally(
         ccs_capabilities: pkg.manifest().capabilities.as_ref(),
         execution_path,
         defer_generation: opts.defer_generation,
+        repository_provenance: opts.repository_provenance,
     };
     let tx_result = match execute_install_transaction(conn, pkg, &extraction, &tx_ctx, &progress) {
         Ok(result) => result,
@@ -2599,6 +2679,7 @@ mod tests {
             ccs_capabilities: None,
             execution_path: PackageExecutionPath::MutableLiveRoot,
             defer_generation: false,
+            repository_provenance: None,
         };
 
         let result = execute_install_transaction(
@@ -2746,6 +2827,7 @@ mod tests {
             ccs_capabilities: None,
             execution_path: PackageExecutionPath::MutableLiveRoot,
             defer_generation: false,
+            repository_provenance: None,
         };
 
         let error = match execute_install_transaction(

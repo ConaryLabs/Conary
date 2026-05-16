@@ -16,7 +16,9 @@ use crate::error::{Error, Result};
 use crate::repository::LatestSignal;
 use crate::repository::dependency_model::RepositoryDependencyFlavor;
 use crate::repository::resolution_policy::{ResolutionPolicy, SelectionMode};
-use crate::repository::versioning::compare_repo_package_versions;
+use crate::repository::versioning::{
+    VersionScheme, compare_repo_package_versions, resolve_package_version_scheme,
+};
 use chrono::Utc;
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
@@ -153,9 +155,8 @@ impl PackageSelector {
 
                 let mut policy_without_allowlist = policy.clone();
                 policy_without_allowlist.allowed_distros.clear();
-                let flavor = crate::repository::distro::flavor_from_repository(&repo)
-                    .unwrap_or(RepositoryDependencyFlavor::Rpm);
-                let scheme = crate::repository::distro::flavor_to_version_scheme(flavor);
+                let scheme =
+                    resolve_package_version_scheme(&pkg, &repo).unwrap_or(VersionScheme::Rpm);
                 if !policy_without_allowlist.accepts_candidate(
                     &repo.name,
                     scheme,
@@ -164,8 +165,8 @@ impl PackageSelector {
                     options.primary_flavor,
                 ) {
                     debug!(
-                        "Policy rejected package {} {} from repository {} (flavor {:?})",
-                        pkg.name, pkg.version, repo.name, flavor
+                        "Policy rejected package {} {} from repository {} (scheme {:?})",
+                        pkg.name, pkg.version, repo.name, scheme
                     );
                     continue;
                 }
@@ -721,6 +722,50 @@ mod tests {
         };
         let candidates = PackageSelector::search_packages(&conn, "libssl3", &options).unwrap();
         assert!(candidates.is_empty(), "strict policy rejects cross-flavor");
+    }
+
+    #[test]
+    fn strict_policy_accepts_candidate_by_stored_version_scheme_when_repo_shape_is_generic() {
+        let conn = test_db();
+
+        let mut repo = Repository::new(
+            "slice-d-local-update".to_string(),
+            "http://127.0.0.1:18087".to_string(),
+        );
+        repo.priority = 500;
+        repo.default_strategy_distro = Some("ubuntu".to_string());
+        repo.insert(&conn).unwrap();
+        let repo = Repository::find_by_name(&conn, "slice-d-local-update")
+            .unwrap()
+            .unwrap();
+
+        let mut pkg = RepositoryPackage::new(
+            repo.id.unwrap(),
+            "phase4-runtime-fixture".into(),
+            "1.0.1".into(),
+            "sha256:fixture".into(),
+            1,
+            "http://127.0.0.1:18087/phase4-runtime-fixture_1.0.1_amd64.deb".into(),
+        );
+        pkg.architecture = Some("amd64".into());
+        pkg.distro = Some("ubuntu".into());
+        pkg.version_scheme = Some("debian".into());
+        pkg.insert(&conn).unwrap();
+
+        let candidates = PackageSelector::search_packages(
+            &conn,
+            "phase4-runtime-fixture",
+            &SelectionOptions {
+                policy: Some(ResolutionPolicy::new().with_mixing(DependencyMixingPolicy::Strict)),
+                is_root: false,
+                primary_flavor: Some(RepositoryDependencyFlavor::Deb),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].repository.name, "slice-d-local-update");
     }
 
     #[test]

@@ -168,6 +168,25 @@ Focused Slice C daily-driver CLI proof:
   package names and declared installed/repository provider metadata instead of
   soname/package-name guessing.
 
+Focused Slice D native package-manager parity proof:
+
+- `cargo run -p conary-test -- run --suite phase4-native-pm-parity --distro fedora44 --phase 4`
+- `cargo run -p conary-test -- run --suite phase4-native-pm-parity --distro ubuntu-26.04 --phase 4`
+- `cargo run -p conary-test -- run --suite phase4-native-pm-parity --distro arch --phase 4`
+
+Each run must pass `scripts/check-conary-test-result-gate.sh`, which requires
+zero failed, skipped, and cancelled results before the matrix can count as
+limited-preview release evidence. The `conary-test run` command also exits
+unsuccessfully for skipped or cancelled results. Distro images rebuild by
+default so the matrix uses the current checkout; set `CONARY_TEST_REUSE_IMAGE=1`
+only for local iterative debugging where stale-image risk is acceptable.
+
+Fresh Slice D evidence from May 16, 2026:
+
+- Fedora 44/RPM: `fedora44-phase4.json`, 12 passed, 0 failed, 0 skipped, 0 cancelled.
+- Ubuntu 26.04/DEB: `ubuntu-26.04-phase4.json`, 12 passed, 0 failed, 0 skipped, 0 cancelled.
+- Arch/package format: `arch-phase4.json`, 12 passed, 0 failed, 0 skipped, 0 cancelled.
+
 For supported Forge control-plane validation after a new runner is registered,
 prefer:
 

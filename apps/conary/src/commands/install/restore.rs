@@ -321,6 +321,7 @@ pub(crate) fn install_prepared_inner(
         ccs_capabilities: None,
         execution_path: PackageExecutionPath::GenerationAware,
         defer_generation: false,
+        repository_provenance: None,
     };
     install_inner(
         tx,

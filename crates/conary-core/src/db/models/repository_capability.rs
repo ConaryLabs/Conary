@@ -346,6 +346,32 @@ mod tests {
     }
 
     #[test]
+    fn find_by_capability_with_name_requires_normalized_capability() {
+        let conn = test_db();
+        seed_repo_and_package(&conn);
+
+        let mut typed = RepositoryProvide::new(
+            1,
+            "libssl.so.3".to_string(),
+            None,
+            "soname".to_string(),
+            Some("libssl.so.3()(64bit)".to_string()),
+        );
+        typed.insert(&conn).unwrap();
+
+        let raw =
+            RepositoryProvide::find_by_capability_with_name(&conn, "libssl.so.3()(64bit)").unwrap();
+        assert!(raw.is_empty());
+
+        let normalized =
+            RepositoryProvide::find_by_capability_with_name(&conn, "libssl.so.3").unwrap();
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(normalized[0].0.capability, "libssl.so.3");
+        assert_eq!(normalized[0].0.raw.as_deref(), Some("libssl.so.3()(64bit)"));
+        assert_eq!(normalized[0].1, "pkg");
+    }
+
+    #[test]
     fn delete_by_package_removes_provides() {
         let conn = test_db();
         seed_repo_and_package(&conn);

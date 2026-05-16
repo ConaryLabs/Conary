@@ -66,7 +66,8 @@ pub use registry::{RepositoryFormat, create_parser, detect_repository_format};
 pub use remi::AsyncRemiClient;
 pub use remi::{PackageManifest, RemiClient};
 pub use resolution::{
-    PackageResolver, PackageSource, ResolutionOptions, build_gpg_options, resolve_package,
+    PackageResolver, PackageSource, RepositorySourceMetadata, ResolutionOptions, build_gpg_options,
+    resolve_package,
 };
 pub use retry::{RetryConfig, with_retry};
 pub use selector::{PackageSelector, PackageWithRepo, SelectionOptions};

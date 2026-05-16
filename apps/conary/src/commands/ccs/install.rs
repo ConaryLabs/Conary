@@ -853,6 +853,7 @@ pub async fn cmd_ccs_install(
                 selection_reason: None,
                 component_selection,
                 selected_manifest_components: Some(selected_components.names.clone()),
+                repository_provenance: None,
             },
         )?;
         return Ok(());
@@ -879,6 +880,7 @@ pub async fn cmd_ccs_install(
             selection_reason: None,
             component_selection,
             selected_manifest_components: Some(selected_components.names.clone()),
+            repository_provenance: None,
         },
     )?;
     let _changeset_id = tx_result.changeset_id;

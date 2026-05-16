@@ -498,7 +498,9 @@ fn run_single_distro(
         conary_test::report::json::write_json_report(&aggregate_suite, &results_file)?;
         tracing::info!(path = %results_file.display(), "Results written");
 
-        let has_failures = aggregate_suite.failed() > 0;
+        let has_blocking_results = aggregate_suite.failed() > 0
+            || aggregate_suite.skipped() > 0
+            || aggregate_suite.cancelled() > 0;
 
         // Cleanup container.
         let keep_container = std::env::var("CONARY_TEST_KEEP_CONTAINER")
@@ -520,7 +522,7 @@ fn run_single_distro(
             }
         }
 
-        Ok(!has_failures)
+        Ok(!has_blocking_results)
     })
 }
 
@@ -575,7 +577,9 @@ async fn run_qemu_only_suite(
     conary_test::report::json::write_json_report(&aggregate_suite, &results_file)?;
     tracing::info!(path = %results_file.display(), "Results written");
 
-    Ok(aggregate_suite.failed() == 0)
+    Ok(aggregate_suite.failed() == 0
+        && aggregate_suite.skipped() == 0
+        && aggregate_suite.cancelled() == 0)
 }
 
 // ---------------------------------------------------------------------------

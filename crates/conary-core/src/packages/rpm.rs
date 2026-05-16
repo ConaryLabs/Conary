@@ -136,8 +136,9 @@ impl RpmPackage {
         // Extract runtime dependencies (Requires)
         if let Ok(requires) = pkg.metadata.get_requires() {
             for req in requires {
-                // Skip rpmlib dependencies and file paths
-                if req.name.starts_with("rpmlib(") || req.name.starts_with('/') {
+                // Skip RPM-internal requirements that do not represent
+                // installable package dependencies.
+                if is_ignored_rpm_requirement_name(&req.name) {
                     continue;
                 }
 
@@ -189,6 +190,10 @@ impl RpmPackage {
 
         provides
     }
+}
+
+fn is_ignored_rpm_requirement_name(name: &str) -> bool {
+    name.starts_with("rpmlib(") || name.starts_with("config(") || name.starts_with('/')
 }
 
 /// Convert RPM DependencyFlags to constraint operator string
@@ -558,5 +563,17 @@ mod tests {
         // Test that parsing a nonexistent file returns an error
         let result = RpmPackage::parse("/nonexistent/file.rpm");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn ignores_rpm_internal_requirement_names() {
+        assert!(is_ignored_rpm_requirement_name(
+            "rpmlib(CompressedFileNames)"
+        ));
+        assert!(is_ignored_rpm_requirement_name(
+            "config(phase4-runtime-fixture)"
+        ));
+        assert!(is_ignored_rpm_requirement_name("/bin/sh"));
+        assert!(!is_ignored_rpm_requirement_name("openssl-libs"));
     }
 }
