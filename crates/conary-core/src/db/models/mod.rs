@@ -79,7 +79,7 @@ pub use flavor::Flavor;
 pub use label::{LabelEntry, LabelPathEntry, add_to_path, get_label_path, remove_from_path};
 pub use metadata::{MetadataTable, get_metadata, set_metadata};
 pub use provenance::Provenance;
-pub use provide_entry::{ProvideEntry, generate_capability_variations};
+pub use provide_entry::ProvideEntry;
 pub use redirect::{Redirect, RedirectType, ResolveResult};
 pub use remote_collection::{DEFAULT_CACHE_TTL_SECS, RemoteCollection};
 pub use repology_cache::RepologyCacheEntry;

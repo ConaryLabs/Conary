@@ -227,10 +227,20 @@ pub(super) fn load_repo_provided_capabilities(
         return Ok(parse_repo_provides(pkg));
     }
 
-    Ok(rows
-        .into_iter()
-        .map(|row| (row.capability, row.version))
-        .collect())
+    let mut capabilities = Vec::new();
+    for row in rows {
+        let typed = if row.kind == "package" || row.kind.is_empty() {
+            row.capability.clone()
+        } else {
+            format!("{}({})", row.kind, row.capability)
+        };
+        capabilities.push((row.capability.clone(), row.version.clone()));
+        if typed != row.capability {
+            capabilities.push((typed, row.version));
+        }
+    }
+
+    Ok(capabilities)
 }
 
 /// Find a repository package by its ID.

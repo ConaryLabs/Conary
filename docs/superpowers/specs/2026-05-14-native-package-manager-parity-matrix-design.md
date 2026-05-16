@@ -397,6 +397,10 @@ Conary Tier 1 contract:
 - `conary query whatprovides <capability>` consults installed and repository metadata where available.
 - `conary query whatbreaks <package>` explains installed reverse dependency breakage before remove.
 - Output uses the same dependency model as install/remove/update preflight, so diagnostics match behavior.
+- Capability resolution uses exact package names or declared provider metadata from installed rows,
+  Remi repository sync, and AppStream/Repology-backed normalized data. It must not invent
+  package matches from soname stems, package-name lookalikes, case folding, or cross-distro
+  string variations.
 
 Adding top-level aliases for `whatprovides` and `whatbreaks` is a separate CLI ergonomics decision. The implementation plan should not test top-level aliases unless it also adds them.
 

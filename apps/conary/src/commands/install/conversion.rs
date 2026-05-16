@@ -17,7 +17,6 @@ use anyhow::{Context, Result};
 use conary_core::capability::inference::InferenceOptions;
 use conary_core::ccs::CcsPackage;
 use conary_core::ccs::convert::{ConversionOptions, FidelityLevel, LegacyConverter};
-use conary_core::db::models::generate_capability_variations;
 use conary_core::db::paths::keyring_dir;
 use conary_core::packages::PackageFormat;
 use conary_core::packages::common::PackageMetadata;
@@ -45,12 +44,21 @@ struct PendingCcsProvider {
 
 impl PendingCcsProvider {
     fn from_package(ccs_pkg: &CcsPackage) -> Self {
-        let mut provides: Vec<String> = std::iter::once(ccs_pkg.name().to_string())
-            .chain(ccs_pkg.manifest().provides.capabilities.iter().cloned())
-            .chain(ccs_pkg.manifest().provides.sonames.iter().cloned())
-            .chain(ccs_pkg.manifest().provides.binaries.iter().cloned())
-            .chain(ccs_pkg.manifest().provides.pkgconfig.iter().cloned())
-            .collect();
+        let mut provides: Vec<String> = Vec::new();
+        provides.push(ccs_pkg.name().to_string());
+        provides.extend(ccs_pkg.manifest().provides.capabilities.iter().cloned());
+        for soname in &ccs_pkg.manifest().provides.sonames {
+            provides.push(soname.clone());
+            provides.push(format!("soname({soname})"));
+        }
+        for binary in &ccs_pkg.manifest().provides.binaries {
+            provides.push(binary.clone());
+            provides.push(format!("binary({binary})"));
+        }
+        for pkgconfig in &ccs_pkg.manifest().provides.pkgconfig {
+            provides.push(pkgconfig.clone());
+            provides.push(format!("pkgconfig({pkgconfig})"));
+        }
         provides.sort();
         provides.dedup();
 
@@ -63,18 +71,7 @@ impl PendingCcsProvider {
 }
 
 fn capability_name_matches(provided: &str, dep_name: &str) -> bool {
-    let mut candidates = vec![dep_name.to_string()];
-    for variation in generate_capability_variations(dep_name) {
-        if !candidates.contains(&variation) {
-            candidates.push(variation);
-        }
-    }
-
-    candidates.iter().any(|candidate| {
-        provided == candidate
-            || provided.starts_with(&format!("{candidate} "))
-            || provided.starts_with(&format!("{candidate}("))
-    })
+    provided == dep_name || provided.starts_with(&format!("{dep_name} "))
 }
 
 fn pending_provider_directly_satisfies(
@@ -122,24 +119,23 @@ fn pending_provider_satisfies_dependency(
 }
 
 fn package_self_provides(ccs_pkg: &CcsPackage, dep_name: &str) -> bool {
-    let provided: std::collections::HashSet<String> = std::iter::once(ccs_pkg.name().to_string())
-        .chain(ccs_pkg.manifest().provides.capabilities.iter().cloned())
-        .chain(ccs_pkg.manifest().provides.sonames.iter().cloned())
-        .chain(ccs_pkg.manifest().provides.binaries.iter().cloned())
-        .chain(ccs_pkg.manifest().provides.pkgconfig.iter().cloned())
-        .collect();
-
-    if provided.contains(dep_name) {
-        return true;
+    let mut provided: std::collections::HashSet<String> = std::collections::HashSet::new();
+    provided.insert(ccs_pkg.name().to_string());
+    provided.extend(ccs_pkg.manifest().provides.capabilities.iter().cloned());
+    for soname in &ccs_pkg.manifest().provides.sonames {
+        provided.insert(soname.clone());
+        provided.insert(format!("soname({soname})"));
+    }
+    for binary in &ccs_pkg.manifest().provides.binaries {
+        provided.insert(binary.clone());
+        provided.insert(format!("binary({binary})"));
+    }
+    for pkgconfig in &ccs_pkg.manifest().provides.pkgconfig {
+        provided.insert(pkgconfig.clone());
+        provided.insert(format!("pkgconfig({pkgconfig})"));
     }
 
-    for variation in generate_capability_variations(dep_name) {
-        if provided.contains(&variation) {
-            return true;
-        }
-    }
-
-    false
+    provided.contains(dep_name)
 }
 
 /// Check whether a dependency string is a conditional/rich RPM dependency

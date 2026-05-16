@@ -9,7 +9,6 @@ use super::super::open_db;
 use anyhow::{Context, Result};
 use conary_core::ccs::{CcsPackage, TrustPolicy, verify};
 use conary_core::components::ComponentType;
-use conary_core::db::models::generate_capability_variations;
 use conary_core::packages::traits::{ExtractedFile, PackageFormat};
 use conary_core::repository::versioning::{
     RepoVersionConstraint, VersionScheme, parse_repo_constraint, repo_version_satisfies,
@@ -18,27 +17,26 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Component as PathComponent, Path, PathBuf};
 
 fn package_provided_names(ccs_pkg: &CcsPackage) -> std::collections::HashSet<String> {
-    std::iter::once(ccs_pkg.name().to_string())
-        .chain(ccs_pkg.manifest().provides.capabilities.iter().cloned())
-        .chain(ccs_pkg.manifest().provides.sonames.iter().cloned())
-        .chain(ccs_pkg.manifest().provides.binaries.iter().cloned())
-        .chain(ccs_pkg.manifest().provides.pkgconfig.iter().cloned())
-        .collect()
+    let mut provided = std::collections::HashSet::new();
+    provided.insert(ccs_pkg.name().to_string());
+    provided.extend(ccs_pkg.manifest().provides.capabilities.iter().cloned());
+    for soname in &ccs_pkg.manifest().provides.sonames {
+        provided.insert(soname.clone());
+        provided.insert(format!("soname({soname})"));
+    }
+    for binary in &ccs_pkg.manifest().provides.binaries {
+        provided.insert(binary.clone());
+        provided.insert(format!("binary({binary})"));
+    }
+    for pkgconfig in &ccs_pkg.manifest().provides.pkgconfig {
+        provided.insert(pkgconfig.clone());
+        provided.insert(format!("pkgconfig({pkgconfig})"));
+    }
+    provided
 }
 
 fn package_self_provides(ccs_pkg: &CcsPackage, dep_name: &str) -> bool {
-    let provided = package_provided_names(ccs_pkg);
-    if provided.contains(dep_name) {
-        return true;
-    }
-
-    for variation in generate_capability_variations(dep_name) {
-        if provided.contains(&variation) {
-            return true;
-        }
-    }
-
-    false
+    package_provided_names(ccs_pkg).contains(dep_name)
 }
 
 pub(crate) fn enforce_ccs_capability_policy(
@@ -422,7 +420,10 @@ fn validate_package_dependency(
         .map(|trove| trove.version)
         .collect::<Vec<_>>();
     if installed_versions.is_empty()
-        && conary_core::db::models::ProvideEntry::is_capability_satisfied_fuzzy(conn, package_name)?
+        && conary_core::db::models::ProvideEntry::is_declared_capability_satisfied(
+            conn,
+            package_name,
+        )?
     {
         return Ok(());
     }
@@ -806,10 +807,11 @@ pub async fn cmd_ccs_install(
             if package_self_provides(&ccs_pkg, capability_name) {
                 continue;
             }
-            let satisfied = conary_core::db::models::ProvideEntry::is_capability_satisfied_fuzzy(
-                &conn,
-                capability_name,
-            )?;
+            let satisfied =
+                conary_core::db::models::ProvideEntry::is_declared_capability_satisfied(
+                    &conn,
+                    capability_name,
+                )?;
             if !satisfied {
                 if dry_run {
                     println!("  Missing dependency: {capability_name} (would fail)");
@@ -1149,7 +1151,7 @@ mod tests {
     }
 
     #[test]
-    fn package_dependency_accepts_fuzzy_capability_when_no_exact_package_exists() {
+    fn package_dependency_rejects_undeclared_capability_guess() {
         let temp_dir = tempfile::tempdir().unwrap();
         let db_path = temp_dir.path().join("conary.db");
         let db_path_str = db_path.to_str().unwrap();
@@ -1167,6 +1169,33 @@ mod tests {
             trove_id,
             "soname",
             "libc.so.6(GLIBC_2.41)(64bit)".to_string(),
+            None,
+        );
+        provide.insert(&conn).unwrap();
+
+        let err = validate_package_dependency(&conn, "libc.so.6", None, false).unwrap_err();
+        assert!(err.to_string().contains("Missing dependency: libc.so.6"));
+    }
+
+    #[test]
+    fn package_dependency_accepts_declared_capability_when_no_exact_package_exists() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+        conary_core::db::init(db_path_str).unwrap();
+        let conn = conary_core::db::open(db_path_str).unwrap();
+
+        let mut glibc = conary_core::db::models::Trove::new(
+            "glibc".to_string(),
+            "2.41.0".to_string(),
+            conary_core::db::models::TroveType::Package,
+        );
+        let trove_id = glibc.insert(&conn).unwrap();
+
+        let mut provide = conary_core::db::models::ProvideEntry::new_typed(
+            trove_id,
+            "soname",
+            "libc.so.6".to_string(),
             None,
         );
         provide.insert(&conn).unwrap();

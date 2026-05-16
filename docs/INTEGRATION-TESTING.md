@@ -159,6 +159,15 @@ Fast workspace verification from 2026-05-14:
 - `cargo clippy --workspace --all-targets -- -D warnings`: passed
 - `git diff --check`: passed
 
+Focused Slice C daily-driver CLI proof:
+
+- `apps/conary/tests/native_pm_daily_driver.rs` proves Tier 1 list/info/files/path,
+  pin/unpin, autoremove, and query diagnostics for Conary-owned packages before
+  the broader Slice D distro matrix.
+- Provider-resolution unit coverage proves package-manager decisions use exact
+  package names and declared installed/repository provider metadata instead of
+  soname/package-name guessing.
+
 For supported Forge control-plane validation after a new runner is registered,
 prefer:
 

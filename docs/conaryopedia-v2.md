@@ -384,7 +384,7 @@ Resolution uses a SAT solver (via resolvo) with topological sorting:
 conary query depends nginx        # What does nginx need?
 conary query rdepends openssl     # What needs openssl?
 conary query deptree nginx        # Full dependency tree
-conary query whatprovides libc.so.6  # Who provides this?
+conary query whatprovides 'soname(libc.so.6)'  # Who provides this?
 ```
 
 #### Provides
@@ -588,7 +588,7 @@ conary query rdepends openssl    # What needs openssl?
 conary query deptree nginx       # Full dependency tree
 conary query deptree nginx --reverse  # Reverse tree (what depends on nginx?)
 conary query deptree nginx --depth 3  # Limit tree depth
-conary query whatprovides libc.so.6   # Who provides this capability?
+conary query whatprovides 'soname(libc.so.6)'  # Who provides this capability?
 conary query whatbreaks nginx    # What would break if nginx is removed?
 conary query reason              # Show why each package was installed
 conary query reason explicit     # Only explicitly installed packages

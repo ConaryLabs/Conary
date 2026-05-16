@@ -5,12 +5,11 @@
 //! Functions for resolving package dependencies across repositories,
 //! including transitive resolution and parallel downloads.
 
-use crate::db::models::{RepositoryProvide, Trove, generate_capability_variations};
+use crate::db::models::{RepositoryProvide, Trove};
 use crate::error::{Error, Result};
 use crate::repository::versioning::{RepoVersionConstraint, VersionScheme, repo_version_satisfies};
 use crate::version::VersionConstraint;
 use rusqlite::Connection;
-use std::cmp::Reverse;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
@@ -215,36 +214,20 @@ fn resolve_repo_dependency_request(
     }
 
     // 2. Normalized capability lookup -- preferred resolution path.
-    //    Queries the indexed `repository_provides` table before falling back
-    //    to cross-distro heuristics or JSON blob scans.
-    let mut capability_names = vec![dep_name.to_string()];
-    for variation in generate_capability_variations(dep_name) {
-        if !capability_names.contains(&variation) {
-            capability_names.push(variation);
-        }
-    }
-    for capability_name in capability_names {
-        if let Some((package_name, package_version)) =
-            resolve_repo_dependency_by_capability(conn, &capability_name, constraint, options)?
-        {
-            let resolved_constraint = if let Some(version) = package_version {
-                VersionConstraint::parse(&format!("= {version}")).unwrap_or(VersionConstraint::Any)
-            } else {
-                constraint.clone()
-            };
-            return Ok((package_name, resolved_constraint));
-        }
+    //    Queries the indexed `repository_provides` table using the exact
+    //    capability key supplied by repository metadata.
+    if let Some((package_name, package_version)) =
+        resolve_repo_dependency_by_capability(conn, dep_name, constraint, options)?
+    {
+        let resolved_constraint = if let Some(version) = package_version {
+            VersionConstraint::parse(&format!("= {version}")).unwrap_or(VersionConstraint::Any)
+        } else {
+            constraint.clone()
+        };
+        return Ok((package_name, resolved_constraint));
     }
 
-    // 3. Cross-distro heuristics (repology / name-variation helpers).
-    //    Only runs after exact native-format lookup fails.
-    for variation in generate_capability_variations(dep_name) {
-        if PackageSelector::find_best_package(conn, &variation, options).is_ok() {
-            return Ok((variation, constraint.clone()));
-        }
-    }
-
-    // 4. Legacy JSON metadata blob scan -- backward compat for packages that
+    // 3. Legacy JSON metadata blob scan -- backward compat for packages that
     //    haven't been re-sync'd with normalized provide data yet.
     if let Some((package_name, package_version)) =
         resolve_repo_dependency_by_metadata(conn, dep_name, options)?
@@ -257,75 +240,9 @@ fn resolve_repo_dependency_request(
         return Ok((package_name, resolved_constraint));
     }
 
-    // 5. Soname-based fuzzy search -- last resort for shared library deps.
-    if let Some(candidate) = resolve_repo_dependency_by_search(conn, dep_name, options)? {
-        return Ok((candidate, constraint.clone()));
-    }
-
     Err(Error::NotFound(format!(
         "Required dependency '{dep_name}' not found in any repository"
     )))
-}
-
-fn resolve_repo_dependency_by_search(
-    conn: &Connection,
-    dep_name: &str,
-    options: &SelectionOptions,
-) -> Result<Option<String>> {
-    if !dep_name.ends_with(".so") && !dep_name.contains(".so.") {
-        return Ok(None);
-    }
-
-    let mut search_terms = HashSet::new();
-    for variation in generate_capability_variations(dep_name) {
-        if variation.len() >= 3 {
-            search_terms.insert(variation);
-        }
-    }
-
-    let mut candidates = Vec::new();
-    for term in search_terms {
-        let pattern = format!("%{term}%");
-        let mut stmt = conn.prepare(
-            "SELECT DISTINCT name FROM repository_packages
-             WHERE name LIKE ?1
-             ORDER BY LENGTH(name), name",
-        )?;
-
-        let rows = stmt.query_map([pattern], |row| row.get::<_, String>(0))?;
-        for row in rows {
-            let name = row?;
-            if PackageSelector::find_best_package(conn, &name, options).is_ok() {
-                candidates.push(name);
-            }
-        }
-    }
-
-    candidates.sort_by_key(|name| {
-        let lower = name.to_lowercase();
-        let starts_with_non_dev = (!lower.ends_with("-devel")
-            && !lower.ends_with("-dev")
-            && !lower.contains('+')
-            && !lower.starts_with("rust-")
-            && !lower.starts_with("ghc-")
-            && !lower.starts_with("python")) as u8;
-        let soname_stem = dep_name
-            .split(".so")
-            .next()
-            .unwrap_or(dep_name)
-            .trim_start_matches("lib")
-            .to_lowercase();
-        let contains_stem = lower.contains(&soname_stem) as u8;
-        (
-            Reverse(starts_with_non_dev),
-            Reverse(contains_stem),
-            lower.len(),
-            lower,
-        )
-    });
-    candidates.dedup();
-
-    Ok(candidates.into_iter().next())
 }
 
 /// Resolve dependencies and return list of packages to download
@@ -701,7 +618,7 @@ mod tests {
     }
 
     #[test]
-    fn resolves_soname_dependency_to_repo_package_name() {
+    fn does_not_resolve_soname_dependency_from_package_name_guess() {
         let conn = test_db();
 
         let mut repo = Repository::new("fedora-remi".to_string(), "https://example.invalid".into());
@@ -718,18 +635,23 @@ mod tests {
         );
         pkg.insert(&conn).unwrap();
 
-        let (resolved, _constraint) = resolve_repo_dependency_request(
+        let err = resolve_repo_dependency_request(
             &conn,
             "libjq.so.1",
             &VersionConstraint::Any,
             &SelectionOptions::default(),
         )
-        .unwrap();
-        assert_eq!(resolved, "libjq");
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("Required dependency 'libjq.so.1' not found"),
+            "{err}"
+        );
     }
 
     #[test]
-    fn resolves_soname_dependency_to_repo_package_name_by_search_stem() {
+    fn does_not_resolve_soname_dependency_by_search_stem() {
         let conn = test_db();
 
         let mut repo = Repository::new("fedora-remi".to_string(), "https://example.invalid".into());
@@ -748,14 +670,19 @@ mod tests {
             pkg.insert(&conn).unwrap();
         }
 
-        let (resolved, _constraint) = resolve_repo_dependency_request(
+        let err = resolve_repo_dependency_request(
             &conn,
             "libonig.so.5",
             &VersionConstraint::Any,
             &SelectionOptions::default(),
         )
-        .unwrap();
-        assert_eq!(resolved, "oniguruma");
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("Required dependency 'libonig.so.5' not found"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -960,7 +887,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_dependency_requests_normalizes_rpm_soname_markers_for_repo_provides() {
+    fn resolve_dependency_requests_requires_normalized_rpm_soname_key() {
         let conn = test_db();
 
         let mut repo = Repository::new("fedora-remi".to_string(), "https://example.invalid".into());
@@ -987,12 +914,19 @@ mod tests {
         );
         provide.insert(&conn).unwrap();
 
-        let requests = vec![(
+        let raw_requests = vec![(
             "libglib-2.0.so.0()(64bit)".to_string(),
             VersionConstraint::Any,
         )];
+        let err = resolve_dependency_requests(&conn, &raw_requests).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Required dependency 'libglib-2.0.so.0()(64bit)' not found"),
+            "{err}"
+        );
 
-        let result = resolve_dependency_requests(&conn, &requests).unwrap();
+        let normalized_requests = vec![("libglib-2.0.so.0".to_string(), VersionConstraint::Any)];
+        let result = resolve_dependency_requests(&conn, &normalized_requests).unwrap();
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].1.package.name, "glib2");
@@ -1119,15 +1053,15 @@ mod tests {
 
     #[test]
     fn no_fallback_to_name_guessing_when_normalized_provide_exists() {
-        // When a normalized provide exists, we should use it rather than
-        // falling through to cross-distro heuristics or fuzzy search.
+        // When a normalized provide exists, resolution should use only the
+        // package that declared it.
         let conn = test_db();
 
         let mut repo = Repository::new("fedora".to_string(), "https://example.invalid".into());
         repo.insert(&conn).unwrap();
         let repo_id = repo.id.unwrap();
 
-        // Two packages: one that matches by name heuristics, one that
+        // Two packages: one whose name resembles the soname, one that
         // actually declares the provide.
         let mut wrong_pkg = RepositoryPackage::new(
             repo_id,
@@ -1168,30 +1102,29 @@ mod tests {
         )
         .unwrap();
         // Must resolve to the package that declares the provide, not the
-        // one whose name happens to match via heuristics.
+        // one whose name merely resembles it.
         assert_eq!(resolved, "libfoo-compat");
     }
 
     #[test]
-    fn capability_lookup_preferred_over_heuristics() {
-        // Verify that normalized capability lookup runs before
-        // `generate_capability_variations` heuristics.
+    fn capability_lookup_ignores_lookalike_package_names() {
+        // Verify that normalized capability lookup is the source of truth.
         let conn = test_db();
 
         let mut repo = Repository::new("fedora".to_string(), "https://example.invalid".into());
         repo.insert(&conn).unwrap();
         let repo_id = repo.id.unwrap();
 
-        // A package whose name would match a variation of the dep name
-        let mut heuristic_pkg = RepositoryPackage::new(
+        // A package whose name looks related but declares no provide.
+        let mut lookalike_pkg = RepositoryPackage::new(
             repo_id,
             "libssl3".to_string(),
             "3.2.0-1.fc43".to_string(),
-            "sha256:heur".to_string(),
+            "sha256:lookalike".to_string(),
             100,
             "https://example.invalid/libssl3.rpm".to_string(),
         );
-        heuristic_pkg.insert(&conn).unwrap();
+        lookalike_pkg.insert(&conn).unwrap();
 
         // A different package that actually provides the capability
         let mut provider_pkg = RepositoryPackage::new(
@@ -1221,7 +1154,7 @@ mod tests {
             &SelectionOptions::default(),
         )
         .unwrap();
-        // Should resolve via capability, not via name heuristic
+        // Should resolve via declared capability, not package-name resemblance.
         assert_eq!(resolved, "openssl-libs");
     }
 }
