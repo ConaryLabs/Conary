@@ -43,6 +43,15 @@ Run this plan as one active Codex goal with the main session acting as controlle
 
 Before implementation starts, confirm the active goal matches the objective above. If no goal exists, create it with the exact objective. If a different goal exists, stop and ask the user to clear or replace it instead of silently reusing the wrong goal.
 
+Use the goal tools deliberately:
+
+```text
+get_goal()
+create_goal(objective = "Slice D: Add the conary-test native package-manager parity matrix. Create a named suite visible from `cargo run -p conary-test -- list` that proves Tier 0 and Tier 1 across Fedora 44/RPM, Ubuntu 26.04/DEB, and Arch package format with explicit step assertions, zero failed/skipped/cancelled result gates, forced deferred-follow-up tests, and exact native fixture metadata checks.")
+```
+
+Do not create a token budget unless the user explicitly asks for one. Use `update_plan(...)`, not `update_goal(...)`, for ordinary progress reporting. The only valid `update_goal(...)` call in this slice is the final completion call in Task 7, after all verification gates pass.
+
 Use this progress checklist as the child plan beneath the goal:
 
 - [ ] Foundation: Tasks 1-3 are committed, reviewed, and locally verified.
@@ -64,6 +73,32 @@ When dispatching subagents, include these goal constraints in every prompt:
 - The worker must run the task's verification commands and report exact pass/fail outcomes.
 - The worker must not skip tests, weaken exact metadata assertions, or mark a distro as passing without the result gate.
 - If the task exposes a real package-manager bug, the worker should report `BLOCKED` or `DONE_WITH_CONCERNS` with the smallest observed reproduction instead of papering over it in the manifest.
+
+Use this prompt frame for worker dispatches, replacing the ownership and task-specific sections:
+
+```text
+We are executing the active /goal: Slice D native package-manager parity matrix.
+
+You are not alone in the codebase. Do not revert or overwrite edits outside your ownership slice, and adapt to neighboring changes if they exist.
+
+Ownership:
+- Modify only: <exact files>
+- Do not modify: <files owned by other workers>
+
+Task:
+<one bounded task from this plan>
+
+Required evidence:
+- Run: <focused test/list/gate command>
+- Commit your completed task with the requested commit message.
+- Report final status as DONE, BLOCKED, or DONE_WITH_CONCERNS.
+- Include changed files, commit SHA, commands run, and exact pass/fail results.
+
+Goal constraints:
+- No skipped tests count as release evidence.
+- Do not weaken exact RPM/DEB/Arch metadata assertions to make the suite pass.
+- If the suite exposes a real package-manager bug, stop at the smallest reproduction and report it.
+```
 
 If a distro failure requires product code, keep the goal active and patch the smallest real root cause. Add focused unit or integration coverage for that bug, rerun the failed distro, then continue the same goal checklist. Do not split the goal unless the fix becomes unrelated to Tier 0/Tier 1 parity evidence.
 
