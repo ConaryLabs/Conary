@@ -33,3 +33,11 @@ if ! find "${output_dir}" -maxdepth 1 -type f -name "*${expected_suffix}" | grep
   echo "No ${expected_suffix} artifact was generated in ${output_dir}" >&2
   exit 1
 fi
+
+artifact="$(find "${output_dir}" -maxdepth 1 -type f -name "*${expected_suffix}" | sort | head -1)"
+checksum="$(sha256sum "${artifact}" | awk '{print $1}')"
+cat > "${output_dir}/native-fixture.env" <<EOF
+NATIVE_PKG_FILE=${artifact}
+NATIVE_PKG_SHA256=${checksum}
+NATIVE_TARGET=${target}
+EOF
