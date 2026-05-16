@@ -82,8 +82,14 @@ impl BollardBackend {
 
     /// Connect to the local Docker/Podman socket using defaults.
     pub fn new() -> Result<Self> {
+        #[cfg(unix)]
+        let docker = Docker::connect_with_podman_defaults()
+            .context("failed to connect to container runtime")?;
+
+        #[cfg(not(unix))]
         let docker = Docker::connect_with_local_defaults()
             .context("failed to connect to container runtime")?;
+
         Ok(Self {
             docker,
             running_execs: Arc::new(Mutex::new(HashMap::new())),
