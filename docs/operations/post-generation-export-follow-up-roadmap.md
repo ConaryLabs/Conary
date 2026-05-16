@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-14
-revision: 8
-summary: Follow-up roadmap after composefs atomic runtime activation validation
+last_updated: 2026-05-16
+revision: 9
+summary: Follow-up roadmap after limited-preview checkpoint generation-export blocker
 ---
 
 # Post-Generation-Export Follow-Up Roadmap
@@ -36,7 +36,9 @@ Completed self-contained installed-runtime export:
 - bulk-adopt installed packages into CAS with `conary system adopt --system --full`
 - validate runtime generation inputs before publishing `.conary-artifact.json`
 - preserve fail-closed behavior for metadata-only or partial installed roots
-- boot a full CAS-backed installed runtime generation exported to qcow2 under UEFI
+- boot a full CAS-backed installed runtime generation exported to qcow2 under
+  UEFI in the earlier 2026-05-09 gate; the 2026-05-16 checkpoint found a
+  regression/blocker in this proof and moved it back to active follow-up
 
 Completed OCI export source loading:
 
@@ -68,14 +70,17 @@ Current active validation:
 
 - `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`
 - covered cases: `TGE01`, `TGE03`, `TGE04`, and `TGE02`
-- when the source fixture is generation-builder-ready, `TGE04` proves
-  installed-runtime qcow2 export boots under UEFI
+- when the source fixture is generation-builder-ready, `TGE04` is the intended
+  proof that installed-runtime qcow2 export boots under UEFI
 - the active manifests use the generation-builder-ready `minimal-boot-v3`
   source image; they no longer install `cpio`, `dracut`, `qemu-img`,
   `dosfstools`, or related helper libraries through Conary before the runtime
   is generation-owned
-- current local Group O evidence remains the 2026-05-09 pass of `TGE01`,
+- historical local Group O evidence includes the 2026-05-09 pass of `TGE01`,
   `TGE02`, `TGE03`, and `TGE04` with 0 failures and 0 skipped results
+- current checkpoint evidence from 2026-05-16 passed `TGE01`, `TGE02`, and
+  `TGE03`, but failed `TGE04`; the exported installed-runtime image booted the
+  kernel and then panicked with `No working init found`
 
 Current composefs modernization validation:
 
@@ -99,16 +104,20 @@ Everything below is deferred follow-up or maintenance work.
 
 ### 1. Keep Installed Runtime Generations Self-Contained
 
-The first follow-up landed. Installed runtime generation export now works when
-the root filesystem is represented by Conary-owned CAS objects, and it fails
-closed before artifact publication when the runtime root is partial or
-metadata-only.
+The first follow-up landed, and the historical 2026-05-09 gate proved the
+installed-runtime export path. The 2026-05-16 checkpoint found a current
+blocker in `TGE04`: the exported installed-runtime image boots the kernel and
+then panics with `No working init found`. The fail-closed partial-runtime
+cases remain green, but the positive installed-runtime boot proof must be
+restored before generation export is treated as preview-ready again.
 
-Remaining work is maintenance, not first implementation:
+Remaining work:
 
 - keep the `minimal-boot-v3` QEMU source image generation-builder-ready so
   Groups N and O do not rely on Conary-installed helper tools on a partial
   live root
+- triage and fix the `TGE04` exported installed-runtime userspace/init
+  projection failure
 - keep `TGE01`, `TGE03`, and `TGE04` in the active Phase 3 rotation
 - preserve usr-merge and package symlink handling for runtime generations
 - keep missing-CAS and checksum/size mismatch failures before artifact

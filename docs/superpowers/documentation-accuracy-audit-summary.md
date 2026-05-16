@@ -6,11 +6,12 @@ This refresh updates the documentation baseline after the limited public
 release readiness pass and the completed composefs atomic switching
 modernization, then refreshes the Adopt Without Regret docs/integration proof
 slice, records the Native Package Manager Parity Matrix design, and catches the
-active Slice A/Slice B/Slice C/Slice D parity plans, the Slice B preview-doc refresh,
-and the focused Slice C daily-driver/provider-metadata proof.
+active Slice A/Slice B/Slice C/Slice D parity plans, the Slice B preview-doc
+refresh, the focused Slice C daily-driver/provider-metadata proof, the Slice D
+three-distro parity evidence, and the 2026-05-16 limited-preview checkpoint.
 
 Audited every tracked documentation-like file returned by
-`bash scripts/docs-audit-inventory.sh`: 79 tracked files spanning root docs,
+`bash scripts/docs-audit-inventory.sh`: 81 tracked files spanning root docs,
 assistant shims, GitHub templates, canonical docs under `docs/`,
 deploy/operator docs, `deploy/remi.toml.example`, app-local READMEs, active
 planning/design records, historical/archive docs, release security waivers, and
@@ -51,6 +52,10 @@ The repo moved materially after the last audit:
   authority, explicit takeover, security-advisory support refusal, and the
   focused Tier 1 daily-driver command parity, declared-provider matching work,
   and the three-distro conary-test matrix plan
+- 2026-05-16 limited-preview checkpoint evidence, including refreshed
+  adoption/unadoption proof, refreshed Group N QEMU proof, the Group O `TGE04`
+  installed-runtime export blocker, and remaining Dependabot `tough` advisory
+  triage
 
 ## Major Corrections
 
@@ -85,8 +90,12 @@ The repo moved materially after the last audit:
 - Updated integration docs and `apps/conary-test/README.md` to include the
   Phase 1 `T21a`-`T21c` non-destructive unadoption proof, focused live-root
   update/security-refusal proof, Phase 3 Group O generation-export QEMU suite,
-  temporary local QEMU release gate, and the TGE04 installed-runtime qcow2 boot
-  proof.
+  temporary local QEMU release gate, refreshed Group N proof, the current
+  TGE04 installed-runtime qcow2 boot blocker, and the Phase 4 native
+  package-manager parity manifest.
+- Added the 2026-05-16 limited-preview release checkpoint and refreshed
+  README/ROADMAP/bootstrap/generation-export docs so a package-manager-only
+  preview ask does not over-promise the blocked installed-runtime export gate.
 - Refreshed assistant-facing docs to route broad doc work through the inventory
   and ledger checker, and added the post-generation export roadmap to the map.
 - Reframed completed dated plans/specs as historical implementation records
@@ -114,6 +123,11 @@ The repo moved materially after the last audit:
 - `cargo test -p conary security_update -- --nocapture`
 - `cargo run -p conary -- update --help`
 - `cargo run -p conary-test -- list`
+- `cargo run -p conary-test -- run --suite phase1-advanced --distro fedora44 --phase 1`
+- `cargo run -p conary-test -- run --suite phase1-advanced --distro ubuntu-26.04 --phase 1`
+- `cargo run -p conary-test -- run --suite phase1-advanced --distro arch --phase 1`
+- `cargo run -p conary-test -- run --suite phase3-group-n-qemu --distro fedora44 --phase 3`
+- `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`
 - `cargo fmt --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `git diff --check`
@@ -139,12 +153,18 @@ The final release-readiness verification gate is tracked by
 - Active-generation handoff back to native package-manager authority remains a
   follow-up; first-slice unadoption intentionally fails closed when a Conary
   generation is selected.
+- Group O `TGE04` failed in the 2026-05-16 checkpoint: the exported
+  installed-runtime qcow2 booted the kernel and then panicked with
+  `No working init found`.
+- Two open high Dependabot alerts for `tough` remain through `sigstore
+  v0.13.0`; `cargo update -p tough --precise 0.22.0 --dry-run` is blocked by
+  the `sigstore` `^0.21` constraint.
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 80
+- Total tracked doc-like files audited: 81
 - `verified-no-change`: 19
-- `corrected`: 34
+- `corrected`: 35
 - `reframed-as-historical`: 5
 - `archived`: 8
 - `retained-historical`: 14

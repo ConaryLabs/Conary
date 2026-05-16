@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-14
-revision: 18
-summary: Record composefs atomic runtime activation validation and refreshed QEMU fixture evidence
+last_updated: 2026-05-16
+revision: 19
+summary: Record limited-preview checkpoint validation and Group O generation-export blocker
 ---
 
 # Integration Testing
@@ -52,7 +52,7 @@ self-contained installed-runtime export slice. The historical Fedora 43 run on
 
 - `TGE01`: metadata-only installed generations fail closed before artifact publication
 - `TGE03`: CAS-backed installed generations fail closed when an included CAS object is missing
-- `TGE04`: full CAS-backed installed runtime generation exports to qcow2 and boots under UEFI
+- `TGE04`: intended proof that a full CAS-backed installed runtime generation exports to qcow2 and boots under UEFI
 - `TGE02`: bootstrap-run generation artifact exports to qcow2 and boots under UEFI
 
 Keep this suite in the Phase 3 rotation for regressions in generation artifact
@@ -123,7 +123,7 @@ Current composefs modernization evidence from 2026-05-13:
 - `cargo run -p conary-test -- run --suite phase3-composefs-modernization --distro fedora44 --phase 3`:
   passed `TCM01` and `TCM02`, 2 passed / 0 failed / 0 skipped
 
-Current Group N QEMU evidence from 2026-05-14:
+Current Group N QEMU evidence from 2026-05-16:
 
 - `minimal-boot-v3`: active source fixture with the generation-builder
   toolchain baked in, so Groups N and O no longer install helper tools through
@@ -131,21 +131,39 @@ Current Group N QEMU evidence from 2026-05-14:
 - `cargo run -p conary-test -- run --suite phase3-group-n-qemu --distro fedora44 --phase 3`:
   passed 5 / failed 0 / skipped 0
 - Passed cases:
-  - `T150` `kernel_file_deployment`: 809502ms
-  - `T151` `bls_entry_created`: 816190ms
-  - `T153` `kernel_generation_rollback`: 1020480ms
-  - `T154` `bootloader_config_deployed`: 1128817ms
-  - `T156` `boot_minimal_image`: 20362ms
+  - `T150` `kernel_file_deployment`: 1152689ms
+  - `T151` `bls_entry_created`: 1097221ms
+  - `T153` `kernel_generation_rollback`: 1175789ms
+  - `T154` `bootloader_config_deployed`: 1537851ms
+  - `T156` `boot_minimal_image`: 23532ms
 - `T154` validates `grub2` installation after full CAS-backed live-root
   adoption, including versioned critical runtime dependency satisfaction
   through `conary-live-root` identity provides for `glibc`/`libc6`
+- The manifest now builds and switches a generation explicitly after
+  no-generation live-root installs, matching the current package-manager
+  contract instead of assuming `conary install` publishes `/conary/current`.
+
+Current Group O QEMU export evidence from 2026-05-16:
+
+- `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`:
+  passed 3 / failed 1 / skipped 0 / cancelled 0
+- Passed cases:
+  - `TGE01` `installed_generation_export_fails_closed_without_self_contained_root`: 29348ms
+  - `TGE03` `installed_generation_build_rejects_missing_runtime_cas_object`: 594719ms
+  - `TGE02` `bootstrap_run_generation_export_boots`: 2868699ms
+- Failed case:
+  - `TGE04` `installed_runtime_generation_export_boots`: 2354782ms,
+    `assertion failed: expected exit code 0, got 1`
+- Root evidence: the first TGE04 step exported
+  `/tmp/conary-generation-export/installed-runtime-generation.qcow2`, but the
+  exported image booted to a kernel panic with `No working init found` before
+  SSH or the `installed-runtime-generation-export-booted` marker became
+  available.
 - Results file: `apps/conary/tests/integration/remi/results/fedora44-phase3.json`
 
-Current Group O QEMU export evidence remains the 2026-05-09 local run under
-`target/local-validation/qemu-blocker-fix-20260509-201100/group-o-generation-export.log`.
-That run passed `TGE01`, `TGE02`, `TGE03`, and `TGE04` with 0 failures and 0
-skips. Keep Group O in the release-candidate rotation because it is still the
-full boot/export proof for installed runtime and bootstrap generation artifacts.
+Keep Group O in the release-candidate rotation because it is still the full
+boot/export proof for installed runtime and bootstrap generation artifacts.
+The installed-runtime export path is not green until `TGE04` passes again.
 
 Fast workspace verification from 2026-05-14:
 

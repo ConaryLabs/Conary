@@ -577,7 +577,7 @@ depends_on = ["T04"]
 run = "${CONARY_BIN} system generation list"
 
 [test.step.assert]
-stdout_contains = "No generations"
+stdout_contains_any = ["No generations found", "No valid generations found"]
 
 # --------------------------------------------------------------------------
 # T34: Takeover Dry Run
@@ -591,7 +591,7 @@ timeout = 60
 depends_on = ["T04"]
 
 [[test.step]]
-conary = "system takeover --dry-run --skip-conversion"
+conary = "system takeover --dry-run"
 
 [test.step.assert]
 # Non-zero is acceptable (may require root privileges)
@@ -646,7 +646,7 @@ timeout = 60
 depends_on = ["T04"]
 
 [[test.step]]
-conary = "system takeover --dry-run --skip-conversion"
+conary = "system takeover --dry-run"
 
 [test.step.assert]
 # Non-zero is acceptable (requires root), just verify no panic.
