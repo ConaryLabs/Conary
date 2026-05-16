@@ -10,7 +10,8 @@
 use anyhow::{Context, Result, anyhow};
 use conary_core::components::ComponentType;
 use conary_core::db::models::{
-    Component, DependencyEntry, FileEntry, ProvideEntry, ScriptletEntry, Trove,
+    Component, ConfigFile, ConfigSource, DependencyEntry, FileEntry, InstallSource, ProvideEntry,
+    ScriptletEntry, Trove,
 };
 use conary_core::dependencies::DependencyClass;
 use conary_core::transaction::TransactionEngine;
@@ -120,11 +121,21 @@ pub(super) fn install_inner_with_stored_files(
         trove.installed_by_changeset_id = Some(changeset_id);
         trove.version_scheme = Some(scheme_to_string(ctx.semantics.version_scheme));
 
+        if let Some(provenance) = ctx.repository_provenance.as_ref() {
+            trove.install_source = InstallSource::Repository;
+            trove.installed_from_repository_id = Some(provenance.repository_id);
+            trove.source_distro = provenance.source_distro.clone();
+            if let Some(version_scheme) = provenance.version_scheme.as_ref() {
+                trove.version_scheme = Some(version_scheme.clone());
+            }
+        }
+
         if let Some(reason) = selection_reason {
             trove.selection_reason = Some(reason.to_string());
         }
 
-        if trove.install_source == conary_core::db::models::InstallSource::Repository {
+        if ctx.repository_provenance.is_none() && trove.install_source == InstallSource::Repository
+        {
             let repo_id: Option<i64> = tx
                 .query_row(
                     "SELECT r.id FROM repository_packages rp
@@ -180,6 +191,8 @@ pub(super) fn install_inner_with_stored_files(
             }
         }
 
+        let mut installed_file_metadata: HashMap<String, (i64, String)> =
+            HashMap::with_capacity(stored_files.len());
         for file in stored_files {
             let path = &file.path;
             let hash = &file.hash;
@@ -197,7 +210,9 @@ pub(super) fn install_inner_with_stored_files(
                 FileEntry::new(path.clone(), hash.clone(), file.size, file.mode, trove_id);
             file_entry.component_id = component_id;
             file_entry.symlink_target = file.symlink_target.clone();
-            insert_file_entry_claiming_live_root_overlap(tx, &mut file_entry, pkg.name())?;
+            let file_id =
+                insert_file_entry_claiming_live_root_overlap(tx, &mut file_entry, pkg.name())?;
+            installed_file_metadata.insert(path.clone(), (file_id, hash.clone()));
 
             let action = if is_upgrade { "modify" } else { "add" };
             tx.execute(
@@ -205,6 +220,8 @@ pub(super) fn install_inner_with_stored_files(
                 [&changeset_id.to_string(), path, hash, action],
             )?;
         }
+
+        persist_declared_config_files(tx, trove_id, pkg, ctx, &installed_file_metadata)?;
 
         for dep in pkg.dependencies() {
             let mut dep_entry = DependencyEntry::new(
@@ -279,6 +296,47 @@ pub(super) fn install_inner_with_stored_files(
     Ok(InnerInstallResult { trove_id })
 }
 
+fn persist_declared_config_files(
+    tx: &Transaction<'_>,
+    trove_id: i64,
+    pkg: &dyn conary_core::packages::PackageFormat,
+    ctx: &TransactionContext<'_>,
+    installed_file_metadata: &HashMap<String, (i64, String)>,
+) -> Result<()> {
+    let source = config_source_for_context(ctx);
+    for config_info in pkg.config_files() {
+        let Some((file_id, hash)) = installed_file_metadata.get(&config_info.path) else {
+            warn!(
+                "Skipping declared config file {} for {} because it was not installed",
+                config_info.path,
+                pkg.name()
+            );
+            continue;
+        };
+        let mut config = if config_info.noreplace {
+            ConfigFile::new_noreplace(config_info.path.clone(), trove_id, hash.clone())
+        } else {
+            ConfigFile::new(config_info.path.clone(), trove_id, hash.clone())
+        };
+        config.file_id = Some(*file_id);
+        config.source = source;
+        config.upsert(tx)?;
+    }
+
+    Ok(())
+}
+
+fn config_source_for_context(ctx: &TransactionContext<'_>) -> ConfigSource {
+    match ctx.semantics.source {
+        super::PreparedSourceKind::Legacy { format } => match format {
+            crate::commands::PackageFormatType::Rpm => ConfigSource::Rpm,
+            crate::commands::PackageFormatType::Deb => ConfigSource::Deb,
+            crate::commands::PackageFormatType::Arch => ConfigSource::Arch,
+        },
+        super::PreparedSourceKind::Ccs => ConfigSource::Auto,
+    }
+}
+
 pub(super) fn preflight_live_root_file_ownership(
     conn: &rusqlite::Connection,
     paths: impl IntoIterator<Item = impl AsRef<str>>,
@@ -347,12 +405,16 @@ pub(super) fn insert_file_entry_claiming_live_root_overlap(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::PackageFormatType;
     use crate::commands::install::{
-        ExtractionResult, InstallSemantics, PackageExecutionPath, TransactionContext,
+        ExtractionResult, InstallSemantics, PackageExecutionPath, RepositoryInstallProvenance,
+        TransactionContext,
     };
-    use conary_core::db::models::{Changeset, FileEntry, Trove, TroveType};
+    use conary_core::db::models::{
+        Changeset, ConfigFile, ConfigSource, FileEntry, Repository, Trove, TroveType,
+    };
     use conary_core::packages::traits::{
-        Dependency, ExtractedFile, PackageFile, PackageFormat, Scriptlet,
+        ConfigFileInfo, Dependency, ExtractedFile, PackageFile, PackageFormat, Scriptlet,
     };
     use conary_core::transaction::{TransactionConfig, TransactionEngine};
     use std::collections::HashMap;
@@ -364,6 +426,7 @@ mod tests {
         extracted_files: Vec<ExtractedFile>,
         dependencies: Vec<Dependency>,
         scriptlets: Vec<Scriptlet>,
+        config_files: Vec<ConfigFileInfo>,
     }
 
     impl FakePackage {
@@ -389,6 +452,7 @@ mod tests {
                 }],
                 dependencies: Vec::new(),
                 scriptlets: Vec::new(),
+                config_files: Vec::new(),
             }
         }
     }
@@ -428,6 +492,10 @@ mod tests {
 
         fn scriptlets(&self) -> &[Scriptlet] {
             &self.scriptlets
+        }
+
+        fn config_files(&self) -> &[ConfigFileInfo] {
+            &self.config_files
         }
 
         fn to_trove(&self) -> Trove {
@@ -485,6 +553,7 @@ mod tests {
             ccs_capabilities: None,
             execution_path: PackageExecutionPath::MutableLiveRoot,
             defer_generation: false,
+            repository_provenance: None,
         };
         let tx_config = TransactionConfig::from_paths(root.clone(), db_path.clone());
         let mut engine = TransactionEngine::new(tx_config).unwrap();
@@ -531,6 +600,7 @@ mod tests {
             }],
             dependencies: Vec::new(),
             scriptlets: Vec::new(),
+            config_files: Vec::new(),
         };
         let extraction = ExtractionResult {
             extracted_files: package.extracted_files.clone(),
@@ -552,5 +622,158 @@ mod tests {
         assert_eq!(stored[0].path, "/usr/bin/fixture-link");
         assert_eq!(stored[0].symlink_target.as_deref(), Some("fixture"));
         assert!(!stored[0].hash.is_empty());
+    }
+
+    #[test]
+    fn install_inner_persists_declared_config_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let db_path = temp.path().join("conary.db");
+        std::fs::create_dir_all(&root).unwrap();
+        conary_core::db::init(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+
+        let mut package = FakePackage::with_file(
+            "phase4-runtime-fixture",
+            "/etc/fixture/app.conf",
+            b"setting=1\n",
+        );
+        package.config_files = vec![ConfigFileInfo {
+            path: "/etc/fixture/app.conf".to_string(),
+            noreplace: true,
+            ghost: false,
+        }];
+        let extraction = ExtractionResult {
+            extracted_files: package.extracted_files.clone(),
+            classified: HashMap::from([(
+                conary_core::components::ComponentType::Config,
+                vec!["/etc/fixture/app.conf".to_string()],
+            )]),
+            component_names_by_path: None,
+            installed_component_names: None,
+            ccs_pre_remove_script: None,
+            installed_component_types: vec![conary_core::components::ComponentType::Config],
+            skipped_components: Vec::new(),
+            language_provides: Vec::new(),
+        };
+        let db_path_string = db_path.to_string_lossy().into_owned();
+        let root_string = root.to_string_lossy().into_owned();
+        let ctx = TransactionContext {
+            db_path: &db_path_string,
+            root: &root_string,
+            semantics: InstallSemantics::legacy(PackageFormatType::Rpm),
+            selection_reason: None,
+            old_trove_to_upgrade: None,
+            ccs_manifest_provides: None,
+            ccs_capabilities: None,
+            execution_path: PackageExecutionPath::MutableLiveRoot,
+            defer_generation: false,
+            repository_provenance: None,
+        };
+        let tx_config = TransactionConfig::from_paths(root.clone(), db_path.clone());
+        let mut engine = TransactionEngine::new(tx_config).unwrap();
+        let tx = conn.unchecked_transaction().unwrap();
+        let changeset_id = Changeset::new("Install phase4-runtime-fixture-1.0.0".to_string())
+            .insert(&tx)
+            .unwrap();
+
+        install_inner(
+            &tx,
+            &mut engine,
+            changeset_id,
+            &package,
+            &extraction,
+            &ctx,
+            &InstallProgress::single("Installing"),
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        let config = ConfigFile::find_by_path(&conn, "/etc/fixture/app.conf")
+            .unwrap()
+            .expect("declared config file should be tracked");
+        let file = FileEntry::find_by_path(&conn, "/etc/fixture/app.conf")
+            .unwrap()
+            .expect("config file entry should be tracked");
+        assert_eq!(config.file_id, file.id);
+        assert_eq!(config.original_hash, file.sha256_hash);
+        assert_eq!(
+            config.current_hash.as_deref(),
+            Some(file.sha256_hash.as_str())
+        );
+        assert!(config.noreplace);
+        assert_eq!(config.source, ConfigSource::Rpm);
+    }
+
+    #[test]
+    fn install_inner_applies_repository_provenance_from_resolution() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let db_path = temp.path().join("conary.db");
+        std::fs::create_dir_all(&root).unwrap();
+        conary_core::db::init(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let mut repo = Repository::new(
+            "fedora-remi".to_string(),
+            "https://example.invalid/fedora".to_string(),
+        );
+        let repo_id = repo.insert(&conn).unwrap();
+
+        let package = FakePackage::with_file("tree", "/usr/bin/tree", b"tree\n");
+        let extraction = ExtractionResult {
+            extracted_files: package.extracted_files.clone(),
+            classified: HashMap::from([(
+                conary_core::components::ComponentType::Runtime,
+                vec!["/usr/bin/tree".to_string()],
+            )]),
+            component_names_by_path: None,
+            installed_component_names: None,
+            ccs_pre_remove_script: None,
+            installed_component_types: vec![conary_core::components::ComponentType::Runtime],
+            skipped_components: Vec::new(),
+            language_provides: Vec::new(),
+        };
+        let db_path_string = db_path.to_string_lossy().into_owned();
+        let root_string = root.to_string_lossy().into_owned();
+        let ctx = TransactionContext {
+            db_path: &db_path_string,
+            root: &root_string,
+            semantics: InstallSemantics::legacy(PackageFormatType::Rpm),
+            selection_reason: None,
+            old_trove_to_upgrade: None,
+            ccs_manifest_provides: None,
+            ccs_capabilities: None,
+            execution_path: PackageExecutionPath::MutableLiveRoot,
+            defer_generation: false,
+            repository_provenance: Some(RepositoryInstallProvenance {
+                repository_id: repo_id,
+                source_distro: Some("fedora".to_string()),
+                version_scheme: Some("rpm".to_string()),
+            }),
+        };
+        let tx_config = TransactionConfig::from_paths(root.clone(), db_path.clone());
+        let mut engine = TransactionEngine::new(tx_config).unwrap();
+        let tx = conn.unchecked_transaction().unwrap();
+        let changeset_id = Changeset::new("Install tree-1.0.0".to_string())
+            .insert(&tx)
+            .unwrap();
+
+        install_inner(
+            &tx,
+            &mut engine,
+            changeset_id,
+            &package,
+            &extraction,
+            &ctx,
+            &InstallProgress::single("Installing"),
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        let trove = Trove::find_one_by_name(&conn, "tree").unwrap().unwrap();
+        assert_eq!(trove.install_source, InstallSource::Repository);
+        assert_eq!(trove.installed_from_repository_id, Some(repo_id));
+        assert_eq!(trove.source_distro.as_deref(), Some("fedora"));
+        assert_eq!(trove.version_scheme.as_deref(), Some("rpm"));
     }
 }

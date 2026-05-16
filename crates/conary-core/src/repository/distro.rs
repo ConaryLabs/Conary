@@ -60,7 +60,10 @@ pub fn flavor_from_distro_name(name: &str) -> Option<RepositoryDependencyFlavor>
 /// Infer the dependency flavor from repository metadata shape.
 #[must_use]
 pub fn flavor_from_repository(repo: &Repository) -> Option<RepositoryDependencyFlavor> {
-    flavor_from_repository_name_url(&repo.name, &repo.url)
+    repo.default_strategy_distro
+        .as_deref()
+        .and_then(flavor_from_distro_name)
+        .or_else(|| flavor_from_repository_name_url(&repo.name, &repo.url))
 }
 
 /// Infer the dependency flavor from repository name and URL detection.
@@ -231,6 +234,21 @@ mod tests {
         assert_eq!(
             version_scheme_from_repository(&ubuntu_repo),
             Some(VersionScheme::Debian)
+        );
+    }
+
+    #[test]
+    fn repository_inference_prefers_explicit_strategy_distro() {
+        let mut repo = Repository::new("custom".into(), "https://example.com/repo".into());
+        repo.default_strategy_distro = Some("arch".to_string());
+
+        assert_eq!(
+            flavor_from_repository(&repo),
+            Some(RepositoryDependencyFlavor::Arch)
+        );
+        assert_eq!(
+            version_scheme_from_repository(&repo),
+            Some(VersionScheme::Arch)
         );
     }
 

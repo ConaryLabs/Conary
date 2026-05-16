@@ -22,14 +22,18 @@ use super::scriptlets::{
     build_execution_mode, get_old_package_scriptlets, run_old_post_remove, run_old_pre_remove,
     run_post_install, run_pre_install, to_scriptlet_format,
 };
-use super::{InstallSemantics, PackageExecutionPath, PackageFormatType, detect_package_format};
+use super::{
+    InstallSemantics, PackageExecutionPath, PackageFormatType, RepositoryInstallProvenance,
+    detect_package_format,
+};
 use anyhow::{Context, Result};
 use conary_core::components::{ComponentClassifier, ComponentType, should_run_scriptlets};
 use conary_core::db::models::{
-    Changeset, ChangesetStatus, Component, DependencyEntry, ProvideEntry, ScriptletEntry, Trove,
+    Changeset, ChangesetStatus, Component, ConfigFile, ConfigSource, DependencyEntry, ProvideEntry,
+    ScriptletEntry, Trove,
 };
 use conary_core::dependencies::{DependencyClass, LanguageDep, LanguageDepDetector};
-use conary_core::packages::traits::{ExtractedFile, Scriptlet};
+use conary_core::packages::traits::{ConfigFileInfo, ExtractedFile, Scriptlet};
 use conary_core::scriptlet::SandboxMode;
 use conary_core::transaction::{FileToRemove, TransactionConfig, TransactionEngine};
 use rusqlite::{Connection, Transaction};
@@ -77,6 +81,8 @@ pub struct PreparedPackage {
     pub dependencies: Vec<conary_core::packages::traits::Dependency>,
     /// Scriptlets from the package
     pub scriptlets: Vec<Scriptlet>,
+    /// Configuration files declared by the native package metadata
+    pub config_files: Vec<ConfigFileInfo>,
     /// Why this package is being installed
     pub install_reason: String,
     /// Whether this is an upgrade of an existing package
@@ -94,6 +100,8 @@ pub struct PreparedPackage {
     /// Cached scriptlets from old package (for upgrades), queried before DB commit
     /// to avoid cascade-delete losing them
     pub cached_old_scriptlets: Vec<ScriptletEntry>,
+    /// Repository metadata for packages resolved from synced repository rows.
+    pub repository_provenance: Option<RepositoryInstallProvenance>,
 }
 
 impl PreparedPackage {
@@ -112,6 +120,14 @@ impl PreparedPackage {
         // Mark as dependency if install reason contains "Required by"
         if self.install_reason.starts_with("Required by") {
             trove.install_reason = conary_core::db::models::InstallReason::Dependency;
+        }
+        if let Some(provenance) = self.repository_provenance.as_ref() {
+            trove.install_source = conary_core::db::models::InstallSource::Repository;
+            trove.installed_from_repository_id = Some(provenance.repository_id);
+            trove.source_distro = provenance.source_distro.clone();
+            if let Some(version_scheme) = provenance.version_scheme.as_ref() {
+                trove.version_scheme = Some(version_scheme.clone());
+            }
         }
 
         trove
@@ -574,6 +590,7 @@ impl<'a> BatchInstaller<'a> {
                 }
             }
 
+            let mut installed_file_metadata: HashMap<String, (i64, String)> = HashMap::new();
             for file in &stored_files_by_pkg[pkg_idx] {
                 let hash = &file.hash;
                 if hash.len() < 3 {
@@ -604,11 +621,12 @@ impl<'a> BatchInstaller<'a> {
                 );
                 file_entry.component_id = component_id;
                 file_entry.symlink_target = file.symlink_target.clone();
-                inner::insert_file_entry_claiming_live_root_overlap(
+                let file_id = inner::insert_file_entry_claiming_live_root_overlap(
                     tx,
                     &mut file_entry,
                     &pkg.name,
                 )?;
+                installed_file_metadata.insert(file.path.clone(), (file_id, hash.clone()));
 
                 let action = if pkg.is_upgrade { "modify" } else { "add" };
                 tx.execute(
@@ -616,6 +634,8 @@ impl<'a> BatchInstaller<'a> {
                     [&changeset_id.to_string(), &file.path, hash, action],
                 )?;
             }
+
+            Self::insert_declared_config_rows(tx, pkg, trove_id, &installed_file_metadata)?;
 
             for dep in &pkg.dependencies {
                 let mut dep_entry = DependencyEntry::new(
@@ -677,6 +697,39 @@ impl<'a> BatchInstaller<'a> {
 
         changeset.update_status(tx, ChangesetStatus::Applied)?;
         Ok((changeset_id, trove_ids))
+    }
+
+    fn insert_declared_config_rows(
+        tx: &Transaction<'_>,
+        pkg: &PreparedPackage,
+        trove_id: i64,
+        installed_file_metadata: &HashMap<String, (i64, String)>,
+    ) -> Result<()> {
+        let source = match pkg.format {
+            PackageFormatType::Rpm => ConfigSource::Rpm,
+            PackageFormatType::Deb => ConfigSource::Deb,
+            PackageFormatType::Arch => ConfigSource::Arch,
+        };
+
+        for config_info in &pkg.config_files {
+            let Some((file_id, hash)) = installed_file_metadata.get(&config_info.path) else {
+                warn!(
+                    "Skipping declared config file {} for {} because it was not installed",
+                    config_info.path, pkg.name
+                );
+                continue;
+            };
+            let mut config = if config_info.noreplace {
+                ConfigFile::new_noreplace(config_info.path.clone(), trove_id, hash.clone())
+            } else {
+                ConfigFile::new(config_info.path.clone(), trove_id, hash.clone())
+            };
+            config.file_id = Some(*file_id);
+            config.source = source;
+            config.upsert(tx)?;
+        }
+
+        Ok(())
     }
 
     /// Plan the batch installation, detecting cross-package conflicts
@@ -890,6 +943,7 @@ pub fn prepare_package_for_batch(
         extracted_files,
         dependencies: pkg.dependencies().to_vec(),
         scriptlets: pkg.scriptlets().to_vec(),
+        config_files: pkg.config_files().to_vec(),
         install_reason: install_reason.to_string(),
         is_upgrade,
         old_trove,
@@ -898,6 +952,7 @@ pub fn prepare_package_for_batch(
         classified_files,
         language_provides,
         cached_old_scriptlets,
+        repository_provenance: None,
     })
 }
 
@@ -981,6 +1036,7 @@ pub fn prepare_from_parsed(
         extracted_files,
         dependencies: pkg.dependencies().to_vec(),
         scriptlets: pkg.scriptlets().to_vec(),
+        config_files: pkg.config_files().to_vec(),
         install_reason: install_reason.to_string(),
         is_upgrade,
         old_trove,
@@ -989,6 +1045,7 @@ pub fn prepare_from_parsed(
         classified_files,
         language_provides,
         cached_old_scriptlets,
+        repository_provenance: None,
     })
 }
 
@@ -1016,6 +1073,7 @@ mod tests {
             }],
             dependencies: Vec::new(),
             scriptlets: Vec::new(),
+            config_files: Vec::new(),
             install_reason: "Test".to_string(),
             is_upgrade: false,
             old_trove: None,
@@ -1024,6 +1082,7 @@ mod tests {
             classified_files: HashMap::new(),
             language_provides: Vec::new(),
             cached_old_scriptlets: Vec::new(),
+            repository_provenance: None,
         };
 
         let pkg2 = PreparedPackage {
@@ -1042,6 +1101,7 @@ mod tests {
             }],
             dependencies: Vec::new(),
             scriptlets: Vec::new(),
+            config_files: Vec::new(),
             install_reason: "Test".to_string(),
             is_upgrade: false,
             old_trove: None,
@@ -1050,6 +1110,7 @@ mod tests {
             classified_files: HashMap::new(),
             language_provides: Vec::new(),
             cached_old_scriptlets: Vec::new(),
+            repository_provenance: None,
         };
 
         let installer = BatchInstaller::new("/tmp/test.db", "/", SandboxMode::None, true);
@@ -1083,6 +1144,7 @@ mod tests {
             extracted_files: Vec::new(),
             dependencies: Vec::new(),
             scriptlets: Vec::new(),
+            config_files: Vec::new(),
             install_reason: "Required by nginx".to_string(),
             is_upgrade: false,
             old_trove: None,
@@ -1091,6 +1153,7 @@ mod tests {
             classified_files: HashMap::new(),
             language_provides: Vec::new(),
             cached_old_scriptlets: Vec::new(),
+            repository_provenance: None,
         };
 
         let trove = pkg.to_trove(42);
@@ -1103,6 +1166,44 @@ mod tests {
             trove.install_reason,
             conary_core::db::models::InstallReason::Dependency
         );
+    }
+
+    #[test]
+    fn prepared_package_to_trove_preserves_repository_provenance() {
+        let pkg = PreparedPackage {
+            name: "dep-pkg".to_string(),
+            version: "2.0.0-1".to_string(),
+            format: PackageFormatType::Arch,
+            architecture: Some("x86_64".to_string()),
+            description: Some("Repo dependency".to_string()),
+            extracted_files: Vec::new(),
+            dependencies: Vec::new(),
+            scriptlets: Vec::new(),
+            config_files: Vec::new(),
+            install_reason: "Required by parent".to_string(),
+            is_upgrade: false,
+            old_trove: None,
+            old_files: Vec::new(),
+            installed_components: Vec::new(),
+            classified_files: HashMap::new(),
+            language_provides: Vec::new(),
+            cached_old_scriptlets: Vec::new(),
+            repository_provenance: Some(RepositoryInstallProvenance {
+                repository_id: 9,
+                source_distro: Some("arch".to_string()),
+                version_scheme: Some("arch".to_string()),
+            }),
+        };
+
+        let trove = pkg.to_trove(42);
+
+        assert_eq!(
+            trove.install_source,
+            conary_core::db::models::InstallSource::Repository
+        );
+        assert_eq!(trove.installed_from_repository_id, Some(9));
+        assert_eq!(trove.source_distro.as_deref(), Some("arch"));
+        assert_eq!(trove.version_scheme.as_deref(), Some("arch"));
     }
 
     #[test]
@@ -1189,6 +1290,7 @@ mod tests {
             }],
             dependencies: Vec::new(),
             scriptlets,
+            config_files: Vec::new(),
             install_reason: "Test".to_string(),
             is_upgrade: false,
             old_trove: None,
@@ -1197,6 +1299,7 @@ mod tests {
             classified_files: HashMap::from([(ComponentType::Runtime, vec![path.to_string()])]),
             language_provides: Vec::new(),
             cached_old_scriptlets: Vec::new(),
+            repository_provenance: None,
         }
     }
 
@@ -1247,6 +1350,50 @@ mod tests {
         assert_eq!(changesets[0].status, ChangesetStatus::Applied);
         let journal_dir = temp.path().join("live-root-journals");
         assert!(!journal_dir.exists() || std::fs::read_dir(&journal_dir).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn no_generation_batch_install_records_declared_config_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let db_path = temp.path().join("conary.db");
+        std::fs::create_dir_all(&root).unwrap();
+        conary_core::db::init(&db_path).unwrap();
+
+        let db_path_string = db_path.to_string_lossy().into_owned();
+        let root_string = root.to_string_lossy().into_owned();
+        let mut package = prepared_test_package(
+            "batch-config-fixture",
+            "/etc/batch-config-fixture.conf",
+            b"managed=true\n",
+            vec![],
+        );
+        package.config_files = vec![ConfigFileInfo {
+            path: "/etc/batch-config-fixture.conf".to_string(),
+            noreplace: true,
+            ghost: false,
+        }];
+        let installer =
+            BatchInstaller::new(&db_path_string, &root_string, SandboxMode::Always, true)
+                .with_preflighted_execution_path(PackageExecutionPath::MutableLiveRoot);
+
+        installer.install_batch(vec![package]).unwrap();
+
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let file = FileEntry::find_by_path(&conn, "/etc/batch-config-fixture.conf")
+            .unwrap()
+            .expect("batch config file should be recorded in DB");
+        let config = ConfigFile::find_by_path(&conn, "/etc/batch-config-fixture.conf")
+            .unwrap()
+            .expect("declared batch config file should be tracked");
+        assert_eq!(config.file_id, file.id);
+        assert_eq!(config.original_hash, file.sha256_hash);
+        assert_eq!(
+            config.current_hash.as_deref(),
+            Some(file.sha256_hash.as_str())
+        );
+        assert_eq!(config.source, ConfigSource::Rpm);
+        assert!(config.noreplace);
     }
 
     #[test]

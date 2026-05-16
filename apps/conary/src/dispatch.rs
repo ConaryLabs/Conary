@@ -101,6 +101,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                         dep_mode,
                         yes,
                         from_distro: from,
+                        repository_provenance: None,
                     },
                 )
                 .await

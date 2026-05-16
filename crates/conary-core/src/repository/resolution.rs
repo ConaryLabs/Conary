@@ -63,6 +63,7 @@ use crate::repository::dependency_model::RepositoryDependencyFlavor;
 use crate::repository::remi::RemiClient;
 use crate::repository::resolution_policy::ResolutionPolicy;
 use crate::repository::selector::{PackageSelector, PackageWithRepo, SelectionOptions};
+use crate::repository::versioning::{VersionScheme, resolve_package_version_scheme};
 use crate::repository::{DownloadOptions, download_package_verified};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -131,11 +132,17 @@ pub enum PackageSource {
         path: PathBuf,
         /// Temp directory that must stay alive until installation completes
         _temp_dir: Option<TempDir>,
+        /// Repository metadata for the selected package, when resolution came
+        /// from synced repository metadata.
+        repository_provenance: Option<RepositorySourceMetadata>,
     },
     /// CCS package from Remi
     Ccs {
         path: PathBuf,
         _temp_dir: Option<TempDir>,
+        /// Repository metadata for the selected package, when a synced
+        /// repository routed the install through Remi/CCS conversion.
+        repository_provenance: Option<RepositorySourceMetadata>,
     },
     /// Delta update (base version, delta path)
     Delta {
@@ -145,6 +152,13 @@ pub enum PackageSource {
     },
     /// Package already in local CAS
     LocalCas { hash: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepositorySourceMetadata {
+    pub repository_id: i64,
+    pub source_distro: Option<String>,
+    pub version_scheme: Option<String>,
 }
 
 impl PackageSource {
@@ -435,15 +449,11 @@ impl<'a> PackageResolver<'a> {
                 distro,
                 source_name,
             } => {
-                let pkg_name = source_name
-                    .as_deref()
-                    .unwrap_or(&pkg_with_repo.package.name);
                 self.try_remi(
                     endpoint,
                     distro,
-                    pkg_name,
-                    effective_remi_version(pkg_with_repo, options),
-                    pkg_with_repo.package.architecture.as_deref(),
+                    source_name.as_deref(),
+                    pkg_with_repo,
                     options,
                 )
                 .await
@@ -559,6 +569,7 @@ impl<'a> PackageResolver<'a> {
         Ok(PackageSource::Binary {
             path,
             _temp_dir: Some(temp_dir),
+            repository_provenance: Some(repository_source_metadata(pkg_with_repo)),
         })
     }
 
@@ -567,12 +578,14 @@ impl<'a> PackageResolver<'a> {
         &self,
         endpoint: &str,
         distro: &str,
-        name: &str,
-        version: Option<&str>,
-        architecture: Option<&str>,
+        source_name: Option<&str>,
+        pkg_with_repo: &PackageWithRepo,
         options: &ResolutionOptions,
     ) -> Result<PackageSource> {
         let (temp_dir, output_dir) = create_output_dir(options)?;
+        let name = source_name.unwrap_or(&pkg_with_repo.package.name);
+        let version = effective_remi_version(pkg_with_repo, options);
+        let architecture = pkg_with_repo.package.architecture.as_deref();
 
         let client = RemiClient::new(endpoint)?;
         let path = client
@@ -582,6 +595,7 @@ impl<'a> PackageResolver<'a> {
         Ok(PackageSource::Ccs {
             path,
             _temp_dir: Some(temp_dir),
+            repository_provenance: Some(repository_source_metadata(pkg_with_repo)),
         })
     }
 
@@ -632,6 +646,7 @@ impl<'a> PackageResolver<'a> {
         Ok(PackageSource::Ccs {
             path: result.package_path,
             _temp_dir: Some(temp_dir),
+            repository_provenance: None,
         })
     }
 
@@ -788,7 +803,32 @@ impl<'a> PackageResolver<'a> {
         Ok(PackageSource::Binary {
             path,
             _temp_dir: Some(temp_dir),
+            repository_provenance: Some(repository_source_metadata(pkg_with_repo)),
         })
+    }
+}
+
+fn repository_source_metadata(pkg_with_repo: &PackageWithRepo) -> RepositorySourceMetadata {
+    RepositorySourceMetadata {
+        repository_id: pkg_with_repo.package.repository_id,
+        source_distro: pkg_with_repo
+            .package
+            .distro
+            .clone()
+            .or_else(|| pkg_with_repo.repository.default_strategy_distro.clone()),
+        version_scheme: resolve_package_version_scheme(
+            &pkg_with_repo.package,
+            &pkg_with_repo.repository,
+        )
+        .map(version_scheme_to_db_string),
+    }
+}
+
+fn version_scheme_to_db_string(scheme: VersionScheme) -> String {
+    match scheme {
+        VersionScheme::Rpm => "rpm".to_string(),
+        VersionScheme::Debian => "debian".to_string(),
+        VersionScheme::Arch => "arch".to_string(),
     }
 }
 
@@ -1019,6 +1059,54 @@ mod tests {
     }
 
     #[test]
+    fn repository_source_metadata_uses_selected_repository_package() {
+        let (_temp, conn) = create_test_db();
+        let repo_id = create_test_repo(&conn);
+        let _pkg_id = create_test_package(&conn, repo_id, "tree", "2.2.1-4.fc44");
+        conn.execute(
+            "UPDATE repositories SET default_strategy_distro = 'fedora' WHERE id = ?1",
+            [repo_id],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE repository_packages
+                SET architecture = 'x86_64', distro = 'fedora', version_scheme = 'rpm'
+              WHERE repository_id = ?1 AND name = 'tree'",
+            [repo_id],
+        )
+        .unwrap();
+
+        let pkg_with_repo =
+            PackageSelector::find_best_package(&conn, "tree", &SelectionOptions::default())
+                .unwrap();
+        let metadata = repository_source_metadata(&pkg_with_repo);
+
+        assert_eq!(metadata.repository_id, repo_id);
+        assert_eq!(metadata.source_distro.as_deref(), Some("fedora"));
+        assert_eq!(metadata.version_scheme.as_deref(), Some("rpm"));
+    }
+
+    #[test]
+    fn repository_source_metadata_falls_back_to_repository_distro_scheme() {
+        let (_temp, conn) = create_test_db();
+        let repo_id = create_test_repo(&conn);
+        let _pkg_id = create_test_package(&conn, repo_id, "tree", "2.2.1-4");
+        conn.execute(
+            "UPDATE repositories SET default_strategy_distro = 'arch' WHERE id = ?1",
+            [repo_id],
+        )
+        .unwrap();
+
+        let pkg_with_repo =
+            PackageSelector::find_best_package(&conn, "tree", &SelectionOptions::default())
+                .unwrap();
+        let metadata = repository_source_metadata(&pkg_with_repo);
+
+        assert_eq!(metadata.source_distro.as_deref(), Some("arch"));
+        assert_eq!(metadata.version_scheme.as_deref(), Some("arch"));
+    }
+
+    #[test]
     fn test_package_source_path() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("test.ccs");
@@ -1027,12 +1115,14 @@ mod tests {
         let binary = PackageSource::Binary {
             path: path.clone(),
             _temp_dir: None,
+            repository_provenance: None,
         };
         assert_eq!(binary.path(), Some(path.as_path()));
 
         let ccs = PackageSource::Ccs {
             path: path.clone(),
             _temp_dir: None,
+            repository_provenance: None,
         };
         assert_eq!(ccs.path(), Some(path.as_path()));
 

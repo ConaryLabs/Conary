@@ -24,7 +24,7 @@ ARG INSTALL_MODE=binary
 COPY source/ /build/
 WORKDIR /build
 RUN if [ "$INSTALL_MODE" = "binary" ] && [ -f Cargo.toml ]; then \
-        cargo build --release 2>&1 && strip target/release/conary; \
+        cargo build --release -p conary 2>&1 && strip target/release/conary; \
     else \
         mkdir -p target/release && touch target/release/conary; \
     fi

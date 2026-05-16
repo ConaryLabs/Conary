@@ -12,11 +12,15 @@ use super::blocklist;
 use super::dep_mode::DepMode;
 use super::dep_resolution;
 use super::resolve::check_provides_dependencies;
-use super::{CcsTransactionInstallOptions, ComponentSelection};
+use super::{
+    CcsTransactionInstallOptions, ComponentSelection, RepositoryInstallProvenance,
+    repository_install_provenance_from_package,
+};
 use anyhow::{Context, Result};
 use conary_core::capability::inference::InferenceOptions;
 use conary_core::ccs::CcsPackage;
 use conary_core::ccs::convert::{ConversionOptions, FidelityLevel, LegacyConverter};
+use conary_core::db::models::RepositoryProvide;
 use conary_core::db::paths::keyring_dir;
 use conary_core::packages::PackageFormat;
 use conary_core::packages::common::PackageMetadata;
@@ -24,6 +28,7 @@ use conary_core::repository;
 use conary_core::resolver::MissingDependency;
 use conary_core::scriptlet::SandboxMode;
 use conary_core::version::VersionConstraint;
+use std::collections::HashMap;
 use std::path::Path;
 use tempfile::TempDir;
 use tracing::{info, warn};
@@ -190,11 +195,32 @@ fn is_already_installed_error(error: &anyhow::Error) -> bool {
 /// This is intentionally non-transitive: we only check existence, not whether
 /// the package's own dependencies are satisfiable.  The full transitive SAT
 /// solve happens later, during the actual download/install step.
-fn is_repo_resolvable(conn: &rusqlite::Connection, dep: &MissingDependency) -> bool {
+fn resolve_repository_dependency_name(
+    conn: &rusqlite::Connection,
+    dep: &MissingDependency,
+) -> Option<String> {
     let requests = [(dep.name.clone(), dep.constraint.clone())];
-    repository::resolve_dependency_requests(conn, &requests)
+    if repository::resolve_dependency_requests(conn, &requests)
         .map(|resolved| !resolved.is_empty())
         .unwrap_or(false)
+    {
+        return Some(dep.name.clone());
+    }
+
+    RepositoryProvide::find_by_cli_exact_query(conn, &dep.name)
+        .ok()?
+        .into_iter()
+        .find_map(|provider| {
+            if provider.capability == dep.name {
+                return None;
+            }
+
+            let requests = [(provider.capability.clone(), dep.constraint.clone())];
+            repository::resolve_dependency_requests(conn, &requests)
+                .ok()
+                .filter(|resolved| !resolved.is_empty())
+                .map(|_| provider.capability)
+        })
 }
 
 fn promote_repo_resolvable_satisfy_deps(
@@ -224,8 +250,8 @@ fn promote_repo_resolvable_satisfy_deps(
             continue;
         }
 
-        if is_repo_resolvable(conn, &dep) {
-            promoted.push(dep);
+        if let Some(resolution_name) = resolve_repository_dependency_name(conn, &dep) {
+            promoted.push((dep, resolution_name));
         } else {
             still_unresolvable.push(dep);
         }
@@ -237,18 +263,18 @@ fn promote_repo_resolvable_satisfy_deps(
             promoted.len(),
             promoted
                 .iter()
-                .map(|dep| dep.name.as_str())
+                .map(|(_, resolution_name)| resolution_name.as_str())
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-        for dep in promoted {
+        for (dep, resolution_name) in promoted {
             if dep_plan
                 .to_install
                 .iter()
-                .all(|existing| existing.name != dep.name)
+                .all(|existing| existing.name != resolution_name)
             {
                 dep_plan.to_install.push(dep_resolution::ResolvedDep {
-                    name: dep.name,
+                    name: resolution_name,
                     version: Some(dep.constraint.to_string()),
                     required_by: dep.required_by,
                 });
@@ -279,6 +305,7 @@ pub struct ConvertedCcsInstallOptions<'a> {
     pub dep_mode: Option<DepMode>,
     pub yes: bool,
     pub dependency_passes_remaining: usize,
+    pub repository_provenance: Option<RepositoryInstallProvenance>,
 }
 
 /// Attempt to convert a legacy package to CCS format
@@ -470,6 +497,7 @@ async fn install_converted_ccs_with_pending(
         dep_mode,
         yes,
         dependency_passes_remaining,
+        repository_provenance,
     } = opts;
 
     let ccs_pkg = CcsPackage::parse(ccs_path).context("Failed to parse converted CCS package")?;
@@ -588,6 +616,16 @@ async fn install_converted_ccs_with_pending(
                     if !to_download.is_empty() {
                         let temp_dir = TempDir::new()?;
                         let keyring_dir = keyring_dir(db_path);
+                        let mut provenance_by_dep = HashMap::new();
+                        for (dep_name, pkg_with_repo) in &to_download {
+                            provenance_by_dep.insert(
+                                dep_name.clone(),
+                                repository_install_provenance_from_package(
+                                    &pkg_with_repo.package,
+                                    &pkg_with_repo.repository,
+                                )?,
+                            );
+                        }
                         let downloaded = repository::download_dependencies(
                             &to_download,
                             temp_dir.path(),
@@ -628,6 +666,9 @@ async fn install_converted_ccs_with_pending(
                                         dep_mode,
                                         yes,
                                         dependency_passes_remaining: nested_dependency_passes,
+                                        repository_provenance: provenance_by_dep
+                                            .get(dep_name)
+                                            .cloned(),
                                     },
                                     child_pending_providers,
                                     true,
@@ -657,7 +698,12 @@ async fn install_converted_ccs_with_pending(
                                 &reason,
                                 allow_downgrade,
                             ) {
-                                Ok(prepared) => prepared_packages.push(prepared),
+                                Ok(prepared) => {
+                                    let mut prepared = prepared;
+                                    prepared.repository_provenance =
+                                        provenance_by_dep.get(dep_name).cloned();
+                                    prepared_packages.push(prepared);
+                                }
                                 Err(e) if e.to_string().contains("already installed") => {
                                     info!("Dependency {} already installed, skipping", dep_name);
                                 }
@@ -723,6 +769,7 @@ async fn install_converted_ccs_with_pending(
             selection_reason: None,
             component_selection: ComponentSelection::All,
             selected_manifest_components: None,
+            repository_provenance,
         },
     )?;
     Ok(())
@@ -992,6 +1039,7 @@ mod tests {
             dep_mode: None,
             yes: true,
             dependency_passes_remaining: 0,
+            repository_provenance: None,
         })
         .await
         .unwrap();
@@ -1030,6 +1078,7 @@ mod tests {
             dep_mode: None,
             yes: true,
             dependency_passes_remaining: 0,
+            repository_provenance: None,
         })
         .await
         .unwrap();
@@ -1132,6 +1181,7 @@ mod tests {
             dep_mode: None,
             yes: true,
             dependency_passes_remaining: 0,
+            repository_provenance: None,
         })
         .await
         .unwrap_err();
@@ -1238,6 +1288,7 @@ mod tests {
             dep_mode: None,
             yes: true,
             dependency_passes_remaining: 0,
+            repository_provenance: None,
         })
         .await
         .unwrap_err();
@@ -1296,6 +1347,7 @@ mod tests {
             dep_mode: None,
             yes: true,
             dependency_passes_remaining: 0,
+            repository_provenance: None,
         })
         .await
         .unwrap_err();
@@ -1672,7 +1724,7 @@ mod tests {
         promote_repo_resolvable_satisfy_deps(&conn, &mut dep_plan);
 
         assert_eq!(dep_plan.to_install.len(), 1);
-        assert_eq!(dep_plan.to_install[0].name, dep_name);
+        assert_eq!(dep_plan.to_install[0].name, "libglib-2.0.so.0");
         assert!(dep_plan.unresolvable.is_empty());
     }
 

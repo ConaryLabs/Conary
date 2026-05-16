@@ -21,7 +21,9 @@ use conary_core::db::models::{ProvideEntry, Redirect};
 use conary_core::db::paths::keyring_dir;
 use conary_core::repository::dependency_model::RepositoryDependencyFlavor;
 use conary_core::repository::resolution_policy::ResolutionPolicy;
-use conary_core::repository::{PackageSource, ResolutionOptions, resolve_package};
+use conary_core::repository::{
+    PackageSource, RepositorySourceMetadata, ResolutionOptions, resolve_package,
+};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -35,6 +37,7 @@ pub struct ResolvedPackage {
     /// Source type (for logging/UI)
     #[allow(dead_code)] // Will be used for logging/UI in future
     pub source_type: ResolvedSourceType,
+    pub repository_provenance: Option<RepositorySourceMetadata>,
 }
 
 /// Outcome of package resolution - either resolved to a path or already installed
@@ -160,6 +163,7 @@ pub async fn resolve_package_path_with_policy(
             path: PathBuf::from(package),
             _temp_dir: None,
             source_type: ResolvedSourceType::LocalFile,
+            repository_provenance: None,
         }));
     }
 
@@ -229,7 +233,11 @@ fn convert_source_to_resolved(
     progress: &InstallProgress,
 ) -> Result<ResolutionOutcome> {
     match source {
-        PackageSource::Binary { path, _temp_dir } => {
+        PackageSource::Binary {
+            path,
+            _temp_dir,
+            repository_provenance,
+        } => {
             info!(
                 "Resolved {} from binary source: {}",
                 package,
@@ -240,16 +248,22 @@ fn convert_source_to_resolved(
                 path,
                 _temp_dir,
                 source_type: ResolvedSourceType::Binary,
+                repository_provenance,
             }))
         }
 
-        PackageSource::Ccs { path, _temp_dir } => {
+        PackageSource::Ccs {
+            path,
+            _temp_dir,
+            repository_provenance,
+        } => {
             info!("Resolved {} from Remi: {}", package, path.display());
             progress.set_phase(package, InstallPhase::Downloading);
             Ok(ResolutionOutcome::Resolved(ResolvedPackage {
                 path,
                 _temp_dir,
                 source_type: ResolvedSourceType::Remi,
+                repository_provenance,
             }))
         }
 
@@ -270,6 +284,7 @@ fn convert_source_to_resolved(
                 path: delta_path,
                 _temp_dir,
                 source_type: ResolvedSourceType::Binary,
+                repository_provenance: None,
             }))
         }
 
@@ -445,5 +460,39 @@ mod tests {
             )]
         );
         assert!(unsatisfied.is_empty());
+    }
+
+    #[test]
+    fn convert_source_preserves_remi_repository_provenance() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("tree.ccs");
+        std::fs::write(&path, b"ccs").unwrap();
+        let progress = InstallProgress::single("Testing");
+
+        let outcome = convert_source_to_resolved(
+            PackageSource::Ccs {
+                path,
+                _temp_dir: None,
+                repository_provenance: Some(RepositorySourceMetadata {
+                    repository_id: 42,
+                    source_distro: Some("fedora".to_string()),
+                    version_scheme: Some("rpm".to_string()),
+                }),
+            },
+            "tree",
+            &progress,
+        )
+        .unwrap();
+
+        let ResolutionOutcome::Resolved(resolved) = outcome else {
+            panic!("expected resolved package");
+        };
+
+        let provenance = resolved
+            .repository_provenance
+            .expect("Remi CCS resolution should keep repository provenance");
+        assert_eq!(provenance.repository_id, 42);
+        assert_eq!(provenance.source_distro.as_deref(), Some("fedora"));
+        assert_eq!(provenance.version_scheme.as_deref(), Some("rpm"));
     }
 }

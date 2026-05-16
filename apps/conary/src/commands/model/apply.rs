@@ -191,6 +191,7 @@ pub(super) async fn apply_replatform_changes(
                 dep_mode: None,
                 yes: true,
                 from_distro: None,
+                repository_provenance: None,
             },
         )
         .await
@@ -464,6 +465,7 @@ pub(super) async fn apply_package_changes(
                         dep_mode: None,
                         yes: true,
                         from_distro: None,
+                        repository_provenance: None,
                     },
                 )
                 .await
@@ -511,6 +513,7 @@ pub(super) async fn apply_package_changes(
                         dep_mode: None,
                         yes: true,
                         from_distro: None,
+                        repository_provenance: None,
                     },
                 )
                 .await

@@ -170,7 +170,10 @@ fn show_package_info(
     }
 
     if let Some(repository_id) = trove.installed_from_repository_id {
-        println!("Repository  : {}", repository_id);
+        println!(
+            "Repository  : {}",
+            repository_display_name(conn, repository_id)?
+        );
     }
 
     if let Some(arch) = &trove.architecture {
@@ -239,6 +242,13 @@ fn show_package_info(
     Ok(())
 }
 
+fn repository_display_name(conn: &rusqlite::Connection, repository_id: i64) -> Result<String> {
+    let name = conary_core::db::models::Repository::find_by_id(conn, repository_id)?
+        .map(|repo| repo.name)
+        .unwrap_or_else(|| repository_id.to_string());
+    Ok(name)
+}
+
 /// List package files
 fn list_package_files(
     conn: &rusqlite::Connection,
@@ -280,4 +290,41 @@ fn list_package_files(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use conary_core::db::schema;
+    use rusqlite::Connection;
+
+    fn test_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        schema::migrate(&conn).unwrap();
+        conn
+    }
+
+    #[test]
+    fn repository_display_name_prefers_repository_name() {
+        let conn = test_db();
+        conn.execute(
+            "INSERT INTO repositories (name, url, enabled, priority)
+             VALUES ('fedora-remi', 'https://remi.example.test', 1, 10)",
+            [],
+        )
+        .unwrap();
+        let repo_id = conn.last_insert_rowid();
+
+        assert_eq!(
+            repository_display_name(&conn, repo_id).unwrap(),
+            "fedora-remi"
+        );
+    }
+
+    #[test]
+    fn repository_display_name_falls_back_to_id_for_stale_rows() {
+        let conn = test_db();
+
+        assert_eq!(repository_display_name(&conn, 99).unwrap(), "99");
+    }
 }

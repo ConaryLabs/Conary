@@ -51,6 +51,8 @@ pub(super) fn remi_sync_row(
         crate::repository::versioning::VersionScheme::Debian => "debian".to_string(),
         crate::repository::versioning::VersionScheme::Arch => "arch".to_string(),
     });
+    package.distro = Some(distro.clone());
+    package.version_scheme = scheme_str.clone();
 
     let mut self_provide = RepositoryProvide::new(
         0,
@@ -309,6 +311,26 @@ mod tests {
         );
 
         assert_eq!(row.package.architecture.as_deref(), Some("x86_64"));
+    }
+
+    #[test]
+    fn remi_sync_row_records_requested_distro_and_version_scheme() {
+        let row = remi_sync_row(
+            7,
+            "http://remi.test".to_string(),
+            "ubuntu".to_string(),
+            RemiPackageEntry {
+                name: "nano".to_string(),
+                version: "8.7.1-1".to_string(),
+                converted: false,
+                architecture: Some("amd64".to_string()),
+                dependencies: None,
+                metadata: None,
+            },
+        );
+
+        assert_eq!(row.package.distro.as_deref(), Some("ubuntu"));
+        assert_eq!(row.package.version_scheme.as_deref(), Some("debian"));
     }
 
     #[tokio::test]

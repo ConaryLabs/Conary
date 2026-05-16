@@ -1,7 +1,9 @@
 // src/commands/update.rs
 //! Update, pinning, and delta statistics commands
 
-use super::install::{DepMode, resolve_default_dep_mode_from_model};
+use super::install::{
+    DepMode, repository_install_provenance_from_package, resolve_default_dep_mode_from_model,
+};
 use super::open_db;
 use super::progress::{UpdatePhase, UpdateProgress};
 use super::{InstalledPackageSelector, SandboxMode, cmd_install, resolve_installed_package};
@@ -24,10 +26,10 @@ use conary_core::repository::{
     dependency_model::RepositoryDependencyFlavor,
     resolution_policy::{ResolutionPolicy, SelectionMode},
     resolve_package,
-    versioning::{VersionScheme, compare_mixed_repo_versions, infer_version_scheme},
+    versioning::{VersionScheme, compare_mixed_repo_versions, resolve_package_version_scheme},
 };
 use std::cmp::Ordering;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
 fn read_delta_result_from_cas(
@@ -37,6 +39,40 @@ fn read_delta_result_from_cas(
     cas.retrieve(hash)
         .map_err(anyhow::Error::from)
         .with_context(|| format!("failed to retrieve verified delta result from CAS: {hash}"))
+}
+
+fn resolution_options_for_selected_update(
+    repo_pkg: &RepositoryPackage,
+    repo: &Repository,
+    temp_dir: &Path,
+    keyring_dir: &Path,
+    policy: &ResolutionPolicy,
+    primary_flavor: Option<RepositoryDependencyFlavor>,
+) -> ResolutionOptions {
+    ResolutionOptions {
+        version: Some(repo_pkg.version.clone()),
+        repository: Some(repo.name.clone()),
+        architecture: repo_pkg.architecture.clone(),
+        output_dir: Some(PathBuf::from(temp_dir)),
+        gpg_options: if repo.gpg_check {
+            Some(DownloadOptions {
+                gpg_check: true,
+                gpg_strict: repo.gpg_strict,
+                keyring_dir: keyring_dir.to_path_buf(),
+                repository_name: repo.name.clone(),
+            })
+        } else {
+            None
+        },
+        // Update has already selected a repository package. Do not let the
+        // generic resolver short-circuit on an installed same-version trove,
+        // because source-switch updates can intentionally reinstall the same
+        // version from a different authority.
+        skip_cas: true,
+        policy: Some(policy.clone()),
+        is_root: false,
+        primary_flavor,
+    }
 }
 
 fn mark_pending_changeset_rolled_back(
@@ -153,16 +189,16 @@ use super::replatform_rendering::render_replatform_execution_plan;
 /// Returns `true` if `repo_version` parses and compares greater than `installed_version`.
 /// Returns `false` (and logs a warning) when either version fails to parse or when the
 /// repository version is the same or older.
-fn is_repo_version_newer(trove: &Trove, repo: &Repository, repo_version: &str) -> bool {
+fn is_repo_version_newer(trove: &Trove, repo: &Repository, package: &RepositoryPackage) -> bool {
     let Some(ordering) = compare_mixed_repo_versions(
         trove_version_scheme(trove),
         &trove.version,
-        infer_version_scheme(repo).unwrap_or(VersionScheme::Rpm),
-        repo_version,
+        resolve_package_version_scheme(package, repo).unwrap_or(VersionScheme::Rpm),
+        &package.version,
     ) else {
         warn!(
             "Could not compare versions for {}: {} vs {}, skipping",
-            trove.name, repo_version, trove.version
+            trove.name, package.version, trove.version
         );
         return false;
     };
@@ -170,7 +206,7 @@ fn is_repo_version_newer(trove: &Trove, repo: &Repository, repo_version: &str) -
     if ordering != Ordering::Less {
         debug!(
             "Skipping {} {} (installed {} is same or newer)",
-            trove.name, repo_version, trove.version
+            trove.name, package.version, trove.version
         );
         return false;
     }
@@ -336,7 +372,7 @@ fn select_update_candidate(
         let same_source =
             candidate_matches_installed_source(trove, &candidate.package, &candidate.repository);
         let newer_in_scheme =
-            is_repo_version_newer(trove, &candidate.repository, &candidate.package.version);
+            is_repo_version_newer(trove, &candidate.repository, &candidate.package);
         let allow_cross_source_latest = policy.selection_mode == SelectionMode::Latest
             && !same_source
             && candidate_has_positive_latest_signal(
@@ -933,7 +969,7 @@ pub async fn cmd_update(
     }
 
     // Phase 1: Check for deltas and categorize updates
-    let mut delta_updates: Vec<(Trove, RepositoryPackage, PackageDelta)> = Vec::new();
+    let mut delta_updates: Vec<(Trove, RepositoryPackage, Repository, PackageDelta)> = Vec::new();
     let mut full_updates: Vec<(Trove, RepositoryPackage, Repository)> = Vec::new();
 
     for (trove, selected) in updates_available {
@@ -948,7 +984,7 @@ pub async fn cmd_update(
                 delta_info.delta_size,
                 delta_info.compression_ratio * 100.0
             );
-            delta_updates.push((trove, repo_pkg, delta_info));
+            delta_updates.push((trove, repo_pkg, repo, delta_info));
         } else {
             full_updates.push((trove, repo_pkg, repo));
         }
@@ -981,7 +1017,7 @@ pub async fn cmd_update(
 
     let update_result: Result<()> = async {
         // Phase 2: Download and apply deltas (sequential - requires CAS access)
-        for (trove, repo_pkg, delta_info) in delta_updates {
+        for (trove, repo_pkg, repo, delta_info) in delta_updates {
             println!("\nUpdating {} (delta)...", trove.name);
 
             match repository::download_delta(
@@ -1035,6 +1071,11 @@ pub async fn cmd_update(
                                                 sandbox_mode,
                                                 dep_mode: Some(dep_mode),
                                                 yes,
+                                                repository_provenance: Some(
+                                                    repository_install_provenance_from_package(
+                                                        &repo_pkg, &repo,
+                                                    )?,
+                                                ),
                                                 ..Default::default()
                                             },
                                         )
@@ -1137,27 +1178,14 @@ pub async fn cmd_update(
                 info!("Resolving {} from {}", trove.name, repo.name);
                 progress.set_phase(&trove.name, UpdatePhase::DownloadingFull);
 
-                // Build resolution options
-                let options = ResolutionOptions {
-                    version: Some(repo_pkg.version.clone()),
-                    repository: Some(repo.name.clone()),
-                    architecture: repo_pkg.architecture.clone(),
-                    output_dir: Some(temp_dir.clone()),
-                    gpg_options: if repo.gpg_check {
-                        Some(DownloadOptions {
-                            gpg_check: true,
-                            gpg_strict: repo.gpg_strict,
-                            keyring_dir: keyring_dir.clone(),
-                            repository_name: repo.name.clone(),
-                        })
-                    } else {
-                        None
-                    },
-                    skip_cas: false,
-                    policy: Some(policy.clone()),
-                    is_root: false,
+                let options = resolution_options_for_selected_update(
+                    &repo_pkg,
+                    &repo,
+                    &temp_dir,
+                    &keyring_dir,
+                    &policy,
                     primary_flavor,
-                };
+                );
 
                 // Use unified resolver - respects remi/binary/recipe strategies
                 let source = match resolve_package(&conn, &trove.name, &options).await {
@@ -1213,6 +1241,9 @@ pub async fn cmd_update(
                         sandbox_mode,
                         dep_mode: Some(dep_mode),
                         yes,
+                        repository_provenance: Some(repository_install_provenance_from_package(
+                            &repo_pkg, &repo,
+                        )?),
                         ..Default::default()
                     },
                 )
@@ -1956,7 +1987,17 @@ mod tests {
         );
         trove.version_scheme = Some("debian".to_string());
 
-        assert!(is_repo_version_newer(&trove, &repo, "1.0"));
+        let mut candidate = RepositoryPackage::new(
+            1,
+            "demo".to_string(),
+            "1.0".to_string(),
+            "sha256:demo".to_string(),
+            1,
+            "https://deb.example.test/demo_1.0_amd64.deb".to_string(),
+        );
+        candidate.version_scheme = Some("debian".to_string());
+
+        assert!(is_repo_version_newer(&trove, &repo, &candidate));
     }
 
     #[test]
@@ -1975,7 +2016,126 @@ mod tests {
         );
         trove.version_scheme = Some("arch".to_string());
 
-        assert!(is_repo_version_newer(&trove, &repo, "1.0-2"));
+        let mut candidate = RepositoryPackage::new(
+            1,
+            "demo".to_string(),
+            "1.0-2".to_string(),
+            "sha256:demo".to_string(),
+            1,
+            "https://arch.example.test/demo-1.0-2.pkg.tar.zst".to_string(),
+        );
+        candidate.version_scheme = Some("arch".to_string());
+
+        assert!(is_repo_version_newer(&trove, &repo, &candidate));
+    }
+
+    #[test]
+    fn update_repository_install_provenance_uses_selected_package_metadata() {
+        let mut repo = Repository::new(
+            "slice-d-local-update".to_string(),
+            "https://example.test/slice-d".to_string(),
+        );
+        repo.default_strategy_distro = Some("fedora".to_string());
+        repo.id = Some(42);
+
+        let mut package = RepositoryPackage::new(
+            42,
+            "phase4-runtime-fixture".to_string(),
+            "1.0.1-1".to_string(),
+            "sha256:fixture".to_string(),
+            123,
+            "https://example.test/phase4-runtime-fixture-1.0.1.rpm".to_string(),
+        );
+        package.architecture = Some("x86_64".to_string());
+        package.distro = Some("fedora".to_string());
+        package.version_scheme = Some("rpm".to_string());
+
+        let provenance = repository_install_provenance_from_package(&package, &repo).unwrap();
+
+        assert_eq!(provenance.repository_id, 42);
+        assert_eq!(provenance.source_distro.as_deref(), Some("fedora"));
+        assert_eq!(provenance.version_scheme.as_deref(), Some("rpm"));
+    }
+
+    #[test]
+    fn selected_update_resolution_bypasses_local_cas_shortcut() {
+        let temp = tempfile::tempdir().unwrap();
+        let keyring_dir = temp.path().join("keyrings");
+        let repo = Repository::new(
+            "slice-d-source-switch".to_string(),
+            "https://example.test/slice-d".to_string(),
+        );
+        let mut package = RepositoryPackage::new(
+            42,
+            "phase4-runtime-fixture".to_string(),
+            "1.0.1-1".to_string(),
+            "sha256:fixture".to_string(),
+            123,
+            "https://example.test/phase4-runtime-fixture-1.0.1.rpm".to_string(),
+        );
+        package.architecture = Some("x86_64".to_string());
+
+        let options = resolution_options_for_selected_update(
+            &package,
+            &repo,
+            temp.path(),
+            &keyring_dir,
+            &ResolutionPolicy::new(),
+            Some(RepositoryDependencyFlavor::Rpm),
+        );
+
+        assert!(options.skip_cas);
+        assert_eq!(options.version.as_deref(), Some("1.0.1-1"));
+        assert_eq!(options.repository.as_deref(), Some("slice-d-source-switch"));
+        assert_eq!(options.architecture.as_deref(), Some("x86_64"));
+    }
+
+    #[test]
+    fn selects_debian_update_from_generic_metadata_driven_repo() {
+        let (_temp, db_path) = create_test_db();
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let mut repo = Repository::new(
+            "slice-d-local-update".to_string(),
+            "http://127.0.0.1:18087".to_string(),
+        );
+        repo.priority = 500;
+        repo.default_strategy_distro = Some("ubuntu".to_string());
+        let repo_id = repo.insert(&conn).unwrap();
+
+        let mut package = RepositoryPackage::new(
+            repo_id,
+            "phase4-runtime-fixture".to_string(),
+            "1.0.1".to_string(),
+            "sha256:fixture".to_string(),
+            1110,
+            "http://127.0.0.1:18087/phase4-runtime-fixture_1.0.1_amd64.deb".to_string(),
+        );
+        package.architecture = Some("amd64".to_string());
+        package.distro = Some("ubuntu".to_string());
+        package.version_scheme = Some("debian".to_string());
+        package.insert(&conn).unwrap();
+
+        let mut installed = Trove::new(
+            "phase4-runtime-fixture".to_string(),
+            "1.0.0".to_string(),
+            TroveType::Package,
+        );
+        installed.architecture = Some("amd64".to_string());
+        installed.version_scheme = Some("debian".to_string());
+
+        let selected = select_update_candidate(
+            &conn,
+            &installed,
+            false,
+            &ResolutionPolicy::new().with_mixing(DependencyMixingPolicy::Strict),
+            Some(RepositoryDependencyFlavor::Deb),
+        )
+        .unwrap()
+        .expect("expected generic metadata-driven Debian update");
+
+        assert_eq!(selected.package.version, "1.0.1");
+        assert_eq!(selected.repository.name, "slice-d-local-update");
+        assert_eq!(selected.package.version_scheme.as_deref(), Some("debian"));
     }
 
     #[test]

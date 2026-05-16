@@ -2019,8 +2019,9 @@ strength = "strict"
         assert_eq!(installed_troves.len(), 1);
         let installed = &installed_troves[0];
         assert_eq!(installed.version, "9.1.0");
-        assert_eq!(installed.source_distro, None);
-        assert_eq!(installed.installed_from_repository_id, None);
+        assert_eq!(installed.source_distro.as_deref(), Some("arch"));
+        assert_eq!(installed.version_scheme.as_deref(), Some("arch"));
+        assert_eq!(installed.installed_from_repository_id, Some(arch_repo_id));
         assert_eq!(
             installed.selection_reason.as_deref(),
             Some("Replatform partial failure after install: injected replatform metadata failure")

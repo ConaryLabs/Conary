@@ -128,6 +128,7 @@ async fn execute_planned_op(
                     dep_mode: None,
                     yes: true,
                     from_distro: None,
+                    repository_provenance: None,
                 },
             )
             .await
@@ -1052,10 +1053,18 @@ mod tests {
         .unwrap();
         conn.execute(
             "UPDATE troves
-             SET install_reason = 'dependency',
+             SET name = 'orphan-cleanup-fixture',
+                 install_reason = 'dependency',
                  selection_reason = 'Required by nginx',
                  orphan_since = '2020-01-01T00:00:00Z'
              WHERE name = 'openssl'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE provides
+             SET capability = 'orphan-cleanup-fixture'
+             WHERE capability = 'openssl'",
             [],
         )
         .unwrap();
@@ -1080,7 +1089,11 @@ mod tests {
         .expect("orphan cleanup should succeed");
 
         let conn = crate::commands::open_db(&db_path).unwrap();
-        assert!(Trove::find_one_by_name(&conn, "openssl").unwrap().is_none());
+        assert!(
+            Trove::find_one_by_name(&conn, "orphan-cleanup-fixture")
+                .unwrap()
+                .is_none()
+        );
 
         let history: (String, String, String) = conn
             .query_row(
@@ -1091,7 +1104,7 @@ mod tests {
             .unwrap();
         assert_eq!(history.0, "orphans");
         assert_eq!(history.1, "applied");
-        assert!(history.2.contains("openssl"));
+        assert!(history.2.contains("orphan-cleanup-fixture"));
     }
 
     #[tokio::test]
