@@ -7,6 +7,9 @@
 
 use super::super::open_db;
 use super::QueryOptions;
+use crate::commands::{
+    InstalledPackageSelector, package_authority_label, resolve_installed_package,
+};
 use anyhow::Result;
 
 /// Query installed packages
@@ -15,7 +18,43 @@ pub async fn cmd_query(pattern: Option<&str>, db_path: &str, options: QueryOptio
 
     // Path query mode: find package containing a file
     if let Some(file_path) = &options.path {
+        if options.version.is_some() || options.architecture.is_some() {
+            anyhow::bail!(
+                "Installed package selectors --version/--arch cannot be used with --path"
+            );
+        }
         return query_by_path(&conn, file_path, &options);
+    }
+
+    if options.info || options.files || options.lsl {
+        let package_name = pattern.ok_or_else(|| {
+            anyhow::anyhow!("A package name is required with --info, --files, or --lsl")
+        })?;
+        let selector = InstalledPackageSelector::new(
+            package_name.to_string(),
+            options.version.clone(),
+            options.architecture.clone(),
+        );
+        let resolved = resolve_installed_package(&conn, &selector)?;
+
+        if options.info {
+            return show_package_info(&conn, &resolved.trove, &options);
+        }
+        return list_package_files(&conn, &resolved.trove, options.lsl);
+    }
+
+    if options.version.is_some() || options.architecture.is_some() {
+        let package_name = pattern.ok_or_else(|| {
+            anyhow::anyhow!("A package name is required with --version or --arch")
+        })?;
+        let selector = InstalledPackageSelector::new(
+            package_name.to_string(),
+            options.version.clone(),
+            options.architecture.clone(),
+        );
+        let resolved = resolve_installed_package(&conn, &selector)?;
+        print_installed_packages(&[resolved.trove]);
+        return Ok(());
     }
 
     let troves = if let Some(pattern) = pattern {
@@ -29,19 +68,14 @@ pub async fn cmd_query(pattern: Option<&str>, db_path: &str, options: QueryOptio
         return Ok(());
     }
 
-    // Detailed info mode
-    if options.info && troves.len() == 1 {
-        return show_package_info(&conn, &troves[0], &options);
-    }
+    print_installed_packages(&troves);
 
-    // List with files (ls -l style)
-    if (options.lsl || options.files) && troves.len() == 1 {
-        return list_package_files(&conn, &troves[0], options.lsl);
-    }
+    Ok(())
+}
 
-    // Standard listing
+fn print_installed_packages(troves: &[conary_core::db::models::Trove]) {
     println!("Installed packages:");
-    for trove in &troves {
+    for trove in troves {
         print!(
             "  {} {} ({:?})",
             trove.name, trove.version, trove.trove_type
@@ -52,8 +86,6 @@ pub async fn cmd_query(pattern: Option<&str>, db_path: &str, options: QueryOptio
         println!();
     }
     println!("\nTotal: {} package(s)", troves.len());
-
-    Ok(())
 }
 
 /// Query package by file path
@@ -123,6 +155,23 @@ fn show_package_info(
     println!("Name        : {}", trove.name);
     println!("Version     : {}", trove.version);
     println!("Type        : {:?}", trove.trove_type);
+    println!(
+        "Authority   : {}",
+        package_authority_label(trove.install_source.clone())
+    );
+    println!("Source      : {}", trove.install_source.as_str());
+
+    if let Some(source_distro) = &trove.source_distro {
+        println!("Distro      : {}", source_distro);
+    }
+
+    if let Some(version_scheme) = &trove.version_scheme {
+        println!("Versioning  : {}", version_scheme);
+    }
+
+    if let Some(repository_id) = trove.installed_from_repository_id {
+        println!("Repository  : {}", repository_id);
+    }
 
     if let Some(arch) = &trove.architecture {
         println!("Architecture: {}", arch);

@@ -35,4 +35,8 @@ pub struct QueryOptions {
     pub path: Option<String>,
     /// List files in package
     pub files: bool,
+    /// Installed package version selector for detailed package operations
+    pub version: Option<String>,
+    /// Installed package architecture selector for detailed package operations
+    pub architecture: Option<String>,
 }
