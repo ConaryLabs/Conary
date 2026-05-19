@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-16
-revision: 19
-summary: Record limited-preview checkpoint validation and Group O generation-export blocker
+last_updated: 2026-05-19
+revision: 20
+summary: Record refreshed Group O generation-export boot proof
 ---
 
 # Integration Testing
@@ -143,27 +143,22 @@ Current Group N QEMU evidence from 2026-05-16:
   no-generation live-root installs, matching the current package-manager
   contract instead of assuming `conary install` publishes `/conary/current`.
 
-Current Group O QEMU export evidence from 2026-05-16:
+Current Group O QEMU export evidence from 2026-05-19:
 
 - `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`:
-  passed 3 / failed 1 / skipped 0 / cancelled 0
+  passed 4 / failed 0 / skipped 0 / cancelled 0
 - Passed cases:
-  - `TGE01` `installed_generation_export_fails_closed_without_self_contained_root`: 29348ms
-  - `TGE03` `installed_generation_build_rejects_missing_runtime_cas_object`: 594719ms
-  - `TGE02` `bootstrap_run_generation_export_boots`: 2868699ms
-- Failed case:
-  - `TGE04` `installed_runtime_generation_export_boots`: 2354782ms,
-    `assertion failed: expected exit code 0, got 1`
-- Root evidence: the first TGE04 step exported
-  `/tmp/conary-generation-export/installed-runtime-generation.qcow2`, but the
-  exported image booted to a kernel panic with `No working init found` before
-  SSH or the `installed-runtime-generation-export-booted` marker became
-  available.
+  - `TGE01` `installed_generation_export_fails_closed_without_self_contained_root`: 149758ms
+  - `TGE03` `installed_generation_build_rejects_missing_runtime_cas_object`: 482836ms
+  - `TGE04` `installed_runtime_generation_export_boots`: 1558474ms
+  - `TGE02` `bootstrap_run_generation_export_boots`: 2923418ms
+- Root evidence: TGE04 now generates a Conary-aware initramfs for the exported
+  installed-runtime image, boots the qcow2 under UEFI, reaches SSH, and emits the
+  `installed-runtime-generation-export-booted` marker.
 - Results file: `apps/conary/tests/integration/remi/results/fedora44-phase3.json`
 
 Keep Group O in the release-candidate rotation because it is still the full
 boot/export proof for installed runtime and bootstrap generation artifacts.
-The installed-runtime export path is not green until `TGE04` passes again.
 
 Fast workspace verification from 2026-05-14:
 
