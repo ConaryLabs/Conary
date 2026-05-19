@@ -1,6 +1,6 @@
 # Conary Roadmap
 
-Conary already has working installs, rollback, adoption/unadoption, immutable generations, Remi conversion/serving, federation, bootstrap, generation artifact export, self-hosting VM validation, and a large integration test surface. The limited public preview target is Fedora 44, Ubuntu 26.04 LTS, and Arch Linux, with security gates and local QEMU validation treated as release criteria while remote Forge validation is paused pending a KVM-capable runner. This roadmap is intentionally forward-looking: it tracks how Conary becomes safe to try on real systems before it asks to become the primary package manager.
+Conary already has working installs, rollback, adoption/unadoption, immutable generations, Remi conversion/serving, federation, bootstrap, generation artifact export, self-hosting VM validation, and a large integration test surface. The limited public preview target is Fedora 44, Ubuntu 26.04 LTS, and Arch Linux, with security gates and local QEMU validation treated as release criteria while remote Forge validation is paused pending a KVM-capable runner. As of 2026-05-19, the local Group O QEMU generation-export gate is green again for both installed-runtime and bootstrap-run raw/qcow2 exports. This roadmap is intentionally forward-looking: it tracks how Conary becomes safe to try on real systems before it asks to become the primary package manager.
 
 For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). For shipped changes, see [CHANGELOG.md](CHANGELOG.md).
 
@@ -33,7 +33,7 @@ For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 
 
 ### 4. System Validation
 
-- Keep the `minimal-boot-v3` Fedora 44 QEMU source fixture generation-builder-ready and restore installed-runtime export to green after the 2026-05-16 Group O `TGE04` boot blocker
+- Keep the `minimal-boot-v3` Fedora 44 QEMU source fixture generation-builder-ready and keep Group O installed-runtime/bootstrap-run generation export green after the 2026-05-19 `TGE04` fix
 - Broader adoption, unadoption, and explicit takeover validation on Fedora 44, Ubuntu 26.04 LTS, Arch, and real-world mixed systems
 - Pristine-by-default QEMU validation for the self-hosting bootstrap VM
 - More end-to-end coverage for selected next-boot generation activation and rollback under failure
@@ -61,7 +61,8 @@ For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 
 - The limited preview should be adoption-led and risk-free to try, not takeover-led. Native package managers remain the authority for adopted RPM, DEB, and Arch packages until the user explicitly chooses takeover.
 - `conary --allow-live-system-mutation system unadopt --all` is the one-command escape hatch only when no Conary generation is selected; active-generation handoff back to native authority remains fail-closed follow-up work.
 - conaryd has queue/SSE/read-route plumbing and enhance-job execution, but install/remove/update package routes intentionally return `501 Not Implemented`.
-- Generation export has x86_64 raw/qcow2 support, but installed-runtime export is blocked by the current Group O `TGE04` QEMU boot failure and should stay outside a package-manager-only preview ask until the gate is green again. aarch64/riscv64 boot assets remain reserved follow-up work.
+- Generation export has x86_64 raw/qcow2 support, and the 2026-05-19 Group O QEMU run passed installed-runtime and bootstrap-run boot proof. Keep generation export as supporting evidence for the preview rather than the headline ask. aarch64/riscv64 boot assets remain reserved follow-up work.
+- The former `tough`/Sigstore trust-root dependency path has been removed from `Cargo.lock`; the remaining `rsa` RustSec advisory is covered by the dated limited-preview waiver until a compatible fixed dependency path exists.
 - ISO generation export is not part of the limited public preview core promise. OCI export uses the shared generation artifact source, but registry workflow polish remains follow-up.
 
 ---
@@ -72,7 +73,7 @@ For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 
 2. Lock down adopted-package update behavior so native package managers remain authoritative unless takeover is explicit
 3. Keep quick-start and preview docs current around adoption, unadoption, native PM coexistence, takeover boundaries, and security-update honesty
 4. Design active-generation handoff back to native package-manager authority
-5. Restore generation export and installed-runtime QEMU validation to green, then keep it in rotation
+5. Keep generation export and installed-runtime QEMU validation green in rotation
 6. Make self-host VM validation inputs pristine by default
 7. Shell integration, release polish, and contributor-experience cleanup
 
