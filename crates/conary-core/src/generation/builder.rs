@@ -37,6 +37,8 @@ pub use erofs::{BuildResult, FileEntryRef, SymlinkEntryRef, build_erofs_image, h
 
 const CONARY_DRACUT_MODULE_SETUP: &str =
     include_str!("../../../../packaging/dracut/90conary/module-setup.sh");
+const CONARY_DRACUT_INIT: &str =
+    include_str!("../../../../packaging/dracut/90conary/conary-init.sh");
 const CONARY_DRACUT_GENERATOR: &str =
     include_str!("../../../../packaging/dracut/90conary/conary-generator.sh");
 const RUNTIME_DRACUT_ADD_MODULES: &str = "conary";
@@ -728,6 +730,12 @@ struct RuntimeBootAssetSources {
     _sysroot_workspace: Option<tempfile::TempDir>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InitramfsPolicy {
+    ReuseExisting,
+    GenerateConary,
+}
+
 fn stage_runtime_boot_assets_from_sources(
     gen_dir: &Path,
     generation: i64,
@@ -752,6 +760,7 @@ fn stage_runtime_boot_assets_from_sources(
     })
 }
 
+#[cfg(test)]
 fn resolve_runtime_boot_asset_sources(
     troves: &[Trove],
     boot_root: &Path,
@@ -771,8 +780,30 @@ fn resolve_generation_boot_asset_sources(
     generations_root: &Path,
     boot_root: &Path,
 ) -> crate::Result<RuntimeBootAssetSources> {
+    resolve_generation_boot_asset_sources_with_tools(
+        troves,
+        runtime_inputs,
+        generations_root,
+        boot_root,
+        Path::new("dracut"),
+        Path::new("depmod"),
+        Path::new("cpio"),
+    )
+}
+
+fn resolve_generation_boot_asset_sources_with_tools(
+    troves: &[Trove],
+    runtime_inputs: &runtime_inputs::RuntimeGenerationInputs,
+    generations_root: &Path,
+    boot_root: &Path,
+    dracut: &Path,
+    depmod: &Path,
+    cpio: &Path,
+) -> crate::Result<RuntimeBootAssetSources> {
     if boot_root != Path::new("/boot") {
-        return resolve_runtime_boot_asset_sources(troves, boot_root);
+        return resolve_runtime_boot_asset_sources_with_tools(
+            troves, boot_root, dracut, depmod, cpio,
+        );
     }
 
     let artifact_root = artifact_root_for_generations_root(generations_root)?;
@@ -780,7 +811,14 @@ fn resolve_generation_boot_asset_sources(
     let sysroot_workspace =
         materialize_runtime_generation_sysroot(runtime_inputs, &objects_dir, &artifact_root)?;
     let generation_boot_root = sysroot_workspace.path().join("boot");
-    let mut sources = resolve_runtime_boot_asset_sources(troves, &generation_boot_root)?;
+    let mut sources = resolve_runtime_boot_asset_sources_with_tools_and_policy(
+        troves,
+        &generation_boot_root,
+        dracut,
+        depmod,
+        cpio,
+        InitramfsPolicy::GenerateConary,
+    )?;
     sources._sysroot_workspace = Some(sysroot_workspace);
     Ok(sources)
 }
@@ -791,6 +829,24 @@ fn resolve_runtime_boot_asset_sources_with_tools(
     dracut: &Path,
     depmod: &Path,
     cpio: &Path,
+) -> crate::Result<RuntimeBootAssetSources> {
+    resolve_runtime_boot_asset_sources_with_tools_and_policy(
+        troves,
+        boot_root,
+        dracut,
+        depmod,
+        cpio,
+        InitramfsPolicy::ReuseExisting,
+    )
+}
+
+fn resolve_runtime_boot_asset_sources_with_tools_and_policy(
+    troves: &[Trove],
+    boot_root: &Path,
+    dracut: &Path,
+    depmod: &Path,
+    cpio: &Path,
+    initramfs_policy: InitramfsPolicy,
 ) -> crate::Result<RuntimeBootAssetSources> {
     let requested_version = detect_kernel_version_from_troves(troves).ok_or_else(|| {
         crate::error::Error::NotFound(
@@ -818,6 +874,7 @@ fn resolve_runtime_boot_asset_sources_with_tools(
             dracut,
             depmod,
             cpio,
+            initramfs_policy,
         ) {
             Ok(sources) => return Ok(sources),
             Err(error) => last_error = Some(error),
@@ -838,6 +895,7 @@ fn runtime_boot_asset_sources_for_release(
     dracut: &Path,
     depmod: &Path,
     cpio: &Path,
+    initramfs_policy: InitramfsPolicy,
 ) -> crate::Result<RuntimeBootAssetSources> {
     let versioned_kernel = boot_root.join(format!("vmlinuz-{release}"));
     let unversioned_kernel = boot_root.join("vmlinuz");
@@ -857,14 +915,13 @@ fn runtime_boot_asset_sources_for_release(
 
     let versioned_initramfs = boot_root.join(format!("initramfs-{release}.img"));
     let unversioned_initramfs = boot_root.join("initramfs.img");
-    let initramfs = if regular_file_exists(&versioned_initramfs) {
+    let force_conary_initramfs = initramfs_policy == InitramfsPolicy::GenerateConary;
+    let initramfs = if force_conary_initramfs {
         versioned_initramfs
-    } else if regular_file_exists(&unversioned_initramfs) {
-        unversioned_initramfs
     } else {
-        versioned_initramfs
+        select_existing_or_versioned_initramfs(versioned_initramfs, unversioned_initramfs)
     };
-    if !regular_file_exists(&initramfs) {
+    if force_conary_initramfs || !regular_file_exists(&initramfs) {
         generate_runtime_initramfs(dracut, depmod, cpio, system_root, release, &initramfs)?;
     }
     if !regular_file_exists(&initramfs) {
@@ -889,6 +946,19 @@ fn runtime_boot_asset_sources_for_release(
         efi_bootloader,
         _sysroot_workspace: None,
     })
+}
+
+fn select_existing_or_versioned_initramfs(
+    versioned_initramfs: PathBuf,
+    unversioned_initramfs: PathBuf,
+) -> PathBuf {
+    if regular_file_exists(&versioned_initramfs) {
+        versioned_initramfs
+    } else if regular_file_exists(&unversioned_initramfs) {
+        unversioned_initramfs
+    } else {
+        versioned_initramfs
+    }
 }
 
 fn generate_runtime_initramfs(
@@ -928,6 +998,7 @@ fn generate_runtime_initramfs(
         &module_dir.join("module-setup.sh"),
         CONARY_DRACUT_MODULE_SETUP,
     )?;
+    write_dracut_module_file(&module_dir.join("conary-init.sh"), CONARY_DRACUT_INIT)?;
     write_dracut_module_file(
         &module_dir.join("conary-generator.sh"),
         CONARY_DRACUT_GENERATOR,
@@ -1747,6 +1818,9 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let generations_root = tmp.path().join("generations");
         let objects_dir = tmp.path().join("objects");
+        let fake_dracut = tmp.path().join("dracut");
+        let fake_depmod = tmp.path().join("depmod");
+        let fake_cpio = tmp.path().join("cpio");
         std::fs::create_dir_all(&generations_root).unwrap();
         let cas = CasStore::new(&objects_dir).unwrap();
 
@@ -1754,6 +1828,7 @@ mod tests {
         let kernel_hash = cas.store(b"cas-kernel").unwrap();
         let initramfs_hash = cas.store(b"cas-initramfs").unwrap();
         let efi_hash = cas.store(b"cas-efi").unwrap();
+        let modules_dep_hash = cas.store(b"modules-dep").unwrap();
         let runtime_inputs = runtime_inputs::RuntimeGenerationInputs {
             file_refs: vec![
                 FileEntryRef {
@@ -1780,21 +1855,38 @@ mod tests {
                     owner: None,
                     group_name: None,
                 },
+                FileEntryRef {
+                    path: format!("/usr/lib/modules/{release}/modules.dep"),
+                    sha256_hash: modules_dep_hash,
+                    size: b"modules-dep".len() as u64,
+                    permissions: 0o100644,
+                    owner: None,
+                    group_name: None,
+                },
             ],
             symlink_refs: Vec::new(),
             adopted_track_count: 0,
         };
+        write_executable(
+            &fake_dracut,
+            "#!/bin/sh\nprev=\nfor arg in \"$@\"; do out=\"$prev\"; prev=\"$arg\"; done\nprintf generated-initramfs > \"$out\"\n",
+        );
+        write_executable(&fake_depmod, "#!/bin/sh\nexit 99\n");
+        write_executable(&fake_cpio, "#!/bin/sh\nexit 0\n");
         let troves = vec![Trove::new(
             "kernel-core".to_string(),
             release.to_string(),
             TroveType::Package,
         )];
 
-        let sources = resolve_generation_boot_asset_sources(
+        let sources = resolve_generation_boot_asset_sources_with_tools(
             &troves,
             &runtime_inputs,
             &generations_root,
             Path::new("/boot"),
+            &fake_dracut,
+            &fake_depmod,
+            &fake_cpio,
         )
         .unwrap();
 
@@ -1806,8 +1898,108 @@ mod tests {
         assert!(sysroot.path().join("tmp").is_dir());
         assert!(sysroot.path().join("var/tmp").is_dir());
         assert_eq!(std::fs::read(sources.kernel).unwrap(), b"cas-kernel");
-        assert_eq!(std::fs::read(sources.initramfs).unwrap(), b"cas-initramfs");
+        assert_eq!(
+            std::fs::read(sources.initramfs).unwrap(),
+            b"generated-initramfs"
+        );
         assert_eq!(std::fs::read(sources.efi_bootloader).unwrap(), b"cas-efi");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn generation_boot_asset_resolution_regenerates_conary_initramfs_from_materialized_sysroot() {
+        use crate::db::models::TroveType;
+        use crate::filesystem::CasStore;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let generations_root = tmp.path().join("generations");
+        let objects_dir = tmp.path().join("objects");
+        let fake_dracut = tmp.path().join("dracut");
+        let fake_depmod = tmp.path().join("depmod");
+        let fake_cpio = tmp.path().join("cpio");
+        let dracut_args = tmp.path().join("dracut.args");
+        std::fs::create_dir_all(&generations_root).unwrap();
+        let cas = CasStore::new(&objects_dir).unwrap();
+
+        let release = "6.20.0-conary";
+        let kernel_hash = cas.store(b"cas-kernel").unwrap();
+        let adopted_initramfs_hash = cas.store(b"adopted-host-initramfs").unwrap();
+        let efi_hash = cas.store(b"cas-efi").unwrap();
+        let modules_dep_hash = cas.store(b"modules-dep").unwrap();
+        let runtime_inputs = runtime_inputs::RuntimeGenerationInputs {
+            file_refs: vec![
+                FileEntryRef {
+                    path: format!("/boot/vmlinuz-{release}"),
+                    sha256_hash: kernel_hash,
+                    size: b"cas-kernel".len() as u64,
+                    permissions: 0o100644,
+                    owner: None,
+                    group_name: None,
+                },
+                FileEntryRef {
+                    path: format!("/boot/initramfs-{release}.img"),
+                    sha256_hash: adopted_initramfs_hash,
+                    size: b"adopted-host-initramfs".len() as u64,
+                    permissions: 0o100644,
+                    owner: None,
+                    group_name: None,
+                },
+                FileEntryRef {
+                    path: "/boot/EFI/BOOT/BOOTX64.EFI".to_string(),
+                    sha256_hash: efi_hash,
+                    size: b"cas-efi".len() as u64,
+                    permissions: 0o100644,
+                    owner: None,
+                    group_name: None,
+                },
+                FileEntryRef {
+                    path: format!("/usr/lib/modules/{release}/modules.dep"),
+                    sha256_hash: modules_dep_hash,
+                    size: b"modules-dep".len() as u64,
+                    permissions: 0o100644,
+                    owner: None,
+                    group_name: None,
+                },
+            ],
+            symlink_refs: Vec::new(),
+            adopted_track_count: 0,
+        };
+        write_executable(
+            &fake_dracut,
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nprev=\nfor arg in \"$@\"; do out=\"$prev\"; prev=\"$arg\"; done\nprintf conary-initramfs > \"$out\"\n",
+                dracut_args.display()
+            ),
+        );
+        write_executable(&fake_depmod, "#!/bin/sh\nexit 99\n");
+        write_executable(&fake_cpio, "#!/bin/sh\nexit 0\n");
+        let troves = vec![Trove::new(
+            "kernel-core".to_string(),
+            release.to_string(),
+            TroveType::Package,
+        )];
+
+        let sources = resolve_generation_boot_asset_sources_with_tools(
+            &troves,
+            &runtime_inputs,
+            &generations_root,
+            Path::new("/boot"),
+            &fake_dracut,
+            &fake_depmod,
+            &fake_cpio,
+        )
+        .unwrap();
+
+        assert_eq!(sources.kernel_version, release);
+        assert_eq!(
+            std::fs::read(&sources.initramfs).unwrap(),
+            b"conary-initramfs"
+        );
+        let args = std::fs::read_to_string(dracut_args).unwrap();
+        assert!(args.lines().any(|line| line == "--add"));
+        assert!(args.lines().any(|line| line == RUNTIME_DRACUT_ADD_MODULES));
+        assert!(args.lines().any(|line| line == "--omit"));
+        assert!(args.lines().any(|line| line == RUNTIME_DRACUT_OMIT_MODULES));
     }
 
     #[cfg(unix)]

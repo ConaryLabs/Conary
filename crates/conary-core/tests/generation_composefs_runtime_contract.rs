@@ -468,9 +468,41 @@ fn initramfs_generation_mounts_expose_usr_without_partial_generation_fallback() 
         "packaging/dracut/90conary/conary-generator.sh",
     ))
     .expect("failed to read conary dracut generator");
+    let dracut_init =
+        fs::read_to_string(workspace_file("packaging/dracut/90conary/conary-init.sh"))
+            .expect("failed to read conary dracut init");
+    let dracut_module =
+        fs::read_to_string(workspace_file("packaging/dracut/90conary/module-setup.sh"))
+            .expect("failed to read conary dracut module setup");
     let bootstrap_config = fs::read_to_string(core_source("bootstrap/system_config.rs"))
         .expect("failed to read bootstrap system config");
 
+    assert!(
+        dracut_module.contains("install_conary_script \"$moddir/conary-init.sh\" \"/init\""),
+        "installed-runtime exports need a Conary-owned /init so the carrier root can activate composefs before switch_root"
+    );
+    assert!(
+        dracut_module.contains("${dracutsysrootdir-}/conary/generations"),
+        "dracut module detection must honor --sysroot when generation builds materialize boot assets from CAS"
+    );
+    assert!(
+        dracut_module.contains(
+            "install_conary_script \"$moddir/conary-generator.sh\" \"/sbin/conary-generator\""
+        ),
+        "the Conary init script must be able to invoke the generator directly"
+    );
+    assert!(
+        dracut_module.contains("/var/lib/dracut/hooks/pre-pivot/90-conary-generator.sh"),
+        "the generated module must still support dracut's normal pre-pivot hook path"
+    );
+    assert!(
+        dracut_init.contains("exec switch_root \"$SYSROOT\" /sbin/init"),
+        "Conary init must switch into the generation-activated sysroot instead of falling through to the carrier root"
+    );
+    assert!(
+        dracut_init.contains("/sbin/conary-generator"),
+        "Conary init must run generation activation before switch_root"
+    );
     assert!(
         !dracut_generator.contains("Fall back to legacy bind-mount"),
         "dracut must not describe missing root.erofs as a compatibility path"
@@ -497,4 +529,19 @@ fn initramfs_generation_mounts_expose_usr_without_partial_generation_fallback() 
             "{label} must ensure /sbin resolves through usr-merge before switch_root"
         );
     }
+}
+
+#[test]
+fn installed_generation_export_boot_assets_force_conary_initramfs() {
+    let builder_rs = fs::read_to_string(core_source("generation/builder.rs"))
+        .expect("failed to read generation builder");
+
+    assert!(
+        builder_rs.contains("InitramfsPolicy::GenerateConary"),
+        "installed-runtime generation export must generate a Conary-aware initramfs instead of reusing an adopted host initramfs"
+    );
+    assert!(
+        builder_rs.contains("resolve_generation_boot_asset_sources_with_tools"),
+        "the default /boot generation path must have an explicit boot-asset resolver that can force Conary initramfs generation"
+    );
 }
