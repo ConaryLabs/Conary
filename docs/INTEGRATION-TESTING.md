@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-05-19
-revision: 20
-summary: Record refreshed Group O generation-export boot proof
+revision: 21
+summary: Record Phase 4 daily-driver corpus evidence
 ---
 
 # Integration Testing
@@ -187,6 +187,34 @@ Focused Slice D native package-manager parity proof:
 - `cargo run -p conary-test -- run --suite phase4-native-pm-parity --distro ubuntu-26.04 --phase 4`
 - `cargo run -p conary-test -- run --suite phase4-native-pm-parity --distro arch --phase 4`
 
+The current `phase4-native-pm-parity` manifest has 18 tests. `TNPM01` through
+`TNPM12` keep the original repository, local-native package, update, query,
+security-refusal, and autoremove parity proof. `TNPM13` through `TNPM18` add the
+daily-driver corpus group. That corpus builds a native package per distro and
+then proves:
+
+- systemd unit file deployment and trigger matching
+- tracked `/etc` config file metadata
+- native dependency metadata for a real package dependency
+- captured install/remove scriptlets plus a pre-remove hook side effect
+- system user and group creation inside the validation guest
+- conflict refusal before an overlapping native package can mutate the live root
+- a 2 MiB payload file through the native package parser and file database
+- a QEMU-safe kernel-adjacent `kernel/install.d` file without mutating boot state
+- an alternative target binary (`/usr/bin/phase4-corpus-alt`) as packaged file
+  coverage
+
+Known unsupported or deliberately out-of-scope classes for this corpus:
+
+- native alternatives registration is still a legacy-format conversion note
+  (`alternatives`/`update-alternatives` on RPM/DEB; no Arch equivalent here);
+  the corpus covers the target file, not registration ownership
+- bootloader or kernel post-install hooks that regenerate initrds, boot entries,
+  or host boot configuration
+- arbitrary uncurated repository package selections and full ecosystem parity
+- dependency installation from the generated local corpus package; this suite
+  records dependency metadata and installs with `--no-deps`
+
 Each run must pass `scripts/check-conary-test-result-gate.sh`, which requires
 zero failed, skipped, and cancelled results before the matrix can count as
 limited-preview release evidence. The `conary-test run` command also exits
@@ -194,11 +222,14 @@ unsuccessfully for skipped or cancelled results. Distro images rebuild by
 default so the matrix uses the current checkout; set `CONARY_TEST_REUSE_IMAGE=1`
 only for local iterative debugging where stale-image risk is acceptable.
 
-Fresh Slice D evidence from May 16, 2026:
+Fresh Slice D evidence from May 19, 2026:
 
-- Fedora 44/RPM: `fedora44-phase4.json`, 12 passed, 0 failed, 0 skipped, 0 cancelled.
-- Ubuntu 26.04/DEB: `ubuntu-26.04-phase4.json`, 12 passed, 0 failed, 0 skipped, 0 cancelled.
-- Arch/package format: `arch-phase4.json`, 12 passed, 0 failed, 0 skipped, 0 cancelled.
+- Fedora 44/RPM: `fedora44-phase4.json`, 18 passed, 0 failed, 0 skipped, 0 cancelled.
+- Ubuntu 26.04/DEB: `ubuntu-26.04-phase4.json`, 18 passed, 0 failed, 0 skipped, 0 cancelled.
+- Arch/package format: `arch-phase4.json`, 18 passed, 0 failed, 0 skipped, 0 cancelled.
+
+All three result files include the `TNPM13` through `TNPM18` daily-driver
+corpus group and passed `scripts/check-conary-test-result-gate.sh`.
 
 For supported Forge control-plane validation after a new runner is registered,
 prefer:

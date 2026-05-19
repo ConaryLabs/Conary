@@ -1,0 +1,3 @@
+#!/bin/sh
+# QEMU-safe kernel-adjacent fixture: validate metadata and file handling only.
+exit 0

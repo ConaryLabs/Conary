@@ -1,0 +1,9 @@
+[Unit]
+Description=Phase 4 corpus service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/phase4-corpus
+
+[Install]
+WantedBy=multi-user.target

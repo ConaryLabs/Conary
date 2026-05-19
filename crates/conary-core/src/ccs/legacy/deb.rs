@@ -46,6 +46,9 @@ impl HookConverter for DebHookConverter {
         lines.extend(CommonHookGenerator::systemd_commands(hooks, true));
         lines.extend(CommonHookGenerator::tmpfiles_commands(hooks));
         lines.extend(CommonHookGenerator::sysctl_commands(hooks));
+        if let Some(hook) = &hooks.post_install {
+            lines.push(hook.script.clone());
+        }
         lines.push("if command -v ldconfig >/dev/null 2>&1; then ldconfig; fi".to_string());
 
         lines.push("exit 0".to_string());
@@ -57,6 +60,9 @@ impl HookConverter for DebHookConverter {
 
         // Stop services before removal
         lines.extend(CommonHookGenerator::systemd_commands(hooks, false));
+        if let Some(hook) = &hooks.pre_remove {
+            lines.push(hook.script.clone());
+        }
 
         if lines.len() <= 2 {
             return None;
@@ -412,6 +418,26 @@ mod tests {
         assert!(script.contains("useradd"));
         assert!(script.contains("myapp"));
         assert!(script.contains("--system"));
+    }
+
+    #[test]
+    fn test_hook_converter_preserves_script_hooks() {
+        let hooks = Hooks {
+            post_install: Some(crate::ccs::manifest::ScriptHook {
+                script: "echo installed > /var/lib/myapp/installed".to_string(),
+            }),
+            pre_remove: Some(crate::ccs::manifest::ScriptHook {
+                script: "echo removed > /var/lib/myapp/removed".to_string(),
+            }),
+            ..Default::default()
+        };
+
+        let converter = DebHookConverter;
+        let post = converter.post_install(&hooks).unwrap();
+        let pre_remove = converter.pre_remove(&hooks).unwrap();
+
+        assert!(post.contains("echo installed > /var/lib/myapp/installed"));
+        assert!(pre_remove.contains("echo removed > /var/lib/myapp/removed"));
     }
 
     #[test]

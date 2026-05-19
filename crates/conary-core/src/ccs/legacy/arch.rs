@@ -59,6 +59,9 @@ impl HookConverter for ArchHookConverter {
 
         // sysctl
         lines.extend(CommonHookGenerator::sysctl_commands(hooks));
+        if let Some(hook) = &hooks.post_install {
+            lines.push(hook.script.clone());
+        }
 
         if lines.is_empty() {
             return None;
@@ -72,6 +75,9 @@ impl HookConverter for ArchHookConverter {
 
         // Stop services
         lines.extend(CommonHookGenerator::systemd_commands(hooks, false));
+        if let Some(hook) = &hooks.pre_remove {
+            lines.push(hook.script.clone());
+        }
 
         if lines.is_empty() {
             return None;
@@ -443,6 +449,27 @@ mod tests {
         assert!(script.contains("post_install()"));
         assert!(script.contains("useradd"));
         assert!(script.contains("systemctl"));
+    }
+
+    #[test]
+    fn test_install_script_preserves_script_hooks() {
+        let hooks = Hooks {
+            post_install: Some(crate::ccs::manifest::ScriptHook {
+                script: "echo installed > /var/lib/myapp/installed".to_string(),
+            }),
+            pre_remove: Some(crate::ccs::manifest::ScriptHook {
+                script: "echo removed > /var/lib/myapp/removed".to_string(),
+            }),
+            ..Default::default()
+        };
+
+        let converter = ArchHookConverter;
+        let script = generate_install_script(&converter, &hooks).unwrap();
+
+        assert!(script.contains("post_install()"));
+        assert!(script.contains("pre_remove()"));
+        assert!(script.contains("echo installed > /var/lib/myapp/installed"));
+        assert!(script.contains("echo removed > /var/lib/myapp/removed"));
     }
 
     #[test]
