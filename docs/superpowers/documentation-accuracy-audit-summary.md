@@ -6,12 +6,13 @@ This refresh updates the documentation baseline after the limited public
 release readiness pass and the completed composefs atomic switching
 modernization, then refreshes the Adopt Without Regret docs/integration proof
 slice, records the Native Package Manager Parity Matrix design, and catches the
-active Slice A/Slice B/Slice C/Slice D parity plans, the Slice B preview-doc
+completed Slice A/Slice B/Slice C/Slice D parity records, the Slice B preview-doc
 refresh, the focused Slice C daily-driver/provider-metadata proof, the Slice D
-three-distro parity evidence, and the 2026-05-16 limited-preview checkpoint.
+three-distro parity evidence, the 2026-05-16 limited-preview checkpoint, and the
+2026-05-19 generation-export/security refresh.
 
 Audited every tracked documentation-like file returned by
-`bash scripts/docs-audit-inventory.sh`: 81 tracked files spanning root docs,
+`bash scripts/docs-audit-inventory.sh`: 82 tracked files spanning root docs,
 assistant shims, GitHub templates, canonical docs under `docs/`,
 deploy/operator docs, `deploy/remi.toml.example`, app-local READMEs, active
 planning/design records, historical/archive docs, release security waivers, and
@@ -53,9 +54,10 @@ The repo moved materially after the last audit:
   focused Tier 1 daily-driver command parity, declared-provider matching work,
   and the three-distro conary-test matrix plan
 - 2026-05-16 limited-preview checkpoint evidence, including refreshed
-  adoption/unadoption proof, refreshed Group N QEMU proof, the Group O `TGE04`
-  installed-runtime export blocker, and remaining Dependabot `tough` advisory
-  triage
+  adoption/unadoption proof and refreshed Group N QEMU proof
+- 2026-05-19 refresh evidence, including the restored Group O `TGE04`
+  installed-runtime export boot proof, the package-manager-only tester-post
+  recommendation, and the removal of the `tough` trust-root dependency path
 
 ## Major Corrections
 
@@ -91,28 +93,35 @@ The repo moved materially after the last audit:
   Phase 1 `T21a`-`T21c` non-destructive unadoption proof, focused live-root
   update/security-refusal proof, Phase 3 Group O generation-export QEMU suite,
   temporary local QEMU release gate, refreshed Group N proof, the current
-  TGE04 installed-runtime qcow2 boot blocker, and the Phase 4 native
-  package-manager parity manifest.
+  2026-05-19 Group O installed-runtime/bootstrap-run boot proof, and the Phase 4
+  native package-manager parity manifest.
 - Added the 2026-05-16 limited-preview release checkpoint and refreshed
   README/ROADMAP/bootstrap/generation-export docs so a package-manager-only
-  preview ask does not over-promise the blocked installed-runtime export gate.
+  preview ask treats generation export as supporting evidence instead of the
+  headline public promise.
 - Refreshed assistant-facing docs to route broad doc work through the inventory
   and ledger checker, and added the post-generation export roadmap to the map.
 - Reframed completed dated plans/specs as historical implementation records
-  and archived the completed 2026-05-12 composefs modernization plan/spec after
-  validation landed on `main`.
-- Added the Native Package Manager Parity Matrix design and active Slice A/B
-  implementation plans for Conary-owned install/remove/update and adjacent
-  daily package-manager commands.
+  and archived completed implementation plans/specs after their validation
+  evidence landed on `main`.
+- Added the Native Package Manager Parity Matrix design and Slice A/B/C/D
+  implementation records for Conary-owned install/remove/update, adjacent daily
+  package-manager commands, and the three-distro parity matrix; then moved them
+  to archive paths once the current integration docs carried the release
+  evidence.
 
 ## Archive Decisions
 
 - Existing archive docs and recipe READMEs were retained as historical
   reference material.
 - Completed top-level superpowers plans were moved to
-  `docs/superpowers/plans/archive/`; the limited public release readiness plan
-  remains active at the top level, and the completed composefs atomic
-  modernization plan/spec moved to archive paths.
+  `docs/superpowers/plans/archive/`.
+- Completed design specs were moved to `docs/superpowers/specs/archive/` so
+  active design directories no longer look like the next implementation queue.
+- The current package-manager tester decision is represented by
+  `docs/superpowers/limited-preview-release-checkpoint-2026-05-16.md` and
+  `docs/superpowers/limited-preview-subreddit-tester-post-2026-05-19.md`, not
+  by a broad top-level release plan.
 - No tracked documentation files were deleted.
 
 ## Verification Commands
@@ -140,8 +149,10 @@ The repo moved materially after the last audit:
 - `npm run build` in `site/`
 - `npm audit --audit-level=moderate` in `site/`
 
-The final release-readiness verification gate is tracked by
-`docs/superpowers/plans/2026-05-06-limited-public-release-readiness-plan.md`.
+Current limited-preview evidence is tracked by
+`docs/superpowers/limited-preview-release-checkpoint-2026-05-16.md`; the narrow
+public tester copy is tracked by
+`docs/superpowers/limited-preview-subreddit-tester-post-2026-05-19.md`.
 
 ## Residual Risks
 
@@ -153,19 +164,18 @@ The final release-readiness verification gate is tracked by
 - Active-generation handoff back to native package-manager authority remains a
   follow-up; first-slice unadoption intentionally fails closed when a Conary
   generation is selected.
-- Group O `TGE04` failed in the 2026-05-16 checkpoint: the exported
-  installed-runtime qcow2 booted the kernel and then panicked with
-  `No working init found`.
-- Two open high Dependabot alerts for `tough` remain through `sigstore
-  v0.13.0`; `cargo update -p tough --precise 0.22.0 --dry-run` is blocked by
-  the `sigstore` `^0.21` constraint.
+- Group O `TGE04` failed in the 2026-05-16 checkpoint, but the 2026-05-19
+  refresh fixed the installed-runtime initramfs path and restored the Group O
+  gate to 4 passed / 0 failed / 0 skipped / 0 cancelled.
+- The previous `tough` advisory path has been removed from `Cargo.lock`; the
+  remaining RustSec waiver is `RUSTSEC-2023-0071` for `rsa 0.9.10`.
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 81
-- `verified-no-change`: 19
-- `corrected`: 35
-- `reframed-as-historical`: 5
-- `archived`: 8
+- Total tracked doc-like files audited: 82
+- `verified-no-change`: 18
+- `corrected`: 26
+- `reframed-as-historical`: 1
+- `archived`: 23
 - `retained-historical`: 14
 - Remaining pending rows: 0
