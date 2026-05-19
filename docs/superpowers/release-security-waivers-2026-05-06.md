@@ -29,6 +29,10 @@ readiness gate. Waivers here are not blanket approval for a wider release.
 - **2026-05-19 update:** Removed the `sigstore-trust-root` feature and the
   `tough` dependency from `Cargo.lock`; this waiver remains because `rsa`
   is still pulled by `sigstore`/`openidconnect` and `sequoia-openpgp`.
+- **2026-05-19 security-advisory pipeline revisit:** Goal 3 did not add new
+  Rust dependencies or expand RSA private-key operations. The release gate
+  remains `bash scripts/release-cargo-audit.sh`, with this waiver as the only
+  ignored RustSec vulnerability.
 
 ## Non-Blocking Warnings
 

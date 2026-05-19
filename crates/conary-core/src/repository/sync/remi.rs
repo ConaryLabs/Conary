@@ -6,11 +6,13 @@ use crate::db::models::{
 };
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
+use crate::repository::metadata::PackageSecurityAdvisoryMetadata;
 use crate::repository::retry::RetryConfig;
 use rusqlite::Connection;
 use std::collections::HashSet;
 use tracing::{debug, info, warn};
 
+use super::apply_trusted_package_security_advisory;
 use super::native::{
     extract_extra_metadata_provides, persist_native_sync_rows, split_on_version_op,
 };
@@ -40,9 +42,42 @@ pub(super) fn remi_sync_row(
         .dependencies
         .as_ref()
         .map(|deps| serde_json::to_string(deps).unwrap_or_default());
-    package.metadata = entry.metadata.as_ref().map(|value| value.to_string());
 
-    let metadata = entry.metadata.unwrap_or(serde_json::Value::Null);
+    let mut metadata = entry.metadata.unwrap_or(serde_json::Value::Null);
+    if let Some(advisory_value) = metadata.get("security_advisory").cloned() {
+        match serde_json::from_value::<PackageSecurityAdvisoryMetadata>(advisory_value) {
+            Ok(advisory) => {
+                match apply_trusted_package_security_advisory(
+                    &mut package,
+                    &advisory,
+                    "remi",
+                    "unknown",
+                ) {
+                    Ok(normalized) => {
+                        if let Some(object) = metadata.as_object_mut() {
+                            object.insert("security_advisory".to_string(), normalized);
+                        }
+                    }
+                    Err(error) => {
+                        warn!(
+                            "Ignoring untrusted Remi security advisory metadata for {} {}: {}",
+                            entry.name, entry.version, error
+                        );
+                    }
+                }
+            }
+            Err(error) => {
+                warn!(
+                    "Ignoring malformed Remi security advisory metadata for {} {}: {}",
+                    entry.name, entry.version, error
+                );
+            }
+        }
+    }
+    package.metadata = match metadata {
+        serde_json::Value::Null => None,
+        ref value => Some(value.to_string()),
+    };
 
     let scheme = crate::repository::distro::version_scheme_from_distro_name(&distro)
         .unwrap_or(crate::repository::versioning::VersionScheme::Rpm);

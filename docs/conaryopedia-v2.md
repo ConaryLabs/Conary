@@ -539,7 +539,7 @@ Conary-owned packages can be updated on a normal mutable host without first sele
 
 Adopted packages keep native package-manager authority. A normal `conary update` or `conary update --dep-mode satisfy|adopt` must not silently replace an adopted RPM/DEB/Arch package with a Conary-owned package. It reports that dnf, apt, or pacman remains authoritative and skips those packages. Crossing that boundary requires explicit `--dep-mode takeover`, and critical adopted packages remain blocked even under takeover.
 
-Security-only updates (`--security`) filter for packages marked as security updates by trusted advisory metadata, allowing rapid patching without changing other packages. This mode is fail-closed for requested Conary-owned sources: if a repository is `unknown` or `unsupported` for security-advisory metadata, Conary refuses before mutation and prints the affected source/package. Mark a repository as advisory-supported only when its synced metadata really publishes advisories that Conary can trust.
+Security-only updates (`--security`) filter for packages marked as security updates by trusted advisory metadata, allowing rapid patching without changing other packages. This mode is fail-closed for requested Conary-owned sources: if a repository is `unknown` or `unsupported` for security-advisory metadata, Conary refuses before mutation and prints the affected source/package. Mark a repository as advisory-supported only when its synced metadata really publishes advisories that Conary can trust. For trusted candidates, update output includes severity, advisory ID, CVEs, fixed version, and trusted source before the package is applied.
 
 Update candidate selection now depends on the effective source policy. In
 `policy` mode, Conary stays biased toward the currently installed source. In
@@ -831,6 +831,35 @@ conary repo add advisory-fedora https://repo.example.com/fedora \
 The `--content-url` flag enables the **reference mirror** pattern: metadata is fetched from the primary URL, but packages are downloaded from the content URL. This allows hosting custom metadata that points to upstream package mirrors.
 
 The `--security-advisories` flag records whether a repository publishes security-advisory metadata that Conary can trust. Valid values are `unknown` (default), `unsupported`, and `supported`. `conary update --security` refuses before mutation for requested Conary-owned packages from `unknown` or `unsupported` sources, so use `supported` only when the source actually carries advisory metadata.
+
+The supported JSON repository advisory shape is:
+
+```json
+{
+  "security_advisory_source": {
+    "name": "conary-json",
+    "trust": "trusted"
+  },
+  "packages": [
+    {
+      "name": "openssl",
+      "version": "3.2.1-1.fc44",
+      "security_advisory": {
+        "id": "FEDORA-2026-0001",
+        "severity": "critical",
+        "cves": ["CVE-2026-0001"],
+        "fixed_version": "3.2.1-1.fc44",
+        "url": "https://security.example.test/FEDORA-2026-0001"
+      }
+    }
+  ]
+}
+```
+
+Remi metadata can carry the same per-package `security_advisory` object inside
+package `metadata` when it includes `source`, `source_trust`, and
+`fixed_version`. Unsupported or untrusted advisory metadata is not treated as a
+security update.
 
 #### Managing Repositories
 

@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-05-19
-revision: 21
-summary: Record Phase 4 daily-driver corpus evidence
+revision: 22
+summary: Record Phase 4 daily-driver corpus and security advisory evidence
 ---
 
 # Integration Testing
@@ -37,6 +37,9 @@ cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distr
 
 # Run focused composefs atomic modernization QEMU validation
 cargo run -p conary-test -- run --suite phase3-composefs-modernization --distro fedora44 --phase 3
+
+# Run trusted security advisory ingestion and update validation
+cargo run -p conary-test -- run --suite phase4-security-advisory-pipeline --distro fedora44 --phase 4
 
 # Run all tests for a phase
 cargo run -p conary-test -- run --distro fedora44 --phase 1
@@ -231,6 +234,22 @@ Fresh Slice D evidence from May 19, 2026:
 All three result files include the `TNPM13` through `TNPM18` daily-driver
 corpus group and passed `scripts/check-conary-test-result-gate.sh`.
 
+Focused Goal 3 security advisory pipeline proof:
+
+- `cargo run -p conary-test -- run --suite phase4-security-advisory-pipeline --distro fedora44 --phase 4`
+
+The `phase4-security-advisory-pipeline` manifest builds a v1/v2 native fixture,
+serves JSON repository metadata with a trusted `security_advisory_source`,
+proves an `unknown` source refuses before mutation, then syncs the same
+repository as `--security-advisories supported` and verifies persisted severity,
+CVE, advisory ID, fixed version, and source-trust metadata before
+`conary update --security` applies the trusted fix.
+
+Fresh Goal 3 evidence from May 19, 2026:
+
+- Fedora 44/RPM: `phase4-security-advisory-pipeline`, 7 passed, 0 failed, 0
+  skipped, 0 cancelled.
+
 For supported Forge control-plane validation after a new runner is registered,
 prefer:
 
@@ -303,7 +322,9 @@ The focused CLI integration test
 Slice B. It proves that a Conary-owned package can update from v1 to v2 on a
 mutable live root with no selected generation, and that `update --security`
 refuses before mutation when the requested repository cannot prove advisory
-metadata support.
+metadata support. It also includes a trusted JSON advisory repository fixture
+that syncs advisory metadata and applies a security update while surfacing
+advisory ID, CVE, fixed version, and trusted source output.
 
 ### Phase 2: Deep E2E (T38-T76)
 

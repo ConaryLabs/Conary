@@ -14,6 +14,9 @@ use tracing::{debug, info, warn};
 
 use super::client::RepositoryClient;
 use super::gpg::{GpgVerifier, MetadataSignatureVerifier};
+use super::metadata::{
+    PackageSecurityAdvisoryMetadata, RepositoryMetadata, SecurityAdvisorySourceMetadata,
+};
 use super::registry::{self, RepositoryFormat};
 use native::{
     convert_requirement_groups, distro_flavor_to_db, normalized_repository_capabilities,
@@ -428,13 +431,15 @@ pub async fn sync_repository(conn: &Connection, repo: &mut Repository) -> Result
     Ok(count)
 }
 
-async fn fetch_repository_json_snapshot(repo: &Repository) -> Result<RepositorySyncSnapshot> {
-    let client = RepositoryClient::new()?;
-    let metadata = client.fetch_metadata(&repo.url).await?;
-
+fn json_repository_sync_snapshot(
+    repo: &Repository,
+    metadata: RepositoryMetadata,
+) -> Result<RepositorySyncSnapshot> {
     let repo_id = repo
         .id
         .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
+    let trusted_advisory_source =
+        trusted_json_advisory_source(repo, metadata.security_advisory_source.as_ref())?;
 
     let mut packages = Vec::new();
     let mut delta_rows = Vec::new();
@@ -464,6 +469,22 @@ async fn fetch_repository_json_snapshot(repo: &Repository) -> Result<RepositoryS
         repo_pkg.architecture = pkg_meta.architecture;
         repo_pkg.description = pkg_meta.description;
         repo_pkg.dependencies = deps_json;
+        if let (Some(source), Some(advisory)) =
+            (trusted_advisory_source, pkg_meta.security_advisory.as_ref())
+        {
+            let normalized = apply_trusted_package_security_advisory(
+                &mut repo_pkg,
+                advisory,
+                &source.name,
+                &source.trust,
+            )?;
+            repo_pkg.metadata = Some(
+                serde_json::json!({
+                    "security_advisory": normalized,
+                })
+                .to_string(),
+            );
+        }
 
         packages.push(repo_pkg);
 
@@ -491,6 +512,129 @@ async fn fetch_repository_json_snapshot(repo: &Repository) -> Result<RepositoryS
             deltas: delta_rows,
         },
     ))
+}
+
+async fn fetch_repository_json_snapshot(repo: &Repository) -> Result<RepositorySyncSnapshot> {
+    let client = RepositoryClient::new()?;
+    let metadata = client.fetch_metadata(&repo.url).await?;
+    json_repository_sync_snapshot(repo, metadata)
+}
+
+fn trusted_json_advisory_source<'a>(
+    repo: &Repository,
+    source: Option<&'a SecurityAdvisorySourceMetadata>,
+) -> Result<Option<&'a SecurityAdvisorySourceMetadata>> {
+    if !repo.security_advisory_support.is_supported() {
+        return Ok(None);
+    }
+
+    let source = source.ok_or_else(|| {
+        Error::ConfigError(format!(
+            "Repository '{}' is marked as supported for security advisories but did not publish a trusted security advisory source",
+            repo.name
+        ))
+    })?;
+
+    if source.name.trim().is_empty() {
+        return Err(Error::ConfigError(format!(
+            "Repository '{}' published an empty security advisory source name",
+            repo.name
+        )));
+    }
+
+    if !source.trust.eq_ignore_ascii_case("trusted") {
+        return Err(Error::ConfigError(format!(
+            "Repository '{}' published security advisory source '{}' with unsupported trust '{}'",
+            repo.name, source.name, source.trust
+        )));
+    }
+
+    Ok(Some(source))
+}
+
+fn apply_trusted_package_security_advisory(
+    package: &mut RepositoryPackage,
+    advisory: &PackageSecurityAdvisoryMetadata,
+    default_source: &str,
+    default_source_trust: &str,
+) -> Result<serde_json::Value> {
+    let source = advisory.source.as_deref().unwrap_or(default_source).trim();
+    if source.is_empty() {
+        return Err(Error::ConfigError(format!(
+            "Security advisory '{}' for package '{}' has an empty source",
+            advisory.id, package.name
+        )));
+    }
+
+    let source_trust = advisory
+        .source_trust
+        .as_deref()
+        .unwrap_or(default_source_trust)
+        .trim()
+        .to_ascii_lowercase();
+    if source_trust != "trusted" {
+        return Err(Error::ConfigError(format!(
+            "Security advisory '{}' for package '{}' is not from a trusted source",
+            advisory.id, package.name
+        )));
+    }
+
+    if advisory.id.trim().is_empty() {
+        return Err(Error::ConfigError(format!(
+            "Security advisory for package '{}' is missing an advisory id",
+            package.name
+        )));
+    }
+
+    let fixed_version = advisory
+        .fixed_version
+        .as_deref()
+        .unwrap_or(&package.version);
+    if fixed_version != package.version {
+        return Err(Error::ConfigError(format!(
+            "Security advisory '{}' for package '{}' fixed_version '{}' does not match package version '{}'",
+            advisory.id, package.name, fixed_version, package.version
+        )));
+    }
+
+    let severity = advisory.severity.as_deref().and_then(normalize_severity);
+    let cves: Vec<String> = advisory
+        .cves
+        .iter()
+        .map(|cve| cve.trim())
+        .filter(|cve| !cve.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+
+    package.is_security_update = true;
+    package.severity = severity.clone();
+    package.cve_ids = if cves.is_empty() {
+        None
+    } else {
+        Some(cves.join(","))
+    };
+    package.advisory_id = Some(advisory.id.trim().to_string());
+    package.advisory_url = advisory.url.clone();
+
+    Ok(serde_json::json!({
+        "id": advisory.id.trim(),
+        "source": source,
+        "source_trust": source_trust,
+        "severity": severity,
+        "cves": cves,
+        "fixed_version": fixed_version,
+        "url": advisory.url,
+    }))
+}
+
+fn normalize_severity(severity: &str) -> Option<String> {
+    let severity = severity.trim().to_ascii_lowercase();
+    match severity.as_str() {
+        "" => None,
+        "high" => Some("important".to_string()),
+        "medium" => Some("moderate".to_string()),
+        _ => Some(severity),
+    }
 }
 
 fn persist_repository_sync_snapshot(
@@ -686,12 +830,14 @@ mod tests {
     use super::*;
     use crate::db::models::{
         RepositoryProvide, RepositoryRequirement, RepositoryRequirementGroup as DbRequirementGroup,
+        SecurityAdvisorySupport,
     };
     use crate::db::schema::migrate;
     use crate::repository::dependency_model::{
         self as dep_model, ConditionalRequirementBehavior, RepositoryDependencyFlavor,
         RepositoryRequirementKind,
     };
+    use crate::repository::metadata::RepositoryMetadata as JsonRepositoryMetadata;
     use crate::repository::parsers::{Dependency, PackageMetadata};
     use crate::repository::versioning::VersionScheme;
     use serde_json::json;
@@ -894,6 +1040,173 @@ mod tests {
             requirement.capability == "glibc"
                 && requirement.version_constraint.as_deref() == Some(">= 2.39")
         }));
+    }
+
+    #[test]
+    fn test_remi_package_entry_marks_trusted_security_advisory() {
+        let entry = RemiPackageEntry {
+            name: "openssl".to_string(),
+            version: "3.2.1-1.fc44".to_string(),
+            converted: false,
+            architecture: Some("x86_64".to_string()),
+            dependencies: None,
+            metadata: Some(json!({
+                "security_advisory": {
+                    "id": "FEDORA-2026-0001",
+                    "source": "remi",
+                    "source_trust": "trusted",
+                    "severity": "critical",
+                    "cves": ["CVE-2026-0001", "CVE-2026-0002"],
+                    "fixed_version": "3.2.1-1.fc44",
+                    "url": "https://security.example.test/FEDORA-2026-0001"
+                }
+            })),
+        };
+
+        let row = remi_sync_row(
+            7,
+            "https://remi.conary.io".to_string(),
+            "fedora".to_string(),
+            entry,
+        );
+
+        assert!(row.package.is_security_update);
+        assert_eq!(row.package.severity.as_deref(), Some("critical"));
+        assert_eq!(
+            row.package.cve_ids.as_deref(),
+            Some("CVE-2026-0001,CVE-2026-0002")
+        );
+        assert_eq!(row.package.advisory_id.as_deref(), Some("FEDORA-2026-0001"));
+        assert_eq!(
+            row.package.advisory_url.as_deref(),
+            Some("https://security.example.test/FEDORA-2026-0001")
+        );
+
+        let metadata: serde_json::Value =
+            serde_json::from_str(row.package.metadata.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            metadata["security_advisory"]["fixed_version"],
+            "3.2.1-1.fc44"
+        );
+        assert_eq!(metadata["security_advisory"]["source_trust"], "trusted");
+    }
+
+    #[test]
+    fn test_json_fallback_persists_trusted_advisory_metadata() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        let mut repo = Repository::new(
+            "fedora-security".to_string(),
+            "https://example.com/fedora".to_string(),
+        );
+        repo.security_advisory_support = SecurityAdvisorySupport::Supported;
+        repo.insert(&conn).unwrap();
+        let repo_id = repo.id.unwrap();
+
+        let metadata: JsonRepositoryMetadata = serde_json::from_value(json!({
+            "name": "fedora-security",
+            "version": "1",
+            "security_advisory_source": {
+                "name": "conary-json",
+                "trust": "trusted"
+            },
+            "packages": [
+                {
+                    "name": "openssl",
+                    "version": "3.2.1-1.fc44",
+                    "architecture": "x86_64",
+                    "description": "TLS toolkit",
+                    "checksum": "sha256:openssl-fixed",
+                    "size": 4096,
+                    "download_url": "https://example.com/fedora/openssl-3.2.1-1.fc44.ccs",
+                    "dependencies": [],
+                    "security_advisory": {
+                        "id": "FEDORA-2026-0001",
+                        "severity": "critical",
+                        "cves": ["CVE-2026-0001"],
+                        "fixed_version": "3.2.1-1.fc44",
+                        "url": "https://security.example.test/FEDORA-2026-0001"
+                    }
+                }
+            ]
+        }))
+        .unwrap();
+
+        let snapshot = json_repository_sync_snapshot(&repo, metadata).unwrap();
+        assert_eq!(
+            persist_repository_sync_snapshot(&conn, &mut repo, snapshot).unwrap(),
+            1
+        );
+
+        let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
+        assert_eq!(stored.len(), 1);
+        let package = &stored[0];
+        assert!(package.is_security_update);
+        assert_eq!(package.severity.as_deref(), Some("critical"));
+        assert_eq!(package.cve_ids.as_deref(), Some("CVE-2026-0001"));
+        assert_eq!(package.advisory_id.as_deref(), Some("FEDORA-2026-0001"));
+        assert_eq!(
+            package.advisory_url.as_deref(),
+            Some("https://security.example.test/FEDORA-2026-0001")
+        );
+
+        let package_metadata: serde_json::Value =
+            serde_json::from_str(package.metadata.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            package_metadata["security_advisory"]["fixed_version"],
+            "3.2.1-1.fc44"
+        );
+        assert_eq!(
+            package_metadata["security_advisory"]["source"],
+            "conary-json"
+        );
+        assert_eq!(
+            package_metadata["security_advisory"]["source_trust"],
+            "trusted"
+        );
+    }
+
+    #[test]
+    fn test_json_fallback_supported_repo_requires_trusted_advisory_source() {
+        let mut repo = Repository::new(
+            "fedora-security".to_string(),
+            "https://example.com/fedora".to_string(),
+        );
+        repo.id = Some(42);
+        repo.security_advisory_support = SecurityAdvisorySupport::Supported;
+
+        let metadata: JsonRepositoryMetadata = serde_json::from_value(json!({
+            "name": "fedora-security",
+            "version": "1",
+            "packages": [
+                {
+                    "name": "openssl",
+                    "version": "3.2.1-1.fc44",
+                    "architecture": "x86_64",
+                    "description": "TLS toolkit",
+                    "checksum": "sha256:openssl-fixed",
+                    "size": 4096,
+                    "download_url": "https://example.com/fedora/openssl-3.2.1-1.fc44.ccs",
+                    "dependencies": [],
+                    "security_advisory": {
+                        "id": "FEDORA-2026-0001",
+                        "severity": "critical",
+                        "cves": ["CVE-2026-0001"],
+                        "fixed_version": "3.2.1-1.fc44"
+                    }
+                }
+            ]
+        }))
+        .unwrap();
+
+        let error = json_repository_sync_snapshot(&repo, metadata).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("trusted security advisory source"),
+            "{error}"
+        );
     }
 
     #[test]

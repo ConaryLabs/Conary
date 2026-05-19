@@ -559,6 +559,69 @@ fn no_update_message(security_only: bool, adopted_updates_skipped: bool) -> &'st
     }
 }
 
+fn render_security_update_marker(package: &RepositoryPackage) -> String {
+    if !package.is_security_update {
+        return String::new();
+    }
+
+    let mut parts = Vec::new();
+    parts.push(
+        package
+            .severity
+            .as_deref()
+            .unwrap_or("security")
+            .to_string(),
+    );
+
+    if let Some(advisory_id) = package
+        .advisory_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        parts.push(advisory_id.to_string());
+    }
+
+    if let Some(cves) = package
+        .cve_ids
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        parts.push(cves.to_string());
+    }
+
+    if let Some(fixed_version) = security_advisory_metadata_text(package, "fixed_version") {
+        parts.push(format!("fixed: {fixed_version}"));
+    }
+
+    if let Some(source) = security_advisory_metadata_text(package, "source") {
+        let source_label = match security_advisory_metadata_text(package, "source_trust")
+            .as_deref()
+            .map(str::trim)
+        {
+            Some("trusted") => format!("trusted source: {source}"),
+            Some(trust) if !trust.is_empty() => format!("{trust} source: {source}"),
+            _ => format!("source: {source}"),
+        };
+        parts.push(source_label);
+    }
+
+    format!(" [{}]", parts.join("; "))
+}
+
+fn security_advisory_metadata_text(package: &RepositoryPackage, key: &str) -> Option<String> {
+    let metadata = package.metadata.as_deref()?;
+    let value: serde_json::Value = serde_json::from_str(metadata).ok()?;
+    value
+        .get("security_advisory")?
+        .get(key)?
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 fn print_security_metadata_unavailable(unavailable: &[SecurityMetadataUnavailable]) {
     if unavailable.is_empty() {
         return;
@@ -845,14 +908,7 @@ pub async fn cmd_update(
             }
         }
 
-        let security_marker = if selected.package.is_security_update {
-            format!(
-                " [{}]",
-                selected.package.severity.as_deref().unwrap_or("security")
-            )
-        } else {
-            String::new()
-        };
+        let security_marker = render_security_update_marker(&selected.package);
         info!(
             "Update available: {} {} -> {}{}",
             trove.name, trove.version, selected.package.version, security_marker
@@ -937,14 +993,7 @@ pub async fn cmd_update(
         );
     }
     for (trove, selected) in &updates_available {
-        let security_marker = if selected.package.is_security_update {
-            format!(
-                " [{}]",
-                selected.package.severity.as_deref().unwrap_or("security")
-            )
-        } else {
-            String::new()
-        };
+        let security_marker = render_security_update_marker(&selected.package);
         println!(
             "  {} {} -> {}{}",
             trove.name, trove.version, selected.package.version, security_marker
@@ -2304,6 +2353,40 @@ mod tests {
         .unwrap();
 
         assert!(matches!(result, UpdateCandidateSelection::Selected(_)));
+    }
+
+    #[test]
+    fn security_update_marker_includes_trusted_advisory_details() {
+        let mut package = RepositoryPackage::new(
+            7,
+            "openssl".to_string(),
+            "3.2.1-1.fc44".to_string(),
+            "sha256:openssl-fixed".to_string(),
+            4096,
+            "https://example.test/openssl-3.2.1-1.fc44.ccs".to_string(),
+        );
+        package.is_security_update = true;
+        package.severity = Some("critical".to_string());
+        package.cve_ids = Some("CVE-2026-0001,CVE-2026-0002".to_string());
+        package.advisory_id = Some("FEDORA-2026-0001".to_string());
+        package.metadata = Some(
+            serde_json::json!({
+                "security_advisory": {
+                    "source": "conary-json",
+                    "source_trust": "trusted",
+                    "fixed_version": "3.2.1-1.fc44"
+                }
+            })
+            .to_string(),
+        );
+
+        let marker = render_security_update_marker(&package);
+
+        assert!(marker.contains("critical"), "{marker}");
+        assert!(marker.contains("FEDORA-2026-0001"), "{marker}");
+        assert!(marker.contains("CVE-2026-0001,CVE-2026-0002"), "{marker}");
+        assert!(marker.contains("fixed: 3.2.1-1.fc44"), "{marker}");
+        assert!(marker.contains("trusted source: conary-json"), "{marker}");
     }
 
     #[test]

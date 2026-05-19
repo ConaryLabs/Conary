@@ -12,7 +12,16 @@ use serde::{Deserialize, Serialize};
 pub struct RepositoryMetadata {
     pub name: String,
     pub version: String,
+    pub security_advisory_source: Option<SecurityAdvisorySourceMetadata>,
     pub packages: Vec<PackageMetadata>,
+}
+
+/// Trusted advisory source declaration for a JSON repository index.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecurityAdvisorySourceMetadata {
+    pub name: String,
+    pub trust: String,
+    pub url: Option<String>,
 }
 
 /// Delta update information for a package
@@ -39,4 +48,19 @@ pub struct PackageMetadata {
     pub dependencies: Option<Vec<String>>,
     /// Available delta updates from previous versions
     pub delta_from: Option<Vec<DeltaInfo>>,
+    /// Security advisory metadata proving that this package fixes vulnerabilities.
+    pub security_advisory: Option<PackageSecurityAdvisoryMetadata>,
+}
+
+/// Per-package security advisory metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackageSecurityAdvisoryMetadata {
+    pub id: String,
+    pub source: Option<String>,
+    pub source_trust: Option<String>,
+    pub severity: Option<String>,
+    #[serde(default)]
+    pub cves: Vec<String>,
+    pub fixed_version: Option<String>,
+    pub url: Option<String>,
 }

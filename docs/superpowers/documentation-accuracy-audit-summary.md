@@ -12,7 +12,7 @@ three-distro parity evidence, the 2026-05-16 limited-preview checkpoint, and the
 2026-05-19 generation-export/security refresh. It also records the 2026-05-19
 daily-driver readiness program design that decomposes the seven replacement
 gaps into Codex `/goal` tracks and the first result-gated daily-driver corpus
-expansion.
+expansion, plus the Goal 3 trusted security advisory pipeline path.
 
 Audited every tracked documentation-like file returned by
 `bash scripts/docs-audit-inventory.sh`: 83 tracked files spanning root docs,
@@ -64,6 +64,9 @@ The repo moved materially after the last audit:
 - the first result-gated daily-driver corpus expansion for the Phase 4 native
   package-manager parity suite, including covered package classes and explicit
   unsupported native alternatives/bootloader mutation boundaries
+- the Goal 3 security advisory pipeline, including trusted JSON repository
+  advisory ingestion, Remi metadata advisory parsing, fail-closed unknown-source
+  behavior, and advisory/CVE/fixed-version/source-trust output
 
 ## Major Corrections
 
@@ -85,7 +88,8 @@ The repo moved materially after the last audit:
   switching landed so transaction and recovery wording reflects next-boot
   selection through `/conary/current`; then refreshed the package-update,
   adoption, unadoption, repository advisory-support, and explicit-takeover
-  command guidance after Slice B landed.
+  command guidance after Slice B landed; refreshed security advisory metadata
+  guidance after Goal 3 added trusted JSON and Remi advisory ingestion.
 - Updated `CHANGELOG.md`, `CONTRIBUTING.md`, and `SECURITY.md` so public and
   developer-facing docs describe rebuild/reselect semantics rather than older
   live remount recovery language.

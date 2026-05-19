@@ -281,24 +281,28 @@ bash scripts/check-conary-test-result-gate.sh apps/conary/tests/integration/remi
 Make `conary update --security` useful enough for a daily driver rather than
 only honest enough to refuse unverifiable sources.
 
-### Current Gap
+### Current State
 
-Conary correctly refuses security-only updates when a source cannot prove
-trusted advisory metadata support. Daily-driver replacement requires trusted
-advisory ingestion, display, and update selection for supported repositories.
+Conary refuses security-only updates when a source cannot prove trusted
+advisory metadata support. The Goal 3 implementation adds a named trusted JSON
+repository advisory path, Remi package-metadata advisory parsing, persisted
+advisory/CVE/severity/fixed-version/source-trust fields, and focused Phase 4
+validation for the positive and fail-closed paths.
 
 ### Scope
 
-- Define supported advisory metadata inputs for Remi and local repository
-  metadata.
-- Persist advisory identity, CVEs, severity, fixed versions, affected packages,
-  and source trust status.
-- Make `update --security` select only trusted security fixes.
-- Make output explain applied, unavailable, unsupported, and up-to-date states.
+- Maintain supported advisory metadata inputs for Remi package metadata and
+  local JSON repository metadata.
+- Keep advisory identity, CVEs, severity, fixed versions, affected packages,
+  and source trust status persisted.
+- Keep `update --security` selecting only trusted security fixes.
+- Keep output explaining applied, unavailable, unsupported, and up-to-date
+  states.
 - Keep refusal before mutation for unknown or unsupported sources.
-- Add a positive fixture for the supported path that proves advisory ingestion,
-  persistence, and trusted candidate selection before package mutation.
-- Revisit the remaining `rsa` waiver and document the exact release gate.
+- Maintain the positive fixture for the supported path that proves advisory
+  ingestion, persistence, and trusted candidate selection before package
+  mutation.
+- Keep the remaining `rsa` waiver and release audit gate current.
 
 ### Out Of Scope
 

@@ -191,6 +191,101 @@ fn serve_static_package(package_path: &Path) -> (String, thread::JoinHandle<()>)
     (url, handle)
 }
 
+fn serve_security_json_repository(package_path: &Path) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+
+    let package_path = package_path.to_path_buf();
+    let package_bytes = fs::read(&package_path).unwrap();
+    let filename = package_path
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let base_url = format!("http://{address}");
+    let package_url = format!("{base_url}/{filename}");
+    let metadata_body = serde_json::json!({
+        "name": "security-json-fixture",
+        "version": "1",
+        "security_advisory_source": {
+            "name": "conary-json",
+            "trust": "trusted"
+        },
+        "packages": [
+            {
+                "name": FIXTURE_NAME,
+                "version": "2.0.0",
+                "architecture": std::env::consts::ARCH,
+                "description": "Trusted security update fixture",
+                "checksum": conary_core::hash::sha256(&package_bytes),
+                "size": package_bytes.len() as i64,
+                "download_url": package_url,
+                "dependencies": [],
+                "security_advisory": {
+                    "id": "TEST-2026-0001",
+                    "severity": "critical",
+                    "cves": ["CVE-2026-0001"],
+                    "fixed_version": "2.0.0",
+                    "url": "https://security.example.test/TEST-2026-0001"
+                }
+            }
+        ]
+    })
+    .to_string()
+    .into_bytes();
+
+    let handle = thread::spawn(move || {
+        let started = Instant::now();
+        let mut served_metadata = false;
+        let mut served_package = false;
+
+        while started.elapsed() <= Duration::from_secs(20) && !(served_metadata && served_package) {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let mut request = [0_u8; 2048];
+                    let bytes_read = stream.read(&mut request).unwrap_or(0);
+                    let request_text = String::from_utf8_lossy(&request[..bytes_read]);
+                    let request_path = request_text
+                        .lines()
+                        .next()
+                        .and_then(|line| line.split_whitespace().nth(1))
+                        .unwrap_or("/");
+
+                    let (status, content_type, body): (&str, &str, &[u8]) =
+                        if request_path == "/metadata.json" {
+                            served_metadata = true;
+                            ("200 OK", "application/json", metadata_body.as_slice())
+                        } else if request_path.trim_start_matches('/') == filename {
+                            served_package = true;
+                            (
+                                "200 OK",
+                                "application/octet-stream",
+                                package_bytes.as_slice(),
+                            )
+                        } else {
+                            ("404 Not Found", "text/plain", b"not found".as_slice())
+                        };
+
+                    write!(
+                        stream,
+                        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: {content_type}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    )
+                    .unwrap();
+                    stream.write_all(body).unwrap();
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => return,
+            }
+        }
+    });
+
+    (base_url, handle)
+}
+
 #[test]
 fn no_generation_remove_deletes_file_and_history_records_apply() {
     let root = tempfile::tempdir().unwrap();
@@ -492,4 +587,87 @@ fn security_update_with_unknown_advisory_support_refuses_before_mutation() {
         "hello-v1\n"
     );
     assert!(!root.join("usr/share/conary-test/added.txt").exists());
+}
+
+#[test]
+fn security_update_syncs_trusted_json_advisory_and_applies_fix() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    fs::create_dir_all(&root).unwrap();
+    let db_path = temp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+
+    let v1_package = build_ccs_fixture(temp.path(), "v1");
+    let v2_package = build_ccs_fixture(temp.path(), "v2");
+    install_ccs_into_root(&root, &db_path, &v1_package);
+
+    let (repo_url, server) = serve_security_json_repository(&v2_package);
+    let add_repo = run_conary_owned(&[
+        "repo".to_string(),
+        "add".to_string(),
+        "security-json-fixture".to_string(),
+        repo_url.clone(),
+        "--db-path".to_string(),
+        db_path.to_string_lossy().into_owned(),
+        "--no-gpg-check".to_string(),
+        "--security-advisories".to_string(),
+        "supported".to_string(),
+    ]);
+    assert_success(&add_repo);
+
+    let sync = run_conary_owned(&[
+        "repo".to_string(),
+        "sync".to_string(),
+        "security-json-fixture".to_string(),
+        "--db-path".to_string(),
+        db_path.to_string_lossy().into_owned(),
+        "--force".to_string(),
+    ]);
+    assert_success(&sync);
+
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let repo = Repository::find_by_name(&conn, "security-json-fixture")
+        .unwrap()
+        .expect("security fixture repo should exist");
+    conn.execute(
+        "UPDATE troves
+         SET installed_from_repository_id = ?1, source_distro = 'security-json-fixture', version_scheme = 'rpm'
+         WHERE name = ?2",
+        (repo.id.unwrap(), FIXTURE_NAME),
+    )
+    .unwrap();
+    drop(conn);
+
+    let output = run_conary_owned(&[
+        "--allow-live-system-mutation".to_string(),
+        "update".to_string(),
+        FIXTURE_NAME.to_string(),
+        "--security".to_string(),
+        "--db-path".to_string(),
+        db_path.to_string_lossy().into_owned(),
+        "--root".to_string(),
+        root.to_string_lossy().into_owned(),
+        "--sandbox".to_string(),
+        "never".to_string(),
+        "--yes".to_string(),
+    ]);
+    server.join().unwrap();
+    assert_success(&output);
+
+    let combined = output_text(&output);
+    assert!(combined.contains("TEST-2026-0001"), "{combined}");
+    assert!(combined.contains("CVE-2026-0001"), "{combined}");
+    assert!(
+        combined.contains("trusted source: conary-json"),
+        "{combined}"
+    );
+    assert_eq!(installed_versions(&db_path), vec!["2.0.0".to_string()]);
+    assert_eq!(
+        fs::read_to_string(root.join("usr/share/conary-test/hello.txt")).unwrap(),
+        "hello-v2\n"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("usr/share/conary-test/added.txt")).unwrap(),
+        "added-in-v2\n"
+    );
 }
