@@ -1,4 +1,4 @@
-# Limited Preview Release Checkpoint - 2026-05-16
+# Limited Preview Release Checkpoint - 2026-05-16, refreshed 2026-05-19
 
 ## Scope
 
@@ -12,27 +12,26 @@ be a low-friction, reversible package-manager trial for Fedora 44, Ubuntu
 26.04 LTS, and Arch Linux users who understand that this is still preview
 software.
 
-- Branch: `limited-preview-checkpoint-2026-05-16`
-- Base commit checked out at start: `50b3ccee771908df36c88b542da5010fde1dff3c`
-- Date: 2026-05-16
+- Original checkpoint branch: `limited-preview-checkpoint-2026-05-16`
+- Base commit checked out at original checkpoint start: `50b3ccee771908df36c88b542da5010fde1dff3c`
+- Original checkpoint date: 2026-05-16
+- Refresh date: 2026-05-19
 
 ## Recommendation
 
-Decision as of 2026-05-16: **no-go for the current documented limited-preview
-surface.**
+Decision as of 2026-05-19: **go for a narrow package-manager tester post, not
+a broad release claim.**
 
 The package-manager and adoption flows have encouraging evidence, including
 fresh Fedora 44, Ubuntu 26.04 LTS, and Arch adoption/unadoption proof plus the
-existing native package-manager parity matrix. The current README/roadmap
-surface still treats local QEMU validation and raw/qcow2 generation export as
-part of the preview readiness bar, though, and the refreshed Group O QEMU run
-found a real installed-runtime export boot failure.
+existing native package-manager parity matrix. The 2026-05-19 refresh also
+restored the Group O QEMU generation-export gate to green: installed-runtime
+and bootstrap-run raw/qcow2 exports both booted under UEFI.
 
-A narrower **package-manager-only tester post** could be reconsidered if the
-public wording deliberately excludes generation export from the ask, avoids any
-"release ready" claim, and names the unresolved `tough`/`sigstore` advisory
-caveat. Until then, do not ask subreddit users to treat the whole documented
-preview surface as ready.
+The public ask should still be deliberately constrained. Ask for testers on VMs,
+snapshotted systems, or non-critical machines; make adoption/unadoption the main
+story; avoid "release ready" language; and keep active-generation handoff,
+conaryd package execution, and ISO export out of the promise.
 
 ## Evidence Summary
 
@@ -48,18 +47,17 @@ Fast workspace gates passed:
 
 Security/advisory triage:
 
-- `bash scripts/release-cargo-audit.sh` passed with the existing
-  `proc-macro-error` unmaintained warning allowed by the release waiver.
-- GitHub Dependabot still reports two open high alerts for `tough` in
+- The first triage found `tough v0.21.0` pulled only through
+  `sigstore-trust-root`; `cargo update -p tough --precise 0.22.0 --dry-run`
+  could not resolve because `sigstore v0.13.0` required `tough = "^0.21"`.
+- The 2026-05-19 patch removed the `sigstore-trust-root` feature, uses bundled
+  Fulcio trust anchors for provenance verification, and removed `tough` from
   `Cargo.lock`.
-- `cargo tree -i tough` shows `tough v0.21.0` is pulled through
-  `sigstore v0.13.0`.
-- `cargo update -p tough --precise 0.22.0 --dry-run` fails because
-  `sigstore v0.13.0` requires `tough = "^0.21"`.
-- Conclusion: the Dependabot highs are not reducible with a simple Cargo
-  package update today. The next real fix is a `sigstore` upgrade, a temporary
-  fork/patch, isolation/removal of the affected signing path, or an explicit
-  preview waiver.
+- `cargo tree --locked -i tough` now reports no matching package.
+- `cargo audit` still reports `RUSTSEC-2023-0071` for `rsa 0.9.10`; no fixed
+  `rsa` release is available, and the remaining paths are through
+  `sigstore`/`openidconnect` and `sequoia-openpgp`. Keep the dated preview
+  waiver in `docs/superpowers/release-security-waivers-2026-05-06.md`.
 
 Adoption/unadoption proof refreshed:
 
@@ -78,7 +76,7 @@ Native package-manager parity evidence already recorded in the result files:
 - Ubuntu 26.04/DEB `phase4-native-pm-parity`: 12 passed, 0 failed, 0 skipped, 0 cancelled.
 - Arch/package format `phase4-native-pm-parity`: 12 passed, 0 failed, 0 skipped, 0 cancelled.
 
-Local QEMU release gate:
+Local QEMU release gate from 2026-05-16:
 
 - Run id: `limited-preview-checkpoint-20260516-124447`
 - Evidence directory: `target/local-validation/limited-preview-checkpoint-20260516-124447`
@@ -88,7 +86,7 @@ Local QEMU release gate:
 - `phase3-group-o-generation-export`: passed `TGE01`, `TGE02`, and `TGE03`;
   failed `TGE04` `installed_runtime_generation_export_boots`.
 
-Group O `TGE04` details:
+Resolved Group O `TGE04` blocker:
 
 - The first TGE04 step adopted the source fixture, built an installed runtime
   generation, exported
@@ -100,8 +98,26 @@ Group O `TGE04` details:
 - The harness timed out waiting for SSH on port `2246` because the exported
   image never reached a working init or the expected
   `installed-runtime-generation-export-booted` marker.
-- This is a blocker for the generation-export readiness claim, not a flaky
-  marker-only failure.
+- At the 2026-05-16 checkpoint, this was a blocker for the generation-export
+  readiness claim, not a flaky marker-only failure.
+- Root cause: default installed-runtime exports reused the adopted host
+  initramfs from CAS, but that image did not include Conary generation
+  activation. After forcing a Conary initramfs, dracut still omitted `/init`
+  because `inst_script` resolved module sources through `--sysroot`.
+- Fix: generate a Conary-aware initramfs for default `/boot` installed-runtime
+  exports, copy the dracut module scripts directly into the initramfs image, and
+  include a minimal `/init` that mounts the exported generation before
+  `switch_root`.
+
+Refreshed Group O evidence from 2026-05-19:
+
+- `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`:
+  passed 4 / failed 0 / skipped 0 / cancelled 0.
+- Passed cases:
+  - `TGE01` `installed_generation_export_fails_closed_without_self_contained_root`: 149758ms
+  - `TGE03` `installed_generation_build_rejects_missing_runtime_cas_object`: 482836ms
+  - `TGE04` `installed_runtime_generation_export_boots`: 1558474ms
+  - `TGE02` `bootstrap_run_generation_export_boots`: 2923418ms
 
 ## Preview Caveats
 
@@ -110,17 +126,17 @@ Group O `TGE04` details:
   surface.
 - ISO generation remains a proof-of-concept follow-up, not a limited-preview
   requirement.
-- Installed-runtime raw/qcow2 generation export is not green in the current
-  checkpoint. Treat it as a blocker for the existing documented preview
-  surface or explicitly remove it from any package-manager-only public ask.
+- Installed-runtime and bootstrap-run raw/qcow2 generation export are green in
+  the 2026-05-19 local QEMU run, but generation export is still supporting
+  evidence rather than the main public ask.
 - Active-generation handoff back to native package-manager authority remains
   fail-closed. `system unadopt --all` is the low-risk escape hatch before a
   Conary generation is selected; handoff after selected generations still needs
   a separate plan.
 - Security-only updates are truthful about repositories that cannot provide
-  advisory metadata, but the current open `tough` advisories mean the preview
-  should not be marketed as security-clean until that dependency path is
-  resolved or waived.
+  advisory metadata. The former `tough` advisory path has been removed from the
+  lockfile; the remaining `rsa` RustSec advisory is covered by the dated preview
+  waiver because no fixed compatible path exists today.
 
 ## Public Trial Framing
 
@@ -134,21 +150,17 @@ Recommended public wording if a narrower package-manager-only post is approved:
   `conary system unadopt --all` before selecting a Conary generation.
 - Be explicit that conaryd remote package execution and ISO export are not the
   thing being previewed.
-- Be explicit that installed-runtime generation export hit a current QEMU
-  blocker and is not part of the package-manager-only ask.
-- Mention the unresolved `tough`/`sigstore` advisory path if posting before it
-  is fixed or waived.
+- Keep generation export out of the headline even though the refreshed QEMU gate
+  is green; the post is asking for package-manager feedback first.
+- Do not market the preview as security-clean while the `rsa` waiver remains.
 
 ## Next Actions
 
-1. Triage and fix or intentionally descope Group O `TGE04` installed-runtime
-   generation export boot. The immediate failure to investigate is the exported
-   image kernel panic: `No working init found`.
-2. Decide the `tough` advisory path: upgrade `sigstore`, patch/fork, isolate
-   the signing path, or add a dated preview waiver.
-3. If generation export is descoped from the public ask, update README/roadmap
-   wording before posting so the preview surface is not over-promised.
-4. Draft the subreddit post as a narrow call for testers with the caveats
-   above.
-5. Keep active-generation native handoff as the next roadmap risk-reduction
+1. Draft and review the subreddit post as a narrow call for package-manager
+   testers with the caveats above.
+2. Run final local verification for the TGE04/dracut and provenance dependency
+   changes before publishing or merging.
+3. Keep active-generation native handoff as the next roadmap risk-reduction
    slice after this checkpoint.
+4. Keep the `rsa` waiver under review and remove it as soon as the dependency
+   graph has a compatible fixed path.
