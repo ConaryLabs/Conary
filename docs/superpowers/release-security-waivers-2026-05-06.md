@@ -11,10 +11,9 @@ readiness gate. Waivers here are not blanket approval for a wider release.
 - **Severity:** Medium, CVSS 5.9
 - **Current fix status:** No fixed `rsa` release is available.
 - **Dependency paths:**
-  - `rsa 0.9.10 -> sigstore 0.13.0 -> conary`
-  - `rsa 0.9.10 -> sigstore 0.13.0 -> conary-core`
   - `rsa 0.9.10 -> openidconnect 4.0.1 -> sigstore 0.13.0`
   - `rsa 0.9.10 -> sequoia-openpgp 2.2.0 -> conary-core`
+  - `rsa 0.9.10 -> sigstore 0.13.0`
 - **Conary reachability:** Conary uses these stacks for trust metadata,
   OpenPGP verification, Sigstore verification, and OIDC/Sigstore support.
   Conary does not expose RSA private-key decryption or signing operations to
@@ -27,6 +26,9 @@ readiness gate. Waivers here are not blanket approval for a wider release.
   `openidconnect`, or `sequoia-openpgp` publishes a compatible fixed path, or
   before any release scope broader than a limited preview.
 - **Release sign-off:** Required before publishing the limited preview.
+- **2026-05-19 update:** Removed the `sigstore-trust-root` feature and the
+  `tough` dependency from `Cargo.lock`; this waiver remains because `rsa`
+  is still pulled by `sigstore`/`openidconnect` and `sequoia-openpgp`.
 
 ## Non-Blocking Warnings
 

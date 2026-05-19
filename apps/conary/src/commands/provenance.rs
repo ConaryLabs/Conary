@@ -17,8 +17,6 @@ use sigstore::rekor::apis::entries_api;
 use sigstore::rekor::models::{
     LogEntry as RekorLogEntry, ProposedEntry, hashedrekord, log_entry::Body as RekorBody,
 };
-use sigstore::trust::TrustRoot;
-use sigstore::trust::sigstore::SigstoreTrustRoot;
 use std::str::FromStr;
 use std::time::Duration;
 use thiserror::Error;
@@ -71,6 +69,12 @@ struct RekorVerification {
     entry_index: i64,
     signer_kind: String,
 }
+
+const BUNDLED_FULCIO_CA_CERTS_BASE64: &[&str] = &[
+    "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",
+];
 
 /// Show provenance information for a package
 pub async fn cmd_provenance_show(
@@ -940,17 +944,7 @@ fn verify_fulcio_chain(cert_pem: &[u8], integrated_time: i64) -> Result<(), Sigs
         ));
     }
 
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    let trust_root = rt.block_on(SigstoreTrustRoot::new(None))?;
-    let fulcio_certs = trust_root.fulcio_certs()?;
-
-    let trust_anchors: Vec<TrustAnchor<'static>> = fulcio_certs
-        .into_iter()
-        .map(|cert| webpki::anchor_from_trusted_cert(&cert).map(|anchor| anchor.to_owned()))
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|err| SigstoreCommandError::FulcioChain(err.to_string()))?;
+    let trust_anchors = bundled_fulcio_trust_anchors()?;
 
     let cert_der = CertificateDer::from(pem.contents().to_vec());
     let end_entity = EndEntityCert::try_from(&cert_der)
@@ -978,6 +972,19 @@ fn verify_fulcio_chain(cert_pem: &[u8], integrated_time: i64) -> Result<(), Sigs
         .map_err(|err| SigstoreCommandError::FulcioChain(err.to_string()))?;
 
     Ok(())
+}
+
+fn bundled_fulcio_trust_anchors() -> Result<Vec<TrustAnchor<'static>>, SigstoreCommandError> {
+    BUNDLED_FULCIO_CA_CERTS_BASE64
+        .iter()
+        .map(|cert| {
+            let der = BASE64_STD_ENGINE.decode(cert)?;
+            let cert = CertificateDer::from(der);
+            webpki::anchor_from_trusted_cert(&cert)
+                .map(|anchor| anchor.to_owned())
+                .map_err(|err| SigstoreCommandError::FulcioChain(err.to_string()))
+        })
+        .collect()
 }
 
 use super::package_parsing::parse_package_spec;
@@ -1230,6 +1237,13 @@ mod tests {
             }
             _ => panic!("expected hashedrekord entry"),
         }
+    }
+
+    #[test]
+    fn bundled_fulcio_roots_parse_as_trust_anchors() {
+        let anchors = bundled_fulcio_trust_anchors().unwrap();
+
+        assert_eq!(anchors.len(), BUNDLED_FULCIO_CA_CERTS_BASE64.len());
     }
 
     #[tokio::test]
