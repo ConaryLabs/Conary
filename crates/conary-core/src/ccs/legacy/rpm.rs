@@ -39,6 +39,9 @@ impl HookConverter for RpmHookConverter {
         lines.extend(CommonHookGenerator::systemd_commands(hooks, true));
         lines.extend(CommonHookGenerator::tmpfiles_commands(hooks));
         lines.extend(CommonHookGenerator::sysctl_commands(hooks));
+        if let Some(hook) = &hooks.post_install {
+            lines.push(hook.script.clone());
+        }
         lines.push("/sbin/ldconfig".to_string());
 
         Some(lines.join("\n"))
@@ -49,6 +52,9 @@ impl HookConverter for RpmHookConverter {
 
         // Stop services before removal
         lines.extend(CommonHookGenerator::systemd_commands(hooks, false));
+        if let Some(hook) = &hooks.pre_remove {
+            lines.push(hook.script.clone());
+        }
 
         if lines.len() <= 2 {
             return None;
@@ -305,5 +311,25 @@ mod tests {
         let script = converter.post_install(&hooks).unwrap();
         assert!(script.contains("systemctl"));
         assert!(script.contains("myapp.service"));
+    }
+
+    #[test]
+    fn test_hook_converter_preserves_script_hooks() {
+        let hooks = Hooks {
+            post_install: Some(crate::ccs::manifest::ScriptHook {
+                script: "echo installed > /var/lib/myapp/installed".to_string(),
+            }),
+            pre_remove: Some(crate::ccs::manifest::ScriptHook {
+                script: "echo removed > /var/lib/myapp/removed".to_string(),
+            }),
+            ..Default::default()
+        };
+
+        let converter = RpmHookConverter;
+        let post = converter.post_install(&hooks).unwrap();
+        let pre_remove = converter.pre_remove(&hooks).unwrap();
+
+        assert!(post.contains("echo installed > /var/lib/myapp/installed"));
+        assert!(pre_remove.contains("echo removed > /var/lib/myapp/removed"));
     }
 }

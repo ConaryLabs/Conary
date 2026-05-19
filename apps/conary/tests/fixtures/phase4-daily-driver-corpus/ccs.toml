@@ -1,0 +1,59 @@
+[package]
+name = "phase4-daily-driver-corpus"
+version = "1.0.0"
+description = "Phase 4 daily-driver corpus fixture for native package-manager parity"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["phase4-daily-driver-corpus", "phase4-corpus-tool"]
+binaries = ["/usr/bin/phase4-corpus", "/usr/bin/phase4-corpus-alt"]
+
+[requires]
+capabilities = []
+packages = [{ name = "bash" }]
+
+[components]
+default = ["runtime", "config"]
+
+[config]
+files = ["/etc/phase4-corpus/app.conf"]
+noreplace = true
+
+[hooks]
+
+[[hooks.groups]]
+name = "phase4-corpus-group"
+system = true
+
+[[hooks.users]]
+name = "phase4-corpus-user"
+system = true
+home = "/var/lib/phase4-corpus"
+shell = "/bin/false"
+group = "phase4-corpus-group"
+
+[[hooks.directories]]
+path = "/var/lib/phase4-corpus"
+mode = "0750"
+owner = "phase4-corpus-user"
+group = "phase4-corpus-group"
+
+[[hooks.systemd]]
+unit = "phase4-corpus.service"
+enable = false
+
+[[hooks.alternatives]]
+name = "phase4-corpus-tool"
+path = "/usr/bin/phase4-corpus-alt"
+priority = 40
+
+[hooks.post_install]
+script = "mkdir -p /var/lib/phase4-corpus; printf installed > /var/lib/phase4-corpus/scriptlet.marker"
+
+[hooks.pre_remove]
+script = "mkdir -p /var/lib/phase4-corpus; printf removed > /var/lib/phase4-corpus/remove.marker"

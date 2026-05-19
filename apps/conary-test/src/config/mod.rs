@@ -342,6 +342,76 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
     }
 
     #[test]
+    fn phase4_native_pm_parity_manifest_carries_daily_driver_corpus_contract() {
+        let path = remi_manifest_path("phase4-native-pm-parity.toml");
+        if !path.exists() {
+            return;
+        }
+
+        let manifest = load_manifest(&path).unwrap();
+        let corpus_tests: Vec<_> = manifest
+            .test
+            .iter()
+            .filter(|test| test.group.as_deref() == Some("daily-driver-corpus"))
+            .collect();
+
+        assert!(
+            corpus_tests.len() >= 5,
+            "Phase 4 native PM parity should include a daily-driver corpus group"
+        );
+        assert!(
+            corpus_tests.iter().all(|test| test.skip.is_none()),
+            "daily-driver corpus tests must not be manifest-skipped"
+        );
+        assert!(
+            corpus_tests.iter().all(|test| test.flaky != Some(true)),
+            "daily-driver corpus tests must not rely on flaky majority voting"
+        );
+
+        let rendered = corpus_tests
+            .iter()
+            .map(|test| format!("{test:?}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for required in [
+            "phase4-corpus.service",
+            "/etc/phase4-corpus/app.conf",
+            "phase4-corpus-alt",
+            "phase4-corpus-user",
+            "phase4-corpus-group",
+            "${native_corpus_dependency_probe}",
+            "/var/lib/phase4-corpus/scriptlet.marker",
+            "/var/lib/phase4-corpus/remove.marker",
+            "phase4-corpus-conflict",
+            "large-payload.bin",
+            "/usr/lib/kernel/install.d/95-phase4-corpus.install",
+        ] {
+            assert!(
+                rendered.contains(required),
+                "daily-driver corpus should cover {required}"
+            );
+        }
+
+        for distro in ["fedora44", "ubuntu-26.04", "arch"] {
+            let overrides = manifest
+                .distro_overrides
+                .get(distro)
+                .unwrap_or_else(|| panic!("missing {distro} overrides"));
+            for key in [
+                "native_corpus_fixture_version",
+                "native_corpus_dependency_count",
+                "native_corpus_dependency_probe",
+                "native_corpus_scriptlet_count",
+            ] {
+                assert!(
+                    overrides.contains_key(key),
+                    "{distro} overrides should define {key}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn active_manifest_live_mutation_commands_acknowledge_live_mutation() {
         let manifest_dir = remi_manifest_path("");
         if !manifest_dir.exists() {

@@ -38,6 +38,15 @@ native_config_source = "rpm"
 native_scriptlet_count = "2"
 native_scriptlet_probe_a = "post-install|/bin/sh|rpm"
 native_scriptlet_probe_b = "post-remove|/bin/sh|rpm"
+native_corpus_fixture_version = "1.0.0-1"
+native_corpus_dependency_count = "1"
+native_corpus_dependency_probe = "bash"
+native_corpus_config_count = "1"
+native_corpus_config_source = "rpm"
+native_corpus_scriptlet_count = "4"
+native_corpus_scriptlet_probe_a = "pre-install|/bin/sh|rpm"
+native_corpus_scriptlet_probe_b = "post-install|/bin/sh|rpm"
+native_corpus_scriptlet_probe_c = "pre-remove|/bin/sh|rpm"
 repo_install_pkg = "tree"
 repo_install_path = "/usr/bin/tree"
 repo_seed_security_version = "9999.0-1"
@@ -57,6 +66,15 @@ native_config_source = "deb"
 native_scriptlet_count = "2"
 native_scriptlet_probe_a = "post-install|/bin/sh|deb"
 native_scriptlet_probe_b = "post-remove|/bin/sh|deb"
+native_corpus_fixture_version = "1.0.0"
+native_corpus_dependency_count = "1"
+native_corpus_dependency_probe = "bash"
+native_corpus_config_count = "1"
+native_corpus_config_source = "deb"
+native_corpus_scriptlet_count = "4"
+native_corpus_scriptlet_probe_a = "pre-install|/bin/sh|deb"
+native_corpus_scriptlet_probe_b = "post-install|/bin/sh|deb"
+native_corpus_scriptlet_probe_c = "pre-remove|/bin/sh|deb"
 repo_install_pkg = "nano"
 repo_install_path = "/usr/bin/nano"
 repo_seed_security_version = "9999.0"
@@ -76,6 +94,15 @@ native_config_source = "arch"
 native_scriptlet_count = "0"
 native_scriptlet_probe_a = "no-scriptlets"
 native_scriptlet_probe_b = "no-scriptlets"
+native_corpus_fixture_version = "1.0.0-1"
+native_corpus_dependency_count = "1"
+native_corpus_dependency_probe = "bash"
+native_corpus_config_count = "1"
+native_corpus_config_source = "arch"
+native_corpus_scriptlet_count = "5"
+native_corpus_scriptlet_probe_a = "pre-install|/bin/sh|arch"
+native_corpus_scriptlet_probe_b = "post-install|/bin/sh|arch"
+native_corpus_scriptlet_probe_c = "pre-remove|/bin/sh|arch"
 repo_install_pkg = "tree"
 repo_install_path = "/usr/bin/tree"
 repo_seed_security_version = "9999.0-1"
@@ -551,6 +578,260 @@ file_not_exists = "${repo_install_path}"
 
 [[test.step]]
 run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' installed' FROM troves WHERE name = '${repo_install_pkg}'\""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "0 installed"
+
+# --------------------------------------------------------------------------
+# TNPM13: daily-driver corpus build
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "TNPM13"
+name = "daily_driver_corpus_build"
+description = "Build a curated native package corpus with service, config, dependency, scriptlet, alternative target, large payload, and kernel-adjacent files"
+group = "daily-driver-corpus"
+timeout = 240
+fatal = true
+depends_on = ["TNPM12"]
+
+[[test.step]]
+run = "rm -rf /tmp/native-pm-corpus /tmp/native-pm-corpus-src /tmp/native-pm-corpus-conflict /tmp/native-pm-corpus-conflict-src && cp -a /opt/remi-tests/fixtures/phase4-daily-driver-corpus /tmp/native-pm-corpus-src && mkdir -p /tmp/native-pm-corpus-src/stage/usr/share/phase4-corpus && dd if=/dev/zero of=/tmp/native-pm-corpus-src/stage/usr/share/phase4-corpus/large-payload.bin bs=1048576 count=2 && mkdir -p /tmp/native-pm-corpus && CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/build-native-fixtures.sh ${native_target} /tmp/native-pm-corpus /tmp/native-pm-corpus-src && . /tmp/native-pm-corpus/native-fixture.env && test -f \"$NATIVE_PKG_FILE\" && test \"$NATIVE_TARGET\" = \"${native_target}\" && test ${#NATIVE_PKG_SHA256} -eq 64 && case \"$NATIVE_PKG_FILE\" in /tmp/native-pm-corpus/${native_glob}) true ;; *) echo \"unexpected native corpus package path: $NATIVE_PKG_FILE\"; exit 1 ;; esac"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# TNPM14: daily-driver corpus install and live root surface
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "TNPM14"
+name = "daily_driver_corpus_install_and_surface"
+description = "Install the corpus package and verify its daily-driver files, service unit, users/groups, trigger, and scriptlet side effects"
+group = "daily-driver-corpus"
+timeout = 240
+fatal = true
+depends_on = ["TNPM13"]
+
+[[test.step]]
+run = "${CONARY_BIN} system trigger remove phase4-corpus-trigger --db-path ${DB_PATH} >/dev/null 2>&1 || true; ${CONARY_BIN} system trigger add phase4-corpus-trigger --pattern /usr/lib/systemd/system/phase4-corpus.service --handler /usr/bin/true --db-path ${DB_PATH}"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "Created trigger: phase4-corpus-trigger"
+
+[[test.step]]
+run = ". /tmp/native-pm-corpus/native-fixture.env && ${CONARY_BIN} install --allow-live-system-mutation \"$NATIVE_PKG_FILE\" --db-path ${DB_PATH} --no-deps --yes --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_any = ["Successfully installed", "Installed", "phase4-daily-driver-corpus"]
+
+[[test.step]]
+file_exists = "/usr/bin/phase4-corpus"
+
+[[test.step]]
+file_exists = "/usr/bin/phase4-corpus-alt"
+
+[[test.step]]
+file_exists = "/etc/phase4-corpus/app.conf"
+
+[[test.step]]
+file_exists = "/usr/lib/systemd/system/phase4-corpus.service"
+
+[[test.step]]
+file_exists = "/usr/lib/kernel/install.d/95-phase4-corpus.install"
+
+[[test.step]]
+file_exists = "/usr/share/phase4-corpus/large-payload.bin"
+
+[[test.step]]
+file_exists = "/var/lib/phase4-corpus/scriptlet.marker"
+
+[[test.step]]
+run = "getent passwd phase4-corpus-user && getent group phase4-corpus-group"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["phase4-corpus-user", "phase4-corpus-group"]
+
+# --------------------------------------------------------------------------
+# TNPM15: daily-driver corpus exact metadata
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "TNPM15"
+name = "daily_driver_corpus_exact_metadata"
+description = "Installed corpus metadata records package identity, files, dependencies, config rows, scriptlets, and triggers"
+group = "daily-driver-corpus"
+timeout = 90
+fatal = true
+depends_on = ["TNPM14"]
+
+[[test.step]]
+run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' troves' FROM troves WHERE name = 'phase4-daily-driver-corpus'; SELECT name || '|' || version || '|' || COALESCE(architecture, '') || '|' || COALESCE(version_scheme, '') || '|' || COALESCE(source_distro, '') || '|' || COALESCE(install_source, '') || '|' || COALESCE(install_reason, '') FROM troves WHERE name = 'phase4-daily-driver-corpus'\""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["1 troves", "phase4-daily-driver-corpus|${native_corpus_fixture_version}|${native_arch}|${native_scheme}||file|explicit"]
+
+[[test.step]]
+run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' files' FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus'); SELECT path || '|' || size FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') ORDER BY path\""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["6 files", "/etc/phase4-corpus/app.conf", "/usr/bin/phase4-corpus-alt", "/usr/lib/kernel/install.d/95-phase4-corpus.install", "/usr/lib/systemd/system/phase4-corpus.service", "/usr/share/phase4-corpus/large-payload.bin|2097152"]
+
+[[test.step]]
+run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' deps' FROM dependencies WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus'); SELECT COALESCE((SELECT group_concat(depends_on_name || '|' || COALESCE(version_constraint, '') || '|' || COALESCE(kind, ''), char(10)) FROM dependencies WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') ORDER BY depends_on_name), 'no-deps')\""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["${native_corpus_dependency_count} deps", "${native_corpus_dependency_probe}"]
+
+[[test.step]]
+run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' config rows' FROM config_files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus'); SELECT path || '|' || noreplace || '|' || status || '|' || source FROM config_files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') ORDER BY path\""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["${native_corpus_config_count} config rows", "/etc/phase4-corpus/app.conf|1|pristine|${native_corpus_config_source}"]
+
+[[test.step]]
+run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' scriptlets' FROM scriptlets WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus'); SELECT COALESCE((SELECT group_concat(phase || '|' || COALESCE(interpreter, '') || '|' || COALESCE(package_format, ''), char(10)) FROM scriptlets WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') ORDER BY phase), 'no-scriptlets')\""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["${native_corpus_scriptlet_count} scriptlets", "${native_corpus_scriptlet_probe_a}", "${native_corpus_scriptlet_probe_b}", "${native_corpus_scriptlet_probe_c}"]
+
+[[test.step]]
+run = "sqlite3 ${DB_PATH} \"SELECT t.name || '|' || ct.status || '|' || ct.matched_files FROM changeset_triggers ct JOIN triggers t ON t.id = ct.trigger_id WHERE t.name = 'phase4-corpus-trigger' ORDER BY ct.id DESC LIMIT 1\""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "phase4-corpus-trigger|completed|1"
+
+# --------------------------------------------------------------------------
+# TNPM16: daily-driver corpus query surface
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "TNPM16"
+name = "daily_driver_corpus_queries"
+description = "Daily-driver query commands answer corpus identity, file ownership, package providers, and alternative target questions"
+group = "daily-driver-corpus"
+timeout = 90
+depends_on = ["TNPM15"]
+
+[[test.step]]
+conary = "list phase4-daily-driver-corpus --info"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["Name        : phase4-daily-driver-corpus", "Version     : ${native_corpus_fixture_version}", "Authority   : conary-owned", "Source      : file", "Install Type: Explicit"]
+
+[[test.step]]
+conary = "list phase4-daily-driver-corpus --files"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["/usr/bin/phase4-corpus", "/usr/bin/phase4-corpus-alt", "/etc/phase4-corpus/app.conf", "/usr/lib/systemd/system/phase4-corpus.service", "/usr/share/phase4-corpus/large-payload.bin", "/usr/lib/kernel/install.d/95-phase4-corpus.install"]
+
+[[test.step]]
+conary = "list --path /usr/bin/phase4-corpus-alt"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["phase4-daily-driver-corpus ${native_corpus_fixture_version} provides:", "/usr/bin/phase4-corpus-alt"]
+
+[[test.step]]
+conary = "list --path /usr/lib/kernel/install.d/95-phase4-corpus.install"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["phase4-daily-driver-corpus ${native_corpus_fixture_version} provides:", "/usr/lib/kernel/install.d/95-phase4-corpus.install"]
+
+[[test.step]]
+conary = "query whatprovides phase4-daily-driver-corpus"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["Capability 'phase4-daily-driver-corpus' is provided by:", "phase4-daily-driver-corpus ${native_corpus_fixture_version}"]
+
+# --------------------------------------------------------------------------
+# TNPM17: daily-driver corpus file conflict refusal
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "TNPM17"
+name = "daily_driver_corpus_file_conflict_refuses_before_mutation"
+description = "A second native package with overlapping files is refused before it can mutate the live root"
+group = "daily-driver-corpus"
+timeout = 240
+fatal = true
+depends_on = ["TNPM16"]
+
+[[test.step]]
+run = "rm -rf /tmp/native-pm-corpus-conflict /tmp/native-pm-corpus-conflict-src && cp -a /tmp/native-pm-corpus-src /tmp/native-pm-corpus-conflict-src && sed -i 's/name = \"phase4-daily-driver-corpus\"/name = \"phase4-corpus-conflict\"/' /tmp/native-pm-corpus-conflict-src/ccs.toml && mkdir -p /tmp/native-pm-corpus-conflict && CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/build-native-fixtures.sh ${native_target} /tmp/native-pm-corpus-conflict /tmp/native-pm-corpus-conflict-src && . /tmp/native-pm-corpus-conflict/native-fixture.env && test -f \"$NATIVE_PKG_FILE\""
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = ". /tmp/native-pm-corpus-conflict/native-fixture.env && ${CONARY_BIN} install --allow-live-system-mutation \"$NATIVE_PKG_FILE\" --db-path ${DB_PATH} --no-deps --yes --sandbox never 2>&1"
+
+[test.step.assert]
+exit_code_not = 0
+stdout_contains = "already tracked by package phase4-daily-driver-corpus"
+
+[[test.step]]
+file_exists = "/usr/bin/phase4-corpus"
+
+[[test.step]]
+run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' installed' FROM troves WHERE name IN ('phase4-daily-driver-corpus', 'phase4-corpus-conflict'); SELECT COUNT(*) || ' conflicts' FROM troves WHERE name = 'phase4-corpus-conflict'\""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["1 installed", "0 conflicts"]
+
+# --------------------------------------------------------------------------
+# TNPM18: daily-driver corpus removal hook and cleanup
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "TNPM18"
+name = "daily_driver_corpus_remove_hooks_and_cleanup"
+description = "Removing the corpus package runs its pre-remove hook and deletes the tracked files"
+group = "daily-driver-corpus"
+timeout = 120
+fatal = true
+depends_on = ["TNPM17"]
+
+[[test.step]]
+conary = "remove phase4-daily-driver-corpus --sandbox never --allow-live-system-mutation"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "Removed package: phase4-daily-driver-corpus version ${native_corpus_fixture_version}"
+
+[[test.step]]
+file_exists = "/var/lib/phase4-corpus/remove.marker"
+
+[[test.step]]
+file_not_exists = "/usr/bin/phase4-corpus"
+
+[[test.step]]
+file_not_exists = "/etc/phase4-corpus/app.conf"
+
+[[test.step]]
+file_not_exists = "/usr/lib/systemd/system/phase4-corpus.service"
+
+[[test.step]]
+file_not_exists = "/usr/share/phase4-corpus/large-payload.bin"
+
+[[test.step]]
+run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' installed' FROM troves WHERE name = 'phase4-daily-driver-corpus'\""
 
 [test.step.assert]
 exit_code = 0

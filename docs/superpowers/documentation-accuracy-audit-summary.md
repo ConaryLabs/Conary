@@ -11,7 +11,8 @@ refresh, the focused Slice C daily-driver/provider-metadata proof, the Slice D
 three-distro parity evidence, the 2026-05-16 limited-preview checkpoint, and the
 2026-05-19 generation-export/security refresh. It also records the 2026-05-19
 daily-driver readiness program design that decomposes the seven replacement
-gaps into Codex `/goal` tracks.
+gaps into Codex `/goal` tracks and the first result-gated daily-driver corpus
+expansion.
 
 Audited every tracked documentation-like file returned by
 `bash scripts/docs-audit-inventory.sh`: 83 tracked files spanning root docs,
@@ -60,6 +61,9 @@ The repo moved materially after the last audit:
 - 2026-05-19 refresh evidence, including the restored Group O `TGE04`
   installed-runtime export boot proof, the package-manager-only tester-post
   recommendation, and the removal of the `tough` trust-root dependency path
+- the first result-gated daily-driver corpus expansion for the Phase 4 native
+  package-manager parity suite, including covered package classes and explicit
+  unsupported native alternatives/bootloader mutation boundaries
 
 ## Major Corrections
 
@@ -96,7 +100,8 @@ The repo moved materially after the last audit:
   update/security-refusal proof, Phase 3 Group O generation-export QEMU suite,
   temporary local QEMU release gate, refreshed Group N proof, the current
   2026-05-19 Group O installed-runtime/bootstrap-run boot proof, and the Phase 4
-  native package-manager parity manifest.
+  native package-manager parity manifest with its 18-test three-distro corpus
+  evidence.
 - Added the 2026-05-16 limited-preview release checkpoint and refreshed
   README/ROADMAP/bootstrap/generation-export docs so a package-manager-only
   preview ask treats generation export as supporting evidence instead of the
