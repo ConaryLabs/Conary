@@ -104,6 +104,7 @@ apps/conary/tests/integration/remi/manifests/
   phase4-group-d.toml       # T221-T255 (Provenance/Capability/Trust/System/Federation/Automation)
   phase4-group-e.toml       # T230-T251 (Cross-distro compatibility overlay: distro policy/replatform/takeover)
   phase4-native-pm-parity.toml  # Three-distro native package-manager parity proof
+  phase4-security-advisory-pipeline.toml  # Trusted advisory ingestion and security update proof
 ```
 
 ## HTTP API

@@ -412,6 +412,44 @@ ccs_file = "conary-test-fixture-1.0.0.ccs"
     }
 
     #[test]
+    fn phase4_security_advisory_pipeline_manifest_carries_trusted_update_contract() {
+        let path = remi_manifest_path("phase4-security-advisory-pipeline.toml");
+        let manifest = load_manifest(&path).unwrap();
+
+        assert_eq!(manifest.suite.phase, 4);
+        assert!(
+            manifest.test.iter().all(|test| test.skip.is_none()),
+            "security advisory pipeline tests must not be manifest-skipped"
+        );
+        assert!(
+            manifest.test.iter().all(|test| test.flaky != Some(true)),
+            "security advisory pipeline tests must not rely on flaky majority voting"
+        );
+
+        let rendered = manifest
+            .test
+            .iter()
+            .map(|test| format!("{test:?}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for required in [
+            "security_advisory_source",
+            "source_trust",
+            "fixed_version",
+            "CVE-2026-0001",
+            "TEST-2026-0001",
+            "--security-advisories unknown",
+            "--security-advisories supported",
+            "trusted source: conary-json",
+        ] {
+            assert!(
+                rendered.contains(required),
+                "security advisory pipeline should cover {required}"
+            );
+        }
+    }
+
+    #[test]
     fn active_manifest_live_mutation_commands_acknowledge_live_mutation() {
         let manifest_dir = remi_manifest_path("");
         if !manifest_dir.exists() {

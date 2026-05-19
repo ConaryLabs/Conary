@@ -1,0 +1,227 @@
+# tests/integration/remi/manifests/phase4-security-advisory-pipeline.toml
+#
+# Phase 4 security advisory metadata pipeline proof.
+
+[suite]
+name = "Phase 4: Security Advisory Pipeline"
+phase = 4
+timeout = 1200
+
+[[suite.setup]]
+conary = "system init"
+
+[suite.setup.assert]
+exit_code = 0
+
+[distro_overrides.fedora44]
+native_target = "rpm"
+native_glob = "*.rpm"
+native_arch = "x86_64"
+native_scheme = "rpm"
+native_distro = "fedora"
+native_fixture_version = "1.0.0-1"
+native_update_version = "1.0.1-1"
+
+[distro_overrides."ubuntu-26.04"]
+native_target = "deb"
+native_glob = "*.deb"
+native_arch = "amd64"
+native_scheme = "debian"
+native_distro = "ubuntu"
+native_fixture_version = "1.0.0"
+native_update_version = "1.0.1"
+
+[distro_overrides.arch]
+native_target = "arch"
+native_glob = "*.pkg.tar.zst"
+native_arch = "x86_64"
+native_scheme = "arch"
+native_distro = "arch"
+native_fixture_version = "1.0.0-1"
+native_update_version = "1.0.1-1"
+
+[[test]]
+id = "TSEC01"
+name = "build_security_update_fixtures"
+description = "Build v1 and v2 native fixtures for the advisory pipeline"
+timeout = 240
+fatal = true
+group = "security-advisory-pipeline"
+
+[[test.step]]
+run = """
+rm -rf /tmp/security-advisory-v1 /tmp/security-advisory-v2 /tmp/security-advisory-v2-src &&
+mkdir -p /tmp/security-advisory-v1 &&
+CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/build-native-fixtures.sh ${native_target} /tmp/security-advisory-v1 /opt/remi-tests/fixtures/phase4-runtime-fixture &&
+cp -a /opt/remi-tests/fixtures/phase4-runtime-fixture /tmp/security-advisory-v2-src &&
+sed -i 's/version = "1.0.0"/version = "1.0.1"/' /tmp/security-advisory-v2-src/ccs.toml &&
+mkdir -p /tmp/security-advisory-v2 &&
+CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/build-native-fixtures.sh ${native_target} /tmp/security-advisory-v2 /tmp/security-advisory-v2-src &&
+. /tmp/security-advisory-v1/native-fixture.env && test -f "$NATIVE_PKG_FILE" &&
+. /tmp/security-advisory-v2/native-fixture.env && test -f "$NATIVE_PKG_FILE"
+"""
+
+[test.step.assert]
+exit_code = 0
+
+[[test]]
+id = "TSEC02"
+name = "install_v1_fixture"
+description = "Install the vulnerable fixture version as the current Conary-owned package"
+timeout = 180
+fatal = true
+depends_on = ["TSEC01"]
+group = "security-advisory-pipeline"
+
+[[test.step]]
+run = ". /tmp/security-advisory-v1/native-fixture.env && ${CONARY_BIN} install --allow-live-system-mutation \"$NATIVE_PKG_FILE\" --db-path ${DB_PATH} --no-deps --yes --sandbox never"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_any = ["Successfully installed", "Installed", "phase4-runtime-fixture"]
+
+[[test]]
+id = "TSEC03"
+name = "publish_trusted_json_advisory_metadata"
+description = "Serve JSON repository metadata with trusted source, CVE, severity, fixed version, and advisory identity"
+timeout = 60
+fatal = true
+depends_on = ["TSEC02"]
+group = "security-advisory-pipeline"
+
+[[test.step]]
+run = """
+if test -f /tmp/security-advisory-http.pid; then kill "$(cat /tmp/security-advisory-http.pid)" 2>/dev/null || true; fi
+. /tmp/security-advisory-v2/native-fixture.env
+PKG_BASENAME=$(basename "$NATIVE_PKG_FILE")
+PKG_SIZE=$(wc -c < "$NATIVE_PKG_FILE")
+cat > /tmp/security-advisory-v2/metadata.json <<JSON
+{
+  "name": "security-advisory-json",
+  "version": "1",
+  "security_advisory_source": {
+    "name": "conary-json",
+    "trust": "trusted"
+  },
+  "packages": [
+    {
+      "name": "phase4-runtime-fixture",
+      "version": "${native_update_version}",
+      "architecture": "${native_arch}",
+      "description": "Trusted security update fixture",
+      "checksum": "$NATIVE_PKG_SHA256",
+      "size": $PKG_SIZE,
+      "download_url": "http://127.0.0.1:18088/$PKG_BASENAME",
+      "dependencies": [],
+      "security_advisory": {
+        "id": "TEST-2026-0001",
+        "severity": "critical",
+        "cves": ["CVE-2026-0001"],
+        "fixed_version": "${native_update_version}",
+        "url": "https://security.example.test/TEST-2026-0001"
+      }
+    }
+  ]
+}
+JSON
+PYTHON=$(command -v python3 || command -v python)
+"$PYTHON" -m http.server 18088 --bind 127.0.0.1 --directory /tmp/security-advisory-v2 >/tmp/security-advisory-http.log 2>&1 &
+echo $! > /tmp/security-advisory-http.pid
+sleep 1
+grep -q security_advisory_source /tmp/security-advisory-v2/metadata.json
+"""
+
+[test.step.assert]
+exit_code = 0
+
+[[test]]
+id = "TSEC04"
+name = "unknown_source_refuses_before_mutation"
+description = "The same metadata is not trusted when the repository source is marked unknown"
+timeout = 180
+fatal = true
+depends_on = ["TSEC03"]
+group = "security-advisory-pipeline"
+
+[[test.step]]
+run = """
+${CONARY_BIN} repo remove security-advisory-json --db-path ${DB_PATH} >/dev/null 2>&1 || true
+${CONARY_BIN} repo add security-advisory-json http://127.0.0.1:18088 --db-path ${DB_PATH} --no-gpg-check --security-advisories unknown
+${CONARY_BIN} repo sync security-advisory-json --db-path ${DB_PATH} --force
+REPO_ID=$(sqlite3 ${DB_PATH} "SELECT id FROM repositories WHERE name = 'security-advisory-json'")
+sqlite3 ${DB_PATH} "UPDATE troves SET installed_from_repository_id = $REPO_ID, source_distro = '${native_distro}', version_scheme = '${native_scheme}' WHERE name = 'phase4-runtime-fixture'"
+set +e
+OUTPUT=$(${CONARY_BIN} update phase4-runtime-fixture --security --allow-live-system-mutation --db-path ${DB_PATH} --sandbox never --yes 2>&1)
+STATUS=$?
+set -e
+printf '%s\n' "$OUTPUT"
+test "$STATUS" -ne 0
+echo "$OUTPUT" | grep -q "security metadata"
+test "$(sqlite3 ${DB_PATH} "SELECT version FROM troves WHERE name = 'phase4-runtime-fixture'")" = "${native_fixture_version}"
+"""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["security metadata", "security-advisory-json"]
+
+[[test]]
+id = "TSEC05"
+name = "trusted_json_advisory_sync_persists_fields"
+description = "Supported JSON advisory metadata persists CVE, severity, fixed version, source trust, and advisory id"
+timeout = 180
+fatal = true
+depends_on = ["TSEC04"]
+group = "security-advisory-pipeline"
+
+[[test.step]]
+run = """
+${CONARY_BIN} repo remove security-advisory-json --db-path ${DB_PATH} >/dev/null 2>&1 || true
+${CONARY_BIN} repo add security-advisory-json http://127.0.0.1:18088 --db-path ${DB_PATH} --no-gpg-check --security-advisories supported
+${CONARY_BIN} repo sync security-advisory-json --db-path ${DB_PATH} --force
+sqlite3 ${DB_PATH} "SELECT is_security_update || '|' || COALESCE(severity, '') || '|' || COALESCE(cve_ids, '') || '|' || COALESCE(advisory_id, '') || '|' || COALESCE(metadata, '') FROM repository_packages WHERE name = 'phase4-runtime-fixture' AND version = '${native_update_version}'"
+"""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["1|critical|CVE-2026-0001|TEST-2026-0001", "fixed_version", "source_trust", "conary-json"]
+
+[[test]]
+id = "TSEC06"
+name = "trusted_security_update_applies"
+description = "update --security selects the trusted advisory candidate and applies the fixed package"
+timeout = 240
+fatal = true
+depends_on = ["TSEC05"]
+group = "security-advisory-pipeline"
+
+[[test.step]]
+run = """
+REPO_ID=$(sqlite3 ${DB_PATH} "SELECT id FROM repositories WHERE name = 'security-advisory-json'")
+sqlite3 ${DB_PATH} "UPDATE troves SET installed_from_repository_id = $REPO_ID, source_distro = '${native_distro}', version_scheme = '${native_scheme}' WHERE name = 'phase4-runtime-fixture'"
+${CONARY_BIN} update phase4-runtime-fixture --security --allow-live-system-mutation --db-path ${DB_PATH} --sandbox never --yes
+"""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["TEST-2026-0001", "CVE-2026-0001", "trusted source: conary-json"]
+
+[[test.step]]
+run = "sqlite3 ${DB_PATH} \"SELECT version FROM troves WHERE name = 'phase4-runtime-fixture'\""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "${native_update_version}"
+
+[[test]]
+id = "TSEC07"
+name = "cleanup_security_advisory_server"
+description = "Stop the local advisory fixture server"
+timeout = 30
+depends_on = ["TSEC06"]
+group = "security-advisory-pipeline"
+
+[[test.step]]
+run = "if test -f /tmp/security-advisory-http.pid; then kill \"$(cat /tmp/security-advisory-http.pid)\" 2>/dev/null || true; rm -f /tmp/security-advisory-http.pid; fi"
+
+[test.step.assert]
+exit_code = 0
