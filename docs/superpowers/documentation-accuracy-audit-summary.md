@@ -9,10 +9,12 @@ slice, records the Native Package Manager Parity Matrix design, and catches the
 completed Slice A/Slice B/Slice C/Slice D parity records, the Slice B preview-doc
 refresh, the focused Slice C daily-driver/provider-metadata proof, the Slice D
 three-distro parity evidence, the 2026-05-16 limited-preview checkpoint, and the
-2026-05-19 generation-export/security refresh.
+2026-05-19 generation-export/security refresh. It also records the 2026-05-19
+daily-driver readiness program design that decomposes the seven replacement
+gaps into Codex `/goal` tracks.
 
 Audited every tracked documentation-like file returned by
-`bash scripts/docs-audit-inventory.sh`: 82 tracked files spanning root docs,
+`bash scripts/docs-audit-inventory.sh`: 83 tracked files spanning root docs,
 assistant shims, GitHub templates, canonical docs under `docs/`,
 deploy/operator docs, `deploy/remi.toml.example`, app-local READMEs, active
 planning/design records, historical/archive docs, release security waivers, and
@@ -109,6 +111,10 @@ The repo moved materially after the last audit:
   package-manager commands, and the three-distro parity matrix; then moved them
   to archive paths once the current integration docs carried the release
   evidence.
+- Added the Daily Driver Readiness Program design with seven Codex `/goal`
+  tracks for active-generation authority handoff, real package corpus
+  validation, security advisory support, live-root sandbox hardening, conaryd
+  package execution, recovery/artifact trust, and daily UX polish.
 
 ## Archive Decisions
 
@@ -116,8 +122,9 @@ The repo moved materially after the last audit:
   reference material.
 - Completed top-level superpowers plans were moved to
   `docs/superpowers/plans/archive/`.
-- Completed design specs were moved to `docs/superpowers/specs/archive/` so
-  active design directories no longer look like the next implementation queue.
+- Completed design specs were moved to `docs/superpowers/specs/archive/`; the
+  active specs directory now contains only current implementation-goal designs,
+  such as the daily-driver readiness program.
 - The current package-manager tester decision is represented by
   `docs/superpowers/limited-preview-release-checkpoint-2026-05-16.md` and
   `docs/superpowers/limited-preview-subreddit-tester-post-2026-05-19.md`, not
@@ -172,9 +179,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 82
+- Total tracked doc-like files audited: 83
 - `verified-no-change`: 18
-- `corrected`: 26
+- `corrected`: 27
 - `reframed-as-historical`: 1
 - `archived`: 23
 - `retained-historical`: 14
