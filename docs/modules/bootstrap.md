@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-12
-revision: 9
-summary: Document bootstrap inputs, complete generation artifact output, self-host VM overlay, runtime-export validation, and manifest comparison commands
+last_updated: 2026-05-19
+revision: 10
+summary: Document bootstrap inputs, complete generation artifact output, self-host VM overlay, current runtime-export validation, and manifest comparison commands
 ---
 
 # Bootstrap Module (conary-core/src/bootstrap/)
@@ -139,11 +139,12 @@ The generation artifact export implementation is merged and covered by the
 `Generation Artifact Export QEMU` suite described in
 [docs/INTEGRATION-TESTING.md](/docs/INTEGRATION-TESTING.md). The suite covers
 both bootstrap-run exports and full CAS-backed installed runtime generations.
-Bootstrap-run export remains green in the 2026-05-16 checkpoint, while the
-installed-runtime positive boot proof is currently blocked by `TGE04`:
-the exported image boots the kernel and then panics with `No working init
-found`. Metadata-only or partial installed generations still fail closed
-before artifact publication. Remaining image-projection follow-ups are tracked in
+The 2026-05-19 Group O QEMU refresh passed both the bootstrap-run export proof
+and the installed-runtime positive boot proof: the installed-runtime qcow2 boots
+under UEFI, reaches SSH, and emits the
+`installed-runtime-generation-export-booted` marker. Metadata-only or partial
+installed generations still fail closed before artifact publication. Remaining
+image-projection follow-ups are tracked in
 [docs/operations/post-generation-export-follow-up-roadmap.md](/docs/operations/post-generation-export-follow-up-roadmap.md).
 
 ## Architecture Context
