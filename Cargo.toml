@@ -62,7 +62,7 @@ libc = "0.2"
 nix = { version = "0.31", features = ["user", "mount", "sched", "process", "signal", "resource", "fs"] }
 
 # Sigstore
-sigstore = { version = "0.13", default-features = false, features = ["bundle", "rekor", "sigstore-trust-root", "rustls-tls"] }
+sigstore = { version = "0.13", default-features = false, features = ["bundle", "rekor", "rustls-tls"] }
 const-oid = { version = "0.10", features = ["db"] }
 rustls-pki-types = "1.0"
 webpki = { package = "rustls-webpki", version = "0.103", features = ["std"], default-features = false }
