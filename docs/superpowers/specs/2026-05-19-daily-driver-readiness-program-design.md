@@ -354,9 +354,18 @@ and hooks on live roots.
 
 ### Current Gap
 
-Current CLI help says scriptlet sandboxing provides PID/network isolation while
-`/etc` and `/var` remain writable on live roots. The follow-up roadmap calls
-out that sandboxing still has uneven host mutation boundaries.
+Before Goal 4, CLI help said scriptlet sandboxing provided PID/network
+isolation while `/etc` and `/var` remained writable on live roots. The follow-up
+roadmap also called out uneven host mutation boundaries.
+
+### Implementation Note
+
+Goal 4 now routes protected live-root scriptlet modes through private writable
+`/etc` and `/var` layers backed by owned temporary directories, overlays
+selected host identity files read-only, and marks the sandbox config as
+enforce-mode so setup failures fail closed before scriptlets run. Remaining
+package-hook surfaces that do not route through protected scriptlet execution
+stay tracked in the follow-up roadmap.
 
 ### Scope
 

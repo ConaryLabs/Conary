@@ -26,7 +26,7 @@
 //! The target root must have a working shell and interpreter for scriptlets
 //! to execute successfully.
 
-use crate::capability::enforcement::EnforcementMode;
+use crate::capability::enforcement::{EnforcementMode, EnforcementPolicy};
 use crate::container::{BindMount, ContainerConfig, Sandbox, ScriptRisk, analyze_script};
 use crate::db::models::ScriptletEntry;
 use crate::error::{Error, Result};
@@ -72,7 +72,13 @@ impl SandboxMode {
 
 /// Default timeout for scriptlet execution (60 seconds)
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
-const LIVE_SANDBOX_PROTECTED_ETC_FILES: [&str; 3] = ["/etc/passwd", "/etc/shadow", "/etc/sudoers"];
+const LIVE_SANDBOX_READONLY_ETC_FILES: [&str; 5] = [
+    "/etc/passwd",
+    "/etc/group",
+    "/etc/hosts",
+    "/etc/shadow",
+    "/etc/sudoers",
+];
 
 /// Package format types for argument handling
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -295,20 +301,11 @@ impl ScriptletExecutor {
         args: &[String],
         env: &[(&str, &str)],
     ) -> Result<()> {
-        // NOTE: This sandbox mode provides namespace isolation (PID, mount,
-        // network) but NOT full write isolation for /var and /etc. The
-        // container runtime does not create tmpfs overlays, so these must
-        // remain writable for scriptlets that update ldconfig, systemd
-        // state, etc. A small set of critical account-management files is
-        // rebound read-only after the writable /etc mount. True isolation
-        // still requires the target-root chroot path (execute_in_target)
-        // or a future overlay-backed sandbox.
-        //
-        // TODO: Add tmpfs overlay support to the container runtime so
-        // sandbox_live can capture scriptlet writes without mutating the
-        // host. Until then, this mode provides process/network isolation
-        // only, not filesystem isolation for /var and /etc.
-        let mut sandbox = Sandbox::new(self.live_sandbox_config());
+        // Protected live-root mode gives scriptlets private writable /etc and
+        // /var layers, then overlays selected host identity files read-only.
+        // Setup failures are fatal so this mode never silently downgrades to
+        // host-writable /etc or /var.
+        let mut sandbox = Sandbox::new(self.live_sandbox_config()?);
         let (code, stdout, stderr) = sandbox.execute(interpreter, content, args, env)?;
 
         log_script_output(phase, &stdout, &stderr);
@@ -324,24 +321,30 @@ impl ScriptletExecutor {
         }
     }
 
-    fn live_sandbox_config(&self) -> ContainerConfig {
+    fn live_sandbox_config(&self) -> Result<ContainerConfig> {
         let mut config = ContainerConfig::default().for_untrusted();
         config.timeout = self.timeout;
-        config.bind_mounts.retain(|mount| {
-            !LIVE_SANDBOX_PROTECTED_ETC_FILES
-                .iter()
-                .any(|protected| mount.target == Path::new(protected))
-        });
-        config.bind_mounts.push(BindMount::writable("/var", "/var"));
-        config.bind_mounts.push(BindMount::writable("/etc", "/etc"));
+        config
+            .bind_mounts
+            .retain(|mount| !is_live_sandbox_private_target(&mount.target));
 
-        for protected in LIVE_SANDBOX_PROTECTED_ETC_FILES {
+        config.add_private_writable_mount("/etc", 0o755)?;
+        config.add_private_writable_mount("/var", 0o755)?;
+
+        for protected in LIVE_SANDBOX_READONLY_ETC_FILES {
             config
                 .bind_mounts
                 .push(BindMount::readonly(protected, protected));
         }
 
-        config
+        config.capability_policy = Some(EnforcementPolicy {
+            mode: EnforcementMode::Enforce,
+            filesystem: None,
+            syscalls: None,
+            network_isolation: config.isolate_network,
+        });
+
+        Ok(config)
     }
 
     /// Execute scriptlet inside a target root using chroot/container
@@ -636,6 +639,13 @@ impl ScriptletExecutor {
             content, function_name, function_name
         )
     }
+}
+
+fn is_live_sandbox_private_target(target: &Path) -> bool {
+    target == Path::new("/etc")
+        || target.starts_with("/etc/")
+        || target == Path::new("/var")
+        || target.starts_with("/var/")
 }
 
 pub fn set_seccomp_warn_override(enabled: bool) {
@@ -1000,7 +1010,7 @@ mod tests {
         let executor =
             ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm);
 
-        let config = executor.live_sandbox_config();
+        let config = executor.live_sandbox_config().expect("live sandbox config");
         let etc_index = config
             .bind_mounts
             .iter()
@@ -1023,6 +1033,45 @@ mod tests {
                 "{protected} should be mounted after writable /etc so it is not shadowed"
             );
         }
+    }
+
+    #[test]
+    fn test_live_sandbox_config_uses_private_layers_for_writable_etc_and_var() {
+        let executor =
+            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm);
+
+        let config = executor.live_sandbox_config().expect("live sandbox config");
+
+        for protected_dir in ["/etc", "/var"] {
+            let mount = config
+                .bind_mounts
+                .iter()
+                .find(|mount| mount.target == Path::new(protected_dir) && mount.writable)
+                .unwrap_or_else(|| panic!("missing writable {protected_dir} sandbox layer"));
+            assert_ne!(
+                mount.source,
+                PathBuf::from(protected_dir),
+                "{protected_dir} must use a private writable layer, not the live host path"
+            );
+            assert!(
+                mount.source.exists(),
+                "private layer backing {protected_dir} should exist for the sandbox lifetime"
+            );
+        }
+    }
+
+    #[test]
+    fn test_live_sandbox_config_fails_closed_on_protection_setup_failures() {
+        let executor =
+            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm);
+
+        let config = executor.live_sandbox_config().expect("live sandbox config");
+
+        let policy = config
+            .capability_policy
+            .as_ref()
+            .expect("protected live sandbox should carry enforce-mode metadata");
+        assert_eq!(policy.mode, EnforcementMode::Enforce);
     }
 
     #[test]

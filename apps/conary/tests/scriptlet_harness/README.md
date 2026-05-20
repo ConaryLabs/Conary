@@ -45,8 +45,11 @@ its work directory instead of touching the live `/`. That keeps the run
 contained even when the generated packages include install/remove hooks.
 
 Pass `--real-root` to install packages to the real root filesystem (`/`). In this
-mode, scriptlets will actually execute on your system. The harness tracks all
-installed packages and removes them in a cleanup step after each test run.
+mode, package install/remove operations act on the live system. With the default
+`--sandbox=always`, scriptlets execute in protected live-root mode with private
+`/etc` and `/var` writable layers; `--sandbox=never` uses legacy direct execution
+and can mutate the host. The harness tracks all installed packages and removes
+them in a cleanup step after each test run.
 
 Use `--real-root` when you need to verify that scriptlet arguments (`$1` for RPM,
 `install`/`configure`/`remove` for DEB, function calls for Arch) are passed

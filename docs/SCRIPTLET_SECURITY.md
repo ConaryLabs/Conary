@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-04-09
-revision: 3
-summary: Refresh sandbox defaults, enforcement paths, and current isolation behavior
+last_updated: 2026-05-20
+revision: 4
+summary: Clarify protected live-root sandbox filesystem isolation and fail-closed behavior
 ---
 
 # Scriptlet Security Model
@@ -49,13 +49,16 @@ pub enum SandboxMode {
 ```
 
 Configure via CLI or environment:
-- `--sandbox=always` - Maximum security, sandbox all scripts (default)
-- `--sandbox=auto` - Risk-based sandboxing for selectively relaxing the default
-- `--sandbox=never` - Legacy behavior, no sandboxing
+- `--sandbox=always` - Protected mode, sandbox all scripts (default)
+- `--sandbox=auto` - Risk-based sandboxing; scripts at medium risk or higher
+  use the same protected mode as `always`
+- `--sandbox=never` - Legacy direct execution; scriptlets can mutate the live
+  host with the package manager's privileges
 
 ### 3. Container Isolation
 
-When sandboxing is enabled, scripts run in a lightweight Linux container with:
+When protected sandboxing is enabled, scripts run in a lightweight Linux
+container with:
 
 #### Namespace Isolation
 - **PID namespace**: Isolated process tree, script cannot see/signal host processes
@@ -71,8 +74,15 @@ When sandboxing is enabled, scripts run in a lightweight Linux container with:
   mount, providing an additional layer of protection -- scriptlets cannot modify
   system binaries even if they escape the sandbox
 - **Bind mounts**: Controlled access to host paths:
-  - Read-only: `/usr`, `/lib`, `/lib64`, `/bin`, `/sbin`, `/etc/passwd`, `/etc/group`
-  - Writable (for scriptlets): `/var`, `/etc` (package config)
+  - Read-only host tooling: `/usr`, `/lib`, `/lib64`, `/bin`, `/sbin`
+  - Read-only host identity files layered into the private `/etc`:
+    `/etc/passwd`, `/etc/group`, `/etc/hosts`, `/etc/shadow`, `/etc/sudoers`
+  - Private writable live-root layers: `/etc` and `/var` are backed by owned
+    temporary directories, so protected scriptlet writes are discarded with the
+    sandbox instead of mutating the host
+
+Target-root installs (`--root=/path`) remain the full chroot/container path for
+building or modifying an alternate filesystem.
 
 #### Resource Limits (setrlimit)
 | Resource | Default Limit | Purpose |
@@ -165,13 +175,15 @@ Arguments are version strings:
 
 Arch `.INSTALL` files define functions rather than executable scripts, so Conary generates wrapper scripts that source the file and call the appropriate function.
 
-## Rootless Execution Fallback
+## Namespace Availability
 
-Full namespace isolation requires root privileges. When running as non-root:
+Protected modes require namespace isolation. When the kernel cannot provide the
+needed mount/network/user namespace guarantees, Conary fails before running the
+scriptlet rather than silently falling back to direct host mutation.
 
-1. Check for unprivileged user namespaces (`/proc/sys/kernel/unprivileged_userns_clone`)
-2. If namespace setup is unavailable, fall back to resource limits only
-3. Warning is logged: "Namespace isolation not available, falling back to resource limits only"
+Direct execution via `--sandbox=never` still uses stdin nullification,
+environment filtering, timeouts, and resource limits where available, but it is
+not a filesystem sandbox.
 
 ## Security Recommendations
 
@@ -210,6 +222,9 @@ The following features, originally planned as future enhancements, are now imple
 - **Network namespace isolation** -- `CLONE_NEWNET` blocks all network access in hermetic builds
 - **Landlock filesystem enforcement** -- Kernel-enforced path restrictions via `crates/conary-core/src/capability/enforcement/landlock_enforce.rs`
 - **Capability declarations** -- Packages declare network, filesystem, and syscall requirements
+- **Protected live-root writable layers** -- `/etc` and `/var` writes in
+  protected scriptlet modes go to private sandbox directories instead of the
+  live host
 
 ## Future Enhancements
 
