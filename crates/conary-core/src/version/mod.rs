@@ -514,11 +514,11 @@ mod tests {
 
     #[test]
     fn test_rpm_version_parse_empty_epoch() {
-        // Some packages have versions like ":1.02.208-2.fc43" with empty epoch
-        let v = RpmVersion::parse(":1.02.208-2.fc43").unwrap();
+        // Some packages have versions like ":1.02.208-2.fc44" with empty epoch
+        let v = RpmVersion::parse(":1.02.208-2.fc44").unwrap();
         assert_eq!(v.epoch, 0);
         assert_eq!(v.version, "1.02.208");
-        assert_eq!(v.release, Some("2.fc43".to_string()));
+        assert_eq!(v.release, Some("2.fc44".to_string()));
     }
 
     #[test]
@@ -553,7 +553,7 @@ mod tests {
 
         // Release None vs Some should not match
         let c = VersionConstraint::parse("= 1.2.3").unwrap();
-        let v = RpmVersion::parse("1.2.3-1.fc43").unwrap();
+        let v = RpmVersion::parse("1.2.3-1.fc44").unwrap();
         assert!(!c.satisfies(&v));
     }
 

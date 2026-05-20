@@ -630,10 +630,10 @@ mod tests {
         );
         let trove_id = trove.insert(&conn).unwrap();
 
-        Trove::update_source_identity(&conn, trove_id, Some("fedora-43"), Some("rpm")).unwrap();
+        Trove::update_source_identity(&conn, trove_id, Some("fedora-44"), Some("rpm")).unwrap();
 
         let loaded = Trove::find_by_id(&conn, trove_id).unwrap().unwrap();
-        assert_eq!(loaded.source_distro.as_deref(), Some("fedora-43"));
+        assert_eq!(loaded.source_distro.as_deref(), Some("fedora-44"));
         assert_eq!(loaded.version_scheme.as_deref(), Some("rpm"));
     }
 
@@ -654,7 +654,7 @@ mod tests {
             "arch",
             "arch",
             repo_id,
-            "Replatformed from fedora-43 to arch by model apply",
+            "Replatformed from fedora-44 to arch by model apply",
         )
         .unwrap();
 
@@ -664,7 +664,7 @@ mod tests {
         assert_eq!(loaded.installed_from_repository_id, Some(repo_id));
         assert_eq!(
             loaded.selection_reason.as_deref(),
-            Some("Replatformed from fedora-43 to arch by model apply")
+            Some("Replatformed from fedora-44 to arch by model apply")
         );
     }
 

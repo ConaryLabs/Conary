@@ -571,12 +571,12 @@ mod tests {
 
         // Create two repos: fedora and ubuntu
         let mut fedora_repo = Repository::new(
-            "fedora-43".to_string(),
+            "fedora-44".to_string(),
             "https://mirrors.fedoraproject.org/metalink".to_string(),
         );
         fedora_repo.priority = 10;
         fedora_repo.insert(&conn).unwrap();
-        let fedora = Repository::find_by_name(&conn, "fedora-43")
+        let fedora = Repository::find_by_name(&conn, "fedora-44")
             .unwrap()
             .unwrap();
 
@@ -613,9 +613,9 @@ mod tests {
         pkg_ubu.architecture = Some("x86_64".into());
         pkg_ubu.insert(&conn).unwrap();
 
-        // With --repo fedora-43, root request should only find fedora
+        // With --repo fedora-44, root request should only find fedora
         let policy =
-            ResolutionPolicy::new().with_scope(RequestScope::Repository("fedora-43".into()));
+            ResolutionPolicy::new().with_scope(RequestScope::Repository("fedora-44".into()));
 
         let options = SelectionOptions {
             policy: Some(policy),
@@ -624,7 +624,7 @@ mod tests {
         };
         let candidates = PackageSelector::search_packages(&conn, "curl", &options).unwrap();
         assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].repository.name, "fedora-43");
+        assert_eq!(candidates[0].repository.name, "fedora-44");
     }
 
     #[test]
@@ -632,12 +632,12 @@ mod tests {
         let conn = test_db();
 
         let mut fedora_repo = Repository::new(
-            "fedora-43".to_string(),
+            "fedora-44".to_string(),
             "https://mirrors.fedoraproject.org/metalink".to_string(),
         );
         fedora_repo.priority = 10;
         fedora_repo.insert(&conn).unwrap();
-        let fedora = Repository::find_by_name(&conn, "fedora-43")
+        let fedora = Repository::find_by_name(&conn, "fedora-44")
             .unwrap()
             .unwrap();
 
@@ -675,7 +675,7 @@ mod tests {
 
         // Request scope targets fedora, but is_root=false so scope is ignored
         let policy =
-            ResolutionPolicy::new().with_scope(RequestScope::Repository("fedora-43".into()));
+            ResolutionPolicy::new().with_scope(RequestScope::Repository("fedora-44".into()));
 
         let options = SelectionOptions {
             policy: Some(policy),
@@ -849,12 +849,12 @@ mod tests {
 
         // Create fedora and ubuntu repos at same priority
         let mut fedora_repo = Repository::new(
-            "fedora-43".to_string(),
+            "fedora-44".to_string(),
             "https://mirrors.fedoraproject.org/metalink".to_string(),
         );
         fedora_repo.priority = 10;
         fedora_repo.insert(&conn).unwrap();
-        let fedora = Repository::find_by_name(&conn, "fedora-43")
+        let fedora = Repository::find_by_name(&conn, "fedora-44")
             .unwrap()
             .unwrap();
 
@@ -871,7 +871,7 @@ mod tests {
         let mut pkg_fed = RepositoryPackage::new(
             fedora.id.unwrap(),
             "curl".into(),
-            "8.9.1-2.fc43".into(),
+            "8.9.1-2.fc44".into(),
             "sha256:fed".into(),
             1,
             "https://example.com/curl.rpm".into(),
@@ -903,8 +903,8 @@ mod tests {
 
         // select_best should pick deterministically (alphabetical repo name)
         let selected = PackageSelector::select_best(candidates).unwrap();
-        // "fedora-43" < "ubuntu-noble" alphabetically, so fedora wins
-        assert_eq!(selected.repository.name, "fedora-43");
+        // "fedora-44" < "ubuntu-noble" alphabetically, so fedora wins
+        assert_eq!(selected.repository.name, "fedora-44");
     }
 
     #[test]
@@ -944,7 +944,7 @@ mod tests {
         let mut fedora_pkg = RepositoryPackage::new(
             fedora.id.unwrap(),
             "python".into(),
-            "3.12.2-1.fc43".into(),
+            "3.12.2-1.fc44".into(),
             "sha256:fedora".into(),
             1,
             "https://example.invalid/python-fedora.rpm".into(),
@@ -1025,7 +1025,7 @@ mod tests {
         let mut fedora_pkg = RepositoryPackage::new(
             fedora_repo.id.unwrap(),
             "python".into(),
-            "3.12.2-1.fc43".into(),
+            "3.12.2-1.fc44".into(),
             "sha256:fedora".into(),
             1,
             "https://example.invalid/python-fedora.rpm".into(),

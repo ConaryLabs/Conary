@@ -1734,7 +1734,7 @@ mod tests {
 
         let tmp = tempfile::TempDir::new().unwrap();
         let boot_root = tmp.path().join("boot");
-        let release = "6.17.1-300.fc43.x86_64";
+        let release = "6.17.1-300.fc44.x86_64";
         let module_dir = tmp.path().join("lib/modules").join(release);
         std::fs::create_dir_all(&module_dir).unwrap();
         std::fs::create_dir_all(boot_root.join("EFI/BOOT")).unwrap();
@@ -1748,7 +1748,7 @@ mod tests {
 
         let troves = vec![Trove::new(
             "kernel-core".to_string(),
-            "6.17.1-300.fc43".to_string(),
+            "6.17.1-300.fc44".to_string(),
             TroveType::Package,
         )];
 
@@ -1769,7 +1769,7 @@ mod tests {
         let troves = vec![
             Trove::new(
                 "kernel".to_string(),
-                "6.17.1-300.fc43".to_string(),
+                "6.17.1-300.fc44".to_string(),
                 TroveType::Package,
             ),
             Trove::new(
@@ -2009,7 +2009,7 @@ mod tests {
 
         let tmp = tempfile::TempDir::new().unwrap();
         let boot_root = tmp.path().join("boot");
-        let release = "6.17.1-300.fc43.x86_64";
+        let release = "6.17.1-300.fc44.x86_64";
         let module_dir = tmp.path().join("lib/modules").join(release);
         let fake_dracut = tmp.path().join("dracut");
         let fake_depmod = tmp.path().join("depmod");
@@ -2032,7 +2032,7 @@ mod tests {
 
         let troves = vec![Trove::new(
             "kernel-core".to_string(),
-            "6.17.1-300.fc43".to_string(),
+            "6.17.1-300.fc44".to_string(),
             TroveType::Package,
         )];
 
@@ -2068,7 +2068,7 @@ mod tests {
 
         let tmp = tempfile::TempDir::new().unwrap();
         let boot_root = tmp.path().join("boot");
-        let release = "6.17.1-300.fc43.x86_64";
+        let release = "6.17.1-300.fc44.x86_64";
         let module_dir = tmp.path().join("lib/modules").join(release);
         let fake_dracut = tmp.path().join("dracut");
         let fake_depmod = tmp.path().join("depmod");
@@ -2089,7 +2089,7 @@ mod tests {
 
         let troves = vec![Trove::new(
             "kernel-core".to_string(),
-            "6.17.1-300.fc43".to_string(),
+            "6.17.1-300.fc44".to_string(),
             TroveType::Package,
         )];
 
@@ -2113,7 +2113,7 @@ mod tests {
 
         let tmp = tempfile::TempDir::new().unwrap();
         let boot_root = tmp.path().join("boot");
-        let release = "6.17.1-300.fc43.x86_64";
+        let release = "6.17.1-300.fc44.x86_64";
         let module_dir = tmp.path().join("lib/modules").join(release);
         let fake_dracut = tmp.path().join("dracut");
         let fake_depmod = tmp.path().join("depmod");
@@ -2127,7 +2127,7 @@ mod tests {
 
         let troves = vec![Trove::new(
             "kernel-core".to_string(),
-            "6.17.1-300.fc43".to_string(),
+            "6.17.1-300.fc44".to_string(),
             TroveType::Package,
         )];
 

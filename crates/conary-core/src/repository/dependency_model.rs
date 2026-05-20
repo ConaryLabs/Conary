@@ -125,7 +125,7 @@ pub struct RepositoryProvide {
     /// may provide `libfoo.so.1` with provide-version `1.3`.
     pub version: Option<String>,
 
-    /// The original native text for diagnostics (e.g. `"kernel-core-uname-r = 6.19.6-200.fc43.x86_64"`).
+    /// The original native text for diagnostics (e.g. `"kernel-core-uname-r = 6.19.6-200.fc44.x86_64"`).
     pub native_text: Option<String>,
 }
 

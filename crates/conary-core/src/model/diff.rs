@@ -1009,7 +1009,7 @@ mod tests {
 
         let mut state = SystemState::new();
         state.source_pin = Some(super::super::parser::SourcePinConfig {
-            distro: "fedora-43".to_string(),
+            distro: "fedora-44".to_string(),
             strength: Some("guarded".to_string()),
         });
 
@@ -1235,7 +1235,7 @@ mod tests {
     fn test_replatform_replace_is_structural_and_descriptive() {
         let action = DiffAction::ReplatformReplace {
             package: "vim".to_string(),
-            current_distro: Some("fedora-43".to_string()),
+            current_distro: Some("fedora-44".to_string()),
             target_distro: "arch".to_string(),
             current_version: "9.0.1".to_string(),
             current_architecture: Some("x86_64".to_string()),
@@ -1250,7 +1250,7 @@ mod tests {
 
         let description = action.description();
         assert!(description.contains("Replatform vim"));
-        assert!(description.contains("fedora-43"));
+        assert!(description.contains("fedora-44"));
         assert!(description.contains("arch"));
         assert!(description.contains("9.0.1 -> 9.1.0"));
         assert!(description.contains("via arch-core"));
@@ -1265,7 +1265,7 @@ mod tests {
         });
         diff.add_action(DiffAction::ReplatformReplace {
             package: "vim".to_string(),
-            current_distro: Some("fedora-43".to_string()),
+            current_distro: Some("fedora-44".to_string()),
             target_distro: "arch".to_string(),
             current_version: "9.0.1".to_string(),
             current_architecture: Some("x86_64".to_string()),

@@ -761,7 +761,7 @@ mod tests {
         let mut metadata = make_test_metadata();
         metadata.provides = vec![Dependency {
             name: "kernel-uname-r".to_string(),
-            version: Some("= 6.17.1-300.fc43.x86_64".to_string()),
+            version: Some("= 6.17.1-300.fc44.x86_64".to_string()),
             dep_type: DependencyType::Runtime,
             description: None,
         }];
@@ -781,7 +781,7 @@ mod tests {
             manifest
                 .provides
                 .capabilities
-                .contains(&"kernel-uname-r = 6.17.1-300.fc43.x86_64".to_string()),
+                .contains(&"kernel-uname-r = 6.17.1-300.fc44.x86_64".to_string()),
             "versioned native provides should retain their native constraint text"
         );
     }

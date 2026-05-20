@@ -39,6 +39,7 @@ docs/operations/infrastructure.md	canonical	contributor
 docs/operations/post-generation-export-follow-up-roadmap.md	canonical	contributor
 docs/specs/ccs-format-v1.md	canonical	contributor
 docs/superpowers/archive/2026-04-04-codebase-simplification-retrospective.md	historical	historical
+docs/superpowers/archive/2026-04-10-release-hardening-checklist.md	historical	historical
 docs/superpowers/documentation-accuracy-audit-summary.md	planning	maintainer
 docs/superpowers/limited-preview-release-checkpoint-2026-05-16.md	planning	maintainer
 docs/superpowers/limited-preview-subreddit-tester-post-2026-05-19.md	planning	maintainer
@@ -56,7 +57,6 @@ docs/superpowers/plans/archive/2026-05-14-native-package-manager-parity-slice-a-
 docs/superpowers/plans/archive/2026-05-15-native-package-manager-parity-slice-b-plan.md	historical	historical
 docs/superpowers/plans/archive/2026-05-15-native-package-manager-parity-slice-c-plan.md	historical	historical
 docs/superpowers/plans/archive/2026-05-16-native-package-manager-parity-slice-d-plan.md	historical	historical
-docs/superpowers/release-hardening-checklist-2026-04-10.md	planning	maintainer
 docs/superpowers/release-security-waivers-2026-05-06.md	planning	maintainer
 docs/superpowers/specs/2026-05-19-daily-driver-readiness-program-design.md	planning	maintainer
 docs/superpowers/specs/archive/2026-04-10-all-tracks-release-hardening-design.md	historical	historical

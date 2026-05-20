@@ -1222,10 +1222,10 @@ mod tests {
     #[test]
     fn test_build_download_url_with_version_and_architecture() {
         let core = RemiClientCore::new("http://remi:8080").unwrap();
-        let url = core.download_url("fedora", "glib2", Some("2.86.0-2.fc43"), Some("x86_64"));
+        let url = core.download_url("fedora", "glib2", Some("2.86.0-2.fc44"), Some("x86_64"));
         assert_eq!(
             url,
-            "http://remi:8080/v1/fedora/packages/glib2/download?version=2.86.0-2.fc43&arch=x86_64"
+            "http://remi:8080/v1/fedora/packages/glib2/download?version=2.86.0-2.fc44&arch=x86_64"
         );
     }
 
@@ -1302,7 +1302,7 @@ mod tests {
             .fetch_package(
                 "fedora",
                 "qemu-img",
-                Some("2:10.1.0-7.fc43"),
+                Some("2:10.1.0-7.fc44"),
                 None,
                 output.path(),
             )
@@ -1354,7 +1354,7 @@ mod tests {
             .fetch_package(
                 "fedora",
                 "qemu-img",
-                Some("2:10.1.0-7.fc43"),
+                Some("2:10.1.0-7.fc44"),
                 None,
                 output.path(),
             )
@@ -1421,7 +1421,7 @@ mod tests {
             .fetch_package(
                 "fedora",
                 "qemu-img",
-                Some("2:10.1.0-7.fc43"),
+                Some("2:10.1.0-7.fc44"),
                 None,
                 output.path(),
             )

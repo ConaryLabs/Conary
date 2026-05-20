@@ -50,8 +50,8 @@ cargo run -p conary-test -- list
 
 The generation artifact export QEMU suite is the operational proof for both
 the 2026-04-22 generation-export unification slice and the later
-self-contained installed-runtime export slice. The historical Fedora 43 run on
-2026-04-30 covered `TGE01` and `TGE02`. The active Fedora 44 suite now covers:
+self-contained installed-runtime export slice. The superseded 2026-04-30
+baseline covered `TGE01` and `TGE02`. The active Fedora 44 suite now covers:
 
 - `TGE01`: metadata-only installed generations fail closed before artifact publication
 - `TGE03`: CAS-backed installed generations fail closed when an included CAS object is missing

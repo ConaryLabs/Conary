@@ -32,7 +32,7 @@ pub enum VersionScheme {
 /// comparison and makes it explicit which algorithm governs ordering.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RepositoryVersion {
-    /// The raw version string (e.g. `"1:1.2.3-2.fc43"`).
+    /// The raw version string (e.g. `"1:1.2.3-2.fc44"`).
     pub raw: String,
     /// Which comparison scheme applies to this version.
     pub scheme: VersionScheme,
@@ -550,7 +550,7 @@ mod tests {
     #[test]
     fn compares_rpm_versions_natively() {
         assert_eq!(
-            compare_repo_versions(VersionScheme::Rpm, "1.2.3-2.fc43", "1.2.3-1.fc43"),
+            compare_repo_versions(VersionScheme::Rpm, "1.2.3-2.fc44", "1.2.3-1.fc44"),
             Some(Ordering::Greater)
         );
     }
@@ -613,8 +613,8 @@ mod tests {
 
     #[test]
     fn repository_version_same_scheme_compare() {
-        let a = RepositoryVersion::new("1.2.3-2.fc43".to_string(), VersionScheme::Rpm);
-        let b = RepositoryVersion::new("1.2.3-1.fc43".to_string(), VersionScheme::Rpm);
+        let a = RepositoryVersion::new("1.2.3-2.fc44".to_string(), VersionScheme::Rpm);
+        let b = RepositoryVersion::new("1.2.3-1.fc44".to_string(), VersionScheme::Rpm);
         assert_eq!(a.compare(&b), Some(Ordering::Greater));
     }
 

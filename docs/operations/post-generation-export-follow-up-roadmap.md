@@ -64,9 +64,8 @@ Completed composefs-only boot activation cleanup:
 
 Historical operational validation:
 
-- `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora43 --phase 3`
-- result on 2026-04-30: `TGE01` and `TGE02` passed, 2 passed / 0 failed
-- that Fedora 43 run is now historical; Fedora 44 is the active baseline
+- superseded 2026-04-30 baseline: `TGE01` and `TGE02` passed, 2 passed / 0 failed
+- Fedora 44 is the active baseline
 
 Current active validation:
 

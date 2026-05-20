@@ -337,7 +337,7 @@ mod tests {
             "fedora".to_string(),
             RemiPackageEntry {
                 name: "qemu-img".to_string(),
-                version: "2:10.1.0-7.fc43".to_string(),
+                version: "2:10.1.0-7.fc44".to_string(),
                 converted: false,
                 architecture: Some("x86_64".to_string()),
                 dependencies: None,
@@ -403,7 +403,7 @@ mod tests {
                 let body = if attempt == 0 {
                     r#"{"packages":[{"name":"qemu-img""#
                 } else {
-                    r#"{"packages":[{"name":"qemu-img","version":"2:10.1.0-7.fc43","converted":false,"architecture":"x86_64"}]}"#
+                    r#"{"packages":[{"name":"qemu-img","version":"2:10.1.0-7.fc44","converted":false,"architecture":"x86_64"}]}"#
                 };
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",

@@ -194,7 +194,7 @@ pub(crate) fn seed_mixed_replatform_fixture(conn: &rusqlite::Connection) {
         "fedora".to_string(),
         "https://example.test/fedora".to_string(),
     );
-    fedora_repo.default_strategy_distro = Some("fedora-43".to_string());
+    fedora_repo.default_strategy_distro = Some("fedora-44".to_string());
     let fedora_repo_id = fedora_repo.insert(conn).unwrap();
 
     let mut arch_repo = Repository::new(

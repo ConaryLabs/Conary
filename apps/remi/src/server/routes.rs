@@ -529,7 +529,7 @@ mod tests {
         let db_path = storage_root.join("metadata/conary.db");
         let chunk_dir = storage_root.join("chunks");
         let cache_dir = storage_root.join("cache");
-        let ccs_path = cache_dir.join("packages/qemu-img-210.1.0-7.fc43-x86_64.ccs");
+        let ccs_path = cache_dir.join("packages/qemu-img-210.1.0-7.fc44-x86_64.ccs");
 
         std::fs::create_dir_all(ccs_path.parent().unwrap()).unwrap();
         std::fs::create_dir_all(&chunk_dir).unwrap();
@@ -545,7 +545,7 @@ mod tests {
         let mut converted = conary_core::db::models::ConvertedPackage::new_server(
             "fedora".to_string(),
             "qemu-img".to_string(),
-            "2:10.1.0-7.fc43".to_string(),
+            "2:10.1.0-7.fc44".to_string(),
             "rpm".to_string(),
             "sha256:native".to_string(),
             "high".to_string(),
@@ -572,7 +572,7 @@ mod tests {
         let app = create_router(state).await;
 
         let mut request = Request::builder()
-            .uri("/v1/fedora/packages/qemu-img/download?version=2%3A10.1.0-7.fc43&arch=x86_64")
+            .uri("/v1/fedora/packages/qemu-img/download?version=2%3A10.1.0-7.fc44&arch=x86_64")
             .header(header::ACCEPT_ENCODING, "gzip")
             .body(Body::empty())
             .unwrap();

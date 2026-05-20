@@ -761,7 +761,7 @@ mod tests {
 
         let ccs_path = temp
             .path()
-            .join("cache/packages/p11-kit-trust-0.25.8-1.fc43-x86_64.ccs");
+            .join("cache/packages/p11-kit-trust-0.25.8-1.fc44-x86_64.ccs");
         std::fs::create_dir_all(ccs_path.parent().unwrap()).unwrap();
         std::fs::write(&ccs_path, b"stale ccs payload").unwrap();
 
@@ -769,7 +769,7 @@ mod tests {
         let mut converted = ConvertedPackage::new_server(
             "fedora".to_string(),
             "p11-kit-trust".to_string(),
-            "0.25.8-1.fc43".to_string(),
+            "0.25.8-1.fc44".to_string(),
             "rpm".to_string(),
             "sha256:stale".to_string(),
             "high".to_string(),
@@ -786,7 +786,7 @@ mod tests {
             &db_path,
             "fedora",
             "p11-kit-trust",
-            Some("0.25.8-1.fc43"),
+            Some("0.25.8-1.fc44"),
             Some("x86_64"),
         )
         .unwrap();

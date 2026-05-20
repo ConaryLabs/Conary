@@ -714,7 +714,7 @@ mod tests {
             "fedora".to_string(),
             "https://example.test/fedora".to_string(),
         );
-        fedora_repo.default_strategy_distro = Some("fedora-43".to_string());
+        fedora_repo.default_strategy_distro = Some("fedora-44".to_string());
         let fedora_repo_id = fedora_repo.insert(&conn).unwrap();
 
         let mut arch_repo =
@@ -762,7 +762,7 @@ mod tests {
     fn test_replatform_estimate_from_affinities_uses_target_counts() {
         let affinities = vec![
             SystemAffinity {
-                distro: "fedora-43".to_string(),
+                distro: "fedora-44".to_string(),
                 package_count: 9,
                 percentage: 75.0,
             },
@@ -790,7 +790,7 @@ mod tests {
             "fedora".to_string(),
             "https://example.test/fedora".to_string(),
         );
-        fedora_repo.default_strategy_distro = Some("fedora-43".to_string());
+        fedora_repo.default_strategy_distro = Some("fedora-44".to_string());
         let fedora_repo_id = fedora_repo.insert(&conn).unwrap();
 
         let mut arch_repo =
@@ -832,7 +832,7 @@ mod tests {
         conn.execute(
             "INSERT INTO system_affinity (distro, package_count, percentage, updated_at)
              VALUES (?1, ?2, ?3, datetime('now'))",
-            ("fedora-43", 1_i64, 100.0_f64),
+            ("fedora-44", 1_i64, 100.0_f64),
         )
         .unwrap();
 
@@ -846,7 +846,7 @@ mod tests {
             snapshot.visible_realignment_proposals[0]
                 .current_distro
                 .as_deref(),
-            Some("fedora-43")
+            Some("fedora-44")
         );
         assert_eq!(
             snapshot.visible_realignment_proposals[0].target_distro,
@@ -876,7 +876,7 @@ mod tests {
             "fedora".to_string(),
             "https://example.test/fedora".to_string(),
         );
-        fedora_repo.default_strategy_distro = Some("fedora-43".to_string());
+        fedora_repo.default_strategy_distro = Some("fedora-44".to_string());
         let fedora_repo_id = fedora_repo.insert(&conn).unwrap();
 
         let mut fedora_label = LabelEntry::new(
@@ -944,7 +944,7 @@ mod tests {
             "fedora".to_string(),
             "https://example.test/fedora".to_string(),
         );
-        fedora_repo.default_strategy_distro = Some("fedora-43".to_string());
+        fedora_repo.default_strategy_distro = Some("fedora-44".to_string());
         let fedora_repo_id = fedora_repo.insert(&conn).unwrap();
 
         let mut fedora_label = LabelEntry::new(
@@ -1031,7 +1031,7 @@ mod tests {
             visible_realignment_candidates: 1,
             visible_realignment_proposals: vec![VisibleRealignmentProposal {
                 package: "vim".to_string(),
-                current_distro: Some("fedora-43".to_string()),
+                current_distro: Some("fedora-44".to_string()),
                 target_distro: "arch".to_string(),
                 target_version: "9.1.0".to_string(),
                 architecture: Some("x86_64".to_string()),
@@ -1068,7 +1068,7 @@ mod tests {
                 target_repository,
                 target_repository_package_id,
             } if package == "vim"
-                && current_distro.as_deref() == Some("fedora-43")
+                && current_distro.as_deref() == Some("fedora-44")
                 && target_distro == "arch"
                 && current_version == "9.0.1"
                 && current_architecture.as_deref() == Some("x86_64")
@@ -1097,7 +1097,7 @@ mod tests {
             },
             DiffAction::ReplatformReplace {
                 package: "vim".to_string(),
-                current_distro: Some("fedora-43".to_string()),
+                current_distro: Some("fedora-44".to_string()),
                 target_distro: "arch".to_string(),
                 current_version: "9.0.1".to_string(),
                 current_architecture: Some("x86_64".to_string()),
@@ -1108,7 +1108,7 @@ mod tests {
             },
             DiffAction::ReplatformReplace {
                 package: "bash".to_string(),
-                current_distro: Some("fedora-43".to_string()),
+                current_distro: Some("fedora-44".to_string()),
                 target_distro: "arch".to_string(),
                 current_version: "5.1.0".to_string(),
                 current_architecture: Some("x86_64".to_string()),
@@ -1153,7 +1153,7 @@ mod tests {
         let (_temp, conn) = create_test_db();
         let actions = vec![DiffAction::ReplatformReplace {
             package: "vim".to_string(),
-            current_distro: Some("fedora-43".to_string()),
+            current_distro: Some("fedora-44".to_string()),
             target_distro: "arch".to_string(),
             current_version: "9.0.1".to_string(),
             current_architecture: Some("x86_64".to_string()),
@@ -1186,7 +1186,7 @@ mod tests {
 
         let actions = vec![DiffAction::ReplatformReplace {
             package: "vim".to_string(),
-            current_distro: Some("fedora-43".to_string()),
+            current_distro: Some("fedora-44".to_string()),
             target_distro: "arch".to_string(),
             current_version: "9.0.1".to_string(),
             current_architecture: Some("x86_64".to_string()),
@@ -1231,7 +1231,7 @@ mod tests {
 
         let actions = vec![DiffAction::ReplatformReplace {
             package: "vim".to_string(),
-            current_distro: Some("fedora-43".to_string()),
+            current_distro: Some("fedora-44".to_string()),
             target_distro: "arch".to_string(),
             current_version: "9.0.1".to_string(),
             current_architecture: Some("x86_64".to_string()),
@@ -1281,7 +1281,7 @@ mod tests {
 
         let actions = vec![DiffAction::ReplatformReplace {
             package: "vim".to_string(),
-            current_distro: Some("fedora-43".to_string()),
+            current_distro: Some("fedora-44".to_string()),
             target_distro: "arch".to_string(),
             current_version: "9.0.1".to_string(),
             current_architecture: Some("x86_64".to_string()),
@@ -1315,7 +1315,7 @@ mod tests {
 
         let actions = vec![DiffAction::ReplatformReplace {
             package: "vim".to_string(),
-            current_distro: Some("fedora-43".to_string()),
+            current_distro: Some("fedora-44".to_string()),
             target_distro: "arch".to_string(),
             current_version: "9.0.1".to_string(),
             current_architecture: Some("x86_64".to_string()),
@@ -1367,7 +1367,7 @@ mod tests {
 
         let actions = vec![DiffAction::ReplatformReplace {
             package: "vim".to_string(),
-            current_distro: Some("fedora-43".to_string()),
+            current_distro: Some("fedora-44".to_string()),
             target_distro: "arch".to_string(),
             current_version: "9.0.1".to_string(),
             current_architecture: Some("x86_64".to_string()),
@@ -1428,7 +1428,7 @@ mod tests {
 
         let actions = vec![DiffAction::ReplatformReplace {
             package: "vim".to_string(),
-            current_distro: Some("fedora-43".to_string()),
+            current_distro: Some("fedora-44".to_string()),
             target_distro: "arch".to_string(),
             current_version: "9.0.1".to_string(),
             current_architecture: Some("x86_64".to_string()),
@@ -1509,7 +1509,7 @@ mod tests {
 
         let actions = vec![DiffAction::ReplatformReplace {
             package: "vim".to_string(),
-            current_distro: Some("fedora-43".to_string()),
+            current_distro: Some("fedora-44".to_string()),
             target_distro: "arch".to_string(),
             current_version: "9.0.1".to_string(),
             current_architecture: Some("x86_64".to_string()),
@@ -1550,7 +1550,7 @@ mod tests {
         target_pkg.architecture = Some("x86_64".to_string());
         target_pkg.dependencies = Some(
             serde_json::to_string(&vec![
-                "kernel-core-uname-r = 6.19.6-200.fc43.x86_64".to_string(),
+                "kernel-core-uname-r = 6.19.6-200.fc44.x86_64".to_string(),
             ])
             .unwrap(),
         );
@@ -1559,7 +1559,7 @@ mod tests {
         let mut provider_pkg = RepositoryPackage::new(
             arch_repo_id,
             "kernel-core".to_string(),
-            "6.19.6-200.fc43".to_string(),
+            "6.19.6-200.fc44".to_string(),
             "sha256:kernel-core".to_string(),
             123,
             "https://example.test/arch/kernel-core.pkg.tar.zst".to_string(),
@@ -1567,7 +1567,7 @@ mod tests {
         provider_pkg.architecture = Some("x86_64".to_string());
         provider_pkg.metadata = Some(
             serde_json::json!({
-                "rpm_provides": ["kernel-core-uname-r = 6.19.6-200.fc43.x86_64"]
+                "rpm_provides": ["kernel-core-uname-r = 6.19.6-200.fc44.x86_64"]
             })
             .to_string(),
         );
@@ -1588,7 +1588,7 @@ mod tests {
 
         let actions = vec![DiffAction::ReplatformReplace {
             package: "kernel".to_string(),
-            current_distro: Some("fedora-43".to_string()),
+            current_distro: Some("fedora-44".to_string()),
             target_distro: "arch".to_string(),
             current_version: "6.19.5-1".to_string(),
             current_architecture: Some("x86_64".to_string()),
@@ -1664,7 +1664,7 @@ mod tests {
 
         let actions = vec![DiffAction::ReplatformReplace {
             package: "mailer".to_string(),
-            current_distro: Some("fedora-43".to_string()),
+            current_distro: Some("fedora-44".to_string()),
             target_distro: "ubuntu-24.04".to_string(),
             current_version: "0.9-1".to_string(),
             current_architecture: Some("amd64".to_string()),
@@ -1750,7 +1750,7 @@ mod tests {
 
         let actions = vec![DiffAction::ReplatformReplace {
             package: "mailer".to_string(),
-            current_distro: Some("fedora-43".to_string()),
+            current_distro: Some("fedora-44".to_string()),
             target_distro: "ubuntu-24.04".to_string(),
             current_version: "0.9-1".to_string(),
             current_architecture: Some("amd64".to_string()),
@@ -1825,7 +1825,7 @@ mod tests {
 
         let actions = vec![DiffAction::ReplatformReplace {
             package: "mailer".to_string(),
-            current_distro: Some("fedora-43".to_string()),
+            current_distro: Some("fedora-44".to_string()),
             target_distro: "arch".to_string(),
             current_version: "0.9-1".to_string(),
             current_architecture: Some("x86_64".to_string()),
@@ -1857,7 +1857,7 @@ mod tests {
 
         let actions = vec![DiffAction::ReplatformReplace {
             package: "vim".to_string(),
-            current_distro: Some("fedora-43".to_string()),
+            current_distro: Some("fedora-44".to_string()),
             target_distro: "arch".to_string(),
             current_version: "9.0.1".to_string(),
             current_architecture: Some("x86_64".to_string()),

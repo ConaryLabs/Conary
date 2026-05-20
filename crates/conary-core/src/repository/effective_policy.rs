@@ -99,13 +99,13 @@ mod tests {
         settings::set(
             &conn,
             SETTINGS_KEY_ALLOWED_DISTROS,
-            "[\"arch\",\"fedora-43\"]",
+            "[\"arch\",\"fedora-44\"]",
         )
         .unwrap();
         let policy = load_effective_policy(&conn, RequestScope::Any).unwrap();
         assert_eq!(
             policy.resolution.allowed_distros.as_slice(),
-            ["arch".to_string(), "fedora-43".to_string()]
+            ["arch".to_string(), "fedora-44".to_string()]
         );
     }
 }

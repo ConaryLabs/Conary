@@ -628,7 +628,7 @@ mod tests {
         let mut pkg = RepositoryPackage::new(
             repo_id,
             "libjq".to_string(),
-            "1.8.1-1.fc43".to_string(),
+            "1.8.1-1.fc44".to_string(),
             "sha256:test".to_string(),
             123,
             "https://example.invalid/libjq.rpm".to_string(),
@@ -662,7 +662,7 @@ mod tests {
             let mut pkg = RepositoryPackage::new(
                 repo_id,
                 name.to_string(),
-                "6.9.10-3.fc43".to_string(),
+                "6.9.10-3.fc44".to_string(),
                 format!("sha256:{name}"),
                 123,
                 format!("https://example.invalid/{name}.rpm"),
@@ -696,14 +696,14 @@ mod tests {
         let mut pkg = RepositoryPackage::new(
             repo_id,
             "kernel-core".to_string(),
-            "6.19.6-200.fc43".to_string(),
+            "6.19.6-200.fc44".to_string(),
             "sha256:test".to_string(),
             123,
             "https://example.invalid/kernel-core.rpm".to_string(),
         );
         pkg.metadata = Some(
             serde_json::json!({
-                "rpm_provides": ["kernel-core-uname-r = 6.19.6-200.fc43.x86_64"]
+                "rpm_provides": ["kernel-core-uname-r = 6.19.6-200.fc44.x86_64"]
             })
             .to_string(),
         );
@@ -712,14 +712,14 @@ mod tests {
         let (resolved, constraint) = resolve_repo_dependency_request(
             &conn,
             "kernel-core-uname-r",
-            &VersionConstraint::parse("= 6.19.6-200.fc43.x86_64").unwrap(),
+            &VersionConstraint::parse("= 6.19.6-200.fc44.x86_64").unwrap(),
             &SelectionOptions::default(),
         )
         .unwrap();
         assert_eq!(resolved, "kernel-core");
         assert_eq!(
             constraint,
-            VersionConstraint::parse("= 6.19.6-200.fc43").unwrap()
+            VersionConstraint::parse("= 6.19.6-200.fc44").unwrap()
         );
     }
 
@@ -734,7 +734,7 @@ mod tests {
         let mut pkg = RepositoryPackage::new(
             repo_id,
             "kernel-core".to_string(),
-            "6.19.6-200.fc43".to_string(),
+            "6.19.6-200.fc44".to_string(),
             "sha256:test".to_string(),
             123,
             "https://example.invalid/kernel-core.rpm".to_string(),
@@ -745,23 +745,23 @@ mod tests {
         let mut provide = RepositoryProvide::new(
             repo_package_id,
             "kernel-core-uname-r".to_string(),
-            Some("6.19.6-200.fc43.x86_64".to_string()),
+            Some("6.19.6-200.fc44.x86_64".to_string()),
             "package".to_string(),
-            Some("kernel-core-uname-r = 6.19.6-200.fc43.x86_64".to_string()),
+            Some("kernel-core-uname-r = 6.19.6-200.fc44.x86_64".to_string()),
         );
         provide.insert(&conn).unwrap();
 
         let (resolved, constraint) = resolve_repo_dependency_request(
             &conn,
             "kernel-core-uname-r",
-            &VersionConstraint::parse("= 6.19.6-200.fc43.x86_64").unwrap(),
+            &VersionConstraint::parse("= 6.19.6-200.fc44.x86_64").unwrap(),
             &SelectionOptions::default(),
         )
         .unwrap();
         assert_eq!(resolved, "kernel-core");
         assert_eq!(
             constraint,
-            VersionConstraint::parse("= 6.19.6-200.fc43").unwrap()
+            VersionConstraint::parse("= 6.19.6-200.fc44").unwrap()
         );
     }
 
@@ -777,7 +777,7 @@ mod tests {
         let mut pkg_a = RepositoryPackage::new(
             repo_id,
             "pkg-a".to_string(),
-            "1.0-1.fc43".to_string(),
+            "1.0-1.fc44".to_string(),
             "sha256:a".to_string(),
             100,
             "https://example.invalid/pkg-a.rpm".to_string(),
@@ -787,7 +787,7 @@ mod tests {
         let mut pkg_b = RepositoryPackage::new(
             repo_id,
             "pkg-b".to_string(),
-            "2.0-1.fc43".to_string(),
+            "2.0-1.fc44".to_string(),
             "sha256:b".to_string(),
             200,
             "https://example.invalid/pkg-b.rpm".to_string(),
@@ -819,7 +819,7 @@ mod tests {
         let mut pkg = RepositoryPackage::new(
             repo_id,
             "already-here".to_string(),
-            "1.0-1.fc43".to_string(),
+            "1.0-1.fc44".to_string(),
             "sha256:ah".to_string(),
             100,
             "https://example.invalid/already-here.rpm".to_string(),
@@ -829,7 +829,7 @@ mod tests {
         // Install a trove with the same name
         conn.execute(
             "INSERT INTO troves (name, version, type, install_source, install_reason)
-             VALUES ('already-here', '1.0-1.fc43', 'package', 'repository', 'explicit')",
+             VALUES ('already-here', '1.0-1.fc44', 'package', 'repository', 'explicit')",
             [],
         )
         .unwrap();
@@ -851,7 +851,7 @@ mod tests {
         let mut pkg = RepositoryPackage::new(
             repo_id,
             "kmod".to_string(),
-            "34.2-2.fc43".to_string(),
+            "34.2-2.fc44".to_string(),
             "sha256:kmod".to_string(),
             100,
             "https://example.invalid/kmod.rpm".to_string(),
@@ -883,7 +883,7 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].1.package.name, "kmod");
-        assert_eq!(result[0].1.package.version, "34.2-2.fc43");
+        assert_eq!(result[0].1.package.version, "34.2-2.fc44");
     }
 
     #[test]
@@ -897,7 +897,7 @@ mod tests {
         let mut pkg = RepositoryPackage::new(
             repo_id,
             "glib2".to_string(),
-            "2.86.0-2.fc43".to_string(),
+            "2.86.0-2.fc44".to_string(),
             "sha256:glib2".to_string(),
             100,
             "https://example.invalid/glib2.rpm".to_string(),
@@ -943,7 +943,7 @@ mod tests {
         let mut pkg = RepositoryPackage::new(
             repo_id,
             "glibc".to_string(),
-            "2.39-1.fc43".to_string(),
+            "2.39-1.fc44".to_string(),
             "sha256:glibc".to_string(),
             500,
             "https://example.invalid/glibc.rpm".to_string(),
@@ -1066,7 +1066,7 @@ mod tests {
         let mut wrong_pkg = RepositoryPackage::new(
             repo_id,
             "libfoo".to_string(),
-            "1.0-1.fc43".to_string(),
+            "1.0-1.fc44".to_string(),
             "sha256:wrong".to_string(),
             100,
             "https://example.invalid/libfoo.rpm".to_string(),
@@ -1076,7 +1076,7 @@ mod tests {
         let mut correct_pkg = RepositoryPackage::new(
             repo_id,
             "libfoo-compat".to_string(),
-            "2.0-1.fc43".to_string(),
+            "2.0-1.fc44".to_string(),
             "sha256:correct".to_string(),
             100,
             "https://example.invalid/libfoo-compat.rpm".to_string(),
@@ -1119,7 +1119,7 @@ mod tests {
         let mut lookalike_pkg = RepositoryPackage::new(
             repo_id,
             "libssl3".to_string(),
-            "3.2.0-1.fc43".to_string(),
+            "3.2.0-1.fc44".to_string(),
             "sha256:lookalike".to_string(),
             100,
             "https://example.invalid/libssl3.rpm".to_string(),
@@ -1130,7 +1130,7 @@ mod tests {
         let mut provider_pkg = RepositoryPackage::new(
             repo_id,
             "openssl-libs".to_string(),
-            "3.2.0-1.fc43".to_string(),
+            "3.2.0-1.fc44".to_string(),
             "sha256:provider".to_string(),
             200,
             "https://example.invalid/openssl-libs.rpm".to_string(),
