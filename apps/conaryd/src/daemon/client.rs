@@ -28,9 +28,9 @@
 //! }
 //! ```
 //!
-//! Note: `install()`, `remove()`, and `update()` are defined but will return
-//! an error from the server until those job kinds are implemented in the
-//! daemon executor.  Use the CLI directly for package operations.
+//! Package mutation helpers queue daemon jobs. Non-dry-run package requests
+//! must explicitly set `allow_live_system_mutation`, matching the CLI's
+//! live-host acknowledgement boundary.
 
 use crate::daemon::{DaemonConfig, DaemonError, DaemonEvent};
 use conary_core::Result;
@@ -78,6 +78,10 @@ pub struct TransactionDetails {
 pub struct InstallOptions {
     pub allow_downgrade: bool,
     pub skip_deps: bool,
+    pub dry_run: bool,
+    pub no_scripts: bool,
+    pub yes: bool,
+    pub allow_live_system_mutation: bool,
 }
 
 /// Options for package removal
@@ -85,12 +89,18 @@ pub struct InstallOptions {
 pub struct RemoveOptions {
     pub cascade: bool,
     pub remove_orphans: bool,
+    pub no_scripts: bool,
+    pub purge_files: bool,
+    pub allow_live_system_mutation: bool,
 }
 
 /// Options for package updates
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct UpdateOptions {
     pub security_only: bool,
+    pub dry_run: bool,
+    pub yes: bool,
+    pub allow_live_system_mutation: bool,
 }
 
 /// HTTP response from daemon
@@ -160,9 +170,6 @@ impl DaemonClient {
     }
 
     /// Install packages
-    ///
-    /// TODO: Server rejects install jobs until the daemon executor implements
-    /// this kind.  Use the CLI directly for now.
     pub fn install(
         &self,
         packages: &[&str],
@@ -179,9 +186,6 @@ impl DaemonClient {
     }
 
     /// Remove packages
-    ///
-    /// TODO: Server rejects remove jobs until the daemon executor implements
-    /// this kind.  Use the CLI directly for now.
     pub fn remove(
         &self,
         packages: &[&str],
@@ -198,9 +202,6 @@ impl DaemonClient {
     }
 
     /// Update packages
-    ///
-    /// TODO: Server rejects update jobs until the daemon executor implements
-    /// this kind.  Use the CLI directly for now.
     pub fn update(
         &self,
         packages: &[&str],
@@ -218,7 +219,6 @@ impl DaemonClient {
 
     /// Trigger a background enhancement job
     ///
-    /// This is the only currently executable job kind in the daemon.
     /// Pass an `idempotency_key` to deduplicate retried requests.
     pub fn enhance(
         &self,

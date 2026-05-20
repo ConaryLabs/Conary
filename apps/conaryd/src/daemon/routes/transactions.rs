@@ -60,17 +60,26 @@ async fn create_transaction_handler(
     headers: axum::http::HeaderMap,
     Json(request): Json<CreateTransactionRequest>,
 ) -> TransactionResult {
-    let job_kind = determine_job_kind(&request.operations);
+    enqueue_transaction_request(state, creds, headers, request).await
+}
 
-    require_auth(&state.auth_checker, &creds, action_for_job_kind(job_kind))?;
-
+async fn enqueue_transaction_request(
+    state: SharedState,
+    creds: Option<PeerCredentials>,
+    headers: axum::http::HeaderMap,
+    request: CreateTransactionRequest,
+) -> TransactionResult {
     if request.operations.is_empty() {
         return Err(bad_request_error("At least one operation is required"));
     }
 
-    if !matches!(job_kind, crate::daemon::JobKind::Enhance) {
-        return Err(package_jobs_not_implemented(job_kind.as_str()));
-    }
+    validate_transaction_operations(&request.operations, false)?;
+
+    let job_kind = determine_job_kind(&request.operations);
+    require_auth_for_operations(&state, &creds, &request.operations)?;
+
+    let spec = serde_json::to_value(&request.operations)
+        .map_err(|e| internal_api_error("Failed to serialize daemon transaction request", e))?;
 
     let idempotency_key = get_idempotency_key(&headers);
 
@@ -82,48 +91,22 @@ async fn create_transaction_handler(
         .await?;
 
         if let Some(existing_job) = existing {
-            let location = format!("/v1/transactions/{}", existing_job.id);
-            let queue_position = state.queue.position(&existing_job.id).await.unwrap_or(0);
-
-            let response = CreateTransactionResponse {
-                job_id: existing_job.id,
-                status: existing_job.status.as_str().to_string(),
-                queue_position,
-                location: location.clone(),
-            };
-
-            return Ok((
-                StatusCode::OK,
-                [(axum::http::header::LOCATION, location)],
-                Json(response),
-            ));
+            return idempotent_job_response(&state, existing_job, job_kind, &spec).await;
         }
     }
-
-    let spec = serde_json::to_value(&request.operations)
-        .map_err(|e| internal_api_error("Failed to serialize daemon transaction request", e))?;
 
     let mut job = DaemonJob::new(job_kind, spec);
     if let Some(key) = idempotency_key {
         job.idempotency_key = Some(key);
     }
+    if let Some(creds) = &creds {
+        job = job.with_uid(creds.uid);
+    }
 
     let job_id = job.id.clone();
 
     if let Some(existing_job) = insert_or_dedup(&state, job.clone()).await? {
-        let location = format!("/v1/transactions/{}", existing_job.id);
-        let queue_position = state.queue.position(&existing_job.id).await.unwrap_or(0);
-        let response = CreateTransactionResponse {
-            job_id: existing_job.id,
-            status: existing_job.status.as_str().to_string(),
-            queue_position,
-            location: location.clone(),
-        };
-        return Ok((
-            StatusCode::OK,
-            [(axum::http::header::LOCATION, location)],
-            Json(response),
-        ));
+        return idempotent_job_response(&state, existing_job, job_kind, &job.spec).await;
     }
 
     let _cancel_token = state
@@ -176,6 +159,73 @@ fn determine_job_kind(operations: &[TransactionOperation]) -> crate::daemon::Job
         (false, false, true) => JobKind::Update,
         _ => JobKind::Install,
     }
+}
+
+fn require_auth_for_operations(
+    state: &SharedState,
+    creds: &Option<PeerCredentials>,
+    operations: &[TransactionOperation],
+) -> Result<(), ApiError> {
+    let mut required_actions = Vec::new();
+
+    for op in operations {
+        let action = match op {
+            TransactionOperation::Install { .. } => Action::Install,
+            TransactionOperation::Remove { .. } => Action::Remove,
+            TransactionOperation::Update { .. } => Action::Update,
+        };
+
+        if !required_actions.contains(&action) {
+            required_actions.push(action);
+        }
+    }
+
+    for action in required_actions {
+        require_auth(&state.auth_checker, creds, action)?;
+    }
+
+    Ok(())
+}
+
+fn validate_transaction_operations(
+    operations: &[TransactionOperation],
+    allow_mixed_kinds: bool,
+) -> Result<(), ApiError> {
+    let mut first_kind = None;
+
+    for op in operations {
+        let current_kind = match op {
+            TransactionOperation::Install { .. } => crate::daemon::JobKind::Install,
+            TransactionOperation::Remove { .. } => crate::daemon::JobKind::Remove,
+            TransactionOperation::Update { .. } => crate::daemon::JobKind::Update,
+        };
+
+        if let Some(kind) = first_kind {
+            if !allow_mixed_kinds && kind != current_kind {
+                return Err(bad_request_error(
+                    "Mutating daemon transactions must contain one package operation kind",
+                ));
+            }
+        } else {
+            first_kind = Some(current_kind);
+        }
+
+        match op {
+            TransactionOperation::Install { packages, .. }
+            | TransactionOperation::Remove { packages, .. }
+                if packages.is_empty() =>
+            {
+                return Err(bad_request_error(
+                    "Install and remove operations require at least one package",
+                ));
+            }
+            TransactionOperation::Install { .. }
+            | TransactionOperation::Remove { .. }
+            | TransactionOperation::Update { .. } => {}
+        }
+    }
+
+    Ok(())
 }
 
 async fn get_transaction_handler(
@@ -391,20 +441,12 @@ async fn dry_run_handler(
     Extension(creds): Extension<Option<PeerCredentials>>,
     Json(request): Json<CreateTransactionRequest>,
 ) -> ApiResult<Json<DryRunResponse>> {
-    require_auth(
-        &state.auth_checker,
-        &creds,
-        action_for_job_kind(determine_job_kind(&request.operations)),
-    )?;
-
     if request.operations.is_empty() {
         return Err(bad_request_error("At least one operation is required"));
     }
 
-    let job_kind = determine_job_kind(&request.operations);
-    if !matches!(job_kind, crate::daemon::JobKind::Enhance) {
-        return Err(package_jobs_not_implemented(job_kind.as_str()));
-    }
+    validate_transaction_operations(&request.operations, true)?;
+    require_auth_for_operations(&state, &creds, &request.operations)?;
 
     let mut install = Vec::new();
     let mut remove = Vec::new();
@@ -439,34 +481,76 @@ async fn dry_run_handler(
     Ok(Json(response))
 }
 
-fn package_jobs_not_implemented(operation: &str) -> ApiError {
-    not_implemented_error(&format!(
-        "Daemon package {operation} jobs are not implemented yet. Use the CLI directly."
-    ))
-}
-
 async fn install_packages_handler(
     State(state): State<SharedState>,
     Extension(creds): Extension<Option<PeerCredentials>>,
-) -> ApiResult<()> {
-    require_auth(&state.auth_checker, &creds, Action::Install)?;
-    Err(package_jobs_not_implemented("install"))
+    headers: axum::http::HeaderMap,
+    Json(request): Json<PackageOperationRequest>,
+) -> TransactionResult {
+    enqueue_transaction_request(
+        state,
+        creds,
+        headers,
+        CreateTransactionRequest {
+            operations: vec![TransactionOperation::Install {
+                packages: request.packages,
+                allow_downgrade: request.options.allow_downgrade,
+                skip_deps: request.options.skip_deps,
+                dry_run: request.options.dry_run,
+                no_scripts: request.options.no_scripts,
+                yes: request.options.yes,
+                allow_live_system_mutation: request.options.allow_live_system_mutation,
+            }],
+        },
+    )
+    .await
 }
 
 async fn remove_packages_handler(
     State(state): State<SharedState>,
     Extension(creds): Extension<Option<PeerCredentials>>,
-) -> ApiResult<()> {
-    require_auth(&state.auth_checker, &creds, Action::Remove)?;
-    Err(package_jobs_not_implemented("remove"))
+    headers: axum::http::HeaderMap,
+    Json(request): Json<PackageOperationRequest>,
+) -> TransactionResult {
+    enqueue_transaction_request(
+        state,
+        creds,
+        headers,
+        CreateTransactionRequest {
+            operations: vec![TransactionOperation::Remove {
+                packages: request.packages,
+                cascade: request.options.cascade,
+                remove_orphans: request.options.remove_orphans,
+                no_scripts: request.options.no_scripts,
+                purge_files: request.options.purge_files,
+                allow_live_system_mutation: request.options.allow_live_system_mutation,
+            }],
+        },
+    )
+    .await
 }
 
 async fn update_packages_handler(
     State(state): State<SharedState>,
     Extension(creds): Extension<Option<PeerCredentials>>,
-) -> ApiResult<()> {
-    require_auth(&state.auth_checker, &creds, Action::Update)?;
-    Err(package_jobs_not_implemented("update"))
+    headers: axum::http::HeaderMap,
+    Json(request): Json<PackageOperationRequest>,
+) -> TransactionResult {
+    enqueue_transaction_request(
+        state,
+        creds,
+        headers,
+        CreateTransactionRequest {
+            operations: vec![TransactionOperation::Update {
+                packages: request.packages,
+                security_only: request.options.security_only,
+                dry_run: request.options.dry_run,
+                yes: request.options.yes,
+                allow_live_system_mutation: request.options.allow_live_system_mutation,
+            }],
+        },
+    )
+    .await
 }
 
 async fn enhance_handler(
@@ -477,6 +561,9 @@ async fn enhance_handler(
 ) -> TransactionResult {
     require_auth(&state.auth_checker, &creds, Action::Enhance)?;
 
+    let job_spec = serde_json::to_value(&spec)
+        .map_err(|e| internal_api_error("Failed to serialize daemon enhancement request", e))?;
+
     let idempotency_key = get_idempotency_key(&headers);
     if let Some(ref key) = idempotency_key {
         let key_clone = key.clone();
@@ -486,24 +573,15 @@ async fn enhance_handler(
         .await?;
 
         if let Some(existing_job) = existing {
-            let location = format!("/v1/transactions/{}", existing_job.id);
-            let queue_position = state.queue.position(&existing_job.id).await.unwrap_or(0);
-            let response = CreateTransactionResponse {
-                job_id: existing_job.id,
-                status: existing_job.status.as_str().to_string(),
-                queue_position,
-                location: location.clone(),
-            };
-            return Ok((
-                StatusCode::OK,
-                [(axum::http::header::LOCATION, location)],
-                Json(response),
-            ));
+            return idempotent_job_response(
+                &state,
+                existing_job,
+                crate::daemon::JobKind::Enhance,
+                &job_spec,
+            )
+            .await;
         }
     }
-
-    let job_spec = serde_json::to_value(&spec)
-        .map_err(|e| internal_api_error("Failed to serialize daemon enhancement request", e))?;
 
     let mut job = DaemonJob::new(crate::daemon::JobKind::Enhance, job_spec);
     if let Some(key) = idempotency_key {
@@ -512,19 +590,13 @@ async fn enhance_handler(
     let job_id = job.id.clone();
 
     if let Some(existing_job) = insert_or_dedup(&state, job.clone()).await? {
-        let location = format!("/v1/transactions/{}", existing_job.id);
-        let queue_position = state.queue.position(&existing_job.id).await.unwrap_or(0);
-        let response = CreateTransactionResponse {
-            job_id: existing_job.id,
-            status: existing_job.status.as_str().to_string(),
-            queue_position,
-            location: location.clone(),
-        };
-        return Ok((
-            StatusCode::OK,
-            [(axum::http::header::LOCATION, location)],
-            Json(response),
-        ));
+        return idempotent_job_response(
+            &state,
+            existing_job,
+            crate::daemon::JobKind::Enhance,
+            &job.spec,
+        )
+        .await;
     }
 
     let _cancel_token = state
@@ -563,6 +635,34 @@ fn get_idempotency_key(headers: &axum::http::HeaderMap) -> Option<String> {
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .map(ToOwned::to_owned)
+}
+
+async fn idempotent_job_response(
+    state: &SharedState,
+    existing_job: DaemonJob,
+    expected_kind: crate::daemon::JobKind,
+    expected_spec: &serde_json::Value,
+) -> TransactionResult {
+    if existing_job.kind != expected_kind || &existing_job.spec != expected_spec {
+        return Err(ApiError(Box::new(DaemonError::conflict(
+            "Idempotency key is already associated with a different daemon job",
+        ))));
+    }
+
+    let location = format!("/v1/transactions/{}", existing_job.id);
+    let queue_position = state.queue.position(&existing_job.id).await.unwrap_or(0);
+    let response = CreateTransactionResponse {
+        job_id: existing_job.id.clone(),
+        status: existing_job.status.as_str().to_string(),
+        queue_position,
+        location: location.clone(),
+    };
+
+    Ok((
+        StatusCode::OK,
+        [(axum::http::header::LOCATION, location)],
+        Json(response),
+    ))
 }
 
 async fn insert_or_dedup(

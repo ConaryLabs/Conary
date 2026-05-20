@@ -513,7 +513,7 @@ cargo run -p remi -- --bind 0.0.0.0:8080
 
 ## conaryd Daemon
 
-A local daemon with Unix-socket REST scaffolding, a persistent job queue, SSE event streaming, read/query routes, and enhance-job support. Package install/remove/update routes intentionally return `501 Not Implemented` until the shared daemon package executor is built; use the CLI directly for package operations in the limited preview.
+A local daemon with Unix-socket REST scaffolding, a persistent job queue, SSE event streaming, read/query routes, package install/remove/update execution, and enhance-job support. Package mutation jobs reuse the CLI command contracts and keep the same explicit live-host mutation acknowledgement boundary.
 
 ```bash
 # Build the daemon crate
@@ -586,7 +586,7 @@ cargo build --profile fast-release   # Faster compile, still optimized
 
 ## Project Status
 
-**Version 0.8.0** -- The project has a working end-to-end stack: multi-format installs, atomic changesets, adoption/unadoption, immutable generations, explicit takeover/bootstrap flows, Remi conversion and serving, federation, and capability-restricted runtime execution. The current release-readiness pass is narrowing the public preview to an adoption-led Fedora 44, Ubuntu 26.04 LTS, and Arch Linux package-manager slice; keeping the installed-runtime and bootstrap-run generation-export QEMU gates green; reducing the `tough`/Sigstore advisory path while carrying the dated `rsa` waiver; and documenting remaining gaps such as active-generation handoff back to native authority, conaryd package execution, ISO generation export proof-of-concept work, portable bundle signing, and non-x86_64 generation boot assets.
+**Version 0.8.0** -- The project has a working end-to-end stack: multi-format installs, atomic changesets, adoption/unadoption, immutable generations, explicit takeover/bootstrap flows, Remi conversion and serving, federation, conaryd package execution, and capability-restricted runtime execution. The current release-readiness pass is narrowing the public preview to an adoption-led Fedora 44, Ubuntu 26.04 LTS, and Arch Linux package-manager slice; keeping the installed-runtime and bootstrap-run generation-export QEMU gates green; reducing the `tough`/Sigstore advisory path while carrying the dated `rsa` waiver; and documenting remaining gaps such as active-generation handoff back to native authority, ISO generation export proof-of-concept work, portable bundle signing, and non-x86_64 generation boot assets.
 
 See [ROADMAP.md](ROADMAP.md) for what we're building next.
 

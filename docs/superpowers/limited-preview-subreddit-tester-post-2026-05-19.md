@@ -51,8 +51,9 @@ A few important caveats:
   explicitly choose takeover behavior.
 - `system unadopt --all` is the escape hatch before selecting a Conary
   generation.
-- Remote `conaryd` package mutation routes intentionally return
-  `501 Not Implemented` today.
+- Local `conaryd` package mutation routes now queue daemon jobs, but CLI flows
+  remain the simplest preview path and non-dry-run daemon jobs require the same
+  explicit live-host mutation acknowledgement.
 - ISO generation is proof-of-concept follow-up work, not the thing I am asking
   people to evaluate here.
 - Active-generation handoff back to native package-manager authority is still a

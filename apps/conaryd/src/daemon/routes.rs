@@ -162,19 +162,6 @@ fn acquire_sse_connection(state: &SharedState) -> Result<SseConnectionGuard, Api
     })
 }
 
-fn action_for_job_kind(kind: crate::daemon::JobKind) -> Action {
-    match kind {
-        crate::daemon::JobKind::Install => Action::Install,
-        crate::daemon::JobKind::Remove => Action::Remove,
-        crate::daemon::JobKind::Update => Action::Update,
-        crate::daemon::JobKind::DryRun => Action::Query,
-        crate::daemon::JobKind::Rollback => Action::Rollback,
-        crate::daemon::JobKind::Verify => Action::Verify,
-        crate::daemon::JobKind::GarbageCollect => Action::GarbageCollect,
-        crate::daemon::JobKind::Enhance => Action::Enhance,
-    }
-}
-
 /// Run a blocking database query on a background thread
 ///
 /// Handles the common pattern of cloning state, spawning a blocking task,
@@ -543,6 +530,10 @@ pub struct TransactionListQuery {
 // Request Types for Mutating Operations
 // =============================================================================
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// A single operation in a transaction
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -557,6 +548,18 @@ pub enum TransactionOperation {
         /// Skip dependency resolution
         #[serde(default)]
         skip_deps: bool,
+        /// Preview without installing
+        #[serde(default, skip_serializing_if = "is_false")]
+        dry_run: bool,
+        /// Skip package scriptlets
+        #[serde(default, skip_serializing_if = "is_false")]
+        no_scripts: bool,
+        /// Assume yes to confirmation prompts
+        #[serde(default, skip_serializing_if = "is_false")]
+        yes: bool,
+        /// Explicitly acknowledge live-host mutation risk
+        #[serde(default, skip_serializing_if = "is_false")]
+        allow_live_system_mutation: bool,
     },
     /// Remove packages
     Remove {
@@ -568,6 +571,15 @@ pub enum TransactionOperation {
         /// Also remove orphaned dependencies
         #[serde(default)]
         remove_orphans: bool,
+        /// Skip package scriptlets
+        #[serde(default, skip_serializing_if = "is_false")]
+        no_scripts: bool,
+        /// Delete adopted package files from disk
+        #[serde(default, skip_serializing_if = "is_false")]
+        purge_files: bool,
+        /// Explicitly acknowledge live-host mutation risk
+        #[serde(default, skip_serializing_if = "is_false")]
+        allow_live_system_mutation: bool,
     },
     /// Update packages
     Update {
@@ -576,6 +588,15 @@ pub enum TransactionOperation {
         /// Only apply security updates
         #[serde(default)]
         security_only: bool,
+        /// Preview without applying updates
+        #[serde(default, skip_serializing_if = "is_false")]
+        dry_run: bool,
+        /// Assume yes to confirmation prompts
+        #[serde(default, skip_serializing_if = "is_false")]
+        yes: bool,
+        /// Explicitly acknowledge live-host mutation risk
+        #[serde(default, skip_serializing_if = "is_false")]
+        allow_live_system_mutation: bool,
     },
 }
 
@@ -614,6 +635,21 @@ pub struct PackageOperationOptions {
     /// For update: only apply security updates
     #[serde(default)]
     pub security_only: bool,
+    /// Preview without making changes
+    #[serde(default)]
+    pub dry_run: bool,
+    /// Skip package scriptlets where the operation supports it
+    #[serde(default)]
+    pub no_scripts: bool,
+    /// Assume yes to prompts where the operation supports it
+    #[serde(default)]
+    pub yes: bool,
+    /// Delete adopted package files from disk during remove
+    #[serde(default)]
+    pub purge_files: bool,
+    /// Explicitly acknowledge live-host mutation risk
+    #[serde(default)]
+    pub allow_live_system_mutation: bool,
 }
 
 /// Response body for transaction creation
@@ -1108,15 +1144,14 @@ mod tests {
         );
     }
 
-    // -- POST /v1/transactions (package jobs = 501) ---------------------------
+    // -- POST /v1/transactions (package jobs are queued) ----------------------
 
     #[tokio::test]
-    async fn test_handler_create_transaction_package_jobs_not_implemented() {
+    async fn test_handler_create_transaction_queues_package_jobs() {
         let (state, _dir) = create_test_state();
         let root_creds = current_process_creds();
-        let app = test_router(state, root_creds);
+        let app = test_router(state.clone(), root_creds);
 
-        // Install/remove/update are not yet executable by the daemon.
         let body = serde_json::json!({
             "operations": [
                 {
@@ -1135,13 +1170,34 @@ mod tests {
 
         let response = app.oneshot(request).await.unwrap();
 
-        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
 
         let json = body_json(response).await;
-        assert_eq!(json["status"], 501);
+        assert_eq!(json["status"], "queued");
+        assert_eq!(json["queue_position"], 0);
+        let job_id = json["job_id"].as_str().unwrap();
+        assert_eq!(json["location"], format!("/v1/transactions/{job_id}"));
+
+        let job = {
+            let conn = state.open_db().unwrap();
+            DaemonJob::find_by_id(&conn, job_id).unwrap().unwrap()
+        };
+        assert_eq!(job.kind, crate::daemon::JobKind::Install);
+        assert_eq!(job.status, JobStatus::Queued);
         assert_eq!(
-            json["detail"],
-            "Daemon package install jobs are not implemented yet. Use the CLI directly."
+            job.spec,
+            serde_json::json!([
+                {
+                    "type": "install",
+                    "packages": ["nginx"],
+                    "allow_downgrade": false,
+                    "skip_deps": false
+                }
+            ])
+        );
+        assert_eq!(
+            job.requested_by_uid,
+            current_process_creds().map(|creds| creds.uid)
         );
     }
 
@@ -1151,7 +1207,7 @@ mod tests {
     async fn test_handler_create_transaction_empty_operations() {
         let (state, _dir) = create_test_state();
         let root_creds = current_process_creds();
-        let app = test_router(state, root_creds);
+        let app = test_router(state.clone(), root_creds);
 
         let body = serde_json::json!({
             "operations": []
@@ -1171,6 +1227,44 @@ mod tests {
         let json = body_json(response).await;
         assert_eq!(json["status"], 400);
         assert!(json["detail"].as_str().unwrap().contains("operation"));
+    }
+
+    #[tokio::test]
+    async fn test_handler_create_transaction_rejects_mixed_package_kinds() {
+        let (state, _dir) = create_test_state();
+        let root_creds = current_process_creds();
+        let app = test_router(state, root_creds);
+
+        let body = serde_json::json!({
+            "operations": [
+                {
+                    "type": "install",
+                    "packages": ["nginx"]
+                },
+                {
+                    "type": "remove",
+                    "packages": ["vim"]
+                }
+            ]
+        });
+
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/transactions")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&body).unwrap()))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let json = body_json(response).await;
+        assert!(
+            json["detail"]
+                .as_str()
+                .unwrap()
+                .contains("one package operation kind")
+        );
     }
 
     // -- POST /v1/transactions (invalid JSON = 400) ---------------------------
@@ -1233,8 +1327,6 @@ mod tests {
         let (state, _dir) = create_test_state();
         let root_creds = current_process_creds();
 
-        // Package job kinds are rejected before enqueueing, so both calls
-        // should consistently return 501 preview guidance.
         let body = serde_json::json!({
             "operations": [
                 {
@@ -1255,13 +1347,9 @@ mod tests {
             .unwrap();
 
         let response1 = app1.oneshot(request1).await.unwrap();
-        assert_eq!(response1.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(response1.status(), StatusCode::ACCEPTED);
         let json1 = body_json(response1).await;
-        assert_eq!(json1["status"], 501);
-        assert_eq!(
-            json1["detail"],
-            "Daemon package install jobs are not implemented yet. Use the CLI directly."
-        );
+        assert_eq!(json1["status"], "queued");
 
         let app2 = test_router(state, root_creds);
         let request2 = axum::http::Request::builder()
@@ -1273,18 +1361,63 @@ mod tests {
             .unwrap();
 
         let response2 = app2.oneshot(request2).await.unwrap();
-        assert_eq!(response2.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(response2.status(), StatusCode::OK);
         let json2 = body_json(response2).await;
-        assert_eq!(json2["status"], 501);
-        assert_eq!(
-            json2["detail"],
-            "Daemon package install jobs are not implemented yet. Use the CLI directly."
-        );
+        assert_eq!(json2["status"], "queued");
+        assert_eq!(json2["job_id"], json1["job_id"]);
+        assert_eq!(json2["location"], json1["location"]);
     }
 
     #[tokio::test]
-    async fn test_handler_create_transaction_package_jobs_ignore_existing_enhance_idempotency_key()
-    {
+    async fn test_handler_enhance_idempotency() {
+        let (state, _dir) = create_test_state();
+        let root_creds = current_process_creds();
+        let idempotency_key = "enhance-key-42";
+
+        let body = serde_json::json!({
+            "batch_size": 1,
+            "trove_ids": [],
+            "types": [],
+            "force": false
+        });
+        let body_str = serde_json::to_string(&body).unwrap();
+
+        let request1 = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/enhance")
+            .header("content-type", "application/json")
+            .header("x-idempotency-key", idempotency_key)
+            .body(Body::from(body_str.clone()))
+            .unwrap();
+
+        let response1 = test_router(state.clone(), root_creds)
+            .oneshot(request1)
+            .await
+            .unwrap();
+        assert_eq!(response1.status(), StatusCode::ACCEPTED);
+        let json1 = body_json(response1).await;
+
+        let request2 = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/enhance")
+            .header("content-type", "application/json")
+            .header("x-idempotency-key", idempotency_key)
+            .body(Body::from(body_str))
+            .unwrap();
+
+        let response2 = test_router(state, root_creds)
+            .oneshot(request2)
+            .await
+            .unwrap();
+        assert_eq!(response2.status(), StatusCode::OK);
+        let json2 = body_json(response2).await;
+        assert_eq!(json2["status"], "queued");
+        assert_eq!(json2["job_id"], json1["job_id"]);
+        assert_eq!(json2["location"], json1["location"]);
+    }
+
+    #[tokio::test]
+    async fn test_handler_create_transaction_rejects_existing_enhance_idempotency_key() {
         let (state, _dir) = create_test_state();
         let root_creds = current_process_creds();
         let idempotency_key = "shared-enhance-key";
@@ -1330,13 +1463,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(package_response.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(package_response.status(), StatusCode::CONFLICT);
         let json = body_json(package_response).await;
-        assert_eq!(json["status"], 501);
-        assert_eq!(
-            json["detail"],
-            "Daemon package install jobs are not implemented yet. Use the CLI directly."
-        );
+        assert_eq!(json["status"], 409);
+        assert!(json["detail"].as_str().unwrap().contains("Idempotency key"));
     }
 
     // -- GET /v1/transactions/:id (after creation) ----------------------------
@@ -1615,37 +1745,64 @@ mod tests {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
-    // -- POST /v1/packages/* (501) --------------------------------------------
+    // -- POST /v1/packages/* --------------------------------------------------
 
     #[tokio::test]
-    async fn test_package_routes_return_not_implemented() {
+    async fn test_package_routes_queue_package_jobs() {
         let (state, _dir) = create_test_state();
         let root_creds = current_process_creds();
-        let app = test_router(state, root_creds);
+        let app = test_router(state.clone(), root_creds);
 
-        for (path, operation) in [
-            ("/v1/packages/install", "install"),
-            ("/v1/packages/remove", "remove"),
-            ("/v1/packages/update", "update"),
-        ] {
+        for (expected_position, (path, operation, expected_kind)) in [
+            (
+                "/v1/packages/install",
+                "install",
+                crate::daemon::JobKind::Install,
+            ),
+            (
+                "/v1/packages/remove",
+                "remove",
+                crate::daemon::JobKind::Remove,
+            ),
+            (
+                "/v1/packages/update",
+                "update",
+                crate::daemon::JobKind::Update,
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let body = serde_json::json!({
+                "packages": ["demo"],
+                "options": {}
+            });
             let request = axum::http::Request::builder()
                 .method("POST")
                 .uri(path)
-                .body(Body::empty())
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&body).unwrap()))
                 .unwrap();
 
             let response = app.clone().oneshot(request).await.unwrap();
 
-            assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+            assert_eq!(response.status(), StatusCode::ACCEPTED);
 
             let json = body_json(response).await;
-            assert_eq!(json["status"], 501);
+            assert_eq!(json["status"], "queued");
+            assert_eq!(json["queue_position"], expected_position);
+            let job_id = json["job_id"].as_str().unwrap();
+
+            let job = {
+                let conn = state.open_db().unwrap();
+                DaemonJob::find_by_id(&conn, job_id).unwrap().unwrap()
+            };
             assert_eq!(
-                json["detail"],
-                format!(
-                    "Daemon package {operation} jobs are not implemented yet. Use the CLI directly."
-                )
+                job.kind, expected_kind,
+                "{operation} route queued wrong kind"
             );
+            assert_eq!(job.spec[0]["type"], operation);
+            assert_eq!(job.spec[0]["packages"], serde_json::json!(["demo"]));
         }
     }
 
@@ -1825,10 +1982,10 @@ mod tests {
         }
     }
 
-    // -- POST /v1/transactions/dry-run (package jobs = 501) -------------------
+    // -- POST /v1/transactions/dry-run ----------------------------------------
 
     #[tokio::test]
-    async fn test_handler_dry_run_package_jobs_not_implemented() {
+    async fn test_handler_dry_run_returns_package_summary() {
         let (state, _dir) = create_test_state();
         let root_creds = current_process_creds();
         let app = test_router(state, root_creds);
@@ -1855,14 +2012,33 @@ mod tests {
 
         let response = app.oneshot(request).await.unwrap();
 
-        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(response.status(), StatusCode::OK);
 
         let json = body_json(response).await;
-        assert_eq!(json["status"], 501);
         assert_eq!(
-            json["detail"],
-            "Daemon package install jobs are not implemented yet. Use the CLI directly."
+            json["operations"],
+            serde_json::json!([
+                {
+                    "type": "install",
+                    "packages": ["nginx", "curl"],
+                    "allow_downgrade": false,
+                    "skip_deps": false
+                },
+                {
+                    "type": "remove",
+                    "packages": ["vim"],
+                    "cascade": false,
+                    "remove_orphans": false
+                }
+            ])
         );
+        assert_eq!(
+            json["summary"]["install"],
+            serde_json::json!(["nginx", "curl"])
+        );
+        assert_eq!(json["summary"]["remove"], serde_json::json!(["vim"]));
+        assert_eq!(json["summary"]["update"], serde_json::json!([]));
+        assert_eq!(json["summary"]["total_affected"], 3);
     }
 
     // -- POST /v1/transactions/dry-run (empty operations = 400) ---------------
