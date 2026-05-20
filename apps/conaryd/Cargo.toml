@@ -12,6 +12,7 @@ default = []
 polkit = ["dep:zbus"]
 
 [dependencies]
+conary = { path = "../conary" }
 conary-core = { path = "../../crates/conary-core" }
 
 # Web framework

@@ -8,9 +8,8 @@ use std::path::PathBuf;
 
 /// conaryd — Conary system daemon
 ///
-/// Local Conary daemon with job queue, SSE progress streaming, and enhance-job
-/// support. Install/remove/update package jobs are accepted only as explicit
-/// Not Implemented responses until the daemon package executor is built.
+/// Local Conary daemon with job queue, SSE progress streaming, package
+/// install/remove/update execution, and enhance-job support.
 #[derive(Parser)]
 #[command(name = "conaryd", version, about)]
 struct Args {

@@ -16,7 +16,7 @@ pub async fn run() -> Result<()> {
     dispatch::dispatch(cli).await
 }
 
-pub(crate) fn report_error(err: &anyhow::Error) {
+pub fn report_error(err: &anyhow::Error) {
     for line in render_error_lines(err) {
         eprintln!("{line}");
     }

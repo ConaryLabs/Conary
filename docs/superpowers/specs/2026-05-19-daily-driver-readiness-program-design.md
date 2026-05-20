@@ -423,11 +423,19 @@ cargo run -p conary -- install --help
 Make the local daemon capable of executing package install/remove/update jobs
 instead of only exposing read routes and returning `501 Not Implemented`.
 
-### Current Gap
+### Implementation Note
+
+Goal 5 now accepts package transaction and `/v1/packages/*` requests, persists
+queued install/remove/update jobs with requester ownership, runs those jobs
+through the same CLI command contracts inside the daemon executor, preserves
+the explicit live-host mutation acknowledgement boundary, and emits job phase
+and progress events for SSE clients.
+
+### Previous Gap
 
 `conaryd` has a Unix-socket daemon, auth, persistent jobs, REST/SSE plumbing,
-and read-route scaffolding. Package mutation routes intentionally return
-`501 Not Implemented`.
+and read-route scaffolding. Before Goal 5 implementation, package mutation
+routes intentionally returned `501 Not Implemented`.
 
 ### Scope
 

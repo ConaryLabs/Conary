@@ -6,18 +6,14 @@
 //! - Exclusive ownership of the transaction lock
 //! - Authenticated REST and SSE scaffolding for daemon-managed work
 //! - SSE event streaming for progress updates
-//! - Background package enhancement jobs
-//!
-//! Today, only enhance jobs execute inside the daemon. Package install,
-//! remove, and update operations should use the CLI directly until daemon
-//! executors for those job kinds are implemented.
+//! - Package install, remove, update, and enhancement jobs
 //!
 //! # Architecture
 //!
 //! The daemon is the "Guardian of State" - it holds the exclusive write lock
-//! for daemon-managed jobs. Today that means enhance jobs plus read/query API
-//! plumbing; package install/remove/update execution remains on the CLI path
-//! until the shared daemon package executor is implemented.
+//! for daemon-managed jobs. Package install/remove/update execution reuses the
+//! CLI command contracts inside the daemon executor, including the same
+//! live-host mutation acknowledgement boundary.
 //!
 //! ```text
 //! CLI (thin client)                     conaryd
@@ -47,6 +43,7 @@ pub mod client;
 pub mod enhance;
 pub mod jobs;
 pub mod lock;
+pub mod package_ops;
 pub mod routes;
 pub mod socket;
 pub mod systemd;
@@ -634,10 +631,23 @@ async fn job_executor_loop(state: Arc<DaemonState>) {
                     Err(e) => Err(e.to_string()),
                 }
             }
-            // TODO: Implement Install, Remove, Update, Rollback, Verify,
-            // GarbageCollect, and DryRun job execution.  These are currently
-            // rejected at the API boundary (routes.rs) but this fallback
-            // provides defense-in-depth.
+            JobKind::Install | JobKind::Remove | JobKind::Update => {
+                match package_ops::execute_package_job(
+                    state.clone(),
+                    &job_id,
+                    job_kind,
+                    job.spec.clone(),
+                    cancel_token,
+                )
+                .await
+                {
+                    Ok(r) => Ok(serde_json::to_value(r).ok()),
+                    Err(e) => Err(e.to_string()),
+                }
+            }
+            // TODO: Implement Rollback, Verify, GarbageCollect, and DryRun job
+            // execution. These remain rejected at their API boundaries; this
+            // fallback provides defense-in-depth for manually seeded jobs.
             _ => Err(format!(
                 "Job kind '{}' execution not yet implemented",
                 job_kind.as_str()

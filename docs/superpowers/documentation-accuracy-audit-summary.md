@@ -13,6 +13,10 @@ three-distro parity evidence, the 2026-05-16 limited-preview checkpoint, and the
 daily-driver readiness program design that decomposes the seven replacement
 gaps into Codex `/goal` tracks and the first result-gated daily-driver corpus
 expansion, plus the Goal 3 trusted security advisory pipeline path.
+It now also records the Goal 5 conaryd package execution path: package
+install/remove/update routes queue daemon jobs instead of returning blanket
+`501 Not Implemented`, and non-dry-run package jobs retain the CLI's explicit
+live-host mutation acknowledgement boundary.
 
 Audited every tracked documentation-like file returned by
 `bash scripts/docs-audit-inventory.sh`: 83 tracked files spanning root docs,
@@ -40,7 +44,8 @@ The repo moved materially after the last audit:
 - schema v67 and architecture-aware conversion cache migration
 - release-readiness dependency/security refresh
 - Fedora 44, Ubuntu 26.04 LTS, and Arch Linux public-preview matrix alignment
-- conaryd package route honesty (`501 Not Implemented` until executor support)
+- conaryd package execution, with queued install/remove/update jobs and the
+  CLI live-host mutation acknowledgement boundary preserved
 - live Remi metadata realignment to 26.04/`resolute` while keeping host OS
   claims separate from client distro support
 - composefs atomic switching completion, with ordinary package mutation and
@@ -98,7 +103,8 @@ The repo moved materially after the last audit:
   follow-up work while OCI export source loading has moved onto the generation
   artifact contract.
 - Updated conaryd CLI help and public docs so package install/remove/update
-  routes are described as explicit `501 Not Implemented` responses.
+  routes are described as daemon-executed package jobs rather than blanket
+  `501 Not Implemented` responses.
 - Updated integration docs and `apps/conary-test/README.md` to include the
   Phase 1 `T21a`-`T21c` non-destructive unadoption proof, focused live-root
   update/security-refusal proof, Phase 3 Group O generation-export QEMU suite,
