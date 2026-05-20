@@ -352,7 +352,7 @@ mod tests {
         let mut pkg1 = RepositoryPackage::new(
             repo_id,
             "nginx".to_string(),
-            "1.24.0-1.fc43".to_string(),
+            "1.24.0-1.fc44".to_string(),
             "sha256:abc".to_string(),
             1024,
             "https://example.com/nginx.rpm".to_string(),
@@ -363,7 +363,7 @@ mod tests {
         let mut pkg2 = RepositoryPackage::new(
             repo_id,
             "curl".to_string(),
-            "8.5.0-1.fc43".to_string(),
+            "8.5.0-1.fc44".to_string(),
             "sha256:def".to_string(),
             512,
             "https://example.com/curl.rpm".to_string(),
@@ -373,7 +373,7 @@ mod tests {
         let mut pkg3 = RepositoryPackage::new(
             repo_id,
             "zlib".to_string(),
-            "1.3.1-1.fc43".to_string(),
+            "1.3.1-1.fc44".to_string(),
             "sha256:ghi".to_string(),
             256,
             "https://example.com/zlib.rpm".to_string(),
@@ -402,7 +402,7 @@ mod tests {
         let mut pkg = RepositoryPackage::new(
             repo_id,
             "qemu-img".to_string(),
-            "2:10.1.0-7.fc43".to_string(),
+            "2:10.1.0-7.fc44".to_string(),
             "sha256:qemu-img".to_string(),
             4096,
             "https://example.com/qemu-img.rpm".to_string(),
@@ -432,7 +432,7 @@ mod tests {
         let mut placeholder = RepositoryPackage::new(
             repo_id,
             "qemu-img".to_string(),
-            "10.1.0-7.fc43".to_string(),
+            "10.1.0-7.fc44".to_string(),
             "sha256:placeholder".to_string(),
             0,
             "".to_string(),
@@ -443,7 +443,7 @@ mod tests {
         let mut real_package = RepositoryPackage::new(
             repo_id,
             "qemu-img".to_string(),
-            "2:10.1.0-7.fc43".to_string(),
+            "2:10.1.0-7.fc44".to_string(),
             "sha256:qemu-img".to_string(),
             4096,
             "https://example.com/qemu-img.rpm".to_string(),
@@ -458,13 +458,13 @@ mod tests {
             metadata
                 .packages
                 .iter()
-                .any(|p| p.name == "qemu-img" && p.version == "2:10.1.0-7.fc43")
+                .any(|p| p.name == "qemu-img" && p.version == "2:10.1.0-7.fc44")
         );
         assert!(
             !metadata
                 .packages
                 .iter()
-                .any(|p| p.name == "qemu-img" && p.version == "10.1.0-7.fc43")
+                .any(|p| p.name == "qemu-img" && p.version == "10.1.0-7.fc44")
         );
     }
 
@@ -481,7 +481,7 @@ mod tests {
         let mut pkg1 = RepositoryPackage::new(
             repo_id,
             "nginx".to_string(),
-            "1.24.0-1.fc43".to_string(),
+            "1.24.0-1.fc44".to_string(),
             "sha256:abc".to_string(),
             1024,
             "https://example.com/nginx.rpm".to_string(),
@@ -492,7 +492,7 @@ mod tests {
         let mut pkg2 = RepositoryPackage::new(
             repo_id,
             "curl".to_string(),
-            "8.5.0-1.fc43".to_string(),
+            "8.5.0-1.fc44".to_string(),
             "sha256:def".to_string(),
             512,
             "https://example.com/curl.rpm".to_string(),
@@ -503,7 +503,7 @@ mod tests {
         let mut converted = ConvertedPackage::new_server(
             "fedora".to_string(),
             "nginx".to_string(),
-            "1.24.0-1.fc43".to_string(),
+            "1.24.0-1.fc44".to_string(),
             "rpm".to_string(),
             "sha256:abc".to_string(),
             "high".to_string(),
@@ -581,7 +581,7 @@ mod tests {
         let mut repo_pkg = RepositoryPackage::new(
             repo_id,
             "qemu-img".to_string(),
-            "2:10.1.0-7.fc43".to_string(),
+            "2:10.1.0-7.fc44".to_string(),
             "sha256:qemu-img".to_string(),
             4096,
             "https://example.com/qemu-img.rpm".to_string(),
@@ -592,14 +592,14 @@ mod tests {
         let mut stale_converted = ConvertedPackage::new_server(
             "fedora".to_string(),
             "qemu-img".to_string(),
-            "10.1.0-7.fc43".to_string(),
+            "10.1.0-7.fc44".to_string(),
             "rpm".to_string(),
             "sha256:old-qemu-img".to_string(),
             "high".to_string(),
             &["chunk".to_string()],
             2048,
             "sha256:content".to_string(),
-            "/cache/qemu-img-10.1.0-7.fc43.ccs".to_string(),
+            "/cache/qemu-img-10.1.0-7.fc44.ccs".to_string(),
         );
         stale_converted.insert(&conn).unwrap();
 
@@ -609,13 +609,13 @@ mod tests {
             metadata
                 .packages
                 .iter()
-                .any(|p| p.name == "qemu-img" && p.version == "2:10.1.0-7.fc43")
+                .any(|p| p.name == "qemu-img" && p.version == "2:10.1.0-7.fc44")
         );
         assert!(
             !metadata
                 .packages
                 .iter()
-                .any(|p| p.name == "qemu-img" && p.version == "10.1.0-7.fc43")
+                .any(|p| p.name == "qemu-img" && p.version == "10.1.0-7.fc44")
         );
     }
 

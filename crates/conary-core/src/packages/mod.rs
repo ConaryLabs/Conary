@@ -258,10 +258,10 @@ mod tests {
     fn detect_source_identity_uses_real_distro_for_fedora() {
         let identity = detect_source_identity_from_os_release(
             SystemPackageManager::Rpm,
-            "ID=fedora\nVERSION_ID=43\nNAME=Fedora Linux\n",
+            "ID=fedora\nVERSION_ID=44\nNAME=Fedora Linux\n",
         );
 
-        assert_eq!(identity.source_distro.as_deref(), Some("fedora-43"));
+        assert_eq!(identity.source_distro.as_deref(), Some("fedora-44"));
         assert_eq!(identity.version_scheme.as_deref(), Some("rpm"));
     }
 

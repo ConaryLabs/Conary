@@ -1379,14 +1379,14 @@ mod tests {
     #[test]
     fn detects_conditional_rpm_dependencies() {
         assert!(is_conditional_rpm_dependency(
-            "((kernel-modules-extra-uname-r = 6.19.6-200.fc43.x86_64) if kernel-modules-extra-matched)"
+            "((kernel-modules-extra-uname-r = 6.19.6-200.fc44.x86_64) if kernel-modules-extra-matched)"
         ));
         assert!(!is_conditional_rpm_dependency("kernel-core-uname-r"));
     }
 
     #[test]
     fn ignores_rpm_internal_config_dependencies() {
-        assert!(is_ignored_rpm_dependency("config(dracut) = 107-8.fc43"));
+        assert!(is_ignored_rpm_dependency("config(dracut) = 107-8.fc44"));
         assert!(is_ignored_rpm_dependency("rpmlib(CompressedFileNames)"));
         assert!(is_ignored_rpm_dependency("/usr/bin/bash"));
         assert!(!is_ignored_rpm_dependency("kernel-core-uname-r"));
@@ -1404,7 +1404,7 @@ mod tests {
         let mut pkg = RepositoryPackage::new(
             repo_id,
             "coreutils-common".to_string(),
-            "9.7-8.fc43".to_string(),
+            "9.7-8.fc44".to_string(),
             "sha256:cc".to_string(),
             100,
             "https://example.invalid/coreutils-common.rpm".to_string(),
@@ -1415,7 +1415,7 @@ mod tests {
         let mut kpkg = RepositoryPackage::new(
             repo_id,
             "kernel-core".to_string(),
-            "6.19.6-200.fc43".to_string(),
+            "6.19.6-200.fc44".to_string(),
             "sha256:kc".to_string(),
             200,
             "https://example.invalid/kernel-core.rpm".to_string(),
@@ -1426,9 +1426,9 @@ mod tests {
         let mut provide = RepositoryProvide::new(
             kpkg_id,
             "kernel-core-uname-r".to_string(),
-            Some("6.19.6-200.fc43.x86_64".to_string()),
+            Some("6.19.6-200.fc44.x86_64".to_string()),
             "package".to_string(),
-            Some("kernel-core-uname-r = 6.19.6-200.fc43.x86_64".to_string()),
+            Some("kernel-core-uname-r = 6.19.6-200.fc44.x86_64".to_string()),
         );
         provide.insert(&conn).unwrap();
 
@@ -1441,7 +1441,7 @@ mod tests {
                 },
                 conary_core::resolver::MissingDependency {
                     name: "kernel-core-uname-r".to_string(),
-                    constraint: VersionConstraint::parse("= 6.19.6-200.fc43.x86_64").unwrap(),
+                    constraint: VersionConstraint::parse("= 6.19.6-200.fc44.x86_64").unwrap(),
                     required_by: vec!["kernel".to_string()],
                 },
                 conary_core::resolver::MissingDependency {
@@ -1505,7 +1505,7 @@ mod tests {
         let mut pkg = RepositoryPackage::new(
             repo_id,
             "kernel".to_string(),
-            "6.17.1-300.fc43".to_string(),
+            "6.17.1-300.fc44".to_string(),
             "sha256:kernel".to_string(),
             123,
             "https://example.invalid/kernel.rpm".to_string(),
@@ -1516,20 +1516,20 @@ mod tests {
         let mut provide = RepositoryProvide::new(
             pkg_id,
             "kernel-uname-r".to_string(),
-            Some("6.17.1-300.fc43.x86_64".to_string()),
+            Some("6.17.1-300.fc44.x86_64".to_string()),
             "package".to_string(),
-            Some("kernel-uname-r = 6.17.1-300.fc43.x86_64".to_string()),
+            Some("kernel-uname-r = 6.17.1-300.fc44.x86_64".to_string()),
         );
         provide.insert(&conn).unwrap();
 
         let pending = vec![PendingCcsProvider {
             name: "kernel".to_string(),
-            version: "6.17.1-300.fc43".to_string(),
+            version: "6.17.1-300.fc44".to_string(),
             provides: vec!["kernel-uname-r".to_string()],
         }];
         let dep = conary_core::resolver::MissingDependency {
             name: "kernel-uname-r".to_string(),
-            constraint: VersionConstraint::parse("= 6.17.1-300.fc43.x86_64").unwrap(),
+            constraint: VersionConstraint::parse("= 6.17.1-300.fc44.x86_64").unwrap(),
             required_by: vec!["kernel-modules-core".to_string()],
         };
 
@@ -1550,7 +1550,7 @@ mod tests {
         let mut pkg = RepositoryPackage::new(
             repo_id,
             "glibc".to_string(),
-            "2.42-4.fc43".to_string(),
+            "2.42-4.fc44".to_string(),
             "sha256:glibc".to_string(),
             123,
             "https://example.invalid/glibc.rpm".to_string(),
@@ -1561,7 +1561,7 @@ mod tests {
         let mut provide = RepositoryProvide::new(
             pkg_id,
             "libc.so.6(GLIBC_2.34)(64bit)".to_string(),
-            Some("2.42-4.fc43".to_string()),
+            Some("2.42-4.fc44".to_string()),
             "package".to_string(),
             Some("libc.so.6(GLIBC_2.34)(64bit)".to_string()),
         );
@@ -1598,7 +1598,7 @@ mod tests {
         let mut pkg = RepositoryPackage::new(
             repo_id,
             "pam".to_string(),
-            "1.7.1-3.fc43".to_string(),
+            "1.7.1-3.fc44".to_string(),
             "sha256:pam".to_string(),
             123,
             "https://example.invalid/pam.rpm".to_string(),
@@ -1609,7 +1609,7 @@ mod tests {
         let mut provide = RepositoryProvide::new(
             pkg_id,
             "libpam.so.0(LIBPAM_1.0)(64bit)".to_string(),
-            Some("1.7.1-3.fc43".to_string()),
+            Some("1.7.1-3.fc44".to_string()),
             "soname".to_string(),
             Some("libpam.so.0(LIBPAM_1.0)(64bit)".to_string()),
         );
@@ -1646,7 +1646,7 @@ mod tests {
         let mut pkg = RepositoryPackage::new(
             repo_id,
             "pcre2".to_string(),
-            "10.45-1.fc43".to_string(),
+            "10.45-1.fc44".to_string(),
             "sha256:pcre2".to_string(),
             123,
             "https://example.invalid/pcre2.rpm".to_string(),
@@ -1657,7 +1657,7 @@ mod tests {
         let mut provide = RepositoryProvide::new(
             pkg_id,
             "libpcre2-8.so.0()(64bit)".to_string(),
-            Some("10.45-1.fc43".to_string()),
+            Some("10.45-1.fc44".to_string()),
             "soname".to_string(),
             Some("libpcre2-8.so.0()(64bit)".to_string()),
         );
@@ -1694,7 +1694,7 @@ mod tests {
         let mut pkg = RepositoryPackage::new(
             repo_id,
             "glib2".to_string(),
-            "2.86.0-2.fc43".to_string(),
+            "2.86.0-2.fc44".to_string(),
             "sha256:glib2".to_string(),
             123,
             "https://example.invalid/glib2.rpm".to_string(),

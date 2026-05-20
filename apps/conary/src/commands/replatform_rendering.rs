@@ -121,7 +121,7 @@ mod tests {
             transactions: vec![
                 conary_core::model::ReplatformExecutionTransaction {
                     package: "bash".to_string(),
-                    current_distro: Some("fedora-43".to_string()),
+                    current_distro: Some("fedora-44".to_string()),
                     target_distro: "arch".to_string(),
                     current_version: "5.1.0".to_string(),
                     current_architecture: Some("x86_64".to_string()),
@@ -140,7 +140,7 @@ mod tests {
                 },
                 conary_core::model::ReplatformExecutionTransaction {
                     package: "vim".to_string(),
-                    current_distro: Some("fedora-43".to_string()),
+                    current_distro: Some("fedora-44".to_string()),
                     target_distro: "arch".to_string(),
                     current_version: "9.0.1".to_string(),
                     current_architecture: Some("x86_64".to_string()),
@@ -164,12 +164,12 @@ mod tests {
 
         assert!(rendered.contains("Planned replatform transactions (2):"));
         assert!(
-            rendered.contains("[blocked] remove bash 5.1.0 from fedora-43, install arch 5.2.0")
+            rendered.contains("[blocked] remove bash 5.1.0 from fedora-44, install arch 5.2.0")
         );
         assert!(rendered.contains(
             "via arch-core [repo-pkg:11] [route:default:legacy] [missing versioned install route]"
         ));
-        assert!(rendered.contains("[blocked] remove vim 9.0.1 from fedora-43, install arch 9.1.0"));
+        assert!(rendered.contains("[blocked] remove vim 9.0.1 from fedora-44, install arch 9.1.0"));
         assert!(rendered.contains(
             "via arch-core [repo-pkg:22] [route:default:legacy] [missing versioned install route]"
         ));
@@ -194,7 +194,7 @@ mod tests {
         let plan = ReplatformExecutionPlan {
             transactions: vec![conary_core::model::ReplatformExecutionTransaction {
                 package: "vim".to_string(),
-                current_distro: Some("fedora-43".to_string()),
+                current_distro: Some("fedora-44".to_string()),
                 target_distro: "arch".to_string(),
                 current_version: "9.0.1".to_string(),
                 current_architecture: Some("x86_64".to_string()),
@@ -216,7 +216,7 @@ mod tests {
         let rendered = render_replatform_execution_plan(&plan);
 
         assert!(
-            rendered.contains("[executable] remove vim 9.0.1 from fedora-43, install arch 9.1.0")
+            rendered.contains("[executable] remove vim 9.0.1 from fedora-44, install arch 9.1.0")
         );
         assert!(rendered.contains("via arch-core [repo-pkg:22] [route:resolution:binary]"));
         assert!(!rendered.contains("missing install route"));
@@ -227,7 +227,7 @@ mod tests {
         let plan = ReplatformExecutionPlan {
             transactions: vec![conary_core::model::ReplatformExecutionTransaction {
                 package: "vim".to_string(),
-                current_distro: Some("fedora-43".to_string()),
+                current_distro: Some("fedora-44".to_string()),
                 target_distro: "arch".to_string(),
                 current_version: "9.0.1".to_string(),
                 current_architecture: Some("x86_64".to_string()),

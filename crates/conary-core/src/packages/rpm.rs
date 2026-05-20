@@ -242,7 +242,7 @@ impl PackageFormat for RpmPackage {
             .map_err(|e| Error::InitError(format!("Failed to get package version: {}", e)))?
             .to_string();
 
-        // Combine version and release (e.g., "2.2.1" + "2.fc43" -> "2.2.1-2.fc43")
+        // Combine version and release (e.g., "2.2.1" + "2.fc44" -> "2.2.1-2.fc44")
         let version = if let Ok(release) = pkg.metadata.get_release() {
             format!("{}-{}", version, release)
         } else {

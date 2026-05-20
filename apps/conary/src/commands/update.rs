@@ -1735,7 +1735,7 @@ mod tests {
             "https://example.test/fedora".to_string(),
         );
         fedora_repo.priority = 50;
-        fedora_repo.default_strategy_distro = Some("fedora-43".to_string());
+        fedora_repo.default_strategy_distro = Some("fedora-44".to_string());
         let fedora_repo_id = fedora_repo.insert(conn).unwrap();
 
         let mut arch_repo = Repository::new(
@@ -1754,9 +1754,9 @@ mod tests {
             conn,
             &RepologyCacheEntry {
                 project_name: "demo".to_string(),
-                distro: "fedora-43".to_string(),
+                distro: "fedora-44".to_string(),
                 distro_name: "demo".to_string(),
-                version: Some("1.1.0-1.fc43".to_string()),
+                version: Some("1.1.0-1.fc44".to_string()),
                 status: Some("outdated".to_string()),
                 fetched_at: fresh.clone(),
             },
@@ -1777,12 +1777,12 @@ mod tests {
 
         let mut installed = Trove::new_with_source(
             "demo".to_string(),
-            "1.0.0-1.fc43".to_string(),
+            "1.0.0-1.fc44".to_string(),
             TroveType::Package,
             InstallSource::Repository,
         );
         installed.architecture = Some("x86_64".to_string());
-        installed.source_distro = Some("fedora-43".to_string());
+        installed.source_distro = Some("fedora-44".to_string());
         installed.version_scheme = Some("rpm".to_string());
         installed.installed_from_repository_id = Some(fedora_repo_id);
         installed.insert(conn).unwrap();
@@ -1790,13 +1790,13 @@ mod tests {
         let mut fedora_candidate = RepositoryPackage::new(
             fedora_repo_id,
             "demo".to_string(),
-            "1.1.0-1.fc43".to_string(),
+            "1.1.0-1.fc44".to_string(),
             "sha256:fedora-demo".to_string(),
             123,
-            "https://example.test/fedora/demo-1.1.0-1.fc43.rpm".to_string(),
+            "https://example.test/fedora/demo-1.1.0-1.fc44.rpm".to_string(),
         );
         fedora_candidate.architecture = Some("x86_64".to_string());
-        fedora_candidate.distro = Some("fedora-43".to_string());
+        fedora_candidate.distro = Some("fedora-44".to_string());
         fedora_candidate.version_scheme = Some("rpm".to_string());
         fedora_candidate.canonical_id = Some(canonical_id);
         fedora_candidate.insert(conn).unwrap();
@@ -1990,7 +1990,7 @@ mod tests {
                 percentage: 25.0,
             },
             SystemAffinity {
-                distro: "fedora-43".to_string(),
+                distro: "fedora-44".to_string(),
                 package_count: 30,
                 percentage: 75.0,
             },
@@ -2211,7 +2211,7 @@ mod tests {
         let source_switch = selected
             .source_switch
             .expect("expected source-switch metadata for latest-mode update");
-        assert_eq!(source_switch.from_distro, "fedora-43");
+        assert_eq!(source_switch.from_distro, "fedora-44");
         assert_eq!(source_switch.to_distro, "arch");
         assert!(source_switch.reason.contains("latest"));
     }
@@ -2238,7 +2238,7 @@ mod tests {
         let preview = render_source_switch_preview_line(&selected)
             .expect("expected latest-mode update preview for source switch");
         assert!(preview.contains("demo"));
-        assert!(preview.contains("fedora-43"));
+        assert!(preview.contains("fedora-44"));
         assert!(preview.contains("arch"));
         assert!(preview.contains("latest"));
     }
@@ -2287,7 +2287,7 @@ mod tests {
         .expect("expected same-source update candidate");
 
         assert_eq!(selected.repository.name, "fedora-main");
-        assert_eq!(selected.package.version, "1.1.0-1.fc43");
+        assert_eq!(selected.package.version, "1.1.0-1.fc44");
         assert!(selected.source_switch.is_none());
     }
 
@@ -2443,7 +2443,7 @@ mod tests {
         .expect("expected strict-mixing update candidate");
 
         assert_eq!(selected.repository.name, "fedora-main");
-        assert_eq!(selected.package.version, "1.1.0-1.fc43");
+        assert_eq!(selected.package.version, "1.1.0-1.fc44");
         assert!(selected.source_switch.is_none());
     }
 
@@ -2505,7 +2505,7 @@ mod tests {
         let actions = vec![
             DiffAction::ReplatformReplace {
                 package: "bash".to_string(),
-                current_distro: Some("fedora-43".to_string()),
+                current_distro: Some("fedora-44".to_string()),
                 target_distro: "arch".to_string(),
                 current_version: "5.1.0".to_string(),
                 current_architecture: Some("x86_64".to_string()),
@@ -2516,7 +2516,7 @@ mod tests {
             },
             DiffAction::ReplatformReplace {
                 package: "vim".to_string(),
-                current_distro: Some("fedora-43".to_string()),
+                current_distro: Some("fedora-44".to_string()),
                 target_distro: "arch".to_string(),
                 current_version: "9.0.1".to_string(),
                 current_architecture: Some("x86_64".to_string()),
@@ -2527,7 +2527,7 @@ mod tests {
             },
             DiffAction::ReplatformReplace {
                 package: "zsh".to_string(),
-                current_distro: Some("fedora-43".to_string()),
+                current_distro: Some("fedora-44".to_string()),
                 target_distro: "arch".to_string(),
                 current_version: "5.8.0".to_string(),
                 current_architecture: Some("x86_64".to_string()),
@@ -2538,7 +2538,7 @@ mod tests {
             },
             DiffAction::ReplatformReplace {
                 package: "curl".to_string(),
-                current_distro: Some("fedora-43".to_string()),
+                current_distro: Some("fedora-44".to_string()),
                 target_distro: "arch".to_string(),
                 current_version: "8.7.0".to_string(),
                 current_architecture: Some("x86_64".to_string()),

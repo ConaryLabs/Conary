@@ -627,16 +627,16 @@ mod tests {
             &conn,
             repo_id,
             "kernel-core",
-            "6.19.6-200.fc43",
+            "6.19.6-200.fc44",
             "https://mirror.fedora.invalid/kernel-core.rpm",
             &[("glibc", Some(">= 2.39"))],
         );
         let mut provide = RepositoryProvide::new(
             kc_id,
             "kernel-core-uname-r".to_string(),
-            Some("6.19.6-200.fc43.x86_64".to_string()),
+            Some("6.19.6-200.fc44.x86_64".to_string()),
             "package".to_string(),
-            Some("kernel-core-uname-r = 6.19.6-200.fc43.x86_64".to_string()),
+            Some("kernel-core-uname-r = 6.19.6-200.fc44.x86_64".to_string()),
         );
         provide.insert(&conn).unwrap();
 
@@ -645,7 +645,7 @@ mod tests {
             &conn,
             repo_id,
             "kernel",
-            "6.19.6-200.fc43",
+            "6.19.6-200.fc44",
             "https://mirror.fedora.invalid/kernel.rpm",
             &[("kernel-core-uname-r", None)],
         );
@@ -655,7 +655,7 @@ mod tests {
             &conn,
             repo_id,
             "glibc",
-            "2.39-22.fc43",
+            "2.39-22.fc44",
             "https://mirror.fedora.invalid/glibc.rpm",
             &[],
         );
@@ -850,9 +850,9 @@ mod tests {
 
     #[test]
     fn provide_version_used_instead_of_package_version() {
-        // Package kernel-modules-core version 6.19.6-200.fc43
-        // Provides kernel-modules-core-uname-r = 6.19.6-200.fc43.x86_64
-        // A dep on kernel-modules-core-uname-r = 6.19.6-200.fc43.x86_64
+        // Package kernel-modules-core version 6.19.6-200.fc44
+        // Provides kernel-modules-core-uname-r = 6.19.6-200.fc44.x86_64
+        // A dep on kernel-modules-core-uname-r = 6.19.6-200.fc44.x86_64
         // should match via the provide version, not the package version.
         let (_dir, conn) = setup_test_db();
 
@@ -867,14 +867,14 @@ mod tests {
             &conn,
             repo_id,
             "kernel-modules-core",
-            "6.19.6-200.fc43",
+            "6.19.6-200.fc44",
             "https://mirror.fedora.invalid/kernel-modules-core.rpm",
             &[],
         );
         let mut provide = RepositoryProvide::new(
             kmc_id,
             "kernel-modules-core-uname-r".to_string(),
-            Some("6.19.6-200.fc43.x86_64".to_string()),
+            Some("6.19.6-200.fc44.x86_64".to_string()),
             "package".to_string(),
             None,
         );
@@ -885,7 +885,7 @@ mod tests {
             &conn,
             repo_id,
             "kernel",
-            "6.19.6-200.fc43",
+            "6.19.6-200.fc44",
             "https://mirror.fedora.invalid/kernel.rpm",
             &[("kernel-modules-core-uname-r", None)],
         );
@@ -914,7 +914,7 @@ mod tests {
         // Legacy trove (no version_scheme) should still participate in SAT
         let (_dir, conn) = setup_test_db();
 
-        insert_trove(&conn, "bash", "5.2.21-2.fc43", &[]);
+        insert_trove(&conn, "bash", "5.2.21-2.fc44", &[]);
 
         let mut repo = Repository::new(
             "fedora-main".to_string(),
@@ -926,7 +926,7 @@ mod tests {
             &conn,
             repo_id,
             "myshell",
-            "1.0-1.fc43",
+            "1.0-1.fc44",
             "https://mirror.fedora.invalid/myshell.rpm",
             &[("bash", Some(">= 5.0"))],
         );
@@ -995,7 +995,7 @@ mod tests {
             &conn,
             repo_id,
             "openssl",
-            "3.2.0-1.fc43",
+            "3.2.0-1.fc44",
             "https://mirror.fedora.invalid/openssl.rpm",
             &[],
         );
@@ -1004,7 +1004,7 @@ mod tests {
             &conn,
             repo_id,
             "myapp",
-            "1.0-1.fc43",
+            "1.0-1.fc44",
             "https://mirror.fedora.invalid/myapp.rpm",
             &[("libssl3", None)],
         );
@@ -1047,7 +1047,7 @@ mod tests {
             &conn,
             repo_id,
             "kernel",
-            "6.19.6-200.fc43",
+            "6.19.6-200.fc44",
             "https://mirror.fedora.invalid/kernel.rpm",
             &[],
         );
@@ -1326,7 +1326,7 @@ mod tests {
 
         conn.execute(
             "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, version_scheme, canonical_id)
-             VALUES (?1, 'python', '3.12.2-1.fc43', 'sha256:fedora', 100, 'https://f.com/python', 'rpm', ?2)",
+             VALUES (?1, 'python', '3.12.2-1.fc44', 'sha256:fedora', 100, 'https://f.com/python', 'rpm', ?2)",
             rusqlite::params![fedora_repo_id, canonical_id],
         )
         .unwrap();

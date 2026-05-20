@@ -543,7 +543,7 @@ mod tests {
     #[test]
     fn parse_remi_download_url_accepts_versioned_download_endpoint() {
         let parsed = parse_remi_download_url(
-            "https://remi.conary.io/v1/fedora/packages/glibc/download?version=2.42-4.fc43",
+            "https://remi.conary.io/v1/fedora/packages/glibc/download?version=2.42-4.fc44",
         );
 
         assert_eq!(

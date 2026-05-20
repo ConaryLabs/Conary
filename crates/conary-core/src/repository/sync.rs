@@ -1003,17 +1003,17 @@ mod tests {
     fn test_remi_package_entry_builds_normalized_capabilities() {
         let entry = RemiPackageEntry {
             name: "kernel-core".to_string(),
-            version: "6.19.6-200.fc43".to_string(),
+            version: "6.19.6-200.fc44".to_string(),
             converted: false,
             architecture: Some("x86_64".to_string()),
             dependencies: Some(vec![
-                "kernel-modules-core-uname-r = 6.19.6-200.fc43.x86_64".to_string(),
+                "kernel-modules-core-uname-r = 6.19.6-200.fc44.x86_64".to_string(),
                 "glibc >= 2.39".to_string(),
             ]),
             metadata: Some(json!({
                 "rpm_provides": [
-                    "kernel-core-uname-r = 6.19.6-200.fc43.x86_64",
-                    "kernel-core = 6.19.6-200.fc43"
+                    "kernel-core-uname-r = 6.19.6-200.fc44.x86_64",
+                    "kernel-core = 6.19.6-200.fc44"
                 ]
             })),
         };
@@ -1027,14 +1027,14 @@ mod tests {
 
         assert!(row.provides.iter().any(|provide| {
             provide.capability == "kernel-core-uname-r"
-                && provide.version.as_deref() == Some("6.19.6-200.fc43.x86_64")
-                && provide.raw.as_deref() == Some("kernel-core-uname-r = 6.19.6-200.fc43.x86_64")
+                && provide.version.as_deref() == Some("6.19.6-200.fc44.x86_64")
+                && provide.raw.as_deref() == Some("kernel-core-uname-r = 6.19.6-200.fc44.x86_64")
         }));
         assert!(row.requirements.iter().any(|requirement| {
             requirement.capability == "kernel-modules-core-uname-r"
-                && requirement.version_constraint.as_deref() == Some("= 6.19.6-200.fc43.x86_64")
+                && requirement.version_constraint.as_deref() == Some("= 6.19.6-200.fc44.x86_64")
                 && requirement.raw.as_deref()
-                    == Some("kernel-modules-core-uname-r = 6.19.6-200.fc43.x86_64")
+                    == Some("kernel-modules-core-uname-r = 6.19.6-200.fc44.x86_64")
         }));
         assert!(row.requirements.iter().any(|requirement| {
             requirement.capability == "glibc"
@@ -1223,7 +1223,7 @@ mod tests {
 
         let mut pkg_meta = PackageMetadata::new(
             "bash".to_string(),
-            "5.2.37-1.fc43".to_string(),
+            "5.2.37-1.fc44".to_string(),
             "deadbeef".to_string(),
             2048,
             "https://example.com/fedora/bash.rpm".to_string(),
@@ -1504,7 +1504,7 @@ mod tests {
 
         let mut pkg_meta = PackageMetadata::new(
             "resolved-client".to_string(),
-            "1.0-1.fc43".to_string(),
+            "1.0-1.fc44".to_string(),
             "ff00ff".to_string(),
             256,
             "https://example.com/fedora/resolved-client.rpm".to_string(),

@@ -1163,7 +1163,7 @@ mod tests {
                 percentage: 25.0,
             },
             SystemAffinity {
-                distro: "fedora-43".to_string(),
+                distro: "fedora-44".to_string(),
                 package_count: 30,
                 percentage: 75.0,
             },
@@ -1389,7 +1389,7 @@ strength = "strict"
         let proposals = vec![
             conary_core::model::VisibleRealignmentProposal {
                 package: "bash".to_string(),
-                current_distro: Some("fedora-43".to_string()),
+                current_distro: Some("fedora-44".to_string()),
                 target_distro: "arch".to_string(),
                 target_version: "5.2.0".to_string(),
                 architecture: Some("x86_64".to_string()),
@@ -1398,7 +1398,7 @@ strength = "strict"
             },
             conary_core::model::VisibleRealignmentProposal {
                 package: "vim".to_string(),
-                current_distro: Some("fedora-43".to_string()),
+                current_distro: Some("fedora-44".to_string()),
                 target_distro: "arch".to_string(),
                 target_version: "9.1.0".to_string(),
                 architecture: Some("x86_64".to_string()),
@@ -1407,7 +1407,7 @@ strength = "strict"
             },
             conary_core::model::VisibleRealignmentProposal {
                 package: "zsh".to_string(),
-                current_distro: Some("fedora-43".to_string()),
+                current_distro: Some("fedora-44".to_string()),
                 target_distro: "arch".to_string(),
                 target_version: "5.9.1".to_string(),
                 architecture: Some("x86_64".to_string()),
@@ -1416,7 +1416,7 @@ strength = "strict"
             },
             conary_core::model::VisibleRealignmentProposal {
                 package: "curl".to_string(),
-                current_distro: Some("fedora-43".to_string()),
+                current_distro: Some("fedora-44".to_string()),
                 target_distro: "arch".to_string(),
                 target_version: "8.8.0".to_string(),
                 architecture: Some("x86_64".to_string()),
@@ -1447,7 +1447,7 @@ strength = "strict"
             visible_realignment_proposals: vec![
                 conary_core::model::VisibleRealignmentProposal {
                     package: "vim".to_string(),
-                    current_distro: Some("fedora-43".to_string()),
+                    current_distro: Some("fedora-44".to_string()),
                     target_distro: "arch".to_string(),
                     target_version: "9.1.0".to_string(),
                     architecture: Some("x86_64".to_string()),
@@ -1456,7 +1456,7 @@ strength = "strict"
                 },
                 conary_core::model::VisibleRealignmentProposal {
                     package: "bash".to_string(),
-                    current_distro: Some("fedora-43".to_string()),
+                    current_distro: Some("fedora-44".to_string()),
                     target_distro: "arch".to_string(),
                     target_version: "5.2.0".to_string(),
                     architecture: Some("x86_64".to_string()),
@@ -1505,7 +1505,7 @@ strength = "strict"
                     target_repository_package_id,
                     ..
                 } if package == "vim"
-                    && current_distro.as_deref() == Some("fedora-43")
+                    && current_distro.as_deref() == Some("fedora-44")
                     && target_distro == "arch"
                     && current_version == "9.0.1"
                     && current_architecture.as_deref() == Some("x86_64")
@@ -1784,7 +1784,7 @@ allowed_distros = ["arch"]
             "fedora".to_string(),
             "https://example.test/fedora".to_string(),
         );
-        fedora_repo.default_strategy_distro = Some("fedora-43".to_string());
+        fedora_repo.default_strategy_distro = Some("fedora-44".to_string());
         let fedora_repo_id = fedora_repo.insert(&conn).unwrap();
 
         let mut arch_repo = Repository::new(
@@ -1810,7 +1810,7 @@ allowed_distros = ["arch"]
         );
         installed.label_id = Some(fedora_label_id);
         installed.architecture = Some("x86_64".to_string());
-        installed.source_distro = Some("fedora-43".to_string());
+        installed.source_distro = Some("fedora-44".to_string());
         installed.version_scheme = Some("rpm".to_string());
         installed.installed_from_repository_id = Some(fedora_repo_id);
         installed.insert(&conn).unwrap();
@@ -1884,7 +1884,7 @@ strength = "strict"
         assert_eq!(installed.installed_from_repository_id, Some(arch_repo_id));
         assert_eq!(
             installed.selection_reason.as_deref(),
-            Some("Replatformed from fedora-43 to arch by model apply")
+            Some("Replatformed from fedora-44 to arch by model apply")
         );
         assert_eq!(
             DistroPin::get_current(&conn).unwrap().unwrap().distro,
@@ -1914,7 +1914,7 @@ strength = "strict"
             "fedora".to_string(),
             "https://example.test/fedora".to_string(),
         );
-        fedora_repo.default_strategy_distro = Some("fedora-43".to_string());
+        fedora_repo.default_strategy_distro = Some("fedora-44".to_string());
         let fedora_repo_id = fedora_repo.insert(&conn).unwrap();
 
         let mut arch_repo = Repository::new(
@@ -1940,7 +1940,7 @@ strength = "strict"
         );
         installed.label_id = Some(fedora_label_id);
         installed.architecture = Some("x86_64".to_string());
-        installed.source_distro = Some("fedora-43".to_string());
+        installed.source_distro = Some("fedora-44".to_string());
         installed.version_scheme = Some("rpm".to_string());
         installed.installed_from_repository_id = Some(fedora_repo_id);
         installed.insert(&conn).unwrap();

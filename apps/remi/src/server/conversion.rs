@@ -1344,8 +1344,8 @@ mod tests {
 
     #[test]
     fn test_safe_ccs_filename_normal() {
-        let result = ConversionService::safe_ccs_filename("nginx", "1.24.0-1.fc43").unwrap();
-        assert_eq!(result, "nginx-1.24.0-1.fc43.ccs");
+        let result = ConversionService::safe_ccs_filename("nginx", "1.24.0-1.fc44").unwrap();
+        assert_eq!(result, "nginx-1.24.0-1.fc44.ccs");
     }
 
     #[test]
@@ -1358,11 +1358,11 @@ mod tests {
     fn test_safe_ccs_filename_with_architecture() {
         let result = ConversionService::safe_ccs_filename_with_arch(
             "glib2",
-            "2.86.0-2.fc43",
+            "2.86.0-2.fc44",
             Some("x86_64"),
         )
         .unwrap();
-        assert_eq!(result, "glib2-2.86.0-2.fc43-x86_64.ccs");
+        assert_eq!(result, "glib2-2.86.0-2.fc44-x86_64.ccs");
     }
 
     #[test]
@@ -1370,14 +1370,14 @@ mod tests {
         let mut metadata = PackageMetadata::new(
             PathBuf::from("/tmp/qemu-img.rpm"),
             "qemu-img".to_string(),
-            "10.1.0-7.fc43".to_string(),
+            "10.1.0-7.fc44".to_string(),
         );
         metadata.architecture = Some("i686".to_string());
 
         let mut repo_pkg = RepositoryPackage::new(
             42,
             "qemu-img".to_string(),
-            "2:10.1.0-7.fc43".to_string(),
+            "2:10.1.0-7.fc44".to_string(),
             "sha256:qemu-img".to_string(),
             4096,
             "https://example.com/qemu-img.rpm".to_string(),
@@ -1387,7 +1387,7 @@ mod tests {
         ConversionService::apply_repository_identity(&mut metadata, &repo_pkg);
 
         assert_eq!(metadata.name, "qemu-img");
-        assert_eq!(metadata.version, "2:10.1.0-7.fc43");
+        assert_eq!(metadata.version, "2:10.1.0-7.fc44");
         assert_eq!(metadata.architecture.as_deref(), Some("x86_64"));
     }
 
@@ -1511,10 +1511,10 @@ mod tests {
         let mut i686 = RepositoryPackage::new(
             repo_id,
             "glib2".to_string(),
-            "2.86.0-2.fc43".to_string(),
+            "2.86.0-2.fc44".to_string(),
             "sha256:glib2-i686".to_string(),
             1024,
-            "https://example.com/glib2-2.86.0-2.fc43.i686.rpm".to_string(),
+            "https://example.com/glib2-2.86.0-2.fc44.i686.rpm".to_string(),
         );
         i686.architecture = Some("i686".to_string());
         i686.insert(&conn).unwrap();
@@ -1522,10 +1522,10 @@ mod tests {
         let mut x86_64 = RepositoryPackage::new(
             repo_id,
             "glib2".to_string(),
-            "2.86.0-2.fc43".to_string(),
+            "2.86.0-2.fc44".to_string(),
             "sha256:glib2-x86_64".to_string(),
             2048,
-            "https://example.com/glib2-2.86.0-2.fc43.x86_64.rpm".to_string(),
+            "https://example.com/glib2-2.86.0-2.fc44.x86_64.rpm".to_string(),
         );
         x86_64.architecture = Some("x86_64".to_string());
         x86_64.insert(&conn).unwrap();
@@ -1542,7 +1542,7 @@ mod tests {
                 &conn,
                 "fedora",
                 "glib2",
-                Some("2.86.0-2.fc43"),
+                Some("2.86.0-2.fc44"),
                 Some("x86_64"),
             )
             .unwrap();
@@ -1744,7 +1744,7 @@ mod tests {
         let mut repo_pkg = RepositoryPackage::new(
             repo_id,
             "kernel-modules-core".to_string(),
-            "6.17.1-300.fc43".to_string(),
+            "6.17.1-300.fc44".to_string(),
             "sha256:kernel-modules-core".to_string(),
             1024,
             "https://example.com/kernel-modules-core.rpm".to_string(),
@@ -1756,9 +1756,9 @@ mod tests {
         let mut provide = RepositoryProvide::new(
             repo_pkg_id,
             "kernel-uname-r".to_string(),
-            Some("6.17.1-300.fc43.x86_64".to_string()),
+            Some("6.17.1-300.fc44.x86_64".to_string()),
             "package".to_string(),
-            Some("kernel-uname-r = 6.17.1-300.fc43.x86_64".to_string()),
+            Some("kernel-uname-r = 6.17.1-300.fc44.x86_64".to_string()),
         );
         provide = provide.with_version_scheme("rpm".to_string());
         provide.insert(&conn).unwrap();
@@ -1766,14 +1766,14 @@ mod tests {
         let mut metadata = PackageMetadata::new(
             PathBuf::from("/tmp/kernel-modules-core.rpm"),
             "kernel-modules-core".to_string(),
-            "6.17.1-300.fc43".to_string(),
+            "6.17.1-300.fc44".to_string(),
         );
 
         ConversionService::merge_repository_provides(&conn, &repo_pkg, &mut metadata).unwrap();
 
         assert!(metadata.provides.iter().any(|provide| {
             provide.name == "kernel-uname-r"
-                && provide.version.as_deref() == Some("= 6.17.1-300.fc43.x86_64")
+                && provide.version.as_deref() == Some("= 6.17.1-300.fc44.x86_64")
         }));
     }
 

@@ -1522,7 +1522,7 @@ version = 1
 
 [system]
 profile = "balanced/latest-anywhere"
-allowed_distros = ["fedora-43", "arch"]
+allowed_distros = ["fedora-44", "arch"]
 
 [system.pin]
 distro = "arch"
@@ -1535,7 +1535,7 @@ strength = "hard"
         );
         assert_eq!(
             model.system.allowed_distros,
-            vec!["fedora-43".to_string(), "arch".to_string()]
+            vec!["fedora-44".to_string(), "arch".to_string()]
         );
         let pin = model.system.effective_pin().expect("expected source pin");
         assert_eq!(pin.distro, "arch");
@@ -1570,7 +1570,7 @@ version = 1
 [overrides]
 mesa = { from = "fedora-41" }
 nvidia-driver = { from = "rpmfusion-41", reason = "closed source drivers" }
-kernel = { from = "fedora-43", scope = "family", reason = "prefer fedora kernels" }
+kernel = { from = "fedora-44", scope = "family", reason = "prefer fedora kernels" }
 "#;
         let model: SystemModel = toml::from_str(input).unwrap();
         assert_eq!(model.overrides.len(), 3);
@@ -1649,7 +1649,7 @@ version = 1
 [system]
 profile = "balanced/latest-anywhere"
 convergence = "full-ownership"
-allowed_distros = ["arch", "fedora-43"]
+allowed_distros = ["arch", "fedora-44"]
 
 [system.pin]
 distro = "arch"
@@ -1717,7 +1717,7 @@ strength = "hard"
 version = 1
 
 [overrides]
-kernel = { from = "fedora-43", scope = "family", reason = "prefer fedora kernels" }
+kernel = { from = "fedora-44", scope = "family", reason = "prefer fedora kernels" }
 kernel-core = { from = "arch", reason = "exact match override" }
 libs = { from = "ubuntu-noble", scope = "class", reason = "prefer ubuntu libs" }
 "#;
@@ -1738,7 +1738,7 @@ libs = { from = "ubuntu-noble", scope = "class", reason = "prefer ubuntu libs" }
 version = 1
 
 [overrides]
-kernel = { from = "fedora-43", scope = "family", reason = "prefer fedora kernels" }
+kernel = { from = "fedora-44", scope = "family", reason = "prefer fedora kernels" }
 libs = { from = "ubuntu-noble", scope = "class", reason = "prefer ubuntu libs" }
 "#;
         let model: SystemModel = toml::from_str(input).unwrap();
@@ -1748,7 +1748,7 @@ libs = { from = "ubuntu-noble", scope = "class", reason = "prefer ubuntu libs" }
         assert!(result.is_some());
         let (key, config) = result.unwrap();
         assert_eq!(key, "kernel");
-        assert_eq!(config.from, "fedora-43");
+        assert_eq!(config.from, "fedora-44");
     }
 
     #[test]
@@ -1864,7 +1864,7 @@ mesa = { from = "fedora-41" }
     #[test]
     fn test_source_policy_with_allowed_distros_is_configured() {
         let config = SystemConfig {
-            allowed_distros: vec!["fedora-43".to_string()],
+            allowed_distros: vec!["fedora-44".to_string()],
             ..SystemConfig::default()
         };
         assert!(config.is_source_policy_configured());

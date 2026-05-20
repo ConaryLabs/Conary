@@ -985,14 +985,14 @@ mod tests {
         let mut pkg = RepositoryPackage::new(
             repo_id,
             "kernel".to_string(),
-            "6.19.6-200.fc43".to_string(),
+            "6.19.6-200.fc44".to_string(),
             "sha256:deadbeef".to_string(),
             1,
             "https://example.invalid/kernel.rpm".to_string(),
         );
         pkg.dependencies = Some(
             serde_json::to_string(&vec![
-                "kernel-core-uname-r = 6.19.6-200.fc43.x86_64".to_string(),
+                "kernel-core-uname-r = 6.19.6-200.fc44.x86_64".to_string(),
                 "coreutils >= 9.7".to_string(),
             ])
             .unwrap(),
@@ -1019,7 +1019,7 @@ mod tests {
                 name == "kernel-core-uname-r"
                     && *constraint
                         == ConaryConstraint::Legacy(
-                            VersionConstraint::parse("= 6.19.6-200.fc43.x86_64").unwrap(),
+                            VersionConstraint::parse("= 6.19.6-200.fc44.x86_64").unwrap(),
                         )
             })
         }));
@@ -1095,7 +1095,7 @@ mod tests {
         let mut pkg = RepositoryPackage::new(
             repo_id,
             "kernel-core".to_string(),
-            "6.19.6-200.fc43".to_string(),
+            "6.19.6-200.fc44".to_string(),
             "sha256:deadbeef".to_string(),
             1,
             "https://example.invalid/kernel-core.rpm".to_string(),
@@ -1106,9 +1106,9 @@ mod tests {
         let mut provide = RepositoryProvide::new(
             repo_package_id,
             "kernel-core-uname-r".to_string(),
-            Some("6.19.6-200.fc43.x86_64".to_string()),
+            Some("6.19.6-200.fc44.x86_64".to_string()),
             "package".to_string(),
-            Some("kernel-core-uname-r = 6.19.6-200.fc43.x86_64".to_string()),
+            Some("kernel-core-uname-r = 6.19.6-200.fc44.x86_64".to_string()),
         );
         provide.insert(&conn).unwrap();
 
@@ -1124,7 +1124,7 @@ mod tests {
             .unwrap();
 
         assert!(loaded.provided_capabilities.iter().any(|(name, version)| {
-            name == "kernel-core-uname-r" && *version == Some("6.19.6-200.fc43.x86_64".to_string())
+            name == "kernel-core-uname-r" && *version == Some("6.19.6-200.fc44.x86_64".to_string())
         }));
     }
 
@@ -1311,7 +1311,7 @@ mod tests {
 
         conn.execute(
             "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, canonical_id)
-             VALUES (?1, 'python', '3.12.2-1.fc43', 'sha256:fedora', 1, 'https://example.invalid/python-fedora.rpm', ?2)",
+             VALUES (?1, 'python', '3.12.2-1.fc44', 'sha256:fedora', 1, 'https://example.invalid/python-fedora.rpm', ?2)",
             rusqlite::params![fedora_repo_id, canonical_id],
         )
         .unwrap();
@@ -1412,7 +1412,7 @@ mod tests {
 
         let mut identity = installed_identity(
             "kernel-modules-core",
-            "6.19.6-200.fc43",
+            "6.19.6-200.fc44",
             VersionScheme::Rpm,
             None,
         );
@@ -1531,7 +1531,7 @@ mod tests {
         let mut pkg = RepositoryPackage::new(
             repo_id,
             "systemd".to_string(),
-            "256-1.fc43".to_string(),
+            "256-1.fc44".to_string(),
             "sha256:systemd".to_string(),
             1,
             "https://example.invalid/systemd.rpm".to_string(),
@@ -1788,7 +1788,7 @@ mod tests {
         // Legacy trove: no version_scheme set
         let mut trove = Trove::new(
             "bash".to_string(),
-            "5.2.21-2.fc43".to_string(),
+            "5.2.21-2.fc44".to_string(),
             TroveType::Package,
         );
         trove.insert(&conn).unwrap();

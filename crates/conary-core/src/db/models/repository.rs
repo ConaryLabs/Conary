@@ -748,7 +748,7 @@ mod tests {
             id: None,
             repository_id: 1,
             name: "kernel".to_string(),
-            version: "6.19.6-200.fc43".to_string(),
+            version: "6.19.6-200.fc44".to_string(),
             architecture: Some("x86_64".to_string()),
             description: None,
             checksum: "sha256:deadbeef".to_string(),
@@ -756,7 +756,7 @@ mod tests {
             download_url: "https://example.invalid/kernel.rpm".to_string(),
             dependencies: Some(
                 serde_json::to_string(&vec![
-                    "kernel-core-uname-r = 6.19.6-200.fc43.x86_64".to_string(),
+                    "kernel-core-uname-r = 6.19.6-200.fc44.x86_64".to_string(),
                     "coreutils >= 9.7".to_string(),
                     "((linux-firmware >= 20150904-56.git6ebf5d57) if linux-firmware)".to_string(),
                     "rpmlib(PayloadIsZstd) <= 5.4.18-1".to_string(),
@@ -781,7 +781,7 @@ mod tests {
         assert_eq!(deps[0].0, "kernel-core-uname-r");
         assert_eq!(
             deps[0].1,
-            VersionConstraint::parse("= 6.19.6-200.fc43.x86_64").unwrap()
+            VersionConstraint::parse("= 6.19.6-200.fc44.x86_64").unwrap()
         );
         assert_eq!(deps[1].0, "coreutils");
         assert_eq!(deps[1].1, VersionConstraint::parse(">= 9.7").unwrap());

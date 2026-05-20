@@ -381,7 +381,7 @@ fn parse_rpm_dependency(dep: &str) -> DependencyInfo {
 /// - "perl(Text::CharWidth)" (virtual provide)
 /// - "libc.so.6(GLIBC_2.17)(64bit)" (library)
 /// - "/usr/bin/perl" (file path)
-/// - "perl-Text-CharWidth = 0.04-58.fc43" (package name = version)
+/// - "perl-Text-CharWidth = 0.04-58.fc44" (package name = version)
 pub fn query_package_provides(name: &str) -> Result<Vec<String>> {
     debug!("Querying provides for RPM package: {}", name);
 
@@ -560,7 +560,7 @@ mod tests {
         let info = InstalledRpmInfo {
             name: "test".to_string(),
             version: "1.0.0".to_string(),
-            release: "1.fc43".to_string(),
+            release: "1.fc44".to_string(),
             epoch: Some(2),
             arch: "x86_64".to_string(),
             description: None,
@@ -573,7 +573,7 @@ mod tests {
             install_time: None,
         };
 
-        assert_eq!(info.full_version(), "2:1.0.0-1.fc43");
+        assert_eq!(info.full_version(), "2:1.0.0-1.fc44");
         assert_eq!(info.version_only(), "2:1.0.0");
     }
 
@@ -582,7 +582,7 @@ mod tests {
         let info = InstalledRpmInfo {
             name: "test".to_string(),
             version: "1.0.0".to_string(),
-            release: "1.fc43".to_string(),
+            release: "1.fc44".to_string(),
             epoch: None,
             arch: "x86_64".to_string(),
             description: None,
@@ -595,7 +595,7 @@ mod tests {
             install_time: None,
         };
 
-        assert_eq!(info.full_version(), "1.0.0-1.fc43");
+        assert_eq!(info.full_version(), "1.0.0-1.fc44");
         assert_eq!(info.version_only(), "1.0.0");
     }
 

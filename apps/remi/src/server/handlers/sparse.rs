@@ -419,7 +419,7 @@ mod tests {
     fn test_sparse_entry_single_version() {
         let (temp_file, conn) = create_test_db();
         let repo_id = insert_repo(&conn, "fedora-base", "fedora");
-        insert_package(&conn, repo_id, "nginx", "1.24.0-1.fc43", 1024);
+        insert_package(&conn, repo_id, "nginx", "1.24.0-1.fc44", 1024);
 
         let entry = build_sparse_entry(temp_file.path(), "fedora", "nginx")
             .unwrap()
@@ -428,7 +428,7 @@ mod tests {
         assert_eq!(entry.name, "nginx");
         assert_eq!(entry.distro, "fedora");
         assert_eq!(entry.versions.len(), 1);
-        assert_eq!(entry.versions[0].version, "1.24.0-1.fc43");
+        assert_eq!(entry.versions[0].version, "1.24.0-1.fc44");
         assert_eq!(entry.versions[0].size, 1024);
         assert_eq!(entry.versions[0].architecture.as_deref(), Some("x86_64"));
         assert!(!entry.versions[0].converted);
@@ -440,7 +440,7 @@ mod tests {
     fn test_sparse_entry_ignores_zero_sized_repository_rows() {
         let (temp_file, conn) = create_test_db();
         let repo_id = insert_repo(&conn, "fedora-base", "fedora");
-        insert_package(&conn, repo_id, "nginx", "1.24.0-1.fc43", 0);
+        insert_package(&conn, repo_id, "nginx", "1.24.0-1.fc44", 0);
 
         let result = build_sparse_entry(temp_file.path(), "fedora", "nginx").unwrap();
         assert!(result.is_none());
@@ -450,9 +450,9 @@ mod tests {
     fn test_sparse_entry_multiple_versions() {
         let (temp_file, conn) = create_test_db();
         let repo_id = insert_repo(&conn, "fedora-base", "fedora");
-        insert_package(&conn, repo_id, "nginx", "1.22.0-1.fc43", 900);
-        insert_package(&conn, repo_id, "nginx", "1.24.0-1.fc43", 1024);
-        insert_package(&conn, repo_id, "nginx", "1.25.0-1.fc43", 1100);
+        insert_package(&conn, repo_id, "nginx", "1.22.0-1.fc44", 900);
+        insert_package(&conn, repo_id, "nginx", "1.24.0-1.fc44", 1024);
+        insert_package(&conn, repo_id, "nginx", "1.25.0-1.fc44", 1100);
 
         let entry = build_sparse_entry(temp_file.path(), "fedora", "nginx")
             .unwrap()
@@ -460,25 +460,25 @@ mod tests {
 
         assert_eq!(entry.versions.len(), 3);
         // Versions should be sorted by version string
-        assert_eq!(entry.versions[0].version, "1.22.0-1.fc43");
-        assert_eq!(entry.versions[1].version, "1.24.0-1.fc43");
-        assert_eq!(entry.versions[2].version, "1.25.0-1.fc43");
+        assert_eq!(entry.versions[0].version, "1.22.0-1.fc44");
+        assert_eq!(entry.versions[1].version, "1.24.0-1.fc44");
+        assert_eq!(entry.versions[2].version, "1.25.0-1.fc44");
     }
 
     #[test]
     fn test_sparse_entry_with_conversion() {
         let (temp_file, conn) = create_test_db();
         let repo_id = insert_repo(&conn, "fedora-base", "fedora");
-        insert_package(&conn, repo_id, "nginx", "1.24.0-1.fc43", 1024);
-        insert_package(&conn, repo_id, "nginx", "1.25.0-1.fc43", 1100);
+        insert_package(&conn, repo_id, "nginx", "1.24.0-1.fc44", 1024);
+        insert_package(&conn, repo_id, "nginx", "1.25.0-1.fc44", 1100);
 
         // Mark one version as converted
         let mut converted = ConvertedPackage::new_server(
             "fedora".to_string(),
             "nginx".to_string(),
-            "1.24.0-1.fc43".to_string(),
+            "1.24.0-1.fc44".to_string(),
             "rpm".to_string(),
-            "sha256:nginx-1.24.0-1.fc43".to_string(),
+            "sha256:nginx-1.24.0-1.fc44".to_string(),
             "high".to_string(),
             &["chunk1".to_string(), "chunk2".to_string()],
             2048,
@@ -495,7 +495,7 @@ mod tests {
         let v1240 = entry
             .versions
             .iter()
-            .find(|v| v.version == "1.24.0-1.fc43")
+            .find(|v| v.version == "1.24.0-1.fc44")
             .unwrap();
         assert!(v1240.converted);
         assert_eq!(v1240.content_hash.as_deref(), Some("sha256:content_abc"));
@@ -503,7 +503,7 @@ mod tests {
         let v1250 = entry
             .versions
             .iter()
-            .find(|v| v.version == "1.25.0-1.fc43")
+            .find(|v| v.version == "1.25.0-1.fc44")
             .unwrap();
         assert!(!v1250.converted);
         assert!(v1250.content_hash.is_none());
@@ -513,14 +513,14 @@ mod tests {
     fn test_sparse_entry_ignores_stale_converted_version() {
         let (temp_file, conn) = create_test_db();
         let repo_id = insert_repo(&conn, "fedora-base", "fedora");
-        insert_package(&conn, repo_id, "nginx", "1.24.0-1.fc43", 1024);
+        insert_package(&conn, repo_id, "nginx", "1.24.0-1.fc44", 1024);
 
         let mut converted = ConvertedPackage::new_server(
             "fedora".to_string(),
             "nginx".to_string(),
-            "1.24.0-1.fc43".to_string(),
+            "1.24.0-1.fc44".to_string(),
             "rpm".to_string(),
-            "sha256:nginx-1.24.0-1.fc43".to_string(),
+            "sha256:nginx-1.24.0-1.fc44".to_string(),
             "high".to_string(),
             &["chunk1".to_string()],
             2048,
@@ -544,12 +544,12 @@ mod tests {
     fn test_sparse_entry_matches_converted_architecture() {
         let (temp_file, conn) = create_test_db();
         let repo_id = insert_repo(&conn, "fedora-base", "fedora");
-        insert_package(&conn, repo_id, "libffi", "3.5.1-2.fc43", 1024);
+        insert_package(&conn, repo_id, "libffi", "3.5.1-2.fc44", 1024);
 
         let mut converted = ConvertedPackage::new_server(
             "fedora".to_string(),
             "libffi".to_string(),
-            "3.5.1-2.fc43".to_string(),
+            "3.5.1-2.fc44".to_string(),
             "rpm".to_string(),
             "sha256:libffi-i686".to_string(),
             "high".to_string(),

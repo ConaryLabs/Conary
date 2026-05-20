@@ -716,12 +716,12 @@ mod tests {
         builder.name = Some("test-package".to_string());
         builder.epoch = Some("1".to_string());
         builder.ver = Some("2.3.4".to_string());
-        builder.rel = Some("5.fc43".to_string());
+        builder.rel = Some("5.fc44".to_string());
         builder.arch = Some("x86_64".to_string());
         builder.checksum = Some("abc123".to_string());
         builder.checksum_type = Some("sha256".to_string());
         builder.size = Some("1024".to_string());
-        builder.location = Some("Packages/t/test-package-2.3.4-5.fc43.x86_64.rpm".to_string());
+        builder.location = Some("Packages/t/test-package-2.3.4-5.fc44.x86_64.rpm".to_string());
         builder
     }
 
@@ -730,7 +730,7 @@ mod tests {
         let builder = valid_builder();
         let pkg = builder.build("https://example.com").unwrap();
         assert_eq!(pkg.name, "test-package");
-        assert_eq!(pkg.version, "1:2.3.4-5.fc43");
+        assert_eq!(pkg.version, "1:2.3.4-5.fc44");
         assert_eq!(pkg.size, 1024);
     }
 
@@ -778,15 +778,15 @@ mod tests {
   <package type="rpm">
     <name>kernel-core</name>
     <arch>x86_64</arch>
-    <version epoch="0" ver="6.19.6" rel="200.fc43"/>
+    <version epoch="0" ver="6.19.6" rel="200.fc44"/>
     <checksum type="sha256">deadbeef</checksum>
     <summary>kernel core</summary>
     <description>kernel core</description>
     <size package="123"/>
-    <location href="Packages/k/kernel-core-6.19.6-200.fc43.x86_64.rpm"/>
+    <location href="Packages/k/kernel-core-6.19.6-200.fc44.x86_64.rpm"/>
     <format>
       <rpm:provides>
-        <rpm:entry name="kernel-core-uname-r" flags="EQ" ver="6.19.6-200.fc43.x86_64"/>
+        <rpm:entry name="kernel-core-uname-r" flags="EQ" ver="6.19.6-200.fc44.x86_64"/>
       </rpm:provides>
       <rpm:requires>
         <rpm:entry name="systemd" flags="GE" ver="255"/>
@@ -818,7 +818,7 @@ mod tests {
             .filter_map(|value| value.as_str())
             .collect::<Vec<_>>();
 
-        assert!(provides.contains(&"kernel-core-uname-r = 6.19.6-200.fc43.x86_64"));
+        assert!(provides.contains(&"kernel-core-uname-r = 6.19.6-200.fc44.x86_64"));
         assert!(requires.contains(&"systemd >= 255"));
     }
 
@@ -838,15 +838,15 @@ mod tests {
   <package type="rpm">
     <name>kernel-core</name>
     <arch>x86_64</arch>
-    <version epoch="0" ver="6.19.6" rel="200.fc43"/>
+    <version epoch="0" ver="6.19.6" rel="200.fc44"/>
     <checksum type="sha256">deadbeef</checksum>
     <summary>kernel core</summary>
     <description>kernel core</description>
     <size package="123"/>
-    <location href="Packages/k/kernel-core-6.19.6-200.fc43.x86_64.rpm"/>
+    <location href="Packages/k/kernel-core-6.19.6-200.fc44.x86_64.rpm"/>
     <format>
       <rpm:provides>
-        <rpm:entry name="kernel-core-uname-r" flags="EQ" ver="6.19.6-200.fc43.x86_64"/>
+        <rpm:entry name="kernel-core-uname-r" flags="EQ" ver="6.19.6-200.fc44.x86_64"/>
       </rpm:provides>
     </format>
   </package>
@@ -869,11 +869,11 @@ mod tests {
         assert_eq!(uname_provide.kind, RepositoryCapabilityKind::Generic);
         assert_eq!(
             uname_provide.version.as_deref(),
-            Some("6.19.6-200.fc43.x86_64")
+            Some("6.19.6-200.fc44.x86_64")
         );
         assert_eq!(
             uname_provide.native_text.as_deref(),
-            Some("kernel-core-uname-r = 6.19.6-200.fc43.x86_64")
+            Some("kernel-core-uname-r = 6.19.6-200.fc44.x86_64")
         );
     }
 
@@ -885,12 +885,12 @@ mod tests {
   <package type="rpm">
     <name>coreutils-common</name>
     <arch>x86_64</arch>
-    <version epoch="0" ver="9.7" rel="1.fc43"/>
+    <version epoch="0" ver="9.7" rel="1.fc44"/>
     <checksum type="sha256">abcd1234</checksum>
     <summary>Common files for coreutils</summary>
     <description>Common files</description>
     <size package="456"/>
-    <location href="Packages/c/coreutils-common-9.7-1.fc43.x86_64.rpm"/>
+    <location href="Packages/c/coreutils-common-9.7-1.fc44.x86_64.rpm"/>
     <format>
       <rpm:provides>
         <rpm:entry name="coreutils-common" flags="EQ" ver="9.7"/>
@@ -923,12 +923,12 @@ mod tests {
   <package type="rpm">
     <name>test-pkg</name>
     <arch>x86_64</arch>
-    <version epoch="0" ver="1.0" rel="1.fc43"/>
+    <version epoch="0" ver="1.0" rel="1.fc44"/>
     <checksum type="sha256">beef1234</checksum>
     <summary>Test</summary>
     <description>Test</description>
     <size package="100"/>
-    <location href="Packages/t/test-pkg-1.0-1.fc43.x86_64.rpm"/>
+    <location href="Packages/t/test-pkg-1.0-1.fc44.x86_64.rpm"/>
     <format>
       <rpm:requires>
         <rpm:entry name="(foo if bar)"/>
@@ -969,12 +969,12 @@ mod tests {
   <package type="rpm">
     <name>glibc</name>
     <arch>x86_64</arch>
-    <version epoch="0" ver="2.40" rel="1.fc43"/>
+    <version epoch="0" ver="2.40" rel="1.fc44"/>
     <checksum type="sha256">cafe0001</checksum>
     <summary>glibc</summary>
     <description>glibc</description>
     <size package="200"/>
-    <location href="Packages/g/glibc-2.40-1.fc43.x86_64.rpm"/>
+    <location href="Packages/g/glibc-2.40-1.fc44.x86_64.rpm"/>
     <format>
       <rpm:provides>
         <rpm:entry name="libc.so.6()(64bit)"/>
@@ -1008,7 +1008,7 @@ mod tests {
             .iter()
             .find(|p| p.name == "test-package" && p.kind == RepositoryCapabilityKind::PackageName)
             .expect("implicit self-provide not found");
-        assert_eq!(self_provide.version.as_deref(), Some("1:2.3.4-5.fc43"));
+        assert_eq!(self_provide.version.as_deref(), Some("1:2.3.4-5.fc44"));
     }
 
     #[test]
@@ -1019,12 +1019,12 @@ mod tests {
   <package type="rpm">
     <name>test-pkg</name>
     <arch>x86_64</arch>
-    <version epoch="0" ver="1.0" rel="1.fc43"/>
+    <version epoch="0" ver="1.0" rel="1.fc44"/>
     <checksum type="sha256">beef1234</checksum>
     <summary>Test</summary>
     <description>Test</description>
     <size package="100"/>
-    <location href="Packages/t/test-pkg-1.0-1.fc43.x86_64.rpm"/>
+    <location href="Packages/t/test-pkg-1.0-1.fc44.x86_64.rpm"/>
     <format>
       <rpm:requires>
         <rpm:entry name="(foo or bar)"/>

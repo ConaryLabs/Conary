@@ -794,20 +794,20 @@ mod tests {
             &conn,
             "fedora",
             "nginx",
-            "1.24.0-1.fc43",
+            "1.24.0-1.fc44",
             &["chunk1".to_string()],
         );
         insert_converted_package(
             &conn,
             "fedora",
             "nginx",
-            "1.25.0-1.fc43",
+            "1.25.0-1.fc44",
             &["chunk2".to_string()],
         );
         insert_converted_package(&conn, "arch", "nginx", "1.25.0-1", &["chunk3".to_string()]);
 
         let tags = build_tags_list(temp_file.path(), "fedora", "nginx").unwrap();
-        assert_eq!(tags, vec!["1.24.0-1.fc43", "1.25.0-1.fc43"]);
+        assert_eq!(tags, vec!["1.24.0-1.fc44", "1.25.0-1.fc44"]);
 
         let tags = build_tags_list(temp_file.path(), "arch", "nginx").unwrap();
         assert_eq!(tags, vec!["1.25.0-1"]);
