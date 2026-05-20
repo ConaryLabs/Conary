@@ -182,8 +182,8 @@ pub enum Commands {
         no_scripts: bool,
 
         /// Scriptlet isolation: auto, always, never (default: always).
-        /// Provides PID/network namespace isolation; /etc and /var remain
-        /// writable on live root. Use target-root installs for full isolation
+        /// Protected modes isolate PID/network/mounts and give live-root
+        /// scriptlets private writable /etc and /var layers
         #[arg(long, value_enum, default_value_t = CliSandboxMode::Always)]
         sandbox: CliSandboxMode,
 
@@ -251,8 +251,8 @@ pub enum Commands {
         no_scripts: bool,
 
         /// Scriptlet isolation: auto, always, never (default: always).
-        /// Provides PID/network namespace isolation; /etc and /var remain
-        /// writable on live root. Use target-root installs for full isolation
+        /// Protected modes isolate PID/network/mounts and give live-root
+        /// scriptlets private writable /etc and /var layers
         #[arg(long, value_enum, default_value_t = CliSandboxMode::Always)]
         sandbox: CliSandboxMode,
 
@@ -286,8 +286,8 @@ pub enum Commands {
         dry_run: bool,
 
         /// Scriptlet isolation: auto, always, never (default: always).
-        /// Provides PID/network namespace isolation; /etc and /var remain
-        /// writable on live root. Use target-root installs for full isolation
+        /// Protected modes isolate PID/network/mounts and give live-root
+        /// scriptlets private writable /etc and /var layers
         #[arg(long, value_enum, default_value_t = CliSandboxMode::Always)]
         sandbox: CliSandboxMode,
 
@@ -367,8 +367,8 @@ pub enum Commands {
         no_scripts: bool,
 
         /// Scriptlet isolation: auto, always, never (default: always).
-        /// Provides PID/network namespace isolation; /etc and /var remain
-        /// writable on live root. Use target-root installs for full isolation
+        /// Protected modes isolate PID/network/mounts and give live-root
+        /// scriptlets private writable /etc and /var layers
         #[arg(long, value_enum, default_value_t = CliSandboxMode::Always)]
         sandbox: CliSandboxMode,
     },

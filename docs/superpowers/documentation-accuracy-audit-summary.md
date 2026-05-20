@@ -124,6 +124,9 @@ The repo moved materially after the last audit:
   tracks for active-generation authority handoff, real package corpus
   validation, security advisory support, live-root sandbox hardening, conaryd
   package execution, recovery/artifact trust, and daily UX polish.
+- Refreshed the Goal 4 sandbox docs after protected live-root scriptlet modes
+  gained private `/etc` and `/var` writable layers plus fail-closed setup
+  behavior.
 
 ## Archive Decisions
 

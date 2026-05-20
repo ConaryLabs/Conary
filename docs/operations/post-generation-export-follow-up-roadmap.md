@@ -185,13 +185,14 @@ Likely work:
 
 ### 6. Finish The Sandbox Story So Sandbox Means No Host Mutation
 
-Live-root sandboxing still has uneven host mutation boundaries.
+Protected live-root scriptlet sandboxing now gives `/etc` and `/var` private
+writable layers and fails before execution when those protection guarantees
+cannot be set up.
 
-Likely work:
+Likely remaining work:
 
-- add tmpfs or overlay-backed writable layers for live-root scriptlet
-  execution
-- prevent package hooks from mutating host `/etc` and `/var` directly
+- extend the same no-host-mutation contract to any package-hook paths that do
+  not already route through protected scriptlet execution
 - revisit bootstrap's currently relaxed isolation assumptions after
   self-hosting remains stable
 - converge bootstrap source verification on strict repo-owned `sha256`
@@ -231,7 +232,7 @@ order is:
 2. introduce signed portable generation bundles
 3. extend trust and provenance to bootable artifacts
 4. make self-host validation pristine by default
-5. finish live-root sandbox/no-host-mutation work
+5. extend live-root sandbox/no-host-mutation work to remaining hook surfaces
 6. simplify CCS/CAS compatibility projections
 7. add VMware and other provider-specific image projections
 

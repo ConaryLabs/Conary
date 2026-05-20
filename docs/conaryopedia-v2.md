@@ -4134,7 +4134,8 @@ The runtime capability policy (section 7.3) integrates with the container: if `c
 
 If namespace isolation isn't available (non-root without `unprivileged_userns_clone`):
 - For standard containers: falls back to resource limits only (with a warning)
-- For hermetic/pristine/network-isolated containers: **fails hard** rather than running unsafely
+- For protected scriptlet, hermetic, pristine, or network-isolated containers:
+  **fails hard** rather than running unsafely
 
 ## 7.7 Package DNA (Provenance)
 

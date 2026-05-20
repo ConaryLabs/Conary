@@ -9,17 +9,11 @@
 //!
 //! - **Target-root mode** (`execute_in_target`): Full isolation via chroot
 //!   into a separate filesystem. Scriptlets cannot see or modify the host.
-//! - **Live-root mode** (`execute_sandbox_live`): Partial isolation only.
-//!   Provides PID/UTS/IPC/network namespace separation and maps container root
-//!   to an unprivileged UID outside the user namespace, but /etc and /var are
-//!   still bind-mounted from the host because the container runtime does not
-//!   create overlay layers. This blocks writes to root-owned host files, but
-//!   world-writable paths can still be mutated.
-//!
-//! TODO: Implement tmpfs overlay support in the container runtime so that
-//! live-root sandbox mode can capture scriptlet writes to /etc and /var
-//! without mutating the host filesystem. This would make the "sandbox"
-//! name accurate for all modes.
+//! - **Live-root protected mode** (`execute_sandbox_live`): Namespace-isolated
+//!   execution with private writable `/etc` and `/var` layers backed by owned
+//!   temporary directories. Selected host identity files are overlaid read-only,
+//!   so package hooks cannot mutate the host's `/etc` or `/var` through the
+//!   protected sandbox path.
 //!
 //! Namespace isolation provided in both modes:
 //! - Isolating process tree (PID namespace)
@@ -48,7 +42,7 @@ use nix::unistd::{ForkResult, Gid, Pid, Uid};
 use std::ffi::CString;
 use std::fs::{self, File};
 use std::io::{Read, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -346,6 +340,48 @@ impl ContainerConfig {
         self.bind_mounts.push(mount);
     }
 
+    /// Add a writable sandbox layer backed by an owned temporary directory.
+    ///
+    /// The tempdir is kept alive by the config and is owned by the host UID/GID
+    /// that root maps to inside the sandbox user namespace, so scriptlets can
+    /// write there without touching the corresponding live host path.
+    pub fn add_private_writable_mount(
+        &mut self,
+        target: impl Into<PathBuf>,
+        mode: u32,
+    ) -> Result<PathBuf> {
+        let target = target.into();
+        let private_dir = Arc::new(TempDir::new()?);
+        let private_path = private_dir.path();
+        let host_uid = sandbox_host_uid(Uid::effective().as_raw());
+        let host_gid = sandbox_host_gid(Gid::effective().as_raw());
+        let metadata = fs::metadata(private_path)?;
+
+        if metadata.uid() != host_uid || metadata.gid() != host_gid {
+            nix::unistd::chown(
+                private_path,
+                Some(Uid::from_raw(host_uid)),
+                Some(Gid::from_raw(host_gid)),
+            )
+            .map_err(|error| {
+                Error::ScriptletError(format!(
+                    "failed to assign private sandbox layer {} ownership to {host_uid}:{host_gid}: {error}",
+                    private_path.display()
+                ))
+            })?;
+        }
+
+        let mut permissions = fs::metadata(private_path)?.permissions();
+        permissions.set_mode(mode);
+        fs::set_permissions(private_path, permissions)?;
+
+        let source = private_path.to_path_buf();
+        self.add_bind_mount(BindMount::writable(&source, target));
+        self.owned_temp_dirs.push(private_dir);
+
+        Ok(source)
+    }
+
     /// Check if this is a pristine (no host mounts) configuration.
     /// Mounting specific directories like /usr/bin for host tools is
     /// acceptable for bootstrap; mounting all of /usr is not.
@@ -471,7 +507,7 @@ impl Sandbox {
             // Do not fall back to unsafe execution for hermetic builds.
             if self.config.isolate_network || self.config.is_pristine() {
                 return Err(Error::ScriptletError(
-                    "Hermetic build requires namespace isolation, but it is not available on this system. \
+                    "Protected sandboxing or hermetic build requires namespace isolation, but it is not available on this system. \
                      (Root privileges or unprivileged user namespaces required)".to_string()
                 ));
             }
@@ -512,7 +548,7 @@ impl Sandbox {
         } else {
             if self.config.isolate_network || self.config.is_pristine() {
                 return Err(Error::ScriptletError(
-                    "Hermetic build requires namespace isolation, but it is not available on this system. \
+                    "Protected sandboxing or hermetic build requires namespace isolation, but it is not available on this system. \
                      (Root privileges or unprivileged user namespaces required)".to_string()
                 ));
             }
