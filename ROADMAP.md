@@ -1,6 +1,6 @@
 # Conary Roadmap
 
-Conary already has working installs, rollback, adoption/unadoption, immutable generations, Remi conversion/serving, federation, bootstrap, generation artifact export, self-hosting VM validation, and a large integration test surface. The limited public preview target is Fedora 44, Ubuntu 26.04 LTS, and Arch Linux, with security gates and local QEMU validation treated as release criteria while remote Forge validation is paused pending a KVM-capable runner. As of 2026-05-19, the local Group O QEMU generation-export gate is green again for both installed-runtime and bootstrap-run raw/qcow2 exports. This roadmap is intentionally forward-looking: it tracks how Conary becomes safe to try on real systems before it asks to become the primary package manager.
+Conary already has working installs, rollback, adoption/unadoption, immutable generations, Remi conversion/serving, federation, bootstrap, generation artifact export, self-hosting VM validation, and a large integration test surface. The limited public preview target is Fedora 44, Ubuntu 26.04 LTS, and Arch Linux, with security gates and local QEMU validation treated as release criteria while remote Forge validation is paused pending a KVM-capable runner. As of 2026-05-21, the local Group O QEMU generation-export gate is green for both installed-runtime and bootstrap-run raw/qcow2 exports, and the focused Group P QEMU run is green for x86_64 ISO generation-carrier export with output provenance, host copy-back, readonly-carrier boot, and writable `/etc` overlay proof. This roadmap is intentionally forward-looking: it tracks how Conary becomes safe to try on real systems before it asks to become the primary package manager.
 
 For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). For shipped changes, see [CHANGELOG.md](CHANGELOG.md).
 
@@ -33,7 +33,8 @@ For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 
 
 ### 4. System Validation
 
-- Keep the `minimal-boot-v3` Fedora 44 QEMU source fixture generation-builder-ready and keep Group O installed-runtime/bootstrap-run generation export green after the 2026-05-19 `TGE04` fix
+- Keep the `minimal-boot-v3` Fedora 44 QEMU source fixture generation-builder-ready and keep Group O installed-runtime/bootstrap-run generation export green after the 2026-05-21 refresh
+- Keep the Group P ISO generation export manifest in the local KVM gate now that its focused 2026-05-21 pass is recorded
 - Broader adoption, unadoption, and explicit takeover validation on Fedora 44, Ubuntu 26.04 LTS, Arch, and real-world mixed systems
 - Pristine-by-default QEMU validation for the self-hosting bootstrap VM
 - More end-to-end coverage for selected next-boot generation activation and rollback under failure
@@ -51,9 +52,8 @@ For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 
 
 - Federation tuning for larger peer topologies
 - Optional alternative chunk transports and mirror strategies
-- ISO generation export as proof-of-concept follow-up on the shared generation artifact contract
 - OCI export hardening and registry workflow polish on the shared generation artifact source
-- Signed portable generation bundles and boot-artifact provenance
+- Signed portable generation bundles and signed boot-artifact provenance
 - More source-oriented workflows around recipes, factories, and remote cooking
 
 ### Preview Caveats
@@ -61,9 +61,9 @@ For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 
 - The limited preview should be adoption-led and risk-free to try, not takeover-led. Native package managers remain the authority for adopted RPM, DEB, and Arch packages until the user explicitly chooses takeover.
 - `conary --allow-live-system-mutation system unadopt --all` is the one-command escape hatch only when no Conary generation is selected; active-generation handoff back to native authority remains fail-closed follow-up work.
 - conaryd has queue/SSE/read-route plumbing plus install/remove/update and enhance-job execution. Package mutation jobs still require the same explicit live-host mutation acknowledgement as the CLI.
-- Generation export has x86_64 raw/qcow2 support, and the 2026-05-19 Group O QEMU run passed installed-runtime and bootstrap-run boot proof. Keep generation export as supporting evidence for the preview rather than the headline ask. aarch64/riscv64 boot assets remain reserved follow-up work.
+- Generation export has x86_64 raw/qcow2/ISO support. The 2026-05-21 Group O QEMU run passed installed-runtime and bootstrap-run raw/qcow2 boot proof. The focused 2026-05-21 Group P QEMU run passed ISO export, provenance sidecar, copy-back, readonly-carrier boot, and writable `/etc` overlay proof. Keep generation export as supporting evidence for the preview rather than the headline ask. aarch64/riscv64 boot assets remain reserved follow-up work.
 - The former `tough`/Sigstore trust-root dependency path has been removed from `Cargo.lock`; the remaining `rsa` RustSec advisory is covered by the dated limited-preview waiver until a compatible fixed dependency path exists.
-- ISO generation export is not part of the limited public preview core promise. OCI export uses the shared generation artifact source, but registry workflow polish remains follow-up.
+- ISO generation export is implemented as a generation-carrier artifact, not installer media. OCI export uses the shared generation artifact source, but registry workflow polish remains follow-up.
 
 ---
 
@@ -73,8 +73,8 @@ For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 
 2. Lock down adopted-package update behavior so native package managers remain authoritative unless takeover is explicit
 3. Keep quick-start and preview docs current around adoption, unadoption, native PM coexistence, takeover boundaries, and security-update honesty
 4. Design active-generation handoff back to native package-manager authority
-5. Keep generation export and installed-runtime QEMU validation green in rotation
-6. Make self-host VM validation inputs pristine by default
+5. Keep generation export, installed-runtime QEMU validation, and Group P ISO evidence green in rotation
+6. Keep self-host VM validation inputs fresh by default and finish pristine rerun isolation
 7. Shell integration, release polish, and contributor-experience cleanup
 
 ---

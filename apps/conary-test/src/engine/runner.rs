@@ -753,8 +753,8 @@ mod tests {
         TestPackage,
     };
     use crate::config::manifest::{
-        Assertion, FileChecksum, KillAfterLog, QemuBoot, ResourceConstraints, SuiteDef, TestDef,
-        TestManifest, TestStep,
+        Assertion, FileChecksum, KillAfterLog, QemuBoot, QemuImageFormat, ResourceConstraints,
+        SuiteDef, TestDef, TestManifest, TestStep,
     };
     use crate::container::backend::ExecResult;
     use crate::container::mock::MockBackend;
@@ -1514,6 +1514,7 @@ mod tests {
                 QemuBoot {
                     image: "https://127.0.0.1:9/minimal-boot-${PKG}.qcow2".to_string(),
                     local_image_path: None,
+                    image_format: QemuImageFormat::Qcow2,
                     stage_conary: false,
                     scratch_disk_mb: None,
                     copy_to_guest: Vec::new(),
@@ -1580,6 +1581,7 @@ mod tests {
             &QemuBoot {
                 image: "${IMG}".to_string(),
                 local_image_path: None,
+                image_format: QemuImageFormat::Qcow2,
                 stage_conary: false,
                 scratch_disk_mb: None,
                 copy_to_guest: Vec::new(),

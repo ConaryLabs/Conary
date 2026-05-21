@@ -168,11 +168,40 @@ pub struct QemuGuestCopy {
     pub dest: String,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QemuImageFormat {
+    #[default]
+    Qcow2,
+    Raw,
+    Iso,
+}
+
+impl QemuImageFormat {
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Qcow2 => "qcow2",
+            Self::Raw => "raw",
+            Self::Iso => "iso",
+        }
+    }
+
+    pub fn qemu_drive_format(self) -> Option<&'static str> {
+        match self {
+            Self::Qcow2 => Some("qcow2"),
+            Self::Raw => Some("raw"),
+            Self::Iso => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct QemuBoot {
     pub image: String,
     #[serde(default)]
     pub local_image_path: Option<String>,
+    #[serde(default)]
+    pub image_format: QemuImageFormat,
     #[serde(default)]
     pub stage_conary: bool,
     #[serde(default)]
@@ -224,6 +253,64 @@ pub struct MockRoute {
     pub delay_ms: Option<u64>,
     #[serde(default)]
     pub truncate_at_bytes: Option<usize>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn qemu_boot_defaults_to_qcow2_image_format() {
+        let manifest: TestManifest = toml::from_str(
+            r#"
+            [suite]
+            name = "QEMU format"
+            phase = 3
+
+            [[test]]
+            id = "TQEMU01"
+            name = "default format"
+            description = "default qemu image format"
+            timeout = 1
+
+            [[test.step]]
+            [test.step.qemu_boot]
+            image = "minimal-boot-v3"
+            commands = ["true"]
+            "#,
+        )
+        .unwrap();
+
+        let qemu = manifest.test[0].step[0].qemu_boot.as_ref().unwrap();
+        assert_eq!(qemu.image_format, QemuImageFormat::Qcow2);
+    }
+
+    #[test]
+    fn qemu_boot_parses_iso_image_format() {
+        let manifest: TestManifest = toml::from_str(
+            r#"
+            [suite]
+            name = "QEMU format"
+            phase = 3
+
+            [[test]]
+            id = "TQEMU02"
+            name = "iso format"
+            description = "iso qemu image format"
+            timeout = 1
+
+            [[test.step]]
+            [test.step.qemu_boot]
+            image = "local-generation-iso"
+            image_format = "iso"
+            commands = ["true"]
+            "#,
+        )
+        .unwrap();
+
+        let qemu = manifest.test[0].step[0].qemu_boot.as_ref().unwrap();
+        assert_eq!(qemu.image_format, QemuImageFormat::Iso);
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

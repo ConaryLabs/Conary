@@ -54,8 +54,8 @@ A few important caveats:
 - Local `conaryd` package mutation routes now queue daemon jobs, but CLI flows
   remain the simplest preview path and non-dry-run daemon jobs require the same
   explicit live-host mutation acknowledgement.
-- ISO generation is proof-of-concept follow-up work, not the thing I am asking
-  people to evaluate here.
+- x86_64 ISO generation-carrier export exists, but it is not the thing I am
+  asking people to evaluate here.
 - Active-generation handoff back to native package-manager authority is still a
   planned follow-up, so this ask is about normal mutable hosts and reversible
   adoption before selecting a Conary generation.

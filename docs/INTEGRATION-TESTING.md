@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-19
-revision: 22
-summary: Record Phase 4 daily-driver corpus and security advisory evidence
+last_updated: 2026-05-21
+revision: 25
+summary: Record passing Goal 6 Group P ISO QEMU evidence
 ---
 
 # Integration Testing
@@ -35,6 +35,9 @@ cargo run -p conary-test -- run --suite phase2-group-a --distro fedora44 --phase
 # Run generation artifact export QEMU validation
 cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3
 
+# Run ISO generation export QEMU validation
+cargo run -p conary-test -- run --suite phase3-group-p-iso-export --distro fedora44 --phase 3
+
 # Run focused composefs atomic modernization QEMU validation
 cargo run -p conary-test -- run --suite phase3-composefs-modernization --distro fedora44 --phase 3
 
@@ -60,12 +63,22 @@ baseline covered `TGE01` and `TGE02`. The active Fedora 44 suite now covers:
 
 Keep this suite in the Phase 3 rotation for regressions in generation artifact
 export, QEMU fixture copying, scratch-disk handling, CAS integrity checks,
-guest SSH access, and exported-image boot. The source QEMU image for Groups N
-and O must already include the runtime generation toolchain (`cpio`, `dracut`,
-`depmod`, `systemd-repart`, `qemu-img`, FAT/ext4 mkfs tools, and composefs
-inspection tools as needed). The manifests intentionally do not install those
-helpers through Conary on a partial live root before the system is
-generation-owned.
+guest SSH access, and exported-image boot. Group P adds the focused ISO
+generation-carrier path:
+
+- `TISO01`: bootstrap-run generation artifact exports to ISO, emits an output
+  provenance sidecar, and boots under UEFI through `image_format = "iso"`
+
+The source QEMU image for Groups N and O must already include the runtime
+generation toolchain (`cpio`, `dracut`, `depmod`, `systemd-repart`, `qemu-img`,
+FAT/ext4 mkfs tools, and composefs inspection tools as needed). Group P uses the
+same source fixture and provisions ISO helper packages through Conary when
+`xorriso`/`mtools` are absent before it builds the bootstrap-run generation. The
+focused 2026-05-21 KVM run passed `TISO01`: it exported a bootstrap-run
+generation to ISO, copied the ISO and provenance sidecar back to
+`target/local-validation/group-p-iso-export/`, booted the ISO with
+`image_format = "iso"`, verified the readonly carrier kernel arguments, and
+proved the writable `/etc` overlay.
 
 The focused composefs atomic modernization suite covers the stricter runtime
 contract added on 2026-05-13:
@@ -76,8 +89,9 @@ contract added on 2026-05-13:
   generation exists
 
 `scripts/local-qemu-validation.sh` runs this focused suite before the broader
-Group N and Group O gates so fail-closed composefs behavior is recorded even
-when a source-image fixture preflight blocks the longer boot/export suites.
+Group N, Group O, and Group P gates so fail-closed composefs behavior is
+recorded even when a source-image fixture preflight blocks the longer
+boot/export suites.
 
 ## CLI Subcommands
 
@@ -119,26 +133,29 @@ Group O (`TGE01`, `TGE02`, `TGE03`, `TGE04`) with 0 failures and 0 skipped
 results, emitted the required boot/export markers, and finished with
 `[local-qemu-validation] ok`.
 
-Current composefs modernization evidence from 2026-05-13:
+Current composefs modernization evidence from 2026-05-21:
 
 - `cargo run -p conary-test -- list`: passed; includes
   `phase3-composefs-modernization`
-- `cargo run -p conary-test -- run --suite phase3-composefs-modernization --distro fedora44 --phase 3`:
+- `scripts/local-qemu-validation.sh`:
   passed `TCM01` and `TCM02`, 2 passed / 0 failed / 0 skipped
+- Passed cases:
+  - `TCM01` `partial_generation_artifacts_rejected`: 69299ms
+  - `TCM02` `no_active_generation_rollback_rejected`: 24486ms
 
-Current Group N QEMU evidence from 2026-05-16:
+Current Group N QEMU evidence from 2026-05-21:
 
 - `minimal-boot-v3`: active source fixture with the generation-builder
-  toolchain baked in, so Groups N and O no longer install helper tools through
-  Conary before the runtime is generation-owned
-- `cargo run -p conary-test -- run --suite phase3-group-n-qemu --distro fedora44 --phase 3`:
+  toolchain baked in for Groups N and O; Group P provisions ISO helper packages
+  through Conary when `xorriso`/`mtools` are absent
+- `scripts/local-qemu-validation.sh`:
   passed 5 / failed 0 / skipped 0
 - Passed cases:
-  - `T150` `kernel_file_deployment`: 1152689ms
-  - `T151` `bls_entry_created`: 1097221ms
-  - `T153` `kernel_generation_rollback`: 1175789ms
-  - `T154` `bootloader_config_deployed`: 1537851ms
-  - `T156` `boot_minimal_image`: 23532ms
+  - `T150` `kernel_file_deployment`: 1101193ms
+  - `T151` `bls_entry_created`: 1110350ms
+  - `T153` `kernel_generation_rollback`: 1183803ms
+  - `T154` `bootloader_config_deployed`: 1180481ms
+  - `T156` `boot_minimal_image`: 20686ms
 - `T154` validates `grub2` installation after full CAS-backed live-root
   adoption, including versioned critical runtime dependency satisfaction
   through `conary-live-root` identity provides for `glibc`/`libc6`
@@ -146,22 +163,40 @@ Current Group N QEMU evidence from 2026-05-16:
   no-generation live-root installs, matching the current package-manager
   contract instead of assuming `conary install` publishes `/conary/current`.
 
-Current Group O QEMU export evidence from 2026-05-19:
+Current Group O QEMU export evidence from 2026-05-21:
 
-- `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`:
+- `scripts/local-qemu-validation.sh`:
   passed 4 / failed 0 / skipped 0 / cancelled 0
 - Passed cases:
-  - `TGE01` `installed_generation_export_fails_closed_without_self_contained_root`: 149758ms
-  - `TGE03` `installed_generation_build_rejects_missing_runtime_cas_object`: 482836ms
-  - `TGE04` `installed_runtime_generation_export_boots`: 1558474ms
-  - `TGE02` `bootstrap_run_generation_export_boots`: 2923418ms
+  - `TGE01` `installed_generation_export_fails_closed_without_self_contained_root`: 24272ms
+  - `TGE03` `installed_generation_build_rejects_missing_runtime_cas_object`: 479388ms
+  - `TGE04` `installed_runtime_generation_export_boots`: 2182397ms
+  - `TGE02` `bootstrap_run_generation_export_boots`: 3168791ms
 - Root evidence: TGE04 now generates a Conary-aware initramfs for the exported
   installed-runtime image, boots the qcow2 under UEFI, reaches SSH, and emits the
   `installed-runtime-generation-export-booted` marker.
-- Results file: `apps/conary/tests/integration/remi/results/fedora44-phase3.json`
+- Local wrapper log: `target/local-validation/qemu-20260519203933/group-o-generation-export.log`
 
 Keep Group O in the release-candidate rotation because it is still the full
 boot/export proof for installed runtime and bootstrap generation artifacts.
+
+Current Group P ISO export evidence from 2026-05-21:
+
+- `cargo run -p conary-test -- list`: passed; includes
+  `ISO Generation Export QEMU` with one test
+- Focused Rust checks for QEMU ISO support and manifest parsing passed under
+  `cargo test -p conary-test qemu_image` and
+  `cargo test -p conary-test qemu_boot_`
+- `cargo run -p conary-test -- run --suite phase3-group-p-iso-export --distro fedora44 --phase 3`:
+  passed `TISO01`, 1 passed / 0 failed / 0 skipped / 0 cancelled
+- The run exported `/mnt/conary-scratch/export/bootstrap-run-generation.iso`,
+  emitted `/mnt/conary-scratch/export/bootstrap-run-generation.iso.conary-provenance.json`,
+  copied both files to `target/local-validation/group-p-iso-export/`, booted
+  the ISO under UEFI, reached SSH, and emitted the
+  `bootstrap-run-generation-iso-export-booted` marker.
+- The ISO boot verified `conary.generation=1`, `conary.carrier=readonly`,
+  `rootfstype=iso9660`, generation artifact files, and a writable `/etc`
+  overlay on the read-only carrier.
 
 Fast workspace verification from 2026-05-14:
 
@@ -413,7 +448,7 @@ boot/export markers in the logs. Keep that wrapper pointed only at published or
 generated fixtures that must be reproducible on a KVM-capable development host.
 
 Generated-image suites can attach a scratch disk, copy files into or out of a
-guest, and then boot a host-local qcow2 produced by an earlier step:
+guest, and then boot a host-local qcow2 or ISO produced by an earlier step:
 
 ```toml
 [[test.step]]
@@ -434,6 +469,10 @@ When `local_image_path` is set, `image` remains a required logical name but the
 engine uses the local path directly instead of downloading a cached Remi
 artifact. `scratch_disk_mb` adds a virtio scratch disk for large exports, and
 `copy_from_guest.dest` parent directories are created automatically.
+
+Set `image_format = "iso"` to boot a host-local ISO with QEMU `-cdrom`; omit it
+for the default qcow2 path. `image_format = "raw"` is also accepted for raw disk
+images.
 
 ## Configuration
 

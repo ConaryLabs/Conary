@@ -100,7 +100,7 @@ mount_runtime_api() {
 }
 
 load_root_modules() {
-    for module in virtio_pci virtio_blk sd_mod ahci ata_piix ext4 erofs overlay composefs; do
+    for module in virtio_pci virtio_blk sd_mod ahci ata_piix ext4 iso9660 erofs overlay composefs; do
         modprobe "$module" 2>/dev/null || true
     done
 }
@@ -111,7 +111,14 @@ mount_root() {
     rootfstype="$(cmdline_value rootfstype)"
     rootfstype="${rootfstype:-ext4}"
     rootflags="$(cmdline_value rootflags)"
-    rootflags="${rootflags:-rw}"
+    carrier="$(cmdline_value conary.carrier)"
+    if [ -z "$rootflags" ]; then
+        if [ "$carrier" = "readonly" ]; then
+            rootflags="ro"
+        else
+            rootflags="rw"
+        fi
+    fi
 
     mkdir -p "$SYSROOT"
     for _attempt in 1 2 3 4 5 6 7 8 9 10; do
@@ -126,9 +133,25 @@ mount_root() {
     die "failed to mount root $root_spec as $rootfstype"
 }
 
+mount_readonly_runtime_state() {
+    carrier="$(cmdline_value conary.carrier)"
+    [ "$carrier" = "readonly" ] || return 0
+
+    mkdir -p "$SYSROOT/run"
+    mount_once tmpfs tmpfs "$SYSROOT/run" mode=0755,nosuid,nodev || \
+        die "failed to mount readonly carrier runtime tmpfs"
+    mkdir -p "$SYSROOT/run/conary/etc-state"
+
+    mount_once tmpfs tmpfs "$SYSROOT/var" mode=0755,nosuid,nodev || \
+        die "failed to mount readonly carrier var tmpfs"
+    mkdir -p "$SYSROOT/var/cache" "$SYSROOT/var/lib/sshd" "$SYSROOT/var/log" "$SYSROOT/var/tmp"
+    chmod 1777 "$SYSROOT/var/tmp"
+}
+
 mount_runtime_api
 load_root_modules
 mount_root
+mount_readonly_runtime_state
 
 if [ -x /sbin/conary-generator ]; then
     /sbin/conary-generator || die "generation activation failed"

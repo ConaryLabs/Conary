@@ -31,6 +31,9 @@ pub async fn cmd_generation_export(
     println!("  Format: {}", result.format);
     println!("  Size:   {} bytes", result.size);
     println!("  Method: {}", generation_export_method(result.format));
+    if let Some(path) = result.provenance_path {
+        println!("  Provenance: {}", path.display());
+    }
 
     Ok(())
 }
@@ -52,7 +55,7 @@ fn generation_export_method(format: GenerationExportFormat) -> &'static str {
     match format {
         GenerationExportFormat::Raw => "systemd-repart raw image",
         GenerationExportFormat::Qcow2 => "systemd-repart raw image + qemu-img qcow2 conversion",
-        GenerationExportFormat::Iso => "reserved ISO export",
+        GenerationExportFormat::Iso => "UEFI bootable ISO generation carrier",
     }
 }
 
@@ -150,7 +153,7 @@ mod tests {
     #[test]
     fn format_parse_errors_list_allowed_values() {
         let err = parse_generation_export_format("vmdk").unwrap_err();
-        assert!(err.to_string().contains("raw, qcow2, or reserved iso"));
+        assert!(err.to_string().contains("raw, qcow2, or iso"));
     }
 
     #[test]
@@ -175,12 +178,12 @@ mod tests {
         );
         assert_eq!(
             generation_export_method(GenerationExportFormat::Iso),
-            "reserved ISO export"
+            "UEFI bootable ISO generation carrier"
         );
     }
 
     #[tokio::test]
-    async fn iso_returns_reserved_error() {
+    async fn iso_loads_generation_artifact_before_tooling() {
         let err = cmd_generation_export(
             None,
             Some("/does/not/exist"),
@@ -191,10 +194,8 @@ mod tests {
         .await
         .unwrap_err();
 
-        assert!(
-            err.to_string()
-                .contains("ISO export is reserved on the generation artifact contract")
-        );
+        assert!(!err.to_string().contains("reserved"));
+        assert!(err.to_string().contains("/does/not/exist") || err.to_string().contains("No such"));
     }
 
     #[tokio::test]

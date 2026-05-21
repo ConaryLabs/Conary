@@ -802,6 +802,33 @@ mod tests {
     }
 
     #[test]
+    fn test_boot_selection_recovery_fails_without_valid_artifacts_and_preserves_missing_current() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().to_path_buf();
+        let db_path = root.join("conary.db");
+        crate::db::init(&db_path).unwrap();
+        let conn = crate::db::open(&db_path).unwrap();
+
+        let generation_dir = root.join("generations/9");
+        std::fs::create_dir_all(&generation_dir).unwrap();
+        write_stub_erofs(&generation_dir.join(EROFS_IMAGE_NAME));
+
+        let config = TransactionConfig::new(&root);
+        let engine = TransactionEngine::new(config).unwrap();
+
+        let err = engine.recover_boot_selection(&conn).unwrap_err();
+
+        assert!(
+            err.to_string().contains("no valid generation artifact"),
+            "unexpected recovery error: {err}"
+        );
+        assert!(
+            !root.join("current").exists(),
+            "failed boot-selection recovery must not create /conary/current"
+        );
+    }
+
+    #[test]
     fn test_recover_rebuilds_when_image_missing() {
         // Arrange: generation directory exists but root.erofs is absent.
         let tmp = TempDir::new().unwrap();
