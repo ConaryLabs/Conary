@@ -24,8 +24,8 @@ run_suite() {
     echo "[local-qemu-validation] running ${suite} for ${DISTRO}"
     cargo run -p conary-test -- run --distro "${DISTRO}" --suite "${suite}" | tee "${log_file}"
 
-    if rg '"status"[[:space:]]*:[[:space:]]*"skipped"|"skipped"[[:space:]]*:[[:space:]]*[1-9][0-9]*' "${log_file}" >/dev/null; then
-        fail "${suite} reported a skipped QEMU test result; see ${log_file}"
+    if rg '"status"[[:space:]]*:[[:space:]]*"(failed|skipped|cancelled)"|"(failed|skipped|cancelled)"[[:space:]]*:[[:space:]]*[1-9][0-9]*' "${log_file}" >/dev/null; then
+        fail "${suite} reported a failed, skipped, or cancelled QEMU test result; see ${log_file}"
     fi
 
     rg "${marker_pattern}" "${log_file}" >/dev/null \
@@ -57,5 +57,10 @@ run_suite \
     phase3-group-o-generation-export \
     "${LOG_DIR}/group-o-generation-export.log" \
     'installed-runtime-generation-export-booted|bootstrap-run-generation-export-booted'
+
+run_suite \
+    phase3-group-p-iso-export \
+    "${LOG_DIR}/group-p-iso-export.log" \
+    'bootstrap-run-generation-iso-export-booted'
 
 echo "[local-qemu-validation] ok"

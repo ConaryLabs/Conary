@@ -211,7 +211,9 @@ acceptance contract.
 
 ## Follow-Up: Pristine Reruns
 
-The remaining validation hygiene work is to make reruns pristine by default:
-the wrapper should eventually fail closed if the staged workspace tarball is
-stale, and validation should boot through an overlay or snapshot mode so a
+The validator now fails before QEMU when the staged workspace tarball checksum
+sidecar is invalid, when the tarball does not match the sidecar, or when the
+sidecar digest does not match a freshly generated deterministic tarball from the
+current checkout. The remaining validation hygiene work is image-state
+isolation: validation should boot through an overlay or snapshot mode so a
 previous run cannot mutate the next run's starting point.

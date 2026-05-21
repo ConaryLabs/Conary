@@ -237,15 +237,38 @@ mount -t sysfs sysfs /sys || fail "failed to mount /sys"
 mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
 
 ROOT_SPEC="PARTLABEL=CONARY_ROOT"
+ROOT_FSTYPE="ext4"
+ROOT_FLAGS=""
 CONARY_GEN=""
+CONARY_CARRIER=""
 for opt in $(cat /proc/cmdline); do
     case "$opt" in
         root=*) ROOT_SPEC="${opt#root=}" ;;
+        rootfstype=*) ROOT_FSTYPE="${opt#rootfstype=}" ;;
+        rootflags=*) ROOT_FLAGS="${opt#rootflags=}" ;;
         conary.generation=*) CONARY_GEN="${opt#conary.generation=}" ;;
+        conary.carrier=*) CONARY_CARRIER="${opt#conary.carrier=}" ;;
     esac
 done
 
-mount -t ext4 -o rw "$ROOT_SPEC" /sysroot || fail "failed to mount root filesystem $ROOT_SPEC"
+if [ -z "$ROOT_FLAGS" ]; then
+    if [ "$CONARY_CARRIER" = "readonly" ]; then
+        ROOT_FLAGS="ro"
+    else
+        ROOT_FLAGS="rw"
+    fi
+fi
+
+mount -t "$ROOT_FSTYPE" -o "$ROOT_FLAGS" "$ROOT_SPEC" /sysroot || fail "failed to mount root filesystem $ROOT_SPEC"
+
+if [ "$CONARY_CARRIER" = "readonly" ]; then
+    mkdir -p /sysroot/run
+    mount -t tmpfs tmpfs /sysroot/run -o mode=0755,nosuid,nodev || fail "failed to mount runtime tmpfs"
+    mkdir -p /sysroot/var
+    mount -t tmpfs tmpfs /sysroot/var -o mode=0755,nosuid,nodev || fail "failed to mount var tmpfs"
+    mkdir -p /sysroot/var/cache /sysroot/var/lib/sshd /sysroot/var/log /sysroot/var/tmp
+    chmod 1777 /sysroot/var/tmp
+fi
 
 if [ -z "$CONARY_GEN" ] && [ -L /sysroot/conary/current ]; then
     CONARY_GEN="$(basename "$(readlink /sysroot/conary/current)")"
@@ -272,8 +295,12 @@ if [ -n "$CONARY_GEN" ]; then
     ensure_root_symlink sbin usr/sbin
 
     if [ -d /sysroot/conary/mnt/etc ]; then
-        ETC_UPPER="/sysroot/conary/etc-state/$CONARY_GEN"
-        ETC_WORK="/sysroot/conary/etc-state/$CONARY_GEN-work"
+        ETC_BASE="/sysroot/conary/etc-state"
+        if [ "$CONARY_CARRIER" = "readonly" ]; then
+            ETC_BASE="/sysroot/run/conary/etc-state"
+        fi
+        ETC_UPPER="$ETC_BASE/$CONARY_GEN"
+        ETC_WORK="$ETC_BASE/$CONARY_GEN-work"
         mkdir -p "$ETC_UPPER" "$ETC_WORK" /sysroot/etc
         mount -t overlay overlay /sysroot/etc \
             -o "lowerdir=/sysroot/conary/mnt/etc,upperdir=$ETC_UPPER,workdir=$ETC_WORK" ||
@@ -1024,6 +1051,23 @@ mod tests {
         assert!(entry.contains("root=PARTLABEL=CONARY_ROOT"));
         assert!(entry.contains("console=ttyS0"));
         assert!(root.join("boot/initramfs.img").is_file());
+    }
+
+    #[test]
+    fn bootstrap_initramfs_supports_readonly_iso_carrier() {
+        assert!(INITRAMFS_INIT.contains("rootfstype=*) ROOT_FSTYPE=\"${opt#rootfstype=}\""));
+        assert!(INITRAMFS_INIT.contains("rootflags=*) ROOT_FLAGS=\"${opt#rootflags=}\""));
+        assert!(
+            INITRAMFS_INIT.contains("conary.carrier=*) CONARY_CARRIER=\"${opt#conary.carrier=}\"")
+        );
+        assert!(
+            INITRAMFS_INIT
+                .contains("mount -t \"$ROOT_FSTYPE\" -o \"$ROOT_FLAGS\" \"$ROOT_SPEC\" /sysroot")
+        );
+        assert!(INITRAMFS_INIT.contains("mount -t tmpfs tmpfs /sysroot/run"));
+        assert!(INITRAMFS_INIT.contains("mount -t tmpfs tmpfs /sysroot/var"));
+        assert!(INITRAMFS_INIT.contains("mkdir -p /sysroot/var/cache /sysroot/var/lib/sshd"));
+        assert!(INITRAMFS_INIT.contains("ETC_BASE=\"/sysroot/run/conary/etc-state\""));
     }
 
     #[cfg(unix)]

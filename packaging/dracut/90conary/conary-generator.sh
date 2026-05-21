@@ -40,19 +40,25 @@ ensure_root_symlink() {
     }
 }
 
-read_kernel_generation() {
+read_kernel_value() {
+    local key="$1"
+
     if [ ! -r "$CMDLINE_FILE" ]; then
         return 0
     fi
 
     for opt in $(cat "$CMDLINE_FILE"); do
         case "$opt" in
-            conary.generation=*)
-                printf '%s\n' "${opt#conary.generation=}"
+            "$key"=*)
+                printf '%s\n' "${opt#*=}"
                 return 0
                 ;;
         esac
     done
+}
+
+read_kernel_generation() {
+    read_kernel_value conary.generation
 }
 
 read_current_generation() {
@@ -67,6 +73,38 @@ read_current_generation() {
     basename "$raw_target"
 }
 
+prepare_etc_state_base() {
+    if [ "$CONARY_CARRIER" = "readonly" ]; then
+        mkdir -p "${SYSROOT}/run"
+        if ! grep -q " ${SYSROOT}/run " /proc/mounts 2>/dev/null; then
+            mount -t tmpfs tmpfs "${SYSROOT}/run" -o mode=0755,nosuid,nodev || {
+                echo "conary: failed to mount runtime tmpfs for readonly carrier" >&2
+                return 1
+            }
+        fi
+        ETC_STATE_BASE="${SYSROOT}/run/conary/etc-state"
+    else
+        ETC_STATE_BASE="${SYSROOT}/conary/etc-state"
+    fi
+
+    mkdir -p "$ETC_STATE_BASE"
+}
+
+prepare_readonly_var_state() {
+    [ "$CONARY_CARRIER" = "readonly" ] || return 0
+
+    mkdir -p "${SYSROOT}/var"
+    if ! grep -q " ${SYSROOT}/var " /proc/mounts 2>/dev/null; then
+        mount -t tmpfs tmpfs "${SYSROOT}/var" -o mode=0755,nosuid,nodev || {
+            echo "conary: failed to mount var tmpfs for readonly carrier" >&2
+            return 1
+        }
+    fi
+    mkdir -p "${SYSROOT}/var/cache" "${SYSROOT}/var/lib/sshd" "${SYSROOT}/var/log" "${SYSROOT}/var/tmp"
+    chmod 1777 "${SYSROOT}/var/tmp"
+}
+
+CONARY_CARRIER="$(read_kernel_value conary.carrier)"
 CONARY_GEN="$(read_kernel_generation)"
 if [ -z "$CONARY_GEN" ]; then
     CONARY_GEN="$(read_current_generation)"
@@ -75,6 +113,8 @@ fi
 if [ -z "$CONARY_GEN" ]; then
     exit 0  # No generation system configured
 fi
+
+prepare_readonly_var_state || exit 1
 
 GEN_DIR="${SYSROOT}/conary/generations/${CONARY_GEN}"
 EROFS_IMG="${GEN_DIR}/root.erofs"
@@ -108,8 +148,9 @@ ensure_root_symlink sbin usr/sbin || exit 1
 
 # Overlayfs for /etc (writable upper on immutable composefs lower)
 if [ -d "${SYSROOT}/conary/mnt/etc" ]; then
-    ETC_UPPER="${SYSROOT}/conary/etc-state/${CONARY_GEN}"
-    ETC_WORK="${SYSROOT}/conary/etc-state/${CONARY_GEN}-work"
+    prepare_etc_state_base || exit 1
+    ETC_UPPER="${ETC_STATE_BASE}/${CONARY_GEN}"
+    ETC_WORK="${ETC_STATE_BASE}/${CONARY_GEN}-work"
     mkdir -p "$ETC_UPPER" "$ETC_WORK"
     mount -t overlay overlay "${SYSROOT}/etc" \
         -o "lowerdir=${SYSROOT}/conary/mnt/etc,upperdir=${ETC_UPPER},workdir=${ETC_WORK}"

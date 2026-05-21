@@ -2219,7 +2219,7 @@ CrossTools -> TempTools -> FinalSystem -> SystemConfig -> BootableImage -> Tier2
 | `temp-tools` | Temporary tools for the chroot handoff | Cross-built tools plus chroot-built basics |
 | `system` | Final LFS Chapter 8 system | Core userspace with per-package checkpointing |
 | `config` | System configuration | network, fstab, kernel, and systemd-boot setup |
-| `image` | Disk image or generation artifact | raw, qcow2, non-bootable preview ISO scaffolding, or EROFS artifact output |
+| `image` | Disk image or generation artifact | raw, qcow2, bootstrap preview ISO scaffolding, or EROFS artifact output |
 | `tier2` | BLFS + Conary self-hosting | PAM, OpenSSH, curl, Rust, Conary |
 
 The current self-hosting milestone is x86_64/QEMU-first. The checked-in
@@ -4643,8 +4643,8 @@ Phase 4: System Configuration (LFS Ch9)
 
 Phase 5: Bootable Image (LFS Ch10)
   systemd-repart for raw/qcow2 bootstrap sysroot images.
-  Formats: raw (dd-able), qcow2 (KVM/QEMU), non-bootable preview ISO
-  scaffolding, or EROFS generation artifact.
+  Formats: raw (dd-able), qcow2 (KVM/QEMU), bootstrap preview ISO scaffolding,
+  or EROFS generation artifact.
   Result: A deployable OS image or exportable generation artifact
 
 Phase 6: Tier-2 (BLFS + Conary self-hosting, optional)
@@ -4738,13 +4738,17 @@ creation:
 ```bash
 conary bootstrap image --format erofs
 conary system generation export --path ./output/generations/1 --format qcow2 --output gen1.qcow2
+conary system generation export --path ./output/generations/1 --format iso --output gen1.iso
 ```
 
 The export command validates the generation artifact contract, scoped CAS
-manifest, and boot assets before it stages a root filesystem and ESP for
-systemd-repart. Installed runtime generations are exportable when their root
-filesystem is fully CAS-backed; partial roots and missing CAS objects fail
-closed before `.conary-artifact.json` is published.
+manifest, and boot assets before it stages a root filesystem and boot assets
+for raw, qcow2, or x86_64 UEFI ISO generation-carrier output. Each output gets
+a `.conary-provenance.json` sidecar naming the source generation and output
+digest. The focused 2026-05-21 Group P QEMU run proved the ISO path boots as a
+read-only carrier with a writable `/etc` overlay. Installed runtime generations
+are exportable when their root filesystem is fully CAS-backed; partial roots
+and missing CAS objects fail closed before `.conary-artifact.json` is published.
 
 #### CLI
 

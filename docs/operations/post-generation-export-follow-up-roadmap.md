@@ -1,20 +1,21 @@
 ---
-last_updated: 2026-05-19
-revision: 10
-summary: Follow-up roadmap after the installed-runtime generation-export boot fix
+last_updated: 2026-05-20
+revision: 11
+summary: Follow-up roadmap after ISO export and output provenance landed
 ---
 
 # Post-Generation-Export Follow-Up Roadmap
 
 ## Purpose
 
-This roadmap preserves the generation/image work that remains after four landed
+This roadmap preserves the generation/image work that remains after five landed
 slices:
 
 1. generation artifact export unification
 2. self-contained installed-runtime generation export
 3. OCI export source loading on the generation artifact interface
 4. composefs-only boot activation cleanup
+5. x86_64 ISO generation-carrier export with output provenance sidecars
 
 The original parking-lot note remains
 [`docs/operations/bootstrap-follow-up-investigations.md`](bootstrap-follow-up-investigations.md).
@@ -27,7 +28,7 @@ Completed generation export unification:
   directory contract
 - remove the legacy imperative generation image path
 - stage explicit boot assets next to generation artifacts
-- reserve ISO on the same artifact contract
+- keep ISO on the same artifact contract as raw/qcow2
 - validate the generation export path with the remote/QEMU suite
 
 Completed self-contained installed-runtime export:
@@ -83,6 +84,17 @@ Current active validation:
   and `TGE02` with 4 passed / 0 failed / 0 skipped / 0 cancelled. `TGE04` now
   boots the installed-runtime qcow2 under UEFI, reaches SSH, and emits the
   `installed-runtime-generation-export-booted` marker.
+- the 2026-05-21 local wrapper refresh kept composefs modernization,
+  Group N, and Group O green, and the focused Group P run passed ISO export,
+  provenance, copy-back, readonly-carrier boot, and writable `/etc` overlay
+  proof
+- `cargo run -p conary-test -- run --suite phase3-group-p-iso-export --distro fedora44 --phase 3`
+- covered case: `TISO01`, which exports a bootstrap-run generation to ISO,
+  copies the ISO plus `.conary-provenance.json` sidecar to the host, and boots
+  the ISO under UEFI using the QEMU `image_format = "iso"` contract
+- the Group P manifest is present and listed by `cargo run -p conary-test -- list`;
+  the focused 2026-05-21 local KVM Group P run passed with 1 passed / 0 failed /
+  0 skipped / 0 cancelled
 
 Current composefs modernization validation:
 
@@ -100,7 +112,7 @@ Current composefs modernization validation:
   and versioned critical runtime dependency satisfaction through
   `conary-live-root` identity provides for `glibc`/`libc6`
 
-Everything below is deferred follow-up or maintenance work.
+Everything below is deferred follow-up, remaining evidence work, or maintenance.
 
 ## Follow-Up Slices
 
@@ -115,28 +127,30 @@ than the headline public-preview ask.
 
 Remaining work:
 
-- keep the `minimal-boot-v3` QEMU source image generation-builder-ready so
-  Groups N and O do not rely on Conary-installed helper tools on a partial
-  live root
+- keep the `minimal-boot-v3` QEMU source image generation-builder-ready for
+  Groups N and O, and keep Group P helper provisioning covered while the source
+  fixture remains minimal
 - keep `TGE01`, `TGE03`, and `TGE04` in the active Phase 3 rotation
 - preserve usr-merge and package symlink handling for runtime generations
 - keep missing-CAS and checksum/size mismatch failures before artifact
   publication
 - avoid reintroducing live-host scraping into runtime export
 
-### 2. Finish ISO Export On The Generation Artifact Contract
+### 2. Keep ISO Export On The Generation Artifact Contract
 
-The landed slice reserves `iso` on the same source contract as raw/qcow2. A
-focused follow-up should implement the ISO backend without changing the
-generation artifact loader.
+The x86_64 ISO backend now uses the same source contract as raw/qcow2. It loads
+`GenerationArtifact`, projects the runtime tree, builds a UEFI bootable
+generation carrier, and emits an output provenance sidecar. The ISO boot entry
+uses `root=LABEL=CONARY_ISO rootfstype=iso9660 ro conary.carrier=readonly`, and
+the initramfs places the writable `/etc` overlay upper/work under
+`/sysroot/run/conary/etc-state` for read-only carriers.
 
-Likely work:
+Remaining work:
 
-- decide whether the ISO is installer media, live media, or a bootable
-  generation carrier
-- build ISO staging from the same `GenerationArtifact` source object
-- make boot configuration generation image-type-specific, not source-specific
-- add QEMU boot validation for ISO output
+- keep the focused Group P ISO QEMU evidence in the release-candidate rotation
+- keep ISO framed as a bootable generation carrier, not installer media
+- keep non-x86_64 boot assets reserved until real boot assets and validation
+  land
 
 ### 3. Introduce Signed Portable Generation Bundles
 
@@ -155,12 +169,13 @@ Likely work:
 ### 4. Extend Trust And Provenance To Bootable Artifacts
 
 Generation metadata already supports detached signatures, and package
-provenance already has SLSA/in-toto structures. Bootable system artifacts need
-the same level of traceability.
+provenance already has SLSA/in-toto structures. Bootable system artifacts now
+emit output provenance sidecars for raw, qcow2, and ISO outputs, including the
+source artifact digest and output digest. They still need signed verification
+and operator-facing trust policy.
 
-Likely work:
+Remaining work:
 
-- emit digest manifests for raw, qcow2, ISO, OCI, and bundles
 - build on the source-level digest binding added by the generation export
   unification slice without treating that binding as a full image signing
   story
@@ -172,14 +187,15 @@ Likely work:
 
 ### 5. Make Self-Host Validation Inputs Pristine By Default
 
-The self-host VM tooling can still become stale or stateful if validation
-reuses a mutable qcow2 or an old staged workspace tarball.
+The validation wrapper now fails before QEMU when the staged workspace tarball
+checksum sidecar is invalid, the tarball does not match the sidecar, or the
+sidecar digest does not match a freshly generated deterministic tarball from the
+current checkout. The remaining hygiene risk is mutable guest image state across
+reruns.
 
-Likely work:
+Remaining work:
 
 - make build and validation share one input-staging command
-- fail validation when the staged workspace tarball no longer matches the
-  current checkout
 - boot validation through a temporary overlay or QEMU snapshot mode
 - make reruns pristine by default
 
@@ -225,13 +241,12 @@ Likely work:
 
 ## Suggested Order
 
-After self-contained installed-runtime export, the likely highest-leverage
-order is:
+After ISO export and output provenance, the likely highest-leverage order is:
 
-1. finish ISO export on the same generation artifact contract
-2. introduce signed portable generation bundles
-3. extend trust and provenance to bootable artifacts
-4. make self-host validation pristine by default
+1. introduce signed portable generation bundles
+2. extend sidecar provenance into signed boot-artifact verification
+3. keep Group P ISO QEMU evidence green in the local release-candidate rotation
+4. finish self-host snapshot/overlay rerun isolation
 5. extend live-root sandbox/no-host-mutation work to remaining hook surfaces
 6. simplify CCS/CAS compatibility projections
 7. add VMware and other provider-specific image projections

@@ -125,7 +125,7 @@ Refreshed Group O evidence from 2026-05-19:
   install/remove/update routes intentionally returned `501 Not Implemented`.
   Goal 5 has since replaced that with queued daemon package jobs while keeping
   the CLI's explicit live-host mutation acknowledgement boundary.
-- ISO generation remains a proof-of-concept follow-up, not a limited-preview
+- x86_64 ISO generation-carrier export exists, but it is not a limited-preview
   requirement.
 - Installed-runtime and bootstrap-run raw/qcow2 generation export are green in
   the 2026-05-19 local QEMU run, but generation export is still supporting

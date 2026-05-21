@@ -11,7 +11,7 @@ use tempfile::TempDir;
 use tokio::process::{Child, Command};
 use tokio::time::{Instant, sleep};
 
-use crate::config::manifest::{QemuBoot, QemuGuestCopy};
+use crate::config::manifest::{QemuBoot, QemuGuestCopy, QemuImageFormat};
 use crate::container::backend::ExecResult;
 
 const DEFAULT_ARTIFACT_BASE_URL: &str = "https://remi.conary.io/test-artifacts";
@@ -47,7 +47,7 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
         }
     };
     if config.local_image_path.is_none() && !image_path.exists() {
-        let url = image_download_url(&config.image);
+        let url = image_download_url(&config.image, config.image_format);
         if let Err(err) = download_image(&url, &image_path).await {
             return Ok(skipped_result(format!(
                 "qemu boot skipped: failed to download {url}: {err:#}"
@@ -88,7 +88,7 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
         "-accel",
         accel,
     ]);
-    qemu.args(qemu_image_args(&image_path));
+    qemu.args(qemu_image_args(&image_path, config.image_format));
     if let Some(disk) = &scratch_disk {
         qemu.args(qemu_scratch_disk_args(&disk.path));
     }
@@ -266,12 +266,15 @@ fn required_qemu_tools(config: &QemuBoot) -> Vec<&'static str> {
     tools
 }
 
-fn qemu_image_args(image_path: &Path) -> [String; 3] {
-    [
-        "-snapshot".to_string(),
-        "-drive".to_string(),
-        format!("file={},format=qcow2", image_path.display()),
-    ]
+fn qemu_image_args(image_path: &Path, image_format: QemuImageFormat) -> Vec<String> {
+    match image_format.qemu_drive_format() {
+        Some(drive_format) => vec![
+            "-snapshot".to_string(),
+            "-drive".to_string(),
+            format!("file={},format={drive_format}", image_path.display()),
+        ],
+        None => vec!["-cdrom".to_string(), image_path.display().to_string()],
+    }
 }
 
 fn qemu_scratch_disk_args(image_path: &Path) -> [String; 4] {
@@ -335,7 +338,7 @@ fn resolve_qemu_image_path(config: &QemuBoot) -> Result<PathBuf> {
         return Ok(path);
     }
 
-    cache_path_for_image(&config.image)
+    cache_path_for_image(&config.image, config.image_format)
 }
 
 fn skipped_result(message: String) -> ExecResult {
@@ -424,14 +427,14 @@ fn cache_dir() -> PathBuf {
     PathBuf::from("/tmp/conary-test-cache")
 }
 
-fn cache_path_for_image(image: &str) -> Result<PathBuf> {
+fn cache_path_for_image(image: &str, image_format: QemuImageFormat) -> Result<PathBuf> {
     let dir = cache_dir();
     fs::create_dir_all(&dir)
         .with_context(|| format!("failed to create QEMU cache dir {}", dir.display()))?;
-    Ok(dir.join(image_filename(image)))
+    Ok(dir.join(image_filename(image, image_format)))
 }
 
-fn image_filename(image: &str) -> String {
+fn image_filename(image: &str, image_format: QemuImageFormat) -> String {
     if image.contains("://") {
         let tail = image.rsplit('/').next().unwrap_or("image.qcow2");
         return tail.to_string();
@@ -441,18 +444,23 @@ fn image_filename(image: &str) -> String {
         .file_name()
         .and_then(|f| f.to_str())
         .unwrap_or("image.qcow2");
-    if basename.ends_with(".qcow2") {
+    let extension = image_format.extension();
+    if basename.ends_with(&format!(".{extension}")) {
         basename.to_string()
     } else {
-        format!("{basename}.qcow2")
+        format!("{basename}.{extension}")
     }
 }
 
-fn image_download_url(image: &str) -> String {
+fn image_download_url(image: &str, image_format: QemuImageFormat) -> String {
     if image.contains("://") {
         image.to_string()
     } else {
-        format!("{}/{}", DEFAULT_ARTIFACT_BASE_URL, image_filename(image))
+        format!(
+            "{}/{}",
+            DEFAULT_ARTIFACT_BASE_URL,
+            image_filename(image, image_format)
+        )
     }
 }
 
@@ -851,21 +859,36 @@ mod tests {
 
     #[test]
     fn test_image_filename_appends_qcow2() {
-        assert_eq!(image_filename("minimal-boot-v1"), "minimal-boot-v1.qcow2");
         assert_eq!(
-            image_filename("minimal-boot-v1.qcow2"),
+            image_filename("minimal-boot-v1", QemuImageFormat::Qcow2),
             "minimal-boot-v1.qcow2"
+        );
+        assert_eq!(
+            image_filename("minimal-boot-v1.qcow2", QemuImageFormat::Qcow2),
+            "minimal-boot-v1.qcow2"
+        );
+    }
+
+    #[test]
+    fn test_image_filename_appends_iso_for_iso_format() {
+        assert_eq!(
+            image_filename("bootstrap-generation", QemuImageFormat::Iso),
+            "bootstrap-generation.iso"
+        );
+        assert_eq!(
+            image_filename("bootstrap-generation.iso", QemuImageFormat::Iso),
+            "bootstrap-generation.iso"
         );
     }
 
     #[test]
     fn test_image_download_url_uses_default_base() {
         assert_eq!(
-            image_download_url("minimal-boot-v1"),
+            image_download_url("minimal-boot-v1", QemuImageFormat::Qcow2),
             "https://remi.conary.io/test-artifacts/minimal-boot-v1.qcow2"
         );
         assert_eq!(
-            image_download_url("https://example.com/custom.qcow2"),
+            image_download_url("https://example.com/custom.qcow2", QemuImageFormat::Qcow2),
             "https://example.com/custom.qcow2"
         );
     }
@@ -873,7 +896,10 @@ mod tests {
     #[test]
     fn test_image_filename_uses_url_basename() {
         assert_eq!(
-            image_filename("https://example.com/test-artifacts/minimal-boot-v1.qcow2"),
+            image_filename(
+                "https://example.com/test-artifacts/minimal-boot-v1.qcow2",
+                QemuImageFormat::Qcow2
+            ),
             "minimal-boot-v1.qcow2"
         );
     }
@@ -881,9 +907,18 @@ mod tests {
     #[test]
     fn test_image_filename_strips_path_traversal() {
         // Path traversal attempts should be stripped to just the filename.
-        assert_eq!(image_filename("../../tmp/owned"), "owned.qcow2");
-        assert_eq!(image_filename("../../../etc/passwd"), "passwd.qcow2");
-        assert_eq!(image_filename("subdir/image.qcow2"), "image.qcow2");
+        assert_eq!(
+            image_filename("../../tmp/owned", QemuImageFormat::Qcow2),
+            "owned.qcow2"
+        );
+        assert_eq!(
+            image_filename("../../../etc/passwd", QemuImageFormat::Qcow2),
+            "passwd.qcow2"
+        );
+        assert_eq!(
+            image_filename("subdir/image.qcow2", QemuImageFormat::Qcow2),
+            "image.qcow2"
+        );
     }
 
     #[test]
@@ -899,6 +934,7 @@ mod tests {
         let config = QemuBoot {
             image: "local-image".to_string(),
             local_image_path: Some(missing.display().to_string()),
+            image_format: QemuImageFormat::Qcow2,
             stage_conary: false,
             scratch_disk_mb: None,
             copy_to_guest: Vec::new(),
@@ -947,11 +983,24 @@ mod tests {
 
     #[test]
     fn test_qemu_image_args_use_snapshot_overlay() {
-        let args = qemu_image_args(Path::new("/tmp/minimal-boot-v2.qcow2"));
+        let args = qemu_image_args(
+            Path::new("/tmp/minimal-boot-v2.qcow2"),
+            QemuImageFormat::Qcow2,
+        );
 
         assert_eq!(args[0], "-snapshot");
         assert_eq!(args[1], "-drive");
         assert_eq!(args[2], "file=/tmp/minimal-boot-v2.qcow2,format=qcow2");
+    }
+
+    #[test]
+    fn test_qemu_image_args_boot_iso_with_cdrom() {
+        let args = qemu_image_args(
+            Path::new("/tmp/bootstrap-generation.iso"),
+            QemuImageFormat::Iso,
+        );
+
+        assert_eq!(args, vec!["-cdrom", "/tmp/bootstrap-generation.iso"]);
     }
 
     #[test]
@@ -1000,6 +1049,7 @@ mod tests {
         let config = QemuBoot {
             image: "minimal-boot-v2".to_string(),
             local_image_path: None,
+            image_format: QemuImageFormat::Qcow2,
             stage_conary: true,
             scratch_disk_mb: None,
             copy_to_guest: Vec::new(),
@@ -1019,6 +1069,7 @@ mod tests {
         let config = QemuBoot {
             image: "minimal-boot-v2".to_string(),
             local_image_path: None,
+            image_format: QemuImageFormat::Qcow2,
             stage_conary: false,
             scratch_disk_mb: None,
             copy_to_guest: vec![QemuGuestCopy {

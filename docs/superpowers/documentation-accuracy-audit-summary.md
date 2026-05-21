@@ -109,7 +109,7 @@ The repo moved materially after the last audit:
   Phase 1 `T21a`-`T21c` non-destructive unadoption proof, focused live-root
   update/security-refusal proof, Phase 3 Group O generation-export QEMU suite,
   temporary local QEMU release gate, refreshed Group N proof, the current
-  2026-05-19 Group O installed-runtime/bootstrap-run boot proof, and the Phase 4
+  2026-05-21 Group O installed-runtime/bootstrap-run boot proof, and the Phase 4
   native package-manager parity manifest with its 18-test three-distro corpus
   evidence.
 - Added the 2026-05-16 limited-preview release checkpoint and refreshed
@@ -133,6 +133,11 @@ The repo moved materially after the last audit:
 - Refreshed the Goal 4 sandbox docs after protected live-root scriptlet modes
   gained private `/etc` and `/var` writable layers plus fail-closed setup
   behavior.
+- Added the Goal 6 recovery/artifact trust implementation plan and refreshed
+  README, ROADMAP, integration, bootstrap, and post-generation-export docs for
+  x86_64 ISO generation-carrier export, raw/qcow2/ISO provenance sidecars, the
+  Group P QEMU manifest, passing Group P ISO evidence, and self-host workspace
+  freshness checks.
 
 ## Archive Decisions
 
@@ -162,6 +167,11 @@ The repo moved materially after the last audit:
 - `cargo run -p conary-test -- run --suite phase1-advanced --distro arch --phase 1`
 - `cargo run -p conary-test -- run --suite phase3-group-n-qemu --distro fedora44 --phase 3`
 - `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`
+- `cargo run -p conary-test -- run --suite phase3-group-p-iso-export --distro fedora44 --phase 3`
+- `cargo test -p conary-core generation::export`
+- `cargo test -p conary-test qemu_image`
+- `cargo test -p conary-test qemu_boot_`
+- `bash scripts/bootstrap-vm/test-validate-selfhost-vm.sh`
 - `cargo fmt --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `git diff --check`
@@ -192,14 +202,18 @@ public tester copy is tracked by
 - Group O `TGE04` failed in the 2026-05-16 checkpoint, but the 2026-05-19
   refresh fixed the installed-runtime initramfs path and restored the Group O
   gate to 4 passed / 0 failed / 0 skipped / 0 cancelled.
+- Group P ISO export is implemented, listed by `conary-test`, and green in the
+  focused 2026-05-21 local KVM run: `TISO01` passed ISO export, provenance
+  sidecar, host copy-back, readonly-carrier boot, and writable `/etc` overlay
+  proof with 1 passed / 0 failed / 0 skipped / 0 cancelled.
 - The previous `tough` advisory path has been removed from `Cargo.lock`; the
   remaining RustSec waiver is `RUSTSEC-2023-0071` for `rsa 0.9.10`.
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 83
+- Total tracked doc-like files audited: 84
 - `verified-no-change`: 18
-- `corrected`: 27
+- `corrected`: 28
 - `reframed-as-historical`: 1
 - `archived`: 23
 - `retained-historical`: 14

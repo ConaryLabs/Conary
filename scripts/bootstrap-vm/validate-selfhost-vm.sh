@@ -138,6 +138,60 @@ require_cmd() {
     done
 }
 
+create_current_workspace_tarball() {
+    local dest="$1"
+
+    (
+        cd "$PROJECT_DIR"
+        LC_ALL=C git ls-files -z --cached --modified --others --exclude-standard \
+            | sort -z \
+            | tar \
+                --null \
+                --no-recursion \
+                --files-from=- \
+                --transform='s,^,conary-workspace/,' \
+                --mtime='UTC 1970-01-01' \
+                --owner=0 \
+                --group=0 \
+                --numeric-owner \
+                -cf - \
+            | gzip -n >"$dest"
+    )
+}
+
+validate_workspace_inputs() {
+    local expected_hash
+    local staged_hash
+    local current_tarball
+    local current_hash
+
+    expected_hash="$(awk 'NF {print $1; exit}' "$WORKSPACE_SHA256")"
+    if [[ ! "$expected_hash" =~ ^[0-9a-f]{64}$ ]]; then
+        echo "workspace tarball checksum sidecar is invalid: $WORKSPACE_SHA256" >&2
+        exit 1
+    fi
+
+    staged_hash="$(sha256sum "$WORKSPACE_TARBALL" | awk '{print $1}')"
+    if [[ "$staged_hash" != "$expected_hash" ]]; then
+        echo "workspace tarball checksum mismatch: $WORKSPACE_TARBALL" >&2
+        exit 1
+    fi
+
+    current_tarball="$(mktemp "$LOGS_DIR/current-workspace.XXXXXX.tar.gz")"
+    if ! create_current_workspace_tarball "$current_tarball"; then
+        rm -f "$current_tarball"
+        echo "failed to create current checkout workspace tarball for freshness check" >&2
+        exit 1
+    fi
+    current_hash="$(sha256sum "$current_tarball" | awk '{print $1}')"
+    rm -f "$current_tarball"
+
+    if [[ "$current_hash" != "$expected_hash" ]]; then
+        echo "staged workspace tarball is stale versus current checkout: $WORKSPACE_TARBALL" >&2
+        exit 1
+    fi
+}
+
 cleanup() {
     if [[ -n "$QEMU_PID" ]]; then
         kill "$QEMU_PID" >/dev/null 2>&1 || true
@@ -265,7 +319,7 @@ run_guest_validation() {
 }
 
 main() {
-    require_cmd qemu-system-x86_64 ssh scp
+    require_cmd qemu-system-x86_64 ssh scp git gzip sha256sum sort tar awk
 
     mkdir -p "$LOGS_DIR"
     resolve_ovmf_firmware
@@ -277,6 +331,7 @@ main() {
             exit 1
         fi
     done
+    validate_workspace_inputs
 
     if [[ -n "$ROOT_JSON" && ! -f "$ROOT_JSON" ]]; then
         echo "root.json not found: $ROOT_JSON" >&2

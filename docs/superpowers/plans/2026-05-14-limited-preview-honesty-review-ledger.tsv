@@ -1,9 +1,9 @@
 path	slice	reviewer	status	finding_category	decision	verification
 README.md	1	agent	changed	documentation-drift	live-mutation, model apply, CCS install, system restore, and SBOM examples corrected	cargo run -p conary -- --help
 apps/conary/src/cli/generation.rs	1,3	agent	changed	misleading-public-surface	ISO reserved generation export help corrected	cargo run -p conary -- system generation export --help
-crates/conary-core/src/generation/export.rs	3	agent	changed	misleading-public-surface	reserved ISO parser error wording corrected	cargo test -p conary-core generation::export
-apps/conary/src/commands/generation/export.rs	1,3	agent	changed	misleading-public-surface	generation export parse-test expectation corrected for reserved ISO wording	cargo test -p conary generation::export
-apps/conary/src/cli/bootstrap.rs	1,3	agent	changed	misleading-public-surface	non-bootable preview ISO bootstrap help corrected	cargo run -p conary -- bootstrap image --help
+crates/conary-core/src/generation/export.rs	3	agent	changed	misleading-public-surface	former ISO-reservation parser error wording corrected	cargo test -p conary-core generation::export
+apps/conary/src/commands/generation/export.rs	1,3	agent	changed	misleading-public-surface	generation export parse-test expectation corrected for former ISO-reservation wording	cargo test -p conary generation::export
+apps/conary/src/cli/bootstrap.rs	1,3	agent	changed	misleading-public-surface	bootstrap preview ISO help corrected	cargo run -p conary -- bootstrap image --help
 docs/ARCHITECTURE.md	1,3,7	agent	changed	documentation-drift	live-mutation examples and ISO wording corrected; stale resolver map removed	rg -n "allow-live-system-mutation|iso|ISO|graph.rs|engine.rs" docs/ARCHITECTURE.md
 docs/modules/bootstrap.md	3,7	agent	changed	documentation-drift	bootstrap ISO wording corrected as non-bootable preview scaffolding	rg -n "iso|ISO|output format" docs/modules/bootstrap.md
 docs/conaryopedia-v2.md	1,3,7	agent	changed	documentation-drift	live-mutation examples, automation expectation, and ISO wording corrected	rg -n "conary (autoremove|remove|update|model apply)|allow-live-system-mutation|automation history|daemon mode|persisting configuration|ISO|USB|optical" docs/conaryopedia-v2.md

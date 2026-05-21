@@ -34,7 +34,7 @@ Host System (any Linux with gcc)
   ImageBuilder -- Phase 5: Bootable image / generation artifact (LFS Ch10)
      |             systemd-repart
      |             GPT: 512MB ESP (FAT32) + root (ext4) for disk images
-     |             Output: raw/qcow2 disk image, non-bootable preview ISO
+     |             Output: raw/qcow2 disk image, bootstrap ISO
      |             scaffolding, or EROFS generation artifact
      |
   Tier2Builder -- Phase 6: BLFS + Conary
@@ -60,7 +60,7 @@ Host System (any Linux with gcc)
 | `TempToolsBuilder` | temp_tools.rs | Phase 2: temporary tools (cross + chroot packages) |
 | `FinalSystemBuilder` | final_system.rs | Phase 3: complete system build (SYSTEM_BUILD_ORDER) |
 | `configure_system()` | system_config.rs | Phase 4: system configuration |
-| `ImageBuilder` | image.rs | Phase 5: disk image generation (raw, qcow2, non-bootable preview ISO, EROFS) |
+| `ImageBuilder` | image.rs | Phase 5: bootstrap sysroot image generation (raw, qcow2, preview ISO scaffolding, EROFS) |
 | `ImageFormat` | image.rs | Enum: Raw, Qcow2, Iso, Erofs |
 | `ImageSize` | image.rs / `image/size.rs` | Parsed size specification for disk images |
 | `ImageTools` | image.rs | Host tool availability check for imaging |
@@ -111,11 +111,11 @@ on a stage clears it and all subsequent stages.
 
 `ImageBuilder` still owns bootstrap sysroot image production: raw images are
 created with the shared systemd-repart backend, qcow2 uses qemu-img conversion,
-and ISO is non-bootable preview scaffolding rather than release media. EROFS is
-different: `conary bootstrap image --format erofs` produces a self-contained
-generation artifact contract (`root.erofs`, scoped CAS manifest, boot assets,
-and `.conary-artifact.json`) instead of directly wrapping that generation in a
-disk image.
+and the bootstrap ISO path remains preview scaffolding rather than release
+media. EROFS is different: `conary bootstrap image --format erofs` produces a
+self-contained generation artifact contract (`root.erofs`, scoped CAS manifest,
+boot assets, and `.conary-artifact.json`) instead of directly wrapping that
+generation in a disk image.
 
 Bootstrap may build mutable sysroot inputs while assembling the system, but the
 published runtime output is a complete generation artifact. Partial or
@@ -128,23 +128,31 @@ conary system generation export \
   --path ./output/generations/1 \
   --format qcow2 \
   --output gen1.qcow2
+
+conary system generation export \
+  --path ./output/generations/1 \
+  --format iso \
+  --output gen1.iso
 ```
 
 That command loads the generation artifact contract, projects the runtime
-rootfs and ESP staging trees, then uses the same shared systemd-repart raw
-backend. It does not scrape `/boot`, `/conary`, or other live-host paths while
-exporting.
+rootfs and boot staging trees, then produces raw, qcow2, or x86_64 UEFI ISO
+generation-carrier artifacts with a `.conary-provenance.json` sidecar. It does
+not scrape `/boot`, `/conary`, or other live-host paths while exporting.
 
-The generation artifact export implementation is merged and covered by the
-`Generation Artifact Export QEMU` suite described in
-[docs/INTEGRATION-TESTING.md](/docs/INTEGRATION-TESTING.md). The suite covers
-both bootstrap-run exports and full CAS-backed installed runtime generations.
-The 2026-05-19 Group O QEMU refresh passed both the bootstrap-run export proof
+The generation artifact export implementation is covered by the `Generation
+Artifact Export QEMU` and `ISO Generation Export QEMU` suites described in
+[docs/INTEGRATION-TESTING.md](/docs/INTEGRATION-TESTING.md). Group O covers
+bootstrap-run qcow2 export and full CAS-backed installed runtime qcow2 export.
+The 2026-05-21 Group O QEMU refresh passed both the bootstrap-run export proof
 and the installed-runtime positive boot proof: the installed-runtime qcow2 boots
 under UEFI, reaches SSH, and emits the
-`installed-runtime-generation-export-booted` marker. Metadata-only or partial
-installed generations still fail closed before artifact publication. Remaining
-image-projection follow-ups are tracked in
+`installed-runtime-generation-export-booted` marker. Group P covers the x86_64
+UEFI ISO generation-carrier path; the focused 2026-05-21 KVM run passed ISO
+export, provenance sidecar, host copy-back, readonly-carrier boot, and writable
+`/etc` overlay proof. Metadata-only or partial installed generations still fail
+closed before artifact publication. Remaining image-projection follow-ups are
+tracked in
 [docs/operations/post-generation-export-follow-up-roadmap.md](/docs/operations/post-generation-export-follow-up-roadmap.md).
 
 ## Architecture Context
@@ -191,6 +199,7 @@ conary bootstrap system
 conary bootstrap config
 conary bootstrap image --format erofs
 conary system generation export --path ./output/generations/1 --format qcow2 --output gen1.qcow2
+conary system generation export --path ./output/generations/1 --format iso --output gen1.iso
 conary bootstrap tier2
 conary bootstrap guest-profile --public-key /tmp/selfhost_ed25519.pub
 conary bootstrap run conaryos.toml --seed ./seed

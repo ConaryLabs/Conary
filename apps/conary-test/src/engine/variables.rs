@@ -165,6 +165,7 @@ pub fn expand_qemu_boot(config: &QemuBoot, vars: &HashMap<String, String>) -> Qe
             .local_image_path
             .as_ref()
             .map(|path| expand_variables(path, vars)),
+        image_format: config.image_format,
         stage_conary: config.stage_conary,
         scratch_disk_mb: config.scratch_disk_mb,
         copy_to_guest: config
@@ -411,6 +412,7 @@ mod tests {
             &QemuBoot {
                 image: "${IMG}".to_string(),
                 local_image_path: None,
+                image_format: crate::config::manifest::QemuImageFormat::Qcow2,
                 stage_conary: false,
                 scratch_disk_mb: None,
                 copy_to_guest: Vec::new(),
@@ -425,6 +427,10 @@ mod tests {
         );
 
         assert_eq!(expanded.image, "minimal-boot-v1");
+        assert_eq!(
+            expanded.image_format,
+            crate::config::manifest::QemuImageFormat::Qcow2
+        );
         assert_eq!(expanded.commands, vec!["echo minimal-boot-v1"]);
         assert_eq!(expanded.expect_output, vec!["minimal-boot-v1"]);
     }
@@ -446,6 +452,7 @@ mod tests {
             &QemuBoot {
                 image: "${IMG}".to_string(),
                 local_image_path: Some("${HOST_OUT}".to_string()),
+                image_format: crate::config::manifest::QemuImageFormat::Qcow2,
                 stage_conary: true,
                 scratch_disk_mb: Some(4096),
                 copy_to_guest: vec![QemuGuestCopy {

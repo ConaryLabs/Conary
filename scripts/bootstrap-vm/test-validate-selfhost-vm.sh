@@ -14,6 +14,8 @@ LOGS_DIR="$WORK_DIR/vm-selfhost/logs"
 INPUTS_DIR="$WORK_DIR/vm-selfhost/inputs"
 KEYS_DIR="$WORK_DIR/vm-selfhost/keys"
 OUTPUT_DIR="$WORK_DIR/vm-selfhost/output"
+WORKSPACE_TARBALL="$INPUTS_DIR/conary-workspace.tar.gz"
+WORKSPACE_SHA256="$INPUTS_DIR/conary-workspace.tar.gz.sha256"
 QEMU_LOG="$TMPDIR_ROOT/qemu.log"
 SSH_LOG="$TMPDIR_ROOT/ssh.log"
 SCP_LOG="$TMPDIR_ROOT/scp.log"
@@ -31,15 +33,35 @@ printf 'fake-ovmf-code\n' >"$OVMF_CODE"
 printf 'fake-ovmf-vars\n' >"$OVMF_VARS_TEMPLATE"
 printf 'fake qcow2\n' >"$OUTPUT_DIR/conaryos-selfhost-x86_64.qcow2"
 printf 'fake private key\n' >"$KEYS_DIR/selfhost_ed25519"
-printf 'fake tarball\n' >"$INPUTS_DIR/conary-workspace.tar.gz"
-printf '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n' \
-    >"$INPUTS_DIR/conary-workspace.tar.gz.sha256"
 cat >"$FAKE_SCRIPT_DIR/guest-validate.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 exit 0
 EOF
 chmod +x "$FAKE_SCRIPT_DIR/guest-validate.sh"
+
+git -C "$FAKE_PROJECT" init -q
+git -C "$FAKE_PROJECT" config user.email "conary-test@example.invalid"
+git -C "$FAKE_PROJECT" config user.name "Conary Test"
+git -C "$FAKE_PROJECT" add scripts/bootstrap-vm/validate-selfhost-vm.sh scripts/bootstrap-vm/guest-validate.sh
+git -C "$FAKE_PROJECT" commit -qm "seed fake project"
+(
+    cd "$FAKE_PROJECT"
+    LC_ALL=C git ls-files -z --cached --modified --others --exclude-standard \
+        | sort -z \
+        | tar \
+            --null \
+            --no-recursion \
+            --files-from=- \
+            --transform='s,^,conary-workspace/,' \
+            --mtime='UTC 1970-01-01' \
+            --owner=0 \
+            --group=0 \
+            --numeric-owner \
+            -cf - \
+        | gzip -n >"$WORKSPACE_TARBALL"
+)
+sha256sum "$WORKSPACE_TARBALL" | awk '{print $1}' >"$WORKSPACE_SHA256"
 
 cat >"$FAKEBIN/qemu-system-x86_64" <<'EOF'
 #!/usr/bin/env bash
@@ -100,5 +122,24 @@ cmp -s "$OVMF_VARS_TEMPLATE" "$LOGS_DIR/OVMF_VARS.fd"
 
 assert_contains "$SSH_LOG" "-p 2222 root@127.0.0.1 true"
 assert_contains "$SCP_LOG" "$INPUTS_DIR/conary-workspace.tar.gz"
+
+printf 'badbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadb\n' \
+    >"$WORKSPACE_SHA256"
+: >"$QEMU_LOG"
+STALE_STDERR="$TMPDIR_ROOT/stale.err"
+if bash "$TARGET_SCRIPT" \
+    --work-dir "$WORK_DIR" \
+    --repo-name fedora-remi \
+    --repo-url https://remi.conary.io \
+    --remi-endpoint https://remi.conary.io \
+    --remi-distro fedora 2>"$STALE_STDERR"; then
+    echo "expected stale workspace validation to fail before QEMU" >&2
+    exit 1
+fi
+assert_contains "$STALE_STDERR" "workspace tarball checksum mismatch"
+if [[ -s "$QEMU_LOG" ]]; then
+    echo "stale workspace validation launched QEMU unexpectedly" >&2
+    exit 1
+fi
 
 echo "validate-selfhost-vm UEFI launch test passed"

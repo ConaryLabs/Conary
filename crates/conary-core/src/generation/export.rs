@@ -1,6 +1,7 @@
 // conary-core/src/generation/export.rs
 
 use std::ffi::OsString;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str::FromStr;
@@ -18,6 +19,9 @@ const ESP_SIZE_MB: u64 = 512;
 const GPT_OVERHEAD_BYTES: u64 = 16 * 1024 * 1024;
 const IMAGE_SIZE_MARGIN_BYTES: u64 = 256 * 1024 * 1024;
 const EXT4_MINIMIZE_HEADROOM_DIVISOR: u64 = 2;
+const ISO_VOLUME_ID: &str = "CONARY_ISO";
+const ISO_EFI_IMAGE_REL: &str = "EFI/efiboot.img";
+const ISO_EFI_IMAGE_SIZE_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GenerationExportFormat {
@@ -35,7 +39,7 @@ impl FromStr for GenerationExportFormat {
             "qcow2" => Ok(Self::Qcow2),
             "iso" => Ok(Self::Iso),
             other => Err(crate::Error::InvalidPath(format!(
-                "invalid generation export format {other}; expected raw, qcow2, or reserved iso"
+                "invalid generation export format {other}; expected raw, qcow2, or iso"
             ))),
         }
     }
@@ -65,12 +69,17 @@ pub struct GenerationExportResult {
     pub format: GenerationExportFormat,
     pub size: u64,
     pub raw_path: Option<PathBuf>,
+    pub provenance_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
 pub struct GenerationExportTools {
     pub systemd_repart: PathBuf,
     pub qemu_img: PathBuf,
+    pub xorriso: PathBuf,
+    pub mkfs_vfat: PathBuf,
+    pub mmd: PathBuf,
+    pub mcopy: PathBuf,
 }
 
 impl Default for GenerationExportTools {
@@ -78,6 +87,10 @@ impl Default for GenerationExportTools {
         Self {
             systemd_repart: PathBuf::from("systemd-repart"),
             qemu_img: PathBuf::from("qemu-img"),
+            xorriso: PathBuf::from("xorriso"),
+            mkfs_vfat: PathBuf::from("mkfs.vfat"),
+            mmd: PathBuf::from("mmd"),
+            mcopy: PathBuf::from("mcopy"),
         }
     }
 }
@@ -92,20 +105,13 @@ pub fn export_generation_image_with_tools(
     options: GenerationExportOptions,
     tools: &GenerationExportTools,
 ) -> crate::Result<GenerationExportResult> {
-    if options.format == GenerationExportFormat::Iso {
-        return Err(crate::Error::NotImplemented(
-            "ISO export is reserved on the generation artifact contract but not implemented yet"
-                .to_string(),
-        ));
-    }
-
     let artifact = load_artifact_for_options(&options)?;
     ensure_export_architecture(&artifact)?;
 
     match options.format {
         GenerationExportFormat::Raw => export_raw(&artifact, &options, tools),
         GenerationExportFormat::Qcow2 => export_qcow2(&artifact, &options, tools),
-        GenerationExportFormat::Iso => unreachable!("ISO returned above"),
+        GenerationExportFormat::Iso => export_iso(&artifact, &options, tools),
     }
 }
 
@@ -160,12 +166,15 @@ fn export_raw(
         ESP_SIZE_MB,
     )
     .map_err(|e| crate::Error::IoError(e.to_string()))?;
+    let provenance_path =
+        write_output_provenance(artifact, GenerationExportFormat::Raw, &options.output, size)?;
 
     Ok(GenerationExportResult {
         path: options.output.clone(),
         format: GenerationExportFormat::Raw,
         size,
         raw_path: None,
+        provenance_path: Some(provenance_path),
     })
 }
 
@@ -186,6 +195,10 @@ fn export_qcow2(
         Ok(result) => result,
         Err(error) => {
             let _ = std::fs::remove_file(&raw_tmp);
+            let _ = std::fs::remove_file(output_provenance_path(
+                &raw_tmp,
+                GenerationExportFormat::Raw,
+            ));
             return Err(error);
         }
     };
@@ -197,6 +210,10 @@ fn export_qcow2(
         .output()
         .map_err(|e| crate::Error::IoError(format!("failed to run qemu-img: {e}")))?;
     let remove_result = std::fs::remove_file(&raw_tmp);
+    let remove_provenance_result = std::fs::remove_file(output_provenance_path(
+        &raw_tmp,
+        GenerationExportFormat::Raw,
+    ));
     if !output.status.success() {
         return Err(crate::Error::IoError(format!(
             "qemu-img convert failed: {}",
@@ -204,12 +221,93 @@ fn export_qcow2(
         )));
     }
     remove_result?;
+    remove_provenance_result?;
     let size = std::fs::metadata(&options.output)?.len();
+    let provenance_path = write_output_provenance(
+        artifact,
+        GenerationExportFormat::Qcow2,
+        &options.output,
+        size,
+    )?;
     Ok(GenerationExportResult {
         path: options.output.clone(),
         format: GenerationExportFormat::Qcow2,
         size,
         raw_path: Some(raw_result.path),
+        provenance_path: Some(provenance_path),
+    })
+}
+
+fn export_iso(
+    artifact: &GenerationArtifact,
+    options: &GenerationExportOptions,
+    tools: &GenerationExportTools,
+) -> crate::Result<GenerationExportResult> {
+    let parent = options.output.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    let staging = tempfile::Builder::new()
+        .prefix(".conary-generation-iso-")
+        .tempdir_in(parent)?;
+    let iso_root = staging.path().join("iso-root");
+    project_generation_rootfs(artifact, &iso_root)?;
+
+    let efi_staging = staging.path().join("efi-staging");
+    project_generation_iso_esp(artifact, &efi_staging)?;
+    let efi_image = iso_root.join(ISO_EFI_IMAGE_REL);
+    if let Some(parent) = efi_image.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    File::create(&efi_image)?.set_len(ISO_EFI_IMAGE_SIZE_BYTES)?;
+
+    run_mkfs_vfat(tools, &efi_image)?;
+    run_mmd(tools, &efi_image, "::/EFI")?;
+    run_mmd(tools, &efi_image, "::/EFI/BOOT")?;
+    run_mmd(tools, &efi_image, "::/loader")?;
+    run_mmd(tools, &efi_image, "::/loader/entries")?;
+    run_mcopy(
+        tools,
+        &efi_image,
+        &efi_staging.join("EFI/BOOT/BOOTX64.EFI"),
+        "::/EFI/BOOT/BOOTX64.EFI",
+    )?;
+    run_mcopy(
+        tools,
+        &efi_image,
+        &efi_staging.join("vmlinuz"),
+        "::/vmlinuz",
+    )?;
+    run_mcopy(
+        tools,
+        &efi_image,
+        &efi_staging.join("initramfs.img"),
+        "::/initramfs.img",
+    )?;
+    run_mcopy(
+        tools,
+        &efi_image,
+        &efi_staging.join("loader/loader.conf"),
+        "::/loader/loader.conf",
+    )?;
+    run_mcopy(
+        tools,
+        &efi_image,
+        &efi_staging.join(format!(
+            "loader/entries/conary-gen-{}.conf",
+            artifact.generation
+        )),
+        &format!("::/loader/entries/conary-gen-{}.conf", artifact.generation),
+    )?;
+    run_xorriso(tools, &iso_root, &options.output)?;
+
+    let size = std::fs::metadata(&options.output)?.len();
+    let provenance_path =
+        write_output_provenance(artifact, GenerationExportFormat::Iso, &options.output, size)?;
+    Ok(GenerationExportResult {
+        path: options.output.clone(),
+        format: GenerationExportFormat::Iso,
+        size,
+        raw_path: None,
+        provenance_path: Some(provenance_path),
     })
 }
 
@@ -217,6 +315,68 @@ fn raw_temp_path(output: &Path) -> PathBuf {
     let mut raw = OsString::from(output.as_os_str());
     raw.push(".raw.tmp");
     PathBuf::from(raw)
+}
+
+fn output_provenance_path(output: &Path, format: GenerationExportFormat) -> PathBuf {
+    output.with_extension(format!("{format}.conary-provenance.json"))
+}
+
+fn write_output_provenance(
+    artifact: &GenerationArtifact,
+    format: GenerationExportFormat,
+    output: &Path,
+    size: u64,
+) -> crate::Result<PathBuf> {
+    let provenance_path = output_provenance_path(output, format);
+    let artifact_manifest_sha256 = artifact
+        .metadata
+        .artifact_manifest_sha256
+        .as_deref()
+        .ok_or_else(|| {
+            crate::Error::InvalidPath(
+                "exported generation metadata is missing artifact_manifest_sha256".to_string(),
+            )
+        })?;
+    let output_sha256 = sha256_file(output)?;
+    let manifest = serde_json::json!({
+        "version": 1,
+        "created_at": chrono::Utc::now().to_rfc3339(),
+        "generation": artifact.generation,
+        "architecture": artifact.artifact_manifest.architecture,
+        "format": format.to_string(),
+        "source": {
+            "generation_metadata": GENERATION_METADATA_FILE,
+            "artifact_manifest": ARTIFACT_MANIFEST_FILE,
+            "artifact_manifest_sha256": artifact_manifest_sha256,
+            "cas_manifest": CAS_MANIFEST_FILE,
+            "cas_manifest_sha256": artifact.artifact_manifest.cas_manifest_sha256,
+            "boot_assets_manifest": artifact.artifact_manifest.boot_assets,
+            "boot_assets_sha256": artifact.artifact_manifest.boot_assets_sha256,
+        },
+        "output": {
+            "path": output.display().to_string(),
+            "size": size,
+            "sha256": output_sha256,
+        },
+    });
+    let bytes = serde_json::to_vec_pretty(&manifest)?;
+    std::fs::write(&provenance_path, bytes)?;
+    Ok(provenance_path)
+}
+
+fn sha256_file(path: &Path) -> crate::Result<String> {
+    let mut file = File::open(path).map_err(|e| {
+        crate::Error::IoError(format!(
+            "failed to open {} for SHA-256: {e}",
+            path.display()
+        ))
+    })?;
+    crate::hash::sha256_reader_hex(&mut file).map_err(|e| {
+        crate::Error::IoError(format!(
+            "failed to hash {} with SHA-256: {e}",
+            path.display()
+        ))
+    })
 }
 
 fn ensure_export_architecture(artifact: &GenerationArtifact) -> crate::Result<()> {
@@ -293,6 +453,7 @@ pub fn project_generation_rootfs(
 
     create_current_symlink(staging_dir, &artifact.generation.to_string())?;
     std::fs::create_dir_all(staging_dir.join("conary/etc-state"))?;
+    std::fs::create_dir_all(staging_dir.join("conary/mnt"))?;
 
     for dir in RUNTIME_ROOT_DIRS.iter().chain(EXCLUDED_DIRS.iter()) {
         std::fs::create_dir_all(staging_dir.join(dir))?;
@@ -305,6 +466,27 @@ pub fn project_generation_rootfs(
 pub fn project_generation_esp(
     artifact: &GenerationArtifact,
     staging_dir: &Path,
+) -> crate::Result<PathBuf> {
+    project_generation_esp_for_carrier(artifact, staging_dir, BootCarrier::WritableDisk)
+}
+
+fn project_generation_iso_esp(
+    artifact: &GenerationArtifact,
+    staging_dir: &Path,
+) -> crate::Result<PathBuf> {
+    project_generation_esp_for_carrier(artifact, staging_dir, BootCarrier::ReadonlyIso)
+}
+
+#[derive(Debug, Clone, Copy)]
+enum BootCarrier {
+    WritableDisk,
+    ReadonlyIso,
+}
+
+fn project_generation_esp_for_carrier(
+    artifact: &GenerationArtifact,
+    staging_dir: &Path,
+    carrier: BootCarrier,
 ) -> crate::Result<PathBuf> {
     if artifact.artifact_manifest.architecture != "x86_64" {
         return Err(crate::Error::NotImplemented(format!(
@@ -338,20 +520,106 @@ pub fn project_generation_esp(
             artifact.generation
         ),
     )?;
+    let boot_options = match carrier {
+        BootCarrier::WritableDisk => format!(
+            "root=PARTLABEL=CONARY_ROOT rootfstype={} rw conary.generation={} console=tty0 console=ttyS0",
+            crate::image::repart::BLS_ROOTFSTYPE,
+            artifact.generation
+        ),
+        BootCarrier::ReadonlyIso => format!(
+            "root=LABEL={ISO_VOLUME_ID} rootfstype=iso9660 ro conary.generation={} conary.carrier=readonly systemd.mask=boot.mount console=tty0 console=ttyS0",
+            artifact.generation
+        ),
+    };
     std::fs::write(
         entries_dir.join(format!("conary-gen-{}.conf", artifact.generation)),
         format!(
             "title      Conary Generation {0}\n\
              linux      /vmlinuz\n\
              initrd     /initramfs.img\n\
-             options    root=PARTLABEL=CONARY_ROOT rootfstype={1} rw conary.generation={0} console=tty0 console=ttyS0\n\
+             options    {1}\n\
              sort-key   conary-{0}\n",
-            artifact.generation,
-            crate::image::repart::BLS_ROOTFSTYPE
+            artifact.generation, boot_options
         ),
     )?;
 
     Ok(staging_dir.to_path_buf())
+}
+
+fn run_mkfs_vfat(tools: &GenerationExportTools, efi_image: &Path) -> crate::Result<()> {
+    let output = Command::new(&tools.mkfs_vfat)
+        .args(["-n", "CONARYEFI"])
+        .arg(efi_image)
+        .output()
+        .map_err(|e| crate::Error::IoError(format!("failed to run mkfs.vfat: {e}")))?;
+    ensure_command_success("mkfs.vfat", output)
+}
+
+fn run_mmd(tools: &GenerationExportTools, efi_image: &Path, dir: &str) -> crate::Result<()> {
+    let output = Command::new(&tools.mmd)
+        .arg("-i")
+        .arg(efi_image)
+        .arg(dir)
+        .output()
+        .map_err(|e| crate::Error::IoError(format!("failed to run mmd: {e}")))?;
+    ensure_command_success("mmd", output)
+}
+
+fn run_mcopy(
+    tools: &GenerationExportTools,
+    efi_image: &Path,
+    source: &Path,
+    dest: &str,
+) -> crate::Result<()> {
+    let output = Command::new(&tools.mcopy)
+        .arg("-i")
+        .arg(efi_image)
+        .arg(source)
+        .arg(dest)
+        .output()
+        .map_err(|e| crate::Error::IoError(format!("failed to run mcopy: {e}")))?;
+    ensure_command_success("mcopy", output)
+}
+
+fn run_xorriso(
+    tools: &GenerationExportTools,
+    iso_root: &Path,
+    output_iso: &Path,
+) -> crate::Result<()> {
+    let output = Command::new(&tools.xorriso)
+        .args([
+            "-as",
+            "mkisofs",
+            "-iso-level",
+            "3",
+            "-full-iso9660-filenames",
+            "-R",
+            "-J",
+            "-V",
+            ISO_VOLUME_ID,
+            "-o",
+        ])
+        .arg(output_iso)
+        .args([
+            "-e",
+            ISO_EFI_IMAGE_REL,
+            "-no-emul-boot",
+            "-isohybrid-gpt-basdat",
+        ])
+        .arg(iso_root)
+        .output()
+        .map_err(|e| crate::Error::IoError(format!("failed to run xorriso: {e}")))?;
+    ensure_command_success("xorriso", output)
+}
+
+fn ensure_command_success(tool: &str, output: std::process::Output) -> crate::Result<()> {
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(crate::Error::IoError(format!(
+        "{tool} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    )))
 }
 
 fn copy_file(source: &Path, dest: &Path) -> crate::Result<()> {
@@ -473,25 +741,65 @@ mod tests {
     fn fake_tools(dir: &Path) -> GenerationExportTools {
         let repart = dir.join("systemd-repart");
         let qemu_img = dir.join("qemu-img");
+        let xorriso = dir.join("xorriso");
+        let mkfs_vfat = dir.join("mkfs.vfat");
+        let mmd = dir.join("mmd");
+        let mcopy = dir.join("mcopy");
         let repart_log = dir.join("repart.log");
         let qemu_log = dir.join("qemu.log");
+        let xorriso_log = dir.join("xorriso.log");
+        let mkfs_vfat_log = dir.join("mkfs-vfat.log");
+        let mmd_log = dir.join("mmd.log");
+        let mcopy_log = dir.join("mcopy.log");
         write_script(
             &repart,
             &format!(
-                "#!/bin/sh\nlast=''\nfor arg in \"$@\"; do echo \"$arg\" >> '{}'; last=\"$arg\"; done\nprintf raw > \"$last\"\n",
+                "#!/bin/sh\nlast=''\nfor arg in \"$@\"; do printf '%s\\n' \"$arg\" >> '{}'; last=\"$arg\"; done\nprintf raw > \"$last\"\n",
                 repart_log.display()
             ),
         );
         write_script(
             &qemu_img,
             &format!(
-                "#!/bin/sh\nprev=''\nlast=''\nfor arg in \"$@\"; do echo \"$arg\" >> '{}'; prev=\"$last\"; last=\"$arg\"; done\nprintf qcow2 > \"$last\"\n",
+                "#!/bin/sh\nprev=''\nlast=''\nfor arg in \"$@\"; do printf '%s\\n' \"$arg\" >> '{}'; prev=\"$last\"; last=\"$arg\"; done\nprintf qcow2 > \"$last\"\n",
                 qemu_log.display()
+            ),
+        );
+        write_script(
+            &xorriso,
+            &format!(
+                "#!/bin/sh\nout=''\nprev=''\nfor arg in \"$@\"; do printf '%s\\n' \"$arg\" >> '{}'; if [ \"$prev\" = '-o' ]; then out=\"$arg\"; fi; prev=\"$arg\"; done\nprintf iso > \"$out\"\n",
+                xorriso_log.display()
+            ),
+        );
+        write_script(
+            &mkfs_vfat,
+            &format!(
+                "#!/bin/sh\nfor arg in \"$@\"; do printf '%s\\n' \"$arg\" >> '{}'; done\n",
+                mkfs_vfat_log.display()
+            ),
+        );
+        write_script(
+            &mmd,
+            &format!(
+                "#!/bin/sh\nfor arg in \"$@\"; do printf '%s\\n' \"$arg\" >> '{}'; done\n",
+                mmd_log.display()
+            ),
+        );
+        write_script(
+            &mcopy,
+            &format!(
+                "#!/bin/sh\nfor arg in \"$@\"; do printf '%s\\n' \"$arg\" >> '{}'; done\n",
+                mcopy_log.display()
             ),
         );
         GenerationExportTools {
             systemd_repart: repart,
             qemu_img,
+            xorriso,
+            mkfs_vfat,
+            mmd,
+            mcopy,
         }
     }
 
@@ -588,6 +896,7 @@ mod tests {
         assert!(gen_dir.join("cas-manifest.json").is_file());
         assert!(gen_dir.join("boot-assets/manifest.json").is_file());
         assert!(staging.join("conary/etc-state").is_dir());
+        assert!(staging.join("conary/mnt").is_dir());
         assert!(staging.join("usr").is_dir());
         assert!(staging.join("etc").is_dir());
         assert!(staging.join("boot").is_dir());
@@ -666,6 +975,30 @@ mod tests {
     }
 
     #[test]
+    fn iso_esp_projection_writes_readonly_carrier_boot_contract() {
+        let fixture = Fixture::new();
+        let artifact = fixture.artifact();
+        let staging = fixture._tmp.path().join("iso-esp");
+
+        project_generation_iso_esp(&artifact, &staging).unwrap();
+
+        assert!(staging.join("EFI/BOOT/BOOTX64.EFI").is_file());
+        assert!(staging.join("vmlinuz").is_file());
+        assert!(staging.join("initramfs.img").is_file());
+
+        let bls =
+            std::fs::read_to_string(staging.join("loader/entries/conary-gen-7.conf")).unwrap();
+        assert!(bls.contains("root=LABEL=CONARY_ISO"));
+        assert!(bls.contains("rootfstype=iso9660"));
+        assert!(bls.contains(" ro "));
+        assert!(bls.contains("conary.generation=7"));
+        assert!(bls.contains("conary.carrier=readonly"));
+        assert!(bls.contains("systemd.mask=boot.mount"));
+        assert!(bls.contains("console=tty0"));
+        assert!(bls.contains("console=ttyS0"));
+    }
+
+    #[test]
     fn esp_projection_rejects_unsupported_architectures() {
         let fixture = Fixture::new();
         let mut artifact = fixture.artifact();
@@ -681,7 +1014,7 @@ mod tests {
     #[test]
     fn export_format_parsing_reports_allowed_values() {
         let err = GenerationExportFormat::from_str("vmdk").unwrap_err();
-        assert!(err.to_string().contains("raw, qcow2, or reserved iso"));
+        assert!(err.to_string().contains("raw, qcow2, or iso"));
         assert_eq!(
             GenerationExportFormat::from_str("raw").unwrap(),
             GenerationExportFormat::Raw
@@ -696,21 +1029,44 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
-    fn iso_export_returns_reserved_error_without_loading_artifact() {
-        let err = export_generation_image(GenerationExportOptions {
-            generation: None,
-            generation_path: Some(PathBuf::from("/does/not/exist")),
-            format: GenerationExportFormat::Iso,
-            output: PathBuf::from("out.iso"),
-            size_bytes: None,
-        })
-        .unwrap_err();
+    fn iso_export_writes_bootable_generation_carrier() {
+        let fixture = Fixture::new();
+        let tools = fake_tools(fixture._tmp.path());
+        let output = fixture._tmp.path().join("gen.iso");
 
-        assert!(
-            err.to_string()
-                .contains("ISO export is reserved on the generation artifact contract")
+        let result = export_generation_image_with_tools(
+            GenerationExportOptions {
+                generation: None,
+                generation_path: Some(fixture.generation_dir.clone()),
+                format: GenerationExportFormat::Iso,
+                output: output.clone(),
+                size_bytes: None,
+            },
+            &tools,
+        )
+        .unwrap();
+
+        assert_eq!(result.path, output);
+        assert_eq!(result.format, GenerationExportFormat::Iso);
+        assert_eq!(result.size, 3);
+        assert!(output.is_file());
+
+        let manifest_path = output.with_extension("iso.conary-provenance.json");
+        assert_eq!(
+            result.provenance_path.as_deref(),
+            Some(manifest_path.as_path())
         );
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        assert_eq!(manifest["format"], "iso");
+        assert_eq!(manifest["output"]["sha256"], crate::hash::sha256(b"iso"));
+
+        let xorriso_log = std::fs::read_to_string(fixture._tmp.path().join("xorriso.log")).unwrap();
+        assert!(xorriso_log.contains("-V\nCONARY_ISO"));
+        assert!(xorriso_log.contains("-e\nEFI/efiboot.img"));
+        assert!(xorriso_log.contains(&output.display().to_string()));
     }
 
     #[test]
@@ -807,6 +1163,49 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn raw_export_writes_output_provenance_manifest() {
+        let fixture = Fixture::new();
+        let tools = fake_tools(fixture._tmp.path());
+        let output = fixture._tmp.path().join("gen.raw");
+
+        let result = export_generation_image_with_tools(
+            GenerationExportOptions {
+                generation: None,
+                generation_path: Some(fixture.generation_dir.clone()),
+                format: GenerationExportFormat::Raw,
+                output: output.clone(),
+                size_bytes: Some(1024 * 1024 * 1024),
+            },
+            &tools,
+        )
+        .unwrap();
+
+        let manifest_path = output.with_extension("raw.conary-provenance.json");
+        assert_eq!(
+            result.provenance_path.as_deref(),
+            Some(manifest_path.as_path())
+        );
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        assert_eq!(manifest["version"], 1);
+        assert_eq!(manifest["generation"], 7);
+        assert_eq!(manifest["architecture"], "x86_64");
+        assert_eq!(manifest["format"], "raw");
+        assert_eq!(manifest["output"]["path"], output.display().to_string());
+        assert_eq!(manifest["output"]["size"], 3);
+        assert_eq!(manifest["output"]["sha256"], crate::hash::sha256(b"raw"));
+        assert_eq!(
+            manifest["source"]["artifact_manifest_sha256"],
+            fixture
+                .artifact()
+                .metadata
+                .artifact_manifest_sha256
+                .unwrap()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn raw_export_passes_4k_aligned_size_to_repart() {
         let fixture = Fixture::new();
         let tools = fake_tools(fixture._tmp.path());
@@ -852,6 +1251,21 @@ mod tests {
         assert_eq!(result.format, GenerationExportFormat::Qcow2);
         assert!(output.is_file());
         assert!(!raw_tmp.exists());
+        assert!(!output_provenance_path(&raw_tmp, GenerationExportFormat::Raw).exists());
+        let manifest_path = output.with_extension("qcow2.conary-provenance.json");
+        assert_eq!(
+            result.provenance_path.as_deref(),
+            Some(manifest_path.as_path())
+        );
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        assert_eq!(manifest["version"], 1);
+        assert_eq!(manifest["generation"], 7);
+        assert_eq!(manifest["architecture"], "x86_64");
+        assert_eq!(manifest["format"], "qcow2");
+        assert_eq!(manifest["output"]["path"], output.display().to_string());
+        assert_eq!(manifest["output"]["size"], 5);
+        assert_eq!(manifest["output"]["sha256"], crate::hash::sha256(b"qcow2"));
         let qemu_log = std::fs::read_to_string(fixture._tmp.path().join("qemu.log")).unwrap();
         assert!(qemu_log.contains("convert"));
         assert!(qemu_log.contains("-O"));

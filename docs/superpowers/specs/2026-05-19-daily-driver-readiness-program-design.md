@@ -500,18 +500,22 @@ selected-generation activation, rollback, boot artifacts, and artifact trust.
 
 ### Current Gap
 
-x86_64 raw/qcow2 generation export is green, but ISO export, portable bundles,
-boot-artifact provenance, non-x86_64 boot assets, and pristine self-host
-validation remain follow-up work. Selected next-boot activation and rollback
-need broader end-to-end failure coverage.
+x86_64 raw/qcow2 generation export is green. The Goal 6 implementation adds
+x86_64 bootable ISO generation-carrier export, raw/qcow2/ISO output provenance,
+and pre-QEMU stale-input checks for self-host validation. The focused
+2026-05-21 Group P run passed ISO export, provenance sidecar, host copy-back,
+readonly-carrier boot, and writable `/etc` overlay proof. Portable bundles and
+non-x86_64 boot assets remain follow-up until their dedicated validation is
+recorded. Selected next-boot activation and rollback need broader end-to-end
+failure coverage.
 
 ### Scope
 
 - Expand selected-generation activation and rollback failure tests.
-- Keep Group N and Group O QEMU gates green.
-- Implement the next recovery artifact as bootable ISO export on the existing
-  generation artifact contract; do not choose among artifact types inside the
-  `/goal` run.
+- Keep Group N, Group O, and Group P QEMU gates green in the local release
+  validation rotation.
+- Keep bootable ISO export on the existing generation artifact contract; do not
+  choose among artifact types inside the `/goal` run.
 - Add or extend an ISO export integration suite that validates the generated
   artifact and boots it under QEMU.
 - Emit digest/provenance data for generated raw, qcow2, and ISO artifacts that
@@ -544,11 +548,11 @@ need broader end-to-end failure coverage.
 
 The goal is complete when named activation/rollback failure cases cover invalid
 artifacts before pointer updates, rollback without an active generation, and
-failed boot-selection recovery; Group N and Group O remain green; bootable ISO
-export lands on the generation artifact contract with QEMU validation; raw,
-qcow2, and ISO outputs include a digest/provenance manifest naming the source
-generation and output digest; and self-host validation refuses stale staged
-inputs before QEMU starts.
+failed boot-selection recovery; Group N, Group O, and Group P remain green;
+bootable ISO export stays on the generation artifact contract with QEMU
+validation; raw, qcow2, and ISO outputs include a digest/provenance manifest
+naming the source generation and output digest; and self-host validation
+refuses stale staged inputs before QEMU starts.
 
 ### Verification
 
@@ -565,7 +569,7 @@ cargo run -p conary-test -- run --suite phase3-group-p-iso-export --distro fedor
 ### Goal Template
 
 ```text
-/goal Harden Conary recovery, boot, and artifact trust for daily-driver use. Read docs/operations/post-generation-export-follow-up-roadmap.md, docs/modules/bootstrap.md, apps/conary/src/commands/generation/export.rs, apps/conary/src/commands/generation/switch.rs, crates/conary-core/src/generation/artifact.rs, crates/conary-core/src/generation/export.rs, the Phase 3 Group N/O manifests, and scripts/local-qemu-validation.sh first. Expand the named selected-generation activation/rollback failure cases, keep Group N and Group O green, implement bootable ISO export as the next recovery artifact path, emit digest/provenance manifests for raw/qcow2/ISO outputs, make self-host validation refuse stale staged inputs before QEMU, update docs/audit metadata, and stop when the ISO suite, QEMU evidence, stale-input checks, and the shared verification gate pass.
+/goal Harden Conary recovery, boot, and artifact trust for daily-driver use. Read docs/operations/post-generation-export-follow-up-roadmap.md, docs/modules/bootstrap.md, apps/conary/src/commands/generation/export.rs, apps/conary/src/commands/generation/switch.rs, crates/conary-core/src/generation/artifact.rs, crates/conary-core/src/generation/export.rs, the Phase 3 Group N/O/P manifests, and scripts/local-qemu-validation.sh first. Expand the named selected-generation activation/rollback failure cases, keep Group N, Group O, and Group P green in the local validation rotation, keep bootable ISO export on the generation artifact contract, emit digest/provenance manifests for raw/qcow2/ISO outputs, make self-host validation refuse stale staged inputs before QEMU, update docs/audit metadata, and stop when the ISO suite, QEMU evidence, stale-input checks, and the shared verification gate pass.
 ```
 
 ## Goal 7: Daily UX And Operator Polish
