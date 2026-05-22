@@ -112,7 +112,8 @@ pub async fn cmd_remove(
         let pkg_mgr = conary_core::packages::SystemPackageManager::detect();
         anyhow::bail!(
             "Refusing to remove adopted package '{}': native package manager authority is preserved. \
-             Use '{}' to uninstall it, or 'conary system unadopt {}' to remove Conary tracking only.",
+             Use '{}' to uninstall it, 'conary system unadopt {}' to remove Conary tracking only, \
+             or rerun with --purge-files only if deleting native-owned files is intentional.",
             package_name,
             pkg_mgr.remove_command(package_name),
             package_name

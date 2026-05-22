@@ -944,6 +944,9 @@ pub async fn cmd_update(
                 native_authority.len(),
                 render_adopted_skip_sample(&native_authority)
             );
+            println!(
+                "Run 'conary system adopt --refresh' after native package-manager changes before retrying Conary workflows."
+            );
             if !matches!(requested_dep_mode, Some(DepMode::Takeover)) {
                 println!(
                     "Use --dep-mode takeover to request Conary takeover for non-critical adopted packages."
@@ -1654,6 +1657,9 @@ pub async fn cmd_update_group(
             println!(
                 "No Conary-managed updates available for collection '{}'; adopted package updates remain under native package-manager authority",
                 name
+            );
+            println!(
+                "Run 'conary system adopt --refresh' after native package-manager changes before retrying Conary workflows."
             );
         } else if security_only {
             println!("No security updates available for collection '{}'", name);

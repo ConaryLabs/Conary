@@ -16,10 +16,13 @@ expansion, plus the Goal 3 trusted security advisory pipeline path.
 It now also records the Goal 5 conaryd package execution path: package
 install/remove/update routes queue daemon jobs instead of returning blanket
 `501 Not Implemented`, and non-dry-run package jobs retain the CLI's explicit
-live-host mutation acknowledgement boundary.
+live-host mutation acknowledgement boundary. The Goal 7 refresh adds the
+checked-in daily-driver UX matrix, root help examples, bash/zsh completion
+rendering checks, and focused CLI diagnostics proof for native PM, adoption
+refresh, explicit takeover, unadopt/purge, generation, and conaryd routes.
 
 Audited every tracked documentation-like file returned by
-`bash scripts/docs-audit-inventory.sh`: 83 tracked files spanning root docs,
+`bash scripts/docs-audit-inventory.sh`: 86 tracked files spanning root docs,
 assistant shims, GitHub templates, canonical docs under `docs/`,
 deploy/operator docs, `deploy/remi.toml.example`, app-local READMEs, active
 planning/design records, historical/archive docs, release security waivers, and
@@ -72,6 +75,10 @@ The repo moved materially after the last audit:
 - the Goal 3 security advisory pipeline, including trusted JSON repository
   advisory ingestion, Remi metadata advisory parsing, fail-closed unknown-source
   behavior, and advisory/CVE/fixed-version/source-trust output
+- the Goal 7 daily-driver UX matrix and CLI diagnostics proof, including
+  rendered root help examples, bash/zsh completion output, live-host mutation
+  refusal guidance, adopted-package native-PM/update-refresh guidance, explicit
+  takeover routes, unadopt/purge routes, and conaryd operator wording
 
 ## Major Corrections
 
@@ -138,6 +145,11 @@ The repo moved materially after the last audit:
   x86_64 ISO generation-carrier export, raw/qcow2/ISO provenance sidecars, the
   Group P QEMU manifest, passing Group P ISO evidence, and self-host workspace
   freshness checks.
+- Added the Goal 7 daily-driver UX matrix and implementation plan, refreshed
+  README, ROADMAP, assistant, integration, and program-design docs for CLI
+  diagnostics/completion checks, and aligned package-command output with
+  native package-manager, adoption refresh, explicit takeover, unadopt/purge,
+  generation, and conaryd guidance.
 
 ## Archive Decisions
 
@@ -171,6 +183,12 @@ The repo moved materially after the last audit:
 - `cargo test -p conary-core generation::export`
 - `cargo test -p conary-test qemu_image`
 - `cargo test -p conary-test qemu_boot_`
+- `cargo test -p conary --test cli_daily_ux`
+- `cargo test -p conary --test native_pm_daily_driver`
+- `cargo test -p conary live_host_safety`
+- `cargo test -p conary --test live_host_mutation_safety`
+- `cargo run -p conary -- system completions bash >/tmp/conary-completion.bash`
+- `cargo run -p conary -- system completions zsh >/tmp/conary-completion.zsh`
 - `bash scripts/bootstrap-vm/test-validate-selfhost-vm.sh`
 - `cargo fmt --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`

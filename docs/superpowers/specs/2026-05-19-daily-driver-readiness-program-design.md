@@ -585,6 +585,14 @@ The CLI surface is broad, but the roadmap still calls out shell integration,
 troubleshooting output, unsupported-case guidance, and fewer special-knowledge
 testing paths.
 
+### Implementation Note
+
+Goal 7 now adds `docs/operations/daily-driver-ux-matrix.md` as the checked-in
+operator wording contract, renders daily workflow examples in root help, verifies
+bash and zsh completion output through `apps/conary/tests/cli_daily_ux.rs`, and
+aligns adopted-package diagnostics with native package-manager, adoption
+refresh, explicit takeover, unadopt/purge, generation, and conaryd routes.
+
 ### Scope
 
 - Add a checked-in UX matrix that lists the install/remove/update/search/list/

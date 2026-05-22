@@ -135,6 +135,9 @@ pub struct CommonArgs {
 #[command(author = "Conary Project")]
 #[command(version)]
 #[command(about = "A next-generation package manager with atomic transactions", long_about = None)]
+#[command(
+    after_help = "Daily workflow examples:\n  conary install nginx --dry-run\n  conary --allow-live-system-mutation install nginx\n  conary update --dry-run\n  conary system adopt --refresh --dry-run\n  conary system completions bash > /tmp/conary-completion.bash\n  conary system generation export --path /conary/generations/1 --format qcow2 --output gen1.qcow2\n  conaryd handles durable package jobs with the same live-host acknowledgement boundary"
+)]
 pub struct Cli {
     /// Use seccomp warn mode for scriptlets instead of enforcing blocked syscalls
     #[arg(long, global = true)]

@@ -929,8 +929,8 @@ fn parse_component_and_validate(
                 ""
             };
             return Err(anyhow::anyhow!(
-                "Package '{}' is adopted from {}.{} Use 'conary install {} --dep-mode takeover' \
-                 for explicit package takeover, or 'conary system takeover' for system takeover.",
+                "Package '{}' is adopted from {}.{} Run 'conary system adopt --refresh' after native package-manager changes. Use 'conary install {} --dep-mode takeover' \
+                 for explicit package takeover, or 'conary system takeover' for generation-level takeover.",
                 package_name,
                 pkg_mgr.display_name(),
                 force_note,
