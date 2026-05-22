@@ -141,16 +141,27 @@ Close the largest replacement-readiness gap: returning from a selected Conary
 generation to native package-manager authority without corrupting Conary state,
 native package-manager state, or future generation builds.
 
-### Current Gap
+### Original Gap
 
 The current contract is safe but incomplete. `system unadopt --all` is the
 escape hatch only before a Conary generation is selected. Once a generation is
 selected, unadoption fails closed because deleting tracking rows can make
 future generated roots omit packages still known to the native package manager.
 
+### Implementation Status
+
+The 2026-05-22 Goal 1 branch adds `conary system native-handoff` for
+selected-generation hosts. The flow supports `--dry-run`, confirmed `--yes`
+apply, and `--recover --yes`; it clears the selected generation link through a
+durable operation record, removes only Conary's adopted-package tracking, and
+leaves native package files and native package-manager databases untouched. The
+dedicated `phase3-active-generation-handoff` suite proves dry-run, refusal,
+success, and interruption/recovery behavior on Fedora 44, Ubuntu 26.04 LTS, and
+Arch.
+
 ### Scope
 
-- Define the active-generation handoff state machine.
+- Define the selected-generation native handoff state machine.
 - Decide whether handoff means reselecting a mutable native root, generating a
   native-authority handoff generation, or a staged operation with explicit boot
   confirmation.
@@ -187,7 +198,7 @@ handoff flow back to native authority without deleting native package files or
 corrupting package-manager databases. A focused selected-generation handoff
 suite must prove dry-run, refusal, success, interruption/recovery, and native
 database preservation on Fedora 44, Ubuntu 26.04 LTS, and Arch; docs no longer
-list active-generation handoff as an open follow-up gap.
+list selected-generation native authority handoff as an open follow-up gap.
 
 ### Verification
 

@@ -56,8 +56,9 @@ pub mod verify;
 
 // Re-export all command handlers
 pub use adopt::{
-    UnadoptOptions, cmd_adopt, cmd_adopt_convert, cmd_adopt_refresh, cmd_adopt_status,
-    cmd_adopt_system, cmd_conflicts, cmd_sync_hook_install, cmd_unadopt,
+    NativeHandoffOptions, NativeHandoffOutcome, NativeHandoffSummary, UnadoptOptions, cmd_adopt,
+    cmd_adopt_convert, cmd_adopt_refresh, cmd_adopt_status, cmd_adopt_system, cmd_conflicts,
+    cmd_native_handoff, cmd_sync_hook_install, cmd_unadopt,
 };
 #[cfg(feature = "experimental")]
 pub use automation::{cmd_ai_explain, cmd_ai_find, cmd_ai_query, cmd_ai_translate};

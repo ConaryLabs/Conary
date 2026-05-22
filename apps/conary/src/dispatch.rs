@@ -617,6 +617,32 @@ async fn dispatch_system_command(
             .map(|_| ())
         }
 
+        cli::SystemCommands::NativeHandoff {
+            db,
+            dry_run,
+            yes,
+            recover,
+            keep_hooks,
+        } => {
+            require_live_mutation(
+                allow_live_system_mutation,
+                Cow::Borrowed("conary system native-handoff"),
+                LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
+                dry_run,
+            )?;
+            commands::cmd_native_handoff(
+                commands::NativeHandoffOptions {
+                    dry_run,
+                    yes,
+                    recover,
+                    keep_hooks,
+                },
+                &db.db_path,
+            )
+            .await
+            .map(|_| ())
+        }
+
         cli::SystemCommands::Gc {
             db,
             objects_dir,

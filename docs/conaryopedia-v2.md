@@ -681,7 +681,7 @@ conary --allow-live-system-mutation system unadopt curl
 conary --allow-live-system-mutation system unadopt --all
 ```
 
-Apply-mode unadoption fails closed when a Conary generation is currently selected, because deleting tracking rows while `/conary/current` points at a generation can make the next generated root omit packages that the native package manager still believes are installed. Active-generation handoff back to native package-manager authority is separate follow-up work.
+Apply-mode unadoption still fails closed when a Conary generation is currently selected, because deleting tracking rows while `/conary/current` points at a generation can make the next generated root omit packages that the native package manager still believes are installed. Use `conary system native-handoff --dry-run` to inspect the selected-generation handoff plan, then `conary --allow-live-system-mutation system native-handoff --yes` to clear `/conary/current` before removing adopted tracking rows. If the operation is interrupted after its record is written, `conary --allow-live-system-mutation system native-handoff --recover --yes` resumes it. The handoff preserves native package files and native package-manager databases; it does not import native transaction history or silently take over packages.
 
 #### Converting Adopted Packages to CCS
 

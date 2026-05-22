@@ -10,7 +10,7 @@ A cross-distribution Linux system manager with immutable generations, atomic tra
 
 Inspired by the [original Conary](https://en.wikipedia.org/wiki/Conary_(package_manager)) from rPath, which pioneered concepts like troves, changesets, flavors, and components that were ahead of their time. This project carries those ideas forward with a modern implementation.
 
-**Release status:** Conary is being prepared as an adoption-led limited public preview for Fedora 44, Ubuntu 26.04 LTS, and Arch Linux. The package-manager preview surface is the CLI install/remove/update path, native-package adoption/unadoption, Remi conversion, and local validation for those flows. Immutable generations and raw/qcow2 generation export remain core capabilities, and the refreshed 2026-05-21 Group O QEMU run passed installed-runtime and bootstrap-run generation export boot proof. The codebase now also has x86_64 UEFI ISO generation-carrier export with output provenance sidecars, and the focused 2026-05-21 Group P QEMU run passed ISO export, host copy-back, provenance, readonly-carrier boot, and writable `/etc` overlay proof. The public ask is still intentionally package-manager focused: in adoption mode, dnf, apt, and pacman remain authoritative for packages they already own; `conary --allow-live-system-mutation system unadopt --all` is the non-destructive escape hatch on hosts without a selected Conary generation. Conary-owned updates work without requiring a selected generation, adopted packages are skipped unless takeover is explicit, and `update --security` refuses before mutation when a requested Conary-owned source cannot prove advisory metadata support. Repositories marked `--security-advisories supported` can now drive security-only updates from trusted JSON advisory metadata with persisted advisory ID, CVE, severity, fixed-version, and source-trust data. Takeover is explicit, active-generation handoff back to native authority remains fail-closed follow-up work, and non-x86_64 generation boot assets remain reserved.
+**Release status:** Conary is being prepared as an adoption-led limited public preview for Fedora 44, Ubuntu 26.04 LTS, and Arch Linux. The package-manager preview surface is the CLI install/remove/update path, native-package adoption/unadoption, selected-generation native-authority handoff, Remi conversion, and local validation for those flows. Immutable generations and raw/qcow2 generation export remain core capabilities, and the refreshed 2026-05-21 Group O QEMU run passed installed-runtime and bootstrap-run generation export boot proof. The codebase now also has x86_64 UEFI ISO generation-carrier export with output provenance sidecars, and the focused 2026-05-21 Group P QEMU run passed ISO export, host copy-back, provenance, readonly-carrier boot, and writable `/etc` overlay proof. The public ask is still intentionally package-manager focused: in adoption mode, dnf, apt, and pacman remain authoritative for packages they already own; `conary --allow-live-system-mutation system unadopt --all` is the non-destructive escape hatch on hosts without a selected Conary generation, and `conary --allow-live-system-mutation system native-handoff --yes` is the staged handoff path after a Conary generation has been selected. Conary-owned updates work without requiring a selected generation, adopted packages are skipped unless takeover is explicit, and `update --security` refuses before mutation when a requested Conary-owned source cannot prove advisory metadata support. Repositories marked `--security-advisories supported` can now drive security-only updates from trusted JSON advisory metadata with persisted advisory ID, CVE, severity, fixed-version, and source-trust data. Takeover remains explicit, native transaction-history import remains out of scope, and non-x86_64 generation boot assets remain reserved.
 
 ---
 
@@ -166,7 +166,7 @@ conary system generation export --path /conary/generations/3 --format iso --outp
 
 ### Adoption And Explicit Takeover
 
-Adopt an existing Linux installation without giving up native package-manager authority. The stable preview path today is `conary --allow-live-system-mutation system adopt --system --full`, which records native packages in Conary with CAS backing while dnf, apt, or pacman remains authoritative for those packages. `conary --allow-live-system-mutation system unadopt --all` removes Conary tracking without deleting native package files on hosts without a selected Conary generation. If a Conary generation is already selected, unadoption fails closed until the active-generation handoff design lands.
+Adopt an existing Linux installation without giving up native package-manager authority. The stable preview path today is `conary --allow-live-system-mutation system adopt --system --full`, which records native packages in Conary with CAS backing while dnf, apt, or pacman remains authoritative for those packages. `conary --allow-live-system-mutation system unadopt --all` removes Conary tracking without deleting native package files on hosts without a selected Conary generation. If a Conary generation is already selected, use the staged native-authority handoff flow: run `conary system native-handoff --dry-run`, then `conary --allow-live-system-mutation system native-handoff --yes`; if the operation is interrupted after its record is written, rerun `conary --allow-live-system-mutation system native-handoff --recover --yes`.
 
 Updates follow the same authority boundary. Conary-owned packages can be installed, removed, and updated on a normal mutable host without first selecting a Conary generation. Adopted packages are not silently replaced by Conary during `update`; Conary reports that the native package manager remains authoritative unless you explicitly choose `--dep-mode takeover`. Critical adopted packages remain blocked even under takeover.
 
@@ -178,7 +178,9 @@ Takeover is a separate, explicit step. The `system takeover` release path builds
 # Risk-free adoption lane
 conary --allow-live-system-mutation system adopt --system --full  # Bulk adoption with CAS backing
 conary system unadopt --all --dry-run
+conary system native-handoff --dry-run
 conary --allow-live-system-mutation system unadopt --all
+conary --allow-live-system-mutation system native-handoff --yes
 
 # Explicit takeover lane
 conary system takeover --dry-run     # Preview the takeover plan
@@ -587,7 +589,7 @@ cargo build --profile fast-release   # Faster compile, still optimized
 
 ## Project Status
 
-**Version 0.8.0** -- The project has a working end-to-end stack: multi-format installs, atomic changesets, adoption/unadoption, immutable generations, explicit takeover/bootstrap flows, Remi conversion and serving, federation, conaryd package execution, and capability-restricted runtime execution. The current release-readiness pass is narrowing the public preview to an adoption-led Fedora 44, Ubuntu 26.04 LTS, and Arch Linux package-manager slice; keeping the installed-runtime and bootstrap-run generation-export QEMU gates green; adding x86_64 ISO generation-carrier export and provenance sidecars; reducing the `tough`/Sigstore advisory path while carrying the dated `rsa` waiver; and documenting remaining gaps such as active-generation handoff back to native authority, portable bundle signing, and non-x86_64 generation boot assets.
+**Version 0.8.0** -- The project has a working end-to-end stack: multi-format installs, atomic changesets, adoption/unadoption, selected-generation native-authority handoff, immutable generations, explicit takeover/bootstrap flows, Remi conversion and serving, federation, conaryd package execution, and capability-restricted runtime execution. The current release-readiness pass is narrowing the public preview to an adoption-led Fedora 44, Ubuntu 26.04 LTS, and Arch Linux package-manager slice; keeping the installed-runtime and bootstrap-run generation-export QEMU gates green; adding x86_64 ISO generation-carrier export and provenance sidecars; reducing the `tough`/Sigstore advisory path while carrying the dated `rsa` waiver; and documenting remaining gaps such as portable bundle signing, native transaction-history import, and non-x86_64 generation boot assets.
 
 See [ROADMAP.md](ROADMAP.md) for what we're building next.
 
@@ -599,7 +601,7 @@ The next milestone is the current **adoption-led preview and validation** push -
 
 - Keep Fedora 44, Ubuntu 26.04 LTS, and Arch adoption/unadoption proof in regular rotation
 - Keep QEMU generation-export validation green in regular rotation, and unblock the ISO Group P gate with a refreshed source fixture
-- Design the active-generation handoff for returning a selected Conary generation to native package-manager authority
+- Keep the selected-generation native-authority handoff suite green across Fedora 44, Ubuntu 26.04 LTS, and Arch
 - Introduce signed portable generation bundles and boot-artifact provenance
 - Keep self-host VM validation freshness checks green and finish snapshot/overlay rerun hygiene
 - Keep the Goal 7 daily-driver UX matrix, shell completion rendering checks, and operator diagnostics current

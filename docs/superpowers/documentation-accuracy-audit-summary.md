@@ -20,13 +20,15 @@ live-host mutation acknowledgement boundary. The Goal 7 refresh adds the
 checked-in daily-driver UX matrix, root help examples, bash/zsh completion
 rendering checks, and focused CLI diagnostics proof for native PM, adoption
 refresh, explicit takeover, unadopt/purge, generation, and conaryd routes.
-The 2026-05-22 completion-validation refresh records that the seven-track
-daily-driver readiness program still cannot be called complete because Goal 1
-native-authority handoff evidence is absent, while fresh Phase 1, Phase 4, and
-local QEMU evidence passed for the supported final validation surface.
+The 2026-05-22 completion-validation refresh first recorded that Goal 1
+native-authority handoff evidence was absent; the later Goal 1 refresh
+supersedes that blocker with selected-generation `native-handoff` dry-run,
+refusal, apply, and recovery evidence across Fedora 44, Ubuntu 26.04 LTS, and
+Arch while preserving the broader rule that program-complete claims need fresh
+combined gates.
 
 Audited every tracked documentation-like file returned by
-`bash scripts/docs-audit-inventory.sh`: 88 tracked files spanning root docs,
+`bash scripts/docs-audit-inventory.sh`: 89 tracked files spanning root docs,
 assistant shims, GitHub templates, canonical docs under `docs/`,
 deploy/operator docs, `deploy/remi.toml.example`, app-local READMEs, active
 planning/design records, historical/archive docs, release security waivers, and
@@ -59,8 +61,9 @@ The repo moved materially after the last audit:
   transaction recovery selecting complete generation artifacts for the next
   boot instead of relying on live generation remounts
 - Adopt Without Regret preview framing, with non-destructive unadoption,
-  native package-manager authority, explicit takeover boundaries, and
-  active-generation handoff limits documented for the limited preview
+  native package-manager authority, explicit takeover boundaries, and later
+  selected-generation native handoff recovery documented for the limited
+  preview
 - Native Package Manager Parity Matrix framing for Tier 0 and Tier 1
   Conary-owned package-manager flows against dnf, apt, and pacman expectations
 - Slice A, Slice B, Slice C, and Slice D native package-manager parity implementation records,
@@ -85,7 +88,10 @@ The repo moved materially after the last audit:
   takeover routes, unadopt/purge routes, and conaryd operator wording
 - the 2026-05-22 daily-driver readiness completion-validation audit, including
   fresh Phase 1 and Phase 4 distro matrices, local QEMU Group N/O/P evidence,
-  the booted ISO export proof, and the remaining Goal 1 handoff blocker
+  the booted ISO export proof, and the superseded Goal 1 handoff blocker
+- the 2026-05-22 Goal 1 native authority handoff proof, including the
+  `native-handoff` CLI, durable recovery record, and three-distro
+  `phase3-active-generation-handoff` matrix
 
 ## Major Corrections
 
@@ -94,7 +100,7 @@ The repo moved materially after the last audit:
   native package-manager authority for adopted packages; the non-destructive
   `system unadopt --all` escape hatch; explicit takeover; Conary-owned updates
   on mutable live roots; security-update advisory support honesty;
-  active-generation handoff limits; local QEMU/security gates; raw/qcow2
+  selected-generation native handoff; local QEMU/security gates; raw/qcow2
   generation export; OCI artifact-source alignment; and ISO/bundle follow-ups.
 - Updated `SECURITY.md` to 0.8.x support and replaced stale journal language
   with the current database/EROFS generation model and preview distro scope.
@@ -159,9 +165,13 @@ The repo moved materially after the last audit:
   generation, and conaryd guidance.
 - Added the 2026-05-22 daily-driver readiness completion audit and execution
   plan. The audit records fresh green Phase 1/Phase 4 matrices and the local
-  QEMU composefs, Group N, Group O, and Group P ISO boot gates, while preserving
-  the active Goal 1 native-authority handoff caveat because the required suite
-  and implementation evidence are still missing.
+  QEMU composefs, Group N, Group O, and Group P ISO boot gates; the later Goal 1
+  branch supersedes the audit's missing-suite blocker with selected-generation
+  native handoff implementation and matrix proof.
+- Added the Goal 1 native authority handoff implementation plan, refreshed
+  README, ROADMAP, integration, conaryopedia, limited-preview, and audit docs,
+  and recorded the Fedora 44, Ubuntu 26.04 LTS, and Arch
+  `phase3-active-generation-handoff` evidence.
 
 ## Archive Decisions
 
@@ -192,6 +202,11 @@ The repo moved materially after the last audit:
 - `cargo run -p conary-test -- run --suite phase3-group-n-qemu --distro fedora44 --phase 3`
 - `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`
 - `cargo run -p conary-test -- run --suite phase3-group-p-iso-export --distro fedora44 --phase 3`
+- `cargo test -p conary --lib adopt::native_handoff`
+- `cargo test -p conary --lib adopt::unadopt`
+- `cargo run -p conary-test -- run --suite phase3-active-generation-handoff --distro fedora44 --phase 3`
+- `cargo run -p conary-test -- run --suite phase3-active-generation-handoff --distro ubuntu-26.04 --phase 3`
+- `cargo run -p conary-test -- run --suite phase3-active-generation-handoff --distro arch --phase 3`
 - `CONARY_LOCAL_VALIDATION_RUN_ID=readiness-completion-20260522 scripts/local-qemu-validation.sh`
 - `cargo run -p conary-test -- run --suite phase4-native-pm-parity --distro fedora44 --phase 4`
 - `cargo run -p conary-test -- run --suite phase4-native-pm-parity --distro ubuntu-26.04 --phase 4`
@@ -230,9 +245,11 @@ public tester copy is tracked by
   ops follow-up if we want the file contents to mirror the DB state.
 - Historical release notes and archived design/spec files may still mention
   older distro names or broad parser support as historical context.
-- Active-generation handoff back to native package-manager authority remains a
-  follow-up; first-slice unadoption intentionally fails closed when a Conary
-  generation is selected.
+- `system unadopt --all` remains the pre-generation escape hatch. After a
+  Conary generation is selected, users must use the explicit
+  `system native-handoff` flow; it preserves native package files and native
+  package-manager databases but does not import native transaction history or
+  silently take over adopted packages.
 - Group O `TGE04` failed in the 2026-05-16 checkpoint, but the 2026-05-19
   refresh fixed the installed-runtime initramfs path and restored the Group O
   gate to 4 passed / 0 failed / 0 skipped / 0 cancelled.
@@ -245,10 +262,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 84
+- Total tracked doc-like files audited: 89
 - `verified-no-change`: 18
-- `corrected`: 28
-- `reframed-as-historical`: 1
-- `archived`: 23
+- `corrected`: 33
+- `archived`: 24
 - `retained-historical`: 14
 - Remaining pending rows: 0

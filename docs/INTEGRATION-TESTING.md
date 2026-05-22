@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-21
-revision: 25
-summary: Record passing Goal 6 Group P ISO QEMU evidence
+last_updated: 2026-05-22
+revision: 26
+summary: Record selected-generation native authority handoff evidence
 ---
 
 # Integration Testing
@@ -40,6 +40,11 @@ cargo run -p conary-test -- run --suite phase3-group-p-iso-export --distro fedor
 
 # Run focused composefs atomic modernization QEMU validation
 cargo run -p conary-test -- run --suite phase3-composefs-modernization --distro fedora44 --phase 3
+
+# Run selected-generation native authority handoff validation
+cargo run -p conary-test -- run --suite phase3-active-generation-handoff --distro fedora44 --phase 3
+cargo run -p conary-test -- run --suite phase3-active-generation-handoff --distro ubuntu-26.04 --phase 3
+cargo run -p conary-test -- run --suite phase3-active-generation-handoff --distro arch --phase 3
 
 # Run trusted security advisory ingestion and update validation
 cargo run -p conary-test -- run --suite phase4-security-advisory-pipeline --distro fedora44 --phase 4
@@ -92,6 +97,28 @@ contract added on 2026-05-13:
 Group N, Group O, and Group P gates so fail-closed composefs behavior is
 recorded even when a source-image fixture preflight blocks the longer
 boot/export suites.
+
+The selected-generation native authority handoff suite covers the Goal 1
+handoff contract added on 2026-05-22:
+
+- `THND01`: dry-run reports selected generation, adopted package plan, and
+  native package-manager preservation without clearing `/conary/current`
+- `THND02`: apply mode refuses before mutation unless the operator confirms
+  `--yes`
+- `THND03`: confirmed handoff clears `/conary/current`, removes adopted
+  Conary tracking, writes a completion record, and preserves native package
+  files and native package-manager queries
+- `THND04`: simulated interruption after current-link clearing is recovered
+  with `conary system native-handoff --recover --yes`
+
+Current selected-generation handoff evidence from 2026-05-22:
+
+- `cargo run -p conary-test -- run --suite phase3-active-generation-handoff --distro fedora44 --phase 3`:
+  passed 4 / failed 0 / skipped 0 / cancelled 0
+- `cargo run -p conary-test -- run --suite phase3-active-generation-handoff --distro ubuntu-26.04 --phase 3`:
+  passed 4 / failed 0 / skipped 0 / cancelled 0
+- `cargo run -p conary-test -- run --suite phase3-active-generation-handoff --distro arch --phase 3`:
+  passed 4 / failed 0 / skipped 0 / cancelled 0
 
 ## CLI Subcommands
 

@@ -177,6 +177,33 @@ pub enum SystemCommands {
         keep_hooks: bool,
     },
 
+    /// Hand selected-generation adopted packages back to native authority
+    ///
+    /// Clears the selected Conary generation pointer before removing adopted
+    /// tracking rows. Native package files and native package-manager databases
+    /// are not modified. Use --dry-run first to inspect the staged plan.
+    #[command(name = "native-handoff")]
+    NativeHandoff {
+        #[command(flatten)]
+        db: DbArgs,
+
+        /// Show the staged handoff plan without changing state
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Confirm clearing the selected generation and removing adopted tracking
+        #[arg(long, short)]
+        yes: bool,
+
+        /// Resume an interrupted native authority handoff
+        #[arg(long)]
+        recover: bool,
+
+        /// Leave installed native package manager refresh hooks in place
+        #[arg(long)]
+        keep_hooks: bool,
+    },
+
     /// Garbage collect unreferenced files from CAS storage
     ///
     /// Removes files from the content-addressable store that are no longer

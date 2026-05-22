@@ -15,7 +15,7 @@ For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 
 - Prove non-destructive unadoption for RPM, DEB, and Arch systems
 - Ensure Conary update paths never silently turn adopted packages into Conary-owned packages
 - Make takeover an explicit opt-in beyond the risk-free adoption lane
-- Design active-generation handoff back to native package-manager authority as follow-up work instead of deleting tracking rows while a Conary generation is selected
+- Keep selected-generation native-authority handoff explicit, recoverable, and covered across Fedora 44, Ubuntu 26.04 LTS, and Arch
 
 ### 2. No Step Down Package Flows
 
@@ -59,7 +59,7 @@ For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 
 ### Preview Caveats
 
 - The limited preview should be adoption-led and risk-free to try, not takeover-led. Native package managers remain the authority for adopted RPM, DEB, and Arch packages until the user explicitly chooses takeover.
-- `conary --allow-live-system-mutation system unadopt --all` is the one-command escape hatch only when no Conary generation is selected; active-generation handoff back to native authority remains fail-closed follow-up work.
+- `conary --allow-live-system-mutation system unadopt --all` is the one-command escape hatch only when no Conary generation is selected; after a generation is selected, use `conary system native-handoff --dry-run` and then `conary --allow-live-system-mutation system native-handoff --yes`. `--recover --yes` resumes an interrupted handoff record.
 - conaryd has queue/SSE/read-route plumbing plus install/remove/update and enhance-job execution. Package mutation jobs still require the same explicit live-host mutation acknowledgement as the CLI.
 - Generation export has x86_64 raw/qcow2/ISO support. The 2026-05-21 Group O QEMU run passed installed-runtime and bootstrap-run raw/qcow2 boot proof. The focused 2026-05-21 Group P QEMU run passed ISO export, provenance sidecar, copy-back, readonly-carrier boot, and writable `/etc` overlay proof. Keep generation export as supporting evidence for the preview rather than the headline ask. aarch64/riscv64 boot assets remain reserved follow-up work.
 - The former `tough`/Sigstore trust-root dependency path has been removed from `Cargo.lock`; the remaining `rsa` RustSec advisory is covered by the dated limited-preview waiver until a compatible fixed dependency path exists.
@@ -72,7 +72,7 @@ For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 
 1. Prove `conary system unadopt` remains the non-destructive adoption escape for RPM, DEB, and Arch
 2. Lock down adopted-package update behavior so native package managers remain authoritative unless takeover is explicit
 3. Keep quick-start and preview docs current around adoption, unadoption, native PM coexistence, takeover boundaries, and security-update honesty
-4. Design active-generation handoff back to native package-manager authority
+4. Keep selected-generation native-authority handoff validation green and document any recovery caveats from real use
 5. Keep generation export, installed-runtime QEMU validation, and Group P ISO evidence green in rotation
 6. Keep self-host VM validation inputs fresh by default and finish pristine rerun isolation
 7. Keep the daily-driver UX matrix, shell completions, release polish, and contributor/operator diagnostics current

@@ -98,6 +98,7 @@ apps/conary/tests/integration/remi/manifests/
   phase3-group-n-qemu.toml       # QEMU boot tests
   phase3-group-o-generation-export.toml  # Generation export QEMU tests
   phase3-composefs-modernization.toml    # Composefs atomic generation QEMU checks
+  phase3-active-generation-handoff.toml  # Selected-generation native authority handoff proof
   phase4-group-a.toml       # T160-T176 (Config/Distro/Canonical/Groups/Registry)
   phase4-group-b.toml       # T177-T195 (Label/Model/Collection/Derive)
   phase4-group-c.toml       # T196-T220 (CCS ops / query / repo management)

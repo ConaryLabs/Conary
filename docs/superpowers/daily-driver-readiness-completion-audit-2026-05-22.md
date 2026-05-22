@@ -1,24 +1,27 @@
 ---
 last_updated: 2026-05-22
-revision: 1
-summary: Evidence-first completion audit for the seven-track daily-driver readiness program
+revision: 2
+summary: Supersede the original Goal 1 blocker after selected-generation native handoff proof
 ---
 
 # Daily-Driver Readiness Completion Audit
 
 ## Result
 
-Status: **validation pass complete; program not complete yet**.
+Status: **original Goal 1 blocker superseded; full-program completion claims
+still require a current combined gate**.
 
-The seven-track daily-driver readiness program cannot honestly be marked
-complete on 2026-05-22 because the Goal 1 selected-generation native authority
-handoff remains an active preview caveat, active docs still describe it as
-follow-up work, and the dedicated `phase3-active-generation-handoff` manifest
-required by Goal 1 is absent.
+This file was first written as an evidence-first audit proving the seven-track
+daily-driver readiness program could not be called complete while Goal 1 was
+missing. A later 2026-05-22 Goal 1 branch superseded that blocker by adding the
+`conary system native-handoff` selected-generation flow and the dedicated
+`phase3-active-generation-handoff` suite for Fedora 44, Ubuntu 26.04 LTS, and
+Arch.
 
-This is a release-honesty result, not a regression: active docs already warn
-that active-generation handoff remains fail-closed follow-up work. The correct
-next move is to keep those caveats, not erase them.
+The original failed finding is retained here as historical audit context, but
+active docs should not continue to describe selected-generation native
+authority handoff as absent. A broad program-complete claim still needs the
+current branch's focused handoff evidence plus the shared verification gate.
 
 ## Baseline
 
@@ -31,6 +34,9 @@ next move is to keep those caveats, not erase them.
 - Local infrastructure:
   - `podman version 5.8.2`
   - `/dev/kvm` present
+- Superseding Goal 1 branch: `goal1-native-authority-handoff`
+- Superseding focused suite:
+  `phase3-active-generation-handoff` on Fedora 44, Ubuntu 26.04 LTS, and Arch
 
 ## Completion Bar
 
@@ -58,7 +64,7 @@ git diff --check
 
 | Track | Completion Requirement | Evidence | Status |
 |---|---|---|---|
-| Goal 1 Native Authority Handoff | Selected-generation handoff suite and no active-doc open-gap wording | Active docs still say active-generation handoff back to native authority remains fail-closed follow-up work; `cargo run -p conary-test -- run --suite phase3-active-generation-handoff --distro fedora44 --phase 3` fails with `failed to load manifest: phase3-active-generation-handoff` | **Blocked / not complete** |
+| Goal 1 Native Authority Handoff | Selected-generation handoff suite and no active-doc open-gap wording | Superseding Goal 1 branch adds `conary system native-handoff --dry-run`, `--yes`, and `--recover --yes`; `phase3-active-generation-handoff` passes on Fedora 44, Ubuntu 26.04 LTS, and Arch with 4 passed / 0 failed / 0 skipped / 0 cancelled for each distro | Landed in superseding branch; focused matrix passed |
 | Goal 2 Real Package Corpus Validation | Phase 1/Phase 4 distro evidence and corpus coverage | Fresh `phase1-advanced` and `phase4-native-pm-parity` runs passed for Fedora 44, Ubuntu 26.04 LTS, and Arch with zero failed, skipped, or cancelled tests | Landed, fresh matrix passed |
 | Goal 3 Security Advisory Pipeline | Trusted advisory ingestion and update proof | `phase4-security-advisory-pipeline` is listed by `conary-test`; docs record May 19 Fedora 44 evidence. This pass did not re-run that suite because it is not listed in the spec's final completion bar. | Landed, not refreshed here |
 | Goal 4 Host-Mutation Sandbox Hardening | Protected live-root sandbox proof | Active spec has an implementation note for protected live-root private `/etc` and `/var` writable layers | Landed, supported by existing focused tests |
@@ -66,26 +72,32 @@ git diff --check
 | Goal 6 Recovery, Boot, And Artifact Trust | Group N/O/P and artifact provenance evidence | Fresh `scripts/local-qemu-validation.sh` run passed composefs modernization, Group N kernel/bootloader, Group O raw/qcow2 generation export, and Group P ISO export boot evidence with zero failed, skipped, or cancelled tests | Landed, fresh local validation passed |
 | Goal 7 Daily UX And Operator Polish | UX matrix, completion rendering, CLI diagnostics proof | `docs/operations/daily-driver-ux-matrix.md` and `apps/conary/tests/cli_daily_ux.rs`; pushed on `main` at `6e546c77` | Landed |
 
-## Active Open-Gap References
+## Superseded Open-Gap References
 
-The active-doc references below are truthful blockers, not stale wording:
+The original blocker references below were truthful when this audit was first
+written. They are superseded by the Goal 1 native handoff implementation and
+should not be copied into current release docs as present-tense limitations:
 
-- `README.md`: active-generation handoff back to native authority remains
-  fail-closed follow-up work.
-- `ROADMAP.md`: active-generation handoff remains follow-up work and a near-term
-  priority.
-- `docs/conaryopedia-v2.md`: active-generation handoff back to native authority
-  is separate follow-up work.
+- `README.md`: now documents `conary system native-handoff --dry-run`, `--yes`,
+  and `--recover --yes`.
+- `ROADMAP.md`: now tracks keeping the selected-generation handoff suite green
+  instead of treating the suite as missing.
+- `docs/conaryopedia-v2.md`: now routes selected-generation hosts to
+  `native-handoff` while preserving `unadopt --all` as the pre-selection escape
+  hatch.
 - `docs/superpowers/limited-preview-release-checkpoint-2026-05-16.md` and
-  `docs/superpowers/limited-preview-subreddit-tester-post-2026-05-19.md`: the
-  limited-preview framing keeps the caveat visible.
+  `docs/superpowers/limited-preview-subreddit-tester-post-2026-05-19.md`: dated
+  preview framing now notes the later selected-generation handoff command.
 
 ## Fresh Validation Evidence
 
 | Command | Result |
 |---|---|
 | `cargo run -p conary-test -- list` | Passed; listed `phase1-advanced`, `phase4-native-pm-parity`, Group N/O QEMU, and ISO Generation Export QEMU |
-| `cargo run -p conary-test -- run --suite phase3-active-generation-handoff --distro fedora44 --phase 3` | Failed before tests with `failed to load manifest: phase3-active-generation-handoff` |
+| `cargo test -p conary --lib adopt::native_handoff` | Superseding Goal 1 branch passed: 6 passed, 0 failed |
+| `cargo run -p conary-test -- run --suite phase3-active-generation-handoff --distro fedora44 --phase 3` | Superseding Goal 1 branch passed: 4 passed, 0 failed, 0 skipped, 0 cancelled |
+| `cargo run -p conary-test -- run --suite phase3-active-generation-handoff --distro ubuntu-26.04 --phase 3` | Superseding Goal 1 branch passed: 4 passed, 0 failed, 0 skipped, 0 cancelled |
+| `cargo run -p conary-test -- run --suite phase3-active-generation-handoff --distro arch --phase 3` | Superseding Goal 1 branch passed: 4 passed, 0 failed, 0 skipped, 0 cancelled |
 | `cargo fmt --check` | Passed |
 | `cargo clippy --workspace --all-targets -- -D warnings` | Passed |
 | `cargo run -p conary-test -- run --suite phase1-advanced --distro fedora44 --phase 1` | Passed: 31 passed, 0 failed, 0 skipped, 0 cancelled |
@@ -104,8 +116,8 @@ The active-doc references below are truthful blockers, not stale wording:
 
 ## Conclusion
 
-Do not describe the daily-driver readiness program as complete yet. The next
-product goal should be Goal 1 itself: implement selected-generation native
-authority handoff, add the missing `phase3-active-generation-handoff` suite for
-Fedora 44, Ubuntu 26.04 LTS, and Arch, and keep the active caveats until that
-fresh evidence exists.
+The original "Goal 1 missing" conclusion has been closed by the later
+selected-generation native handoff branch. Do not use this older audit's
+blocked verdict as current release status. For any broad daily-driver
+completion claim, rerun the current combined gate and record that evidence
+alongside the focused Goal 1 matrix.
