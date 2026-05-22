@@ -51,14 +51,17 @@ A few important caveats:
   explicitly choose takeover behavior.
 - `system unadopt --all` is the escape hatch before selecting a Conary
   generation.
+- After selecting a Conary generation, use `system native-handoff --dry-run`,
+  then `system native-handoff --yes`; if interrupted, resume with
+  `system native-handoff --recover --yes`.
 - Local `conaryd` package mutation routes now queue daemon jobs, but CLI flows
   remain the simplest preview path and non-dry-run daemon jobs require the same
   explicit live-host mutation acknowledgement.
 - x86_64 ISO generation-carrier export exists, but it is not the thing I am
   asking people to evaluate here.
-- Active-generation handoff back to native package-manager authority is still a
-  planned follow-up, so this ask is about normal mutable hosts and reversible
-  adoption before selecting a Conary generation.
+- Selected-generation native handoff preserves native package files and native
+  package-manager databases, but it does not import native transaction history
+  or silently take over adopted packages.
 
 The feedback I care about most:
 

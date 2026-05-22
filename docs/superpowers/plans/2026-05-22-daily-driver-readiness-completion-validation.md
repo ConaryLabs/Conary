@@ -65,7 +65,7 @@ Expected: `phase1-advanced`, `phase4-native-pm-parity`, and the local QEMU suite
 Run:
 
 ```bash
-rg -n "active-generation handoff|Real Package Corpus|Security Advisory Pipeline|Host-Mutation Sandbox|conaryd Package Execution|Recovery, Boot|Daily UX|Goal [1-7]|follow-up work|remaining gap|not implemented|reserved follow-up" README.md ROADMAP.md docs apps crates
+rg -n "selected-generation native authority handoff|Real Package Corpus|Security Advisory Pipeline|Host-Mutation Sandbox|conaryd Package Execution|Recovery, Boot|Daily UX|Goal [1-7]|follow-up work|remaining gap|not implemented|reserved follow-up" README.md ROADMAP.md docs apps crates
 ```
 
 Expected: active docs may still mention real follow-up gaps. Every active open-gap reference must be classified as either truthful preview caveat, stale completion blocker, or historical/archive-only.
@@ -165,7 +165,7 @@ Expected: if `/dev/kvm` exists, the wrapper must pass with zero failed, skipped,
 
 - [x] **Step 1: Apply only evidence-backed docs changes**
 
-If validation proves a program item complete, update docs to say so. If validation finds blockers, keep or add clear caveats. Do not remove active-generation handoff caveats unless the selected-generation handoff evidence exists.
+If validation proves a program item complete, update docs to say so. If validation finds blockers, keep or add clear caveats. Once selected-generation handoff evidence exists, replace active handoff caveats with command guidance instead of leaving stale open-gap language behind.
 
 - [x] **Step 2: Refresh doc audit inventory**
 

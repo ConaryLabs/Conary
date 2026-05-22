@@ -9,6 +9,7 @@ pub(crate) mod cas_capture;
 mod conflicts;
 mod convert;
 mod hooks;
+mod native_handoff;
 mod packages;
 mod refresh;
 mod status;
@@ -19,6 +20,9 @@ mod unadopt;
 pub use conflicts::cmd_conflicts;
 pub use convert::cmd_adopt_convert;
 pub use hooks::cmd_sync_hook_install;
+pub use native_handoff::{
+    NativeHandoffOptions, NativeHandoffOutcome, NativeHandoffSummary, cmd_native_handoff,
+};
 pub use packages::cmd_adopt;
 pub use refresh::cmd_adopt_refresh;
 pub use status::cmd_adopt_status;

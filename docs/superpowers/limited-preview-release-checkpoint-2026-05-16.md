@@ -1,4 +1,4 @@
-# Limited Preview Release Checkpoint - 2026-05-16, refreshed 2026-05-19
+# Limited Preview Release Checkpoint - 2026-05-16, refreshed 2026-05-19 and 2026-05-22
 
 ## Scope
 
@@ -16,6 +16,7 @@ software.
 - Base commit checked out at original checkpoint start: `50b3ccee771908df36c88b542da5010fde1dff3c`
 - Original checkpoint date: 2026-05-16
 - Refresh date: 2026-05-19
+- Goal 1 handoff refresh: 2026-05-22
 
 ## Recommendation
 
@@ -30,8 +31,10 @@ and bootstrap-run raw/qcow2 exports both booted under UEFI.
 
 The public ask should still be deliberately constrained. Ask for testers on VMs,
 snapshotted systems, or non-critical machines; make adoption/unadoption the main
-story; avoid "release ready" language; and keep active-generation handoff,
-conaryd package execution, and ISO export out of the promise.
+story; avoid "release ready" language; and keep selected-generation handoff as
+an explicit `system native-handoff` recovery route rather than a silent promise.
+conaryd package execution and ISO export remain outside this package-manager
+tester ask.
 
 ## Evidence Summary
 

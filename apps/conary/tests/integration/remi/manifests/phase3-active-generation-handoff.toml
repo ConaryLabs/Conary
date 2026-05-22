@@ -1,0 +1,160 @@
+# tests/integration/remi/manifests/phase3-active-generation-handoff.toml
+#
+# Phase 3 selected-generation native authority handoff checks.
+#
+# This suite proves that a host with /conary/current selected can hand adopted
+# native packages back to dnf/rpm, apt/dpkg, or pacman authority without deleting
+# package files or mutating the native package-manager database.
+
+[suite]
+name = "Phase 3 Active Generation Native Authority Handoff"
+phase = 3
+timeout = 1800
+
+[distro_overrides.fedora44]
+native_package = "bash"
+native_file = "/usr/bin/bash"
+native_query = "rpm -q bash"
+
+[distro_overrides."ubuntu-26.04"]
+native_package = "bash"
+native_file = "/usr/bin/bash"
+native_query = "dpkg-query -W bash"
+
+[distro_overrides.arch]
+native_package = "bash"
+native_file = "/usr/bin/bash"
+native_query = "pacman -Q bash"
+
+[[test]]
+id = "THND01"
+name = "selected_generation_handoff_dry_run"
+description = "Dry-run reports selected-generation handoff without clearing /conary/current or removing adopted tracking"
+timeout = 240
+fatal = true
+
+[[test.step]]
+run = """
+set -eu
+rm -f ${DB_PATH}
+rm -rf /conary/current /conary/current.native-handoff-backup /conary/native-authority-handoff.json /conary/generations/71
+${CONARY_BIN} system init --db-path ${DB_PATH}
+${native_query}
+test -x ${native_file}
+${CONARY_BIN} system adopt ${native_package} --db-path ${DB_PATH}
+mkdir -p /conary/generations/71
+ln -s generations/71 /conary/current
+${CONARY_BIN} system native-handoff --dry-run --db-path ${DB_PATH} > /tmp/native-handoff-dry-run.log 2>&1
+cat /tmp/native-handoff-dry-run.log
+grep -q "Native authority handoff dry run" /tmp/native-handoff-dry-run.log
+grep -q "Selected Conary generation: 71" /tmp/native-handoff-dry-run.log
+test "$(readlink /conary/current)" = "generations/71"
+test "$(sqlite3 ${DB_PATH} "SELECT COUNT(*) FROM troves WHERE name = '${native_package}' AND install_source IN ('adopted-track', 'adopted-full')")" = "1"
+${native_query}
+test -x ${native_file}
+echo selected-generation-handoff-dry-run-ok
+"""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "selected-generation-handoff-dry-run-ok"
+
+[[test]]
+id = "THND02"
+name = "selected_generation_handoff_refuses_without_yes"
+description = "Apply mode refuses before mutation unless the operator confirms --yes"
+timeout = 120
+fatal = true
+depends_on = ["THND01"]
+
+[[test.step]]
+run = """
+set -eu
+set +e
+${CONARY_BIN} --allow-live-system-mutation system native-handoff --db-path ${DB_PATH} > /tmp/native-handoff-refusal.log 2>&1
+code=$?
+set -e
+cat /tmp/native-handoff-refusal.log
+test "$code" -ne 0
+grep -q -- "--yes" /tmp/native-handoff-refusal.log
+test "$(readlink /conary/current)" = "generations/71"
+test "$(sqlite3 ${DB_PATH} "SELECT COUNT(*) FROM troves WHERE name = '${native_package}' AND install_source IN ('adopted-track', 'adopted-full')")" = "1"
+${native_query}
+test -x ${native_file}
+echo selected-generation-handoff-refusal-ok
+"""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "selected-generation-handoff-refusal-ok"
+
+[[test]]
+id = "THND03"
+name = "selected_generation_handoff_success"
+description = "Confirmed handoff clears /conary/current, removes adopted tracking, and preserves native PM authority and files"
+timeout = 240
+fatal = true
+depends_on = ["THND02"]
+
+[[test.step]]
+run = """
+set -eu
+${CONARY_BIN} --allow-live-system-mutation system native-handoff --yes --db-path ${DB_PATH} > /tmp/native-handoff-success.log 2>&1
+cat /tmp/native-handoff-success.log
+grep -q "Completed native authority handoff" /tmp/native-handoff-success.log
+test ! -e /conary/current
+test -L /conary/current.native-handoff-backup
+test "$(readlink /conary/current.native-handoff-backup)" = "generations/71"
+test "$(sqlite3 ${DB_PATH} "SELECT COUNT(*) FROM troves WHERE name = '${native_package}'")" = "0"
+test "$(sqlite3 ${DB_PATH} "SELECT COUNT(*) FROM changesets WHERE description LIKE 'Native authority handoff%' AND status = 'applied'")" = "1"
+grep -q '"completed_at":' /conary/native-authority-handoff.json
+${native_query}
+test -x ${native_file}
+echo selected-generation-handoff-success-ok
+"""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "selected-generation-handoff-success-ok"
+
+[[test]]
+id = "THND04"
+name = "selected_generation_handoff_recovery"
+description = "Interrupted handoff after current-link clearing can be recovered without native PM or file damage"
+timeout = 300
+fatal = true
+
+[[test.step]]
+run = """
+set -eu
+rm -f ${DB_PATH}
+rm -rf /conary/current /conary/current.native-handoff-backup /conary/native-authority-handoff.json /conary/generations/72
+${CONARY_BIN} system init --db-path ${DB_PATH}
+${native_query}
+test -x ${native_file}
+${CONARY_BIN} system adopt ${native_package} --db-path ${DB_PATH}
+mkdir -p /conary/generations/72
+ln -s generations/72 /conary/current
+set +e
+CONARY_TEST_NATIVE_HANDOFF_FAIL_AFTER=current-cleared ${CONARY_BIN} --allow-live-system-mutation system native-handoff --yes --db-path ${DB_PATH} > /tmp/native-handoff-interrupted.log 2>&1
+code=$?
+set -e
+cat /tmp/native-handoff-interrupted.log
+test "$code" -ne 0
+grep -q "current-cleared" /tmp/native-handoff-interrupted.log
+test ! -e /conary/current
+test -L /conary/current.native-handoff-backup
+test "$(sqlite3 ${DB_PATH} "SELECT COUNT(*) FROM troves WHERE name = '${native_package}' AND install_source IN ('adopted-track', 'adopted-full')")" = "1"
+${CONARY_BIN} --allow-live-system-mutation system native-handoff --recover --yes --db-path ${DB_PATH} > /tmp/native-handoff-recovered.log 2>&1
+cat /tmp/native-handoff-recovered.log
+grep -q "Recovered native authority handoff" /tmp/native-handoff-recovered.log
+test "$(sqlite3 ${DB_PATH} "SELECT COUNT(*) FROM troves WHERE name = '${native_package}'")" = "0"
+grep -q '"completed_at":' /conary/native-authority-handoff.json
+${native_query}
+test -x ${native_file}
+echo selected-generation-handoff-recovery-ok
+"""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "selected-generation-handoff-recovery-ok"
