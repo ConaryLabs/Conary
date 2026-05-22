@@ -40,7 +40,7 @@ Expected: the validation worktree is on `readiness-completion-validation`, and `
 Read:
 
 ```bash
-sed -n '657,682p' docs/superpowers/specs/2026-05-19-daily-driver-readiness-program-design.md
+sed -n '657,682p' docs/superpowers/specs/archive/2026-05-19-daily-driver-readiness-program-design.md
 ```
 
 Expected: capture the exact required final validation set in the audit report.

@@ -1,13 +1,13 @@
 ---
-last_updated: 2026-05-19
-revision: 1
-summary: Daily-driver readiness program design with seven Codex /goal tracks
+last_updated: 2026-05-22
+revision: 2
+summary: Archived daily-driver readiness program design after all seven Codex /goal tracks landed
 ---
 
 # Daily Driver Readiness Program: Design Spec
 
 **Date:** 2026-05-19
-**Status:** Active program design; implementation goals not yet launched
+**Status:** Archived implementation record; all seven goal tracks landed on main by 2026-05-22
 **Goal:** Turn Conary from a credible preview package-manager path into a daily-driver replacement candidate by closing the seven obvious gaps identified from the current codebase and docs.
 
 ---
@@ -17,6 +17,10 @@ summary: Daily-driver readiness program design with seven Codex /goal tracks
 This design ignores the narrow limited-release question and asks what must be
 true before a technically careful Linux user could use Conary as the normal
 package manager for a real machine.
+
+Archival note: this file preserves the completed program design and original
+goal templates. Current product status lives in README, ROADMAP, integration
+testing docs, operator docs, and the daily-driver completion audit.
 
 The answer is not one giant implementation pass. The work spans package
 ownership, distro corpus validation, security advisory metadata, daemon
@@ -217,7 +221,7 @@ cargo run -p conary-test -- run --suite phase3-active-generation-handoff --distr
 ### Goal Template
 
 ```text
-/goal Implement Conary native authority handoff for selected-generation hosts. Read docs/superpowers/specs/2026-05-19-daily-driver-readiness-program-design.md, README.md, ROADMAP.md, docs/INTEGRATION-TESTING.md, apps/conary/src/commands/adopt/unadopt.rs, apps/conary/src/commands/generation/switch.rs, apps/conary/src/commands/generation/takeover.rs, and crates/conary-core/src/transaction/recovery.rs first. Preserve native package files and native package-manager authority, make adopted tracking removal safe after a Conary generation is selected, add a selected-generation handoff suite that proves dry-run/refusal/success/recovery on Fedora 44, Ubuntu 26.04 LTS, and Arch authority, update docs and audit metadata, and stop only when that focused suite plus the shared verification gate pass.
+/goal Implement Conary native authority handoff for selected-generation hosts. Read docs/superpowers/specs/archive/2026-05-19-daily-driver-readiness-program-design.md, README.md, ROADMAP.md, docs/INTEGRATION-TESTING.md, apps/conary/src/commands/adopt/unadopt.rs, apps/conary/src/commands/generation/switch.rs, apps/conary/src/commands/generation/takeover.rs, and crates/conary-core/src/transaction/recovery.rs first. Preserve native package files and native package-manager authority, make adopted tracking removal safe after a Conary generation is selected, add a selected-generation handoff suite that proves dry-run/refusal/success/recovery on Fedora 44, Ubuntu 26.04 LTS, and Arch authority, update docs and audit metadata, and stop only when that focused suite plus the shared verification gate pass.
 ```
 
 ## Goal 2: Real Package Corpus Validation

@@ -25,13 +25,16 @@ native-authority handoff evidence was absent; the later Goal 1 refresh
 supersedes that blocker with selected-generation `native-handoff` dry-run,
 refusal, apply, and recovery evidence across Fedora 44, Ubuntu 26.04 LTS, and
 Arch while preserving the broader rule that program-complete claims need fresh
-combined gates.
+combined gates. This clean-slate archive pass moves the completed Goal 6,
+Goal 7, completion-validation, Goal 1, and daily-driver umbrella records under
+archive paths and leaves the active `plans/` and `specs/` roots empty until a
+new current plan or spec begins.
 
 Audited every tracked documentation-like file returned by
 `bash scripts/docs-audit-inventory.sh`: 89 tracked files spanning root docs,
 assistant shims, GitHub templates, canonical docs under `docs/`,
 deploy/operator docs, `deploy/remi.toml.example`, app-local READMEs, active
-planning/design records, historical/archive docs, release security waivers, and
+planning records, historical/archive docs, release security waivers, and
 the `site/`/`web` frontend READMEs.
 
 Ignored local or credential-bearing files were reviewed only as scan findings
@@ -146,29 +149,29 @@ The repo moved materially after the last audit:
   package-manager commands, and the three-distro parity matrix; then moved them
   to archive paths once the current integration docs carried the release
   evidence.
-- Added the Daily Driver Readiness Program design with seven Codex `/goal`
+- Recorded and archived the Daily Driver Readiness Program design with seven Codex `/goal`
   tracks for active-generation authority handoff, real package corpus
   validation, security advisory support, live-root sandbox hardening, conaryd
   package execution, recovery/artifact trust, and daily UX polish.
 - Refreshed the Goal 4 sandbox docs after protected live-root scriptlet modes
   gained private `/etc` and `/var` writable layers plus fail-closed setup
   behavior.
-- Added the Goal 6 recovery/artifact trust implementation plan and refreshed
+- Archived the completed Goal 6 recovery/artifact trust implementation plan and refreshed
   README, ROADMAP, integration, bootstrap, and post-generation-export docs for
   x86_64 ISO generation-carrier export, raw/qcow2/ISO provenance sidecars, the
   Group P QEMU manifest, passing Group P ISO evidence, and self-host workspace
   freshness checks.
-- Added the Goal 7 daily-driver UX matrix and implementation plan, refreshed
+- Archived the completed Goal 7 daily-driver UX matrix implementation plan, refreshed
   README, ROADMAP, assistant, integration, and program-design docs for CLI
   diagnostics/completion checks, and aligned package-command output with
   native package-manager, adoption refresh, explicit takeover, unadopt/purge,
   generation, and conaryd guidance.
-- Added the 2026-05-22 daily-driver readiness completion audit and execution
-  plan. The audit records fresh green Phase 1/Phase 4 matrices and the local
+- Archived the completed 2026-05-22 daily-driver readiness completion
+  validation plan. The audit records fresh green Phase 1/Phase 4 matrices and the local
   QEMU composefs, Group N, Group O, and Group P ISO boot gates; the later Goal 1
   branch supersedes the audit's missing-suite blocker with selected-generation
   native handoff implementation and matrix proof.
-- Added the Goal 1 native authority handoff implementation plan, refreshed
+- Archived the completed Goal 1 native authority handoff implementation plan, refreshed
   README, ROADMAP, integration, conaryopedia, limited-preview, and audit docs,
   and recorded the Fedora 44, Ubuntu 26.04 LTS, and Arch
   `phase3-active-generation-handoff` evidence.
@@ -177,11 +180,14 @@ The repo moved materially after the last audit:
 
 - Existing archive docs and recipe READMEs were retained as historical
   reference material.
-- Completed top-level superpowers plans were moved to
-  `docs/superpowers/plans/archive/`.
+- Completed top-level superpowers plans, including Goal 6, Goal 7, completion
+  validation, and Goal 1, were moved to `docs/superpowers/plans/archive/`.
 - Completed design specs were moved to `docs/superpowers/specs/archive/`; the
-  active specs directory now contains only current implementation-goal designs,
-  such as the daily-driver readiness program.
+  active top-level `plans/` and `specs/` directories are intentionally empty
+  until a new current implementation record starts.
+- The completed May 14 limited-preview honesty review TSV was moved beside its
+  archived plan in `docs/superpowers/plans/archive/`; it is outside the doc
+  inventory script because that script tracks documentation-like files.
 - The current package-manager tester decision is represented by
   `docs/superpowers/limited-preview-release-checkpoint-2026-05-16.md` and
   `docs/superpowers/limited-preview-subreddit-tester-post-2026-05-19.md`, not
@@ -264,7 +270,7 @@ public tester copy is tracked by
 
 - Total tracked doc-like files audited: 89
 - `verified-no-change`: 18
-- `corrected`: 33
-- `archived`: 24
+- `corrected`: 28
+- `archived`: 29
 - `retained-historical`: 14
 - Remaining pending rows: 0

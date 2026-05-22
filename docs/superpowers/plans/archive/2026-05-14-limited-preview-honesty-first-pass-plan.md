@@ -36,7 +36,7 @@ Out of scope for this plan:
 
 ## Files
 
-- Create: `docs/superpowers/plans/2026-05-14-limited-preview-honesty-review-ledger.tsv`
+- Create: `docs/superpowers/plans/archive/2026-05-14-limited-preview-honesty-review-ledger.tsv`
 - Modify: `README.md`
 - Modify: `apps/conary/src/cli/generation.rs`
 - Modify: `crates/conary-core/src/generation/export.rs`
@@ -60,7 +60,7 @@ Out of scope for this plan:
 ### Task 1: Seed The Review Coverage Ledger
 
 **Files:**
-- Create: `docs/superpowers/plans/2026-05-14-limited-preview-honesty-review-ledger.tsv`
+- Create: `docs/superpowers/plans/archive/2026-05-14-limited-preview-honesty-review-ledger.tsv`
 
 - [ ] **Step 1: Create the ledger with seed rows**
 
@@ -92,7 +92,7 @@ apps/conary-test/src/server/service.rs	6	agent	pending	duplication-consolidation
 Run:
 
 ```bash
-awk -F '\t' 'NR == 1 { cols = NF; next } NF != cols { print FNR ":" $0; bad = 1 } END { exit bad }' docs/superpowers/plans/2026-05-14-limited-preview-honesty-review-ledger.tsv
+awk -F '\t' 'NR == 1 { cols = NF; next } NF != cols { print FNR ":" $0; bad = 1 } END { exit bad }' docs/superpowers/plans/archive/2026-05-14-limited-preview-honesty-review-ledger.tsv
 ```
 
 Expected: exit 0 with no output.
@@ -102,7 +102,7 @@ Expected: exit 0 with no output.
 Run:
 
 ```bash
-git add docs/superpowers/plans/2026-05-14-limited-preview-honesty-review-ledger.tsv
+git add docs/superpowers/plans/archive/2026-05-14-limited-preview-honesty-review-ledger.tsv
 git commit -m "docs: seed limited preview honesty review ledger"
 ```
 
@@ -120,7 +120,7 @@ git commit -m "docs: seed limited preview honesty review ledger"
 - Modify: `docs/conaryopedia-v2.md`
 - Modify: `apps/conary/tests/integration/remi/manifests/phase4-group-d.toml`
 - Modify: `docs/INTEGRATION-TESTING.md`
-- Modify: `docs/superpowers/plans/2026-05-14-limited-preview-honesty-review-ledger.tsv`
+- Modify: `docs/superpowers/plans/archive/2026-05-14-limited-preview-honesty-review-ledger.tsv`
 
 - [ ] **Step 1: Confirm the current command-help mismatches**
 
@@ -278,7 +278,7 @@ In `docs/INTEGRATION-TESTING.md`, update any current Phase 4 wording that still 
 
 - [ ] **Step 8: Update the review ledger rows for Task 2 files**
 
-For each Task 2 file in `docs/superpowers/plans/2026-05-14-limited-preview-honesty-review-ledger.tsv`, change `pending` to `changed` and set the decision to the concrete correction made.
+For each Task 2 file in `docs/superpowers/plans/archive/2026-05-14-limited-preview-honesty-review-ledger.tsv`, change `pending` to `changed` and set the decision to the concrete correction made.
 
 - [ ] **Step 9: Verify CLI help and manifest parsing**
 
@@ -314,7 +314,7 @@ Expected: Group D completes, including T254 with `No automation history.`
 Run:
 
 ```bash
-git add README.md apps/conary/src/cli/generation.rs crates/conary-core/src/generation/export.rs apps/conary/src/cli/bootstrap.rs docs/ARCHITECTURE.md docs/modules/bootstrap.md docs/conaryopedia-v2.md apps/conary/tests/integration/remi/manifests/phase4-group-d.toml docs/INTEGRATION-TESTING.md docs/superpowers/plans/2026-05-14-limited-preview-honesty-review-ledger.tsv
+git add README.md apps/conary/src/cli/generation.rs crates/conary-core/src/generation/export.rs apps/conary/src/cli/bootstrap.rs docs/ARCHITECTURE.md docs/modules/bootstrap.md docs/conaryopedia-v2.md apps/conary/tests/integration/remi/manifests/phase4-group-d.toml docs/INTEGRATION-TESTING.md docs/superpowers/plans/archive/2026-05-14-limited-preview-honesty-review-ledger.tsv
 git commit -m "docs: clarify limited preview CLI honesty"
 ```
 
@@ -326,7 +326,7 @@ git commit -m "docs: clarify limited preview CLI honesty"
 - Modify: `apps/conaryd/src/daemon/routes.rs`
 - Modify: `apps/conaryd/src/daemon/routes/system.rs`
 - Modify: `apps/conaryd/src/daemon/routes/transactions.rs`
-- Modify: `docs/superpowers/plans/2026-05-14-limited-preview-honesty-review-ledger.tsv`
+- Modify: `docs/superpowers/plans/archive/2026-05-14-limited-preview-honesty-review-ledger.tsv`
 
 - [ ] **Step 1: Change conaryd route tests first**
 
@@ -518,7 +518,7 @@ For `apps/conaryd/src/daemon/routes.rs`, `apps/conaryd/src/daemon/routes/system.
 Run:
 
 ```bash
-git add apps/conaryd/src/daemon/routes.rs apps/conaryd/src/daemon/routes/system.rs apps/conaryd/src/daemon/routes/transactions.rs docs/superpowers/plans/2026-05-14-limited-preview-honesty-review-ledger.tsv
+git add apps/conaryd/src/daemon/routes.rs apps/conaryd/src/daemon/routes/system.rs apps/conaryd/src/daemon/routes/transactions.rs docs/superpowers/plans/archive/2026-05-14-limited-preview-honesty-review-ledger.tsv
 git commit -m "fix(conaryd): make deferred transaction routes explicit"
 ```
 
@@ -530,7 +530,7 @@ git commit -m "fix(conaryd): make deferred transaction routes explicit"
 - Modify: `apps/remi/src/server/handlers/derivations.rs`
 - Modify: `apps/remi/src/server/handlers/seeds.rs`
 - Modify: `apps/remi/src/server/handlers/profiles.rs`
-- Modify: `docs/superpowers/plans/2026-05-14-limited-preview-honesty-review-ledger.tsv`
+- Modify: `docs/superpowers/plans/archive/2026-05-14-limited-preview-honesty-review-ledger.tsv`
 
 - [ ] **Step 1: Review the current public and admin router layers**
 
@@ -587,7 +587,7 @@ Expected: pass.
 Run:
 
 ```bash
-git add apps/remi/src/server/handlers/derivations.rs apps/remi/src/server/handlers/seeds.rs apps/remi/src/server/handlers/profiles.rs docs/superpowers/plans/2026-05-14-limited-preview-honesty-review-ledger.tsv
+git add apps/remi/src/server/handlers/derivations.rs apps/remi/src/server/handlers/seeds.rs apps/remi/src/server/handlers/profiles.rs docs/superpowers/plans/archive/2026-05-14-limited-preview-honesty-review-ledger.tsv
 git commit -m "docs(remi): classify public write route controls"
 ```
 
@@ -596,7 +596,7 @@ git commit -m "docs(remi): classify public write route controls"
 ### Task 5: Record conary-test Fallback Shape Decisions
 
 **Files:**
-- Modify: `docs/superpowers/plans/2026-05-14-limited-preview-honesty-review-ledger.tsv`
+- Modify: `docs/superpowers/plans/archive/2026-05-14-limited-preview-honesty-review-ledger.tsv`
 
 - [ ] **Step 1: Verify the fallback paths differ**
 
@@ -644,7 +644,7 @@ Expected: both pass.
 Run:
 
 ```bash
-git add docs/superpowers/plans/2026-05-14-limited-preview-honesty-review-ledger.tsv
+git add docs/superpowers/plans/archive/2026-05-14-limited-preview-honesty-review-ledger.tsv
 git commit -m "docs: record conary-test fallback review decision"
 ```
 
@@ -655,7 +655,7 @@ git commit -m "docs: record conary-test fallback review decision"
 **Files:**
 - Modify: `docs/superpowers/documentation-accuracy-audit-inventory.tsv`
 - Modify: `docs/superpowers/documentation-accuracy-audit-ledger.tsv`
-- Modify: `docs/superpowers/plans/2026-05-14-limited-preview-honesty-review-ledger.tsv`
+- Modify: `docs/superpowers/plans/archive/2026-05-14-limited-preview-honesty-review-ledger.tsv`
 
 - [ ] **Step 1: Add audit rows for the new plan and review ledger**
 
@@ -717,7 +717,7 @@ Expected: all pass.
 Run:
 
 ```bash
-git add docs/superpowers/documentation-accuracy-audit-inventory.tsv docs/superpowers/documentation-accuracy-audit-ledger.tsv docs/superpowers/plans/2026-05-14-limited-preview-honesty-review-ledger.tsv
+git add docs/superpowers/documentation-accuracy-audit-inventory.tsv docs/superpowers/documentation-accuracy-audit-ledger.tsv docs/superpowers/plans/archive/2026-05-14-limited-preview-honesty-review-ledger.tsv
 git commit -m "docs: record limited preview honesty audit coverage"
 ```
 
