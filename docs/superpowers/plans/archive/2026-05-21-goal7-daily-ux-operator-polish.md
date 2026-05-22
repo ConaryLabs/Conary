@@ -122,7 +122,7 @@ Expected: all focused UX tests pass.
 - Modify: `ROADMAP.md`
 - Modify: `docs/INTEGRATION-TESTING.md`
 - Modify: `docs/llms/README.md`
-- Modify: `docs/superpowers/specs/2026-05-19-daily-driver-readiness-program-design.md`
+- Modify: `docs/superpowers/specs/archive/2026-05-19-daily-driver-readiness-program-design.md`
 - Modify: `docs/superpowers/documentation-accuracy-audit-summary.md`
 - Modify: `docs/superpowers/documentation-accuracy-audit-inventory.tsv`
 - Modify: `docs/superpowers/documentation-accuracy-audit-ledger.tsv`
