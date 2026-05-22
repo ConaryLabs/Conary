@@ -219,6 +219,17 @@ Focused Slice C daily-driver CLI proof:
   package names and declared installed/repository provider metadata instead of
   soname/package-name guessing.
 
+Focused Goal 7 daily-driver UX proof:
+
+- `apps/conary/tests/cli_daily_ux.rs` proves the checked-in
+  `docs/operations/daily-driver-ux-matrix.md` routes for rendered root help,
+  bash/zsh completion output, live-host mutation refusal, adopted-package
+  install takeover guidance, adopted-package remove unadopt/purge guidance, and
+  adopted-package update native-PM/adoption-refresh guidance.
+- Completion rendering is verified by command execution, not visual review:
+  `cargo run -p conary -- system completions bash` and
+  `cargo run -p conary -- system completions zsh`.
+
 Focused Slice D native package-manager parity proof:
 
 - `cargo run -p conary-test -- run --suite phase4-native-pm-parity --distro fedora44 --phase 4`

@@ -26,8 +26,8 @@ For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 
 
 ### 3. Developer Experience
 
-- Shell integration and smoother project-local workflows
-- Better CLI ergonomics and troubleshooting output
+- Shell integration and smoother project-local workflows, backed by rendered bash/zsh completion checks
+- Better CLI ergonomics and troubleshooting output, tracked in the daily-driver UX matrix
 - Cleaner onboarding for contributors and operators
 - Fewer "special knowledge" paths for testing server-enabled code
 
@@ -75,7 +75,7 @@ For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 
 4. Design active-generation handoff back to native package-manager authority
 5. Keep generation export, installed-runtime QEMU validation, and Group P ISO evidence green in rotation
 6. Keep self-host VM validation inputs fresh by default and finish pristine rerun isolation
-7. Shell integration, release polish, and contributor-experience cleanup
+7. Keep the daily-driver UX matrix, shell completions, release polish, and contributor/operator diagnostics current
 
 ---
 

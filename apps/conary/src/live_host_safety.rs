@@ -37,7 +37,7 @@ pub fn require_live_system_mutation_ack(
     }
 
     message.push_str(
-        " Rerun with --allow-live-system-mutation only if you intend to modify the real machine.",
+        " Use --dry-run when available to preview first. Rerun with --allow-live-system-mutation only if you intend to modify the real machine. For durable background package jobs, use conaryd; daemon jobs keep the same explicit live-host acknowledgement boundary.",
     );
 
     bail!("{message}")

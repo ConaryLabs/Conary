@@ -89,6 +89,7 @@ other non-UTC context.
 ## Focused Docs
 
 - [`docs/operations/bootstrap-selfhosting-vm.md`](../operations/bootstrap-selfhosting-vm.md): truthful operator flow for the current bootstrap self-hosting VM path
+- [`docs/operations/daily-driver-ux-matrix.md`](../operations/daily-driver-ux-matrix.md): daily-driver CLI diagnostics, unsupported-case routes, shell completion checks, and focused Goal 7 tests
 - [`docs/operations/post-generation-export-follow-up-roadmap.md`](../operations/post-generation-export-follow-up-roadmap.md): remaining image projection, ISO, bundle, and boot-artifact provenance work
 - [`docs/operations/bootstrap-follow-up-investigations.md`](../operations/bootstrap-follow-up-investigations.md): deferred architecture and cleanup ideas to revisit after bootstrap is stable
 

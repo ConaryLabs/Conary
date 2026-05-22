@@ -602,7 +602,7 @@ The next milestone is the current **adoption-led preview and validation** push -
 - Design the active-generation handoff for returning a selected Conary generation to native package-manager authority
 - Introduce signed portable generation bundles and boot-artifact provenance
 - Keep self-host VM validation freshness checks green and finish snapshot/overlay rerun hygiene
-- Improve shell integration, contributor onboarding, and operator diagnostics
+- Keep the Goal 7 daily-driver UX matrix, shell completion rendering checks, and operator diagnostics current
 - Continue hardening trust, federation, release, and rollback behavior
 
 ---
@@ -628,6 +628,7 @@ For the repo-level documentation system:
 | [docs/INTEGRATION-TESTING.md](docs/INTEGRATION-TESTING.md) | Integration-test suites, phases, and runtime expectations |
 | [docs/modules/bootstrap.md](docs/modules/bootstrap.md) | Bootstrap pipeline and command-surface reference |
 | [docs/operations/bootstrap-selfhosting-vm.md](docs/operations/bootstrap-selfhosting-vm.md) | Truthful operator flow for the current self-hosting VM path |
+| [docs/operations/daily-driver-ux-matrix.md](docs/operations/daily-driver-ux-matrix.md) | Daily-driver CLI diagnostics, unsupported-case routes, and shell completion checks |
 | [docs/operations/post-generation-export-follow-up-roadmap.md](docs/operations/post-generation-export-follow-up-roadmap.md) | Remaining generation export, image projection, and provenance follow-ups |
 | [docs/operations/bootstrap-follow-up-investigations.md](docs/operations/bootstrap-follow-up-investigations.md) | Deferred bootstrap architecture follow-ups to revisit later |
 | [docs/operations/infrastructure.md](docs/operations/infrastructure.md) | MCP, deploy, and host workflow notes |
