@@ -1,8 +1,8 @@
 // apps/remi/src/server/mcp.rs
 //! MCP (Model Context Protocol) server for LLM agent integration.
 //!
-//! Exposes Remi admin operations as MCP tools so that LLM agents (Claude,
-//! etc.) can manage tokens, repositories, federation peers, audit data,
+//! Exposes Remi admin operations as MCP tools so that LLM agents can manage
+//! tokens, repositories, federation peers, audit data,
 //! test harness state, chunk garbage collection, and canonical mappings
 //! through a standardised protocol.
 //!

@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-01
-revision: 6
-summary: Stable subsystem pointers and durable assistant-facing guidance for the Conary workspace after self-contained runtime generation export and the documentation-system refresh
+last_updated: 2026-05-22
+revision: 7
+summary: Stable subsystem pointers and durable assistant-facing guidance for the Conary workspace after selected-generation handoff and x86_64 ISO export proof
 ---
 
 # Assistant Subsystem Map
@@ -43,6 +43,11 @@ summary: Stable subsystem pointers and durable assistant-facing guidance for the
   `crates/conary-core/src/generation/mount.rs`,
   `crates/conary-core/src/generation/etc_merge.rs`, and
   `crates/conary-core/src/generation/gc.rs`
+- Adoption, unadoption, and selected-generation native-authority handoff:
+  `apps/conary/src/commands/adopt/mod.rs`,
+  `apps/conary/src/commands/adopt/unadopt.rs`,
+  `apps/conary/src/commands/adopt/native_handoff.rs`, and
+  `apps/conary/tests/integration/remi/manifests/phase3-active-generation-handoff.toml`
 - CCS package building, chunking, verification, and conversion:
   `crates/conary-core/src/ccs/builder.rs`,
   `crates/conary-core/src/ccs/binary_manifest.rs`,
@@ -85,6 +90,9 @@ summary: Stable subsystem pointers and durable assistant-facing guidance for the
   before duplicating business logic in handlers.
 - Transaction and generation work are tightly coupled: resolve, fetch, DB
   commit, build the EROFS generation artifact, then mount or export it.
+- Adoption mode preserves native package-manager authority until explicit
+  takeover or selected-generation native handoff. Do not silently convert
+  adopted RPM/DEB/Arch packages into Conary-owned packages.
 - Trust defaults matter. Keep HTTPS peer identity pinning and strict signature
   verification intact unless the task explicitly changes the trust model.
 
@@ -94,7 +102,7 @@ summary: Stable subsystem pointers and durable assistant-facing guidance for the
 - [`docs/modules/ccs.md`](../modules/ccs.md) for CCS format and conversion context
 - [`docs/modules/bootstrap.md`](../modules/bootstrap.md) for bootstrap and stage flows
 - [`docs/operations/bootstrap-selfhosting-vm.md`](../operations/bootstrap-selfhosting-vm.md) for the truthful self-hosting VM build and validation path
-- [`docs/operations/post-generation-export-follow-up-roadmap.md`](../operations/post-generation-export-follow-up-roadmap.md) for remaining generation export and image projection follow-ups
+- [`docs/operations/post-generation-export-follow-up-roadmap.md`](../operations/post-generation-export-follow-up-roadmap.md) for remaining bundle, boot-artifact verification, sandbox, pristine-validation, and image-projection follow-ups
 - [`docs/modules/recipe.md`](../modules/recipe.md) for recipe/build-system behavior
 - [`docs/modules/query.md`](../modules/query.md) for query-oriented CLI flows
 - [`docs/modules/source-selection.md`](../modules/source-selection.md) for source-policy, ranking, and replatform behavior

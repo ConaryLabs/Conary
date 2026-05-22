@@ -19,11 +19,10 @@ Thumbs.db
 *.db-shm
 *.db-wal
 
-# Claude Code
+# Retired Claude Code local leftovers
 .mcp.json
 CLAUDE.local.md
-.claude/settings.local.json
-.claude/*.local.md
+.claude/
 
 # Local operator notes
 docs/operations/LOCAL_ACCESS.md

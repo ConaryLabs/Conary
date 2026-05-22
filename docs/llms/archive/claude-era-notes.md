@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-04-02
-revision: 1
-summary: Historical notes about the retired Claude-era assistant harness and why its durable pieces were migrated
+last_updated: 2026-05-22
+revision: 2
+summary: Historical notes about the retired Claude-era assistant harness, its migration, and the later removal of tracked Claude active artifacts
 ---
 
 # Claude-Era Harness Notes
@@ -22,12 +22,13 @@ tool-specific structure that other assistants could not reuse directly.
 - Subsystem pointers, invariants, and "look here first" guidance
 - MCP-first operational habits
 - The habit of checking current external docs before guessing third-party APIs
-- Two useful hook guardrails: sensitive-file blocking and post-edit clippy feedback
 
 ## What Did Not Survive As Active Guidance
 
 - Named-agent rosters as the primary collaboration model
 - Claude-specific path-loading metadata such as `paths:` frontmatter
+- Claude hook guardrails such as sensitive-file blocking and post-edit clippy
+  feedback
 - Local settings files as an implicit place to stash operator access details
 - Volatile inventories such as schema counts, workflow counts, and other
   fast-moving implementation trivia
@@ -41,5 +42,11 @@ The durable pieces moved into:
 - [`docs/operations/infrastructure.md`](../../operations/infrastructure.md) for non-secret operations notes
 - [`docs/operations/LOCAL_ACCESS.example.md`](../../operations/LOCAL_ACCESS.example.md) as the tracked template for the ignored `docs/operations/LOCAL_ACCESS.md` local note
 
-The remaining Claude-specific artifacts are compatibility shims or explicit
-tool-coupled helpers rather than the repository's source of truth.
+The tracked Claude-specific active artifacts were later removed because this
+workspace no longer uses Claude. That includes the `CLAUDE.md` compatibility
+shim, `.claude/settings.json`, and the Claude hook helper scripts under
+`scripts/dev/`.
+
+If old local `.claude/` files still exist in a checkout, they are ignored local
+leftovers and are not repository guidance. Do not restore tracked Claude
+entrypoints or harness files unless the active toolchain changes.
