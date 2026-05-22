@@ -1,14 +1,14 @@
 ---
-last_updated: 2026-05-12
-revision: 6
-summary: Vendor-neutral map for coding assistants working in the Conary repository, current validation docs, and tool-specific entrypoints
+last_updated: 2026-05-22
+revision: 7
+summary: GPT-5.5/Codex-first map for coding assistants working in the Conary repository, current validation docs, and remaining compatibility entrypoints
 ---
 
 # Conary For Coding Assistants
 
 ## Purpose
 
-This directory is the vendor-neutral map for coding assistants working on
+This directory is the GPT-5.5/Codex-first map for coding assistants working on
 Conary. Use it to find the right canonical docs quickly without turning the
 root guidance into a manual.
 
@@ -27,9 +27,11 @@ root guidance into a manual.
 - Canonical subsystem and operations detail belongs in human-readable docs such
   as `docs/ARCHITECTURE.md`, `docs/modules/*.md`, and
   `docs/operations/*.md`.
-- Tool-specific entrypoints such as `CLAUDE.md`, `GEMINI.md`, and
+- Tool-specific entrypoints such as `GEMINI.md` and
   `.github/copilot-instructions.md` should stay intentionally thin and point
   back to this layered doc system instead of becoming parallel manuals.
+- Claude-specific tracked entrypoints and `.claude/` harness files are retired.
+  Keep Claude-era context in `docs/llms/archive/`, not in active guidance.
 - If a subtree later needs materially different durable instructions, prefer a
   nested `AGENTS.md` scoped to that subtree over bloating the root guidance.
 
@@ -38,7 +40,11 @@ root guidance into a manual.
 This repo should keep durable guidance model-neutral, but OpenAI/Codex prompt
 and harness changes should be checked against current OpenAI docs:
 
+- [Codex AGENTS.md guidance](https://developers.openai.com/codex/guides/agents-md)
+- [Codex best practices](https://developers.openai.com/codex/learn/best-practices)
 - [Prompt guidance](https://developers.openai.com/api/docs/guides/prompt-guidance)
+- [Prompt engineering](https://developers.openai.com/api/docs/guides/prompt-engineering)
+- [Reasoning best practices](https://developers.openai.com/api/docs/guides/reasoning-best-practices)
 - [Using GPT-5.5](https://developers.openai.com/api/docs/guides/latest-model#using-reasoning-models)
 
 For Codex or other OpenAI agents, keep stable repo policy near the top of the
@@ -51,6 +57,14 @@ State the desired mode plainly: plan, design, implement, review, debug, or
 verify. Include acceptance criteria and exact verification commands when they
 are known, while leaving room for the agent to inspect the codebase and adjust
 the path. Prefer outcome-focused constraints over long, brittle scripts.
+For long-running Codex work, ask for an explicit plan/TODO list, short notable
+tool preambles, persistence until the request is fully handled, and final
+evidence before success claims.
+
+Keep GPT-5.5 prompts simple and direct. Use Markdown headings, XML tags, or
+other clear delimiters when mixing logs, diffs, requirements, and expected
+output. Do not ask for hidden chain-of-thought; ask for findings, decisions,
+verification evidence, and concise rationale.
 
 Treat output length and reasoning depth as separate concerns. Use harness
 controls such as `text.verbosity` and `reasoning.effort` when available; in repo
@@ -68,6 +82,12 @@ configuration when possible. `AGENTS.md` and this directory should carry
 cross-tool policy, source-of-truth pointers, and durable repo workflow
 expectations. Use structured outputs or schema validation in a harness instead
 of prose-only JSON schema instructions.
+
+There is no active OpenAI/LLM prompt harness in this repository today.
+`crates/conary-core/src/automation/prompt.rs` is product automation UI, not a
+model prompt layer. If a future agentic harness is added, prefer the Responses
+API plus current Agents SDK patterns over custom orchestration, and document the
+runtime contract outside the repo-wide assistant map.
 
 Do not bake a "current date" into durable assistant docs. Add explicit dates or
 time zones only when a workflow needs user-local, release, policy-effective, or
@@ -90,7 +110,7 @@ other non-UTC context.
 
 - [`docs/operations/bootstrap-selfhosting-vm.md`](../operations/bootstrap-selfhosting-vm.md): truthful operator flow for the current bootstrap self-hosting VM path
 - [`docs/operations/daily-driver-ux-matrix.md`](../operations/daily-driver-ux-matrix.md): daily-driver CLI diagnostics, unsupported-case routes, shell completion checks, and focused Goal 7 tests
-- [`docs/operations/post-generation-export-follow-up-roadmap.md`](../operations/post-generation-export-follow-up-roadmap.md): remaining image projection, ISO, bundle, and boot-artifact provenance work
+- [`docs/operations/post-generation-export-follow-up-roadmap.md`](../operations/post-generation-export-follow-up-roadmap.md): remaining bundle, boot-artifact verification, pristine-validation, sandbox, and image-projection work after x86_64 ISO export landed
 - [`docs/operations/bootstrap-follow-up-investigations.md`](../operations/bootstrap-follow-up-investigations.md): deferred architecture and cleanup ideas to revisit after bootstrap is stable
 
 ## Working Rules
@@ -98,8 +118,10 @@ other non-UTC context.
 - Treat `AGENTS.md` as a map, not a manual.
 - Prefer `AGENTS.md` as the shared cross-tool filename where the tool supports
   it.
-- Keep tool-specific files such as `CLAUDE.md`, `GEMINI.md`, or
+- Keep tool-specific files such as `GEMINI.md` or
   `.github/copilot-instructions.md` short and pointed back at `AGENTS.md`.
+- Do not reintroduce tracked `CLAUDE.md`, `.claude/`, or Claude hook helpers
+  unless the active toolchain changes.
 - Avoid duplicating or conflicting repo-wide guidance across tool-specific
   entrypoints or path rules.
 - Prefer MCP tools over ad hoc SSH or curl when the MCP surface already covers

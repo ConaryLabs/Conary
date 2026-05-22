@@ -31,8 +31,8 @@ archive paths and leaves the active `plans/` and `specs/` roots empty until a
 new current plan or spec begins.
 
 Audited every tracked documentation-like file returned by
-`bash scripts/docs-audit-inventory.sh`: 89 tracked files spanning root docs,
-assistant shims, GitHub templates, canonical docs under `docs/`,
+`bash scripts/docs-audit-inventory.sh`: tracked files spanning root docs,
+assistant entrypoints, GitHub templates, canonical docs under `docs/`,
 deploy/operator docs, `deploy/remi.toml.example`, app-local READMEs, active
 planning records, historical/archive docs, release security waivers, and
 the `site/`/`web` frontend READMEs.
@@ -141,6 +141,9 @@ The repo moved materially after the last audit:
   headline public promise.
 - Refreshed assistant-facing docs to route broad doc work through the inventory
   and ledger checker, and added the post-generation export roadmap to the map.
+- Refreshed assistant-facing docs again on 2026-05-22 for GPT-5.5/Codex-first
+  work, removed tracked Claude active guidance/harness files, and kept
+  Claude-era context only as archived history.
 - Reframed completed dated plans/specs as historical implementation records
   and archived completed implementation plans/specs after their validation
   evidence landed on `main`.
@@ -192,7 +195,9 @@ The repo moved materially after the last audit:
   `docs/superpowers/limited-preview-release-checkpoint-2026-05-16.md` and
   `docs/superpowers/limited-preview-subreddit-tester-post-2026-05-19.md`, not
   by a broad top-level release plan.
-- No tracked documentation files were deleted.
+- The retired `CLAUDE.md` compatibility shim was deleted after Claude stopped
+  being an active toolchain for this repo. The historical Claude-era notes were
+  retained under `docs/llms/archive/`.
 
 ## Verification Commands
 
@@ -231,7 +236,7 @@ The repo moved materially after the last audit:
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `git diff --check`
 - `rg -n "replace dnf|replace apt|replace pacman|risk-free|unadopt|takeover" README.md ROADMAP.md docs`
-- `rg -n "rebuild or remoun[t]|MOUNTE[D]|refresh the Fedora 44 QEMU source imag[e]|active execution pla[n]|active umbrella desig[n]|remain active at the top leve[l]" README.md ROADMAP.md CHANGELOG.md CONTRIBUTING.md SECURITY.md AGENTS.md CLAUDE.md GEMINI.md docs apps/conary-test deploy site web .github`
+- `rg -n "rebuild or remoun[t]|MOUNTE[D]|refresh the Fedora 44 QEMU source imag[e]|active execution pla[n]|active umbrella desig[n]|remain active at the top leve[l]" README.md ROADMAP.md CHANGELOG.md CONTRIBUTING.md SECURITY.md AGENTS.md GEMINI.md docs apps/conary-test deploy site web .github`
 - `cargo test -p conaryd test_package_routes_return_not_implemented`
 - `cargo test -p conaryd package_routes`
 - `cargo run -p conaryd -- --help`
