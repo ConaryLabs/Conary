@@ -20,9 +20,13 @@ live-host mutation acknowledgement boundary. The Goal 7 refresh adds the
 checked-in daily-driver UX matrix, root help examples, bash/zsh completion
 rendering checks, and focused CLI diagnostics proof for native PM, adoption
 refresh, explicit takeover, unadopt/purge, generation, and conaryd routes.
+The 2026-05-22 completion-validation refresh records that the seven-track
+daily-driver readiness program still cannot be called complete because Goal 1
+native-authority handoff evidence is absent, while fresh Phase 1, Phase 4, and
+local QEMU evidence passed for the supported final validation surface.
 
 Audited every tracked documentation-like file returned by
-`bash scripts/docs-audit-inventory.sh`: 86 tracked files spanning root docs,
+`bash scripts/docs-audit-inventory.sh`: 88 tracked files spanning root docs,
 assistant shims, GitHub templates, canonical docs under `docs/`,
 deploy/operator docs, `deploy/remi.toml.example`, app-local READMEs, active
 planning/design records, historical/archive docs, release security waivers, and
@@ -79,6 +83,9 @@ The repo moved materially after the last audit:
   rendered root help examples, bash/zsh completion output, live-host mutation
   refusal guidance, adopted-package native-PM/update-refresh guidance, explicit
   takeover routes, unadopt/purge routes, and conaryd operator wording
+- the 2026-05-22 daily-driver readiness completion-validation audit, including
+  fresh Phase 1 and Phase 4 distro matrices, local QEMU Group N/O/P evidence,
+  the booted ISO export proof, and the remaining Goal 1 handoff blocker
 
 ## Major Corrections
 
@@ -150,6 +157,11 @@ The repo moved materially after the last audit:
   diagnostics/completion checks, and aligned package-command output with
   native package-manager, adoption refresh, explicit takeover, unadopt/purge,
   generation, and conaryd guidance.
+- Added the 2026-05-22 daily-driver readiness completion audit and execution
+  plan. The audit records fresh green Phase 1/Phase 4 matrices and the local
+  QEMU composefs, Group N, Group O, and Group P ISO boot gates, while preserving
+  the active Goal 1 native-authority handoff caveat because the required suite
+  and implementation evidence are still missing.
 
 ## Archive Decisions
 
@@ -180,6 +192,10 @@ The repo moved materially after the last audit:
 - `cargo run -p conary-test -- run --suite phase3-group-n-qemu --distro fedora44 --phase 3`
 - `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`
 - `cargo run -p conary-test -- run --suite phase3-group-p-iso-export --distro fedora44 --phase 3`
+- `CONARY_LOCAL_VALIDATION_RUN_ID=readiness-completion-20260522 scripts/local-qemu-validation.sh`
+- `cargo run -p conary-test -- run --suite phase4-native-pm-parity --distro fedora44 --phase 4`
+- `cargo run -p conary-test -- run --suite phase4-native-pm-parity --distro ubuntu-26.04 --phase 4`
+- `cargo run -p conary-test -- run --suite phase4-native-pm-parity --distro arch --phase 4`
 - `cargo test -p conary-core generation::export`
 - `cargo test -p conary-test qemu_image`
 - `cargo test -p conary-test qemu_boot_`
