@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-22
-revision: 1
-summary: Follow-on design for a stateless MCP adapter compliance harness before live MCP expansion
+last_updated: 2026-05-23
+revision: 2
+summary: Follow-on design for a stateless MCP adapter compliance harness before live MCP expansion, with final review fixes
 ---
 
 # Stateless MCP Adapter Compliance Harness: Design Spec
@@ -166,6 +166,27 @@ The compliance module should expose typed errors with stable machine-readable
 codes so a later raw HTTP adapter can translate them into JSON-RPC errors and
 HTTP statuses without string parsing.
 
+Protocol error codes from the current MCP draft:
+
+| Error code | Name | Use |
+| --- | --- | --- |
+| `-32001` | `HeaderMismatch` | Required MCP request headers are missing or malformed, or header values do not match the JSON-RPC request body. |
+| `-32004` | `UnsupportedProtocolVersion` | The server does not support the requested MCP protocol version. |
+
+Missing per-request `_meta` fields are malformed request parameters and should
+remain distinguishable from header validation failures.
+
+`DiscoverResult` and `CacheableResult` in this slice return
+`resultType: "complete"`. Other draft result types, especially
+`input_required` from MRTR / SEP-2322, are out of scope for this harness slice
+but should not be precluded by the type design.
+
+`CacheableResult` uses `#[serde(flatten)]` to merge `CachePolicy` fields into
+the result. The contract crate's `CachePolicy` serde renames (`ttlMs`,
+`cacheScope`) are intentionally the MCP draft field names. If the draft changes
+these names before the release candidate, update both the contract and adapter
+tests together.
+
 ## Testing
 
 The implementation plan must use TDD and focused tests in `crates/conary-mcp`.
@@ -179,6 +200,7 @@ Required coverage:
   or per-request `_meta` fails with typed errors
 - mismatched header/body method, name, or protocol version fails with typed
   errors
+- header/protocol errors expose the current draft JSON-RPC numeric error codes
 - `server/discover` serializes `resultType: "complete"`, supported versions,
   capabilities, server info, and optional instructions
 - unsupported protocol version errors include supported and requested versions
