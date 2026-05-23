@@ -139,7 +139,7 @@ git commit -m "feat(test): define bootstrap smoke command"
 **Files:**
 - Modify: `apps/conary-test/src/bootstrap.rs`
 
-- [ ] **Step 1: Write failing tests for dry-run and not-ready output**
+- [x] **Step 1: Write failing tests for dry-run and not-ready output**
 
 Add:
 
@@ -202,7 +202,7 @@ struct ReadyBootstrapFixture {
 }
 ```
 
-- [ ] **Step 2: Run tests and verify they fail**
+- [x] **Step 2: Run tests and verify they fail**
 
 ```bash
 cargo test -p conary-test bootstrap::tests::smoke_dry_run_returns_planned_command_without_execution
@@ -211,7 +211,7 @@ cargo test -p conary-test bootstrap::tests::smoke_refuses_when_bootstrap_check_i
 
 Expected: FAIL because `smoke_with_runner` does not exist.
 
-- [ ] **Step 3: Implement dry-run and readiness gating**
+- [x] **Step 3: Implement dry-run and readiness gating**
 
 Add:
 
@@ -302,7 +302,7 @@ pub fn smoke_with_runner(
 }
 ```
 
-- [ ] **Step 4: Run tests and commit**
+- [x] **Step 4: Run tests and commit**
 
 ```bash
 cargo test -p conary-test bootstrap::tests::smoke_dry_run_returns_planned_command_without_execution

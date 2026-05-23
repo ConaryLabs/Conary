@@ -106,6 +106,90 @@ pub fn build_smoke_command(exe: &Path, options: &BootstrapSmokeOptions) -> Boots
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmokeCommandOutput {
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+pub fn smoke_with_runner(
+    inspect: &InspectResult,
+    options: &BootstrapSmokeOptions,
+    mut runner: impl FnMut(&BootstrapSmokeCommand) -> SmokeCommandOutput,
+) -> conary_agent_contract::VerifyResult {
+    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("conary-test"));
+    let command = build_smoke_command(&exe, options);
+    let mut envelope = OperationEnvelope::new(
+        "conary-test.bootstrap.smoke",
+        OperationStatus::Planned,
+        RiskLevel::Medium,
+        "Local Conary developer bootstrap smoke proof loop",
+    );
+    envelope.subject = Some(local_bootstrap_status());
+
+    let command_json = serde_json::json!({
+        "program": command.program.display().to_string(),
+        "args": command.args.clone(),
+    });
+
+    let ready = inspect
+        .data
+        .pointer("/default_smoke_candidate/ready")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+
+    if options.dry_run {
+        return conary_agent_contract::VerifyResult::new(envelope).with_data(serde_json::json!({
+            "dry_run": true,
+            "executed": false,
+            "command": command_json,
+        }));
+    }
+
+    if !ready && !options.force {
+        envelope.status = OperationStatus::Unavailable;
+        envelope
+            .warnings
+            .push("bootstrap check is not ready; rerun bootstrap check or use --force".to_string());
+        return conary_agent_contract::VerifyResult::new(envelope).with_data(serde_json::json!({
+            "dry_run": false,
+            "executed": false,
+            "command": command_json,
+        }));
+    }
+
+    let output = runner(&command);
+    envelope.status = if output.exit_code == 0 {
+        OperationStatus::Ok
+    } else {
+        OperationStatus::Failed
+    };
+    envelope.evidence.push(EvidenceItem {
+        kind: EvidenceKind::Command,
+        summary: format!("bootstrap smoke exited {}", output.exit_code),
+        uri: None,
+        path: None,
+        id: Some("bootstrap-smoke".to_string()),
+        command: Some(
+            std::iter::once(command.program.display().to_string())
+                .chain(command.args.iter().cloned())
+                .collect(),
+        ),
+        exit_code: Some(output.exit_code),
+        metadata: Default::default(),
+    });
+
+    conary_agent_contract::VerifyResult::new(envelope).with_data(serde_json::json!({
+        "dry_run": false,
+        "executed": true,
+        "command": command_json,
+        "exit_code": output.exit_code,
+        "stdout": output.stdout,
+        "stderr": output.stderr,
+    }))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BootstrapProbe {
     pub cargo_available: bool,
     pub podman_command_available: bool,
@@ -472,6 +556,16 @@ exit_code = 0
         .unwrap();
     }
 
+    fn ready_bootstrap_report() -> InspectResult {
+        let root = tempdir().unwrap();
+        let manifests = root.path().join("manifests");
+        std::fs::create_dir_all(&manifests).unwrap();
+        write_valid_manifest(&manifests.join("phase1-core.toml"));
+        let config = root.path().join("config.toml");
+        write_valid_config(&config);
+        inspect_with_paths_and_probe(root.path(), &manifests, &config, ready_probe())
+    }
+
     #[test]
     fn inspect_reports_missing_manifest_dir_without_success() {
         let root = tempdir().unwrap();
@@ -585,6 +679,40 @@ exit_code = 0
                 "--phase",
                 "1",
             ]
+        );
+    }
+
+    #[test]
+    fn smoke_dry_run_returns_planned_command_without_execution() {
+        let mut options = BootstrapSmokeOptions::default();
+        options.dry_run = true;
+        let inspect = ready_bootstrap_report();
+        let report = smoke_with_runner(&inspect, &options, |_command| {
+            panic!("dry-run must not execute the smoke command")
+        });
+
+        assert_eq!(report.envelope.status, OperationStatus::Planned);
+        assert_eq!(report.envelope.risk, RiskLevel::Medium);
+        assert_eq!(report.data["dry_run"], true);
+        assert_eq!(report.data["command"]["args"][0], "run");
+    }
+
+    #[test]
+    fn smoke_refuses_when_bootstrap_check_is_not_ready() {
+        let mut inspect = ready_bootstrap_report();
+        inspect.data["default_smoke_candidate"]["ready"] = serde_json::json!(false);
+        let report = smoke_with_runner(&inspect, &BootstrapSmokeOptions::default(), |_command| {
+            panic!("not-ready smoke must not execute")
+        });
+
+        assert_eq!(report.envelope.status, OperationStatus::Unavailable);
+        assert_eq!(report.data["executed"], false);
+        assert!(
+            report
+                .envelope
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("bootstrap check is not ready"))
         );
     }
 }
