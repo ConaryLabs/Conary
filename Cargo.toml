@@ -5,6 +5,7 @@ members = [
     "apps/conaryd",
     "apps/conary-test",
     "crates/conary-bootstrap",
+    "crates/conary-agent-contract",
     "crates/conary-mcp",
     "crates/conary-core",
 ]
