@@ -1176,6 +1176,7 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
+ "conary-agent-contract",
  "conary-core",
  "conary-mcp",
  "dashmap",

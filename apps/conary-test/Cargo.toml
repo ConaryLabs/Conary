@@ -10,6 +10,7 @@ description = "Test infrastructure for Conary — declarative TOML test engine w
 
 [dependencies]
 conary-core = { path = "../../crates/conary-core" }
+conary-agent-contract = { path = "../../crates/conary-agent-contract" }
 conary-mcp = { path = "../../crates/conary-mcp" }
 
 # Workspace shared

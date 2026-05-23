@@ -1,5 +1,6 @@
 // conary-test/src/lib.rs
 
+pub mod bootstrap;
 pub mod build_info;
 pub mod config;
 pub mod container;
