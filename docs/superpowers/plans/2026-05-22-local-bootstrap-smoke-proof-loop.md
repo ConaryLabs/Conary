@@ -526,7 +526,7 @@ git commit -m "feat(test): add bootstrap smoke cli"
 - Modify: `docs/INTEGRATION-TESTING.md`
 - Modify: `docs/llms/README.md` if assistant routing needs the new smoke command
 
-- [ ] **Step 1: Update docs**
+- [x] **Step 1: Update docs**
 
 Document:
 
@@ -538,7 +538,7 @@ cargo run -p conary-test -- bootstrap smoke --json
 
 Text must say `bootstrap smoke` may build images, start containers, and write result files. It is not package publishing and does not require cloud credentials.
 
-- [ ] **Step 2: Run docs/stale scans**
+- [x] **Step 2: Run docs/stale scans**
 
 ```bash
 rg -n "bootstrap check|bootstrap smoke|smoke-readiness" apps/conary-test/README.md docs/INTEGRATION-TESTING.md docs/llms/README.md
@@ -547,7 +547,7 @@ rg -n "publish fixtures|cloud credentials|live MCP resources|live MCP prompts" a
 
 Expected: command references are current; no doc implies `bootstrap smoke` publishes fixtures or adds live MCP surface area.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add apps/conary-test/README.md docs/INTEGRATION-TESTING.md docs/llms/README.md docs/superpowers/plans/2026-05-22-local-bootstrap-smoke-proof-loop.md

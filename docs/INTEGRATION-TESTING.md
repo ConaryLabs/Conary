@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-05-22
-revision: 26
-summary: Record selected-generation native authority handoff evidence
+revision: 27
+summary: Document local bootstrap smoke proof loop
 ---
 
 # Integration Testing
@@ -127,6 +127,7 @@ Common conary-test operations have CLI equivalents for human use:
 | Command | Purpose |
 |---------|---------|
 | `conary-test bootstrap check [--json]` | Inspect local developer prerequisites and smoke-readiness status |
+| `conary-test bootstrap smoke [--dry-run] [--json]` | Preview or run the local developer smoke proof loop |
 | `conary-test deploy rollout (--unit <name> \| --group <name>) [--ref <git-ref> \| --path <path>]` | Managed Forge deploy flow; trusted default source is a GitHub ref |
 | `conary-test run --suite <name> --distro <distro> --phase <N>` | Execute a test suite |
 | `conary-test deploy source [--ref <git-ref>]` | Deploy source and rebuild |
@@ -146,6 +147,19 @@ From a checkout, use
 `cargo run -p conary-test -- bootstrap check --json` before smoke validation to
 inspect local prerequisites such as Cargo, manifest availability, container
 runtime readiness, and optional QEMU/KVM support.
+
+Use the local developer smoke proof loop when you want one command to preview
+or execute the default `phase1-core` Fedora 44 validation path:
+
+```bash
+cargo run -p conary-test -- bootstrap check --json
+cargo run -p conary-test -- bootstrap smoke --dry-run --json
+cargo run -p conary-test -- bootstrap smoke --json
+```
+
+`bootstrap smoke` may build images, start containers, and write conary-test
+result files through the normal runner. It is not package publishing, does not
+publish fixtures, and does not require cloud credentials.
 
 Remote Forge control-plane validation is temporarily paused while Conary
 replaces the old VPS runner with a KVM-capable host. The Forge scripts remain
