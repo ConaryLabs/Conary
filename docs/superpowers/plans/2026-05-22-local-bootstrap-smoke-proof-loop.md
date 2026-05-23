@@ -559,13 +559,13 @@ git commit -m "docs(test): document bootstrap smoke proof loop"
 **Files:**
 - All touched files.
 
-- [ ] **Step 1: Run formatting**
+- [x] **Step 1: Run formatting**
 
 ```bash
 cargo fmt --check
 ```
 
-- [ ] **Step 2: Run focused tests**
+- [x] **Step 2: Run focused tests**
 
 ```bash
 cargo test -p conary-test bootstrap
@@ -575,13 +575,13 @@ cargo run -p conary-test -- bootstrap smoke --dry-run --json
 cargo run -p conary-test -- list
 ```
 
-- [ ] **Step 3: Run lint**
+- [x] **Step 3: Run lint**
 
 ```bash
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-- [ ] **Step 4: Run final status checks**
+- [x] **Step 4: Run final status checks**
 
 ```bash
 rg -n "conary-test bootstrap smoke|bootstrap smoke --dry-run|conary-local://bootstrap/status" apps/conary-test/README.md docs/INTEGRATION-TESTING.md docs/llms/README.md apps/conary-test/src
@@ -590,7 +590,7 @@ git status --short
 git log --oneline -8
 ```
 
-- [ ] **Step 5: Request review**
+- [x] **Step 5: Request review**
 
 Use `/review` or dispatch a code-review subagent with this scope:
 
