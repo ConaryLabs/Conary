@@ -8,6 +8,8 @@ description = "Shared MCP adapter helpers for Conary workspace apps"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+conary-agent-contract = { path = "../conary-agent-contract" }
 rmcp = { workspace = true, features = ["server"] }
+schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true

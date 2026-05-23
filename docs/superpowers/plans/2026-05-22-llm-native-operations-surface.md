@@ -603,7 +603,7 @@ git commit -m "feat(agent): add transport-neutral operation contract"
 - Modify: `crates/conary-mcp/Cargo.toml`
 - Modify: `crates/conary-mcp/src/lib.rs`
 
-- [ ] **Step 1: Write failing schema helper tests**
+- [x] **Step 1: Write failing schema helper tests**
 
 Add these tests to `crates/conary-mcp/src/lib.rs`:
 
@@ -636,12 +636,12 @@ Add these tests to `crates/conary-mcp/src/lib.rs`:
 Run:
 
 ```bash
-cargo test -p conary-mcp contract_json_text_serializes_contract_result output_schema_for_contract_result_mentions_operation
+cargo test -p conary-mcp contract_result
 ```
 
 Expected: FAIL because the helper functions and dependency do not exist yet.
 
-- [ ] **Step 2: Add dependencies**
+- [x] **Step 2: Add dependencies**
 
 In `crates/conary-mcp/Cargo.toml`, add:
 
@@ -650,7 +650,7 @@ conary-agent-contract = { path = "../conary-agent-contract" }
 schemars.workspace = true
 ```
 
-- [ ] **Step 3: Add schema helpers**
+- [x] **Step 3: Add schema helpers**
 
 In `crates/conary-mcp/src/lib.rs`, add these imports:
 
@@ -673,7 +673,7 @@ pub fn output_schema_for<T: JsonSchema>() -> Result<serde_json::Value, McpError>
 }
 ```
 
-- [ ] **Step 4: Run adapter tests**
+- [x] **Step 4: Run adapter tests**
 
 ```bash
 cargo test -p conary-mcp
@@ -681,7 +681,7 @@ cargo test -p conary-mcp
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/conary-mcp/Cargo.toml crates/conary-mcp/src/lib.rs
