@@ -46,6 +46,25 @@ pub struct CatalogItem {
     pub cache: CachePolicy,
 }
 
+pub fn default_read_resources() -> Vec<CatalogItem> {
+    vec![
+        CatalogItem {
+            name: "remi.health".to_string(),
+            description: "Read Remi service health".to_string(),
+            when_to_use: "Use before Remi admin or package-service operations".to_string(),
+            risk: RiskLevel::ReadOnly,
+            cache: CachePolicy::private_short(),
+        },
+        CatalogItem {
+            name: "conary-test.bootstrap.status".to_string(),
+            description: "Read local developer bootstrap status".to_string(),
+            when_to_use: "Use before running local smoke validation".to_string(),
+            risk: RiskLevel::ReadOnly,
+            cache: CachePolicy::private_short(),
+        },
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -55,5 +74,17 @@ mod tests {
         let value = serde_json::to_value(CachePolicy::private_short()).unwrap();
         assert_eq!(value["ttlMs"], 30_000);
         assert_eq!(value["cacheScope"], "private");
+    }
+
+    #[test]
+    fn default_resources_are_read_only_and_explain_when_to_use() {
+        let resources = default_read_resources();
+        assert!(
+            resources
+                .iter()
+                .all(|item| item.risk == RiskLevel::ReadOnly)
+        );
+        assert!(resources.iter().all(|item| !item.when_to_use.is_empty()));
+        assert!(resources.iter().all(|item| item.cache.ttl_ms > 0));
     }
 }

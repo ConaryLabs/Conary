@@ -1111,10 +1111,13 @@ mod tests {
     }
 
     #[test]
-    fn test_mcp_tool_count() {
-        let router = TestMcpServer::tool_router();
-        let tools = router.list_all();
-        assert_eq!(tools.len(), 23, "Expected 23 MCP tools");
+    fn mcp_tool_catalog_records_context_budget_debt() {
+        let tools = TestMcpServer::tool_router().list_all();
+        assert!(
+            tools.len() <= 25,
+            "conary-test has {} MCP tools; split read-only/admin/mutation surfaces or document progressive discovery before adding more",
+            tools.len()
+        );
     }
 
     #[tokio::test]

@@ -747,13 +747,14 @@ mod tests {
         assert_eq!(info.server_info.name, "remi-mcp");
     }
 
-    /// Verify the tool router registers the expected number of tools.
     #[test]
-    fn test_mcp_tool_count() {
-        // Build the tool router directly to inspect registered tools
-        let router = RemiMcpServer::tool_router();
-        let tools = router.list_all();
-        assert_eq!(tools.len(), 18, "Expected 18 MCP tools");
+    fn mcp_tool_catalog_records_context_budget_debt() {
+        let tools = RemiMcpServer::tool_router().list_all();
+        assert!(
+            tools.len() <= 20,
+            "Remi has {} MCP tools; split read-only/admin/mutation surfaces or document progressive discovery before adding more",
+            tools.len()
+        );
     }
 
     #[test]
