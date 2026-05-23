@@ -228,7 +228,7 @@ impl RemiMcpServer {
     /// The plaintext token is only shown in this response -- store it
     /// securely. Subsequent `list_tokens` calls only return metadata.
     #[tool(
-        description = "Create a new admin API token. Returns the plaintext token once -- store it securely."
+        description = "Create a new admin API token. Returns the plaintext token once -- store it securely. Risk: high. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
     )]
     async fn create_token(
         &self,
@@ -250,7 +250,9 @@ impl RemiMcpServer {
     }
 
     /// Delete an admin API token by ID.
-    #[tool(description = "Delete an admin API token by ID. Returns success or error if not found.")]
+    #[tool(
+        description = "Delete an admin API token by ID. Returns success or error if not found. Risk: high/destructive. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
+    )]
     async fn delete_token(
         &self,
         Parameters(params): Parameters<DeleteTokenParams>,
@@ -467,7 +469,7 @@ impl RemiMcpServer {
     ///
     /// **Not idempotent** -- deleted entries cannot be recovered.
     #[tool(
-        description = "Delete audit log entries older than a given ISO 8601 date. NOT reversible."
+        description = "Delete audit log entries older than a given ISO 8601 date. NOT reversible. Risk: destructive. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
     )]
     async fn purge_audit_log(
         &self,
@@ -755,6 +757,34 @@ mod tests {
             "Remi has {} MCP tools; split read-only/admin/mutation surfaces or document progressive discovery before adding more",
             tools.len()
         );
+    }
+
+    #[test]
+    fn high_risk_tools_are_named_for_confirmation_review() {
+        let tools = RemiMcpServer::tool_router().list_all();
+        let names: Vec<String> = tools.iter().map(|tool| tool.name.to_string()).collect();
+        assert!(names.iter().any(|name| name.contains("token")));
+        assert!(names.iter().any(|name| name.contains("audit")));
+    }
+
+    #[test]
+    fn high_risk_tool_descriptions_require_contract_confirmation() {
+        let tools = RemiMcpServer::tool_router().list_all();
+        for name in ["create_token", "delete_token", "purge_audit_log"] {
+            let tool = tools
+                .iter()
+                .find(|tool| tool.name.as_ref() == name)
+                .unwrap_or_else(|| panic!("missing high-risk tool: {name}"));
+            let description = tool.description.as_deref().unwrap_or_default();
+            assert!(
+                description.contains("Risk:"),
+                "{name} should classify mutation risk"
+            );
+            assert!(
+                description.contains("plan-then-apply confirmation"),
+                "{name} should require contract confirmation"
+            );
+        }
     }
 
     #[test]

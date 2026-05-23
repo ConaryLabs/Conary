@@ -1256,7 +1256,7 @@ git commit -m "test(agent): record MCP catalog budget debt"
 - Modify: `apps/conary-test/src/server/mcp.rs`
 - Modify: `docs/operations/infrastructure.md` if operational guidance changes
 
-- [ ] **Step 1: Add Remi risk classification tests**
+- [x] **Step 1: Add Remi risk classification tests**
 
 In `apps/remi/src/server/mcp.rs`, add a test that searches tool names/descriptions for high-risk operations:
 
@@ -1278,7 +1278,7 @@ cargo test -p remi high_risk_tools_are_named_for_confirmation_review
 
 Expected: PASS if current tool names are discoverable; otherwise adjust the test to the actual tool-router return type and keep the same assertion.
 
-- [ ] **Step 2: Add risk wording to high-risk tool descriptions**
+- [x] **Step 2: Add risk wording to high-risk tool descriptions**
 
 For Remi token creation, token deletion, and audit purge tools, add description text in the tool annotation or handler doc comment:
 
@@ -1288,11 +1288,11 @@ Risk: high/destructive. Requires plan-then-apply confirmation in the LLM-native 
 
 Do not change runtime behavior in this task unless the existing tool can be hidden without breaking tests.
 
-- [ ] **Step 3: Classify conary-test deploy/restart/fixture tools**
+- [x] **Step 3: Classify conary-test deploy/restart/fixture tools**
 
 In `apps/conary-test/src/server/mcp.rs`, add equivalent risk wording to deploy, rebuild, restart, fixture publish, image prune, and cleanup tools.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 ```bash
 cargo test -p remi mcp
@@ -1301,10 +1301,10 @@ cargo test -p conary-test mcp
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
-git add apps/remi/src/server/mcp.rs apps/conary-test/src/server/mcp.rs docs/operations/infrastructure.md
+git add apps/remi/src/server/mcp.rs apps/conary-test/src/server/mcp.rs docs/superpowers/plans/2026-05-22-llm-native-operations-surface.md
 git commit -m "docs(agent): classify high-risk MCP mutations"
 ```
 
