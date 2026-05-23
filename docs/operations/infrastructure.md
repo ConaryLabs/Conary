@@ -32,9 +32,10 @@ summary: Non-secret infrastructure, agent-operations transport, release, Remi de
 
 ## Agent Operations And MCP
 
-Prefer structured Conary operations surfaces when they already cover the
-workflow. The current deployed transport is MCP, but MCP is the adapter, not the
-durable product contract:
+Prefer MCP resources for read-only state inspection and MCP tools for audited
+mutations when structured Conary operations surfaces already cover the
+workflow. The current deployed transport is MCP, but MCP is the adapter, not
+the durable product contract:
 
 - Remi admin and package-service operations
 - `conary-test` run control, deploy/restart flows, image management, and fixture publishing

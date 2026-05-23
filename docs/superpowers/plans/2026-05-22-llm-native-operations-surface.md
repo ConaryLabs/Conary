@@ -35,7 +35,7 @@ Goal text must be non-empty and at most 4,000 characters. Keep the detailed inst
 Recommended goal text:
 
 ```text
-Implement docs/superpowers/plans/2026-05-22-llm-native-operations-surface.md task-by-task. Use the reviewed spec at docs/superpowers/specs/2026-05-22-llm-native-operations-surface-design.md as the source of truth. Keep the first milestone contract-only plus inventory/prune unless the stateless MCP adapter decision is settled. For each task: write tests first, make one focused commit, run the listed verification, update checkboxes, and stop only when final acceptance criteria pass.
+Implement docs/superpowers/plans/2026-05-22-llm-native-operations-surface.md task-by-task. Use docs/superpowers/specs/2026-05-22-llm-native-operations-surface-design.md as source of truth. Keep milestone one contract-only plus inventory/prune/local bootstrap. Do not add live MCP registrations until the stateless adapter decision is settled. For each task: write tests first, make one focused commit, run verification, update checkboxes, and stop only when final acceptance criteria pass.
 ```
 
 Goal-mode checkpoint rules:
@@ -58,11 +58,12 @@ Official docs used for this section:
 - Repository contract: `AGENTS.md`
 - Assistant map: `docs/llms/README.md`
 - MCP/host notes: `docs/operations/infrastructure.md`
-- Current MCP dependency fact: `Cargo.toml` has workspace requirement `rmcp = "1.1"` and `Cargo.lock` currently resolves `rmcp` to `1.6.0`.
+- Current MCP dependency fact: `Cargo.toml` has workspace requirement `rmcp = "1.1"` and `Cargo.lock` currently resolves `rmcp` to `1.6.0`; local source inspection shows that resolved SDK does not implement the target stateless MCP draft.
 
 Non-negotiable constraints:
 
 - Do not add new live session-based MCP resources, tools, prompts, or discovery behavior.
+- Treat the MCP draft's current `DRAFT-2026-v1` protocol-version token as non-final until live adapter work verifies the released spec.
 - Do not implement OpenAPI generation in this slice.
 - Do not publish packages or fixtures from local bootstrap.
 - Do not expose host-local secrets, bearer tokens, SSH identities, or ignored local access notes.
@@ -700,7 +701,7 @@ cargo tree -p conary-mcp -i rmcp
 rg -n "LocalSessionManager|RoleServer|ServerHandler|server/discover|Mcp-Method|MCP-Protocol-Version|ttlMs|cacheScope" apps crates Cargo.toml Cargo.lock
 ```
 
-Expected: output confirms current code still uses `RoleServer` / `ServerHandler` and local session managers, and does not already implement the target draft adapter.
+Expected: output confirms current code still uses `RoleServer` / `ServerHandler` and local session managers. It should not show `server/discover`, `Mcp-Method`, `ttlMs`, or `cacheScope` in Conary code yet; those are target draft strings for the future stateless adapter.
 
 - [ ] **Step 2: Create the decision record**
 
@@ -725,10 +726,11 @@ The first LLM-native operations milestone remains contract-only plus inventory/p
 - Resolved dependency: `rmcp 1.6.0` in `Cargo.lock`
 - Current Remi and conary-test wiring uses `RoleServer`, `ServerHandler`, `StreamableHttpService`, and `LocalSessionManager`
 - Current live MCP surfaces are tool-only from Conary's product perspective
+- Local source inspection on 2026-05-22 shows `rmcp 1.6.0` does not implement the target stateless MCP draft; it still uses `initialize`, `Mcp-Session-Id`, and session-manager based Streamable HTTP code
 
 ## Target
 
-Target the current MCP draft / `DRAFT-2026-v1` stateless direction associated with the 2026-07-28 release candidate.
+Target the current MCP draft stateless direction associated with the 2026-07-28 release candidate. The draft docs currently use `DRAFT-2026-v1` as the protocol-version token; re-verify the final token before live adapter work.
 
 ## Adapter Gate
 
@@ -945,6 +947,7 @@ use conary_agent_contract::{
 };
 
 pub fn inspect_default() -> InspectResult {
+    // conary-test already owns repository-root discovery through paths::project_dir.
     let root = crate::paths::project_dir().unwrap_or_else(|_| {
         std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
     });
@@ -1211,17 +1214,21 @@ In `apps/remi/src/server/mcp.rs`, add or update a test that reports the current 
     }
 ```
 
-If this fails because the current surface has 18 tools, do not weaken it. Replace it with a test that asserts an explicit `#[ignore]` is not used and add a committed decision comment near the test explaining which split is planned:
+If this fails because the current surface already exceeds the guardrail, do not mark the test ignored and do not pin an exact magic count. Replace it with a test that records context-budget debt while still preventing unreviewed growth:
 
 ```rust
     #[test]
     fn mcp_tool_catalog_records_context_budget_debt() {
         let tools = RemiMcpServer::tool_router().list_all();
-        assert_eq!(tools.len(), 18, "update this test when Remi MCP is split");
+        assert!(
+            tools.len() <= 20,
+            "Remi has {} MCP tools; split read-only/admin/mutation surfaces or document progressive discovery before adding more",
+            tools.len()
+        );
     }
 ```
 
-Use the same pattern in `apps/conary-test/src/server/mcp.rs` for the current conary-test tool count.
+Use the same pattern in `apps/conary-test/src/server/mcp.rs` with a budget that allows the current surface but blocks unreviewed growth.
 
 - [ ] **Step 3: Run focused MCP tests**
 
@@ -1309,6 +1316,8 @@ git commit -m "docs(agent): classify high-risk MCP mutations"
 In `crates/conary-agent-contract/src/catalog.rs`, add:
 
 ```rust
+// These are catalog definitions only. Do not register them as live MCP prompts
+// until the stateless MCP adapter decision is satisfied.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PromptCatalogItem {
     pub name: String,
