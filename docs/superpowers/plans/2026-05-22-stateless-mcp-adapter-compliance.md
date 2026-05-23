@@ -950,7 +950,7 @@ Expected: commit succeeds and `git status --short` is clean.
 **Files:**
 - Create: `crates/conary-mcp/tests/stateless_dependency_boundary.rs`
 
-- [ ] **Step 1: Write guard tests**
+- [x] **Step 1: Write guard tests**
 
 Create `crates/conary-mcp/tests/stateless_dependency_boundary.rs`:
 
@@ -1014,7 +1014,7 @@ fn live_mcp_route_files_do_not_contain_draft_stateless_identifiers() {
 }
 ```
 
-- [ ] **Step 2: Run the guard tests**
+- [x] **Step 2: Run the guard tests**
 
 Run:
 
@@ -1024,7 +1024,7 @@ cargo test -p conary-mcp --test stateless_dependency_boundary
 
 Expected: PASS.
 
-- [ ] **Step 3: Run all MCP tests**
+- [x] **Step 3: Run all MCP tests**
 
 Run:
 
@@ -1034,7 +1034,7 @@ cargo test -p conary-mcp
 
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 Run:
 
