@@ -103,7 +103,7 @@ other non-UTC context.
 - [`docs/modules/query.md`](../modules/query.md): CLI query surface and related data paths
 - [`docs/modules/recipe.md`](../modules/recipe.md): recipe/build-system background
 - [`docs/modules/source-selection.md`](../modules/source-selection.md): source-policy inputs, runtime mirrors, and replatform/update behavior
-- [`docs/operations/infrastructure.md`](../operations/infrastructure.md): MCP-first operations, deploy, and host notes
+- [`docs/operations/infrastructure.md`](../operations/infrastructure.md): structured operations transport, deploy, and host notes
 - [`docs/llms/subsystem-map.md`](subsystem-map.md): stable "look here first" pointers distilled from legacy assistant docs
 
 ## Focused Docs
@@ -124,8 +124,8 @@ other non-UTC context.
   unless the active toolchain changes.
 - Avoid duplicating or conflicting repo-wide guidance across tool-specific
   entrypoints or path rules.
-- Prefer MCP tools over ad hoc SSH or curl when the MCP surface already covers
-  the workflow.
+- Prefer structured Conary operation surfaces over ad hoc SSH or curl when the
+  available MCP/HTTP/CLI surface already covers the workflow.
 - When version-specific library behavior matters, check current external
   documentation instead of guessing APIs.
 

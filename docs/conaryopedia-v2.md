@@ -3491,7 +3491,7 @@ admin routes are only public if you explicitly proxy them.
 | GET | `/v1/admin/audit` | Query audit log | admin |
 | DELETE | `/v1/admin/audit` | Purge old audit entries | admin |
 | GET | `/v1/admin/openapi.json` | OpenAPI 3.1 spec | (no auth) |
-| GET/POST | `/mcp` | MCP endpoint (23 tools, proxied publicly at `https://remi.conary.io/mcp`) | admin |
+| GET/POST | `/mcp` | MCP endpoint, proxied publicly at `https://remi.conary.io/mcp` | admin |
 | POST | `/v1/admin/test-runs` | Create a test run | admin |
 | GET | `/v1/admin/test-runs` | List runs (cursor pagination) | admin |
 | GET | `/v1/admin/test-runs/{id}` | Get run with results | admin |
