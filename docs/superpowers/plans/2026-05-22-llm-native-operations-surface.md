@@ -781,7 +781,7 @@ git commit -m "docs(agent): record stateless MCP adapter gate"
 - Modify: `crates/conary-core/src/automation/mod.rs`
 - Modify: `crates/conary-core/src/model/parser.rs`
 
-- [ ] **Step 1: Write CLI regression tests**
+- [x] **Step 1: Write CLI regression tests**
 
 In `apps/conary/src/cli/automation.rs`, add tests under the existing `#[cfg(test)] mod tests`:
 
@@ -805,7 +805,7 @@ cargo test -p conary --features experimental cli_rejects_removed_ai_subcommand_f
 
 Expected before removal: FAIL because the command still parses.
 
-- [ ] **Step 2: Remove the CLI command family**
+- [x] **Step 2: Remove the CLI command family**
 
 In `apps/conary/src/cli/automation.rs`, remove:
 
@@ -817,7 +817,7 @@ In `apps/conary/src/cli/automation.rs`, remove:
 
 Remove the `AiCommands` enum.
 
-- [ ] **Step 3: Remove not-implemented handlers**
+- [x] **Step 3: Remove not-implemented handlers**
 
 In `apps/conary/src/commands/automation.rs`, remove these functions:
 
@@ -830,7 +830,7 @@ cmd_ai_explain
 
 Then remove any match arms that call them. If removing the match arms exposes unused imports, delete those imports in the same commit.
 
-- [ ] **Step 4: Reword dormant AI-assist configuration**
+- [x] **Step 4: Reword dormant AI-assist configuration**
 
 In `crates/conary-core/src/automation/mod.rs`, change the module docs from:
 
@@ -849,20 +849,20 @@ to:
 
 In `crates/conary-core/src/model/parser.rs`, reword the `AiAssistConfig` comments so they say the fields are deferred configuration, not active behavior.
 
-- [ ] **Step 5: Run focused tests**
+- [x] **Step 5: Run focused tests**
 
 ```bash
 cargo test -p conary --features experimental automation
 cargo test -p conary-core model::parser
-rg -n "\\[NOT IMPLEMENTED\\]|AI-assisted operations|Use AI assistance" apps/conary/src crates/conary-core/src
+rg -n "\\[NOT IMPLEMENTED\\]|AI-assisted operations|Use AI assistance" apps/conary/src/cli apps/conary/src/commands/automation.rs apps/conary/src/commands/mod.rs apps/conary/src/dispatch.rs crates/conary-core/src/automation crates/conary-core/src/model/parser.rs
 ```
 
 Expected: tests pass, and the `rg` command does not find the removed fake CLI claims. If it finds intentionally deferred config wording, confirm the wording says deferred or future.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
-git add apps/conary/src/cli/automation.rs apps/conary/src/commands/automation.rs crates/conary-core/src/automation/mod.rs crates/conary-core/src/model/parser.rs
+git add apps/conary/Cargo.toml apps/conary/src/cli/automation.rs apps/conary/src/cli/mod.rs apps/conary/src/commands/automation.rs apps/conary/src/commands/mod.rs apps/conary/src/dispatch.rs crates/conary-core/src/automation/mod.rs crates/conary-core/src/model/parser.rs docs/superpowers/plans/2026-05-22-llm-native-operations-surface.md
 git commit -m "fix(agent): remove fake automation ai commands"
 ```
 

@@ -1,11 +1,13 @@
 // conary-core/src/automation/mod.rs
 
-//! Automation system for self-healing, auto-updates, and AI-assisted operations.
+//! Automation system for self-healing and suggest-confirm maintenance flows.
+//!
+//! Some model/config fields reserve space for future assistant-driven behavior,
+//! but this module does not execute LLM-backed operations today.
 //!
 //! This module implements Conary's "suggest + confirm" model for autonomous operations:
 //! - By default, all automation actions are suggested and require user confirmation
 //! - Users can configure specific categories to run automatically
-//! - AI assistance is opt-in and configurable per-feature
 //!
 //! # Design Principles
 //!
@@ -131,7 +133,7 @@ pub enum ActionStatus {
     },
 }
 
-/// AI suggestion with confidence score
+/// Reserved future assistant suggestion with confidence score.
 #[derive(Debug, Clone)]
 pub struct AiSuggestion {
     /// The suggested action or response
@@ -151,21 +153,19 @@ pub struct AiSuggestion {
 }
 
 impl AiSuggestion {
-    /// Check if this suggestion should be auto-applied based on config
+    /// Check if a future assistant suggestion could be auto-applied based on config.
     pub fn should_auto_apply(&self, config: &AiAssistConfig) -> bool {
         if !config.enabled {
             return false;
         }
 
         match config.mode {
-            AiAssistMode::Advisory => false, // Never auto-apply in advisory mode
+            AiAssistMode::Advisory => false,
             AiAssistMode::Autonomous => {
-                // Auto-apply if confidence is high enough and category doesn't require approval
                 self.confidence >= config.confidence_threshold
                     && !config.require_human_approval.contains(&self.category)
             }
             AiAssistMode::Assisted => {
-                // Auto-apply only high-confidence, low-risk suggestions
                 self.confidence >= config.confidence_threshold
                     && !config.require_human_approval.contains(&self.category)
                     && !self.requires_approval

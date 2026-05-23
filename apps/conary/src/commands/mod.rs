@@ -60,8 +60,6 @@ pub use adopt::{
     cmd_adopt_convert, cmd_adopt_refresh, cmd_adopt_status, cmd_adopt_system, cmd_conflicts,
     cmd_native_handoff, cmd_sync_hook_install, cmd_unadopt,
 };
-#[cfg(feature = "experimental")]
-pub use automation::{cmd_ai_explain, cmd_ai_find, cmd_ai_query, cmd_ai_translate};
 pub use automation::{
     cmd_automation_apply, cmd_automation_check, cmd_automation_configure, cmd_automation_daemon,
     cmd_automation_history, cmd_automation_status,

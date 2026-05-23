@@ -123,7 +123,7 @@ pub struct AutomationConfig {
     #[serde(default)]
     pub repair: RepairAutomation,
 
-    /// AI-assisted features (intent resolution, scriptlet translation, etc.)
+    /// Deferred assistant-related configuration.
     #[serde(default)]
     pub ai_assist: AiAssistConfig,
 }
@@ -365,48 +365,48 @@ fn default_failure_window() -> String {
     "5m".to_string()
 }
 
-/// AI-assisted features configuration
+/// Deferred assistant-related configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiAssistConfig {
-    /// Enable AI assistance features
+    /// Enable reserved assistant configuration fields.
     #[serde(default)]
     pub enabled: bool,
 
-    /// AI interaction mode
+    /// Reserved assistant interaction mode.
     #[serde(default)]
     pub mode: AiAssistMode,
 
-    /// Enable intent-based package resolution
+    /// Reserve intent-based package resolution behavior.
     #[serde(default)]
     pub intent_resolution: bool,
 
-    /// Enable AI-assisted scriptlet translation
+    /// Reserve scriptlet translation behavior.
     #[serde(default)]
     pub scriptlet_translation: bool,
 
-    /// Enable natural language system queries
+    /// Reserve natural language system query behavior.
     #[serde(default)]
     pub natural_language: bool,
 
-    /// Confidence threshold for auto-applying AI suggestions (0.0-1.0)
+    /// Reserved confidence threshold for future assistant suggestions (0.0-1.0).
     #[serde(default = "default_confidence_threshold")]
     pub confidence_threshold: f64,
 
-    /// Categories where AI suggestions require human approval
+    /// Categories where future assistant suggestions require human approval.
     #[serde(default = "default_require_human_approval")]
     pub require_human_approval: Vec<String>,
 }
 
-/// How AI assistance interacts with the user
+/// Reserved assistant interaction policy.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum AiAssistMode {
-    /// AI provides suggestions, user must confirm all actions (default)
+    /// Future assistant provides suggestions; user must confirm all actions.
     #[default]
     Advisory,
-    /// AI can auto-apply low-risk suggestions, asks for others
+    /// Future assistant can auto-apply low-risk suggestions, asks for others.
     Assisted,
-    /// AI operates autonomously within configured bounds
+    /// Future assistant operates autonomously within configured bounds.
     Autonomous,
 }
 
@@ -464,12 +464,12 @@ impl AutomationCategory {
     }
 }
 
-/// AI assistance feature flags
+/// Reserved assistant feature flags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AiFeature {
     /// Intent-based package resolution
     IntentResolution,
-    /// AI-assisted scriptlet translation
+    /// Scriptlet translation
     ScriptletTranslation,
     /// Natural language queries
     NaturalLanguage,
@@ -987,7 +987,7 @@ impl SystemModel {
         category_mode.unwrap_or_else(|| self.automation.mode.clone())
     }
 
-    /// Check if AI assist is enabled for a specific feature
+    /// Check if a deferred assistant feature flag is enabled.
     pub fn ai_assist_enabled(&self, feature: AiFeature) -> bool {
         if !self.automation.ai_assist.enabled {
             return false;
