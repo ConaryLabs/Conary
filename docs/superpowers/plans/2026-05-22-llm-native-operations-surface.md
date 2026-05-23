@@ -107,7 +107,7 @@ Modify:
 - Create: `crates/conary-agent-contract/src/resource.rs`
 - Create: `crates/conary-agent-contract/src/catalog.rs`
 
-- [ ] **Step 1: Add a failing workspace crate check**
+- [x] **Step 1: Add a failing workspace crate check**
 
 Run:
 
@@ -117,7 +117,7 @@ cargo test -p conary-agent-contract
 
 Expected: FAIL because the package does not exist.
 
-- [ ] **Step 2: Register the crate in the workspace**
+- [x] **Step 2: Register the crate in the workspace**
 
 In `Cargo.toml`, add the new crate beside the other crates:
 
@@ -134,7 +134,7 @@ members = [
 ]
 ```
 
-- [ ] **Step 3: Create the crate manifest**
+- [x] **Step 3: Create the crate manifest**
 
 Create `crates/conary-agent-contract/Cargo.toml`:
 
@@ -155,7 +155,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 ```
 
-- [ ] **Step 4: Create module exports**
+- [x] **Step 4: Create module exports**
 
 Create `crates/conary-agent-contract/src/lib.rs`:
 
@@ -172,7 +172,7 @@ pub use resource::*;
 pub use result::*;
 ```
 
-- [ ] **Step 5: Add resource URI helpers**
+- [x] **Step 5: Add resource URI helpers**
 
 Create `crates/conary-agent-contract/src/resource.rs`:
 
@@ -269,7 +269,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 6: Add operation result types**
+- [x] **Step 6: Add operation result types**
 
 Create `crates/conary-agent-contract/src/result.rs`:
 
@@ -514,7 +514,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 7: Add catalog and cache-policy types**
+- [x] **Step 7: Add catalog and cache-policy types**
 
 Create `crates/conary-agent-contract/src/catalog.rs`:
 
@@ -536,7 +536,9 @@ pub enum CacheScope {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct CachePolicy {
+    #[serde(rename = "ttlMs")]
     pub ttl_ms: u64,
+    #[serde(rename = "cacheScope")]
     pub cache_scope: CacheScope,
 }
 
@@ -572,13 +574,13 @@ mod tests {
     #[test]
     fn cache_policy_serializes_rc_field_names() {
         let value = serde_json::to_value(CachePolicy::private_short()).unwrap();
-        assert_eq!(value["ttl_ms"], 30_000);
-        assert_eq!(value["cache_scope"], "private");
+        assert_eq!(value["ttlMs"], 30_000);
+        assert_eq!(value["cacheScope"], "private");
     }
 }
 ```
 
-- [ ] **Step 8: Run contract tests**
+- [x] **Step 8: Run contract tests**
 
 Run:
 
@@ -588,7 +590,7 @@ cargo test -p conary-agent-contract
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add Cargo.toml crates/conary-agent-contract

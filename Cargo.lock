@@ -1066,6 +1066,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "conary-agent-contract"
+version = "0.8.0"
+dependencies = [
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "conary-bootstrap"
 version = "0.8.0"
 dependencies = [

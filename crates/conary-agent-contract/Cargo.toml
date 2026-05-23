@@ -1,0 +1,14 @@
+[package]
+name = "conary-agent-contract"
+version = "0.8.0"
+edition = "2024"
+rust-version = "1.94"
+authors = ["Conary Contributors"]
+description = "Transport-neutral agent operation contract for Conary"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
