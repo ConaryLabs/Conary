@@ -147,9 +147,19 @@ Run:
 
 ```bash
 cargo test -p conary-mcp
+cargo check -p remi -p conary-test
 ```
 
-Expected: PASS. If this fails due to `rmcp` API changes, update the existing adapter helper code to match the new crate API without changing live MCP registration behavior.
+Expected: PASS. If this fails due to `rmcp` API changes, update the existing
+adapter helper code to match the new crate API without changing live MCP
+registration behavior.
+
+Highest-risk symbol: `crates/conary-mcp/src/lib.rs` currently builds
+`server_info()` with `InitializeResult`. If `rmcp 1.7.0` removed or renamed
+`InitializeResult`, replace the helper with the equivalent new API or remove
+the helper only if the live Remi and `conary-test` servers no longer need it.
+The `cargo check -p remi -p conary-test` command is required because those live
+servers consume this helper.
 
 - [ ] **Step 7: Commit**
 
@@ -242,6 +252,21 @@ mod tests {
     }
 
     #[test]
+    fn missing_meta_fails() {
+        let headers = valid_headers("tools/list");
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": "test-1",
+            "method": "tools/list",
+            "params": {}
+        });
+
+        let err = validate_stateless_request(&headers, &request, &[MCP_DRAFT_PROTOCOL_VERSION])
+            .expect_err("missing _meta should fail");
+        assert_eq!(err.code(), "missing_meta_field");
+    }
+
+    #[test]
     fn protocol_header_must_match_meta() {
         let headers = StatelessRequestHeaders::new("DRAFT-OTHER", "tools/list")
             .with_accepts(["application/json", "text/event-stream"]);
@@ -250,6 +275,7 @@ mod tests {
         let err = validate_stateless_request(&headers, &request, &[MCP_DRAFT_PROTOCOL_VERSION])
             .expect_err("mismatched protocol should fail");
         assert_eq!(err.code(), "unsupported_protocol_version");
+        assert_eq!(err.json_rpc_error_code(), JSON_RPC_UNSUPPORTED_PROTOCOL_VERSION);
     }
 
     #[test]
@@ -260,6 +286,7 @@ mod tests {
         let err = validate_stateless_request(&headers, &request, &[MCP_DRAFT_PROTOCOL_VERSION])
             .expect_err("mismatched method should fail");
         assert_eq!(err.code(), "header_mismatch");
+        assert_eq!(err.json_rpc_error_code(), JSON_RPC_HEADER_MISMATCH);
         assert!(err.to_string().contains("Mcp-Method"));
     }
 
@@ -318,6 +345,9 @@ pub const MCP_DRAFT_PROTOCOL_VERSION: &str = "DRAFT-2026-v1";
 pub const HEADER_PROTOCOL_VERSION: &str = "MCP-Protocol-Version";
 pub const HEADER_METHOD: &str = "Mcp-Method";
 pub const HEADER_NAME: &str = "Mcp-Name";
+pub const JSON_RPC_HEADER_MISMATCH: i32 = -32001;
+pub const JSON_RPC_UNSUPPORTED_PROTOCOL_VERSION: i32 = -32004;
+pub const JSON_RPC_INVALID_PARAMS: i32 = -32602;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatelessRequestHeaders {
@@ -389,6 +419,17 @@ impl StatelessProtocolError {
             Self::HeaderMismatch { .. } => "header_mismatch",
             Self::MissingName { .. } => "missing_name",
             Self::UnsupportedProtocolVersion { .. } => "unsupported_protocol_version",
+        }
+    }
+
+    pub fn json_rpc_error_code(&self) -> i32 {
+        match self {
+            Self::UnsupportedProtocolVersion { .. } => JSON_RPC_UNSUPPORTED_PROTOCOL_VERSION,
+            Self::MissingMetaField(_) => JSON_RPC_INVALID_PARAMS,
+            Self::MissingHeader(_)
+            | Self::MissingAccept(_)
+            | Self::HeaderMismatch { .. }
+            | Self::MissingName { .. } => JSON_RPC_HEADER_MISMATCH,
         }
     }
 }
@@ -614,6 +655,21 @@ mod tests {
     }
 
     #[test]
+    fn missing_meta_fails() {
+        let headers = valid_headers("tools/list");
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": "test-1",
+            "method": "tools/list",
+            "params": {}
+        });
+
+        let err = validate_stateless_request(&headers, &request, &[MCP_DRAFT_PROTOCOL_VERSION])
+            .expect_err("missing _meta should fail");
+        assert_eq!(err.code(), "missing_meta_field");
+    }
+
+    #[test]
     fn protocol_header_must_match_meta() {
         let headers = StatelessRequestHeaders::new("DRAFT-OTHER", "tools/list")
             .with_accepts(["application/json", "text/event-stream"]);
@@ -622,6 +678,7 @@ mod tests {
         let err = validate_stateless_request(&headers, &request, &[MCP_DRAFT_PROTOCOL_VERSION])
             .expect_err("mismatched protocol should fail");
         assert_eq!(err.code(), "unsupported_protocol_version");
+        assert_eq!(err.json_rpc_error_code(), JSON_RPC_UNSUPPORTED_PROTOCOL_VERSION);
     }
 
     #[test]
@@ -632,6 +689,7 @@ mod tests {
         let err = validate_stateless_request(&headers, &request, &[MCP_DRAFT_PROTOCOL_VERSION])
             .expect_err("mismatched method should fail");
         assert_eq!(err.code(), "header_mismatch");
+        assert_eq!(err.json_rpc_error_code(), JSON_RPC_HEADER_MISMATCH);
         assert!(err.to_string().contains("Mcp-Method"));
     }
 
@@ -706,6 +764,17 @@ Add these tests inside the existing `#[cfg(test)] mod tests` in `crates/conary-m
         assert_eq!(value["supportedVersions"][0], MCP_DRAFT_PROTOCOL_VERSION);
         assert_eq!(value["serverInfo"]["name"], "conary-mcp");
         assert_eq!(value["capabilities"]["resources"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn discover_result_type_is_complete() {
+        let result = DiscoverResult::new(
+            [MCP_DRAFT_PROTOCOL_VERSION],
+            serde_json::json!({}),
+            ImplementationInfo::new("test", "0.1.0"),
+        );
+
+        assert_eq!(result.result_type, "complete");
     }
 
     #[test]
@@ -847,6 +916,13 @@ impl<T> CacheableResult<T> {
 }
 ```
 
+`CacheableResult` deliberately flattens `CachePolicy` into the MCP result
+object. The `ttlMs` and `cacheScope` serde field names are owned by
+`conary-agent-contract::CachePolicy` and are intentionally the current MCP
+draft field names. If implementation discovers payload collisions with
+`resultType`, `ttlMs`, or `cacheScope`, reserve those names for adapter fields
+and add a regression test for the observed serde behavior before committing.
+
 - [ ] **Step 4: Run tests**
 
 Run:
@@ -914,7 +990,7 @@ fn stateless_module_does_not_use_rmcp_or_session_types() {
 }
 
 #[test]
-fn live_mcp_route_files_are_not_changed_by_this_slice() {
+fn live_mcp_route_files_do_not_contain_draft_stateless_identifiers() {
     let root = repo_root();
     for path in [
         "apps/remi/src/server/routes/mcp.rs",
@@ -922,10 +998,18 @@ fn live_mcp_route_files_are_not_changed_by_this_slice() {
     ] {
         let source = fs::read_to_string(root.join(path))
             .expect("live MCP route file should be readable");
-        assert!(
-            source.contains("LocalSessionManager::default()"),
-            "{path} should remain legacy session wiring until a live adapter slice replaces it"
-        );
+        for forbidden in [
+            "Mcp-Method",
+            "Mcp-Name",
+            "server/discover",
+            "MCP-Protocol-Version",
+            "DRAFT-2026-v1",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{path} must not contain draft stateless identifier '{forbidden}' until a live adapter slice adds it"
+            );
+        }
     }
 }
 ```
