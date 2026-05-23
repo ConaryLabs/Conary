@@ -132,9 +132,9 @@ pub fn smoke_with_runner(
         "args": command.args.clone(),
     });
 
-    let ready = inspect
-        .data
-        .pointer("/default_smoke_candidate/ready")
+    let (selected_smoke_candidate, readiness_warnings) = selected_smoke_candidate(inspect, options);
+    let ready = selected_smoke_candidate
+        .get("ready")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
 
@@ -143,6 +143,7 @@ pub fn smoke_with_runner(
             "dry_run": true,
             "executed": false,
             "command": command_json,
+            "selected_smoke_candidate": selected_smoke_candidate,
         }));
     }
 
@@ -151,11 +152,18 @@ pub fn smoke_with_runner(
         envelope
             .warnings
             .push("bootstrap check is not ready; rerun bootstrap check or use --force".to_string());
+        envelope.warnings.extend(readiness_warnings);
         return conary_agent_contract::VerifyResult::new(envelope).with_data(serde_json::json!({
             "dry_run": false,
             "executed": false,
             "command": command_json,
+            "selected_smoke_candidate": selected_smoke_candidate,
         }));
+    } else if !ready {
+        envelope
+            .warnings
+            .push("bootstrap check is not ready, but --force was set".to_string());
+        envelope.warnings.extend(readiness_warnings);
     }
 
     let output = runner(&command);
@@ -183,6 +191,7 @@ pub fn smoke_with_runner(
         "dry_run": false,
         "executed": true,
         "command": command_json,
+        "selected_smoke_candidate": selected_smoke_candidate,
         "exit_code": output.exit_code,
         "stdout": output.stdout,
         "stderr": output.stderr,
@@ -269,8 +278,17 @@ fn inspect_with_resolved_paths(paths: BootstrapPaths, probe: &BootstrapProbe) ->
 
     let manifest_inventory = inspect_manifest_dir(&paths.manifest_dir);
     let config_exists = paths.config_path.is_file();
-    let config_parse_ok =
-        config_exists && crate::config::load_global_config(&paths.config_path).is_ok();
+    let parsed_config = if config_exists {
+        crate::config::load_global_config(&paths.config_path).ok()
+    } else {
+        None
+    };
+    let config_parse_ok = parsed_config.is_some();
+    let mut configured_distros = parsed_config
+        .as_ref()
+        .map(|config| config.distros.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    configured_distros.sort();
     let container_runtime_command_ok =
         probe.podman_command_available || probe.docker_command_available;
     let container_runtime_api_ok = probe.podman_api_accessible || probe.docker_api_accessible;
@@ -379,6 +397,7 @@ fn inspect_with_resolved_paths(paths: BootstrapPaths, probe: &BootstrapProbe) ->
             "source": paths.config_source,
             "exists": config_exists,
             "parse_ok": config_parse_ok,
+            "distros": configured_distros,
         },
         "manifests": {
             "dir": paths.manifest_dir.display().to_string(),
@@ -460,11 +479,16 @@ fn inspect_manifest_dir(manifest_dir: &Path) -> ManifestInventory {
         match crate::config::load_manifest(&path) {
             Ok(manifest) => {
                 inventory.parsed += 1;
+                let requires_qemu = manifest_requires_qemu(&manifest);
+                let qemu_only = manifest.is_qemu_only();
                 inventory.suites.push(serde_json::json!({
                     "id": id,
                     "name": manifest.suite.name,
                     "phase": manifest.suite.phase,
                     "test_count": manifest.test.len(),
+                    "requires_container_runtime": !qemu_only,
+                    "requires_qemu": requires_qemu,
+                    "qemu_only": qemu_only,
                 }));
             }
             Err(error) => {
@@ -479,6 +503,147 @@ fn inspect_manifest_dir(manifest_dir: &Path) -> ManifestInventory {
     }
 
     inventory
+}
+
+fn manifest_requires_qemu(manifest: &crate::config::TestManifest) -> bool {
+    manifest
+        .suite
+        .setup
+        .iter()
+        .any(|step| step.qemu_boot.is_some())
+        || manifest
+            .test
+            .iter()
+            .any(|test| test.step.iter().any(|step| step.qemu_boot.is_some()))
+}
+
+fn selected_smoke_candidate(
+    inspect: &InspectResult,
+    options: &BootstrapSmokeOptions,
+) -> (serde_json::Value, Vec<String>) {
+    let suites = inspect
+        .data
+        .pointer("/manifests/suites")
+        .and_then(serde_json::Value::as_array);
+    let suite = suites.and_then(|suites| {
+        suites.iter().find(|suite| {
+            suite.get("id").and_then(serde_json::Value::as_str) == Some(options.suite.as_str())
+        })
+    });
+    let suite_phase = suite
+        .and_then(|suite| suite.get("phase"))
+        .and_then(serde_json::Value::as_u64)
+        .map(|phase| phase as u32);
+    let phase_matches = suite_phase == Some(options.phase);
+    let manifest_available = suite.is_some();
+    let qemu_only = suite
+        .and_then(|suite| suite.get("qemu_only"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let requires_qemu = suite
+        .and_then(|suite| suite.get("requires_qemu"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let requires_container_runtime = suite
+        .and_then(|suite| suite.get("requires_container_runtime"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true);
+    let configured_distros = inspect
+        .data
+        .pointer("/config/distros")
+        .and_then(serde_json::Value::as_array);
+    let distro_configured = configured_distros
+        .map(|distros| {
+            distros
+                .iter()
+                .any(|distro| distro.as_str() == Some(options.distro.as_str()))
+        })
+        .unwrap_or(false);
+    let cargo_ready = data_bool(&inspect.data, "/required/cargo");
+    let config_ready = data_bool(&inspect.data, "/required/config");
+    let manifest_dir_ready = data_bool(&inspect.data, "/required/manifest_dir");
+    let manifest_parse_ready = data_bool(&inspect.data, "/required/manifest_parse");
+    let sqlite_ready = data_bool(&inspect.data, "/required/sqlite");
+    let container_runtime_api_ready = data_bool(&inspect.data, "/container_runtime/api_accessible");
+    let qemu_ready = data_bool(&inspect.data, "/optional_toolchain/qemu_system_x86_64")
+        && data_bool(&inspect.data, "/optional_toolchain/dev_kvm");
+    let legacy_default_ready = inspect
+        .data
+        .pointer("/default_smoke_candidate/ready")
+        .and_then(serde_json::Value::as_bool);
+    let default_options =
+        options.suite == "phase1-core" && options.distro == "fedora44" && options.phase == 1;
+
+    let mut warnings = Vec::new();
+    if !cargo_ready {
+        warnings.push("cargo is required for bootstrap smoke".to_string());
+    }
+    if !config_ready {
+        warnings.push("conary-test config is required for bootstrap smoke".to_string());
+    }
+    if !manifest_dir_ready {
+        warnings.push("test manifest directory is required for bootstrap smoke".to_string());
+    }
+    if !manifest_parse_ready {
+        warnings.push("parseable test manifests are required for bootstrap smoke".to_string());
+    }
+    if !sqlite_ready {
+        warnings.push("SQLite is required for bootstrap smoke".to_string());
+    }
+    if !manifest_available {
+        warnings.push(format!(
+            "selected bootstrap smoke suite is not available: {}",
+            options.suite
+        ));
+    } else if !phase_matches {
+        warnings.push(format!(
+            "selected bootstrap smoke suite {} is phase {}, not requested phase {}",
+            options.suite,
+            suite_phase
+                .map(|phase| phase.to_string())
+                .unwrap_or_else(|| "<unknown>".to_string()),
+            options.phase
+        ));
+    }
+    if config_ready && !distro_configured {
+        warnings.push(format!(
+            "selected bootstrap smoke distro is not configured: {}",
+            options.distro
+        ));
+    }
+    if requires_container_runtime && !container_runtime_api_ready {
+        warnings.push("container runtime API access is required for bootstrap smoke".to_string());
+    }
+    if requires_qemu && !qemu_ready {
+        warnings.push("QEMU/KVM is required for selected bootstrap smoke suite".to_string());
+    }
+    if default_options && legacy_default_ready == Some(false) {
+        warnings.push("default bootstrap smoke candidate is not ready".to_string());
+    }
+
+    let ready = warnings.is_empty();
+    (
+        serde_json::json!({
+            "suite": options.suite,
+            "distro": options.distro,
+            "phase": options.phase,
+            "requires_container_runtime": requires_container_runtime,
+            "requires_qemu": requires_qemu,
+            "qemu_only": qemu_only,
+            "manifest_available": manifest_available,
+            "suite_phase": suite_phase,
+            "phase_matches": phase_matches,
+            "distro_configured": distro_configured,
+            "ready": ready,
+        }),
+        warnings,
+    )
+}
+
+fn data_bool(data: &serde_json::Value, pointer: &str) -> bool {
+    data.pointer(pointer)
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
 }
 
 fn push_check(
@@ -570,6 +735,30 @@ run = "true"
 
 [test.step.assert]
 exit_code = 0
+"#,
+        )
+        .unwrap();
+    }
+
+    fn write_qemu_manifest(path: &Path) {
+        std::fs::write(
+            path,
+            r#"
+[suite]
+name = "QEMU Smoke"
+phase = 3
+
+[[test]]
+id = "TQEMU"
+name = "qemu_smoke"
+description = "Verify QEMU readiness gating"
+timeout = 10
+
+[[test.step]]
+[test.step.qemu_boot]
+image = "unused"
+local_image_path = "/tmp/missing.qcow2"
+commands = ["true"]
 "#,
         )
         .unwrap();
@@ -748,6 +937,85 @@ exit_code = 0
                 .warnings
                 .iter()
                 .any(|warning| warning.contains("bootstrap check is not ready"))
+        );
+    }
+
+    #[test]
+    fn smoke_refuses_unknown_selected_suite_even_when_default_is_ready() {
+        let inspect = ready_bootstrap_report();
+        let options = BootstrapSmokeOptions {
+            suite: "missing-suite".to_string(),
+            ..Default::default()
+        };
+        let report = smoke_with_runner(&inspect, &options, |_command| {
+            panic!("unknown selected suite must not execute")
+        });
+
+        assert_eq!(report.envelope.status, OperationStatus::Unavailable);
+        assert_eq!(report.data["executed"], false);
+        assert_eq!(
+            report.data["selected_smoke_candidate"]["manifest_available"],
+            false
+        );
+        assert!(
+            report
+                .envelope
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("selected bootstrap smoke suite is not available"))
+        );
+    }
+
+    #[test]
+    fn smoke_refuses_selected_suite_phase_mismatch() {
+        let inspect = ready_bootstrap_report();
+        let options = BootstrapSmokeOptions {
+            phase: 2,
+            ..Default::default()
+        };
+        let report = smoke_with_runner(&inspect, &options, |_command| {
+            panic!("phase-mismatched selected suite must not execute")
+        });
+
+        assert_eq!(report.envelope.status, OperationStatus::Unavailable);
+        assert_eq!(report.data["executed"], false);
+        assert_eq!(
+            report.data["selected_smoke_candidate"]["phase_matches"],
+            false
+        );
+    }
+
+    #[test]
+    fn smoke_refuses_qemu_selected_suite_without_qemu_readiness() {
+        let root = tempdir().unwrap();
+        let manifests = root.path().join("manifests");
+        std::fs::create_dir_all(&manifests).unwrap();
+        write_valid_manifest(&manifests.join("phase1-core.toml"));
+        write_qemu_manifest(&manifests.join("qemu-smoke.toml"));
+        let config = root.path().join("config.toml");
+        write_valid_config(&config);
+        let report = inspect_with_paths_and_probe(root.path(), &manifests, &config, ready_probe());
+        let options = BootstrapSmokeOptions {
+            suite: "qemu-smoke".to_string(),
+            phase: 3,
+            ..Default::default()
+        };
+        let report = smoke_with_runner(&report, &options, |_command| {
+            panic!("QEMU-selected suite must not execute without QEMU readiness")
+        });
+
+        assert_eq!(report.envelope.status, OperationStatus::Unavailable);
+        assert_eq!(report.data["executed"], false);
+        assert_eq!(
+            report.data["selected_smoke_candidate"]["requires_qemu"],
+            true
+        );
+        assert!(
+            report
+                .envelope
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("QEMU/KVM is required"))
         );
     }
 
