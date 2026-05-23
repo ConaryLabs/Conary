@@ -37,6 +37,10 @@ mutations when structured Conary operations surfaces already cover the
 workflow. The current deployed transport is MCP, but MCP is the adapter, not
 the durable product contract:
 
+The first LLM-native operations milestone may define prompt catalogs in
+`conary-agent-contract`, but it must not register new live MCP prompts until
+the stateless MCP adapter decision is satisfied.
+
 - Remi admin and package-service operations
 - `conary-test` run control, deploy/restart flows, image management, and fixture publishing
 
