@@ -874,7 +874,7 @@ git commit -m "fix(agent): remove fake automation ai commands"
 - Create: `apps/conary-test/src/bootstrap.rs`
 - Modify: `apps/conary-test/src/cli.rs`
 
-- [ ] **Step 1: Add failing bootstrap service tests**
+- [x] **Step 1: Add failing bootstrap service tests**
 
 Create `apps/conary-test/src/bootstrap.rs` with tests first:
 
@@ -926,7 +926,7 @@ cargo test -p conary-test bootstrap
 
 Expected: FAIL because `inspect_with_paths` and the dependency are not defined.
 
-- [ ] **Step 2: Add the contract dependency**
+- [x] **Step 2: Add the contract dependency**
 
 In `apps/conary-test/Cargo.toml`, add:
 
@@ -934,7 +934,7 @@ In `apps/conary-test/Cargo.toml`, add:
 conary-agent-contract = { path = "../../crates/conary-agent-contract" }
 ```
 
-- [ ] **Step 3: Implement bootstrap inspection**
+- [x] **Step 3: Implement bootstrap inspection**
 
 Replace `apps/conary-test/src/bootstrap.rs` with:
 
@@ -1083,7 +1083,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 4: Export the module**
+- [x] **Step 4: Export the module**
 
 In `apps/conary-test/src/lib.rs`, add:
 
@@ -1091,7 +1091,7 @@ In `apps/conary-test/src/lib.rs`, add:
 pub mod bootstrap;
 ```
 
-- [ ] **Step 5: Add CLI command**
+- [x] **Step 5: Add CLI command**
 
 In `apps/conary-test/src/cli.rs`, add a command variant:
 
@@ -1132,7 +1132,7 @@ In the command dispatch, add:
         }
 ```
 
-- [ ] **Step 6: Run focused tests and smoke command**
+- [x] **Step 6: Run focused tests and smoke command**
 
 ```bash
 cargo test -p conary-test bootstrap
@@ -1142,10 +1142,10 @@ cargo run -p conary-test -- list
 
 Expected: tests pass, bootstrap emits JSON with `conary-local://bootstrap/status`, and suite inventory lists manifests.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
-git add apps/conary-test/Cargo.toml apps/conary-test/src/bootstrap.rs apps/conary-test/src/lib.rs apps/conary-test/src/cli.rs
+git add Cargo.lock apps/conary-test/Cargo.toml apps/conary-test/src/bootstrap.rs apps/conary-test/src/lib.rs apps/conary-test/src/cli.rs docs/superpowers/plans/2026-05-22-llm-native-operations-surface.md
 git commit -m "feat(test): add local bootstrap inspection"
 ```
 

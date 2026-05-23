@@ -91,6 +91,12 @@ enum Commands {
     /// List available test suites
     List,
 
+    /// Inspect local developer bootstrap prerequisites
+    Bootstrap {
+        #[command(subcommand)]
+        command: BootstrapCommands,
+    },
+
     /// Manage container images
     Images {
         #[command(subcommand)]
@@ -139,6 +145,12 @@ enum Commands {
         #[command(subcommand)]
         command: ManifestCommands,
     },
+}
+
+#[derive(Subcommand)]
+enum BootstrapCommands {
+    /// Check local prerequisites and emit structured bootstrap status
+    Check,
 }
 
 #[derive(Subcommand)]
@@ -701,6 +713,21 @@ fn main() -> Result<()> {
                             tracing::warn!(file = %name, error = %e, "Failed to parse manifest");
                         }
                     }
+                }
+            }
+            Ok(())
+        }
+
+        Commands::Bootstrap {
+            command: BootstrapCommands::Check,
+        } => {
+            let report = conary_test::bootstrap::inspect_default();
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("{}", report.envelope.summary);
+                for warning in &report.envelope.warnings {
+                    println!("warning: {warning}");
                 }
             }
             Ok(())
