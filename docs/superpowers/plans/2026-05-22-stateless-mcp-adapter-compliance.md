@@ -1052,7 +1052,7 @@ Expected: commit succeeds and `git status --short` is clean.
 - Modify: `docs/operations/agent-mcp-adapter-decision.md`
 - Modify: `docs/superpowers/specs/2026-05-22-stateless-mcp-adapter-compliance-design.md`
 
-- [ ] **Step 1: Update the decision record after implementation facts are known**
+- [x] **Step 1: Update the decision record after implementation facts are known**
 
 In `docs/operations/agent-mcp-adapter-decision.md`, keep revision `2` or increment it if the file has changed since this plan was written. Ensure the `Current State` section says:
 
@@ -1066,7 +1066,7 @@ In `docs/operations/agent-mcp-adapter-decision.md`, keep revision `2` or increme
 
 Ensure the `Next Slice` section remains clear that the harness added no live MCP resources, tools, prompts, routes, or discovery behavior.
 
-- [ ] **Step 2: Update the spec with completed dependency facts**
+- [x] **Step 2: Update the spec with completed dependency facts**
 
 If Task 1 used a newer compatible `rmcp` version than `1.7.0`, update `docs/superpowers/specs/2026-05-22-stateless-mcp-adapter-compliance-design.md` so its current facts and acceptance criteria name the actual version used.
 
@@ -1083,7 +1083,7 @@ Also update the local repo facts in that spec from the pre-plan state to the com
 - `Cargo.lock` resolves the local workspace to `rmcp 1.7.0`.
 ```
 
-- [ ] **Step 3: Run docs consistency checks**
+- [x] **Step 3: Run docs consistency checks**
 
 Run:
 
@@ -1097,7 +1097,7 @@ Expected:
 - The first command should show no stale `rmcp 1.6.0` or `rmcp = "1.1"` hits in the updated decision/spec and dependency files.
 - The second command should show only language that this slice did not add live MCP behavior and that `server/discover` remains target/harness behavior.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 Run:
 

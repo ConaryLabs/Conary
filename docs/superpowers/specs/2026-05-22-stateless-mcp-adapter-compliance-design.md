@@ -1,13 +1,13 @@
 ---
 last_updated: 2026-05-23
-revision: 2
-summary: Follow-on design for a stateless MCP adapter compliance harness before live MCP expansion, with final review fixes
+revision: 3
+summary: Follow-on design for a stateless MCP adapter compliance harness before live MCP expansion, with implementation facts
 ---
 
 # Stateless MCP Adapter Compliance Harness: Design Spec
 
 **Date:** 2026-05-22
-**Status:** Approved design for planning; implementation not started
+**Status:** Implemented plan source; live adapter not started
 **Goal:** Define the next bounded LLM-native operations slice after the
 transport-neutral contract and local bootstrap milestones: a compliance harness
 for Conary's future stateless MCP adapter.
@@ -30,14 +30,17 @@ stateless model while preserving the earlier decision that
 
 ## Current Facts
 
-Local repo facts, verified on 2026-05-22:
+Local repo facts, verified on 2026-05-23:
 
-- `Cargo.toml` still has the workspace requirement `rmcp = "1.1"`.
-- `Cargo.lock` resolves the local workspace to `rmcp 1.6.0`.
+- `Cargo.toml` has the workspace requirement `rmcp = "1.7.0"`.
+- `Cargo.lock` resolves the local workspace to `rmcp 1.7.0`.
 - Remi and `conary-test` still use `RoleServer`, `ServerHandler`,
   `StreamableHttpService`, and `LocalSessionManager`.
-- `server/discover`, `MCP-Protocol-Version`, `Mcp-Method`, and `Mcp-Name`
-  appear only in docs/specs/decisions, not in live application code.
+- `crates/conary-mcp::stateless` contains non-live helpers and tests for
+  `server/discover`, `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name`,
+  cacheable results, and adapter-boundary guardrails.
+- Draft stateless identifiers do not appear in live Remi or `conary-test` route
+  files.
 - `ttlMs` and `cacheScope` exist only in
   `crates/conary-agent-contract/src/catalog.rs` as catalog metadata.
 
