@@ -1314,7 +1314,7 @@ git commit -m "docs(agent): classify high-risk MCP mutations"
 - Modify: `crates/conary-agent-contract/src/catalog.rs`
 - Modify: `docs/operations/infrastructure.md`
 
-- [ ] **Step 1: Add prompt catalog types**
+- [x] **Step 1: Add prompt catalog types**
 
 In `crates/conary-agent-contract/src/catalog.rs`, add:
 
@@ -1371,7 +1371,7 @@ Add test:
     }
 ```
 
-- [ ] **Step 2: Run prompt catalog tests**
+- [x] **Step 2: Run prompt catalog tests**
 
 ```bash
 cargo test -p conary-agent-contract first_slice_prompt_catalog_is_limited_to_three_prompts
@@ -1379,7 +1379,7 @@ cargo test -p conary-agent-contract first_slice_prompt_catalog_is_limited_to_thr
 
 Expected: PASS.
 
-- [ ] **Step 3: Document non-registration boundary**
+- [x] **Step 3: Document non-registration boundary**
 
 In `docs/operations/infrastructure.md`, add one sentence under `Agent Operations And MCP`:
 
@@ -1387,10 +1387,10 @@ In `docs/operations/infrastructure.md`, add one sentence under `Agent Operations
 The first LLM-native operations milestone may define prompt catalogs in `conary-agent-contract`, but it must not register new live MCP prompts until the stateless MCP adapter decision is satisfied.
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
-git add crates/conary-agent-contract/src/catalog.rs docs/operations/infrastructure.md
+git add crates/conary-agent-contract/src/catalog.rs docs/operations/infrastructure.md docs/superpowers/plans/2026-05-22-llm-native-operations-surface.md
 git commit -m "feat(agent): define first prompt catalog"
 ```
 

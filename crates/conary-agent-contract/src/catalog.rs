@@ -65,6 +65,48 @@ pub fn default_read_resources() -> Vec<CatalogItem> {
     ]
 }
 
+// These are catalog definitions only. Do not register them as live MCP prompts
+// until the stateless MCP adapter decision is satisfied.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PromptCatalogItem {
+    pub name: String,
+    pub description: String,
+    pub deterministic_inputs: Vec<String>,
+    pub expected_result: String,
+    pub cache: CachePolicy,
+}
+
+pub fn first_slice_prompts() -> Vec<PromptCatalogItem> {
+    vec![
+        PromptCatalogItem {
+            name: "inspect_remi_health".to_string(),
+            description: "Inspect Remi health before admin or package-service work".to_string(),
+            deterministic_inputs: vec!["conary://remi/health".to_string()],
+            expected_result: "InspectResult".to_string(),
+            cache: CachePolicy::private_short(),
+        },
+        PromptCatalogItem {
+            name: "debug_failing_test".to_string(),
+            description: "Collect run, artifact, and log evidence for a failing conary-test run"
+                .to_string(),
+            deterministic_inputs: vec![
+                "conary-test://runs/{run_id}".to_string(),
+                "conary-test://runs/{run_id}/artifacts/{artifact_id}".to_string(),
+            ],
+            expected_result: "ExplainResult".to_string(),
+            cache: CachePolicy::private_short(),
+        },
+        PromptCatalogItem {
+            name: "bootstrap_local_dev_environment".to_string(),
+            description: "Inspect local prerequisites and propose the next bootstrap proof step"
+                .to_string(),
+            deterministic_inputs: vec!["conary-local://bootstrap/status".to_string()],
+            expected_result: "PlanResult".to_string(),
+            cache: CachePolicy::private_short(),
+        },
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,5 +128,16 @@ mod tests {
         );
         assert!(resources.iter().all(|item| !item.when_to_use.is_empty()));
         assert!(resources.iter().all(|item| item.cache.ttl_ms > 0));
+    }
+
+    #[test]
+    fn first_slice_prompt_catalog_is_limited_to_three_prompts() {
+        let prompts = first_slice_prompts();
+        assert_eq!(prompts.len(), 3);
+        assert!(
+            prompts
+                .iter()
+                .all(|prompt| !prompt.deterministic_inputs.is_empty())
+        );
     }
 }
