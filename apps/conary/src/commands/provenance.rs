@@ -241,7 +241,7 @@ pub async fn cmd_provenance_diff(
 
             match format {
                 "json" => {
-                    println!("[NOT IMPLEMENTED] JSON diff format");
+                    bail!("provenance diff JSON output is not supported yet; use --format text");
                 }
                 _ => {
                     let diffs: &[(&str, &str, &Option<String>, &Option<String>)] = &[

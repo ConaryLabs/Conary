@@ -126,6 +126,8 @@ other non-UTC context.
   entrypoints or path rules.
 - Prefer structured Conary operation surfaces over ad hoc SSH or curl when the
   available MCP/HTTP/CLI surface already covers the workflow.
+- Treat `crates/conary-agent-contract` as the LLM-facing operation vocabulary;
+  MCP code should adapt that contract, not become the product contract itself.
 - When version-specific library behavior matters, check current external
   documentation instead of guessing APIs.
 

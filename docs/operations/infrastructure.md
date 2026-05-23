@@ -40,6 +40,8 @@ the durable product contract:
 The first LLM-native operations milestone may define prompt catalogs in
 `conary-agent-contract`, but it must not register new live MCP prompts until
 the stateless MCP adapter decision is satisfied.
+The transport-neutral contract lives in `crates/conary-agent-contract`;
+`crates/conary-mcp` remains MCP-specific adapter glue.
 
 - Remi admin and package-service operations
 - `conary-test` run control, deploy/restart flows, image management, and fixture publishing

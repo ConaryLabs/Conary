@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-05-22
-revision: 7
-summary: Stable subsystem pointers and durable assistant-facing guidance for the Conary workspace after selected-generation handoff and x86_64 ISO export proof
+revision: 8
+summary: Stable subsystem pointers and durable assistant-facing guidance for the Conary workspace after selected-generation handoff, x86_64 ISO export proof, and agent contract split
 ---
 
 # Assistant Subsystem Map
@@ -14,6 +14,7 @@ summary: Stable subsystem pointers and durable assistant-facing guidance for the
 - `apps/conaryd/`: local daemon, socket auth, job queue, and REST/SSE routes
 - `apps/conary-test/`: declarative integration-test engine, HTTP API, and MCP server
 - `crates/conary-bootstrap/`: shared tracing, runtime, and error-exit helpers for workspace apps
+- `crates/conary-agent-contract/`: transport-neutral agent operation contract, resource refs, risk labels, and catalogs
 - `crates/conary-mcp/`: shared MCP adapter helpers used by workspace apps
 
 ## Look Here First
@@ -69,6 +70,8 @@ summary: Stable subsystem pointers and durable assistant-facing guidance for the
   `apps/conary-test/src/server/service.rs`,
   `apps/conary-test/src/server/mcp.rs`, and
   `apps/conary-test/src/engine/`
+- Agent operation contract and MCP adapter helpers:
+  `crates/conary-agent-contract/src/` and `crates/conary-mcp/src/`
 - conaryd daemon routes and auth boundaries:
   `apps/conaryd/src/daemon/mod.rs`,
   `apps/conaryd/src/daemon/routes/`,
