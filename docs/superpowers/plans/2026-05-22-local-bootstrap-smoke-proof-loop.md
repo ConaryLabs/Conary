@@ -402,7 +402,7 @@ git commit -m "feat(test): execute bootstrap smoke command"
 - Modify: `apps/conary-test/src/cli.rs`
 - Modify: `apps/conary-test/src/bootstrap.rs` only if CLI needs a small display helper
 
-- [ ] **Step 1: Write failing CLI tests**
+- [x] **Step 1: Write failing CLI tests**
 
 Add tests near the existing CLI tests in `apps/conary-test/src/cli.rs`:
 
@@ -437,7 +437,7 @@ fn cli_accepts_bootstrap_smoke_overrides() {
 }
 ```
 
-- [ ] **Step 2: Run tests and verify they fail**
+- [x] **Step 2: Run tests and verify they fail**
 
 ```bash
 cargo test -p conary-test cli_accepts_bootstrap_smoke
@@ -445,7 +445,7 @@ cargo test -p conary-test cli_accepts_bootstrap_smoke
 
 Expected: FAIL because the subcommand does not exist.
 
-- [ ] **Step 3: Add CLI subcommand**
+- [x] **Step 3: Add CLI subcommand**
 
 Extend `BootstrapCommands`:
 
@@ -503,7 +503,7 @@ Commands::Bootstrap {
 }
 ```
 
-- [ ] **Step 4: Run CLI tests and dry-run command**
+- [x] **Step 4: Run CLI tests and dry-run command**
 
 ```bash
 cargo test -p conary-test cli_accepts_bootstrap_smoke
@@ -512,7 +512,7 @@ cargo run -p conary-test -- bootstrap smoke --dry-run --json
 
 Expected: tests pass, command emits JSON with `operation = "conary-test.bootstrap.smoke"`, `status = "planned"`, and `data.command.args` containing `run --suite phase1-core --distro fedora44 --phase 1`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/conary-test/src/cli.rs apps/conary-test/src/bootstrap.rs docs/superpowers/plans/2026-05-22-local-bootstrap-smoke-proof-loop.md

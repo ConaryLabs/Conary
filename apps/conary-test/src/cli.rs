@@ -151,6 +151,20 @@ enum Commands {
 enum BootstrapCommands {
     /// Check local prerequisites and emit structured bootstrap status
     Check,
+
+    /// Run or preview the default local developer smoke proof loop
+    Smoke {
+        #[arg(long, default_value = "phase1-core")]
+        suite: String,
+        #[arg(long, default_value = "fedora44")]
+        distro: String,
+        #[arg(long, default_value = "1")]
+        phase: u32,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -733,6 +747,36 @@ fn main() -> Result<()> {
             Ok(())
         }
 
+        Commands::Bootstrap {
+            command:
+                BootstrapCommands::Smoke {
+                    suite,
+                    distro,
+                    phase,
+                    dry_run,
+                    force,
+                },
+        } => {
+            let report =
+                conary_test::bootstrap::run_smoke(&conary_test::bootstrap::BootstrapSmokeOptions {
+                    suite,
+                    distro,
+                    phase,
+                    dry_run,
+                    force,
+                });
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("{}", report.envelope.summary);
+                println!("status: {:?}", report.envelope.status);
+                for warning in &report.envelope.warnings {
+                    println!("warning: {warning}");
+                }
+            }
+            Ok(())
+        }
+
         Commands::Images { command } => {
             let rt = tokio::runtime::Runtime::new()?;
             match command {
@@ -945,6 +989,29 @@ mod tests {
             Commands::Health { port } => assert_eq!(port, 8181),
             _ => panic!("unexpected command"),
         }
+    }
+
+    #[test]
+    fn cli_accepts_bootstrap_smoke_dry_run() {
+        Cli::try_parse_from(["conary-test", "--json", "bootstrap", "smoke", "--dry-run"])
+            .expect("bootstrap smoke dry-run should parse");
+    }
+
+    #[test]
+    fn cli_accepts_bootstrap_smoke_overrides() {
+        Cli::try_parse_from([
+            "conary-test",
+            "bootstrap",
+            "smoke",
+            "--suite",
+            "phase1-core",
+            "--distro",
+            "fedora44",
+            "--phase",
+            "1",
+            "--force",
+        ])
+        .expect("bootstrap smoke overrides should parse");
     }
 
     #[test]
