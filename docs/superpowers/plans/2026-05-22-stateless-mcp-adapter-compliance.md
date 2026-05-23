@@ -72,7 +72,7 @@ Those files are allowed to remain legacy session-based until a later live adapte
 - Modify: `Cargo.toml`
 - Modify: `Cargo.lock`
 
-- [ ] **Step 1: Confirm current stale local state**
+- [x] **Step 1: Confirm current stale local state**
 
 Run:
 
@@ -87,7 +87,7 @@ rmcp v1.6.0
 └── conary-mcp v0.8.0 (.../crates/conary-mcp)
 ```
 
-- [ ] **Step 2: Check the latest published crate version**
+- [x] **Step 2: Check the latest published crate version**
 
 Run:
 
@@ -103,7 +103,7 @@ rmcp = "1.7.0"    # Rust SDK for Model Context Protocol
 
 If the command reports a newer compatible `1.x` version, use that newer version in the rest of this task and record the observed version in the completed-task notes.
 
-- [ ] **Step 3: Update the workspace dependency**
+- [x] **Step 3: Update the workspace dependency**
 
 In `Cargo.toml`, change the MCP dependency line to the latest compatible version. Expected edit as of 2026-05-22:
 
@@ -113,7 +113,7 @@ rmcp = "1.7.0"
 schemars = "1.0"
 ```
 
-- [ ] **Step 4: Update the lockfile**
+- [x] **Step 4: Update the lockfile**
 
 Run:
 
@@ -123,7 +123,7 @@ cargo update -p rmcp --precise 1.7.0
 
 Expected: Cargo updates `rmcp` and any matching `rmcp-macros` dependency to `1.7.0` or reports that the lockfile is already current after the workspace dependency edit.
 
-- [ ] **Step 5: Verify the dependency graph**
+- [x] **Step 5: Verify the dependency graph**
 
 Run:
 
@@ -141,7 +141,7 @@ rmcp v1.7.0
 
 The `rg` output should show `rmcp` and `rmcp-macros` lock entries at `1.7.0`.
 
-- [ ] **Step 6: Run focused tests**
+- [x] **Step 6: Run focused tests**
 
 Run:
 
@@ -161,7 +161,7 @@ the helper only if the live Remi and `conary-test` servers no longer need it.
 The `cargo check -p remi -p conary-test` command is required because those live
 servers consume this helper.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 Run:
 
