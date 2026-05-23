@@ -415,6 +415,17 @@ fn print_command_result(label: &str, code: i32, stdout: &str, stderr: &str) {
     }
 }
 
+fn bootstrap_smoke_exit_code(status: conary_agent_contract::OperationStatus) -> i32 {
+    match status {
+        conary_agent_contract::OperationStatus::Ok
+        | conary_agent_contract::OperationStatus::Planned => 0,
+        conary_agent_contract::OperationStatus::Running
+        | conary_agent_contract::OperationStatus::Unavailable
+        | conary_agent_contract::OperationStatus::Failed
+        | conary_agent_contract::OperationStatus::Partial => 1,
+    }
+}
+
 /// Run tests for a single distro.
 fn run_single_distro(
     config: &conary_test::config::distro::GlobalConfig,
@@ -774,6 +785,10 @@ fn main() -> Result<()> {
                     println!("warning: {warning}");
                 }
             }
+            let exit_code = bootstrap_smoke_exit_code(report.envelope.status);
+            if exit_code != 0 {
+                std::process::exit(exit_code);
+            }
             Ok(())
         }
 
@@ -1012,6 +1027,17 @@ mod tests {
             "--force",
         ])
         .expect("bootstrap smoke overrides should parse");
+    }
+
+    #[test]
+    fn bootstrap_smoke_exit_code_reflects_contract_status() {
+        use conary_agent_contract::OperationStatus;
+
+        assert_eq!(bootstrap_smoke_exit_code(OperationStatus::Planned), 0);
+        assert_eq!(bootstrap_smoke_exit_code(OperationStatus::Ok), 0);
+        assert_eq!(bootstrap_smoke_exit_code(OperationStatus::Unavailable), 1);
+        assert_eq!(bootstrap_smoke_exit_code(OperationStatus::Failed), 1);
+        assert_eq!(bootstrap_smoke_exit_code(OperationStatus::Partial), 1);
     }
 
     #[test]
