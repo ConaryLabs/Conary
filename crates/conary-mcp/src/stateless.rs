@@ -7,6 +7,9 @@
 
 use std::{error::Error, fmt};
 
+use conary_agent_contract::CachePolicy;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const MCP_DRAFT_PROTOCOL_VERSION: &str = "DRAFT-2026-v1";
@@ -274,6 +277,97 @@ fn required_name_field(method: &str) -> Option<&'static str> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ImplementationInfo {
+    pub name: String,
+    pub version: String,
+}
+
+impl ImplementationInfo {
+    pub fn new(name: impl Into<String>, version: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            version: version.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscoverResult {
+    #[serde(rename = "resultType")]
+    pub result_type: String,
+    pub supported_versions: Vec<String>,
+    pub capabilities: Value,
+    pub server_info: ImplementationInfo,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+}
+
+impl DiscoverResult {
+    pub fn new<I, S>(
+        supported_versions: I,
+        capabilities: Value,
+        server_info: ImplementationInfo,
+    ) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self {
+            result_type: "complete".to_string(),
+            supported_versions: supported_versions.into_iter().map(Into::into).collect(),
+            capabilities,
+            server_info,
+            instructions: None,
+        }
+    }
+
+    pub fn with_instructions(mut self, instructions: impl Into<String>) -> Self {
+        self.instructions = Some(instructions.into());
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct UnsupportedProtocolVersion {
+    pub requested: String,
+    pub supported: Vec<String>,
+}
+
+impl UnsupportedProtocolVersion {
+    pub fn new<I, S>(requested: impl Into<String>, supported: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self {
+            requested: requested.into(),
+            supported: supported.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct CacheableResult<T> {
+    #[serde(rename = "resultType")]
+    pub result_type: String,
+    #[serde(flatten)]
+    pub cache: CachePolicy,
+    #[serde(flatten)]
+    pub payload: T,
+}
+
+impl<T> CacheableResult<T> {
+    pub fn new(cache: CachePolicy, payload: T) -> Self {
+        Self {
+            result_type: "complete".to_string(),
+            cache,
+            payload,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -399,5 +493,55 @@ mod tests {
         let err = validate_stateless_request(&headers, &request, &[MCP_DRAFT_PROTOCOL_VERSION])
             .expect_err("missing event-stream accept should fail");
         assert_eq!(err.code(), "missing_accept");
+    }
+
+    #[test]
+    fn discover_result_serializes_target_shape() {
+        let result = DiscoverResult::new(
+            [MCP_DRAFT_PROTOCOL_VERSION],
+            serde_json::json!({"tools": {}, "resources": {}}),
+            ImplementationInfo::new("conary-mcp", "0.8.0"),
+        )
+        .with_instructions("Conary exposes package, repository, and test operations.");
+
+        let value = serde_json::to_value(result).expect("discover result serializes");
+        assert_eq!(value["resultType"], "complete");
+        assert_eq!(value["supportedVersions"][0], MCP_DRAFT_PROTOCOL_VERSION);
+        assert_eq!(value["serverInfo"]["name"], "conary-mcp");
+        assert_eq!(value["capabilities"]["resources"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn discover_result_type_is_complete() {
+        let result = DiscoverResult::new(
+            [MCP_DRAFT_PROTOCOL_VERSION],
+            serde_json::json!({}),
+            ImplementationInfo::new("test", "0.1.0"),
+        );
+
+        assert_eq!(result.result_type, "complete");
+    }
+
+    #[test]
+    fn unsupported_version_payload_lists_supported_and_requested() {
+        let payload = UnsupportedProtocolVersion::new("OLD", [MCP_DRAFT_PROTOCOL_VERSION]);
+
+        let value = serde_json::to_value(payload).expect("payload serializes");
+        assert_eq!(value["requested"], "OLD");
+        assert_eq!(value["supported"][0], MCP_DRAFT_PROTOCOL_VERSION);
+    }
+
+    #[test]
+    fn cacheable_result_serializes_cache_metadata() {
+        let result = CacheableResult::new(
+            conary_agent_contract::CachePolicy::private_short(),
+            serde_json::json!({"resources": [{"uri": "conary://remi/health"}]}),
+        );
+
+        let value = serde_json::to_value(result).expect("cacheable result serializes");
+        assert_eq!(value["resultType"], "complete");
+        assert_eq!(value["ttlMs"], 30_000);
+        assert_eq!(value["cacheScope"], "private");
+        assert_eq!(value["resources"][0]["uri"], "conary://remi/health");
     }
 }

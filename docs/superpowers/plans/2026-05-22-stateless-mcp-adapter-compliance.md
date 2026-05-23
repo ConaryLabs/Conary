@@ -745,7 +745,7 @@ Expected: commit succeeds and `git status --short` is clean.
 **Files:**
 - Modify: `crates/conary-mcp/src/stateless.rs`
 
-- [ ] **Step 1: Add failing serialization tests**
+- [x] **Step 1: Add failing serialization tests**
 
 Add these tests inside the existing `#[cfg(test)] mod tests` in `crates/conary-mcp/src/stateless.rs`:
 
@@ -801,7 +801,7 @@ Add these tests inside the existing `#[cfg(test)] mod tests` in `crates/conary-m
     }
 ```
 
-- [ ] **Step 2: Run tests and verify they fail**
+- [x] **Step 2: Run tests and verify they fail**
 
 Run:
 
@@ -811,7 +811,7 @@ cargo test -p conary-mcp stateless
 
 Expected: FAIL with unresolved names such as `DiscoverResult`, `ImplementationInfo`, `UnsupportedProtocolVersion`, and `CacheableResult`.
 
-- [ ] **Step 3: Add discovery and cache models**
+- [x] **Step 3: Add discovery and cache models**
 
 Add these imports near the top of `crates/conary-mcp/src/stateless.rs`:
 
@@ -923,7 +923,7 @@ draft field names. If implementation discovers payload collisions with
 `resultType`, `ttlMs`, or `cacheScope`, reserve those names for adapter fields
 and add a regression test for the observed serde behavior before committing.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run:
 
@@ -933,7 +933,7 @@ cargo test -p conary-mcp stateless
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 
