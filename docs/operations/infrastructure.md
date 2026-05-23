@@ -32,10 +32,13 @@ summary: Non-secret infrastructure, agent-operations transport, release, Remi de
 
 ## Agent Operations And MCP
 
-Prefer MCP resources for read-only state inspection and MCP tools for audited
-mutations when structured Conary operations surfaces already cover the
-workflow. The current deployed transport is MCP, but MCP is the adapter, not
-the durable product contract:
+Today, the live Remi and `conary-test` MCP endpoints are legacy
+session-based, tool-only surfaces. Prefer those structured tools over manual
+SSH, rsync, or curl only when they already cover the workflow.
+
+For the next stateless adapter, prefer MCP resources for read-only state
+inspection and MCP tools for audited mutations. MCP is the adapter, not the
+durable product contract:
 
 The first LLM-native operations milestone may define prompt catalogs in
 `conary-agent-contract`, but it must not register new live MCP prompts until

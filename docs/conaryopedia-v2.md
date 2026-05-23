@@ -4560,7 +4560,7 @@ No single layer is sufficient. A compromised repository (layer 1 bypassed) still
 
 ## Chapter 8 -- Advanced Topics
 
-This chapter covers the systems that make Conary more than a package manager: bootstrapping entire OS images from scratch, federating content across a mesh of nodes, computing binary deltas for bandwidth savings, declaring system state as code, building packages from recipes, and automating maintenance with AI assistance. Each system is self-contained but they compose -- a bootstrapped system uses recipes to build packages, federation to distribute them, the system model to declare the target state, and automation to keep it healthy.
+This chapter covers the systems that make Conary more than a package manager: bootstrapping entire OS images from scratch, federating content across a mesh of nodes, computing binary deltas for bandwidth savings, declaring system state as code, building packages from recipes, and automating maintenance through explicit policy. Each system is self-contained but they compose -- a bootstrapped system uses recipes to build packages, federation to distribute them, the system model to declare the target state, and automation to keep it healthy.
 
 ### 8.1 Bootstrap: Building an OS from Nothing
 
@@ -5466,9 +5466,12 @@ The risk level determines the default behavior:
 - `0.3 <= risk < 0.7` -- Suggest regardless of mode
 - `risk >= 0.7` -- Always require explicit confirmation
 
-#### AI-Assisted Maintenance
+#### Future Agent-Assisted Maintenance
 
-The automation system can optionally consult an AI model for complex decisions:
+The LLM-native operations contract is the future path for agent assistance.
+The removed experimental AI subcommand family is not a live product surface. A
+future adapter may consult a model for complex decisions through audited
+inspect/plan/apply flows:
 
 ```rust
 pub enum AiAssistMode {
