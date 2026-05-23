@@ -35,6 +35,12 @@ by CI pipelines and LLM agents.
 # Inspect local developer prerequisites and smoke-readiness state
 cargo run -p conary-test -- bootstrap check --json
 
+# Preview the local developer smoke proof loop without executing it
+cargo run -p conary-test -- bootstrap smoke --dry-run --json
+
+# Run the local developer smoke proof loop
+cargo run -p conary-test -- bootstrap smoke --json
+
 # Run Phase 1 tests on Fedora 44 from the repo root
 cargo run -p conary-test -- run --distro fedora44 --phase 1
 
@@ -58,6 +64,11 @@ cargo run -p conary-test -- list
 # Build container images
 cargo run -p conary-test -- images build --distro fedora44
 ```
+
+`bootstrap smoke` is a local developer proof loop for a checkout. It may build
+images, start containers, and write conary-test result files through the normal
+test runner path. It is not package publishing and does not require cloud
+credentials.
 
 ## Test Manifest Format
 

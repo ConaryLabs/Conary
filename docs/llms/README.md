@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-05-22
-revision: 7
-summary: GPT-5.5/Codex-first map for coding assistants working in the Conary repository, current validation docs, and remaining compatibility entrypoints
+revision: 8
+summary: GPT-5.5/Codex-first map with local bootstrap smoke routing
 ---
 
 # Conary For Coding Assistants
@@ -128,6 +128,13 @@ other non-UTC context.
   available MCP/HTTP/CLI surface already covers the workflow.
 - Treat `crates/conary-agent-contract` as the LLM-facing operation vocabulary;
   MCP code should adapt that contract, not become the product contract itself.
+- For local developer environment validation, start with
+  `cargo run -p conary-test -- bootstrap check --json`, then preview
+  `cargo run -p conary-test -- bootstrap smoke --dry-run --json` before running
+  `cargo run -p conary-test -- bootstrap smoke --json`.
+- Treat `bootstrap smoke` as a local test-runner proof loop. It may build
+  images, start containers, and write result files, but it is not fixture
+  publishing and does not add live MCP resources or live MCP prompts.
 - When version-specific library behavior matters, check current external
   documentation instead of guessing APIs.
 
