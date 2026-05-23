@@ -1456,7 +1456,7 @@ git commit -m "docs(agent): document operation contract slice"
 **Files:**
 - All files touched by prior tasks.
 
-- [ ] **Step 1: Run full formatting check**
+- [x] **Step 1: Run full formatting check**
 
 ```bash
 cargo fmt --check
@@ -1464,7 +1464,7 @@ cargo fmt --check
 
 Expected: PASS.
 
-- [ ] **Step 2: Run focused package tests**
+- [x] **Step 2: Run focused package tests**
 
 ```bash
 cargo test -p conary-agent-contract
@@ -1479,7 +1479,7 @@ cargo run -p conary-test -- list
 
 Expected: all commands pass.
 
-- [ ] **Step 3: Run workspace lint**
+- [x] **Step 3: Run workspace lint**
 
 ```bash
 cargo clippy --workspace --all-targets -- -D warnings
@@ -1487,7 +1487,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 Expected: PASS.
 
-- [ ] **Step 4: Run final stale-surface scan**
+- [x] **Step 4: Run final stale-surface scan**
 
 ```bash
 rg -n "MCP-first|transport-agnostic MCP|23 tools|Every MCP tool|\\[NOT IMPLEMENTED\\]|conary automation ai" README.md docs apps crates --glob '!docs/superpowers/**' --glob '!docs/llms/archive/**'
@@ -1495,7 +1495,7 @@ rg -n "MCP-first|transport-agnostic MCP|23 tools|Every MCP tool|\\[NOT IMPLEMENT
 
 Expected: no active stale claims. Any remaining hits must be intentional tests or historical archive files.
 
-- [ ] **Step 5: Inspect final diff and status**
+- [x] **Step 5: Inspect final diff and status**
 
 ```bash
 git status --short
@@ -1504,7 +1504,7 @@ git log --oneline -10
 
 Expected: worktree is clean after the final commit, and the last commits match the task sequence.
 
-- [ ] **Step 6: Request review**
+- [x] **Step 6: Request review**
 
 Use `/review` or dispatch a code-review subagent with this scope:
 

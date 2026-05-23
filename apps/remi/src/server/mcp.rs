@@ -388,7 +388,7 @@ impl RemiMcpServer {
     /// the peer ID. HTTP peers use a hash of the endpoint.
     /// Returns an error if the peer already exists.
     #[tool(
-        description = "Add a federation peer by endpoint URL. HTTPS peers require a pinned TLS certificate fingerprint, which becomes the peer ID. HTTP peers use a SHA-256 hash of the endpoint. Returns an error if the peer already exists."
+        description = "Add a federation peer by endpoint URL. HTTPS peers require a pinned TLS certificate fingerprint, which becomes the peer ID. HTTP peers use a SHA-256 hash of the endpoint. Returns an error if the peer already exists. Risk: high. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
     )]
     async fn add_peer(
         &self,
@@ -416,7 +416,7 @@ impl RemiMcpServer {
 
     /// Delete a federation peer by its peer ID.
     #[tool(
-        description = "Delete a federation peer by its peer ID. Returns success or error if not found."
+        description = "Delete a federation peer by its peer ID. Returns success or error if not found. Risk: high/destructive. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
     )]
     async fn delete_peer(
         &self,
@@ -585,15 +585,16 @@ impl RemiMcpServer {
     /// Garbage collect orphaned chunks from local disk and R2.
     ///
     /// Finds chunks not referenced by any converted package and deletes
-    /// them.  Use `dry_run = true` to preview without deleting.
+    /// them.  Omitted `dry_run` defaults to preview mode; set `dry_run = false`
+    /// only after confirmation.
     #[tool(
-        description = "Garbage collect orphaned chunks from local disk and R2. Finds chunks not referenced by any converted package and deletes them. Use dry_run=true to preview."
+        description = "Garbage collect orphaned chunks from local disk and R2. Finds chunks not referenced by any converted package and deletes them when dry_run=false. Omitted dry_run defaults to preview mode. Risk: destructive. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
     )]
     async fn chunk_gc(
         &self,
         Parameters(params): Parameters<ChunkGcParams>,
     ) -> Result<CallToolResult, McpError> {
-        let dry_run = params.dry_run.unwrap_or(false);
+        let dry_run = params.dry_run.unwrap_or(true);
         let grace_period_secs: u64 = 3600; // 1 hour grace period
 
         let state = self.state.read().await;
@@ -634,7 +635,7 @@ impl RemiMcpServer {
     /// Runs auto-discovery and curated rules to create cross-distro name
     /// equivalences.
     #[tool(
-        description = "Rebuild the canonical package mapping from all indexed distros. Runs auto-discovery and curated rules to create cross-distro name equivalences."
+        description = "Rebuild the canonical package mapping from all indexed distros. Runs auto-discovery and curated rules to create cross-distro name equivalences. Risk: medium. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
     )]
     async fn canonical_rebuild(&self) -> Result<CallToolResult, McpError> {
         let state = self.state.read().await;
@@ -661,7 +662,7 @@ impl RemiMcpServer {
     /// Populates the cache tables used by `canonical_rebuild`. Returns counts
     /// of cached entries for each source.
     #[tool(
-        description = "Trigger immediate Repology + AppStream fetch cycle. Populates the cache tables used by canonical_rebuild. Returns counts of cached entries."
+        description = "Trigger immediate Repology + AppStream fetch cycle. Populates the cache tables used by canonical_rebuild. Returns counts of cached entries. Risk: medium. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
     )]
     async fn canonical_fetch(&self) -> Result<CallToolResult, McpError> {
         let state = self.state.read().await;
@@ -770,7 +771,16 @@ mod tests {
     #[test]
     fn high_risk_tool_descriptions_require_contract_confirmation() {
         let tools = RemiMcpServer::tool_router().list_all();
-        for name in ["create_token", "delete_token", "purge_audit_log"] {
+        for name in [
+            "create_token",
+            "delete_token",
+            "add_peer",
+            "delete_peer",
+            "purge_audit_log",
+            "chunk_gc",
+            "canonical_rebuild",
+            "canonical_fetch",
+        ] {
             let tool = tools
                 .iter()
                 .find(|tool| tool.name.as_ref() == name)

@@ -287,7 +287,7 @@ impl TestMcpServer {
     /// Creates a pending run and returns the run ID. The run can be
     /// inspected with `get_run` or `get_test`.
     #[tool(
-        description = "Start a new test run. Requires suite name, distro, and phase. Returns the new run ID."
+        description = "Start a new test run. Requires suite name, distro, and phase. Returns the new run ID and starts background execution. Risk: medium. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
     )]
     async fn start_run(
         &self,
@@ -456,7 +456,7 @@ impl TestMcpServer {
     /// Sets the cancellation flag so the runner stops executing tests and
     /// marks the run status as cancelled.
     #[tool(
-        description = "Cancel a running test run. Sets the cancellation flag and marks the run as cancelled."
+        description = "Cancel a running test run. Sets the cancellation flag and marks the run as cancelled. Risk: medium. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
     )]
     async fn cancel_run(
         &self,
@@ -476,7 +476,9 @@ impl TestMcpServer {
     ///
     /// Creates a new pending run containing just the specified test and
     /// returns the new run ID.
-    #[tool(description = "Re-run a single test from a previous run. Returns the new run ID.")]
+    #[tool(
+        description = "Re-run a single test from a previous run. Returns the new run ID and starts background execution. Risk: medium. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
+    )]
     async fn rerun_test(
         &self,
         Parameters(params): Parameters<RerunTestParams>,
@@ -551,7 +553,9 @@ impl TestMcpServer {
     }
 
     /// Build a container image for a configured distro.
-    #[tool(description = "Build a container image for a distro. Returns the image tag on success.")]
+    #[tool(
+        description = "Build a container image for a distro. Returns the image tag on success. Risk: medium. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
+    )]
     async fn build_image(
         &self,
         Parameters(params): Parameters<BuildImageParams>,
@@ -989,7 +993,7 @@ impl TestMcpServer {
     /// Replays all buffered test results that failed to reach Remi.
     /// Returns counts of flushed and failed items.
     #[tool(
-        description = "Flush pending WAL items to Remi. Returns count of flushed and failed items."
+        description = "Flush pending WAL items to Remi. Returns count of flushed and failed items. Risk: high. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
     )]
     async fn flush_pending(&self) -> Result<CallToolResult, McpError> {
         let wal_arc =
@@ -1132,6 +1136,10 @@ mod tests {
     fn high_risk_tool_descriptions_require_contract_confirmation() {
         let tools = TestMcpServer::tool_router().list_all();
         for name in [
+            "start_run",
+            "cancel_run",
+            "rerun_test",
+            "build_image",
             "cleanup_containers",
             "prune_images",
             "deploy_source",
@@ -1139,6 +1147,7 @@ mod tests {
             "restart_service",
             "build_fixtures",
             "publish_fixtures",
+            "flush_pending",
         ] {
             let tool = tools
                 .iter()
