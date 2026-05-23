@@ -6,11 +6,23 @@
 use std::fmt::Display;
 
 use rmcp::{ErrorData as McpError, model::*};
+use schemars::{JsonSchema, schema_for};
 
 /// Serialize a value to pretty JSON, mapping failures to [`McpError`].
 pub fn to_json_text<T: serde::Serialize>(value: &T) -> Result<String, McpError> {
     serde_json::to_string_pretty(value)
         .map_err(|e| McpError::internal_error(format!("Serialization error: {e}"), None))
+}
+
+/// Serialize a transport-neutral Conary agent contract value to pretty JSON.
+pub fn contract_json_text<T: serde::Serialize>(value: &T) -> Result<String, McpError> {
+    to_json_text(value)
+}
+
+/// Return a JSON Schema value for an MCP `outputSchema`.
+pub fn output_schema_for<T: JsonSchema>() -> Result<serde_json::Value, McpError> {
+    serde_json::to_value(schema_for!(T))
+        .map_err(|e| McpError::internal_error(format!("Schema serialization error: {e}"), None))
 }
 
 /// Validate a path parameter against a safe pattern for URL interpolation.
@@ -79,5 +91,29 @@ mod tests {
     fn validate_path_param_accepts_valid() {
         assert!(validate_path_param("ci.yaml", "workflow").is_ok());
         assert!(validate_path_param("my-workflow_v2.0", "workflow").is_ok());
+    }
+
+    #[test]
+    fn contract_json_text_serializes_contract_result() {
+        let result = conary_agent_contract::InspectResult::new(
+            conary_agent_contract::OperationEnvelope::new(
+                "remi.health.inspect",
+                conary_agent_contract::OperationStatus::Ok,
+                conary_agent_contract::RiskLevel::ReadOnly,
+                "Remi health inspected",
+            ),
+        );
+        let text = contract_json_text(&result).expect("serialize contract result");
+        assert!(text.contains("\"operation\": \"remi.health.inspect\""));
+        assert!(text.contains("\"risk\": \"read_only\""));
+    }
+
+    #[test]
+    fn output_schema_for_contract_result_mentions_operation() {
+        let schema = output_schema_for::<conary_agent_contract::InspectResult>()
+            .expect("schema should serialize");
+        let text = serde_json::to_string(&schema).unwrap();
+        assert!(text.contains("operation"));
+        assert!(text.contains("status"));
     }
 }
