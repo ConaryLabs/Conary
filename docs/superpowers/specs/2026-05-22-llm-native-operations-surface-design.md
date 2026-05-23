@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-05-22
-revision: 3
-summary: Draft design for making Conary's operations surfaces explicitly LLM-native, with agent-review fixes for MCP draft compliance, contract shape, and active-doc consistency
+revision: 4
+summary: Draft design for making Conary's operations surfaces explicitly LLM-native, with final review fixes for MCP draft and rmcp readiness boundaries
 ---
 
 # LLM-Native Operations Surface: Design Spec
@@ -66,16 +66,19 @@ current docs describe remote MCP servers as a supported way to connect models
 to additional tools and knowledge in ChatGPT apps, deep research, and API
 integrations.
 
-As of 2026-05-22, the important MCP target is the current MCP draft /
-`DRAFT-2026-v1` stateless direction associated with the 2026-07-28 release
-candidate, not the older session-oriented 2025-era implementation model. The
-draft removes protocol-level sessions, `Mcp-Session-Id`, and the
-`initialize`/`initialized` handshake; adds `server/discover`; moves protocol,
-client identity, and client capability data into per-request `_meta`; and
-requires routing-friendly HTTP headers such as `Mcp-Method` and `Mcp-Name`.
-That direction fits Conary better than sticky sessions: Remi and `conary-test`
-should be able to sit behind ordinary HTTP infrastructure, with any cross-call
-state represented by explicit run IDs, handles, artifact IDs, or resource URIs.
+As of 2026-05-22, the important MCP target is the current MCP draft stateless
+direction associated with the 2026-07-28 release candidate, not the older
+session-oriented 2025-era implementation model. The draft docs currently show
+`DRAFT-2026-v1` as the protocol-version value, but Conary should treat the
+draft as moving until release and re-verify the final version token before
+shipping a live adapter. The draft removes protocol-level sessions,
+`Mcp-Session-Id`, and the `initialize`/`initialized` handshake; adds
+`server/discover`; moves protocol, client identity, and client capability data
+into per-request `_meta`; and requires routing-friendly HTTP headers such as
+`Mcp-Method` and `Mcp-Name`. That direction fits Conary better than sticky
+sessions: Remi and `conary-test` should be able to sit behind ordinary HTTP
+infrastructure, with any cross-call state represented by explicit run IDs,
+handles, artifact IDs, or resource URIs.
 
 **OpenAPI:** Best companion contract for HTTP surfaces and non-agent clients.
 OpenAPI is mature, language-neutral, YAML/JSON-based, and useful for client
@@ -111,9 +114,11 @@ For the first implementation slice:
   and docs before expanding any transport.
 - Expose the first agent-facing surface through MCP because it has the best
   current fit for tools, resources, prompts, discovery, and LLM-host adoption.
-- Target the current MCP draft / `DRAFT-2026-v1` stateless direction associated
-  with the 2026-07-28 release candidate. Do not add new session-based MCP
-  behavior while the Rust SDK and final protocol support are still moving.
+- Target the current MCP draft stateless direction associated with the
+  2026-07-28 release candidate. Treat the current `DRAFT-2026-v1`
+  protocol-version value as a draft token to verify before live adapter work.
+  Do not add new session-based MCP behavior while the Rust SDK and final
+  protocol support are still moving.
 - Keep REST/OpenAPI compatibility possible through the contract types, but do
   not make OpenAPI generation part of the first implementation slice.
 - Do not build A2A yet; add a future follow-on only if Conary starts exposing a
@@ -121,13 +126,16 @@ For the first implementation slice:
 - Do not bake OpenAI-specific harness behavior into product code, even though
   current OpenAI APIs can consume remote MCP servers and local function tools.
 
-If `rmcp` support lags the stateless MCP release, the first implementation
-slice should still aim at the RC: prepare the transport-neutral contract, prune
-stale surfaces, and avoid deepening the current
-`RoleServer`/`ServerHandler`/local-session shape. A thin raw HTTP adapter can
-be considered later if it is smaller than waiting for the SDK. Building toward
-the RC and absorbing small release changes is preferable to adding fresh code
-for the old session model.
+As of 2026-05-22, local source inspection shows the resolved `rmcp 1.6.0`
+dependency does not implement the target stateless draft: it still exposes the
+`initialize` handshake, `Mcp-Session-Id`, `RoleServer`, `ServerHandler`, and
+session-manager based Streamable HTTP server code. If `rmcp` support lags the
+stateless MCP release, the first implementation slice should still aim at the
+RC: prepare the transport-neutral contract, prune stale surfaces, and avoid
+deepening the current `RoleServer`/`ServerHandler`/local-session shape. A thin
+raw HTTP adapter can be considered later if it is smaller than waiting for the
+SDK. Building toward the RC and absorbing small release changes is preferable
+to adding fresh code for the old session model.
 
 Primary references for this decision:
 
@@ -150,9 +158,11 @@ Primary references for this decision:
 ### MCP Draft Compliance Notes
 
 Implementation planning must treat the MCP adapter as a compliance boundary,
-not as casual `axum` glue. If Conary uses a thin raw HTTP adapter before `rmcp`
-fully supports the target draft, that adapter must implement and test at least
-these draft requirements:
+not as casual `axum` glue. This checklist is aspirational for the target
+stateless adapter until either `rmcp` supports the draft or Conary builds a raw
+HTTP adapter. If Conary uses a thin raw HTTP adapter before `rmcp` fully
+supports the target draft, that adapter must implement and test at least these
+draft requirements:
 
 - every JSON-RPC message arrives as a new HTTP `POST` to the MCP endpoint
 - `Accept` includes both `application/json` and `text/event-stream`
@@ -168,7 +178,8 @@ these draft requirements:
 - list and read results include cache metadata such as `ttlMs` and `cacheScope`
   where the draft requires them
 
-MCP tool-result mapping should be explicit:
+Target MCP tool-result mapping for the stateless adapter should be explicit.
+This table is not current behavior for the existing `rmcp 1.6.0` adapter:
 
 | MCP outcome | Conary contract use |
 | --- | --- |
@@ -326,8 +337,9 @@ mutation.
 
 ### RC-First, Session-Free Transport
 
-New MCP work should target the current MCP draft / `DRAFT-2026-v1` stateless
-model associated with the 2026-07-28 release candidate. Do not rely on
+New MCP work should target the current MCP draft stateless model associated
+with the 2026-07-28 release candidate. Treat the draft's current
+`DRAFT-2026-v1` protocol-version token as non-final until release. Do not rely on
 `Mcp-Session-Id`, per-connection tool/resource/prompt lists, or implicit
 transport sessions. Any state that must survive across calls should be
 represented by explicit run IDs, plan IDs, artifact IDs, resource URIs, or
@@ -377,11 +389,13 @@ shape.
 
 Before expanding the live MCP surface:
 
-- Track the current MCP draft / `DRAFT-2026-v1` stateless direction associated
-  with the 2026-07-28 release candidate and treat it as the target.
+- Track the current MCP draft stateless direction associated with the
+  2026-07-28 release candidate and treat it as the target. Re-verify the final
+  protocol-version token before live adapter work; the draft docs currently use
+  `DRAFT-2026-v1`.
 - Record that the workspace requirement `rmcp = "1.1"` currently resolves to
-  `rmcp 1.6.0` in `Cargo.lock`, and verify that resolved SDK's actual support
-  for the target draft before relying on it.
+  `rmcp 1.6.0` in `Cargo.lock`, and that local source inspection shows this
+  resolved SDK does not implement the target stateless draft.
 - Record the current
   `RoleServer`/`ServerHandler`/local session-manager usage as legacy transport
   facts, not architectural commitments.
@@ -553,7 +567,7 @@ Expected decisions:
 - Replace "MCP-first operations" wording with the broader agent operations
   contract.
 
-Every mutation tool should return the appropriate contract type, usually
+Every mutation tool should return the matching contract type, usually
 `PlanResult`, `VerifyResult`, or `ApplyResult`, with risk, changed resources,
 evidence, warnings, and next actions. Every MCP mutation tool should publish an
 `outputSchema` matching the contract type. Long raw command output should move
@@ -708,9 +722,10 @@ The first slice is complete when:
   source for response semantics
 - stale or fake AI command surfaces are removed or replaced with honest
   behavior
-- new MCP work targets the current MCP draft / `DRAFT-2026-v1` stateless
-  direction associated with the 2026-07-28 release candidate, with no new
-  reliance on protocol sessions or sticky connection state
+- new MCP work targets the current MCP draft stateless direction associated
+  with the 2026-07-28 release candidate, with final protocol-version token
+  verification before live adapter work and no new reliance on protocol
+  sessions or sticky connection state
 - Remi and `conary-test` MCP surfaces expose read-only resources for key state
 - mutating MCP tools return structured contract results with status, risk,
   evidence, and next actions
