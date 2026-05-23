@@ -582,7 +582,7 @@ impl TestMcpServer {
 
     /// Clean up stopped conary-test containers.
     #[tool(
-        description = "Remove stopped conary-test containers. Returns count of removed containers."
+        description = "Remove stopped conary-test containers. Returns count of removed containers. Risk: destructive. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
     )]
     async fn cleanup_containers(&self) -> Result<CallToolResult, McpError> {
         let result = service::cleanup_containers(&self.state)
@@ -627,7 +627,7 @@ impl TestMcpServer {
     /// Lists all `conary-test-*` images, groups them by distro, sorts by
     /// creation date, and removes all except the N newest per distro.
     #[tool(
-        description = "Remove old container images, keeping the N most recent per distro. Frees disk space on the test server."
+        description = "Remove old container images, keeping the N most recent per distro. Frees disk space on the test server. Risk: destructive. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
     )]
     async fn prune_images(
         &self,
@@ -771,7 +771,7 @@ impl TestMcpServer {
     /// Otherwise runs `git fetch && git checkout <ref>`. Then rebuilds
     /// both `conary-test` and `conary` with `cargo build`.
     #[tool(
-        description = "Deploy source code from git ref and rebuild. Runs git pull + cargo build on Forge."
+        description = "Deploy source code from git ref and rebuild. Runs git pull + cargo build on Forge. Risk: high. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
     )]
     async fn deploy_source(
         &self,
@@ -830,7 +830,9 @@ impl TestMcpServer {
     }
 
     /// Rebuild conary and/or conary-test binaries from current source.
-    #[tool(description = "Rebuild conary and conary-test binaries from current source.")]
+    #[tool(
+        description = "Rebuild conary and conary-test binaries from current source. Risk: high. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
+    )]
     async fn rebuild_binary(
         &self,
         Parameters(params): Parameters<RebuildParams>,
@@ -891,7 +893,9 @@ impl TestMcpServer {
     ///
     /// Spawns a delayed restart (1 second) so the MCP response is sent before
     /// the process is killed by systemd.
-    #[tool(description = "Restart the conary-test systemd user service and verify it's healthy.")]
+    #[tool(
+        description = "Restart the conary-test systemd user service and verify it's healthy. Risk: high. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
+    )]
     async fn restart_service(&self) -> Result<CallToolResult, McpError> {
         // Spawn a background task that waits 1 second then restarts.
         // This ensures the MCP response is sent before the process dies.
@@ -914,7 +918,9 @@ impl TestMcpServer {
     /// Build test fixtures (CCS packages for integration tests).
     ///
     /// Runs the appropriate `build-*.sh` script from the workspace fixture tree.
-    #[tool(description = "Build test fixtures (CCS packages for integration tests).")]
+    #[tool(
+        description = "Build test fixtures (CCS packages for integration tests). Risk: medium. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
+    )]
     async fn build_fixtures(
         &self,
         Parameters(params): Parameters<BuildFixturesParams>,
@@ -954,7 +960,9 @@ impl TestMcpServer {
     /// Publish test fixtures to the Remi repository.
     ///
     /// Runs `scripts/publish-test-fixtures.sh` from the project root.
-    #[tool(description = "Publish test fixtures to Remi repository.")]
+    #[tool(
+        description = "Publish test fixtures to Remi repository. Risk: high. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
+    )]
     async fn publish_fixtures(&self) -> Result<CallToolResult, McpError> {
         let dir = project_dir()?;
         let script_path = format!("{dir}/scripts/publish-test-fixtures.sh");
@@ -1118,6 +1126,34 @@ mod tests {
             "conary-test has {} MCP tools; split read-only/admin/mutation surfaces or document progressive discovery before adding more",
             tools.len()
         );
+    }
+
+    #[test]
+    fn high_risk_tool_descriptions_require_contract_confirmation() {
+        let tools = TestMcpServer::tool_router().list_all();
+        for name in [
+            "cleanup_containers",
+            "prune_images",
+            "deploy_source",
+            "rebuild_binary",
+            "restart_service",
+            "build_fixtures",
+            "publish_fixtures",
+        ] {
+            let tool = tools
+                .iter()
+                .find(|tool| tool.name.as_ref() == name)
+                .unwrap_or_else(|| panic!("missing high-risk tool: {name}"));
+            let description = tool.description.as_deref().unwrap_or_default();
+            assert!(
+                description.contains("Risk:"),
+                "{name} should classify mutation risk"
+            );
+            assert!(
+                description.contains("plan-then-apply confirmation"),
+                "{name} should require contract confirmation"
+            );
+        }
     }
 
     #[tokio::test]
