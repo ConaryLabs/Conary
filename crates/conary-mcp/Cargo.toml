@@ -4,7 +4,7 @@ version = "0.8.0"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Conary Contributors"]
-description = "Shared transport-agnostic MCP helpers for Conary workspace apps"
+description = "Shared MCP adapter helpers for Conary workspace apps"
 license = "MIT OR Apache-2.0"
 
 [dependencies]

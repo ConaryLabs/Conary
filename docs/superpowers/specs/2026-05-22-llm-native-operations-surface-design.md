@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-05-22
-revision: 2
-summary: Draft design for making Conary's operations surfaces explicitly LLM-native, targeting the stateless MCP direction while keeping the durable contract transport-neutral
+revision: 3
+summary: Draft design for making Conary's operations surfaces explicitly LLM-native, with agent-review fixes for MCP draft compliance, contract shape, and active-doc consistency
 ---
 
 # LLM-Native Operations Surface: Design Spec
@@ -27,9 +27,13 @@ manager designed around a structured agent operations contract. The first
 implementation slice should prove that idea on the existing operations surface
 before widening into end-user package and system management.
 
-Backward compatibility is not a constraint for this work. The repository is not
-serving external MCP clients today, and stale or misleading surfaces may be
-removed wholesale when replacement paths are clearer and more future-facing.
+Backward compatibility is not a product constraint for this work, but Conary
+does have a documented authenticated Remi MCP endpoint. The accurate constraint
+is that Conary has no stable third-party MCP schema contract, no known external
+client compatibility promise, and no need to preserve stale tool names or raw
+response shapes. Migration should preserve or deliberately redirect the
+production endpoint while allowing the tool/resource/prompt surface underneath
+it to be replaced.
 
 ## Product Position
 
@@ -62,11 +66,12 @@ current docs describe remote MCP servers as a supported way to connect models
 to additional tools and knowledge in ChatGPT apps, deep research, and API
 integrations.
 
-As of 2026-05-22, the important MCP target is the 2026-07-28 release-candidate
-direction, not the older session-oriented 2025-era implementation model. The
-draft changelog removes protocol-level sessions, `Mcp-Session-Id`, and the
+As of 2026-05-22, the important MCP target is the current MCP draft /
+`DRAFT-2026-v1` stateless direction associated with the 2026-07-28 release
+candidate, not the older session-oriented 2025-era implementation model. The
+draft removes protocol-level sessions, `Mcp-Session-Id`, and the
 `initialize`/`initialized` handshake; adds `server/discover`; moves protocol,
-client identity, and client capability data into per-request metadata; and
+client identity, and client capability data into per-request `_meta`; and
 requires routing-friendly HTTP headers such as `Mcp-Method` and `Mcp-Name`.
 That direction fits Conary better than sticky sessions: Remi and `conary-test`
 should be able to sit behind ordinary HTTP infrastructure, with any cross-call
@@ -106,9 +111,9 @@ For the first implementation slice:
   and docs before expanding any transport.
 - Expose the first agent-facing surface through MCP because it has the best
   current fit for tools, resources, prompts, discovery, and LLM-host adoption.
-- Target the 2026-07-28 stateless MCP release-candidate direction. Do not add
-  new session-based MCP behavior while the Rust SDK and final protocol support
-  are still moving.
+- Target the current MCP draft / `DRAFT-2026-v1` stateless direction associated
+  with the 2026-07-28 release candidate. Do not add new session-based MCP
+  behavior while the Rust SDK and final protocol support are still moving.
 - Keep REST/OpenAPI compatibility possible through the contract types, but do
   not make OpenAPI generation part of the first implementation slice.
 - Do not build A2A yet; add a future follow-on only if Conary starts exposing a
@@ -142,12 +147,46 @@ Primary references for this decision:
 - <https://adk.dev/a2a/intro/>
 - <https://developers.googleblog.com/en/a2a-a-new-era-of-agent-interoperability/>
 
+### MCP Draft Compliance Notes
+
+Implementation planning must treat the MCP adapter as a compliance boundary,
+not as casual `axum` glue. If Conary uses a thin raw HTTP adapter before `rmcp`
+fully supports the target draft, that adapter must implement and test at least
+these draft requirements:
+
+- every JSON-RPC message arrives as a new HTTP `POST` to the MCP endpoint
+- `Accept` includes both `application/json` and `text/event-stream`
+- every request carries `MCP-Protocol-Version`, `Mcp-Method`, and, for
+  `tools/call`, `resources/read`, and `prompts/get`, `Mcp-Name`
+- the `MCP-Protocol-Version` header matches
+  `_meta.io.modelcontextprotocol/protocolVersion`
+- client info and capabilities come from per-request `_meta`, not connection
+  setup
+- `Origin` is validated for HTTP transports, especially local servers
+- `server/discover` is supported before ordinary capability use
+- old HTTP GET or SSE session semantics are not required for first-slice work
+- list and read results include cache metadata such as `ttlMs` and `cacheScope`
+  where the draft requires them
+
+MCP tool-result mapping should be explicit:
+
+| MCP outcome | Conary contract use |
+| --- | --- |
+| `resultType: "complete"`, `isError: false` | Successful `InspectResult`, `PlanResult`, `VerifyResult`, `ApplyResult`, `ExplainResult`, or `RecoverResult`; `structuredContent` conforms to the matching `outputSchema`. |
+| `resultType: "complete"`, `isError: true` | Tool executed but the operation failed as a domain outcome, such as validation failure or remote unavailability; structured content conforms to the matching error-capable contract schema. |
+| JSON-RPC error | Protocol, authorization, invalid request, invalid schema, or unknown method/tool/resource/prompt failures. |
+| `resultType: "input_required"` with `inputRequests` / `inputResponses` | Confirmation or missing client input that must be supplied before the operation can complete. |
+
+Parameterized read-only state should prefer MCP resource templates before
+tools. Use tools for expensive computation, true command semantics, or actions
+with side effects.
+
 ## Audiences
 
 ### Maintainer And Operator
 
-This is the current user. The operator needs safer, less manual remote
-operations for Remi and `conary-test`:
+This is the current maintainer/operator persona. The operator needs safer, less
+manual remote operations for Remi and `conary-test`:
 
 - inspect Remi health, repositories, federation peers, audit events, canonical
   mapping status, and chunk storage
@@ -274,11 +313,23 @@ The LLM-native surface should make confirmation, risk labels, and audit trails
 clear. The goal is not blind autonomy; it is making safe, high-context
 operation easy.
 
+### Confirmation Is A Contract
+
+High-risk and destructive operations should use a plan-then-apply boundary.
+`PlanResult` should produce a stable plan ID, the affected resource URIs, the
+required confirmation level, the risk rationale, and the verification command
+or resource that will prove the result. `ApplyResult` for medium, high, or
+destructive operations should require explicit confirmation input that matches
+the plan ID and current operation fingerprint. Replayed, stale, or missing
+confirmation should return `unsafe_without_confirmation`, not attempt the
+mutation.
+
 ### RC-First, Session-Free Transport
 
-New MCP work should target the stateless 2026-07-28 release-candidate model.
-Do not rely on `Mcp-Session-Id`, per-connection tool/resource/prompt lists, or
-implicit transport sessions. Any state that must survive across calls should be
+New MCP work should target the current MCP draft / `DRAFT-2026-v1` stateless
+model associated with the 2026-07-28 release candidate. Do not rely on
+`Mcp-Session-Id`, per-connection tool/resource/prompt lists, or implicit
+transport sessions. Any state that must survive across calls should be
 represented by explicit run IDs, plan IDs, artifact IDs, resource URIs, or
 bounded server-minted handles in the Conary contract.
 
@@ -288,12 +339,13 @@ An LLM-operable package manager should not require the model to load every
 possible operation up front. Conary should avoid a single giant MCP server full
 of loosely described tools. Prefer resources for read-heavy state, concise tool
 descriptions that say when a tool should be used, deterministic listing order,
-cacheable resource/tool metadata where the protocol supports it, and separate
-surfaces when capability groups diverge. As a working guardrail, if one MCP
-surface grows beyond roughly fifteen active tools, implementation planning must
-either justify that count or introduce progressive discovery, a smaller
-capability catalog, or a split such as read-only, admin, test-runner, and local
-bootstrap surfaces.
+cacheable resource/tool metadata, and separate surfaces when capability groups
+diverge. As a working guardrail, if one MCP surface grows beyond roughly
+fifteen active tools, or tool definitions consume more than a small share of the
+target context window, implementation planning must either justify that count
+with measured tool-definition size or introduce progressive discovery, a
+smaller capability catalog, or a split such as read-only, admin, test-runner,
+and local bootstrap surfaces.
 
 ### Prompts Are Not Magic Orchestrators
 
@@ -301,8 +353,9 @@ Prompts should not pretend they can enforce a multi-step workflow by instruction
 alone. A prompt may frame the task for the assistant, but deterministic checks
 should run server-side where possible and return structured state for the model
 to reason over. Confirmation gates should be represented in the contract and,
-when the target MCP version supports it cleanly, mapped to input-required
-results rather than relying on prose that asks the model to pause.
+when the target MCP version supports it cleanly, mapped to `input_required`
+results with `inputRequests` / `inputResponses` rather than relying on prose
+that asks the model to pause.
 
 ### Contract Schemas Are The Source
 
@@ -324,17 +377,22 @@ shape.
 
 Before expanding the live MCP surface:
 
-- Track the 2026-07-28 MCP release candidate and treat its stateless model as
-  the target.
-- Record the current `rmcp = "1.1"` dependency and the current
+- Track the current MCP draft / `DRAFT-2026-v1` stateless direction associated
+  with the 2026-07-28 release candidate and treat it as the target.
+- Record that the workspace requirement `rmcp = "1.1"` currently resolves to
+  `rmcp 1.6.0` in `Cargo.lock`, and verify that resolved SDK's actual support
+  for the target draft before relying on it.
+- Record the current
   `RoleServer`/`ServerHandler`/local session-manager usage as legacy transport
   facts, not architectural commitments.
-- Avoid adding new MCP tools or prompts on the session-based path. Short-lived
-  implementation probes are acceptable only when they help delete, replace, or
-  isolate existing legacy transport code.
+- Avoid adding new MCP resources, tools, prompts, or list/discovery behavior on
+  the session-based path. Short-lived implementation probes are acceptable only
+  when they help delete, replace, or isolate existing legacy transport code.
+- Make the first milestone contract-only plus inventory/prune unless the
+  stateless adapter decision is settled.
 - Plan an `rmcp` upgrade when stateless support exists. If the SDK lags and the
   raw adapter would be small, consider implementing Streamable HTTP directly
-  with the RC header and discovery shape.
+  only if it satisfies the MCP draft compliance checklist above.
 - Delete the experimental `conary automation ai ...` commands if implementation
   review confirms they still only emit not-implemented behavior.
 
@@ -355,15 +413,77 @@ type. It should define serde-serializable Rust types for:
 - `RiskLevel`: `read_only`, `low`, `medium`, `high`, `destructive`
 - `AgentError`: `missing_prerequisite`, `not_supported`, `deferred`,
   `unsafe_without_confirmation`, `remote_unavailable`, `validation_failed`,
-  `partial`
+  `partial_failure`
 - shared evidence, changed-resource, warning, confirmation, and next-action
   fields
+
+Every result type should use a shared minimal envelope:
+
+- `operation`: stable operation name, such as `remi.audit.purge.plan`
+- `status`: `OperationStatus`
+- `subject`: primary resource URI or operation subject
+- `risk`: `RiskLevel`
+- `summary`: short human-readable status
+- `changed`: resource URIs changed or planned to change
+- `evidence`: structured evidence items with kind, URI/path/ID, command summary,
+  exit code where relevant, and optional artifact metadata
+- `warnings`: bounded human-readable warnings
+- `next_actions`: bounded follow-up actions with stable action labels
+- `confirmation`: optional `ConfirmationRequirement` with plan ID, reason,
+  required input shape, and expiry/fingerprint when applicable
+- `raw_logs`: optional detail field or artifact link, never the primary result
+
+Canonical resource URI patterns should be defined with the contract crate before
+the MCP adapter is expanded. Initial patterns should include:
+
+- `conary://remi/health`
+- `conary://remi/repositories/{name}`
+- `conary://remi/federation/peers/{peer_id}`
+- `conary://remi/audit/summary`
+- `conary://remi/chunks/stats`
+- `conary-test://suites/{suite_id}`
+- `conary-test://runs/{run_id}`
+- `conary-test://runs/{run_id}/artifacts/{artifact_id}`
+- `conary-local://bootstrap/status`
+
+The contract crate should derive JSON Schema 2020-12 with `schemars` where that
+fits the desired schema. Any handwritten MCP `outputSchema` must have snapshot
+or round-trip tests proving parity with the Rust contract types.
 
 `crates/conary-mcp` should become an adapter that maps these types into MCP
 structured content and `outputSchema`. CLI JSON, HTTP JSON, and future daemon
 APIs should be able to import the contract crate without pulling in MCP.
 
-### 2. Resources First
+### 2. Local Bootstrap Inspection Service
+
+Implement the local developer bootstrap inspection service before exposing the
+bootstrap resource or prompt. Initial ownership should live in
+`apps/conary-test`, because the first proof loop is a test-harness health and
+smoke-validation path, not package installation.
+
+The first command shape should be planned around
+`conary-test bootstrap check --json`, with room to rename only if the
+implementation plan documents an equivalent user-facing path. It should:
+
+- inspect required tools: Rust/Cargo, Podman or Docker API access, SQLite, and
+  the repository paths that `conary-test` expects
+- inspect optional tools: `/dev/kvm`, QEMU, and SSH helpers, reporting them as
+  optional unless the selected smoke suite needs them
+- run no network credential checks and publish no packages
+- validate `CONARY_TEST_CONFIG`, `CONARY_TEST_MANIFESTS`, and default path
+  resolution
+- run `cargo run -p conary-test -- list` or the equivalent manifest parser
+  inventory without starting containers
+- select a default non-QEMU smoke candidate, initially `phase1-core` on
+  `fedora44`, only when container prerequisites are available
+- write JSON evidence under a repo-local ignored path such as
+  `target/conary-agent/bootstrap/`
+- report missing prerequisites as `missing_prerequisite` without pretending the
+  bootstrap succeeded
+- keep the first proof loop bounded to a configurable timeout, with a planning
+  target of under twenty minutes after binaries are already built
+
+### 3. Resources First
 
 Add resources for stable state that assistants should inspect before invoking
 tools:
@@ -381,12 +501,13 @@ tools:
 - `conary-test` local service health
 - local developer bootstrap status
 
-Resources should be read-only, cacheable where the target MCP version supports
-freshness hints, and cheap enough to call during orientation. Read-only
-operation-shaped tools should be reclassified as resources unless they need
-parameters or computation that genuinely belongs behind a tool.
+Resources should be read-only, cheap enough to call during orientation, and
+return draft-required cache metadata such as `ttlMs` and `cacheScope`.
+Parameterized read-only state should prefer resource templates first. Read-only
+operation-shaped tools should be reclassified as resources unless they require
+expensive computation, true command semantics, or side effects.
 
-### 3. Tool Audit And Mutation Tools
+### 4. Tool Audit And Mutation Tools
 
 Review all active MCP and AI-adjacent surfaces:
 
@@ -395,8 +516,15 @@ Review all active MCP and AI-adjacent surfaces:
 - `apps/remi/src/server/admin_service.rs`
 - `apps/conary-test/src/server/mcp.rs`
 - `apps/conary-test/src/server/service.rs`
+- `apps/conary-test/README.md`
 - `apps/conary/src/cli/automation.rs`
+- `apps/conary/src/cli/mod.rs`
 - `apps/conary/src/commands/automation.rs`
+- `crates/conary-core/src/automation/mod.rs`
+- `crates/conary-core/src/model/parser.rs`
+- `AGENTS.md`
+- `docs/ARCHITECTURE.md`
+- `docs/INTEGRATION-TESTING.md`
 - `docs/operations/infrastructure.md`
 - `docs/llms/README.md`
 - `docs/llms/subsystem-map.md`
@@ -410,6 +538,9 @@ Expected decisions:
 
 - Keep Remi test/repo/federation/canonical/chunk tools that share service
   logic, but normalize response shape and docs.
+- Explicitly classify Remi token-creation, token-deletion, and audit-purge
+  tools. They should be `high` or `destructive`, require plan-then-apply
+  confirmation, or be removed from the first MCP mutation surface.
 - Keep `conary-test` run-control tools that mutate or launch work, but move
   evidence inspection and status reads into resources where possible.
 - Reshape or remove deploy/build/restart/fixture tools. Any tool that remains
@@ -417,6 +548,8 @@ Expected decisions:
   orchestration where possible.
 - Remove experimental `conary automation ai ...` commands unless the first
   slice replaces them with honest behavior.
+- Classify existing AI-assist configuration and model-schema fields as keep
+  with deferred wording, reshape into the new contract, or remove.
 - Replace "MCP-first operations" wording with the broader agent operations
   contract.
 
@@ -426,7 +559,7 @@ evidence, warnings, and next actions. Every MCP mutation tool should publish an
 `outputSchema` matching the contract type. Long raw command output should move
 to optional detail fields or artifacts, not the main result.
 
-### 4. Hybrid Prompts
+### 5. Hybrid Prompts
 
 Add only three prompts in the first slice:
 
@@ -442,25 +575,27 @@ test inventory before suggesting a mutation. Prompts should not contain volatile
 host secrets, and they should not be the only place where workflow correctness
 lives.
 
-### 5. Local Developer Bootstrap Path
+### 6. Local Developer Bootstrap Path
 
 Add a small local path that an assistant can drive from a clean checkout for
 one audience: a developer who has cloned Conary and wants to verify that the
-local development loop works. The exact command shape can be decided during
-implementation, but the behavior should include:
+local development loop works. The first implementation should treat
+`apps/conary-test` as the owner and should build around the bootstrap
+inspection service defined above.
 
 - inspect prerequisites and report missing local dependencies
 - validate local repository and test configuration
 - run a focused build check for the packages needed by the smoke path
 - list available integration suites
-- run a small smoke validation
+- run one small non-QEMU smoke validation only when container prerequisites are
+  present
 - emit structured JSON describing state, evidence, and next steps
 
 This path should avoid pretending to install a full production environment. It
 is a developer bootstrap and proof loop, not repository publishing or end-user
 system management.
 
-### 6. Docs And Positioning
+### 7. Docs And Positioning
 
 Document the agent operations model as a real Conary feature:
 
@@ -503,14 +638,30 @@ LLM-facing operations should use typed failures and remediation hints:
 - `remote_unavailable`: Remi, Forge, or other remote service could not be
   reached
 - `validation_failed`: check ran and produced negative evidence
-- `partial`: some steps succeeded and others failed
+- `partial_failure`: some steps succeeded and others failed; use
+  `status = partial` for the overall operation state
 
 Responses should include enough evidence for an assistant to decide whether to
 retry, ask the user, run a narrower diagnostic, or stop.
 
+## Security And Authorization
+
+MCP resources, tools, and prompts must inherit the same authentication and
+authorization boundary as the owning HTTP or CLI surface. Remi admin resources
+and tools remain bearer-authenticated admin operations unless the implementation
+plan explicitly carves out a narrower read-only scope. Discovery must not reveal
+tools or resources beyond the caller's granted scope.
+
+The first slice should add tests for denied access to sensitive resources and
+mutations. Token creation, token deletion, audit purge, deploy/restart, fixture
+publication, and any host-level cleanup action are high-risk or destructive
+until proven otherwise. Local bootstrap may run without cloud credentials, but
+it must not expose host-local secrets, bearer tokens, SSH identities, or ignored
+personal access notes.
+
 ## Testing Strategy
 
-The implementation plan should include focused tests at three levels:
+The implementation plan should include focused tests across these areas:
 
 - unit tests for contract serialization, risk labels, and error mapping
 - service-layer tests for local bootstrap inspection and structured operation
@@ -518,7 +669,12 @@ The implementation plan should include focused tests at three levels:
 - schema tests that confirm MCP `outputSchema` matches the contract types used
   by each tool
 - MCP/server tests for resource, tool, and prompt registration against the
-  selected stateless transport path
+  selected stateless transport path, or contract-level stateless readiness when
+  live transport registration is deferred
+- authorization and confirmation tests for sensitive resources and mutation
+  tools
+- catalog/context-budget checks that report tool count and approximate
+  tool-definition size for each MCP surface
 
 Documentation and inventory checks should run when active docs change.
 
@@ -530,14 +686,17 @@ cargo test -p conary-agent-contract
 cargo test -p conary-mcp
 cargo test -p remi mcp
 cargo test -p conary-test mcp
+cargo test -p conary-test bootstrap
 cargo run -p conary-test -- list
 cargo clippy --workspace --all-targets -- -D warnings
 git diff --check
 ```
 
 The implementation may adjust focused package tests once the exact touched
-files are known. Any removed experimental AI surface should have tests or help
-snapshots updated so stale commands do not remain visible by accident.
+files are known. If bootstrap ownership moves out of `conary-test`, replace the
+bootstrap command above with the owning package's focused tests. Any removed
+experimental AI surface should have tests or help snapshots updated so stale
+commands do not remain visible by accident.
 
 ## Acceptance Criteria
 
@@ -549,11 +708,18 @@ The first slice is complete when:
   source for response semantics
 - stale or fake AI command surfaces are removed or replaced with honest
   behavior
-- new MCP work targets the 2026-07-28 stateless release-candidate direction,
-  with no new reliance on protocol sessions or sticky connection state
+- new MCP work targets the current MCP draft / `DRAFT-2026-v1` stateless
+  direction associated with the 2026-07-28 release candidate, with no new
+  reliance on protocol sessions or sticky connection state
 - Remi and `conary-test` MCP surfaces expose read-only resources for key state
 - mutating MCP tools return structured contract results with status, risk,
   evidence, and next actions
+- medium, high, and destructive mutation tools require plan-then-apply
+  confirmation
+- each MCP surface either meets the context-budget guardrail or documents a
+  split/progressive-discovery plan with measured catalog size
+- resource, tool, and prompt list/read results include draft-required cache
+  metadata where applicable
 - first-slice prompts are limited to Remi health inspection, failing-test
   debugging, and local developer bootstrap
 - local developer bootstrap can inspect prerequisites and run a small proof loop
@@ -567,15 +733,14 @@ The first slice is complete when:
 
 - Whether the stateless MCP adapter should wait for `rmcp` support or use a thin
   raw HTTP adapter temporarily.
-- Whether local developer bootstrap should live under `conary-test`, `conary`,
-  or a new subcommand family.
-- Which smoke validation suite is small enough for local developer bootstrap
-  but meaningful enough to prove the loop.
+- Whether the initial `conary-test bootstrap check --json` command should be
+  paired with a separate `bootstrap smoke` command or one command with modes.
+- Whether `phase1-core` on `fedora44` is the right default smoke suite after
+  timing and prerequisite checks.
 - How much of deploy/build/restart should remain MCP-accessible versus being
   moved to CLI-only workflows with MCP prompt guidance.
-- Whether the first transport-neutral response types should be reflected into
-  MCP `outputSchema` through generated JSON Schema or carefully reviewed
-  handwritten schemas.
+- Whether generated JSON Schema is sufficient for every MCP `outputSchema`, or
+  whether a small number of handwritten schemas need parity tests.
 
 ## Out-Of-Scope Follow-On Notes
 

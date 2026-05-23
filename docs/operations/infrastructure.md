@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-06
-revision: 6
-summary: Non-secret infrastructure, MCP, release, Remi deploy, and Forge staging guidance for Conary contributors and coding assistants
+last_updated: 2026-05-22
+revision: 7
+summary: Non-secret infrastructure, agent-operations transport, release, Remi deploy, and Forge staging guidance for Conary contributors and coding assistants
 ---
 
 # Infrastructure Overview
@@ -30,15 +30,17 @@ summary: Non-secret infrastructure, MCP, release, Remi deploy, and Forge staging
 - Sensitive usernames, credentials, or workstation-only shortcuts belong in the
   ignored `docs/operations/LOCAL_ACCESS.md`, not in tracked docs.
 
-## MCP-First Operations
+## Agent Operations And MCP
 
-Prefer MCP tools when they already cover the workflow:
+Prefer structured Conary operations surfaces when they already cover the
+workflow. The current deployed transport is MCP, but MCP is the adapter, not the
+durable product contract:
 
 - Remi admin and package-service operations
 - `conary-test` run control, deploy/restart flows, image management, and fixture publishing
 
-Use manual SSH, rsync, or curl only when the MCP surface does not cover the
-task or when you are debugging the underlying service path itself.
+Use manual SSH, rsync, or curl only when the structured operation surface does
+not cover the task or when you are debugging the underlying service path itself.
 
 ## Safe Public And Admin Endpoints
 

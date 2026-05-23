@@ -555,7 +555,7 @@ cargo run -p conary-test -- logs T42  # Retrieve test logs
 ```
 
 - TOML manifest-based tests with per-step logging
-- MCP-backed test and deployment operations for automation
+- Structured test and deployment operations exposed through HTTP/MCP transports
 - Results streamed to Remi for persistent storage
 
 ---
@@ -567,7 +567,7 @@ workspace with seven members: `apps/conary` (CLI), `apps/remi` (Remi),
 `apps/conaryd` (daemon), `apps/conary-test` (test infrastructure),
 `crates/conary-bootstrap` (shared binary bootstrap helpers),
 `crates/conary-core` (shared library), and `crates/conary-mcp` (shared MCP
-helpers).
+adapter helpers).
 
 ```bash
 cargo build -p conary                              # CLI

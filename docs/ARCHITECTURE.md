@@ -35,7 +35,7 @@ Supporting workspace members
   apps/conaryd/      local daemon, auth, job queue, REST/SSE routes, package execution
   apps/conary-test/  integration harness, HTTP API, MCP, container runners
   crates/conary-bootstrap/ shared tracing/runtime/exit helpers for workspace binaries
-  crates/conary-mcp/ shared transport-agnostic MCP helpers
+  crates/conary-mcp/ shared MCP adapter helpers
 ```
 
 ## Core Concepts
@@ -242,9 +242,9 @@ apps/conaryd/            conaryd local daemon
     |   +-- systemd.rs   Socket activation and watchdog
     +-- bin/conaryd.rs   conaryd binary entry point
 
-crates/conary-mcp/       Shared MCP helpers
+crates/conary-mcp/       Shared MCP adapter helpers
 +-- src/
-    +-- lib.rs           Transport-agnostic MCP primitives reused by workspace apps
+    +-- lib.rs           MCP-specific primitives reused by workspace apps
 ```
 
 ## Data Flow: Package Installation

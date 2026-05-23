@@ -122,7 +122,7 @@ Current selected-generation handoff evidence from 2026-05-22:
 
 ## CLI Subcommands
 
-Every MCP tool has a CLI equivalent for human use:
+Common conary-test operations have CLI equivalents for human use:
 
 | Command | Purpose |
 |---------|---------|
