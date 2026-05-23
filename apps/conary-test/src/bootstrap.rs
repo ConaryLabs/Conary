@@ -189,6 +189,25 @@ pub fn smoke_with_runner(
     }))
 }
 
+pub fn run_smoke(options: &BootstrapSmokeOptions) -> conary_agent_contract::VerifyResult {
+    let inspect = inspect_default();
+    smoke_with_runner(&inspect, options, |command| {
+        let output = Command::new(&command.program).args(&command.args).output();
+        match output {
+            Ok(output) => SmokeCommandOutput {
+                exit_code: output.status.code().unwrap_or(1),
+                stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            },
+            Err(error) => SmokeCommandOutput {
+                exit_code: 127,
+                stdout: String::new(),
+                stderr: error.to_string(),
+            },
+        }
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BootstrapProbe {
     pub cargo_available: bool,
@@ -556,14 +575,28 @@ exit_code = 0
         .unwrap();
     }
 
+    struct ReadyBootstrapFixture {
+        _root: tempfile::TempDir,
+        report: InspectResult,
+    }
+
     fn ready_bootstrap_report() -> InspectResult {
+        ready_bootstrap_fixture().report
+    }
+
+    fn ready_bootstrap_fixture() -> ReadyBootstrapFixture {
         let root = tempdir().unwrap();
         let manifests = root.path().join("manifests");
         std::fs::create_dir_all(&manifests).unwrap();
         write_valid_manifest(&manifests.join("phase1-core.toml"));
         let config = root.path().join("config.toml");
         write_valid_config(&config);
-        inspect_with_paths_and_probe(root.path(), &manifests, &config, ready_probe())
+        let report = inspect_with_paths_and_probe(root.path(), &manifests, &config, ready_probe());
+
+        ReadyBootstrapFixture {
+            _root: root,
+            report,
+        }
     }
 
     #[test]
@@ -684,8 +717,10 @@ exit_code = 0
 
     #[test]
     fn smoke_dry_run_returns_planned_command_without_execution() {
-        let mut options = BootstrapSmokeOptions::default();
-        options.dry_run = true;
+        let options = BootstrapSmokeOptions {
+            dry_run: true,
+            ..Default::default()
+        };
         let inspect = ready_bootstrap_report();
         let report = smoke_with_runner(&inspect, &options, |_command| {
             panic!("dry-run must not execute the smoke command")
@@ -714,5 +749,41 @@ exit_code = 0
                 .iter()
                 .any(|warning| warning.contains("bootstrap check is not ready"))
         );
+    }
+
+    #[test]
+    fn smoke_success_records_command_evidence() {
+        let fixture = ready_bootstrap_fixture();
+        let report = smoke_with_runner(
+            &fixture.report,
+            &BootstrapSmokeOptions::default(),
+            |_command| SmokeCommandOutput {
+                exit_code: 0,
+                stdout: r#"{"suite":"phase1-core","status":"passed"}"#.to_string(),
+                stderr: String::new(),
+            },
+        );
+
+        assert_eq!(report.envelope.status, OperationStatus::Ok);
+        assert_eq!(report.envelope.evidence[0].kind, EvidenceKind::Command);
+        assert_eq!(report.data["executed"], true);
+        assert_eq!(report.data["exit_code"], 0);
+    }
+
+    #[test]
+    fn smoke_failure_records_failed_status_and_stderr() {
+        let fixture = ready_bootstrap_fixture();
+        let report = smoke_with_runner(
+            &fixture.report,
+            &BootstrapSmokeOptions::default(),
+            |_command| SmokeCommandOutput {
+                exit_code: 2,
+                stdout: String::new(),
+                stderr: "container runtime unavailable".to_string(),
+            },
+        );
+
+        assert_eq!(report.envelope.status, OperationStatus::Failed);
+        assert_eq!(report.data["stderr"], "container runtime unavailable");
     }
 }
