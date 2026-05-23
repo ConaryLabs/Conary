@@ -1156,7 +1156,7 @@ git commit -m "feat(test): add local bootstrap inspection"
 - Modify: `apps/remi/src/server/mcp.rs`
 - Modify: `apps/conary-test/src/server/mcp.rs`
 
-- [ ] **Step 1: Add catalog tests**
+- [x] **Step 1: Add catalog tests**
 
 In `crates/conary-agent-contract/src/catalog.rs`, add:
 
@@ -1201,7 +1201,7 @@ cargo test -p conary-agent-contract default_resources_are_read_only_and_explain_
 
 Expected: PASS after imports are adjusted.
 
-- [ ] **Step 2: Add MCP catalog guard tests**
+- [x] **Step 2: Add MCP catalog guard tests**
 
 In `apps/remi/src/server/mcp.rs`, add or update a test that reports the current tool count and enforces a catalog decision:
 
@@ -1233,7 +1233,7 @@ If this fails because the current surface already exceeds the guardrail, do not 
 
 Use the same pattern in `apps/conary-test/src/server/mcp.rs` with a budget that allows the current surface but blocks unreviewed growth.
 
-- [ ] **Step 3: Run focused MCP tests**
+- [x] **Step 3: Run focused MCP tests**
 
 ```bash
 cargo test -p remi mcp_tool_catalog
@@ -1242,10 +1242,10 @@ cargo test -p conary-test mcp_tool_catalog
 
 Expected: tests pass and document current catalog debt without adding new live MCP registrations.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
-git add crates/conary-agent-contract/src/catalog.rs apps/remi/src/server/mcp.rs apps/conary-test/src/server/mcp.rs
+git add crates/conary-agent-contract/src/catalog.rs apps/remi/src/server/mcp.rs apps/conary-test/src/server/mcp.rs docs/superpowers/plans/2026-05-22-llm-native-operations-surface.md
 git commit -m "test(agent): record MCP catalog budget debt"
 ```
 
