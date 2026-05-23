@@ -64,6 +64,48 @@ pub fn inspect_with_paths_and_probe(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BootstrapSmokeOptions {
+    pub suite: String,
+    pub distro: String,
+    pub phase: u32,
+    pub dry_run: bool,
+    pub force: bool,
+}
+
+impl Default for BootstrapSmokeOptions {
+    fn default() -> Self {
+        Self {
+            suite: "phase1-core".to_string(),
+            distro: "fedora44".to_string(),
+            phase: 1,
+            dry_run: false,
+            force: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BootstrapSmokeCommand {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+}
+
+pub fn build_smoke_command(exe: &Path, options: &BootstrapSmokeOptions) -> BootstrapSmokeCommand {
+    BootstrapSmokeCommand {
+        program: exe.to_path_buf(),
+        args: vec![
+            "run".to_string(),
+            "--suite".to_string(),
+            options.suite.clone(),
+            "--distro".to_string(),
+            options.distro.clone(),
+            "--phase".to_string(),
+            options.phase.to_string(),
+        ],
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BootstrapProbe {
     pub cargo_available: bool,
     pub podman_command_available: bool,
@@ -514,6 +556,35 @@ exit_code = 0
                 .warnings
                 .iter()
                 .any(|warning| warning.contains("no parseable test manifests"))
+        );
+    }
+
+    #[test]
+    fn smoke_options_default_to_phase1_core_fedora44() {
+        let options = BootstrapSmokeOptions::default();
+        assert_eq!(options.suite, "phase1-core");
+        assert_eq!(options.distro, "fedora44");
+        assert_eq!(options.phase, 1);
+        assert!(!options.force);
+        assert!(!options.dry_run);
+    }
+
+    #[test]
+    fn smoke_command_invokes_existing_run_path() {
+        let exe = Path::new("/tmp/conary-test");
+        let command = build_smoke_command(exe, &BootstrapSmokeOptions::default());
+        assert_eq!(command.program, exe);
+        assert_eq!(
+            command.args,
+            vec![
+                "run",
+                "--suite",
+                "phase1-core",
+                "--distro",
+                "fedora44",
+                "--phase",
+                "1",
+            ]
         );
     }
 }

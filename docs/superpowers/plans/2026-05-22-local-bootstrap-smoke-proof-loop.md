@@ -33,7 +33,7 @@ Implement docs/superpowers/plans/2026-05-22-local-bootstrap-smoke-proof-loop.md 
 **Files:**
 - Modify: `apps/conary-test/src/bootstrap.rs`
 
-- [ ] **Step 1: Write failing tests for smoke command construction**
+- [x] **Step 1: Write failing tests for smoke command construction**
 
 Add these tests to `apps/conary-test/src/bootstrap.rs`:
 
@@ -68,7 +68,7 @@ fn smoke_command_invokes_existing_run_path() {
 }
 ```
 
-- [ ] **Step 2: Run tests and verify they fail**
+- [x] **Step 2: Run tests and verify they fail**
 
 ```bash
 cargo test -p conary-test bootstrap::tests::smoke_options_default_to_phase1_core_fedora44
@@ -77,7 +77,7 @@ cargo test -p conary-test bootstrap::tests::smoke_command_invokes_existing_run_p
 
 Expected: FAIL because `BootstrapSmokeOptions` and `build_smoke_command` do not exist yet.
 
-- [ ] **Step 3: Implement minimal smoke helper types**
+- [x] **Step 3: Implement minimal smoke helper types**
 
 Add near the top-level bootstrap types:
 
@@ -125,7 +125,7 @@ pub fn build_smoke_command(exe: &Path, options: &BootstrapSmokeOptions) -> Boots
 }
 ```
 
-- [ ] **Step 4: Run tests and commit**
+- [x] **Step 4: Run tests and commit**
 
 ```bash
 cargo test -p conary-test bootstrap::tests::smoke_options_default_to_phase1_core_fedora44
