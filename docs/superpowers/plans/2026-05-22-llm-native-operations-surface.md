@@ -694,7 +694,7 @@ git commit -m "feat(mcp): expose contract schema helpers"
 - Create: `docs/operations/agent-mcp-adapter-decision.md`
 - Modify: `docs/superpowers/specs/2026-05-22-llm-native-operations-surface-design.md` only if the decision changes a spec assumption.
 
-- [ ] **Step 1: Inspect current SDK state**
+- [x] **Step 1: Inspect current SDK state**
 
 Run:
 
@@ -703,9 +703,9 @@ cargo tree -p conary-mcp -i rmcp
 rg -n "LocalSessionManager|RoleServer|ServerHandler|server/discover|Mcp-Method|MCP-Protocol-Version|ttlMs|cacheScope" apps crates Cargo.toml Cargo.lock
 ```
 
-Expected: output confirms current code still uses `RoleServer` / `ServerHandler` and local session managers. It should not show `server/discover`, `Mcp-Method`, `ttlMs`, or `cacheScope` in Conary code yet; those are target draft strings for the future stateless adapter.
+Expected: output confirms current code still uses `RoleServer` / `ServerHandler` and local session managers. It should not show `server/discover` or `Mcp-Method` in Conary code yet. `ttlMs` and `cacheScope` may appear only in contract/catalog metadata, not in live MCP list/read behavior.
 
-- [ ] **Step 2: Create the decision record**
+- [x] **Step 2: Create the decision record**
 
 Create `docs/operations/agent-mcp-adapter-decision.md`:
 
@@ -729,6 +729,7 @@ The first LLM-native operations milestone remains contract-only plus inventory/p
 - Current Remi and conary-test wiring uses `RoleServer`, `ServerHandler`, `StreamableHttpService`, and `LocalSessionManager`
 - Current live MCP surfaces are tool-only from Conary's product perspective
 - Local source inspection on 2026-05-22 shows `rmcp 1.6.0` does not implement the target stateless MCP draft; it still uses `initialize`, `Mcp-Session-Id`, and session-manager based Streamable HTTP code
+- `crates/conary-agent-contract` may define draft-shaped metadata names such as `ttlMs` and `cacheScope`, but those are contract/catalog metadata only and do not create live MCP list/read behavior
 
 ## Target
 
@@ -755,7 +756,7 @@ Before new live MCP registration work begins, implementation must prove one of t
 Do not build new live MCP registrations in the first milestone. Build the contract crate, catalog metadata, local bootstrap inspection, and cleanup first.
 ```
 
-- [ ] **Step 3: Verify docs**
+- [x] **Step 3: Verify docs**
 
 ```bash
 rg -n "LocalSessionManager|DRAFT-2026-v1|server/discover|Mcp-Method|cache metadata" docs/operations/agent-mcp-adapter-decision.md
@@ -764,7 +765,7 @@ git diff --check
 
 Expected: command prints the decision-record lines and no whitespace errors.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/operations/agent-mcp-adapter-decision.md
