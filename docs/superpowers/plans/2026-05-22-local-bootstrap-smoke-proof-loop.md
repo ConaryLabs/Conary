@@ -316,7 +316,7 @@ git commit -m "feat(test): gate bootstrap smoke execution"
 **Files:**
 - Modify: `apps/conary-test/src/bootstrap.rs`
 
-- [ ] **Step 1: Write failing command-runner tests**
+- [x] **Step 1: Write failing command-runner tests**
 
 Add:
 
@@ -354,7 +354,7 @@ fn smoke_failure_records_failed_status_and_stderr() {
 }
 ```
 
-- [ ] **Step 2: Run tests and verify they fail if helpers are incomplete**
+- [x] **Step 2: Run tests and verify they fail if helpers are incomplete**
 
 ```bash
 cargo test -p conary-test bootstrap::tests::smoke_success_records_command_evidence
@@ -363,7 +363,7 @@ cargo test -p conary-test bootstrap::tests::smoke_failure_records_failed_status_
 
 Expected: FAIL until fixture/helper names match the implementation.
 
-- [ ] **Step 3: Add real execution wrapper**
+- [x] **Step 3: Add real execution wrapper**
 
 Add:
 
@@ -388,7 +388,7 @@ pub fn run_smoke(options: &BootstrapSmokeOptions) -> conary_agent_contract::Veri
 }
 ```
 
-- [ ] **Step 4: Run tests and commit**
+- [x] **Step 4: Run tests and commit**
 
 ```bash
 cargo test -p conary-test bootstrap
