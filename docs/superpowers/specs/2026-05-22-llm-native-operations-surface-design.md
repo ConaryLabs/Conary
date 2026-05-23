@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-05-22
-revision: 1
-summary: Draft design for making Conary's operations surfaces explicitly LLM-native, starting with Remi, conary-test, and local developer bootstrap workflows
+revision: 2
+summary: Draft design for making Conary's operations surfaces explicitly LLM-native, targeting the stateless MCP direction while keeping the durable contract transport-neutral
 ---
 
 # LLM-Native Operations Surface: Design Spec
@@ -10,7 +10,7 @@ summary: Draft design for making Conary's operations surfaces explicitly LLM-nat
 **Status:** Draft design for user review
 **Goal:** Turn Conary's existing MCP and automation-adjacent surfaces into a
 coherent, future-facing agent operations model for developers and operators,
-starting with Remi, `conary-test`, and a small local repository bootstrap path.
+starting with Remi, `conary-test`, and a small local developer bootstrap path.
 
 ---
 
@@ -18,9 +18,9 @@ starting with Remi, `conary-test`, and a small local repository bootstrap path.
 
 Conary should treat LLM operation as a first-class product capability, not as a
 collection of sidecar MCP endpoints or unfinished AI commands. The immediate
-audience is a developer or operator who wants to use Conary, set up a package
-repository, publish test content, run validation, inspect evidence, and recover
-from failures with an assistant in the loop.
+audience is a developer or operator who wants to use Conary, inspect repository
+and validation state, run tests, inspect evidence, and recover from failures
+with an assistant in the loop.
 
 The longer-term product idea is larger: Conary can become the first package
 manager designed around a structured agent operations contract. The first
@@ -42,7 +42,8 @@ The product claim is:
 
 MCP is one transport and discovery mechanism for this contract. The durable
 Conary design should be transport-agnostic enough that CLI JSON, HTTP routes,
-MCP tools, MCP resources, and future daemon APIs can share the same vocabulary.
+MCP tools, MCP resources, MCP prompts, and future daemon APIs can share the same
+vocabulary.
 
 ## Protocol Strategy
 
@@ -54,12 +55,22 @@ and future SDK integrations are ways to expose that contract.
 ### Candidate Protocols
 
 **MCP:** Best first fit for exposing Conary capabilities directly to LLM hosts.
-The current MCP server model has separate primitives for prompts, resources,
-and tools, which maps well onto Conary's need to separate read-only state,
-workflow guidance, and mutation tools. MCP tools also support structured
-content and output schemas. OpenAI's current docs describe remote MCP servers
-as a supported way to connect models to additional tools and knowledge in
-ChatGPT apps, deep research, and API integrations.
+MCP has separate primitives for prompts, resources, and tools, which maps well
+onto Conary's need to separate read-only state, workflow guidance, and mutation
+tools. MCP tools also support structured content and output schemas. OpenAI's
+current docs describe remote MCP servers as a supported way to connect models
+to additional tools and knowledge in ChatGPT apps, deep research, and API
+integrations.
+
+As of 2026-05-22, the important MCP target is the 2026-07-28 release-candidate
+direction, not the older session-oriented 2025-era implementation model. The
+draft changelog removes protocol-level sessions, `Mcp-Session-Id`, and the
+`initialize`/`initialized` handshake; adds `server/discover`; moves protocol,
+client identity, and client capability data into per-request metadata; and
+requires routing-friendly HTTP headers such as `Mcp-Method` and `Mcp-Name`.
+That direction fits Conary better than sticky sessions: Remi and `conary-test`
+should be able to sit behind ordinary HTTP infrastructure, with any cross-call
+state represented by explicit run IDs, handles, artifact IDs, or resource URIs.
 
 **OpenAPI:** Best companion contract for HTTP surfaces and non-agent clients.
 OpenAPI is mature, language-neutral, YAML/JSON-based, and useful for client
@@ -92,20 +103,37 @@ making the core contract depend on one model vendor or one runtime.
 For the first implementation slice:
 
 - Define Conary's agent operation vocabulary in transport-neutral Rust types
-  and docs.
+  and docs before expanding any transport.
 - Expose the first agent-facing surface through MCP because it has the best
   current fit for tools, resources, prompts, discovery, and LLM-host adoption.
-- Keep or generate OpenAPI for HTTP surfaces where REST is already the stable
-  product boundary.
+- Target the 2026-07-28 stateless MCP release-candidate direction. Do not add
+  new session-based MCP behavior while the Rust SDK and final protocol support
+  are still moving.
+- Keep REST/OpenAPI compatibility possible through the contract types, but do
+  not make OpenAPI generation part of the first implementation slice.
 - Do not build A2A yet; add a future follow-on only if Conary starts exposing a
   remote agent as a peer service rather than an operations tool server.
 - Do not bake OpenAI-specific harness behavior into product code, even though
   current OpenAI APIs can consume remote MCP servers and local function tools.
 
+If `rmcp` support lags the stateless MCP release, the first implementation
+slice should still aim at the RC: prepare the transport-neutral contract, prune
+stale surfaces, and avoid deepening the current
+`RoleServer`/`ServerHandler`/local-session shape. A thin raw HTTP adapter can
+be considered later if it is smaller than waiting for the SDK. Building toward
+the RC and absorbing small release changes is preferable to adding fresh code
+for the old session model.
+
 Primary references for this decision:
 
-- <https://modelcontextprotocol.io/specification/2025-06-18/server/index>
-- <https://modelcontextprotocol.io/specification/2025-06-18/server/tools>
+- <https://blog.modelcontextprotocol.io/tags/mcp/>
+- <https://modelcontextprotocol.io/specification/draft/changelog>
+- <https://modelcontextprotocol.io/specification/draft/server/discover>
+- <https://modelcontextprotocol.io/specification/draft/basic/transports>
+- <https://modelcontextprotocol.io/specification/draft/server/tools>
+- <https://modelcontextprotocol.io/specification/draft/server/resources>
+- <https://modelcontextprotocol.io/specification/draft/server/prompts>
+- <https://modelcontextprotocol.io/docs/develop/clients/client-best-practices>
 - <https://developers.openai.com/api/docs/mcp>
 - <https://developers.openai.com/api/docs/guides/tools>
 - <https://www.openapis.org/what-is-openapi>
@@ -124,25 +152,28 @@ operations for Remi and `conary-test`:
 - inspect Remi health, repositories, federation peers, audit events, canonical
   mapping status, and chunk storage
 - run and inspect `conary-test` suites
-- publish fixtures and packages
 - understand failing test evidence quickly
 - run deployment and service-management paths only through clear, auditable
   mutation boundaries
+- inspect whether fixture or package publication paths are available, while
+  leaving publication mutations out of the first local bootstrap slice
 
 ### Developer Trying Conary
 
-A new developer should be able to ask an assistant to set up a small local
-Conary repository and validation loop:
+A new developer who has cloned Conary should be able to ask an assistant to
+verify that the local development environment works:
 
-- initialize local repository configuration
-- create or verify a local Remi-like package service path, when available
-- publish fixture packages or a small sample package
+- inspect local prerequisites and explain missing dependencies
+- validate repository and test configuration that already exists in the repo
+- build the minimal packages needed by the smoke path, if that is already part
+  of the test harness
 - run a smoke validation suite
 - inspect logs and artifacts
 - receive machine-readable next steps when something is missing
 
 This path should be small and honest. It does not need to solve full production
-hosting, multi-node federation, or every distro matrix combination.
+hosting, package publishing, multi-node federation, or every distro matrix
+combination.
 
 ### Future End User
 
@@ -243,12 +274,119 @@ The LLM-native surface should make confirmation, risk labels, and audit trails
 clear. The goal is not blind autonomy; it is making safe, high-context
 operation easy.
 
+### RC-First, Session-Free Transport
+
+New MCP work should target the stateless 2026-07-28 release-candidate model.
+Do not rely on `Mcp-Session-Id`, per-connection tool/resource/prompt lists, or
+implicit transport sessions. Any state that must survive across calls should be
+represented by explicit run IDs, plan IDs, artifact IDs, resource URIs, or
+bounded server-minted handles in the Conary contract.
+
+### Context Budget Is A Product Constraint
+
+An LLM-operable package manager should not require the model to load every
+possible operation up front. Conary should avoid a single giant MCP server full
+of loosely described tools. Prefer resources for read-heavy state, concise tool
+descriptions that say when a tool should be used, deterministic listing order,
+cacheable resource/tool metadata where the protocol supports it, and separate
+surfaces when capability groups diverge. As a working guardrail, if one MCP
+surface grows beyond roughly fifteen active tools, implementation planning must
+either justify that count or introduce progressive discovery, a smaller
+capability catalog, or a split such as read-only, admin, test-runner, and local
+bootstrap surfaces.
+
+### Prompts Are Not Magic Orchestrators
+
+Prompts should not pretend they can enforce a multi-step workflow by instruction
+alone. A prompt may frame the task for the assistant, but deterministic checks
+should run server-side where possible and return structured state for the model
+to reason over. Confirmation gates should be represented in the contract and,
+when the target MCP version supports it cleanly, mapped to input-required
+results rather than relying on prose that asks the model to pause.
+
+### Contract Schemas Are The Source
+
+Conary's response vocabulary should be implemented first as transport-neutral
+Rust types, not as `rmcp` wrappers. MCP `outputSchema` should be derived from or
+manually matched to those contract types. The goal is one semantic result shape
+adapted into MCP structured content, CLI JSON, HTTP JSON, and future daemon
+APIs, not nested Conary envelopes wrapped inside unrelated MCP-specific
+envelopes.
+
 ## First Implementation Slice
 
 The first implementation slice should be called **LLM-native operations
-surface**. It covers remote operations plus local developer bootstrap.
+surface**. It covers remote operations plus local developer bootstrap, but it
+is staged so Conary does not spend new effort on the old session-based MCP
+shape.
 
-### 1. Inventory And Prune
+### 0. Prepare For The MCP RC
+
+Before expanding the live MCP surface:
+
+- Track the 2026-07-28 MCP release candidate and treat its stateless model as
+  the target.
+- Record the current `rmcp = "1.1"` dependency and the current
+  `RoleServer`/`ServerHandler`/local session-manager usage as legacy transport
+  facts, not architectural commitments.
+- Avoid adding new MCP tools or prompts on the session-based path. Short-lived
+  implementation probes are acceptable only when they help delete, replace, or
+  isolate existing legacy transport code.
+- Plan an `rmcp` upgrade when stateless support exists. If the SDK lags and the
+  raw adapter would be small, consider implementing Streamable HTTP directly
+  with the RC header and discovery shape.
+- Delete the experimental `conary automation ai ...` commands if implementation
+  review confirms they still only emit not-implemented behavior.
+
+### 1. Transport-Neutral Contract Crate
+
+Create `crates/conary-agent-contract` as the source of truth for LLM-facing
+operation results. This crate must not depend on `rmcp` or any MCP-specific
+type. It should define serde-serializable Rust types for:
+
+- `InspectResult`
+- `PlanResult`
+- `VerifyResult`
+- `ApplyResult`
+- `ExplainResult`
+- `RecoverResult`
+- `OperationStatus`: `ok`, `planned`, `running`, `unavailable`, `failed`,
+  `partial`
+- `RiskLevel`: `read_only`, `low`, `medium`, `high`, `destructive`
+- `AgentError`: `missing_prerequisite`, `not_supported`, `deferred`,
+  `unsafe_without_confirmation`, `remote_unavailable`, `validation_failed`,
+  `partial`
+- shared evidence, changed-resource, warning, confirmation, and next-action
+  fields
+
+`crates/conary-mcp` should become an adapter that maps these types into MCP
+structured content and `outputSchema`. CLI JSON, HTTP JSON, and future daemon
+APIs should be able to import the contract crate without pulling in MCP.
+
+### 2. Resources First
+
+Add resources for stable state that assistants should inspect before invoking
+tools:
+
+- Remi health
+- Remi repositories
+- Remi federation peers
+- Remi audit summary
+- Remi canonical mapping status
+- Remi chunk storage stats
+- Remi test health
+- recent `conary-test` runs
+- known `conary-test` suites
+- `conary-test` deployment status
+- `conary-test` local service health
+- local developer bootstrap status
+
+Resources should be read-only, cacheable where the target MCP version supports
+freshness hints, and cheap enough to call during orientation. Read-only
+operation-shaped tools should be reclassified as resources unless they need
+parameters or computation that genuinely belongs behind a tool.
+
+### 3. Tool Audit And Mutation Tools
 
 Review all active MCP and AI-adjacent surfaces:
 
@@ -272,81 +410,55 @@ Expected decisions:
 
 - Keep Remi test/repo/federation/canonical/chunk tools that share service
   logic, but normalize response shape and docs.
-- Keep `conary-test` run-control and evidence-inspection tools, but separate
-  read resources from action tools.
-- Reshape deploy/build/restart/fixture tools so they return structured results
-  and use shared service orchestration where possible.
-- Remove or hide experimental `conary automation ai ...` commands unless the
-  first slice makes them honest and useful.
+- Keep `conary-test` run-control tools that mutate or launch work, but move
+  evidence inspection and status reads into resources where possible.
+- Reshape or remove deploy/build/restart/fixture tools. Any tool that remains
+  in the first slice must return structured results and use shared service
+  orchestration where possible.
+- Remove experimental `conary automation ai ...` commands unless the first
+  slice replaces them with honest behavior.
 - Replace "MCP-first operations" wording with the broader agent operations
   contract.
 
-### 2. Shared Agent Response Model
+Every mutation tool should return the appropriate contract type, usually
+`PlanResult`, `VerifyResult`, or `ApplyResult`, with risk, changed resources,
+evidence, warnings, and next actions. Every MCP mutation tool should publish an
+`outputSchema` matching the contract type. Long raw command output should move
+to optional detail fields or artifacts, not the main result.
 
-Introduce a shared response vocabulary, probably in `crates/conary-mcp` or a
-new transport-neutral module if the vocabulary should also serve CLI and HTTP
-JSON:
+### 4. Hybrid Prompts
 
-- `status`: `ok`, `planned`, `running`, `unavailable`, `failed`, `partial`
-- `operation`: stable operation name
-- `risk`: `read_only`, `low`, `medium`, `high`, `destructive`
-- `requires_confirmation`: boolean
-- `changed`: list of changed resources
-- `evidence`: paths, run IDs, artifact IDs, checks, command summaries
-- `warnings`: human-readable warnings
-- `next_actions`: bounded suggested follow-ups
-- `raw_logs`: optional detail for command-heavy workflows
+Add only three prompts in the first slice:
 
-This model should stay small. Do not invent a full orchestration framework in
-the first slice.
-
-### 3. MCP Resources
-
-Add resources for stable state that assistants should inspect:
-
-- Remi repositories
-- Remi federation peers
-- Remi audit summary
-- Remi test health
-- recent test runs
-- known test suites
-- `conary-test` deployment status
-- `conary-test` local service health
-- local developer bootstrap status
-- local fixture/package publication status, if available
-
-Resources should be read-only and cheap enough to call during orientation.
-
-### 4. MCP Prompts
-
-Add prompts for common operator/developer workflows:
-
-- set up local developer repository
-- run preview validation
-- debug a failing test
 - inspect Remi health
-- publish fixtures or a sample package
-- prepare a safe federation change
-- summarize recent validation evidence
+- debug a failing test
+- bootstrap local dev environment
 
-Prompts should guide the assistant through inspect, plan, verify, apply,
-explain, and recover. They should not replace tool schemas or contain volatile
-host secrets.
+Each prompt should combine a concise task frame with deterministic server-side
+inspection where possible. For example, "debug a failing test" should fetch the
+run resource and artifact summary before presenting the assistant with the
+evidence. "bootstrap local dev environment" should inspect prerequisites and
+test inventory before suggesting a mutation. Prompts should not contain volatile
+host secrets, and they should not be the only place where workflow correctness
+lives.
 
 ### 5. Local Developer Bootstrap Path
 
-Add a small local path that an assistant can drive from a clean checkout. The
-exact command shape can be decided during implementation, but the behavior
-should include:
+Add a small local path that an assistant can drive from a clean checkout for
+one audience: a developer who has cloned Conary and wants to verify that the
+local development loop works. The exact command shape can be decided during
+implementation, but the behavior should include:
 
 - inspect prerequisites and report missing local dependencies
-- initialize or validate local repository/test configuration
-- build or publish a minimal sample/fixture package
+- validate local repository and test configuration
+- run a focused build check for the packages needed by the smoke path
+- list available integration suites
 - run a small smoke validation
 - emit structured JSON describing state, evidence, and next steps
 
 This path should avoid pretending to install a full production environment. It
-is a developer bootstrap and proof loop.
+is a developer bootstrap and proof loop, not repository publishing or end-user
+system management.
 
 ### 6. Docs And Positioning
 
@@ -367,7 +479,14 @@ Document the agent operations model as a real Conary feature:
 - Do not add an OpenAI-specific runtime harness.
 - Do not require cloud model credentials for normal Conary operations.
 - Do not preserve old MCP tool names if a cleaner contract requires change.
+- Do not add new session-based MCP surface area for the old protocol shape.
+- Do not implement OpenAPI generation in this slice; keep the contract ready
+  for it later.
 - Do not implement autonomous package mutation.
+- Do not include package publishing or fixture publication in the local
+  developer bootstrap path.
+- Do not expand beyond the three first prompts unless implementation evidence
+  shows one is necessary for acceptance.
 - Do not implement A2A before Conary has a real peer-agent use case.
 - Do not rework Remi, `conary-test`, and `conaryd` into one monolithic service.
 - Do not expose host-local secrets or personal access notes in tracked docs.
@@ -393,11 +512,13 @@ retry, ask the user, run a narrower diagnostic, or stop.
 
 The implementation plan should include focused tests at three levels:
 
-- unit tests for response model serialization, risk labels, and error mapping
+- unit tests for contract serialization, risk labels, and error mapping
 - service-layer tests for local bootstrap inspection and structured operation
   summaries
-- MCP/server tests for tool/resource/prompt registration and expected response
-  shapes
+- schema tests that confirm MCP `outputSchema` matches the contract types used
+  by each tool
+- MCP/server tests for resource, tool, and prompt registration against the
+  selected stateless transport path
 
 Documentation and inventory checks should run when active docs change.
 
@@ -405,10 +526,10 @@ Baseline verification for the first slice:
 
 ```bash
 cargo fmt --check
+cargo test -p conary-agent-contract
 cargo test -p conary-mcp
 cargo test -p remi mcp
 cargo test -p conary-test mcp
-cargo test -p conary --features experimental automation
 cargo run -p conary-test -- list
 cargo clippy --workspace --all-targets -- -D warnings
 git diff --check
@@ -424,33 +545,41 @@ The first slice is complete when:
 
 - active docs describe an LLM-native operations model, not just an MCP endpoint
   inventory
-- stale or fake AI command surfaces are removed, hidden, or made explicitly
-  honest
+- `crates/conary-agent-contract` exists, has no MCP dependency, and is the
+  source for response semantics
+- stale or fake AI command surfaces are removed or replaced with honest
+  behavior
+- new MCP work targets the 2026-07-28 stateless release-candidate direction,
+  with no new reliance on protocol sessions or sticky connection state
 - Remi and `conary-test` MCP surfaces expose read-only resources for key state
-- mutating MCP tools return structured status, risk, evidence, and next actions
+- mutating MCP tools return structured contract results with status, risk,
+  evidence, and next actions
+- first-slice prompts are limited to Remi health inspection, failing-test
+  debugging, and local developer bootstrap
 - local developer bootstrap can inspect prerequisites and run a small proof loop
   with machine-readable output
-- tests cover response shape, tool/resource registration, and the local
-  bootstrap path
+- tests cover contract serialization/schema shape, tool/resource/prompt
+  registration, and the local bootstrap path
 - no active docs claim end-user autonomous package management is implemented
   before it exists
 
 ## Open Design Decisions For Implementation Planning
 
-- Whether the shared response vocabulary belongs in `crates/conary-mcp` or a
-  more transport-neutral crate/module.
+- Whether the stateless MCP adapter should wait for `rmcp` support or use a thin
+  raw HTTP adapter temporarily.
 - Whether local developer bootstrap should live under `conary-test`, `conary`,
   or a new subcommand family.
-- Whether MCP prompts and resources should be implemented first for Remi,
-  `conary-test`, or both together.
-- Whether experimental `conary automation ai ...` should be deleted outright or
-  hidden behind a clearer future-feature flag with no user-facing docs.
+- Which smoke validation suite is small enough for local developer bootstrap
+  but meaningful enough to prove the loop.
 - How much of deploy/build/restart should remain MCP-accessible versus being
   moved to CLI-only workflows with MCP prompt guidance.
 - Whether the first transport-neutral response types should be reflected into
-  OpenAPI schemas at the same time as MCP output schemas.
+  MCP `outputSchema` through generated JSON Schema or carefully reviewed
+  handwritten schemas.
 
-## Suggested Follow-On Slices
+## Out-Of-Scope Follow-On Notes
+
+These are product roadmap notes, not first-slice implementation scope:
 
 1. **Local Package-Agent Surface:** apply the same contract to `conary` package
    operations: inspect, plan, explain, apply, verify, and recover.
