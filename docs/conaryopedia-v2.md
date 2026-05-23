@@ -3522,6 +3522,12 @@ Remi persists test run data in a separate SQLite database (`/conary/test-data.db
 
 **MCP Tools:** `test_list_runs`, `test_get_run`, `test_get_test`, `test_get_logs`, `test_health`
 
+Agent-facing operation semantics are intentionally transport-neutral:
+`crates/conary-agent-contract` defines result envelopes, resource references,
+risk labels, confirmation metadata, and catalog entries. Remi and
+`conary-test` MCP servers adapt service-layer behavior into MCP; MCP is not the
+durable product contract.
+
 ## 6.25 Canonical Package Mapping
 
 Remi builds a cross-distro canonical package map by analyzing all indexed distributions. Packages with different names across distros (e.g., `kernel` on Fedora, `linux` on Arch, `linux-image-generic` on Ubuntu) are grouped into canonical entries.

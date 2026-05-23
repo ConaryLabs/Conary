@@ -549,6 +549,7 @@ conary federation stats --days 7      # Bandwidth savings report
 The `conary-test` Rust engine runs container-backed integration suites against real distros and a live Remi deployment:
 
 ```bash
+cargo run -p conary-test -- bootstrap check --json  # Local prerequisite/smoke-readiness inspection
 cargo run -p conary-test -- run --suite phase1-core --distro fedora44 --phase 1
 cargo run -p conary-test -- health    # Service health check
 cargo run -p conary-test -- logs T42  # Retrieve test logs
@@ -563,11 +564,12 @@ cargo run -p conary-test -- logs T42  # Retrieve test logs
 ## Building
 
 Requires Rust 1.94+ (edition 2024). The project root is a virtual Cargo
-workspace with seven members: `apps/conary` (CLI), `apps/remi` (Remi),
+workspace with eight members: `apps/conary` (CLI), `apps/remi` (Remi),
 `apps/conaryd` (daemon), `apps/conary-test` (test infrastructure),
 `crates/conary-bootstrap` (shared binary bootstrap helpers),
-`crates/conary-core` (shared library), and `crates/conary-mcp` (shared MCP
-adapter helpers).
+`crates/conary-core` (shared library), `crates/conary-agent-contract`
+(transport-neutral agent operation contract), and `crates/conary-mcp` (shared
+MCP adapter helpers).
 
 ```bash
 cargo build -p conary                              # CLI

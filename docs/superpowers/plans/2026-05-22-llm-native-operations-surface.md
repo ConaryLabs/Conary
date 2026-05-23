@@ -1405,8 +1405,9 @@ git commit -m "feat(agent): define first prompt catalog"
 - Modify: `docs/conaryopedia-v2.md`
 - Modify: `docs/INTEGRATION-TESTING.md`
 - Modify: `apps/conary-test/README.md`
+- Modify: `apps/conary/src/commands/provenance.rs`
 
-- [ ] **Step 1: Add the new contract crate to docs**
+- [x] **Step 1: Add the new contract crate to docs**
 
 Update workspace/module listings so they mention:
 
@@ -1415,7 +1416,7 @@ crates/conary-agent-contract/ transport-neutral agent operation contract
 crates/conary-mcp/            shared MCP adapter helpers
 ```
 
-- [ ] **Step 2: Document bootstrap command**
+- [x] **Step 2: Document bootstrap command**
 
 In `apps/conary-test/README.md` and `docs/INTEGRATION-TESTING.md`, add:
 
@@ -1425,17 +1426,17 @@ cargo run -p conary-test -- bootstrap check --json
 
 Describe it as a local developer prerequisite and smoke-readiness inspection command.
 
-- [ ] **Step 3: Sweep stale wording**
+- [x] **Step 3: Sweep stale wording**
 
 Run:
 
 ```bash
-rg -n "MCP-first|transport-agnostic MCP|23 tools|Every MCP tool|\\[NOT IMPLEMENTED\\]|AI-assisted operations|conary automation ai" README.md docs apps crates
+rg -n "MCP-first|transport-agnostic MCP|23 tools|Every MCP tool|\\[NOT IMPLEMENTED\\]|AI-assisted operations|conary automation ai" README.md docs apps crates --glob '!docs/superpowers/**' --glob '!docs/llms/archive/**'
 ```
 
-Expected: no active-doc hits that describe stale behavior as current. Code hits are acceptable only when they are tests asserting removal or deferred config comments.
+Expected: no active-doc hits that describe stale behavior as current. Code hits are acceptable only when they are tests asserting removal or deferred config comments. The scan excludes implementation plans/specs and archived assistant notes because they intentionally cite removed behavior as historical context.
 
-- [ ] **Step 4: Verify docs**
+- [x] **Step 4: Verify docs**
 
 ```bash
 git diff --check
@@ -1443,10 +1444,10 @@ git diff --check
 
 Expected: no output.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
-git add README.md docs/llms/README.md docs/llms/subsystem-map.md docs/ARCHITECTURE.md docs/operations/infrastructure.md docs/conaryopedia-v2.md docs/INTEGRATION-TESTING.md apps/conary-test/README.md
+git add README.md docs/llms/README.md docs/llms/subsystem-map.md docs/ARCHITECTURE.md docs/operations/infrastructure.md docs/conaryopedia-v2.md docs/INTEGRATION-TESTING.md apps/conary-test/README.md apps/conary/src/commands/provenance.rs docs/superpowers/plans/2026-05-22-llm-native-operations-surface.md
 git commit -m "docs(agent): document operation contract slice"
 ```
 
@@ -1489,7 +1490,7 @@ Expected: PASS.
 - [ ] **Step 4: Run final stale-surface scan**
 
 ```bash
-rg -n "MCP-first|transport-agnostic MCP|23 tools|Every MCP tool|\\[NOT IMPLEMENTED\\]|conary automation ai" README.md docs apps crates
+rg -n "MCP-first|transport-agnostic MCP|23 tools|Every MCP tool|\\[NOT IMPLEMENTED\\]|conary automation ai" README.md docs apps crates --glob '!docs/superpowers/**' --glob '!docs/llms/archive/**'
 ```
 
 Expected: no active stale claims. Any remaining hits must be intentional tests or historical archive files.

@@ -20,6 +20,7 @@ by CI pipelines and LLM agents.
 | `src/engine/mock_server.rs` | In-container mock HTTP server for testing |
 | `src/engine/qemu.rs` | QEMU boot step support |
 | `src/error.rs` | Typed ConaryTestError enum (Container, Timeout, Cancelled, etc.) |
+| `src/bootstrap.rs` | Local developer prerequisite and smoke-readiness inspection |
 | `src/report/` | JSON output, SSE event streaming |
 | `src/server/handlers.rs` | Axum HTTP handlers |
 | `src/server/routes.rs` | Router construction (HTTP + MCP) |
@@ -31,6 +32,9 @@ by CI pipelines and LLM agents.
 ## CLI Usage
 
 ```bash
+# Inspect local developer prerequisites and smoke-readiness state
+cargo run -p conary-test -- bootstrap check --json
+
 # Run Phase 1 tests on Fedora 44 from the repo root
 cargo run -p conary-test -- run --distro fedora44 --phase 1
 

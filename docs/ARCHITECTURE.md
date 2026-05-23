@@ -35,6 +35,7 @@ Supporting workspace members
   apps/conaryd/      local daemon, auth, job queue, REST/SSE routes, package execution
   apps/conary-test/  integration harness, HTTP API, MCP, container runners
   crates/conary-bootstrap/ shared tracing/runtime/exit helpers for workspace binaries
+  crates/conary-agent-contract/ transport-neutral agent operation contract
   crates/conary-mcp/ shared MCP adapter helpers
 ```
 
@@ -74,7 +75,7 @@ can be flagged as stale when the parent updates.
 
 ## Module Map
 
-The project is a virtual Cargo workspace with 7 members:
+The project is a virtual Cargo workspace with 8 members:
 
 ```
 apps/conary/             CLI binary
@@ -197,6 +198,12 @@ crates/conary-core/      Core library crate
 crates/conary-bootstrap/ Shared app bootstrap helpers
 +-- src/
     +-- lib.rs           Tracing init, Tokio runtime entry, and shared finish helpers
+
+crates/conary-agent-contract/ Transport-neutral agent operation contract
++-- src/
+    +-- result.rs        Operation envelopes, risk, confirmation, evidence, and errors
+    +-- resource.rs      Canonical agent resource URI helpers
+    +-- catalog.rs       Resource and prompt catalogs plus cache policy metadata
 
 apps/conary-test/        Declarative test infrastructure (TOML manifests, container management)
 +-- src/
@@ -450,6 +457,7 @@ The root manifest is now a virtual workspace. Build the owning crate directly:
 | `conary-test` | Test harness | `cargo build -p conary-test` |
 | `conary-bootstrap` | Shared binary bootstrap helpers | `cargo build -p conary-bootstrap` |
 | `conary-core` | Shared library | `cargo build -p conary-core` |
+| `conary-agent-contract` | Transport-neutral agent operation contract | `cargo build -p conary-agent-contract` |
 | `conary-mcp` | Shared MCP helpers | `cargo build -p conary-mcp` |
 
 ## Key Design Decisions

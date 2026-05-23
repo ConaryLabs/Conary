@@ -126,6 +126,7 @@ Common conary-test operations have CLI equivalents for human use:
 
 | Command | Purpose |
 |---------|---------|
+| `conary-test bootstrap check [--json]` | Inspect local developer prerequisites and smoke-readiness status |
 | `conary-test deploy rollout (--unit <name> \| --group <name>) [--ref <git-ref> \| --path <path>]` | Managed Forge deploy flow; trusted default source is a GitHub ref |
 | `conary-test run --suite <name> --distro <distro> --phase <N>` | Execute a test suite |
 | `conary-test deploy source [--ref <git-ref>]` | Deploy source and rebuild |
@@ -140,6 +141,11 @@ Common conary-test operations have CLI equivalents for human use:
 | `conary-test manifests reload` | Reload TOML manifests without restart |
 
 Add `--json` to any command for machine-readable output.
+
+From a checkout, use
+`cargo run -p conary-test -- bootstrap check --json` before smoke validation to
+inspect local prerequisites such as Cargo, manifest availability, container
+runtime readiness, and optional QEMU/KVM support.
 
 Remote Forge control-plane validation is temporarily paused while Conary
 replaces the old VPS runner with a KVM-capable host. The Forge scripts remain
