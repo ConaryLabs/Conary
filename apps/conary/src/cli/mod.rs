@@ -56,8 +56,6 @@ mod trigger;
 mod trust;
 mod verify;
 
-#[cfg(feature = "experimental")]
-pub use automation::AiCommands;
 pub use automation::AutomationCommands;
 pub use bootstrap::BootstrapCommands;
 pub use cache::CacheCommands;
@@ -542,10 +540,10 @@ pub enum Commands {
     #[command(subcommand)]
     Collection(CollectionCommands),
 
-    /// Automation and AI-assisted operations
+    /// Automation maintenance operations
     ///
     /// Manage automated system maintenance including security updates,
-    /// orphan cleanup, and AI-assisted package management.
+    /// orphan cleanup, updates, and integrity repair.
     #[command(subcommand)]
     Automation(AutomationCommands),
 

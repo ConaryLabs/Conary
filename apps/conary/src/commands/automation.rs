@@ -789,7 +789,7 @@ pub async fn cmd_automation_configure(
         );
         println!();
         println!(
-            "AI Assistance: {}",
+            "Deferred assistant config: {}",
             if config.ai_assist.enabled {
                 "enabled"
             } else {
@@ -928,71 +928,6 @@ pub async fn cmd_automation_history(
             println!("  error: {}", error);
         }
     }
-
-    Ok(())
-}
-
-/// AI-assisted package finding by intent
-#[cfg(feature = "experimental")]
-pub async fn cmd_ai_find(
-    _db_path: &str,
-    intent: &str,
-    _limit: usize,
-    _verbose: bool,
-) -> Result<()> {
-    println!("=== AI-Assisted Package Search ===\n");
-    println!("Intent: \"{}\"\n", intent);
-
-    println!("[NOT IMPLEMENTED]");
-    println!();
-    println!("AI assistance is not yet implemented.");
-    println!("This feature will use semantic matching to find packages");
-    println!("based on what you want to accomplish rather than package names.");
-    println!();
-    println!("To enable AI assistance when implemented:");
-    println!("  conary automation configure --enable-ai");
-
-    Ok(())
-}
-
-/// AI-assisted scriptlet translation
-#[cfg(feature = "experimental")]
-pub async fn cmd_ai_translate(source: &str, format: &str, confidence: f64) -> Result<()> {
-    println!("=== AI-Assisted Scriptlet Translation ===\n");
-    println!("Source: {}", source);
-    println!("Output format: {}", format);
-    println!("Minimum confidence: {:.0}%\n", confidence * 100.0);
-
-    println!("[NOT IMPLEMENTED]");
-    println!();
-    println!("This feature will analyze bash scriptlets and suggest");
-    println!("equivalent declarative CCS hooks.");
-
-    Ok(())
-}
-
-/// AI-assisted natural language query
-#[cfg(feature = "experimental")]
-pub async fn cmd_ai_query(_db_path: &str, question: &str) -> Result<()> {
-    println!("=== AI-Assisted System Query ===\n");
-    println!("Question: \"{}\"\n", question);
-
-    println!("[NOT IMPLEMENTED]");
-    println!();
-    println!("This feature will allow natural language queries about your system.");
-
-    Ok(())
-}
-
-/// AI-assisted action explanation
-#[cfg(feature = "experimental")]
-pub async fn cmd_ai_explain(_db_path: &str, command: &str) -> Result<()> {
-    println!("=== AI-Assisted Command Explanation ===\n");
-    println!("Command: \"{}\"\n", command);
-
-    println!("[NOT IMPLEMENTED]");
-    println!();
-    println!("This feature will explain what a command would do before you run it.");
 
     Ok(())
 }

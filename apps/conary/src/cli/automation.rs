@@ -100,11 +100,11 @@ pub enum AutomationCommands {
         #[arg(long)]
         interval: Option<String>,
 
-        /// Enable AI assistance
+        /// Enable deferred assistant configuration fields
         #[arg(long)]
         enable_ai: bool,
 
-        /// Disable AI assistance
+        /// Disable deferred assistant configuration fields
         #[arg(long)]
         disable_ai: bool,
     },
@@ -146,82 +146,6 @@ pub enum AutomationCommands {
         /// Show entries since date (YYYY-MM-DD)
         #[arg(long)]
         since: Option<String>,
-    },
-
-    /// AI-assisted operations
-    ///
-    /// Use AI assistance for package management tasks.
-    /// Requires AI assistance to be enabled in configuration.
-    ///
-    /// Note: This is an experimental feature. Build with --features experimental to enable.
-    #[cfg(feature = "experimental")]
-    #[command(subcommand)]
-    Ai(AiCommands),
-}
-
-#[cfg(feature = "experimental")]
-#[derive(Subcommand)]
-pub enum AiCommands {
-    /// Find packages by intent (what you want to accomplish)
-    ///
-    /// Instead of specifying a package name, describe what you need:
-    /// "web server with HTTP/2 and systemd integration"
-    Find {
-        /// Description of what you're looking for
-        intent: String,
-
-        #[command(flatten)]
-        db: DbArgs,
-
-        /// Maximum number of suggestions
-        #[arg(short = 'n', long, default_value = "5")]
-        limit: usize,
-
-        /// Show detailed comparison of options
-        #[arg(short, long)]
-        verbose: bool,
-    },
-
-    /// Translate a scriptlet to declarative hooks
-    ///
-    /// Uses AI to analyze a bash scriptlet and suggest
-    /// equivalent declarative CCS hooks.
-    Translate {
-        /// Path to scriptlet file or package name
-        source: String,
-
-        /// Output format: toml, json
-        #[arg(long, default_value = "toml")]
-        format: String,
-
-        /// Minimum confidence threshold (0.0-1.0)
-        #[arg(long, default_value = "0.8")]
-        confidence: f64,
-    },
-
-    /// Query system state in natural language
-    ///
-    /// Ask questions about your system:
-    /// "What changed since Tuesday?"
-    /// "Which packages depend on openssl?"
-    Query {
-        /// Your question
-        question: String,
-
-        #[command(flatten)]
-        db: DbArgs,
-    },
-
-    /// Explain what an action would do
-    ///
-    /// Get a detailed explanation of what a package operation
-    /// would do before running it.
-    Explain {
-        /// Command to explain (e.g., "install nginx")
-        command: String,
-
-        #[command(flatten)]
-        db: DbArgs,
     },
 }
 
@@ -268,6 +192,16 @@ mod tests {
         assert!(
             parsed.is_err(),
             "daemon should no longer accept --foreground"
+        );
+    }
+
+    #[cfg(feature = "experimental")]
+    #[test]
+    fn cli_rejects_removed_ai_subcommand_family() {
+        let parsed = AutomationCli::try_parse_from(["automation", "ai", "find", "web server"]);
+        assert!(
+            parsed.is_err(),
+            "automation ai should not remain as a visible not-implemented command"
         );
     }
 }
