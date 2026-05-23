@@ -179,7 +179,7 @@ Expected: commit succeeds and `git status --short` is clean.
 - Modify: `crates/conary-mcp/src/lib.rs`
 - Create: `crates/conary-mcp/src/stateless.rs`
 
-- [ ] **Step 1: Write failing validation tests**
+- [x] **Step 1: Write failing validation tests**
 
 Add this export to `crates/conary-mcp/src/lib.rs`:
 
@@ -315,7 +315,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run tests and verify they fail**
+- [x] **Step 2: Run tests and verify they fail**
 
 Run:
 
@@ -325,7 +325,7 @@ cargo test -p conary-mcp stateless
 
 Expected: FAIL with unresolved names such as `StatelessRequestHeaders`, `MCP_DRAFT_PROTOCOL_VERSION`, and `validate_stateless_request`.
 
-- [ ] **Step 3: Implement validation helpers**
+- [x] **Step 3: Implement validation helpers**
 
 Replace `crates/conary-mcp/src/stateless.rs` with:
 
@@ -718,7 +718,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 4: Run validation tests**
+- [x] **Step 4: Run validation tests**
 
 Run:
 
@@ -728,7 +728,7 @@ cargo test -p conary-mcp stateless
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 

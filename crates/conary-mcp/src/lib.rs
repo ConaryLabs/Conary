@@ -8,6 +8,8 @@ use std::fmt::Display;
 use rmcp::{ErrorData as McpError, model::*};
 use schemars::{JsonSchema, schema_for};
 
+pub mod stateless;
+
 /// Serialize a value to pretty JSON, mapping failures to [`McpError`].
 pub fn to_json_text<T: serde::Serialize>(value: &T) -> Result<String, McpError> {
     serde_json::to_string_pretty(value)
