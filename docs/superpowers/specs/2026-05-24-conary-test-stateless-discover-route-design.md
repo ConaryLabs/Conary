@@ -289,6 +289,9 @@ The version shown above is illustrative; implementation should use the current
 
 The response must not advertise `tools`, `resources`, or `prompts`.
 
+All stateless route responses, including errors, use
+`Content-Type: application/json`. SSE is not supported by this route.
+
 ## Error Model
 
 Use the existing raw proof mappings for parsed requests:
@@ -304,7 +307,7 @@ Use the existing raw proof mappings for parsed requests:
 | unsupported protocol version | `400` | `-32004` | Error `data` includes `{ requested, supported }`. |
 | missing `_meta` fields | `400` | `-32602` | Preserve current stateless distinction. |
 | unsupported validated RPC method | `404` | `-32601` | Used until live dispatch exists. |
-| missing or wrong bearer token | `401` | none | Existing app auth middleware response, outside MCP handler. |
+| missing or wrong bearer token | `401` | none | Existing app auth middleware response, outside MCP handler. Body is `{"error":"unauthorized"}` plain JSON, not a JSON-RPC envelope; clients must handle it separately. |
 
 ## Testing
 
@@ -332,6 +335,8 @@ Required `conary-test` route coverage:
 - `/mcp` still reaches the legacy `rmcp` service when a valid bearer token is
   supplied; a route composition change must not turn it into a `404`, `405`,
   `401`, or stateless discovery response
+- a valid `server/discover` request sent to `/mcp`, not `/mcp/stateless`, does
+  not return discovery JSON; this proves the routes are not cross-wired
 - `/mcp/stateless` requires the bearer token when `create_router` receives a
   token
 - `/mcp/stateless` accepts missing `Origin` for non-browser local clients
