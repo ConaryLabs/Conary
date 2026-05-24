@@ -1114,7 +1114,7 @@ Expected: commit succeeds and `git status --short` is clean.
 **Files:**
 - Inspect all changed files.
 
-- [ ] **Step 1: Run formatting**
+- [x] **Step 1: Run formatting**
 
 Run:
 
@@ -1124,7 +1124,7 @@ cargo fmt --check
 
 Expected: PASS.
 
-- [ ] **Step 2: Run focused tests**
+- [x] **Step 2: Run focused tests**
 
 Run:
 
@@ -1135,7 +1135,7 @@ cargo test -p conary-agent-contract
 
 Expected: PASS.
 
-- [ ] **Step 3: Run workspace lint**
+- [x] **Step 3: Run workspace lint**
 
 Run:
 
@@ -1145,7 +1145,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 Expected: PASS.
 
-- [ ] **Step 4: Verify no live MCP behavior was added**
+- [x] **Step 4: Verify no live MCP behavior was added**
 
 Run:
 
@@ -1161,7 +1161,7 @@ Expected:
 - The `apps/...` search should return no hits for draft-stateless headers or live `server/discover`.
 - The `crates/conary-mcp` search should show the harness code and tests only.
 
-- [ ] **Step 5: Inspect final status**
+- [x] **Step 5: Inspect final status**
 
 Run:
 
@@ -1172,7 +1172,7 @@ git log --oneline -6
 
 Expected: branch is ahead of `main` by the task commits and `git status --short` shows no uncommitted changes.
 
-- [ ] **Step 6: Request review before merge**
+- [x] **Step 6: Request review before merge**
 
 Summarize:
 
