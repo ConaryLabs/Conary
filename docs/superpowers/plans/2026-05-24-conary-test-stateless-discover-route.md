@@ -825,7 +825,7 @@ Expected: commit succeeds and the worktree is clean.
 - Modify: `crates/conary-mcp/tests/stateless_dependency_boundary.rs`
 - Modify: `docs/superpowers/plans/2026-05-24-conary-test-stateless-discover-route.md`
 
-- [ ] **Step 1: Replace the live-route guard test**
+- [x] **Step 1: Replace the live-route guard test**
 
 In `crates/conary-mcp/tests/stateless_dependency_boundary.rs`, replace `live_mcp_server_files_do_not_contain_draft_stateless_identifiers` with these tests:
 
@@ -912,7 +912,7 @@ fn conary_test_stateless_adapter_does_not_use_rmcp_session_types() {
 }
 ```
 
-- [ ] **Step 2: Run guard tests and verify pass**
+- [x] **Step 2: Run guard tests and verify pass**
 
 Run:
 
@@ -922,7 +922,7 @@ cargo test -p conary-mcp --test stateless_dependency_boundary
 
 Expected: all guard tests pass.
 
-- [ ] **Step 3: Run route tests again**
+- [x] **Step 3: Run route tests again**
 
 Run:
 
@@ -932,7 +932,7 @@ cargo test -p conary-test stateless_mcp
 
 Expected: all `stateless_mcp` tests still pass.
 
-- [ ] **Step 4: Commit Task 3**
+- [x] **Step 4: Commit Task 3**
 
 Update this task's checkboxes, then commit:
 
