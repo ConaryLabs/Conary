@@ -145,9 +145,12 @@ apps/conary/tests/integration/remi/manifests/
 
 The legacy MCP endpoint is mounted at `/mcp` through `rmcp`'s session-based
 Streamable HTTP transport. The draft stateless preview endpoint is mounted at
-`/mcp/stateless` and currently exposes only `server/discover` with empty
-capabilities; it does not expose live tools, resources, prompts, or SSE
-streaming.
+`/mcp/stateless` and supports `server/discover`, `resources/list`, and
+`resources/read` for the single read-only resource
+`conary-local://bootstrap/status`. That resource returns the same structured
+bootstrap `InspectResult` used by `conary-test bootstrap check --json`. The
+stateless preview does not expose live tools, prompts, resource templates,
+subscriptions, SSE streaming, or smoke execution.
 
 ## MCP Tools
 

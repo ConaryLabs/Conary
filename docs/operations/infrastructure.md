@@ -34,19 +34,23 @@ summary: Non-secret infrastructure, agent-operations transport, release, Remi de
 
 Today, the live Remi MCP endpoint and the legacy `conary-test` `/mcp` endpoint
 are session-based, tool-only surfaces. `conary-test` also exposes
-`/mcp/stateless` as a draft stateless discovery-only preview route; it returns
-empty capabilities and does not expose live resources, tools, prompts, or SSE
-streaming.
+`/mcp/stateless` as a draft stateless preview route with `server/discover`,
+`resources/list`, and `resources/read` for
+`conary-local://bootstrap/status`. That resource is read-only local bootstrap
+state. The stateless preview does not expose live tools, prompts, resource
+templates, subscriptions, SSE streaming, mutations, or smoke execution.
 
-For the next stateless slice, prefer MCP resources for read-only state
-inspection and MCP tools for audited mutations. MCP is the adapter, not the
-durable product contract:
+Prefer MCP resources for read-only state inspection and MCP tools for audited
+mutations. MCP is the adapter, not the durable product contract:
 
 The first LLM-native operations milestone may define prompt catalogs in
 `conary-agent-contract`, but it must not register new live MCP prompts until
 the stateless MCP adapter decision is satisfied.
 The transport-neutral contract lives in `crates/conary-agent-contract`;
 `crates/conary-mcp` remains MCP-specific adapter glue.
+
+Remi and legacy MCP endpoints remain session-based until stateless support is
+intentionally expanded for those services.
 
 - Remi admin and package-service operations
 - `conary-test` run control, deploy/restart flows, image management, and fixture publishing
