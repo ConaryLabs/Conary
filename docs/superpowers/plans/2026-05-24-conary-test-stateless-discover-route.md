@@ -111,7 +111,7 @@ Use these headers for valid stateless requests:
 - Modify: `crates/conary-mcp/src/stateless_http.rs`
 - Modify: `docs/superpowers/plans/2026-05-24-conary-test-stateless-discover-route.md`
 
-- [ ] **Step 1: Write failing byte-entry tests**
+- [x] **Step 1: Write failing byte-entry tests**
 
 In `crates/conary-mcp/src/stateless_http.rs`, add these helpers and tests near the existing test helpers:
 
@@ -193,17 +193,17 @@ In `crates/conary-mcp/src/stateless_http.rs`, add these helpers and tests near t
     }
 ```
 
-- [ ] **Step 2: Run byte-entry tests and verify failure**
+- [x] **Step 2: Run byte-entry tests and verify failure**
 
 Run:
 
 ```bash
-cargo test -p conary-mcp stateless_http::tests::malformed_json_bytes_return_parse_error stateless_http::tests::valid_json_bytes_delegate_to_parsed_handler stateless_http::tests::non_post_byte_request_is_rejected_before_json_parse stateless_http::tests::origin_byte_gate_runs_before_json_parse
+cargo test -p conary-mcp byte
 ```
 
 Expected: compile failure mentioning missing `handle_stateless_http_bytes` and `JSON_RPC_PARSE_ERROR`.
 
-- [ ] **Step 3: Implement byte-entry helper**
+- [x] **Step 3: Implement byte-entry helper**
 
 In `crates/conary-mcp/src/stateless_http.rs`, add the parse-error constant near the existing JSON-RPC constants:
 
@@ -274,17 +274,17 @@ pub fn handle_stateless_http_bytes(
 }
 ```
 
-- [ ] **Step 4: Run byte-entry tests and verify pass**
+- [x] **Step 4: Run byte-entry tests and verify pass**
 
 Run:
 
 ```bash
-cargo test -p conary-mcp stateless_http::tests::malformed_json_bytes_return_parse_error stateless_http::tests::valid_json_bytes_delegate_to_parsed_handler stateless_http::tests::non_post_byte_request_is_rejected_before_json_parse stateless_http::tests::origin_byte_gate_runs_before_json_parse
+cargo test -p conary-mcp byte
 ```
 
 Expected: all four tests pass.
 
-- [ ] **Step 5: Run the full conary-mcp package tests**
+- [x] **Step 5: Run the full conary-mcp package tests**
 
 Run:
 
@@ -294,7 +294,7 @@ cargo test -p conary-mcp
 
 Expected: all `conary-mcp` unit, integration, and doc tests pass.
 
-- [ ] **Step 6: Commit Task 1**
+- [x] **Step 6: Commit Task 1**
 
 Update this task's checkboxes, then commit:
 
