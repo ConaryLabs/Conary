@@ -1221,7 +1221,7 @@ Expected: commit succeeds and the worktree is clean.
 **Files:**
 - Modify: `docs/superpowers/plans/2026-05-24-conary-test-stateless-discover-route.md`
 
-- [ ] **Step 1: Run final Rust verification**
+- [x] **Step 1: Run final Rust verification**
 
 Run:
 
@@ -1236,7 +1236,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 Expected: every command succeeds.
 
-- [ ] **Step 2: Verify Remi has no draft stateless identifiers**
+- [x] **Step 2: Verify Remi has no draft stateless identifiers**
 
 Run:
 
@@ -1249,7 +1249,7 @@ fi
 
 Expected: no output and exit code `0`.
 
-- [ ] **Step 3: Verify docs audit ledger**
+- [x] **Step 3: Verify docs audit ledger**
 
 Run:
 
@@ -1259,7 +1259,7 @@ bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-a
 
 Expected: `Documentation audit ledger check passed (--require-complete).`
 
-- [ ] **Step 4: Verify scope boundaries**
+- [x] **Step 4: Verify scope boundaries**
 
 Run:
 
@@ -1275,7 +1275,7 @@ Expected:
 - Second command returns no Remi matches.
 - Third command finds tests for unsupported methods only; no live list/read/get route registrations exist.
 
-- [ ] **Step 5: Check formatting and worktree**
+- [x] **Step 5: Check formatting and worktree**
 
 Run:
 
@@ -1286,7 +1286,7 @@ git status --short --branch
 
 Expected: `git diff --check` succeeds. `git status --short --branch` shows only this plan file modified for final checkbox updates.
 
-- [ ] **Step 6: Commit final plan checkbox update**
+- [x] **Step 6: Commit final plan checkbox update**
 
 Update this task's checkboxes, then commit:
 
