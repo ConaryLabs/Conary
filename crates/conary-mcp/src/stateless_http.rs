@@ -535,4 +535,73 @@ mod tests {
 
         assert_eq!(response.status, HTTP_OK);
     }
+
+    #[test]
+    fn malformed_json_rpc_envelopes_return_invalid_request() {
+        let cases = [
+            ("batch", json!([]), Value::Null),
+            (
+                "notification",
+                json!({"jsonrpc": "2.0", "method": "server/discover"}),
+                Value::Null,
+            ),
+            (
+                "response",
+                json!({"jsonrpc": "2.0", "id": "r1", "result": {}}),
+                json!("r1"),
+            ),
+            ("non_object", json!("not an object"), Value::Null),
+            (
+                "wrong_jsonrpc",
+                json!({"jsonrpc": "1.0", "id": "bad-1", "method": "server/discover"}),
+                json!("bad-1"),
+            ),
+            (
+                "missing_method",
+                json!({"jsonrpc": "2.0", "id": "bad-2"}),
+                json!("bad-2"),
+            ),
+            (
+                "non_string_method",
+                json!({"jsonrpc": "2.0", "id": "bad-3", "method": 7}),
+                json!("bad-3"),
+            ),
+        ];
+
+        for (name, body, expected_id) in cases {
+            let response = handle_stateless_http_request(
+                RawStatelessHttpRequest::post(body)
+                    .with_header("Accept", "application/json, text/event-stream")
+                    .with_header("MCP-Protocol-Version", MCP_DRAFT_PROTOCOL_VERSION)
+                    .with_header("Mcp-Method", "server/discover"),
+                &RawStatelessHttpConfig::default(),
+            );
+
+            assert_eq!(response.status, HTTP_BAD_REQUEST, "{name}");
+            let body = response_body(&response);
+            assert_eq!(body["id"], expected_id, "{name}");
+            assert_eq!(body["error"]["code"], JSON_RPC_INVALID_REQUEST, "{name}");
+        }
+    }
+
+    #[test]
+    fn invalid_json_rpc_id_is_rejected() {
+        let response = handle_stateless_http_request(
+            RawStatelessHttpRequest::post(json!({
+                "jsonrpc": "2.0",
+                "id": {"nested": true},
+                "method": "server/discover",
+                "params": {"_meta": valid_meta()}
+            }))
+            .with_header("Accept", "application/json, text/event-stream")
+            .with_header("MCP-Protocol-Version", MCP_DRAFT_PROTOCOL_VERSION)
+            .with_header("Mcp-Method", "server/discover"),
+            &RawStatelessHttpConfig::default(),
+        );
+
+        assert_eq!(response.status, HTTP_BAD_REQUEST);
+        let body = response_body(&response);
+        assert_eq!(body["id"], Value::Null);
+        assert_eq!(body["error"]["code"], JSON_RPC_INVALID_REQUEST);
+    }
 }
