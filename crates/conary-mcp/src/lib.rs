@@ -9,6 +9,7 @@ use rmcp::{ErrorData as McpError, model::*};
 use schemars::{JsonSchema, schema_for};
 
 pub mod stateless;
+pub mod stateless_http;
 
 /// Serialize a value to pretty JSON, mapping failures to [`McpError`].
 pub fn to_json_text<T: serde::Serialize>(value: &T) -> Result<String, McpError> {

@@ -47,6 +47,20 @@ impl StatelessRequestHeaders {
         }
     }
 
+    pub fn from_optional_parts(
+        protocol_version: Option<String>,
+        method: Option<String>,
+        name: Option<String>,
+        accepts: Vec<String>,
+    ) -> Self {
+        Self {
+            protocol_version,
+            method,
+            name,
+            accepts,
+        }
+    }
+
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
         self
