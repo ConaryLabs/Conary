@@ -1164,7 +1164,7 @@ git commit -m "feat(conary-test): expose bootstrap status stateless resource"
 
 Update this checkbox after the commit:
 
-- [ ] Task 3 complete
+- [x] Task 3 complete
 
 ## Task 4: Run Scope Guards And Boundary Checks
 
