@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-05-24
-revision: 4
-summary: Decision record for Conary's stateless MCP adapter path, compliance harness, and raw HTTP proof
+revision: 5
+summary: Decision record for Conary's stateless MCP adapter path, compliance harness, and non-live raw HTTP proof implementation
 ---
 
 # Agent MCP Adapter Decision
@@ -25,6 +25,11 @@ discovery behavior on the existing session-based `rmcp` path.
 - `crates/conary-mcp::stateless` contains the non-live compliance harness for
   request validation, discovery result modeling, cacheable result modeling, and
   adapter-boundary guard tests
+- `crates/conary-mcp::stateless_http` contains the non-live raw HTTP proof for
+  `server/discover`, origin validation, JSON-RPC envelope validation, header
+  extraction, protocol error mapping, and unsupported-method responses
+- The raw HTTP proof does not mount routes, bind sockets, register resources,
+  register tools, register prompts, or depend on `rmcp` / `axum`
 - The compliance harness does not add live MCP resources, tools, prompts,
   routes, or discovery behavior
 - `crates/conary-agent-contract` may define draft-shaped metadata names such as
@@ -82,10 +87,11 @@ Source spec:
 
 ## Raw HTTP Proof Slice
 
-The next implementation slice should prove Conary can satisfy the current MCP
-draft stateless HTTP requirements without waiting for `rmcp` support. It should
-reuse `crates/conary-mcp::stateless`, add a framework-neutral request/response
-adapter proof, and keep Remi and `conary-test` live routes unchanged.
+The current raw HTTP proof slice proves Conary can satisfy the current MCP
+draft stateless HTTP requirements without waiting for `rmcp` support. It reuses
+`crates/conary-mcp::stateless`, adds a framework-neutral request/response
+adapter proof, handles only `server/discover` successfully, and keeps Remi and
+`conary-test` live routes unchanged.
 
 Source spec:
 
