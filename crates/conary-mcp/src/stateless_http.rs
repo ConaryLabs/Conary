@@ -604,4 +604,163 @@ mod tests {
         assert_eq!(body["id"], Value::Null);
         assert_eq!(body["error"]["code"], JSON_RPC_INVALID_REQUEST);
     }
+
+    #[test]
+    fn missing_protocol_version_header_returns_header_mismatch_code() {
+        let response = handle_stateless_http_request(
+            RawStatelessHttpRequest::post(discover_body("missing-protocol-1"))
+                .with_header("Accept", "application/json, text/event-stream")
+                .with_header("Mcp-Method", "server/discover"),
+            &RawStatelessHttpConfig::default(),
+        );
+
+        assert_eq!(response.status, HTTP_BAD_REQUEST);
+        let body = response_body(&response);
+        assert_eq!(body["id"], "missing-protocol-1");
+        assert_eq!(body["error"]["code"], JSON_RPC_HEADER_MISMATCH);
+        assert_eq!(body["error"]["data"]["kind"], "missing_header");
+    }
+
+    #[test]
+    fn unsupported_protocol_version_returns_supported_and_requested_data() {
+        let mut body = discover_body("unsupported-protocol-1");
+        body["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"] = json!("DRAFT-OLD");
+
+        let response = handle_stateless_http_request(
+            RawStatelessHttpRequest::post(body)
+                .with_header("Accept", "application/json, text/event-stream")
+                .with_header("MCP-Protocol-Version", "DRAFT-OLD")
+                .with_header("Mcp-Method", "server/discover"),
+            &RawStatelessHttpConfig::default(),
+        );
+
+        assert_eq!(response.status, HTTP_BAD_REQUEST);
+        let body = response_body(&response);
+        assert_eq!(body["id"], "unsupported-protocol-1");
+        assert_eq!(body["error"]["code"], JSON_RPC_UNSUPPORTED_PROTOCOL_VERSION);
+        assert_eq!(body["error"]["data"]["requested"], "DRAFT-OLD");
+        assert_eq!(
+            body["error"]["data"]["supported"][0],
+            MCP_DRAFT_PROTOCOL_VERSION
+        );
+    }
+
+    #[test]
+    fn mismatched_mcp_method_header_returns_header_mismatch_code() {
+        let response = handle_stateless_http_request(
+            RawStatelessHttpRequest::post(discover_body("method-mismatch-1"))
+                .with_header("Accept", "application/json, text/event-stream")
+                .with_header("MCP-Protocol-Version", MCP_DRAFT_PROTOCOL_VERSION)
+                .with_header("Mcp-Method", "tools/list"),
+            &RawStatelessHttpConfig::default(),
+        );
+
+        assert_eq!(response.status, HTTP_BAD_REQUEST);
+        let body = response_body(&response);
+        assert_eq!(body["id"], "method-mismatch-1");
+        assert_eq!(body["error"]["code"], JSON_RPC_HEADER_MISMATCH);
+        assert_eq!(body["error"]["data"]["kind"], "header_mismatch");
+    }
+
+    #[test]
+    fn unsupported_validated_method_returns_json_rpc_method_not_found() {
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": "tools-list-1",
+            "method": "tools/list",
+            "params": {
+                "_meta": valid_meta()
+            }
+        });
+
+        let response = handle_stateless_http_request(
+            RawStatelessHttpRequest::post(body)
+                .with_header("Accept", "application/json, text/event-stream")
+                .with_header("MCP-Protocol-Version", MCP_DRAFT_PROTOCOL_VERSION)
+                .with_header("Mcp-Method", "tools/list"),
+            &RawStatelessHttpConfig::default(),
+        );
+
+        assert_eq!(response.status, HTTP_NOT_FOUND);
+        let body = response_body(&response);
+        assert_eq!(body["id"], "tools-list-1");
+        assert_eq!(body["error"]["code"], JSON_RPC_METHOD_NOT_FOUND);
+    }
+
+    #[test]
+    fn missing_mcp_method_header_returns_header_mismatch_code() {
+        let response = handle_stateless_http_request(
+            RawStatelessHttpRequest::post(discover_body("missing-method-1"))
+                .with_header("Accept", "application/json, text/event-stream")
+                .with_header("MCP-Protocol-Version", MCP_DRAFT_PROTOCOL_VERSION),
+            &RawStatelessHttpConfig::default(),
+        );
+
+        assert_eq!(response.status, HTTP_BAD_REQUEST);
+        let body = response_body(&response);
+        assert_eq!(body["id"], "missing-method-1");
+        assert_eq!(body["error"]["code"], JSON_RPC_HEADER_MISMATCH);
+        assert_eq!(body["error"]["data"]["kind"], "missing_header");
+    }
+
+    #[test]
+    fn missing_meta_fields_return_invalid_params_code() {
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": "no-meta-1",
+            "method": "server/discover",
+            "params": {}
+        });
+
+        let response = handle_stateless_http_request(
+            RawStatelessHttpRequest::post(body)
+                .with_header("Accept", "application/json, text/event-stream")
+                .with_header("MCP-Protocol-Version", MCP_DRAFT_PROTOCOL_VERSION)
+                .with_header("Mcp-Method", "server/discover"),
+            &RawStatelessHttpConfig::default(),
+        );
+
+        assert_eq!(response.status, HTTP_BAD_REQUEST);
+        let body = response_body(&response);
+        assert_eq!(body["id"], "no-meta-1");
+        assert_eq!(body["error"]["code"], JSON_RPC_INVALID_PARAMS);
+        assert_eq!(body["error"]["data"]["kind"], "missing_meta_field");
+    }
+
+    #[test]
+    fn resources_read_requires_mcp_name_before_unsupported_method_mapping() {
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": "resources-read-1",
+            "method": "resources/read",
+            "params": {
+                "uri": "conary://remi/health",
+                "_meta": valid_meta()
+            }
+        });
+
+        let missing_name = handle_stateless_http_request(
+            RawStatelessHttpRequest::post(body.clone())
+                .with_header("Accept", "application/json, text/event-stream")
+                .with_header("MCP-Protocol-Version", MCP_DRAFT_PROTOCOL_VERSION)
+                .with_header("Mcp-Method", "resources/read"),
+            &RawStatelessHttpConfig::default(),
+        );
+        assert_eq!(missing_name.status, HTTP_BAD_REQUEST);
+        let missing_name_body = response_body(&missing_name);
+        assert_eq!(missing_name_body["error"]["code"], JSON_RPC_HEADER_MISMATCH);
+        assert_eq!(missing_name_body["error"]["data"]["kind"], "missing_name");
+
+        let with_name = handle_stateless_http_request(
+            RawStatelessHttpRequest::post(body)
+                .with_header("Accept", "application/json, text/event-stream")
+                .with_header("MCP-Protocol-Version", MCP_DRAFT_PROTOCOL_VERSION)
+                .with_header("Mcp-Method", "resources/read")
+                .with_header("Mcp-Name", "conary://remi/health"),
+            &RawStatelessHttpConfig::default(),
+        );
+        assert_eq!(with_name.status, HTTP_NOT_FOUND);
+        let with_name_body = response_body(&with_name);
+        assert_eq!(with_name_body["error"]["code"], JSON_RPC_METHOD_NOT_FOUND);
+    }
 }

@@ -826,7 +826,7 @@ Expected: tests pass, commit succeeds, and status is clean.
 **Files:**
 - Modify: `crates/conary-mcp/src/stateless_http.rs`
 
-- [ ] **Step 1: Add protocol mapping conformance tests**
+- [x] **Step 1: Add protocol mapping conformance tests**
 
 Add these tests inside `#[cfg(test)] mod tests` in `crates/conary-mcp/src/stateless_http.rs`:
 
@@ -997,7 +997,7 @@ Add these tests inside `#[cfg(test)] mod tests` in `crates/conary-mcp/src/statel
     }
 ```
 
-- [ ] **Step 2: Run protocol mapping tests**
+- [x] **Step 2: Run protocol mapping tests**
 
 Run:
 
@@ -1013,7 +1013,7 @@ cargo test -p conary-mcp stateless_http::tests::resources_read_requires_mcp_name
 
 Expected: PASS. If any command fails, fix only `stateless_protocol_error_response`, `error_response`, or `handle_stateless_http_request` dispatch in `crates/conary-mcp/src/stateless_http.rs`.
 
-- [ ] **Step 3: Run all raw proof tests**
+- [x] **Step 3: Run all raw proof tests**
 
 Run:
 
@@ -1023,7 +1023,7 @@ cargo test -p conary-mcp stateless_http
 
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 Run:
 
