@@ -5,7 +5,6 @@ path	family	audience
 .github/copilot-instructions.md	template	contributor
 AGENTS.md	root	contributor
 CHANGELOG.md	root	contributor
-CLAUDE.md	root	contributor
 CONTRIBUTING.md	root	contributor
 GEMINI.md	root	contributor
 README.md	root	user
@@ -33,6 +32,7 @@ docs/modules/query.md	canonical	contributor
 docs/modules/recipe.md	canonical	contributor
 docs/modules/source-selection.md	canonical	contributor
 docs/operations/LOCAL_ACCESS.example.md	template	contributor
+docs/operations/agent-mcp-adapter-decision.md	canonical	contributor
 docs/operations/bootstrap-follow-up-investigations.md	canonical	contributor
 docs/operations/bootstrap-selfhosting-vm.md	canonical	contributor
 docs/operations/daily-driver-ux-matrix.md	canonical	contributor
@@ -45,6 +45,11 @@ docs/superpowers/daily-driver-readiness-completion-audit-2026-05-22.md	planning	
 docs/superpowers/documentation-accuracy-audit-summary.md	planning	maintainer
 docs/superpowers/limited-preview-release-checkpoint-2026-05-16.md	planning	maintainer
 docs/superpowers/limited-preview-subreddit-tester-post-2026-05-19.md	planning	maintainer
+docs/superpowers/plans/2026-05-22-llm-native-operations-surface.md	planning	maintainer
+docs/superpowers/plans/2026-05-22-local-bootstrap-smoke-proof-loop.md	planning	maintainer
+docs/superpowers/plans/2026-05-22-stateless-mcp-adapter-compliance.md	planning	maintainer
+docs/superpowers/plans/2026-05-24-conary-test-stateless-discover-route.md	planning	maintainer
+docs/superpowers/plans/2026-05-24-stateless-raw-http-adapter-proof.md	planning	maintainer
 docs/superpowers/plans/archive/2026-04-10-all-tracks-release-hardening-plan.md	historical	historical
 docs/superpowers/plans/archive/2026-04-16-conaryd-forge-staging-deployment-plan.md	historical	historical
 docs/superpowers/plans/archive/2026-04-22-generation-artifact-export-unification-plan.md	historical	historical
@@ -64,6 +69,10 @@ docs/superpowers/plans/archive/2026-05-21-goal7-daily-ux-operator-polish.md	hist
 docs/superpowers/plans/archive/2026-05-22-daily-driver-readiness-completion-validation.md	historical	historical
 docs/superpowers/plans/archive/2026-05-22-goal1-native-authority-handoff.md	historical	historical
 docs/superpowers/release-security-waivers-2026-05-06.md	planning	maintainer
+docs/superpowers/specs/2026-05-22-llm-native-operations-surface-design.md	planning	maintainer
+docs/superpowers/specs/2026-05-22-stateless-mcp-adapter-compliance-design.md	planning	maintainer
+docs/superpowers/specs/2026-05-24-conary-test-stateless-discover-route-design.md	planning	maintainer
+docs/superpowers/specs/2026-05-24-stateless-raw-http-adapter-proof-design.md	planning	maintainer
 docs/superpowers/specs/archive/2026-04-10-all-tracks-release-hardening-design.md	historical	historical
 docs/superpowers/specs/archive/2026-04-10-conaryd-forge-staging-deployment-design.md	historical	historical
 docs/superpowers/specs/archive/2026-04-16-bootstrap-self-hosting-vm-design.md	historical	historical

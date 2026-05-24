@@ -143,7 +143,11 @@ apps/conary/tests/integration/remi/manifests/
 | POST | `/v1/images/build` | Build a container image |
 | POST | `/v1/cleanup` | Remove stopped containers |
 
-The MCP endpoint is mounted at `/mcp` (Streamable HTTP transport).
+The legacy MCP endpoint is mounted at `/mcp` through `rmcp`'s session-based
+Streamable HTTP transport. The draft stateless preview endpoint is mounted at
+`/mcp/stateless` and currently exposes only `server/discover` with empty
+capabilities; it does not expose live tools, resources, prompts, or SSE
+streaming.
 
 ## MCP Tools
 
