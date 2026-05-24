@@ -314,7 +314,7 @@ Expected: commit succeeds and the worktree is clean.
 - Modify: `apps/conary-test/src/server/routes.rs`
 - Modify: `docs/superpowers/plans/2026-05-24-conary-test-stateless-discover-route.md`
 
-- [ ] **Step 1: Create route tests before implementation**
+- [x] **Step 1: Create route tests before implementation**
 
 In `apps/conary-test/src/server/mod.rs`, add the module declaration:
 
@@ -668,7 +668,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run route tests and verify expected failures**
+- [x] **Step 2: Run route tests and verify expected failures**
 
 Run:
 
@@ -678,7 +678,7 @@ cargo test -p conary-test stateless_mcp
 
 Expected: tests compile, and route tests fail because `/mcp/stateless` is not mounted yet.
 
-- [ ] **Step 3: Implement the Axum adapter**
+- [x] **Step 3: Implement the Axum adapter**
 
 Replace the top of `apps/conary-test/src/server/stateless_mcp.rs`, keeping the tests below it:
 
@@ -766,7 +766,7 @@ fn raw_response_to_axum(response: RawStatelessHttpResponse) -> Response {
 }
 ```
 
-- [ ] **Step 4: Mount the route next to legacy `/mcp`**
+- [x] **Step 4: Mount the route next to legacy `/mcp`**
 
 In `apps/conary-test/src/server/routes.rs`, add the module import:
 
@@ -787,7 +787,7 @@ Mount `/mcp/stateless` before the legacy nested service:
         .nest_service("/mcp", mcp_service);
 ```
 
-- [ ] **Step 5: Run route tests and verify pass**
+- [x] **Step 5: Run route tests and verify pass**
 
 Run:
 
@@ -797,7 +797,7 @@ cargo test -p conary-test stateless_mcp
 
 Expected: all `stateless_mcp` tests pass.
 
-- [ ] **Step 6: Re-run legacy auth regression**
+- [x] **Step 6: Re-run legacy auth regression**
 
 Run:
 
@@ -807,7 +807,7 @@ cargo test -p conary-test mcp_endpoint_requires_token
 
 Expected: existing legacy `/mcp` auth regression still passes.
 
-- [ ] **Step 7: Commit Task 2**
+- [x] **Step 7: Commit Task 2**
 
 Update this task's checkboxes, then commit:
 
