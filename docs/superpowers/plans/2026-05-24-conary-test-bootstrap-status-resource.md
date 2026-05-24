@@ -775,7 +775,7 @@ git commit -m "feat(mcp): dispatch stateless resource requests"
 
 Update this checkbox after the commit:
 
-- [ ] Task 2 complete
+- [x] Task 2 complete
 
 ## Task 3: Expose Bootstrap Status From The Conary-Test Route
 
