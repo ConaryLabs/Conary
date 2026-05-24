@@ -32,11 +32,13 @@ summary: Non-secret infrastructure, agent-operations transport, release, Remi de
 
 ## Agent Operations And MCP
 
-Today, the live Remi and `conary-test` MCP endpoints are legacy
-session-based, tool-only surfaces. Prefer those structured tools over manual
-SSH, rsync, or curl only when they already cover the workflow.
+Today, the live Remi MCP endpoint and the legacy `conary-test` `/mcp` endpoint
+are session-based, tool-only surfaces. `conary-test` also exposes
+`/mcp/stateless` as a draft stateless discovery-only preview route; it returns
+empty capabilities and does not expose live resources, tools, prompts, or SSE
+streaming.
 
-For the next stateless adapter, prefer MCP resources for read-only state
+For the next stateless slice, prefer MCP resources for read-only state
 inspection and MCP tools for audited mutations. MCP is the adapter, not the
 durable product contract:
 

@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-05-24
-revision: 5
-summary: Decision record for Conary's stateless MCP adapter path, compliance harness, and non-live raw HTTP proof implementation
+revision: 6
+summary: Decision record for Conary's stateless MCP adapter path, compliance harness, raw HTTP proof, and conary-test discovery route
 ---
 
 # Agent MCP Adapter Decision
@@ -28,6 +28,10 @@ discovery behavior on the existing session-based `rmcp` path.
 - `crates/conary-mcp::stateless_http` contains the non-live raw HTTP proof for
   `server/discover`, origin validation, JSON-RPC envelope validation, header
   extraction, protocol error mapping, and unsupported-method responses
+- `apps/conary-test` exposes `POST /mcp/stateless` as the first live
+  stateless adapter gate. It handles only `server/discover`, returns empty
+  capabilities, and keeps the legacy `/mcp` session-based tool surface
+  unchanged.
 - The raw HTTP proof does not mount routes, bind sockets, register resources,
   register tools, register prompts, or depend on `rmcp` / `axum`
 - The compliance harness does not add live MCP resources, tools, prompts,
@@ -62,11 +66,10 @@ these paths:
 ## Current Choice
 
 Do not build new live MCP registrations on the existing session-based path.
-After the contract, catalog, local bootstrap, and compliance harness slices,
-the selected adapter-gate slice is a non-live raw HTTP proof in
-`crates/conary-mcp`. The proof should handle `server/discover`, draft request
-validation, origin checks, HTTP status mapping, and JSON-RPC error envelopes
-without mounting routes in Remi or `conary-test`.
+After the contract, catalog, local bootstrap, compliance harness, and non-live
+raw proof slices, the selected live adapter-gate slice is a `conary-test` route
+at `POST /mcp/stateless`. It exposes only `server/discover` and advertises no
+tools, resources, or prompts.
 
 The raw HTTP proof should not implement list/read stubs. Cache metadata remains
 covered by the non-live stateless harness and is deferred to the first
@@ -96,3 +99,18 @@ adapter proof, handles only `server/discover` successfully, and keeps Remi and
 Source spec:
 
 - `docs/superpowers/specs/2026-05-24-stateless-raw-http-adapter-proof-design.md`
+
+## Conary-Test Stateless Discovery Slice
+
+The first live stateless adapter gate is `POST /mcp/stateless` in
+`conary-test`. It adapts Axum requests into `crates/conary-mcp::stateless_http`,
+uses `serverInfo.name = "conary-test-mcp"`, preserves the existing `/mcp`
+session-based service, and stays inside the existing conary-test auth boundary
+when a token is configured.
+
+This route is discovery-only. It must not add resources, tools, prompts, SSE,
+or Remi route behavior. First read-only resources remain a follow-on slice.
+
+Source spec:
+
+- `docs/superpowers/specs/2026-05-24-conary-test-stateless-discover-route-design.md`

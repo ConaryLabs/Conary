@@ -954,7 +954,7 @@ Expected: commit succeeds and the worktree is clean.
 - Modify: `docs/superpowers/documentation-accuracy-audit-ledger.tsv`
 - Modify: `docs/superpowers/plans/2026-05-24-conary-test-stateless-discover-route.md`
 
-- [ ] **Step 1: Update conary-test README endpoint wording**
+- [x] **Step 1: Update conary-test README endpoint wording**
 
 In `apps/conary-test/README.md`, replace:
 
@@ -972,7 +972,7 @@ capabilities; it does not expose live tools, resources, prompts, or SSE
 streaming.
 ```
 
-- [ ] **Step 2: Update adapter decision current state**
+- [x] **Step 2: Update adapter decision current state**
 
 In `docs/operations/agent-mcp-adapter-decision.md`, update the frontmatter to:
 
@@ -1022,7 +1022,7 @@ Source spec:
 - `docs/superpowers/specs/2026-05-24-conary-test-stateless-discover-route-design.md`
 ```
 
-- [ ] **Step 3: Update infrastructure MCP wording**
+- [x] **Step 3: Update infrastructure MCP wording**
 
 In `docs/operations/infrastructure.md`, replace the first paragraph under **Agent Operations And MCP** with:
 
@@ -1050,7 +1050,7 @@ inspection and MCP tools for audited mutations. MCP is the adapter, not the
 durable product contract:
 ```
 
-- [ ] **Step 4: Refresh inventory and reconcile ledger**
+- [x] **Step 4: Refresh inventory and reconcile ledger**
 
 Run this script from the repo root:
 
@@ -1177,7 +1177,7 @@ This intentionally removes stale ledger rows whose origin paths are no longer tr
 The committed inventory is known to be stale before this task; do not treat
 `--require-complete` failures before this task as implementation failures.
 
-- [ ] **Step 5: Run docs audit verification**
+- [x] **Step 5: Run docs audit verification**
 
 Run:
 
@@ -1193,7 +1193,7 @@ After the check passes, remove the backup:
 rm docs/superpowers/documentation-accuracy-audit-ledger.tsv.bak
 ```
 
-- [ ] **Step 6: Run focused documentation sweeps**
+- [x] **Step 6: Run focused documentation sweeps**
 
 Run:
 
@@ -1204,7 +1204,7 @@ rg -n "resources/list|resources/read|prompts/list|prompts/get|live tools|live re
 
 Expected: first command finds the new discovery-only documentation; second command finds only wording that says live resources/tools/prompts are not exposed yet.
 
-- [ ] **Step 7: Commit Task 4**
+- [x] **Step 7: Commit Task 4**
 
 Update this task's checkboxes, then commit:
 
