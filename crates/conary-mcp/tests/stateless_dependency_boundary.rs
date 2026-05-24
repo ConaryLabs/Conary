@@ -12,36 +12,43 @@ fn repo_root() -> PathBuf {
 }
 
 #[test]
-fn stateless_module_does_not_use_rmcp_or_session_types() {
-    let source =
-        fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/stateless.rs"))
-            .expect("stateless module should be readable");
+fn stateless_modules_do_not_use_rmcp_or_live_http_framework_types() {
+    for module_path in ["src/stateless.rs", "src/stateless_http.rs"] {
+        let source =
+            fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(module_path))
+                .expect("stateless module should be readable");
 
-    for forbidden in [
-        "use rmcp",
-        "rmcp::",
-        "RoleServer",
-        "ServerHandler",
-        "LocalSessionManager",
-        "Mcp-Session-Id",
-        "InitializeResult",
-    ] {
-        assert!(
-            !source.contains(forbidden),
-            "stateless module must not depend on legacy/session MCP type {forbidden}"
-        );
+        for forbidden in [
+            "use rmcp",
+            "rmcp::",
+            "RoleServer",
+            "ServerHandler",
+            "StreamableHttpService",
+            "LocalSessionManager",
+            "Mcp-Session-Id",
+            "InitializeResult",
+            "use axum",
+            "axum::",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{module_path} must not depend on legacy/session/live HTTP type {forbidden}"
+            );
+        }
     }
 }
 
 #[test]
-fn live_mcp_route_files_do_not_contain_draft_stateless_identifiers() {
+fn live_mcp_server_files_do_not_contain_draft_stateless_identifiers() {
     let root = repo_root();
     for path in [
+        "apps/remi/src/server/mcp.rs",
         "apps/remi/src/server/routes/mcp.rs",
+        "apps/conary-test/src/server/mcp.rs",
         "apps/conary-test/src/server/routes.rs",
     ] {
         let source =
-            fs::read_to_string(root.join(path)).expect("live MCP route file should be readable");
+            fs::read_to_string(root.join(path)).expect("live MCP server file should be readable");
         for forbidden in [
             "Mcp-Method",
             "Mcp-Name",

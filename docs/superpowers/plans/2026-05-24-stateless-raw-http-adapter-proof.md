@@ -1043,7 +1043,7 @@ Expected: tests pass, commit succeeds, and status is clean.
 - Modify: `crates/conary-mcp/tests/stateless_dependency_boundary.rs`
 - Modify: `docs/operations/agent-mcp-adapter-decision.md`
 
-- [ ] **Step 1: Extend guard tests to cover the raw proof module**
+- [x] **Step 1: Extend guard tests to cover the raw proof module**
 
 Replace the entire contents of `crates/conary-mcp/tests/stateless_dependency_boundary.rs` with:
 
@@ -1116,7 +1116,7 @@ fn live_mcp_server_files_do_not_contain_draft_stateless_identifiers() {
 }
 ```
 
-- [ ] **Step 2: Run guard tests**
+- [x] **Step 2: Run guard tests**
 
 Run:
 
@@ -1126,7 +1126,7 @@ cargo test -p conary-mcp --test stateless_dependency_boundary
 
 Expected: PASS.
 
-- [ ] **Step 3: Update the adapter decision record with implementation facts**
+- [x] **Step 3: Update the adapter decision record with implementation facts**
 
 In `docs/operations/agent-mcp-adapter-decision.md`, update the frontmatter:
 
@@ -1156,7 +1156,7 @@ adapter proof, handles only `server/discover` successfully, and keeps Remi and
 `conary-test` live routes unchanged.
 ```
 
-- [ ] **Step 4: Run docs and stale-surface checks**
+- [x] **Step 4: Run docs and stale-surface checks**
 
 Run:
 
@@ -1172,7 +1172,7 @@ Expected:
 - Second `rg` exits with no hits.
 - `git diff --check` exits 0.
 
-- [ ] **Step 5: Run all MCP tests**
+- [x] **Step 5: Run all MCP tests**
 
 Run:
 
@@ -1182,7 +1182,7 @@ cargo test -p conary-mcp
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 Run:
 
