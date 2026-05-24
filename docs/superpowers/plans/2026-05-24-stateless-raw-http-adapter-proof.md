@@ -741,7 +741,7 @@ Expected: tests pass, commit succeeds, and status is clean.
 **Files:**
 - Modify: `crates/conary-mcp/src/stateless_http.rs`
 
-- [ ] **Step 1: Add JSON-RPC envelope conformance tests**
+- [x] **Step 1: Add JSON-RPC envelope conformance tests**
 
 Add these tests inside `#[cfg(test)] mod tests` in `crates/conary-mcp/src/stateless_http.rs`:
 
@@ -796,7 +796,7 @@ Add these tests inside `#[cfg(test)] mod tests` in `crates/conary-mcp/src/statel
     }
 ```
 
-- [ ] **Step 2: Run envelope tests**
+- [x] **Step 2: Run envelope tests**
 
 Run:
 
@@ -807,7 +807,7 @@ cargo test -p conary-mcp stateless_http::tests::invalid_json_rpc_id_is_rejected
 
 Expected: PASS. If either command fails, fix only `validate_json_rpc_envelope`, `extract_scalar_id`, or `is_valid_request_id` in `crates/conary-mcp/src/stateless_http.rs`.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 Run:
 
