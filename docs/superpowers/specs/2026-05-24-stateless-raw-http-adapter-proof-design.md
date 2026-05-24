@@ -246,6 +246,7 @@ Required coverage:
   `resources`, or `prompts`
 - invalid present `Origin` returns HTTP `403`
 - missing `Origin` is accepted by the configured local/non-browser policy
+- non-matching configured exact `Origin` returns HTTP `403`
 - non-`POST` request returns HTTP `405`
 - lowercase MCP header names validate the same as canonical header names
 - comma-separated and repeated `Accept` headers are parsed correctly
@@ -256,6 +257,7 @@ Required coverage:
   `-32001`
 - unsupported protocol version returns HTTP `400` with JSON-RPC code `-32004`
   and `data.requested` / `data.supported`
+- missing `_meta` fields return HTTP `400` with JSON-RPC code `-32602`
 - mismatched `Mcp-Method` returns HTTP `400` with JSON-RPC code `-32001`
 - unsupported validated method returns HTTP `404` with JSON-RPC code `-32601`
 - the raw proof module source does not import `rmcp`, `RoleServer`,
@@ -271,6 +273,10 @@ Final verification should include:
 - `cargo test -p conary-agent-contract`
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `rg -n "server/discover|MCP-Protocol-Version|Mcp-Method|Mcp-Name" apps/remi/src/server apps/conary-test/src/server`
+
+`Origin` rejection and non-`POST` requests are HTTP transport gates rather
+than MCP protocol validation failures. They may both use JSON-RPC `-32000`
+because the HTTP status code disambiguates `403` from `405`.
 
 ## Acceptance Criteria
 

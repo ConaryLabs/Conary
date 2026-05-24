@@ -15,7 +15,7 @@
 Use this plan with Codex Goal mode. Recommended goal text:
 
 ```text
-Implement docs/superpowers/plans/2026-05-24-stateless-raw-http-adapter-proof.md task-by-task. Source spec: docs/superpowers/specs/2026-05-24-stateless-raw-http-adapter-proof-design.md. Add only a non-live, framework-neutral raw HTTP proof in crates/conary-mcp. Do not add Remi or conary-test routes, live MCP resources, live MCP tools, live MCP prompts, SSE streaming, or rmcp session-path changes. For implementation tasks, write tests before code and verify the expected failure before implementation. Tasks 2-4 add conformance tests over the Task 1 proof. Make one focused commit per task, update checkboxes, and stop only when final acceptance passes.
+Implement docs/superpowers/plans/2026-05-24-stateless-raw-http-adapter-proof.md task-by-task. Source spec: docs/superpowers/specs/2026-05-24-stateless-raw-http-adapter-proof-design.md. Add only a non-live, framework-neutral raw HTTP proof in crates/conary-mcp. Do not add Remi or conary-test routes, live MCP resources, live MCP tools, live MCP prompts, SSE streaming, or rmcp session-path changes. For implementation tasks, write tests before code and verify the expected failure before implementation. Tasks 2-4 add conformance tests over the Task 1 proof. Make one focused commit per task, update checkboxes, and stop only when final acceptance passes. In Task 1 Step 4, use crate::stateless::HEADER_PROTOCOL_VERSION, HEADER_METHOD, and HEADER_NAME instead of hard-coded MCP header strings in stateless_headers_from_request.
 ```
 
 Goal-mode checkpoint rules:
@@ -92,7 +92,7 @@ pub mod stateless;
 pub mod stateless_http;
 ```
 
-In `crates/conary-mcp/src/stateless.rs`, add this method inside `impl StatelessRequestHeaders` after `missing_protocol`:
+In `crates/conary-mcp/src/stateless.rs`, add this method to the `impl StatelessRequestHeaders` block:
 
 ```rust
     pub fn from_optional_parts(
@@ -124,7 +124,8 @@ mod tests {
 
     use super::*;
     use crate::stateless::{
-        JSON_RPC_HEADER_MISMATCH, JSON_RPC_UNSUPPORTED_PROTOCOL_VERSION,
+        JSON_RPC_HEADER_MISMATCH, JSON_RPC_INVALID_PARAMS,
+        JSON_RPC_UNSUPPORTED_PROTOCOL_VERSION,
         MCP_DRAFT_PROTOCOL_VERSION,
     };
 
@@ -234,6 +235,21 @@ mod tests {
     }
 
     #[test]
+    fn non_matching_exact_origin_is_rejected() {
+        let config = RawStatelessHttpConfig {
+            origin_policy: OriginPolicy::exact_origins(["https://forge.local"]),
+            ..RawStatelessHttpConfig::default()
+        };
+
+        let response = handle_stateless_http_request(
+            valid_discover_request("bad-origin-1").with_header("Origin", "https://evil.example"),
+            &config,
+        );
+
+        assert_eq!(response.status, HTTP_FORBIDDEN);
+    }
+
+    #[test]
     fn non_post_request_returns_method_not_allowed() {
         let response = handle_stateless_http_request(
             RawStatelessHttpRequest::new("GET", discover_body("discover-5")),
@@ -265,7 +281,8 @@ Add this implementation above the tests in `crates/conary-mcp/src/stateless_http
 ```rust
 use crate::stateless::{
     validate_stateless_request, DiscoverResult, ImplementationInfo, StatelessProtocolError,
-    StatelessRequestHeaders, UnsupportedProtocolVersion, MCP_DRAFT_PROTOCOL_VERSION,
+    StatelessRequestHeaders, UnsupportedProtocolVersion, HEADER_METHOD, HEADER_NAME,
+    HEADER_PROTOCOL_VERSION, MCP_DRAFT_PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
 
@@ -275,6 +292,8 @@ pub const HTTP_FORBIDDEN: u16 = 403;
 pub const HTTP_METHOD_NOT_ALLOWED: u16 = 405;
 pub const HTTP_NOT_FOUND: u16 = 404;
 
+// Origin rejection and non-POST are HTTP-layer gates; HTTP status
+// disambiguates these server-defined JSON-RPC errors.
 pub const JSON_RPC_SERVER_ERROR: i32 = -32000;
 pub const JSON_RPC_INVALID_REQUEST: i32 = -32600;
 pub const JSON_RPC_METHOD_NOT_FOUND: i32 = -32601;
@@ -551,9 +570,9 @@ fn extract_scalar_id(body: &Value) -> Option<Value> {
 
 fn stateless_headers_from_request(request: &RawStatelessHttpRequest) -> StatelessRequestHeaders {
     StatelessRequestHeaders::from_optional_parts(
-        first_header_value(request, "MCP-Protocol-Version"),
-        first_header_value(request, "Mcp-Method"),
-        first_header_value(request, "Mcp-Name"),
+        first_header_value(request, HEADER_PROTOCOL_VERSION),
+        first_header_value(request, HEADER_METHOD),
+        first_header_value(request, HEADER_NAME),
         accept_media_types(request),
     )
 }
@@ -578,6 +597,8 @@ fn accept_media_types(request: &RawStatelessHttpRequest) -> Vec<String> {
         .filter(|(header_name, _)| header_name.eq_ignore_ascii_case("Accept"))
         .flat_map(|(_, value)| value.split(','))
         .filter_map(|part| {
+            // This proof strips today's simple media-type parameters, not the
+            // full quoted-parameter grammar from HTTP content negotiation.
             let media_type = part
                 .trim()
                 .split(';')
@@ -600,6 +621,7 @@ cargo test -p conary-mcp stateless_http::tests::server_discover_returns_empty_ca
 cargo test -p conary-mcp stateless_http::tests::invalid_present_origin_is_rejected_before_body_trust
 cargo test -p conary-mcp stateless_http::tests::missing_origin_is_accepted_for_local_non_browser_clients
 cargo test -p conary-mcp stateless_http::tests::configured_origin_is_accepted_exactly
+cargo test -p conary-mcp stateless_http::tests::non_matching_exact_origin_is_rejected
 cargo test -p conary-mcp stateless_http::tests::non_post_request_returns_method_not_allowed
 ```
 
@@ -911,6 +933,30 @@ Add these tests inside `#[cfg(test)] mod tests` in `crates/conary-mcp/src/statel
     }
 
     #[test]
+    fn missing_meta_fields_return_invalid_params_code() {
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": "no-meta-1",
+            "method": "server/discover",
+            "params": {}
+        });
+
+        let response = handle_stateless_http_request(
+            RawStatelessHttpRequest::post(body)
+                .with_header("Accept", "application/json, text/event-stream")
+                .with_header("MCP-Protocol-Version", MCP_DRAFT_PROTOCOL_VERSION)
+                .with_header("Mcp-Method", "server/discover"),
+            &RawStatelessHttpConfig::default(),
+        );
+
+        assert_eq!(response.status, HTTP_BAD_REQUEST);
+        let body = response_body(&response);
+        assert_eq!(body["id"], "no-meta-1");
+        assert_eq!(body["error"]["code"], JSON_RPC_INVALID_PARAMS);
+        assert_eq!(body["error"]["data"]["kind"], "missing_meta_field");
+    }
+
+    #[test]
     fn resources_read_requires_mcp_name_before_unsupported_method_mapping() {
         let body = json!({
             "jsonrpc": "2.0",
@@ -961,6 +1007,7 @@ cargo test -p conary-mcp stateless_http::tests::unsupported_protocol_version_ret
 cargo test -p conary-mcp stateless_http::tests::mismatched_mcp_method_header_returns_header_mismatch_code
 cargo test -p conary-mcp stateless_http::tests::unsupported_validated_method_returns_json_rpc_method_not_found
 cargo test -p conary-mcp stateless_http::tests::missing_mcp_method_header_returns_header_mismatch_code
+cargo test -p conary-mcp stateless_http::tests::missing_meta_fields_return_invalid_params_code
 cargo test -p conary-mcp stateless_http::tests::resources_read_requires_mcp_name_before_unsupported_method_mapping
 ```
 
@@ -998,9 +1045,22 @@ Expected: tests pass, commit succeeds, and status is clean.
 
 - [ ] **Step 1: Extend guard tests to cover the raw proof module**
 
-Replace `stateless_module_does_not_use_rmcp_or_session_types` in `crates/conary-mcp/tests/stateless_dependency_boundary.rs` with:
+Replace the entire contents of `crates/conary-mcp/tests/stateless_dependency_boundary.rs` with:
 
 ```rust
+// crates/conary-mcp/tests/stateless_dependency_boundary.rs
+//! Guard tests for the stateless MCP compliance harness boundary.
+
+use std::{fs, path::PathBuf};
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|path| path.parent())
+        .expect("conary-mcp should live under crates/")
+        .to_path_buf()
+}
+
 #[test]
 fn stateless_modules_do_not_use_rmcp_or_live_http_framework_types() {
     for module_path in ["src/stateless.rs", "src/stateless_http.rs"] {
@@ -1018,8 +1078,8 @@ fn stateless_modules_do_not_use_rmcp_or_live_http_framework_types() {
             "LocalSessionManager",
             "Mcp-Session-Id",
             "InitializeResult",
+            "use axum",
             "axum::",
-            "axum ",
         ] {
             assert!(
                 !source.contains(forbidden),
@@ -1028,11 +1088,7 @@ fn stateless_modules_do_not_use_rmcp_or_live_http_framework_types() {
         }
     }
 }
-```
 
-Replace `live_mcp_route_files_do_not_contain_draft_stateless_identifiers` in the same file with:
-
-```rust
 #[test]
 fn live_mcp_server_files_do_not_contain_draft_stateless_identifiers() {
     let root = repo_root();
@@ -1234,12 +1290,14 @@ Expected: commit succeeds and `git status --short` is clean.
 - [ ] `server/discover` response capabilities are empty and omit `tools`, `resources`, and `prompts`.
 - [ ] Invalid present `Origin` returns HTTP `403`.
 - [ ] Missing `Origin` is accepted by the local/non-browser policy.
+- [ ] Non-matching configured exact `Origin` returns HTTP `403`.
 - [ ] Non-`POST` requests return HTTP `405`.
 - [ ] Header extraction handles lowercase header names.
 - [ ] Header extraction handles comma-separated and repeated `Accept` headers.
 - [ ] Header extraction strips `Accept` media-type parameters and quality values.
 - [ ] Malformed JSON-RPC envelopes return HTTP `400` with JSON-RPC `-32600`.
 - [ ] Missing or mismatched MCP headers return HTTP `400` with JSON-RPC `-32001`.
+- [ ] Missing `_meta` fields return HTTP `400` with JSON-RPC `-32602`.
 - [ ] Conditional `Mcp-Name` validation runs before unsupported method mapping.
 - [ ] Unsupported protocol versions return HTTP `400` with JSON-RPC `-32004` and structured data.
 - [ ] Unsupported validated RPC methods return HTTP `404` with JSON-RPC `-32601`.
