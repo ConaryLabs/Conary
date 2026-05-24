@@ -3,12 +3,13 @@
 use std::sync::Arc;
 
 use axum::Router;
-use axum::routing::{get, post};
+use axum::routing::{any, get, post};
 
 use crate::server::auth;
 use crate::server::handlers;
 use crate::server::mcp::TestMcpServer;
 use crate::server::state::AppState;
+use crate::server::stateless_mcp;
 
 pub fn create_router(state: AppState, token: Option<String>) -> Router {
     // MCP (Model Context Protocol) endpoint for LLM agent integration.
@@ -47,6 +48,7 @@ pub fn create_router(state: AppState, token: Option<String>) -> Router {
         .route("/v1/images", get(handlers::list_images))
         .route("/v1/images/build", post(handlers::build_image))
         .route("/v1/cleanup", post(handlers::cleanup_containers))
+        .route("/mcp/stateless", any(stateless_mcp::handle))
         .nest_service("/mcp", mcp_service);
 
     // Apply auth middleware only if a token is configured.
