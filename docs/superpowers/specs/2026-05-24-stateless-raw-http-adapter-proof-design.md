@@ -255,6 +255,8 @@ Required coverage:
   `jsonrpc`, and missing `method` return HTTP `400` with JSON-RPC code `-32600`
 - missing `MCP-Protocol-Version` returns HTTP `400` with JSON-RPC code
   `-32001`
+- malformed standard MCP header values return HTTP `400` with JSON-RPC code
+  `-32001`
 - unsupported protocol version returns HTTP `400` with JSON-RPC code `-32004`
   and `data.requested` / `data.supported`
 - missing `_meta` fields return HTTP `400` with JSON-RPC code `-32602`
