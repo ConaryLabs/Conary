@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-23
-revision: 3
-summary: Decision record for Conary's stateless MCP adapter path and compliance harness implementation
+last_updated: 2026-05-24
+revision: 4
+summary: Decision record for Conary's stateless MCP adapter path, compliance harness, and raw HTTP proof
 ---
 
 # Agent MCP Adapter Decision
@@ -16,7 +16,7 @@ discovery behavior on the existing session-based `rmcp` path.
 
 - Workspace requirement: `rmcp = "1.7.0"` in `Cargo.toml`
 - Resolved dependency: `rmcp 1.7.0` in `Cargo.lock`
-- Latest public `rmcp` docs checked on 2026-05-23 list `rmcp 1.7.0`, but still
+- Latest public `rmcp` docs checked on 2026-05-24 list `rmcp 1.7.0`, but still
   document session/initialize-era types such as `LocalSessionManager` and
   `InitializeResult`
 - Current Remi and conary-test wiring uses `RoleServer`, `ServerHandler`,
@@ -52,12 +52,20 @@ these paths:
    - per-request `_meta`
    - `Origin` validation
    - `server/discover`
-   - cache metadata on list/read responses
+   - cache metadata before the first live list/read response is exposed
 
 ## Current Choice
 
-Do not build new live MCP registrations in the first milestone. Build the
-contract crate, catalog metadata, local bootstrap inspection, and cleanup first.
+Do not build new live MCP registrations on the existing session-based path.
+After the contract, catalog, local bootstrap, and compliance harness slices,
+the selected adapter-gate slice is a non-live raw HTTP proof in
+`crates/conary-mcp`. The proof should handle `server/discover`, draft request
+validation, origin checks, HTTP status mapping, and JSON-RPC error envelopes
+without mounting routes in Remi or `conary-test`.
+
+The raw HTTP proof should not implement list/read stubs. Cache metadata remains
+covered by the non-live stateless harness and is deferred to the first
+read-only resource slice before any live list/read response ships.
 
 ## Harness Slice
 
@@ -71,3 +79,14 @@ avoiding fresh investment in the legacy session path.
 Source spec:
 
 - `docs/superpowers/specs/2026-05-22-stateless-mcp-adapter-compliance-design.md`
+
+## Raw HTTP Proof Slice
+
+The next implementation slice should prove Conary can satisfy the current MCP
+draft stateless HTTP requirements without waiting for `rmcp` support. It should
+reuse `crates/conary-mcp::stateless`, add a framework-neutral request/response
+adapter proof, and keep Remi and `conary-test` live routes unchanged.
+
+Source spec:
+
+- `docs/superpowers/specs/2026-05-24-stateless-raw-http-adapter-proof-design.md`
