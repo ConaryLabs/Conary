@@ -1443,7 +1443,7 @@ Expected result:
 - Worktree is clean.
 - Recent commits include the Task 1 through Task 6 commits.
 
-- [ ] Task 6 complete
+- [x] Task 6 complete
 
 ## Rollback Notes
 
