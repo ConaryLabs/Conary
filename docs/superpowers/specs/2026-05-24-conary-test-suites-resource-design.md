@@ -374,7 +374,6 @@ cargo test -p conary-test suite_inventory
 cargo test -p conary-test stateless_mcp
 cargo test -p conary-test bootstrap
 cargo test -p conary-test mcp_endpoint_requires_token
-cargo run -p conary-test -- list
 cargo clippy --workspace --all-targets -- -D warnings
 diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv <(bash scripts/docs-audit-inventory.sh)
 bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete
