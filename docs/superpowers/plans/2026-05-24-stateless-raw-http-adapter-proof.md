@@ -1199,7 +1199,7 @@ Expected: commit succeeds and status is clean.
 **Files:**
 - Inspect all changed files.
 
-- [ ] **Step 1: Run formatting**
+- [x] **Step 1: Run formatting**
 
 Run:
 
@@ -1209,7 +1209,7 @@ cargo fmt --check
 
 Expected: PASS.
 
-- [ ] **Step 2: Run focused tests**
+- [x] **Step 2: Run focused tests**
 
 Run:
 
@@ -1220,7 +1220,7 @@ cargo test -p conary-agent-contract
 
 Expected: PASS.
 
-- [ ] **Step 3: Run workspace lint**
+- [x] **Step 3: Run workspace lint**
 
 Run:
 
@@ -1230,7 +1230,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 Expected: PASS.
 
-- [ ] **Step 4: Verify no live MCP behavior was added**
+- [x] **Step 4: Verify no live MCP behavior was added**
 
 Run:
 
@@ -1243,11 +1243,11 @@ rg -n "pub mod stateless_http|RawStatelessHttpRequest|OriginPolicy|handle_statel
 
 Expected:
 
-- `git diff --name-only "$BASE"...HEAD` lists `crates/conary-mcp/src/lib.rs`, `crates/conary-mcp/src/stateless.rs`, `crates/conary-mcp/src/stateless_http.rs`, `crates/conary-mcp/tests/stateless_dependency_boundary.rs`, this plan, and the decision record.
+- `git diff --name-only "$BASE"...HEAD` lists `crates/conary-mcp/src/lib.rs`, `crates/conary-mcp/src/stateless.rs`, `crates/conary-mcp/src/stateless_http.rs`, `crates/conary-mcp/tests/stateless_dependency_boundary.rs`, this plan, the decision record, and the reviewed spec.
 - The `apps/...` search exits with no hits.
 - The `crates/conary-mcp` search shows only the non-live proof module, module export, and guard tests.
 
-- [ ] **Step 5: Inspect final status**
+- [x] **Step 5: Inspect final status**
 
 Run:
 
@@ -1258,7 +1258,7 @@ git log --oneline -6
 
 Expected: branch is ahead of `main` by the task commits. If Task 6 checkboxes have already been updated, `git status --short` may show only `docs/superpowers/plans/2026-05-24-stateless-raw-http-adapter-proof.md`; no code files should be dirty.
 
-- [ ] **Step 6: Request review before merge**
+- [x] **Step 6: Request review before merge**
 
 Summarize:
 
@@ -1270,7 +1270,7 @@ Summarize:
 
 Do not merge until the reviewer approves the branch.
 
-- [ ] **Step 7: Commit final verification checklist**
+- [x] **Step 7: Commit final verification checklist**
 
 After Step 6 is complete and all Task 6 plus final acceptance checkboxes are checked, run:
 
@@ -1284,26 +1284,27 @@ Expected: commit succeeds and `git status --short` is clean.
 
 ## Final Acceptance Checklist
 
-- [ ] `crates/conary-mcp/src/stateless_http.rs` exists.
-- [ ] `crates/conary-mcp/src/lib.rs` exports `pub mod stateless_http;`.
-- [ ] `server/discover` returns HTTP `200` with JSON-RPC `result`.
-- [ ] `server/discover` response capabilities are empty and omit `tools`, `resources`, and `prompts`.
-- [ ] Invalid present `Origin` returns HTTP `403`.
-- [ ] Missing `Origin` is accepted by the local/non-browser policy.
-- [ ] Non-matching configured exact `Origin` returns HTTP `403`.
-- [ ] Non-`POST` requests return HTTP `405`.
-- [ ] Header extraction handles lowercase header names.
-- [ ] Header extraction handles comma-separated and repeated `Accept` headers.
-- [ ] Header extraction strips `Accept` media-type parameters and quality values.
-- [ ] Malformed JSON-RPC envelopes return HTTP `400` with JSON-RPC `-32600`.
-- [ ] Missing or mismatched MCP headers return HTTP `400` with JSON-RPC `-32001`.
-- [ ] Missing `_meta` fields return HTTP `400` with JSON-RPC `-32602`.
-- [ ] Conditional `Mcp-Name` validation runs before unsupported method mapping.
-- [ ] Unsupported protocol versions return HTTP `400` with JSON-RPC `-32004` and structured data.
-- [ ] Unsupported validated RPC methods return HTTP `404` with JSON-RPC `-32601`.
-- [ ] Guard tests prove `stateless_http.rs` does not import `rmcp`, session-era types, or `axum`.
-- [ ] Guard tests prove live Remi and `conary-test` route files do not contain draft stateless identifiers.
-- [ ] `cargo fmt --check` passes.
-- [ ] `cargo test -p conary-mcp` passes.
-- [ ] `cargo test -p conary-agent-contract` passes.
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings` passes.
+- [x] `crates/conary-mcp/src/stateless_http.rs` exists.
+- [x] `crates/conary-mcp/src/lib.rs` exports `pub mod stateless_http;`.
+- [x] `server/discover` returns HTTP `200` with JSON-RPC `result`.
+- [x] `server/discover` response capabilities are empty and omit `tools`, `resources`, and `prompts`.
+- [x] Invalid present `Origin` returns HTTP `403`.
+- [x] Missing `Origin` is accepted by the local/non-browser policy.
+- [x] Non-matching configured exact `Origin` returns HTTP `403`.
+- [x] Non-`POST` requests return HTTP `405`.
+- [x] Header extraction handles lowercase header names.
+- [x] Header extraction handles comma-separated and repeated `Accept` headers.
+- [x] Header extraction strips `Accept` media-type parameters and quality values.
+- [x] Malformed JSON-RPC envelopes return HTTP `400` with JSON-RPC `-32600`.
+- [x] Missing or mismatched MCP headers return HTTP `400` with JSON-RPC `-32001`.
+- [x] Malformed standard MCP header values return HTTP `400` with JSON-RPC `-32001`.
+- [x] Missing `_meta` fields return HTTP `400` with JSON-RPC `-32602`.
+- [x] Conditional `Mcp-Name` validation runs before unsupported method mapping.
+- [x] Unsupported protocol versions return HTTP `400` with JSON-RPC `-32004` and structured data.
+- [x] Unsupported validated RPC methods return HTTP `404` with JSON-RPC `-32601`.
+- [x] Guard tests prove `stateless_http.rs` does not import `rmcp`, session-era types, or `axum`.
+- [x] Guard tests prove live Remi and `conary-test` route files do not contain draft stateless identifiers.
+- [x] `cargo fmt --check` passes.
+- [x] `cargo test -p conary-mcp` passes.
+- [x] `cargo test -p conary-agent-contract` passes.
+- [x] `cargo clippy --workspace --all-targets -- -D warnings` passes.
