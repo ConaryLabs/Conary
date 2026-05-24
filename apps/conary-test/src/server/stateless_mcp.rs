@@ -5,14 +5,18 @@ use axum::Json;
 use axum::body::{Body, to_bytes};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use conary_mcp::stateless::{ImplementationInfo, MCP_DRAFT_PROTOCOL_VERSION};
+use conary_mcp::stateless::{
+    ImplementationInfo, MCP_DRAFT_PROTOCOL_VERSION, ResourceContent, ResourceDescriptor,
+};
 use conary_mcp::stateless_http::{
     HTTP_BAD_REQUEST, JSON_RPC_PARSE_ERROR, OriginPolicy, RawStatelessHttpConfig,
-    RawStatelessHttpResponse, handle_stateless_http_bytes,
+    RawStatelessHttpResponse, ResourceReadError, StatelessResourceProvider,
+    handle_stateless_http_bytes_with_resources,
 };
 use serde_json::{Value, json};
 
 const MAX_STATELESS_MCP_BODY_BYTES: usize = 1024 * 1024;
+const BOOTSTRAP_STATUS_URI: &str = "conary-local://bootstrap/status";
 
 pub async fn handle(request: axum::http::Request<Body>) -> Response {
     let (parts, body) = request.into_parts();
@@ -46,11 +50,12 @@ pub async fn handle(request: axum::http::Request<Body>) -> Response {
         }
     };
 
-    raw_response_to_axum(handle_stateless_http_bytes(
+    raw_response_to_axum(handle_stateless_http_bytes_with_resources(
         method,
         headers,
         &body,
         &stateless_config(),
+        &BootstrapStatusResourceProvider,
     ))
 }
 
@@ -60,8 +65,43 @@ fn stateless_config() -> RawStatelessHttpConfig {
         supported_versions: vec![MCP_DRAFT_PROTOCOL_VERSION.to_string()],
         server_info: ImplementationInfo::new("conary-test-mcp", env!("CARGO_PKG_VERSION")),
         instructions: Some(
-            "Conary test infrastructure stateless MCP endpoint exposes discovery only.".to_string(),
+            "Conary test infrastructure stateless MCP endpoint exposes discovery plus one read-only bootstrap-status resource."
+                .to_string(),
         ),
+    }
+}
+
+#[derive(Debug, Default)]
+struct BootstrapStatusResourceProvider;
+
+impl StatelessResourceProvider for BootstrapStatusResourceProvider {
+    fn list_resources(&self) -> Vec<ResourceDescriptor> {
+        vec![ResourceDescriptor {
+            uri: BOOTSTRAP_STATUS_URI.to_string(),
+            name: "bootstrap_status".to_string(),
+            title: Some("Local Bootstrap Status".to_string()),
+            description: "Read local developer bootstrap prerequisites and smoke-readiness state"
+                .to_string(),
+            mime_type: "application/json".to_string(),
+        }]
+    }
+
+    fn read_resource(&self, uri: &str) -> Result<Vec<ResourceContent>, ResourceReadError> {
+        if uri != BOOTSTRAP_STATUS_URI {
+            return Err(ResourceReadError::NotFound {
+                uri: uri.to_string(),
+            });
+        }
+
+        let inspect = crate::bootstrap::inspect_default();
+        let text = serde_json::to_string_pretty(&inspect)
+            .expect("bootstrap InspectResult should serialize to JSON");
+
+        Ok(vec![ResourceContent {
+            uri: BOOTSTRAP_STATUS_URI.to_string(),
+            mime_type: "application/json".to_string(),
+            text,
+        }])
     }
 }
 
@@ -83,8 +123,8 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
     use conary_mcp::stateless::{
-        HEADER_METHOD, HEADER_PROTOCOL_VERSION, JSON_RPC_HEADER_MISMATCH, JSON_RPC_INVALID_PARAMS,
-        JSON_RPC_UNSUPPORTED_PROTOCOL_VERSION, MCP_DRAFT_PROTOCOL_VERSION,
+        HEADER_METHOD, HEADER_NAME, HEADER_PROTOCOL_VERSION, JSON_RPC_HEADER_MISMATCH,
+        JSON_RPC_INVALID_PARAMS, JSON_RPC_UNSUPPORTED_PROTOCOL_VERSION, MCP_DRAFT_PROTOCOL_VERSION,
     };
     use conary_mcp::stateless_http::{
         JSON_RPC_METHOD_NOT_FOUND, JSON_RPC_PARSE_ERROR, JSON_RPC_SERVER_ERROR,
@@ -130,6 +170,29 @@ mod tests {
         })
     }
 
+    fn resource_list_body(id: &str) -> Value {
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "resources/list",
+            "params": {
+                "_meta": valid_meta()
+            }
+        })
+    }
+
+    fn resource_read_body(id: &str, uri: &str) -> Value {
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "resources/read",
+            "params": {
+                "_meta": valid_meta(),
+                "uri": uri
+            }
+        })
+    }
+
     fn stateless_request(method: &str) -> axum::http::request::Builder {
         Request::builder()
             .method(method)
@@ -152,7 +215,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stateless_discover_route_returns_conary_test_discovery() {
+    async fn stateless_discover_route_advertises_resources_only() {
         let app = create_router(test_fixtures::test_app_state(), None);
         let response = app
             .oneshot(
@@ -174,15 +237,194 @@ mod tests {
             body["result"]["serverInfo"]["version"],
             env!("CARGO_PKG_VERSION")
         );
-        assert!(
-            body["result"]["capabilities"]
-                .as_object()
-                .unwrap()
-                .is_empty()
+        assert_eq!(body["result"]["capabilities"]["resources"], json!({}));
+        assert!(body["result"]["capabilities"].get("tools").is_none());
+        assert!(body["result"]["capabilities"].get("prompts").is_none());
+    }
+
+    #[tokio::test]
+    async fn resources_list_route_returns_bootstrap_status_resource() {
+        let app = create_router(test_fixtures::test_app_state(), None);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp/stateless")
+                    .header("content-type", "application/json")
+                    .header("accept", "application/json, text/event-stream")
+                    .header(HEADER_PROTOCOL_VERSION, MCP_DRAFT_PROTOCOL_VERSION)
+                    .header(HEADER_METHOD, "resources/list")
+                    .body(Body::from(
+                        serde_json::to_vec(&resource_list_body("resources-list-1")).unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = read_json(response).await;
+        assert_eq!(body["result"]["resultType"], "complete");
+        assert_eq!(body["result"]["ttlMs"], 30_000);
+        assert_eq!(body["result"]["cacheScope"], "private");
+        assert_eq!(body["result"]["resources"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            body["result"]["resources"][0]["uri"],
+            "conary-local://bootstrap/status"
         );
-        assert!(body["result"]["capabilities"]["tools"].is_null());
-        assert!(body["result"]["capabilities"]["resources"].is_null());
-        assert!(body["result"]["capabilities"]["prompts"].is_null());
+        assert_eq!(body["result"]["resources"][0]["name"], "bootstrap_status");
+        assert_eq!(
+            body["result"]["resources"][0]["title"],
+            "Local Bootstrap Status"
+        );
+        assert_eq!(
+            body["result"]["resources"][0]["description"],
+            "Read local developer bootstrap prerequisites and smoke-readiness state"
+        );
+        assert_eq!(
+            body["result"]["resources"][0]["mimeType"],
+            "application/json"
+        );
+    }
+
+    #[tokio::test]
+    async fn resources_read_route_returns_bootstrap_inspect_json() {
+        let app = create_router(test_fixtures::test_app_state(), None);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp/stateless")
+                    .header("content-type", "application/json")
+                    .header("accept", "application/json, text/event-stream")
+                    .header(HEADER_PROTOCOL_VERSION, MCP_DRAFT_PROTOCOL_VERSION)
+                    .header(HEADER_METHOD, "resources/read")
+                    .header(HEADER_NAME, "conary-local://bootstrap/status")
+                    .body(Body::from(
+                        serde_json::to_vec(&resource_read_body(
+                            "resources-read-1",
+                            "conary-local://bootstrap/status",
+                        ))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = read_json(response).await;
+        assert_eq!(body["result"]["resultType"], "complete");
+        assert_eq!(body["result"]["ttlMs"], 30_000);
+        assert_eq!(body["result"]["cacheScope"], "private");
+        assert_eq!(body["result"]["contents"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            body["result"]["contents"][0]["uri"],
+            "conary-local://bootstrap/status"
+        );
+        assert_eq!(
+            body["result"]["contents"][0]["mimeType"],
+            "application/json"
+        );
+
+        let text = body["result"]["contents"][0]["text"]
+            .as_str()
+            .expect("resource content should be text");
+        let payload: serde_json::Value =
+            serde_json::from_str(text).expect("bootstrap resource text should be JSON");
+
+        assert_eq!(payload["operation"], "conary-test.bootstrap.inspect");
+        assert_eq!(payload["subject"]["uri"], "conary-local://bootstrap/status");
+        assert_eq!(payload["risk"], "read_only");
+        assert!(payload["data"].get("project_root").is_some());
+        assert!(payload["data"].get("required").is_some());
+    }
+
+    #[tokio::test]
+    async fn resources_read_route_unknown_uri_returns_resource_not_found() {
+        let app = create_router(test_fixtures::test_app_state(), None);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp/stateless")
+                    .header("content-type", "application/json")
+                    .header("accept", "application/json, text/event-stream")
+                    .header(HEADER_PROTOCOL_VERSION, MCP_DRAFT_PROTOCOL_VERSION)
+                    .header(HEADER_METHOD, "resources/read")
+                    .header(HEADER_NAME, "conary-local://missing")
+                    .body(Body::from(
+                        serde_json::to_vec(&resource_read_body(
+                            "resources-read-missing-1",
+                            "conary-local://missing",
+                        ))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = read_json(response).await;
+        assert_eq!(body["error"]["code"], JSON_RPC_INVALID_PARAMS);
+        assert_eq!(body["error"]["data"]["uri"], "conary-local://missing");
+    }
+
+    #[tokio::test]
+    async fn resources_read_route_requires_matching_mcp_name() {
+        let app = create_router(test_fixtures::test_app_state(), None);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp/stateless")
+                    .header("content-type", "application/json")
+                    .header("accept", "application/json, text/event-stream")
+                    .header(HEADER_PROTOCOL_VERSION, MCP_DRAFT_PROTOCOL_VERSION)
+                    .header(HEADER_METHOD, "resources/read")
+                    .header(HEADER_NAME, "conary-local://other")
+                    .body(Body::from(
+                        serde_json::to_vec(&resource_read_body(
+                            "resources-read-header-mismatch-1",
+                            "conary-local://bootstrap/status",
+                        ))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = read_json(response).await;
+        assert_eq!(body["error"]["code"], JSON_RPC_HEADER_MISMATCH);
+    }
+
+    #[tokio::test]
+    async fn stateless_resource_requires_token_when_router_is_authed() {
+        let app = create_router(
+            test_fixtures::test_app_state(),
+            Some(TEST_TOKEN.to_string()),
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp/stateless")
+                    .header("content-type", "application/json")
+                    .header("accept", "application/json, text/event-stream")
+                    .header(HEADER_PROTOCOL_VERSION, MCP_DRAFT_PROTOCOL_VERSION)
+                    .header(HEADER_METHOD, "resources/list")
+                    .body(Body::from(
+                        serde_json::to_vec(&resource_list_body("resources-list-auth-1")).unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
@@ -282,6 +524,40 @@ mod tests {
                     .and_then(|result| result.get("resultType"))
                     .is_none(),
                 "legacy /mcp should not return stateless discovery"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn legacy_mcp_route_does_not_return_stateless_resource_list() {
+        let app = create_router(
+            test_fixtures::test_app_state(),
+            Some(TEST_TOKEN.to_string()),
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp")
+                    .header("authorization", format!("Bearer {TEST_TOKEN}"))
+                    .header("content-type", "application/json")
+                    .header("accept", "application/json, text/event-stream")
+                    .header(HEADER_PROTOCOL_VERSION, MCP_DRAFT_PROTOCOL_VERSION)
+                    .header(HEADER_METHOD, "resources/list")
+                    .body(Body::from(
+                        serde_json::to_vec(&resource_list_body("cross-wire-list-1")).unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        if let Ok(body) = try_read_json(response).await {
+            assert!(
+                body.get("result")
+                    .and_then(|result| result.get("resultType"))
+                    .is_none(),
+                "legacy /mcp should not return stateless resource list result"
             );
         }
     }
