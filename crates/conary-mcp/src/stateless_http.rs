@@ -163,7 +163,10 @@ pub fn handle_stateless_http_request(
         }
     };
 
-    let headers = stateless_headers_from_request(&request);
+    let headers = match stateless_headers_from_request(&request) {
+        Ok(headers) => headers,
+        Err(err) => return stateless_protocol_error_response(envelope.id, err),
+    };
     let supported_versions: Vec<&str> = config
         .supported_versions
         .iter()
@@ -290,26 +293,59 @@ fn extract_scalar_id(body: &Value) -> Option<Value> {
         .cloned()
 }
 
-fn stateless_headers_from_request(request: &RawStatelessHttpRequest) -> StatelessRequestHeaders {
-    StatelessRequestHeaders::from_optional_parts(
-        first_header_value(request, HEADER_PROTOCOL_VERSION),
-        first_header_value(request, HEADER_METHOD),
-        first_header_value(request, HEADER_NAME),
+fn stateless_headers_from_request(
+    request: &RawStatelessHttpRequest,
+) -> Result<StatelessRequestHeaders, StatelessProtocolError> {
+    Ok(StatelessRequestHeaders::from_optional_parts(
+        standard_header_value(request, HEADER_PROTOCOL_VERSION)?,
+        standard_header_value(request, HEADER_METHOD)?,
+        standard_header_value(request, HEADER_NAME)?,
         accept_media_types(request),
-    )
+    ))
 }
 
 fn origin_header(request: &RawStatelessHttpRequest) -> Option<String> {
     first_header_value(request, "Origin")
 }
 
+fn standard_header_value(
+    request: &RawStatelessHttpRequest,
+    name: &'static str,
+) -> Result<Option<String>, StatelessProtocolError> {
+    let Some(value) = raw_header_value(request, name) else {
+        return Ok(None);
+    };
+
+    if !is_valid_http_field_value(value) {
+        return Err(StatelessProtocolError::HeaderMismatch {
+            header: name,
+            expected: "visible ASCII header value".to_string(),
+            actual: value.to_string(),
+        });
+    }
+
+    let trimmed = value.trim_matches(|ch| ch == ' ' || ch == '\t').to_string();
+    Ok((!trimmed.is_empty()).then_some(trimmed))
+}
+
 fn first_header_value(request: &RawStatelessHttpRequest, name: &str) -> Option<String> {
+    raw_header_value(request, name)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn raw_header_value<'a>(request: &'a RawStatelessHttpRequest, name: &str) -> Option<&'a str> {
     request
         .headers
         .iter()
         .find(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
-        .map(|(_, value)| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+        .map(|(_, value)| value.as_str())
+}
+
+fn is_valid_http_field_value(value: &str) -> bool {
+    value
+        .bytes()
+        .all(|byte| matches!(byte, b'\t' | b' '..=b'~'))
 }
 
 fn accept_media_types(request: &RawStatelessHttpRequest) -> Vec<String> {
@@ -725,6 +761,26 @@ mod tests {
         assert_eq!(body["id"], "no-meta-1");
         assert_eq!(body["error"]["code"], JSON_RPC_INVALID_PARAMS);
         assert_eq!(body["error"]["data"]["kind"], "missing_meta_field");
+    }
+
+    #[test]
+    fn malformed_standard_mcp_header_values_return_header_mismatch_code() {
+        let mut body = discover_body("malformed-header-1");
+        body["method"] = json!("server/discover\nbad");
+
+        let response = handle_stateless_http_request(
+            RawStatelessHttpRequest::post(body)
+                .with_header("Accept", "application/json, text/event-stream")
+                .with_header("MCP-Protocol-Version", MCP_DRAFT_PROTOCOL_VERSION)
+                .with_header("Mcp-Method", "server/discover\nbad"),
+            &RawStatelessHttpConfig::default(),
+        );
+
+        assert_eq!(response.status, HTTP_BAD_REQUEST);
+        let body = response_body(&response);
+        assert_eq!(body["id"], "malformed-header-1");
+        assert_eq!(body["error"]["code"], JSON_RPC_HEADER_MISMATCH);
+        assert_eq!(body["error"]["data"]["kind"], "header_mismatch");
     }
 
     #[test]
