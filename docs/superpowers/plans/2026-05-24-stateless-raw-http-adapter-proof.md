@@ -83,7 +83,7 @@ Use these names consistently in every task:
 - Modify: `crates/conary-mcp/src/stateless.rs`
 - Create: `crates/conary-mcp/src/stateless_http.rs`
 
-- [ ] **Step 1: Export the planned module and add optional header construction**
+- [x] **Step 1: Export the planned module and add optional header construction**
 
 In `crates/conary-mcp/src/lib.rs`, add the new module export next to `stateless`:
 
@@ -110,7 +110,7 @@ In `crates/conary-mcp/src/stateless.rs`, add this method to the `impl StatelessR
     }
 ```
 
-- [ ] **Step 2: Write failing success-path tests**
+- [x] **Step 2: Write failing success-path tests**
 
 Create `crates/conary-mcp/src/stateless_http.rs` with the path comment, module docs, and these tests:
 
@@ -264,7 +264,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Run tests and verify they fail**
+- [x] **Step 3: Run tests and verify they fail**
 
 Run:
 
@@ -274,7 +274,7 @@ cargo test -p conary-mcp stateless_http
 
 Expected: FAIL with unresolved names such as `RawStatelessHttpRequest`, `RawStatelessHttpResponse`, `RawStatelessHttpConfig`, `OriginPolicy`, `handle_stateless_http_request`, and the HTTP/JSON-RPC constants.
 
-- [ ] **Step 4: Implement the success path and transport gates**
+- [x] **Step 4: Implement the success path and transport gates**
 
 Add this implementation above the tests in `crates/conary-mcp/src/stateless_http.rs`:
 
@@ -612,7 +612,7 @@ fn accept_media_types(request: &RawStatelessHttpRequest) -> Vec<String> {
 }
 ```
 
-- [ ] **Step 5: Run success-path tests**
+- [x] **Step 5: Run success-path tests**
 
 Run:
 
@@ -627,7 +627,7 @@ cargo test -p conary-mcp stateless_http::tests::non_post_request_returns_method_
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 Run:
 
