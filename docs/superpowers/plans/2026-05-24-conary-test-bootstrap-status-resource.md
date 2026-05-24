@@ -1220,7 +1220,7 @@ git commit -m "test(mcp): guard bootstrap status resource scope"
 
 If the guard file was not edited, update this checkbox after the verification passes:
 
-- [ ] Task 4 complete
+- [x] Task 4 complete
 
 ## Task 5: Update Docs And Reconcile Docs Audit Metadata
 
@@ -1380,7 +1380,7 @@ git commit -m "docs(mcp): record bootstrap status resource"
 
 Update this checkbox after the commit:
 
-- [ ] Task 5 complete
+- [x] Task 5 complete
 
 ## Task 6: Final Acceptance
 

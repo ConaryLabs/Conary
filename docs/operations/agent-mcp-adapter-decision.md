@@ -25,15 +25,17 @@ discovery behavior on the existing session-based `rmcp` path.
 - `crates/conary-mcp::stateless` contains the non-live compliance harness for
   request validation, discovery result modeling, cacheable result modeling, and
   adapter-boundary guard tests
-- `crates/conary-mcp::stateless_http` contains the non-live raw HTTP proof for
-  `server/discover`, origin validation, JSON-RPC envelope validation, header
-  extraction, protocol error mapping, and unsupported-method responses
+- `crates/conary-mcp::stateless_http` contains the framework-neutral raw HTTP
+  adapter support for `server/discover`, resource list/read dispatch when a
+  provider is configured, origin validation, JSON-RPC envelope validation,
+  header extraction, protocol error mapping, and unsupported-method responses
 - `apps/conary-test` exposes `POST /mcp/stateless` as the first live
-  stateless adapter gate. It handles only `server/discover`, returns empty
-  capabilities, and keeps the legacy `/mcp` session-based tool surface
-  unchanged.
-- The raw HTTP proof does not mount routes, bind sockets, register resources,
-  register tools, register prompts, or depend on `rmcp` / `axum`
+  stateless adapter gate. It handles `server/discover`, `resources/list`, and
+  `resources/read` for `conary-local://bootstrap/status`, and keeps the legacy
+  `/mcp` session-based tool surface unchanged.
+- The raw HTTP adapter support does not mount routes, bind sockets, register
+  product resources by itself, register tools, register prompts, or depend on
+  `rmcp` / `axum`
 - The compliance harness does not add live MCP resources, tools, prompts,
   routes, or discovery behavior
 - `crates/conary-agent-contract` may define draft-shaped metadata names such as
@@ -68,12 +70,14 @@ these paths:
 Do not build new live MCP registrations on the existing session-based path.
 After the contract, catalog, local bootstrap, compliance harness, and non-live
 raw proof slices, the selected live adapter-gate slice is a `conary-test` route
-at `POST /mcp/stateless`. It exposes only `server/discover` and advertises no
-tools, resources, or prompts.
+at `POST /mcp/stateless`. It exposes `server/discover` plus the single
+read-only `conary-local://bootstrap/status` resource and advertises no tools or
+prompts.
 
-The raw HTTP proof should not implement list/read stubs. Cache metadata remains
-covered by the non-live stateless harness and is deferred to the first
-read-only resource slice before any live list/read response ships.
+The raw HTTP adapter supports list/read through an explicit provider trait.
+Cache metadata remains modeled through `CacheableResult<T>` and the shared
+contract `CachePolicy`; live list/read behavior is added only when a service
+wires a provider.
 
 ## Harness Slice
 
@@ -90,17 +94,17 @@ Source spec:
 
 ## Raw HTTP Proof Slice
 
-The current raw HTTP proof slice proves Conary can satisfy the current MCP
-draft stateless HTTP requirements without waiting for `rmcp` support. It reuses
-`crates/conary-mcp::stateless`, adds a framework-neutral request/response
-adapter proof, handles only `server/discover` successfully, and keeps Remi and
-`conary-test` live routes unchanged.
+The raw HTTP proof slice proved Conary can satisfy the current MCP draft
+stateless HTTP requirements without waiting for `rmcp` support. It reuses
+`crates/conary-mcp::stateless`, adds framework-neutral request/response
+adapter support, handles `server/discover`, and can dispatch `resources/list`
+and `resources/read` through a configured provider.
 
 Source spec:
 
 - `docs/superpowers/specs/2026-05-24-stateless-raw-http-adapter-proof-design.md`
 
-## Conary-Test Stateless Discovery Slice
+## Conary-Test Stateless Route Slice
 
 The first live stateless adapter gate is `POST /mcp/stateless` in
 `conary-test`. It adapts Axum requests into `crates/conary-mcp::stateless_http`,
@@ -108,9 +112,13 @@ uses `serverInfo.name = "conary-test-mcp"`, preserves the existing `/mcp`
 session-based service, and stays inside the existing conary-test auth boundary
 when a token is configured.
 
-This route is discovery-only. It must not add resources, tools, prompts, SSE,
-or Remi route behavior. First read-only resources remain a follow-on slice.
+This route supports `server/discover`, `resources/list`, and `resources/read`
+for `conary-local://bootstrap/status`. The resource returns the existing local
+bootstrap `InspectResult` as `application/json` text content. It must not add
+tools, prompts, resource templates, subscriptions, SSE, smoke execution, or
+Remi route behavior.
 
-Source spec:
+Source specs:
 
 - `docs/superpowers/specs/2026-05-24-conary-test-stateless-discover-route-design.md`
+- `docs/superpowers/specs/2026-05-24-conary-test-bootstrap-status-resource-design.md`
