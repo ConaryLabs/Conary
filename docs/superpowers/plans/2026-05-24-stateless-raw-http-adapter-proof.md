@@ -646,7 +646,7 @@ Expected: tests pass, commit succeeds, and status is clean.
 **Files:**
 - Modify: `crates/conary-mcp/src/stateless_http.rs`
 
-- [ ] **Step 1: Add header parsing conformance tests**
+- [x] **Step 1: Add header parsing conformance tests**
 
 Add these tests inside `#[cfg(test)] mod tests` in `crates/conary-mcp/src/stateless_http.rs`:
 
@@ -709,7 +709,7 @@ Add these tests inside `#[cfg(test)] mod tests` in `crates/conary-mcp/src/statel
     }
 ```
 
-- [ ] **Step 2: Run header tests and verify behavior**
+- [x] **Step 2: Run header tests and verify behavior**
 
 Run:
 
@@ -722,7 +722,7 @@ cargo test -p conary-mcp stateless_http::tests::accept_parameters_and_quality_va
 
 Expected: PASS. If any command fails, fix only `first_header_value` or `accept_media_types` in `crates/conary-mcp/src/stateless_http.rs` so header names are case-insensitive and `Accept` parsing strips parameters after `;`.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 Run:
 

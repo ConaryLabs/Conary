@@ -478,4 +478,61 @@ mod tests {
         assert_eq!(body["id"], "discover-5");
         assert_eq!(body["error"]["code"], JSON_RPC_SERVER_ERROR);
     }
+
+    #[test]
+    fn lowercase_mcp_headers_are_accepted() {
+        let response = handle_stateless_http_request(
+            RawStatelessHttpRequest::post(discover_body("lowercase-1"))
+                .with_header("accept", "application/json")
+                .with_header("accept", "text/event-stream")
+                .with_header("mcp-protocol-version", MCP_DRAFT_PROTOCOL_VERSION)
+                .with_header("mcp-method", "server/discover"),
+            &RawStatelessHttpConfig::default(),
+        );
+
+        assert_eq!(response.status, HTTP_OK);
+    }
+
+    #[test]
+    fn comma_separated_accept_header_is_parsed() {
+        let response = handle_stateless_http_request(
+            RawStatelessHttpRequest::post(discover_body("accept-1"))
+                .with_header("Accept", "application/json, text/event-stream")
+                .with_header("MCP-Protocol-Version", MCP_DRAFT_PROTOCOL_VERSION)
+                .with_header("Mcp-Method", "server/discover"),
+            &RawStatelessHttpConfig::default(),
+        );
+
+        assert_eq!(response.status, HTTP_OK);
+    }
+
+    #[test]
+    fn repeated_accept_headers_are_parsed() {
+        let response = handle_stateless_http_request(
+            RawStatelessHttpRequest::post(discover_body("accept-2"))
+                .with_header("Accept", "application/json")
+                .with_header("Accept", "text/event-stream")
+                .with_header("MCP-Protocol-Version", MCP_DRAFT_PROTOCOL_VERSION)
+                .with_header("Mcp-Method", "server/discover"),
+            &RawStatelessHttpConfig::default(),
+        );
+
+        assert_eq!(response.status, HTTP_OK);
+    }
+
+    #[test]
+    fn accept_parameters_and_quality_values_are_ignored_for_matching() {
+        let response = handle_stateless_http_request(
+            RawStatelessHttpRequest::post(discover_body("accept-3"))
+                .with_header(
+                    "Accept",
+                    "application/json; charset=utf-8, text/event-stream; q=0.9",
+                )
+                .with_header("MCP-Protocol-Version", MCP_DRAFT_PROTOCOL_VERSION)
+                .with_header("Mcp-Method", "server/discover"),
+            &RawStatelessHttpConfig::default(),
+        );
+
+        assert_eq!(response.status, HTTP_OK);
+    }
 }
