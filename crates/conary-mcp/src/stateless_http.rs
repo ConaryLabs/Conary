@@ -2,10 +2,13 @@
 //! Framework-neutral raw HTTP proof for the target stateless MCP adapter.
 
 use crate::stateless::{
-    DiscoverResult, HEADER_METHOD, HEADER_NAME, HEADER_PROTOCOL_VERSION, ImplementationInfo,
-    MCP_DRAFT_PROTOCOL_VERSION, StatelessProtocolError, StatelessRequestHeaders,
-    UnsupportedProtocolVersion, validate_stateless_request,
+    CacheableResult, DiscoverResult, HEADER_METHOD, HEADER_NAME, HEADER_PROTOCOL_VERSION,
+    ImplementationInfo, JSON_RPC_INVALID_PARAMS, MCP_DRAFT_PROTOCOL_VERSION, ResourceContent,
+    ResourceDescriptor, ResourcesListPayload, ResourcesReadPayload, StatelessProtocolError,
+    StatelessRequestHeaders, UnsupportedProtocolVersion, validate_stateless_request,
 };
+use conary_agent_contract::CachePolicy;
+use serde::Serialize;
 use serde_json::{Value, json};
 
 pub const HTTP_OK: u16 = 200;
@@ -112,10 +115,22 @@ impl Default for RawStatelessHttpConfig {
             supported_versions: vec![MCP_DRAFT_PROTOCOL_VERSION.to_string()],
             server_info: ImplementationInfo::new("conary-mcp", env!("CARGO_PKG_VERSION")),
             instructions: Some(
-                "Conary stateless MCP adapter proof exposes discovery only.".to_string(),
+                "Conary stateless MCP adapter proof exposes discovery. Resources are available when a provider is configured."
+                    .to_string(),
             ),
         }
     }
+}
+
+pub trait StatelessResourceProvider {
+    fn list_resources(&self) -> Vec<ResourceDescriptor>;
+
+    fn read_resource(&self, uri: &str) -> Result<Vec<ResourceContent>, ResourceReadError>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResourceReadError {
+    NotFound { uri: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -127,6 +142,26 @@ struct JsonRpcRequestEnvelope {
 pub fn handle_stateless_http_request(
     request: RawStatelessHttpRequest,
     config: &RawStatelessHttpConfig,
+) -> RawStatelessHttpResponse {
+    handle_stateless_http_request_inner(request, config, None)
+}
+
+pub fn handle_stateless_http_request_with_resources<P: StatelessResourceProvider>(
+    request: RawStatelessHttpRequest,
+    config: &RawStatelessHttpConfig,
+    resource_provider: &P,
+) -> RawStatelessHttpResponse {
+    handle_stateless_http_request_inner(
+        request,
+        config,
+        Some(resource_provider as &dyn StatelessResourceProvider),
+    )
+}
+
+fn handle_stateless_http_request_inner(
+    request: RawStatelessHttpRequest,
+    config: &RawStatelessHttpConfig,
+    resource_provider: Option<&dyn StatelessResourceProvider>,
 ) -> RawStatelessHttpResponse {
     if !request.method.eq_ignore_ascii_case("POST") {
         return error_response(
@@ -178,15 +213,19 @@ pub fn handle_stateless_http_request(
         return stateless_protocol_error_response(envelope.id, err);
     }
 
-    match envelope.method.as_str() {
-        "server/discover" => discover_response(envelope.id, config),
-        method => error_response(
-            HTTP_NOT_FOUND,
-            Some(envelope.id),
-            JSON_RPC_METHOD_NOT_FOUND,
-            format!("Method not found: {method}"),
-            None,
-        ),
+    let JsonRpcRequestEnvelope { id, method } = envelope;
+
+    match method.as_str() {
+        "server/discover" => discover_response(id, config, resource_provider.is_some()),
+        "resources/list" => match resource_provider {
+            Some(provider) => resources_list_response(id, provider),
+            None => method_not_found_response(id, &method),
+        },
+        "resources/read" => match resource_provider {
+            Some(provider) => resources_read_response(id, &request.body, provider),
+            None => method_not_found_response(id, &method),
+        },
+        method => method_not_found_response(id, method),
     }
 }
 
@@ -196,9 +235,34 @@ pub fn handle_stateless_http_bytes(
     body: &[u8],
     config: &RawStatelessHttpConfig,
 ) -> RawStatelessHttpResponse {
-    let method = method.into();
-    let preflight_request = RawStatelessHttpRequest {
+    handle_stateless_http_bytes_inner(method, headers, body, config, None)
+}
+
+pub fn handle_stateless_http_bytes_with_resources<P: StatelessResourceProvider>(
+    method: impl Into<String>,
+    headers: Vec<(String, String)>,
+    body: &[u8],
+    config: &RawStatelessHttpConfig,
+    resource_provider: &P,
+) -> RawStatelessHttpResponse {
+    handle_stateless_http_bytes_inner(
         method,
+        headers,
+        body,
+        config,
+        Some(resource_provider as &dyn StatelessResourceProvider),
+    )
+}
+
+fn handle_stateless_http_bytes_inner(
+    method: impl Into<String>,
+    headers: Vec<(String, String)>,
+    body: &[u8],
+    config: &RawStatelessHttpConfig,
+    resource_provider: Option<&dyn StatelessResourceProvider>,
+) -> RawStatelessHttpResponse {
+    let preflight_request = RawStatelessHttpRequest {
+        method: method.into(),
         headers,
         body: Value::Null,
     };
@@ -239,27 +303,18 @@ pub fn handle_stateless_http_bytes(
         }
     };
 
-    handle_stateless_http_request(
+    handle_stateless_http_request_inner(
         RawStatelessHttpRequest {
             method: preflight_request.method,
             headers: preflight_request.headers,
             body: parsed_body,
         },
         config,
+        resource_provider,
     )
 }
 
-fn discover_response(id: Value, config: &RawStatelessHttpConfig) -> RawStatelessHttpResponse {
-    let mut result = DiscoverResult::new(
-        config.supported_versions.clone(),
-        json!({}),
-        config.server_info.clone(),
-    );
-
-    if let Some(instructions) = &config.instructions {
-        result = result.with_instructions(instructions);
-    }
-
+fn success_response<T: Serialize>(id: Value, result: T) -> RawStatelessHttpResponse {
     RawStatelessHttpResponse::json(
         HTTP_OK,
         json!({
@@ -268,6 +323,84 @@ fn discover_response(id: Value, config: &RawStatelessHttpConfig) -> RawStateless
             "result": result,
         }),
     )
+}
+
+fn method_not_found_response(id: Value, method: &str) -> RawStatelessHttpResponse {
+    error_response(
+        HTTP_NOT_FOUND,
+        Some(id),
+        JSON_RPC_METHOD_NOT_FOUND,
+        format!("Method not found: {method}"),
+        None,
+    )
+}
+
+fn discover_response(
+    id: Value,
+    config: &RawStatelessHttpConfig,
+    resources_enabled: bool,
+) -> RawStatelessHttpResponse {
+    let capabilities = if resources_enabled {
+        json!({ "resources": {} })
+    } else {
+        json!({})
+    };
+
+    let mut result = DiscoverResult::new(
+        config.supported_versions.clone(),
+        capabilities,
+        config.server_info.clone(),
+    );
+
+    if let Some(instructions) = &config.instructions {
+        result = result.with_instructions(instructions);
+    }
+
+    success_response(id, result)
+}
+
+fn resources_list_response(
+    id: Value,
+    provider: &dyn StatelessResourceProvider,
+) -> RawStatelessHttpResponse {
+    success_response(
+        id,
+        CacheableResult::new(
+            CachePolicy::private_short(),
+            ResourcesListPayload {
+                resources: provider.list_resources(),
+            },
+        ),
+    )
+}
+
+fn resources_read_response(
+    id: Value,
+    body: &Value,
+    provider: &dyn StatelessResourceProvider,
+) -> RawStatelessHttpResponse {
+    let uri = body
+        .get("params")
+        .and_then(|params| params.get("uri"))
+        .and_then(Value::as_str)
+        .expect("resources/read validation requires params.uri");
+
+    match provider.read_resource(uri) {
+        Ok(contents) => success_response(
+            id,
+            CacheableResult::new(
+                CachePolicy::private_short(),
+                ResourcesReadPayload { contents },
+            ),
+        ),
+        Err(ResourceReadError::NotFound { uri }) => error_response(
+            HTTP_NOT_FOUND,
+            Some(id),
+            JSON_RPC_INVALID_PARAMS,
+            format!("Resource not found: {uri}"),
+            Some(json!({ "uri": uri })),
+        ),
+    }
 }
 
 fn stateless_protocol_error_response(
@@ -435,8 +568,9 @@ mod tests {
 
     use super::*;
     use crate::stateless::{
-        JSON_RPC_HEADER_MISMATCH, JSON_RPC_INVALID_PARAMS, JSON_RPC_UNSUPPORTED_PROTOCOL_VERSION,
-        MCP_DRAFT_PROTOCOL_VERSION,
+        HEADER_NAME, JSON_RPC_HEADER_MISMATCH, JSON_RPC_INVALID_PARAMS,
+        JSON_RPC_UNSUPPORTED_PROTOCOL_VERSION, MCP_DRAFT_PROTOCOL_VERSION, ResourceContent,
+        ResourceDescriptor,
     };
 
     fn valid_meta() -> Value {
@@ -467,6 +601,48 @@ mod tests {
             .with_header("Accept", "text/event-stream")
             .with_header("MCP-Protocol-Version", MCP_DRAFT_PROTOCOL_VERSION)
             .with_header("Mcp-Method", "server/discover")
+    }
+
+    struct TestResourceProvider;
+
+    impl StatelessResourceProvider for TestResourceProvider {
+        fn list_resources(&self) -> Vec<ResourceDescriptor> {
+            vec![ResourceDescriptor {
+                uri: "conary-local://bootstrap/status".to_string(),
+                name: "bootstrap_status".to_string(),
+                title: Some("Local Bootstrap Status".to_string()),
+                description:
+                    "Read local developer bootstrap prerequisites and smoke-readiness state"
+                        .to_string(),
+                mime_type: "application/json".to_string(),
+            }]
+        }
+
+        fn read_resource(&self, uri: &str) -> Result<Vec<ResourceContent>, ResourceReadError> {
+            if uri != "conary-local://bootstrap/status" {
+                return Err(ResourceReadError::NotFound {
+                    uri: uri.to_string(),
+                });
+            }
+
+            Ok(vec![ResourceContent {
+                uri: uri.to_string(),
+                mime_type: "application/json".to_string(),
+                text: "{\n  \"operation\": \"conary-test.bootstrap.inspect\"\n}".to_string(),
+            }])
+        }
+    }
+
+    fn resource_request(method: &str, params: serde_json::Value) -> RawStatelessHttpRequest {
+        RawStatelessHttpRequest::post(json!({
+            "jsonrpc": "2.0",
+            "id": format!("{method}-1"),
+            "method": method,
+            "params": params,
+        }))
+        .with_header("Accept", "application/json, text/event-stream")
+        .with_header(HEADER_PROTOCOL_VERSION, MCP_DRAFT_PROTOCOL_VERSION)
+        .with_header(HEADER_METHOD, method)
     }
 
     fn valid_discover_headers() -> Vec<(String, String)> {
@@ -581,6 +757,169 @@ mod tests {
         assert!(capabilities.get("tools").is_none());
         assert!(capabilities.get("resources").is_none());
         assert!(capabilities.get("prompts").is_none());
+    }
+
+    #[test]
+    fn resource_aware_discovery_advertises_resources() {
+        let request = valid_discover_request("discover-resource-1");
+        let response = handle_stateless_http_request_with_resources(
+            request,
+            &RawStatelessHttpConfig::default(),
+            &TestResourceProvider,
+        );
+        let body = response_body(&response);
+
+        assert_eq!(response.status, HTTP_OK);
+        assert_eq!(body["result"]["capabilities"]["resources"], json!({}));
+        assert!(body["result"]["capabilities"].get("tools").is_none());
+        assert!(body["result"]["capabilities"].get("prompts").is_none());
+    }
+
+    #[test]
+    fn resources_list_returns_provider_resources_and_cache_hints() {
+        let response = handle_stateless_http_request_with_resources(
+            resource_request(
+                "resources/list",
+                json!({
+                    "_meta": valid_meta(),
+                }),
+            ),
+            &RawStatelessHttpConfig::default(),
+            &TestResourceProvider,
+        );
+        let body = response_body(&response);
+
+        assert_eq!(response.status, HTTP_OK);
+        assert_eq!(body["result"]["resultType"], "complete");
+        assert_eq!(body["result"]["ttlMs"], 30_000);
+        assert_eq!(body["result"]["cacheScope"], "private");
+        assert_eq!(
+            body["result"]["resources"][0]["uri"],
+            "conary-local://bootstrap/status"
+        );
+        assert_eq!(body["result"]["resources"][0]["name"], "bootstrap_status");
+        assert_eq!(
+            body["result"]["resources"][0]["title"],
+            "Local Bootstrap Status"
+        );
+        assert_eq!(
+            body["result"]["resources"][0]["mimeType"],
+            "application/json"
+        );
+    }
+
+    #[test]
+    fn resources_list_accepts_cursor_but_returns_static_single_page() {
+        let response = handle_stateless_http_request_with_resources(
+            resource_request(
+                "resources/list",
+                json!({
+                    "_meta": valid_meta(),
+                    "cursor": "ignored-for-static-preview"
+                }),
+            ),
+            &RawStatelessHttpConfig::default(),
+            &TestResourceProvider,
+        );
+        let body = response_body(&response);
+
+        assert_eq!(response.status, HTTP_OK);
+        assert_eq!(body["result"]["resources"].as_array().unwrap().len(), 1);
+        assert!(body["result"].get("nextCursor").is_none());
+    }
+
+    #[test]
+    fn resources_read_returns_provider_content_and_cache_hints() {
+        let response = handle_stateless_http_request_with_resources(
+            resource_request(
+                "resources/read",
+                json!({
+                    "_meta": valid_meta(),
+                    "uri": "conary-local://bootstrap/status"
+                }),
+            )
+            .with_header(HEADER_NAME, "conary-local://bootstrap/status"),
+            &RawStatelessHttpConfig::default(),
+            &TestResourceProvider,
+        );
+        let body = response_body(&response);
+
+        assert_eq!(response.status, HTTP_OK);
+        assert_eq!(body["result"]["resultType"], "complete");
+        assert_eq!(body["result"]["ttlMs"], 30_000);
+        assert_eq!(body["result"]["cacheScope"], "private");
+        assert_eq!(
+            body["result"]["contents"][0]["uri"],
+            "conary-local://bootstrap/status"
+        );
+        assert_eq!(
+            body["result"]["contents"][0]["mimeType"],
+            "application/json"
+        );
+        assert!(
+            body["result"]["contents"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("conary-test.bootstrap.inspect")
+        );
+    }
+
+    #[test]
+    fn resources_read_unknown_uri_returns_invalid_params_resource_not_found() {
+        let response = handle_stateless_http_request_with_resources(
+            resource_request(
+                "resources/read",
+                json!({
+                    "_meta": valid_meta(),
+                    "uri": "conary-local://missing"
+                }),
+            )
+            .with_header(HEADER_NAME, "conary-local://missing"),
+            &RawStatelessHttpConfig::default(),
+            &TestResourceProvider,
+        );
+        let body = response_body(&response);
+
+        assert_eq!(response.status, HTTP_NOT_FOUND);
+        assert_eq!(body["error"]["code"], JSON_RPC_INVALID_PARAMS);
+        assert_eq!(body["error"]["data"]["uri"], "conary-local://missing");
+    }
+
+    #[test]
+    fn resource_methods_without_provider_remain_method_not_found() {
+        let response = handle_stateless_http_request(
+            resource_request(
+                "resources/list",
+                json!({
+                    "_meta": valid_meta(),
+                }),
+            ),
+            &RawStatelessHttpConfig::default(),
+        );
+        let body = response_body(&response);
+
+        assert_eq!(response.status, HTTP_NOT_FOUND);
+        assert_eq!(body["error"]["code"], JSON_RPC_METHOD_NOT_FOUND);
+    }
+
+    #[test]
+    fn resources_read_still_requires_matching_name_header_before_provider_lookup() {
+        let response = handle_stateless_http_request_with_resources(
+            resource_request(
+                "resources/read",
+                json!({
+                    "_meta": valid_meta(),
+                    "uri": "conary-local://bootstrap/status"
+                }),
+            )
+            .with_header(HEADER_NAME, "conary-local://other"),
+            &RawStatelessHttpConfig::default(),
+            &TestResourceProvider,
+        );
+        let body = response_body(&response);
+
+        assert_eq!(response.status, HTTP_BAD_REQUEST);
+        assert_eq!(body["error"]["code"], JSON_RPC_HEADER_MISMATCH);
     }
 
     #[test]
