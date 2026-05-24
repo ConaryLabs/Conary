@@ -17,6 +17,7 @@ pub const HTTP_NOT_FOUND: u16 = 404;
 // Origin rejection and non-POST are HTTP-layer gates; HTTP status
 // disambiguates these server-defined JSON-RPC errors.
 pub const JSON_RPC_SERVER_ERROR: i32 = -32000;
+pub const JSON_RPC_PARSE_ERROR: i32 = -32700;
 pub const JSON_RPC_INVALID_REQUEST: i32 = -32600;
 pub const JSON_RPC_METHOD_NOT_FOUND: i32 = -32601;
 
@@ -187,6 +188,65 @@ pub fn handle_stateless_http_request(
             None,
         ),
     }
+}
+
+pub fn handle_stateless_http_bytes(
+    method: impl Into<String>,
+    headers: Vec<(String, String)>,
+    body: &[u8],
+    config: &RawStatelessHttpConfig,
+) -> RawStatelessHttpResponse {
+    let method = method.into();
+    let preflight_request = RawStatelessHttpRequest {
+        method,
+        headers,
+        body: Value::Null,
+    };
+
+    if !preflight_request.method.eq_ignore_ascii_case("POST") {
+        return error_response(
+            HTTP_METHOD_NOT_ALLOWED,
+            None,
+            JSON_RPC_SERVER_ERROR,
+            "Only POST is supported for stateless MCP requests",
+            None,
+        );
+    }
+
+    if !config
+        .origin_policy
+        .allows(origin_header(&preflight_request).as_deref())
+    {
+        return error_response(
+            HTTP_FORBIDDEN,
+            None,
+            JSON_RPC_SERVER_ERROR,
+            "Origin is not allowed",
+            None,
+        );
+    }
+
+    let parsed_body = match serde_json::from_slice(body) {
+        Ok(body) => body,
+        Err(_) => {
+            return error_response(
+                HTTP_BAD_REQUEST,
+                None,
+                JSON_RPC_PARSE_ERROR,
+                "Parse error",
+                None,
+            );
+        }
+    };
+
+    handle_stateless_http_request(
+        RawStatelessHttpRequest {
+            method: preflight_request.method,
+            headers: preflight_request.headers,
+            body: parsed_body,
+        },
+        config,
+    )
 }
 
 fn discover_response(id: Value, config: &RawStatelessHttpConfig) -> RawStatelessHttpResponse {
@@ -409,11 +469,90 @@ mod tests {
             .with_header("Mcp-Method", "server/discover")
     }
 
+    fn valid_discover_headers() -> Vec<(String, String)> {
+        vec![
+            (
+                "Accept".to_string(),
+                "application/json, text/event-stream".to_string(),
+            ),
+            (
+                "MCP-Protocol-Version".to_string(),
+                MCP_DRAFT_PROTOCOL_VERSION.to_string(),
+            ),
+            ("Mcp-Method".to_string(), "server/discover".to_string()),
+        ]
+    }
+
     fn response_body(response: &RawStatelessHttpResponse) -> &Value {
         response
             .body
             .as_ref()
             .expect("response should include JSON body")
+    }
+
+    #[test]
+    fn malformed_json_bytes_return_parse_error() {
+        let response = handle_stateless_http_bytes(
+            "POST",
+            valid_discover_headers(),
+            br#"{"jsonrpc": "2.0", "#,
+            &RawStatelessHttpConfig::default(),
+        );
+
+        assert_eq!(response.status, HTTP_BAD_REQUEST);
+        let body = response_body(&response);
+        assert_eq!(body["id"], Value::Null);
+        assert_eq!(body["error"]["code"], JSON_RPC_PARSE_ERROR);
+    }
+
+    #[test]
+    fn valid_json_bytes_delegate_to_parsed_handler() {
+        let bytes = serde_json::to_vec(&discover_body("bytes-1")).unwrap();
+
+        let response = handle_stateless_http_bytes(
+            "POST",
+            valid_discover_headers(),
+            &bytes,
+            &RawStatelessHttpConfig::default(),
+        );
+
+        assert_eq!(response.status, HTTP_OK);
+        let body = response_body(&response);
+        assert_eq!(body["id"], "bytes-1");
+        assert_eq!(body["result"]["serverInfo"]["name"], "conary-mcp");
+    }
+
+    #[test]
+    fn non_post_byte_request_is_rejected_before_json_parse() {
+        let response = handle_stateless_http_bytes(
+            "GET",
+            valid_discover_headers(),
+            br#"{"jsonrpc": "2.0", "#,
+            &RawStatelessHttpConfig::default(),
+        );
+
+        assert_eq!(response.status, HTTP_METHOD_NOT_ALLOWED);
+        let body = response_body(&response);
+        assert_eq!(body["id"], Value::Null);
+        assert_eq!(body["error"]["code"], JSON_RPC_SERVER_ERROR);
+    }
+
+    #[test]
+    fn origin_byte_gate_runs_before_json_parse() {
+        let mut headers = valid_discover_headers();
+        headers.push(("Origin".to_string(), "https://evil.example".to_string()));
+
+        let response = handle_stateless_http_bytes(
+            "POST",
+            headers,
+            br#"{"jsonrpc": "2.0", "#,
+            &RawStatelessHttpConfig::default(),
+        );
+
+        assert_eq!(response.status, HTTP_FORBIDDEN);
+        let body = response_body(&response);
+        assert_eq!(body["id"], Value::Null);
+        assert_eq!(body["error"]["code"], JSON_RPC_SERVER_ERROR);
     }
 
     #[test]
