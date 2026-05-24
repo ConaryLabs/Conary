@@ -200,7 +200,7 @@ git commit -m "feat(mcp): model stateless resource results"
 
 Update this checkbox after the commit:
 
-- [ ] Task 1 complete
+- [x] Task 1 complete
 
 ## Task 2: Dispatch Resource Methods In The Raw Stateless Adapter
 

@@ -382,6 +382,35 @@ impl<T> CacheableResult<T> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceDescriptor {
+    pub uri: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    pub description: String,
+    pub mime_type: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ResourcesListPayload {
+    pub resources: Vec<ResourceDescriptor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceContent {
+    pub uri: String,
+    pub mime_type: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ResourcesReadPayload {
+    pub contents: Vec<ResourceContent>,
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -557,5 +586,115 @@ mod tests {
         assert_eq!(value["ttlMs"], 30_000);
         assert_eq!(value["cacheScope"], "private");
         assert_eq!(value["resources"][0]["uri"], "conary://remi/health");
+    }
+
+    #[test]
+    fn resource_descriptor_serializes_mcp_shape() {
+        let descriptor = ResourceDescriptor {
+            uri: "conary-local://bootstrap/status".to_string(),
+            name: "bootstrap_status".to_string(),
+            title: Some("Local Bootstrap Status".to_string()),
+            description: "Read local developer bootstrap prerequisites and smoke-readiness state"
+                .to_string(),
+            mime_type: "application/json".to_string(),
+        };
+
+        let value = serde_json::to_value(descriptor).expect("descriptor should serialize");
+
+        assert_eq!(value["uri"], "conary-local://bootstrap/status");
+        assert_eq!(value["name"], "bootstrap_status");
+        assert_eq!(value["title"], "Local Bootstrap Status");
+        assert_eq!(
+            value["description"],
+            "Read local developer bootstrap prerequisites and smoke-readiness state"
+        );
+        assert_eq!(value["mimeType"], "application/json");
+        assert!(value.get("mime_type").is_none());
+    }
+
+    #[test]
+    fn resource_descriptor_omits_absent_title() {
+        let descriptor = ResourceDescriptor {
+            uri: "conary-local://minimal".to_string(),
+            name: "minimal".to_string(),
+            title: None,
+            description: "Minimal resource".to_string(),
+            mime_type: "application/json".to_string(),
+        };
+
+        let value = serde_json::to_value(descriptor).expect("descriptor should serialize");
+
+        assert!(value.get("title").is_none());
+    }
+
+    #[test]
+    fn resources_list_payload_serializes_resource_array() {
+        let result = CacheableResult::new(
+            CachePolicy::private_short(),
+            ResourcesListPayload {
+                resources: vec![ResourceDescriptor {
+                    uri: "conary-local://bootstrap/status".to_string(),
+                    name: "bootstrap_status".to_string(),
+                    title: Some("Local Bootstrap Status".to_string()),
+                    description:
+                        "Read local developer bootstrap prerequisites and smoke-readiness state"
+                            .to_string(),
+                    mime_type: "application/json".to_string(),
+                }],
+            },
+        );
+
+        let value = serde_json::to_value(result).expect("resource list should serialize");
+
+        assert_eq!(value["resultType"], "complete");
+        assert_eq!(value["ttlMs"], 30_000);
+        assert_eq!(value["cacheScope"], "private");
+        assert_eq!(
+            value["resources"][0]["uri"],
+            "conary-local://bootstrap/status"
+        );
+        assert_eq!(value["resources"][0]["mimeType"], "application/json");
+    }
+
+    #[test]
+    fn resource_content_serializes_text_content_shape() {
+        let content = ResourceContent {
+            uri: "conary-local://bootstrap/status".to_string(),
+            mime_type: "application/json".to_string(),
+            text: "{\n  \"status\": \"ok\"\n}".to_string(),
+        };
+
+        let value = serde_json::to_value(content).expect("content should serialize");
+
+        assert_eq!(value["uri"], "conary-local://bootstrap/status");
+        assert_eq!(value["mimeType"], "application/json");
+        assert_eq!(value["text"], "{\n  \"status\": \"ok\"\n}");
+        assert!(value.get("mime_type").is_none());
+    }
+
+    #[test]
+    fn resources_read_payload_serializes_contents_array() {
+        let result = CacheableResult::new(
+            CachePolicy::private_short(),
+            ResourcesReadPayload {
+                contents: vec![ResourceContent {
+                    uri: "conary-local://bootstrap/status".to_string(),
+                    mime_type: "application/json".to_string(),
+                    text: "{}".to_string(),
+                }],
+            },
+        );
+
+        let value = serde_json::to_value(result).expect("resource read should serialize");
+
+        assert_eq!(value["resultType"], "complete");
+        assert_eq!(value["ttlMs"], 30_000);
+        assert_eq!(value["cacheScope"], "private");
+        assert_eq!(
+            value["contents"][0]["uri"],
+            "conary-local://bootstrap/status"
+        );
+        assert_eq!(value["contents"][0]["mimeType"], "application/json");
+        assert_eq!(value["contents"][0]["text"], "{}");
     }
 }
