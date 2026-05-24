@@ -483,6 +483,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn legacy_mcp_route_does_not_return_stateless_discovery() {
+        let app = create_router(
+            test_fixtures::test_app_state(),
+            Some(TEST_TOKEN.to_string()),
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp")
+                    .header("authorization", format!("Bearer {TEST_TOKEN}"))
+                    .header("content-type", "application/json")
+                    .header("accept", "application/json, text/event-stream")
+                    .header(HEADER_PROTOCOL_VERSION, MCP_DRAFT_PROTOCOL_VERSION)
+                    .header(HEADER_METHOD, "server/discover")
+                    .body(Body::from(
+                        serde_json::to_vec(&discover_body("cross-wire-1")).unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = read_json(response).await;
+        assert!(
+            body.get("result")
+                .and_then(|result| result.get("resultType"))
+                .is_none(),
+            "legacy /mcp should not return stateless discovery"
+        );
+    }
+
+    #[tokio::test]
     async fn stateless_route_rejects_bad_origin() {
         let app = create_router(test_fixtures::test_app_state(), None);
         let response = app
@@ -1023,6 +1056,7 @@ Run this script from the repo root:
 
 ```bash
 bash scripts/docs-audit-inventory.sh > docs/superpowers/documentation-accuracy-audit-inventory.tsv
+cp docs/superpowers/documentation-accuracy-audit-ledger.tsv docs/superpowers/documentation-accuracy-audit-ledger.tsv.bak
 python - <<'PY'
 from pathlib import Path
 
@@ -1041,6 +1075,24 @@ for line in existing_lines:
     origin = parts[0]
     if origin in inventory_rows:
         rows[origin] = parts
+
+required_upsert_paths = [
+    "apps/conary-test/README.md",
+    "docs/operations/agent-mcp-adapter-decision.md",
+    "docs/operations/infrastructure.md",
+    "docs/superpowers/plans/2026-05-22-llm-native-operations-surface.md",
+    "docs/superpowers/plans/2026-05-22-local-bootstrap-smoke-proof-loop.md",
+    "docs/superpowers/plans/2026-05-22-stateless-mcp-adapter-compliance.md",
+    "docs/superpowers/plans/2026-05-24-stateless-raw-http-adapter-proof.md",
+    "docs/superpowers/specs/2026-05-22-llm-native-operations-surface-design.md",
+    "docs/superpowers/specs/2026-05-22-stateless-mcp-adapter-compliance-design.md",
+    "docs/superpowers/specs/2026-05-24-stateless-raw-http-adapter-proof-design.md",
+    "docs/superpowers/specs/2026-05-24-conary-test-stateless-discover-route-design.md",
+    "docs/superpowers/plans/2026-05-24-conary-test-stateless-discover-route.md",
+]
+for path in required_upsert_paths:
+    if path not in inventory_rows:
+        raise SystemExit(f"upserted path not in refreshed inventory: {path}")
 
 def upsert(path, claim_clusters, evidence_sources, disposition, notes):
     family, audience = inventory_rows[path]
@@ -1122,6 +1174,8 @@ PY
 ```
 
 This intentionally removes stale ledger rows whose origin paths are no longer tracked, including the retired `CLAUDE.md` row, because the refreshed inventory is the current baseline.
+The committed inventory is known to be stale before this task; do not treat
+`--require-complete` failures before this task as implementation failures.
 
 - [ ] **Step 5: Run docs audit verification**
 
@@ -1132,6 +1186,12 @@ bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-a
 ```
 
 Expected: `Documentation audit ledger check passed (--require-complete).`
+
+After the check passes, remove the backup:
+
+```bash
+rm docs/superpowers/documentation-accuracy-audit-ledger.tsv.bak
+```
 
 - [ ] **Step 6: Run focused documentation sweeps**
 
