@@ -34,7 +34,9 @@ local bootstrap smoke, stateless compliance/raw HTTP proof, conary-test
 stateless discovery, bootstrap-status, and suites resource records. The
 2026-05-25 preview invariant hardening umbrella opens the next active spec lane
 for command-risk, CAS/adoption integrity, generation publication durability, and
-docs/CI truth-check planning.
+docs/CI truth-check planning. The matching Plan A checklist opens the active
+plans lane for adoption acknowledgement gates, dry-run behavior, private CAS
+capture, ghost-trove cleanup, and refresh savepoints.
 
 Audited every tracked documentation-like file returned by
 `bash scripts/docs-audit-inventory.sh`: tracked files spanning root docs,
@@ -197,9 +199,9 @@ The repo moved materially after the last audit:
   to `docs/superpowers/plans/archive/`.
 - Completed design specs, including the MCP/LLM-native operations design
   records, were moved to `docs/superpowers/specs/archive/`; the active top-level
-  `plans/` directory remains empty, and the active `specs/` directory now holds
-  the 2026-05-25 preview invariant hardening umbrella until its follow-on plans
-  land or defer their tracks.
+  `plans/` directory now holds the 2026-05-25 adoption safety Plan A checklist,
+  and the active `specs/` directory holds the 2026-05-25 preview invariant
+  hardening umbrella until its follow-on plans land or defer their tracks.
 - The completed May 14 limited-preview honesty review TSV was moved beside its
   archived plan in `docs/superpowers/plans/archive/`; it is outside the doc
   inventory script because that script tracks documentation-like files.
@@ -285,9 +287,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 103
+- Total tracked doc-like files audited: 104
 - `verified-no-change`: 17
-- `corrected`: 30
+- `corrected`: 31
 - `archived`: 42
 - `retained-historical`: 14
 - Remaining pending rows: 0
