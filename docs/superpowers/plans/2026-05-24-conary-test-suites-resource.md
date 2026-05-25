@@ -1298,7 +1298,7 @@ git status --short
 - Modify: `docs/superpowers/documentation-accuracy-audit-inventory.tsv`
 - Modify: `docs/superpowers/documentation-accuracy-audit-ledger.tsv`
 
-- [ ] **Step 1: Add failing scope guard tests**
+- [x] **Step 1: Add failing scope guard tests**
 
 Add these tests to the `#[cfg(test)] mod tests` block in `apps/conary-test/src/server/stateless_mcp.rs`:
 
@@ -1345,7 +1345,7 @@ Add these tests to the `#[cfg(test)] mod tests` block in `apps/conary-test/src/s
     }
 ```
 
-- [ ] **Step 2: Run guard tests**
+- [x] **Step 2: Run guard tests**
 
 Run:
 
@@ -1356,7 +1356,7 @@ cargo test -p conary-test remi_files_do_not_expose_conary_test_suites_resource
 
 Expected: both pass immediately. They are regression guards for the remaining documentation work and future edits.
 
-- [ ] **Step 3: Update `apps/conary-test/README.md`**
+- [x] **Step 3: Update `apps/conary-test/README.md`**
 
 Replace the current stateless preview paragraph with:
 
@@ -1379,7 +1379,7 @@ Also add this row to the architecture table after `src/bootstrap.rs`:
 | `src/suite_inventory.rs` | Suite manifest inventory for agent-facing read-only resources |
 ```
 
-- [ ] **Step 4: Update adapter decision doc**
+- [x] **Step 4: Update adapter decision doc**
 
 In `docs/operations/agent-mcp-adapter-decision.md`, change `revision: 6` to:
 
@@ -1431,7 +1431,7 @@ Add this source spec to the source-spec list:
 - `docs/superpowers/specs/2026-05-24-conary-test-suites-resource-design.md`
 ```
 
-- [ ] **Step 5: Update infrastructure doc**
+- [x] **Step 5: Update infrastructure doc**
 
 In `docs/operations/infrastructure.md`, change `revision: 7` to:
 
@@ -1452,7 +1452,7 @@ does not expose live tools, prompts, resource templates, subscriptions, SSE
 streaming, mutations, or smoke execution.
 ```
 
-- [ ] **Step 6: Refresh docs audit files**
+- [x] **Step 6: Refresh docs audit files**
 
 Run:
 
@@ -1541,7 +1541,7 @@ ledger_path.write_text("\n".join(output) + "\n")
 PY
 ```
 
-- [ ] **Step 7: Verify docs and guards**
+- [x] **Step 7: Verify docs and guards**
 
 Run:
 
@@ -1566,7 +1566,7 @@ Expected:
 - Negative `rg` commands return no hits.
 - `git diff --check` passes.
 
-- [ ] **Step 8: Commit Task 4**
+- [x] **Step 8: Commit Task 4**
 
 Run:
 

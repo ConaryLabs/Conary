@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-05-22
-revision: 7
+last_updated: 2026-05-24
+revision: 8
 summary: Non-secret infrastructure, agent-operations transport, release, Remi deploy, and Forge staging guidance for Conary contributors and coding assistants
 ---
 
@@ -36,9 +36,10 @@ Today, the live Remi MCP endpoint and the legacy `conary-test` `/mcp` endpoint
 are session-based, tool-only surfaces. `conary-test` also exposes
 `/mcp/stateless` as a draft stateless preview route with `server/discover`,
 `resources/list`, and `resources/read` for
-`conary-local://bootstrap/status`. That resource is read-only local bootstrap
-state. The stateless preview does not expose live tools, prompts, resource
-templates, subscriptions, SSE streaming, mutations, or smoke execution.
+`conary-local://bootstrap/status` and `conary-test://suites`. Those resources
+are read-only local bootstrap and suite-manifest state. The stateless preview
+does not expose live tools, prompts, resource templates, subscriptions, SSE
+streaming, mutations, or smoke execution.
 
 Prefer MCP resources for read-only state inspection and MCP tools for audited
 mutations. MCP is the adapter, not the durable product contract:
