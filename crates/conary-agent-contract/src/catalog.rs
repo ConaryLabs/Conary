@@ -62,6 +62,14 @@ pub fn default_read_resources() -> Vec<CatalogItem> {
             risk: RiskLevel::ReadOnly,
             cache: CachePolicy::private_short(),
         },
+        CatalogItem {
+            name: "conary-test.suites".to_string(),
+            description: "Read local conary-test suite manifest inventory".to_string(),
+            when_to_use: "Use before selecting local conary-test smoke or validation suites"
+                .to_string(),
+            risk: RiskLevel::ReadOnly,
+            cache: CachePolicy::private_short(),
+        },
     ]
 }
 
@@ -128,6 +136,26 @@ mod tests {
         );
         assert!(resources.iter().all(|item| !item.when_to_use.is_empty()));
         assert!(resources.iter().all(|item| item.cache.ttl_ms > 0));
+    }
+
+    #[test]
+    fn default_read_resources_include_conary_test_suites() {
+        let resources = default_read_resources();
+        let suites = resources
+            .iter()
+            .find(|item| item.name == "conary-test.suites")
+            .expect("conary-test suites catalog entry should exist");
+
+        assert_eq!(
+            suites.description,
+            "Read local conary-test suite manifest inventory"
+        );
+        assert_eq!(
+            suites.when_to_use,
+            "Use before selecting local conary-test smoke or validation suites"
+        );
+        assert_eq!(suites.risk, RiskLevel::ReadOnly);
+        assert_eq!(suites.cache, CachePolicy::private_short());
     }
 
     #[test]

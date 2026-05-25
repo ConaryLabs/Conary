@@ -53,6 +53,10 @@ pub fn remi_chunk_stats() -> ResourceRef {
     ResourceRef::new("conary://remi/chunks/stats")
 }
 
+pub fn test_suites() -> ResourceRef {
+    ResourceRef::new("conary-test://suites")
+}
+
 pub fn test_suite(suite_id: &str) -> ResourceRef {
     ResourceRef::named(
         format!("conary-test://suites/{}", encode_segment(suite_id)),
@@ -111,6 +115,14 @@ mod tests {
             local_bootstrap_status().uri,
             "conary-local://bootstrap/status"
         );
+    }
+
+    #[test]
+    fn test_suites_resource_helper_emits_static_index_uri() {
+        let resource = test_suites();
+
+        assert_eq!(resource.uri, "conary-test://suites");
+        assert!(resource.name.is_none());
     }
 
     #[test]
