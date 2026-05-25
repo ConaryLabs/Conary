@@ -21,6 +21,7 @@ by CI pipelines and LLM agents.
 | `src/engine/qemu.rs` | QEMU boot step support |
 | `src/error.rs` | Typed ConaryTestError enum (Container, Timeout, Cancelled, etc.) |
 | `src/bootstrap.rs` | Local developer prerequisite and smoke-readiness inspection |
+| `src/suite_inventory.rs` | Suite manifest inventory for agent-facing read-only resources |
 | `src/report/` | JSON output, SSE event streaming |
 | `src/server/handlers.rs` | Axum HTTP handlers |
 | `src/server/routes.rs` | Router construction (HTTP + MCP) |
@@ -146,11 +147,13 @@ apps/conary/tests/integration/remi/manifests/
 The legacy MCP endpoint is mounted at `/mcp` through `rmcp`'s session-based
 Streamable HTTP transport. The draft stateless preview endpoint is mounted at
 `/mcp/stateless` and supports `server/discover`, `resources/list`, and
-`resources/read` for the single read-only resource
-`conary-local://bootstrap/status`. That resource returns the same structured
-bootstrap `InspectResult` used by `conary-test bootstrap check --json`. The
+`resources/read` for two read-only resources:
+`conary-local://bootstrap/status` and `conary-test://suites`. Bootstrap status
+returns the same structured `InspectResult` used by
+`conary-test bootstrap check --json`. The suites resource returns a static
+manifest inventory from the server's configured manifest directory. The
 stateless preview does not expose live tools, prompts, resource templates,
-subscriptions, SSE streaming, or smoke execution.
+subscriptions, SSE streaming, mutations, or smoke execution.
 
 ## MCP Tools
 

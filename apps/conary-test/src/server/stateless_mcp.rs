@@ -844,6 +844,45 @@ run = "true"
         }
     }
 
+    #[test]
+    fn remi_files_do_not_expose_conary_test_suites_resource() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        for path in [
+            "apps/remi/src/server/mcp.rs",
+            "apps/remi/src/server/routes/mcp.rs",
+        ] {
+            let source =
+                std::fs::read_to_string(root.join(path)).expect("Remi MCP file should be readable");
+            assert!(
+                !source.contains("conary-test://suites") && !source.contains("conary_test_suites"),
+                "{path} must not expose the conary-test suites stateless resource"
+            );
+        }
+    }
+
+    #[test]
+    fn stateless_route_does_not_register_tools_prompts_templates_or_sse() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let source =
+            std::fs::read_to_string(root.join("apps/conary-test/src/server/stateless_mcp.rs"))
+                .expect("conary-test stateless route file should be readable");
+
+        for forbidden in [
+            concat!("tools", "/call"),
+            concat!("prompts", "/get"),
+            concat!("resources", "/templates", "/list"),
+            concat!("subscriptions", "/listen"),
+            concat!("notifications", "/resources"),
+            concat!("Event", "Stream"),
+            concat!("S", "se"),
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "stateless route must not register unsupported MCP surface {forbidden}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn stateless_route_rejects_bad_origin() {
         let app = create_router(test_fixtures::test_app_state(), None);

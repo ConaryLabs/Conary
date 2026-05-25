@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-05-24
-revision: 6
-summary: Decision record for Conary's stateless MCP adapter path, compliance harness, raw HTTP proof, and conary-test discovery route
+revision: 7
+summary: Decision record for Conary's stateless MCP adapter path, compliance harness, raw HTTP proof, and conary-test read-only resources
 ---
 
 # Agent MCP Adapter Decision
@@ -31,8 +31,9 @@ discovery behavior on the existing session-based `rmcp` path.
   header extraction, protocol error mapping, and unsupported-method responses
 - `apps/conary-test` exposes `POST /mcp/stateless` as the first live
   stateless adapter gate. It handles `server/discover`, `resources/list`, and
-  `resources/read` for `conary-local://bootstrap/status`, and keeps the legacy
-  `/mcp` session-based tool surface unchanged.
+  `resources/read` for `conary-local://bootstrap/status` and
+  `conary-test://suites`, and keeps the legacy `/mcp` session-based tool
+  surface unchanged.
 - The raw HTTP adapter support does not mount routes, bind sockets, register
   product resources by itself, register tools, register prompts, or depend on
   `rmcp` / `axum`
@@ -68,11 +69,11 @@ these paths:
 ## Current Choice
 
 Do not build new live MCP registrations on the existing session-based path.
-After the contract, catalog, local bootstrap, compliance harness, and non-live
-raw proof slices, the selected live adapter-gate slice is a `conary-test` route
-at `POST /mcp/stateless`. It exposes `server/discover` plus the single
-read-only `conary-local://bootstrap/status` resource and advertises no tools or
-prompts.
+After the contract, catalog, local bootstrap, compliance harness, non-live raw
+proof, and first live resource slices, the selected live adapter-gate surface
+is a `conary-test` route at `POST /mcp/stateless`. It exposes
+`server/discover` plus read-only `conary-local://bootstrap/status` and
+`conary-test://suites` resources, and advertises no tools or prompts.
 
 The raw HTTP adapter supports list/read through an explicit provider trait.
 Cache metadata remains modeled through `CacheableResult<T>` and the shared
@@ -113,12 +114,15 @@ session-based service, and stays inside the existing conary-test auth boundary
 when a token is configured.
 
 This route supports `server/discover`, `resources/list`, and `resources/read`
-for `conary-local://bootstrap/status`. The resource returns the existing local
-bootstrap `InspectResult` as `application/json` text content. It must not add
-tools, prompts, resource templates, subscriptions, SSE, smoke execution, or
-Remi route behavior.
+for `conary-local://bootstrap/status` and `conary-test://suites`. Bootstrap
+status returns the existing local bootstrap `InspectResult` as
+`application/json` text content. The suites resource returns a static
+manifest-inventory `InspectResult` from `AppState.manifest_dir`. It must not
+add tools, prompts, resource templates, subscriptions, SSE, smoke execution,
+per-suite resources, or Remi route behavior.
 
 Source specs:
 
 - `docs/superpowers/specs/2026-05-24-conary-test-stateless-discover-route-design.md`
 - `docs/superpowers/specs/2026-05-24-conary-test-bootstrap-status-resource-design.md`
+- `docs/superpowers/specs/2026-05-24-conary-test-suites-resource-design.md`
