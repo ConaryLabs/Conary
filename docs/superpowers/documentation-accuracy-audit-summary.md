@@ -27,11 +27,14 @@ refusal, apply, and recovery evidence across Fedora 44, Ubuntu 26.04 LTS, and
 Arch while preserving the broader rule that program-complete claims need fresh
 combined gates. This clean-slate archive pass moves the completed Goal 6,
 Goal 7, completion-validation, Goal 1, and daily-driver umbrella records under
-archive paths and leaves the active `plans/` and `specs/` roots empty until a
-new current plan or spec begins. The 2026-05-24 MCP stateless prep refresh
+archive paths and left the active `plans/` and `specs/` roots clear for the next
+current plan or spec. The 2026-05-24 MCP stateless prep refresh
 extends that clean-slate pass by archiving the completed LLM-native operations,
 local bootstrap smoke, stateless compliance/raw HTTP proof, conary-test
-stateless discovery, bootstrap-status, and suites resource records.
+stateless discovery, bootstrap-status, and suites resource records. The
+2026-05-25 preview invariant hardening umbrella opens the next active spec lane
+for command-risk, CAS/adoption integrity, generation publication durability, and
+docs/CI truth-check planning.
 
 Audited every tracked documentation-like file returned by
 `bash scripts/docs-audit-inventory.sh`: tracked files spanning root docs,
@@ -194,8 +197,9 @@ The repo moved materially after the last audit:
   to `docs/superpowers/plans/archive/`.
 - Completed design specs, including the MCP/LLM-native operations design
   records, were moved to `docs/superpowers/specs/archive/`; the active top-level
-  `plans/` and `specs/` directories are intentionally empty until a new current
-  implementation record starts.
+  `plans/` directory remains empty, and the active `specs/` directory now holds
+  the 2026-05-25 preview invariant hardening umbrella until its follow-on plans
+  land or defer their tracks.
 - The completed May 14 limited-preview honesty review TSV was moved beside its
   archived plan in `docs/superpowers/plans/archive/`; it is outside the doc
   inventory script because that script tracks documentation-like files.
@@ -281,9 +285,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 102
+- Total tracked doc-like files audited: 103
 - `verified-no-change`: 17
-- `corrected`: 29
+- `corrected`: 30
 - `archived`: 42
 - `retained-historical`: 14
 - Remaining pending rows: 0
