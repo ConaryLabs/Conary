@@ -35,7 +35,7 @@ Goal text must be non-empty and at most 4,000 characters. Keep the detailed inst
 Recommended goal text:
 
 ```text
-Implement docs/superpowers/plans/2026-05-22-llm-native-operations-surface.md task-by-task. Use docs/superpowers/specs/2026-05-22-llm-native-operations-surface-design.md as source of truth. Keep milestone one contract-only plus inventory/prune/local bootstrap. Do not add live MCP registrations until the stateless adapter decision is settled. For each task: write tests first, make one focused commit, run verification, update checkboxes, and stop only when final acceptance criteria pass.
+Implement docs/superpowers/plans/archive/2026-05-22-llm-native-operations-surface.md task-by-task. Use docs/superpowers/specs/archive/2026-05-22-llm-native-operations-surface-design.md as source of truth. Keep milestone one contract-only plus inventory/prune/local bootstrap. Do not add live MCP registrations until the stateless adapter decision is settled. For each task: write tests first, make one focused commit, run verification, update checkboxes, and stop only when final acceptance criteria pass.
 ```
 
 Goal-mode checkpoint rules:
@@ -54,7 +54,7 @@ Official docs used for this section:
 
 ## Source Specs And Constraints
 
-- Primary spec: `docs/superpowers/specs/2026-05-22-llm-native-operations-surface-design.md`
+- Primary spec: `docs/superpowers/specs/archive/2026-05-22-llm-native-operations-surface-design.md`
 - Repository contract: `AGENTS.md`
 - Assistant map: `docs/llms/README.md`
 - MCP/host notes: `docs/operations/infrastructure.md`
@@ -692,7 +692,7 @@ git commit -m "feat(mcp): expose contract schema helpers"
 
 **Files:**
 - Create: `docs/operations/agent-mcp-adapter-decision.md`
-- Modify: `docs/superpowers/specs/2026-05-22-llm-native-operations-surface-design.md` only if the decision changes a spec assumption.
+- Modify: `docs/superpowers/specs/archive/2026-05-22-llm-native-operations-surface-design.md` only if the decision changes a spec assumption.
 
 - [x] **Step 1: Inspect current SDK state**
 
@@ -862,7 +862,7 @@ Expected: tests pass, and the `rg` command does not find the removed fake CLI cl
 - [x] **Step 6: Commit**
 
 ```bash
-git add apps/conary/Cargo.toml apps/conary/src/cli/automation.rs apps/conary/src/cli/mod.rs apps/conary/src/commands/automation.rs apps/conary/src/commands/mod.rs apps/conary/src/dispatch.rs crates/conary-core/src/automation/mod.rs crates/conary-core/src/model/parser.rs docs/superpowers/plans/2026-05-22-llm-native-operations-surface.md
+git add apps/conary/Cargo.toml apps/conary/src/cli/automation.rs apps/conary/src/cli/mod.rs apps/conary/src/commands/automation.rs apps/conary/src/commands/mod.rs apps/conary/src/dispatch.rs crates/conary-core/src/automation/mod.rs crates/conary-core/src/model/parser.rs docs/superpowers/plans/archive/2026-05-22-llm-native-operations-surface.md
 git commit -m "fix(agent): remove fake automation ai commands"
 ```
 
@@ -1145,7 +1145,7 @@ Expected: tests pass, bootstrap emits JSON with `conary-local://bootstrap/status
 - [x] **Step 7: Commit**
 
 ```bash
-git add Cargo.lock apps/conary-test/Cargo.toml apps/conary-test/src/bootstrap.rs apps/conary-test/src/lib.rs apps/conary-test/src/cli.rs docs/superpowers/plans/2026-05-22-llm-native-operations-surface.md
+git add Cargo.lock apps/conary-test/Cargo.toml apps/conary-test/src/bootstrap.rs apps/conary-test/src/lib.rs apps/conary-test/src/cli.rs docs/superpowers/plans/archive/2026-05-22-llm-native-operations-surface.md
 git commit -m "feat(test): add local bootstrap inspection"
 ```
 
@@ -1245,7 +1245,7 @@ Expected: tests pass and document current catalog debt without adding new live M
 - [x] **Step 4: Commit**
 
 ```bash
-git add crates/conary-agent-contract/src/catalog.rs apps/remi/src/server/mcp.rs apps/conary-test/src/server/mcp.rs docs/superpowers/plans/2026-05-22-llm-native-operations-surface.md
+git add crates/conary-agent-contract/src/catalog.rs apps/remi/src/server/mcp.rs apps/conary-test/src/server/mcp.rs docs/superpowers/plans/archive/2026-05-22-llm-native-operations-surface.md
 git commit -m "test(agent): record MCP catalog budget debt"
 ```
 
@@ -1304,7 +1304,7 @@ Expected: PASS.
 - [x] **Step 5: Commit**
 
 ```bash
-git add apps/remi/src/server/mcp.rs apps/conary-test/src/server/mcp.rs docs/superpowers/plans/2026-05-22-llm-native-operations-surface.md
+git add apps/remi/src/server/mcp.rs apps/conary-test/src/server/mcp.rs docs/superpowers/plans/archive/2026-05-22-llm-native-operations-surface.md
 git commit -m "docs(agent): classify high-risk MCP mutations"
 ```
 
@@ -1390,7 +1390,7 @@ The first LLM-native operations milestone may define prompt catalogs in `conary-
 - [x] **Step 4: Commit**
 
 ```bash
-git add crates/conary-agent-contract/src/catalog.rs docs/operations/infrastructure.md docs/superpowers/plans/2026-05-22-llm-native-operations-surface.md
+git add crates/conary-agent-contract/src/catalog.rs docs/operations/infrastructure.md docs/superpowers/plans/archive/2026-05-22-llm-native-operations-surface.md
 git commit -m "feat(agent): define first prompt catalog"
 ```
 
@@ -1447,7 +1447,7 @@ Expected: no output.
 - [x] **Step 5: Commit**
 
 ```bash
-git add README.md docs/llms/README.md docs/llms/subsystem-map.md docs/ARCHITECTURE.md docs/operations/infrastructure.md docs/conaryopedia-v2.md docs/INTEGRATION-TESTING.md apps/conary-test/README.md apps/conary/src/commands/provenance.rs docs/superpowers/plans/2026-05-22-llm-native-operations-surface.md
+git add README.md docs/llms/README.md docs/llms/subsystem-map.md docs/ARCHITECTURE.md docs/operations/infrastructure.md docs/conaryopedia-v2.md docs/INTEGRATION-TESTING.md apps/conary-test/README.md apps/conary/src/commands/provenance.rs docs/superpowers/plans/archive/2026-05-22-llm-native-operations-surface.md
 git commit -m "docs(agent): document operation contract slice"
 ```
 

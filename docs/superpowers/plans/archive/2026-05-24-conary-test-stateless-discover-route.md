@@ -15,7 +15,7 @@
 Recommended goal text:
 
 ```text
-Implement docs/superpowers/plans/2026-05-24-conary-test-stateless-discover-route.md task-by-task. Source spec: docs/superpowers/specs/2026-05-24-conary-test-stateless-discover-route-design.md. Add only a conary-test live stateless MCP discovery route at /mcp/stateless. Do not add Remi routes, live MCP resources, live MCP tools, live MCP prompts, SSE streaming, provider SDK integration, or rmcp stateless assumptions. Keep legacy /mcp behavior unchanged. For every task, write tests first, verify the expected failure, implement the smallest code/docs change, run the listed verification, update task checkboxes, and make one focused commit. Stop only when final acceptance passes.
+Implement docs/superpowers/plans/archive/2026-05-24-conary-test-stateless-discover-route.md task-by-task. Source spec: docs/superpowers/specs/archive/2026-05-24-conary-test-stateless-discover-route-design.md. Add only a conary-test live stateless MCP discovery route at /mcp/stateless. Do not add Remi routes, live MCP resources, live MCP tools, live MCP prompts, SSE streaming, provider SDK integration, or rmcp stateless assumptions. Keep legacy /mcp behavior unchanged. For every task, write tests first, verify the expected failure, implement the smallest code/docs change, run the listed verification, update task checkboxes, and make one focused commit. Stop only when final acceptance passes.
 ```
 
 Goal-mode checkpoint rules:
@@ -28,8 +28,8 @@ Goal-mode checkpoint rules:
 
 ## Source Specs And Constraints
 
-- Primary spec: `docs/superpowers/specs/2026-05-24-conary-test-stateless-discover-route-design.md`
-- Previous raw proof spec: `docs/superpowers/specs/2026-05-24-stateless-raw-http-adapter-proof-design.md`
+- Primary spec: `docs/superpowers/specs/archive/2026-05-24-conary-test-stateless-discover-route-design.md`
+- Previous raw proof spec: `docs/superpowers/specs/archive/2026-05-24-stateless-raw-http-adapter-proof-design.md`
 - Adapter decision: `docs/operations/agent-mcp-adapter-decision.md`
 - Existing protocol harness: `crates/conary-mcp/src/stateless.rs`
 - Existing raw proof: `crates/conary-mcp/src/stateless_http.rs`
@@ -58,7 +58,7 @@ Modify:
 - `docs/operations/infrastructure.md`: describe legacy `/mcp` and stateless `/mcp/stateless` split.
 - `docs/superpowers/documentation-accuracy-audit-inventory.tsv`: refresh current tracked docs inventory.
 - `docs/superpowers/documentation-accuracy-audit-ledger.tsv`: reconcile retained rows for active MCP plans/specs and changed docs.
-- `docs/superpowers/plans/2026-05-24-conary-test-stateless-discover-route.md`: update checkboxes.
+- `docs/superpowers/plans/archive/2026-05-24-conary-test-stateless-discover-route.md`: update checkboxes.
 
 Create:
 
@@ -109,7 +109,7 @@ Use these headers for valid stateless requests:
 
 **Files:**
 - Modify: `crates/conary-mcp/src/stateless_http.rs`
-- Modify: `docs/superpowers/plans/2026-05-24-conary-test-stateless-discover-route.md`
+- Modify: `docs/superpowers/plans/archive/2026-05-24-conary-test-stateless-discover-route.md`
 
 - [x] **Step 1: Write failing byte-entry tests**
 
@@ -299,7 +299,7 @@ Expected: all `conary-mcp` unit, integration, and doc tests pass.
 Update this task's checkboxes, then commit:
 
 ```bash
-git add crates/conary-mcp/src/stateless_http.rs docs/superpowers/plans/2026-05-24-conary-test-stateless-discover-route.md
+git add crates/conary-mcp/src/stateless_http.rs docs/superpowers/plans/archive/2026-05-24-conary-test-stateless-discover-route.md
 git commit -m "feat(mcp): parse raw stateless HTTP request bytes"
 git status --short
 ```
@@ -312,7 +312,7 @@ Expected: commit succeeds and the worktree is clean.
 - Create: `apps/conary-test/src/server/stateless_mcp.rs`
 - Modify: `apps/conary-test/src/server/mod.rs`
 - Modify: `apps/conary-test/src/server/routes.rs`
-- Modify: `docs/superpowers/plans/2026-05-24-conary-test-stateless-discover-route.md`
+- Modify: `docs/superpowers/plans/archive/2026-05-24-conary-test-stateless-discover-route.md`
 
 - [x] **Step 1: Create route tests before implementation**
 
@@ -812,7 +812,7 @@ Expected: existing legacy `/mcp` auth regression still passes.
 Update this task's checkboxes, then commit:
 
 ```bash
-git add apps/conary-test/src/server/stateless_mcp.rs apps/conary-test/src/server/mod.rs apps/conary-test/src/server/routes.rs docs/superpowers/plans/2026-05-24-conary-test-stateless-discover-route.md
+git add apps/conary-test/src/server/stateless_mcp.rs apps/conary-test/src/server/mod.rs apps/conary-test/src/server/routes.rs docs/superpowers/plans/archive/2026-05-24-conary-test-stateless-discover-route.md
 git commit -m "feat(conary-test): mount stateless MCP discovery route"
 git status --short
 ```
@@ -823,7 +823,7 @@ Expected: commit succeeds and the worktree is clean.
 
 **Files:**
 - Modify: `crates/conary-mcp/tests/stateless_dependency_boundary.rs`
-- Modify: `docs/superpowers/plans/2026-05-24-conary-test-stateless-discover-route.md`
+- Modify: `docs/superpowers/plans/archive/2026-05-24-conary-test-stateless-discover-route.md`
 
 - [x] **Step 1: Replace the live-route guard test**
 
@@ -937,7 +937,7 @@ Expected: all `stateless_mcp` tests still pass.
 Update this task's checkboxes, then commit:
 
 ```bash
-git add crates/conary-mcp/tests/stateless_dependency_boundary.rs docs/superpowers/plans/2026-05-24-conary-test-stateless-discover-route.md
+git add crates/conary-mcp/tests/stateless_dependency_boundary.rs docs/superpowers/plans/archive/2026-05-24-conary-test-stateless-discover-route.md
 git commit -m "test(mcp): guard stateless discovery route boundary"
 git status --short
 ```
@@ -952,7 +952,7 @@ Expected: commit succeeds and the worktree is clean.
 - Modify: `docs/operations/infrastructure.md`
 - Modify: `docs/superpowers/documentation-accuracy-audit-inventory.tsv`
 - Modify: `docs/superpowers/documentation-accuracy-audit-ledger.tsv`
-- Modify: `docs/superpowers/plans/2026-05-24-conary-test-stateless-discover-route.md`
+- Modify: `docs/superpowers/plans/archive/2026-05-24-conary-test-stateless-discover-route.md`
 
 - [x] **Step 1: Update conary-test README endpoint wording**
 
@@ -1019,7 +1019,7 @@ or Remi route behavior. First read-only resources remain a follow-on slice.
 
 Source spec:
 
-- `docs/superpowers/specs/2026-05-24-conary-test-stateless-discover-route-design.md`
+- `docs/superpowers/specs/archive/2026-05-24-conary-test-stateless-discover-route-design.md`
 ```
 
 - [x] **Step 3: Update infrastructure MCP wording**
@@ -1080,15 +1080,15 @@ required_upsert_paths = [
     "apps/conary-test/README.md",
     "docs/operations/agent-mcp-adapter-decision.md",
     "docs/operations/infrastructure.md",
-    "docs/superpowers/plans/2026-05-22-llm-native-operations-surface.md",
-    "docs/superpowers/plans/2026-05-22-local-bootstrap-smoke-proof-loop.md",
-    "docs/superpowers/plans/2026-05-22-stateless-mcp-adapter-compliance.md",
-    "docs/superpowers/plans/2026-05-24-stateless-raw-http-adapter-proof.md",
-    "docs/superpowers/specs/2026-05-22-llm-native-operations-surface-design.md",
-    "docs/superpowers/specs/2026-05-22-stateless-mcp-adapter-compliance-design.md",
-    "docs/superpowers/specs/2026-05-24-stateless-raw-http-adapter-proof-design.md",
-    "docs/superpowers/specs/2026-05-24-conary-test-stateless-discover-route-design.md",
-    "docs/superpowers/plans/2026-05-24-conary-test-stateless-discover-route.md",
+    "docs/superpowers/plans/archive/2026-05-22-llm-native-operations-surface.md",
+    "docs/superpowers/plans/archive/2026-05-22-local-bootstrap-smoke-proof-loop.md",
+    "docs/superpowers/plans/archive/2026-05-22-stateless-mcp-adapter-compliance.md",
+    "docs/superpowers/plans/archive/2026-05-24-stateless-raw-http-adapter-proof.md",
+    "docs/superpowers/specs/archive/2026-05-22-llm-native-operations-surface-design.md",
+    "docs/superpowers/specs/archive/2026-05-22-stateless-mcp-adapter-compliance-design.md",
+    "docs/superpowers/specs/archive/2026-05-24-stateless-raw-http-adapter-proof-design.md",
+    "docs/superpowers/specs/archive/2026-05-24-conary-test-stateless-discover-route-design.md",
+    "docs/superpowers/plans/archive/2026-05-24-conary-test-stateless-discover-route.md",
 ]
 for path in required_upsert_paths:
     if path not in inventory_rows:
@@ -1131,13 +1131,13 @@ upsert(
 )
 
 for path in [
-    "docs/superpowers/plans/2026-05-22-llm-native-operations-surface.md",
-    "docs/superpowers/plans/2026-05-22-local-bootstrap-smoke-proof-loop.md",
-    "docs/superpowers/plans/2026-05-22-stateless-mcp-adapter-compliance.md",
-    "docs/superpowers/plans/2026-05-24-stateless-raw-http-adapter-proof.md",
-    "docs/superpowers/specs/2026-05-22-llm-native-operations-surface-design.md",
-    "docs/superpowers/specs/2026-05-22-stateless-mcp-adapter-compliance-design.md",
-    "docs/superpowers/specs/2026-05-24-stateless-raw-http-adapter-proof-design.md",
+    "docs/superpowers/plans/archive/2026-05-22-llm-native-operations-surface.md",
+    "docs/superpowers/plans/archive/2026-05-22-local-bootstrap-smoke-proof-loop.md",
+    "docs/superpowers/plans/archive/2026-05-22-stateless-mcp-adapter-compliance.md",
+    "docs/superpowers/plans/archive/2026-05-24-stateless-raw-http-adapter-proof.md",
+    "docs/superpowers/specs/archive/2026-05-22-llm-native-operations-surface-design.md",
+    "docs/superpowers/specs/archive/2026-05-22-stateless-mcp-adapter-compliance-design.md",
+    "docs/superpowers/specs/archive/2026-05-24-stateless-raw-http-adapter-proof-design.md",
 ]:
     upsert(
         path,
@@ -1148,16 +1148,16 @@ for path in [
     )
 
 upsert(
-    "docs/superpowers/specs/2026-05-24-conary-test-stateless-discover-route-design.md",
+    "docs/superpowers/specs/archive/2026-05-24-conary-test-stateless-discover-route-design.md",
     "llm-native-operations; mcp-adapter; conary-test; stateless-discovery",
     "crates/conary-mcp/src/stateless_http.rs; apps/conary-test/src/server/routes.rs; apps/conary-test/src/server/mcp.rs; docs/operations/agent-mcp-adapter-decision.md",
     "verified-no-change",
     "Active reviewed design for the conary-test stateless discovery route.",
 )
 upsert(
-    "docs/superpowers/plans/2026-05-24-conary-test-stateless-discover-route.md",
+    "docs/superpowers/plans/archive/2026-05-24-conary-test-stateless-discover-route.md",
     "llm-native-operations; mcp-adapter; conary-test; stateless-discovery",
-    "docs/superpowers/specs/2026-05-24-conary-test-stateless-discover-route-design.md; apps/conary-test/src/server/routes.rs; crates/conary-mcp/src/stateless_http.rs",
+    "docs/superpowers/specs/archive/2026-05-24-conary-test-stateless-discover-route-design.md; apps/conary-test/src/server/routes.rs; crates/conary-mcp/src/stateless_http.rs",
     "corrected",
     "Active goal-ready implementation plan for the conary-test stateless discovery route.",
 )
@@ -1209,7 +1209,7 @@ Expected: first command finds the new discovery-only documentation; second comma
 Update this task's checkboxes, then commit:
 
 ```bash
-git add apps/conary-test/README.md docs/operations/agent-mcp-adapter-decision.md docs/operations/infrastructure.md docs/superpowers/documentation-accuracy-audit-inventory.tsv docs/superpowers/documentation-accuracy-audit-ledger.tsv docs/superpowers/plans/2026-05-24-conary-test-stateless-discover-route.md
+git add apps/conary-test/README.md docs/operations/agent-mcp-adapter-decision.md docs/operations/infrastructure.md docs/superpowers/documentation-accuracy-audit-inventory.tsv docs/superpowers/documentation-accuracy-audit-ledger.tsv docs/superpowers/plans/archive/2026-05-24-conary-test-stateless-discover-route.md
 git commit -m "docs(mcp): record conary-test stateless discovery route"
 git status --short
 ```
@@ -1219,7 +1219,7 @@ Expected: commit succeeds and the worktree is clean.
 ## Task 5: Final Acceptance
 
 **Files:**
-- Modify: `docs/superpowers/plans/2026-05-24-conary-test-stateless-discover-route.md`
+- Modify: `docs/superpowers/plans/archive/2026-05-24-conary-test-stateless-discover-route.md`
 
 - [x] **Step 1: Run final Rust verification**
 
@@ -1291,7 +1291,7 @@ Expected: `git diff --check` succeeds. `git status --short --branch` shows only 
 Update this task's checkboxes, then commit:
 
 ```bash
-git add docs/superpowers/plans/2026-05-24-conary-test-stateless-discover-route.md
+git add docs/superpowers/plans/archive/2026-05-24-conary-test-stateless-discover-route.md
 git commit -m "docs(plan): complete conary-test stateless discovery route"
 git status --short --branch
 ```

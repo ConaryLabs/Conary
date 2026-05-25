@@ -28,7 +28,10 @@ Arch while preserving the broader rule that program-complete claims need fresh
 combined gates. This clean-slate archive pass moves the completed Goal 6,
 Goal 7, completion-validation, Goal 1, and daily-driver umbrella records under
 archive paths and leaves the active `plans/` and `specs/` roots empty until a
-new current plan or spec begins.
+new current plan or spec begins. The 2026-05-24 MCP stateless prep refresh
+extends that clean-slate pass by archiving the completed LLM-native operations,
+local bootstrap smoke, stateless compliance/raw HTTP proof, conary-test
+stateless discovery, bootstrap-status, and suites resource records.
 
 Audited every tracked documentation-like file returned by
 `bash scripts/docs-audit-inventory.sh`: tracked files spanning root docs,
@@ -178,16 +181,21 @@ The repo moved materially after the last audit:
   README, ROADMAP, integration, conaryopedia, limited-preview, and audit docs,
   and recorded the Fedora 44, Ubuntu 26.04 LTS, and Arch
   `phase3-active-generation-handoff` evidence.
+- Archived the completed MCP/LLM-native operations plans and design specs after
+  the contract, bootstrap, stateless adapter proof, conary-test discovery, and
+  read-only resource slices landed.
 
 ## Archive Decisions
 
 - Existing archive docs and recipe READMEs were retained as historical
   reference material.
 - Completed top-level superpowers plans, including Goal 6, Goal 7, completion
-  validation, and Goal 1, were moved to `docs/superpowers/plans/archive/`.
-- Completed design specs were moved to `docs/superpowers/specs/archive/`; the
-  active top-level `plans/` and `specs/` directories are intentionally empty
-  until a new current implementation record starts.
+  validation, Goal 1, and the MCP/LLM-native operations prep slices, were moved
+  to `docs/superpowers/plans/archive/`.
+- Completed design specs, including the MCP/LLM-native operations design
+  records, were moved to `docs/superpowers/specs/archive/`; the active top-level
+  `plans/` and `specs/` directories are intentionally empty until a new current
+  implementation record starts.
 - The completed May 14 limited-preview honesty review TSV was moved beside its
   archived plan in `docs/superpowers/plans/archive/`; it is outside the doc
   inventory script because that script tracks documentation-like files.
@@ -273,9 +281,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 89
-- `verified-no-change`: 18
-- `corrected`: 28
-- `archived`: 29
+- Total tracked doc-like files audited: 102
+- `verified-no-change`: 17
+- `corrected`: 29
+- `archived`: 42
 - `retained-historical`: 14
 - Remaining pending rows: 0

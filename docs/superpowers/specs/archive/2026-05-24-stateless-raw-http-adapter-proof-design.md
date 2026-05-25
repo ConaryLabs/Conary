@@ -283,7 +283,7 @@ because the HTTP status code disambiguates `403` from `405`.
 ## Acceptance Criteria
 
 - A new implementation plan exists at
-  `docs/superpowers/plans/2026-05-24-stateless-raw-http-adapter-proof.md`.
+  `docs/superpowers/plans/archive/2026-05-24-stateless-raw-http-adapter-proof.md`.
 - The plan is suitable for Codex `/goal` and has one focused commit per task.
 - The proof handles `server/discover` only; it does not expose real
   resources, prompts, tools, routes, or app registrations.

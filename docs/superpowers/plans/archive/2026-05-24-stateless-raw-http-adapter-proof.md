@@ -15,7 +15,7 @@
 Use this plan with Codex Goal mode. Recommended goal text:
 
 ```text
-Implement docs/superpowers/plans/2026-05-24-stateless-raw-http-adapter-proof.md task-by-task. Source spec: docs/superpowers/specs/2026-05-24-stateless-raw-http-adapter-proof-design.md. Add only a non-live, framework-neutral raw HTTP proof in crates/conary-mcp. Do not add Remi or conary-test routes, live MCP resources, live MCP tools, live MCP prompts, SSE streaming, or rmcp session-path changes. For implementation tasks, write tests before code and verify the expected failure before implementation. Tasks 2-4 add conformance tests over the Task 1 proof. Make one focused commit per task, update checkboxes, and stop only when final acceptance passes. In Task 1 Step 4, use crate::stateless::HEADER_PROTOCOL_VERSION, HEADER_METHOD, and HEADER_NAME instead of hard-coded MCP header strings in stateless_headers_from_request.
+Implement docs/superpowers/plans/archive/2026-05-24-stateless-raw-http-adapter-proof.md task-by-task. Source spec: docs/superpowers/specs/archive/2026-05-24-stateless-raw-http-adapter-proof-design.md. Add only a non-live, framework-neutral raw HTTP proof in crates/conary-mcp. Do not add Remi or conary-test routes, live MCP resources, live MCP tools, live MCP prompts, SSE streaming, or rmcp session-path changes. For implementation tasks, write tests before code and verify the expected failure before implementation. Tasks 2-4 add conformance tests over the Task 1 proof. Make one focused commit per task, update checkboxes, and stop only when final acceptance passes. In Task 1 Step 4, use crate::stateless::HEADER_PROTOCOL_VERSION, HEADER_METHOD, and HEADER_NAME instead of hard-coded MCP header strings in stateless_headers_from_request.
 ```
 
 Goal-mode checkpoint rules:
@@ -28,7 +28,7 @@ Goal-mode checkpoint rules:
 
 ## Source Specs And Constraints
 
-- Primary spec: `docs/superpowers/specs/2026-05-24-stateless-raw-http-adapter-proof-design.md`
+- Primary spec: `docs/superpowers/specs/archive/2026-05-24-stateless-raw-http-adapter-proof-design.md`
 - Adapter decision: `docs/operations/agent-mcp-adapter-decision.md`
 - Existing protocol harness: `crates/conary-mcp/src/stateless.rs`
 - Existing guard tests: `crates/conary-mcp/tests/stateless_dependency_boundary.rs`
@@ -51,7 +51,7 @@ Modify:
 - `crates/conary-mcp/src/stateless.rs`: add a public constructor for optional extracted headers so raw HTTP extraction can represent missing required headers.
 - `crates/conary-mcp/tests/stateless_dependency_boundary.rs`: extend source guard tests to include `stateless_http.rs`.
 - `docs/operations/agent-mcp-adapter-decision.md`: record that the raw HTTP proof is implemented and remains non-live.
-- `docs/superpowers/plans/2026-05-24-stateless-raw-http-adapter-proof.md`: update task checkboxes as each step completes.
+- `docs/superpowers/plans/archive/2026-05-24-stateless-raw-http-adapter-proof.md`: update task checkboxes as each step completes.
 
 Create:
 
@@ -634,7 +634,7 @@ Run:
 ```bash
 cargo fmt
 cargo test -p conary-mcp stateless_http
-git add crates/conary-mcp/src/lib.rs crates/conary-mcp/src/stateless.rs crates/conary-mcp/src/stateless_http.rs docs/superpowers/plans/2026-05-24-stateless-raw-http-adapter-proof.md
+git add crates/conary-mcp/src/lib.rs crates/conary-mcp/src/stateless.rs crates/conary-mcp/src/stateless_http.rs docs/superpowers/plans/archive/2026-05-24-stateless-raw-http-adapter-proof.md
 git commit -m "feat(mcp): add raw stateless HTTP proof"
 git status --short
 ```
@@ -729,7 +729,7 @@ Run:
 ```bash
 cargo fmt
 cargo test -p conary-mcp stateless_http
-git add crates/conary-mcp/src/stateless_http.rs docs/superpowers/plans/2026-05-24-stateless-raw-http-adapter-proof.md
+git add crates/conary-mcp/src/stateless_http.rs docs/superpowers/plans/archive/2026-05-24-stateless-raw-http-adapter-proof.md
 git commit -m "test(mcp): prove raw stateless header extraction"
 git status --short
 ```
@@ -814,7 +814,7 @@ Run:
 ```bash
 cargo fmt
 cargo test -p conary-mcp stateless_http
-git add crates/conary-mcp/src/stateless_http.rs docs/superpowers/plans/2026-05-24-stateless-raw-http-adapter-proof.md
+git add crates/conary-mcp/src/stateless_http.rs docs/superpowers/plans/archive/2026-05-24-stateless-raw-http-adapter-proof.md
 git commit -m "test(mcp): prove raw stateless JSON-RPC envelope policy"
 git status --short
 ```
@@ -1030,7 +1030,7 @@ Run:
 ```bash
 cargo fmt
 cargo test -p conary-mcp stateless_http
-git add crates/conary-mcp/src/stateless_http.rs docs/superpowers/plans/2026-05-24-stateless-raw-http-adapter-proof.md
+git add crates/conary-mcp/src/stateless_http.rs docs/superpowers/plans/archive/2026-05-24-stateless-raw-http-adapter-proof.md
 git commit -m "test(mcp): prove raw stateless error mapping"
 git status --short
 ```
@@ -1161,7 +1161,7 @@ adapter proof, handles only `server/discover` successfully, and keeps Remi and
 Run:
 
 ```bash
-rg -n "stateless_http|raw HTTP proof|server/discover" docs/operations/agent-mcp-adapter-decision.md docs/superpowers/specs/2026-05-24-stateless-raw-http-adapter-proof-design.md
+rg -n "stateless_http|raw HTTP proof|server/discover" docs/operations/agent-mcp-adapter-decision.md docs/superpowers/specs/archive/2026-05-24-stateless-raw-http-adapter-proof-design.md
 rg -n "server/discover|MCP-Protocol-Version|Mcp-Method|Mcp-Name" apps/remi/src/server apps/conary-test/src/server
 git diff --check
 ```
@@ -1187,7 +1187,7 @@ Expected: PASS.
 Run:
 
 ```bash
-git add crates/conary-mcp/tests/stateless_dependency_boundary.rs docs/operations/agent-mcp-adapter-decision.md docs/superpowers/plans/2026-05-24-stateless-raw-http-adapter-proof.md
+git add crates/conary-mcp/tests/stateless_dependency_boundary.rs docs/operations/agent-mcp-adapter-decision.md docs/superpowers/plans/archive/2026-05-24-stateless-raw-http-adapter-proof.md
 git commit -m "docs(mcp): record raw stateless proof boundary"
 git status --short
 ```
@@ -1256,7 +1256,7 @@ git status --short --branch
 git log --oneline -6
 ```
 
-Expected: branch is ahead of `main` by the task commits. If Task 6 checkboxes have already been updated, `git status --short` may show only `docs/superpowers/plans/2026-05-24-stateless-raw-http-adapter-proof.md`; no code files should be dirty.
+Expected: branch is ahead of `main` by the task commits. If Task 6 checkboxes have already been updated, `git status --short` may show only `docs/superpowers/plans/archive/2026-05-24-stateless-raw-http-adapter-proof.md`; no code files should be dirty.
 
 - [x] **Step 6: Request review before merge**
 
@@ -1275,7 +1275,7 @@ Do not merge until the reviewer approves the branch.
 After Step 6 is complete and all Task 6 plus final acceptance checkboxes are checked, run:
 
 ```bash
-git add docs/superpowers/plans/2026-05-24-stateless-raw-http-adapter-proof.md
+git add docs/superpowers/plans/archive/2026-05-24-stateless-raw-http-adapter-proof.md
 git commit -m "docs(mcp): mark raw stateless proof verified"
 git status --short
 ```

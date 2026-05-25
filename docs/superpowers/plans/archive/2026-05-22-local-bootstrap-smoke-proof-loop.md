@@ -15,7 +15,7 @@
 Use this text for Codex `/goal`:
 
 ```text
-Implement docs/superpowers/plans/2026-05-22-local-bootstrap-smoke-proof-loop.md task-by-task. Keep the slice local-bootstrap only: add `conary-test bootstrap smoke`, structured contract output, tests, and docs. Do NOT add live MCP resources, tools, prompts, or discovery behavior. Write tests first, verify expected failures before implementation, make one focused commit per task, update checkboxes, and stop only when final acceptance passes.
+Implement docs/superpowers/plans/archive/2026-05-22-local-bootstrap-smoke-proof-loop.md task-by-task. Keep the slice local-bootstrap only: add `conary-test bootstrap smoke`, structured contract output, tests, and docs. Do NOT add live MCP resources, tools, prompts, or discovery behavior. Write tests first, verify expected failures before implementation, make one focused commit per task, update checkboxes, and stop only when final acceptance passes.
 ```
 
 ## Constraints
@@ -130,7 +130,7 @@ pub fn build_smoke_command(exe: &Path, options: &BootstrapSmokeOptions) -> Boots
 ```bash
 cargo test -p conary-test bootstrap::tests::smoke_options_default_to_phase1_core_fedora44
 cargo test -p conary-test bootstrap::tests::smoke_command_invokes_existing_run_path
-git add apps/conary-test/src/bootstrap.rs docs/superpowers/plans/2026-05-22-local-bootstrap-smoke-proof-loop.md
+git add apps/conary-test/src/bootstrap.rs docs/superpowers/plans/archive/2026-05-22-local-bootstrap-smoke-proof-loop.md
 git commit -m "feat(test): define bootstrap smoke command"
 ```
 
@@ -307,7 +307,7 @@ pub fn smoke_with_runner(
 ```bash
 cargo test -p conary-test bootstrap::tests::smoke_dry_run_returns_planned_command_without_execution
 cargo test -p conary-test bootstrap::tests::smoke_refuses_when_bootstrap_check_is_not_ready
-git add apps/conary-test/src/bootstrap.rs docs/superpowers/plans/2026-05-22-local-bootstrap-smoke-proof-loop.md
+git add apps/conary-test/src/bootstrap.rs docs/superpowers/plans/archive/2026-05-22-local-bootstrap-smoke-proof-loop.md
 git commit -m "feat(test): gate bootstrap smoke execution"
 ```
 
@@ -392,7 +392,7 @@ pub fn run_smoke(options: &BootstrapSmokeOptions) -> conary_agent_contract::Veri
 
 ```bash
 cargo test -p conary-test bootstrap
-git add apps/conary-test/src/bootstrap.rs docs/superpowers/plans/2026-05-22-local-bootstrap-smoke-proof-loop.md
+git add apps/conary-test/src/bootstrap.rs docs/superpowers/plans/archive/2026-05-22-local-bootstrap-smoke-proof-loop.md
 git commit -m "feat(test): execute bootstrap smoke command"
 ```
 
@@ -515,7 +515,7 @@ Expected: tests pass, command emits JSON with `operation = "conary-test.bootstra
 - [x] **Step 5: Commit**
 
 ```bash
-git add apps/conary-test/src/cli.rs apps/conary-test/src/bootstrap.rs docs/superpowers/plans/2026-05-22-local-bootstrap-smoke-proof-loop.md
+git add apps/conary-test/src/cli.rs apps/conary-test/src/bootstrap.rs docs/superpowers/plans/archive/2026-05-22-local-bootstrap-smoke-proof-loop.md
 git commit -m "feat(test): add bootstrap smoke cli"
 ```
 
@@ -550,7 +550,7 @@ Expected: command references are current; no doc implies `bootstrap smoke` publi
 - [x] **Step 3: Commit**
 
 ```bash
-git add apps/conary-test/README.md docs/INTEGRATION-TESTING.md docs/llms/README.md docs/superpowers/plans/2026-05-22-local-bootstrap-smoke-proof-loop.md
+git add apps/conary-test/README.md docs/INTEGRATION-TESTING.md docs/llms/README.md docs/superpowers/plans/archive/2026-05-22-local-bootstrap-smoke-proof-loop.md
 git commit -m "docs(test): document bootstrap smoke proof loop"
 ```
 

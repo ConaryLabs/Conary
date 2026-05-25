@@ -15,7 +15,7 @@
 Use this plan with Codex Goal mode. Recommended goal text:
 
 ```text
-Implement docs/superpowers/plans/2026-05-22-stateless-mcp-adapter-compliance.md task-by-task. Source spec: docs/superpowers/specs/2026-05-22-stateless-mcp-adapter-compliance-design.md. First move rmcp to the latest compatible crate version, expected rmcp 1.7.0 as of 2026-05-22. Then add only non-live conary-mcp stateless compliance helpers and tests. Do not add live MCP resources, tools, prompts, routes, or discovery behavior. Make one focused commit per task, run verification before each commit, and update checkboxes as tasks complete.
+Implement docs/superpowers/plans/archive/2026-05-22-stateless-mcp-adapter-compliance.md task-by-task. Source spec: docs/superpowers/specs/archive/2026-05-22-stateless-mcp-adapter-compliance-design.md. First move rmcp to the latest compatible crate version, expected rmcp 1.7.0 as of 2026-05-22. Then add only non-live conary-mcp stateless compliance helpers and tests. Do not add live MCP resources, tools, prompts, routes, or discovery behavior. Make one focused commit per task, run verification before each commit, and update checkboxes as tasks complete.
 ```
 
 Goal-mode checkpoint rules:
@@ -28,8 +28,8 @@ Goal-mode checkpoint rules:
 
 ## Source Specs And Constraints
 
-- Primary spec: `docs/superpowers/specs/2026-05-22-stateless-mcp-adapter-compliance-design.md`
-- Parent spec: `docs/superpowers/specs/2026-05-22-llm-native-operations-surface-design.md`
+- Primary spec: `docs/superpowers/specs/archive/2026-05-22-stateless-mcp-adapter-compliance-design.md`
+- Parent spec: `docs/superpowers/specs/archive/2026-05-22-llm-native-operations-surface-design.md`
 - Adapter decision: `docs/operations/agent-mcp-adapter-decision.md`
 - Existing contract crate: `crates/conary-agent-contract`
 - Existing adapter crate: `crates/conary-mcp`
@@ -1050,7 +1050,7 @@ Expected: commit succeeds and `git status --short` is clean.
 
 **Files:**
 - Modify: `docs/operations/agent-mcp-adapter-decision.md`
-- Modify: `docs/superpowers/specs/2026-05-22-stateless-mcp-adapter-compliance-design.md`
+- Modify: `docs/superpowers/specs/archive/2026-05-22-stateless-mcp-adapter-compliance-design.md`
 
 - [x] **Step 1: Update the decision record after implementation facts are known**
 
@@ -1068,7 +1068,7 @@ Ensure the `Next Slice` section remains clear that the harness added no live MCP
 
 - [x] **Step 2: Update the spec with completed dependency facts**
 
-If Task 1 used a newer compatible `rmcp` version than `1.7.0`, update `docs/superpowers/specs/2026-05-22-stateless-mcp-adapter-compliance-design.md` so its current facts and acceptance criteria name the actual version used.
+If Task 1 used a newer compatible `rmcp` version than `1.7.0`, update `docs/superpowers/specs/archive/2026-05-22-stateless-mcp-adapter-compliance-design.md` so its current facts and acceptance criteria name the actual version used.
 
 If Task 1 used `1.7.0`, update the status line:
 
@@ -1088,8 +1088,8 @@ Also update the local repo facts in that spec from the pre-plan state to the com
 Run:
 
 ```bash
-rg -n "rmcp 1\\.6\\.0|rmcp = \"1\\.1\"" docs/operations/agent-mcp-adapter-decision.md docs/superpowers/specs/2026-05-22-stateless-mcp-adapter-compliance-design.md Cargo.toml Cargo.lock
-rg -n "live MCP resources|live MCP tools|server/discover" docs/operations/agent-mcp-adapter-decision.md docs/superpowers/specs/2026-05-22-stateless-mcp-adapter-compliance-design.md
+rg -n "rmcp 1\\.6\\.0|rmcp = \"1\\.1\"" docs/operations/agent-mcp-adapter-decision.md docs/superpowers/specs/archive/2026-05-22-stateless-mcp-adapter-compliance-design.md Cargo.toml Cargo.lock
+rg -n "live MCP resources|live MCP tools|server/discover" docs/operations/agent-mcp-adapter-decision.md docs/superpowers/specs/archive/2026-05-22-stateless-mcp-adapter-compliance-design.md
 ```
 
 Expected:
@@ -1102,7 +1102,7 @@ Expected:
 Run:
 
 ```bash
-git add docs/operations/agent-mcp-adapter-decision.md docs/superpowers/specs/2026-05-22-stateless-mcp-adapter-compliance-design.md
+git add docs/operations/agent-mcp-adapter-decision.md docs/superpowers/specs/archive/2026-05-22-stateless-mcp-adapter-compliance-design.md
 git commit -m "docs(mcp): record stateless harness boundary"
 git status --short
 ```
