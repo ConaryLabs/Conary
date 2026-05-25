@@ -820,7 +820,7 @@ git status --short
 **Files:**
 - Modify: `apps/conary-test/src/server/stateless_mcp.rs`
 
-- [ ] **Step 1: Add failing route tests first**
+- [x] **Step 1: Add failing route tests first**
 
 In `apps/conary-test/src/server/stateless_mcp.rs`, add these imports to the test module:
 
@@ -1132,7 +1132,7 @@ Add this test after `legacy_mcp_route_does_not_return_stateless_resource_list`:
     }
 ```
 
-- [ ] **Step 2: Run tests to verify failure**
+- [x] **Step 2: Run tests to verify failure**
 
 Run:
 
@@ -1146,7 +1146,7 @@ Expected:
 - First command fails because `resources/list` still returns one descriptor.
 - Second command fails because `conary-test://suites` is not registered.
 
-- [ ] **Step 3: Wire `AppState` into handler and provider**
+- [x] **Step 3: Wire `AppState` into handler and provider**
 
 In `apps/conary-test/src/server/stateless_mcp.rs`, update imports:
 
@@ -1265,7 +1265,7 @@ fn json_resource_content(
 
 Run `cargo fmt` after this step. If rustfmt wraps the long `inspect_manifest_dir` line, keep the rustfmt output.
 
-- [ ] **Step 4: Verify Task 3**
+- [x] **Step 4: Verify Task 3**
 
 Run:
 
@@ -1277,7 +1277,7 @@ cargo test -p conary-test mcp_endpoint_requires_token
 
 Expected: all commands pass.
 
-- [ ] **Step 5: Commit Task 3**
+- [x] **Step 5: Commit Task 3**
 
 Run:
 
