@@ -60,7 +60,7 @@ Add only one static read-only stateless MCP resource to conary-test: `conary-tes
 - Modify: `crates/conary-agent-contract/src/resource.rs`
 - Modify: `crates/conary-agent-contract/src/catalog.rs`
 
-- [ ] **Step 1: Write failing resource helper test**
+- [x] **Step 1: Write failing resource helper test**
 
 Add this test inside `#[cfg(test)] mod tests` in `crates/conary-agent-contract/src/resource.rs`:
 
@@ -74,7 +74,7 @@ Add this test inside `#[cfg(test)] mod tests` in `crates/conary-agent-contract/s
     }
 ```
 
-- [ ] **Step 2: Write failing catalog test**
+- [x] **Step 2: Write failing catalog test**
 
 Add this test inside `#[cfg(test)] mod tests` in `crates/conary-agent-contract/src/catalog.rs`:
 
@@ -100,7 +100,7 @@ Add this test inside `#[cfg(test)] mod tests` in `crates/conary-agent-contract/s
     }
 ```
 
-- [ ] **Step 3: Run tests to verify failure**
+- [x] **Step 3: Run tests to verify failure**
 
 Run:
 
@@ -114,7 +114,7 @@ Expected:
 - First command fails because `test_suites` does not exist.
 - Second command fails because the catalog entry does not exist.
 
-- [ ] **Step 4: Add `test_suites()` helper**
+- [x] **Step 4: Add `test_suites()` helper**
 
 Add this function before `test_suite(suite_id: &str)` in `crates/conary-agent-contract/src/resource.rs`:
 
@@ -124,7 +124,7 @@ pub fn test_suites() -> ResourceRef {
 }
 ```
 
-- [ ] **Step 5: Add catalog item**
+- [x] **Step 5: Add catalog item**
 
 Insert this `CatalogItem` in `default_read_resources()` after `conary-test.bootstrap.status`:
 
@@ -139,7 +139,7 @@ Insert this `CatalogItem` in `default_read_resources()` after `conary-test.boots
         },
 ```
 
-- [ ] **Step 6: Verify Task 1**
+- [x] **Step 6: Verify Task 1**
 
 Run:
 
@@ -152,7 +152,7 @@ cargo test -p conary-agent-contract
 
 Expected: all commands pass.
 
-- [ ] **Step 7: Commit Task 1**
+- [x] **Step 7: Commit Task 1**
 
 Run:
 
