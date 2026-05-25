@@ -214,7 +214,7 @@ Required coverage:
 ## Acceptance Criteria
 
 - A new plan exists at
-  `docs/superpowers/plans/2026-05-22-stateless-mcp-adapter-compliance.md`.
+  `docs/superpowers/plans/archive/2026-05-22-stateless-mcp-adapter-compliance.md`.
 - The implementation plan starts by moving `rmcp` to the latest compatible
   crate version, expected to be `1.7.0` as of this spec.
 - The implementation plan adds only compliance helpers and tests; it does not

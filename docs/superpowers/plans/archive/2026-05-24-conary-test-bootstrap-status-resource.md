@@ -1,6 +1,6 @@
 # Conary-Test Bootstrap Status Stateless Resource Implementation Plan
 
-> **For /goal:** Implement this plan task-by-task. Source spec: `docs/superpowers/specs/2026-05-24-conary-test-bootstrap-status-resource-design.md`. Add only one read-only stateless MCP resource to conary-test: `conary-local://bootstrap/status`. Keep Remi untouched. Do not add live tools, prompts, resource templates, subscriptions, SSE streaming, mutations, smoke execution, or rmcp stateless assumptions. Use tests-first for every code task, verify the expected failure before implementation, update checkboxes as tasks complete, and make one focused commit per task.
+> **For /goal:** Implement this plan task-by-task. Source spec: `docs/superpowers/specs/archive/2026-05-24-conary-test-bootstrap-status-resource-design.md`. Add only one read-only stateless MCP resource to conary-test: `conary-local://bootstrap/status`. Keep Remi untouched. Do not add live tools, prompts, resource templates, subscriptions, SSE streaming, mutations, smoke execution, or rmcp stateless assumptions. Use tests-first for every code task, verify the expected failure before implementation, update checkboxes as tasks complete, and make one focused commit per task.
 
 **Goal:** Extend the conary-test `/mcp/stateless` preview from discovery-only to discovery plus the first live read-only MCP resource, `conary-local://bootstrap/status`, backed by the existing bootstrap `InspectResult`.
 
@@ -1291,11 +1291,11 @@ updated_paths = {
         "corrected",
         "Updated agent operations guidance to prefer resources for read-only inspection and record bootstrap/status preview."
     ),
-    "docs/superpowers/specs/2026-05-24-conary-test-bootstrap-status-resource-design.md": (
+    "docs/superpowers/specs/archive/2026-05-24-conary-test-bootstrap-status-resource-design.md": (
         "verified-no-change",
         "Source spec for bootstrap status resource slice remains active and accurate."
     ),
-    "docs/superpowers/plans/2026-05-24-conary-test-bootstrap-status-resource.md": (
+    "docs/superpowers/plans/archive/2026-05-24-conary-test-bootstrap-status-resource.md": (
         "corrected",
         "Added implementation plan for the bootstrap status stateless resource slice."
     ),
@@ -1428,7 +1428,7 @@ Update all remaining checkboxes in this file from `- [ ]` to `- [x]`, then run:
 
 ```bash
 git status --short
-git add docs/superpowers/plans/2026-05-24-conary-test-bootstrap-status-resource.md
+git add docs/superpowers/plans/archive/2026-05-24-conary-test-bootstrap-status-resource.md
 git commit -m "docs(plan): complete bootstrap status resource plan"
 ```
 

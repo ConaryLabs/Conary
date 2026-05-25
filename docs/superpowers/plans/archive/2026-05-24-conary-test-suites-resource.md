@@ -12,7 +12,7 @@
 
 ## /goal Text
 
-Implement `docs/superpowers/plans/2026-05-24-conary-test-suites-resource.md` task-by-task. Source spec: `docs/superpowers/specs/2026-05-24-conary-test-suites-resource-design.md`.
+Implement `docs/superpowers/plans/archive/2026-05-24-conary-test-suites-resource.md` task-by-task. Source spec: `docs/superpowers/specs/archive/2026-05-24-conary-test-suites-resource-design.md`.
 
 Add only one static read-only stateless MCP resource to conary-test: `conary-test://suites`. Keep Remi untouched. Do not add live tools, prompts, resource templates, subscriptions, SSE streaming, smoke execution, per-suite resources, or mutations. Keep legacy `/mcp` behavior unchanged. Use tests-first for every code task, verify the expected failure before implementation, update checkboxes as tasks complete, and make one focused commit per task.
 
@@ -1428,7 +1428,7 @@ per-suite resources, or Remi route behavior.
 Add this source spec to the source-spec list:
 
 ```markdown
-- `docs/superpowers/specs/2026-05-24-conary-test-suites-resource-design.md`
+- `docs/superpowers/specs/archive/2026-05-24-conary-test-suites-resource-design.md`
 ```
 
 - [x] **Step 5: Update infrastructure doc**
@@ -1510,7 +1510,7 @@ upsert(
 upsert(
     "docs/operations/agent-mcp-adapter-decision.md",
     "mcp; stateless-adapter; bootstrap-status; suites-resource",
-    "crates/conary-mcp/src/stateless_http.rs; apps/conary-test/src/server/stateless_mcp.rs; apps/conary-test/src/suite_inventory.rs; docs/superpowers/specs/2026-05-24-conary-test-suites-resource-design.md",
+    "crates/conary-mcp/src/stateless_http.rs; apps/conary-test/src/server/stateless_mcp.rs; apps/conary-test/src/suite_inventory.rs; docs/superpowers/specs/archive/2026-05-24-conary-test-suites-resource-design.md",
     "corrected",
     "Updated adapter decision current state for conary-test bootstrap/status and suites resources while Remi remains unwired.",
 )
@@ -1522,9 +1522,9 @@ upsert(
     "Updated agent operations guidance to record bootstrap/status and suites stateless preview resources.",
 )
 upsert(
-    "docs/superpowers/plans/2026-05-24-conary-test-suites-resource.md",
+    "docs/superpowers/plans/archive/2026-05-24-conary-test-suites-resource.md",
     "planning; mcp; conary-test-suites",
-    "docs/superpowers/specs/2026-05-24-conary-test-suites-resource-design.md; apps/conary-test/src/server/stateless_mcp.rs; apps/conary-test/src/bootstrap.rs; apps/conary-test/src/config/manifest.rs",
+    "docs/superpowers/specs/archive/2026-05-24-conary-test-suites-resource-design.md; apps/conary-test/src/server/stateless_mcp.rs; apps/conary-test/src/bootstrap.rs; apps/conary-test/src/config/manifest.rs",
     "corrected",
     "Added goal-ready implementation plan for the conary-test://suites stateless resource slice.",
 )
@@ -1614,7 +1614,7 @@ Run:
 
 ```bash
 git status --short
-git add docs/superpowers/plans/2026-05-24-conary-test-suites-resource.md
+git add docs/superpowers/plans/archive/2026-05-24-conary-test-suites-resource.md
 git commit -m "docs(plan): complete conary-test suites resource plan"
 git status --short
 ```

@@ -91,7 +91,7 @@ avoiding fresh investment in the legacy session path.
 
 Source spec:
 
-- `docs/superpowers/specs/2026-05-22-stateless-mcp-adapter-compliance-design.md`
+- `docs/superpowers/specs/archive/2026-05-22-stateless-mcp-adapter-compliance-design.md`
 
 ## Raw HTTP Proof Slice
 
@@ -103,7 +103,7 @@ and `resources/read` through a configured provider.
 
 Source spec:
 
-- `docs/superpowers/specs/2026-05-24-stateless-raw-http-adapter-proof-design.md`
+- `docs/superpowers/specs/archive/2026-05-24-stateless-raw-http-adapter-proof-design.md`
 
 ## Conary-Test Stateless Route Slice
 
@@ -123,6 +123,6 @@ per-suite resources, or Remi route behavior.
 
 Source specs:
 
-- `docs/superpowers/specs/2026-05-24-conary-test-stateless-discover-route-design.md`
-- `docs/superpowers/specs/2026-05-24-conary-test-bootstrap-status-resource-design.md`
-- `docs/superpowers/specs/2026-05-24-conary-test-suites-resource-design.md`
+- `docs/superpowers/specs/archive/2026-05-24-conary-test-stateless-discover-route-design.md`
+- `docs/superpowers/specs/archive/2026-05-24-conary-test-bootstrap-status-resource-design.md`
+- `docs/superpowers/specs/archive/2026-05-24-conary-test-suites-resource-design.md`
