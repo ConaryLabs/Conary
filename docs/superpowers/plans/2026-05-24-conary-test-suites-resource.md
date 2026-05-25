@@ -1582,7 +1582,7 @@ git status --short
 **Files:**
 - No new files; this task verifies the whole slice and marks the plan complete.
 
-- [ ] **Step 1: Run final verification**
+- [x] **Step 1: Run final verification**
 
 Run these commands from the repository root:
 
@@ -1604,11 +1604,11 @@ git diff --check
 
 Expected: all commands pass exactly as written.
 
-- [ ] **Step 2: Update this plan checkbox state**
+- [x] **Step 2: Update this plan checkbox state**
 
 Change every completed task checkbox in this file from `- [ ]` to `- [x]`.
 
-- [ ] **Step 3: Commit final plan update**
+- [x] **Step 3: Commit final plan update**
 
 Run:
 
