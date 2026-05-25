@@ -11,6 +11,7 @@ pub mod error_taxonomy;
 pub mod paths;
 pub mod report;
 pub mod server;
+pub mod suite_inventory;
 
 #[cfg(test)]
 pub mod test_fixtures {

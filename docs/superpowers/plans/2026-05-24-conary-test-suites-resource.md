@@ -169,7 +169,7 @@ git status --short
 - Create: `apps/conary-test/src/suite_inventory.rs`
 - Modify: `apps/conary-test/src/lib.rs`
 
-- [ ] **Step 1: Export module and write failing tests**
+- [x] **Step 1: Export module and write failing tests**
 
 Add this line to `apps/conary-test/src/lib.rs`:
 
@@ -386,7 +386,7 @@ commands = ["true"]
 }
 ```
 
-- [ ] **Step 2: Run tests to verify failure**
+- [x] **Step 2: Run tests to verify failure**
 
 Run:
 
@@ -396,7 +396,7 @@ cargo test -p conary-test suite_inventory
 
 Expected: compile failure because `inspect_manifest_dir` and the inventory types do not exist yet.
 
-- [ ] **Step 3: Replace skeleton with full implementation**
+- [x] **Step 3: Replace skeleton with full implementation**
 
 Replace `apps/conary-test/src/suite_inventory.rs` with this full file:
 
@@ -793,7 +793,7 @@ commands = ["true"]
 }
 ```
 
-- [ ] **Step 4: Verify Task 2**
+- [x] **Step 4: Verify Task 2**
 
 Run:
 
@@ -804,7 +804,7 @@ cargo test -p conary-test suite_inventory
 
 Expected: all suite inventory tests pass.
 
-- [ ] **Step 5: Commit Task 2**
+- [x] **Step 5: Commit Task 2**
 
 Run:
 
