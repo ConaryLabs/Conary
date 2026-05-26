@@ -968,6 +968,64 @@ pub fn migrate_v68(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 69: Generation publication debt ledger
+pub fn migrate_v69(conn: &Connection) -> Result<()> {
+    debug!("Migrating to schema version 69");
+
+    conn.execute_batch(
+        "
+        CREATE TABLE generation_publications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trigger_changeset_id INTEGER REFERENCES changesets(id) ON DELETE SET NULL,
+            published_through_changeset_id INTEGER REFERENCES changesets(id) ON DELETE SET NULL,
+            tx_uuid TEXT,
+            db_path TEXT NOT NULL,
+            runtime_root TEXT NOT NULL,
+            phase TEXT NOT NULL CHECK(phase IN (
+                'pending_build',
+                'building',
+                'artifact_ready',
+                'current_published',
+                'active_marked'
+            )),
+            status TEXT NOT NULL CHECK(status IN (
+                'pending',
+                'running',
+                'failed',
+                'complete',
+                'abandoned'
+            )),
+            state_number INTEGER,
+            generation_number INTEGER,
+            summary TEXT NOT NULL,
+            last_error TEXT,
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            recoverable INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            completed_at TEXT,
+            CHECK (
+                state_number IS NULL
+                OR generation_number IS NULL
+                OR state_number = generation_number
+            )
+        );
+
+        CREATE INDEX idx_generation_publications_status
+            ON generation_publications(status);
+        CREATE INDEX idx_generation_publications_trigger_changeset
+            ON generation_publications(trigger_changeset_id);
+        CREATE INDEX idx_generation_publications_generation
+            ON generation_publications(generation_number);
+        CREATE INDEX idx_generation_publications_recoverable
+            ON generation_publications(recoverable, status);
+        ",
+    )?;
+
+    info!("Schema version 69 applied successfully (generation publication debt ledger)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1276,5 +1334,80 @@ mod tests {
             )
             .unwrap();
         assert_eq!(support, "unknown");
+    }
+
+    #[test]
+    fn test_migrate_v69_adds_generation_publications_table() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        let version: i32 = conn
+            .query_row(
+                "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, crate::db::schema::SCHEMA_VERSION);
+
+        conn.execute(
+            "INSERT INTO changesets (description, status)
+             VALUES ('Install fixture', 'applied')",
+            [],
+        )
+        .unwrap();
+        let changeset_id = conn.last_insert_rowid();
+
+        conn.execute(
+            "INSERT INTO generation_publications (
+                trigger_changeset_id, db_path, runtime_root, phase, status, summary
+             ) VALUES (?1, ?2, ?3, 'pending_build', 'pending', ?4)",
+            (
+                changeset_id,
+                "/tmp/conary.db",
+                "/tmp/conary",
+                "Install fixture",
+            ),
+        )
+        .unwrap();
+
+        let phase: String = conn
+            .query_row("SELECT phase FROM generation_publications", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(phase, "pending_build");
+    }
+
+    #[test]
+    fn test_generation_publications_reject_unknown_phase() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        let err = conn
+            .execute(
+                "INSERT INTO generation_publications (
+                    db_path, runtime_root, phase, status, summary
+                 ) VALUES (?1, ?2, 'current_renamed', 'pending', ?3)",
+                ("/tmp/conary.db", "/tmp/conary", "bad phase"),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("CHECK"));
+    }
+
+    #[test]
+    fn test_generation_publications_reject_mismatched_state_and_generation() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        let err = conn
+            .execute(
+                "INSERT INTO generation_publications (
+                    db_path, runtime_root, phase, status, state_number, generation_number, summary
+                 ) VALUES (?1, ?2, 'artifact_ready', 'running', 1, 2, ?3)",
+                ("/tmp/conary.db", "/tmp/conary", "bad state/generation"),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("CHECK"));
     }
 }
