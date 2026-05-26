@@ -1,13 +1,15 @@
 ---
 last_updated: 2026-05-26
-revision: 5
+revision: 6
 summary: Umbrella design for hardening limited-preview safety and truthfulness invariants
 ---
 
 # Preview Invariant Hardening: Design Spec
 
 **Date:** 2026-05-25
-**Status:** Plan A implemented in `2e294320`; Plans B and C remain open
+**Status:** Plan A implemented in `2e294320`; Plan B design split out in
+`docs/superpowers/specs/2026-05-26-generation-publication-durability-design.md`;
+Plan C remains open
 **Goal:** Turn the overhead safety review into a release-hardening milestone
 that makes Conary's limited-preview claims harder to accidentally violate.
 
@@ -412,8 +414,10 @@ The umbrella milestone should be implemented as multiple plans:
 
 2. **Plan B: Generation Publication Durability**
    - Track 3.
-   - This needs a focused design for phase persistence, durable filesystem
-     helpers, and failure injection.
+   - The design is split out in
+     `docs/superpowers/specs/2026-05-26-generation-publication-durability-design.md`.
+     It should be implemented as B1 publication intent/recovery semantics first
+     and B2 durable filesystem helper coverage second.
 
 3. **Plan C: Docs And CI Truth Checks**
    - Track 4.

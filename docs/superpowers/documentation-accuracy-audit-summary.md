@@ -39,7 +39,9 @@ plans lane for adoption acknowledgement gates, dry-run behavior, private CAS
 capture, ghost-trove cleanup, and refresh savepoints; the 2026-05-26 review
 tightening records a constrained sync-hook refresh path, touched legacy shared
 CAS-object repair, changeset-envelope adoption warnings, production-path
-ghost-trove tests, and dirty-worktree-safe final commit instructions.
+ghost-trove tests, and dirty-worktree-safe final commit instructions. The
+2026-05-26 Plan B design now splits generation publication durability into a
+DB-backed publication intent/recovery slice and a durable filesystem fsync sweep.
 
 Audited every tracked documentation-like file returned by
 `bash scripts/docs-audit-inventory.sh`: tracked files spanning root docs,
@@ -204,8 +206,9 @@ The repo moved materially after the last audit:
   records, were moved to `docs/superpowers/specs/archive/`; the active top-level
   `plans/` directory now holds the 2026-05-25 adoption safety Plan A checklist,
   and the active `specs/` directory holds the 2026-05-25 preview invariant
-  hardening umbrella until its follow-on plans land or defer their tracks. Both
-  active records were review-tightened on 2026-05-26 before implementation.
+  hardening umbrella plus the 2026-05-26 Plan B generation publication
+  durability design until their follow-on plans land or defer their tracks.
+  The Plan A records were review-tightened on 2026-05-26 before implementation.
 - The completed May 14 limited-preview honesty review TSV was moved beside its
   archived plan in `docs/superpowers/plans/archive/`; it is outside the doc
   inventory script because that script tracks documentation-like files.
@@ -291,9 +294,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 104
+- Total tracked doc-like files audited: 105
 - `verified-no-change`: 17
-- `corrected`: 31
+- `corrected`: 32
 - `archived`: 42
 - `retained-historical`: 14
 - Remaining pending rows: 0
