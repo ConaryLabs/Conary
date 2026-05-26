@@ -10,6 +10,7 @@ pub mod commands;
 pub mod composefs;
 pub mod export;
 pub mod metadata;
+pub(crate) mod publication;
 pub mod switch;
 pub mod takeover;
 pub mod takeover_state;
