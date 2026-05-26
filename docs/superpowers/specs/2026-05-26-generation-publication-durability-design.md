@@ -1,13 +1,13 @@
 ---
 last_updated: 2026-05-26
-revision: 1
+revision: 2
 summary: Design for Plan B generation publication durability and recovery hardening
 ---
 
 # Generation Publication Durability: Design Spec
 
 **Date:** 2026-05-26
-**Status:** Design approved; implementation plans pending
+**Status:** Review-tightened design approved; implementation plans pending
 **Parent:** `docs/superpowers/specs/2026-05-25-preview-invariant-hardening-design.md`
 **Goal:** Make post-DB generation publication explicit, durable, recoverable,
 and visible to operators and automation.
@@ -39,12 +39,14 @@ Plan B closes those gaps without broadening the public preview feature surface.
 Plan B is one Track 3 design split into two implementation slices:
 
 1. **Plan B1: Publication Intent And Recovery Contract**
-   - Add a DB-backed generation publication intent table and typed model APIs.
+   - Add a DB-backed generation publication debt table and typed model APIs.
    - Route install, batch install, and remove through the shared publication
      contract after DB commit.
    - Add an explicit retry command for pending publication intents.
    - Make recovery, history, and status surfaces consult pending publication
      state.
+   - Include durable `/conary/current` parent-directory sync because the B1
+     phase contract depends on knowing when the selected generation is durable.
 
 2. **Plan B2: Durable Filesystem Helper And Fsync Sweep**
    - Add shared durable filesystem helpers for temp-write, sync, rename, and
@@ -77,13 +79,20 @@ The design is based on these current code paths:
 - `apps/conary/src/commands/composefs_ops.rs::rebuild_and_mount` builds a
   generation, may update `/conary/current`, and is called after package DB
   commit.
+- `crates/conary-core/src/generation/builder.rs` builds generations from
+  `Trove::list_all(conn)` and therefore publishes the current installed DB
+  state. It does not replay an isolated historical changeset.
+- The current composefs package-mutation path uses a generation build API whose
+  default activation mode can mark the DB state active before
+  `/conary/current` is durably selected. Plan B must refactor this ordering
+  rather than merely record it.
 - `apps/conary/src/commands/install/mod.rs`, `apps/conary/src/commands/install/batch.rs`,
   and `apps/conary/src/commands/remove.rs` append free-form deferred follow-up
   metadata when post-commit generation rebuild fails.
 - That deferred metadata currently uses string fields such as
   `kind = "generation_rebuild"` and `status = "failed"` and points to
   `system generation build`, which builds a new inactive generation instead of
-  completing a specific DB-backed publication intent.
+  clearing the DB-backed publication debt.
 - `crates/conary-core/src/transaction/recovery.rs` accepts a valid selected
   `/conary/current` artifact in selected-generation recovery without consulting
   pending publication work.
@@ -98,14 +107,20 @@ The design is based on these current code paths:
 
 ## Architecture Decision
 
-Use a real SQLite table as the authoritative publication state, not changeset
-metadata and not sidecar JSON.
+Use a real SQLite table as the authoritative publication debt ledger, not
+changeset metadata and not sidecar JSON.
 
 Plan B adds a `generation_publications` table with typed Rust model APIs. Each
-row represents the publication of one package-mutation changeset into a
-selected generation. The row links to `changesets.id`, records runtime identity,
-tracks phase transitions, captures target state/generation numbers as they
-become known, and stores failure/retry metadata.
+row records that committed DB state still needs to be flushed into a selected
+generation, or that such a flush previously failed. Rows may link to the
+changeset that created or observed the debt for history and diagnostics, but
+they are not independent historical build tasks.
+
+This distinction is important. Conary generation builds are snapshots of the
+current DB state. If changeset A and changeset B both have pending publication
+debt, a single successful publication of current DB state publishes the effects
+of both. It must mark both debts complete instead of rebuilding twice or
+pretending that A and B can be replayed separately.
 
 Changeset metadata may keep a compatibility follow-up entry, but it must become
 secondary. The DB publication row is the source of truth used by recovery,
@@ -124,7 +139,8 @@ Proposed columns:
 | Column | Purpose |
 | --- | --- |
 | `id` | Primary key. |
-| `changeset_id` | Required reference to the package mutation changeset. |
+| `trigger_changeset_id` | Nullable reference to the changeset that created or observed this publication debt. |
+| `published_through_changeset_id` | High-water changeset ID represented by the generation once publication completes. |
 | `tx_uuid` | Optional transaction UUID for correlation with existing transaction state. |
 | `db_path` | Canonical DB path used by the command. |
 | `runtime_root` | Runtime root whose `/conary/current` is being published. |
@@ -142,35 +158,45 @@ Proposed columns:
 
 Constraints:
 
-- one active non-complete publication should exist per `changeset_id`;
+- publication rows are debts to flush current DB state, not isolated requests to
+  rebuild the exact historical state of `trigger_changeset_id`;
+- successful publication records the high-water changeset ID represented by the
+  selected generation and marks all pending recoverable rows at or below that
+  high-water mark complete;
+- `trigger_changeset_id` should use `ON DELETE SET NULL` unless the
+  implementation proves changesets are never deleted. Publication debt should
+  not disappear silently merely because historical changeset rows are pruned;
 - phases and statuses must parse into Rust enums before recovery acts on them;
 - unknown phases or statuses fail closed;
 - rows must preserve enough identity to reject accidental publication against
-  the wrong DB/runtime root.
+  the wrong runtime root. B1 may use canonical DB path plus canonical runtime
+  root for the limited preview, but the implementation plan must explicitly
+  decide whether to add a stable DB identity UUID in settings. If a DB is moved
+  and the derived runtime root no longer matches the row, publication fails
+  closed until the operator abandons or recreates the debt.
+
+`tx_uuid` is optional and must not be required for composefs-native recovery.
+The generation-aware path usually creates changesets without a transaction UUID.
 
 ## Phase Model
 
-Publication phases are typed and intentionally finer-grained than a generic
-"generation rebuild failed" marker:
+Publication phases are typed, but they should represent recovery decision
+points rather than every syscall. Failure is represented by `status = failed`
+plus the last safe phase and `last_error`.
 
 | Phase | Meaning |
 | --- | --- |
-| `DbCommitted` | Package mutation committed; publication not started or needs retry. |
-| `StateSnapshotStarted` | System state snapshot creation started. |
-| `StateSnapshotRecorded` | State row and members exist; `state_number` is known. |
-| `ArtifactBuildStarted` | Generation artifact build started. |
-| `ArtifactBuilt` | Artifact exists and validates; `generation_number` is known. |
-| `CurrentLinkStarted` | Current-link publication started. |
-| `CurrentRenamed` | `/conary/current` rename completed; parent sync is not confirmed. |
-| `CurrentSynced` | Current-link parent directory sync completed. |
-| `DbActiveMarkStarted` | DB active-state update started. |
-| `DbActiveMarked` | DB active-state update completed. |
-| `Complete` | Publication finished successfully. |
-| `Failed` | Last attempt failed; row remains recoverable unless abandoned. |
+| `PendingBuild` | DB committed; no reusable validated generation artifact is known. |
+| `Building` | Generation build is in progress. A crash here may require rebuilding from current DB state. |
+| `ArtifactReady` | Artifact, metadata, manifest, and state snapshot exist and validate; generation/state number is known. |
+| `CurrentPublished` | `/conary/current` points to the generation and its parent directory has been synced. |
+| `ActiveMarked` | Matching DB state has been marked active. This is the complete phase. |
 
-The implementation may merge adjacent phases only if tests still cover the
-important recovery decisions. It must not collapse the whole post-commit path
-back into an opaque warning string.
+The implementation may add more granular internal trace events, but persisted
+recovery state should stay at these semantic boundaries unless a finer phase is
+needed for a concrete recovery decision. In particular, `CurrentLinkStarted`,
+`CurrentRenamed`, and `CurrentSynced` should be one durable helper outcome:
+`CurrentPublished`.
 
 ## Ordering Rule
 
@@ -178,17 +204,27 @@ Plan B changes the publication ordering so durable boot selection happens
 before DB active-state marking:
 
 1. Package DB commit.
-2. Publication intent row created.
-3. System state snapshot recorded.
-4. Generation artifact built and validated.
-5. `/conary/current` updated and parent directory synced.
-6. Matching system state marked active in the DB.
-7. Publication intent marked complete.
+2. Publication debt row created or updated.
+3. Current DB state high-water changeset ID captured while holding the package
+   transaction/publication lock.
+4. Generation artifact built from current DB state with the DB snapshot left
+   inactive.
+5. Artifact, metadata, manifest, and state snapshot validated.
+6. `/conary/current` updated and parent directory synced.
+7. Matching system state marked active in the DB.
+8. Publication debt rows at or below the high-water changeset ID marked
+   complete.
 
 This ordering avoids the current unsafe shape where DB state can claim a
 generation is active before `/conary/current` durably points at it. The reverse
 is easier to recover: if `/conary/current` is durable but DB active marking
 failed, recovery can validate the artifact and mark the matching state active.
+
+This requires a real refactor. `rebuild_and_mount` and the builder path must use
+inactive generation creation for package-mutation publication, then activate the
+state only after current-link publication succeeds. The implementation plan
+must name the exact call sites that currently use active generation creation and
+move them behind the new publication helper.
 
 ## Package Mutation Flow
 
@@ -198,9 +234,12 @@ publication helper after the package DB transaction commits.
 Expected behavior:
 
 1. Commit the package mutation transaction.
-2. Create or update a `generation_publications` row for the changeset.
-3. Attempt publication through the phase model.
-4. If publication completes, mark the row `complete`.
+2. Create or update a `generation_publications` debt row for the triggering
+   changeset or command.
+3. Attempt publication through the phase model while holding the same
+   transaction/publication lock used to prevent concurrent package mutations.
+4. If publication completes, mark all pending recoverable rows covered by the
+   published DB high-water mark `complete`.
 5. If publication fails after DB commit, leave the row `failed` or `pending`
    with `recoverable = true`, record `last_error`, and keep the command exit
    code `0`.
@@ -214,35 +253,51 @@ The command should still print a clear warning on stderr when publication fails:
 
 ```text
 WARNING: package mutation committed, but generation publication is pending for changeset <id>.
-Run: conary --allow-live-system-mutation system generation publish --changeset <id>
+Run: conary --allow-live-system-mutation system generation publish
 ```
+
+If a later package mutation successfully publishes current DB state, it must
+automatically resolve earlier pending debts covered by that generation. Required
+test shape: install A commits and publication fails; install B commits and
+publication succeeds; A's prior publication debt is marked complete because the
+selected generation now represents the current DB state including A and B.
 
 ## Retry Command
 
-Plan B1 adds an explicit retry command:
+Plan B1 adds an explicit retry command whose primary form flushes current DB
+state:
+
+```bash
+conary --allow-live-system-mutation system generation publish
+```
+
+Behavior:
+
+- If no pending recoverable publication debt exists, report that publication is
+  already current and exit successfully.
+- If pending or failed recoverable debt exists, publish current DB state once
+  and mark every covered debt complete.
+- If an existing artifact recorded in a debt row still validates and represents
+  the current high-water DB state, reuse it rather than rebuilding.
+- If the phase/status is unknown, fail closed.
+- If all matching rows are `abandoned`, fail with a diagnostic that manual
+  intervention is required.
+
+Optional selector:
 
 ```bash
 conary --allow-live-system-mutation system generation publish --changeset <id>
 ```
 
-Behavior:
-
-- If the publication is `complete`, report that it is already complete and exit
-  successfully.
-- If the publication is pending or failed but recoverable, resume from the
-  recorded phase or rebuild idempotently from the earliest safe phase.
-- If the changeset has no publication intent, fail with a clear diagnostic.
-- If the intent belongs to a different DB path or runtime root, fail closed.
-- If the phase/status is unknown, fail closed.
-- If the row is `abandoned`, fail with a diagnostic that manual intervention is
-  required.
-
-The retry command must complete the specific DB-backed publication intent. It
-must not merely call `system generation build` and create an unrelated manual
+`--changeset <id>` is an assertion/filter, not a request to rebuild that
+historical changeset in isolation. It should fail if the changeset has no
+pending recoverable publication debt. If it succeeds, publication still flushes
+current DB state and may complete other pending debts covered by the same
 generation.
 
 `system generation recover --publish-pending` is an allowed convenience flag,
-but it is optional for B1. The required B1 surface is `publish --changeset`.
+but it is optional for B1. The required B1 surface is parameterless `publish`
+plus the optional `--changeset` guard if the implementation plan includes it.
 
 ## Recovery Behavior
 
@@ -251,14 +306,19 @@ selected `/conary/current` artifact as complete.
 
 Required behavior:
 
-- If no pending/failed recoverable publication intents exist, current recovery
+- If no pending/failed recoverable publication debts exist, current recovery
   may continue with selected-generation validation.
-- If a pending/failed recoverable intent exists, recovery must try to complete
-  it or fail closed with a diagnostic explaining which changeset needs
-  publication.
-- If multiple pending intents exist, recovery must process them in changeset or
-  creation order and avoid selecting a later generation before earlier
-  publications are resolved or explicitly abandoned.
+- In non-boot recovery contexts, such as pre-command transaction recovery and
+  manual `system generation publish`, recoverable debt should be completed or
+  fail closed with a diagnostic.
+- In boot-selection recovery contexts, if publication cannot be completed with
+  the available runtime facilities, recovery should prefer booting the last
+  complete published generation and leave the debt visible for later retry
+  rather than making the system unnecessarily unbootable. If no complete
+  generation exists, fail with a clear manual-intervention diagnostic.
+- If multiple pending debts exist, recovery/publish should perform one
+  publication of current DB state and complete all covered debts rather than
+  rebuilding once per changeset.
 - Unknown phases or statuses must fail closed.
 - Recovery must not mark a system state active unless the selected generation
   artifact validates and `/conary/current` is durably selected.
@@ -285,8 +345,14 @@ Required surfaces:
   command.
 - Existing conaryd history/status routes must not report a mutation as fully
   published when the DB contains a pending or failed recoverable publication
-  intent. A dedicated conaryd endpoint can be deferred if existing route output
-  can truthfully surface the state.
+  debt. B1 should review at least `/v1/history`, `/v1/transactions`,
+  `/v1/transactions/{id}`, and `/v1/system/states`. A dedicated conaryd
+  endpoint can be deferred if existing route output can truthfully surface the
+  state.
+
+The exit-code contract must be documented in CLI help or operator docs:
+exit `0` after a package mutation means the package DB commit succeeded. Scripts
+that need boot-state convergence must check publication status separately.
 
 ## Deferred Follow-Up Metadata
 
@@ -303,10 +369,22 @@ display layer and rely on `generation_publications` for recovery. Metadata must
 continue to preserve rollback snapshots and adoption warnings in the existing
 `conary.changeset.metadata.v1` envelope.
 
+Legacy metadata cannot be fully migrated by a schema migration alone because
+old follow-up JSON does not reliably contain runtime-root identity. Plan B must
+still prevent old hints from misleading operators. The minimum requirement is:
+when rendering or appending follow-up metadata, recognize legacy
+`generation_rebuild` records, suppress the old `system generation build` retry
+hint, and point operators at `system generation publish`. If practical, B1 may
+perform lazy backfill of publication debt rows when opening a DB with known
+runtime root information.
+
 ## Durable Filesystem Helper
 
-Plan B2 adds shared durable filesystem helpers, preferably in `conary-core`, for
-the publication pattern Conary repeats today:
+Plan B1 must make `/conary/current` publication durable enough for
+`CurrentPublished` to mean what it says: temp symlink, atomic rename, and
+successful parent-directory sync. Plan B2 then adds shared durable filesystem
+helpers, preferably in `conary-core`, for the broader publication pattern Conary
+repeats today:
 
 1. create/write a temp file or temp symlink next to the destination;
 2. fsync file contents when applicable;
@@ -330,6 +408,7 @@ Apply the durable helper or equivalent behavior to:
 - `/conary/current` updates in `crates/conary-core/src/generation/mount.rs`;
 - generation metadata writes in `crates/conary-core/src/generation/metadata.rs`;
 - `.conary-gen.sig` writes when generation signing is active;
+- `.conary-gen.pending` writes/removals;
 - artifact and boot manifests where the selected-generation contract depends on
   them;
 - boot asset copies where the artifact contract depends on the copied entry;
@@ -342,6 +421,11 @@ If a platform does not support a specific sync operation, the helper should
 return a typed unsupported/ignored result only where the caller explicitly
 chooses that policy.
 
+Operation records should be split into "must sync" and "best effort" classes.
+Records used for recovery decisions are B2 targets. Informational-only records
+may use the helper for consistency, but they should not expand Plan B's
+acceptance surface.
+
 ## Testing Strategy
 
 B1 tests:
@@ -352,26 +436,41 @@ B1 tests:
   and exits successfully;
 - install, batch install, and remove share the same publication failure
   contract;
+- multiple pending debts are resolved by one successful publication of current
+  DB state;
+- a later successful install publication marks prior covered debts complete;
+- pending debt for a changeset whose packages were later removed is resolved by
+  publishing current DB state, not by trying to reconstruct removed troves;
 - `system history` marks incomplete publications;
 - the pending publication query surface includes changeset ID, phase, status,
   and retry command;
-- `system generation publish --changeset <id>` completes a pending publication;
+- `system generation publish` completes pending publication debt;
+- `system generation publish --changeset <id>`, if implemented, acts as an
+  assertion/filter and still completes all covered debts;
 - publish is idempotent for completed publications;
 - recovery checks pending publication intents before accepting a valid selected
   `/conary/current`;
+- recovery handles the crash shape where current-link publication succeeded but
+  DB active marking did not;
+- retry validates and reuses an existing artifact at `ArtifactReady` when it
+  still represents the current DB high-water mark;
 - recovery fails closed on unknown publication phase/status;
 - deferred follow-up kind/status values are typed or validated.
+- `update_current_symlink` reports parent-directory sync errors through the B1
+  publication path.
 
 B2 tests:
 
-- `update_current_symlink` fsyncs the parent directory, using injectable failure
-  or a focused helper test where direct observation is impractical;
 - generation metadata/signature writers propagate parent-sync errors;
 - operation record writes use durable temp-write and rename helpers;
 - live-root rename/remove/directory helpers call parent sync after target
   changes;
 - temp-root recovery tests cover representative publication phases without
-  destructive host mutation.
+  destructive host mutation;
+- generation GC refuses to remove a generation referenced by an incomplete
+  publication debt row;
+- concurrent `generation publish` and package mutation attempts serialize on
+  the transaction/publication lock.
 
 ## Rollout
 
@@ -379,18 +478,19 @@ Plan B should become one implementation plan with two slices or two tightly
 linked plans:
 
 1. **B1 commit path:** schema migration, model APIs, publication helper,
-   install/batch/remove integration, retry command, recovery/status/history
-   behavior, focused tests.
-2. **B2 durability path:** shared durable filesystem helper, current-link
-   durability, metadata/signature/operation-record durability, live-root
-   parent-sync coverage, focused tests.
+   install/batch/remove integration, `rebuild_and_mount` activation-order
+   refactor, durable current-link parent sync, retry command,
+   recovery/status/history behavior, focused tests.
+2. **B2 durability path:** shared durable filesystem helper,
+   metadata/signature/pending-marker/operation-record durability, live-root
+   parent-sync coverage, GC coordination, focused tests.
 
 The implementation plan must stage exact changed paths only. Broad `git add`
 of source or docs directories is not allowed.
 
 ## Acceptance Criteria
 
-- A DB-backed publication intent exists before post-commit generation
+- A DB-backed publication debt row exists before post-commit generation
   publication begins.
 - Post-DB generation publication phases are typed and persisted.
 - Unknown publication phases or statuses fail closed.
@@ -398,10 +498,15 @@ of source or docs directories is not allowed.
   `/conary/current`.
 - A forced post-DB publication failure leaves an observable
   `needs_publication` state and still exits `0`.
-- `system generation publish --changeset <id>` completes the specific
-  DB-backed publication intent and is idempotent when already complete.
+- `system generation publish` flushes current DB state, completes all covered
+  pending publication debts, and is idempotent when already complete.
+- `system generation publish --changeset <id>`, if implemented, does not claim
+  to replay historical changeset state; it is an assertion/filter over pending
+  debt.
 - Single install, batch install, and remove use the same failure and retry
   contract.
+- A subsequent successful publication resolves earlier pending debts covered by
+  the published DB high-water mark.
 - CLI history/status surfaces distinguish fully published mutations from
   DB-committed but publication-pending mutations.
 - Existing daemon status/history surfaces do not falsely report pending

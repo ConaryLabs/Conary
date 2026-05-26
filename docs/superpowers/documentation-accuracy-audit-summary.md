@@ -41,7 +41,10 @@ tightening records a constrained sync-hook refresh path, touched legacy shared
 CAS-object repair, changeset-envelope adoption warnings, production-path
 ghost-trove tests, and dirty-worktree-safe final commit instructions. The
 2026-05-26 Plan B design now splits generation publication durability into a
-DB-backed publication intent/recovery slice and a durable filesystem fsync sweep.
+DB-backed publication debt/recovery slice and a durable filesystem fsync sweep;
+the external review follow-up tightened it around current-DB publication sweeps,
+parameterless publish retries, a smaller recovery phase model, and the
+activation-order refactor required in `rebuild_and_mount`.
 
 Audited every tracked documentation-like file returned by
 `bash scripts/docs-audit-inventory.sh`: tracked files spanning root docs,
