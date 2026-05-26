@@ -4,8 +4,8 @@
 //!
 //! Provides:
 //! - Peer credential extraction (SO_PEERCRED)
-//! - Permission checking (root vs non-root)
-//! - PolicyKit integration stub (for future implementation)
+//! - Permission checking (root and daemon identity)
+//! - Fail-closed PolicyKit authorization stub
 //! - Audit logging
 //!
 //! # Security Model
@@ -13,15 +13,18 @@
 //! The daemon enforces the following security model:
 //!
 //! - **Root users** (UID 0): Full access to all operations
-//! - **Members of admin groups** (wheel, sudo): Full access (configurable)
-//! - **Other users**: Read-only access by default; write access requires PolicyKit
+//! - **Daemon identity**: Access to daemon-owned local API operations
+//! - **Other users**: Read-only access by default; write access is denied while
+//!   PolicyKit remains an unimplemented fail-closed stub
 //!
 //! # PolicyKit
 //!
-//! Non-root users can be authorized via PolicyKit for specific operations.
-//! This requires the `polkit` feature and installation of a policy file.
+//! PolicyKit authorization is not implemented yet. Both the `polkit` feature
+//! path and the non-`polkit` build path deny write authorization for non-root
+//! users until Conary has a real DBus authorization check and installed policy
+//! file contract.
 //!
-//! Policy actions:
+//! Reserved future policy actions:
 //! - `com.conary.daemon.install` - Install packages
 //! - `com.conary.daemon.remove` - Remove packages
 //! - `com.conary.daemon.update` - Update packages

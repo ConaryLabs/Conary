@@ -532,7 +532,7 @@ cargo build -p conaryd
 cargo run -p conaryd -- --foreground
 ```
 
-See the [Conaryopedia](docs/conaryopedia-v2.md) for the full REST endpoint list.
+See [docs/modules/conaryd.md](docs/modules/conaryd.md) for the maintained daemon endpoint list.
 
 ---
 

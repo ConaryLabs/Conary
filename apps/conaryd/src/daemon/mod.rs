@@ -93,7 +93,7 @@ pub struct DaemonConfig {
     pub max_concurrent_reads: usize,
     /// Enable automation scheduler
     pub enable_automation: bool,
-    /// Require PolicyKit for non-root users
+    /// Keep non-root write authorization fail-closed behind the PolicyKit stub
     pub require_polkit: bool,
     /// Exit after idle timeout (for socket activation)
     pub idle_timeout_secs: Option<u64>,
