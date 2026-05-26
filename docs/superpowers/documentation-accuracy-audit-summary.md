@@ -45,9 +45,10 @@ DB-backed publication debt/recovery slice and a durable filesystem fsync sweep;
 the external review follow-up tightened it around current-DB publication sweeps,
 parameterless publish retries, a smaller recovery phase model, and the
 activation-order refactor required in `rebuild_and_mount`.
-The matching Plan B implementation checklist now opens the active plans lane
-for the DB publication debt model, publication helper, CLI/status surfaces,
-recovery guardrails, current-link durability, and the B2 fsync sweep.
+The matching Plan B implementation landed in `c7a549d0..46b268da` with the
+schema v69 publication debt model, publication helper, CLI/status surfaces,
+recovery guardrails, current-link durability, daemon history truthfulness, GC
+protection, and the B2 fsync sweep.
 
 Audited every tracked documentation-like file returned by
 `bash scripts/docs-audit-inventory.sh`: tracked files spanning root docs,
@@ -73,6 +74,8 @@ The repo moved materially after the last audit:
   validation
 - Remi deploy/access and conversion-burst hardening
 - schema v68 and architecture-aware conversion cache migration
+- schema v69 generation publication debt, recovery/status surfaces, and
+  durable fsync helper coverage
 - release-readiness dependency/security refresh
 - Fedora 44, Ubuntu 26.04 LTS, and Arch Linux public-preview matrix alignment
 - conaryd package execution, with queued install/remove/update jobs and the
@@ -129,14 +132,18 @@ The repo moved materially after the last audit:
 - Updated deploy/operator docs and `deploy/remi.toml.example` for Fedora 44,
   Ubuntu 26.04 LTS, Remi admin-origin access, current host assumptions, and
   Forge/conaryd paths.
-- Updated `docs/ARCHITECTURE.md` and `docs/conaryopedia-v2.md` for schema v68,
+- Updated `docs/ARCHITECTURE.md` and `docs/conaryopedia-v2.md` for schema v69,
   runtime generation input validation, LFS 13.0 bootstrap phases, and
   self-contained generation export; refreshed them again after composefs atomic
   switching landed so transaction and recovery wording reflects next-boot
   selection through `/conary/current`; then refreshed the package-update,
   adoption, unadoption, repository advisory-support, and explicit-takeover
   command guidance after Slice B landed; refreshed security advisory metadata
-  guidance after Goal 3 added trusted JSON and Remi advisory ingestion.
+  guidance after Goal 3 added trusted JSON and Remi advisory ingestion; then
+  refreshed schema wording again after Plan B added generation publication debt.
+- Updated `README.md` with the operator path for pending generation publication
+  debt: inspect with `system generation pending` and retry current-DB
+  publication with live-mutation acknowledgement.
 - Updated `CHANGELOG.md`, `CONTRIBUTING.md`, and `SECURITY.md` so public and
   developer-facing docs describe rebuild/reselect semantics rather than older
   live remount recovery language.
@@ -211,11 +218,13 @@ The repo moved materially after the last audit:
 - Completed design specs, including the MCP/LLM-native operations design
   records, were moved to `docs/superpowers/specs/archive/`; the active top-level
   `plans/` directory now holds the 2026-05-25 adoption safety Plan A checklist
-  plus the 2026-05-26 Plan B generation publication durability checklist, and
+  plus the implemented 2026-05-26 Plan B generation publication durability
+  checklist, and
   the active `specs/` directory holds the 2026-05-25 preview invariant
-  hardening umbrella plus the 2026-05-26 Plan B generation publication
-  durability design until their follow-on plans land or defer their tracks.
-  The Plan A records were review-tightened on 2026-05-26 before implementation.
+  hardening umbrella plus the implemented 2026-05-26 Plan B generation
+  publication durability design until Plan C lands or the active records are
+  archived. The Plan A records were review-tightened on 2026-05-26 before
+  implementation.
 - The completed May 14 limited-preview honesty review TSV was moved beside its
   archived plan in `docs/superpowers/plans/archive/`; it is outside the doc
   inventory script because that script tracks documentation-like files.
