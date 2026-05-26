@@ -2,8 +2,11 @@
 
 //! Conary Core Library
 //!
-//! Shared types, database, package parsing, and filesystem operations
-//! used by the Conary workspace apps.
+//! Internal workspace crate used by Conary applications for shared package,
+//! database, transaction, generation, and filesystem logic.
+//!
+//! The broad module exports are for workspace convenience and integration-test
+//! reuse. They are not a stable external public API or SDK contract.
 
 pub mod automation;
 pub mod bootstrap;

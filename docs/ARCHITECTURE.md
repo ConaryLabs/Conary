@@ -88,7 +88,7 @@ apps/conary/             CLI binary
 
 crates/conary-core/      Core library crate
 +-- src/
-    +-- lib.rs           Public API surface
+    +-- lib.rs           Internal workspace crate surface, not a stable external API
     +-- operations.rs    Shared operation vocabulary across CLI and daemon boundaries
     +-- db/              Database layer
     |   +-- schema.rs    Schema v69, migration dispatcher
@@ -253,6 +253,12 @@ crates/conary-mcp/       Shared MCP adapter helpers
 +-- src/
     +-- lib.rs           MCP-specific primitives reused by workspace apps
 ```
+
+`conary-core` is currently an internal workspace crate. Its broad module exports
+exist for workspace app reuse and integration tests, not as a stable external
+API or SDK promise. The crate is marked `publish = false`; a curated public
+facade would need its own design if Conary later supports external library
+consumers.
 
 ## Data Flow: Package Installation
 
@@ -429,7 +435,7 @@ itself.
 Supports x86_64, aarch64, and riscv64 targets. Dry-run mode
 (`--dry-run`) validates the full pipeline without building.
 
-## Database Schema (v67)
+## Database Schema (v69)
 
 All runtime state lives in SQLite, and migrations are dispatched from
 `crates/conary-core/src/db/schema.rs`.
