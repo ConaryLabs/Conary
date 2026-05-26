@@ -50,6 +50,15 @@ schema v69 publication debt model, publication helper, CLI/status surfaces,
 recovery guardrails, current-link durability, daemon history truthfulness, GC
 protection, and the B2 fsync sweep.
 
+### 2026-05-26 Plan C Docs Truth Gate
+
+Plan C closed the preview invariant hardening umbrella by adding an always-on
+docs-truth PR gate, strict docs-audit CI checks, a maintained conaryd endpoint
+reference, fail-closed PolicyKit wording, retired-command checks,
+schema-version truth checks, and the internal `conary-core` crate guard. The
+completed Plan A, Plan B, Plan C, and umbrella docs were moved to archive paths
+after landing.
+
 Audited every tracked documentation-like file returned by
 `bash scripts/docs-audit-inventory.sh`: tracked files spanning root docs,
 assistant entrypoints, GitHub templates, canonical docs under `docs/`,
@@ -216,15 +225,11 @@ The repo moved materially after the last audit:
   validation, Goal 1, and the MCP/LLM-native operations prep slices, were moved
   to `docs/superpowers/plans/archive/`.
 - Completed design specs, including the MCP/LLM-native operations design
-  records, were moved to `docs/superpowers/specs/archive/`; the active top-level
-  `plans/` directory now holds the 2026-05-25 adoption safety Plan A checklist
-  plus the implemented 2026-05-26 Plan B generation publication durability
-  checklist, and
-  the active `specs/` directory holds the 2026-05-25 preview invariant
-  hardening umbrella plus the implemented 2026-05-26 Plan B generation
-  publication durability design until Plan C lands or the active records are
-  archived. The Plan A records were review-tightened on 2026-05-26 before
-  implementation.
+  records and the Plan A/B/C invariant-hardening records, were moved to
+  `docs/superpowers/specs/archive/`; completed implementation plans were moved
+  to `docs/superpowers/plans/archive/`. After Plan C, the active top-level
+  `plans/` and `specs/` directories are intentionally clear for the next
+  current design slice.
 - The completed May 14 limited-preview honesty review TSV was moved beside its
   archived plan in `docs/superpowers/plans/archive/`; it is outside the doc
   inventory script because that script tracks documentation-like files.
