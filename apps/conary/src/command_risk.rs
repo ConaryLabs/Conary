@@ -326,6 +326,12 @@ fn classify_generation(command: &cli::GenerationCommands) -> CommandRiskPolicy {
             CommandRisk::AlwaysLive,
             false,
         ),
+        cli::GenerationCommands::Publish { .. } => policy(
+            "conary system generation publish",
+            CommandRisk::AlwaysLive,
+            false,
+        ),
+        cli::GenerationCommands::Pending { .. } => read_only("conary system generation pending"),
         cli::GenerationCommands::Switch { .. } => policy(
             "conary system generation switch",
             CommandRisk::AlwaysLive,
@@ -774,5 +780,19 @@ mod tests {
             convert.command_label.as_ref(),
             "conary system adopt --convert --dry-run"
         );
+    }
+
+    #[test]
+    fn classify_generation_publish_as_always_live() {
+        let policy = policy(&["conary", "system", "generation", "publish"]);
+        assert_eq!(policy.risk, CommandRisk::AlwaysLive);
+        assert!(policy.requires_ack());
+    }
+
+    #[test]
+    fn classify_generation_pending_as_read_only() {
+        let policy = policy(&["conary", "system", "generation", "pending"]);
+        assert_eq!(policy.risk, CommandRisk::ReadOnly);
+        assert!(!policy.requires_ack());
     }
 }
