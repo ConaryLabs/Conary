@@ -19,6 +19,22 @@ pub enum GenerationCommands {
         db: DbArgs,
     },
 
+    /// Publish committed DB state into the selected generation
+    Publish {
+        /// Assert that this pending changeset is covered by the publication
+        #[arg(long)]
+        changeset: Option<i64>,
+
+        #[command(flatten)]
+        db: DbArgs,
+    },
+
+    /// Show generation publication debt that still needs operator attention
+    Pending {
+        #[command(flatten)]
+        db: DbArgs,
+    },
+
     /// Export a generation artifact as a disk image.
     Export {
         /// Installed generation number to export (defaults to current generation).

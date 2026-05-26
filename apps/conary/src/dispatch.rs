@@ -732,6 +732,18 @@ async fn dispatch_system_command(
                 )?;
                 commands::generation::commands::cmd_generation_build(&db.db_path, &summary)
             }
+            cli::GenerationCommands::Publish { changeset, db } => {
+                require_live_mutation(
+                    allow_live_system_mutation,
+                    Cow::Borrowed("conary system generation publish"),
+                    LiveMutationClass::AlwaysLive,
+                    false,
+                )?;
+                commands::generation::commands::cmd_generation_publish(&db.db_path, changeset)
+            }
+            cli::GenerationCommands::Pending { db } => {
+                commands::generation::commands::cmd_generation_pending(&db.db_path)
+            }
             cli::GenerationCommands::Export {
                 generation,
                 path,

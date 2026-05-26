@@ -673,6 +673,92 @@ pub fn cmd_generation_build(db_path: &str, summary: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn cmd_generation_publish(db_path: &str, changeset: Option<i64>) -> Result<()> {
+    let conn = crate::commands::open_db(db_path)?;
+    if let Some(changeset_id) = changeset
+        && conary_core::db::models::GenerationPublication::pending_for_changeset(
+            &conn,
+            changeset_id,
+        )?
+        .is_none()
+    {
+        return Err(anyhow!(
+            "No pending generation publication debt found for changeset {changeset_id}"
+        ));
+    }
+
+    let debts = conary_core::db::models::GenerationPublication::pending_recoverable(&conn)?;
+    if debts.is_empty() {
+        println!("Generation publication is already current.");
+        return Ok(());
+    }
+
+    let runtime_root = runtime_root_for_generation_db_path(db_path);
+    let mut engine = TransactionEngine::new(TransactionConfig::from_paths(
+        runtime_root.root().to_path_buf(),
+        runtime_root.db_path().to_path_buf(),
+    ))?;
+    engine.begin()?;
+    let result = crate::commands::generation::publication::publish_current_db_state(
+        &conn,
+        crate::commands::generation::publication::PublicationRequest {
+            db_path,
+            summary: "Retry pending generation publication",
+            trigger_changeset_id: changeset,
+            tx_uuid: None,
+            prev_etc_snapshot: None,
+        },
+    );
+    engine.release_lock();
+
+    let outcome = result?;
+    if outcome.needs_publication {
+        return Err(anyhow!(
+            "Generation publication is still pending. Retry with: {}",
+            outcome.retry_command.unwrap_or_else(
+                crate::commands::generation::publication::PublicationOutcome::default_retry_command
+            )
+        ));
+    }
+
+    println!(
+        "Generation publication complete: generation {} selected.",
+        outcome.generation_number.unwrap_or_default()
+    );
+    Ok(())
+}
+
+pub fn cmd_generation_pending(db_path: &str) -> Result<()> {
+    let conn = crate::commands::open_db(db_path)?;
+    let debts = conary_core::db::models::GenerationPublication::pending_recoverable(&conn)?;
+    if debts.is_empty() {
+        println!("No pending generation publication debt.");
+        return Ok(());
+    }
+
+    println!("Pending generation publication debt:");
+    for debt in debts {
+        let id = debt.id.unwrap_or_default();
+        let changeset = debt
+            .trigger_changeset_id
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| "-".to_string());
+        println!(
+            "  [{id}] changeset={changeset} status={} phase={} generation={} state={} retry=\"{}\"",
+            debt.status.as_str(),
+            debt.phase.as_str(),
+            debt.generation_number
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            debt.state_number
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            crate::commands::generation::publication::PublicationOutcome::default_retry_command()
+        );
+    }
+    Ok(())
+}
+
 /// Select `number` as the next boot generation, update the boot entry, and optionally reboot.
 pub fn cmd_generation_switch(number: i64, reboot: bool) -> Result<()> {
     let runtime_root = default_runtime_root();
