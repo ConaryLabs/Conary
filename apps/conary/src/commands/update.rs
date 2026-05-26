@@ -945,7 +945,7 @@ pub async fn cmd_update(
                 render_adopted_skip_sample(&native_authority)
             );
             println!(
-                "Run 'conary system adopt --refresh' after native package-manager changes before retrying Conary workflows."
+                "Run 'conary --allow-live-system-mutation system adopt --refresh' after native package-manager changes before retrying Conary workflows."
             );
             if !matches!(requested_dep_mode, Some(DepMode::Takeover)) {
                 println!(
@@ -1659,7 +1659,7 @@ pub async fn cmd_update_group(
                 name
             );
             println!(
-                "Run 'conary system adopt --refresh' after native package-manager changes before retrying Conary workflows."
+                "Run 'conary --allow-live-system-mutation system adopt --refresh' after native package-manager changes before retrying Conary workflows."
             );
         } else if security_only {
             println!("No security updates available for collection '{}'", name);

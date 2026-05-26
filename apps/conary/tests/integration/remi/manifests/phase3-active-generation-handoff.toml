@@ -41,7 +41,7 @@ rm -rf /conary/current /conary/current.native-handoff-backup /conary/native-auth
 ${CONARY_BIN} system init --db-path ${DB_PATH}
 ${native_query}
 test -x ${native_file}
-${CONARY_BIN} system adopt ${native_package} --db-path ${DB_PATH}
+${CONARY_BIN} --allow-live-system-mutation system adopt ${native_package} --db-path ${DB_PATH}
 mkdir -p /conary/generations/71
 ln -s generations/71 /conary/current
 ${CONARY_BIN} system native-handoff --dry-run --db-path ${DB_PATH} > /tmp/native-handoff-dry-run.log 2>&1
@@ -132,7 +132,7 @@ rm -rf /conary/current /conary/current.native-handoff-backup /conary/native-auth
 ${CONARY_BIN} system init --db-path ${DB_PATH}
 ${native_query}
 test -x ${native_file}
-${CONARY_BIN} system adopt ${native_package} --db-path ${DB_PATH}
+${CONARY_BIN} --allow-live-system-mutation system adopt ${native_package} --db-path ${DB_PATH}
 mkdir -p /conary/generations/72
 ln -s generations/72 /conary/current
 set +e

@@ -48,7 +48,7 @@ pub(crate) fn compute_cas_backed_file_hash(
                     "{file_path}: regular file must be readable before CAS storage"
                 ));
             }
-            cas.hardlink_from_existing(path)
+            cas.store_file_copy_from_existing(path)
                 .map_err(|e| anyhow!("{file_path}: regular file could not be stored in CAS: {e}"))
         }
         other => Err(anyhow!(
@@ -142,6 +142,58 @@ mod tests {
 
         assert_ne!(hash, "package-manager-digest");
         assert_eq!(cas.retrieve(&hash).unwrap(), b"hello");
+    }
+
+    #[test]
+    fn full_adoption_cas_survives_in_place_source_mutation() {
+        let tmp = tempdir_in_target();
+        let source = tmp.path().join("mutable-source");
+        std::fs::write(&source, b"original bytes").unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        let source_arg = source.strip_prefix(cwd).unwrap();
+        let cas = CasStore::new(tmp.path().join("objects")).unwrap();
+
+        let hash = compute_cas_backed_file_hash(
+            source_arg.to_str().unwrap(),
+            0o100644,
+            Some("package-manager-digest"),
+            None,
+            &cas,
+        )
+        .unwrap();
+
+        std::fs::write(&source, b"mutated bytes").unwrap();
+
+        assert_eq!(cas.retrieve(&hash).unwrap(), b"original bytes");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn full_adoption_regular_file_uses_private_cas_inode() {
+        use std::os::unix::fs::MetadataExt;
+
+        let tmp = tempdir_in_target();
+        let source = tmp.path().join("private-inode-source");
+        std::fs::write(&source, b"private inode bytes").unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        let source_arg = source.strip_prefix(cwd).unwrap();
+        let cas = CasStore::new(tmp.path().join("objects")).unwrap();
+
+        let hash = compute_cas_backed_file_hash(
+            source_arg.to_str().unwrap(),
+            0o100644,
+            Some("package-manager-digest"),
+            None,
+            &cas,
+        )
+        .unwrap();
+        let cas_path = cas.hash_to_path(&hash).unwrap();
+
+        assert_ne!(
+            std::fs::metadata(&source).unwrap().ino(),
+            std::fs::metadata(&cas_path).unwrap().ino(),
+            "live full adoption must not share an inode with mutable source files"
+        );
     }
 
     #[test]

@@ -82,7 +82,7 @@ pub enum SystemCommands {
     Adopt {
         /// Package name(s) to adopt (ignored if --system, --status, --refresh, etc.)
         #[arg(required_unless_present_any = ["system", "status", "refresh", "convert", "sync_hook"])]
-        #[arg(conflicts_with_all = ["system", "status", "refresh", "convert", "sync_hook"])]
+        #[arg(conflicts_with_all = ["system", "status", "refresh", "convert", "sync_hook", "from_sync_hook"])]
         packages: Vec<String>,
 
         #[command(flatten)]
@@ -90,7 +90,7 @@ pub enum SystemCommands {
 
         /// Copy files to CAS for full management (enables rollback)
         /// Used by: default (package adopt), --system, --refresh
-        #[arg(long, conflicts_with_all = ["status", "convert", "sync_hook"])]
+        #[arg(long, conflicts_with_all = ["status", "convert", "sync_hook", "from_sync_hook"])]
         full: bool,
 
         /// Adopt all installed system packages
@@ -102,7 +102,8 @@ pub enum SystemCommands {
         status: bool,
 
         /// Show what would be adopted without making changes
-        /// Used by: --system, --convert, --refresh
+        /// Used by: --system, --convert, --refresh. Single-package dry-run is
+        /// rejected until it has a true non-mutating preview path.
         #[arg(long, conflicts_with_all = ["status", "sync_hook"])]
         dry_run: bool,
 
@@ -149,6 +150,13 @@ pub enum SystemCommands {
         /// Used by: --refresh only
         #[arg(long, requires = "refresh", conflicts_with_all = ["system", "status", "convert", "sync_hook"])]
         quiet: bool,
+
+        /// Internal path used by installed native package-manager sync hooks.
+        ///
+        /// Requires --refresh --quiet and cannot be combined with --full; hook
+        /// install/remove remains the explicit consent point.
+        #[arg(long, hide = true, requires_all = ["refresh", "quiet"], conflicts_with_all = ["system", "status", "convert", "sync_hook", "full"])]
+        from_sync_hook: bool,
     },
 
     /// Stop Conary tracking adopted native packages without deleting files

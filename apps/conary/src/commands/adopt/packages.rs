@@ -8,7 +8,9 @@ use super::super::create_state_snapshot;
 use super::super::open_db;
 use super::super::progress::{AdoptPhase, AdoptProgress};
 use super::cas_capture::prepare_cas_backed_package_files;
+use super::outcome::{metadata_insert_succeeded, write_warning_metadata};
 use super::system::{FileInfoTuple, compute_file_hash};
+use crate::commands::AdoptionWarning;
 use anyhow::Result;
 use conary_core::db::models::{
     Changeset, ChangesetStatus, DependencyEntry, FileEntry, InstallSource, ProvideEntry, Trove,
@@ -19,10 +21,6 @@ use conary_core::packages::{
 };
 use std::path::PathBuf;
 use tracing::debug;
-
-fn metadata_insert_succeeded(total_inserts: usize, insert_failures: usize) -> bool {
-    total_inserts == 0 || insert_failures < total_inserts
-}
 
 /// Adopt specific packages
 pub async fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result<()> {
@@ -160,7 +158,7 @@ pub async fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result
         })
         .collect();
 
-        // Perform CAS writes (hardlinks) before opening the transaction.
+        // Perform CAS writes before opening the transaction.
         let files_with_hashes: Vec<(FileInfoTuple, String)> = if full {
             progress.set_phase(&pkg_name, AdoptPhase::CasStorage);
             match prepare_cas_backed_package_files(
@@ -221,98 +219,119 @@ pub async fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result
         ));
 
         // DB-only transaction: all PM queries and CAS writes are already done.
-        let (changeset_id, adopted) = conary_core::db::transaction(&mut conn, |tx| {
-            let changeset_id = changeset.insert(tx)?;
+        let (changeset_id, adopted, has_warnings) =
+            conary_core::db::transaction(&mut conn, |tx| {
+                let changeset_id = changeset.insert(tx)?;
 
-            // Create trove
-            let mut trove = Trove::new_with_source(
-                pkg_name.clone(),
-                pkg_version.clone(),
-                TroveType::Package,
-                install_source.clone(),
-            );
-            trove.architecture = Some(pkg_arch.clone());
-            trove.description = pkg_desc.clone();
-            trove.installed_by_changeset_id = Some(changeset_id);
-            trove.source_distro = source_identity.source_distro.clone();
-            trove.version_scheme = source_identity.version_scheme.clone();
-
-            let trove_id = trove.insert(tx)?;
-
-            progress.set_phase(&pkg_name, AdoptPhase::Inserting);
-            let total_inserts = files_with_hashes.len()
-                + deps.iter().filter(|dep| !dep.name.is_empty()).count()
-                + provides
-                    .iter()
-                    .filter(|provide| !provide.is_empty())
-                    .count();
-            let mut insert_failures = 0usize;
-
-            for (
-                (file_path, file_size, file_mode, _digest, file_user, file_group, file_link_target),
-                hash,
-            ) in &files_with_hashes
-            {
-                let mut file_entry = FileEntry::new(
-                    file_path.clone(),
-                    hash.clone(),
-                    *file_size,
-                    *file_mode,
-                    trove_id,
+                // Create trove
+                let mut trove = Trove::new_with_source(
+                    pkg_name.clone(),
+                    pkg_version.clone(),
+                    TroveType::Package,
+                    install_source.clone(),
                 );
-                file_entry.owner = file_user.clone();
-                file_entry.group_name = file_group.clone();
-                file_entry.symlink_target = file_link_target.clone();
+                trove.architecture = Some(pkg_arch.clone());
+                trove.description = pkg_desc.clone();
+                trove.installed_by_changeset_id = Some(changeset_id);
+                trove.source_distro = source_identity.source_distro.clone();
+                trove.version_scheme = source_identity.version_scheme.clone();
 
-                // Use INSERT OR REPLACE to handle shared paths (directories, etc.)
-                if let Err(e) = file_entry.insert_or_replace(tx) {
-                    debug!("Failed to insert file {}: {}", file_path, e);
-                    insert_failures += 1;
+                let trove_id = trove.insert(tx)?;
+
+                progress.set_phase(&pkg_name, AdoptPhase::Inserting);
+                let total_inserts = files_with_hashes.len()
+                    + deps.iter().filter(|dep| !dep.name.is_empty()).count()
+                    + provides
+                        .iter()
+                        .filter(|provide| !provide.is_empty())
+                        .count();
+                let mut insert_failures = 0usize;
+
+                for (
+                    (
+                        file_path,
+                        file_size,
+                        file_mode,
+                        _digest,
+                        file_user,
+                        file_group,
+                        file_link_target,
+                    ),
+                    hash,
+                ) in &files_with_hashes
+                {
+                    let mut file_entry = FileEntry::new(
+                        file_path.clone(),
+                        hash.clone(),
+                        *file_size,
+                        *file_mode,
+                        trove_id,
+                    );
+                    file_entry.owner = file_user.clone();
+                    file_entry.group_name = file_group.clone();
+                    file_entry.symlink_target = file_link_target.clone();
+
+                    // Use INSERT OR REPLACE to handle shared paths (directories, etc.)
+                    if let Err(e) = file_entry.insert_or_replace(tx) {
+                        debug!("Failed to insert file {}: {}", file_path, e);
+                        insert_failures += 1;
+                    }
                 }
-            }
 
-            for dep in &deps {
-                if dep.name.is_empty() {
-                    continue;
+                for dep in &deps {
+                    if dep.name.is_empty() {
+                        continue;
+                    }
+
+                    let mut dep_entry = DependencyEntry::new(
+                        trove_id,
+                        dep.name.clone(),
+                        None, // depends_on_version is for resolved version, not constraint
+                        "runtime".to_string(),
+                        dep.constraint.clone(), // Store the version constraint
+                    );
+                    if let Err(e) = dep_entry.insert(tx) {
+                        debug!("Failed to insert dependency {}: {}", dep.name, e);
+                        insert_failures += 1;
+                    }
                 }
 
-                let mut dep_entry = DependencyEntry::new(
-                    trove_id,
-                    dep.name.clone(),
-                    None, // depends_on_version is for resolved version, not constraint
-                    "runtime".to_string(),
-                    dep.constraint.clone(), // Store the version constraint
-                );
-                if let Err(e) = dep_entry.insert(tx) {
-                    debug!("Failed to insert dependency {}: {}", dep.name, e);
-                    insert_failures += 1;
+                for provide in &provides {
+                    if provide.is_empty() {
+                        continue;
+                    }
+                    let mut provide_entry = ProvideEntry::new(trove_id, provide.clone(), None);
+                    if let Err(e) = provide_entry.insert_or_ignore(tx) {
+                        debug!("Failed to insert provide {}: {}", provide, e);
+                        insert_failures += 1;
+                    }
                 }
-            }
 
-            for provide in &provides {
-                if provide.is_empty() {
-                    continue;
+                if !metadata_insert_succeeded(total_inserts, insert_failures) {
+                    debug!(
+                        "All {} metadata insert(s) failed for {}; removing empty adopted trove",
+                        total_inserts, pkg_name
+                    );
+                    conary_core::db::models::Trove::delete(tx, trove_id)?;
+                    changeset.update_status(tx, ChangesetStatus::RolledBack)?;
+                    return Ok((changeset_id, false, false));
                 }
-                let mut provide_entry = ProvideEntry::new(trove_id, provide.clone(), None);
-                if let Err(e) = provide_entry.insert_or_ignore(tx) {
-                    debug!("Failed to insert provide {}: {}", provide, e);
-                    insert_failures += 1;
-                }
-            }
 
-            if !metadata_insert_succeeded(total_inserts, insert_failures) {
-                debug!(
-                    "All {} metadata insert(s) failed for {}; removing empty adopted trove",
-                    total_inserts, pkg_name
-                );
-                conary_core::db::models::Trove::delete(tx, trove_id)?;
-                changeset.update_status(tx, ChangesetStatus::RolledBack)?;
-                return Ok((changeset_id, false));
-            }
-
-            changeset.update_status(tx, ChangesetStatus::Applied)?;
-            Ok((changeset_id, true))
-        })?;
+                let warnings = if total_inserts > 0 && insert_failures > 0 {
+                    vec![AdoptionWarning::partial_insert_failure(
+                        pkg_name.clone(),
+                        total_inserts,
+                        insert_failures,
+                    )]
+                } else {
+                    Vec::new()
+                };
+                let has_warnings = !warnings.is_empty();
+                write_warning_metadata(tx, changeset_id, warnings)
+                    .map_err(|e| conary_core::Error::Io(std::io::Error::other(e.to_string())))?;
+                changeset.update_status(tx, ChangesetStatus::Applied)?;
+                Ok((changeset_id, true, has_warnings))
+            })?;
 
         if !adopted {
             continue;
@@ -321,26 +340,16 @@ pub async fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result
         // Create state snapshot for rollback safety
         create_state_snapshot(&conn, changeset_id, &format!("Adopt {}", pkg_name))?;
 
+        if has_warnings {
+            println!(
+                "Adopted with warnings: 1 package(s). Run `conary system history` to inspect adoption warning metadata."
+            );
+        }
+
         progress.complete_package(&pkg_name);
     }
 
     progress.finish("Adoption complete");
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::metadata_insert_succeeded;
-
-    #[test]
-    fn metadata_insert_succeeded_rejects_empty_troves() {
-        assert!(!metadata_insert_succeeded(3, 3));
-    }
-
-    #[test]
-    fn metadata_insert_succeeded_allows_partial_or_empty_metadata() {
-        assert!(metadata_insert_succeeded(3, 2));
-        assert!(metadata_insert_succeeded(0, 0));
-    }
 }

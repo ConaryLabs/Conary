@@ -8,6 +8,8 @@ use super::super::create_state_snapshot;
 use super::super::open_db;
 use super::super::progress::{AdoptPhase, AdoptProgress};
 use super::cas_capture::prepare_cas_backed_package_files;
+use super::outcome::{metadata_insert_succeeded, write_warning_metadata};
+use crate::commands::AdoptionWarning;
 use anyhow::Result;
 use conary_core::db::models::{
     Changeset, ChangesetStatus, DependencyEntry, FileEntry, InstallReason, InstallSource,
@@ -246,6 +248,7 @@ pub async fn cmd_adopt_system(
 
     let mut adopted_count = 0;
     let mut skipped_count = 0;
+    let mut degraded_count = 0;
     let mut error_count = 0;
 
     let mode_label = if full { "Adopting (full)" } else { "Adopting" };
@@ -308,7 +311,7 @@ pub async fn cmd_adopt_system(
             }
         };
 
-        // Perform CAS writes (hardlinks) OUTSIDE the transaction.
+        // Perform CAS writes OUTSIDE the transaction.
         let files_with_hashes: Vec<(FileInfoTuple, String)> = if full {
             progress.set_phase(name, AdoptPhase::CasStorage);
             match prepare_cas_backed_package_files(
@@ -353,6 +356,7 @@ pub async fn cmd_adopt_system(
     // DB-only transaction: all PM queries and CAS writes are already done.
     let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
         let changeset_id = changeset.insert(tx)?;
+        let mut adoption_warnings = Vec::new();
 
         for pkg in &pre_collected {
             let mut trove = Trove::new_with_source(
@@ -441,21 +445,28 @@ pub async fn cmd_adopt_system(
                 }
             }
 
-            // If the package has metadata to insert and every single insert
-            // failed, the trove record is empty and useless — skip it.
-            if total_inserts > 0 && insert_failures == total_inserts {
-                warn!(
-                    "All {} insert(s) failed for '{}'; skipping trove",
-                    total_inserts, pkg.name
-                );
+            let has_partial_failure = total_inserts > 0 && insert_failures > 0;
+            if !finalize_bulk_metadata_insert_outcome(
+                tx,
+                trove_id,
+                &pkg.name,
+                total_inserts,
+                insert_failures,
+                &mut adoption_warnings,
+            )? {
                 error_count += 1;
                 continue;
             }
 
+            if has_partial_failure {
+                degraded_count += 1;
+            }
             adopted_count += 1;
             progress.complete_package(&pkg.name);
         }
 
+        write_warning_metadata(tx, changeset_id, adoption_warnings)
+            .map_err(|e| conary_core::Error::Io(std::io::Error::other(e.to_string())))?;
         changeset.update_status(tx, ChangesetStatus::Applied)?;
         Ok(changeset_id)
     })?;
@@ -481,8 +492,44 @@ pub async fn cmd_adopt_system(
             adopted_count, skipped_count, mode_desc
         ));
     }
+    if degraded_count > 0 {
+        println!(
+            "Adopted with warnings: {degraded_count} package(s). Run `conary system history` to inspect adoption warning metadata."
+        );
+    }
 
     Ok(())
+}
+
+fn finalize_bulk_metadata_insert_outcome(
+    tx: &rusqlite::Connection,
+    trove_id: i64,
+    package_name: &str,
+    total_inserts: usize,
+    insert_failures: usize,
+    adoption_warnings: &mut Vec<AdoptionWarning>,
+) -> conary_core::Result<bool> {
+    if metadata_insert_succeeded(total_inserts, insert_failures) {
+        if total_inserts > 0 && insert_failures > 0 {
+            adoption_warnings.push(AdoptionWarning::partial_insert_failure(
+                package_name.to_string(),
+                total_inserts,
+                insert_failures,
+            ));
+        }
+        return Ok(true);
+    }
+
+    warn!(
+        "All {} insert(s) failed for '{}'; removing empty adopted trove",
+        total_inserts, package_name
+    );
+    Trove::delete(tx, trove_id)?;
+    adoption_warnings.push(AdoptionWarning::all_insert_failure(
+        package_name.to_string(),
+        total_inserts,
+    ));
+    Ok(false)
 }
 
 const LIVE_ROOT_PACKAGE_NAME: &str = "conary-live-root";
@@ -926,13 +973,13 @@ pub fn compute_file_hash(
             // Directories don't have content in CAS
             debug!("Skipping directory: {}", file_path);
         } else {
-            // Regular file - use hardlink_from_existing
+            // Regular live file - copy into a private CAS inode.
             let path = std::path::Path::new(file_path);
             if path.is_file() {
-                match cas_store.hardlink_from_existing(file_path) {
+                match cas_store.store_file_copy_from_existing(file_path) {
                     Ok(h) => return h,
                     Err(e) => {
-                        debug!("Failed to hardlink {} into CAS: {}", file_path, e);
+                        debug!("Failed to copy {} into CAS: {}", file_path, e);
                     }
                 }
             } else {
@@ -1052,6 +1099,37 @@ mod tests {
         assert!(glob_match("kernel*", "kernel-core"));
         assert!(glob_match("kernel*", "kernel-modules"));
         assert!(!glob_match("kernel*", "linux-kernel"));
+    }
+
+    #[test]
+    fn all_failed_bulk_outcome_helper_deletes_seeded_trove() {
+        use conary_core::db;
+        use conary_core::db::models::{Trove, TroveType};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("test.db").to_string_lossy().into_owned();
+        db::init(&db_path).unwrap();
+        let mut conn = db::open(&db_path).unwrap();
+
+        db::transaction(&mut conn, |tx| {
+            let mut trove = Trove::new("ghost".to_string(), "1.0".to_string(), TroveType::Package);
+            let trove_id = trove.insert(tx)?;
+
+            let mut warnings = Vec::new();
+            let keep_trove =
+                finalize_bulk_metadata_insert_outcome(tx, trove_id, "ghost", 3, 3, &mut warnings)?;
+            assert!(!keep_trove);
+            assert_eq!(warnings.len(), 1);
+
+            let count: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM troves WHERE id = ?1",
+                [trove_id],
+                |row| row.get(0),
+            )?;
+            assert_eq!(count, 0);
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]

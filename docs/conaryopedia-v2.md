@@ -428,7 +428,7 @@ Before Conary can manage packages, its database must be initialized:
 conary system init
 ```
 
-This creates the SQLite database at `/var/lib/conary/conary.db` and sets up all tables (currently schema v67). The database is the single source of truth for all package state -- there are no configuration files for runtime state.
+This creates the SQLite database at `/var/lib/conary/conary.db` and sets up all tables (currently schema v68). The database is the single source of truth for all package state -- there are no configuration files for runtime state.
 
 You can specify an alternate database path with `-d`:
 
@@ -639,8 +639,8 @@ Conary can coexist with your system's native package manager (dnf, apt, pacman).
 #### Adopting Individual Packages
 
 ```bash
-conary system adopt nginx curl vim    # Adopt specific packages
-conary system adopt nginx --full      # Adopt with files copied to CAS
+conary --allow-live-system-mutation system adopt nginx curl vim  # Adopt specific packages
+conary --allow-live-system-mutation system adopt nginx --full    # Adopt with files copied to CAS
 ```
 
 The `--full` flag copies all files into Conary's content-addressable store. This is slower but enables rollback and integrity verification for those packages.
@@ -648,12 +648,12 @@ The `--full` flag copies all files into Conary's content-addressable store. This
 #### Adopting the Entire System
 
 ```bash
-conary system adopt --system                      # Adopt all packages
-conary system adopt --system --full               # Full adoption (CAS)
-conary system adopt --system --pattern "lib*"     # Only matching packages
-conary system adopt --system --exclude "kernel*"  # Skip kernel packages
-conary system adopt --system --explicit-only      # Skip auto-installed deps
-conary system adopt --system --dry-run            # Preview
+conary --allow-live-system-mutation system adopt --system                      # Adopt all packages
+conary --allow-live-system-mutation system adopt --system --full               # Full adoption (CAS)
+conary --allow-live-system-mutation system adopt --system --pattern "lib*"     # Only matching packages
+conary --allow-live-system-mutation system adopt --system --exclude "kernel*"  # Skip kernel packages
+conary --allow-live-system-mutation system adopt --system --explicit-only      # Skip auto-installed deps
+conary system adopt --system --dry-run                                          # Preview
 ```
 
 #### Checking Adoption Status
@@ -667,7 +667,7 @@ conary system adopt --status     # Summary of adopted/native packages
 If packages have been updated via the system package manager, refresh detects the version drift:
 
 ```bash
-conary system adopt --refresh    # Update adopted packages that changed
+conary --allow-live-system-mutation system adopt --refresh    # Update adopted packages that changed
 ```
 
 #### Unadopting Without Deleting Files
@@ -688,9 +688,9 @@ Apply-mode unadoption still fails closed when a Conary generation is currently s
 Bulk convert adopted packages to CCS format for deduplication and atomic transactions:
 
 ```bash
-conary system adopt --convert              # Convert all adopted packages
-conary system adopt --convert --jobs 8     # With 8 parallel threads
-conary system adopt --convert --no-chunking  # Skip CDC chunking
+conary --allow-live-system-mutation system adopt --convert                # Convert all adopted packages
+conary --allow-live-system-mutation system adopt --convert --jobs 8       # With 8 parallel threads
+conary --allow-live-system-mutation system adopt --convert --no-chunking  # Skip CDC chunking
 ```
 
 #### Takeover
@@ -714,8 +714,8 @@ Do not treat takeover as part of the risk-free adoption lane. Package-level take
 Install hooks that automatically notify Conary when the system package manager installs or removes packages:
 
 ```bash
-conary system adopt --sync-hook              # Install the hooks
-conary system adopt --sync-hook --remove-hook  # Remove them
+conary --allow-live-system-mutation system adopt --sync-hook                # Install the hooks
+conary --allow-live-system-mutation system adopt --sync-hook --remove-hook  # Remove them
 ```
 
 ### 2.10 System State and Rollback

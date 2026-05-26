@@ -10,6 +10,7 @@ mod conflicts;
 mod convert;
 mod hooks;
 mod native_handoff;
+mod outcome;
 mod packages;
 mod refresh;
 mod status;

@@ -17,12 +17,58 @@ pub(crate) struct DeferredFollowUp {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct AdoptionWarning {
+    pub package: String,
+    pub reason: String,
+    pub total_inserts: usize,
+    pub failed_inserts: usize,
+}
+
+impl AdoptionWarning {
+    pub(crate) fn partial_insert_failure(
+        package: impl Into<String>,
+        total_inserts: usize,
+        failed_inserts: usize,
+    ) -> Self {
+        Self {
+            package: package.into(),
+            reason: "partial_metadata_insert_failure".to_string(),
+            total_inserts,
+            failed_inserts,
+        }
+    }
+
+    pub(crate) fn all_insert_failure(package: impl Into<String>, total_inserts: usize) -> Self {
+        Self {
+            package: package.into(),
+            reason: "all_metadata_inserts_failed".to_string(),
+            total_inserts,
+            failed_inserts: total_inserts,
+        }
+    }
+
+    pub(crate) fn refresh_replacement_failure(
+        package: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            package: package.into(),
+            reason: format!("refresh_replacement_failed: {}", message.into()),
+            total_inserts: 0,
+            failed_inserts: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ChangesetMetadataEnvelope {
     pub schema: String,
     #[serde(default)]
     pub removed_troves: Vec<TroveSnapshot>,
     #[serde(default)]
     pub deferred_follow_up: Vec<DeferredFollowUp>,
+    #[serde(default)]
+    pub adoption_warnings: Vec<AdoptionWarning>,
 }
 
 pub(crate) fn metadata_with_removed_troves(snapshots: Vec<TroveSnapshot>) -> Result<String> {
@@ -30,6 +76,7 @@ pub(crate) fn metadata_with_removed_troves(snapshots: Vec<TroveSnapshot>) -> Res
         schema: CHANGESET_METADATA_SCHEMA.to_string(),
         removed_troves: snapshots,
         deferred_follow_up: Vec::new(),
+        adoption_warnings: Vec::new(),
     })
     .map_err(Into::into)
 }
@@ -42,6 +89,21 @@ pub(crate) fn metadata_with_deferred_follow_up(
         schema: CHANGESET_METADATA_SCHEMA.to_string(),
         removed_troves: snapshots,
         deferred_follow_up,
+        adoption_warnings: Vec::new(),
+    })
+    .map_err(Into::into)
+}
+
+pub(crate) fn metadata_with_adoption_warnings(
+    snapshots: Vec<TroveSnapshot>,
+    deferred_follow_up: Vec<DeferredFollowUp>,
+    adoption_warnings: Vec<AdoptionWarning>,
+) -> Result<String> {
+    serde_json::to_string(&ChangesetMetadataEnvelope {
+        schema: CHANGESET_METADATA_SCHEMA.to_string(),
+        removed_troves: snapshots,
+        deferred_follow_up,
+        adoption_warnings,
     })
     .map_err(Into::into)
 }
@@ -78,6 +140,14 @@ pub(crate) fn deferred_follow_up(snapshot_json: Option<&str>) -> Vec<DeferredFol
         .unwrap_or_default()
 }
 
+pub(crate) fn adoption_warnings(snapshot_json: Option<&str>) -> Vec<AdoptionWarning> {
+    snapshot_json
+        .and_then(|raw| serde_json::from_str::<ChangesetMetadataEnvelope>(raw).ok())
+        .filter(|envelope| envelope.schema == CHANGESET_METADATA_SCHEMA)
+        .map(|envelope| envelope.adoption_warnings)
+        .unwrap_or_default()
+}
+
 pub(crate) fn append_deferred_follow_up_metadata(
     conn: &rusqlite::Connection,
     changeset_id: i64,
@@ -95,7 +165,41 @@ pub(crate) fn append_deferred_follow_up_metadata(
         .unwrap_or_default();
     let mut deferred = deferred_follow_up(existing.as_deref());
     deferred.push(follow_up);
-    let metadata = metadata_with_deferred_follow_up(std::mem::take(&mut removed_troves), deferred)?;
+    let metadata = metadata_with_adoption_warnings(
+        std::mem::take(&mut removed_troves),
+        deferred,
+        adoption_warnings(existing.as_deref()),
+    )?;
+    conn.execute(
+        "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
+        rusqlite::params![metadata, changeset_id],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn append_adoption_warning_metadata(
+    conn: &rusqlite::Connection,
+    changeset_id: i64,
+    warnings: Vec<AdoptionWarning>,
+) -> Result<()> {
+    if warnings.is_empty() {
+        return Ok(());
+    }
+
+    let existing: Option<String> = conn.query_row(
+        "SELECT metadata FROM changesets WHERE id = ?1",
+        [changeset_id],
+        |row| row.get(0),
+    )?;
+    let removed_troves = existing
+        .as_deref()
+        .map(parse_rollback_snapshots)
+        .transpose()?
+        .unwrap_or_default();
+    let deferred = deferred_follow_up(existing.as_deref());
+    let mut existing_warnings = adoption_warnings(existing.as_deref());
+    existing_warnings.extend(warnings);
+    let metadata = metadata_with_adoption_warnings(removed_troves, deferred, existing_warnings)?;
     conn.execute(
         "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
         rusqlite::params![metadata, changeset_id],

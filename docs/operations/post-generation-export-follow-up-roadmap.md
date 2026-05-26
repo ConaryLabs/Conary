@@ -34,7 +34,7 @@ Completed generation export unification:
 Completed self-contained installed-runtime export:
 
 - migrate the active Fedora integration baseline to Fedora 44
-- bulk-adopt installed packages into CAS with `conary system adopt --system --full`
+- bulk-adopt installed packages into CAS with `conary --allow-live-system-mutation system adopt --system --full`
 - validate runtime generation inputs before publishing `.conary-artifact.json`
 - preserve fail-closed behavior for metadata-only or partial installed roots
 - boot a full CAS-backed installed runtime generation exported to qcow2 under
