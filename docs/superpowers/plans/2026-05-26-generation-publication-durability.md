@@ -27,9 +27,13 @@ The plan intentionally does not add daemon-side automatic retries or a new dedic
 - Generation publication builds from current DB state (`Trove::list_all(conn)`). It never tries to replay only one historical changeset.
 - The primary retry command is `conary system generation publish`. Optional `--changeset <id>` is an assertion/filter over pending debt, not a request to build that exact historical state.
 - A successful current-DB publication marks every covered pending recoverable debt complete.
+- The covered high-water changeset must count only applied DB state: `applied` and `post_hooks_failed` changesets. Pending and rolled-back changesets are not represented by a published generation.
 - B1 must make `/conary/current` parent-directory sync durable. The `CurrentPublished` phase cannot be deferred to B2.
 - Package-mutation publication must build an inactive generation, durably select it with `/conary/current`, then mark the matching DB state active.
 - Post-commit publication failure keeps exit code `0` because the package DB mutation committed, but it must leave machine-readable `needs_publication` state.
+- Current Conary generation builds use the same number for `system_states.state_number` and generation directories. Plan B keeps both `state_number` and `generation_number` columns only as an enforced cross-check; the implementation must reject mismatches and use the generation number for DB-active lookup.
+- Pre-command recovery must not block later package mutations solely because publication debt exists. It may complete debt that already points at the selected current generation; otherwise it warns and leaves debt visible for `system generation publish` or a later successful package publication.
+- A stable DB identity UUID is a follow-on after Plan B. B1 uses canonical DB path plus runtime root and fails closed on mismatches.
 - The implementation plan must stage exact paths only. Do not `git add docs apps crates` or other broad directories.
 
 ## File Structure
@@ -52,7 +56,7 @@ The plan intentionally does not add daemon-side automatic retries or a new dedic
 - Modify `apps/conary/src/commands/query/history.rs`: mark changesets with pending/failed publication debt.
 - Modify `crates/conary-core/src/transaction/recovery.rs`: check publication debt before accepting `/conary/current` as fully recovered.
 - Modify `apps/conary/src/commands/generation/commands.rs`: protect incomplete publication generations in GC.
-- Modify `apps/conaryd/src/daemon/routes.rs`, `apps/conaryd/src/daemon/routes/query.rs`, `apps/conaryd/src/daemon/routes/system.rs`, and `apps/conaryd/src/daemon/routes/transactions.rs`: add `publication_status` to changeset/transaction JSON responses and `pending_publications` to system summary/state responses so existing surfaces expose publication debt instead of implying full publication.
+- Modify `apps/conaryd/src/daemon/routes.rs` and `apps/conaryd/src/daemon/routes/query.rs`: add `publication_status` to `/v1/history` changeset JSON responses. Do not add fake publication fields to daemon job responses or currently unimplemented system-state endpoints.
 - Modify `crates/conary-core/src/generation/metadata.rs`, `apps/conary/src/commands/operation_records.rs`, and `apps/conary/src/commands/live_root.rs` during B2 for durable filesystem coverage.
 - Modify docs-audit metadata if this plan changes active docs.
 
@@ -224,6 +228,11 @@ pub fn migrate_v69(conn: &Connection) -> Result<()> {
             )),
             state_number INTEGER,
             generation_number INTEGER,
+            CHECK (
+                state_number IS NULL
+                OR generation_number IS NULL
+                OR state_number = generation_number
+            ),
             summary TEXT NOT NULL,
             last_error TEXT,
             retry_count INTEGER NOT NULL DEFAULT 0,
@@ -301,6 +310,22 @@ fn test_generation_publications_reject_unknown_phase() {
                 db_path, runtime_root, phase, status, summary
              ) VALUES (?1, ?2, 'current_renamed', 'pending', ?3)",
             ("/tmp/conary.db", "/tmp/conary", "bad phase"),
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("CHECK"));
+}
+
+#[test]
+fn test_generation_publications_reject_mismatched_state_and_generation() {
+    let conn = Connection::open_in_memory().unwrap();
+    migrate(&conn).unwrap();
+
+    let err = conn
+        .execute(
+            "INSERT INTO generation_publications (
+                db_path, runtime_root, phase, status, state_number, generation_number, summary
+             ) VALUES (?1, ?2, 'artifact_ready', 'running', 1, 2, ?3)",
+            ("/tmp/conary.db", "/tmp/conary", "bad state/generation"),
         )
         .unwrap_err();
     assert!(err.to_string().contains("CHECK"));
@@ -387,8 +412,12 @@ impl GenerationPublication {
             .map_err(Into::into)
     }
 
-    pub fn high_water_changeset_id(conn: &Connection) -> Result<Option<i64>> {
-        conn.query_row("SELECT MAX(id) FROM changesets", [], |row| row.get(0))
+    pub fn applied_high_water_changeset_id(conn: &Connection) -> Result<Option<i64>> {
+        conn.query_row(
+            "SELECT MAX(id) FROM changesets WHERE status IN ('applied', 'post_hooks_failed')",
+            [],
+            |row| row.get(0),
+        )
             .map_err(Into::into)
     }
 
@@ -430,7 +459,7 @@ impl GenerationPublication {
 
     pub fn mark_complete_through(
         conn: &Connection,
-        high_water_changeset_id: Option<i64>,
+        applied_high_water_changeset_id: Option<i64>,
         state_number: i64,
         generation_number: i64,
     ) -> Result<usize> {
@@ -447,7 +476,7 @@ impl GenerationPublication {
              WHERE recoverable = 1
                AND status IN ('pending', 'running', 'failed')
                AND (?1 IS NULL OR trigger_changeset_id IS NULL OR trigger_changeset_id <= ?1)",
-            params![high_water_changeset_id, state_number, generation_number],
+            params![applied_high_water_changeset_id, state_number, generation_number],
         )?;
         Ok(rows)
     }
@@ -581,6 +610,32 @@ fn pending_for_changeset_finds_recoverable_debt_only() {
 
     GenerationPublication::mark_complete_through(&conn, Some(cs_a), 1, 1).unwrap();
     assert!(GenerationPublication::pending_for_changeset(&conn, cs_a).unwrap().is_none());
+}
+
+#[test]
+fn applied_high_water_ignores_pending_and_rolled_back_changesets() {
+    let (_tmp, conn) = crate::db::testing::create_test_db();
+    conn.execute(
+        "INSERT INTO changesets (description, status) VALUES ('A', 'applied')",
+        [],
+    )
+    .unwrap();
+    let applied = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO changesets (description, status) VALUES ('B', 'pending')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO changesets (description, status) VALUES ('C', 'rolled_back')",
+        [],
+    )
+    .unwrap();
+
+    assert_eq!(
+        GenerationPublication::applied_high_water_changeset_id(&conn).unwrap(),
+        Some(applied)
+    );
 }
 ```
 
@@ -766,9 +821,12 @@ pub(crate) struct PublicationOutcome {
     pub completed_debts: usize,
 }
 
+pub(crate) const DEFAULT_PUBLICATION_RETRY_COMMAND: &str =
+    "conary --allow-live-system-mutation system generation publish";
+
 impl PublicationOutcome {
-    pub(crate) fn retry_command() -> String {
-        "conary --allow-live-system-mutation system generation publish".to_string()
+    pub(crate) fn default_retry_command() -> String {
+        DEFAULT_PUBLICATION_RETRY_COMMAND.to_string()
     }
 }
 
@@ -779,7 +837,7 @@ mod tests {
     #[test]
     fn retry_command_uses_parameterless_publish() {
         assert_eq!(
-            PublicationOutcome::retry_command(),
+            PublicationOutcome::default_retry_command(),
             "conary --allow-live-system-mutation system generation publish"
         );
     }
@@ -993,7 +1051,7 @@ pub fn rebuild_and_mount(
 ) -> anyhow::Result<i64> {
     let built = build_generation_for_publication(conn, db_path, summary, prev_etc_snapshot)?;
     publish_generation_link(db_path, built.generation_number)?;
-    mark_generation_state_active(conn, built.state_number)?;
+    mark_generation_state_active(conn, built.generation_number)?;
 
     info!(
         "Generation {} built and selected for next boot",
@@ -1016,7 +1074,6 @@ pub(crate) fn publish_current_db_state(
 ) -> Result<PublicationOutcome> {
     let runtime_root = ConaryRuntimeRoot::from_db_path(request.db_path.into());
     let runtime_root_display = runtime_root.root().display().to_string();
-    let high_water = GenerationPublication::high_water_changeset_id(conn)?;
     let debt = GenerationPublication::create_pending(
         conn,
         request.trigger_changeset_id,
@@ -1025,6 +1082,7 @@ pub(crate) fn publish_current_db_state(
         &runtime_root_display,
         request.summary,
     )?;
+    let high_water = GenerationPublication::applied_high_water_changeset_id(conn)?;
 
     let publish_result = (|| -> Result<BuiltForPublication> {
         debt.set_phase(
@@ -1040,6 +1098,13 @@ pub(crate) fn publish_current_db_state(
             request.summary,
             request.prev_etc_snapshot,
         )?;
+        if built.state_number != built.generation_number {
+            return Err(anyhow!(
+                "generation builder returned mismatched state/generation numbers: state={} generation={}",
+                built.state_number,
+                built.generation_number
+            ));
+        }
         debt.set_phase(
             conn,
             GenerationPublicationPhase::ArtifactReady,
@@ -1058,7 +1123,7 @@ pub(crate) fn publish_current_db_state(
             Some(built.state_number),
             Some(built.generation_number),
         )?;
-        crate::commands::composefs_ops::mark_generation_state_active(conn, built.state_number)?;
+        crate::commands::composefs_ops::mark_generation_state_active(conn, built.generation_number)?;
         Ok(BuiltForPublication {
             state_number: built.state_number,
             generation_number: built.generation_number,
@@ -1087,7 +1152,7 @@ pub(crate) fn publish_current_db_state(
                 generation_number: None,
                 state_number: None,
                 needs_publication: true,
-                retry_command: Some(PublicationOutcome::retry_command()),
+                retry_command: Some(PublicationOutcome::default_retry_command()),
                 completed_debts: 0,
             })
         }
@@ -1110,7 +1175,9 @@ In `generation/publication.rs`, add a test that uses the core model without buil
 ```rust
 #[test]
 fn successful_publication_completion_sweeps_prior_debts() {
-    let (_tmp, conn) = conary_core::db::testing::create_test_db();
+    let temp = tempfile::NamedTempFile::new().unwrap();
+    conary_core::db::init(temp.path()).unwrap();
+    let conn = conary_core::db::open(temp.path()).unwrap();
     conn.execute(
         "INSERT INTO changesets (description, status) VALUES ('A', 'applied')",
         [],
@@ -1204,9 +1271,9 @@ pub(crate) fn warn_if_publication_pending(changeset_id: i64, outcome: &Publicati
 }
 ```
 
-- [ ] **Step 2: Type/validate deferred generation follow-up metadata**
+- [ ] **Step 2: Classify deferred generation follow-up metadata for display only**
 
-In `apps/conary/src/commands/changeset_metadata.rs`, add enum wrappers while preserving the JSON envelope:
+In `apps/conary/src/commands/changeset_metadata.rs`, add a kind classifier while preserving the JSON envelope. Do not add a second status enum; the DB-backed `generation_publications.status` is authoritative for publication state, and deferred metadata is compatibility display only:
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1216,27 +1283,12 @@ pub(crate) enum DeferredFollowUpKind {
     Other,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DeferredFollowUpStatus {
-    Pending,
-    Failed,
-    Complete,
-    Other,
-}
-
-pub(crate) fn classify_deferred_follow_up(follow_up: &DeferredFollowUp) -> (DeferredFollowUpKind, DeferredFollowUpStatus) {
-    let kind = match follow_up.kind.as_str() {
+pub(crate) fn classify_deferred_follow_up_kind(follow_up: &DeferredFollowUp) -> DeferredFollowUpKind {
+    match follow_up.kind.as_str() {
         "generation_publication" => DeferredFollowUpKind::GenerationPublication,
         "generation_rebuild" => DeferredFollowUpKind::LegacyGenerationRebuild,
         _ => DeferredFollowUpKind::Other,
-    };
-    let status = match follow_up.status.as_str() {
-        "pending" => DeferredFollowUpStatus::Pending,
-        "failed" => DeferredFollowUpStatus::Failed,
-        "complete" => DeferredFollowUpStatus::Complete,
-        _ => DeferredFollowUpStatus::Other,
-    };
-    (kind, status)
+    }
 }
 
 pub(crate) fn publication_deferred_follow_up(message: String) -> DeferredFollowUp {
@@ -1274,8 +1326,8 @@ fn classify_legacy_generation_rebuild_follow_up() {
         retry_command: Some("conary system generation build --summary retry".to_string()),
     };
     assert_eq!(
-        classify_deferred_follow_up(&follow_up),
-        (DeferredFollowUpKind::LegacyGenerationRebuild, DeferredFollowUpStatus::Failed)
+        classify_deferred_follow_up_kind(&follow_up),
+        DeferredFollowUpKind::LegacyGenerationRebuild
     );
 }
 ```
@@ -1322,7 +1374,7 @@ Keep the existing `ctx.defer_generation` early return, but create visible public
 if ctx.defer_generation && ctx.execution_path == PackageExecutionPath::GenerationAware {
     let runtime_root = conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(ctx.db_path.into());
     conary_core::db::models::GenerationPublication::create_pending(
-        conn,
+        &tx,
         Some(changeset_id),
         changeset.tx_uuid.as_deref(),
         ctx.db_path,
@@ -1330,13 +1382,21 @@ if ctx.defer_generation && ctx.execution_path == PackageExecutionPath::Generatio
         &tx_description,
     )?;
     crate::commands::append_deferred_follow_up_metadata(
-        conn,
+        &tx,
         changeset_id,
         crate::commands::publication_deferred_follow_up(
-            "generation publication is pending".to_string(),
+            "generation publication was deferred by caller request".to_string(),
         ),
     )?;
-    changeset.update_status(conn, ChangesetStatus::Applied)?;
+}
+```
+
+This runs inside the existing DB transaction before `tx.commit()?`. Do not call `changeset.update_status(conn, ChangesetStatus::Applied)?` again after commit for this early return; the status was already updated with `changeset.update_status(&tx, ChangesetStatus::Applied)?`.
+
+After `tx.commit()?`, keep the early return small:
+
+```rust
+if ctx.defer_generation && ctx.execution_path == PackageExecutionPath::GenerationAware {
     engine.release_lock();
     return Ok(InstallTransactionResult { changeset_id });
 }
@@ -1344,32 +1404,54 @@ if ctx.defer_generation && ctx.execution_path == PackageExecutionPath::Generatio
 
 - [ ] **Step 4: Integrate batch install**
 
-In `apps/conary/src/commands/install/batch.rs`, replace the deferred generation rebuild metadata block with the same helper shape:
+In `apps/conary/src/commands/install/batch.rs`, replace the existing `rebuild_and_mount` block:
 
 ```rust
+let rebuild_result = crate::commands::composefs_ops::rebuild_and_mount(
+    &conn,
+    self.db_path,
+    &format!("Batch install: {}", main_pkg_name),
+    None,
+);
+if let Err(error) = rebuild_result
+    && let Err(metadata_error) =
+        Self::record_generation_rebuild_failure(&conn, changeset_id, error)
+{
+    engine.release_lock();
+    return Err(metadata_error);
+}
+```
+
+with this exact call:
+
+```rust
+let summary = format!("Batch install: {main_pkg_name}");
 let outcome = crate::commands::generation::publication::publish_current_db_state(
-    conn,
+    &conn,
     crate::commands::generation::publication::PublicationRequest {
-        db_path,
-        summary,
+        db_path: self.db_path,
+        summary: &summary,
         trigger_changeset_id: Some(changeset_id),
-        tx_uuid: changeset.tx_uuid.as_deref(),
-        prev_etc_snapshot,
+        tx_uuid: None,
+        prev_etc_snapshot: None,
     },
 )?;
 if outcome.needs_publication {
     crate::commands::append_deferred_follow_up_metadata(
-        conn,
+        &conn,
         changeset_id,
         crate::commands::publication_deferred_follow_up(
             "generation publication is pending".to_string(),
         ),
     )?;
-    crate::commands::generation::publication::warn_if_publication_pending(changeset_id, &outcome);
+    crate::commands::generation::publication::warn_if_publication_pending(
+        changeset_id,
+        &outcome,
+    );
 }
 ```
 
-Adapt this snippet at the existing `batch.rs` call site by passing the caller's existing `conn`, `db_path`, `summary`, `changeset_id`, `changeset.tx_uuid`, and `prev_etc_snapshot` values. Keep `PublicationRequest` unchanged.
+The batch path does not keep a `Changeset` struct in scope after insert, does not have `prev_etc_snapshot`, and currently passes `None` to `rebuild_and_mount`; keep those semantics.
 
 - [ ] **Step 5: Integrate remove**
 
@@ -1460,40 +1542,64 @@ fn generation_publication_failure_records_debt_for_applied_batch() {
         .unwrap()
         .expect("changeset should exist");
     assert_eq!(changeset.status, ChangesetStatus::Applied);
-let deferred = crate::commands::deferred_follow_up(changeset.metadata.as_deref());
-assert_eq!(deferred.len(), 1);
-assert_eq!(deferred[0].kind, "generation_publication");
-assert_eq!(deferred[0].status, "pending");
-assert!(deferred[0].message.contains("composefs build failed"));
-assert_eq!(
-    deferred[0].retry_command.as_deref(),
-    Some("conary --allow-live-system-mutation system generation publish")
-);
-let debts = conary_core::db::models::GenerationPublication::pending_recoverable(&conn).unwrap();
-assert_eq!(debts.len(), 1);
-assert_eq!(debts[0].status, conary_core::db::models::GenerationPublicationStatus::Failed);
+    let deferred = crate::commands::deferred_follow_up(changeset.metadata.as_deref());
+    assert_eq!(deferred.len(), 1);
+    assert_eq!(deferred[0].kind, "generation_publication");
+    assert_eq!(deferred[0].status, "pending");
+    assert!(deferred[0].message.contains("composefs build failed"));
+    assert_eq!(
+        deferred[0].retry_command.as_deref(),
+        Some("conary --allow-live-system-mutation system generation publish")
+    );
+    let debts = conary_core::db::models::GenerationPublication::pending_recoverable(&conn).unwrap();
+    assert_eq!(debts.len(), 1);
+    assert_eq!(debts[0].status, conary_core::db::models::GenerationPublicationStatus::Failed);
 }
 ```
 
-Add a source-order regression in `apps/conary/src/commands/install/mod.rs` proving post-commit publication failure does not convert the already-committed install into an error:
+Add a dynamic publication failure regression in `apps/conary/src/commands/generation/publication.rs`:
 
 ```rust
 #[test]
-fn install_exits_zero_and_records_publication_debt_when_generation_publish_fails() {
-    let source = include_str!("mod.rs");
-    let commit_pos = source
-        .find("tx.commit()?")
-        .expect("install transaction should commit before publication");
-    let publish_pos = source
-        .find("publish_current_db_state")
-        .expect("install path should publish after commit");
-    let result_pos = source
-        .find("Ok(InstallTransactionResult { changeset_id })")
-        .expect("install path should return success after post-commit handling");
-    assert!(commit_pos < publish_pos);
-    assert!(publish_pos < result_pos);
-    assert!(source.contains("outcome.needs_publication"));
-    assert!(source.contains("append_deferred_follow_up_metadata"));
+fn forced_publication_failure_returns_pending_outcome_and_failed_debt() {
+    let temp = tempfile::NamedTempFile::new().unwrap();
+    conary_core::db::init(temp.path()).unwrap();
+    let conn = conary_core::db::open(temp.path()).unwrap();
+    conn.execute(
+        "INSERT INTO changesets (description, status) VALUES ('Install fixture', 'applied')",
+        [],
+    )
+    .unwrap();
+    let changeset_id = conn.last_insert_rowid();
+    let _guard = crate::commands::composefs_ops::test_forced_generation_rebuild_failure_guard(
+        "forced publication failure",
+    );
+
+    let outcome = publish_current_db_state(
+        &conn,
+        PublicationRequest {
+            db_path: "/tmp/conary.db",
+            summary: "Install fixture",
+            trigger_changeset_id: Some(changeset_id),
+            tx_uuid: None,
+            prev_etc_snapshot: None,
+        },
+    )
+    .unwrap();
+
+    assert!(outcome.needs_publication);
+    assert_eq!(
+        outcome.retry_command.as_deref(),
+        Some(DEFAULT_PUBLICATION_RETRY_COMMAND)
+    );
+    let debts = conary_core::db::models::GenerationPublication::pending_recoverable(&conn)
+        .unwrap();
+    assert_eq!(debts.len(), 1);
+    assert_eq!(
+        debts[0].status,
+        conary_core::db::models::GenerationPublicationStatus::Failed
+    );
+    assert!(debts[0].last_error.as_deref().unwrap().contains("forced publication failure"));
 }
 ```
 
@@ -1504,7 +1610,9 @@ Add a unit test in `generation/publication.rs` or an integration test in the ins
 ```rust
 #[test]
 fn later_successful_publication_completes_prior_publication_debt() {
-    let (_tmp, conn) = conary_core::db::testing::create_test_db();
+    let temp = tempfile::NamedTempFile::new().unwrap();
+    conary_core::db::init(temp.path()).unwrap();
+    let conn = conary_core::db::open(temp.path()).unwrap();
     conn.execute("INSERT INTO changesets (description, status) VALUES ('A', 'applied')", []).unwrap();
     let cs_a = conn.last_insert_rowid();
     conn.execute("INSERT INTO changesets (description, status) VALUES ('B', 'applied')", []).unwrap();
@@ -1656,7 +1764,7 @@ pub fn cmd_generation_publish(db_path: &str, changeset: Option<i64>) -> Result<(
     if outcome.needs_publication {
         return Err(anyhow!(
             "Generation publication is still pending. Retry with: {}",
-            outcome.retry_command.unwrap_or_else(crate::commands::generation::publication::PublicationOutcome::retry_command)
+            outcome.retry_command.unwrap_or_else(crate::commands::generation::publication::PublicationOutcome::default_retry_command)
         ));
     }
 
@@ -1692,7 +1800,7 @@ pub fn cmd_generation_pending(db_path: &str) -> Result<()> {
             debt.state_number
                 .map(|n| n.to_string())
                 .unwrap_or_else(|| "-".to_string()),
-            crate::commands::generation::publication::PublicationOutcome::retry_command()
+            crate::commands::generation::publication::PublicationOutcome::default_retry_command()
         );
     }
     Ok(())
@@ -1748,7 +1856,7 @@ Update `format_deferred_follow_up_lines` so legacy `generation_rebuild` metadata
 
 ```rust
 fn deferred_retry_hint(follow_up: &crate::commands::DeferredFollowUp) -> String {
-    let (kind, _) = crate::commands::classify_deferred_follow_up(follow_up);
+    let kind = crate::commands::classify_deferred_follow_up_kind(follow_up);
     match kind {
         crate::commands::DeferredFollowUpKind::GenerationPublication
         | crate::commands::DeferredFollowUpKind::LegacyGenerationRebuild => {
@@ -1859,6 +1967,44 @@ In `crates/conary-core/src/transaction/recovery.rs`, add:
 fn pending_publication_debt(conn: &Connection) -> Result<Vec<GenerationPublication>> {
     GenerationPublication::pending_recoverable(conn)
 }
+
+fn debt_matches_selected_current(debt: &GenerationPublication, current_num: i64) -> bool {
+    debt.generation_number == Some(current_num)
+        && matches!(
+            debt.phase,
+            GenerationPublicationPhase::ArtifactReady
+                | GenerationPublicationPhase::CurrentPublished
+        )
+}
+
+fn complete_selected_current_publication_debt(
+    conn: &Connection,
+    current_num: i64,
+    pending_debt: &[GenerationPublication],
+) -> Result<bool> {
+    if pending_debt.is_empty() {
+        return Ok(false);
+    }
+    if !pending_debt
+        .iter()
+        .all(|debt| debt_matches_selected_current(debt, current_num))
+    {
+        return Ok(false);
+    }
+
+    mark_generation_state_active_if_present(conn, current_num)?;
+    let completed = GenerationPublication::mark_complete_through(
+        conn,
+        GenerationPublication::applied_high_water_changeset_id(conn)?,
+        current_num,
+        current_num,
+    )?;
+    tracing::info!(
+        completed,
+        "Recovery completed publication debt for durably selected generation {current_num}"
+    );
+    Ok(completed > 0)
+}
 ```
 
 Update imports:
@@ -1880,32 +2026,21 @@ let pending_debt = pending_publication_debt(conn)?;
 When selected artifact validation succeeds and `policy == RecoveryScanPolicy::SelectedGenerationOnly`, replace the immediate return with:
 
 ```rust
-if !pending_debt.is_empty() {
-    if pending_debt.iter().all(|debt| {
-        debt.generation_number == Some(current_num)
-            && debt.phase == GenerationPublicationPhase::CurrentPublished
-    }) {
-        mark_generation_state_active_if_present(conn, current_num)?;
-        let completed = GenerationPublication::mark_complete_through(
-            conn,
-            GenerationPublication::high_water_changeset_id(conn)?,
-            current_num,
-            current_num,
-        )?;
-        tracing::info!(
-            completed,
-            "Recovery completed publication debt for durably selected generation {current_num}"
-        );
+if policy == RecoveryScanPolicy::SelectedGenerationOnly {
+    if complete_selected_current_publication_debt(conn, current_num, &pending_debt)? {
         return Ok(());
     }
-    return Err(crate::Error::RecoveryFailed(format!(
-        "Pending generation publication debt exists; run `conary --allow-live-system-mutation system generation publish` before accepting selected generation {current_num} as recovered"
-    )));
+    if !pending_debt.is_empty() {
+        tracing::warn!(
+            count = pending_debt.len(),
+            "Recovery found pending generation publication debt; continuing with valid selected generation so a later publish or package mutation can flush current DB state"
+        );
+    }
+    return mark_generation_state_active_if_present(conn, current_num);
 }
-return mark_generation_state_active_if_present(conn, current_num);
 ```
 
-This closes the current short-circuit without trying to rebuild full current DB state inside `conary-core`.
+This closes the current short-circuit without blocking normal package commands. Pre-command recovery leaves non-matching debt visible so the next successful publication can sweep it.
 
 - [ ] **Step 3: Keep boot-selection recovery available**
 
@@ -1920,7 +2055,30 @@ if !pending_debt.is_empty() {
 }
 ```
 
-Do not mark pending debts complete in this policy unless the selected current generation matches debt at `CurrentPublished` and active marking succeeds.
+Do not mark pending debts complete in this policy unless the selected current generation matches every debt at `ArtifactReady` or `CurrentPublished` and active marking succeeds.
+
+Update `mount_artifact_and_link` to use a policy-aware DB active marker so boot-selection recovery can keep booting a valid artifact if the DB is read-only:
+
+```rust
+fn mark_generation_state_active_for_policy(
+    conn: &Connection,
+    gen_num: i64,
+    policy: RecoveryScanPolicy,
+) -> Result<()> {
+    match mark_generation_state_active_if_present(conn, gen_num) {
+        Ok(()) => Ok(()),
+        Err(error) if policy == RecoveryScanPolicy::SelectedOrLatestArtifact => {
+            tracing::warn!(
+                "Recovery selected valid generation {gen_num}, but DB active-state catch-up failed: {error}"
+            );
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
+}
+```
+
+Pass `policy` into `mount_artifact_and_link` and call this helper instead of `mark_generation_state_active_if_present` directly.
 
 - [ ] **Step 4: Add recovery debt query tests**
 
@@ -1952,34 +2110,61 @@ fn pending_publication_debt_reads_recoverable_rows() {
 }
 ```
 
-- [ ] **Step 5: Add source-order recovery regressions**
+- [ ] **Step 5: Add recovery behavior tests**
 
-Add these tests in `recovery.rs` to pin the short-circuit fix and the `CurrentPublished` completion branch:
+Add these tests in `recovery.rs` to pin the `ArtifactReady` / `CurrentPublished` matching logic without source-text assertions:
 
 ```rust
 #[test]
-fn recovery_checks_publication_debt_before_accepting_selected_current() {
-    let source = include_str!("recovery.rs");
-    let debt_pos = source
-        .find("pending_publication_debt(conn)?")
-        .expect("recovery should load publication debt");
-    let current_pos = source
-        .find("current_generation(&self.config.root)")
-        .expect("recovery should inspect selected current generation");
-    assert!(
-        debt_pos < current_pos,
-        "publication debt must be loaded before selected generation can short-circuit recovery"
-    );
-    assert!(source.contains("Pending generation publication debt exists"));
-    assert!(source.contains("system generation publish"));
+fn debt_matches_selected_current_accepts_artifact_ready_and_current_published() {
+    let mut debt = GenerationPublication {
+        id: Some(1),
+        trigger_changeset_id: Some(1),
+        published_through_changeset_id: None,
+        tx_uuid: None,
+        db_path: "/tmp/db".to_string(),
+        runtime_root: "/tmp/root".to_string(),
+        phase: GenerationPublicationPhase::ArtifactReady,
+        status: GenerationPublicationStatus::Failed,
+        state_number: Some(7),
+        generation_number: Some(7),
+        summary: "fixture".to_string(),
+        last_error: None,
+        retry_count: 1,
+        recoverable: true,
+        created_at: None,
+        updated_at: None,
+        completed_at: None,
+    };
+    assert!(debt_matches_selected_current(&debt, 7));
+    debt.phase = GenerationPublicationPhase::CurrentPublished;
+    assert!(debt_matches_selected_current(&debt, 7));
+    debt.phase = GenerationPublicationPhase::PendingBuild;
+    assert!(!debt_matches_selected_current(&debt, 7));
+    debt.phase = GenerationPublicationPhase::CurrentPublished;
+    debt.generation_number = Some(8);
+    assert!(!debt_matches_selected_current(&debt, 7));
 }
 
 #[test]
-fn recovery_completes_current_published_debt_branch() {
-    let source = include_str!("recovery.rs");
-    assert!(source.contains("GenerationPublicationPhase::CurrentPublished"));
-    assert!(source.contains("GenerationPublication::mark_complete_through"));
-    assert!(source.contains("Recovery completed publication debt for durably selected generation"));
+fn selected_generation_recovery_leaves_nonmatching_debt_visible() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    let db_path = root.join("conary.db");
+    crate::db::init(&db_path).unwrap();
+    let conn = crate::db::open(&db_path).unwrap();
+
+    conn.execute(
+        "INSERT INTO generation_publications (
+            db_path, runtime_root, phase, status, summary
+         ) VALUES (?1, ?2, 'pending_build', 'failed', 'fixture')",
+        (db_path.display().to_string(), root.display().to_string()),
+    )
+    .unwrap();
+
+    let debts = pending_publication_debt(&conn).unwrap();
+    assert!(!complete_selected_current_publication_debt(&conn, 7, &debts).unwrap());
+    assert_eq!(GenerationPublication::pending_recoverable(&conn).unwrap().len(), 1);
 }
 ```
 
@@ -2006,8 +2191,6 @@ git commit -m "fix(recovery): honor pending generation publication debt"
 **Files:**
 - Modify: `apps/conaryd/src/daemon/routes.rs`
 - Modify: `apps/conaryd/src/daemon/routes/query.rs`
-- Modify: `apps/conaryd/src/daemon/routes/system.rs`
-- Modify: `apps/conaryd/src/daemon/routes/transactions.rs`
 - Modify: `apps/conary/src/commands/generation/commands.rs`
 
 - [ ] **Step 1: Add publication status to conaryd history entries**
@@ -2070,15 +2253,23 @@ let history: Vec<HistoryEntry> = changesets
     .collect();
 ```
 
-- [ ] **Step 3: Update transaction and system-state surfaces minimally**
+- [ ] **Step 3: Keep non-changeset daemon surfaces from implying publication state**
 
-For `/v1/transactions`, `/v1/transactions/{id}`, and `/v1/system/states`, add a field named `publication_status` or `pending_publications` only where the response already maps to DB changesets or system state. If a response is daemon-job-only and has no DB changeset, leave the field absent and add a test proving it does not claim publication success.
+Do not add `publication_status` to `TransactionSummary` or `TransactionDetails`: those responses describe daemon jobs, not DB changesets. Do not add `pending_publications` to `/v1/system/states` in this plan because `list_states_handler` currently returns `501 Not Implemented` and does not claim state publication success.
 
-Use this query when a DB connection is available:
+Add a route-serialization test in `apps/conaryd/src/daemon/routes.rs`:
 
 ```rust
-let pending_publications =
-    conary_core::db::models::GenerationPublication::pending_recoverable(conn)?.len();
+#[test]
+fn daemon_job_transaction_summary_does_not_claim_publication_status() {
+    let job = crate::daemon::DaemonJob::new(
+        crate::daemon::JobKind::Install,
+        serde_json::json!({"packages": ["fixture"]}),
+    );
+    let json = serde_json::to_value(TransactionSummary::from(&job)).unwrap();
+    assert!(json.get("publication_status").is_none());
+    assert!(json.get("pending_publications").is_none());
+}
 ```
 
 - [ ] **Step 4: Protect incomplete publication generations from GC**
@@ -2146,19 +2337,41 @@ Add a GC unit test in `generation/commands.rs`:
 ```rust
 #[test]
 fn generation_gc_keeps_generation_referenced_by_publication_debt() {
-    let source = include_str!("commands.rs");
-    let query_pos = source
-        .find("GenerationPublication::protected_generation_numbers")
-        .expect("generation GC should query publication-protected roots");
-    let insert_pos = source
-        .find("for root in &publication_roots")
-        .expect("generation GC should add publication roots to keep_set");
-    let remove_pos = source
-        .find("for gen_number in &pending_numbers")
-        .expect("generation GC should evaluate pending generations for deletion");
-    assert!(query_pos < remove_pos);
-    assert!(insert_pos < remove_pos);
-    assert!(source.contains("publication debt references it"));
+    let runtime = tempfile::TempDir::new().unwrap();
+    let db_path = runtime.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
+
+    let runtime_root =
+        conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(db_path.clone());
+    std::fs::create_dir_all(runtime_root.generations_dir()).unwrap();
+    let protected = runtime_root.generation_path(1);
+    let removable = runtime_root.generation_path(2);
+    std::fs::create_dir_all(&protected).unwrap();
+    std::fs::create_dir_all(&removable).unwrap();
+    conary_core::generation::metadata::mark_generation_pending(&protected).unwrap();
+
+    let debt = conary_core::db::models::GenerationPublication::create_pending(
+        &conn,
+        None,
+        None,
+        db_path.to_str().unwrap(),
+        runtime_root.root().to_str().unwrap(),
+        "fixture",
+    )
+    .unwrap();
+    debt.set_phase(
+        &conn,
+        conary_core::db::models::GenerationPublicationPhase::ArtifactReady,
+        conary_core::db::models::GenerationPublicationStatus::Failed,
+        Some(1),
+        Some(1),
+    )
+    .unwrap();
+
+    cmd_generation_gc_locked(0, db_path.to_str().unwrap(), &runtime_root).unwrap();
+    assert!(protected.exists());
+    assert!(!removable.exists());
 }
 ```
 
@@ -2168,7 +2381,6 @@ fn generation_gc_keeps_generation_referenced_by_publication_debt() {
 cargo test -p conary generation::commands::tests::generation_gc
 cargo test -p conaryd history
 cargo test -p conaryd transactions
-cargo test -p conaryd system
 ```
 
 Expected: all tests pass.
@@ -2178,8 +2390,6 @@ Expected: all tests pass.
 ```bash
 git add apps/conaryd/src/daemon/routes.rs \
         apps/conaryd/src/daemon/routes/query.rs \
-        apps/conaryd/src/daemon/routes/system.rs \
-        apps/conaryd/src/daemon/routes/transactions.rs \
         apps/conary/src/commands/generation/commands.rs
 git commit -m "fix(api): surface pending generation publication state"
 ```
@@ -2202,12 +2412,20 @@ In `crates/conary-core/src/filesystem/durable.rs`, add:
 use serde::Serialize;
 use std::fs::File;
 use std::io::Write;
+use std::path::PathBuf;
+
+fn temp_path_for(path: &Path) -> PathBuf {
+    match path.extension() {
+        Some(extension) => path.with_extension(format!("{}.tmp", extension.to_string_lossy())),
+        None => path.with_extension("tmp"),
+    }
+}
 
 pub fn write_file_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let tmp = path.with_extension("tmp");
+    let tmp = temp_path_for(path);
     {
         let mut file = File::create(&tmp)?;
         file.write_all(bytes)?;
@@ -2246,7 +2464,9 @@ fn write_json_atomic_writes_pretty_json_and_syncs_parent() {
 }
 ```
 
-- [ ] **Step 2: Make generation metadata/signature/pending marker durable**
+- [ ] **Step 2: Make generation metadata/signature/pending marker use shared durable helpers**
+
+`GenerationMetadata::write_to_with_key_paths`, `mark_generation_pending`, and `clear_generation_pending` already use temp files and parent sync in several paths. Refactor them to the shared helper so sync errors propagate instead of being swallowed and signature writes follow the same parent-sync contract.
 
 In `crates/conary-core/src/generation/metadata.rs`, replace manual temp-write/rename blocks with `write_json_atomic` or `write_file_atomic`. For pending marker removal, use `remove_file_and_sync_parent` and ignore `NotFound` only:
 
@@ -2291,7 +2511,47 @@ fn write_json_record_uses_atomic_tmp_path() {
 
 - [ ] **Step 4: Add parent sync in live-root target mutations**
 
-In `apps/conary/src/commands/live_root.rs`, reuse its existing `sync_parent_directory` if present; otherwise call `conary_core::filesystem::durable::sync_parent_directory`. After every target `rename`, backup move, directory create, file remove, and directory remove that recovery depends on, call parent sync.
+In `apps/conary/src/commands/live_root.rs`, add focused helpers and use them at the exact recovery-critical call sites listed below.
+
+Add helpers:
+
+```rust
+fn rename_and_sync(source: &Path, target: &Path) -> Result<()> {
+    fs::rename(source, target)?;
+    sync_parent_directory(target)?;
+    if let Some(source_parent) = source.parent()
+        && source_parent != target.parent().unwrap_or(source_parent)
+    {
+        sync_directory(source_parent)?;
+    }
+    Ok(())
+}
+
+fn remove_file_and_sync(path: &Path) -> Result<()> {
+    fs::remove_file(path)?;
+    sync_parent_directory(path)
+}
+
+fn remove_dir_and_sync(path: &Path) -> Result<()> {
+    fs::remove_dir(path)?;
+    sync_parent_directory(path)
+}
+
+fn create_dir_and_sync(path: &Path) -> Result<()> {
+    fs::create_dir(path)?;
+    sync_parent_directory(path)
+}
+```
+
+Apply them at these call sites:
+
+- `apply_install_files`: backup existing target with `rename_and_sync(&target, &backup_path)`.
+- `apply_install_files`: temp file replacement with `rename_and_sync(&temp, &target)`.
+- `apply_remove_paths`: backup existing target with `rename_and_sync(&target, &backup_path)`.
+- `apply_remove_paths`: remove empty directories with `remove_dir_and_sync(&dir)`.
+- `create_parent_dirs`: create missing directories with `create_dir_and_sync(&full)`.
+- `rollback`: restore backup with `rename_and_sync(&backup_path, &target)`.
+- `cleanup_recovered_journal_files`: remove journal files and backup directories with parent sync after successful removal.
 
 Use this common pattern:
 
@@ -2358,17 +2618,31 @@ fn generation_metadata_write_leaves_no_tmp_file() {
 }
 ```
 
-For live root, add a structural regression test if direct fsync injection is impractical:
+For live root, add helper-level tests instead of source-text assertions:
 
 ```rust
 #[test]
-fn live_root_install_syncs_target_parent_after_rename() {
-    let source = include_str!("live_root.rs");
-    assert!(
-        source.contains("sync_parent_directory(&target)")
-            || source.contains("durable::sync_parent_directory(&target)"),
-        "live-root target rename path must sync target parent"
-    );
+fn rename_and_sync_moves_file_and_leaves_target_parent_consistent() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let source = temp.path().join("source");
+    let target_dir = temp.path().join("target");
+    std::fs::create_dir(&target_dir).unwrap();
+    let target = target_dir.join("file");
+    std::fs::write(&source, b"ok").unwrap();
+
+    rename_and_sync(&source, &target).unwrap();
+    assert!(!source.exists());
+    assert_eq!(std::fs::read(&target).unwrap(), b"ok");
+}
+
+#[test]
+fn remove_file_and_sync_removes_target() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let target = temp.path().join("file");
+    std::fs::write(&target, b"ok").unwrap();
+
+    remove_file_and_sync(&target).unwrap();
+    assert!(!target.exists());
 }
 ```
 
