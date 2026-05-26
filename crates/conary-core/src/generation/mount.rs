@@ -290,6 +290,7 @@ pub fn update_current_symlink(conary_root: &Path, generation_number: i64) -> cra
             link.display()
         ))
     })?;
+    crate::filesystem::durable::sync_parent_directory(&link)?;
 
     info!("Updated {} -> {}", link.display(), target.display());
     Ok(())
@@ -636,6 +637,10 @@ mod tests {
 
         // Write the symlink: current -> generations/7
         update_current_symlink(tmp.path(), 7).expect("update_current_symlink");
+        assert!(
+            !tmp.path().join("current.tmp").exists(),
+            "successful update must not leave a stale temp symlink"
+        );
 
         let n = current_generation(tmp.path())
             .expect("current_generation")
@@ -652,6 +657,10 @@ mod tests {
 
         update_current_symlink(tmp.path(), 1).expect("first update");
         update_current_symlink(tmp.path(), 2).expect("second update");
+        assert!(
+            !tmp.path().join("current.tmp").exists(),
+            "successful update must not leave a stale temp symlink"
+        );
 
         let n = current_generation(tmp.path())
             .expect("current_generation")
