@@ -59,6 +59,15 @@ schema-version truth checks, and the internal `conary-core` crate guard. The
 completed Plan A, Plan B, Plan C, and umbrella docs were moved to archive paths
 after landing.
 
+### 2026-05-26 Review-Derived Release Hardening Queue
+
+The multi-model release review has opened a new active planning lane. The
+current roadmap now points at one umbrella design and four implementation
+plans: preview truth/onboarding, scriptlet trust assurance, release evidence
+and supportability, and generation state resilience. These records convert the
+external review findings into a sequenced queue rather than another broad
+readiness checklist.
+
 Audited every tracked documentation-like file returned by
 `bash scripts/docs-audit-inventory.sh`: tracked files spanning root docs,
 assistant entrypoints, GitHub templates, canonical docs under `docs/`,
