@@ -52,10 +52,6 @@ require_ref .github/workflows/release-build.yml \
 require_ref .github/workflows/release-build.yml \
   'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c' \
   'Node 24 download-artifact pin'
-require_ref .github/workflows/scheduled-ops.yml \
-  'actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f' \
-  'Node 24 upload-artifact pin'
-
 forbid_ref .github/workflows/pr-gate.yml \
   'actions/dependency-review-action@' \
   'dependency-review-action'
