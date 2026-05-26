@@ -35,6 +35,24 @@ impl PublicationOutcome {
     }
 }
 
+pub(crate) fn warn_if_publication_pending(changeset_id: i64, outcome: &PublicationOutcome) {
+    if !outcome.needs_publication {
+        return;
+    }
+    let retry = outcome
+        .retry_command
+        .as_deref()
+        .unwrap_or(DEFAULT_PUBLICATION_RETRY_COMMAND);
+    tracing::warn!(
+        changeset_id,
+        retry,
+        "Package mutation committed, but generation publication is pending"
+    );
+    eprintln!(
+        "WARNING: package mutation committed, but generation publication is pending for changeset {changeset_id}.\nRun: {retry}"
+    );
+}
+
 pub(crate) fn publish_current_db_state(
     conn: &Connection,
     request: PublicationRequest<'_>,
@@ -192,6 +210,54 @@ mod tests {
             GenerationPublication::pending_recoverable(&conn)
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn forced_publication_failure_returns_pending_outcome_and_failed_debt() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        conary_core::db::init(temp.path()).unwrap();
+        let conn = conary_core::db::open(temp.path()).unwrap();
+        conn.execute(
+            "INSERT INTO changesets (description, status) VALUES ('Install fixture', 'applied')",
+            [],
+        )
+        .unwrap();
+        let changeset_id = conn.last_insert_rowid();
+        let _guard = crate::commands::composefs_ops::test_forced_generation_rebuild_failure_guard(
+            "forced publication failure",
+        );
+
+        let outcome = publish_current_db_state(
+            &conn,
+            PublicationRequest {
+                db_path: "/tmp/conary.db",
+                summary: "Install fixture",
+                trigger_changeset_id: Some(changeset_id),
+                tx_uuid: None,
+                prev_etc_snapshot: None,
+            },
+        )
+        .unwrap();
+
+        assert!(outcome.needs_publication);
+        assert_eq!(
+            outcome.retry_command.as_deref(),
+            Some(DEFAULT_PUBLICATION_RETRY_COMMAND)
+        );
+        let debts =
+            conary_core::db::models::GenerationPublication::pending_recoverable(&conn).unwrap();
+        assert_eq!(debts.len(), 1);
+        assert_eq!(
+            debts[0].status,
+            conary_core::db::models::GenerationPublicationStatus::Failed
+        );
+        assert!(
+            debts[0]
+                .last_error
+                .as_deref()
+                .unwrap()
+                .contains("forced publication failure")
         );
     }
 }

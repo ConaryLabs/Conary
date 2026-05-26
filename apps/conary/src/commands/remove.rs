@@ -264,40 +264,36 @@ pub async fn cmd_remove(
         "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
         rusqlite::params![snapshot_json, remove_changeset_id],
     )?;
+    changeset.update_status(&tx, conary_core::db::models::ChangesetStatus::Applied)?;
     tx.commit()?;
 
     // Composefs-native: rebuild EROFS image and remount to reflect removal
     progress.set_phase(RemovePhase::RemovingFiles);
     let post_commit_result = (|| -> Result<()> {
-        let rebuild_result = crate::commands::composefs_ops::rebuild_and_mount(
+        let summary = format!("Remove {}", package_name);
+        let outcome = crate::commands::generation::publication::publish_current_db_state(
             &conn,
-            db_path,
-            &format!("Remove {}", package_name),
-            Some(prev_etc),
-        );
-        if let Err(error) = rebuild_result {
+            crate::commands::generation::publication::PublicationRequest {
+                db_path,
+                summary: &summary,
+                trigger_changeset_id: Some(remove_changeset_id),
+                tx_uuid: changeset.tx_uuid.as_deref(),
+                prev_etc_snapshot: Some(prev_etc),
+            },
+        )?;
+        if outcome.needs_publication {
             crate::commands::append_deferred_follow_up_metadata(
                 &conn,
                 remove_changeset_id,
-                crate::commands::DeferredFollowUp {
-                    kind: "generation_rebuild".to_string(),
-                    status: "failed".to_string(),
-                    message: error.to_string(),
-                    retry_command: Some(
-                        "conary --allow-live-system-mutation system generation build --summary \"Retry deferred package follow-up\""
-                            .to_string(),
-                    ),
-                },
+                crate::commands::publication_deferred_follow_up(
+                    "generation publication is pending".to_string(),
+                ),
             )?;
-            warn!(
-                changeset_id = remove_changeset_id,
-                "Package mutation completed, but generation rebuild was deferred: {}", error
-            );
-            eprintln!(
-                "WARNING: package mutation completed, but generation rebuild was deferred: {error}"
+            crate::commands::generation::publication::warn_if_publication_pending(
+                remove_changeset_id,
+                &outcome,
             );
         }
-        changeset.update_status(&conn, conary_core::db::models::ChangesetStatus::Applied)?;
         Ok(())
     })();
     engine.release_lock();
@@ -939,6 +935,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_generation_remove_deletes_files_and_db_rows() {
+        let _mount_skip = crate::commands::composefs_ops::test_mount_skip_clear_guard();
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         let db_path = root.join("conary.db");
@@ -1045,6 +1042,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_generation_remove_live_root_failure_leaves_no_pending_changeset() {
+        let _mount_skip = crate::commands::composefs_ops::test_mount_skip_clear_guard();
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         let db_path = root.join("conary.db");

@@ -418,18 +418,29 @@ impl<'a> BatchInstaller<'a> {
         super::run_triggers(&conn, Path::new(self.root), changeset_id, &all_file_paths);
 
         if execution_path == PackageExecutionPath::GenerationAware {
-            let rebuild_result = crate::commands::composefs_ops::rebuild_and_mount(
+            let summary = format!("Batch install: {main_pkg_name}");
+            let outcome = crate::commands::generation::publication::publish_current_db_state(
                 &conn,
-                self.db_path,
-                &format!("Batch install: {}", main_pkg_name),
-                None,
-            );
-            if let Err(error) = rebuild_result
-                && let Err(metadata_error) =
-                    Self::record_generation_rebuild_failure(&conn, changeset_id, error)
-            {
-                engine.release_lock();
-                return Err(metadata_error);
+                crate::commands::generation::publication::PublicationRequest {
+                    db_path: self.db_path,
+                    summary: &summary,
+                    trigger_changeset_id: Some(changeset_id),
+                    tx_uuid: None,
+                    prev_etc_snapshot: None,
+                },
+            )?;
+            if outcome.needs_publication {
+                crate::commands::append_deferred_follow_up_metadata(
+                    &conn,
+                    changeset_id,
+                    crate::commands::publication_deferred_follow_up(
+                        "generation publication is pending".to_string(),
+                    ),
+                )?;
+                crate::commands::generation::publication::warn_if_publication_pending(
+                    changeset_id,
+                    &outcome,
+                );
             }
         }
 
@@ -458,32 +469,29 @@ impl<'a> BatchInstaller<'a> {
         Ok(())
     }
 
-    fn record_generation_rebuild_failure(
+    #[cfg(test)]
+    fn record_generation_publication_pending(
         conn: &Connection,
         changeset_id: i64,
+        db_path: &str,
+        summary: &str,
         error: anyhow::Error,
     ) -> Result<()> {
+        let runtime_root = conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(db_path);
+        let debt = conary_core::db::models::GenerationPublication::create_pending(
+            conn,
+            Some(changeset_id),
+            None,
+            db_path,
+            &runtime_root.root().display().to_string(),
+            summary,
+        )?;
+        debt.mark_failed(conn, &error.to_string())?;
         crate::commands::append_deferred_follow_up_metadata(
             conn,
             changeset_id,
-            crate::commands::DeferredFollowUp {
-                kind: "generation_rebuild".to_string(),
-                status: "failed".to_string(),
-                message: error.to_string(),
-                retry_command: Some(
-                    "conary --allow-live-system-mutation system generation build --summary \"Retry deferred package follow-up\""
-                        .to_string(),
-                ),
-            },
-        )?;
-        warn!(
-            changeset_id,
-            "Package mutation completed, but generation rebuild was deferred: {}", error
-        );
-        eprintln!(
-            "WARNING: package mutation completed, but generation rebuild was deferred: {error}"
-        );
-        Ok(())
+            crate::commands::publication_deferred_follow_up(error.to_string()),
+        )
     }
 
     fn preflight_live_root_file_ownership_for_batch(
@@ -1232,7 +1240,7 @@ mod tests {
     }
 
     #[test]
-    fn generation_rebuild_failure_records_deferred_follow_up_for_applied_batch() {
+    fn generation_publication_failure_records_debt_for_applied_batch() {
         let temp = tempfile::tempdir().unwrap();
         let db_path = temp.path().join("conary.db");
         conary_core::db::init(&db_path).unwrap();
@@ -1243,9 +1251,11 @@ mod tests {
             .update_status(&conn, ChangesetStatus::Applied)
             .unwrap();
 
-        BatchInstaller::record_generation_rebuild_failure(
+        BatchInstaller::record_generation_publication_pending(
             &conn,
             changeset_id,
+            db_path.to_str().unwrap(),
+            "Batch install: fixture",
             anyhow::anyhow!("composefs build failed"),
         )
         .unwrap();
@@ -1256,15 +1266,19 @@ mod tests {
         assert_eq!(changeset.status, ChangesetStatus::Applied);
         let deferred = crate::commands::deferred_follow_up(changeset.metadata.as_deref());
         assert_eq!(deferred.len(), 1);
-        assert_eq!(deferred[0].kind, "generation_rebuild");
-        assert_eq!(deferred[0].status, "failed");
+        assert_eq!(deferred[0].kind, "generation_publication");
+        assert_eq!(deferred[0].status, "pending");
         assert!(deferred[0].message.contains("composefs build failed"));
-        assert!(
-            deferred[0]
-                .retry_command
-                .as_deref()
-                .unwrap()
-                .contains("system generation build")
+        assert_eq!(
+            deferred[0].retry_command.as_deref(),
+            Some("conary --allow-live-system-mutation system generation publish")
+        );
+        let debts =
+            conary_core::db::models::GenerationPublication::pending_recoverable(&conn).unwrap();
+        assert_eq!(debts.len(), 1);
+        assert_eq!(
+            debts[0].status,
+            conary_core::db::models::GenerationPublicationStatus::Failed
         );
     }
 
