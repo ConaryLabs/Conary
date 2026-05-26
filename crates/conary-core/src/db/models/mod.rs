@@ -37,6 +37,7 @@ mod distro_pin;
 mod download_stats;
 mod file_entry;
 mod flavor;
+mod generation_publication;
 mod label;
 mod metadata;
 mod provenance;
@@ -76,6 +77,9 @@ pub use distro_pin::{DistroPin, PackageOverride, SystemAffinity};
 pub use download_stats::{DownloadCount, DownloadStat, GlobalDownloadStats};
 pub use file_entry::FileEntry;
 pub use flavor::Flavor;
+pub use generation_publication::{
+    GenerationPublication, GenerationPublicationPhase, GenerationPublicationStatus,
+};
 pub use label::{LabelEntry, LabelPathEntry, add_to_path, get_label_path, remove_from_path};
 pub use metadata::{MetadataTable, get_metadata, set_metadata};
 pub use provenance::Provenance;
