@@ -164,6 +164,12 @@ conary system generation export --path /conary/generations/3 --format qcow2 --ou
 conary system generation export --path /conary/generations/3 --format iso --output gen3.iso
 ```
 
+When a package mutation commits but generation publication fails, Conary exits
+successfully for the package transaction and records pending publication debt.
+Run `conary system generation pending` to inspect it and
+`conary --allow-live-system-mutation system generation publish` to retry
+publication of the current DB state.
+
 ### Adoption And Explicit Takeover
 
 Adopt an existing Linux installation without giving up native package-manager authority. The stable preview path today is `conary --allow-live-system-mutation system adopt --system --full`, which records native packages in Conary with CAS backing while dnf, apt, or pacman remains authoritative for those packages. `conary --allow-live-system-mutation system unadopt --all` removes Conary tracking without deleting native package files on hosts without a selected Conary generation. If a Conary generation is already selected, use the staged native-authority handoff flow: run `conary system native-handoff --dry-run`, then `conary --allow-live-system-mutation system native-handoff --yes`; if the operation is interrupted after its record is written, rerun `conary --allow-live-system-mutation system native-handoff --recover --yes`.

@@ -7,7 +7,8 @@ summary: Design for Plan B generation publication durability and recovery harden
 # Generation Publication Durability: Design Spec
 
 **Date:** 2026-05-26
-**Status:** Review-tightened design approved; implementation plans pending
+**Status:** Implemented in `c7a549d0..46b268da`; archive when umbrella Plan C
+is split out or deferred
 **Parent:** `docs/superpowers/specs/2026-05-25-preview-invariant-hardening-design.md`
 **Goal:** Make post-DB generation publication explicit, durable, recoverable,
 and visible to operators and automation.
