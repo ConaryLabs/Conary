@@ -34,6 +34,23 @@ jobs:
       - name: Check release matrix workflow alignment
         run: bash scripts/check-release-matrix.sh
 
+  docs-truth:
+    name: docs-truth
+    runs-on: ubuntu-latest
+    env:
+      LC_ALL: C
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Check required shell tools
+        run: command -v rg >/dev/null
+      - name: Check docs audit ledger
+        run: bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete
+      - name: Check docs audit inventory
+        shell: bash
+        run: diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv <(bash scripts/docs-audit-inventory.sh)
+      - name: Check docs truth invariants
+        run: bash scripts/check-doc-truth.sh
+
   fmt:
     name: fmt
     runs-on: ubuntu-latest
