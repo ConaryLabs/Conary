@@ -1,13 +1,13 @@
 ---
 last_updated: 2026-05-26
-revision: 4
+revision: 5
 summary: Umbrella design for hardening limited-preview safety and truthfulness invariants
 ---
 
 # Preview Invariant Hardening: Design Spec
 
 **Date:** 2026-05-25
-**Status:** Reviewed umbrella design; Plan A external-review fixes folded in
+**Status:** Plan A implemented in `2e294320`; Plans B and C remain open
 **Goal:** Turn the overhead safety review into a release-hardening milestone
 that makes Conary's limited-preview claims harder to accidentally violate.
 
@@ -109,6 +109,11 @@ deferred to Track 4.
 
 ## Track 1: Command Risk And Adoption Gate
 
+**Plan A status:** Implemented in `2e294320`. Mutating adoption modes now route
+through the centralized command-risk policy, installed hooks use the constrained
+`--refresh --quiet --from-sync-hook` path, and dry-run conversion no longer
+backfills source identity before returning.
+
 ### Intent
 
 Live-host mutation policy should be represented as data or a small focused API,
@@ -195,6 +200,12 @@ runtime-root contract.
   behavior.
 
 ## Track 2: CAS And Adoption State Integrity
+
+**Plan A status:** Implemented in `2e294320`. Full adoption now copies mutable
+live files into private CAS inodes, touched legacy shared CAS objects are
+repaired on copy, adoption warnings extend the existing changeset metadata
+envelope, ghost troves are removed, and refresh replacement uses per-package
+savepoints.
 
 ### Intent
 
