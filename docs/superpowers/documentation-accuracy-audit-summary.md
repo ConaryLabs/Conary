@@ -45,6 +45,9 @@ DB-backed publication debt/recovery slice and a durable filesystem fsync sweep;
 the external review follow-up tightened it around current-DB publication sweeps,
 parameterless publish retries, a smaller recovery phase model, and the
 activation-order refactor required in `rebuild_and_mount`.
+The matching Plan B implementation checklist now opens the active plans lane
+for the DB publication debt model, publication helper, CLI/status surfaces,
+recovery guardrails, current-link durability, and the B2 fsync sweep.
 
 Audited every tracked documentation-like file returned by
 `bash scripts/docs-audit-inventory.sh`: tracked files spanning root docs,
@@ -207,8 +210,9 @@ The repo moved materially after the last audit:
   to `docs/superpowers/plans/archive/`.
 - Completed design specs, including the MCP/LLM-native operations design
   records, were moved to `docs/superpowers/specs/archive/`; the active top-level
-  `plans/` directory now holds the 2026-05-25 adoption safety Plan A checklist,
-  and the active `specs/` directory holds the 2026-05-25 preview invariant
+  `plans/` directory now holds the 2026-05-25 adoption safety Plan A checklist
+  plus the 2026-05-26 Plan B generation publication durability checklist, and
+  the active `specs/` directory holds the 2026-05-25 preview invariant
   hardening umbrella plus the 2026-05-26 Plan B generation publication
   durability design until their follow-on plans land or defer their tracks.
   The Plan A records were review-tightened on 2026-05-26 before implementation.
@@ -297,9 +301,9 @@ public tester copy is tracked by
 
 ## Final Counts
 
-- Total tracked doc-like files audited: 105
+- Total tracked doc-like files audited: 106
 - `verified-no-change`: 17
-- `corrected`: 32
+- `corrected`: 33
 - `archived`: 42
 - `retained-historical`: 14
 - Remaining pending rows: 0
