@@ -67,15 +67,67 @@ For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 
 
 ---
 
+## Review-Derived Release Hardening Queue
+
+The 2026-05-26 multi-model review pass agrees on the main direction: Conary's
+near-term advantage is not "replace every package manager now." The useful
+wedge is Nix-like safety on the Linux distribution a tester already uses,
+with adoption and unadoption as the low-risk entry point. The active planning
+queue therefore protects the preview promise before adding more ecosystem
+breadth.
+
+Umbrella design:
+[Limited Preview Release Hardening](docs/superpowers/specs/2026-05-26-limited-preview-release-hardening-design.md).
+
+1. **Preview truth and onboarding** -
+   [plan](docs/superpowers/plans/2026-05-26-preview-truth-and-onboarding.md).
+   Fix public truth drift, make the five-minute adoption/unadoption path
+   impossible to miss, sharpen the Nix comparison, include the site in truth
+   checks, and either implement or route single-package adoption dry-runs.
+2. **Scriptlet trust assurance** -
+   [plan](docs/superpowers/plans/2026-05-26-scriptlet-trust-assurance.md).
+   Resolve the protected-sandbox `chroot`/root-transition ambiguity, make
+   direct scriptlet failure semantics structured and visible, and design
+   capability-scoped integration hooks before relying on unsandboxed fallbacks.
+3. **Release evidence and supportability** -
+   [plan](docs/superpowers/plans/2026-05-26-release-evidence-and-supportability.md).
+   Publish a product/artifact/provenance matrix, keep local KVM evidence honest
+   while remote validation is paused, add beta support-bundle/privacy guidance,
+   and turn the limited preview into a contributor funnel.
+4. **Generation state resilience** -
+   [plan](docs/superpowers/plans/2026-05-26-generation-state-resilience.md).
+   Add generation-bound DB snapshots and a rebuild/recovery path so a damaged
+   live SQLite DB does not blind the manager when generation artifacts and
+   metadata are still intact.
+
+Strategic follow-up after the preview queue:
+
+- pre-convert and pre-warm core Remi package sets to reduce first-run latency;
+- define a CCS-native corpus strategy with a small signed reference set;
+- add aarch64 generation boot assets before claiming broad developer reach;
+- add openSUSE/Tumbleweed after Fedora/RPM behavior is boringly repeatable;
+- polish recipe, bootstrap, and model flows before selling Conary as a system
+  builder target;
+- keep conaryd remote/fleet management and signed portable generation bundles
+  behind the release-hardening work.
+
+---
+
 ## Near-Term Priorities
 
-1. Prove `conary system unadopt` remains the non-destructive adoption escape for RPM, DEB, and Arch
-2. Lock down adopted-package update behavior so native package managers remain authoritative unless takeover is explicit
-3. Keep quick-start and preview docs current around adoption, unadoption, native PM coexistence, takeover boundaries, and security-update honesty
-4. Keep selected-generation native-authority handoff validation green and document any recovery caveats from real use
-5. Keep generation export, installed-runtime QEMU validation, and Group P ISO evidence green in rotation
-6. Keep self-host VM validation inputs fresh by default and finish pristine rerun isolation
-7. Keep the daily-driver UX matrix, shell completions, release polish, and contributor/operator diagnostics current
+1. Land the preview truth/onboarding plan before inviting new public testers.
+2. Land the scriptlet trust-assurance plan before widening beyond careful VM or
+   non-critical-machine testers.
+3. Keep `conary system unadopt` and selected-generation `native-handoff` proof
+   green for Fedora 44, Ubuntu 26.04 LTS, and Arch.
+4. Keep generation export, installed-runtime QEMU validation, and Group P ISO
+   evidence green in rotation while remote KVM validation is paused.
+5. Add release evidence, support-bundle, and contributor-onboarding polish
+   before treating the limited preview as more than a small tester program.
+6. Add generation-state reconstruction before generation switching becomes the
+   headline public ask.
+7. Keep daily-driver UX, shell completions, release polish, and operator
+   diagnostics current as preview feedback arrives.
 
 ---
 
