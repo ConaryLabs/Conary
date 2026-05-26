@@ -2107,8 +2107,24 @@ fn execute_install_transaction(
         conary_core::capability::store_capabilities(&tx, inner_result.trove_id, capabilities)?;
     }
 
+    changeset.update_status(&tx, ChangesetStatus::Applied)?;
     if ctx.defer_generation && ctx.execution_path == PackageExecutionPath::GenerationAware {
-        changeset.update_status(&tx, ChangesetStatus::Applied)?;
+        let runtime_root = conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(ctx.db_path);
+        conary_core::db::models::GenerationPublication::create_pending(
+            &tx,
+            Some(changeset_id),
+            changeset.tx_uuid.as_deref(),
+            ctx.db_path,
+            &runtime_root.root().display().to_string(),
+            &tx_description,
+        )?;
+        crate::commands::append_deferred_follow_up_metadata(
+            &tx,
+            changeset_id,
+            crate::commands::publication_deferred_follow_up(
+                "generation publication was deferred by caller request".to_string(),
+            ),
+        )?;
     }
 
     tx.commit()?;
@@ -2123,35 +2139,29 @@ fn execute_install_transaction(
     }
 
     let post_commit_result = (|| -> Result<()> {
-        let rebuild_result = crate::commands::composefs_ops::rebuild_and_mount(
+        let outcome = crate::commands::generation::publication::publish_current_db_state(
             conn,
-            ctx.db_path,
-            &tx_description,
-            Some(prev_etc),
-        );
-        if let Err(error) = rebuild_result {
+            crate::commands::generation::publication::PublicationRequest {
+                db_path: ctx.db_path,
+                summary: &tx_description,
+                trigger_changeset_id: Some(changeset_id),
+                tx_uuid: changeset.tx_uuid.as_deref(),
+                prev_etc_snapshot: Some(prev_etc),
+            },
+        )?;
+        if outcome.needs_publication {
             crate::commands::append_deferred_follow_up_metadata(
                 conn,
                 changeset_id,
-                crate::commands::DeferredFollowUp {
-                    kind: "generation_rebuild".to_string(),
-                    status: "failed".to_string(),
-                    message: error.to_string(),
-                    retry_command: Some(
-                        "conary --allow-live-system-mutation system generation build --summary \"Retry deferred package follow-up\""
-                            .to_string(),
-                    ),
-                },
+                crate::commands::publication_deferred_follow_up(
+                    "generation publication is pending".to_string(),
+                ),
             )?;
-            warn!(
+            crate::commands::generation::publication::warn_if_publication_pending(
                 changeset_id,
-                "Package mutation completed, but generation rebuild was deferred: {}", error
-            );
-            eprintln!(
-                "WARNING: package mutation completed, but generation rebuild was deferred: {error}"
+                &outcome,
             );
         }
-        changeset.update_status(conn, ChangesetStatus::Applied)?;
         Ok(())
     })();
     engine.release_lock();

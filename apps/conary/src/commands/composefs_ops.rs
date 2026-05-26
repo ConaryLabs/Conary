@@ -377,6 +377,12 @@ pub(crate) struct TestMountSkipGuard {
 static TEST_MOUNT_SKIP_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
+pub(crate) struct TestMountSkipClearGuard {
+    _guard: std::sync::MutexGuard<'static, ()>,
+    previous: Option<std::ffi::OsString>,
+}
+
+#[cfg(test)]
 pub(crate) fn test_mount_skip_guard() -> TestMountSkipGuard {
     let guard = TEST_MOUNT_SKIP_LOCK.lock().unwrap();
     unsafe {
@@ -386,10 +392,36 @@ pub(crate) fn test_mount_skip_guard() -> TestMountSkipGuard {
 }
 
 #[cfg(test)]
+pub(crate) fn test_mount_skip_clear_guard() -> TestMountSkipClearGuard {
+    let guard = TEST_MOUNT_SKIP_LOCK.lock().unwrap();
+    let previous = std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT");
+    unsafe {
+        std::env::remove_var("CONARY_TEST_SKIP_GENERATION_MOUNT");
+    }
+    TestMountSkipClearGuard {
+        _guard: guard,
+        previous,
+    }
+}
+
+#[cfg(test)]
 impl Drop for TestMountSkipGuard {
     fn drop(&mut self) {
         unsafe {
             std::env::remove_var("CONARY_TEST_SKIP_GENERATION_MOUNT");
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestMountSkipClearGuard {
+    fn drop(&mut self) {
+        unsafe {
+            if let Some(previous) = &self.previous {
+                std::env::set_var("CONARY_TEST_SKIP_GENERATION_MOUNT", previous);
+            } else {
+                std::env::remove_var("CONARY_TEST_SKIP_GENERATION_MOUNT");
+            }
         }
     }
 }

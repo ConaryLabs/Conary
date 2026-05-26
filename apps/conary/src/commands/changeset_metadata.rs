@@ -16,6 +16,34 @@ pub(crate) struct DeferredFollowUp {
     pub retry_command: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeferredFollowUpKind {
+    GenerationPublication,
+    LegacyGenerationRebuild,
+    Other,
+}
+
+pub(crate) fn classify_deferred_follow_up_kind(
+    follow_up: &DeferredFollowUp,
+) -> DeferredFollowUpKind {
+    match follow_up.kind.as_str() {
+        "generation_publication" => DeferredFollowUpKind::GenerationPublication,
+        "generation_rebuild" => DeferredFollowUpKind::LegacyGenerationRebuild,
+        _ => DeferredFollowUpKind::Other,
+    }
+}
+
+pub(crate) fn publication_deferred_follow_up(message: String) -> DeferredFollowUp {
+    DeferredFollowUp {
+        kind: "generation_publication".to_string(),
+        status: "pending".to_string(),
+        message,
+        retry_command: Some(
+            "conary --allow-live-system-mutation system generation publish".to_string(),
+        ),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct AdoptionWarning {
     pub package: String,
@@ -275,6 +303,31 @@ mod tests {
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].name, "fixture");
         assert_eq!(deferred, vec![warning]);
+    }
+
+    #[test]
+    fn publication_deferred_follow_up_uses_publish_retry() {
+        let follow_up = publication_deferred_follow_up("forced".to_string());
+        assert_eq!(follow_up.kind, "generation_publication");
+        assert_eq!(follow_up.status, "pending");
+        assert_eq!(
+            follow_up.retry_command.as_deref(),
+            Some("conary --allow-live-system-mutation system generation publish")
+        );
+    }
+
+    #[test]
+    fn classify_legacy_generation_rebuild_follow_up() {
+        let follow_up = DeferredFollowUp {
+            kind: "generation_rebuild".to_string(),
+            status: "failed".to_string(),
+            message: "old failure".to_string(),
+            retry_command: Some("conary system generation build --summary retry".to_string()),
+        };
+        assert_eq!(
+            classify_deferred_follow_up_kind(&follow_up),
+            DeferredFollowUpKind::LegacyGenerationRebuild
+        );
     }
 
     #[test]

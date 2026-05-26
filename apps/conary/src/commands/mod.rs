@@ -79,10 +79,11 @@ pub use capability::{
 };
 #[allow(unused_imports)]
 pub(crate) use changeset_metadata::{
-    AdoptionWarning, ChangesetMetadataEnvelope, DeferredFollowUp, adoption_warnings,
-    append_adoption_warning_metadata, append_deferred_follow_up_metadata, deferred_follow_up,
-    metadata_with_adoption_warnings, metadata_with_deferred_follow_up,
-    metadata_with_removed_troves, parse_rollback_snapshots,
+    AdoptionWarning, ChangesetMetadataEnvelope, DeferredFollowUp, DeferredFollowUpKind,
+    adoption_warnings, append_adoption_warning_metadata, append_deferred_follow_up_metadata,
+    classify_deferred_follow_up_kind, deferred_follow_up, metadata_with_adoption_warnings,
+    metadata_with_deferred_follow_up, metadata_with_removed_troves, parse_rollback_snapshots,
+    publication_deferred_follow_up,
 };
 pub use collection::{
     cmd_collection_add, cmd_collection_create, cmd_collection_delete, cmd_collection_install,
