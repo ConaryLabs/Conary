@@ -1,8 +1,17 @@
 // conary-core/src/filesystem/durable.rs
 
 use crate::{Error, Result};
-use std::fs::OpenOptions;
-use std::path::Path;
+use serde::Serialize;
+use std::fs::{File, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+fn temp_path_for(path: &Path) -> PathBuf {
+    match path.extension() {
+        Some(extension) => path.with_extension(format!("{}.tmp", extension.to_string_lossy())),
+        None => path.with_extension("tmp"),
+    }
+}
 
 pub fn sync_parent_directory(path: &Path) -> Result<()> {
     let parent = path
@@ -28,9 +37,34 @@ pub fn sync_parent_directory(path: &Path) -> Result<()> {
     })
 }
 
+pub fn write_file_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = temp_path_for(path);
+    {
+        let mut file = File::create(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)?;
+    sync_parent_directory(path)
+}
+
+pub fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    let bytes = serde_json::to_vec_pretty(value)
+        .map_err(|error| Error::InternalError(format!("failed to serialize JSON: {error}")))?;
+    write_file_atomic(path, &bytes)
+}
+
+pub fn remove_file_and_sync_parent(path: &Path) -> Result<()> {
+    std::fs::remove_file(path)?;
+    sync_parent_directory(path)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::sync_parent_directory;
+    use super::{sync_parent_directory, write_json_atomic};
     use tempfile::TempDir;
 
     #[test]
@@ -46,5 +80,21 @@ mod tests {
         let error = sync_parent_directory(std::path::Path::new("current"))
             .expect_err("relative path without parent should fail");
         assert!(error.to_string().contains("no parent directory"));
+    }
+
+    #[test]
+    fn write_json_atomic_writes_pretty_json_and_syncs_parent() {
+        #[derive(serde::Serialize)]
+        struct Fixture {
+            name: &'static str,
+        }
+
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("record.json");
+        write_json_atomic(&path, &Fixture { name: "fixture" }).unwrap();
+
+        let raw = std::fs::read_to_string(path).unwrap();
+        assert!(raw.contains("\"fixture\""));
+        assert!(!temp.path().join("record.json.tmp").exists());
     }
 }

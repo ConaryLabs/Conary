@@ -1,9 +1,10 @@
 // apps/conary/src/commands/live_root.rs
 
 use anyhow::{Context, Result, bail};
+use conary_core::filesystem::durable::{sync_parent_directory, write_json_atomic};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{self, Write};
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Component, Path, PathBuf};
 
@@ -86,7 +87,7 @@ impl LiveRootTransaction {
     ) -> Result<Self> {
         validate_tx_uuid(&tx_uuid)?;
         let journal_dir = runtime_root.join("live-root-journals");
-        fs::create_dir_all(&journal_dir)?;
+        create_dir_all_and_sync(&journal_dir)?;
         let operation = operation.into();
         let journal_path = journal_dir.join(format!("{tx_uuid}.json"));
         let transaction = Self {
@@ -115,7 +116,7 @@ impl LiveRootTransaction {
             if let Some(target_value) = file.symlink_target.as_deref() {
                 symlink(target_value, &temp)
                     .with_context(|| format!("Failed to create symlink {}", temp.display()))?;
-                fs::rename(&temp, &target)
+                rename_and_sync(&temp, &target)
                     .with_context(|| format!("Failed to move symlink {}", target.display()))?;
             } else {
                 let mut temp_file = OpenOptions::new()
@@ -133,7 +134,7 @@ impl LiveRootTransaction {
                     &temp,
                     fs::Permissions::from_mode((file.mode as u32) & 0o7777),
                 )?;
-                fs::rename(&temp, &target)
+                rename_and_sync(&temp, &target)
                     .with_context(|| format!("Failed to move file {}", target.display()))?;
             }
             stats.files_written += 1;
@@ -168,7 +169,7 @@ impl LiveRootTransaction {
         for dir in dirs {
             self.removed_dirs.push(dir.clone());
             self.write_journal("in_progress")?;
-            match fs::remove_dir(&dir) {
+            match remove_dir_and_sync(&dir) {
                 Ok(()) => stats.dirs_removed += 1,
                 Err(error)
                     if matches!(
@@ -191,10 +192,10 @@ impl LiveRootTransaction {
             }
             match fs::symlink_metadata(created) {
                 Ok(meta) if meta.is_dir() => {
-                    let _ = fs::remove_dir(created);
+                    let _ = remove_dir_and_sync(created);
                 }
                 Ok(_) => {
-                    let _ = fs::remove_file(created);
+                    let _ = remove_file_and_sync(created);
                 }
                 Err(_) => {}
             }
@@ -207,7 +208,7 @@ impl LiveRootTransaction {
             let backup_path = PathBuf::from(&backup.backup_path);
             if backup_path.exists() {
                 ensure_safe_parent(&self.root, &target)?;
-                fs::rename(&backup_path, &target)?;
+                rename_and_sync(&backup_path, &target)?;
             }
         }
         self.write_journal("rolled_back")?;
@@ -257,7 +258,7 @@ impl LiveRootTransaction {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                     self.created_paths.push(full.clone());
                     self.write_journal("in_progress")?;
-                    fs::create_dir(&full)?;
+                    create_dir_and_sync(&full)?;
                     stats.dirs_created += 1;
                 }
                 Err(error) => {
@@ -283,14 +284,14 @@ impl LiveRootTransaction {
             }
         }
         let backup_dir = self.journal_path.with_extension("backups");
-        fs::create_dir_all(&backup_dir)?;
+        create_dir_all_and_sync(&backup_dir)?;
         let backup_path = backup_dir.join(format!("backup-{}", self.backups.len()));
         self.backups.push(BackupRecord {
             path: target.to_string_lossy().into_owned(),
             backup_path: backup_path.to_string_lossy().into_owned(),
         });
         self.write_journal("in_progress")?;
-        fs::rename(target, &backup_path)?;
+        rename_and_sync(target, &backup_path)?;
         Ok(())
     }
 
@@ -316,30 +317,18 @@ impl LiveRootTransaction {
             .journal_path
             .parent()
             .context("live-root journal path has no parent")?;
-        fs::create_dir_all(journal_dir)?;
-        let temp_path = journal_dir.join(format!(".{}.json.tmp", self.tx_uuid));
-        let _ = fs::remove_file(&temp_path);
-        let mut temp = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp_path)
-            .with_context(|| format!("Failed to create {}", temp_path.display()))?;
-        temp.write_all(&serde_json::to_vec_pretty(&journal)?)?;
-        temp.sync_all()
-            .with_context(|| format!("Failed to sync {}", temp_path.display()))?;
-        drop(temp);
-        fs::rename(&temp_path, &self.journal_path).with_context(|| {
+        create_dir_all_and_sync(journal_dir)?;
+        write_json_atomic(&self.journal_path, &journal).with_context(|| {
             format!(
                 "Failed to replace live-root journal {}",
                 self.journal_path.display()
             )
         })?;
-        sync_directory(journal_dir)?;
         Ok(())
     }
 
     fn cleanup_transaction_files(&self) -> Result<()> {
-        match fs::remove_file(&self.journal_path) {
+        match remove_file_and_sync(&self.journal_path) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
@@ -348,7 +337,7 @@ impl LiveRootTransaction {
             }
         }
         let backup_dir = self.journal_path.with_extension("backups");
-        match fs::remove_dir_all(&backup_dir) {
+        match remove_dir_all_and_sync(&backup_dir) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
@@ -469,14 +458,14 @@ fn live_root_transaction_from_journal(
 }
 
 fn cleanup_recovered_journal_files(path: &Path) -> Result<()> {
-    match fs::remove_file(path) {
+    match remove_file_and_sync(path) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => {
             return Err(error).with_context(|| format!("Failed to remove {}", path.display()));
         }
     }
-    match fs::remove_dir_all(path.with_extension("backups")) {
+    match remove_dir_all_and_sync(&path.with_extension("backups")) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => {
@@ -719,7 +708,7 @@ fn ensure_safe_directory(root: &Path, dir: &Path) -> Result<()> {
             }
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                fs::create_dir(&current)
+                create_dir_and_sync(&current)
                     .with_context(|| format!("Failed to create {}", current.display()))?;
             }
             Err(error) => {
@@ -731,10 +720,52 @@ fn ensure_safe_directory(root: &Path, dir: &Path) -> Result<()> {
     Ok(())
 }
 
+fn rename_and_sync(source: &Path, target: &Path) -> io::Result<()> {
+    fs::rename(source, target)?;
+    sync_parent_directory_io(target)?;
+    if let (Some(source_parent), Some(target_parent)) = (source.parent(), target.parent())
+        && source_parent != target_parent
+    {
+        sync_directory_io(source_parent)?;
+    }
+    Ok(())
+}
+
+fn remove_file_and_sync(path: &Path) -> io::Result<()> {
+    fs::remove_file(path)?;
+    sync_parent_directory_io(path)
+}
+
+fn remove_dir_and_sync(path: &Path) -> io::Result<()> {
+    fs::remove_dir(path)?;
+    sync_parent_directory_io(path)
+}
+
+fn remove_dir_all_and_sync(path: &Path) -> io::Result<()> {
+    fs::remove_dir_all(path)?;
+    sync_parent_directory_io(path)
+}
+
+fn create_dir_and_sync(path: &Path) -> io::Result<()> {
+    fs::create_dir(path)?;
+    sync_parent_directory_io(path)
+}
+
+fn create_dir_all_and_sync(path: &Path) -> io::Result<()> {
+    fs::create_dir_all(path)?;
+    sync_parent_directory_io(path)
+}
+
+fn sync_parent_directory_io(path: &Path) -> io::Result<()> {
+    sync_parent_directory(path).map_err(|error| io::Error::other(error.to_string()))
+}
+
+fn sync_directory_io(path: &Path) -> io::Result<()> {
+    File::open(path)?.sync_all()
+}
+
 fn sync_directory(path: &Path) -> Result<()> {
-    let dir = File::open(path).with_context(|| format!("Failed to open {}", path.display()))?;
-    dir.sync_all()
-        .with_context(|| format!("Failed to sync {}", path.display()))?;
+    sync_directory_io(path).with_context(|| format!("Failed to sync {}", path.display()))?;
     Ok(())
 }
 
@@ -770,6 +801,32 @@ mod tests {
                 "{package_path:?} returned {err}"
             );
         }
+    }
+
+    #[test]
+    fn rename_and_sync_moves_file_and_leaves_target_parent_consistent() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let target_dir = temp.path().join("target");
+        std::fs::create_dir(&target_dir).unwrap();
+        let target = target_dir.join("file");
+        std::fs::write(&source, b"ok").unwrap();
+
+        rename_and_sync(&source, &target).unwrap();
+
+        assert!(!source.exists());
+        assert_eq!(std::fs::read(&target).unwrap(), b"ok");
+    }
+
+    #[test]
+    fn remove_file_and_sync_removes_target() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let target = temp.path().join("file");
+        std::fs::write(&target, b"ok").unwrap();
+
+        remove_file_and_sync(&target).unwrap();
+
+        assert!(!target.exists());
     }
 
     #[test]
