@@ -59,6 +59,7 @@ site/build/
 .sccache/
 
 .gemini/
+.antigravitycli/
 gha-creds-*.json
 
 # Environment and credentials
