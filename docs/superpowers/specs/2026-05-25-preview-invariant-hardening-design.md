@@ -7,8 +7,9 @@ summary: Umbrella design for hardening limited-preview safety and truthfulness i
 # Preview Invariant Hardening: Design Spec
 
 **Date:** 2026-05-25
-**Status:** Plan A implemented in `2e294320`; Plan B implemented in
-`c7a549d0..46b268da`; Plan C remains open
+**Status:** Plan A implemented in `2e294320`; Plan B implemented through
+`5c9354b3`; Plan C design split out in
+`docs/superpowers/specs/2026-05-26-docs-ci-truth-checks-design.md`
 **Goal:** Turn the overhead safety review into a release-hardening milestone
 that makes Conary's limited-preview claims harder to accidentally violate.
 
