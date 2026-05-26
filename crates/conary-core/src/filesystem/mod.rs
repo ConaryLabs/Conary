@@ -11,6 +11,7 @@
 //! generation building (see `crate::generation`).
 
 mod cas;
+pub mod durable;
 pub mod fsverity;
 pub mod path;
 pub mod vfs;
