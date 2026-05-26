@@ -8,6 +8,7 @@ use std::borrow::Cow;
 use std::io;
 
 use crate::cli::{self, Cli, Commands};
+use crate::command_risk;
 use crate::commands;
 use crate::live_host_safety::{
     LiveMutationClass, LiveMutationRequest, require_live_system_mutation_ack,
@@ -31,6 +32,7 @@ fn require_live_mutation(
 
 pub async fn dispatch(cli: Cli) -> Result<()> {
     let allow_live_system_mutation = cli.allow_live_system_mutation;
+    command_risk::enforce_cli_policy(allow_live_system_mutation, &cli)?;
 
     match cli.command {
         // =====================================================================
@@ -567,6 +569,7 @@ async fn dispatch_system_command(
             sync_hook,
             remove_hook,
             quiet,
+            from_sync_hook: _,
         } => {
             if sync_hook {
                 commands::cmd_sync_hook_install(remove_hook).await
@@ -587,6 +590,11 @@ async fn dispatch_system_command(
                 )
                 .await
             } else {
+                if dry_run {
+                    anyhow::bail!(
+                        "single-package adoption dry-run is not implemented yet; use `conary system adopt --system --dry-run` for a system-wide preview or rerun without --dry-run when ready to adopt package(s)"
+                    );
+                }
                 commands::cmd_adopt(&packages, &db.db_path, full).await
             }
         }

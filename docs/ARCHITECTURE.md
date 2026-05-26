@@ -91,7 +91,7 @@ crates/conary-core/      Core library crate
     +-- lib.rs           Public API surface
     +-- operations.rs    Shared operation vocabulary across CLI and daemon boundaries
     +-- db/              Database layer
-    |   +-- schema.rs    Schema v67, migration dispatcher
+    |   +-- schema.rs    Schema v68, migration dispatcher
     |   +-- migrations/  Migration functions grouped into v1_v20.rs, v21_v40.rs, v41_current.rs
     |   +-- models/      ORM-style model structs
     +-- transaction/     Composefs-native transaction engine

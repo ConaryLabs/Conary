@@ -105,12 +105,6 @@ pub async fn cmd_adopt_convert(
     let source_identity =
         conary_core::packages::SystemPackageManager::detect().detect_source_identity();
 
-    backfill_adopted_source_identity(
-        &conn,
-        source_identity.source_distro.as_deref(),
-        source_identity.version_scheme.as_deref(),
-    )?;
-
     // 1. Query unconverted adopted troves
     let troves = query_unconverted_adopted(&conn)?;
 
@@ -131,6 +125,12 @@ pub async fn cmd_adopt_convert(
         println!("\nDry run: no packages converted.");
         return Ok(());
     }
+
+    backfill_adopted_source_identity(
+        &conn,
+        source_identity.source_distro.as_deref(),
+        source_identity.version_scheme.as_deref(),
+    )?;
 
     // 2. Collect DB data sequentially (SQLite is single-threaded)
     let bundles: Vec<AdoptedTroveBundle> = troves

@@ -11,6 +11,40 @@ fn run_conary(args: &[&str]) -> std::process::Output {
         .expect("failed to run conary")
 }
 
+fn seed_adopted_trove_without_source_identity(db_path: &str, name: &str) {
+    use conary_core::db;
+    use conary_core::db::models::{Changeset, ChangesetStatus, InstallSource, Trove, TroveType};
+
+    let mut conn = db::open(db_path).unwrap();
+    db::transaction(&mut conn, |tx| {
+        let mut changeset = Changeset::new(format!("Seed adopted {name}"));
+        let changeset_id = changeset.insert(tx)?;
+        let mut trove = Trove::new_with_source(
+            name.to_string(),
+            "1.0.0".to_string(),
+            TroveType::Package,
+            InstallSource::AdoptedTrack,
+        );
+        trove.installed_by_changeset_id = Some(changeset_id);
+        trove.source_distro = None;
+        trove.version_scheme = None;
+        trove.insert(tx)?;
+        changeset.update_status(tx, ChangesetStatus::Applied)?;
+        Ok(())
+    })
+    .unwrap();
+}
+
+fn source_identity_for(db_path: &str, name: &str) -> (Option<String>, Option<String>) {
+    let conn = conary_core::db::open(db_path).unwrap();
+    conn.query_row(
+        "SELECT source_distro, version_scheme FROM troves WHERE name = ?1",
+        [name],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .unwrap()
+}
+
 #[test]
 fn install_refuses_without_live_mutation_flag() {
     let (_tmp, db_path) = common::setup_command_test_db();
@@ -201,4 +235,113 @@ fn excluded_system_gc_is_not_gated() {
     assert!(output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stderr.contains("--allow-live-system-mutation"));
+}
+
+#[test]
+fn system_adopt_package_refuses_without_live_mutation_flag() {
+    let (_tmp, db_path) = common::setup_command_test_db();
+
+    let output = run_conary(&["system", "adopt", "curl", "--db-path", &db_path]);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("conary system adopt <pkg>"));
+    assert!(stderr.contains("--allow-live-system-mutation"));
+    assert!(stderr.contains("Conary DB"));
+}
+
+#[test]
+fn system_adopt_system_refuses_without_live_mutation_flag() {
+    let (_tmp, db_path) = common::setup_command_test_db();
+
+    let output = run_conary(&["system", "adopt", "--system", "--db-path", &db_path]);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("conary system adopt --system"));
+    assert!(stderr.contains("--allow-live-system-mutation"));
+}
+
+#[test]
+fn system_adopt_refresh_refuses_without_live_mutation_flag() {
+    let (_tmp, db_path) = common::setup_command_test_db();
+
+    let output = run_conary(&["system", "adopt", "--refresh", "--db-path", &db_path]);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("conary system adopt --refresh"));
+    assert!(stderr.contains("--allow-live-system-mutation"));
+}
+
+#[test]
+fn system_adopt_convert_refuses_without_live_mutation_flag() {
+    let (_tmp, db_path) = common::setup_command_test_db();
+    seed_adopted_trove_without_source_identity(&db_path, "curl");
+
+    let output = run_conary(&["system", "adopt", "--convert", "--db-path", &db_path]);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("conary system adopt --convert"));
+    assert!(stderr.contains("--allow-live-system-mutation"));
+}
+
+#[test]
+fn system_adopt_sync_hook_refuses_without_live_mutation_flag() {
+    let (_tmp, db_path) = common::setup_command_test_db();
+
+    let output = run_conary(&["system", "adopt", "--sync-hook", "--db-path", &db_path]);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("conary system adopt --sync-hook"));
+    assert!(stderr.contains("--allow-live-system-mutation"));
+}
+
+#[test]
+fn system_adopt_status_bypasses_gate() {
+    let (_tmp, db_path) = common::setup_command_test_db();
+
+    let output = run_conary(&["system", "adopt", "--status", "--db-path", &db_path]);
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("--allow-live-system-mutation"));
+}
+
+#[test]
+fn system_adopt_package_dry_run_is_rejected_without_ack_prompt() {
+    let (_tmp, db_path) = common::setup_command_test_db();
+
+    let output = run_conary(&[
+        "system",
+        "adopt",
+        "curl",
+        "--dry-run",
+        "--db-path",
+        &db_path,
+    ]);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("single-package adoption dry-run is not implemented"));
+    assert!(!stderr.contains("--allow-live-system-mutation"));
+}
+
+#[test]
+fn system_adopt_convert_dry_run_does_not_backfill_source_identity() {
+    let (_tmp, db_path) = common::setup_command_test_db();
+    seed_adopted_trove_without_source_identity(&db_path, "curl");
+
+    let output = run_conary(&[
+        "system",
+        "adopt",
+        "--convert",
+        "--dry-run",
+        "--db-path",
+        &db_path,
+    ]);
+
+    assert!(output.status.success());
+    assert_eq!(source_identity_for(&db_path, "curl"), (None, None));
 }

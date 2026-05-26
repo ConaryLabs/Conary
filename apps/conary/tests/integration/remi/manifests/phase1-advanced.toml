@@ -216,7 +216,7 @@ timeout = 60
 depends_on = ["T04"]
 
 [[test.step]]
-conary = "system adopt curl"
+conary = "--allow-live-system-mutation system adopt curl"
 
 [test.step.assert]
 exit_code = 0
@@ -300,7 +300,7 @@ timeout = 90
 depends_on = ["T21b"]
 
 [[test.step]]
-conary = "system adopt curl"
+conary = "--allow-live-system-mutation system adopt curl"
 
 [test.step.assert]
 exit_code = 0
@@ -553,7 +553,7 @@ depends_on = ["T04"]
 
 # Ensure curl is adopted
 [[test.step]]
-conary = "system adopt curl"
+conary = "--allow-live-system-mutation system adopt curl"
 
 # Run update with dep-mode satisfy
 [[test.step]]

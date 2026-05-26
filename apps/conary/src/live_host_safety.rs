@@ -5,6 +5,7 @@ use std::borrow::Cow;
 
 pub enum LiveMutationClass {
     AlwaysLive,
+    LiveConaryState,
     CurrentlyLiveEvenWithRootArguments,
 }
 
@@ -22,10 +23,18 @@ pub fn require_live_system_mutation_ack(
         return Ok(());
     }
 
-    let mut message = format!(
-        "command '{}' may mutate the active host. Conary is still early software, and this command can perform generation rebuild or activation work, remount /usr, rewrite the live /etc overlay, execute scriptlet hooks, or change package ownership during takeover or rollback.",
-        request.command_label
-    );
+    let mut message = match request.class {
+        LiveMutationClass::LiveConaryState => format!(
+            "command '{}' may mutate live Conary state. Conary is still early software, and this command can update the Conary DB or CAS records that describe the active machine.",
+            request.command_label
+        ),
+        LiveMutationClass::AlwaysLive | LiveMutationClass::CurrentlyLiveEvenWithRootArguments => {
+            format!(
+                "command '{}' may mutate the active host. Conary is still early software, and this command can perform generation rebuild or activation work, remount /usr, rewrite the live /etc overlay, execute scriptlet hooks, or change package ownership during takeover or rollback.",
+                request.command_label
+            )
+        }
+    };
 
     if matches!(
         request.class,
@@ -114,5 +123,22 @@ mod tests {
         assert!(message.contains("conary ccs install"));
         assert!(message.contains("--root"));
         assert!(message.contains("not sufficient isolation"));
+    }
+
+    #[test]
+    fn live_conary_state_refusal_describes_db_and_cas_not_scriptlets() {
+        let request = LiveMutationRequest {
+            command_label: Cow::Borrowed("conary system adopt <pkg>"),
+            class: LiveMutationClass::LiveConaryState,
+            dry_run: false,
+        };
+
+        let err = require_live_system_mutation_ack(false, &request).unwrap_err();
+        let message = format!("{err:#}");
+        assert!(message.contains("Conary DB"));
+        assert!(message.contains("CAS"));
+        assert!(message.contains("--allow-live-system-mutation"));
+        assert!(!message.contains("scriptlet hooks"));
+        assert!(!message.contains("remount /usr"));
     }
 }

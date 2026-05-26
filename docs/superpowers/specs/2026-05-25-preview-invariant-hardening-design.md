@@ -1,13 +1,13 @@
 ---
-last_updated: 2026-05-25
-revision: 3
+last_updated: 2026-05-26
+revision: 4
 summary: Umbrella design for hardening limited-preview safety and truthfulness invariants
 ---
 
 # Preview Invariant Hardening: Design Spec
 
 **Date:** 2026-05-25
-**Status:** Reviewed umbrella design; implementation plans pending
+**Status:** Reviewed umbrella design; Plan A external-review fixes folded in
 **Goal:** Turn the overhead safety review into a release-hardening milestone
 that makes Conary's limited-preview claims harder to accidentally violate.
 
@@ -41,6 +41,10 @@ The review confirmed several concrete issues:
 - `apps/conary/src/commands/adopt/hooks.rs` installs or removes package-manager
   hook files under host paths such as `/usr/lib/rpm`, `/etc/apt`, and
   `/etc/pacman.d`.
+- Before this hardening work, the installed hook templates invoked
+  `conary system adopt --refresh --quiet` without the preview acknowledgement
+  boundary, so Plan A adds a narrow hook-only refresh contract before gating
+  general refresh.
 - `apps/conary/src/commands/adopt/convert.rs` backfills adopted source identity
   before the `--dry-run` return path, so `system adopt --convert --dry-run` is
   not currently a true non-mutating dry-run.
@@ -77,9 +81,9 @@ The review confirmed several concrete issues:
 - `apps/conary/src/commands/live_root.rs` has durable journal writes, but some
   live-root target renames, backup moves, directory creates, and removals lack
   parent-directory sync coverage.
-- Active docs still contain drift examples: schema v67 references while code is
-  at schema v68, retired `conary adopt-system` hints, stale preview gate
-  wording, and an incomplete conaryd API reference path.
+- The review found drift examples such as schema version mismatches, retired
+  command hints, stale preview gate wording, and an incomplete conaryd API
+  reference path. Track 4 turns those into automated truth checks.
 - `apps/conaryd/src/daemon/auth.rs` safely denies PolicyKit authorization
   attempts today, but its module docs describe non-root PolicyKit authorization
   as available instead of clearly calling it an unimplemented stub.
@@ -147,9 +151,21 @@ Adoption modes should be classified explicitly:
 | `system adopt --system` | `DbMutation` | Requires acknowledgement; bulk insert must satisfy Track 2. |
 | `system adopt --system --full` | `DbMutation` | Requires acknowledgement; full CAS capture must satisfy Track 2. |
 | `system adopt --refresh` | `DbMutation` | Requires acknowledgement unless invoked through the narrow hook-refresh contract below. |
+| `system adopt --refresh --quiet --from-sync-hook` | `HookRefreshDbMutation` | Hidden installed-hook path; no interactive acknowledgement, root-owned hook context only, no `--full`. |
 | `system adopt --convert` | `DbMutation` | Requires acknowledgement for DB writes; `--dry-run` must be non-mutating. |
 | `system adopt --sync-hook` | `ActiveHostMutation` | Requires `--allow-live-system-mutation`. |
 | `system adopt --sync-hook --remove-hook` | `ActiveHostMutation` | Requires `--allow-live-system-mutation`. |
+
+Plan A chooses a narrow installed-hook refresh path rather than embedding the
+global acknowledgement flag in generated hook scripts. The hidden
+`--from-sync-hook` flag must require `--refresh --quiet`, conflict with `--full`
+and all other adoption modes, and be accepted only for the installed
+package-manager hook contract. Hook install/remove remains gated. Generated hook
+scripts must call `conary system adopt --refresh --quiet --from-sync-hook`, and
+operator-facing hook text must say that installing hooks enables a constrained
+hook-only refresh of Conary's adopted-package DB metadata after native package
+manager transactions. The hidden flag must not become a general user-facing
+bypass for interactive refresh.
 
 The `--root` option must not be presented as active-host isolation for commands
 whose runtime state still resolves to live Conary locations. If a future
@@ -170,10 +186,11 @@ runtime-root contract.
   write DB metadata before returning.
 - Sync-hook install/remove is gated.
 - Installed sync-hook refresh behavior has a concrete contract: hook
-  install/remove remains gated, while installed hooks either call a narrow
-  non-interactive refresh path with constrained privileges or run a command that
-  explicitly satisfies the acknowledgement boundary without silently creating
-  recurring consent.
+  install/remove remains gated, generated hook scripts use only the constrained
+  `--refresh --quiet --from-sync-hook` path, that path refuses unsupported
+  combinations such as `--full`, and the operator-facing hook text says hook
+  installation enables constrained hook-only refresh after native package
+  manager transactions.
 - Table-driven tests enumerate the full command-risk registry and expected gate
   behavior.
 
@@ -197,13 +214,22 @@ called from live adoption by accident. Plan A should decide whether legacy
 already-hardlinked CAS objects are out of scope, detected and warned about, or
 repaired during refresh.
 
+Plan A chooses a bounded legacy-CAS repair: the mutable-source copy API must
+not trust an existing hash path blindly. If the target CAS object already exists
+and appears to be a shared hardlink on Unix, the copy API must replace that CAS
+directory entry with a private inode by temp-write, fsync, atomic rename, and
+parent-directory fsync. A repo-wide sweep of every historical CAS object is out
+of scope for Plan A and should be recorded as a follow-on audit/repair task.
+
 Package-level adoption should be all-or-clean:
 
 - If all child metadata inserts fail for a new package, the trove must not
   persist.
 - Partial child metadata success may persist only if the command surfaces a
   degraded package result and records package names plus reasons in durable,
-  operator-visible state.
+  operator-visible state. Adoption warning metadata must extend the existing
+  `conary.changeset.metadata.v1` envelope instead of overwriting
+  `changesets.metadata` with an unrelated JSON shape.
 - Refresh must preserve old child metadata unless the replacement package
   metadata has been fully prepared and successfully committed.
 - Empty package metadata is allowed only when it is a real package-manager fact,
@@ -219,13 +245,15 @@ Package-level adoption should be all-or-clean:
 - Bulk adoption cannot leave ghost troves when all child inserts fail.
 - Refresh cannot hollow out an existing adopted package when replacement child
   insertions fail; injected failures after child-row deletion must leave the old
-  version plus old files/dependencies/provides intact or roll back the refresh.
+  version plus old files/dependencies/provides intact. If refresh continues past
+  a failed package, that package must be recorded as degraded or skipped in
+  durable adoption warning metadata.
 - Adoption summaries distinguish adopted, skipped, degraded, and failed
   packages.
 - Degraded adoption persists package names and warning reasons in a durable
-  operator-visible record. Plan A must choose the representation explicitly,
-  such as a changeset status extension, changeset metadata JSON, or a dedicated
-  adoption warning table.
+  operator-visible record. Plan A uses the existing versioned changeset
+  metadata envelope with an `adoption_warnings` field; it must preserve
+  rollback snapshots and deferred follow-up metadata.
 
 ## Track 3: Generation Publication Durability
 
@@ -320,8 +348,8 @@ Add lightweight truth checks for:
 
 - schema version mentions in active docs versus
   `crates/conary-core/src/db/schema.rs::SCHEMA_VERSION`;
-- retired command names such as `conary adopt-system`;
-- impossible command hints such as `system adopt --takeover`;
+- retired command names, including the old one-word system-adoption spelling;
+- impossible takeover hints in adoption command examples;
 - stale preview-gate wording that contradicts current README, ROADMAP, and
   integration-testing evidence;
 - conaryd API reference links that point to the actual daemon route surface;
@@ -411,6 +439,7 @@ cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p conary-test -- list
 bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete
+diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv <(bash scripts/docs-audit-inventory.sh)
 git diff --check
 ```
 

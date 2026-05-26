@@ -3,7 +3,7 @@
 //! System package manager hooks for automatic Conary refresh
 //!
 //! Installs or removes hooks for dpkg/rpm/pacman that automatically run
-//! `conary system adopt --refresh --quiet` after the system PM modifies packages.
+//! `conary system adopt --refresh --quiet --from-sync-hook` after the system PM modifies packages.
 //! This keeps Conary's tracking database in sync during the hybrid transition period.
 
 use anyhow::Result;
@@ -18,12 +18,12 @@ const RPM_FILTER_CONTENT: &str = ".*\n";
 /// RPM file trigger script
 const RPM_SCRIPT_CONTENT: &str = r#"#!/bin/sh
 # Conary sync hook: refresh adopted package tracking after RPM transactions
-/usr/bin/conary system adopt --refresh --quiet 2>/dev/null || true
+/usr/bin/conary system adopt --refresh --quiet --from-sync-hook 2>/dev/null || true
 "#;
 
 /// APT post-invoke hook configuration
 const APT_HOOK_CONTENT: &str = r#"// Conary sync hook: refresh adopted package tracking after APT transactions
-DPkg::Post-Invoke { "/usr/bin/conary system adopt --refresh --quiet 2>/dev/null || true"; };
+DPkg::Post-Invoke { "/usr/bin/conary system adopt --refresh --quiet --from-sync-hook 2>/dev/null || true"; };
 "#;
 
 /// Pacman alpm-hook
@@ -37,7 +37,7 @@ Target = *
 [Action]
 Description = Refreshing Conary adopted package tracking...
 When = PostTransaction
-Exec = /usr/bin/conary system adopt --refresh --quiet
+Exec = /usr/bin/conary system adopt --refresh --quiet --from-sync-hook
 "#;
 
 /// Hook file paths for each package manager
@@ -67,7 +67,7 @@ fn hook_paths(pkg_mgr: SystemPackageManager) -> Option<HookPaths> {
 /// Install or remove system PM sync hooks.
 ///
 /// When `remove` is false, installs hooks so that the system PM automatically
-/// calls `conary system adopt --refresh --quiet` after package transactions.
+/// calls `conary system adopt --refresh --quiet --from-sync-hook` after package transactions.
 ///
 /// When `remove` is true, removes the previously installed hooks.
 pub async fn cmd_sync_hook_install(remove: bool) -> Result<()> {
@@ -135,7 +135,9 @@ pub async fn cmd_sync_hook_install(remove: bool) -> Result<()> {
         }
 
         println!("Installed Conary sync hook for {}.", pkg_mgr.display_name());
-        println!("The system PM will now auto-refresh Conary tracking after package operations.");
+        println!(
+            "The system PM will now auto-refresh Conary adopted-package metadata after package operations through a constrained installed-hook refresh path."
+        );
     }
 
     Ok(())
@@ -203,14 +205,20 @@ mod tests {
 
     #[test]
     fn test_rpm_hook_content_format() {
-        assert!(RPM_SCRIPT_CONTENT.contains("conary system adopt --refresh --quiet"));
+        assert!(
+            RPM_SCRIPT_CONTENT
+                .contains("/usr/bin/conary system adopt --refresh --quiet --from-sync-hook")
+        );
         assert!(RPM_SCRIPT_CONTENT.starts_with("#!/bin/sh"));
     }
 
     #[test]
     fn test_apt_hook_content_format() {
         assert!(APT_HOOK_CONTENT.contains("DPkg::Post-Invoke"));
-        assert!(APT_HOOK_CONTENT.contains("conary system adopt --refresh --quiet"));
+        assert!(
+            APT_HOOK_CONTENT
+                .contains("/usr/bin/conary system adopt --refresh --quiet --from-sync-hook")
+        );
     }
 
     #[test]
@@ -218,7 +226,10 @@ mod tests {
         assert!(PACMAN_HOOK_CONTENT.contains("[Trigger]"));
         assert!(PACMAN_HOOK_CONTENT.contains("[Action]"));
         assert!(PACMAN_HOOK_CONTENT.contains("PostTransaction"));
-        assert!(PACMAN_HOOK_CONTENT.contains("conary system adopt --refresh --quiet"));
+        assert!(
+            PACMAN_HOOK_CONTENT
+                .contains("Exec = /usr/bin/conary system adopt --refresh --quiet --from-sync-hook")
+        );
     }
 
     #[test]

@@ -4,7 +4,7 @@
 
 **Goal:** Close the Plan A hardening slice from the preview invariant spec: adoption commands must cross the live-system acknowledgement boundary consistently, full adoption must store private immutable CAS objects, and adoption DB state must not persist ghost or hollow package metadata.
 
-**Architecture:** Keep the first implementation slice narrow. Add a command-risk policy surface for the CLI paths that currently perform or bypass live mutation checks, route adoption through that surface, switch full-adoption CAS capture from hardlinking to private CAS storage, and make adoption metadata writes all-or-clean using small local helpers. Durable generation publication, broad docs truth automation, and `conary-core` facade decisions remain outside this plan.
+**Architecture:** Keep the first implementation slice narrow. Add a command-risk policy surface for the CLI paths that currently perform or bypass live mutation checks, route adoption through that surface, give installed sync hooks a constrained non-interactive refresh path, switch full-adoption CAS capture from hardlinking to private CAS storage that repairs touched legacy shared objects, and make adoption metadata writes all-or-clean using the existing changeset metadata envelope. Durable generation publication, broad docs truth automation, and `conary-core` facade decisions remain outside this plan.
 
 **Tech Stack:** Rust, clap, rusqlite transactions/savepoints, tempfile-based tests, existing `conary_core::filesystem::CasStore`, existing `apps/conary/tests/live_host_mutation_safety.rs` integration tests.
 
@@ -22,16 +22,27 @@ It intentionally does not implement Track 3 generation publication durability or
 - Modify `apps/conary/src/lib.rs`: export the new `command_risk` module for tests and dispatch.
 - Modify `apps/conary/src/live_host_safety.rs`: add a DB/CAS-only live Conary state mutation class with accurate refusal text.
 - Modify `apps/conary/src/dispatch.rs`: call command-risk enforcement once before command execution, then remove the duplicate adoption-specific risk logic from the dispatch arm.
-- Modify `apps/conary/src/cli/system.rs`: clarify that single-package `system adopt --dry-run` is currently rejected until a true preview path exists.
+- Modify `apps/conary/src/cli/system.rs`: clarify that single-package `system adopt --dry-run` is currently rejected until a true preview path exists, and add the hidden constrained `--from-sync-hook` refresh flag.
+- Modify `apps/conary/src/commands/adopt/hooks.rs`: generated hook scripts pass `--from-sync-hook`, hook comments/tests document the constrained quiet-refresh contract, and hook install/remove remains gated.
 - Modify `apps/conary/tests/live_host_mutation_safety.rs`: add regression coverage for every adoption mode in the Plan A table.
 - Modify `apps/conary/src/commands/adopt/convert.rs`: move source-identity backfill behind the dry-run return.
 - Modify `crates/conary-core/src/filesystem/cas.rs`: add a private-copy storage API for mutable source files and rename/document hardlink APIs as sealed-source-only.
 - Modify `apps/conary/src/commands/adopt/cas_capture.rs`: use private CAS storage for full adoption regular files.
 - Modify `apps/conary/src/commands/adopt/system.rs`: use private CAS storage in the legacy single-package helper branch and delete all-failed bulk-adoption troves.
 - Modify `apps/conary/src/commands/adopt/packages.rs`: share metadata outcome logic and persist degraded partial-insert warnings.
-- Create `apps/conary/src/commands/adopt/outcome.rs`: adoption metadata outcome helpers, changeset metadata warning JSON, and tests.
-- Modify `apps/conary/src/commands/adopt/refresh.rs`: replace child metadata through a per-package savepoint and propagate insert failures.
+- Create `apps/conary/src/commands/adopt/outcome.rs`: adoption outcome helpers, adoption warning types, and tests.
+- Modify `apps/conary/src/commands/changeset_metadata.rs`: extend the existing versioned metadata envelope with adoption warning records and helper accessors.
+- Modify `apps/conary/src/commands/adopt/refresh.rs`: replace child metadata through a production savepoint helper, preserve old children on per-package failure, and persist degraded refresh warnings.
 - Modify focused docs only if command help or operator-facing text changes.
+
+## Review-Tightened Decisions
+
+- `None` from `classify_cli` means "no subcommand was supplied"; it does not mean read-only. Every parsed Clap command variant must return a `CommandRiskPolicy`, including explicit `ReadOnly` policies.
+- Plan A uses a constrained hidden hook-refresh path rather than embedding the global acknowledgement flag in installed hook scripts. Hook installation remains gated, and generated hook scripts call `system adopt --refresh --quiet --from-sync-hook`.
+- `store_file_copy_from_existing` must repair a touched legacy shared CAS object when the hash path already exists with a shared inode. A full historical CAS sweep is deferred.
+- Adoption warnings must live inside the existing `conary.changeset.metadata.v1` envelope. The plan must not overwrite rollback snapshots or deferred follow-up metadata with a new top-level JSON shape.
+- Refresh replacement failures skip/degrade the affected package and preserve old child metadata through a production savepoint helper; tests must exercise that production helper rather than only a test-only savepoint wrapper.
+- Final commits stage exact paths only after reviewing `git diff --name-only`; broad directory staging is not allowed in this plan.
 
 ---
 
@@ -98,6 +109,47 @@ mod tests {
     }
 
     #[test]
+    fn classify_installed_sync_hook_refresh_as_narrow_hook_refresh() {
+        let policy = policy(&[
+            "conary",
+            "system",
+            "adopt",
+            "--refresh",
+            "--quiet",
+            "--from-sync-hook",
+        ]);
+        assert_eq!(policy.risk, CommandRisk::HookRefreshDbMutation);
+        assert!(!policy.requires_ack());
+        assert_eq!(
+            policy.command_label.as_ref(),
+            "conary system adopt --refresh --quiet --from-sync-hook"
+        );
+    }
+
+    #[test]
+    fn from_sync_hook_requires_quiet_refresh_and_rejects_full_capture() {
+        assert!(Cli::try_parse_from([
+            "conary",
+            "system",
+            "adopt",
+            "--refresh",
+            "--from-sync-hook",
+        ])
+        .is_err());
+
+        assert!(Cli::try_parse_from([
+            "conary",
+            "system",
+            "adopt",
+            "--refresh",
+            "--quiet",
+            "--full",
+            "--from-sync-hook",
+        ])
+        .is_err());
+    }
+
+    #[test]
     fn classify_system_adopt_sync_hook_as_active_host_mutation() {
         let policy = policy(&["conary", "system", "adopt", "--sync-hook"]);
         assert_eq!(policy.risk, CommandRisk::ActiveHostMutation);
@@ -109,6 +161,30 @@ mod tests {
         let policy = policy(&["conary", "system", "adopt", "--sync-hook", "--remove-hook"]);
         assert_eq!(policy.risk, CommandRisk::ActiveHostMutation);
         assert!(policy.requires_ack());
+    }
+
+    #[test]
+    fn classify_pin_and_unpin_as_live_db_mutations() {
+        for args in [
+            ["conary", "pin", "curl"].as_slice(),
+            ["conary", "unpin", "curl"].as_slice(),
+        ] {
+            let policy = policy(args);
+            assert_eq!(policy.risk, CommandRisk::DbMutation);
+            assert!(policy.requires_ack());
+        }
+    }
+
+    #[test]
+    fn classify_adoption_dry_runs_with_precise_labels() {
+        let system = policy(&["conary", "system", "adopt", "--system", "--dry-run"]);
+        assert_eq!(system.command_label.as_ref(), "conary system adopt --system --dry-run");
+
+        let refresh = policy(&["conary", "system", "adopt", "--refresh", "--dry-run"]);
+        assert_eq!(refresh.command_label.as_ref(), "conary system adopt --refresh --dry-run");
+
+        let convert = policy(&["conary", "system", "adopt", "--convert", "--dry-run"]);
+        assert_eq!(convert.command_label.as_ref(), "conary system adopt --convert --dry-run");
     }
 }
 ```
@@ -199,7 +275,9 @@ use crate::live_host_safety::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandRisk {
     ReadOnly,
+    LocalStateMutation,
     DryRunOnly,
+    HookRefreshDbMutation,
     DbMutation,
     ActiveHostMutation,
     AlwaysLive,
@@ -225,7 +303,10 @@ impl CommandRiskPolicy {
 
     fn mutation_class(&self) -> Option<LiveMutationClass> {
         match self.risk {
-            CommandRisk::ReadOnly | CommandRisk::DryRunOnly => None,
+            CommandRisk::ReadOnly
+            | CommandRisk::LocalStateMutation
+            | CommandRisk::DryRunOnly
+            | CommandRisk::HookRefreshDbMutation => None,
             CommandRisk::DbMutation => Some(LiveMutationClass::LiveConaryState),
             CommandRisk::ActiveHostMutation => {
                 Some(LiveMutationClass::CurrentlyLiveEvenWithRootArguments)
@@ -240,6 +321,10 @@ pub fn enforce_cli_policy(allow_live_system_mutation: bool, cli: &Cli) -> Result
         return Ok(());
     };
 
+    if policy.risk == CommandRisk::HookRefreshDbMutation {
+        return require_sync_hook_context(&policy);
+    }
+
     let Some(class) = policy.mutation_class() else {
         return Ok(());
     };
@@ -252,6 +337,28 @@ pub fn enforce_cli_policy(allow_live_system_mutation: bool, cli: &Cli) -> Result
             dry_run: policy.dry_run,
         },
     )
+}
+
+fn require_sync_hook_context(policy: &CommandRiskPolicy) -> Result<()> {
+    #[cfg(unix)]
+    {
+        if unsafe { libc::geteuid() } != 0 {
+            anyhow::bail!(
+                "command '{}' is reserved for installed native package-manager sync hooks; run `conary --allow-live-system-mutation system adopt --refresh` for an interactive refresh",
+                policy.command_label
+            );
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        anyhow::bail!(
+            "command '{}' is reserved for Unix native package-manager sync hooks",
+            policy.command_label
+        );
+    }
+
+    Ok(())
 }
 
 pub fn classify_cli(cli: &Cli) -> Option<CommandRiskPolicy> {
@@ -298,10 +405,10 @@ pub fn classify_cli(cli: &Cli) -> Option<CommandRiskPolicy> {
             CommandRisk::ActiveHostMutation,
             *dry_run,
         )),
+        Commands::Pin { .. } => Some(local_state("conary pin")),
+        Commands::Unpin { .. } => Some(local_state("conary unpin")),
         Commands::Search { .. }
         | Commands::List { .. }
-        | Commands::Pin { .. }
-        | Commands::Unpin { .. }
         | Commands::Cook { .. }
         | Commands::ConvertPkgbuild { .. }
         | Commands::RecipeAudit { .. }
@@ -328,9 +435,29 @@ pub fn classify_cli(cli: &Cli) -> Option<CommandRiskPolicy> {
         | Commands::VerifyDerivation(_)
         | Commands::Sbom { .. }
         | Commands::Federation(_)
-        | Commands::Export { .. } => None,
+        | Commands::Export { .. } => Some(policy(
+            "conary read-only or non-host command",
+            CommandRisk::ReadOnly,
+            false,
+        )),
     }
 }
+
+// Do not leave the aggregate `read-only or non-host command` arm in the final
+// patch. Replace it with one classifier per nested enum: classify_repo,
+// classify_config, classify_ccs, classify_model, classify_automation, and
+// equivalent helpers for every Commands::*(_) group. Each helper must match
+// every current variant without wildcard arms. Use LocalStateMutation for
+// non-host config/metadata mutations such as repository add/remove, trigger
+// enable/disable/add/remove, redirect add/remove, collection
+// create/add/remove/delete, model snapshot/update/publish, automation
+// configure, federation peer add/remove/enable/disable, distro
+// set/remove/mixing/selection-mode, trust init/enable/disable, and
+// update-channel set/reset. Reserve DbMutation for live package/CAS state that
+// must cross the acknowledgement boundary, such as mutating adoption modes. Use
+// ReadOnly for pure queries, inspections, local builds, or local output
+// generation. A new nested enum variant should break compilation until it is
+// classified.
 
 fn classify_system(command: &cli::SystemCommands) -> Option<CommandRiskPolicy> {
     match command {
@@ -346,6 +473,7 @@ fn classify_system(command: &cli::SystemCommands) -> Option<CommandRiskPolicy> {
             refresh,
             convert,
             sync_hook,
+            from_sync_hook,
             remove_hook: _,
             packages: _,
             full: _,
@@ -355,8 +483,17 @@ fn classify_system(command: &cli::SystemCommands) -> Option<CommandRiskPolicy> {
             explicit_only: _,
             jobs: _,
             no_chunking: _,
-            quiet: _,
-        } => classify_adopt(*system, *status, *dry_run, *refresh, *convert, *sync_hook),
+            quiet,
+        } => classify_adopt(
+            *system,
+            *status,
+            *dry_run,
+            *refresh,
+            *convert,
+            *sync_hook,
+            *quiet,
+            *from_sync_hook,
+        ),
         cli::SystemCommands::Unadopt { dry_run, .. } => Some(policy(
             "conary system unadopt",
             CommandRisk::ActiveHostMutation,
@@ -417,7 +554,11 @@ fn classify_system(command: &cli::SystemCommands) -> Option<CommandRiskPolicy> {
         | cli::SystemCommands::Generation(_)
         | cli::SystemCommands::Trigger(_)
         | cli::SystemCommands::Redirect(_)
-        | cli::SystemCommands::UpdateChannel(_) => None,
+        | cli::SystemCommands::UpdateChannel { .. } => Some(policy(
+            "conary system read-only or non-host command",
+            CommandRisk::ReadOnly,
+            false,
+        )),
     }
 }
 
@@ -428,6 +569,8 @@ fn classify_adopt(
     refresh: bool,
     convert: bool,
     sync_hook: bool,
+    quiet: bool,
+    from_sync_hook: bool,
 ) -> Option<CommandRiskPolicy> {
     if status {
         Some(policy("conary system adopt --status", CommandRisk::ReadOnly, false))
@@ -437,8 +580,30 @@ fn classify_adopt(
             CommandRisk::ActiveHostMutation,
             false,
         ))
-    } else if dry_run && (system || refresh || convert) {
-        Some(policy("conary system adopt --dry-run", CommandRisk::DryRunOnly, true))
+    } else if from_sync_hook && refresh && quiet {
+        Some(policy(
+            "conary system adopt --refresh --quiet --from-sync-hook",
+            CommandRisk::HookRefreshDbMutation,
+            false,
+        ))
+    } else if dry_run && system {
+        Some(policy(
+            "conary system adopt --system --dry-run",
+            CommandRisk::DryRunOnly,
+            true,
+        ))
+    } else if dry_run && refresh {
+        Some(policy(
+            "conary system adopt --refresh --dry-run",
+            CommandRisk::DryRunOnly,
+            true,
+        ))
+    } else if dry_run && convert {
+        Some(policy(
+            "conary system adopt --convert --dry-run",
+            CommandRisk::DryRunOnly,
+            true,
+        ))
     } else if convert {
         Some(policy("conary system adopt --convert", CommandRisk::DbMutation, false))
     } else if refresh {
@@ -485,7 +650,13 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
 ```
 
-Then remove the existing `require_live_mutation` calls from branches now covered by `command_risk`. Keep command behavior unchanged after the pre-dispatch policy check.
+Then remove the existing `require_live_mutation` calls from branches now covered
+by `command_risk`. Remove the now-unused `allow_live_system_mutation`
+parameters from nested dispatch helpers and their call sites, including
+`dispatch_system_command`, `dispatch_ccs_command`, `dispatch_model_command`, and
+`dispatch_automation_command`. Delete the old local `require_live_mutation`
+helper and unused imports once pre-dispatch policy owns the acknowledgement
+gate. Keep command behavior unchanged after the pre-dispatch policy check.
 
 - [ ] **Step 6: Run unit tests**
 
@@ -513,9 +684,23 @@ git commit -m "security(cli): centralize live mutation policy"
 - Modify: `apps/conary/tests/live_host_mutation_safety.rs`
 - Modify: `apps/conary/src/dispatch.rs`
 - Modify: `apps/conary/src/commands/adopt/convert.rs`
+- Modify: `apps/conary/src/commands/adopt/hooks.rs`
 - Modify: `apps/conary/src/cli/system.rs`
 
 - [ ] **Step 1: Add failing integration tests for adoption gate behavior**
+
+First add this hidden flag to the `SystemCommands::Adopt` variant in
+`apps/conary/src/cli/system.rs` so the tests can parse the installed-hook
+command line:
+
+```rust
+/// Internal path used by installed native package-manager sync hooks.
+///
+/// Requires --refresh --quiet and cannot be combined with --full; hook
+/// install/remove remains the explicit consent point.
+#[arg(long, hide = true, requires_all = ["refresh", "quiet"], conflicts_with_all = ["system", "status", "convert", "sync_hook", "full"])]
+from_sync_hook: bool,
+```
 
 Append these helpers and tests to `apps/conary/tests/live_host_mutation_safety.rs`:
 
@@ -659,12 +844,44 @@ fn system_adopt_convert_dry_run_does_not_backfill_source_identity() {
 }
 ```
 
+Update the existing `apps/conary/src/commands/adopt/hooks.rs` tests so the
+generated hook templates assert the constrained hook-only refresh path:
+
+```rust
+#[test]
+fn test_rpm_hook_content_format() {
+    assert!(RPM_SCRIPT_CONTENT.contains(
+        "/usr/bin/conary system adopt --refresh --quiet --from-sync-hook"
+    ));
+    assert!(RPM_SCRIPT_CONTENT.starts_with("#!/bin/sh"));
+}
+
+#[test]
+fn test_apt_hook_content_format() {
+    assert!(APT_HOOK_CONTENT.contains("DPkg::Post-Invoke"));
+    assert!(APT_HOOK_CONTENT.contains(
+        "/usr/bin/conary system adopt --refresh --quiet --from-sync-hook"
+    ));
+}
+
+#[test]
+fn test_pacman_hook_content_format() {
+    assert!(PACMAN_HOOK_CONTENT.contains("[Trigger]"));
+    assert!(PACMAN_HOOK_CONTENT.contains("[Action]"));
+    assert!(PACMAN_HOOK_CONTENT.contains("PostTransaction"));
+    assert!(PACMAN_HOOK_CONTENT.contains(
+        "Exec = /usr/bin/conary system adopt --refresh --quiet --from-sync-hook"
+    ));
+}
+```
+
 - [ ] **Step 2: Run the failing adoption gate tests**
 
 Run:
 
 ```bash
 cargo test -p conary --test live_host_mutation_safety system_adopt -- --nocapture
+cargo test -p conary adopt::hooks -- --nocapture
 ```
 
 Expected before implementation: mutating adoption commands reach their handlers instead of the acknowledgement error, and `system_adopt_convert_dry_run_does_not_backfill_source_identity` fails because the dry-run path writes source identity.
@@ -728,20 +945,57 @@ backfill_adopted_source_identity(
 )?;
 ```
 
-- [ ] **Step 5: Run adoption gate tests**
+If the regression can pass on a host where package-manager detection returns no
+source identity, extract the dry-run ordering into a small helper that accepts an
+explicit `InstalledSourceIdentity` in tests. The test must prove that a
+non-`None` identity is not written during dry-run; it must not depend on the
+CI host having RPM, dpkg, or pacman identity metadata.
+
+- [ ] **Step 5: Encode the constrained installed-hook refresh contract**
+
+In `apps/conary/src/commands/adopt/hooks.rs`, update the module doc comment,
+template comments, and generated commands from:
+
+```text
+conary system adopt --refresh --quiet
+```
+
+to:
+
+```text
+conary system adopt --refresh --quiet --from-sync-hook
+```
+
+Also update the post-install message:
+
+```rust
+println!(
+    "The system PM will now auto-refresh Conary adopted-package metadata after package operations through a constrained installed-hook refresh path."
+);
+```
+
+Do not put the global `--allow-live-system-mutation` flag in generated hook
+scripts. The hidden `--from-sync-hook` flag is the narrow installed-hook
+contract: it requires `--refresh --quiet`, conflicts with `--full`, is enforced
+by `command_risk`, and should not be documented as a general user command.
+
+- [ ] **Step 6: Run adoption gate tests**
 
 Run:
 
 ```bash
 cargo test -p conary --test live_host_mutation_safety system_adopt -- --nocapture
+cargo test -p conary adopt::hooks -- --nocapture
 ```
 
-Expected after implementation: all `system_adopt*` tests pass.
+Expected after implementation: all `system_adopt*` tests pass and hook-template
+tests prove generated hooks include `--from-sync-hook` without
+`--allow-live-system-mutation`.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add apps/conary/tests/live_host_mutation_safety.rs apps/conary/src/dispatch.rs apps/conary/src/commands/adopt/convert.rs apps/conary/src/cli/system.rs
+git add apps/conary/tests/live_host_mutation_safety.rs apps/conary/src/dispatch.rs apps/conary/src/commands/adopt/convert.rs apps/conary/src/commands/adopt/hooks.rs apps/conary/src/cli/system.rs
 git commit -m "security(adopt): gate live adoption mutations"
 ```
 
@@ -829,6 +1083,37 @@ fn test_hardlink_from_immutable_root_shares_inode() {
 
     assert_eq!(original_inode, fs::metadata(&cas_path).unwrap().ino());
 }
+
+#[test]
+#[cfg(unix)]
+fn test_store_file_copy_repairs_existing_shared_cas_object() {
+    use std::os::unix::fs::MetadataExt;
+
+    let temp_dir = TempDir::new().unwrap();
+    let cas_dir = temp_dir.path().join("cas");
+    let cas = CasStore::new(&cas_dir).unwrap();
+    let sealed_file = temp_dir.path().join("sealed.txt");
+    let mutable_file = temp_dir.path().join("mutable.txt");
+    let content = b"same content through two capture paths";
+    fs::write(&sealed_file, content).unwrap();
+    fs::write(&mutable_file, content).unwrap();
+
+    let hash = cas.hardlink_from_immutable_root(&sealed_file).unwrap();
+    let shared_path = cas.hash_to_path(&hash).unwrap();
+    assert_eq!(
+        fs::metadata(&sealed_file).unwrap().ino(),
+        fs::metadata(&shared_path).unwrap().ino()
+    );
+
+    let copied_hash = cas.store_file_copy_from_existing(&mutable_file).unwrap();
+    assert_eq!(copied_hash, hash);
+    assert_ne!(
+        fs::metadata(&sealed_file).unwrap().ino(),
+        fs::metadata(&shared_path).unwrap().ino(),
+        "mutable-source copy must break a touched legacy shared CAS object"
+    );
+    assert_eq!(cas.retrieve(&hash).unwrap(), content);
+}
 ```
 
 - [ ] **Step 2: Run tests to verify failure**
@@ -838,9 +1123,12 @@ Run:
 ```bash
 cargo test -p conary adopt::cas_capture -- --nocapture
 cargo test -p conary-core filesystem::cas::tests::test_hardlink_from_immutable_root_shares_inode -- --nocapture
+cargo test -p conary-core filesystem::cas::tests::test_store_file_copy_repairs_existing_shared_cas_object -- --nocapture
 ```
 
-Expected before implementation: the mutation and private inode tests fail, and `hardlink_from_immutable_root` is missing.
+Expected before implementation: the mutation and private inode tests fail, the
+shared-object repair test is missing or fails, and `hardlink_from_immutable_root`
+is missing.
 
 - [ ] **Step 3: Add private copy storage API and rename hardlink API**
 
@@ -853,7 +1141,35 @@ In `crates/conary-core/src/filesystem/cas.rs`, add:
 /// Conary after capture.
 pub fn store_file_copy_from_existing<P: AsRef<Path>>(&self, existing_path: P) -> Result<String> {
     let content = fs::read(existing_path)?;
-    self.store(&content)
+    let hash = self.compute_hash(&content);
+    self.atomic_store_private_copy(&hash, &content)?;
+    Ok(hash)
+}
+
+/// Atomically store content into a private CAS inode.
+///
+/// Unlike `store`, this helper also repairs a touched legacy shared hardlink
+/// object. If the hash already exists and appears private, it is left alone for
+/// deduplication. If it is shared on Unix, the CAS directory entry is replaced
+/// with a fresh inode containing the same content.
+fn atomic_store_private_copy(&self, hash: &str, content: &[u8]) -> Result<bool> {
+    let path = self.hash_to_path(hash)?;
+    if path.exists() && !cas_object_appears_shared(&path)? {
+        return Ok(false);
+    }
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let temp_ext = format!("tmp.{}.{}.private", std::process::id(), Self::next_temp_id());
+    let temp_path = path.with_extension(temp_ext);
+    let mut file = fs::File::create(&temp_path)?;
+    file.write_all(content)?;
+    file.sync_all()?;
+    fs::rename(&temp_path, &path)?;
+    sync_parent_dir(&path)?;
+    Ok(true)
 }
 
 /// Hardlink an existing file into CAS when the caller proves the source root is sealed.
@@ -861,22 +1177,39 @@ pub fn store_file_copy_from_existing<P: AsRef<Path>>(&self, existing_path: P) ->
 /// Do not use this for live native package-manager files. A hardlink shares the
 /// inode with the source and therefore shares future in-place mutations.
 pub fn hardlink_from_immutable_root<P: AsRef<Path>>(&self, existing_path: P) -> Result<String> {
-    self.hardlink_from_existing(existing_path)
+    self.hardlink_from_existing_inner(existing_path)
 }
 ```
 
-Mark `hardlink_from_existing` as a compatibility shim:
+Add these helpers near `atomic_store` and use `sync_parent_dir` from both
+`atomic_store` and `atomic_store_private_copy`:
 
 ```rust
-#[deprecated(note = "use store_file_copy_from_existing for mutable sources or hardlink_from_immutable_root for sealed roots")]
-pub fn hardlink_from_existing<P: AsRef<Path>>(&self, existing_path: P) -> Result<String> {
-    self.hardlink_from_immutable_root(existing_path)
+#[cfg(unix)]
+fn cas_object_appears_shared(path: &Path) -> Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+    Ok(fs::metadata(path)?.nlink() > 1)
+}
+
+#[cfg(not(unix))]
+fn cas_object_appears_shared(_path: &Path) -> Result<bool> {
+    Ok(false)
+}
+
+fn sync_parent_dir(path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        let dir = fs::File::open(parent)?;
+        dir.sync_all()?;
+    }
+    Ok(())
 }
 ```
 
-Then move the current hardlink implementation into a private helper named
-`hardlink_from_existing_inner` so the shim does not recurse.
-`hardlink_from_immutable_root` should call `hardlink_from_existing_inner`.
+Do not leave `hardlink_from_existing` as a public compatibility shim. Move the
+current hardlink implementation into a private helper named
+`hardlink_from_existing_inner`, and make the only public hardlink entrypoint the
+sealed-source name `hardlink_from_immutable_root`. This intentionally breaks any
+workspace call site that still tries to hardlink mutable live files.
 
 Apply the same sealed-source naming to the known-hash helper:
 
@@ -890,19 +1223,11 @@ pub fn hardlink_from_immutable_root_with_hash<P: AsRef<Path>>(
     self.hardlink_from_existing_with_hash_inner(existing_path, expected_hash, verify_hash)
 }
 
-#[deprecated(note = "use hardlink_from_immutable_root_with_hash only for sealed roots")]
-pub fn hardlink_from_existing_with_hash<P: AsRef<Path>>(
-    &self,
-    existing_path: P,
-    expected_hash: &str,
-    verify_hash: bool,
-) -> Result<String> {
-    self.hardlink_from_immutable_root_with_hash(existing_path, expected_hash, verify_hash)
-}
 ```
 
 Move the current known-hash hardlink body into a private helper named
-`hardlink_from_existing_with_hash_inner`.
+`hardlink_from_existing_with_hash_inner`, and do not leave
+`hardlink_from_existing_with_hash` public.
 
 - [ ] **Step 4: Switch live adoption to private CAS storage**
 
@@ -936,6 +1261,11 @@ Update the nearby comment from `Regular file - use hardlink_from_existing` to:
 // Regular live file - copy into a private CAS inode.
 ```
 
+Plan A does not scan the entire existing CAS for historical shared inodes. The
+repair guarantee is bounded to objects touched through
+`store_file_copy_from_existing`; a future audit/repair plan can add a full CAS
+sweep if preview operators need it.
+
 - [ ] **Step 5: Run focused CAS tests**
 
 Run:
@@ -945,7 +1275,10 @@ cargo test -p conary adopt::cas_capture -- --nocapture
 cargo test -p conary-core filesystem::cas -- --nocapture
 ```
 
-Expected after implementation: CAS capture tests pass, and remaining hardlink tests use the sealed-source helper name.
+Expected after implementation: CAS capture tests pass, mutable-source capture
+does not share source inodes, a touched legacy shared object is repaired into a
+private CAS inode, and remaining hardlink tests use the sealed-source helper
+name.
 
 - [ ] **Step 6: Commit**
 
@@ -963,6 +1296,7 @@ git commit -m "security(cas): copy live adoption content into private objects"
 - Modify: `apps/conary/src/commands/adopt/mod.rs`
 - Modify: `apps/conary/src/commands/adopt/packages.rs`
 - Modify: `apps/conary/src/commands/adopt/system.rs`
+- Modify: `apps/conary/src/commands/changeset_metadata.rs`
 
 - [ ] **Step 1: Add helper tests for metadata outcomes**
 
@@ -973,7 +1307,11 @@ Create `apps/conary/src/commands/adopt/outcome.rs` with tests first:
 
 #[cfg(test)]
 mod tests {
-    use super::{AdoptionWarning, metadata_insert_succeeded, warning_metadata_json};
+    use super::metadata_insert_succeeded;
+    use crate::commands::{
+        AdoptionWarning, adoption_warnings, metadata_with_adoption_warnings,
+        parse_rollback_snapshots,
+    };
 
     #[test]
     fn metadata_insert_succeeded_rejects_all_failed_non_empty_metadata() {
@@ -987,17 +1325,20 @@ mod tests {
     }
 
     #[test]
-    fn warning_metadata_json_records_package_names_and_reasons() {
-        let json = warning_metadata_json(&[
+    fn adoption_warning_metadata_preserves_versioned_envelope() {
+        let json = metadata_with_adoption_warnings(vec![], vec![], vec![
             AdoptionWarning::partial_insert_failure("curl", 4, 1),
             AdoptionWarning::all_insert_failure("bash", 3),
         ])
         .unwrap();
 
+        assert!(json.contains("\"schema\":\"conary.changeset.metadata.v1\""));
         assert!(json.contains("\"package\":\"curl\""));
         assert!(json.contains("\"reason\":\"partial_metadata_insert_failure\""));
         assert!(json.contains("\"package\":\"bash\""));
         assert!(json.contains("\"reason\":\"all_metadata_inserts_failed\""));
+        assert!(parse_rollback_snapshots(&json).unwrap().is_empty());
+        assert_eq!(adoption_warnings(Some(&json)).len(), 2);
     }
 }
 ```
@@ -1014,24 +1355,15 @@ Expected before implementation: `adopt::outcome` does not exist.
 
 - [ ] **Step 3: Implement shared outcome helpers**
 
-Implement `apps/conary/src/commands/adopt/outcome.rs`:
+First extend `apps/conary/src/commands/changeset_metadata.rs`:
 
 ```rust
-// apps/conary/src/commands/adopt/outcome.rs
-
-use anyhow::Result;
-use serde::Serialize;
-
-pub(crate) fn metadata_insert_succeeded(total_inserts: usize, insert_failures: usize) -> bool {
-    total_inserts == 0 || insert_failures < total_inserts
-}
-
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct AdoptionWarning {
-    package: String,
-    reason: &'static str,
-    total_inserts: usize,
-    failed_inserts: usize,
+    pub package: String,
+    pub reason: String,
+    pub total_inserts: usize,
+    pub failed_inserts: usize,
 }
 
 impl AdoptionWarning {
@@ -1042,56 +1374,127 @@ impl AdoptionWarning {
     ) -> Self {
         Self {
             package: package.into(),
-            reason: "partial_metadata_insert_failure",
+            reason: "partial_metadata_insert_failure".to_string(),
             total_inserts,
             failed_inserts,
         }
     }
 
-    pub(crate) fn all_insert_failure(
-        package: impl Into<String>,
-        total_inserts: usize,
-    ) -> Self {
+    pub(crate) fn all_insert_failure(package: impl Into<String>, total_inserts: usize) -> Self {
         Self {
             package: package.into(),
-            reason: "all_metadata_inserts_failed",
+            reason: "all_metadata_inserts_failed".to_string(),
             total_inserts,
             failed_inserts: total_inserts,
         }
     }
+
+    pub(crate) fn refresh_replacement_failure(
+        package: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            package: package.into(),
+            reason: format!("refresh_replacement_failed: {}", message.into()),
+            total_inserts: 0,
+            failed_inserts: 0,
+        }
+    }
 }
 
-#[derive(Debug, Serialize)]
-struct AdoptionWarningEnvelope<'a> {
-    adoption: AdoptionWarnings<'a>,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ChangesetMetadataEnvelope {
+    pub schema: String,
+    #[serde(default)]
+    pub removed_troves: Vec<TroveSnapshot>,
+    #[serde(default)]
+    pub deferred_follow_up: Vec<DeferredFollowUp>,
+    #[serde(default)]
+    pub adoption_warnings: Vec<AdoptionWarning>,
+}
+```
+
+Update `metadata_with_removed_troves` and `metadata_with_deferred_follow_up` so
+they initialize `adoption_warnings: Vec::new()`. Add:
+
+```rust
+pub(crate) fn metadata_with_adoption_warnings(
+    snapshots: Vec<TroveSnapshot>,
+    deferred_follow_up: Vec<DeferredFollowUp>,
+    adoption_warnings: Vec<AdoptionWarning>,
+) -> Result<String> {
+    serde_json::to_string(&ChangesetMetadataEnvelope {
+        schema: CHANGESET_METADATA_SCHEMA.to_string(),
+        removed_troves: snapshots,
+        deferred_follow_up,
+        adoption_warnings,
+    })
+    .map_err(Into::into)
 }
 
-#[derive(Debug, Serialize)]
-struct AdoptionWarnings<'a> {
-    warnings: &'a [AdoptionWarning],
+pub(crate) fn adoption_warnings(snapshot_json: Option<&str>) -> Vec<AdoptionWarning> {
+    snapshot_json
+        .and_then(|raw| serde_json::from_str::<ChangesetMetadataEnvelope>(raw).ok())
+        .filter(|envelope| envelope.schema == CHANGESET_METADATA_SCHEMA)
+        .map(|envelope| envelope.adoption_warnings)
+        .unwrap_or_default()
 }
 
-pub(crate) fn warning_metadata_json(warnings: &[AdoptionWarning]) -> Result<String> {
-    Ok(serde_json::to_string(&AdoptionWarningEnvelope {
-        adoption: AdoptionWarnings { warnings },
-    })?)
-}
-
-pub(crate) fn write_warning_metadata(
+pub(crate) fn append_adoption_warning_metadata(
     conn: &rusqlite::Connection,
     changeset_id: i64,
-    warnings: &[AdoptionWarning],
+    warnings: Vec<AdoptionWarning>,
 ) -> Result<()> {
     if warnings.is_empty() {
         return Ok(());
     }
 
-    let json = warning_metadata_json(warnings)?;
+    let existing: Option<String> = conn.query_row(
+        "SELECT metadata FROM changesets WHERE id = ?1",
+        [changeset_id],
+        |row| row.get(0),
+    )?;
+    let removed_troves = existing
+        .as_deref()
+        .map(parse_rollback_snapshots)
+        .transpose()?
+        .unwrap_or_default();
+    let deferred = deferred_follow_up(existing.as_deref());
+    let mut existing_warnings = adoption_warnings(existing.as_deref());
+    existing_warnings.extend(warnings);
+
+    let metadata =
+        metadata_with_adoption_warnings(removed_troves, deferred, existing_warnings)?;
     conn.execute(
         "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
-        rusqlite::params![json, changeset_id],
+        rusqlite::params![metadata, changeset_id],
     )?;
     Ok(())
+}
+```
+
+Update `apps/conary/src/commands/mod.rs` re-exports to include
+`AdoptionWarning`, `adoption_warnings`, `append_adoption_warning_metadata`, and
+`metadata_with_adoption_warnings`.
+
+Then implement `apps/conary/src/commands/adopt/outcome.rs`:
+
+```rust
+// apps/conary/src/commands/adopt/outcome.rs
+
+use anyhow::Result;
+use crate::commands::{AdoptionWarning, append_adoption_warning_metadata};
+
+pub(crate) fn metadata_insert_succeeded(total_inserts: usize, insert_failures: usize) -> bool {
+    total_inserts == 0 || insert_failures < total_inserts
+}
+
+pub(crate) fn write_warning_metadata(
+    conn: &rusqlite::Connection,
+    changeset_id: i64,
+    warnings: Vec<AdoptionWarning>,
+) -> Result<()> {
+    append_adoption_warning_metadata(conn, changeset_id, warnings)
 }
 ```
 
@@ -1104,7 +1507,8 @@ mod outcome;
 Remove the local `metadata_insert_succeeded` helper and tests from `packages.rs`, then import the shared helper:
 
 ```rust
-use super::outcome::{AdoptionWarning, metadata_insert_succeeded, write_warning_metadata};
+use crate::commands::AdoptionWarning;
+use super::outcome::{metadata_insert_succeeded, write_warning_metadata};
 ```
 
 - [ ] **Step 4: Persist partial-insert warnings in single-package adoption**
@@ -1122,7 +1526,7 @@ let warnings = if total_inserts > 0 && insert_failures > 0 {
     Vec::new()
 };
 
-write_warning_metadata(tx, changeset_id, &warnings)?;
+write_warning_metadata(tx, changeset_id, warnings)?;
 ```
 
 Keep the existing all-failed branch that deletes the trove and marks the changeset rolled back.
@@ -1132,7 +1536,8 @@ Keep the existing all-failed branch that deletes the trove and marks the changes
 In `apps/conary/src/commands/adopt/system.rs`, import:
 
 ```rust
-use super::outcome::{AdoptionWarning, metadata_insert_succeeded, write_warning_metadata};
+use crate::commands::AdoptionWarning;
+use super::outcome::{metadata_insert_succeeded, write_warning_metadata};
 ```
 
 Before the `for pkg in packages` loop inside the transaction, add:
@@ -1183,16 +1588,71 @@ if total_inserts > 0 && insert_failures > 0 {
 Before `changeset.update_status(tx, ChangesetStatus::Applied)?;`, add:
 
 ```rust
-write_warning_metadata(tx, changeset_id, &adoption_warnings)?;
+write_warning_metadata(tx, changeset_id, adoption_warnings)?;
 ```
 
-- [ ] **Step 6: Add ghost-trove helper regression**
+Track a `degraded_count` alongside `adopted_count` and `error_count`. Increment
+it for packages with partial metadata insert failures and print an operator
+summary after the transaction:
 
-Add a unit test to `apps/conary/src/commands/adopt/outcome.rs` that exercises deletion against a real schema:
+```rust
+if degraded_count > 0 {
+    println!(
+        "Adopted with warnings: {degraded_count} package(s). Run `conary system history` to inspect adoption warning metadata."
+    );
+}
+```
+
+Single-package adoption should print the same warning when `warnings` is not
+empty. Do not count an all-failed package as adopted; it is skipped/failed and
+the trove is deleted.
+
+- [ ] **Step 6: Add ghost-trove production-helper regression**
+
+Do not test ghost-trove cleanup by calling `Trove::delete` directly in the test.
+Extract the bulk-adoption all-failed branch into a helper in
+`apps/conary/src/commands/adopt/system.rs`, and call that helper from the real
+bulk-adoption loop:
+
+```rust
+fn finalize_bulk_metadata_insert_outcome(
+    tx: &rusqlite::Connection,
+    trove_id: i64,
+    package_name: &str,
+    total_inserts: usize,
+    insert_failures: usize,
+    adoption_warnings: &mut Vec<AdoptionWarning>,
+) -> Result<bool> {
+    if metadata_insert_succeeded(total_inserts, insert_failures) {
+        if total_inserts > 0 && insert_failures > 0 {
+            adoption_warnings.push(AdoptionWarning::partial_insert_failure(
+                package_name.to_string(),
+                total_inserts,
+                insert_failures,
+            ));
+        }
+        return Ok(true);
+    }
+
+    warn!(
+        "All {} insert(s) failed for '{}'; removing empty adopted trove",
+        total_inserts, package_name
+    );
+    Trove::delete(tx, trove_id)?;
+    adoption_warnings.push(AdoptionWarning::all_insert_failure(
+        package_name.to_string(),
+        total_inserts,
+    ));
+    Ok(false)
+}
+```
+
+Then add a unit test in `apps/conary/src/commands/adopt/system.rs` that proves
+the production helper deletes the trove and records the warning:
 
 ```rust
 #[test]
-fn all_failed_bulk_outcome_deletes_seeded_trove() {
+fn all_failed_bulk_outcome_helper_deletes_seeded_trove() {
     use conary_core::db;
     use conary_core::db::models::{Trove, TroveType};
 
@@ -1209,8 +1669,11 @@ fn all_failed_bulk_outcome_deletes_seeded_trove() {
         );
         let trove_id = trove.insert(tx)?;
 
-        assert!(!metadata_insert_succeeded(3, 3));
-        Trove::delete(tx, trove_id)?;
+        let mut warnings = Vec::new();
+        let keep_trove =
+            finalize_bulk_metadata_insert_outcome(tx, trove_id, "ghost", 3, 3, &mut warnings)?;
+        assert!(!keep_trove);
+        assert_eq!(warnings.len(), 1);
 
         let count: i64 = tx.query_row(
             "SELECT COUNT(*) FROM troves WHERE id = ?1",
@@ -1231,14 +1694,19 @@ Run:
 ```bash
 cargo test -p conary adopt::outcome -- --nocapture
 cargo test -p conary adopt::packages -- --nocapture
+cargo test -p conary adopt::system::tests::all_failed_bulk_outcome_helper_deletes_seeded_trove -- --nocapture
+cargo test -p conary changeset_metadata -- --nocapture
 ```
 
-Expected after implementation: outcome tests pass and package adoption tests still pass.
+Expected after implementation: outcome tests pass, changeset metadata tests prove
+adoption warnings preserve rollback/deferred metadata, the bulk-adoption helper
+test proves the production cleanup helper deletes ghost troves, and package
+adoption tests still pass.
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add apps/conary/src/commands/adopt/outcome.rs apps/conary/src/commands/adopt/mod.rs apps/conary/src/commands/adopt/packages.rs apps/conary/src/commands/adopt/system.rs
+git add apps/conary/src/commands/adopt/outcome.rs apps/conary/src/commands/adopt/mod.rs apps/conary/src/commands/adopt/packages.rs apps/conary/src/commands/adopt/system.rs apps/conary/src/commands/changeset_metadata.rs apps/conary/src/commands/mod.rs
 git commit -m "fix(adopt): remove ghost troves on metadata failure"
 ```
 
@@ -1308,10 +1776,18 @@ mod tests {
     fn refresh_savepoint_preserves_old_children_when_replacement_fails() {
         let (_tmp, _db_path, mut conn, trove_id) = create_refresh_test_db();
         let result = db::transaction(&mut conn, |tx| {
-            replace_refresh_children_for_test(tx, trove_id, true)
+            let err = replace_refresh_children_for_package_for_test(tx, trove_id, true)
+                .expect_err("injected replacement failure should be isolated to savepoint");
+            assert!(err.to_string().contains("injected refresh child replacement failure"));
+
+            tx.execute(
+                "UPDATE troves SET description = ?1 WHERE id = ?2",
+                ("outer transaction committed", trove_id),
+            )?;
+            Ok(())
         });
 
-        assert!(result.is_err());
+        assert!(result.is_ok());
 
         let file_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM files WHERE trove_id = ?1", [trove_id], |row| {
@@ -1336,6 +1812,12 @@ mod tests {
         assert_eq!(file_count, 1);
         assert_eq!(dep_count, 1);
         assert_eq!(provide_count, 1);
+        let description: String = conn
+            .query_row("SELECT description FROM troves WHERE id = ?1", [trove_id], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(description, "outer transaction committed");
     }
 }
 ```
@@ -1348,7 +1830,8 @@ Run:
 cargo test -p conary adopt::refresh::tests::refresh_savepoint_preserves_old_children_when_replacement_fails -- --nocapture
 ```
 
-Expected before implementation: `replace_refresh_children_for_test` is missing.
+Expected before implementation: `replace_refresh_children_for_package_for_test`
+is missing.
 
 - [ ] **Step 3: Extract child replacement into a savepoint helper**
 
@@ -1376,7 +1859,11 @@ fn with_refresh_savepoint<T>(
 }
 ```
 
-Extract the `UPDATE troves`, `DELETE FROM files/dependencies/provides`, and replacement insert loops for `DriftOutcome::Updated` into a helper called by `with_refresh_savepoint`. Insert failures must return `Err` instead of logging and continuing:
+Extract the `UPDATE troves`, `DELETE FROM files/dependencies/provides`, and
+replacement insert loops for `DriftOutcome::Updated` into a production helper
+called by `with_refresh_savepoint`. The production `DriftOutcome::Updated` arm
+must delegate to this helper; do not leave raw child-row deletes in the match
+arm. Insert failures must return `Err` instead of logging and continuing:
 
 ```rust
 fe.insert_or_replace(tx).map_err(|e| {
@@ -1386,25 +1873,76 @@ fe.insert_or_replace(tx).map_err(|e| {
 
 Use the same pattern for dependencies and provides.
 
-For the test hook, add:
+For test injection, add a `#[cfg(test)]` wrapper that calls the same production
+helper used by `DriftOutcome::Updated`. It may pass fixture replacement metadata
+and an injected failure flag, but it must not reimplement the delete/insert
+sequence itself:
 
 ```rust
+struct RefreshReplacement {
+    files: Vec<(FileInfoTuple, String)>,
+    deps: Vec<DependencyInfo>,
+    provides: Vec<String>,
+}
+
+impl RefreshReplacement {
+    #[cfg(test)]
+    fn test_fixture(trove_id: i64) -> Self {
+        let _ = trove_id;
+        Self {
+            files: Vec::new(),
+            deps: Vec::new(),
+            provides: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RefreshFailureInjection {
+    None,
+    AfterDelete,
+}
+
+impl RefreshFailureInjection {
+    #[cfg(test)]
+    fn after_delete(enabled: bool) -> Self {
+        if enabled {
+            Self::AfterDelete
+        } else {
+            Self::None
+        }
+    }
+}
+
 #[cfg(test)]
-fn replace_refresh_children_for_test(
+fn replace_refresh_children_for_package_for_test(
     tx: &rusqlite::Transaction<'_>,
     trove_id: i64,
     fail_after_delete: bool,
 ) -> Result<()> {
-    with_refresh_savepoint(tx, trove_id, |tx| {
-        tx.execute("DELETE FROM files WHERE trove_id = ?1", [trove_id])?;
-        tx.execute("DELETE FROM dependencies WHERE trove_id = ?1", [trove_id])?;
-        tx.execute("DELETE FROM provides WHERE trove_id = ?1", [trove_id])?;
-        if fail_after_delete {
-            anyhow::bail!("injected refresh child replacement failure");
-        }
-        Ok(())
-    })
+    let replacement = RefreshReplacement::test_fixture(trove_id);
+    replace_refresh_children_for_package(
+        tx,
+        trove_id,
+        &replacement,
+        RefreshFailureInjection::after_delete(fail_after_delete),
+    )
 }
+```
+
+If a replacement failure is returned for one package, catch it at the package
+loop, push
+`AdoptionWarning::refresh_replacement_failure(pkg.name.clone(), error.to_string())`,
+leave the old metadata intact through the savepoint rollback, increment a
+`degraded_count`, and continue refreshing the remaining packages. Persist the
+warnings with `write_warning_metadata` before the refresh changeset is marked
+applied.
+
+Add the imports:
+
+```rust
+use crate::commands::AdoptionWarning;
+use super::outcome::write_warning_metadata;
 ```
 
 - [ ] **Step 4: Run refresh tests**
@@ -1415,7 +1953,10 @@ Run:
 cargo test -p conary adopt::refresh -- --nocapture
 ```
 
-Expected after implementation: the injected failure test passes and existing refresh tests pass.
+Expected after implementation: the injected failure test proves the outer
+transaction can still commit after a per-package replacement failure, old child
+rows remain intact, degraded refresh warnings are persisted, and existing
+refresh tests pass.
 
 - [ ] **Step 5: Commit**
 
@@ -1450,8 +1991,10 @@ Run:
 ```bash
 cargo test -p conary --test live_host_mutation_safety -- --nocapture
 cargo test -p conary adopt::cas_capture -- --nocapture
+cargo test -p conary adopt::hooks -- --nocapture
 cargo test -p conary adopt::outcome -- --nocapture
 cargo test -p conary adopt::refresh -- --nocapture
+cargo test -p conary changeset_metadata -- --nocapture
 cargo test -p conary-core filesystem::cas -- --nocapture
 ```
 
@@ -1466,20 +2009,34 @@ cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p conary-test -- list
 bash scripts/check-doc-audit-ledger.sh docs/superpowers/documentation-accuracy-audit-ledger.tsv --require-complete
+diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv <(bash scripts/docs-audit-inventory.sh)
 git diff --check
 ```
 
-Expected: all commands exit 0. If `cargo clippy` flags deprecation warnings from the sealed-source hardlink compatibility shim, update internal tests to call `hardlink_from_immutable_root` directly and keep the deprecated shim unused in workspace code.
+Expected: all commands exit 0. If docs under `docs/superpowers/` were added,
+moved, or archived, update the docs-audit inventory and ledger before rerunning
+the inventory diff and ledger check. There should be no deprecation warnings
+from old hardlink APIs because the public old names were removed or made
+private.
 
 - [ ] **Step 4: Update the umbrella spec status note if Plan A lands**
 
-After all code and docs are committed, update `docs/superpowers/specs/2026-05-25-preview-invariant-hardening-design.md` so Track 1 and Track 2 note the implementation commit SHA and current status. Do not archive the umbrella yet unless Plans B and C are also landed or explicitly deferred.
+After the final Plan A code commit exists, update
+`docs/superpowers/specs/2026-05-25-preview-invariant-hardening-design.md` so
+Track 1 and Track 2 note that exact Plan A implementation commit SHA and current
+status. This should be a follow-up docs commit. Do not archive the umbrella yet
+unless Plans B and C are also landed or explicitly deferred.
 
 - [ ] **Step 5: Commit final docs touchups**
 
 ```bash
-git add README.md ROADMAP.md docs apps/conary/src apps/conary/tests crates/conary-core/src
+git diff --name-only
+git add <exact Plan A docs/app-string files changed in this step>
+git status --short
 git commit -m "docs(adopt): record adoption safety hardening"
 ```
 
-If Step 1 found no docs changes, skip this commit and record "no docs touchups needed" in the final implementation summary.
+Before committing, confirm `git status --short` contains only Plan A docs or
+app-string files intended for this final docs commit. Do not stage broad
+directories. If Step 1 found no docs changes, skip this commit and record "no
+docs touchups needed" in the final implementation summary.

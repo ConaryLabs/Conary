@@ -62,6 +62,26 @@ fn validate_hash_path(hash: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+fn cas_object_appears_shared(path: &Path) -> Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+
+    Ok(fs::metadata(path)?.nlink() > 1)
+}
+
+#[cfg(not(unix))]
+fn cas_object_appears_shared(_path: &Path) -> Result<bool> {
+    Ok(false)
+}
+
+fn sync_parent_dir(path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        let dir = fs::File::open(parent)?;
+        dir.sync_all()?;
+    }
+    Ok(())
+}
+
 /// Content-addressable storage manager
 #[derive(Clone)]
 pub struct CasStore {
@@ -156,11 +176,7 @@ impl CasStore {
         fs::rename(&temp_path, &path)?;
 
         // Fsync parent directory to ensure the rename is durable on crash
-        if let Some(parent) = path.parent()
-            && let Ok(dir) = fs::File::open(parent)
-        {
-            let _ = dir.sync_all();
-        }
+        sync_parent_dir(&path)?;
 
         Ok(true)
     }
@@ -413,18 +429,63 @@ impl CasStore {
         Ok(String::from_utf8_lossy(&content).into_owned())
     }
 
-    /// Hardlink an existing file into CAS (zero-copy adoption)
+    /// Store an existing mutable file into CAS by copying bytes into a private inode.
     ///
-    /// Instead of reading the file and copying it to CAS, this creates a hardlink
-    /// from the CAS location to the existing file. Benefits:
-    /// - Zero additional disk space (same inode)
-    /// - Instant operation (no I/O for content)
-    /// - File survives if original is deleted (nlink > 1)
+    /// Use this for live adoption and any path whose source can be modified
+    /// outside Conary after capture.
+    pub fn store_file_copy_from_existing<P: AsRef<Path>>(
+        &self,
+        existing_path: P,
+    ) -> Result<String> {
+        let content = fs::read(existing_path)?;
+        let hash = self.compute_hash(&content);
+        if self.atomic_store_private_copy(&hash, &content)? {
+            debug!("Stored private file copy in CAS: {}", hash);
+        } else {
+            debug!("Private CAS object already exists: {}", hash);
+        }
+        Ok(hash)
+    }
+
+    /// Atomically store content into a private CAS inode.
     ///
-    /// Falls back to copying if hardlink fails (cross-device, etc).
+    /// Unlike `store`, this helper also repairs a touched legacy shared hardlink
+    /// object. If the hash already exists and appears private, it is left alone
+    /// for deduplication. If it is shared on Unix, the CAS directory entry is
+    /// replaced with a fresh inode containing the same content.
+    fn atomic_store_private_copy(&self, hash: &str, content: &[u8]) -> Result<bool> {
+        let path = self.hash_to_path(hash)?;
+        if path.exists() && !cas_object_appears_shared(&path)? {
+            return Ok(false);
+        }
+
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let temp_ext = format!(
+            "tmp.{}.{}.private",
+            std::process::id(),
+            Self::next_temp_id()
+        );
+        let temp_path = path.with_extension(temp_ext);
+        let mut file = fs::File::create(&temp_path)?;
+        file.write_all(content)?;
+        file.sync_all()?;
+        fs::rename(&temp_path, &path)?;
+        sync_parent_dir(&path)?;
+        Ok(true)
+    }
+
+    /// Hardlink an existing file into CAS when the caller proves the source root is sealed.
     ///
-    /// Returns the SHA-256 hash of the file content.
-    pub fn hardlink_from_existing<P: AsRef<Path>>(&self, existing_path: P) -> Result<String> {
+    /// Do not use this for live native package-manager files. A hardlink shares
+    /// the inode with the source and therefore shares future in-place mutations.
+    pub fn hardlink_from_immutable_root<P: AsRef<Path>>(&self, existing_path: P) -> Result<String> {
+        self.hardlink_from_existing_inner(existing_path)
+    }
+
+    fn hardlink_from_existing_inner<P: AsRef<Path>>(&self, existing_path: P) -> Result<String> {
         let existing_path = existing_path.as_ref();
 
         // Read file to compute hash (we need the hash for the CAS path)
@@ -483,13 +544,23 @@ impl CasStore {
         }
     }
 
-    /// Hardlink an existing file into CAS using a pre-computed hash
+    /// Hardlink an existing file into CAS using a pre-computed hash when the
+    /// caller proves the source root is sealed.
     ///
     /// This is more efficient when you already have the hash (e.g., from RPM metadata)
     /// because it can skip reading the file entirely if the hash already exists in CAS.
     ///
     /// If verify_hash is true, reads the file to verify the hash matches.
-    pub fn hardlink_from_existing_with_hash<P: AsRef<Path>>(
+    pub fn hardlink_from_immutable_root_with_hash<P: AsRef<Path>>(
+        &self,
+        existing_path: P,
+        expected_hash: &str,
+        verify_hash: bool,
+    ) -> Result<String> {
+        self.hardlink_from_existing_with_hash_inner(existing_path, expected_hash, verify_hash)
+    }
+
+    fn hardlink_from_existing_with_hash_inner<P: AsRef<Path>>(
         &self,
         existing_path: P,
         expected_hash: &str,
@@ -831,7 +902,7 @@ mod tests {
     }
 
     #[test]
-    fn test_hardlink_from_existing() {
+    fn test_hardlink_from_immutable_root() {
         let temp_dir = TempDir::new().unwrap();
         let cas_dir = temp_dir.path().join("cas");
         let cas = CasStore::new(&cas_dir).unwrap();
@@ -842,7 +913,7 @@ mod tests {
         fs::write(&existing_file, content).unwrap();
 
         // Hardlink into CAS
-        let hash = cas.hardlink_from_existing(&existing_file).unwrap();
+        let hash = cas.hardlink_from_immutable_root(&existing_file).unwrap();
 
         // Verify content is in CAS
         assert!(cas.exists(&hash));
@@ -852,7 +923,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn test_hardlink_shares_inode() {
+    fn test_hardlink_from_immutable_root_shares_inode_legacy_case() {
         use std::os::unix::fs::MetadataExt;
 
         let temp_dir = TempDir::new().unwrap();
@@ -868,7 +939,7 @@ mod tests {
         let original_inode = fs::metadata(&existing_file).unwrap().ino();
 
         // Hardlink into CAS
-        let hash = cas.hardlink_from_existing(&existing_file).unwrap();
+        let hash = cas.hardlink_from_immutable_root(&existing_file).unwrap();
 
         // Get CAS file inode
         let cas_path = cas.hash_to_path(&hash).unwrap();
@@ -898,7 +969,7 @@ mod tests {
         fs::write(&existing_file, content).unwrap();
 
         // Hardlink into CAS
-        let hash = cas.hardlink_from_existing(&existing_file).unwrap();
+        let hash = cas.hardlink_from_immutable_root(&existing_file).unwrap();
 
         // Delete the original file (simulating RPM removal)
         fs::remove_file(&existing_file).unwrap();
@@ -926,7 +997,7 @@ mod tests {
 
         // Hardlink with known hash (no verification)
         let hash = cas
-            .hardlink_from_existing_with_hash(&existing_file, &expected_hash, false)
+            .hardlink_from_immutable_root_with_hash(&existing_file, &expected_hash, false)
             .unwrap();
 
         assert_eq!(hash, expected_hash);
@@ -947,10 +1018,10 @@ mod tests {
         fs::write(&file2, content).unwrap();
 
         // Hardlink first file
-        let hash1 = cas.hardlink_from_existing(&file1).unwrap();
+        let hash1 = cas.hardlink_from_immutable_root(&file1).unwrap();
 
         // Hardlink second file - should detect duplicate
-        let hash2 = cas.hardlink_from_existing(&file2).unwrap();
+        let hash2 = cas.hardlink_from_immutable_root(&file2).unwrap();
 
         // Same hash
         assert_eq!(hash1, hash2);
@@ -958,6 +1029,56 @@ mod tests {
         // Content retrievable
         let retrieved = cas.retrieve(&hash1).unwrap();
         assert_eq!(content, retrieved.as_slice());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_hardlink_from_immutable_root_shares_inode() {
+        use std::os::unix::fs::MetadataExt;
+
+        let temp_dir = TempDir::new().unwrap();
+        let cas_dir = temp_dir.path().join("cas");
+        let cas = CasStore::new(&cas_dir).unwrap();
+        let existing_file = temp_dir.path().join("sealed_inode.txt");
+        let content = b"This sealed-source helper intentionally shares an inode";
+        fs::write(&existing_file, content).unwrap();
+        let original_inode = fs::metadata(&existing_file).unwrap().ino();
+
+        let hash = cas.hardlink_from_immutable_root(&existing_file).unwrap();
+        let cas_path = cas.hash_to_path(&hash).unwrap();
+
+        assert_eq!(original_inode, fs::metadata(&cas_path).unwrap().ino());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_store_file_copy_repairs_existing_shared_cas_object() {
+        use std::os::unix::fs::MetadataExt;
+
+        let temp_dir = TempDir::new().unwrap();
+        let cas_dir = temp_dir.path().join("cas");
+        let cas = CasStore::new(&cas_dir).unwrap();
+        let sealed_file = temp_dir.path().join("sealed.txt");
+        let mutable_file = temp_dir.path().join("mutable.txt");
+        let content = b"same content through two capture paths";
+        fs::write(&sealed_file, content).unwrap();
+        fs::write(&mutable_file, content).unwrap();
+
+        let hash = cas.hardlink_from_immutable_root(&sealed_file).unwrap();
+        let shared_path = cas.hash_to_path(&hash).unwrap();
+        assert_eq!(
+            fs::metadata(&sealed_file).unwrap().ino(),
+            fs::metadata(&shared_path).unwrap().ino()
+        );
+
+        let copied_hash = cas.store_file_copy_from_existing(&mutable_file).unwrap();
+        assert_eq!(copied_hash, hash);
+        assert_ne!(
+            fs::metadata(&sealed_file).unwrap().ino(),
+            fs::metadata(&shared_path).unwrap().ino(),
+            "mutable-source copy must break a touched legacy shared CAS object"
+        );
+        assert_eq!(cas.retrieve(&hash).unwrap(), content);
     }
 
     #[test]

@@ -139,7 +139,10 @@ fn adopted_install_refusal_routes_to_refresh_and_takeover() {
 
     assert!(!output.status.success(), "{}", output_text(&output));
     let text = output_text(&output);
-    assert!(text.contains("conary system adopt --refresh"), "{text}");
+    assert!(
+        text.contains("conary --allow-live-system-mutation system adopt --refresh"),
+        "{text}"
+    );
     assert!(
         text.contains("conary install curl --dep-mode takeover"),
         "{text}"
@@ -204,5 +207,8 @@ fn adopted_update_routes_to_native_pm_and_refresh() {
         "{stdout}"
     );
     assert!(stdout.contains("dnf update curl"), "{stdout}");
-    assert!(stdout.contains("conary system adopt --refresh"), "{stdout}");
+    assert!(
+        stdout.contains("conary --allow-live-system-mutation system adopt --refresh"),
+        "{stdout}"
+    );
 }

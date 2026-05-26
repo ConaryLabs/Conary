@@ -8,7 +8,9 @@
 use super::super::create_state_snapshot;
 use super::super::open_db;
 use super::cas_capture::prepare_cas_backed_package_files;
+use super::outcome::write_warning_metadata;
 use super::system::{FileInfoTuple, compute_file_hash};
+use crate::commands::AdoptionWarning;
 use anyhow::Result;
 use conary_core::db::models::{
     Changeset, ChangesetStatus, DependencyEntry, FileEntry, InstallSource, ProvideEntry, Trove,
@@ -16,7 +18,7 @@ use conary_core::db::models::{
 use conary_core::packages::{
     DependencyInfo, SystemPackageManager, dpkg_query, pacman_query, rpm_query,
 };
-use tracing::{debug, warn};
+use tracing::warn;
 
 /// Map of package name -> (version, arch, description).
 type InstalledPackageMap = std::collections::HashMap<String, (String, String, Option<String>)>;
@@ -33,6 +35,40 @@ enum DriftOutcome {
     },
     /// Package no longer present in system package manager
     Removed,
+}
+
+struct RefreshReplacement {
+    files: Vec<(FileInfoTuple, String)>,
+    deps: Vec<DependencyInfo>,
+    provides: Vec<String>,
+}
+
+impl RefreshReplacement {
+    #[cfg(test)]
+    fn test_fixture(_trove_id: i64) -> Self {
+        Self {
+            files: Vec::new(),
+            deps: Vec::new(),
+            provides: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RefreshFailureInjection {
+    None,
+    AfterDelete,
+}
+
+impl RefreshFailureInjection {
+    #[cfg(test)]
+    fn after_delete(enabled: bool) -> Self {
+        if enabled {
+            Self::AfterDelete
+        } else {
+            Self::None
+        }
+    }
 }
 
 /// Compare adopted troves against current system state and update drifted entries.
@@ -74,7 +110,9 @@ pub async fn cmd_adopt_refresh(
 
     if adopted.is_empty() {
         if !quiet {
-            println!("No adopted packages found. Run 'conary system adopt --system' first.");
+            println!(
+                "No adopted packages found. Run 'conary --allow-live-system-mutation system adopt --system' first."
+            );
         }
         return Ok(());
     }
@@ -174,9 +212,7 @@ pub async fn cmd_adopt_refresh(
         sys_ver: String,
         sys_arch: String,
         sys_desc: Option<String>,
-        files_with_hashes: Vec<(FileInfoTuple, String)>,
-        deps: Vec<DependencyInfo>,
-        provides: Vec<String>,
+        replacement: RefreshReplacement,
     }
 
     let mut update_data: Vec<UpdateData<'_>> = Vec::new();
@@ -275,9 +311,11 @@ pub async fn cmd_adopt_refresh(
                 sys_ver: sys_ver.clone(),
                 sys_arch: sys_arch.clone(),
                 sys_desc: sys_desc.clone(),
-                files_with_hashes,
-                deps,
-                provides,
+                replacement: RefreshReplacement {
+                    files: files_with_hashes,
+                    deps,
+                    provides,
+                },
             });
         }
     }
@@ -289,10 +327,12 @@ pub async fn cmd_adopt_refresh(
 
     let mut actually_updated = 0u32;
     let mut actually_removed = 0u32;
+    let mut degraded_count = 0u32;
 
     // DB-only transaction: all PM queries and CAS writes are already done.
     let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
         let changeset_id = changeset.insert(tx)?;
+        let mut adoption_warnings = Vec::new();
 
         for (trove, outcome) in &results {
             match outcome {
@@ -331,82 +371,27 @@ pub async fn cmd_adopt_refresh(
                         None => continue,
                     };
 
-                    // Use the trove_id captured during pre-fetch.
-                    let trove_id = data.trove_id;
-
-                    // Update version and metadata on the trove record
-                    tx.execute(
-                        "UPDATE troves SET version = ?1, architecture = ?2, description = ?3,
-                         installed_by_changeset_id = ?4
-                         WHERE id = ?5",
-                        rusqlite::params![
-                            data.sys_ver,
-                            data.sys_arch,
-                            data.sys_desc,
-                            changeset_id,
-                            trove_id,
-                        ],
-                    )?;
-
-                    // Replace file records with pre-computed data.
-                    tx.execute("DELETE FROM files WHERE trove_id = ?1", [trove_id])?;
-                    for (
-                        (
-                            file_path,
-                            file_size,
-                            file_mode,
-                            _digest,
-                            file_user,
-                            file_group,
-                            link_target,
-                        ),
-                        hash,
-                    ) in &data.files_with_hashes
-                    {
-                        let mut fe = FileEntry::new(
-                            file_path.clone(),
-                            hash.clone(),
-                            *file_size,
-                            *file_mode,
-                            trove_id,
+                    if let Err(error) = replace_refresh_children_for_package(
+                        tx,
+                        trove.name.as_str(),
+                        data.trove_id,
+                        changeset_id,
+                        data.sys_ver.as_str(),
+                        data.sys_arch.as_str(),
+                        data.sys_desc.as_deref(),
+                        &data.replacement,
+                        RefreshFailureInjection::None,
+                    ) {
+                        warn!(
+                            "Failed to refresh metadata for '{}'; preserving old metadata: {}",
+                            trove.name, error
                         );
-                        fe.owner = file_user.clone();
-                        fe.group_name = file_group.clone();
-                        fe.symlink_target = link_target.clone();
-                        if let Err(e) = fe.insert_or_replace(tx) {
-                            debug!(
-                                "Failed to insert file {} for {}: {}",
-                                file_path, trove.name, e
-                            );
-                        }
-                    }
-
-                    tx.execute("DELETE FROM dependencies WHERE trove_id = ?1", [trove_id])?;
-                    for dep in &data.deps {
-                        if dep.name.is_empty() {
-                            continue;
-                        }
-                        let mut de = DependencyEntry::new(
-                            trove_id,
-                            dep.name.clone(),
-                            None,
-                            "runtime".to_string(),
-                            dep.constraint.clone(),
-                        );
-                        if let Err(e) = de.insert(tx) {
-                            debug!("Failed to insert dep for {}: {}", trove.name, e);
-                        }
-                    }
-
-                    tx.execute("DELETE FROM provides WHERE trove_id = ?1", [trove_id])?;
-                    for provide in &data.provides {
-                        if provide.is_empty() {
-                            continue;
-                        }
-                        let mut pe = ProvideEntry::new(trove_id, provide.clone(), None);
-                        if let Err(e) = pe.insert_or_ignore(tx) {
-                            debug!("Failed to insert provide for {}: {}", trove.name, e);
-                        }
+                        adoption_warnings.push(AdoptionWarning::refresh_replacement_failure(
+                            trove.name.clone(),
+                            error.to_string(),
+                        ));
+                        degraded_count += 1;
+                        continue;
                     }
 
                     if !quiet {
@@ -417,6 +402,8 @@ pub async fn cmd_adopt_refresh(
             }
         }
 
+        write_warning_metadata(tx, changeset_id, adoption_warnings)
+            .map_err(|e| conary_core::Error::Io(std::io::Error::other(e.to_string())))?;
         changeset.update_status(tx, ChangesetStatus::Applied)?;
         Ok(changeset_id)
     })?;
@@ -438,9 +425,134 @@ pub async fn cmd_adopt_refresh(
             "\nRefresh complete: {} updated, {} removed from tracking.",
             actually_updated, actually_removed
         );
+        if degraded_count > 0 {
+            println!(
+                "Refreshed with warnings: {degraded_count} package(s). Run `conary system history` to inspect adoption warning metadata."
+            );
+        }
     }
 
     Ok(())
+}
+
+fn with_refresh_savepoint<T>(
+    tx: &rusqlite::Transaction<'_>,
+    trove_id: i64,
+    f: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T>,
+) -> Result<T> {
+    let savepoint = format!("refresh_trove_{trove_id}");
+    tx.execute_batch(&format!("SAVEPOINT {savepoint}"))?;
+    match f(tx) {
+        Ok(value) => {
+            tx.execute_batch(&format!("RELEASE {savepoint}"))?;
+            Ok(value)
+        }
+        Err(error) => {
+            let _ = tx.execute_batch(&format!("ROLLBACK TO {savepoint}"));
+            let _ = tx.execute_batch(&format!("RELEASE {savepoint}"));
+            Err(error)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn replace_refresh_children_for_package(
+    tx: &rusqlite::Transaction<'_>,
+    trove_name: &str,
+    trove_id: i64,
+    changeset_id: i64,
+    sys_ver: &str,
+    sys_arch: &str,
+    sys_desc: Option<&str>,
+    replacement: &RefreshReplacement,
+    injection: RefreshFailureInjection,
+) -> Result<()> {
+    with_refresh_savepoint(tx, trove_id, |tx| {
+        tx.execute(
+            "UPDATE troves SET version = ?1, architecture = ?2, description = ?3,
+             installed_by_changeset_id = ?4
+             WHERE id = ?5",
+            rusqlite::params![sys_ver, sys_arch, sys_desc, changeset_id, trove_id],
+        )?;
+
+        tx.execute("DELETE FROM files WHERE trove_id = ?1", [trove_id])?;
+        tx.execute("DELETE FROM dependencies WHERE trove_id = ?1", [trove_id])?;
+        tx.execute("DELETE FROM provides WHERE trove_id = ?1", [trove_id])?;
+
+        if injection == RefreshFailureInjection::AfterDelete {
+            return Err(anyhow::anyhow!(
+                "injected refresh child replacement failure"
+            ));
+        }
+
+        for (
+            (file_path, file_size, file_mode, _digest, file_user, file_group, link_target),
+            hash,
+        ) in &replacement.files
+        {
+            let mut fe = FileEntry::new(
+                file_path.clone(),
+                hash.clone(),
+                *file_size,
+                *file_mode,
+                trove_id,
+            );
+            fe.owner = file_user.clone();
+            fe.group_name = file_group.clone();
+            fe.symlink_target = link_target.clone();
+            fe.insert_or_replace(tx).map_err(|e| {
+                anyhow::anyhow!("failed to insert refreshed file {file_path} for {trove_name}: {e}")
+            })?;
+        }
+
+        for dep in &replacement.deps {
+            if dep.name.is_empty() {
+                continue;
+            }
+            let mut de = DependencyEntry::new(
+                trove_id,
+                dep.name.clone(),
+                None,
+                "runtime".to_string(),
+                dep.constraint.clone(),
+            );
+            de.insert(tx).map_err(|e| {
+                anyhow::anyhow!("failed to insert refreshed dependency for {trove_name}: {e}")
+            })?;
+        }
+
+        for provide in &replacement.provides {
+            if provide.is_empty() {
+                continue;
+            }
+            let mut pe = ProvideEntry::new(trove_id, provide.clone(), None);
+            pe.insert_or_ignore(tx).map_err(|e| {
+                anyhow::anyhow!("failed to insert refreshed provide for {trove_name}: {e}")
+            })?;
+        }
+
+        Ok(())
+    })
+}
+
+#[cfg(test)]
+fn replace_refresh_children_for_package_for_test(
+    tx: &rusqlite::Transaction<'_>,
+    trove_id: i64,
+    fail_after_delete: bool,
+) -> Result<()> {
+    let replacement = RefreshReplacement::test_fixture(trove_id);
+    replace_refresh_children_for_package(
+        tx,
+        "curl",
+        trove_id,
+        1,
+        "8.9.0",
+        "x86_64",
+        Some("refreshed fixture"),
+        &replacement,
+        RefreshFailureInjection::after_delete(fail_after_delete),
+    )
 }
 
 /// Query all currently installed packages from the active package manager.
@@ -545,4 +657,110 @@ fn query_package_provides(pkg_mgr: SystemPackageManager, name: &str) -> Result<V
             .map_err(|e| anyhow::anyhow!("Pacman provides query failed for '{name}': {e}"))?,
         _ => Vec::new(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use conary_core::db;
+    use conary_core::db::models::{
+        Changeset, ChangesetStatus, DependencyEntry, FileEntry, InstallSource, ProvideEntry, Trove,
+        TroveType,
+    };
+
+    fn create_refresh_test_db() -> (tempfile::TempDir, String, rusqlite::Connection, i64) {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("test.db").to_string_lossy().into_owned();
+        db::init(&db_path).unwrap();
+        let mut conn = db::open(&db_path).unwrap();
+        let trove_id = db::transaction(&mut conn, |tx| {
+            let mut changeset = Changeset::new("seed adopted".to_string());
+            let changeset_id = changeset.insert(tx)?;
+            let mut trove = Trove::new_with_source(
+                "curl".to_string(),
+                "8.8.0".to_string(),
+                TroveType::Package,
+                InstallSource::AdoptedFull,
+            );
+            trove.installed_by_changeset_id = Some(changeset_id);
+            let trove_id = trove.insert(tx)?;
+            let mut file = FileEntry::new(
+                "/usr/bin/curl".to_string(),
+                "old-hash".to_string(),
+                4,
+                0o100755,
+                trove_id,
+            );
+            file.insert(tx)?;
+            let mut dep = DependencyEntry::new(
+                trove_id,
+                "openssl".to_string(),
+                None,
+                "runtime".to_string(),
+                None,
+            );
+            dep.insert(tx)?;
+            let mut provide = ProvideEntry::new(trove_id, "curl".to_string(), None);
+            provide.insert(tx)?;
+            changeset.update_status(tx, ChangesetStatus::Applied)?;
+            Ok(trove_id)
+        })
+        .unwrap();
+        (tmp, db_path, conn, trove_id)
+    }
+
+    #[test]
+    fn refresh_savepoint_preserves_old_children_when_replacement_fails() {
+        let (_tmp, _db_path, mut conn, trove_id) = create_refresh_test_db();
+        let result = db::transaction(&mut conn, |tx| {
+            let err = replace_refresh_children_for_package_for_test(tx, trove_id, true)
+                .expect_err("injected replacement failure should be isolated to savepoint");
+            assert!(
+                err.to_string()
+                    .contains("injected refresh child replacement failure")
+            );
+
+            tx.execute(
+                "UPDATE troves SET description = ?1 WHERE id = ?2",
+                ("outer transaction committed", trove_id),
+            )?;
+            Ok(())
+        });
+
+        assert!(result.is_ok());
+
+        let file_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM files WHERE trove_id = ?1",
+                [trove_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let dep_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM dependencies WHERE trove_id = ?1",
+                [trove_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let provide_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM provides WHERE trove_id = ?1",
+                [trove_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(file_count, 1);
+        assert_eq!(dep_count, 1);
+        assert_eq!(provide_count, 1);
+        let description: String = conn
+            .query_row(
+                "SELECT description FROM troves WHERE id = ?1",
+                [trove_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(description, "outer transaction committed");
+    }
 }

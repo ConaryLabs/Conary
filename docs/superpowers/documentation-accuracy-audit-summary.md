@@ -36,7 +36,10 @@ stateless discovery, bootstrap-status, and suites resource records. The
 for command-risk, CAS/adoption integrity, generation publication durability, and
 docs/CI truth-check planning. The matching Plan A checklist opens the active
 plans lane for adoption acknowledgement gates, dry-run behavior, private CAS
-capture, ghost-trove cleanup, and refresh savepoints.
+capture, ghost-trove cleanup, and refresh savepoints; the 2026-05-26 review
+tightening records a constrained sync-hook refresh path, touched legacy shared
+CAS-object repair, changeset-envelope adoption warnings, production-path
+ghost-trove tests, and dirty-worktree-safe final commit instructions.
 
 Audited every tracked documentation-like file returned by
 `bash scripts/docs-audit-inventory.sh`: tracked files spanning root docs,
@@ -61,7 +64,7 @@ The repo moved materially after the last audit:
 - self-contained installed-runtime generation exports with Fedora 44 QEMU
   validation
 - Remi deploy/access and conversion-burst hardening
-- schema v67 and architecture-aware conversion cache migration
+- schema v68 and architecture-aware conversion cache migration
 - release-readiness dependency/security refresh
 - Fedora 44, Ubuntu 26.04 LTS, and Arch Linux public-preview matrix alignment
 - conaryd package execution, with queued install/remove/update jobs and the
@@ -118,7 +121,7 @@ The repo moved materially after the last audit:
 - Updated deploy/operator docs and `deploy/remi.toml.example` for Fedora 44,
   Ubuntu 26.04 LTS, Remi admin-origin access, current host assumptions, and
   Forge/conaryd paths.
-- Updated `docs/ARCHITECTURE.md` and `docs/conaryopedia-v2.md` for schema v67,
+- Updated `docs/ARCHITECTURE.md` and `docs/conaryopedia-v2.md` for schema v68,
   runtime generation input validation, LFS 13.0 bootstrap phases, and
   self-contained generation export; refreshed them again after composefs atomic
   switching landed so transaction and recovery wording reflects next-boot
@@ -201,7 +204,8 @@ The repo moved materially after the last audit:
   records, were moved to `docs/superpowers/specs/archive/`; the active top-level
   `plans/` directory now holds the 2026-05-25 adoption safety Plan A checklist,
   and the active `specs/` directory holds the 2026-05-25 preview invariant
-  hardening umbrella until its follow-on plans land or defer their tracks.
+  hardening umbrella until its follow-on plans land or defer their tracks. Both
+  active records were review-tightened on 2026-05-26 before implementation.
 - The completed May 14 limited-preview honesty review TSV was moved beside its
   archived plan in `docs/superpowers/plans/archive/`; it is outside the doc
   inventory script because that script tracks documentation-like files.

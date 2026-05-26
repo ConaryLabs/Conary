@@ -71,7 +71,7 @@ timeout = 900
 group = "M"
 
 [[test.step]]
-conary = "system adopt --system"
+conary = "--allow-live-system-mutation system adopt --system"
 
 [test.step.assert]
 exit_code = 0
@@ -329,7 +329,7 @@ timeout = 120
 group = "M"
 
 [[test.step]]
-conary = "system adopt curl"
+conary = "--allow-live-system-mutation system adopt curl"
 
 [test.step.assert]
 exit_code = 0
