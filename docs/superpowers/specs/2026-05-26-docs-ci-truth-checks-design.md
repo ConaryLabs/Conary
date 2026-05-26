@@ -7,7 +7,7 @@ summary: Design for Plan C docs, CI, and public-surface truth checks
 # Docs And CI Truth Checks: Design Spec
 
 **Date:** 2026-05-26
-**Status:** Design revised after external review
+**Status:** Implementation plan written in `docs/superpowers/plans/2026-05-26-docs-ci-truth-checks.md`
 **Umbrella:** `docs/superpowers/specs/2026-05-25-preview-invariant-hardening-design.md`
 **Goal:** Make active documentation, command hints, daemon route references, and
 preview status claims cheap to check against the current repository state.
