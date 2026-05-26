@@ -6,6 +6,7 @@ rust-version = "1.94"
 authors = ["Conary Contributors"]
 description = "Core library for the Conary package manager"
 license = "MIT OR Apache-2.0"
+publish = false
 
 [features]
 default = ["composefs-rs"]
