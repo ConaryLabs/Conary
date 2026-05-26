@@ -15,11 +15,12 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use anyhow::Context;
 use rusqlite::Connection;
 use tracing::{debug, info, warn};
 
 use crate::commands::generation::builder::enable_generation_rootfs_verity;
-use conary_core::db::models::FileEntry;
+use conary_core::db::models::{FileEntry, SystemState};
 use conary_core::generation::etc_merge::{self, MergeAction};
 use conary_core::runtime_root::ConaryRuntimeRoot;
 
@@ -133,139 +134,87 @@ fn boot_root_for_generation_build(runtime_root: &ConaryRuntimeRoot) -> PathBuf {
     PathBuf::from("/boot")
 }
 
-pub fn rebuild_and_mount(
+#[derive(Debug)]
+pub(crate) struct BuiltGeneration {
+    pub generation_number: i64,
+    pub state_number: i64,
+}
+
+fn resolve_previous_etc_snapshot(
     conn: &Connection,
-    db_path: &str,
-    summary: &str,
     prev_etc_snapshot: Option<HashMap<String, String>>,
-) -> anyhow::Result<i64> {
-    if let Some(error) = forced_generation_rebuild_failure() {
-        return Err(error);
-    }
-
-    let runtime_root = runtime_root_for_db_path(db_path);
-
-    // Record the currently active generation before building the new one.
-    // The state snapshot for the new generation stores this as its
-    // database-backed /etc merge base.
-    let current_gen = conary_core::generation::mount::current_generation(runtime_root.root())
-        .unwrap_or(None)
-        .unwrap_or(0);
-
-    // Step 1: Determine the correct "previous" /etc state.
-    // - If a pre-captured snapshot was provided (install/remove callers), use it.
-    // - Otherwise, check the active generation's recorded base_generation
-    //   in system_states. That tells us which generation was active when the
-    //   current upper dir was created -- we should use THAT generation's DB
-    //   state as the base.
-    //   This handles the rollback case correctly.
-    // - Final fallback: read from current DB state (for init/first-run).
-    let prev_etc = match prev_etc_snapshot {
-        Some(snapshot) => snapshot,
+    current_gen: i64,
+) -> anyhow::Result<HashMap<String, String>> {
+    match prev_etc_snapshot {
+        Some(snapshot) => Ok(snapshot),
         None => {
             if let Some(base_num) = current_base_generation_for_merge(conn, current_gen)? {
                 debug!(
                     "Using base generation {} from system_states for /etc merge",
                     base_num
                 );
-                // Query /etc files from the base generation's state snapshot.
-                // This is the correct "previous" state for the three-way merge,
-                // even after a rollback where the current DB may not match.
                 let base_etc = collect_etc_files_for_state(conn, base_num)?;
-                if base_etc.is_empty() {
-                    // Distinguish "no /etc files" (legitimate) from "troves
-                    // deleted" (cascade, need fallback). Check if the state's
-                    // members can still be resolved to trove rows.
-                    // Match architecture to avoid false positives from
-                    // multilib: if base had foo.x86_64 but only foo.i686
-                    // survives, the base troves are effectively deleted.
-                    let has_resolvable_troves: bool = conn
-                        .query_row(
-                            "SELECT EXISTS(SELECT 1 FROM state_members sm \
-                             JOIN troves t ON t.name = sm.trove_name \
-                                 AND t.version = sm.trove_version \
-                                 AND (sm.architecture IS NULL \
-                                      OR t.architecture IS NULL \
-                                      OR sm.architecture = t.architecture) \
-                             JOIN system_states ss ON sm.state_id = ss.id \
-                             WHERE ss.state_number = ?1)",
-                            [base_num],
-                            |row| row.get(0),
-                        )
-                        .unwrap_or(false);
+                if !base_etc.is_empty() {
+                    return Ok(base_etc);
+                }
 
-                    if has_resolvable_troves {
-                        // State exists and has troves, they just have no /etc
-                        // files. An empty map IS the correct base.
-                        debug!("Base generation {} has no /etc files (correct)", base_num);
-                        base_etc
-                    } else {
-                        // Troves were cascade-deleted. Fall back to current DB.
-                        debug!(
-                            "Base generation {} troves deleted, falling back to current DB",
-                            base_num
-                        );
-                        collect_etc_files(conn)?
-                    }
+                let has_resolvable_troves: bool = conn
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM state_members sm \
+                         JOIN troves t ON t.name = sm.trove_name \
+                             AND t.version = sm.trove_version \
+                             AND (sm.architecture IS NULL \
+                                  OR t.architecture IS NULL \
+                                  OR sm.architecture = t.architecture) \
+                         JOIN system_states ss ON sm.state_id = ss.id \
+                         WHERE ss.state_number = ?1)",
+                        [base_num],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(false);
+
+                if has_resolvable_troves {
+                    debug!("Base generation {} has no /etc files (correct)", base_num);
+                    Ok(base_etc)
                 } else {
-                    base_etc
+                    debug!(
+                        "Base generation {} troves deleted, falling back to current DB",
+                        base_num
+                    );
+                    collect_etc_files(conn)
                 }
             } else {
-                collect_etc_files(conn)?
+                collect_etc_files(conn)
             }
         }
-    };
+    }
+}
 
-    // Step 2: Build the new generation (creates state snapshot + EROFS image).
-    let generations_dir = runtime_root.generations_dir();
-    let boot_root = boot_root_for_generation_build(&runtime_root);
-    let (gen_num, build_result) =
-        conary_core::generation::builder::build_generation_from_db_with_boot_root(
-            conn,
-            &generations_dir,
-            summary,
-            &boot_root,
-        )
-        .map_err(|e| anyhow::anyhow!("Failed to build EROFS generation: {e}"))?;
-
-    // Per-generation /etc overlay directories -- isolate user modifications so
-    // they do not bleed across generation switches.
+fn apply_etc_merge_for_generation(
+    conn: &Connection,
+    runtime_root: &ConaryRuntimeRoot,
+    gen_num: i64,
+    prev_etc: &HashMap<String, String>,
+) -> anyhow::Result<()> {
     let upper_dir = runtime_root.etc_state_dir().join(gen_num.to_string());
     std::fs::create_dir_all(&upper_dir)?;
 
-    info!(
-        "Built generation {gen_num} ({} bytes, {} CAS objects)",
-        build_result.image_size, build_result.cas_objects_referenced
-    );
-
-    // Step 3: Collect new generation's /etc files (DB was just updated by
-    // the build/snapshot process, so this reflects the new package set).
     let new_etc = collect_etc_files(conn)?;
-
-    // Step 4: Run three-way /etc merge.
-    let merge_plan = etc_merge::plan_etc_merge(&prev_etc, &new_etc, &upper_dir)
+    let merge_plan = etc_merge::plan_etc_merge(prev_etc, &new_etc, &upper_dir)
         .map_err(|e| anyhow::anyhow!("Failed to plan /etc merge: {e}"))?;
 
-    // Step 5: Apply non-conflict actions.
     for (rel_path, action) in &merge_plan.actions {
         match action {
             MergeAction::AcceptPackage => {
-                // Remove the upper layer copy so the new EROFS lower version
-                // shows through the overlay.
                 let upper_file = upper_dir.join(rel_path);
                 if upper_file.exists() {
-                    if let Err(e) = std::fs::remove_file(&upper_file) {
-                        warn!(
-                            path = %rel_path.display(),
-                            error = %e,
-                            "Failed to remove upper layer file for package update"
-                        );
-                    } else {
-                        info!(
-                            path = %rel_path.display(),
-                            "Accepted package update (removed upper layer copy)"
-                        );
-                    }
+                    std::fs::remove_file(&upper_file).with_context(|| {
+                        format!("failed to remove upper layer copy {}", upper_file.display())
+                    })?;
+                    info!(
+                        path = %rel_path.display(),
+                        "Accepted package update (removed upper layer copy)"
+                    );
                 }
             }
             MergeAction::Conflict {
@@ -312,13 +261,51 @@ pub fn rebuild_and_mount(
         );
     }
 
+    Ok(())
+}
+
+pub(crate) fn build_generation_for_publication(
+    conn: &Connection,
+    db_path: &str,
+    summary: &str,
+    prev_etc_snapshot: Option<HashMap<String, String>>,
+) -> anyhow::Result<BuiltGeneration> {
+    if let Some(error) = forced_generation_rebuild_failure() {
+        return Err(error);
+    }
+
+    let runtime_root = runtime_root_for_db_path(db_path);
+    let current_gen = conary_core::generation::mount::current_generation(runtime_root.root())
+        .unwrap_or(None)
+        .unwrap_or(0);
+    let prev_etc = resolve_previous_etc_snapshot(conn, prev_etc_snapshot, current_gen)?;
+    let generations_dir = runtime_root.generations_dir();
+    let boot_root = boot_root_for_generation_build(&runtime_root);
+    let (gen_num, build_result) =
+        conary_core::generation::builder::build_generation_from_db_with_boot_root_and_activation(
+            conn,
+            &generations_dir,
+            summary,
+            &boot_root,
+            conary_core::generation::builder::GenerationActivation::Inactive,
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to build EROFS generation: {e}"))?;
+
+    info!(
+        "Built generation {gen_num} ({} bytes, {} CAS objects)",
+        build_result.image_size, build_result.cas_objects_referenced
+    );
+
+    apply_etc_merge_for_generation(conn, &runtime_root, gen_num, &prev_etc)?;
+
     if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
-        conary_core::generation::mount::update_current_symlink(runtime_root.root(), gen_num)
-            .map_err(|e| anyhow::anyhow!("Failed to update current symlink: {e}"))?;
         info!(
             "Skipping generation fs-verity enablement because CONARY_TEST_SKIP_GENERATION_MOUNT is set"
         );
-        return Ok(gen_num);
+        return Ok(BuiltGeneration {
+            generation_number: gen_num,
+            state_number: gen_num,
+        });
     }
 
     let gen_dir = generations_dir.join(gen_num.to_string());
@@ -329,11 +316,45 @@ pub fn rebuild_and_mount(
         )
     })?;
 
+    Ok(BuiltGeneration {
+        generation_number: gen_num,
+        state_number: gen_num,
+    })
+}
+
+pub(crate) fn publish_generation_link(db_path: &str, gen_num: i64) -> anyhow::Result<()> {
+    let runtime_root = runtime_root_for_db_path(db_path);
     conary_core::generation::mount::update_current_symlink(runtime_root.root(), gen_num)
         .map_err(|e| anyhow::anyhow!("Failed to update current symlink: {e}"))?;
+    Ok(())
+}
 
-    info!("Generation {gen_num} built and selected for next boot");
-    Ok(gen_num)
+pub(crate) fn mark_generation_state_active(conn: &Connection, gen_num: i64) -> anyhow::Result<()> {
+    let state = SystemState::find_by_number(conn, gen_num)
+        .map_err(|e| anyhow::anyhow!("Failed to load system state {gen_num}: {e}"))?
+        .ok_or_else(|| {
+            anyhow::anyhow!("System state {gen_num} not found after generation build")
+        })?;
+    state
+        .set_active(conn)
+        .map_err(|e| anyhow::anyhow!("Failed to mark system state {gen_num} active: {e}"))
+}
+
+pub fn rebuild_and_mount(
+    conn: &Connection,
+    db_path: &str,
+    summary: &str,
+    prev_etc_snapshot: Option<HashMap<String, String>>,
+) -> anyhow::Result<i64> {
+    let built = build_generation_for_publication(conn, db_path, summary, prev_etc_snapshot)?;
+    publish_generation_link(db_path, built.generation_number)?;
+    mark_generation_state_active(conn, built.generation_number)?;
+
+    info!(
+        "Generation {} built and selected for next boot",
+        built.generation_number
+    );
+    Ok(built.generation_number)
 }
 
 fn forced_generation_rebuild_failure() -> Option<anyhow::Error> {
