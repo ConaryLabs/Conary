@@ -105,33 +105,13 @@ impl GenerationMetadata {
         gen_dir: &Path,
         signing_key_path: Option<&Path>,
     ) -> Result<()> {
-        use std::io::Write;
-
         let path = gen_dir.join(GENERATION_METADATA_FILE);
-        let tmp_path = gen_dir.join(".metadata.json.tmp");
-        let json = serde_json::to_string_pretty(self)?;
-
-        // Write to temp file, fsync, then atomically rename.
-        let mut file = std::fs::File::create(&tmp_path)?;
-        file.write_all(json.as_bytes())?;
-        file.sync_all()?;
-        drop(file);
-
-        std::fs::rename(&tmp_path, &path)?;
+        crate::filesystem::durable::write_json_atomic(&path, self)?;
 
         let signature_path = gen_dir.join(GENERATION_METADATA_SIGNATURE_FILE);
         match signing_key_path {
             Some(key_path) => write_generation_metadata_signature(self, key_path, &signature_path)?,
-            None => {
-                if signature_path.exists() {
-                    std::fs::remove_file(&signature_path)?;
-                }
-            }
-        }
-
-        // fsync the parent directory to persist the rename.
-        if let Ok(dir) = std::fs::File::open(gen_dir) {
-            let _ = dir.sync_all();
+            None => remove_generation_metadata_signature(&signature_path)?,
         }
 
         Ok(())
@@ -229,8 +209,6 @@ fn write_generation_metadata_signature(
     signing_key_path: &Path,
     signature_path: &Path,
 ) -> Result<()> {
-    use std::io::Write;
-
     let keypair = crate::ccs::signing::SigningKeyPair::load_from_file(signing_key_path)?;
     let canonical = canonical_metadata_bytes(metadata)?;
     let signature = keypair.signing_key().sign(&canonical);
@@ -240,14 +218,15 @@ fn write_generation_metadata_signature(
         key_id: keypair.key_id().map(ToOwned::to_owned),
     };
 
-    let tmp_path = signature_path.with_extension("sig.tmp");
-    let json = serde_json::to_string_pretty(&signature_doc)?;
-    let mut file = std::fs::File::create(&tmp_path)?;
-    file.write_all(json.as_bytes())?;
-    file.sync_all()?;
-    drop(file);
-    std::fs::rename(&tmp_path, signature_path)?;
-    Ok(())
+    crate::filesystem::durable::write_json_atomic(signature_path, &signature_doc)
+}
+
+fn remove_generation_metadata_signature(signature_path: &Path) -> Result<()> {
+    match crate::filesystem::durable::remove_file_and_sync_parent(signature_path) {
+        Ok(()) => Ok(()),
+        Err(crate::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 fn verify_generation_metadata_signature(
@@ -318,33 +297,17 @@ pub fn is_generation_pending(gen_dir: &Path) -> bool {
 
 /// Mark a generation directory as pending using a durable temp-file + rename sequence.
 pub fn mark_generation_pending(gen_dir: &Path) -> Result<()> {
-    use std::io::Write;
-
     let path = generation_pending_marker_path(gen_dir);
-    let tmp_path = gen_dir.join(".pending.tmp");
-    let mut file = std::fs::File::create(&tmp_path)?;
-    file.write_all(b"pending\n")?;
-    file.sync_all()?;
-    drop(file);
-
-    std::fs::rename(&tmp_path, &path)?;
-    sync_generation_dir(gen_dir);
-    Ok(())
+    crate::filesystem::durable::write_file_atomic(&path, b"pending\n")
 }
 
 /// Remove the pending marker after a generation fully commits.
 pub fn clear_generation_pending(gen_dir: &Path) -> Result<()> {
     let path = generation_pending_marker_path(gen_dir);
-    if path.exists() {
-        std::fs::remove_file(&path)?;
-        sync_generation_dir(gen_dir);
-    }
-    Ok(())
-}
-
-fn sync_generation_dir(gen_dir: &Path) {
-    if let Ok(dir) = std::fs::File::open(gen_dir) {
-        let _ = dir.sync_all();
+    match crate::filesystem::durable::remove_file_and_sync_parent(&path) {
+        Ok(()) => Ok(()),
+        Err(crate::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
     }
 }
 
@@ -484,6 +447,28 @@ mod tests {
 
         let loaded = GenerationMetadata::read_from_with_key_paths(tmp.path(), None, None).unwrap();
         assert_eq!(loaded.erofs_verity_digest, None);
+    }
+
+    #[test]
+    fn generation_metadata_write_leaves_no_tmp_file() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let metadata = GenerationMetadata {
+            generation: 1,
+            format: GENERATION_FORMAT.to_string(),
+            erofs_size: Some(1),
+            cas_objects_referenced: Some(0),
+            fsverity_enabled: false,
+            erofs_verity_digest: None,
+            artifact_manifest_sha256: None,
+            created_at: "2026-05-26T00:00:00Z".to_string(),
+            package_count: 0,
+            kernel_version: None,
+            summary: "fixture".to_string(),
+        };
+
+        metadata.write_to(temp.path()).unwrap();
+
+        assert!(!temp.path().join(".conary-gen.json.tmp").exists());
     }
 
     #[test]
