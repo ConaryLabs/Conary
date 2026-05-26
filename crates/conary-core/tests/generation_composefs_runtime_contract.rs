@@ -156,11 +156,11 @@ fn recursive_ccs_dependency_installs_defer_generation_publication_until_root_pac
     let deferred_branch = transaction_body
         .find("if ctx.defer_generation")
         .expect("deferred CCS dependencies must skip generation rebuild");
-    let rebuild_generation = transaction_body
-        .find("composefs_ops::rebuild_and_mount")
+    let publish_generation = transaction_body
+        .find("generation::publication::publish_current_db_state")
         .expect("root installs must still publish a composefs generation");
     assert!(
-        deferred_branch < rebuild_generation,
+        deferred_branch < publish_generation,
         "deferred dependency commits must return before rebuilding and selecting a generation"
     );
 }
