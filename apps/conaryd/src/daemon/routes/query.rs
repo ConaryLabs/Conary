@@ -177,7 +177,16 @@ async fn rdepends_handler(
 }
 
 async fn history_handler(State(state): State<SharedState>) -> ApiResult<Json<Vec<HistoryEntry>>> {
-    let changesets = run_db_query(&state, Changeset::list_all).await?;
-    let history: Vec<HistoryEntry> = changesets.iter().map(HistoryEntry::from).collect();
+    let (changesets, publications) = run_db_query(&state, |conn| {
+        Ok((
+            Changeset::list_all(conn)?,
+            conary_core::db::models::GenerationPublication::pending_recoverable(conn)?,
+        ))
+    })
+    .await?;
+    let history: Vec<HistoryEntry> = changesets
+        .iter()
+        .map(|changeset| HistoryEntry::from_changeset_with_publication(changeset, &publications))
+        .collect();
     Ok(Json(history))
 }
