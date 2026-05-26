@@ -23,7 +23,7 @@ use axum::{
     },
     routing::{delete, get, post},
 };
-use conary_core::db::models::{Changeset, DependencyEntry, Trove};
+use conary_core::db::models::{Changeset, DependencyEntry, GenerationPublication, Trove};
 use futures::stream::{self, Stream};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -432,6 +432,7 @@ pub struct HistoryEntry {
     pub status: String,
     pub created_at: Option<String>,
     pub applied_at: Option<String>,
+    pub publication_status: Option<String>,
 }
 
 impl From<&Changeset> for HistoryEntry {
@@ -442,8 +443,31 @@ impl From<&Changeset> for HistoryEntry {
             status: cs.status.as_str().to_string(),
             created_at: cs.created_at.clone(),
             applied_at: cs.applied_at.clone(),
+            publication_status: None,
         }
     }
+}
+
+impl HistoryEntry {
+    pub(crate) fn from_changeset_with_publication(
+        cs: &Changeset,
+        publications: &[GenerationPublication],
+    ) -> Self {
+        let mut entry = Self::from(cs);
+        entry.publication_status = publication_status_for_changeset(publications, cs.id);
+        entry
+    }
+}
+
+fn publication_status_for_changeset(
+    publications: &[GenerationPublication],
+    changeset_id: Option<i64>,
+) -> Option<String> {
+    let changeset_id = changeset_id?;
+    publications
+        .iter()
+        .find(|publication| publication.trigger_changeset_id == Some(changeset_id))
+        .map(|publication| publication.status.as_str().to_string())
 }
 
 /// Search query parameters
@@ -743,6 +767,48 @@ mod tests {
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("0.2.0"));
         assert!(!json.contains("schema_version"));
+    }
+
+    #[test]
+    fn history_publication_status_matches_changeset_debt() {
+        let publications = vec![conary_core::db::models::GenerationPublication {
+            id: Some(1),
+            trigger_changeset_id: Some(42),
+            published_through_changeset_id: None,
+            tx_uuid: None,
+            db_path: "/tmp/conary.db".to_string(),
+            runtime_root: "/tmp/conary".to_string(),
+            phase: conary_core::db::models::GenerationPublicationPhase::PendingBuild,
+            status: conary_core::db::models::GenerationPublicationStatus::Failed,
+            state_number: None,
+            generation_number: None,
+            summary: "fixture".to_string(),
+            last_error: Some("forced".to_string()),
+            retry_count: 1,
+            recoverable: true,
+            created_at: None,
+            updated_at: None,
+            completed_at: None,
+        }];
+        assert_eq!(
+            publication_status_for_changeset(&publications, Some(42)),
+            Some("failed".to_string())
+        );
+        assert_eq!(
+            publication_status_for_changeset(&publications, Some(7)),
+            None
+        );
+    }
+
+    #[test]
+    fn daemon_job_transaction_summary_does_not_claim_publication_status() {
+        let job = DaemonJob::new(
+            crate::daemon::JobKind::Install,
+            serde_json::json!({"packages": ["fixture"]}),
+        );
+        let json = serde_json::to_value(TransactionSummary::from(&job)).unwrap();
+        assert!(json.get("publication_status").is_none());
+        assert!(json.get("pending_publications").is_none());
     }
 
     #[test]

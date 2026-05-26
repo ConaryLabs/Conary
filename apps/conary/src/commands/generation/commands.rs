@@ -200,6 +200,8 @@ fn cmd_generation_gc_locked(
     let current = current_generation(runtime_root.root())?;
     let conn = crate::commands::open_db(db_path)?;
     let gc_roots = load_gc_roots(&conn)?;
+    let publication_roots =
+        conary_core::db::models::GenerationPublication::protected_generation_numbers(&conn)?;
     let dir = runtime_root.generations_dir();
 
     if !dir.exists() {
@@ -242,6 +244,10 @@ fn cmd_generation_gc_locked(
         keep_set.insert(*root);
     }
 
+    for root in &publication_roots {
+        keep_set.insert(*root);
+    }
+
     // Keep the last N generations (by highest number)
     let start = all_numbers.len().saturating_sub(keep);
     for &num in &all_numbers[start..] {
@@ -254,7 +260,12 @@ fn cmd_generation_gc_locked(
         .copied()
         .collect();
 
-    if to_remove.is_empty() {
+    let pending_to_remove = pending_numbers
+        .iter()
+        .filter(|n| !keep_set.contains(n))
+        .count();
+
+    if to_remove.is_empty() && pending_to_remove == 0 {
         println!("Nothing to collect. All generations are kept.");
         return Ok(());
     }
@@ -263,6 +274,10 @@ fn cmd_generation_gc_locked(
     let mut freed_bytes = 0u64;
 
     for gen_number in &pending_numbers {
+        if keep_set.contains(gen_number) {
+            info!("Keeping pending generation {gen_number} because publication debt references it");
+            continue;
+        }
         let gen_dir = runtime_root.generation_path(*gen_number);
         let size = dir_size_bytes(&gen_dir);
         match std::fs::remove_dir_all(&gen_dir) {
@@ -873,8 +888,8 @@ pub fn cmd_generation_recover(db_path: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        booted_generation_from_cmdline, classify_side_effect_reasons, etc_state_paths,
-        load_gc_roots, parse_gc_root_setting, remove_generation_etc_state,
+        booted_generation_from_cmdline, classify_side_effect_reasons, cmd_generation_gc_locked,
+        etc_state_paths, load_gc_roots, parse_gc_root_setting, remove_generation_etc_state,
         removed_members_for_side_effect_warning, runtime_root_for_generation_db_path,
     };
     use conary_core::db::models::settings;
@@ -981,6 +996,46 @@ mod tests {
 
         settings::set(&conn, "generation.gc_roots", "[7,5]").unwrap();
         assert_eq!(load_gc_roots(&conn).unwrap(), vec![5, 7]);
+    }
+
+    #[test]
+    fn generation_gc_keeps_generation_referenced_by_publication_debt() {
+        let runtime = TempDir::new().unwrap();
+        let db_path = runtime.path().join("conary.db");
+        conary_core::db::init(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let runtime_root =
+            conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(db_path.clone());
+
+        std::fs::create_dir_all(runtime_root.generations_dir()).unwrap();
+        let protected = runtime_root.generation_path(1);
+        let removable = runtime_root.generation_path(2);
+        std::fs::create_dir_all(&protected).unwrap();
+        std::fs::create_dir_all(&removable).unwrap();
+        conary_core::generation::metadata::mark_generation_pending(&protected).unwrap();
+
+        let debt = conary_core::db::models::GenerationPublication::create_pending(
+            &conn,
+            None,
+            None,
+            db_path.to_str().unwrap(),
+            runtime_root.root().to_str().unwrap(),
+            "fixture",
+        )
+        .unwrap();
+        debt.set_phase(
+            &conn,
+            conary_core::db::models::GenerationPublicationPhase::ArtifactReady,
+            conary_core::db::models::GenerationPublicationStatus::Failed,
+            Some(1),
+            Some(1),
+        )
+        .unwrap();
+
+        cmd_generation_gc_locked(0, db_path.to_str().unwrap(), &runtime_root).unwrap();
+
+        assert!(protected.exists());
+        assert!(!removable.exists());
     }
 
     #[test]
