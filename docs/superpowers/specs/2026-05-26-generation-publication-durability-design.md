@@ -146,8 +146,8 @@ Proposed columns:
 | `runtime_root` | Runtime root whose `/conary/current` is being published. |
 | `phase` | Typed publication phase as a snake-case string with a CHECK constraint if practical. |
 | `status` | Typed status: `pending`, `running`, `failed`, `complete`, or `abandoned`. |
-| `state_number` | System state number once the snapshot exists. |
-| `generation_number` | Generation number once the artifact exists. |
+| `state_number` | System state number once the snapshot exists. In Plan B this must equal `generation_number`; keep it only as an explicit cross-check against current builder behavior. |
+| `generation_number` | Generation number once the artifact exists. Current Conary generation builds use the generation number as the system state number. |
 | `summary` | Human-readable publication summary. |
 | `last_error` | Last failure message, if any. |
 | `retry_count` | Number of retry attempts. |
@@ -163,6 +163,13 @@ Constraints:
 - successful publication records the high-water changeset ID represented by the
   selected generation and marks all pending recoverable rows at or below that
   high-water mark complete;
+- the high-water changeset ID must count only applied DB state, specifically
+  `applied` and `post_hooks_failed` changesets; pending or rolled-back
+  changesets are not represented by the published generation and must not be
+  swept complete;
+- `state_number` and `generation_number` must be equal while the builder uses
+  generation numbers as state numbers. A future design that allows divergence
+  must rework DB-active lookups before relaxing that invariant;
 - `trigger_changeset_id` should use `ON DELETE SET NULL` unless the
   implementation proves changesets are never deleted. Publication debt should
   not disappear silently merely because historical changeset rows are pruned;
@@ -308,9 +315,13 @@ Required behavior:
 
 - If no pending/failed recoverable publication debts exist, current recovery
   may continue with selected-generation validation.
-- In non-boot recovery contexts, such as pre-command transaction recovery and
-  manual `system generation publish`, recoverable debt should be completed or
-  fail closed with a diagnostic.
+- In pre-command transaction recovery, recoverable debt must stay visible but
+  must not block a later package mutation from publishing current DB state and
+  sweeping older debt complete. If `/conary/current` already points at the debt
+  generation, recovery may catch the DB active marker up; otherwise it should
+  warn and continue with the valid selected generation.
+- Manual `system generation publish` is the fail-closed remediation path: it
+  must complete recoverable debt or return a clear diagnostic.
 - In boot-selection recovery contexts, if publication cannot be completed with
   the available runtime facilities, recovery should prefer booting the last
   complete published generation and leave the debt visible for later retry
@@ -319,6 +330,10 @@ Required behavior:
 - If multiple pending debts exist, recovery/publish should perform one
   publication of current DB state and complete all covered debts rather than
   rebuilding once per changeset.
+- If a crash occurs after `/conary/current` is durably renamed but before the
+  row advances to `CurrentPublished`, recovery may complete an `ArtifactReady`
+  debt when its `generation_number` matches the selected current generation and
+  the artifact validates.
 - Unknown phases or statuses must fail closed.
 - Recovery must not mark a system state active unless the selected generation
   artifact validates and `/conary/current` is durably selected.
