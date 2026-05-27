@@ -1,8 +1,9 @@
 // conary-core/src/ccs/legacy_scriptlets.rs
 //! Passive Legacy Scriptlet Semantics Bundle metadata for CCS packages.
 
+use anyhow::{anyhow, bail};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 pub const LEGACY_SCRIPTLET_SCHEMA_V1: &str = "conary.legacy-scriptlets.v1";
@@ -464,6 +465,209 @@ pub struct ResidualReplayMetadata {
     pub extra: BTreeMap<String, toml::Value>,
 }
 
+impl LegacyScriptletBundle {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.schema != LEGACY_SCRIPTLET_SCHEMA_V1 {
+            bail!(
+                "legacy scriptlet bundle schema must be {LEGACY_SCRIPTLET_SCHEMA_V1}, got {}",
+                self.schema
+            );
+        }
+        if self.schema_revision == 0 {
+            bail!("legacy scriptlet bundle schema_revision must be greater than zero");
+        }
+
+        required_string("source_family", &self.source_family)?;
+        required_string("source_package", &self.source_package)?;
+        required_string("source_version", &self.source_version)?;
+        required_string("conversion_tool", &self.conversion_tool)?;
+        required_string("conversion_tool_version", &self.conversion_tool_version)?;
+        required_string("conversion_policy", &self.conversion_policy)?;
+
+        validate_optional_sha256("source_checksum", self.source_checksum.as_deref())?;
+        validate_optional_sha256(
+            "adapter_registry_digest",
+            self.adapter_registry_digest.as_deref(),
+        )?;
+        validate_optional_sha256("target_policy_digest", self.target_policy_digest.as_deref())?;
+        validate_optional_sha256("evidence_digest", self.evidence_digest.as_deref())?;
+
+        for target in &self.allowed_targets {
+            validate_allowed_target(target)?;
+        }
+
+        let mut seen_ids = BTreeSet::new();
+        let mut expected_counts = DecisionCounts::default();
+        for entry in &self.entries {
+            if !seen_ids.insert(entry.id.as_str()) {
+                bail!("duplicate entry id '{}'", entry.id);
+            }
+            expected_counts.record(&entry.decision);
+            entry.validate()?;
+        }
+
+        if self.decision_counts != expected_counts {
+            bail!(
+                "decision counts do not match entries: expected {:?}, got {:?}",
+                expected_counts,
+                self.decision_counts
+            );
+        }
+        if self.decision_counts.total() != self.entries.len() as u32 {
+            bail!(
+                "decision counts total {} does not match entry count {}",
+                self.decision_counts.total(),
+                self.entries.len()
+            );
+        }
+
+        Ok(())
+    }
+}
+
+impl LegacyScriptletEntry {
+    fn validate(&self) -> anyhow::Result<()> {
+        required_string("entry.id", &self.id)?;
+        required_string("entry.native_slot", &self.native_slot)?;
+        required_string("entry.interpreter", &self.interpreter)?;
+        required_string("entry.body", &self.body)?;
+        required_string("entry.reason_code", &self.reason_code)?;
+        required_string("entry.transaction_order.position", &self.transaction_order.position)?;
+
+        if self.lifecycle_paths.is_empty() {
+            bail!("entry '{}' lifecycle_paths must not be empty", self.id);
+        }
+        if self.timeout_ms == 0 {
+            bail!("entry '{}' timeout_ms must be greater than zero", self.id);
+        }
+
+        validate_sha256("entry.body_sha256", &self.body_sha256)?;
+        validate_optional_sha256("entry.evidence_digest", self.evidence_digest.as_deref())?;
+
+        let body_bytes = self.body_bytes()?;
+        let actual = crate::hash::sha256_prefixed(&body_bytes);
+        if !actual.eq_ignore_ascii_case(&self.body_sha256) {
+            bail!(
+                "entry '{}' body_sha256 mismatch: expected {}, got {}",
+                self.id,
+                self.body_sha256,
+                actual
+            );
+        }
+
+        for effect in &self.effects {
+            effect.validate(&self.id)?;
+        }
+        if let Some(metadata) = &self.arch_install {
+            metadata.validate(&self.id)?;
+        }
+        if let Some(metadata) = &self.residual_replay {
+            metadata.validate(&self.id)?;
+        }
+
+        Ok(())
+    }
+
+    fn body_bytes(&self) -> anyhow::Result<Vec<u8>> {
+        match self.body_encoding.as_deref().unwrap_or("utf-8") {
+            "utf-8" => Ok(self.body.as_bytes().to_vec()),
+            "base64" => {
+                use base64::Engine as _;
+                base64::engine::general_purpose::STANDARD
+                    .decode(&self.body)
+                    .map_err(|error| anyhow!("entry '{}' body base64 decode failed: {error}", self.id))
+            }
+            other => bail!(
+                "entry '{}' body_encoding '{}' is unsupported",
+                self.id,
+                other
+            ),
+        }
+    }
+}
+
+impl ScriptletEffect {
+    fn validate(&self, entry_id: &str) -> anyhow::Result<()> {
+        required_string("effect.kind", &self.kind)?;
+        validate_optional_sha256("effect.adapter_digest", self.adapter_digest.as_deref())
+            .map_err(|error| anyhow!("entry '{entry_id}' {error}"))?;
+        Ok(())
+    }
+}
+
+impl DecisionCounts {
+    fn record(&mut self, decision: &ScriptletDecision) {
+        match decision {
+            ScriptletDecision::Replaced => self.replaced += 1,
+            ScriptletDecision::Legacy => self.legacy += 1,
+            ScriptletDecision::Blocked => self.blocked += 1,
+            ScriptletDecision::Review => self.review += 1,
+            ScriptletDecision::Unknown(value) => {
+                *self.extra.entry(value.clone()).or_insert(0) += 1;
+            }
+        }
+    }
+}
+
+impl ArchInstallMetadata {
+    fn validate(&self, entry_id: &str) -> anyhow::Result<()> {
+        validate_optional_sha256("arch_install.install_digest", self.install_digest.as_deref())
+            .map_err(|error| anyhow!("entry '{entry_id}' {error}"))?;
+        validate_optional_sha256(
+            "arch_install.wrapper_source_digest",
+            self.wrapper_source_digest.as_deref(),
+        )
+        .map_err(|error| anyhow!("entry '{entry_id}' {error}"))?;
+        Ok(())
+    }
+}
+
+impl ResidualReplayMetadata {
+    fn validate(&self, entry_id: &str) -> anyhow::Result<()> {
+        validate_optional_sha256(
+            "residual_replay.residual_body_digest",
+            self.residual_body_digest.as_deref(),
+        )
+        .map_err(|error| anyhow!("entry '{entry_id}' {error}"))?;
+        Ok(())
+    }
+}
+
+fn required_string(label: &str, value: &str) -> anyhow::Result<()> {
+    if value.trim().is_empty() {
+        bail!("{label} must not be empty");
+    }
+    Ok(())
+}
+
+fn validate_optional_sha256(label: &str, value: Option<&str>) -> anyhow::Result<()> {
+    if let Some(value) = value {
+        validate_sha256(label, value)?;
+    }
+    Ok(())
+}
+
+fn validate_sha256(label: &str, value: &str) -> anyhow::Result<()> {
+    let Some((algorithm, digest)) = value.split_once(':') else {
+        bail!("{label} must use sha256:<64 hex>");
+    };
+    if algorithm != "sha256" {
+        bail!("{label} must use sha256:<64 hex>");
+    }
+    if digest.len() != 64 || !digest.chars().all(|character| character.is_ascii_hexdigit()) {
+        bail!("{label} must use sha256:<64 hex>");
+    }
+    Ok(())
+}
+
+fn validate_allowed_target(value: &str) -> anyhow::Result<()> {
+    let parts: Vec<&str> = value.split('/').collect();
+    if parts.len() != 4 || parts.iter().any(|part| part.trim().is_empty()) {
+        bail!("allowed target '{value}' must use <format>/<distro>/<release>/<arch>");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -800,5 +1004,77 @@ review = 0
 
         assert!(decoded.entries.is_empty());
         assert_eq!(decoded.scriptlet_fidelity, ScriptletFidelity::NativeFree);
+    }
+
+    #[test]
+    fn legacy_scriptlet_bundle_rejects_duplicate_entry_ids() {
+        let mut bundle = sample_bundle();
+        bundle.entries[1].id = bundle.entries[0].id.clone();
+
+        let error = bundle.validate().expect_err("duplicate IDs must fail");
+
+        assert!(error.to_string().contains("duplicate entry id"));
+    }
+
+    #[test]
+    fn legacy_scriptlet_bundle_rejects_mismatched_decision_counts() {
+        let mut bundle = sample_bundle();
+        bundle.decision_counts.legacy = 0;
+
+        let error = bundle.validate().expect_err("mismatched counts must fail");
+
+        assert!(error.to_string().contains("decision counts"));
+    }
+
+    #[test]
+    fn legacy_scriptlet_bundle_rejects_zero_timeout() {
+        let mut bundle = sample_bundle();
+        bundle.entries[0].timeout_ms = 0;
+
+        let error = bundle.validate().expect_err("zero timeout must fail");
+
+        assert!(error.to_string().contains("timeout_ms"));
+    }
+
+    #[test]
+    fn legacy_scriptlet_bundle_rejects_malformed_sha256_digest() {
+        let mut bundle = sample_bundle();
+        bundle.entries[0].body_sha256 = "sha256:not-hex".to_string();
+
+        let error = bundle.validate().expect_err("malformed digest must fail");
+
+        assert!(error.to_string().contains("body_sha256"));
+    }
+
+    #[test]
+    fn legacy_scriptlet_bundle_rejects_tampered_body_hash() {
+        let mut bundle = sample_bundle();
+        bundle.entries[0].body.push_str("echo tampered\n");
+
+        let error = bundle.validate().expect_err("tampered body must fail");
+
+        assert!(error.to_string().contains("body_sha256 mismatch"));
+    }
+
+    #[test]
+    fn legacy_scriptlet_bundle_validates_base64_body_hash() {
+        let mut bundle = sample_bundle();
+        let body_bytes = b"\xff\x00native bytes\n";
+        use base64::Engine as _;
+        bundle.entries[0].body = base64::engine::general_purpose::STANDARD.encode(body_bytes);
+        bundle.entries[0].body_encoding = Some("base64".to_string());
+        bundle.entries[0].body_sha256 = crate::hash::sha256_prefixed(body_bytes);
+
+        bundle.validate().expect("base64 body hash validates");
+    }
+
+    #[test]
+    fn legacy_scriptlet_bundle_rejects_malformed_allowed_target() {
+        let mut bundle = sample_bundle();
+        bundle.allowed_targets = vec!["rpm/fedora/44".to_string()];
+
+        let error = bundle.validate().expect_err("malformed target must fail");
+
+        assert!(error.to_string().contains("allowed target"));
     }
 }
