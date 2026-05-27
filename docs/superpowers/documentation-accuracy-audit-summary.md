@@ -85,12 +85,12 @@ and non-generation recovery, Plan B distinguishes sandbox setup failures from
 script exit failures, and Plan A's first-run path is bounded by timing/disk
 evidence.
 
-The follow-up reconciliation completed the preview truth/onboarding,
-release-evidence/supportability, and generation-state-resilience plan records
-and moved them to archive paths. The active `plans/` root intentionally keeps
-only the scriptlet trust-assurance plan, because that remains the release
-hardening blocker before widening beyond careful VM or non-critical-machine
-testers.
+The follow-up reconciliation completed preview truth/onboarding,
+scriptlet trust assurance, release-evidence/supportability, and
+generation-state-resilience, then moved the four plan records plus the umbrella
+design to archive paths. The active `plans/` and `specs/` roots are clear
+again; the release-hardening queue now survives as active product behavior,
+tests, and user/operator docs rather than as open planning records.
 
 Audited every tracked documentation-like file returned by
 `bash scripts/docs-audit-inventory.sh`: tracked files spanning root docs,

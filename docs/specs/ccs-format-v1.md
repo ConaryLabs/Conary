@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-04-09
-revision: 2
-summary: Add YAML frontmatter; spec verified accurate against current ccs manifest code
+last_updated: 2026-05-26
+revision: 3
+summary: Document scriptlet-scoped host integration capability declarations
 ---
 
 # CCS Package Format Specification v1
@@ -156,6 +156,11 @@ value = "4096"
 name = "editor"
 path = "/usr/bin/myapp-edit"
 priority = 50
+
+# Scriptlet-scoped host integration declarations
+[[scriptlets.capabilities]]
+name = "systemd-service-registration"
+paths = ["/etc/systemd/system"]
 
 # Configuration files (noreplace behavior)
 [config]
@@ -380,6 +385,29 @@ message = "Split for modularity"
 | name | string | required | Alternative group name |
 | path | string | required | Path to this package's implementation |
 | priority | int | 50 | Priority (higher wins) |
+
+#### [scriptlets] Section
+
+Scriptlet-scoped capabilities declare narrow host-integration needs for
+imperative scriptlets. They are not a request to run the whole script
+unsandboxed. In the current preview, declarations parse and validate, but
+install fails closed until enforcement exists unless the operator explicitly
+chooses direct legacy execution with `--sandbox=never`.
+
+##### scriptlets.capabilities
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| name | string | yes | Supported scriptlet capability name |
+| paths | string[] | yes | Exact supported integration paths |
+
+Supported values:
+
+| Capability | Allowed paths |
+|------------|---------------|
+| `systemd-service-registration` | `/etc/systemd/system` |
+| `tmpfiles-registration` | `/usr/lib/tmpfiles.d`, `/etc/tmpfiles.d` |
+| `dbus-service-registration` | `/usr/share/dbus-1/system-services`, `/etc/dbus-1/system.d` |
 
 ---
 

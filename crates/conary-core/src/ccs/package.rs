@@ -48,15 +48,15 @@ pub struct CcsPackage {
 /// Note: The binary manifest format does not carry all CcsManifest fields.
 /// The following fields are unavailable from CBOR and will use defaults:
 /// `homepage`, `repository`, `authors`, `build.environment`, `build.commands`,
-/// `suggests`, `components`, `config`, `legacy`, `policy`, `provenance`,
-/// and `redirects`.
+/// `suggests`, `components`, `scriptlets`, `config`, `legacy`, `policy`,
+/// `provenance`, and `redirects`.
 pub fn convert_binary_to_ccs_manifest(
     bin: &crate::ccs::binary_manifest::BinaryManifest,
 ) -> CcsManifest {
     use crate::ccs::manifest::{
         AlternativeHook, BuildInfo, Capability, Components, Config, DirectoryHook, GroupHook,
-        Hooks, Package, PackageDep, Platform, Provides, Requires, ScriptHook, Suggests, SysctlHook,
-        SystemdHook, TmpfilesHook, UserHook,
+        Hooks, Package, PackageDep, Platform, Provides, Requires, ScriptHook,
+        ScriptletDeclarations, Suggests, SysctlHook, SystemdHook, TmpfilesHook, UserHook,
     };
 
     let platform = bin.platform.as_ref().map(|p| Platform {
@@ -208,6 +208,7 @@ pub fn convert_binary_to_ccs_manifest(
         suggests: Suggests::default(),
         components: Components::default(),
         hooks,
+        scriptlets: ScriptletDeclarations::default(),
         config: Config::default(),
         build,
         legacy: None,

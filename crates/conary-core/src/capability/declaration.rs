@@ -751,6 +751,15 @@ mod tests {
     }
 
     #[test]
+    fn scriptlet_profile_does_not_allow_chroot() {
+        let profile = SyscallProfile::parse("scriptlet").unwrap();
+        assert!(
+            !profile.allowed_syscalls().contains(&"chroot"),
+            "protected scriptlets must not regain the classic chroot escape primitive"
+        );
+    }
+
+    #[test]
     fn test_scriptlet_profile_toml_parse_and_validate() {
         let toml = r#"
             version = 1

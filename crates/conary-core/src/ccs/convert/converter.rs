@@ -409,6 +409,7 @@ impl LegacyConverter {
             suggests: Suggests::default(),
             components: Components::default(),
             hooks: hooks.clone(),
+            scriptlets: Default::default(),
             config: Config {
                 files: config_files,
                 noreplace: true,

@@ -27,7 +27,7 @@ conary --allow-live-system-mutation system generation switch 2
 conary --allow-live-system-mutation system generation rollback
 ```
 
-**Atomic package state and generation selection.** Install, remove, and update operations commit package DB/file state as changesets, and generation rollback switches complete system states. Legacy RPM/DEB/Arch post-scriptlets can still fail after package files are installed or removed. Until the scriptlet trust plan lands structured degradation metadata, treat those as warning-only post-scriptlet side effects rather than part of the same rollback boundary.
+**Atomic package state and generation selection.** Install, remove, and update operations commit package DB/file state as changesets, and generation rollback switches complete system states. Legacy RPM/DEB/Arch post-scriptlets can still fail after package files are installed or removed only when protected setup succeeded and the script process itself exited nonzero; Conary records those cases as `scriptlet_warning` metadata and marks them in history rather than treating scriptlet side effects as part of the same rollback boundary.
 
 ```bash
 conary --allow-live-system-mutation install nginx postgresql redis
@@ -437,7 +437,7 @@ conary query label delegate local@devel:main fedora@f44:stable
 <details>
 <summary><strong>Sandboxed Scriptlets</strong></summary>
 
-Package install scripts run in namespace isolation with resource limits. Dangerous scripts are detected automatically.
+Package install scripts run in namespace isolation with resource limits by default. Protected live-root mode preflights namespace/enforcement setup before mutation and records both requested and effective sandbox mode for any warning-only post-scriptlet degradation.
 
 ```bash
 conary --allow-live-system-mutation install pkg --sandbox=always   # Force sandboxing
@@ -471,6 +471,12 @@ CCS packages declaring capabilities are evaluated against a three-tier policy:
 conary --allow-live-system-mutation ccs install package.ccs --allow-capabilities    # Approve prompted caps
 conary --allow-live-system-mutation ccs install package.ccs --capability-policy /path/to/policy.toml
 ```
+
+Scriptlet-scoped host integration declarations use `[[scriptlets.capabilities]]`
+for narrow cases such as systemd service, tmpfiles, or D-Bus registration.
+Those declarations parse today, but install fails closed until enforcement
+exists unless the operator explicitly chooses direct legacy execution with
+`--sandbox=never`.
 
 Custom policy file (`/etc/conary/capability-policy.toml`):
 ```toml

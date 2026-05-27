@@ -1803,6 +1803,7 @@ mod tests {
             suggests: Default::default(),
             components: Default::default(),
             hooks: Hooks::default(),
+            scriptlets: Default::default(),
             config: Default::default(),
             build: None,
             legacy: None,

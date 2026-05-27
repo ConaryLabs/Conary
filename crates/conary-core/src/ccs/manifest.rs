@@ -51,6 +51,10 @@ pub struct CcsManifest {
     #[serde(default)]
     pub hooks: Hooks,
 
+    /// Scriptlet execution declarations and host-integration capabilities
+    #[serde(default)]
+    pub scriptlets: ScriptletDeclarations,
+
     #[serde(default)]
     pub config: Config,
 
@@ -199,6 +203,8 @@ impl CcsManifest {
             }
         }
 
+        self.scriptlets.validate()?;
+
         Ok(())
     }
 
@@ -220,6 +226,7 @@ impl CcsManifest {
             suggests: Suggests::default(),
             components: Components::default(),
             hooks: Hooks::default(),
+            scriptlets: ScriptletDeclarations::default(),
             config: Config::default(),
             build: None,
             legacy: None,
@@ -428,6 +435,77 @@ pub struct Hooks {
     /// Pre-remove script hook (runs before files are removed)
     #[serde(default)]
     pub pre_remove: Option<ScriptHook>,
+}
+
+/// Scriptlet-scoped declarations.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ScriptletDeclarations {
+    /// Narrow host-integration capabilities requested by scriptlets.
+    #[serde(default)]
+    pub capabilities: Vec<ScriptletCapabilityDeclaration>,
+}
+
+impl ScriptletDeclarations {
+    /// Whether any scriptlet capability declarations are present.
+    pub fn has_capability_declarations(&self) -> bool {
+        !self.capabilities.is_empty()
+    }
+
+    fn validate(&self) -> Result<(), ManifestError> {
+        for capability in &self.capabilities {
+            capability.validate()?;
+        }
+        Ok(())
+    }
+}
+
+/// A narrow host-integration capability requested by a package scriptlet.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScriptletCapabilityDeclaration {
+    pub name: String,
+    #[serde(default)]
+    pub paths: Vec<String>,
+}
+
+impl ScriptletCapabilityDeclaration {
+    fn validate(&self) -> Result<(), ManifestError> {
+        let Some(allowed_paths) = supported_scriptlet_capability_paths(&self.name) else {
+            return Err(ManifestError::Invalid(format!(
+                "unknown scriptlet capability '{}'; declare a supported capability or run in a VM until enforcement exists",
+                self.name
+            )));
+        };
+
+        for path in &self.paths {
+            if !path.starts_with('/') {
+                return Err(ManifestError::Invalid(format!(
+                    "relative path not allowed in scriptlets.capabilities '{}': {}",
+                    self.name, path
+                )));
+            }
+            if !allowed_paths.contains(&path.as_str()) {
+                return Err(ManifestError::Invalid(format!(
+                    "unsupported path '{}' for scriptlet capability '{}'; supported paths: {}",
+                    path,
+                    self.name,
+                    allowed_paths.join(", ")
+                )));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+fn supported_scriptlet_capability_paths(name: &str) -> Option<&'static [&'static str]> {
+    match name {
+        "systemd-service-registration" => Some(&["/etc/systemd/system"]),
+        "tmpfiles-registration" => Some(&["/usr/lib/tmpfiles.d", "/etc/tmpfiles.d"]),
+        "dbus-service-registration" => {
+            Some(&["/usr/share/dbus-1/system-services", "/etc/dbus-1/system.d"])
+        }
+        _ => None,
+    }
 }
 
 /// Script hook -- an arbitrary shell command run during install/remove
@@ -1143,5 +1221,49 @@ enable = true
 
         let err = CcsManifest::parse(toml).unwrap_err();
         assert!(err.to_string().contains("systemd"));
+    }
+
+    #[test]
+    fn test_manifest_accepts_supported_scriptlet_capabilities() {
+        let toml = r#"
+[package]
+name = "test"
+version = "1.0.0"
+description = "test"
+
+[[scriptlets.capabilities]]
+name = "systemd-service-registration"
+paths = ["/etc/systemd/system"]
+
+[[scriptlets.capabilities]]
+name = "tmpfiles-registration"
+paths = ["/usr/lib/tmpfiles.d", "/etc/tmpfiles.d"]
+"#;
+
+        let manifest = CcsManifest::parse(toml).unwrap();
+        assert_eq!(manifest.scriptlets.capabilities.len(), 2);
+        assert!(manifest.scriptlets.has_capability_declarations());
+    }
+
+    #[test]
+    fn test_manifest_rejects_unknown_scriptlet_capability() {
+        let toml = r#"
+[package]
+name = "test"
+version = "1.0.0"
+description = "test"
+
+[[scriptlets.capabilities]]
+name = "pam-live-edit"
+paths = ["/etc/pam.d"]
+"#;
+
+        let err = CcsManifest::parse(toml).unwrap_err();
+        assert!(
+            err.to_string().contains(
+                "unknown scriptlet capability 'pam-live-edit'; declare a supported capability or run in a VM until enforcement exists"
+            ),
+            "unexpected error: {err}"
+        );
     }
 }
