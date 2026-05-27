@@ -23,6 +23,9 @@ For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 
 - Tighten unsupported-case errors so users know whether to use native PM, adoption refresh, or explicit takeover
 - Keep security-update behavior honest per supported package type and distro
 - Keep common package-manager expectations covered by real CLI and integration tests
+- Treat Remi cold-start conversion latency as a preview UX risk: document it in
+  the quickstart and pre-warm a small tested package set before broader tester
+  outreach.
 
 ### 3. Developer Experience
 
@@ -83,7 +86,9 @@ Umbrella design:
    [plan](docs/superpowers/plans/2026-05-26-preview-truth-and-onboarding.md).
    Fix public truth drift, make the five-minute adoption/unadoption path
    impossible to miss, sharpen the Nix comparison, include the site in truth
-   checks, and either implement or route single-package adoption dry-runs.
+   checks, explain the live-mutation acknowledgement flag, account for Remi
+   cold-start latency, and either implement or route single-package adoption
+   dry-runs.
 2. **Scriptlet trust assurance** -
    [plan](docs/superpowers/plans/2026-05-26-scriptlet-trust-assurance.md).
    Resolve the protected-sandbox `chroot`/root-transition ambiguity, make
@@ -96,13 +101,13 @@ Umbrella design:
    and turn the limited preview into a contributor funnel.
 4. **Generation state resilience** -
    [plan](docs/superpowers/plans/2026-05-26-generation-state-resilience.md).
-   Add generation-bound DB snapshots and a rebuild/recovery path so a damaged
-   live SQLite DB does not blind the manager when generation artifacts and
-   metadata are still intact.
+   Add a forward-compatible generation-state marker before the first tester
+   wave, then add generation-bound DB snapshots and a rebuild/recovery path so
+   a damaged live SQLite DB does not blind the manager when generation
+   artifacts and metadata are still intact.
 
 Strategic follow-up after the preview queue:
 
-- pre-convert and pre-warm core Remi package sets to reduce first-run latency;
 - define a CCS-native corpus strategy with a small signed reference set;
 - add aarch64 generation boot assets before claiming broad developer reach;
 - add openSUSE/Tumbleweed after Fedora/RPM behavior is boringly repeatable;
@@ -116,17 +121,19 @@ Strategic follow-up after the preview queue:
 ## Near-Term Priorities
 
 1. Land the preview truth/onboarding plan before inviting new public testers.
-2. Land the scriptlet trust-assurance plan before widening beyond careful VM or
+2. Add the generation-state forward-compat marker before first-wave tester
+   generations become part of the support story.
+3. Land the scriptlet trust-assurance plan before widening beyond careful VM or
    non-critical-machine testers.
-3. Keep `conary system unadopt` and selected-generation `native-handoff` proof
+4. Keep `conary system unadopt` and selected-generation `native-handoff` proof
    green for Fedora 44, Ubuntu 26.04 LTS, and Arch.
-4. Keep generation export, installed-runtime QEMU validation, and Group P ISO
+5. Keep generation export, installed-runtime QEMU validation, and Group P ISO
    evidence green in rotation while remote KVM validation is paused.
-5. Add release evidence, support-bundle, and contributor-onboarding polish
+6. Add release evidence, support-bundle, and contributor-onboarding polish
    before treating the limited preview as more than a small tester program.
-6. Add generation-state reconstruction before generation switching becomes the
+7. Add full generation-state reconstruction before generation switching becomes the
    headline public ask.
-7. Keep daily-driver UX, shell completions, release polish, and operator
+8. Keep daily-driver UX, shell completions, release polish, and operator
    diagnostics current as preview feedback arrives.
 
 ---

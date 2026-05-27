@@ -17,7 +17,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Paused Forge-backed validation and conaryd staging after discovering the old VPS runner lacked `/dev/kvm`; added a local QEMU release gate script for temporary evidence.
 - Updated cargo dependencies and the release cargo-audit gate to use the latest feasible package versions with a documented advisory waiver.
 - Refreshed site lockfile dependencies to clear high and moderate npm audit findings.
-- Clarified that conaryd package install/remove/update routes return `501 Not Implemented`; daemon package execution remains future work.
+- Clarified that conaryd package install/remove/update routes queue daemon
+  package jobs while preserving the CLI's explicit live-host mutation
+  acknowledgement boundary.
 
 ## [conary-test-v0.8.0] - 2026-04-10
 

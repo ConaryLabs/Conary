@@ -54,6 +54,9 @@ semantics honest.
   effects in history/status.
 - Capability declarations should be narrow and declarative. They should not be
   a synonym for "run the whole script unsandboxed."
+- If capability declarations parse before enforcement exists, install paths
+  must fail closed unless the operator explicitly chooses direct execution with
+  `--sandbox=never`.
 
 ---
 
@@ -82,6 +85,9 @@ protected live-root root transition: pivot_root | chroot | other
 target-root/offline install transition: chroot | other
 scriptlet syscall profile allows chroot: yes | no
 ```
+
+If the profile allows `chroot`, stop and either remove it from protected
+scriptlet execution or update this plan with the exact compatibility reason.
 
 - [ ] **Step 3: Add an assurance note to the security doc**
 
@@ -218,11 +224,17 @@ Add manifest parsing tests where an unknown capability produces a clear error:
 unknown scriptlet capability 'pam-live-edit'; declare a supported capability or run with --sandbox=never explicitly
 ```
 
-- [ ] **Step 3: Do not grant the capability yet unless the enforcement path is ready**
+- [ ] **Step 3: Fail closed until enforcement exists**
 
 It is acceptable for this task to parse and validate declarations while
-leaving enforcement as a follow-up. The docs must say declarations are
-accepted only when enforcement exists.
+leaving enforcement as a follow-up, but install execution must fail closed for
+packages declaring unenforced capabilities unless the operator uses
+`--sandbox=never` explicitly. The error should say:
+
+```text
+scriptlet capability declarations are present but enforcement is not available;
+rerun with --sandbox=never only if you intentionally accept direct host mutation
+```
 
 ### Task 5: Update Security Docs And Public Atomicity Claims
 

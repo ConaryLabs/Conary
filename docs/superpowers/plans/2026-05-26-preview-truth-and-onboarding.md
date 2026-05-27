@@ -4,7 +4,7 @@
 
 **Goal:** Make Conary's public preview story truthful, easy to try, and hard to overread.
 
-**Architecture:** Treat docs truth as part of the product surface. Fix stale claims, wire public docs/site/changelog into truth checks, add a safe five-minute adoption path, and either implement true single-package adoption dry-run or make the unsupported route explicit and tested.
+**Architecture:** Treat docs truth as part of the product surface. Fix stale claims, wire public docs/site/changelog into truth checks, add a safe five-minute adoption path, explain the live-mutation acknowledgement boundary, account for Remi cold-start latency, and either implement true single-package adoption dry-run or make the unsupported route explicit and tested.
 
 **Tech Stack:** Markdown, Svelte site copy, Bash docs-truth scripts, Rust CLI dispatch/tests, existing docs-audit inventory and ledger.
 
@@ -21,7 +21,8 @@ generation DB recovery except where public docs must stop overclaiming them.
 
 - Modify `CHANGELOG.md`: replace stale conaryd `501 Not Implemented` wording.
 - Modify `README.md`: sharpen positioning, atomicity wording, Nix comparison,
-  and five-minute preview quickstart.
+  Remi cold-start caveat, live-mutation acknowledgement explanation, and
+  five-minute preview quickstart.
 - Modify `ROADMAP.md`: keep the review-derived queue current after this plan
   lands.
 - Modify `site/src/routes/+page.svelte`, `site/src/routes/install/+page.svelte`,
@@ -47,6 +48,10 @@ generation DB recovery except where public docs must stop overclaiming them.
 - If single-package adoption dry-run is not implemented in this pass, the
   refusal text and docs must deliberately route testers to the system-wide
   dry-run path.
+- Remi cold-start conversion latency is part of tester onboarding, not a hidden
+  service detail.
+- Source-selection defaults should be documented before behavior changes are
+  considered.
 - Include `CHANGELOG.md` and public site copy in docs truth checks so this
   exact drift class cannot recur quietly.
 
@@ -61,7 +66,7 @@ generation DB recovery except where public docs must stop overclaiming them.
 - Read: `site/src/routes/compare/+page.svelte`
 - Read: `apps/conary/src/dispatch.rs`
 
-- [ ] **Step 1: Confirm the stale conaryd claim still exists**
+- [ ] **Step 1: Confirm the conaryd route claim is not stale**
 
 Run:
 
@@ -69,9 +74,9 @@ Run:
 rg -n "501 Not Implemented|package install/remove/update" CHANGELOG.md docs/modules/conaryd.md README.md
 ```
 
-Expected before the fix: `CHANGELOG.md` still contains the stale `501 Not
-Implemented` claim, while `docs/modules/conaryd.md` describes queued package
-jobs.
+Expected: current-state docs and changelog language agree that conaryd package
+routes queue package jobs rather than returning blanket `501 Not Implemented`.
+If the stale claim remains, fix it in Task 2.
 
 - [ ] **Step 2: Confirm the current single-package dry-run route**
 
@@ -102,9 +107,9 @@ covered yet.
 - Modify: `README.md`
 - Modify: `docs/superpowers/documentation-accuracy-audit-ledger.tsv`
 
-- [ ] **Step 1: Update the changelog conaryd bullet**
+- [ ] **Step 1: Ensure the changelog conaryd bullet is current**
 
-Replace the stale bullet with:
+If the stale bullet remains, replace it with:
 
 ```markdown
 - Clarified that conaryd package install/remove/update routes queue daemon
@@ -163,7 +168,31 @@ conary --allow-live-system-mutation system unadopt --all
 If release binaries are not yet published for the current tag, keep the build
 steps as a developer path but label them that way.
 
-- [ ] **Step 2: Put the escape hatch near the first mutating command**
+- [ ] **Step 2: Decide binary-vs-source tester expectations**
+
+Before publishing the tester post, choose one of these explicit paths:
+
+```text
+release-binary path: publish and link a binary/package artifact for each
+supported preview distro
+
+source-build path: time the build-from-source path on a clean VM and state the
+expected compile time honestly in the quickstart
+```
+
+- [ ] **Step 3: Explain the live-mutation acknowledgement flag at first use**
+
+Add one sentence near the first command that uses the flag:
+
+```markdown
+`--allow-live-system-mutation` is intentionally long: it marks the exact point
+where the preview moves from inspection into changing the active host.
+```
+
+Do not add a shorter alias in this task unless the CLI review chooses one
+explicitly and adds matching command-risk tests.
+
+- [ ] **Step 4: Put the escape hatch near the first mutating command**
 
 Add one sentence immediately after the first adoption apply command:
 
@@ -173,12 +202,57 @@ system unadopt --all` removes Conary tracking without deleting native package
 files.
 ```
 
-- [ ] **Step 3: Mirror the same flow on the install page**
+- [ ] **Step 5: Mirror the same flow on the install page**
 
 Update the site install page so the first path is adoption-led and reversible,
 not takeover-led and not generation-export-led.
 
-### Task 4: Sharpen The Ecosystem Comparison
+### Task 4: Account For Remi Cold-Start Latency
+
+**Files:**
+- Modify: `README.md`
+- Modify: `site/src/routes/install/+page.svelte`
+- Modify or create only if chosen: `scripts/remi-prewarm-preview.sh`
+
+- [ ] **Step 1: Time the cold path**
+
+On a clean VM or clean Remi cache, time the first supported install path:
+
+```bash
+time conary --allow-live-system-mutation install nginx --dry-run
+```
+
+Record the distro, package, cache state, and elapsed time in the implementation
+PR.
+
+- [ ] **Step 2: Choose the preview mitigation**
+
+Pick one:
+
+```text
+documented caveat: quickstart says first use may spend time converting legacy
+packages through Remi
+
+pre-warm command: add a script or command that warms a small package set before
+the tester tries install/remove flows
+
+server pre-conversion: pre-convert a top package set for Fedora 44, Ubuntu
+26.04 LTS, and Arch before the tester post
+```
+
+- [ ] **Step 3: Keep the scope small**
+
+The initial warm set should be no larger than packages used in the quickstart
+and integration smoke paths, for example:
+
+```text
+nginx
+curl
+openssl
+sqlite
+```
+
+### Task 5: Sharpen The Ecosystem Comparison
 
 **Files:**
 - Modify: `README.md`
@@ -219,7 +293,7 @@ rg -n "replace.*(apt|dnf|pacman)|universal package manager|all distros|risk-free
 Expected: any remaining "risk-free" wording is specifically tied to adoption
 and unadoption, not takeover or generation switching.
 
-### Task 5: Extend Docs Truth Checks
+### Task 6: Extend Docs Truth Checks
 
 **Files:**
 - Modify: `scripts/check-doc-truth.sh`
@@ -273,7 +347,7 @@ bash scripts/check-doc-truth.sh
 
 Expected: both pass.
 
-### Task 6: Decide Single-Package Adoption Dry-Run
+### Task 7: Decide Single-Package Adoption Dry-Run
 
 **Files:**
 - Modify: `apps/conary/src/dispatch.rs`
@@ -313,13 +387,13 @@ Single-package adoption dry-run is not implemented yet; use `conary system
 adopt --system --dry-run` for the safe preview path.
 ```
 
-### Task 7: Revisit Preview Source-Selection Defaults
+### Task 8: Document Preview Source-Selection Defaults
 
 **Files:**
 - Modify: `docs/modules/source-selection.md`
-- Modify only if behavior changes: `crates/conary-core/src/repository/effective_policy.rs`
-- Modify only if behavior changes: `apps/conary/src/commands/model.rs`
-- Test only if behavior changes: `cargo test -p conary-core repository::effective_policy`
+- Read: `crates/conary-core/src/repository/effective_policy.rs`
+- Read: `apps/conary/src/commands/model.rs`
+- Test only if a harmful mismatch is found: `cargo test -p conary-core repository::effective_policy`
 
 - [ ] **Step 1: Confirm current defaults**
 
@@ -329,19 +403,58 @@ Run:
 rg -n "latest-anywhere|SelectionMode::Latest|SelectionMode::Policy|balanced" docs/modules/source-selection.md crates/conary-core/src/repository apps/conary/src/commands/model.rs
 ```
 
-- [ ] **Step 2: Choose a preview-safe default**
+- [ ] **Step 2: Document the current dual default before changing behavior**
 
-For the limited preview, prefer native/source affinity unless the user opts
-into newest-anywhere behavior. If code already behaves this way, update docs
-to say so. If code defaults to `latest-anywhere`, change the preview preset to
-policy/native-affinity and require explicit opt-in for cross-source latest.
+If the current behavior is:
+
+```text
+model-backed configuration defaults to balanced/latest-anywhere
+runtime policy falls back to policy/native-affinity
+```
+
+then document that clearly and do not change behavior in this plan. Only change
+defaults if the code contradicts docs or current behavior actively undermines
+the adoption-led preview.
 
 - [ ] **Step 3: Add or update tests**
 
-Add a test proving default update selection does not switch from a package's
-current native source to another distro source without explicit policy.
+If behavior changes, add a test proving default update selection does not
+switch from a package's current native source to another distro source without
+explicit policy.
 
-### Task 8: Docs-Audit And Verification
+### Task 9: Audit First-Run `system init` Failure Modes
+
+**Files:**
+- Modify: `apps/conary/src/commands/system/init.rs` or the current init module
+- Modify: `README.md`
+- Test: focused CLI or command unit tests
+
+- [ ] **Step 1: Locate init implementation and tests**
+
+Run:
+
+```bash
+rg -n "system init|cmd_.*init|composefs|disk space|/conary" apps/conary/src apps/conary/tests crates/conary-core/src
+```
+
+- [ ] **Step 2: Check common first-run failures**
+
+Verify error messages for:
+
+```text
+/conary already exists from a prior attempt
+insufficient disk space for CAS/generation work
+missing composefs or kernel support
+permission denied creating /conary
+```
+
+- [ ] **Step 3: Add targeted improvements**
+
+Each failure should name the failing path or requirement and the safest next
+action. Avoid suggesting destructive cleanup unless the command can prove the
+state is disposable.
+
+### Task 10: Docs-Audit And Verification
 
 **Files:**
 - Modify: `docs/superpowers/documentation-accuracy-audit-inventory.tsv`

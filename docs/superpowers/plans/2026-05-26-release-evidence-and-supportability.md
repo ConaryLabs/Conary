@@ -39,6 +39,9 @@ All tester diagnostics are explicit and local-first.
 - No automatic telemetry in this plan.
 - The support bundle must default to local output and redact paths/secrets that
   are likely to include credentials.
+- Do not include `conary.db` by default. The first support bundle should include
+  integrity/status summaries and require an explicit opt-in before copying any
+  database file.
 - Remote Forge validation remains explicitly paused until a KVM-capable runner
   exists; do not imply hosted boot evidence is green.
 - The contributor funnel should start with validation and docs tasks, not
@@ -75,6 +78,7 @@ Include columns for:
 ```text
 release workflow
 source commit
+binary download URL or package repository URL
 SLSA/provenance sidecar
 SBOM path
 known caveats
@@ -157,6 +161,27 @@ uname -a
 lsb_release -a or /etc/os-release
 ```
 
+Explicitly exclude by default:
+
+```text
+/var/lib/conary/conary.db or any live conary.db path
+/etc/conary/trust
+private keys
+SSH keys
+ignored local access docs
+full package payloads
+```
+
+For database troubleshooting, collect only:
+
+```bash
+sqlite3 "$CONARY_DB" "PRAGMA integrity_check;"
+sqlite3 "$CONARY_DB" "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"
+```
+
+Do not copy the DB into the bundle unless a future `--include-db` option is
+added with a separate redaction/review warning.
+
 - [ ] **Step 2: Redact obvious secrets**
 
 Pipe collected text through a redactor that masks:
@@ -167,6 +192,8 @@ token=...
 password=...
 secret=...
 /home/<user>/.ssh/...
+Bearer ...
+X-Remi-Admin-Token: ...
 ```
 
 - [ ] **Step 3: Add privacy wording**
@@ -212,14 +239,15 @@ Include fields:
 
 - [ ] **Step 2: Add good first validation tasks**
 
-In `CONTRIBUTING.md`, add a short section listing:
+In `CONTRIBUTING.md`, add a short section listing concrete entry points:
 
 ```text
-Run a dry-run adoption on a VM.
-Run unadopt dry-run/apply and report output clarity.
-Try one Conary-owned package install/remove.
-Verify docs quickstart on one supported distro.
-Improve error messages with tests.
+apps/conary/tests/live_host_mutation_safety.rs: command-risk and dry-run tests
+apps/conary/tests/cli_daily_ux.rs: preview output and diagnostic clarity
+docs/SCRIPTLET_SECURITY.md: sandbox wording and evidence references
+site/src/routes/install/+page.svelte: tester quickstart copy
+scripts/check-doc-truth.sh: docs drift checks
+docs/modules/source-selection.md: source-policy wording
 ```
 
 ### Task 5: Evidence Refresh Checklist

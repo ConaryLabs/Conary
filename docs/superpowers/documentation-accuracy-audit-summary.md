@@ -68,6 +68,12 @@ and supportability, and generation state resilience. These records convert the
 external review findings into a sequenced queue rather than another broad
 readiness checklist.
 
+The DeepSeek follow-up review tightened the active queue around Remi cold-start
+latency, the live-mutation acknowledgement explanation, first-run `system init`
+failure modes, a generation-state marker before the first tester wave, support
+bundle redaction scope, and source-selection documentation before behavior
+changes.
+
 Audited every tracked documentation-like file returned by
 `bash scripts/docs-audit-inventory.sh`: tracked files spanning root docs,
 assistant entrypoints, GitHub templates, canonical docs under `docs/`,
