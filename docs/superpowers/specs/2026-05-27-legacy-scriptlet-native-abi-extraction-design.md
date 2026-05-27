@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-05-27
-revision: 4
-summary: Design for Goal 2 native ABI extraction for RPM, DEB, Arch, byte-preserving parser facts, and RPM verification scriptlet preservation without Remi embedding, bundle conversion, or install behavior changes
+revision: 5
+summary: Design for Goal 2 native ABI extraction for RPM, DEB, Arch install scriptlets and ALPM hook artifacts, byte-preserving parser facts, and RPM verification scriptlet preservation without Remi embedding, bundle conversion, or install behavior changes
 ---
 
 # Legacy Scriptlet Native ABI Extraction: Goal 2 Design Spec
@@ -358,7 +358,12 @@ pub enum DebTriggerAwaitMode {
     NoAwait,
 }
 
-pub struct ArchNativeScriptletMetadata {
+pub enum ArchNativeScriptletMetadata {
+    Install(ArchInstallScriptletMetadata),
+    AlpmHook(ArchAlpmHookMetadata),
+}
+
+pub struct ArchInstallScriptletMetadata {
     pub install_source_sha256: String,
     pub function_name: String,
     pub function_body: Option<String>,
@@ -369,6 +374,38 @@ pub struct ArchNativeScriptletMetadata {
 pub enum ArchFunctionExtractionStatus {
     Parsed,
     DeferredReview { reason_code: String },
+}
+
+pub struct ArchAlpmHookMetadata {
+    pub hook_path: String,
+    pub triggers: Vec<ArchAlpmHookTrigger>,
+    pub action: Option<ArchAlpmHookAction>,
+}
+
+pub struct ArchAlpmHookTrigger {
+    pub operations: Vec<ArchAlpmHookOperation>,
+    pub trigger_type: ArchAlpmHookTriggerType,
+    pub targets: Vec<String>,
+}
+
+pub enum ArchAlpmHookOperation {
+    Install,
+    Upgrade,
+    Remove,
+}
+
+pub enum ArchAlpmHookTriggerType {
+    Package,
+    Path,
+}
+
+pub struct ArchAlpmHookAction {
+    pub description: Option<String>,
+    pub when: NativeTransactionPosition,
+    pub exec: String,
+    pub depends: Vec<String>,
+    pub abort_on_fail: bool,
+    pub needs_targets: bool,
 }
 ```
 
@@ -595,13 +632,12 @@ a compatible old-API phase and updates every current caller.
 Arch extraction should preserve the full `.INSTALL` file, not only detached
 function bodies.
 
-Arch ALPM hook files are a separate documented transaction-trigger mechanism, not
-`.INSTALL` functions. If Goal 2 includes them, represent each packaged
-`/usr/share/libalpm/hooks/*.hook` file as a native ABI `ControlArtifact` with
-parsed trigger/action metadata where straightforward and raw bytes preserved in
-all cases. If Goal 2 defers them, the plan must record that deferral explicitly
-and add a follow-up goal so package-provided pacman hook semantics are not
-mistaken for covered `.INSTALL` semantics.
+Arch ALPM hook files are a separate documented transaction-trigger mechanism,
+not `.INSTALL` functions. Goal 2 includes package-provided
+`/usr/share/libalpm/hooks/*.hook` files as native ABI `ControlArtifact` entries
+with parsed trigger/action metadata and raw bytes preserved in all cases. This
+keeps package-provided pacman hook semantics visible without claiming Goal 2
+executes or replays them.
 
 Required callable functions:
 
@@ -736,8 +772,8 @@ Prefer generated fixtures in tests over committed binary packages unless a
 format requires a binary fixture that cannot be assembled deterministically.
 End-to-end parser tests should write temporary package files because
 `PackageFormat::parse()` is path-based. In-memory buffers are fine for private
-helper tests, but the cross-format parser contract should exercise real temp
-`.rpm`, `.deb`, and `.pkg.tar.*` archives where practical.
+helper tests, but the cross-format parser contract must exercise real temp
+`.rpm`, `.deb`, and `.pkg.tar.*` archives.
 
 RPM tests can use the `rpm` crate builder because the local crate exposes
 scriptlet and trigger builder APIs. Build fixtures with:
@@ -759,13 +795,15 @@ control tar containing:
 - a `triggers` file;
 - shebangs that prove native interpreter and args are split while flattened
   compatibility output remains unchanged;
-- a non-UTF-8 control member body if practical, to prove native ABI body bytes
-  are preserved even when the old `Scriptlet` projection cannot represent them.
+- a non-UTF-8 maintainer script fixture in a helper-level test, to prove native
+  ABI body bytes are preserved even when the old `Scriptlet` projection cannot
+  represent them.
 
-Arch tests can directly exercise `.INSTALL` parsing and, where practical, build
-a minimal package archive containing `.PKGINFO` and `.INSTALL`. Include one
-fixture where a recognizable function declaration cannot be safely extracted, so
-the native ABI fallback emits `DeferredReview` instead of dropping the slot.
+Arch tests must directly exercise `.INSTALL` parsing and build a minimal package
+archive containing `.PKGINFO`, `.INSTALL`, and one packaged ALPM hook under
+`usr/share/libalpm/hooks/`. Include one fixture where a recognizable function
+declaration cannot be safely extracted, so the native ABI fallback emits
+`DeferredReview` instead of dropping the slot.
 
 Tests must assert both sides of the contract:
 
