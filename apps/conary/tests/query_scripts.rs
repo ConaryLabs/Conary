@@ -5,10 +5,10 @@ use conary::cli::{Cli, Commands, QueryCommands};
 use conary_core::ccs::builder::{CcsBuilder, write_ccs_package};
 use conary_core::ccs::legacy_scriptlets::{
     DecisionCounts, EffectConfidence, EffectReplacement, EffectSource, ForeignReplayPolicy,
-    LegacyScriptletBundle, LegacyScriptletEntry, LifecyclePath, NativeInvocation,
-    PublicationPolicy, PublicationStatus, RpmTriggerMetadata, RpmTriggerTargetConstraint,
-    ScriptletDecision, ScriptletEffect, ScriptletFidelity, SourceFormat, TargetCompatibility,
-    TransactionOrder, VersionScheme, LEGACY_SCRIPTLET_SCHEMA_V1,
+    LEGACY_SCRIPTLET_SCHEMA_V1, LegacyScriptletBundle, LegacyScriptletEntry, LifecyclePath,
+    NativeInvocation, PublicationPolicy, PublicationStatus, RpmTriggerMetadata,
+    RpmTriggerTargetConstraint, ScriptletDecision, ScriptletEffect, ScriptletFidelity,
+    SourceFormat, TargetCompatibility, TransactionOrder, VersionScheme,
 };
 use conary_core::ccs::manifest::CcsManifest;
 use std::collections::BTreeMap;
@@ -89,21 +89,18 @@ fn bundle_fixture() -> LegacyScriptletBundle {
         source_package: "nginx".to_string(),
         source_version: "1.28.0-1.fc44".to_string(),
         source_checksum: Some(
-            "sha256:3333333333333333333333333333333333333333333333333333333333333333"
-                .to_string(),
+            "sha256:3333333333333333333333333333333333333333333333333333333333333333".to_string(),
         ),
         version_scheme: VersionScheme::Rpm,
         conversion_tool: "remi".to_string(),
         conversion_tool_version: "0.8.0".to_string(),
         conversion_policy: "safe-or-legacy".to_string(),
         adapter_registry_digest: Some(
-            "sha256:4444444444444444444444444444444444444444444444444444444444444444"
-                .to_string(),
+            "sha256:4444444444444444444444444444444444444444444444444444444444444444".to_string(),
         ),
         target_policy_digest: None,
         evidence_digest: Some(
-            "sha256:5555555555555555555555555555555555555555555555555555555555555555"
-                .to_string(),
+            "sha256:5555555555555555555555555555555555555555555555555555555555555555".to_string(),
         ),
         target_compatibility: TargetCompatibility::SourceNative,
         allowed_targets: vec!["rpm/fedora/44/x86_64".to_string()],
@@ -120,7 +117,12 @@ fn bundle_fixture() -> LegacyScriptletBundle {
         },
         unsupported_class_counts: BTreeMap::new(),
         entries: vec![
-            entry_fixture("rpm:%preun", ScriptletDecision::Replaced, replaced_body, true),
+            entry_fixture(
+                "rpm:%preun",
+                ScriptletDecision::Replaced,
+                replaced_body,
+                true,
+            ),
             entry_fixture("rpm:%post", ScriptletDecision::Legacy, legacy_body, false),
         ],
         extra: BTreeMap::new(),
@@ -175,8 +177,7 @@ fn entry_fixture(
         reason_code: "protected-replay-required".to_string(),
         human_reason: Some("fixture reason".to_string()),
         evidence_digest: Some(
-            "sha256:6666666666666666666666666666666666666666666666666666666666666666"
-                .to_string(),
+            "sha256:6666666666666666666666666666666666666666666666666666666666666666".to_string(),
         ),
         source_evidence_refs: vec!["capture:rpm:%post".to_string()],
         effects: vec![ScriptletEffect {
@@ -302,7 +303,12 @@ fn query_scripts_ccs_bundle_prints_summary() {
 #[test]
 fn query_scripts_ccs_bundle_verbose_prints_effects() {
     let (_temp, package_path) = build_ccs_fixture("nginx", "1.28.0", Some(bundle_fixture()));
-    let output = run_conary(&["query", "scripts", package_path.to_str().unwrap(), "--verbose"]);
+    let output = run_conary(&[
+        "query",
+        "scripts",
+        package_path.to_str().unwrap(),
+        "--verbose",
+    ]);
 
     assert_success(&output);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -341,7 +347,9 @@ fn query_scripts_ccs_bundle_missing_entry_exits_with_error() {
     ]);
 
     assert_failure(&output);
-    assert!(output_text(&output).contains("legacy scriptlet bundle entry 'rpm:%missing' not found"));
+    assert!(
+        output_text(&output).contains("legacy scriptlet bundle entry 'rpm:%missing' not found")
+    );
 }
 
 #[test]
@@ -380,7 +388,12 @@ fn query_scripts_ccs_without_bundle_json_reports_absent_bundle() {
         serde_json::from_slice(&output.stdout).expect("valid absent-bundle json");
     assert_eq!(json["bundle_present"], false);
     assert!(json["bundle"].is_null());
-    assert!(json["entries"].as_array().expect("entries array").is_empty());
+    assert!(
+        json["entries"]
+            .as_array()
+            .expect("entries array")
+            .is_empty()
+    );
 }
 
 #[test]
@@ -393,7 +406,12 @@ fn query_scripts_ccs_zero_entry_bundle_json_reports_empty_entries() {
     let json: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("valid zero-entry json");
     assert_eq!(json["bundle_present"], true);
-    assert!(json["entries"].as_array().expect("entries array").is_empty());
+    assert!(
+        json["entries"]
+            .as_array()
+            .expect("entries array")
+            .is_empty()
+    );
 }
 
 #[test]

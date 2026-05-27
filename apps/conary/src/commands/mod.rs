@@ -106,6 +106,11 @@ pub use derived::{
     cmd_derive_patch, cmd_derive_show, cmd_derive_stale,
 };
 pub use export::export_oci;
+pub use federation::cmd_federation_scan;
+pub use federation::{
+    cmd_federation_add_peer, cmd_federation_enable_peer, cmd_federation_peers,
+    cmd_federation_remove_peer, cmd_federation_stats, cmd_federation_status, cmd_federation_test,
+};
 pub use install::{DepMode, InstallOptions, cmd_install};
 pub use label::{
     cmd_label_add, cmd_label_delegate, cmd_label_link, cmd_label_list, cmd_label_path,
@@ -129,22 +134,17 @@ pub use provenance::{
     cmd_provenance_audit, cmd_provenance_diff, cmd_provenance_export, cmd_provenance_find_by_dep,
     cmd_provenance_register, cmd_provenance_show, cmd_provenance_verify,
 };
-pub use recipe_audit::cmd_recipe_audit;
-pub use remove::{cmd_autoremove, cmd_remove};
-pub use federation::cmd_federation_scan;
-pub use federation::{
-    cmd_federation_add_peer, cmd_federation_enable_peer, cmd_federation_peers,
-    cmd_federation_remove_peer, cmd_federation_stats, cmd_federation_status, cmd_federation_test,
-};
 pub use query::{
     QueryOptions, ScriptQueryOptions, cmd_depends, cmd_deptree, cmd_history, cmd_list_components,
     cmd_query, cmd_query_component, cmd_query_reason, cmd_rdepends, cmd_repquery, cmd_sbom,
     cmd_scripts, cmd_scripts_with_options, cmd_whatbreaks, cmd_whatprovides,
 };
+pub use recipe_audit::cmd_recipe_audit;
 pub use redirect::{
     cmd_redirect_add, cmd_redirect_list, cmd_redirect_remove, cmd_redirect_resolve,
     cmd_redirect_show,
 };
+pub use remove::{cmd_autoremove, cmd_remove};
 pub use repo::{
     RepoAddOptions, cmd_key_import, cmd_key_list, cmd_key_remove, cmd_repo_add, cmd_repo_disable,
     cmd_repo_enable, cmd_repo_list, cmd_repo_remove, cmd_repo_sync, cmd_search,

@@ -293,10 +293,10 @@ mod tests {
     use crate::ccs::builder::{CcsBuilder, write_ccs_package};
     use crate::ccs::legacy_scriptlets::{
         DecisionCounts, EffectConfidence, EffectReplacement, EffectSource, ForeignReplayPolicy,
-        LegacyScriptletBundle, LegacyScriptletEntry, LifecyclePath, NativeInvocation,
-        PublicationPolicy, PublicationStatus, RpmTriggerMetadata, RpmTriggerTargetConstraint,
-        ScriptletDecision, ScriptletEffect, ScriptletFidelity, SourceFormat, TargetCompatibility,
-        TransactionOrder, VersionScheme, LEGACY_SCRIPTLET_SCHEMA_V1,
+        LEGACY_SCRIPTLET_SCHEMA_V1, LegacyScriptletBundle, LegacyScriptletEntry, LifecyclePath,
+        NativeInvocation, PublicationPolicy, PublicationStatus, RpmTriggerMetadata,
+        RpmTriggerTargetConstraint, ScriptletDecision, ScriptletEffect, ScriptletFidelity,
+        SourceFormat, TargetCompatibility, TransactionOrder, VersionScheme,
     };
     use crate::ccs::manifest::CcsManifest;
     use std::collections::BTreeMap;
