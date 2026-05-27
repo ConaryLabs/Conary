@@ -79,7 +79,7 @@ pub use redirect::RedirectCommands;
 pub use registry::RegistryCommands;
 pub use repo::{CliSecurityAdvisorySupport, RepoCommands};
 pub use state::StateCommands;
-pub use system::{SystemCommands, TakeoverLevel, UpdateChannelAction};
+pub use system::{DbBackupCommands, SystemCommands, TakeoverLevel, UpdateChannelAction};
 pub use trigger::TriggerCommands;
 pub use trust::TrustCommands;
 pub use verify::VerifyCommands;

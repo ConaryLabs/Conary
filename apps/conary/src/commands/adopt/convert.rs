@@ -9,9 +9,11 @@
 use super::super::create_state_snapshot;
 use super::super::open_db;
 use super::super::progress::AdoptProgress;
+use super::checkpoint::write_db_checkpoint;
 use anyhow::Result;
 use conary_core::ccs::builder::{CcsBuilder, write_ccs_package};
 use conary_core::ccs::manifest::{Capability, CcsManifest, PackageDep, Platform};
+use conary_core::db::backup::CheckpointReason;
 use conary_core::db::models::{
     Changeset, ChangesetStatus, ConvertedPackage, DependencyEntry, FileEntry, ProvideEntry, Trove,
 };
@@ -126,6 +128,7 @@ pub async fn cmd_adopt_convert(
         return Ok(());
     }
 
+    write_db_checkpoint(db_path, CheckpointReason::PreMutation)?;
     backfill_adopted_source_identity(
         &conn,
         source_identity.source_distro.as_deref(),
@@ -236,6 +239,7 @@ pub async fn cmd_adopt_convert(
             &format!("CCS conversion: {} packages", converted_count),
         )?;
     }
+    write_db_checkpoint(db_path, CheckpointReason::PostSuccess)?;
 
     // 9. Summary
     println!("\nConversion summary:");

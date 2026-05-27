@@ -258,6 +258,13 @@ pub enum SystemCommands {
         output: Option<String>,
     },
 
+    /// Inspect, verify, or recover Conary database checkpoint backups
+    #[command(name = "db-backup")]
+    DbBackup {
+        #[command(subcommand)]
+        command: DbBackupCommands,
+    },
+
     // =========================================================================
     // Nested Subcommands
     // =========================================================================
@@ -300,6 +307,47 @@ pub enum SystemCommands {
     UpdateChannel {
         #[command(subcommand)]
         action: UpdateChannelAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum DbBackupCommands {
+    /// List available database checkpoint backups
+    List {
+        #[command(flatten)]
+        db: DbArgs,
+    },
+
+    /// Verify a database checkpoint backup
+    Verify {
+        /// Verify the newest backup
+        #[arg(long)]
+        latest: bool,
+
+        #[command(flatten)]
+        db: DbArgs,
+    },
+
+    /// Recover the live Conary database from a checkpoint backup
+    Recover {
+        /// Recover the newest backup
+        #[arg(long)]
+        latest: bool,
+
+        /// Verify and show the selected backup without changing the live DB
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Confirm replacing a missing or corrupt live DB
+        #[arg(long, short)]
+        yes: bool,
+
+        /// Debug escape hatch: replace a live DB that still passes integrity checks
+        #[arg(long, hide = true)]
+        replace_healthy_db: bool,
+
+        #[command(flatten)]
+        db: DbArgs,
     },
 }
 

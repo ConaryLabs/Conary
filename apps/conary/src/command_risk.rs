@@ -222,6 +222,7 @@ fn classify_system(command: &cli::SystemCommands) -> Option<CommandRiskPolicy> {
             *dry_run,
         )),
         cli::SystemCommands::Gc { .. } => Some(local_state("conary system gc")),
+        cli::SystemCommands::DbBackup { command } => Some(classify_db_backup(command)),
         cli::SystemCommands::State(command) => Some(classify_state(command)),
         cli::SystemCommands::Generation(command) => Some(classify_generation(command)),
         cli::SystemCommands::Takeover { dry_run, .. } => Some(policy(
@@ -232,6 +233,22 @@ fn classify_system(command: &cli::SystemCommands) -> Option<CommandRiskPolicy> {
         cli::SystemCommands::Trigger(command) => Some(classify_trigger(command)),
         cli::SystemCommands::Redirect(command) => Some(classify_redirect(command)),
         cli::SystemCommands::UpdateChannel { action } => Some(classify_update_channel(action)),
+    }
+}
+
+fn classify_db_backup(command: &cli::DbBackupCommands) -> CommandRiskPolicy {
+    match command {
+        cli::DbBackupCommands::List { .. } | cli::DbBackupCommands::Verify { .. } => {
+            read_only("conary system db-backup")
+        }
+        cli::DbBackupCommands::Recover { dry_run, .. } if *dry_run => {
+            read_only("conary system db-backup recover --dry-run")
+        }
+        cli::DbBackupCommands::Recover { .. } => policy(
+            "conary system db-backup recover",
+            CommandRisk::ActiveHostMutation,
+            false,
+        ),
     }
 }
 
@@ -794,5 +811,44 @@ mod tests {
         let policy = policy(&["conary", "system", "generation", "pending"]);
         assert_eq!(policy.risk, CommandRisk::ReadOnly);
         assert!(!policy.requires_ack());
+    }
+
+    #[test]
+    fn classify_db_backup_inspection_as_read_only() {
+        for args in [
+            ["conary", "system", "db-backup", "list"].as_slice(),
+            ["conary", "system", "db-backup", "verify", "--latest"].as_slice(),
+            [
+                "conary",
+                "system",
+                "db-backup",
+                "recover",
+                "--latest",
+                "--dry-run",
+            ]
+            .as_slice(),
+        ] {
+            let policy = policy(args);
+            assert_eq!(policy.risk, CommandRisk::ReadOnly);
+            assert!(!policy.requires_ack());
+        }
+    }
+
+    #[test]
+    fn classify_db_backup_recover_apply_as_active_host_mutation() {
+        let policy = policy(&[
+            "conary",
+            "system",
+            "db-backup",
+            "recover",
+            "--latest",
+            "--yes",
+        ]);
+        assert_eq!(policy.risk, CommandRisk::ActiveHostMutation);
+        assert!(policy.requires_ack());
+        assert_eq!(
+            policy.command_label.as_ref(),
+            "conary system db-backup recover"
+        );
     }
 }

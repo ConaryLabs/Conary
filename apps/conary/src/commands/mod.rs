@@ -15,6 +15,7 @@ pub(crate) mod composefs_ops;
 mod config;
 mod convert_pkgbuild;
 mod cook;
+mod db_backup;
 mod derivation;
 mod derivation_sbom;
 mod derived;
@@ -96,6 +97,7 @@ pub use config::{
 };
 pub use convert_pkgbuild::cmd_convert_pkgbuild;
 pub use cook::cmd_cook;
+pub use db_backup::{cmd_db_backup_list, cmd_db_backup_recover, cmd_db_backup_verify};
 pub use derivation::{cmd_derivation_build, cmd_derivation_show};
 pub use derivation_sbom::cmd_derivation_sbom;
 pub use derived::{

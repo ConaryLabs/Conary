@@ -8,10 +8,12 @@ use super::super::create_state_snapshot;
 use super::super::open_db;
 use super::super::progress::{AdoptPhase, AdoptProgress};
 use super::cas_capture::prepare_cas_backed_package_files;
+use super::checkpoint::write_db_checkpoint;
 use super::outcome::{metadata_insert_succeeded, write_warning_metadata};
 use super::system::{FileInfoTuple, compute_file_hash};
 use crate::commands::AdoptionWarning;
 use anyhow::Result;
+use conary_core::db::backup::CheckpointReason;
 use conary_core::db::models::{
     Changeset, ChangesetStatus, DependencyEntry, FileEntry, InstallSource, ProvideEntry, Trove,
     TroveType,
@@ -219,6 +221,7 @@ pub async fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result
         ));
 
         // DB-only transaction: all PM queries and CAS writes are already done.
+        write_db_checkpoint(db_path, CheckpointReason::PreMutation)?;
         let (changeset_id, adopted, has_warnings) =
             conary_core::db::transaction(&mut conn, |tx| {
                 let changeset_id = changeset.insert(tx)?;
@@ -333,12 +336,15 @@ pub async fn cmd_adopt(packages: &[String], db_path: &str, full: bool) -> Result
                 Ok((changeset_id, true, has_warnings))
             })?;
 
+        if adopted {
+            // Create state snapshot for rollback safety
+            create_state_snapshot(&conn, changeset_id, &format!("Adopt {}", pkg_name))?;
+        }
+        write_db_checkpoint(db_path, CheckpointReason::PostSuccess)?;
+
         if !adopted {
             continue;
         }
-
-        // Create state snapshot for rollback safety
-        create_state_snapshot(&conn, changeset_id, &format!("Adopt {}", pkg_name))?;
 
         if has_warnings {
             println!(

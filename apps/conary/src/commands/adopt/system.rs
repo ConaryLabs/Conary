@@ -8,9 +8,11 @@ use super::super::create_state_snapshot;
 use super::super::open_db;
 use super::super::progress::{AdoptPhase, AdoptProgress};
 use super::cas_capture::prepare_cas_backed_package_files;
+use super::checkpoint::write_db_checkpoint;
 use super::outcome::{metadata_insert_succeeded, write_warning_metadata};
 use crate::commands::AdoptionWarning;
 use anyhow::Result;
+use conary_core::db::backup::CheckpointReason;
 use conary_core::db::models::{
     Changeset, ChangesetStatus, DependencyEntry, FileEntry, InstallReason, InstallSource,
     ProvideEntry, Trove, TroveType,
@@ -354,6 +356,7 @@ pub async fn cmd_adopt_system(
     }
 
     // DB-only transaction: all PM queries and CAS writes are already done.
+    write_db_checkpoint(db_path, CheckpointReason::PreMutation)?;
     let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
         let changeset_id = changeset.insert(tx)?;
         let mut adoption_warnings = Vec::new();
@@ -479,6 +482,7 @@ pub async fn cmd_adopt_system(
             &format!("Adopt {} system packages", adopted_count),
         )?;
     }
+    write_db_checkpoint(db_path, CheckpointReason::PostSuccess)?;
 
     let mode_desc = if full { "full" } else { "track" };
     if error_count > 0 {
@@ -787,6 +791,7 @@ fn adopt_live_root_as_full_package(
     let mut changeset = Changeset::new(format!(
         "Adopt live root as CAS-backed package ({LIVE_ROOT_PACKAGE_NAME})"
     ));
+    write_db_checkpoint(db_path, CheckpointReason::PreMutation)?;
     let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
         let changeset_id = changeset.insert(tx)?;
         let mut trove = Trove::new_with_source(
@@ -849,6 +854,7 @@ fn adopt_live_root_as_full_package(
         changeset_id,
         &format!("Adopt live root as {LIVE_ROOT_PACKAGE_NAME}"),
     )?;
+    write_db_checkpoint(db_path, CheckpointReason::PostSuccess)?;
 
     println!(
         "Adopted live root as {LIVE_ROOT_PACKAGE_NAME}: {} files (full)",

@@ -8,10 +8,12 @@
 use super::super::create_state_snapshot;
 use super::super::open_db;
 use super::cas_capture::prepare_cas_backed_package_files;
+use super::checkpoint::write_db_checkpoint;
 use super::outcome::write_warning_metadata;
 use super::system::{FileInfoTuple, compute_file_hash};
 use crate::commands::AdoptionWarning;
 use anyhow::Result;
+use conary_core::db::backup::CheckpointReason;
 use conary_core::db::models::{
     Changeset, ChangesetStatus, DependencyEntry, FileEntry, InstallSource, ProvideEntry, Trove,
 };
@@ -330,6 +332,7 @@ pub async fn cmd_adopt_refresh(
     let mut degraded_count = 0u32;
 
     // DB-only transaction: all PM queries and CAS writes are already done.
+    write_db_checkpoint(db_path, CheckpointReason::PreMutation)?;
     let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
         let changeset_id = changeset.insert(tx)?;
         let mut adoption_warnings = Vec::new();
@@ -419,6 +422,7 @@ pub async fn cmd_adopt_refresh(
             ),
         )?;
     }
+    write_db_checkpoint(db_path, CheckpointReason::PostSuccess)?;
 
     if !quiet {
         println!(

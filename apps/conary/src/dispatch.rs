@@ -666,6 +666,34 @@ async fn dispatch_system_command(
             output,
         } => commands::cmd_sbom(&package_name, &db.db_path, &format, output.as_deref()).await,
 
+        cli::SystemCommands::DbBackup { command } => match command {
+            cli::DbBackupCommands::List { db } => commands::cmd_db_backup_list(&db.db_path),
+            cli::DbBackupCommands::Verify { latest, db } => {
+                commands::cmd_db_backup_verify(&db.db_path, latest)
+            }
+            cli::DbBackupCommands::Recover {
+                latest,
+                dry_run,
+                yes,
+                replace_healthy_db,
+                db,
+            } => {
+                require_live_mutation(
+                    allow_live_system_mutation,
+                    Cow::Borrowed("conary system db-backup recover"),
+                    LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
+                    dry_run,
+                )?;
+                commands::cmd_db_backup_recover(
+                    &db.db_path,
+                    latest,
+                    dry_run,
+                    yes,
+                    replace_healthy_db,
+                )
+            }
+        },
+
         cli::SystemCommands::State(state_cmd) => match state_cmd {
             cli::StateCommands::List { db, limit } => {
                 commands::cmd_state_list(&db.db_path, limit).await
