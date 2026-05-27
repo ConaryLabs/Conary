@@ -12,6 +12,7 @@ mod history;
 mod package;
 mod reason;
 mod repo;
+mod scripts;
 mod sbom;
 
 // Re-export all public commands
@@ -22,6 +23,7 @@ pub use history::cmd_history;
 pub use package::cmd_query;
 pub use reason::cmd_query_reason;
 pub use repo::cmd_repquery;
+pub use scripts::{ScriptQueryOptions, cmd_scripts, cmd_scripts_with_options};
 pub use sbom::cmd_sbom;
 
 /// Options for the query command
