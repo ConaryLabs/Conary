@@ -60,11 +60,12 @@
 				with no upstream changes required.
 			</p>
 			<p>
-				Under the hood, every install, remove, or upgrade builds a new EROFS image and
-				atomically switches the composefs mount. Content-addressable storage (SHA-256 + XXH128)
-				handles file-level deduplication, a SAT-based dependency resolver (via resolvo) solves
-				dependencies, and EROFS binary deltas keep updates small. The kernel enforces integrity
-				via fs-verity on every file read -- tampered files cause I/O errors, not silent corruption.
+				Under the hood, package operations commit DB and file state through changesets,
+				while generation builds produce EROFS images that can be selected for complete-system
+				rollback. Content-addressable storage (SHA-256 + XXH128) handles file-level
+				deduplication, a SAT-based dependency resolver (via resolvo) solves dependencies,
+				and EROFS binary deltas keep updates small. The kernel enforces integrity via
+				fs-verity on every file read -- tampered files cause I/O errors, not silent corruption.
 			</p>
 		</div>
 
@@ -77,7 +78,7 @@
 				</div>
 				<div class="arch-item">
 					<h3>Composefs Transactions</h3>
-					<p>Every operation builds a new EROFS image and switches the composefs mount. Previous generation remains intact for instant rollback.</p>
+					<p>Generation builds create EROFS images backed by composefs. Previous generations remain available for selected-generation rollback.</p>
 				</div>
 				<div class="arch-item">
 					<h3>Resolver</h3>
@@ -111,7 +112,7 @@
 			<div class="tech-list">
 				<div class="tech-item">
 					<span class="tech-label">Language</span>
-					<span class="tech-value">Rust (Edition 2024), 6-member Cargo workspace</span>
+					<span class="tech-value">Rust (Edition 2024), 8-member Cargo workspace</span>
 				</div>
 				<div class="tech-item">
 					<span class="tech-label">Filesystem</span>
@@ -119,7 +120,7 @@
 				</div>
 				<div class="tech-item">
 					<span class="tech-label">Database</span>
-					<span class="tech-value">SQLite (schema version 65, DB-first runtime state)</span>
+					<span class="tech-value">SQLite (schema version 69, DB-first runtime state)</span>
 				</div>
 				<div class="tech-item">
 					<span class="tech-label">Hashing</span>

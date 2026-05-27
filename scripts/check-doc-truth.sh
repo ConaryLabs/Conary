@@ -17,15 +17,18 @@ fi
 DOCS_TRUTH_SCHEMA_CHECK_PATHS=(
     "docs/ARCHITECTURE.md"
     "docs/conaryopedia-v2.md"
+    "site/src/routes"
 )
 
 PRODUCT_DOC_PATHS=(
     "README.md"
     "ROADMAP.md"
+    "CHANGELOG.md"
     "docs/ARCHITECTURE.md"
     "docs/conaryopedia-v2.md"
     "docs/modules"
     "docs/operations"
+    "site/src/routes"
 )
 
 POLICYKIT_DOC_PATHS=(
@@ -92,14 +95,18 @@ check_schema_versions() {
     fi
 
     local schema_pattern='([Ss]chema[ \t]+\(v|[Ss]chema[ \t]+v|currently[ \t]+schema[ \t]+v|schema[ \t]+version[ \t]+)([0-9]+)'
-    local path line_no text found
+    local file line_no text found path
     for path in "${DOCS_TRUTH_SCHEMA_CHECK_PATHS[@]}"; do
-        require_file "$path" || continue
-        while IFS=: read -r _ line_no text; do
+        if [[ ! -e "$path" ]]; then
+            report_error "$path: missing while checking schema version claims"
+            continue
+        fi
+
+        while IFS=: read -r file line_no text; do
             if [[ "$text" =~ $schema_pattern ]]; then
                 found="${BASH_REMATCH[2]}"
                 if [[ "$found" != "$schema_version" ]]; then
-                    report_error "$path:$line_no mentions schema $found but SCHEMA_VERSION is $schema_version"
+                    report_error "$file:$line_no mentions schema $found but SCHEMA_VERSION is $schema_version"
                 fi
             fi
         done < <(rg -nH -- "$schema_pattern" "$path" || true)
@@ -145,6 +152,44 @@ check_preview_status() {
     require_match "ROADMAP.md" '2026-05-21.*Group P' 'dated Group P evidence'
     require_match "docs/INTEGRATION-TESTING.md" 'Group O.*2026-05-21' 'dated Group O evidence'
     require_match "docs/INTEGRATION-TESTING.md" 'Group P.*2026-05-21' 'dated Group P evidence'
+}
+
+check_preview_claim_drift() {
+    local paths=()
+    local path
+
+    while IFS= read -r path; do
+        paths+=("$path")
+    done < <(existing_paths "${PRODUCT_DOC_PATHS[@]}")
+
+    if [[ "${#paths[@]}" -eq 0 ]]; then
+        report_error "preview claim drift check had no paths to scan"
+        return
+    fi
+
+    local file line_no text
+
+    while IFS=: read -r file line_no text; do
+        report_error "$file:$line_no claims conaryd package execution is still blanket 501: $text"
+    done < <(
+        rg -n -i -- 'conaryd.*package (install/remove/update|mutation).*501 Not Implemented|package install/remove/update routes return.*501 Not Implemented' "${paths[@]}" || true
+    )
+
+    while IFS=: read -r file line_no text; do
+        report_error "$file:$line_no claims every install builds an EROFS generation: $text"
+    done < <(
+        rg -n -i -- 'every install[^.\n]*(builds|produces)[^.\n]*EROF|every install, remove, (or |and )?(upgrade|update)[^.\n]*builds[^.\n]*EROF' "${paths[@]}" || true
+    )
+
+    while IFS=: read -r file line_no text; do
+        report_error "$file:$line_no makes an unmeasured under-a-minute preview claim: $text"
+    done < <(rg -n -i -- 'under a minute' "${paths[@]}" || true)
+
+    while IFS=: read -r file line_no text; do
+        report_error "$file:$line_no claims native packages are atomically absorbed/taken over without the explicit takeover boundary: $text"
+    done < <(
+        rg -n -i -- 'atomically[^.\n]*(absorbs|takes over)|absorbed atomically' "${paths[@]}" || true
+    )
 }
 
 check_policykit_truth() {
@@ -266,6 +311,7 @@ check_conary_core_surface() {
 check_schema_versions
 check_retired_commands
 check_preview_status
+check_preview_claim_drift
 check_policykit_truth
 check_conaryd_routes
 check_conary_core_surface
