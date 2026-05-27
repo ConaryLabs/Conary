@@ -76,8 +76,9 @@ The review found a strong base:
 
 It also found current risks that should shape the next queue:
 
-- `CHANGELOG.md` still contains a stale conaryd `501 Not Implemented` claim
-  while the active docs describe queued package execution;
+- the review surfaced a stale `CHANGELOG.md` conaryd `501 Not Implemented`
+  claim while active docs described queued package execution, proving that this
+  drift class needs a permanent docs-truth gate;
 - `README.md` says every install/remove/update is all-or-nothing, but legacy
   direct post-install/post-remove scriptlet failures can be warning-only after
   package files are installed or removed;
@@ -97,6 +98,12 @@ It also found current risks that should shape the next queue:
   package-manager slowness to testers;
 - the live SQLite DB is the operational authority, but generation artifacts do
   not yet carry enough state to rebuild the manager's DB after corruption;
+- adoption-only testers do not necessarily create a generation, so
+  generation-bound recovery alone does not protect the `system unadopt --all`
+  escape hatch;
+- protected scriptlet sandboxing can fail closed on hardened kernels or
+  containers where namespace creation is restricted, and those failures need to
+  be readable first-run diagnostics rather than late cryptic errors;
 - public docs explain many facts, but a tester still has to assemble the
   five-minute safe path from several places.
 
@@ -153,6 +160,8 @@ Required outcomes:
 
 - audit protected live-root scriptlet execution and document the exact root
   transition and namespace guarantees;
+- add a clear namespace/sandbox preflight diagnostic for hardened kernels and
+  container environments;
 - replace stale or ambiguous `chroot` wording if protected live-root execution
   no longer depends on it, or replace the implementation if it still does;
 - add a regression gate that fails if protected scriptlets regain the unsafe
@@ -175,7 +184,7 @@ Required outcomes:
   `conaryd`, and `conary-test`;
 - make SBOM/provenance expectations explicit for every release artifact;
 - keep local QEMU/KVM evidence honest while remote Forge validation is paused;
-- add a privacy-preserving beta support bundle flow or script;
+- add an allowlist-only, privacy-preserving beta support bundle flow or script;
 - add a beta feedback issue template and contributor-onboarding guide;
 - make "good first validation tasks" visible for testers who want to help.
 
@@ -190,20 +199,21 @@ database-first while selling generation-backed safety.
 
 Required outcomes:
 
-- write a compact generation-bound state snapshot next to each selected
-  generation artifact;
-- land a minimal forward-compatible marker writer before the first tester wave
-  so early preview generations can be distinguished from pre-snapshot
-  generations;
-- include enough package, trove, generation, publication-debt, and provenance
-  state to rebuild the live SQLite DB for manager visibility;
-- add verification commands for snapshot integrity;
-- add an explicit dry-run recovery command that reconstructs into a temporary
-  DB before touching the live DB;
-- fail closed when generation metadata and live DB disagree.
+- write a rotational SQLite-native backup before adoption/unadoption and other
+  live preview mutations, so adoption-only testers can recover the manager DB
+  before generation artifacts exist;
+- write a SQLite-native generation-bound backup next to each selected
+  generation artifact, with a small manifest for schema, generation number,
+  checksum, and compression metadata;
+- prefer SQLite's online backup API or `VACUUM INTO` over a custom JSON mirror
+  of troves/files/publications;
+- add verification commands for backup integrity;
+- add an explicit dry-run recovery command that verifies a copied backup before
+  touching the live DB;
+- fail closed when generation metadata and backup metadata disagree.
 
 Success means a damaged `conary.db` is a recoverable state-management problem,
-not a blind-manager disaster.
+not a blind-manager disaster, even for an adoption-only tester.
 
 ## Deferred Roadmap Items
 
@@ -224,7 +234,7 @@ These remain important but should not crowd the release-hardening queue:
 Before the limited tester post:
 
 - land Plan A;
-- land the Plan D forward-compatible generation-state marker;
+- land the Plan D rotational pre-mutation DB backup slice;
 - land the documentation and assurance portions of Plan B or explicitly narrow
   the preview if any scriptlet assurance work remains open.
 
@@ -244,7 +254,7 @@ Before making generation switching the headline ask:
 
 - Do not add a new distro target in this queue.
 - Do not add aarch64 boot assets in this queue.
-- Do not create a broad telemetry system before privacy and redaction rules are
+- Do not create a broad telemetry system before privacy and collection rules are
   explicit.
 - Do not turn the preview into a takeover-first program.
 - Do not create a native CCS corpus plan here beyond roadmap positioning.

@@ -12,6 +12,9 @@ For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 
 
 - Keep dnf, apt, and pacman authoritative for packages in adoption mode
 - Keep `conary --allow-live-system-mutation system unadopt --all` as the one-command, non-destructive escape hatch for adopted packages on hosts without a selected Conary generation
+- Write a rotational SQLite backup before adoption/unadoption and other live
+  preview mutations so the escape hatch remains recoverable even before a
+  generation exists
 - Prove non-destructive unadoption for RPM, DEB, and Arch systems
 - Ensure Conary update paths never silently turn adopted packages into Conary-owned packages
 - Make takeover an explicit opt-in beyond the risk-free adoption lane
@@ -92,7 +95,8 @@ Umbrella design:
 2. **Scriptlet trust assurance** -
    [plan](docs/superpowers/plans/2026-05-26-scriptlet-trust-assurance.md).
    Resolve the protected-sandbox `chroot`/root-transition ambiguity, make
-   direct scriptlet failure semantics structured and visible, and design
+   namespace failures readable on hardened kernels and containers, make direct
+   scriptlet failure semantics structured and visible, and design
    capability-scoped integration hooks before relying on unsandboxed fallbacks.
 3. **Release evidence and supportability** -
    [plan](docs/superpowers/plans/2026-05-26-release-evidence-and-supportability.md).
@@ -101,10 +105,10 @@ Umbrella design:
    and turn the limited preview into a contributor funnel.
 4. **Generation state resilience** -
    [plan](docs/superpowers/plans/2026-05-26-generation-state-resilience.md).
-   Add a forward-compatible generation-state marker before the first tester
-   wave, then add generation-bound DB snapshots and a rebuild/recovery path so
-   a damaged live SQLite DB does not blind the manager when generation
-   artifacts and metadata are still intact.
+   Add rotational pre-mutation SQLite backups before the first tester wave,
+   then add generation-bound SQLite-native backups and recovery commands so a
+   damaged live SQLite DB does not blind the manager when generation artifacts
+   and metadata are still intact.
 
 Strategic follow-up after the preview queue:
 
@@ -121,8 +125,8 @@ Strategic follow-up after the preview queue:
 ## Near-Term Priorities
 
 1. Land the preview truth/onboarding plan before inviting new public testers.
-2. Add the generation-state forward-compat marker before first-wave tester
-   generations become part of the support story.
+2. Add rotational pre-mutation SQLite backups before first-wave tester
+   adoption/unadoption becomes part of the support story.
 3. Land the scriptlet trust-assurance plan before widening beyond careful VM or
    non-critical-machine testers.
 4. Keep `conary system unadopt` and selected-generation `native-handoff` proof
@@ -131,8 +135,8 @@ Strategic follow-up after the preview queue:
    evidence green in rotation while remote KVM validation is paused.
 6. Add release evidence, support-bundle, and contributor-onboarding polish
    before treating the limited preview as more than a small tester program.
-7. Add full generation-state reconstruction before generation switching becomes the
-   headline public ask.
+7. Add full generation-state DB backup and recovery before generation switching
+   becomes the headline public ask.
 8. Keep daily-driver UX, shell completions, release polish, and operator
    diagnostics current as preview feedback arrives.
 

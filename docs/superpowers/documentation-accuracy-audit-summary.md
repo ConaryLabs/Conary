@@ -74,6 +74,12 @@ failure modes, a generation-state marker before the first tester wave, support
 bundle redaction scope, and source-selection documentation before behavior
 changes.
 
+The Gemini follow-up review then shifted Plan D away from a custom JSON
+trove/file/publication mirror toward SQLite-native backups, added rotational
+pre-mutation DB backups for adoption-only recovery, tightened support bundles
+to an allowlist-only model, and added namespace preflight diagnostics for
+hardened kernels and restricted containers.
+
 Audited every tracked documentation-like file returned by
 `bash scripts/docs-audit-inventory.sh`: tracked files spanning root docs,
 assistant entrypoints, GitHub templates, canonical docs under `docs/`,
