@@ -61,12 +61,11 @@ after landing.
 
 ### 2026-05-26 Review-Derived Release Hardening Queue
 
-The multi-model release review has opened a new active planning lane. The
-current roadmap now points at one umbrella design and four implementation
-plans: preview truth/onboarding, scriptlet trust assurance, release evidence
-and supportability, and generation state resilience. These records convert the
-external review findings into a sequenced queue rather than another broad
-readiness checklist.
+The multi-model release review opened a new planning lane with one umbrella
+design and four implementation plans: preview truth/onboarding, scriptlet trust
+assurance, release evidence and supportability, and generation state
+resilience. These records converted the external review findings into a
+sequenced queue rather than another broad readiness checklist.
 
 The DeepSeek follow-up review tightened the active queue around Remi cold-start
 latency, the live-mutation acknowledgement explanation, first-run `system init`
@@ -80,10 +79,18 @@ to an allowlist-only model, and added namespace preflight diagnostics for
 hardened kernels and restricted containers.
 
 The agentic plan review then tightened blocker sequencing and implementation
-specificity: minimum Plan C supportability now gates first public testers,
-Plan D requires live-mutation inventory plus pre/post DB checkpoints and
-non-generation recovery, Plan B distinguishes sandbox setup failures from script
-exit failures, and Plan A's first-run path is bounded by timing/disk evidence.
+specificity: minimum Plan C supportability gated first public testers until it
+landed, Plan D required live-mutation inventory plus pre/post DB checkpoints
+and non-generation recovery, Plan B distinguishes sandbox setup failures from
+script exit failures, and Plan A's first-run path is bounded by timing/disk
+evidence.
+
+The follow-up reconciliation completed the preview truth/onboarding,
+release-evidence/supportability, and generation-state-resilience plan records
+and moved them to archive paths. The active `plans/` root intentionally keeps
+only the scriptlet trust-assurance plan, because that remains the release
+hardening blocker before widening beyond careful VM or non-critical-machine
+testers.
 
 Audited every tracked documentation-like file returned by
 `bash scripts/docs-audit-inventory.sh`: tracked files spanning root docs,

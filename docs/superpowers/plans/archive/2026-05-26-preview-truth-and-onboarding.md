@@ -74,7 +74,7 @@ generation DB recovery except where public docs must stop overclaiming them.
 - Read: `site/src/routes`
 - Read: `apps/conary/src/dispatch.rs`
 
-- [ ] **Step 1: Confirm the conaryd route claim is not stale**
+- [x] **Step 1: Confirm the conaryd route claim is not stale**
 
 Run:
 
@@ -86,7 +86,7 @@ Expected: current-state docs and changelog language agree that conaryd package
 routes queue package jobs rather than returning blanket `501 Not Implemented`.
 If the stale claim remains, fix it in Task 2.
 
-- [ ] **Step 2: Confirm the current single-package dry-run route**
+- [x] **Step 2: Confirm the current single-package dry-run route**
 
 Run:
 
@@ -97,7 +97,7 @@ rg -n "single-package adoption dry-run" apps/conary/src/dispatch.rs apps/conary/
 Expected before the fix: dispatch rejects single-package adoption dry-run and
 CLI help says it is unsupported.
 
-- [ ] **Step 3: Run the existing docs truth gate**
+- [x] **Step 3: Run the existing docs truth gate**
 
 Run:
 
@@ -115,7 +115,7 @@ covered yet.
 - Modify: `README.md`
 - Modify: `docs/superpowers/documentation-accuracy-audit-ledger.tsv`
 
-- [ ] **Step 1: Ensure the changelog conaryd bullet is current**
+- [x] **Step 1: Ensure the changelog conaryd bullet is current**
 
 If the stale bullet remains, replace it with:
 
@@ -125,7 +125,7 @@ If the stale bullet remains, replace it with:
   acknowledgement boundary.
 ```
 
-- [ ] **Step 2: Revise README atomicity wording**
+- [x] **Step 2: Revise README atomicity wording**
 
 Replace the absolute "If something fails, your system stays exactly as it was"
 claim with wording equivalent to:
@@ -141,7 +141,7 @@ post-scriptlet side effects rather than part of the same rollback boundary.
 
 Keep the tone user-facing, not defensive.
 
-- [ ] **Step 3: Verify the stale text is gone**
+- [x] **Step 3: Verify the stale text is gone**
 
 Run:
 
@@ -158,7 +158,7 @@ may remain only if they describe old releases accurately.
 - Modify: `README.md`
 - Modify: `site/src/routes/install/+page.svelte`
 
-- [ ] **Step 1: Add a `Five-Minute Preview` subsection**
+- [x] **Step 1: Add a `Five-Minute Preview` subsection**
 
 Add the sequence below before or at the top of the existing quickstart. The
 default path must be safe to complete in one sitting on a VM or non-critical
@@ -190,7 +190,7 @@ quickstart.
 If release binaries are not yet published for the current tag, keep the build
 steps as a developer path but label them that way.
 
-- [ ] **Step 2: Decide binary-vs-source tester expectations**
+- [x] **Step 2: Decide binary-vs-source tester expectations**
 
 Before publishing the tester post, choose one of these explicit paths:
 
@@ -203,7 +203,7 @@ source-build path: time the build-from-source path on a clean VM and state the
 expected compile time honestly in the quickstart
 ```
 
-- [ ] **Step 3: Explain the live-mutation acknowledgement flag at first use**
+- [x] **Step 3: Explain the live-mutation acknowledgement flag at first use**
 
 Add one sentence near the first command that uses the flag:
 
@@ -215,7 +215,7 @@ where the preview moves from inspection into changing the active host.
 Do not add a shorter alias in this task unless the CLI review chooses one
 explicitly and adds matching command-risk tests.
 
-- [ ] **Step 4: Put the escape hatch near the first mutating command**
+- [x] **Step 4: Put the escape hatch near the first mutating command**
 
 Add one sentence immediately after the first adoption apply command:
 
@@ -225,7 +225,7 @@ system unadopt --all` removes Conary tracking without deleting native package
 files.
 ```
 
-- [ ] **Step 5: Mirror the same flow on the install page**
+- [x] **Step 5: Mirror the same flow on the install page**
 
 Update the site install page so the first path is adoption-led and reversible,
 not takeover-led and not generation-export-led.
@@ -237,7 +237,7 @@ not takeover-led and not generation-export-led.
 - Modify: `site/src/routes/install/+page.svelte`
 - Modify or create only if chosen: `scripts/remi-prewarm-preview.sh`
 
-- [ ] **Step 1: Time the cold path**
+- [x] **Step 1: Time the cold path**
 
 On a clean VM or clean Remi cache, time the first supported install path:
 
@@ -248,7 +248,7 @@ time conary install nginx --dry-run
 Record the distro, package, cache state, and elapsed time in the implementation
 PR.
 
-- [ ] **Step 2: Choose the preview mitigation**
+- [x] **Step 2: Choose the preview mitigation**
 
 Pick one. Caveat-only is acceptable only if the measured cold path is below the
 threshold chosen in the implementation PR; use 30 seconds as the starting
@@ -265,7 +265,7 @@ server pre-conversion: pre-convert a top package set for Fedora 44, Ubuntu
 26.04 LTS, and Arch before the tester post
 ```
 
-- [ ] **Step 3: Keep the scope small**
+- [x] **Step 3: Keep the scope small**
 
 The initial warm set should be no larger than packages used in the quickstart
 and integration smoke paths, for example:
@@ -283,7 +283,7 @@ sqlite
 - Modify: `README.md`
 - Modify: `site/src/routes/compare/+page.svelte`
 
-- [ ] **Step 1: Replace the generic Nix paragraph**
+- [x] **Step 1: Replace the generic Nix paragraph**
 
 Use this content as the core comparison:
 
@@ -297,7 +297,7 @@ there today. Conary wins only if the migration path is safer and easier to
 try.
 ```
 
-- [ ] **Step 2: Adjust comparison table wording**
+- [x] **Step 2: Adjust comparison table wording**
 
 Change blunt table labels such as `Atomic transactions` to distinguish:
 
@@ -307,7 +307,7 @@ Bootable generation rollback
 Native distro adoption/unadoption
 ```
 
-- [ ] **Step 3: Check site copy for replacement overclaims**
+- [x] **Step 3: Check site copy for replacement overclaims**
 
 Run:
 
@@ -324,7 +324,7 @@ and unadoption, not takeover or generation switching.
 - Modify: `scripts/check-doc-truth.sh`
 - Modify: `scripts/test-doc-truth.sh`
 
-- [ ] **Step 1: Add changelog and all site paths to the truth scan**
+- [x] **Step 1: Add changelog and all site paths to the truth scan**
 
 Extend `PRODUCT_DOC_PATHS` in `scripts/check-doc-truth.sh`:
 
@@ -341,12 +341,12 @@ PRODUCT_DOC_PATHS=(
 )
 ```
 
-- [ ] **Step 2: Add explicit stale conaryd detection**
+- [x] **Step 2: Add explicit stale conaryd detection**
 
 Add a check that reports an error if `CHANGELOG.md` or active site copy says
 conaryd package mutation routes still return blanket `501 Not Implemented`.
 
-- [ ] **Step 3: Update fixture tests**
+- [x] **Step 3: Update fixture tests**
 
 Add one failing fixture in `scripts/test-doc-truth.sh` where `CHANGELOG.md`
 contains:
@@ -361,7 +361,7 @@ Expected failure text:
 claims conaryd package execution is still blanket 501
 ```
 
-- [ ] **Step 4: Add stale site/status detection**
+- [x] **Step 4: Add stale site/status detection**
 
 Add negative fixtures and real checks for stale site claims found in the
 baseline sweep, including:
@@ -373,7 +373,7 @@ under a minute
 atomically absorbs/takes over native packages without explicit takeover
 ```
 
-- [ ] **Step 5: Run the truth tests**
+- [x] **Step 5: Run the truth tests**
 
 Run:
 
@@ -392,7 +392,7 @@ Expected: both pass.
 - Modify: `apps/conary/tests/live_host_mutation_safety.rs`
 - Modify: `README.md`
 
-- [ ] **Step 1: Prefer implementation if package discovery can be reused safely**
+- [x] **Step 1: Prefer implementation if package discovery can be reused safely**
 
 If `cmd_adopt_packages` can expose the same package query and CAS/file-count
 summary without DB or CAS mutation, add a dry-run branch that prints:
@@ -404,7 +404,7 @@ Native package-manager authority remains unchanged.
 No Conary DB, CAS, or host files were modified.
 ```
 
-- [ ] **Step 2: Add the non-mutating regression test**
+- [x] **Step 2: Add the non-mutating regression test**
 
 Add an integration test that runs:
 
@@ -414,7 +414,7 @@ conary system adopt curl --dry-run
 
 and asserts no trove rows or CAS objects are added.
 
-- [ ] **Step 3: Keep the deliberate refusal if implementation is unsafe**
+- [x] **Step 3: Keep the deliberate refusal if implementation is unsafe**
 
 If the preview cannot be implemented without mutation in this slice, keep the
 refusal but update docs and tests so the first-run route says:
@@ -432,7 +432,7 @@ adopt --system --dry-run` for the safe preview path.
 - Read: `apps/conary/src/commands/model.rs`
 - Test only if a harmful mismatch is found: `cargo test -p conary-core repository::effective_policy`
 
-- [ ] **Step 1: Confirm current defaults**
+- [x] **Step 1: Confirm current defaults**
 
 Run:
 
@@ -440,7 +440,7 @@ Run:
 rg -n "latest-anywhere|SelectionMode::Latest|SelectionMode::Policy|balanced" docs/modules/source-selection.md crates/conary-core/src/repository apps/conary/src/commands/model.rs
 ```
 
-- [ ] **Step 2: Document the current dual default before changing behavior**
+- [x] **Step 2: Document the current dual default before changing behavior**
 
 If the current behavior is:
 
@@ -453,7 +453,7 @@ then document that clearly and do not change behavior in this plan. Only change
 defaults if the code contradicts docs or current behavior actively undermines
 the adoption-led preview.
 
-- [ ] **Step 3: Add or update tests**
+- [x] **Step 3: Add or update tests**
 
 If behavior changes, add a test proving default update selection does not
 switch from a package's current native source to another distro source without
@@ -466,7 +466,7 @@ explicit policy.
 - Modify: `README.md`
 - Test: focused CLI or command unit tests
 
-- [ ] **Step 1: Locate init implementation and tests**
+- [x] **Step 1: Locate init implementation and tests**
 
 Run:
 
@@ -474,7 +474,7 @@ Run:
 rg -n "system init|cmd_.*init|composefs|disk space|/conary" apps/conary/src apps/conary/tests crates/conary-core/src
 ```
 
-- [ ] **Step 2: Check common first-run failures**
+- [x] **Step 2: Check common first-run failures**
 
 Verify error messages for:
 
@@ -485,7 +485,7 @@ missing composefs or kernel support
 permission denied creating /conary
 ```
 
-- [ ] **Step 3: Add targeted improvements**
+- [x] **Step 3: Add targeted improvements**
 
 Each failure should name the failing path or requirement and the safest next
 action. Avoid suggesting destructive cleanup unless the command can prove the
@@ -497,7 +497,7 @@ state is disposable.
 - Modify: `docs/superpowers/documentation-accuracy-audit-inventory.tsv`
 - Modify: `docs/superpowers/documentation-accuracy-audit-ledger.tsv`
 
-- [ ] **Step 1: Regenerate inventory after staging new tracked docs**
+- [x] **Step 1: Regenerate inventory after staging new tracked docs**
 
 Run:
 
@@ -505,12 +505,12 @@ Run:
 bash scripts/docs-audit-inventory.sh > docs/superpowers/documentation-accuracy-audit-inventory.tsv
 ```
 
-- [ ] **Step 2: Add ledger rows for changed planning docs**
+- [x] **Step 2: Add ledger rows for changed planning docs**
 
 Every new or edited active planning doc must have one ledger row with
 `status=verified` and a concrete disposition.
 
-- [ ] **Step 3: Run verification**
+- [x] **Step 3: Run verification**
 
 Run:
 
