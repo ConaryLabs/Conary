@@ -32,6 +32,8 @@ enum Command {
     IndexGen(IndexGenArgs),
     /// Pre-warm the chunk cache by converting popular packages.
     Prewarm(PrewarmArgs),
+    /// Benchmark conversion latency and scriptlet corpus evidence.
+    ConversionBenchmark(ConversionBenchmarkArgs),
     /// Remi-owned trust admin commands.
     Trust {
         #[command(subcommand)]
@@ -151,6 +153,57 @@ struct PrewarmArgs {
     dry_run: bool,
 }
 
+#[derive(Args)]
+struct ConversionBenchmarkArgs {
+    /// Database path
+    #[arg(long, default_value = "/var/lib/conary/conary.db")]
+    db: String,
+
+    /// Path to chunk storage directory
+    #[arg(long, default_value = "/var/lib/conary/data/chunks")]
+    chunk_dir: String,
+
+    /// Path to cache/scratch directory
+    #[arg(long, default_value = "/var/lib/conary/data/cache")]
+    cache_dir: String,
+
+    /// Distribution to benchmark, such as fedora, ubuntu, debian, or arch
+    #[arg(long)]
+    distro: String,
+
+    /// Package names to benchmark. Repeat the flag for multiple packages.
+    #[arg(long = "package")]
+    packages: Vec<String>,
+
+    /// Maximum repository packages to scan when no package names are supplied.
+    #[arg(long, default_value = "25")]
+    max_packages: usize,
+
+    /// Emit JSON lines instead of pretty JSON.
+    #[arg(long)]
+    jsonl: bool,
+
+    /// Parse package metadata and scriptlets without writing converted CCS packages.
+    #[arg(long)]
+    scan_only: bool,
+
+    /// Optional R2 endpoint. When omitted, R2 write-through timing is recorded as skipped.
+    #[arg(long)]
+    r2_endpoint: Option<String>,
+
+    /// Optional R2 bucket name.
+    #[arg(long, default_value = "conary-chunks")]
+    r2_bucket: String,
+
+    /// Optional R2 key prefix.
+    #[arg(long, default_value = "chunks/")]
+    r2_prefix: String,
+
+    /// Optional R2 region string.
+    #[arg(long, default_value = "auto")]
+    r2_region: String,
+}
+
 #[derive(Subcommand)]
 enum TrustCommand {
     /// Sign targets metadata for a repository.
@@ -206,6 +259,7 @@ fn main() {
         Some(Command::Proxy(args)) => run_proxy_command(args),
         Some(Command::IndexGen(args)) => run_index_gen_command(args),
         Some(Command::Prewarm(args)) => run_prewarm_command(args),
+        Some(Command::ConversionBenchmark(args)) => run_conversion_benchmark_command(args),
         Some(Command::Trust { command }) => run_trust_command(command),
         None => run_server_command(cli.serve),
     };
@@ -377,6 +431,82 @@ fn run_prewarm_command(args: PrewarmArgs) -> Result<()> {
             println!("\nFailed packages:");
             for (package, error) in &result.failed {
                 println!("  {}: {}", package, error);
+            }
+        }
+
+        Ok(())
+    })
+}
+
+fn run_conversion_benchmark_command(args: ConversionBenchmarkArgs) -> Result<()> {
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async move {
+        let r2_store = if let Some(endpoint) = args.r2_endpoint.clone() {
+            let config = remi::server::r2::R2Config {
+                endpoint,
+                bucket: args.r2_bucket.clone(),
+                prefix: args.r2_prefix.clone(),
+                region: args.r2_region.clone(),
+            };
+            Some(std::sync::Arc::new(remi::server::R2Store::new(&config)?))
+        } else {
+            None
+        };
+
+        let service = remi::server::ConversionService::new(
+            PathBuf::from(args.chunk_dir),
+            PathBuf::from(args.cache_dir),
+            PathBuf::from(args.db),
+            r2_store,
+        );
+
+        let packages = if args.packages.is_empty() {
+            service
+                .benchmark_package_sample(&args.distro, args.max_packages)
+                .await?
+        } else {
+            args.packages
+        };
+
+        if packages.is_empty() {
+            eprintln!(
+                "No repository packages matched distro '{}'; run repo sync before benchmarking.",
+                args.distro
+            );
+        }
+
+        for package in packages {
+            let result = if args.scan_only {
+                service
+                    .scan_package_scriptlets(&args.distro, &package, None, None)
+                    .await
+            } else {
+                service
+                    .benchmark_package_conversion(&args.distro, &package, None, None)
+                    .await
+            };
+
+            match result {
+                Ok(evidence) => {
+                    if args.jsonl {
+                        println!("{}", serde_json::to_string(&evidence)?);
+                    } else {
+                        println!("{}", serde_json::to_string_pretty(&evidence)?);
+                    }
+                }
+                Err(err) => {
+                    let evidence = serde_json::json!({
+                        "distro": &args.distro,
+                        "package": package,
+                        "converted": false,
+                        "error": err.to_string(),
+                    });
+                    if args.jsonl {
+                        println!("{}", serde_json::to_string(&evidence)?);
+                    } else {
+                        println!("{}", serde_json::to_string_pretty(&evidence)?);
+                    }
+                }
             }
         }
 
