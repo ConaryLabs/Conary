@@ -133,13 +133,16 @@ Required outcomes:
 - revise atomicity wording so it distinguishes package DB/file transaction
   atomicity, generation atomicity, and best-effort legacy scriptlet side
   effects;
-- add a five-minute adoption/unadoption quickstart that is not build-from-source
-  as the main public tester path;
+- add a bounded five-minute adoption/unadoption quickstart that is not
+  build-from-source as the main public tester path and does not call
+  full-system CAS-backed adoption "five minute" unless timing/disk evidence
+  proves it;
 - make the unadopt and native-handoff recovery paths prominent;
 - explain the live-mutation acknowledgement flag at first use and decide
   whether a shorter preview-safe alias or session acknowledgement is needed;
 - document Remi cold-start conversion latency and either pre-warm a small tested
-  package set or provide an explicit tester pre-warm command;
+  package set, provide an explicit tester pre-warm command, or prove the cold
+  path is below the preview threshold;
 - audit `conary system init` first-run failure modes such as existing state,
   low disk space, and missing kernel features;
 - sharpen the Nix comparison into one honest paragraph;
@@ -168,6 +171,8 @@ Required outcomes:
   `chroot` capability;
 - make legacy post-install/post-remove warning-only failures visible through
   structured changeset metadata, status, or history;
+- preflight protected sandbox setup before package file/DB mutation and
+  distinguish setup/enforcement failures from script process exit failures;
 - define a small capability declaration model for scriptlets that need system
   integration, instead of telling operators to disable the sandbox wholesale.
 
@@ -199,9 +204,14 @@ database-first while selling generation-backed safety.
 
 Required outcomes:
 
-- write a rotational SQLite-native backup before adoption/unadoption and other
-  live preview mutations, so adoption-only testers can recover the manager DB
-  before generation artifacts exist;
+- inventory all live preview mutation surfaces and mark each as covered,
+  VM-only, excluded from first-wave docs, or follow-up;
+- write SQLite-native rollback and post-success checkpoint backups around
+  adoption/unadoption/native-handoff and any other first-wave live DB mutation,
+  so adoption-only testers can recover the manager DB before generation
+  artifacts exist;
+- provide non-generation backup list/verify/recover commands for adoption-only
+  recovery;
 - write a SQLite-native generation-bound backup next to each selected
   generation artifact, with a small manifest for schema, generation number,
   checksum, and compression metadata;
@@ -234,9 +244,12 @@ These remain important but should not crowd the release-hardening queue:
 Before the limited tester post:
 
 - land Plan A;
-- land the Plan D rotational pre-mutation DB backup slice;
+- land the Plan D live-mutation inventory plus adoption-lane rollback,
+  post-success checkpoint, and non-generation recovery slice;
+- land the minimum Plan C supportability slice: artifact/source expectation
+  matrix, support bundle, beta issue template, and evidence command block;
 - land the documentation and assurance portions of Plan B or explicitly narrow
-  the preview if any scriptlet assurance work remains open.
+  the preview lanes if any scriptlet assurance work remains open.
 
 Before widening beta:
 

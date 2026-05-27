@@ -4,7 +4,12 @@
 
 **Goal:** Make Conary's scriptlet trust story precise, test-backed, and visible to operators before the preview widens.
 
-**Architecture:** Start with an assurance audit of protected live-root execution, then either update stale docs or harden the implementation. Add regression tests around unsafe root-transition capabilities, record legacy direct-scriptlet degradation structurally, and design a narrow capability model for packages that need real host integration.
+**Architecture:** Start with an assurance audit of protected live-root execution,
+then either update stale docs or harden the implementation. Add pre-mutation
+sandbox setup checks, typed scriptlet outcomes, regression tests around unsafe
+root-transition capabilities, structured degradation metadata for true script
+exit failures, and a narrow capability model for packages that need real host
+integration.
 
 **Tech Stack:** Rust scriptlet/container code, seccomp capability declarations, rusqlite changeset metadata, Markdown security docs, focused cargo tests.
 
@@ -28,7 +33,7 @@ semantics honest.
   syscall profile excludes `chroot` and captures allowed root-transition
   behavior.
 - Modify `crates/conary-core/src/scriptlet/mod.rs`: expose structured execution
-  outcomes if needed.
+  outcomes and live-root sandbox preflight if needed.
 - Modify `apps/conary/src/commands/install/scriptlets.rs`,
   `apps/conary/src/commands/remove.rs`, and upgrade scriptlet call sites:
   record warning-only post-scriptlet failures in structured metadata.
@@ -50,8 +55,12 @@ semantics honest.
 - Direct execution remains an explicit legacy escape hatch; do not imply it is
   sandboxed.
 - Post-install/post-remove legacy scriptlet failures may remain warning-only
-  after package file state changes, but they must be visible as degraded side
-  effects in history/status.
+  after package file state changes only when the sandbox was set up correctly
+  and the script process itself exited nonzero. Sandbox setup/enforcement
+  failures must be detected before file/DB mutation or fail the command.
+- The security story must distinguish `requested_sandbox_mode` from
+  `effective_sandbox`; `auto` can choose direct execution for low-risk
+  live-root scripts and must not be described as protected.
 - Capability declarations should be narrow and declarative. They should not be
   a synonym for "run the whole script unsandboxed."
 - If capability declarations parse before enforcement exists, install paths
@@ -78,16 +87,22 @@ rg -n "execute_sandbox_live|pivot_root|chroot|SandboxMode|namespace|seccomp" cra
 
 - [ ] **Step 2: Classify the actual root-transition mechanism**
 
-Record the answer in the implementation PR description:
+Record the answer in the implementation PR description with separate cases:
 
 ```text
-protected live-root root transition: pivot_root | chroot | other
-target-root/offline install transition: chroot | other
+protected live-root root/no-userns: pivot_root required | other
+protected live-root unprivileged-userns: chroot after non-host-root mapping | other
+protected live-root chroot fallback in enforce mode: fatal | allowed
+target-root/offline install transition: chroot/container | other
 scriptlet syscall profile allows chroot: yes | no
+live-root protected seccomp profile installed: yes | no
 ```
 
 If the profile allows `chroot`, stop and either remove it from protected
 scriptlet execution or update this plan with the exact compatibility reason.
+If live-root protected mode does not install the scriptlet seccomp profile,
+either add it or make the docs explicit that live-root protection relies on
+namespace and mount isolation rather than seccomp.
 
 - [ ] **Step 3: Classify hardened-kernel and container failure modes**
 
@@ -100,14 +115,15 @@ rootless or restricted container
 hardened kernel with unprivileged user namespaces disabled
 ```
 
-The implementation must turn namespace setup failures into one clear error
-that names the missing capability and the choices:
+The implementation must turn namespace setup failures into one clear error that
+names the missing capability. The primary remediation must be safer
+environmental setup, not direct execution:
 
 ```text
 Protected scriptlet sandboxing requires mount and user namespace support.
-Enable the required kernel/container namespace support, run inside a VM, or
-rerun with --sandbox=never only if you intentionally accept direct host
-mutation.
+Enable the required kernel/container namespace support or run inside a VM.
+Dangerous legacy direct execution is available only with --sandbox=never plus
+the live-host mutation acknowledgement, and it records effective_sandbox=direct.
 ```
 
 - [ ] **Step 4: Add an assurance note to the security doc**
@@ -117,15 +133,62 @@ Add a short section:
 ```markdown
 ## Assurance Notes
 
-Protected live-root scriptlets do not receive the `chroot` syscall in the
-scriptlet seccomp profile. Target-root build/install flows may still use
-chroot-style execution for alternate roots; that is not the protected live-root
-sandbox boundary.
+Protected live-root scriptlets do not receive the `chroot` syscall in any
+enforced live-root seccomp profile. When unprivileged user namespaces are used,
+setup may enter the prepared root with chroot after root maps to a non-host
+UID/GID; that is distinct from allowing the scriptlet process to call `chroot`.
+Target-root build/install flows may still use chroot-style execution for
+alternate roots; that is not the protected live-root sandbox boundary.
 ```
 
 Adjust the wording if the audit proves a different current fact.
 
-### Task 2: Add Regression Tests For Unsafe Root-Transition Drift
+### Task 2: Add Pre-Mutation Sandbox Setup And Outcome Typing
+
+**Files:**
+- Modify: `crates/conary-core/src/scriptlet/mod.rs`
+- Modify: `crates/conary-core/src/container/mod.rs`
+- Modify: `apps/conary/src/commands/install/scriptlets.rs`
+- Modify: `apps/conary/src/commands/remove.rs`
+
+- [ ] **Step 1: Add a protected live-root preflight**
+
+Before package file/DB mutation for packages with runnable live-root scriptlets,
+verify that protected sandbox setup can create the required namespaces,
+writable layers, and enforcement handles. If preflight fails, abort before
+mutating package state.
+
+- [ ] **Step 2: Add typed outcomes**
+
+Return or record outcomes equivalent to:
+
+```rust
+enum ScriptletOutcome {
+    Skipped,
+    ScriptExited { code: Option<i32> },
+    SandboxSetupUnavailable { message: String },
+    EnforcementSetupFailed { message: String },
+}
+```
+
+Only `ScriptExited` in post phases may degrade to warning-only after package
+state changes. Setup and enforcement failures must fail closed.
+
+- [ ] **Step 3: Record requested and effective sandbox mode**
+
+Structured metadata must include:
+
+```text
+requested_sandbox_mode
+effective_sandbox
+phase
+failure_kind
+```
+
+This prevents `--sandbox=auto` direct execution from being confused with
+protected sandboxing.
+
+### Task 3: Add Regression Tests For Unsafe Root-Transition Drift
 
 **Files:**
 - Modify: `crates/conary-core/src/capability/declaration.rs`
@@ -141,25 +204,32 @@ Add or keep a unit test equivalent to:
 fn scriptlet_profile_does_not_allow_chroot() {
     let profile = SyscallProfile::parse("scriptlet").unwrap();
     assert!(
-        !profile.syscalls.iter().any(|syscall| syscall == "chroot"),
+        !profile.allowed_syscalls().iter().any(|syscall| syscall == "chroot"),
         "protected scriptlets must not regain the classic chroot escape primitive"
     );
 }
 ```
 
-- [ ] **Step 2: Add a protected-mode setup test**
+- [ ] **Step 2: Assert live-root enforcement matches the docs**
+
+If protected live-root mode claims seccomp enforcement, assert that
+`live_sandbox_config()` installs `SyscallCapabilities { profile:
+Some("scriptlet"), ... }` or the local equivalent. If it intentionally does not
+use seccomp, assert the docs say so explicitly.
+
+- [ ] **Step 3: Add a protected-mode setup test**
 
 If the container module exposes enough structure, add a test that asserts
 protected live-root setup uses the hardened path and fails closed when the
 required namespace operations are unavailable.
 
-- [ ] **Step 3: Add readable namespace-preflight diagnostics**
+- [ ] **Step 4: Add readable namespace-preflight diagnostics**
 
 If current errors are generic `Operation not permitted` or low-level namespace
 errors, add a focused helper that maps them to the protected-sandbox diagnostic
 from Task 1.
 
-- [ ] **Step 4: Run focused tests**
+- [ ] **Step 5: Run focused tests**
 
 Run:
 
@@ -170,7 +240,7 @@ cargo test -p conary-core container
 
 Expected: both pass.
 
-### Task 3: Make Direct Scriptlet Degradation Structured
+### Task 4: Make Direct Scriptlet Degradation Structured
 
 **Files:**
 - Modify: `apps/conary/src/commands/changeset_metadata.rs`
@@ -188,7 +258,9 @@ Extend the existing metadata envelope with entries shaped like:
   "kind": "scriptlet_warning",
   "phase": "post-install",
   "package": "example",
-  "sandbox_mode": "never",
+  "failure_kind": "ScriptExited",
+  "requested_sandbox_mode": "auto",
+  "effective_sandbox": "direct",
   "message": "post-install scriptlet failed after package files were installed"
 }
 ```
@@ -200,10 +272,13 @@ when a warning-only scriptlet fails. Keep existing warning output.
 
 - [ ] **Step 3: Add regression coverage**
 
-Add a test with a package whose post-install scriptlet exits nonzero. Assert:
+Add tests for post-install, upgrade old post-remove, and remove post-remove.
+For each, cover both a script process that exits nonzero and a sandbox setup
+failure. Assert:
 
 - package file state is installed if that remains the chosen behavior;
-- command output warns;
+- command output warns only for `ScriptExited` post-phase failures;
+- setup/enforcement failures fail closed before mutation;
 - history or changeset metadata records `scriptlet_warning`;
 - README atomicity wording remains accurate.
 
@@ -219,7 +294,7 @@ cargo test -p conary commands::changeset_metadata
 Expected: tests pass or the harness target name is adjusted to the existing
 scriptlet test target.
 
-### Task 4: Design Capability-Scoped Host Integration
+### Task 5: Design Capability-Scoped Host Integration
 
 **Files:**
 - Modify: `docs/specs/ccs-format-v1.md`
@@ -249,22 +324,24 @@ paths = ["/usr/share/dbus-1/system-services", "/etc/dbus-1/system.d"]
 Add manifest parsing tests where an unknown capability produces a clear error:
 
 ```text
-unknown scriptlet capability 'pam-live-edit'; declare a supported capability or run with --sandbox=never explicitly
+unknown scriptlet capability 'pam-live-edit'; declare a supported capability or run in a VM until enforcement exists
 ```
 
 - [ ] **Step 3: Fail closed until enforcement exists**
 
-It is acceptable for this task to parse and validate declarations while
-leaving enforcement as a follow-up, but install execution must fail closed for
-packages declaring unenforced capabilities unless the operator uses
-`--sandbox=never` explicitly. The error should say:
+It is acceptable for this task to parse and validate declarations while leaving
+enforcement as a follow-up, but install execution must fail closed for packages
+declaring unenforced capabilities unless the operator chooses the documented
+dangerous direct-execution path. The error should say:
 
 ```text
 scriptlet capability declarations are present but enforcement is not available;
-rerun with --sandbox=never only if you intentionally accept direct host mutation
+enable supported capability enforcement or run inside a VM. Dangerous legacy
+direct execution requires --sandbox=never plus the live-host mutation
+acknowledgement and records effective_sandbox=direct.
 ```
 
-### Task 5: Update Security Docs And Public Atomicity Claims
+### Task 6: Update Security Docs And Public Atomicity Claims
 
 **Files:**
 - Modify: `docs/SCRIPTLET_SECURITY.md`
@@ -287,9 +364,10 @@ Add:
 
 ```markdown
 Post-install and post-remove scriptlets from legacy packages can fail after
-package file state has changed. Conary records those failures as degraded
-scriptlet side effects and surfaces them in history/status; use
-`--sandbox=never` only when you intentionally accept direct host mutation.
+package file state has changed only when the sandbox setup succeeded and the
+script process itself exited nonzero. Conary records those failures as degraded
+scriptlet side effects and surfaces them in history/status. Sandbox setup and
+enforcement failures fail closed before mutation.
 ```
 
 - [ ] **Step 3: Run docs truth and audit**

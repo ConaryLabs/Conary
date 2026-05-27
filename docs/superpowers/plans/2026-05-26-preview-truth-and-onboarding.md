@@ -4,7 +4,11 @@
 
 **Goal:** Make Conary's public preview story truthful, easy to try, and hard to overread.
 
-**Architecture:** Treat docs truth as part of the product surface. Fix stale claims, wire public docs/site/changelog into truth checks, add a safe five-minute adoption path, explain the live-mutation acknowledgement boundary, account for Remi cold-start latency, and either implement true single-package adoption dry-run or make the unsupported route explicit and tested.
+**Architecture:** Treat docs truth as part of the product surface. Fix stale
+claims, wire public docs/site/changelog into truth checks, add a bounded
+five-minute adoption path, explain the live-mutation acknowledgement boundary,
+account for Remi cold-start latency, and either implement true single-package
+adoption dry-run or make the unsupported route explicit and tested.
 
 **Tech Stack:** Markdown, Svelte site copy, Bash docs-truth scripts, Rust CLI dispatch/tests, existing docs-audit inventory and ledger.
 
@@ -45,6 +49,9 @@ generation DB recovery except where public docs must stop overclaiming them.
 - Keep build-from-source instructions for developers, but the tester quickstart
   must prefer release artifacts once they exist.
 - Atomicity wording must not hide warning-only legacy post-scriptlet behavior.
+  Before Plan B structured metadata lands, wording must describe current
+  warning-only behavior plainly instead of promising future history/status
+  fields.
 - If single-package adoption dry-run is not implemented in this pass, the
   refusal text and docs must deliberately route testers to the system-wide
   dry-run path.
@@ -52,8 +59,9 @@ generation DB recovery except where public docs must stop overclaiming them.
   service detail.
 - Source-selection defaults should be documented before behavior changes are
   considered.
-- Include `CHANGELOG.md` and public site copy in docs truth checks so this
-  exact drift class cannot recur quietly.
+- Include `CHANGELOG.md` and all public site routes in docs truth checks so this
+  exact drift class cannot recur quietly. The baseline sweep must include stale
+  schema/version claims, not only the compare page.
 
 ---
 
@@ -63,7 +71,7 @@ generation DB recovery except where public docs must stop overclaiming them.
 - Read: `README.md`
 - Read: `CHANGELOG.md`
 - Read: `docs/modules/conaryd.md`
-- Read: `site/src/routes/compare/+page.svelte`
+- Read: `site/src/routes`
 - Read: `apps/conary/src/dispatch.rs`
 
 - [ ] **Step 1: Confirm the conaryd route claim is not stale**
@@ -126,9 +134,9 @@ claim with wording equivalent to:
 **Atomic package state and generation selection.** Install, remove, and update
 operations commit package DB/file state as changesets, and generation rollback
 switches complete system states. Legacy RPM/DEB/Arch post-scriptlets can still
-fail after package files are installed or removed; Conary must report those as
-degraded side effects rather than pretending they are part of the same rollback
-boundary.
+fail after package files are installed or removed. Until the scriptlet trust
+plan lands structured degradation metadata, treat those as warning-only
+post-scriptlet side effects rather than part of the same rollback boundary.
 ```
 
 Keep the tone user-facing, not defensive.
@@ -144,7 +152,7 @@ rg -n "501 Not Implemented|If something fails, your system stays exactly as it w
 Expected: no matches in active current-state prose. Historical release entries
 may remain only if they describe old releases accurately.
 
-### Task 3: Add The Five-Minute Preview Path
+### Task 3: Add The Bounded Five-Minute Preview Path
 
 **Files:**
 - Modify: `README.md`
@@ -152,18 +160,32 @@ may remain only if they describe old releases accurately.
 
 - [ ] **Step 1: Add a `Five-Minute Preview` subsection**
 
-Add the sequence below before or at the top of the existing quickstart:
+Add the sequence below before or at the top of the existing quickstart. The
+default path must be safe to complete in one sitting on a VM or non-critical
+host; do not call full-system CAS-backed adoption "five minute" unless the
+implementation PR records timing and disk bounds that prove it.
 
 ```bash
 conary system init
 conary repo add remi https://remi.conary.io
 conary repo sync
 conary system adopt --system --dry-run
-conary --allow-live-system-mutation system adopt --system --full
+conary system adopt --status
+```
+
+If the quickstart includes an apply step, prefer a measured metadata-only or
+scoped adoption path first:
+
+```bash
+conary --allow-live-system-mutation system adopt --system
 conary system adopt --status
 conary system unadopt --all --dry-run
 conary --allow-live-system-mutation system unadopt --all
 ```
+
+If the chosen apply path uses `--full`, record clean-VM timing, package count,
+and disk growth in the implementation PR and state the expectation in the
+quickstart.
 
 If release binaries are not yet published for the current tag, keep the build
 steps as a developer path but label them that way.
@@ -174,7 +196,8 @@ Before publishing the tester post, choose one of these explicit paths:
 
 ```text
 release-binary path: publish and link a binary/package artifact for each
-supported preview distro
+supported preview distro, with the minimum artifact/provenance matrix from
+Plan C already published
 
 source-build path: time the build-from-source path on a clean VM and state the
 expected compile time honestly in the quickstart
@@ -219,7 +242,7 @@ not takeover-led and not generation-export-led.
 On a clean VM or clean Remi cache, time the first supported install path:
 
 ```bash
-time conary --allow-live-system-mutation install nginx --dry-run
+time conary install nginx --dry-run
 ```
 
 Record the distro, package, cache state, and elapsed time in the implementation
@@ -227,11 +250,13 @@ PR.
 
 - [ ] **Step 2: Choose the preview mitigation**
 
-Pick one:
+Pick one. Caveat-only is acceptable only if the measured cold path is below the
+threshold chosen in the implementation PR; use 30 seconds as the starting
+threshold unless the release notes justify another number.
 
 ```text
 documented caveat: quickstart says first use may spend time converting legacy
-packages through Remi
+packages through Remi, allowed only below the threshold
 
 pre-warm command: add a script or command that warms a small package set before
 the tester tries install/remove flows
@@ -299,7 +324,7 @@ and unadoption, not takeover or generation switching.
 - Modify: `scripts/check-doc-truth.sh`
 - Modify: `scripts/test-doc-truth.sh`
 
-- [ ] **Step 1: Add changelog and site paths to the truth scan**
+- [ ] **Step 1: Add changelog and all site paths to the truth scan**
 
 Extend `PRODUCT_DOC_PATHS` in `scripts/check-doc-truth.sh`:
 
@@ -336,7 +361,19 @@ Expected failure text:
 claims conaryd package execution is still blanket 501
 ```
 
-- [ ] **Step 4: Run the truth tests**
+- [ ] **Step 4: Add stale site/status detection**
+
+Add negative fixtures and real checks for stale site claims found in the
+baseline sweep, including:
+
+```text
+schema version older than crates/conary-core/src/db/schema.rs
+every install builds EROFS
+under a minute
+atomically absorbs/takes over native packages without explicit takeover
+```
+
+- [ ] **Step 5: Run the truth tests**
 
 Run:
 

@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make the limited preview supportable: every artifact has a clear evidence/provenance story, every beta report has useful diagnostics, and every tester sees a path to contribute.
+**Goal:** Make the limited preview supportable: every artifact or source-build
+path has a clear evidence/provenance story, every beta report has useful
+diagnostics, and every tester sees a path to contribute.
 
 **Architecture:** Add a canonical release artifact matrix and checks around it, keep local QEMU/KVM evidence honest while remote validation is paused, add an allowlist-only support-bundle flow, and create contributor-facing beta intake paths without adding heavy governance.
 
@@ -24,6 +26,8 @@ All tester diagnostics are explicit and local-first.
 - Modify `scripts/check-release-matrix.sh` or add
   `scripts/check-release-artifacts.sh`: verify documented artifacts match the
   release matrix.
+- Modify `.github/workflows/release-build.yml` if a documented binary artifact
+  lacks checksum/signature/SBOM/provenance sidecars.
 - Modify `.github/ISSUE_TEMPLATE/bug_report.md` and create
   `.github/ISSUE_TEMPLATE/beta_feedback.md`: capture preview-support context.
 - Modify `CONTRIBUTING.md`: add contributor quickstart and validation tasks.
@@ -47,8 +51,44 @@ All tester diagnostics are explicit and local-first.
   exists; do not imply hosted boot evidence is green.
 - The contributor funnel should start with validation and docs tasks, not
   kernel/boot/trust code.
+- A minimum Plan C slice must land before the first public tester post:
+  artifact/source expectation matrix, reviewed support-bundle flow, beta issue
+  template, and evidence command block. The full matrix can deepen before
+  widened beta, but first testers need a support path on day one.
 
 ---
+
+### Task 0: Minimum First-Tester Support Slice
+
+**Files:**
+- Modify: `docs/operations/release-artifact-matrix.md`
+- Modify: `.github/ISSUE_TEMPLATE/bug_report.md`
+- Create: `.github/ISSUE_TEMPLATE/beta_feedback.md`
+- Create or modify: support-bundle script/command chosen in Task 3
+- Modify: `docs/INTEGRATION-TESTING.md`
+
+- [ ] **Step 1: Decide binary or source-build first post**
+
+Before the tester post, publish one of these states:
+
+```text
+binary path: artifact URL, checksum, signature status, SBOM/provenance status,
+known caveats, and verification command
+
+source-build path: exact source commit, build commands, expected clean-VM build
+time, supported distros, and known caveats
+```
+
+- [ ] **Step 2: Land the minimum support loop**
+
+The first tester post must link:
+
+```text
+support bundle command
+beta feedback template
+release/source expectation matrix
+evidence command block
+```
 
 ### Task 1: Release Artifact Matrix
 
@@ -66,10 +106,10 @@ Use this initial table:
 
 | Product | Artifact classes | Required evidence | Preview support |
 | --- | --- | --- | --- |
-| `conary` | binary, `.ccs`, `.rpm`, `.deb`, `.pkg.tar.zst` | checksums, signature, SBOM, release-matrix row, smoke help output | limited preview |
-| `remi` | binary/container/deploy bundle | checksums, signature, SBOM, health check, admin-origin config review | service operator preview |
-| `conaryd` | binary/package artifacts | checksums, signature, SBOM, Unix-socket auth check, package-job queue smoke | local daemon preview |
-| `conary-test` | binary/package artifacts | checksums, signature, SBOM, suite inventory parse, fixture manifest check | validation tooling |
+| `conary` | binary, `.ccs`, `.rpm`, `.deb`, `.pkg.tar.zst`, or source-build fallback | checksums, signature status, SBOM/provenance status, release-matrix row, smoke help output | limited preview |
+| `remi` | binary/container/deploy bundle or source-build fallback | checksums, signature status, SBOM/provenance status, health check, admin-origin config review | service operator preview |
+| `conaryd` | binary/package artifacts or source-build fallback | checksums, signature status, SBOM/provenance status, Unix-socket auth check, package-job queue smoke | local daemon preview |
+| `conary-test` | binary/package artifacts or source-build fallback | checksums, signature status, SBOM/provenance status, suite inventory parse, fixture manifest check | validation tooling |
 ```
 
 - [ ] **Step 2: Add provenance columns**
@@ -83,6 +123,7 @@ binary download URL or package repository URL
 SLSA/provenance sidecar
 SBOM path
 known caveats
+source-build fallback and expected build time if no binary is published
 ```
 
 - [ ] **Step 3: Link it from README and ROADMAP**
@@ -103,7 +144,8 @@ Release artifact and provenance expectations are tracked in
 
 - [ ] **Step 1: Parse product names from docs**
 
-If creating a new script, start with:
+If creating a new script, start with product-name checks, then require each row
+to carry concrete URLs/paths or an explicit `source-build-only` caveat:
 
 ```bash
 #!/usr/bin/env bash
@@ -123,15 +165,25 @@ for product in conary remi conaryd conary-test; do
 done
 ```
 
-- [ ] **Step 2: Cross-check release matrix entries**
+- [ ] **Step 2: Cross-check release matrix entries and sidecars**
 
 Read the existing release matrix source used by `scripts/check-release-matrix.sh`
-and assert every documented product still exists there.
+and assert every documented product still exists there. For every row that
+claims a binary artifact, verify the documented checksum, signature status,
+SBOM/provenance status, URL/path, and caveat fields are non-empty. If the
+workflow does not produce those sidecars yet, add workflow tasks or mark the row
+`source-build-only` until it does.
 
 - [ ] **Step 3: Add the check to PR gate**
 
 If the new script is separate, add it to the docs/release validation section in
 `.github/workflows/pr-gate.yml`.
+
+- [ ] **Step 4: Add workflow follow-up when matrix claims outpace artifacts**
+
+If `.github/workflows/release-build.yml` only signs/checksums a subset of the
+matrix, either extend the workflow for the missing products or downgrade those
+rows to source-build fallback before the first tester post.
 
 ### Task 3: Allowlist-Only Support Bundle Flow
 
@@ -199,6 +251,8 @@ secret=...
 /home/<user>/.ssh/...
 Bearer ...
 X-Remi-Admin-Token: ...
+https://user:password@example
+?access_token=...
 ```
 
 If the script ever needs a non-allowlisted source, add a new explicit command
@@ -212,6 +266,17 @@ Document:
 The support bundle is local-only. Review it before attaching it to an issue.
 Do not include `/etc/conary/trust`, private keys, SSH keys, or host-local
 credential files.
+```
+
+- [ ] **Step 4: Add support-bundle privacy tests**
+
+Add tests or shell fixtures proving:
+
+```text
+conary.db is not copied by default
+raw logs and environment dumps are not collected
+repository URLs with embedded credentials are redacted
+the reviewed-before-attach reminder is present
 ```
 
 ### Task 4: Beta Feedback Intake
@@ -245,7 +310,14 @@ Include fields:
 - Support bundle reviewed before attach: yes/no
 ```
 
-- [ ] **Step 2: Add good first validation tasks**
+- [ ] **Step 2: Replace raw-log bug report guidance**
+
+Update `.github/ISSUE_TEMPLATE/bug_report.md` so it prefers the reviewed support
+bundle over pasted raw `RUST_LOG=debug` output. Keep raw debug logs as
+maintainer-requested follow-up only, with warnings not to include credentials,
+`/etc/conary/trust`, DB files, or unreviewed environment dumps.
+
+- [ ] **Step 3: Add good first validation tasks**
 
 In `CONTRIBUTING.md`, add a short section listing concrete entry points:
 
