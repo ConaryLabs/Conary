@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-05-27
-revision: 7
+revision: 8
 summary: Design for Goal 2 native ABI extraction for RPM, DEB, Arch install scriptlets and ALPM hook artifacts, byte-preserving parser facts, and RPM verification scriptlet preservation without Remi embedding, bundle conversion, or install behavior changes
 ---
 
@@ -294,6 +294,7 @@ pub enum RpmTriggerAction {
     Install,
     Uninstall,
     PostUninstall,
+    Unknown { raw_flags: u32 },
 }
 
 pub struct RpmTriggerCondition {
@@ -328,6 +329,7 @@ pub struct DebMaintainerInvocation {
 pub enum DebMaintainerMode {
     Install,
     Configure,
+    Reconfigure,
     Upgrade,
     Remove,
     Purge,
@@ -464,8 +466,10 @@ pub enum NativeArgumentValue {
     PackageInstanceCount,
     PackageName,
     TriggerName,
+    TriggerNames,
     TriggerCount,
     FilePath,
+    InstalledVersion,
     Raw(String),
 }
 
@@ -568,6 +572,12 @@ run for erase or upgrade, and triggers receive trigger-specific package/count
 arguments. Goal 2 does not need to emulate those values, but tests should assert
 that the metadata records the possible argument kinds and lifecycle paths.
 
+RPM trigger invocation contracts must be family- and action-aware. Package
+triggers and package file triggers receive `$1` and `$2` package instance counts.
+Transaction file triggers receive `$1` only. File-trigger stdin must distinguish
+`%transfiletriggerpostun`, where RPM does not make the triggering file list
+available, from the file-trigger forms that receive path lists.
+
 Unsupported trigger semantics must become explicit `DeferredReview` entries
 with stable reason codes unless the parser can prove the entry is impossible to
 preserve as native ABI metadata. They must not disappear from the native ABI
@@ -601,11 +611,16 @@ arguments live at the same index: complex Debian Policy calls such as
 `deconfigure in-favour ... [removing ...]` include literal marker arguments and
 package/version values at higher positions.
 
+`config` script metadata should include debconf's `configure` and `reconfigure`
+actions with action plus installed-version arguments when present. `postinst
+triggered` should model the second argument as a space-separated trigger-name
+list, not a single trigger name.
+
 Minimum maintainer invocation table:
 
 | Control member | Invocation modes to preserve |
 | --- | --- |
-| `config` | `configure` and any parser-visible debconf configuration mode |
+| `config` | `configure`, `reconfigure`, and any parser-visible debconf configuration mode |
 | `preinst` | `install`, `upgrade`, `abort-upgrade` |
 | `postinst` | `configure`, `triggered`, `abort-upgrade`, `abort-remove`, `abort-deconfigure` |
 | `prerm` | `remove`, `upgrade`, `deconfigure`, `failed-upgrade` |
@@ -751,7 +766,7 @@ package parse by default. Preserve the entry with explicit support metadata:
 - `Parsed` when the parser has the native body and enough metadata for later
   classification.
 - `DeferredReview` when the parser preserved the body/metadata but later goals
-  must decide semantics.
+  classify semantic behavior.
 - `Unpreservable` only for parser-visible semantics that are known impossible
   to preserve as native ABI metadata. This is not a publication, install, or
   replay block; unknown interpreters are not parser-level blockers in Goal 2.
