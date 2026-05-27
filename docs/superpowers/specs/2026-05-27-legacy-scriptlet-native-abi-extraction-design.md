@@ -64,6 +64,37 @@ Later goals consume the native ABI entries:
 - No broad helper-specific `replaced` claims.
 - No retirement of the existing flattened `Scriptlet` API.
 
+## Official Semantics Grounding
+
+Goal 2 should use upstream package-format documentation as the normative source
+for native lifecycle names, trigger names, argument contracts, and ordering.
+Implementation can still be limited by parser APIs, but tests should not invent
+undocumented lifecycle slots.
+
+Primary sources:
+
+- RPM/Fedora: RPM's `rpm-scriptlets(7)` and spec-file docs define lifecycle
+  scriptlets, transaction scriptlets, `%verify`, package triggers, file triggers,
+  transaction file triggers, trigger arguments, stdin contracts, and ordering.
+  Fedora/DNF uses RPM as the package transaction engine, so DNF documentation is
+  useful for frontend transaction context but RPM docs own the scriptlet ABI.
+- Debian/Ubuntu: Debian Policy and dpkg manpages define maintainer scripts,
+  `config`, call modes, noninteractive expectations, `postinst triggered`, and
+  `deb-triggers(5)` await/noawait declarations. Ubuntu/APT layers on Debian
+  packages through dpkg, so apt documentation is useful for frontend context but
+  dpkg/Debian Policy own the maintainer-script and trigger ABI.
+- Arch/ALPM: `alpm-install-scriptlet(5)` defines `.INSTALL` functions and their
+  version arguments. `alpm-hooks(5)` defines separate transaction hook files with
+  `[Trigger]` and `[Action]` sections, package/path targets, stdin target lists,
+  and pre/post-transaction ordering.
+
+Goal 2's current Arch implementation target covers `.INSTALL` scriptlets. Before
+implementation planning, decide whether packaged ALPM hook files under
+`/usr/share/libalpm/hooks/*.hook` should be added to Goal 2 as byte-preserved
+`ControlArtifact` entries or split into a follow-up goal. They are documented
+native transaction behavior and should not be silently ignored in the overall
+legacy-scriptlet program.
+
 ## Architecture
 
 Add native ABI metadata beside existing common package metadata.
@@ -564,6 +595,14 @@ a compatible old-API phase and updates every current caller.
 Arch extraction should preserve the full `.INSTALL` file, not only detached
 function bodies.
 
+Arch ALPM hook files are a separate documented transaction-trigger mechanism, not
+`.INSTALL` functions. If Goal 2 includes them, represent each packaged
+`/usr/share/libalpm/hooks/*.hook` file as a native ABI `ControlArtifact` with
+parsed trigger/action metadata where straightforward and raw bytes preserved in
+all cases. If Goal 2 defers them, the plan must record that deferral explicitly
+and add a follow-up goal so package-provided pacman hook semantics are not
+mistaken for covered `.INSTALL` semantics.
+
 Required callable functions:
 
 - `pre_install`
@@ -775,3 +814,15 @@ context that this parser-only goal intentionally does not own.
 
 Keep each task reviewable and avoid broad conversion or Remi changes in this
 goal.
+
+## References
+
+- RPM scriptlets and triggers: <https://rpm.org/docs/latest/man/rpm-scriptlets.7>
+- RPM spec runtime scriptlets: <https://rpm.org/docs/4.20.x/manual/spec.html#runtime-scriptlets>
+- DNF transactions passing package operations to RPM: <https://dnf.readthedocs.io/en/latest/api_transaction.html>
+- Debian Policy maintainer scripts: <https://www.debian.org/doc/debian-policy/ch-maintainerscripts.html>
+- Ubuntu package management overview: <https://ubuntu.com/server/docs/how-to/software/package-management/>
+- Ubuntu `deb-postinst(5)` maintainer-script call modes: <https://manpages.ubuntu.com/manpages/noble/man5/deb-postinst.5.html>
+- Ubuntu `deb-triggers(5)` trigger declarations: <https://manpages.ubuntu.com/manpages/questing/man5/deb-triggers.5.html>
+- Arch `.INSTALL` scriptlets: <https://man.archlinux.org/man/alpm-install-scriptlet.5.en>
+- Arch ALPM hooks: <https://man.archlinux.org/man/alpm-hooks.5>
