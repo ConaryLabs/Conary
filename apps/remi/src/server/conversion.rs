@@ -5,6 +5,9 @@
 //! to CCS format, storing chunks in the CAS.
 
 use crate::server::R2Store;
+use crate::server::conversion_timing::{
+    ConversionPhase, ConversionPhaseTiming, ConversionSkippedPhase, ConversionTimingReport,
+};
 use anyhow::{Context, Result, anyhow};
 use conary_core::ccs::convert::{ConversionOptions, ConversionResult, LegacyConverter};
 use conary_core::db::models::{ConvertedPackage, RepositoryPackage, RepositoryProvide};
@@ -18,6 +21,7 @@ use conary_core::repository::download_package;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use tracing::{debug, info};
 
@@ -38,6 +42,10 @@ pub struct ServerConversionResult {
     pub content_hash: String,
     /// Path to the generated CCS package (temporary)
     pub ccs_path: PathBuf,
+    /// Whether this result came from a cold conversion or a hot existing CCS artifact.
+    pub cache_state: String,
+    /// Phase timing report for this conversion, when collected.
+    pub timing: Option<ConversionTimingReport>,
 }
 
 /// Conversion service for Remi
@@ -68,6 +76,14 @@ struct ParsedConversion {
     original_checksum: String,
     conversion_result: ConversionResult,
     repo_pkg: RepositoryPackage,
+    phase_timings: Vec<ConversionPhaseTiming>,
+    skipped_phases: Vec<ConversionSkippedPhase>,
+}
+
+struct StoredChunks {
+    chunk_hashes: Vec<String>,
+    cas_duration: Duration,
+    r2_duration: Option<Duration>,
 }
 
 struct PersistConversionInput {
@@ -197,6 +213,40 @@ impl ConversionService {
         version: Option<&str>,
         architecture: Option<&str>,
     ) -> Result<ServerConversionResult> {
+        let mut timing = ConversionTimingReport::new(distro, package_name, version);
+        let result = self
+            .convert_package_async_inner(
+                distro,
+                package_name,
+                version,
+                architecture,
+                &mut timing,
+            )
+            .await;
+
+        match result {
+            Ok(mut result) => {
+                timing.finish(true);
+                Self::log_conversion_timing(&timing);
+                result.timing = Some(timing);
+                Ok(result)
+            }
+            Err(err) => {
+                timing.finish(false);
+                Self::log_conversion_timing(&timing);
+                Err(err)
+            }
+        }
+    }
+
+    async fn convert_package_async_inner(
+        &self,
+        distro: &str,
+        package_name: &str,
+        version: Option<&str>,
+        architecture: Option<&str>,
+        timing: &mut ConversionTimingReport,
+    ) -> Result<ServerConversionResult> {
         // Refuse to convert critical system packages
         Self::ensure_package_name_not_critical(package_name)?;
 
@@ -205,9 +255,14 @@ impl ConversionService {
             distro, package_name, version
         );
 
+        let started = Instant::now();
         let repo_pkg = self
             .find_package_for_conversion_async(distro, package_name, version, architecture)
             .await?;
+        timing.record(ConversionPhase::PackageLookup, started.elapsed());
+        if timing.version.is_none() {
+            timing.version = Some(repo_pkg.version.clone());
+        }
         info!(
             "Found package: {} {} from repo {}",
             repo_pkg.name, repo_pkg.version, repo_pkg.repository_id
@@ -219,6 +274,7 @@ impl ConversionService {
             .unwrap_or_else(|_| self.cache_dir.clone());
         let temp_dir = TempDir::new_in(&cache_dir).context("Failed to create temp directory")?;
 
+        let started = Instant::now();
         let (repo_pkg, pkg_path) = self
             .download_package_with_refresh_async(PackageDownloadRefresh {
                 distro,
@@ -230,20 +286,27 @@ impl ConversionService {
             })
             .await
             .map_err(|e| anyhow!("Failed to download package: {}", e))?;
+        timing.record(ConversionPhase::Download, started.elapsed());
         info!("Downloaded to: {:?}", pkg_path);
 
         let checksum_path = pkg_path.clone();
+        let started = Instant::now();
         let original_checksum =
             tokio::task::spawn_blocking(move || Self::calculate_checksum(&checksum_path))
                 .await
                 .map_err(|e| anyhow!("checksum task panicked: {e}"))??;
+        timing.record(ConversionPhase::Checksum, started.elapsed());
 
+        let started = Instant::now();
         if let Some(existing) = self
             .cached_conversion_result_async(distro, &repo_pkg, &original_checksum)
             .await?
         {
+            timing.record(ConversionPhase::CacheLookup, started.elapsed());
+            Self::record_cache_hit_skips(timing);
             return Ok(existing);
         }
+        timing.record(ConversionPhase::CacheLookup, started.elapsed());
 
         let parse_service = self.clone();
         let distro_owned = distro.to_string();
@@ -259,12 +322,21 @@ impl ConversionService {
         })
         .await
         .map_err(|e| anyhow!("conversion task panicked: {e}"))??;
+        timing.phases.extend(parsed.phase_timings.clone());
+        timing.skipped_phases.extend(parsed.skipped_phases.clone());
 
-        let chunk_hashes = self.store_chunks(&parsed.conversion_result).await?;
-        info!("Stored {} chunks/blobs", chunk_hashes.len());
+        let stored_chunks = self.store_chunks_with_timing(&parsed.conversion_result).await?;
+        timing.record(ConversionPhase::CasWrite, stored_chunks.cas_duration);
+        if let Some(duration) = stored_chunks.r2_duration {
+            timing.record(ConversionPhase::R2WriteThrough, duration);
+        } else {
+            timing.record_skipped(ConversionPhase::R2WriteThrough, "r2 store not configured");
+        }
+        info!("Stored {} chunks/blobs", stored_chunks.chunk_hashes.len());
 
         let persist_service = self.clone();
         let distro_owned = distro.to_string();
+        let started = Instant::now();
         tokio::task::spawn_blocking(move || {
             persist_service.persist_conversion_result(PersistConversionInput {
                 distro: distro_owned,
@@ -273,11 +345,42 @@ impl ConversionService {
                 original_checksum: parsed.original_checksum,
                 conversion_result: parsed.conversion_result,
                 repo_pkg: parsed.repo_pkg,
-                chunk_hashes,
+                chunk_hashes: stored_chunks.chunk_hashes,
             })
         })
         .await
         .map_err(|e| anyhow!("conversion persistence task panicked: {e}"))?
+        .inspect(|_| timing.record(ConversionPhase::Persistence, started.elapsed()))
+    }
+
+    fn record_cache_hit_skips(timing: &mut ConversionTimingReport) {
+        for phase in [
+            ConversionPhase::ArchiveExtraction,
+            ConversionPhase::NativeMetadataExtraction,
+            ConversionPhase::Capture,
+            ConversionPhase::AdapterDispatch,
+            ConversionPhase::Chunking,
+            ConversionPhase::CasWrite,
+            ConversionPhase::R2WriteThrough,
+            ConversionPhase::Persistence,
+        ] {
+            timing.record_skipped(phase, "cache hit; phase did not run");
+        }
+    }
+
+    fn log_conversion_timing(timing: &ConversionTimingReport) {
+        tracing::info!(
+            target: "remi::conversion_timing",
+            distro = %timing.distro,
+            package = %timing.package,
+            total_ms = timing.total_ms,
+            success = timing.success,
+            phases = %serde_json::to_string(&timing.phases)
+                .unwrap_or_else(|_| "[]".to_string()),
+            skipped_phases = %serde_json::to_string(&timing.skipped_phases)
+                .unwrap_or_else(|_| "[]".to_string()),
+            "conversion timing report"
+        );
     }
 
     async fn find_package_for_conversion_async(
@@ -361,8 +464,18 @@ impl ConversionService {
         output_dir: PathBuf,
         original_checksum: String,
     ) -> Result<ParsedConversion> {
+        let mut phase_timings = Vec::new();
+        let mut skipped_phases = Vec::new();
+
         let conn = conary_core::db::open(&self.db_path)?;
+        let started = Instant::now();
         let (mut metadata, files, format) = self.parse_package(&pkg_path, distro)?;
+        phase_timings.push(ConversionPhaseTiming {
+            phase: ConversionPhase::ArchiveExtraction,
+            duration_ms: started.elapsed().as_millis(),
+        });
+
+        let started = Instant::now();
         Self::apply_repository_identity(&mut metadata, &repo_pkg);
         Self::merge_repository_provides(&conn, &repo_pkg, &mut metadata)?;
         Self::ensure_metadata_not_critical(&metadata)?;
@@ -373,6 +486,10 @@ impl ConversionService {
             files.len(),
             metadata.provides.len()
         );
+        phase_timings.push(ConversionPhaseTiming {
+            phase: ConversionPhase::NativeMetadataExtraction,
+            duration_ms: started.elapsed().as_millis(),
+        });
 
         std::fs::create_dir_all(&output_dir)?;
         let output_dir = output_dir.canonicalize().unwrap_or(output_dir);
@@ -385,9 +502,31 @@ impl ConversionService {
         };
 
         let converter = LegacyConverter::new(options);
+        if metadata.scriptlets.is_empty() {
+            skipped_phases.push(ConversionSkippedPhase {
+                phase: ConversionPhase::Capture,
+                reason: "package has no native scriptlets to capture".to_string(),
+            });
+        } else {
+            skipped_phases.push(ConversionSkippedPhase {
+                phase: ConversionPhase::Capture,
+                reason: "capture timing is included in legacy converter timing".to_string(),
+            });
+        }
+        skipped_phases.push(ConversionSkippedPhase {
+            phase: ConversionPhase::AdapterDispatch,
+            reason: "adapter registry not implemented; analyzer timing is included in legacy converter timing"
+                .to_string(),
+        });
+
+        let started = Instant::now();
         let conversion_result = converter
             .convert(&metadata, &files, format, &original_checksum)
             .map_err(|e| anyhow!("Conversion failed: {}", e))?;
+        phase_timings.push(ConversionPhaseTiming {
+            phase: ConversionPhase::Chunking,
+            duration_ms: started.elapsed().as_millis(),
+        });
 
         info!(
             "Conversion complete: fidelity={}",
@@ -400,6 +539,8 @@ impl ConversionService {
             original_checksum,
             conversion_result,
             repo_pkg,
+            phase_timings,
+            skipped_phases,
         })
     }
 
@@ -471,6 +612,8 @@ impl ConversionService {
             total_size,
             content_hash,
             ccs_path: final_ccs_path,
+            cache_state: "cold".to_string(),
+            timing: None,
         })
     }
 
@@ -807,17 +950,26 @@ impl ConversionService {
     }
 
     /// Store blobs from conversion result in CAS
+    #[cfg(test)]
     async fn store_chunks(&self, result: &ConversionResult) -> Result<Vec<String>> {
+        Ok(self.store_chunks_with_timing(result).await?.chunk_hashes)
+    }
+
+    async fn store_chunks_with_timing(&self, result: &ConversionResult) -> Result<StoredChunks> {
         let mut chunk_hashes = Vec::new();
+        let mut cas_duration = Duration::default();
+        let mut r2_duration = self.r2_store.as_ref().map(|_| Duration::default());
         let objects_dir = self.chunk_dir.join("objects");
 
         // Get blobs from the build result (chunks or whole files)
         for (hash, data) in &result.build_result.blobs {
+            let cas_started = Instant::now();
             let (prefix, rest) = hash.split_at(2.min(hash.len()));
             let chunk_path = objects_dir.join(prefix).join(rest);
 
             // Skip if chunk already exists (content-addressed = immutable)
             if chunk_path.exists() {
+                cas_duration += cas_started.elapsed();
                 debug!("Chunk {} already exists", hash);
                 chunk_hashes.push(hash.clone());
                 continue;
@@ -838,13 +990,18 @@ impl ConversionService {
             tokio::fs::rename(&temp_path, &chunk_path)
                 .await
                 .context("Failed to rename chunk")?;
+            cas_duration += cas_started.elapsed();
 
             // R2 write-through: upload to Cloudflare R2 in parallel
             if let Some(ref r2) = self.r2_store {
+                let r2_started = Instant::now();
                 if let Err(e) = r2.put_chunk(hash, data).await {
                     tracing::warn!("R2 write-through failed for chunk {}: {}", hash, e);
                 } else {
                     debug!("R2 write-through: uploaded chunk {}", hash);
+                }
+                if let Some(total) = &mut r2_duration {
+                    *total += r2_started.elapsed();
                 }
             }
 
@@ -852,7 +1009,11 @@ impl ConversionService {
             chunk_hashes.push(hash.clone());
         }
 
-        Ok(chunk_hashes)
+        Ok(StoredChunks {
+            chunk_hashes,
+            cas_duration,
+            r2_duration,
+        })
     }
 
     /// Calculate SHA-256 checksum of a file
@@ -911,6 +1072,8 @@ impl ConversionService {
                 .clone()
                 .unwrap_or_else(|| existing.original_checksum.clone()),
             ccs_path,
+            cache_state: "hot".to_string(),
+            timing: None,
         })
     }
 
@@ -989,6 +1152,8 @@ impl ConversionService {
             total_size,
             content_hash,
             ccs_path: final_ccs_path,
+            cache_state: "recipe".to_string(),
+            timing: None,
         })
     }
 
@@ -2078,6 +2243,30 @@ mod tests {
     // --- ServerConversionResult tests ---
 
     #[test]
+    fn server_conversion_result_can_carry_timing_report() {
+        use crate::server::conversion_timing::{ConversionPhase, ConversionTimingReport};
+        use std::time::Duration;
+
+        let mut timing = ConversionTimingReport::new("fedora", "nginx", None);
+        timing.record(ConversionPhase::PackageLookup, Duration::from_millis(7));
+        timing.finish(true);
+
+        let result = ServerConversionResult {
+            name: "nginx".to_string(),
+            version: "1.28.0".to_string(),
+            distro: "fedora".to_string(),
+            chunk_hashes: vec![],
+            total_size: 0,
+            content_hash: "sha256:test".to_string(),
+            ccs_path: PathBuf::from("/tmp/nginx.ccs"),
+            cache_state: "cold".to_string(),
+            timing: Some(timing),
+        };
+
+        assert_eq!(result.timing.unwrap().phases[0].duration_ms, 7);
+    }
+
+    #[test]
     fn test_server_conversion_result_debug() {
         let result = ServerConversionResult {
             name: "nginx".to_string(),
@@ -2087,6 +2276,8 @@ mod tests {
             total_size: 1024,
             content_hash: "sha256:deadbeef".to_string(),
             ccs_path: PathBuf::from("/data/nginx.ccs"),
+            cache_state: "cold".to_string(),
+            timing: None,
         };
         // Verify Debug is implemented (would fail to compile otherwise)
         let debug_str = format!("{:?}", result);
