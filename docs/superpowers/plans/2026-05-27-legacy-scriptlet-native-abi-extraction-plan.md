@@ -116,8 +116,15 @@ Expected local package metadata literal sites to update in Task 1 are:
 - [ ] **Step 1: Write failing native ABI model tests**
 
 Create `crates/conary-core/src/packages/native_abi.rs` with the path comment,
-minimal imports, and this test module. The module will not compile until Step 3
-adds the types.
+minimal imports, and this test module. Also wire the module immediately so the
+red test is compiled:
+
+```rust
+// conary-core/src/packages/mod.rs
+pub mod native_abi;
+```
+
+The module will not compile until Step 3 adds the types.
 
 ```rust
 // conary-core/src/packages/native_abi.rs
@@ -353,8 +360,10 @@ pub enum NativeArgumentValue {
     PackageInstanceCount,
     PackageName,
     TriggerName,
+    TriggerNames,
     TriggerCount,
     FilePath,
+    InstalledVersion,
     Raw(String),
 }
 
@@ -454,6 +463,7 @@ pub enum RpmTriggerAction {
     Install,
     Uninstall,
     PostUninstall,
+    Unknown { raw_flags: u32 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -493,6 +503,7 @@ pub struct DebMaintainerInvocation {
 pub enum DebMaintainerMode {
     Install,
     Configure,
+    Reconfigure,
     Upgrade,
     Remove,
     Purge,
@@ -675,7 +686,7 @@ For these package metadata literals, add:
 - `apps/remi/src/server/conversion.rs`
 - `crates/conary-core/src/ccs/convert/converter.rs`
 
-For every package metadata literal that already sets `scriptlets`, add:
+For package parser and test literals that already set `scriptlets`, add:
 
 ```rust
 native_scriptlet_abi: Vec::new(),
@@ -685,6 +696,13 @@ For literals that use `Default::default()` on vectors, use:
 
 ```rust
 native_scriptlet_abi: Default::default(),
+```
+
+For generic conversion code that rebuilds metadata from a `P: PackageFormat`,
+copy the parser-owned ABI entries instead of emptying them:
+
+```rust
+native_scriptlet_abi: pkg.native_scriptlet_abi().to_vec(),
 ```
 
 Parser literals in `rpm.rs`, `deb.rs`, and `arch.rs` will be replaced with real
@@ -710,6 +728,9 @@ git add crates/conary-core/src/packages/native_abi.rs \
         crates/conary-core/src/packages/mod.rs \
         crates/conary-core/src/packages/traits.rs \
         crates/conary-core/src/packages/common.rs \
+        crates/conary-core/src/packages/arch.rs \
+        crates/conary-core/src/packages/deb.rs \
+        crates/conary-core/src/packages/rpm.rs \
         apps/conary/tests/conversion_integration.rs \
         apps/conary/src/commands/install/conversion.rs \
         apps/remi/src/server/conversion.rs \
@@ -761,12 +782,21 @@ post_upgrade() {
     assert_eq!(meta.function_name, "pre_install");
     assert_eq!(
         meta.function_body.as_deref(),
-        Some("\n    echo \"before $1\"\n")
+        Some("echo \"before $1\"")
     );
     assert_eq!(
         meta.function_body_sha256.as_deref(),
-        Some(crate::hash::sha256_prefixed(b"\n    echo \"before $1\"\n").as_str())
+        Some(crate::hash::sha256_prefixed(b"echo \"before $1\"").as_str())
     );
+
+    let post_upgrade = entries
+        .iter()
+        .find(|entry| entry.native_slot == "post_upgrade")
+        .expect("post_upgrade entry");
+    assert_eq!(post_upgrade.invocation.args[0].name, "new-version");
+    assert_eq!(post_upgrade.invocation.args[0].value, NativeArgumentValue::NewVersion);
+    assert_eq!(post_upgrade.invocation.args[1].name, "old-version");
+    assert_eq!(post_upgrade.invocation.args[1].value, NativeArgumentValue::OldVersion);
 }
 
 #[test]
@@ -855,7 +885,7 @@ post_install() {
 
     assert_eq!(scriptlets.len(), 1);
     assert_eq!(scriptlets[0].phase, ScriptletPhase::PostInstall);
-    assert_eq!(scriptlets[0].content, "\n    echo \"compat body\"\n");
+    assert_eq!(scriptlets[0].content, "echo \"compat body\"");
 }
 ```
 
@@ -1333,6 +1363,18 @@ fn deb_native_abi_includes_config_as_native_only() {
     assert_eq!(entry.primary_lifecycle, NativeLifecyclePath::Config);
     assert_eq!(entry.compatibility_phase, None);
     assert_eq!(entry.invocation.stdin, NativeStdinContract::Debconf);
+
+    let NativeScriptletMetadata::Deb(meta) = &entry.metadata else {
+        panic!("expected deb metadata");
+    };
+    assert!(meta
+        .maintainer_modes
+        .iter()
+        .any(|mode| mode.mode == DebMaintainerMode::Configure));
+    assert!(meta
+        .maintainer_modes
+        .iter()
+        .any(|mode| mode.mode == DebMaintainerMode::Reconfigure));
 }
 
 #[test]
@@ -1355,6 +1397,76 @@ fn deb_triggers_file_is_control_artifact_with_await_mode() {
     assert_eq!(meta.trigger_declarations[1].directive, DebTriggerDirective::Activate);
     assert_eq!(meta.trigger_declarations[1].await_mode, DebTriggerAwaitMode::Await);
 }
+
+#[test]
+fn deb_maintainer_invocation_table_preserves_mode_specific_arguments() {
+    let preinst = DebPackage::native_abi_from_control_member("preinst", b"#!/bin/sh\n:")
+        .expect("preinst entry");
+    let NativeScriptletMetadata::Deb(preinst_meta) = &preinst.metadata else {
+        panic!("expected deb metadata");
+    };
+    let upgrade = preinst_meta
+        .maintainer_modes
+        .iter()
+        .find(|mode| mode.mode == DebMaintainerMode::Upgrade)
+        .expect("preinst upgrade mode");
+    assert_eq!(upgrade.args[0].name, "action");
+    assert_eq!(upgrade.args[1].name, "old-version");
+    assert_eq!(upgrade.args[1].index, 2);
+    assert_eq!(upgrade.args[2].name, "new-version");
+    assert_eq!(upgrade.args[2].index, 3);
+
+    let postinst = DebPackage::native_abi_from_control_member("postinst", b"#!/bin/sh\n:")
+        .expect("postinst entry");
+    let NativeScriptletMetadata::Deb(postinst_meta) = &postinst.metadata else {
+        panic!("expected deb metadata");
+    };
+    let triggered = postinst_meta
+        .maintainer_modes
+        .iter()
+        .find(|mode| mode.mode == DebMaintainerMode::Triggered)
+        .expect("postinst triggered mode");
+    assert_eq!(triggered.args[1].name, "trigger-names");
+    assert_eq!(triggered.args[1].value, NativeArgumentValue::TriggerNames);
+
+    let abort_deconfigure = postinst_meta
+        .maintainer_modes
+        .iter()
+        .find(|mode| mode.mode == DebMaintainerMode::AbortDeconfigure)
+        .expect("postinst abort-deconfigure mode");
+    assert_eq!(abort_deconfigure.args[1].name, "in-favour");
+    assert_eq!(abort_deconfigure.args[2].name, "failed-install-package");
+    assert_eq!(abort_deconfigure.args[3].index, 4);
+    assert_eq!(abort_deconfigure.args[6].name, "conflicting-package");
+
+    let prerm = DebPackage::native_abi_from_control_member("prerm", b"#!/bin/sh\n:")
+        .expect("prerm entry");
+    let NativeScriptletMetadata::Deb(prerm_meta) = &prerm.metadata else {
+        panic!("expected deb metadata");
+    };
+    let deconfigure = prerm_meta
+        .maintainer_modes
+        .iter()
+        .find(|mode| mode.mode == DebMaintainerMode::Deconfigure)
+        .expect("prerm deconfigure mode");
+    assert_eq!(deconfigure.args[1].name, "in-favour");
+    assert_eq!(deconfigure.args[2].name, "package-being-installed");
+    assert_eq!(deconfigure.args[3].index, 4);
+    assert_eq!(deconfigure.args[6].name, "conflicting-package");
+
+    let postrm = DebPackage::native_abi_from_control_member("postrm", b"#!/bin/sh\n:")
+        .expect("postrm entry");
+    let NativeScriptletMetadata::Deb(postrm_meta) = &postrm.metadata else {
+        panic!("expected deb metadata");
+    };
+    let disappear = postrm_meta
+        .maintainer_modes
+        .iter()
+        .find(|mode| mode.mode == DebMaintainerMode::Disappear)
+        .expect("postrm disappear mode");
+    assert_eq!(disappear.args[1].name, "overwriter-package");
+    assert_eq!(disappear.args[2].name, "overwriter-version");
+}
 ```
 
 - [ ] **Step 2: Run the failing DEB tests**
@@ -1365,6 +1477,7 @@ Run:
 cargo test -p conary-core deb_shebang_split_preserves_flattened_interpreter_behavior
 cargo test -p conary-core deb_native_abi_includes_config_as_native_only
 cargo test -p conary-core deb_triggers_file_is_control_artifact_with_await_mode
+cargo test -p conary-core deb_maintainer_invocation_table_preserves_mode_specific_arguments
 ```
 
 Expected: compile failure for missing helper methods.
@@ -1383,7 +1496,22 @@ struct ControlTarContents {
 }
 ```
 
-Update imports to include native ABI types and `split_shebang`.
+Update the existing `crate::packages::traits` import in `deb.rs` to include the
+native ABI types and `split_shebang`:
+
+```rust
+use crate::packages::traits::{
+    ConfigFileInfo, DebControlMember, DebMaintainerInvocation, DebMaintainerMode,
+    DebNativeScriptletMetadata, DebTriggerAwaitMode, DebTriggerDeclaration,
+    DebTriggerDirective, Dependency, DependencyType, ExtractedFile, NativeArgumentContract,
+    NativeArgumentValue, NativeInvocationContract, NativeLifecyclePath,
+    NativeRootExpectation, NativeScriptletBody, NativeScriptletEntry,
+    NativeScriptletFormat, NativeScriptletKind, NativeScriptletMetadata,
+    NativeScriptletSupport, NativeStdinContract, NativeTransactionOrder,
+    NativeTransactionPosition, PackageFile, PackageFormat, Scriptlet,
+    ScriptletPhase, split_shebang,
+};
+```
 
 - [ ] **Step 4: Implement DEB control-member helpers**
 
@@ -1538,6 +1666,15 @@ fn deb_new_version_arg(index: usize, required: bool) -> NativeArgumentContract {
     Self::deb_arg(index, "new-version", NativeArgumentValue::NewVersion, required)
 }
 
+fn deb_installed_version_arg(index: usize, required: bool) -> NativeArgumentContract {
+    Self::deb_arg(
+        index,
+        "installed-version",
+        NativeArgumentValue::InstalledVersion,
+        required,
+    )
+}
+
 fn deb_marker_arg(index: usize, marker: &str, required: bool) -> NativeArgumentContract {
     Self::deb_arg(
         index,
@@ -1576,11 +1713,18 @@ fn deb_invocation(
 
 fn deb_maintainer_invocations(control_member: DebControlMember) -> Vec<DebMaintainerInvocation> {
     match control_member {
-        DebControlMember::Config => vec![Self::deb_invocation(
-            DebMaintainerMode::Configure,
-            Vec::new(),
-            vec![NativeLifecyclePath::Config],
-        )],
+        DebControlMember::Config => vec![
+            Self::deb_invocation(
+                DebMaintainerMode::Configure,
+                vec![Self::deb_installed_version_arg(2, false)],
+                vec![NativeLifecyclePath::Config],
+            ),
+            Self::deb_invocation(
+                DebMaintainerMode::Reconfigure,
+                vec![Self::deb_installed_version_arg(2, false)],
+                vec![NativeLifecyclePath::Config],
+            ),
+        ],
         DebControlMember::Preinst => vec![
             Self::deb_invocation(
                 DebMaintainerMode::Install,
@@ -1611,7 +1755,7 @@ fn deb_maintainer_invocations(control_member: DebControlMember) -> Vec<DebMainta
             ),
             Self::deb_invocation(
                 DebMaintainerMode::Triggered,
-                vec![Self::deb_arg(2, "trigger-name", NativeArgumentValue::TriggerName, true)],
+                vec![Self::deb_arg(2, "trigger-names", NativeArgumentValue::TriggerNames, true)],
                 vec![NativeLifecyclePath::Trigger],
             ),
             Self::deb_invocation(
@@ -1854,6 +1998,7 @@ Run:
 cargo test -p conary-core deb_shebang_split_preserves_flattened_interpreter_behavior
 cargo test -p conary-core deb_native_abi_includes_config_as_native_only
 cargo test -p conary-core deb_triggers_file_is_control_artifact_with_await_mode
+cargo test -p conary-core deb_maintainer_invocation_table_preserves_mode_specific_arguments
 cargo test -p conary-core deb_scriptlet
 ```
 
@@ -1901,8 +2046,16 @@ fn rpm_scriptlet_flags_preserve_names_and_bits() {
 fn rpm_trigger_action_and_comparison_are_split_from_raw_flags() {
     let flags = rpm::DependencyFlags::TRIGGERPOSTUN | rpm::DependencyFlags::LE;
 
-    assert_eq!(RpmPackage::rpm_trigger_action(flags), Some(RpmTriggerAction::PostUninstall));
+    assert_eq!(RpmPackage::rpm_trigger_action(flags), RpmTriggerAction::PostUninstall);
     assert_eq!(RpmPackage::rpm_trigger_comparison(flags), Some("<=".to_string()));
+
+    let unknown = RpmPackage::rpm_trigger_action(rpm::DependencyFlags::from_bits_retain(0));
+    assert_eq!(
+        unknown,
+        RpmTriggerAction::Unknown {
+            raw_flags: rpm::DependencyFlags::from_bits_retain(0).bits(),
+        }
+    );
 }
 ```
 
@@ -1978,6 +2131,23 @@ fn rpm_native_abi_preserves_untransaction_verify_and_all_trigger_actions() {
         Some("rpm-verify-scriptlet-deferred")
     );
 
+    let pre = entries
+        .iter()
+        .find(|entry| entry.native_slot == "%pre")
+        .expect("pre entry");
+    assert_eq!(
+        pre.lifecycle_paths,
+        vec![NativeLifecyclePath::PreInstall, NativeLifecyclePath::PreUpgrade]
+    );
+    let preun = entries
+        .iter()
+        .find(|entry| entry.native_slot == "%preun")
+        .expect("preun entry");
+    assert_eq!(
+        preun.lifecycle_paths,
+        vec![NativeLifecyclePath::PreRemove, NativeLifecyclePath::PreUpgrade]
+    );
+
     let file_trigger = entries
         .iter()
         .find(|entry| entry.native_slot == "%filetriggerin")
@@ -1987,6 +2157,20 @@ fn rpm_native_abi_preserves_untransaction_verify_and_all_trigger_actions() {
     };
     let trigger = meta.trigger.as_ref().expect("trigger metadata");
     assert_eq!(trigger.file_globs, vec!["/usr/lib".to_string()]);
+
+    let trans_postun = entries
+        .iter()
+        .find(|entry| entry.native_slot == "%transfiletriggerpostun")
+        .expect("transaction file trigger postun entry");
+    assert_eq!(trans_postun.invocation.stdin, NativeStdinContract::None);
+    assert_eq!(trans_postun.invocation.args.len(), 1);
+    let NativeScriptletMetadata::Rpm(meta) = &trans_postun.metadata else {
+        panic!("expected rpm metadata");
+    };
+    assert_eq!(
+        meta.trigger.as_ref().expect("trigger metadata").file_globs,
+        vec!["/usr/bin".to_string()]
+    );
 }
 ```
 
@@ -2006,7 +2190,24 @@ Step 5.
 
 - [ ] **Step 3: Implement RPM helper functions**
 
-Add native ABI imports to `rpm.rs`, then add:
+Update the existing `crate::packages::traits` import in `rpm.rs` to include the
+native ABI types:
+
+```rust
+use crate::packages::traits::{
+    ConfigFileInfo, Dependency, DependencyType, ExtractedFile, NativeArgumentContract,
+    NativeArgumentValue, NativeInvocationContract, NativeLifecyclePath,
+    NativeRootExpectation, NativeScriptletBody, NativeScriptletEntry,
+    NativeScriptletFormat, NativeScriptletKind, NativeScriptletMetadata,
+    NativeScriptletSupport, NativeStdinContract, NativeTransactionOrder,
+    NativeTransactionPosition, PackageFile, PackageFormat, RpmNativeScriptletMetadata,
+    RpmScriptletFlagsMetadata, RpmScriptletSlot, RpmTriggerAction,
+    RpmTriggerCondition, RpmTriggerFamily, RpmTriggerMetadata, Scriptlet,
+    ScriptletPhase,
+};
+```
+
+Then add:
 
 ```rust
 fn rpm_scriptlet_program(scriptlet: &rpm::Scriptlet) -> (String, Vec<String>) {
@@ -2036,17 +2237,19 @@ fn rpm_scriptlet_flags_metadata(
     }
 }
 
-fn rpm_trigger_action(flags: rpm::DependencyFlags) -> Option<RpmTriggerAction> {
+fn rpm_trigger_action(flags: rpm::DependencyFlags) -> RpmTriggerAction {
     if flags.contains(rpm::DependencyFlags::TRIGGERPREIN) {
-        Some(RpmTriggerAction::PreInstall)
+        RpmTriggerAction::PreInstall
     } else if flags.contains(rpm::DependencyFlags::TRIGGERIN) {
-        Some(RpmTriggerAction::Install)
+        RpmTriggerAction::Install
     } else if flags.contains(rpm::DependencyFlags::TRIGGERUN) {
-        Some(RpmTriggerAction::Uninstall)
+        RpmTriggerAction::Uninstall
     } else if flags.contains(rpm::DependencyFlags::TRIGGERPOSTUN) {
-        Some(RpmTriggerAction::PostUninstall)
+        RpmTriggerAction::PostUninstall
     } else {
-        None
+        RpmTriggerAction::Unknown {
+            raw_flags: flags.bits(),
+        }
     }
 }
 
@@ -2106,6 +2309,31 @@ fn rpm_scriptlet_invocation() -> NativeInvocationContract {
     }
 }
 
+fn rpm_lifecycle_paths_for_slot(
+    slot: RpmScriptletSlot,
+    primary: NativeLifecyclePath,
+) -> Vec<NativeLifecyclePath> {
+    match slot {
+        RpmScriptletSlot::Pre => vec![
+            NativeLifecyclePath::PreInstall,
+            NativeLifecyclePath::PreUpgrade,
+        ],
+        RpmScriptletSlot::Post => vec![
+            NativeLifecyclePath::PostInstall,
+            NativeLifecyclePath::PostUpgrade,
+        ],
+        RpmScriptletSlot::PreUn => vec![
+            NativeLifecyclePath::PreRemove,
+            NativeLifecyclePath::PreUpgrade,
+        ],
+        RpmScriptletSlot::PostUn => vec![
+            NativeLifecyclePath::PostRemove,
+            NativeLifecyclePath::PostUpgrade,
+        ],
+        _ => vec![primary],
+    }
+}
+
 fn rpm_order_for_lifecycle(lifecycle: NativeLifecyclePath) -> NativeTransactionOrder {
     NativeTransactionOrder::new(match lifecycle {
         NativeLifecyclePath::PreInstall
@@ -2155,7 +2383,7 @@ fn add_rpm_scriptlet_entry(
         native_slot: native_slot.to_string(),
         primary_lifecycle: lifecycle,
         compatibility_phase,
-        lifecycle_paths: vec![lifecycle],
+        lifecycle_paths: Self::rpm_lifecycle_paths_for_slot(slot, lifecycle),
         interpreter: Some(interpreter),
         interpreter_args,
         body: NativeScriptletBody::from_bytes(scriptlet.script.as_bytes().to_vec()),
@@ -2179,6 +2407,66 @@ RPM bodies because the `rpm` crate exposes scriptlets as strings.
 Add:
 
 ```rust
+fn rpm_trigger_invocation(
+    family: RpmTriggerFamily,
+    action: RpmTriggerAction,
+) -> NativeInvocationContract {
+    let mut args = vec![NativeArgumentContract {
+        index: 1,
+        name: "triggered-package-count".to_string(),
+        value: NativeArgumentValue::TriggerCount,
+        required: true,
+    }];
+    if family != RpmTriggerFamily::TransactionFile {
+        args.push(NativeArgumentContract {
+            index: 2,
+            name: "triggering-package-count".to_string(),
+            value: NativeArgumentValue::TriggerCount,
+            required: true,
+        });
+    }
+
+    NativeInvocationContract {
+        args,
+        environment: Vec::new(),
+        stdin: Self::rpm_trigger_stdin(family, action),
+        root: NativeRootExpectation::PackageManagerDefault,
+    }
+}
+
+fn rpm_trigger_stdin(
+    family: RpmTriggerFamily,
+    action: RpmTriggerAction,
+) -> NativeStdinContract {
+    match (family, action) {
+        (RpmTriggerFamily::File, _) => NativeStdinContract::Paths,
+        (RpmTriggerFamily::TransactionFile, RpmTriggerAction::Install)
+        | (RpmTriggerFamily::TransactionFile, RpmTriggerAction::Uninstall) => {
+            NativeStdinContract::Paths
+        }
+        (RpmTriggerFamily::TransactionFile, RpmTriggerAction::PostUninstall) => {
+            NativeStdinContract::None
+        }
+        _ => NativeStdinContract::None,
+    }
+}
+
+fn rpm_trigger_order(
+    family: RpmTriggerFamily,
+    action: RpmTriggerAction,
+) -> NativeTransactionOrder {
+    NativeTransactionOrder::new(match (family, action) {
+        (RpmTriggerFamily::TransactionFile, RpmTriggerAction::Uninstall) => {
+            NativeTransactionPosition::BeforeTransaction
+        }
+        (RpmTriggerFamily::TransactionFile, RpmTriggerAction::Install)
+        | (RpmTriggerFamily::TransactionFile, RpmTriggerAction::PostUninstall) => {
+            NativeTransactionPosition::AfterTransaction
+        }
+        _ => NativeTransactionPosition::Trigger,
+    })
+}
+
 fn add_rpm_triggers(
     entries: &mut Vec<NativeScriptletEntry>,
     family: RpmTriggerFamily,
@@ -2190,6 +2478,11 @@ fn add_rpm_triggers(
 
     for (trigger_index, trigger) in triggers.into_iter().enumerate() {
         let native_slot = Self::rpm_trigger_slot_name(family, &trigger);
+        let primary_action = trigger
+            .conditions
+            .first()
+            .map(|condition| Self::rpm_trigger_action(condition.flags))
+            .unwrap_or(RpmTriggerAction::Unknown { raw_flags: 0 });
         let (interpreter, interpreter_args) = {
             let mut program = trigger.program.clone().into_iter();
             (
@@ -2216,10 +2509,10 @@ fn add_rpm_triggers(
         let conditions = trigger
             .conditions
             .iter()
-            .filter_map(|condition| {
-                Some(RpmTriggerCondition {
+            .map(|condition| {
+                RpmTriggerCondition {
                     name: condition.name.clone(),
-                    action: Self::rpm_trigger_action(condition.flags)?,
+                    action: Self::rpm_trigger_action(condition.flags),
                     version: if condition.version.is_empty() {
                         None
                     } else {
@@ -2227,7 +2520,7 @@ fn add_rpm_triggers(
                     },
                     comparison: Self::rpm_trigger_comparison(condition.flags),
                     raw_flags: condition.flags.bits(),
-                })
+                }
             })
             .collect();
 
@@ -2242,32 +2535,8 @@ fn add_rpm_triggers(
             interpreter: Some(interpreter),
             interpreter_args,
             body: NativeScriptletBody::from_bytes(trigger.script.as_bytes().to_vec()),
-            invocation: NativeInvocationContract {
-                args: vec![
-                    NativeArgumentContract {
-                        index: 1,
-                        name: "triggered-package-count".to_string(),
-                        value: NativeArgumentValue::TriggerCount,
-                        required: true,
-                    },
-                    NativeArgumentContract {
-                        index: 2,
-                        name: "triggering-package-count".to_string(),
-                        value: NativeArgumentValue::TriggerCount,
-                        required: family != RpmTriggerFamily::TransactionFile,
-                    },
-                ],
-                environment: Vec::new(),
-                stdin: if family == RpmTriggerFamily::File
-                    || family == RpmTriggerFamily::TransactionFile
-                {
-                    NativeStdinContract::Paths
-                } else {
-                    NativeStdinContract::None
-                },
-                root: NativeRootExpectation::PackageManagerDefault,
-            },
-            order: NativeTransactionOrder::new(NativeTransactionPosition::Trigger),
+            invocation: Self::rpm_trigger_invocation(family, primary_action),
+            order: Self::rpm_trigger_order(family, primary_action),
             support: NativeScriptletSupport::DeferredReview {
                 reason_code: match family {
                     RpmTriggerFamily::Package => "rpm-trigger-semantics-deferred",
@@ -2299,7 +2568,7 @@ fn rpm_trigger_slot_name(family: RpmTriggerFamily, trigger: &rpm::Trigger) -> St
     let action = trigger
         .conditions
         .first()
-        .and_then(|condition| Self::rpm_trigger_action(condition.flags));
+        .map(|condition| Self::rpm_trigger_action(condition.flags));
     match (family, action) {
         (RpmTriggerFamily::Package, Some(RpmTriggerAction::PreInstall)) => "%triggerprein",
         (RpmTriggerFamily::Package, Some(RpmTriggerAction::Install)) => "%triggerin",
@@ -2368,20 +2637,30 @@ git commit -m "feat(packages): extract rpm native scriptlet abi"
 
 - [ ] **Step 1: Write integration tests for the public API**
 
-Create `crates/conary-core/tests/native_abi.rs`:
+Create `crates/conary-core/tests/native_abi.rs`. These tests exercise the
+public trait default and real path-based parsers for generated `.rpm`, `.deb`,
+and `.pkg.tar.gz` fixtures:
 
 ```rust
 // conary-core/tests/native_abi.rs
 
-use conary_core::packages::traits::PackageFormat;
-use conary_core::packages::{ArchPackage, DebPackage, RpmPackage};
+use conary_core::packages::traits::{
+    NativeScriptletKind, NativeScriptletMetadata, NativeStdinContract, PackageFormat,
+    ScriptletPhase,
+};
+use conary_core::packages::{arch::ArchPackage, deb::DebPackage, rpm::RpmPackage};
+use flate2::{write::GzEncoder, Compression};
+use std::fs::File;
+use std::io::{Cursor, Write};
+use std::path::{Path, PathBuf};
+use tempfile::TempDir;
 
 #[test]
 fn package_format_trait_exposes_native_abi_default_empty_for_test_double() {
     struct EmptyPackage;
 
     impl PackageFormat for EmptyPackage {
-        fn parse(_path: &str) -> conary_core::error::Result<Self> {
+        fn parse(_path: &str) -> conary_core::Result<Self> {
             Ok(Self)
         }
         fn name(&self) -> &str {
@@ -2404,7 +2683,7 @@ fn package_format_trait_exposes_native_abi_default_empty_for_test_double() {
         }
         fn extract_file_contents(
             &self,
-        ) -> conary_core::error::Result<Vec<conary_core::packages::traits::ExtractedFile>> {
+        ) -> conary_core::Result<Vec<conary_core::packages::traits::ExtractedFile>> {
             Ok(Vec::new())
         }
         fn to_trove(&self) -> conary_core::db::models::Trove {
@@ -2427,6 +2706,175 @@ fn parser_types_expose_native_abi_method() {
     assert_native_abi_method::<RpmPackage>();
     assert_native_abi_method::<DebPackage>();
     assert_native_abi_method::<ArchPackage>();
+}
+
+#[test]
+fn rpm_parser_preserves_native_scriptlet_and_trigger_slots() {
+    let temp = TempDir::new().expect("tempdir");
+    let path = write_rpm_fixture(temp.path());
+    let package = RpmPackage::parse(path.to_str().expect("utf8 rpm path"))
+        .expect("parse rpm fixture");
+
+    let slots: Vec<_> = package
+        .native_scriptlet_abi()
+        .iter()
+        .map(|entry| entry.native_slot.as_str())
+        .collect();
+    assert!(slots.contains(&"%pre"));
+    assert!(slots.contains(&"%verify"));
+    assert!(slots.contains(&"%filetriggerin"));
+    assert!(slots.contains(&"%transfiletriggerpostun"));
+    assert!(package
+        .scriptlets()
+        .iter()
+        .any(|scriptlet| scriptlet.phase == ScriptletPhase::PreInstall));
+
+    let trans_postun = package
+        .native_scriptlet_abi()
+        .iter()
+        .find(|entry| entry.native_slot == "%transfiletriggerpostun")
+        .expect("trans file trigger postun");
+    assert_eq!(trans_postun.invocation.stdin, NativeStdinContract::None);
+    let NativeScriptletMetadata::Rpm(meta) = &trans_postun.metadata else {
+        panic!("expected rpm metadata");
+    };
+    assert_eq!(
+        meta.trigger.as_ref().expect("trigger metadata").file_globs,
+        vec!["/usr/bin".to_string()]
+    );
+}
+
+#[test]
+fn deb_parser_preserves_config_and_triggers_control_artifacts() {
+    let temp = TempDir::new().expect("tempdir");
+    let path = write_deb_fixture(temp.path());
+    let package = DebPackage::parse(path.to_str().expect("utf8 deb path"))
+        .expect("parse deb fixture");
+
+    assert!(package
+        .native_scriptlet_abi()
+        .iter()
+        .any(|entry| entry.native_slot == "config"));
+    let triggers = package
+        .native_scriptlet_abi()
+        .iter()
+        .find(|entry| entry.native_slot == "triggers")
+        .expect("triggers entry");
+    assert_eq!(triggers.kind, NativeScriptletKind::ControlArtifact);
+    assert!(package
+        .scriptlets()
+        .iter()
+        .any(|scriptlet| scriptlet.phase == ScriptletPhase::PostInstall));
+    assert!(!package
+        .scriptlets()
+        .iter()
+        .any(|scriptlet| scriptlet.interpreter.contains("debconf")));
+}
+
+#[test]
+fn arch_parser_preserves_install_source_and_packaged_alpm_hook() {
+    let temp = TempDir::new().expect("tempdir");
+    let path = write_arch_fixture(temp.path());
+    let package = ArchPackage::parse(path.to_str().expect("utf8 arch path"))
+        .expect("parse arch fixture");
+
+    assert!(package
+        .native_scriptlet_abi()
+        .iter()
+        .any(|entry| entry.native_slot == "post_install"));
+    let hook = package
+        .native_scriptlet_abi()
+        .iter()
+        .find(|entry| entry.native_slot.contains("alpm-hook:"))
+        .expect("alpm hook entry");
+    assert_eq!(hook.kind, NativeScriptletKind::ControlArtifact);
+    assert!(package
+        .scriptlets()
+        .iter()
+        .any(|scriptlet| scriptlet.content == "echo arch-post"));
+}
+
+fn write_rpm_fixture(dir: &Path) -> PathBuf {
+    let mut builder = rpm::PackageBuilder::new(
+        "native-abi-fixture",
+        "1.0.0",
+        "MIT",
+        "x86_64",
+        "native abi fixture",
+    );
+    builder
+        .pre_install_script("echo pre")
+        .verify_script("echo verify")
+        .file_trigger_in("/usr/lib", None, "echo filetriggerin")
+        .trans_file_trigger_postun("/usr/bin", None, "echo transfiletriggerpostun");
+    let package = builder.build().expect("build rpm");
+    let path = dir.join("native-abi-fixture.rpm");
+    package.write_file(&path).expect("write rpm");
+    path
+}
+
+fn write_deb_fixture(dir: &Path) -> PathBuf {
+    let control = b"Package: native-abi-deb\nVersion: 1.0\nArchitecture: amd64\nDescription: native abi fixture\n";
+    let postinst = b"#!/bin/sh\necho postinst\n";
+    let config = b"#!/bin/sh\n. /usr/share/debconf/confmodule\n";
+    let triggers = b"interest-noawait update-icon-caches\n";
+    let control_tar = tar_bytes(&[
+        ("control", control.as_slice()),
+        ("postinst", postinst.as_slice()),
+        ("config", config.as_slice()),
+        ("triggers", triggers.as_slice()),
+    ]);
+    let data_tar = tar_bytes(&[("usr/bin/native-abi", b"#!/bin/sh\n".as_slice())]);
+
+    let path = dir.join("native-abi.deb");
+    let file = File::create(&path).expect("create deb");
+    let mut builder = ar::Builder::new(file);
+    append_ar_member(&mut builder, "debian-binary", b"2.0\n");
+    append_ar_member(&mut builder, "control.tar", &control_tar);
+    append_ar_member(&mut builder, "data.tar", &data_tar);
+    path
+}
+
+fn write_arch_fixture(dir: &Path) -> PathBuf {
+    let pkginfo = b"pkgname = native-abi-arch\npkgver = 1.0-1\npkgdesc = native abi fixture\narch = x86_64\n";
+    let install = b"post_install() {\n    echo arch-post\n}\n";
+    let hook = b"[Trigger]\nOperation = Install\nType = Path\nTarget = usr/share/mime/*\n\n[Action]\nWhen = PostTransaction\nExec = /usr/bin/update-mime-database /usr/share/mime\nNeedsTargets\n";
+    let raw_tar = tar_bytes(&[
+        (".PKGINFO", pkginfo.as_slice()),
+        (".INSTALL", install.as_slice()),
+        ("usr/share/libalpm/hooks/30-native-abi.hook", hook.as_slice()),
+    ]);
+    let gz = gzip(raw_tar);
+    let path = dir.join("native-abi.pkg.tar.gz");
+    std::fs::write(&path, gz).expect("write arch package");
+    path
+}
+
+fn tar_bytes(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut builder = tar::Builder::new(Vec::new());
+    for (path, body) in entries {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(body.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, *path, Cursor::new(*body))
+            .expect("append tar entry");
+    }
+    builder.into_inner().expect("finish tar")
+}
+
+fn gzip(bytes: Vec<u8>) -> Vec<u8> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(&bytes).expect("gzip write");
+    encoder.finish().expect("gzip finish")
+}
+
+fn append_ar_member(builder: &mut ar::Builder<File>, name: &str, body: &[u8]) {
+    let header = ar::Header::new(name.as_bytes().to_vec(), body.len() as u64);
+    builder
+        .append(&header, Cursor::new(body))
+        .expect("append ar member");
 }
 ```
 
@@ -2481,6 +2929,7 @@ cargo test -p conary
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 git diff --check
+git diff --exit-code -- crates/conary-core/src/repository/metadata.rs crates/conary-core/src/repository/parsers
 ```
 
 Expected: every command exits with status 0.
@@ -2538,6 +2987,8 @@ If no files changed after Step 1, do not create an empty commit.
   `/usr/share/libalpm/hooks/*.hook` artifacts.
 - [ ] Native bodies hash raw bytes with `sha256:` prefixes.
 - [ ] Native-only entries do not get inaccurate `ScriptletPhase` projections.
+- [ ] Repository metadata structs under `crates/conary-core/src/repository/`
+  remain untouched by the package parser metadata field.
 - [ ] No Remi database migration, CCS conversion, bundle embedding, adapter
   classification, scriptlet execution, replay, install, update, or remove
   behavior changed.
