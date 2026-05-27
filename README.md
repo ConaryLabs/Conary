@@ -535,7 +535,9 @@ Conary is a system manager structured around a few core concepts:
 | **Label** | Package provenance: `repository@namespace:tag` |
 | **CAS** | Content-addressable storage for all file data |
 
-**Database-first design.** All state lives in SQLite. No config files for runtime state. Every operation is queryable, every state transition is recorded.
+**Database-first design.** All state lives in SQLite. No config files for runtime state. Every operation is queryable, every state transition is recorded. Conary writes SQLite-native checkpoint backups for first-wave adoption/unadoption paths and stores generation-bound DB backups next to published generation artifacts. Use `conary system db-backup recover --latest --dry-run`, `conary system generation verify-db-backup --current`, and `conary system generation recover-db --generation <n> --dry-run` to verify recovery metadata before applying it.
+
+SQLite-native backups recover Conary manager visibility for packages and generations represented by the backed-up DB. They do not recover missing package payloads, private keys, remote repository history, or native package-manager transaction history. Applying a generation-bound DB backup requires an explicit live-host acknowledgement and confirmation: `conary --allow-live-system-mutation system generation recover-db --generation <n> --yes`.
 
 For a detailed architecture overview, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 

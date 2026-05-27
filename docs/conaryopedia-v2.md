@@ -428,7 +428,7 @@ Before Conary can manage packages, its database must be initialized:
 conary system init
 ```
 
-This creates the SQLite database at `/var/lib/conary/conary.db` and sets up all tables (currently schema v69). The database is the single source of truth for all package state -- there are no configuration files for runtime state.
+This creates the SQLite database at `/var/lib/conary/conary.db` and sets up all tables (currently schema v69). The database is the single source of truth for all package state -- there are no configuration files for runtime state. Recovery metadata is SQLite-native: first-wave adoption and unadoption paths write checkpoint backups under the runtime root, and generation publication writes a DB backup under `/conary/generations/<n>/state/`.
 
 You can specify an alternate database path with `-d`:
 
@@ -682,6 +682,27 @@ conary --allow-live-system-mutation system unadopt --all
 ```
 
 Apply-mode unadoption still fails closed when a Conary generation is currently selected, because deleting tracking rows while `/conary/current` points at a generation can make the next generated root omit packages that the native package manager still believes are installed. Use `conary system native-handoff --dry-run` to inspect the selected-generation handoff plan, then `conary --allow-live-system-mutation system native-handoff --yes` to clear `/conary/current` before removing adopted tracking rows. If the operation is interrupted after its record is written, `conary --allow-live-system-mutation system native-handoff --recover --yes` resumes it. The handoff preserves native package files and native package-manager databases; it does not import native transaction history or silently take over packages.
+
+#### Database Backup Recovery
+
+Adoption-lane apply paths write pre-mutation and post-success SQLite checkpoint backups so adoption-only testers can recover Conary's manager state before any generation exists:
+
+```bash
+conary system db-backup list
+conary system db-backup verify --latest
+conary system db-backup recover --latest --dry-run
+conary --allow-live-system-mutation system db-backup recover --latest --yes
+```
+
+Generation publication also writes a SQLite-native backup next to the generation artifact:
+
+```bash
+conary system generation verify-db-backup --current
+conary system generation recover-db --generation <n> --dry-run
+conary --allow-live-system-mutation system generation recover-db --generation <n> --yes
+```
+
+SQLite-native backups recover Conary manager visibility for packages and generations represented by the backed-up DB. They do not recover missing package payloads, private keys, remote repository history, or native package-manager transaction history.
 
 #### Converting Adopted Packages to CCS
 
@@ -5541,7 +5562,7 @@ strategy:
 3. **Explicit boot-selection recovery**: The operator-facing recovery command may scan `/conary/generations/` by number descending, select a valid artifact, and remount it.
 4. **Fail**: If nothing works, return `RecoveryFailed` requiring manual intervention.
 
-This replaces the old journal-based roll-forward/roll-back system. There is no journal, no backup directory, and no staging area. The database is the single source of truth, and EROFS images are re-derivable from it.
+This replaces the old journal-based roll-forward/roll-back system. There is no journal or transaction staging area. The live database remains the single source of truth during normal operation, and EROFS images are re-derivable from DB/CAS state. Conary also writes SQLite-native checkpoint backups and generation-bound DB backups as recovery artifacts; they restore manager visibility when the live DB is missing or damaged, but they are not a second mutable state store.
 
 #### Configuration
 

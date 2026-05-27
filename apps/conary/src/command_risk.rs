@@ -335,6 +335,7 @@ fn classify_generation(command: &cli::GenerationCommands) -> CommandRiskPolicy {
     match command {
         cli::GenerationCommands::List
         | cli::GenerationCommands::Export { .. }
+        | cli::GenerationCommands::VerifyDbBackup { .. }
         | cli::GenerationCommands::Info { .. } => {
             read_only("conary system generation read-only command")
         }
@@ -349,6 +350,14 @@ fn classify_generation(command: &cli::GenerationCommands) -> CommandRiskPolicy {
             false,
         ),
         cli::GenerationCommands::Pending { .. } => read_only("conary system generation pending"),
+        cli::GenerationCommands::RecoverDb { dry_run, .. } if *dry_run => {
+            read_only("conary system generation recover-db --dry-run")
+        }
+        cli::GenerationCommands::RecoverDb { .. } => policy(
+            "conary system generation recover-db",
+            CommandRisk::AlwaysLive,
+            false,
+        ),
         cli::GenerationCommands::Switch { .. } => policy(
             "conary system generation switch",
             CommandRisk::AlwaysLive,
@@ -811,6 +820,54 @@ mod tests {
         let policy = policy(&["conary", "system", "generation", "pending"]);
         assert_eq!(policy.risk, CommandRisk::ReadOnly);
         assert!(!policy.requires_ack());
+    }
+
+    #[test]
+    fn classify_generation_db_backup_verification_and_dry_run_recovery_as_read_only() {
+        for args in [
+            [
+                "conary",
+                "system",
+                "generation",
+                "verify-db-backup",
+                "--current",
+            ]
+            .as_slice(),
+            [
+                "conary",
+                "system",
+                "generation",
+                "recover-db",
+                "--generation",
+                "7",
+                "--dry-run",
+            ]
+            .as_slice(),
+        ] {
+            let policy = policy(args);
+            assert_eq!(policy.risk, CommandRisk::ReadOnly);
+            assert!(!policy.requires_ack());
+        }
+    }
+
+    #[test]
+    fn classify_generation_db_backup_recover_apply_as_always_live() {
+        let policy = policy(&[
+            "conary",
+            "system",
+            "generation",
+            "recover-db",
+            "--generation",
+            "7",
+            "--yes",
+        ]);
+
+        assert_eq!(policy.risk, CommandRisk::AlwaysLive);
+        assert!(policy.requires_ack());
+        assert_eq!(
+            policy.command_label.as_ref(),
+            "conary system generation recover-db"
+        );
     }
 
     #[test]

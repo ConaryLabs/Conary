@@ -35,6 +35,46 @@ pub enum GenerationCommands {
         db: DbArgs,
     },
 
+    /// Verify the SQLite DB backup stored with a generation
+    VerifyDbBackup {
+        /// Installed generation number to verify
+        #[arg(long, conflicts_with = "current", required_unless_present = "current")]
+        generation: Option<i64>,
+
+        /// Verify the backup for the currently selected generation
+        #[arg(long, conflicts_with = "generation")]
+        current: bool,
+
+        #[command(flatten)]
+        db: DbArgs,
+    },
+
+    /// Recover the Conary SQLite DB from a generation-bound backup
+    RecoverDb {
+        /// Installed generation number whose DB backup should be recovered
+        #[arg(long)]
+        generation: i64,
+
+        /// Verify the recovery copy without touching the live DB
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Keep the temporary verified copy created by --dry-run
+        #[arg(long)]
+        keep_temp: bool,
+
+        /// Confirm live DB replacement
+        #[arg(short, long)]
+        yes: bool,
+
+        /// Replace a live DB even if it passes integrity checks
+        #[arg(long, hide = true)]
+        replace_healthy_db: bool,
+
+        #[command(flatten)]
+        db: DbArgs,
+    },
+
     /// Export a generation artifact as a disk image.
     Export {
         /// Installed generation number to export (defaults to current generation).

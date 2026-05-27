@@ -774,6 +774,104 @@ pub fn cmd_generation_pending(db_path: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn cmd_generation_verify_db_backup(
+    db_path: &str,
+    generation: Option<i64>,
+    current: bool,
+) -> Result<()> {
+    let runtime_root = runtime_root_for_generation_db_path(db_path);
+    let generation_number = if current {
+        current_generation(runtime_root.root())?
+            .ok_or_else(|| anyhow!("No currently selected generation found at /conary/current"))?
+    } else {
+        generation.ok_or_else(|| anyhow!("Specify --generation <N> or --current"))?
+    };
+
+    let gen_dir = runtime_root.generation_path(generation_number);
+    let current_root = current.then_some(runtime_root.root());
+    let verification =
+        conary_core::db::backup::verify_generation_db_backup(&gen_dir, current_root)?;
+    println!(
+        "Verified generation {} DB backup: {}",
+        verification.generation_number,
+        verification.backup_path.display()
+    );
+    println!(
+        "  schema={} integrity={} pages={}",
+        verification.db_schema_version,
+        verification.integrity_check,
+        verification
+            .sqlite_page_count
+            .map(|pages| pages.to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    );
+    println!("  manifest={}", verification.manifest_path.display());
+    println!("  sha256={}", verification.backup_sha256);
+    Ok(())
+}
+
+pub fn cmd_generation_recover_db(
+    db_path: &str,
+    generation: i64,
+    dry_run: bool,
+    keep_temp: bool,
+    yes: bool,
+    replace_healthy_db: bool,
+) -> Result<()> {
+    let runtime_root = runtime_root_for_generation_db_path(db_path);
+    let gen_dir = runtime_root.generation_path(generation);
+    let options = conary_core::db::backup::GenerationDbRecoveryOptions {
+        dry_run,
+        yes,
+        keep_temp,
+        replace_healthy_db,
+    };
+    let outcome = if dry_run {
+        conary_core::db::backup::recover_generation_db_backup(
+            runtime_root.db_path(),
+            &gen_dir,
+            options,
+        )?
+    } else {
+        let mut engine = TransactionEngine::new(TransactionConfig::from_paths(
+            runtime_root.root().to_path_buf(),
+            runtime_root.db_path().to_path_buf(),
+        ))?;
+        engine.begin()?;
+        let result = conary_core::db::backup::recover_generation_db_backup(
+            runtime_root.db_path(),
+            &gen_dir,
+            options,
+        );
+        engine.release_lock();
+        result?
+    };
+
+    if outcome.dry_run {
+        println!(
+            "Generation {generation} DB recovery dry-run verified: {}",
+            outcome.backup_path.display()
+        );
+        if let Some(temp_path) = outcome.verified_temp_path {
+            println!("  verified temp copy={}", temp_path.display());
+        }
+    } else {
+        println!(
+            "Recovered Conary DB from generation {generation} backup: {}",
+            outcome.backup_path.display()
+        );
+        if outcome.quarantined_paths.is_empty() {
+            println!("  no previous DB files needed quarantine");
+        } else {
+            for path in outcome.quarantined_paths {
+                println!("  quarantined={}", path.display());
+            }
+        }
+    }
+    println!("  manifest={}", outcome.manifest_path.display());
+    Ok(())
+}
+
 /// Select `number` as the next boot generation, update the boot entry, and optionally reboot.
 pub fn cmd_generation_switch(number: i64, reboot: bool) -> Result<()> {
     let runtime_root = default_runtime_root();

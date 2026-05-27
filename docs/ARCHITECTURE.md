@@ -468,19 +468,32 @@ The root manifest is now a virtual workspace. Build the owning crate directly:
 
 ## Key Design Decisions
 
-**Database-first**: Every piece of state lives in SQLite. No TOML/YAML/JSON
-config files for runtime state. The database is the single source of truth,
-queryable with standard SQL tools.
+**Database-first with SQLite-native recovery backups**: Every piece of state
+lives in SQLite. No TOML/YAML/JSON config files drive runtime state. The live
+database is the single source of truth, queryable with standard SQL tools.
+Conary writes SQLite-native checkpoint backups around first-wave
+adoption/unadoption mutations and writes a generation-bound SQLite backup under
+`/conary/generations/<n>/state/` when a generation publication reaches the
+selected-generation boundary.
 
 **Composefs-native transactions**: The transaction engine follows a linear
 pipeline: resolve -> fetch -> DB commit -> EROFS build -> select. The DB commit
 is the point of no return. Recovery is simple: if `/conary/current` points at a
 selected generation whose artifact is missing or invalid, rebuild that artifact
-from DB/CAS state and leave the boot selection intact. Explicit boot-selection
-recovery is the path that scans, promotes, and remounts. No journal, no backup
-phase, no staging directory.
+from DB/CAS state and leave the boot selection intact. If the live SQLite DB is
+missing or corrupt, operators can verify a checkpoint backup or the
+generation-bound backup for a valid generation, dry-run the recovery copy, and
+then explicitly restore it with live-host acknowledgement. Explicit
+boot-selection recovery is the path that scans, promotes, and remounts. There
+is no transaction journal or staging directory; DB backups are recovery
+artifacts, not a second mutable source of truth.
 Runtime mutation is DB/CAS/generation/active-pointer first; direct mutation of
 the live root is not a supported release path.
+
+SQLite-native backups recover Conary manager visibility for packages and
+generations represented by the backed-up DB. They do not recover missing
+package payloads, private keys, remote repository history, or native
+package-manager transaction history.
 
 **Content-addressable storage**: Files are stored by SHA-256 hash in a flat
 CAS directory. This enables deduplication across packages, instant rollback

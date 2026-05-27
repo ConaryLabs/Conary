@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-05-20
-revision: 11
+last_updated: 2026-05-27
+revision: 12
 summary: Follow-up roadmap after ISO export and output provenance landed
 ---
 
@@ -16,6 +16,7 @@ slices:
 3. OCI export source loading on the generation artifact interface
 4. composefs-only boot activation cleanup
 5. x86_64 ISO generation-carrier export with output provenance sidecars
+6. generation-bound SQLite DB backups for published generation artifacts
 
 The original parking-lot note remains
 [`docs/operations/bootstrap-follow-up-investigations.md`](bootstrap-follow-up-investigations.md).
@@ -62,6 +63,26 @@ Completed composefs-only boot activation cleanup:
   boot instead of live-mounting the newly built generation
 - keep ordinary transaction recovery selected-generation-only; explicit boot
   selection recovery remains the path that scans, promotes, and remounts
+
+Completed generation-bound DB backup resilience:
+
+- write `/conary/generations/<n>/state/conary.db.backup`,
+  `conary.db.backup.sha256`, and `conary-db-backup.json` after a generation is
+  selected through `/conary/current` and before publication debt is marked
+  complete
+- verify generation-bound backups against the artifact manifest, generation
+  number, checksum sidecar, SQLite `integrity_check`, Conary schema version,
+  and publication state
+- provide `conary system generation verify-db-backup --current`,
+  `conary system generation recover-db --generation <n> --dry-run`, and the
+  explicit apply path
+  `conary --allow-live-system-mutation system generation recover-db --generation <n> --yes`
+  for operator recovery when the live SQLite DB is missing or damaged
+
+SQLite-native backups recover Conary manager visibility for packages and
+generations represented by the backed-up DB. They do not recover missing
+package payloads, private keys, remote repository history, or native
+package-manager transaction history.
 
 Historical operational validation:
 

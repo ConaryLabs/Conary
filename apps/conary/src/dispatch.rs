@@ -772,6 +772,38 @@ async fn dispatch_system_command(
             cli::GenerationCommands::Pending { db } => {
                 commands::generation::commands::cmd_generation_pending(&db.db_path)
             }
+            cli::GenerationCommands::VerifyDbBackup {
+                generation,
+                current,
+                db,
+            } => commands::generation::commands::cmd_generation_verify_db_backup(
+                &db.db_path,
+                generation,
+                current,
+            ),
+            cli::GenerationCommands::RecoverDb {
+                generation,
+                dry_run,
+                keep_temp,
+                yes,
+                replace_healthy_db,
+                db,
+            } => {
+                require_live_mutation(
+                    allow_live_system_mutation,
+                    Cow::Borrowed("conary system generation recover-db"),
+                    LiveMutationClass::AlwaysLive,
+                    dry_run,
+                )?;
+                commands::generation::commands::cmd_generation_recover_db(
+                    &db.db_path,
+                    generation,
+                    dry_run,
+                    keep_temp,
+                    yes,
+                    replace_healthy_db,
+                )
+            }
             cli::GenerationCommands::Export {
                 generation,
                 path,
