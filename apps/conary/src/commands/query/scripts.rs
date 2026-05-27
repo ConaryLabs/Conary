@@ -113,8 +113,9 @@ pub async fn cmd_scripts_with_options(
     options: ScriptQueryOptions,
 ) -> Result<()> {
     if package_path.ends_with(".ccs") {
-        let package = CcsPackage::parse(package_path)
-            .map_err(|error| anyhow::anyhow!("failed to parse CCS package '{package_path}': {error}"))?;
+        let package = CcsPackage::parse(package_path).map_err(|error| {
+            anyhow::anyhow!("failed to parse CCS package '{package_path}': {error}")
+        })?;
         return print_ccs_scriptlet_bundle(&package, &options);
     }
 
@@ -352,7 +353,9 @@ fn filtered_entries<'a>(
             .entries
             .iter()
             .find(|entry| entry.id == entry_id)
-            .ok_or_else(|| anyhow::anyhow!("legacy scriptlet bundle entry '{entry_id}' not found"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!("legacy scriptlet bundle entry '{entry_id}' not found")
+            })?;
         Ok(vec![entry])
     } else {
         Ok(bundle.entries.iter().collect())
@@ -524,10 +527,9 @@ mod query_scripts {
     use super::*;
     use conary_core::ccs::legacy_scriptlets::{
         DecisionCounts, EffectConfidence, EffectReplacement, EffectSource, ForeignReplayPolicy,
-        LegacyScriptletBundle, LegacyScriptletEntry, LifecyclePath, NativeInvocation,
-        PublicationPolicy, PublicationStatus, ScriptletDecision, ScriptletEffect,
+        LEGACY_SCRIPTLET_SCHEMA_V1, LegacyScriptletBundle, LegacyScriptletEntry, LifecyclePath,
+        NativeInvocation, PublicationPolicy, PublicationStatus, ScriptletDecision, ScriptletEffect,
         ScriptletFidelity, SourceFormat, TargetCompatibility, TransactionOrder, VersionScheme,
-        LEGACY_SCRIPTLET_SCHEMA_V1,
     };
     use std::collections::BTreeMap;
 
@@ -724,17 +726,19 @@ mod query_scripts {
 
     #[test]
     fn script_query_json_reports_no_bundle_without_entries() {
-        let output = render_ccs_bundle_json(
-            &package_identity(),
-            None,
-            &ScriptQueryOptions::default(),
-        )
-        .expect("render json");
+        let output =
+            render_ccs_bundle_json(&package_identity(), None, &ScriptQueryOptions::default())
+                .expect("render json");
         let json: serde_json::Value = serde_json::from_str(&output).expect("valid json");
 
         assert_eq!(json["bundle_present"], false);
         assert!(json["bundle"].is_null());
-        assert!(json["entries"].as_array().expect("entries array").is_empty());
+        assert!(
+            json["entries"]
+                .as_array()
+                .expect("entries array")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -753,6 +757,11 @@ mod query_scripts {
         let json: serde_json::Value = serde_json::from_str(&output).expect("valid json");
 
         assert_eq!(json["bundle_present"], true);
-        assert!(json["entries"].as_array().expect("entries array").is_empty());
+        assert!(
+            json["entries"]
+                .as_array()
+                .expect("entries array")
+                .is_empty()
+        );
     }
 }

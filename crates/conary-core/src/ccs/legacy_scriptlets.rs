@@ -104,7 +104,10 @@ string_enum! {
 
 impl TargetCompatibility {
     pub fn is_actionable_for_replay(&self) -> bool {
-        !matches!(self, Self::Unknown(_) | Self::ReviewRequired | Self::Blocked)
+        !matches!(
+            self,
+            Self::Unknown(_) | Self::ReviewRequired | Self::Blocked
+        )
     }
 }
 
@@ -532,7 +535,10 @@ impl LegacyScriptletEntry {
         required_string("entry.interpreter", &self.interpreter)?;
         required_string("entry.body", &self.body)?;
         required_string("entry.reason_code", &self.reason_code)?;
-        required_string("entry.transaction_order.position", &self.transaction_order.position)?;
+        required_string(
+            "entry.transaction_order.position",
+            &self.transaction_order.position,
+        )?;
 
         if self.lifecycle_paths.is_empty() {
             bail!("entry '{}' lifecycle_paths must not be empty", self.id);
@@ -575,7 +581,9 @@ impl LegacyScriptletEntry {
                 use base64::Engine as _;
                 base64::engine::general_purpose::STANDARD
                     .decode(&self.body)
-                    .map_err(|error| anyhow!("entry '{}' body base64 decode failed: {error}", self.id))
+                    .map_err(|error| {
+                        anyhow!("entry '{}' body base64 decode failed: {error}", self.id)
+                    })
             }
             other => bail!(
                 "entry '{}' body_encoding '{}' is unsupported",
@@ -611,8 +619,11 @@ impl DecisionCounts {
 
 impl ArchInstallMetadata {
     fn validate(&self, entry_id: &str) -> anyhow::Result<()> {
-        validate_optional_sha256("arch_install.install_digest", self.install_digest.as_deref())
-            .map_err(|error| anyhow!("entry '{entry_id}' {error}"))?;
+        validate_optional_sha256(
+            "arch_install.install_digest",
+            self.install_digest.as_deref(),
+        )
+        .map_err(|error| anyhow!("entry '{entry_id}' {error}"))?;
         validate_optional_sha256(
             "arch_install.wrapper_source_digest",
             self.wrapper_source_digest.as_deref(),
@@ -654,7 +665,11 @@ fn validate_sha256(label: &str, value: &str) -> anyhow::Result<()> {
     if algorithm != "sha256" {
         bail!("{label} must use sha256:<64 hex>");
     }
-    if digest.len() != 64 || !digest.chars().all(|character| character.is_ascii_hexdigit()) {
+    if digest.len() != 64
+        || !digest
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
         bail!("{label} must use sha256:<64 hex>");
     }
     Ok(())
@@ -794,7 +809,11 @@ mod tests {
             unsupported_class_counts: BTreeMap::new(),
             entries: vec![
                 sample_entry("rpm:%preun", ScriptletDecision::Replaced, "ldconfig\n"),
-                sample_entry("rpm:%post", ScriptletDecision::Legacy, "systemctl daemon-reload\n"),
+                sample_entry(
+                    "rpm:%post",
+                    ScriptletDecision::Legacy,
+                    "systemctl daemon-reload\n",
+                ),
             ],
             extra: BTreeMap::new(),
         }
@@ -809,12 +828,18 @@ mod tests {
 
         assert_eq!(decoded.schema, LEGACY_SCRIPTLET_SCHEMA_V1);
         assert_eq!(decoded.source_format, SourceFormat::Rpm);
-        assert_eq!(decoded.target_compatibility, TargetCompatibility::SourceNative);
+        assert_eq!(
+            decoded.target_compatibility,
+            TargetCompatibility::SourceNative
+        );
         assert_eq!(decoded.foreign_replay_policy, ForeignReplayPolicy::Deny);
         assert_eq!(decoded.entries.len(), 2);
         assert_eq!(decoded.entries[0].decision, ScriptletDecision::Replaced);
         assert_eq!(decoded.entries[1].decision, ScriptletDecision::Legacy);
-        assert_eq!(decoded.entries[0].effects[0].replacement, EffectReplacement::Complete);
+        assert_eq!(
+            decoded.entries[0].effects[0].replacement,
+            EffectReplacement::Complete
+        );
     }
 
     #[test]
@@ -915,16 +940,18 @@ mod tests {
             "future_entry_field".to_string(),
             toml::Value::String("also-kept".to_string()),
         );
-        bundle.entries[0].effects[0].extra.insert(
-            "future_effect_field".to_string(),
-            toml::Value::Integer(7),
-        );
+        bundle.entries[0].effects[0]
+            .extra
+            .insert("future_effect_field".to_string(), toml::Value::Integer(7));
 
         let encoded = toml::to_string_pretty(&bundle).expect("serialize bundle");
         let decoded: LegacyScriptletBundle = toml::from_str(&encoded).expect("parse bundle");
 
         assert_eq!(
-            decoded.extra.get("future_top_level").and_then(toml::Value::as_str),
+            decoded
+                .extra
+                .get("future_top_level")
+                .and_then(toml::Value::as_str),
             Some("kept")
         );
         assert_eq!(
@@ -968,8 +995,14 @@ review = 0
 
         let decoded: LegacyScriptletBundle = toml::from_str(toml).expect("parse bundle");
 
-        assert_eq!(decoded.source_format, SourceFormat::Unknown("apk".to_string()));
-        assert_eq!(decoded.version_scheme, VersionScheme::Unknown("apk".to_string()));
+        assert_eq!(
+            decoded.source_format,
+            SourceFormat::Unknown("apk".to_string())
+        );
+        assert_eq!(
+            decoded.version_scheme,
+            VersionScheme::Unknown("apk".to_string())
+        );
         assert_eq!(
             decoded.target_compatibility,
             TargetCompatibility::Unknown("future-compatible".to_string())
