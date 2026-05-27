@@ -1,4 +1,5 @@
 path	family	audience
+.github/ISSUE_TEMPLATE/beta_feedback.md	template	contributor
 .github/ISSUE_TEMPLATE/bug_report.md	template	contributor
 .github/ISSUE_TEMPLATE/feature_request.md	template	contributor
 .github/PULL_REQUEST_TEMPLATE.md	template	contributor
@@ -40,6 +41,7 @@ docs/operations/daily-driver-ux-matrix.md	canonical	contributor
 docs/operations/infrastructure.md	canonical	contributor
 docs/operations/live-mutation-backup-inventory.md	canonical	contributor
 docs/operations/post-generation-export-follow-up-roadmap.md	canonical	contributor
+docs/operations/release-artifact-matrix.md	canonical	contributor
 docs/specs/ccs-format-v1.md	canonical	contributor
 docs/superpowers/archive/2026-04-04-codebase-simplification-retrospective.md	historical	historical
 docs/superpowers/archive/2026-04-10-release-hardening-checklist.md	historical	historical

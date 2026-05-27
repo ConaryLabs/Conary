@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-22
-revision: 27
-summary: Document local bootstrap smoke proof loop
+last_updated: 2026-05-27
+revision: 28
+summary: Add first-tester release evidence support loop
 ---
 
 # Integration Testing
@@ -164,6 +164,10 @@ publish fixtures, and does not require cloud credentials.
 Remote Forge control-plane validation is temporarily paused while Conary
 replaces the old VPS runner with a KVM-capable host. The Forge scripts remain
 checked in for the next runner, but they are not active release evidence today.
+
+Do not describe local evidence as hosted CI while the remote KVM path is
+paused. Any QEMU release evidence must name the absolute run date, distro,
+suite name, and pass/fail/skip/cancel counts.
 
 For the temporary local QEMU release gate, run this on a development machine
 with `/dev/kvm`:
@@ -353,6 +357,32 @@ bash scripts/forge-smoke.sh
 That path validates the local `conary-test` service contract (`/v1/health`,
 `/v1/deploy/status`, `health --json`, and `deploy status --json`) without
 pretending to be a full integration suite.
+
+## Release Evidence Block
+
+Before publishing a limited-preview tester post or refreshing the release
+artifact/source matrix, run the current evidence command block from
+[docs/operations/release-artifact-matrix.md](operations/release-artifact-matrix.md):
+
+```bash
+cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo run -p conary-test -- list
+bash scripts/check-doc-truth.sh
+bash scripts/check-release-matrix.sh
+bash scripts/release-cargo-audit.sh
+```
+
+For shared tester feedback, prefer the beta issue template and the allowlist
+support bundle:
+
+```bash
+bash scripts/conary-support-bundle.sh target/conary-support-bundle
+```
+
+Review the generated bundle before attaching it. It does not copy `conary.db`,
+raw logs, environment dumps, shell history, private keys, SSH keys,
+`/etc/conary/trust`, host-local access notes, or package payloads.
 
 For managed Forge deployments from an operator workstation, prefer:
 

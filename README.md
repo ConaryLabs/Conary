@@ -12,6 +12,8 @@ Inspired by the [original Conary](https://en.wikipedia.org/wiki/Conary_(package_
 
 **Release status:** Conary is being prepared as an adoption-led limited public preview for Fedora 44, Ubuntu 26.04 LTS, and Arch Linux. The package-manager preview surface is the CLI install/remove/update path, native-package adoption/unadoption, selected-generation native-authority handoff, Remi conversion, and local validation for those flows. Immutable generations and raw/qcow2 generation export remain core capabilities, and the refreshed 2026-05-21 Group O QEMU run passed installed-runtime and bootstrap-run generation export boot proof. The codebase now also has x86_64 UEFI ISO generation-carrier export with output provenance sidecars, and the focused 2026-05-21 Group P QEMU run passed ISO export, host copy-back, provenance, readonly-carrier boot, and writable `/etc` overlay proof. The public ask is still intentionally package-manager focused: in adoption mode, dnf, apt, and pacman remain authoritative for packages they already own; `conary --allow-live-system-mutation system unadopt --all` is the non-destructive escape hatch on hosts without a selected Conary generation, and `conary --allow-live-system-mutation system native-handoff --yes` is the staged handoff path after a Conary generation has been selected. Conary-owned updates work without requiring a selected generation, adopted packages are skipped unless takeover is explicit, and `update --security` refuses before mutation when a requested Conary-owned source cannot prove advisory metadata support. Repositories marked `--security-advisories supported` can now drive security-only updates from trusted JSON advisory metadata with persisted advisory ID, CVE, severity, fixed-version, and source-trust data. Takeover remains explicit, native transaction-history import remains out of scope, and non-x86_64 generation boot assets remain reserved.
 
+Release artifact and provenance expectations for the limited preview are tracked in [docs/operations/release-artifact-matrix.md](docs/operations/release-artifact-matrix.md).
+
 ---
 
 ## Why Conary
@@ -58,6 +60,8 @@ conary --allow-live-system-mutation install nginx
 ```
 
 **Current focus: limited public preview readiness.** The core install, rollback, generation, bootstrap, and server paths are in place. The preview path is now adopt-first: users can let Conary observe existing RPM/DEB/Arch packages while the native package manager remains the authority, optionally CAS-back them with full adoption, then unadopt without deleting package files if they decide not to continue. Remote Forge validation is paused pending a new KVM-capable runner; QEMU release evidence should come from `scripts/local-qemu-validation.sh` on a local machine with `/dev/kvm`.
+
+For first-wave feedback, collect an allowlist-only local support bundle with `bash scripts/conary-support-bundle.sh target/conary-support-bundle`, review it, and attach only the reviewed output to the beta feedback or bug template.
 
 ---
 

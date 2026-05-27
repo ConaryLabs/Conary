@@ -50,6 +50,8 @@ jobs:
         run: diff -u docs/superpowers/documentation-accuracy-audit-inventory.tsv <(bash scripts/docs-audit-inventory.sh)
       - name: Check docs truth invariants
         run: bash scripts/check-doc-truth.sh
+      - name: Check support bundle privacy
+        run: bash scripts/test-support-bundle.sh
 
   fmt:
     name: fmt
