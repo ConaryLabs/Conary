@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-05-27
-revision: 1
-summary: Design for Goal 2 native ABI extraction for RPM, DEB, and Arch scriptlets without Remi embedding or install behavior changes
+revision: 2
+summary: Design for Goal 2 native ABI extraction for RPM, DEB, and Arch scriptlets without Remi embedding, bundle conversion, or install behavior changes
 ---
 
 # Legacy Scriptlet Native ABI Extraction: Goal 2 Design Spec
@@ -59,6 +59,8 @@ Later goals consume the native ABI entries:
 - No install/update/remove behavior change.
 - No scriptlet execution or replay.
 - No adapter registry decisions.
+- No `NativeScriptletEntry` to `LegacyScriptletEntry` converter. That bridge
+  belongs to the later conversion and Remi embedding goals.
 - No broad helper-specific `replaced` claims.
 - No retirement of the existing flattened `Scriptlet` API.
 
@@ -92,6 +94,10 @@ Package parsers populate both fields:
 - `native_scriptlet_abi` is the authoritative Goal 2 model for later bundle
   production.
 
+This is an additive parser API change. Do not replace `scriptlets()` or change
+its return type in Goal 2. Current callers should compile without needing to
+understand native ABI entries.
+
 The ABI layer should live near the existing package parser traits, either in
 `crates/conary-core/src/packages/traits.rs` for small types or in a focused
 `crates/conary-core/src/packages/native_abi.rs` module re-exported by
@@ -111,7 +117,8 @@ pub struct NativeScriptletEntry {
     pub id: String,
     pub format: NativeScriptletFormat,
     pub native_slot: String,
-    pub phase: ScriptletPhase,
+    pub primary_lifecycle: NativeLifecyclePath,
+    pub compatibility_phase: Option<ScriptletPhase>,
     pub lifecycle_paths: Vec<NativeLifecyclePath>,
     pub interpreter: String,
     pub interpreter_args: Vec<String>,
@@ -129,7 +136,10 @@ The exact names can change during implementation, but the semantics should not:
   `arch:post_install`.
 - `native_slot` is the native slot name as close to the source package format
   as possible.
-- `phase` keeps compatibility with current lifecycle grouping.
+- `primary_lifecycle` is the native lifecycle category, including native-only
+  paths that the old compatibility enum cannot represent.
+- `compatibility_phase` is `Some` only when the entry can be projected into the
+  existing flattened `Scriptlet` API without inventing semantics.
 - `lifecycle_paths` records the native call paths that later classification or
   replay must consider.
 - `interpreter` and `interpreter_args` split the native interpreter vector or
@@ -163,11 +173,35 @@ pub enum NativeScriptletMetadata {
     Deb(DebNativeScriptletMetadata),
     Arch(ArchNativeScriptletMetadata),
 }
+
+pub enum NativeLifecyclePath {
+    PreInstall,
+    PostInstall,
+    PreUpgrade,
+    PostUpgrade,
+    PreRemove,
+    PostRemove,
+    PreTransaction,
+    PostTransaction,
+    Config,
+    Trigger,
+    FileTrigger,
+    TransactionFileTrigger,
+    Purge,
+    Abort,
+}
 ```
 
 Use plain Rust data structures, not `toml::Value`, in the parser ABI model.
 `toml::Value` remains part of the serialized bundle schema, not the native
 parser contract.
+
+`NativeLifecyclePath` is intentionally richer than the old `ScriptletPhase`
+compatibility enum. Goal 2 should not widen `ScriptletPhase` just to represent
+native-only lifecycle paths such as DEB `config`, file triggers, transaction
+file triggers, purge, or abort modes. Flattened compatibility output may keep
+using the old phase vocabulary while native ABI entries carry the lossless
+lifecycle details.
 
 ## RPM ABI
 
@@ -190,10 +224,12 @@ Required trigger families when present:
 - file triggers from `metadata.get_file_triggers()`
 - transaction file triggers from `metadata.get_trans_file_triggers()`
 
-The local `rpm` crate exposes trigger scripts, interpreter vectors, and trigger
-conditions. Preserve condition names, versions, and flags. Convert trigger flags
-into stable metadata fields when straightforward, and preserve the raw flag bits
-or debug value where a complete semantic split is not yet implemented.
+The current workspace depends on an `rpm` crate version that exposes trigger
+scripts, interpreter vectors, and trigger conditions through those metadata
+methods. Preserve condition names, versions, and flags. Convert trigger flags
+into stable string comparison operators using the same logic as the parser's
+existing dependency flag handling, and preserve the raw flag bits or debug value
+where a complete semantic split is not yet implemented.
 
 RPM entries should record:
 
@@ -207,17 +243,19 @@ RPM entries should record:
 - lifecycle paths for install, upgrade, remove, transaction, trigger, and file
   trigger paths.
 
-Unsupported trigger semantics must become explicit `DeferredReview` or
-`Blocked` entries with stable reason codes. They must not disappear from the
-native ABI list.
+Unsupported trigger semantics must become explicit `DeferredReview` entries
+with stable reason codes unless the parser can prove the entry is impossible to
+preserve as native ABI metadata. They must not disappear from the native ABI
+list.
 
 ## DEB ABI
 
-DEB extraction should preserve maintainer scripts and control `triggers`
-content from the control archive.
+DEB extraction should preserve maintainer scripts and the Debian `triggers`
+control-archive file.
 
 Required maintainer scripts:
 
+- `config`
 - `preinst`
 - `postinst`
 - `prerm`
@@ -234,13 +272,19 @@ DEB entries should record:
 - noninteractive expectation for package-manager execution;
 - unpack, configure, remove, purge, and trigger lifecycle paths.
 
-The control archive `triggers` file should be captured once and attached to
-DEB ABI metadata. Trigger content is deferred evidence in Goal 2: preserve it
-and list trigger names, but mark complex trigger execution paths as review until
-later goals implement replay or publication gates.
+The `triggers` artifact is a separate member of the DEB control tarball, not a
+field in the RFC822-style `control` file. `parse_control_tar_all()` should
+recognize a basename of `triggers`, preserve the raw file content, and parse
+trigger declarations such as `interest`, `interest-noawait`, `activate`, and
+`activate-noawait` into metadata when straightforward. Trigger content is
+deferred evidence in Goal 2: preserve it and list trigger names, but mark
+complex trigger execution paths as review until later goals implement replay or
+publication gates.
 
 The existing flattened projection can continue to expose one `Scriptlet` per
-maintainer script.
+package lifecycle maintainer script it already models. The DEB `config` script
+may remain native-ABI-only in Goal 2 unless the implementation deliberately adds
+a compatible old-API phase and updates every current caller.
 
 ## Arch ABI
 
@@ -259,7 +303,8 @@ Required callable functions:
 Arch entries should record:
 
 - the called function name as the native slot;
-- full `.INSTALL` source context;
+- full `.INSTALL` source context, plus a digest of that source for later bundle
+  metadata;
 - per-function body for compatibility projection and diagnostics;
 - pacman-style old/new version argument expectations;
 - chroot/install-root execution expectation;
@@ -280,9 +325,15 @@ Goal 2 can implement compatibility projection in either direction:
   them.
 
 The implementation should prefer the first option where it removes duplication,
-but only if tests prove current behavior is unchanged. The flattened API may
-continue to omit trigger-only entries if that matches existing public behavior;
-the native ABI API must include them.
+but only if tests prove current behavior is unchanged. For Arch packages, the
+compatibility projection must extract individual callable function bodies from
+the preserved `.INSTALL` source with the parser's existing function-extraction
+logic, rather than returning the raw full file content.
+
+The flattened API may continue to omit native-only entries if that matches
+existing public behavior; the native ABI API must include them. If a native-only
+path cannot be represented by `ScriptletPhase`, keep it in
+`NativeLifecyclePath` instead of forcing an inaccurate compatibility phase.
 
 ## Error Handling
 
@@ -295,8 +346,16 @@ package parse by default. Preserve the entry with explicit support metadata:
   classification.
 - `DeferredReview` when the parser preserved the body/metadata but later goals
   must decide semantics.
-- `Blocked` only for parser-visible semantics that are known impossible or
-  unsafe to preserve under current policy.
+- `Blocked` only for parser-visible semantics that are known impossible to
+  preserve as native ABI metadata. Unknown interpreters are not parser-level
+  blockers in Goal 2; preserve the interpreter string and let later sandbox or
+  replay gates decide safety.
+
+Empty or whitespace-only basic scriptlet bodies are not native ABI entries.
+They are equivalent to absent executable scriptlets for Goal 2 and should not be
+counted as dropped slots. If a trigger family exposes conditions with an empty
+script body, preserve a `DeferredReview` entry so the condition metadata is not
+lost.
 
 Goal 2 should use stable reason codes, for example:
 
@@ -325,7 +384,7 @@ scriptlet and trigger builder APIs. Build fixtures with:
 DEB tests should build minimal in-memory or temporary `.deb` archives with a
 control tar containing:
 
-- all four maintainer scripts;
+- all four package lifecycle maintainer scripts plus `config`;
 - a `triggers` file;
 - shebangs that prove interpreter and args are split.
 
@@ -361,13 +420,17 @@ The detailed implementation plan should split Goal 2 into these tasks:
 
 1. Add the native ABI model and compatibility API with failing tests.
 2. Implement Arch `.INSTALL` full-source and callable-function ABI extraction.
-3. Implement DEB maintainer-script and triggers-file ABI extraction.
+3. Implement DEB maintainer-script, `config`, and triggers-file ABI extraction.
 4. Implement RPM basic scriptlet, package-trigger, file-trigger, and
    transaction-file-trigger ABI extraction.
 5. Add cross-format native ABI fixture tests proving no native slot is silently
    dropped.
 6. Run final verification and update module docs if parser API documentation
    changes.
+
+Do not add a `NativeScriptletEntry` to `LegacyScriptletEntry` conversion task to
+Goal 2. That mapping needs adapter, fidelity, publication, and evidence-digest
+context that this parser-only goal intentionally does not own.
 
 Keep each task reviewable and avoid broad conversion or Remi changes in this
 goal.
