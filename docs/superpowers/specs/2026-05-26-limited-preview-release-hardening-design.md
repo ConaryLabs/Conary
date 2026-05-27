@@ -83,6 +83,11 @@ It also found current risks that should shape the next queue:
   package files are installed or removed;
 - docs-truth does not currently scan `CHANGELOG.md` or the public site;
 - single-package adoption dry-run currently refuses instead of previewing;
+- the five-minute tester path currently depends on build-from-source setup in
+  public docs, which is not a true five-minute path for most testers;
+- the explicit `--allow-live-system-mutation` acknowledgement is correct for
+  safety, but the quickstart must explain why it exists so it reads as a guard
+  rather than unexplained ceremony;
 - `docs/SCRIPTLET_SECURITY.md` still names `chroot` as filesystem isolation
   while other code/docs imply stronger protected sandboxing and the public
   security review raised `chroot` escape as a P0 risk class;
@@ -124,6 +129,12 @@ Required outcomes:
 - add a five-minute adoption/unadoption quickstart that is not build-from-source
   as the main public tester path;
 - make the unadopt and native-handoff recovery paths prominent;
+- explain the live-mutation acknowledgement flag at first use and decide
+  whether a shorter preview-safe alias or session acknowledgement is needed;
+- document Remi cold-start conversion latency and either pre-warm a small tested
+  package set or provide an explicit tester pre-warm command;
+- audit `conary system init` first-run failure modes such as existing state,
+  low disk space, and missing kernel features;
 - sharpen the Nix comparison into one honest paragraph;
 - include `CHANGELOG.md` and site copy in docs-truth checks;
 - either implement true single-package adoption dry-run or make the unsupported
@@ -181,6 +192,9 @@ Required outcomes:
 
 - write a compact generation-bound state snapshot next to each selected
   generation artifact;
+- land a minimal forward-compatible marker writer before the first tester wave
+  so early preview generations can be distinguished from pre-snapshot
+  generations;
 - include enough package, trove, generation, publication-debt, and provenance
   state to rebuild the live SQLite DB for manager visibility;
 - add verification commands for snapshot integrity;
@@ -195,7 +209,8 @@ not a blind-manager disaster.
 
 These remain important but should not crowd the release-hardening queue:
 
-- pre-converted Remi base repositories for the tested distros;
+- a broader pre-converted Remi base repository beyond the small preview
+  warm-set;
 - a small CCS-native signed reference corpus;
 - openSUSE/Tumbleweed support after Fedora/RPM behavior is stable;
 - aarch64 generation boot assets;
@@ -209,6 +224,7 @@ These remain important but should not crowd the release-hardening queue:
 Before the limited tester post:
 
 - land Plan A;
+- land the Plan D forward-compatible generation-state marker;
 - land the documentation and assurance portions of Plan B or explicitly narrow
   the preview if any scriptlet assurance work remains open.
 

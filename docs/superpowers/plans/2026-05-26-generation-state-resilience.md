@@ -43,6 +43,9 @@ package repositories reconstructible from generation artifacts alone.
 - The live SQLite DB remains authoritative during normal operation.
 - The generation-bound snapshot is recovery metadata, not a second mutable
   source of truth.
+- A minimal forward-compatible marker should land before the first tester wave
+  so preview generations can be distinguished from older generations that do
+  not carry reconstruction metadata.
 - Reconstruction must default to dry-run into a temporary DB.
 - Applying reconstructed state to the live DB requires an explicit flag and a
   backup of the damaged DB.
@@ -50,6 +53,66 @@ package repositories reconstructible from generation artifacts alone.
   debt, or `/conary/current` selection disagree.
 
 ---
+
+### Task 0: Forward-Compatible Snapshot Marker
+
+**Files:**
+- Create: `crates/conary-core/src/generation/state_snapshot.rs`
+- Modify: `crates/conary-core/src/generation/mod.rs`
+- Modify: `apps/conary/src/commands/generation/publication.rs`
+- Test: focused generation publication or state-snapshot tests
+
+- [ ] **Step 1: Add the minimal marker type**
+
+Before full reconstruction lands, add a small serializable marker:
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GenerationStateMarker {
+    pub format: String,
+    pub snapshot_version: u32,
+    pub generation_number: i64,
+    pub state_number: i64,
+    pub created_at: String,
+    pub reconstruction: String,
+}
+```
+
+Use:
+
+```text
+format = "conary.generation-state.v1"
+snapshot_version = 1
+reconstruction = "marker-only"
+```
+
+- [ ] **Step 2: Write the marker during generation publication**
+
+Write the marker to:
+
+```text
+/conary/generations/<n>/state/conary-state.json
+```
+
+Use durable write and parent-directory sync helpers. If the marker cannot be
+written, warn and record publication metadata, but do not block the first
+marker-only slice unless the full snapshot writer has already become required.
+
+- [ ] **Step 3: Add compatibility tests**
+
+Add tests proving:
+
+```text
+marker JSON round-trips
+marker-only snapshots are recognized as not sufficient for DB reconstruction
+full snapshot code can later distinguish marker-only from reconstructible
+```
+
+Run:
+
+```bash
+cargo test -p conary-core generation::state_snapshot
+```
 
 ### Task 1: Snapshot Schema
 
@@ -158,6 +221,7 @@ schema_version is supported
 checksum matches
 generation_number matches directory/metadata
 referenced CAS hashes exist
+generation artifacts have not been garbage-collected
 selected /conary/current agrees when --current is used
 ```
 
