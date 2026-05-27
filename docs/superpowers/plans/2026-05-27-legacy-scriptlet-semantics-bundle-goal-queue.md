@@ -150,6 +150,7 @@ Done means:
 - RPM entries preserve lifecycle scriptlets including `%preuntrans` and `%postuntrans`, preserve non-empty `%verify` scriptlets as deferred evidence, and preserve package/file/transaction-file trigger metadata when available.
 - DEB entries preserve maintainer-script invocation modes, `config` scriptlets, control `triggers` content, and await/noawait trigger declarations when present.
 - Arch entries preserve full `.INSTALL` source plus callable function metadata.
+- Arch ALPM hook files are either included as byte-preserved `ControlArtifact` entries or explicitly deferred to a follow-up goal with official `alpm-hooks(5)` coverage recorded.
 - Unsupported but preservable native slots become `DeferredReview` parser evidence, and parser-visible unpreservable slots become `Unpreservable` parser evidence. Goal 2 does not emit bundle-level `review` or `blocked` decisions.
 
 Verification:
