@@ -229,13 +229,7 @@ impl ConversionService {
     ) -> Result<ServerConversionResult> {
         let mut timing = ConversionTimingReport::new(distro, package_name, version);
         let result = self
-            .convert_package_async_inner(
-                distro,
-                package_name,
-                version,
-                architecture,
-                &mut timing,
-            )
+            .convert_package_async_inner(distro, package_name, version, architecture, &mut timing)
             .await;
 
         match result {
@@ -253,7 +247,11 @@ impl ConversionService {
         }
     }
 
-    pub async fn benchmark_package_sample(&self, distro: &str, limit: usize) -> Result<Vec<String>> {
+    pub async fn benchmark_package_sample(
+        &self,
+        distro: &str,
+        limit: usize,
+    ) -> Result<Vec<String>> {
         let db_path = self.db_path.clone();
         let distro = distro.to_string();
         tokio::task::spawn_blocking(move || {
@@ -319,16 +317,18 @@ impl ConversionService {
         let package_owned = package_name.to_string();
         let summary_result = tokio::task::spawn_blocking(
             move || -> Result<crate::server::scriptlet_corpus::ScriptletCorpusSummary> {
-            let (mut metadata, _files, _format) = service.parse_package(&pkg_path, &distro_owned)?;
-            Self::apply_repository_identity(&mut metadata, &repo_pkg);
-            Ok(
-                crate::server::scriptlet_corpus::ScriptletCorpusSummary::from_scriptlets(
-                    &distro_owned,
-                    &package_owned,
-                    &metadata.scriptlets,
-                ),
-            )
-        })
+                let (mut metadata, _files, _format) =
+                    service.parse_package(&pkg_path, &distro_owned)?;
+                Self::apply_repository_identity(&mut metadata, &repo_pkg);
+                Ok(
+                    crate::server::scriptlet_corpus::ScriptletCorpusSummary::from_scriptlets(
+                        &distro_owned,
+                        &package_owned,
+                        &metadata.scriptlets,
+                    ),
+                )
+            },
+        )
         .await
         .map_err(|e| anyhow!("scriptlet scan task panicked: {e}"))?;
         let summary = summary_result?;
@@ -471,7 +471,9 @@ impl ConversionService {
         timing.phases.extend(parsed.phase_timings.clone());
         timing.skipped_phases.extend(parsed.skipped_phases.clone());
 
-        let stored_chunks = self.store_chunks_with_timing(&parsed.conversion_result).await?;
+        let stored_chunks = self
+            .store_chunks_with_timing(&parsed.conversion_result)
+            .await?;
         timing.record(ConversionPhase::CasWrite, stored_chunks.cas_duration);
         if let Some(duration) = stored_chunks.r2_duration {
             timing.record(ConversionPhase::R2WriteThrough, duration);
