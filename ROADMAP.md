@@ -3,6 +3,7 @@
 Conary already has working installs, rollback, adoption/unadoption, immutable generations, Remi conversion/serving, federation, bootstrap, generation artifact export, self-hosting VM validation, and a large integration test surface. The limited public preview target is Fedora 44, Ubuntu 26.04 LTS, and Arch Linux, with security gates and local QEMU validation treated as release criteria while remote Forge validation is paused pending a KVM-capable runner. As of 2026-05-21, the local Group O QEMU generation-export gate is green for both installed-runtime and bootstrap-run raw/qcow2 exports, and the focused Group P QEMU run is green for x86_64 ISO generation-carrier export with output provenance, host copy-back, readonly-carrier boot, and writable `/etc` overlay proof. This roadmap is intentionally forward-looking: it tracks how Conary becomes safe to try on real systems before it asks to become the primary package manager.
 
 For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). For shipped changes, see [CHANGELOG.md](CHANGELOG.md).
+For limited-preview artifact, checksum, signature, SBOM, provenance, and source-build expectations, see [docs/operations/release-artifact-matrix.md](docs/operations/release-artifact-matrix.md).
 
 ---
 
@@ -131,7 +132,9 @@ Strategic follow-up after the preview queue:
    non-generation recovery before first-wave tester adoption/unadoption becomes
    part of the support story.
 3. Land the minimum Plan C supportability slice before the first public tester
-   post if binaries or shared tester feedback are involved.
+   post if binaries or shared tester feedback are involved: the artifact matrix,
+   allowlist support bundle, beta feedback template, and release evidence
+   command block should stay current together.
 4. Land the scriptlet trust-assurance plan before widening beyond careful VM or
    non-critical-machine testers.
 5. Keep `conary system unadopt` and selected-generation `native-handoff` proof

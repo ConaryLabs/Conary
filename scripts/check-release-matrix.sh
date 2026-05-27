@@ -6,6 +6,7 @@ cd "$repo_root"
 
 release_build=".github/workflows/release-build.yml"
 deploy_workflow=".github/workflows/deploy-and-verify.yml"
+artifact_matrix="docs/operations/release-artifact-matrix.md"
 
 fail() {
     echo "ERROR: $*" >&2
@@ -29,6 +30,29 @@ forbid_match() {
         fail "$description unexpectedly present in $file"
     fi
 }
+
+require_artifact_matrix_row() {
+    local product="$1"
+    local row
+
+    row="$(rg -n -- "^\| \`$product\` \|" "$artifact_matrix" || true)"
+    [[ -n "$row" ]] || fail "release artifact matrix missing $product row"
+
+    if [[ "$row" != *"source-build-only"* && "$row" != *"https://"* ]]; then
+        fail "release artifact matrix row for $product needs artifact URL or source-build-only caveat"
+    fi
+
+    [[ "$row" == *"checksum"* || "$row" == *"checksums"* ]] ||
+        fail "release artifact matrix row for $product missing checksum status"
+    [[ "$row" == *"signature"* ]] ||
+        fail "release artifact matrix row for $product missing signature status"
+    [[ "$row" == *"SBOM"* ]] ||
+        fail "release artifact matrix row for $product missing SBOM status"
+    [[ "$row" == *"provenance"* || "$row" == *"SLSA"* ]] ||
+        fail "release artifact matrix row for $product missing provenance status"
+}
+
+[[ -f "$artifact_matrix" ]] || fail "missing $artifact_matrix"
 
 require_match "$release_build" 'conary-test-v\*' 'conary-test release trigger'
 require_match "$release_build" 'scripts/release-matrix\.sh resolve-tag' 'helper-based tag resolution'
@@ -76,14 +100,17 @@ require_match "$deploy_workflow" 'gh release download "\$source_tag"' 'release-a
 forbid_match "$deploy_workflow" 'CONARYD_VERIFY_URL' 'legacy public verify URL'
 
 for product in conary remi; do
+    require_artifact_matrix_row "$product"
     deploy_mode="$(bash scripts/release-matrix.sh field "$product" deploy_mode)"
     [[ "$deploy_mode" != "none" ]] || fail "$product unexpectedly marked non-deployable"
     require_match "$deploy_workflow" "needs\\.resolve\\.outputs\\.product == '${product}'" "${product} deploy lane"
 done
 
+require_artifact_matrix_row conaryd
 conaryd_deploy_mode="$(bash scripts/release-matrix.sh field conaryd deploy_mode)"
 [[ "$conaryd_deploy_mode" == "none" ]] || fail "conaryd should be deploy_mode=none while Forge staging is paused"
 
+require_artifact_matrix_row conary-test
 conary_test_deploy_mode="$(bash scripts/release-matrix.sh field conary-test deploy_mode)"
 [[ "$conary_test_deploy_mode" == "none" ]] || fail "conary-test should be deploy_mode=none"
 forbid_match "$deploy_workflow" 'deploy-conary-test:' 'conary-test deploy lane'

@@ -33,11 +33,17 @@ What actually happened.
 ## Logs
 
 <details>
-<summary>Debug output</summary>
+<summary>Support bundle or reviewed logs</summary>
 
+```bash
+bash scripts/conary-support-bundle.sh target/conary-support-bundle
 ```
-Paste output from running with RUST_LOG=debug
-```
+
+Review the generated bundle before attaching it. It is allowlist-only and does
+not copy `conary.db`, raw logs, environment dumps, shell history, private keys,
+SSH keys, `/etc/conary/trust`, host-local access notes, or package payloads.
+If a maintainer asks for `RUST_LOG=debug` output, review and redact it before
+posting.
 
 </details>
 

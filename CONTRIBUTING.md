@@ -33,6 +33,21 @@ Good first contributions include:
 - Documentation improvements in doc comments
 - Small bug fixes in package parsers
 
+Concrete first-wave validation tasks include:
+
+- Extend `apps/conary/tests/live_host_mutation_safety.rs` with one more
+  refusal-before-mutation case.
+- Add a daily-driver CLI diagnostic assertion in
+  `apps/conary/tests/cli_daily_ux.rs`.
+- Clarify one checked behavior in `docs/SCRIPTLET_SECURITY.md` and verify it
+  against `crates/conary-core/src/scriptlet/`.
+- Improve the preview install path in `site/src/routes/install/+page.svelte`
+  without adding unsupported claims.
+- Add a narrow invariant to `scripts/check-doc-truth.sh` for a claim that has
+  drifted before.
+- Tighten one source-selection example in `docs/modules/source-selection.md`
+  against `crates/conary-core/src/repository/effective_policy.rs`.
+
 ### Fork and Clone
 
 ```bash
@@ -69,9 +84,10 @@ cargo build -p conaryd
 cargo build -p conary --release
 ```
 
-The project root is a virtual Cargo workspace with seven members:
+The project root is a virtual Cargo workspace with eight members:
 `apps/conary`, `apps/remi`, `apps/conaryd`, `apps/conary-test`,
-`crates/conary-bootstrap`, `crates/conary-core`, and `crates/conary-mcp`.
+`crates/conary-agent-contract`, `crates/conary-bootstrap`,
+`crates/conary-core`, and `crates/conary-mcp`.
 EROFS support uses `composefs-rs` directly in `crates/conary-core`.
 
 ## Running Tests
@@ -165,8 +181,8 @@ Use the imperative mood in the subject line (e.g., "add sparse index support" no
 
 ## Module Overview
 
-The project is a virtual Cargo workspace with seven members: four app crates
-and three shared crates.
+The project is a virtual Cargo workspace with eight members: four app crates
+and four shared crates.
 
 **`apps/conary`** -- CLI binary
 
@@ -215,6 +231,12 @@ and three shared crates.
 | Module | Purpose |
 |--------|---------|
 | `crates/conary-bootstrap/src/lib.rs` | Shared tracing, runtime, and exit-code helpers for workspace binaries |
+
+**`crates/conary-agent-contract`** -- Shared agent contract types
+
+| Module | Purpose |
+|--------|---------|
+| `crates/conary-agent-contract/src/lib.rs` | Versioned tool, resource, risk, and approval contract types for agent-facing Conary surfaces |
 
 **`crates/conary-mcp`** -- Shared transport-agnostic MCP helpers
 
@@ -281,7 +303,13 @@ When filing a bug report, please include:
 - Linux distribution and version
 - Steps to reproduce
 - Expected vs. actual behavior
-- Relevant log output (run with `RUST_LOG=debug` for verbose output)
+- A reviewed support bundle when host state matters:
+  `bash scripts/conary-support-bundle.sh target/conary-support-bundle`
+
+The support bundle is allowlist-only and does not copy `conary.db`, raw logs,
+environment dumps, shell history, private keys, SSH keys, `/etc/conary/trust`,
+host-local access notes, or package payloads. Share raw `RUST_LOG=debug` output
+only when a maintainer asks for it, and review/redact it before posting.
 
 ### Feature Requests
 
