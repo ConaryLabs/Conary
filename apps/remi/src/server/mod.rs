@@ -26,6 +26,7 @@ pub mod canonical_job;
 pub mod chunk_gc;
 pub mod config;
 mod conversion;
+pub mod conversion_timing;
 pub mod delta_manifests;
 pub mod federated_index;
 mod handlers;
