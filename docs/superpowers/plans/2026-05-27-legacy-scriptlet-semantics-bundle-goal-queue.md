@@ -34,6 +34,7 @@ At the end of each goal:
 - run `cargo fmt --check`;
 - run `git diff --check`;
 - run targeted Cargo tests named by the goal;
+- run `cargo clippy --workspace --all-targets -- -D warnings` unless the goal records a narrower justified lint gate;
 - commit with one conventional-style commit;
 - merge/push/cleanup when requested;
 - archive or update the plan only after the goal is actually complete.
@@ -43,7 +44,7 @@ At the end of each goal:
 Recommended objective:
 
 ```text
-/goal Implement Goal 0: add non-mutating Remi conversion timing and scriptlet corpus-scan evidence so we can measure cold-path latency and adapter bootstrap needs before schema or replay work. Stop when the benchmark command emits JSON evidence, targeted Remi tests pass, and docs record the baseline workflow.
+/goal Implement Goal 0: add non-mutating Remi conversion timing and scriptlet corpus-scan evidence. Instrument async conversion phases with explicit millisecond duration tracking, handle remote cloud storage metrics, and parse scriptlet commands after shell control operators. Stop when the benchmark command emits correct JSON evidence, target clippy and Remi tests pass, and docs record the workflow.
 ```
 
 Detailed plan:
@@ -62,6 +63,7 @@ Files likely touched:
 Done means:
 
 - Remi can time package lookup, download, checksum/cache lookup, parse, conversion, chunk storage, and persistence.
+- R2 write-through timing is measured when an R2 store is configured, or the benchmark output explicitly records that R2 timing was skipped.
 - A CLI path can run a benchmark over named packages or a bounded sample from repository metadata.
 - Scriptlet command frequency and blocked-class hints are emitted as evidence only, not as conversion authority.
 - The first evidence format can support later adapter registry decisions.
@@ -71,7 +73,8 @@ Verification:
 ```bash
 cargo test -p remi conversion_timing
 cargo test -p remi scriptlet_corpus
-cargo test -p remi conversion_benchmark
+cargo test -p remi conversion
+cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 git diff --check
 ```
@@ -106,6 +109,7 @@ Verification:
 ```bash
 cargo test -p conary-core legacy_scriptlets
 cargo test -p conary query_scripts
+cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 git diff --check
 ```
@@ -141,16 +145,17 @@ cargo test -p conary-core native_abi
 cargo test -p conary-core rpm_scriptlet
 cargo test -p conary-core deb_scriptlet
 cargo test -p conary-core arch_scriptlet
+cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 git diff --check
 ```
 
-## Goal 3: Adapter Registry And Blocked-Class Registry
+## Goal 3a: Adapter Registry And Blocked-Class Registry Infrastructure
 
 Recommended objective:
 
 ```text
-/goal Implement Goal 3: add the effect adapter registry, blocked-class registry, command evidence model, and bootstrap support matrix for common preview-corpus helpers. Stop when adapters classify fixture invocations and blocked classes produce stable reasons.
+/goal Implement Goal 3a: add the effect adapter registry infrastructure, blocked-class registry, command evidence model, and support matrix scaffolding. Stop when fixture invocations are classified as known, unknown, review, or blocked with stable reason IDs, without broad helper-specific replacement claims.
 ```
 
 Files likely touched:
@@ -165,9 +170,9 @@ Files likely touched:
 Done means:
 
 - The registry consumes structured invocations, metadata, payload hints, and curated rules.
-- Initial adapters cover no-scriptlet, `ldconfig`, systemd daemon reload, simple systemd enable/disable/preset evidence, tmpfiles, sysusers payload hints, alternatives, and common cache refreshes.
 - Unsafe classes such as network, package-manager recursion, PAM, kernel/initramfs/bootloader, SELinux/AppArmor policy, and unmodeled triggers fail with stable class IDs.
 - Regex analysis may remain as a temporary signal source but not the authority for `replaced`.
+- Adapter infrastructure can report complete, partial, none, blocked, and unknown outcomes without making the first helper coverage set bigger than the evidence supports.
 
 Verification:
 
@@ -175,6 +180,41 @@ Verification:
 cargo test -p conary-core adapter_registry
 cargo test -p conary-core blocked_classes
 cargo test -p conary-core conversion_integration
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --check
+git diff --check
+```
+
+## Goal 3b: Bootstrap Adapters Driven By Corpus Evidence
+
+Recommended objective:
+
+```text
+/goal Implement Goal 3b: add bootstrap effect adapters selected from Goal 0 corpus evidence, with fixtures and support-matrix entries. Stop when common preview-corpus helpers are covered by tests and unsupported helper classes still fail with stable reasons.
+```
+
+Files likely touched:
+
+- `crates/conary-core/src/ccs/convert/effects.rs`
+- `crates/conary-core/src/ccs/convert/adapters.rs`
+- `crates/conary-core/src/ccs/convert/blocked_classes.rs`
+- `crates/conary-core/src/ccs/convert/capture.rs`
+- `crates/conary-core/src/ccs/convert/mod.rs`
+
+Done means:
+
+- Bootstrap adapters are chosen from Goal 0 command-frequency evidence, not guesswork.
+- Initial adapter candidates cover no-scriptlet, `ldconfig`, systemd daemon reload, simple systemd enable/disable/preset evidence, tmpfiles, sysusers payload hints, alternatives, and common cache refreshes when the corpus proves they matter.
+- Every adapter has fixture coverage and at least one support-matrix entry.
+- Adapter decisions explicitly cite the spec's `replaced` and `legacy` rubrics before marking any effect complete.
+
+Verification:
+
+```bash
+cargo test -p conary-core adapter_registry
+cargo test -p conary-core blocked_classes
+cargo test -p conary-core conversion_integration
+cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 git diff --check
 ```
@@ -192,7 +232,8 @@ Files likely touched:
 - `crates/conary-core/src/ccs/convert/converter.rs`
 - `apps/remi/src/server/conversion.rs`
 - `crates/conary-core/src/db/models/converted.rs`
-- `crates/conary-core/src/db/migrations/`
+- `crates/conary-core/src/db/migrations/v41_current.rs`
+- `crates/conary-core/src/db/schema.rs`
 - `apps/remi/src/server/handlers/packages.rs`
 - `docs/modules/remi.md`
 
@@ -201,6 +242,7 @@ Done means:
 - `ConversionResult` includes the bundle and evidence digest.
 - `build_manifest` stores the bundle in the CCS manifest or a referenced sidecar.
 - Converted package records store publication status and scriptlet fidelity.
+- A database migration adds `scriptlet_fidelity`, `target_compatibility`, `publication_status`, `evidence_digest`, `curation_evidence_digest`, `blocked_reason_codes_json`, and `review_artifact_path` fields to `converted_packages` with defaults that preserve existing records.
 - Existing installs still use current behavior until enforcement goals land.
 
 Verification:
@@ -209,6 +251,7 @@ Verification:
 cargo test -p conary-core legacy_scriptlets
 cargo test -p remi conversion
 cargo test -p remi packages
+cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 git diff --check
 ```
@@ -243,16 +286,17 @@ Verification:
 cargo test -p remi jobs
 cargo test -p remi package_publication
 cargo test -p remi conversion
+cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 git diff --check
 ```
 
-## Goal 6: Replay Engine Behind Feature Gate
+## Goal 6: Safe Replay Engine With Target Compatibility Gate
 
 Recommended objective:
 
 ```text
-/goal Implement Goal 6: make install/update/remove consume legacy scriptlet bundles for no-scriptlet, fully-replaced, and legacy-replay normal paths behind an explicit feature gate. Stop when bundle-aware dry-run and install tests pass without changing default preview behavior unexpectedly.
+/goal Implement Goal 6: make install/update/remove consume legacy scriptlet bundles behind an explicit feature gate. Enforce target compatibility metadata and deny foreign legacy replay by default during preflight before live mutation. Stop when bundle-aware same-distro dry-run/install tests pass and cross-distro replay is rejected.
 ```
 
 Files likely touched:
@@ -262,14 +306,20 @@ Files likely touched:
 - `apps/conary/src/commands/remove.rs`
 - `crates/conary-core/src/scriptlet/mod.rs`
 - `crates/conary-core/src/ccs/legacy_scriptlets.rs`
+- `crates/conary-core/src/repository/distro.rs`
+- `apps/conary/src/live_host_safety.rs`
 - `apps/conary/tests/`
 
 Done means:
 
 - `blocked` and `review` entries fail before mutation under bundle-aware mode.
 - `replaced` entries run only CCS declarative hooks.
-- `legacy` entries replay preserved native scriptlets with native-compatible args when allowed.
+- `legacy` entries replay preserved native scriptlets with native-compatible args only after target compatibility preflight passes.
+- Target IDs use `<format>/<distro>/<release>/<arch>`.
+- `foreign_replay_policy = "deny"` is enforced by default before live mutation.
+- `strict`, `guarded`, and `permissive` policies behave as specified.
 - Raw replay and generated hooks from the same entry do not both run.
+- The integration test plan for golden behavior fixtures is documented, even if the full native-versus-CCS corpus does not run until Goal 8a.
 
 Verification:
 
@@ -277,16 +327,20 @@ Verification:
 cargo test -p conary ccs_install
 cargo test -p conary-core scriptlet
 cargo test -p conary bundle_replay
+cargo test -p conary-core target_compatibility
+cargo test -p conary foreign_replay
+cargo test -p conary live_host_safety
+cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 git diff --check
 ```
 
-## Goal 7: Target Compatibility Preflight And Foreign Replay Denial
+## Goal 7: Compatibility Matrix Expansion And Override Audit
 
 Recommended objective:
 
 ```text
-/goal Implement Goal 7: enforce target compatibility metadata and deny foreign legacy replay by default before live mutation. Stop when Fedora-origin legacy replay is rejected on Arch/Ubuntu-like targets unless an explicit compatibility matrix entry and operator policy allow it.
+/goal Implement Goal 7: expand the target compatibility matrix, helper/path preflight checks, and override audit metadata after Goal 6's default-deny safety gate is in place. Stop when compatible same-family cases require explicit matrix entries and every operator override is recorded.
 ```
 
 Files likely touched:
@@ -299,10 +353,10 @@ Files likely touched:
 
 Done means:
 
-- Target IDs use `<format>/<distro>/<release>/<arch>`.
-- `foreign_replay_policy = "deny"` is the default.
-- `strict`, `guarded`, and `permissive` policies behave as specified.
-- Changeset metadata records compatibility decisions and overrides.
+- Same-family compatibility is granted only by explicit matrix entries.
+- Helper command, path, service-manager, security-policy, and sandbox preflight failures produce stable reason IDs.
+- Changeset metadata records compatibility decisions and operator overrides.
+- Docs describe why converted CCS format does not imply raw scriptlet portability.
 
 Verification:
 
@@ -310,16 +364,17 @@ Verification:
 cargo test -p conary-core target_compatibility
 cargo test -p conary foreign_replay
 cargo test -p conary live_host_safety
+cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 git diff --check
 ```
 
-## Goal 8: Lifecycle Expansion And Regex Authority Retirement
+## Goal 8a: Lifecycle Expansion And Golden Behavior Fixtures
 
 Recommended objective:
 
 ```text
-/goal Implement Goal 8: expand update/remove/trigger coverage, add golden behavior fixtures, and retire regex analysis as the authoritative conversion mechanism once adapter parity covers the preview corpus. Stop when supported fixture packages match native observable behavior and unsupported packages fail before mutation with specific reasons.
+/goal Implement Goal 8a: expand update/remove/trigger coverage and add golden behavior fixtures for supported and unsupported package classes. Stop when supported fixture packages match native observable behavior and unsupported packages fail before mutation with specific reasons.
 ```
 
 Files likely touched:
@@ -327,14 +382,11 @@ Files likely touched:
 - `crates/conary-core/src/ccs/convert/`
 - `apps/conary/tests/`
 - `apps/remi/tests/`
-- `docs/modules/remi.md`
-- `docs/conaryopedia-v2.md`
 
 Done means:
 
 - Golden fixtures cover no-scriptlet, user/group, systemd, tmpfiles/cache, alternatives, unknown legacy replay, blocked package-manager recursion, foreign replay rejection, RPM trigger quarantine, DEB trigger quarantine, and Arch `.INSTALL` wrapper replay.
-- Regex analyzer is no longer the authority for publishing `replaced` decisions.
-- Public docs describe scriptlet fidelity truthfully.
+- Update, remove, trigger, purge, and Arch wrapper behavior is either covered by golden fixtures or fails before mutation with stable reason IDs.
 
 Verification:
 
@@ -343,6 +395,40 @@ cargo test -p conary-core conversion_integration
 cargo test -p conary bundle_replay
 cargo test -p remi conversion
 cargo run -p conary-test -- list
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --check
+git diff --check
+```
+
+## Goal 8b: Regex Authority Retirement And Docs Truth
+
+Recommended objective:
+
+```text
+/goal Implement Goal 8b: retire regex analysis as the authoritative conversion mechanism after adapter parity evidence covers the preview corpus, and update public/internal docs to describe scriptlet fidelity truthfully. Stop when corpus parity evidence exists, docs-truth checks pass, and regex analysis is only an advisory signal.
+```
+
+Files likely touched:
+
+- `crates/conary-core/src/ccs/convert/analyzer.rs`
+- `crates/conary-core/src/ccs/convert/`
+- `docs/modules/remi.md`
+- `docs/conaryopedia-v2.md`
+- `README.md`
+
+Done means:
+
+- Regex analyzer output cannot mark entries `replaced` without adapter or curated-rule evidence.
+- Adapter parity against the preview corpus is recorded before any old authority path is removed.
+- Public docs describe `native-free`, `fully-replaced`, `legacy-replay`, `review-required`, and `blocked` without overclaiming broad repository portability.
+
+Verification:
+
+```bash
+cargo test -p conary-core conversion_integration
+cargo test -p remi conversion
+bash scripts/check-doc-truth.sh
+cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 git diff --check
 ```
@@ -354,3 +440,4 @@ git diff --check
 - Do not make cross-distro raw replay the default.
 - Do not remove existing compatibility paths until the replacement has tests and a migration story.
 - Keep each goal small enough to review, commit, merge, push, and clean up before starting the next.
+- Run `cargo clippy --workspace --all-targets -- -D warnings` as part of every goal's final verification unless the goal explicitly records why a narrower clippy target is sufficient.
