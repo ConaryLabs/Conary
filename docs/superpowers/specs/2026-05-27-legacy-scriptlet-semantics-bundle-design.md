@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-05-27
-revision: 3
-summary: Clean-room design for preserving and improving RPM, DEB, and Arch scriptlet behavior in Remi-converted CCS packages, including target compatibility gates, adapter-based command growth, and cold-path latency budgets
+revision: 4
+summary: Clean-room design for preserving and improving RPM, DEB, and Arch scriptlet behavior in Remi-converted CCS packages, including decision rubrics, target compatibility gates, adapter-based command growth, deferred trigger fields, and measured cold-path latency budgets
 ---
 
 # Legacy Scriptlet Semantics Bundle: Design Spec
@@ -74,6 +74,66 @@ Regex analysis may remain as a temporary signal source, but it is not the
 authority. The authority is the bundle's explicit per-slot replay decision plus
 the test evidence that produced it.
 
+## Decision Rubrics
+
+The converter must make per-entry decisions using explicit rubrics, not broad
+"best effort" confidence.
+
+### `replaced`
+
+An entry may be marked `replaced` only when all of these are true:
+
+- every lifecycle path relevant to the entry has been modeled from native ABI,
+  static metadata, curated rules, or capture evidence;
+- every observed or declared host-integration operation is handled by an
+  adapter whose replacement status is `complete`;
+- no unknown command, external script call, network use, package-manager
+  recursion, privileged kernel/security-policy mutation, or uncertain
+  filesystem mutation remains;
+- control flow is either irrelevant to the replacement, fully modeled by the
+  adapter, or covered by separate native-ABI lifecycle paths;
+- the generated CCS hooks are idempotent and have fixture coverage proving the
+  expected observable state.
+
+If any operation is only partially understood, the entry is not `replaced`.
+Partial effects can produce warnings, evidence, and future adapter work, but
+they do not justify dropping the raw scriptlet.
+
+### `legacy`
+
+An entry may be marked `legacy` only when all of these are true:
+
+- the native script body, interpreter, arguments, environment contract, stdin
+  contract, and lifecycle ordering are preserved;
+- the target compatibility policy allows legacy replay for the host;
+- every external helper command is either present in the target, provided by a
+  Conary shim, or explicitly allowed by sandbox policy;
+- static and captured evidence show no network activity, package-manager
+  recursion, unsupported setuid/setcap/sysctl/security-policy mutation, kernel
+  or bootloader mutation, or unmodeled trigger dependency;
+- the protected scriptlet runner can satisfy the required isolation policy.
+
+If the entry is source-native or family-compatible but one of these checks
+cannot be proven, the outcome is `review` or `blocked`, not optimistic replay.
+
+### `review` versus `blocked`
+
+Use `review` when the package may be safe but lacks enough automated evidence
+or an adapter has not yet reached required coverage. Use `blocked` when the
+entry belongs to a known unsafe or unsupported class under current policy.
+
+Review artifacts are private Remi artifacts. Blocked artifacts are negative
+conversion results with structured reasons. Neither is served as a ready public
+CCS package under default policy.
+
+### Double-application rule
+
+V1 does not rewrite arbitrary shell to suppress individual commands. If a raw
+entry is replayed, Conary must not also run CCS hooks generated from that same
+entry unless the entry is explicitly marked with a future residual-replay mode
+that proves command suppression in tests. Until that mode exists, an entry is
+either fully replaced or fully replayed, never both.
+
 ## Remi Default Conversion Contract
 
 Remi remains the default conversion authority for repository packages. A client
@@ -121,6 +181,28 @@ These are product SLOs, not claims about the current implementation. The
 implementation plan must add conversion timing telemetry before public claims
 use these numbers.
 
+Before schema or replay implementation work begins, the implementation plan must
+benchmark the current Remi cold path with representative packages and split the
+timing by phase:
+
+- upstream metadata lookup and package download;
+- archive extraction and payload indexing;
+- native metadata and scriptlet extraction;
+- capture, when enabled;
+- adapter dispatch and bundle generation;
+- CDC chunking, CAS write, R2 write-through, and DB publication.
+
+The benchmark corpus should include at least one small package, one common
+scriptlet-bearing service package, one large payload package, and one
+dependency-heavy desktop/library package from the preview lanes. Example
+starting points are `jq`, `nginx`, `linux-firmware`, and a Qt base package, but
+the exact package names should follow the supported Fedora 44, Ubuntu 26.04, and
+Arch repositories available to the benchmark runner.
+
+If measured timings miss the target budgets, the budgets must be revised or the
+implementation plan must name concrete optimizations before public release notes
+claim the numbers.
+
 The scriptlet bundle should add little overhead for common packages:
 
 - static native ABI extraction and adapter dispatch should be metadata-bound
@@ -150,6 +232,14 @@ should optimize those before weakening scriptlet fidelity:
 Conary must model scriptlet slots by package format instead of flattening them
 into generic pre/post names too early.
 
+Every native ABI entry must also carry lifecycle-path coverage. For example,
+an RPM `%post` entry may have first-install and upgrade call paths, while a DEB
+`postinst` entry may have `configure`, `abort-configure`, and trigger-related
+paths. Capture or static modeling must cover every path relevant to the
+decision. Paths that cannot be modeled in the first implementation keep the
+entry in `legacy`, `review`, or `blocked` depending on the replay safety
+checklist.
+
 ### RPM
 
 RPM supports basic scriptlets, transaction scriptlets, triggers, and file
@@ -159,6 +249,8 @@ triggers. The model must preserve at least:
   `%posttrans`, trigger, and file-trigger variants;
 - interpreter program and interpreter flags;
 - script body after RPM macro expansion as present in the binary RPM;
+- pre-expansion macro source when available from source packages or curated
+  rules, but never as a requirement for binary RPM fidelity;
 - install/remove/upgrade argument conventions;
 - trigger condition, trigger target package, trigger priority, and file-prefix
   matches where the parser exposes them;
@@ -250,6 +342,37 @@ This keeps Conary's mixed-package story honest: Conary can understand many
 ecosystems, but source-distro scriptlets do not get to mutate an arbitrary live
 root by default.
 
+### Distro Identifiers And Compatibility Matrix
+
+Target identifiers use this logical form:
+
+```text
+<format>/<distro>/<release>/<arch>
+```
+
+Examples:
+
+- `rpm/fedora/44/x86_64`
+- `deb/ubuntu/26.04/x86_64`
+- `arch/arch/rolling/x86_64`
+
+Derivatives are not automatically compatible because they share a package
+format. `family-compatible` must be granted by an explicit compatibility matrix
+entry from `(source_format, source_distro, source_release, source_arch)` to
+`(target_format, target_distro, target_release, target_arch)`.
+
+Each matrix entry must define preflight checks, such as:
+
+- required helper commands and accepted version ranges;
+- expected service manager and initramfs/kernel integration capabilities;
+- filesystem path conventions;
+- security-policy assumptions such as SELinux or AppArmor;
+- whether native trigger/debconf behavior is required;
+- sandbox features required for replay.
+
+Absent a matrix entry, same-format packages are treated as `source-native`, not
+`family-compatible`.
+
 ## Bundle Shape
 
 The CCS package should carry one structured bundle, either as a manifest section
@@ -270,7 +393,7 @@ source_package = "nginx"
 source_version = "1.28.0-1.fc44"
 version_scheme = "rpm"
 target_compatibility = "source-native"
-allowed_targets = ["fedora-44"]
+allowed_targets = ["rpm/fedora/44/x86_64"]
 foreign_replay_policy = "deny"
 conversion_policy = "safe-or-legacy"
 publication_policy = "public-if-no-blocked"
@@ -279,23 +402,75 @@ publication_policy = "public-if-no-blocked"
 id = "rpm:%post"
 native_slot = "%post"
 phase = "post-install"
+lifecycle_paths = ["install:first", "upgrade:new"]
 interpreter = "/bin/sh"
 interpreter_args = []
 body_sha256 = "..."
 body = "..."
 decision = "legacy"
 reason = "contains residual shell after modeled systemd reload"
+timeout_ms = 30000
+transaction_order = "after-payload"
 
 [[legacy_scriptlets.entries.effects]]
 kind = "systemd-daemon-reload"
 source = "capture"
 confidence = "observed"
 replacement = "ccs-hook"
+adapter_id = "systemd-daemon-reload/v1"
+adapter_digest = "sha256:..."
 ```
 
 The final encoding can be optimized for binary CCS packages, but the logical
 data must remain inspectable through `conary query scripts` or an equivalent
 command.
+
+### Bundle Schema v1 Field Requirements
+
+The first schema must reserve fields for deferred scriptlet classes so Remi does
+not need to rewrite stored CCS packages when triggers and purge paths become
+supported.
+
+Top-level required fields:
+
+- schema ID and schema revision;
+- source format, source family, source distro, source release, source arch, and
+  version scheme;
+- source package name, source version, source package checksum, and conversion
+  tool version;
+- adapter registry digest and target policy digest;
+- target compatibility, allowed targets, foreign replay policy, publication
+  policy, and scriptlet fidelity;
+- aggregate counts by decision and unsupported class.
+
+Per-entry required fields:
+
+- stable entry ID, native slot, native phase, lifecycle paths, interpreter,
+  interpreter args, body digest, preserved body, and body encoding;
+- native invocation arguments for every modeled lifecycle path;
+- transaction ordering marker such as before-payload, after-payload,
+  pre-transaction, post-transaction, trigger, file-trigger, or remove/purge;
+- timeout policy and sandbox/capability requirements;
+- decision, reason code, human-readable reason, evidence digest, and source
+  evidence references;
+- effects with adapter IDs, adapter digests, replacement status, confidence,
+  and original command evidence;
+- unknown commands and blocked classes observed for that entry.
+
+Deferred but reserved fields:
+
+- RPM trigger condition, target package, priority, file-prefix matches, stdin
+  path contract, and trigger ordering;
+- DEB maintainer-script invocation mode, old/new version arguments, control
+  `triggers` content, debconf requirements, and purge/abort modes;
+- Arch function name, old/new version arguments, and `.INSTALL` source digest;
+- residual-replay metadata for a future mode that can prove command
+  suppression without double application.
+
+Schema evolution is additive within `v1`: unknown optional fields are preserved,
+and unknown enum variants fail closed to `review` unless the running converter
+explicitly supports them. Removing fields or changing the meaning of a required
+field requires a new schema ID.
 
 ## Effect Adapter Registry
 
@@ -325,6 +500,12 @@ Each adapter must declare:
 - sandbox/capability requirements;
 - fixture tests and at least one conversion corpus example.
 
+Adapter registry versions are content-addressed. Each entry records the adapter
+IDs and adapter content hashes that influenced its effects and decision. A
+global registry version may be used for coarse cache invalidation, but Remi
+should be able to identify which entries need re-evaluation when one adapter
+changes.
+
 Adapters consume structured command invocations, not arbitrary regex matches
 against whole scripts. Conversion capture should record command, argv, cwd,
 environment deltas, stdin summary, scriptlet entry ID, and source phase. Static
@@ -344,6 +525,24 @@ Unknown commands are first-class output:
 
 This creates a quality ratchet: every new helper command Conary learns becomes
 structured, tested conversion knowledge rather than another one-off heuristic.
+
+Before the public preview advertises broad Remi conversion, the registry must
+have a measured bootstrap set for the preview corpus. The first corpus scan
+should cover Fedora 44 base/update packages in scope, Ubuntu 26.04 main packages
+in scope, and Arch core/extra packages in scope. At minimum, the implementation
+plan must report:
+
+- the top helper commands and command forms by occurrence;
+- the percentage of packages with no scriptlets;
+- the percentage eligible for `replaced`, `legacy`, `review`, and `blocked`;
+- the top blocked classes by package count and by user-visible importance;
+- the adapter set required to cover the top 25 helper command names, or every
+  helper command that accounts for at least 1% of observed scriptlet command
+  occurrences, whichever is broader.
+
+If the blocked/review rate is too high for the advertised preview lane, Remi
+should expose a curated converted-package lane first instead of implying that
+the full native repository is ready.
 
 ## Effect IR
 
@@ -379,6 +578,11 @@ Each effect carries:
 
 Declarative CCS hooks are generated from `complete` effects only. Partial or
 uncertain effects can add warnings but cannot justify dropping the raw script.
+Current `hooks.post_install` and `hooks.pre_remove` script hooks remain valid
+for native CCS packages and existing transitional artifacts, but Remi-converted
+legacy package scriptlets must be represented by the bundle. Arbitrary
+`ScriptHook` fields must not be used as the lossy preservation path for native
+RPM, DEB, or Arch scriptlet entries.
 
 ## Conversion Pipeline
 
@@ -454,6 +658,39 @@ Conary should not also run declarative replacements for effects inside that same
 entry unless the entry explicitly declares those replacements as preconditions
 and the raw script was rewritten or wrapped to skip the replaced effect.
 
+## Blocked-Class Registry
+
+Remi must maintain a blocked-class registry alongside the adapter registry. The
+registry turns deferrals into trackable policy instead of implicit gaps.
+
+Each class entry records:
+
+- class ID and description;
+- default outcome: `replaced`, `legacy`, `review`, or `blocked`;
+- affected package formats and preview distros;
+- unblock criteria;
+- required adapters, replay capabilities, or target compatibility matrix
+  entries;
+- fixture and golden-corpus requirements.
+
+Initial registry expectations:
+
+| Class | Initial outcome | Unblock criteria |
+| --- | --- | --- |
+| `ldconfig` | `replaced` candidate | Adapter emits idempotent dynamic-linker-cache effect or proves no-op under generation model. |
+| `icon-cache`, `font-cache`, `desktop-db`, `mime-db`, `gsettings` | `replaced` candidate | Declarative cache-refresh adapters with fixture coverage. |
+| `systemd-enable`, `systemd-preset`, `daemon-reload` | `replaced` or `legacy` | Native helper semantics modeled per source family and target preflight. |
+| `tmpfiles`, `sysusers` | `replaced` candidate | Payload metadata extraction plus hook support and ordering tests. |
+| `alternatives` | `replaced` candidate | Adapter maps native registration/removal to CCS alternatives hooks. |
+| `dbus-policy` | `review` | D-Bus policy/service registration adapter and target compatibility checks. |
+| `pam` | `blocked` | Explicit PAM policy model and daily-driver safety review. |
+| `selinux`, `apparmor` | `blocked` | Target-compatible labeling/policy adapter and rollback story. |
+| `kernel-module`, `initramfs`, `bootloader` | `blocked` | Kernel/initramfs/boot artifact plan and isolated golden tests. |
+| `package-manager-recursion` | `blocked` | No default unblock path; requires explicit product decision. |
+| `network` | `blocked` | No default unblock path; requires explicit product decision. |
+| `rpm-trigger`, `rpm-file-trigger` | `review` or `blocked` | Native trigger ABI extraction, ordering model, and replay/golden tests. |
+| `deb-trigger`, `debconf`, `purge`, `abort-*` | `review` or `blocked` | DEB trigger/debconf mode model and lifecycle-path tests. |
+
 ## Publication Policy
 
 Remi should expose conversion quality as package metadata:
@@ -488,14 +725,43 @@ Default public publication should reject or quarantine:
 - Arch packages whose `.INSTALL` cannot be wrapped faithfully.
 - source-native packages requested for a cross-distro portable lane.
 
+## Review And Curation Workflow
+
+The `review` outcome needs an explicit promotion path.
+
+1. Remi stores the artifact privately with the bundle, source package digest,
+   evidence digest, unknown commands, blocked-class hits, and timing profile.
+2. A curator runs `remi conversion inspect` or equivalent tooling to view native
+   entries, adapter evidence, target compatibility, and golden-test gaps.
+3. The curator may add a scoped curated rule, add or improve an adapter, narrow
+   allowed targets, or mark the artifact blocked.
+4. Promotion to public cache requires rerunning conversion with the updated
+   adapter/rule set and producing a new evidence digest.
+5. Curated decisions must be scoped by source package checksum, package name
+   and version range, source distro/release, or a documented helper-command
+   pattern. Unscoped one-off approvals are not valid.
+6. Every promotion produces an audit entry that can be linked from Remi package
+   metadata.
+
+Human review is acceptable for early preview, but the workflow must feed back
+into adapters, curated rules, or blocked-class policy so the same package class
+does not require repeated manual judgment.
+
 ## CLI And Operator UX
 
 Operators need an inspectable answer, not a hidden conversion decision.
 
 Required UX:
 
-- `conary query scripts <pkg>` shows native entries, decisions, interpreters,
-  source format, and effect summaries.
+- `conary query scripts <pkg>` defaults to a concise summary: package
+  fidelity, target compatibility, counts by decision, blocked/review reasons,
+  and whether raw legacy replay is needed.
+- `conary query scripts <pkg> --verbose` shows native entries, decisions,
+  interpreters, lifecycle paths, source format, effect summaries, adapter IDs,
+  unknown commands, and timeout/sandbox requirements.
+- `conary query scripts <pkg> --entry <id>` shows one entry in detail.
+- `conary query scripts <pkg> --json` emits stable machine-readable output for
+  support bundles, Remi dashboards, and corpus analysis.
 - `conary install --dry-run <pkg>` reports whether the package uses declarative
   hooks, legacy replay, or is blocked before mutation, and whether the replay is
   native, family-compatible, or foreign.
@@ -515,9 +781,13 @@ Required test layers:
 
 - unit tests for RPM, DEB, and Arch native ABI extraction;
 - unit tests for effect IR serialization and manifest round trips;
+- schema compatibility tests proving reserved trigger/purge fields round-trip
+  even before enforcement exists;
 - adapter tests for every supported helper command and every blocked helper
   command class;
 - fixture conversion tests for each scriptlet decision;
+- latency benchmark tests or benchmark harness output for the current Remi
+  cold-path phases before product SLOs are published;
 - sandbox tests proving legacy replay receives native-compatible arguments and
   cannot mutate outside allowed roots;
 - target compatibility tests proving Fedora-native legacy replay is rejected on
@@ -548,20 +818,25 @@ The first golden corpus should include simple packages for:
 
 This should land as a clean-room replacement in slices:
 
-1. Define the bundle data model, parser extraction structs, and query rendering
-   without changing installation behavior.
-2. Define the adapter registry, command invocation evidence format, and initial
-   support matrix.
-3. Embed bundle sidecars in Remi-generated CCS packages while keeping current
-   hook behavior behind a compatibility path.
-4. Add replay-engine support for no-scriptlet, fully-replaced, and legacy-replay
-   normal install paths.
-5. Add target compatibility preflight and foreign replay refusal.
-6. Add publication gating and Remi metadata exposure.
-7. Expand update/remove/trigger coverage and block unsupported classes by
+0. Benchmark the current Remi cold path and scan the preview corpus for
+   scriptlet/helper-command frequency.
+1. Define the bundle data model, reserved schema fields, parser extraction
+   structs, command evidence format, and query rendering without changing
+   installation behavior.
+2. Define the adapter registry, blocked-class registry, bootstrap support
+   matrix, and first adapters.
+3. Embed bundle sidecars in Remi-generated CCS packages as passive metadata
+   while keeping current install behavior behind a compatibility path.
+4. Add publication metadata and review/blocked results without enforcing them on
+   install.
+5. Add replay-engine support for no-scriptlet, fully-replaced, and legacy-replay
+   normal install paths behind a feature gate.
+6. Add target compatibility preflight and foreign replay refusal.
+7. Enable publication gating for the curated preview lane.
+8. Expand update/remove/trigger coverage and block unsupported classes by
    default.
-8. Remove the old regex analyzer as an authority after the new tests cover the
-   preview conversion corpus.
+9. Remove the old regex analyzer as an authority after the adapter registry
+   reaches parity for common cases covered by the preview corpus.
 
 During rollout, existing converted packages without a bundle must be treated as
 legacy/untrusted conversion artifacts. They can be installed only under an
