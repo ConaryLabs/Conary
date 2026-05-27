@@ -12,9 +12,10 @@ For the current system shape, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 
 
 - Keep dnf, apt, and pacman authoritative for packages in adoption mode
 - Keep `conary --allow-live-system-mutation system unadopt --all` as the one-command, non-destructive escape hatch for adopted packages on hosts without a selected Conary generation
-- Write a rotational SQLite backup before adoption/unadoption and other live
-  preview mutations so the escape hatch remains recoverable even before a
-  generation exists
+- Write SQLite rollback and post-success checkpoint backups around
+  adoption/unadoption and other first-wave live DB mutations, with
+  non-generation recovery commands so the escape hatch remains recoverable even
+  before a generation exists
 - Prove non-destructive unadoption for RPM, DEB, and Arch systems
 - Ensure Conary update paths never silently turn adopted packages into Conary-owned packages
 - Make takeover an explicit opt-in beyond the risk-free adoption lane
@@ -87,11 +88,10 @@ Umbrella design:
 
 1. **Preview truth and onboarding** -
    [plan](docs/superpowers/plans/2026-05-26-preview-truth-and-onboarding.md).
-   Fix public truth drift, make the five-minute adoption/unadoption path
-   impossible to miss, sharpen the Nix comparison, include the site in truth
-   checks, explain the live-mutation acknowledgement flag, account for Remi
-   cold-start latency, and either implement or route single-package adoption
-   dry-runs.
+   Fix public truth drift, make the bounded adoption/unadoption path impossible
+   to miss, sharpen the Nix comparison, include the site in truth checks,
+   explain the live-mutation acknowledgement flag, account for Remi cold-start
+   latency, and either implement or route single-package adoption dry-runs.
 2. **Scriptlet trust assurance** -
    [plan](docs/superpowers/plans/2026-05-26-scriptlet-trust-assurance.md).
    Resolve the protected-sandbox `chroot`/root-transition ambiguity, make
@@ -100,15 +100,17 @@ Umbrella design:
    capability-scoped integration hooks before relying on unsandboxed fallbacks.
 3. **Release evidence and supportability** -
    [plan](docs/superpowers/plans/2026-05-26-release-evidence-and-supportability.md).
-   Publish a product/artifact/provenance matrix, keep local KVM evidence honest
-   while remote validation is paused, add beta support-bundle/privacy guidance,
-   and turn the limited preview into a contributor funnel.
+   Publish the minimum artifact/source expectation matrix before first testers,
+   keep local KVM evidence honest while remote validation is paused, add beta
+   support-bundle/privacy guidance, and turn the limited preview into a
+   contributor funnel.
 4. **Generation state resilience** -
    [plan](docs/superpowers/plans/2026-05-26-generation-state-resilience.md).
-   Add rotational pre-mutation SQLite backups before the first tester wave,
-   then add generation-bound SQLite-native backups and recovery commands so a
-   damaged live SQLite DB does not blind the manager when generation artifacts
-   and metadata are still intact.
+   Add live-mutation inventory plus adoption-lane rollback/post-success SQLite
+   backups and non-generation recovery before the first tester wave, then add
+   generation-bound SQLite-native backups and recovery commands so a damaged
+   live SQLite DB does not blind the manager when generation artifacts and
+   metadata are still intact.
 
 Strategic follow-up after the preview queue:
 
@@ -125,19 +127,22 @@ Strategic follow-up after the preview queue:
 ## Near-Term Priorities
 
 1. Land the preview truth/onboarding plan before inviting new public testers.
-2. Add rotational pre-mutation SQLite backups before first-wave tester
-   adoption/unadoption becomes part of the support story.
-3. Land the scriptlet trust-assurance plan before widening beyond careful VM or
+2. Add adoption-lane rollback and post-success DB checkpoints plus
+   non-generation recovery before first-wave tester adoption/unadoption becomes
+   part of the support story.
+3. Land the minimum Plan C supportability slice before the first public tester
+   post if binaries or shared tester feedback are involved.
+4. Land the scriptlet trust-assurance plan before widening beyond careful VM or
    non-critical-machine testers.
-4. Keep `conary system unadopt` and selected-generation `native-handoff` proof
+5. Keep `conary system unadopt` and selected-generation `native-handoff` proof
    green for Fedora 44, Ubuntu 26.04 LTS, and Arch.
-5. Keep generation export, installed-runtime QEMU validation, and Group P ISO
+6. Keep generation export, installed-runtime QEMU validation, and Group P ISO
    evidence green in rotation while remote KVM validation is paused.
-6. Add release evidence, support-bundle, and contributor-onboarding polish
+7. Add release evidence, support-bundle, and contributor-onboarding polish
    before treating the limited preview as more than a small tester program.
-7. Add full generation-state DB backup and recovery before generation switching
+8. Add full generation-state DB backup and recovery before generation switching
    becomes the headline public ask.
-8. Keep daily-driver UX, shell completions, release polish, and operator
+9. Keep daily-driver UX, shell completions, release polish, and operator
    diagnostics current as preview feedback arrives.
 
 ---

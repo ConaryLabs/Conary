@@ -70,15 +70,20 @@ readiness checklist.
 
 The DeepSeek follow-up review tightened the active queue around Remi cold-start
 latency, the live-mutation acknowledgement explanation, first-run `system init`
-failure modes, a generation-state marker before the first tester wave, support
-bundle redaction scope, and source-selection documentation before behavior
-changes.
+failure modes, generation-state resilience pre-work, support-bundle redaction
+scope, and source-selection documentation before behavior changes.
 
 The Gemini follow-up review then shifted Plan D away from a custom JSON
 trove/file/publication mirror toward SQLite-native backups, added rotational
 pre-mutation DB backups for adoption-only recovery, tightened support bundles
 to an allowlist-only model, and added namespace preflight diagnostics for
 hardened kernels and restricted containers.
+
+The agentic plan review then tightened blocker sequencing and implementation
+specificity: minimum Plan C supportability now gates first public testers,
+Plan D requires live-mutation inventory plus pre/post DB checkpoints and
+non-generation recovery, Plan B distinguishes sandbox setup failures from script
+exit failures, and Plan A's first-run path is bounded by timing/disk evidence.
 
 Audited every tracked documentation-like file returned by
 `bash scripts/docs-audit-inventory.sh`: tracked files spanning root docs,
