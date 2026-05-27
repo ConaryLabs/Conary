@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-04-07
-revision: 8
-summary: Refresh CCS conversion, runtime helper, and selective-component install notes
+last_updated: 2026-05-27
+revision: 9
+summary: Add passive legacy scriptlet bundle query notes
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -45,6 +45,7 @@ CcsBuilder::new(manifest, source_dir)
 | `SigningKeyPair` | signing.rs | Ed25519 key generation, signing, file I/O |
 | `PackageSignature` | signing.rs | Embedded signature with algorithm, key_id, timestamp |
 | `HookExecutor` | hooks/ | Runs declarative hooks with rollback tracking |
+| `LegacyScriptletBundle` | legacy_scriptlets.rs | Passive metadata for converted RPM/DEB/Arch scriptlet decisions |
 | `BuildPolicy` (trait) | policy.rs | Pluggable build policy (DenyPaths, StripBinaries, FixShebangs, etc.) |
 | `EnhancementEngine` (trait) | enhancement/ | Post-conversion enhancement (capabilities, provenance, subpackages) |
 
@@ -61,6 +62,14 @@ hooks from scriptlets where possible and preserves remaining scripts for
 sandboxed execution when they cannot be safely captured. Tracks conversion
 fidelity (High/Medium/Low) via `FidelityReport`.
 
+**legacy_scriptlets.rs** -- Versioned passive metadata for converted package
+scriptlet semantics. The v1 bundle lives in the TOML manifest as
+`[legacy_scriptlets]` and records source package identity, target
+compatibility, per-entry decisions, effects, reserved trigger/purge metadata,
+timeouts, and evidence digests. It is TOML-only in this revision; the CBOR
+`BinaryManifest` remains unchanged and archive reads overlay the TOML field
+when both manifest formats are present.
+
 **enhancement/** -- Post-conversion enrichment via trait-based plugins.
 Adds capabilities, provenance, and subpackage relationships that the
 original format lacked. Uses EnhancementRunner with a registry pattern.
@@ -75,6 +84,29 @@ CCS sits at the center of Conary's format pipeline. All package formats
 (RPM, DEB, Arch) convert to CCS before installation. The builder produces
 CAS-compatible content (SHA-256 keyed blobs), and the chunking system
 enables delta-efficient distribution via the Remi server.
+
+## Passive Legacy Scriptlet Bundles
+
+Converted CCS packages may carry a `[legacy_scriptlets]` section. In the
+current implementation this bundle is queryable metadata only: it does not
+enable legacy replay, does not change install/update/remove behavior, and does
+not make a converted package eligible for public publication. Raw foreign
+scriptlet replay remains denied until later target-compatibility, sandbox, and
+replay safety gates land.
+
+Operators can inspect a local CCS package with:
+
+```bash
+conary query scripts ./nginx.ccs
+conary query scripts ./nginx.ccs --verbose
+conary query scripts ./nginx.ccs --entry rpm:%post
+conary query scripts ./nginx.ccs --json
+```
+
+The CCS query output shows decisions, reasons, effects, body digests, and
+reserved metadata summaries. It does not print preserved raw script bodies in
+text or JSON output by default. Existing RPM/DEB/Arch package-file scriptlet
+inspection keeps its current default behavior.
 
 ## Install
 
