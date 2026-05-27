@@ -125,6 +125,10 @@ git diff --check
 
 ## Goal 2: Native ABI Extraction For RPM, DEB, And Arch
 
+Design:
+
+- `docs/superpowers/specs/2026-05-27-legacy-scriptlet-native-abi-extraction-design.md`
+
 Recommended objective:
 
 ```text
