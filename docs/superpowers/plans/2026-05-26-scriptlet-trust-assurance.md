@@ -89,7 +89,28 @@ scriptlet syscall profile allows chroot: yes | no
 If the profile allows `chroot`, stop and either remove it from protected
 scriptlet execution or update this plan with the exact compatibility reason.
 
-- [ ] **Step 3: Add an assurance note to the security doc**
+- [ ] **Step 3: Classify hardened-kernel and container failure modes**
+
+Run the sandbox preflight or focused sandbox test in environments where
+namespace creation can be restricted:
+
+```text
+standard local host
+rootless or restricted container
+hardened kernel with unprivileged user namespaces disabled
+```
+
+The implementation must turn namespace setup failures into one clear error
+that names the missing capability and the choices:
+
+```text
+Protected scriptlet sandboxing requires mount and user namespace support.
+Enable the required kernel/container namespace support, run inside a VM, or
+rerun with --sandbox=never only if you intentionally accept direct host
+mutation.
+```
+
+- [ ] **Step 4: Add an assurance note to the security doc**
 
 Add a short section:
 
@@ -109,6 +130,7 @@ Adjust the wording if the audit proves a different current fact.
 **Files:**
 - Modify: `crates/conary-core/src/capability/declaration.rs`
 - Modify: `crates/conary-core/src/container/mod.rs`
+- Modify if needed: `crates/conary-core/src/scriptlet/mod.rs`
 
 - [ ] **Step 1: Add a scriptlet profile test**
 
@@ -131,7 +153,13 @@ If the container module exposes enough structure, add a test that asserts
 protected live-root setup uses the hardened path and fails closed when the
 required namespace operations are unavailable.
 
-- [ ] **Step 3: Run focused tests**
+- [ ] **Step 3: Add readable namespace-preflight diagnostics**
+
+If current errors are generic `Operation not permitted` or low-level namespace
+errors, add a focused helper that maps them to the protected-sandbox diagnostic
+from Task 1.
+
+- [ ] **Step 4: Run focused tests**
 
 Run:
 

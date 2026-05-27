@@ -4,7 +4,7 @@
 
 **Goal:** Make the limited preview supportable: every artifact has a clear evidence/provenance story, every beta report has useful diagnostics, and every tester sees a path to contribute.
 
-**Architecture:** Add a canonical release artifact matrix and checks around it, keep local QEMU/KVM evidence honest while remote validation is paused, add a redacted support-bundle flow, and create contributor-facing beta intake paths without adding heavy governance.
+**Architecture:** Add a canonical release artifact matrix and checks around it, keep local QEMU/KVM evidence honest while remote validation is paused, add an allowlist-only support-bundle flow, and create contributor-facing beta intake paths without adding heavy governance.
 
 **Tech Stack:** Markdown operations docs, Bash release checks, GitHub issue templates, Rust or Bash diagnostic collection, existing release matrix and docs-audit scripts.
 
@@ -37,8 +37,9 @@ All tester diagnostics are explicit and local-first.
 ## Review-Tightened Decisions
 
 - No automatic telemetry in this plan.
-- The support bundle must default to local output and redact paths/secrets that
-  are likely to include credentials.
+- The support bundle must be allowlist-only. Redaction is a backstop for
+  allowed command output, not permission to collect raw logs, environment
+  dumps, filesystem trees, or arbitrary files.
 - Do not include `conary.db` by default. The first support bundle should include
   integrity/status summaries and require an explicit opt-in before copying any
   database file.
@@ -132,7 +133,7 @@ and assert every documented product still exists there.
 If the new script is separate, add it to the docs/release validation section in
 `.github/workflows/pr-gate.yml`.
 
-### Task 3: Support Bundle Flow
+### Task 3: Allowlist-Only Support Bundle Flow
 
 **Files:**
 - Prefer create: `scripts/conary-support-bundle.sh`
@@ -149,7 +150,7 @@ target_dir="${1:-target/conary-support-bundle}"
 mkdir -p "$target_dir"
 ```
 
-Collect:
+Collect only these predefined command outputs:
 
 ```text
 conary --version
@@ -160,6 +161,10 @@ conary repo list
 uname -a
 lsb_release -a or /etc/os-release
 ```
+
+Do not collect raw filesystem logs, process environments, shell history,
+package payloads, arbitrary `/etc` files, home-directory paths, or recursive
+directory listings.
 
 Explicitly exclude by default:
 
@@ -182,9 +187,9 @@ sqlite3 "$CONARY_DB" "SELECT name FROM sqlite_master WHERE type='table' ORDER BY
 Do not copy the DB into the bundle unless a future `--include-db` option is
 added with a separate redaction/review warning.
 
-- [ ] **Step 2: Redact obvious secrets**
+- [ ] **Step 2: Use redaction only as a backstop**
 
-Pipe collected text through a redactor that masks:
+Pipe only the allowlisted command output through a redactor that masks:
 
 ```text
 Authorization: ...
@@ -195,6 +200,9 @@ secret=...
 Bearer ...
 X-Remi-Admin-Token: ...
 ```
+
+If the script ever needs a non-allowlisted source, add a new explicit command
+entry and test rather than widening the collector.
 
 - [ ] **Step 3: Add privacy wording**
 
