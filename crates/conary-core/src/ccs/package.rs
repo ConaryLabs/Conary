@@ -48,8 +48,8 @@ pub struct CcsPackage {
 /// Note: The binary manifest format does not carry all CcsManifest fields.
 /// The following fields are unavailable from CBOR and will use defaults:
 /// `homepage`, `repository`, `authors`, `build.environment`, `build.commands`,
-/// `suggests`, `components`, `scriptlets`, `config`, `legacy`, `policy`,
-/// `provenance`, and `redirects`.
+/// `suggests`, `components`, `scriptlets`, `legacy_scriptlets`, `config`,
+/// `legacy`, `policy`, `provenance`, and `redirects`.
 pub fn convert_binary_to_ccs_manifest(
     bin: &crate::ccs::binary_manifest::BinaryManifest,
 ) -> CcsManifest {
@@ -209,6 +209,7 @@ pub fn convert_binary_to_ccs_manifest(
         components: Components::default(),
         hooks,
         scriptlets: ScriptletDeclarations::default(),
+        legacy_scriptlets: None,
         config: Config::default(),
         build,
         legacy: None,

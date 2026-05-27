@@ -410,6 +410,7 @@ impl LegacyConverter {
             components: Components::default(),
             hooks: hooks.clone(),
             scriptlets: Default::default(),
+            legacy_scriptlets: None,
             config: Config {
                 files: config_files,
                 noreplace: true,

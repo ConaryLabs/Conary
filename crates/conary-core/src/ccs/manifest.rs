@@ -9,6 +9,7 @@ use crate::ccs::hooks::{
     is_denied_sysctl_key, is_safe_unit_name, validate_shell, validate_tmpfiles_entry_type,
     validate_username,
 };
+use crate::ccs::legacy_scriptlets::LegacyScriptletBundle;
 use crate::ccs::policy::BuildPolicyConfig;
 use crate::filesystem::path::sanitize_path;
 use serde::{Deserialize, Serialize};
@@ -54,6 +55,10 @@ pub struct CcsManifest {
     /// Scriptlet execution declarations and host-integration capabilities
     #[serde(default)]
     pub scriptlets: ScriptletDeclarations,
+
+    /// Passive legacy scriptlet semantics bundle for converted packages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_scriptlets: Option<LegacyScriptletBundle>,
 
     #[serde(default)]
     pub config: Config,
@@ -204,6 +209,13 @@ impl CcsManifest {
         }
 
         self.scriptlets.validate()?;
+        if let Some(bundle) = &self.legacy_scriptlets {
+            bundle.validate().map_err(|error| {
+                ManifestError::Invalid(format!(
+                    "legacy scriptlet bundle validation failed: {error}"
+                ))
+            })?;
+        }
 
         Ok(())
     }
@@ -227,6 +239,7 @@ impl CcsManifest {
             components: Components::default(),
             hooks: Hooks::default(),
             scriptlets: ScriptletDeclarations::default(),
+            legacy_scriptlets: None,
             config: Config::default(),
             build: None,
             legacy: None,
@@ -1265,5 +1278,104 @@ paths = ["/etc/pam.d"]
             ),
             "unexpected error: {err}"
         );
+    }
+
+    fn manifest_with_legacy_scriptlet_bundle(body: &str, body_sha256: &str) -> String {
+        format!(
+            r#"
+[package]
+name = "nginx"
+version = "1.28.0"
+description = "nginx converted from RPM"
+
+[legacy_scriptlets]
+schema = "conary.legacy-scriptlets.v1"
+schema_revision = 1
+source_format = "rpm"
+source_family = "fedora-rhel"
+source_distro = "fedora"
+source_release = "44"
+source_arch = "x86_64"
+source_package = "nginx"
+source_version = "1.28.0-1.fc44"
+source_checksum = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+version_scheme = "rpm"
+conversion_tool = "remi"
+conversion_tool_version = "0.8.0"
+conversion_policy = "safe-or-legacy"
+target_compatibility = "source-native"
+allowed_targets = ["rpm/fedora/44/x86_64"]
+foreign_replay_policy = "deny"
+publication_policy = "public-if-no-blocked"
+publication_status = "private-review"
+scriptlet_fidelity = "legacy-replay"
+
+[legacy_scriptlets.decision_counts]
+legacy = 1
+
+[[legacy_scriptlets.entries]]
+id = "rpm:%post"
+native_slot = "%post"
+phase = "post-install"
+lifecycle_paths = ["install:first"]
+interpreter = "/bin/sh"
+interpreter_args = ["-e"]
+body_sha256 = "{body_sha256}"
+body = "{body}"
+native_invocation = {{ args = ["1"], environment = ["RPM_INSTALL_PREFIX=/"], stdin = "none", chroot = "install-root" }}
+transaction_order = {{ position = "after-payload", after = ["payload"] }}
+timeout_ms = 30000
+decision = "legacy"
+reason_code = "protected-replay-required"
+
+[[legacy_scriptlets.entries.effects]]
+kind = "ldconfig"
+source = "static-signal"
+confidence = "declared"
+replacement = "complete"
+"#
+        )
+    }
+
+    #[test]
+    fn manifest_toml_round_trips_legacy_scriptlet_bundle() {
+        let body = "ldconfig";
+        let body_sha256 = crate::hash::sha256_prefixed(body.as_bytes());
+        let toml = manifest_with_legacy_scriptlet_bundle(body, &body_sha256);
+
+        let manifest = CcsManifest::parse(&toml).expect("parse manifest");
+        let bundle = manifest
+            .legacy_scriptlets
+            .as_ref()
+            .expect("legacy scriptlet bundle");
+
+        assert_eq!(bundle.source_package, "nginx");
+        assert_eq!(bundle.entries.len(), 1);
+        assert_eq!(bundle.entries[0].id, "rpm:%post");
+
+        let encoded = manifest.to_toml().expect("serialize manifest");
+        assert!(encoded.contains("[legacy_scriptlets]"));
+        let decoded = CcsManifest::parse(&encoded).expect("parse serialized manifest");
+        assert_eq!(
+            decoded
+                .legacy_scriptlets
+                .as_ref()
+                .expect("legacy bundle")
+                .entries[0]
+                .effects[0]
+                .kind,
+            "ldconfig"
+        );
+    }
+
+    #[test]
+    fn manifest_validation_rejects_invalid_legacy_scriptlet_bundle() {
+        let body_sha256 = crate::hash::sha256_prefixed(b"ldconfig");
+        let toml = manifest_with_legacy_scriptlet_bundle("ldconfig && echo tampered", &body_sha256);
+
+        let err = CcsManifest::parse(&toml).expect_err("tampered bundle must fail");
+
+        assert!(err.to_string().contains("legacy scriptlet bundle"));
+        assert!(err.to_string().contains("body_sha256 mismatch"));
     }
 }
