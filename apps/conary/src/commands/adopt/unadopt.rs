@@ -6,10 +6,12 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 use conary_core::db;
+use conary_core::db::backup::CheckpointReason;
 use conary_core::db::models::{Changeset, ChangesetStatus, Trove};
 use conary_core::generation::mount::current_generation;
 use conary_core::runtime_root::ConaryRuntimeRoot;
 
+use super::checkpoint::write_db_checkpoint;
 use super::hooks::remove_detected_sync_hooks;
 use crate::commands::create_state_snapshot;
 
@@ -70,6 +72,7 @@ where
     let changeset_id = if target_ids.is_empty() {
         None
     } else {
+        write_db_checkpoint(db_path, CheckpointReason::PreMutation)?;
         let changeset_id = db::transaction(&mut conn, |tx| {
             let mut changeset = Changeset::new(changeset_description(&unadopted));
             let changeset_id = changeset.insert(tx)?;
@@ -81,6 +84,7 @@ where
         })?;
 
         create_state_snapshot(&conn, changeset_id, "Unadopt native packages")?;
+        write_db_checkpoint(db_path, CheckpointReason::PostSuccess)?;
         Some(changeset_id)
     };
 

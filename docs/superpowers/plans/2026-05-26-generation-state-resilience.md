@@ -87,7 +87,7 @@ indices, constraints, and migrations; backups should preserve that fidelity.
 - Read: `apps/conaryd/src/`
 - Modify: this plan if the inventory changes the first-wave scope
 
-- [ ] **Step 1: Inventory all live DB mutation surfaces**
+- [x] **Step 1: Inventory all live DB mutation surfaces**
 
 List every command classified as `DbMutation`, `ActiveHostMutation`, or
 `AlwaysLive`, plus conaryd package-job execution paths. Mark each as:
@@ -114,7 +114,7 @@ system takeover
 conaryd package install/remove/update jobs
 ```
 
-- [ ] **Step 2: Keep docs aligned with uncovered surfaces**
+- [x] **Step 2: Keep docs aligned with uncovered surfaces**
 
 If a mutating surface is not covered by pre/post DB checkpoint backups, it must
 be absent from the first public quickstart or clearly marked VM/non-critical
@@ -128,12 +128,13 @@ host only.
 - Modify: `apps/conary/src/commands/adopt/system.rs`
 - Modify: `apps/conary/src/commands/adopt/packages.rs`
 - Modify: `apps/conary/src/commands/adopt/refresh.rs`
+- Modify: `apps/conary/src/commands/adopt/convert.rs`
 - Modify: `apps/conary/src/commands/adopt/unadopt.rs`
 - Modify: `apps/conary/src/commands/adopt/native_handoff.rs`
 - Modify: system backup CLI/commands chosen for list/verify/recover
 - Test: focused DB backup tests and adoption/unadoption command tests
 
-- [ ] **Step 1: Add a SQLite backup helper**
+- [x] **Step 1: Add a SQLite backup helper**
 
 Create a helper that writes a consistent copy of the DB using SQLite's online
 backup API or `VACUUM INTO`. The first version should produce:
@@ -152,7 +153,7 @@ Reasons should include at least `pre-mutation` and `post-success`.
 If the online backup API is chosen, add the required `rusqlite` feature in
 `Cargo.toml`; otherwise prefer `VACUUM INTO`.
 
-- [ ] **Step 2: Add rotation**
+- [x] **Step 2: Add rotation**
 
 Keep the most recent verified backups by count and age:
 
@@ -164,20 +165,20 @@ default max age: 14 days
 Rotation must run only after the new backup has been written durably, reopened,
 and verified.
 
-- [ ] **Step 3: Use durable write semantics**
+- [x] **Step 3: Use durable write semantics**
 
 Write to a temporary path, fsync the file, rename into place, fsync the parent
 directory, and write a checksum/manifest sidecar. Do not prune older backups
 until the new backup and manifest pass verification.
 
-- [ ] **Step 4: Call the helper before and after first-wave apply paths**
+- [x] **Step 4: Call the helper before and after first-wave apply paths**
 
 Before adoption/unadoption/native-handoff apply paths mutate the live Conary DB,
 write a pre-mutation backup. After the DB transaction and any state snapshot
 that defines the successful command outcome, write a post-success checkpoint.
 Dry-runs must not create backups.
 
-- [ ] **Step 5: Add non-generation recovery commands**
+- [x] **Step 5: Add non-generation recovery commands**
 
 Add commands equivalent to:
 

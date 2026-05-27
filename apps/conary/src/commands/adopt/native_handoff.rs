@@ -6,12 +6,14 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use conary_core::db;
+use conary_core::db::backup::CheckpointReason;
 use conary_core::db::models::{Changeset, ChangesetStatus, Trove};
 use conary_core::generation::mount::current_generation;
 use conary_core::packages::SystemPackageManager;
 use conary_core::runtime_root::ConaryRuntimeRoot;
 use serde::{Deserialize, Serialize};
 
+use super::checkpoint::write_db_checkpoint;
 use super::hooks::remove_detected_sync_hooks;
 use crate::commands::create_state_snapshot;
 
@@ -414,6 +416,7 @@ fn remove_recorded_adopted_tracking(
         return Ok(record.changeset_id);
     }
 
+    write_db_checkpoint(db_path, CheckpointReason::PreMutation)?;
     let changeset_id = db::transaction(&mut conn, |tx| {
         let mut changeset = Changeset::new(changeset_description(&target_names));
         let changeset_id = changeset.insert(tx)?;
@@ -425,6 +428,7 @@ fn remove_recorded_adopted_tracking(
     })?;
 
     create_state_snapshot(&conn, changeset_id, "Native authority handoff")?;
+    write_db_checkpoint(db_path, CheckpointReason::PostSuccess)?;
     Ok(Some(changeset_id))
 }
 
