@@ -25,7 +25,7 @@ conary --allow-live-system-mutation system generation switch 2
 conary --allow-live-system-mutation system generation rollback
 ```
 
-**Atomic operations.** Every install, remove, and update is a changeset -- an all-or-nothing transaction. If something fails, your system stays exactly as it was. Rollback is not an afterthought; it is core to how the system works. Generations extend this further: the entire system state is atomic.
+**Atomic package state and generation selection.** Install, remove, and update operations commit package DB/file state as changesets, and generation rollback switches complete system states. Legacy RPM/DEB/Arch post-scriptlets can still fail after package files are installed or removed. Until the scriptlet trust plan lands structured degradation metadata, treat those as warning-only post-scriptlet side effects rather than part of the same rollback boundary.
 
 ```bash
 conary --allow-live-system-mutation install nginx postgresql redis
@@ -57,7 +57,7 @@ conary repo sync
 conary --allow-live-system-mutation install nginx
 ```
 
-**Current focus: limited public preview readiness.** The core install, rollback, generation, bootstrap, and server paths are in place. The preview path is now adopt-first: users can let Conary observe and CAS-back existing RPM/DEB/Arch packages while the native package manager remains the authority, then unadopt without deleting package files if they decide not to continue. Remote Forge validation is paused pending a new KVM-capable runner; QEMU release evidence should come from `scripts/local-qemu-validation.sh` on a local machine with `/dev/kvm`.
+**Current focus: limited public preview readiness.** The core install, rollback, generation, bootstrap, and server paths are in place. The preview path is now adopt-first: users can let Conary observe existing RPM/DEB/Arch packages while the native package manager remains the authority, optionally CAS-back them with full adoption, then unadopt without deleting package files if they decide not to continue. Remote Forge validation is paused pending a new KVM-capable runner; QEMU release evidence should come from `scripts/local-qemu-validation.sh` on a local machine with `/dev/kvm`.
 
 ---
 
@@ -66,9 +66,11 @@ conary --allow-live-system-mutation install nginx
 | Capability | apt/dnf | pacman | Nix | Conary |
 |---|---|---|---|---|
 | Immutable generations | No | No | Yes (generations) | Yes (EROFS + composefs) |
-| Atomic transactions | No | No | Yes | Yes |
+| Package-state transaction boundary | No | No | Yes | Yes |
+| Bootable generation rollback | No | No | Yes | Yes |
+| Native distro adoption/unadoption | No | No | No | Yes |
 | Rollback to any state | No | No | Yes (generations) | Yes (snapshots + generations) |
-| System takeover | No | No | No | Yes (partial) |
+| Explicit system takeover | No | No | No | Yes (partial) |
 | Bootstrap from scratch | No | No | Yes | Yes (partial) |
 | Multi-format (RPM + DEB + Arch) | No | No | No | Yes |
 | Derived packages | No | No | Yes (overlays) | Yes |
@@ -84,13 +86,48 @@ conary --allow-live-system-mutation install nginx
 | Mature ecosystem | Yes | Yes | Yes | No (early) |
 | Package count | 60K+ | 15K+ | 100K+ | Via conversion |
 
-Conary is strongest where traditional package managers are weakest: atomic operations, cross-format support, immutable system images, and fine-grained component control. Nix shares several of Conary's design principles but uses a custom language (Nix expressions) where Conary uses TOML, and Nix does not handle RPM/DEB/Arch formats natively.
+If you already run NixOS and like it, Conary is probably not trying to pull you away. Conary's near-term bet is different: keep Fedora, Ubuntu, or Arch as the base system, let Conary adopt and CAS-back what is already installed, and move into Conary-owned generations only when the user explicitly chooses that authority boundary. The trade-off is maturity and package count; Nix wins there today. Conary wins only if the migration path is safer and easier to try.
 
 The honest gap: ecosystem maturity. apt and dnf have decades of packages and integration. Conary bridges this through format conversion (install .rpm/.deb/.pkg.tar.zst directly) and the Remi server (which converts upstream repos to CCS on the fly), but native CCS packages are still early. Immutable generations and raw/qcow2/ISO export are working on x86_64 generation artifacts, OCI export uses the same generation artifact source, and signed portable bundles remain active follow-up work.
 
 ---
 
 ## Quick Start
+
+### Five-Minute Preview
+
+Use this path on a VM or non-critical host first. Release binaries are not
+linked for this preview tag yet, so the commands below assume the developer
+build path in the next subsection and use `./target/debug/conary`.
+
+```bash
+./target/debug/conary system init
+./target/debug/conary repo add remi https://remi.conary.io
+./target/debug/conary repo sync
+./target/debug/conary system adopt --system --dry-run
+./target/debug/conary system adopt --status
+```
+
+The first install or dry-run that needs a package not already converted by Remi
+may spend extra time converting upstream RPM/DEB/Arch metadata into CCS. That
+cold-start latency is expected during the limited preview; reruns should be
+faster once the conversion cache is warm.
+
+When you are ready to test the reversible adoption apply path on that host:
+
+```bash
+./target/debug/conary --allow-live-system-mutation system adopt --system
+./target/debug/conary system adopt --status
+./target/debug/conary system unadopt --all --dry-run
+./target/debug/conary --allow-live-system-mutation system unadopt --all
+```
+
+`--allow-live-system-mutation` is intentionally long: it marks the exact point
+where the preview moves from inspection into changing the active host. Before
+selecting a Conary generation, `conary --allow-live-system-mutation system
+unadopt --all` removes Conary tracking without deleting native package files.
+
+### Developer Build
 
 ```bash
 # Build from source (requires Rust 1.94+, Linux only)
@@ -124,7 +161,8 @@ Commands that mutate the active host require the explicit `--allow-live-system-m
 # Add --version and/or --arch when multiple installed variants match.
 
 # Adopt packages already on the system; dnf/apt/pacman remain authoritative
-./target/debug/conary --allow-live-system-mutation system adopt --system --full # CAS-back native packages
+./target/debug/conary system adopt --system --dry-run
+./target/debug/conary --allow-live-system-mutation system adopt --system # Track native packages
 
 # Optional escape hatch before a Conary generation is selected
 # ./target/debug/conary system unadopt --all --dry-run
@@ -172,7 +210,7 @@ publication of the current DB state.
 
 ### Adoption And Explicit Takeover
 
-Adopt an existing Linux installation without giving up native package-manager authority. The stable preview path today is `conary --allow-live-system-mutation system adopt --system --full`, which records native packages in Conary with CAS backing while dnf, apt, or pacman remains authoritative for those packages. `conary --allow-live-system-mutation system unadopt --all` removes Conary tracking without deleting native package files on hosts without a selected Conary generation. If a Conary generation is already selected, use the staged native-authority handoff flow: run `conary system native-handoff --dry-run`, then `conary --allow-live-system-mutation system native-handoff --yes`; if the operation is interrupted after its record is written, rerun `conary --allow-live-system-mutation system native-handoff --recover --yes`.
+Adopt an existing Linux installation without giving up native package-manager authority. The fastest preview path today is metadata-only system adoption, `conary --allow-live-system-mutation system adopt --system`, which records native packages in Conary while dnf, apt, or pacman remains authoritative for those packages. Use `--full` when you want CAS backing for adopted package files and have budgeted the extra first-run time and disk growth. `conary --allow-live-system-mutation system unadopt --all` removes Conary tracking without deleting native package files on hosts without a selected Conary generation. If a Conary generation is already selected, use the staged native-authority handoff flow: run `conary system native-handoff --dry-run`, then `conary --allow-live-system-mutation system native-handoff --yes`; if the operation is interrupted after its record is written, rerun `conary --allow-live-system-mutation system native-handoff --recover --yes`.
 
 Updates follow the same authority boundary. Conary-owned packages can be installed, removed, and updated on a normal mutable host without first selecting a Conary generation. Adopted packages are not silently replaced by Conary during `update`; Conary reports that the native package manager remains authoritative unless you explicitly choose `--dep-mode takeover`. Critical adopted packages remain blocked even under takeover.
 

@@ -23,8 +23,9 @@
 				<h3>System Generations</h3>
 				<p>
 					Atomic, immutable filesystem snapshots using EROFS images and Linux composefs.
-					Build a generation from current system state and switch between generations live,
-					without rebooting. Every generation is a complete, verified filesystem snapshot.
+					Build a generation from current system state, select it for the next boot,
+					or export it for image validation. Every generation is a complete, verified
+					filesystem snapshot.
 				</p>
 				<div class="feature-code">
 					<code>conary system generation build --summary "Post-update"</code>
@@ -38,15 +39,17 @@
 			</div>
 
 			<div class="feature-card">
-				<h3>System Takeover</h3>
+				<h3>Adoption and Explicit Takeover</h3>
 				<p>
-					Adopt an entire existing Linux system into Conary management. Analyzes all
-					installed RPM/DEB/pacman packages, plans the adoption strategy, and atomically
-					takes over the system with an initial generation.
+					Start by adopting installed RPM/DEB/pacman packages into Conary tracking while
+					the native package manager remains authoritative. Explicit takeover is a later
+					opt-in path that prepares a Conary generation instead of being the default preview
+					workflow.
 				</p>
 				<div class="feature-code">
+					<code>conary system adopt --system --dry-run</code>
+					<code>conary system unadopt --all --dry-run</code>
 					<code>conary system takeover --dry-run</code>
-					<code>conary system takeover</code>
 				</div>
 			</div>
 

@@ -54,7 +54,23 @@
 							<td><span class="check no" aria-label="No"></span></td>
 						</tr>
 						<tr>
-							<td class="feature-name">Composefs-native transactions</td>
+							<td class="feature-name">Package-state transaction boundary</td>
+							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check yes" aria-label="Yes"></span></td>
+						</tr>
+						<tr>
+							<td class="feature-name">Bootable generation rollback</td>
+							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check no" aria-label="No"></span></td>
+							<td><span class="check yes" aria-label="Yes"></span></td>
+						</tr>
+						<tr>
+							<td class="feature-name">Native distro adoption/unadoption</td>
 							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
@@ -126,7 +142,7 @@
 							<td><span class="check yes" aria-label="Yes"></span></td>
 						</tr>
 						<tr>
-							<td class="feature-name">System takeover</td>
+							<td class="feature-name">Explicit system takeover</td>
 							<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
 							<td><span class="check no" aria-label="No"></span></td>
@@ -161,8 +177,8 @@
 					Conary builds immutable EROFS generations with kernel-enforced integrity (fs-verity),
 					adds content-addressable storage for deduplication, binary delta updates to
 					reduce bandwidth, and the ability to manage Fedora or Arch packages on the same machine.
-					Every operation produces a new composefs-mounted generation -- instant rollback by
-					remounting the previous one.
+					Its preview starts with adoption and unadoption, then lets you select bootable
+					generations only when you explicitly choose that authority boundary.
 				</p>
 				<p>
 					If you only run Ubuntu and don't need cross-distro support, apt works great. Conary
@@ -179,8 +195,8 @@
 					EROFS generations with composefs mounts, and cross-distro package management.
 					dnf's delta RPM support is partial -- it depends on upstream providing
 					delta files. Conary generates EROFS binary deltas on-demand from any two versions.
-					Every dnf transaction mutates the filesystem in place; every Conary transaction
-					produces a new verified generation that can be rolled back instantly.
+					dnf transactions mutate the filesystem in place; Conary adds changeset-backed
+					package state plus optional bootable generations for complete-system rollback.
 				</p>
 			</div>
 
@@ -188,8 +204,8 @@
 				<h2>vs. pacman <span class="detail-distro">(Arch Linux)</span></h2>
 				<p>
 					pacman is fast, minimal, and trusts the user. Conary respects that philosophy while
-					adding features pacman lacks: composefs-native transactions that produce immutable EROFS
-					images (no more broken systems from interrupted updates), kernel-enforced integrity via
+					adding features pacman lacks: reversible adoption, immutable EROFS
+					generation artifacts, kernel-enforced integrity via
 					fs-verity, content-addressable storage, dependency resolution through SAT solving,
 					and the ability to install packages from Fedora or Ubuntu repos alongside Arch packages.
 				</p>
@@ -198,18 +214,15 @@
 			<div class="detail-card animate-in" style="--stagger: 8">
 				<h2>vs. Nix</h2>
 				<p>
-					Nix is the closest conceptual relative. Both use content-addressable storage, atomic
-					transactions, and declarative system configuration. The difference is in approach: Nix
-					builds its own package universe from scratch with custom derivations. Conary works with
-					existing upstream packages -- the same RPMs, DEBs, and Arch packages you already know --
-					and converts them transparently via Remi, the conversion proxy. This means Conary gets
-					access to tens of thousands of upstream packages on day one without requiring maintainers to write Nix
-					expressions.
+					If you already run NixOS and like it, Conary is probably not trying to pull
+					you away. Conary's near-term bet is different: keep Fedora, Ubuntu, or Arch
+					as the base system, let Conary adopt and CAS-back what is already installed,
+					and move into Conary-owned generations only when you explicitly choose that
+					authority boundary.
 				</p>
 				<p>
-					Trade-off: Nix's functional model enables reproducible builds at the cost of a large
-					closure size and learning curve. Conary prioritizes pragmatism, smaller disk footprint
-					through file-level CAS, and a familiar CLI.
+					The trade-off is maturity and package count; Nix wins there today. Conary
+					wins only if the migration path is safer and easier to try.
 				</p>
 			</div>
 		</div>

@@ -1,6 +1,6 @@
 <svelte:head>
 	<title>Conary - The Cross-Distribution System Manager</title>
-	<meta name="description" content="Build immutable EROFS system generations with kernel-enforced integrity. Unified system management across Fedora, Arch, and Ubuntu with composefs-native transactions and on-demand format conversion." />
+	<meta name="description" content="Try Nix-like package safety on Fedora, Arch, and Ubuntu through reversible native-package adoption, immutable generations, and Remi conversion." />
 </svelte:head>
 
 <!-- Hero -->
@@ -10,13 +10,13 @@
 	<div class="container hero-inner">
 		<h1 class="hero-title animate-in" style="--stagger: 0">Conary</h1>
 		<p class="hero-tagline animate-in" style="--stagger: 2">
-			One system manager for every Linux distro
+			Nix-like safety on the distro you already use
 		</p>
 		<p class="hero-desc animate-in" style="--stagger: 3">
-			Every install produces an EROFS image mounted via composefs.
-			Kernel-enforced integrity on every file read. Instant rollback by remounting a previous generation.
-			Install RPM, DEB, and Arch packages with the same tool.
-			Tens of thousands of upstream packages are available through Remi conversion.
+			Conary's limited preview starts with reversible native-package adoption:
+			let Conary track RPM, DEB, or Arch packages while dnf, apt, or pacman
+			remains authoritative, then add CAS backing when you choose. Move into
+			immutable generations only when you explicitly choose that boundary.
 		</p>
 		<div class="hero-actions animate-in" style="--stagger: 5">
 			<a href="/install" class="btn btn-primary">Get Started</a>
@@ -34,7 +34,7 @@
 		</div>
 		<div class="stat-divider" aria-hidden="true"></div>
 		<div class="stat">
-			<span class="stat-value">6</span>
+			<span class="stat-value">8</span>
 			<span class="stat-label">Workspace Members</span>
 		</div>
 		<div class="stat-divider" aria-hidden="true"></div>
@@ -71,18 +71,19 @@
 				</p>
 			</div>
 			<div class="feature-card animate-in" style="--stagger: 12">
-				<h3>Composefs-Native Transactions</h3>
+				<h3>Package-State Transactions</h3>
 				<p>
-					Every install, remove, and upgrade builds a new EROFS image and
-					atomically switches the composefs mount. Power loss mid-update?
-					The previous generation is still intact -- remount and continue.
+					Package DB and file state commit as changesets. Bootable generation
+					rollback is a separate complete-system boundary you select when you
+					are ready for Conary-owned generations.
 				</p>
 			</div>
 			<div class="feature-card animate-in" style="--stagger: 13">
-				<h3>System Takeover</h3>
+				<h3>Adoption First</h3>
 				<p>
-					Adopt an entire existing Linux system into Conary management
-					with a single command. RPM, DEB, or pacman -- all absorbed atomically.
+					Adopt installed RPM, DEB, or pacman packages into Conary tracking
+					without taking authority away from the native package manager.
+					Unadopt before generation selection without deleting package files.
 				</p>
 			</div>
 			<div class="feature-card animate-in" style="--stagger: 14">
@@ -146,26 +147,24 @@
 			<div class="terminal-body">
 				<div class="terminal-line">
 					<span class="t-prompt">$</span>
-					<span class="t-cmd">conary install nginx</span>
+					<span class="t-cmd">conary system adopt --system --dry-run</span>
 				</div>
-				<div class="terminal-line t-output">Resolving dependencies...</div>
-				<div class="terminal-line t-output">Installing 3 packages (12.4 MB)</div>
-				<div class="terminal-line t-output">Building EROFS image...</div>
-				<div class="terminal-line t-output t-success">Generation 4 built. Switched.</div>
+				<div class="terminal-line t-output">Scanning native package database...</div>
+				<div class="terminal-line t-output">Would adopt 142 package(s)</div>
+				<div class="terminal-line t-output t-success">Native package-manager authority remains unchanged.</div>
 				<div class="terminal-line t-blank"></div>
 				<div class="terminal-line">
 					<span class="t-prompt">$</span>
-					<span class="t-cmd">conary system generation list</span>
+					<span class="t-cmd">conary system adopt --status</span>
 				</div>
-				<div class="terminal-line t-output">  4  [active]  142 packages  847 MB  Added nginx</div>
-				<div class="terminal-line t-output">  3            141 packages  832 MB  System update</div>
-				<div class="terminal-line t-output">  2            139 packages  810 MB  Initial setup</div>
+				<div class="terminal-line t-output">Adopted (track): 0</div>
+				<div class="terminal-line t-output">Native packages visible: 142</div>
 				<div class="terminal-line t-blank"></div>
 				<div class="terminal-line">
 					<span class="t-prompt">$</span>
-					<span class="t-cmd">conary system generation rollback</span>
+					<span class="t-cmd">conary system unadopt --all --dry-run</span>
 				</div>
-				<div class="terminal-line t-output t-success">Switched to generation 3. Instant.</div>
+				<div class="terminal-line t-output t-success">Would remove Conary tracking only.</div>
 			</div>
 		</div>
 	</div>
@@ -221,7 +220,7 @@
 						<td><span class="check no" aria-label="No"></span></td>
 					</tr>
 					<tr>
-						<td class="feature-name">Composefs-native transactions</td>
+						<td class="feature-name">Bootable generation rollback</td>
 						<td class="highlight"><span class="check yes" aria-label="Yes"></span></td>
 						<td><span class="check no" aria-label="No"></span></td>
 						<td><span class="check no" aria-label="No"></span></td>
@@ -266,7 +265,7 @@
 	<div class="container cta-inner">
 		<h2 class="animate-in" style="--stagger: 24">Ready to get started?</h2>
 		<p class="animate-in" style="--stagger: 25">
-			Install Conary in under a minute and unify your system management.
+			Start with the reversible adoption preview on Fedora, Ubuntu, or Arch.
 		</p>
 		<div class="cta-actions animate-in" style="--stagger: 26">
 			<a href="/install" class="btn btn-primary">Install Conary</a>

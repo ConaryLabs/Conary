@@ -1,23 +1,83 @@
 <svelte:head>
 	<title>Install - Conary</title>
-	<meta name="description" content="Install Conary on Fedora 44, Ubuntu 26.04 LTS, or Arch Linux in under a minute." />
+	<meta name="description" content="Try the Conary limited preview on Fedora 44, Ubuntu 26.04 LTS, or Arch Linux with reversible native-package adoption." />
 </svelte:head>
 
 <section class="page-hero">
 	<div class="container">
 		<h1 class="page-title animate-in" style="--stagger: 0">Install Conary</h1>
 		<p class="page-desc animate-in" style="--stagger: 1">
-			Get up and running on your distribution in under a minute.
+			Start with a reversible adoption preview on a VM or non-critical host.
 		</p>
 	</div>
 </section>
 
 <section class="install-section">
 	<div class="container">
-		<!-- Build from source -->
-		<div class="install-block animate-in" style="--stagger: 3">
-			<h2>Build from Source</h2>
+		<!-- Five-minute preview -->
+		<div class="install-block animate-in" style="--stagger: 2">
+			<h2>Five-Minute Preview</h2>
 			<p class="install-note">
+				The limited preview path is adoption-led: Conary observes native packages while
+				dnf, apt, or pacman remains authoritative. First Remi-backed package use may be
+				slower while RPM/DEB/Arch metadata is converted into CCS.
+			</p>
+			<div class="terminal">
+				<div class="terminal-header">
+					<span class="terminal-dot" aria-hidden="true"></span>
+					<span class="terminal-dot" aria-hidden="true"></span>
+					<span class="terminal-dot" aria-hidden="true"></span>
+					<span class="terminal-title">terminal</span>
+				</div>
+				<div class="terminal-body">
+					<div class="terminal-line">
+						<span class="t-prompt">$</span>
+						<span class="t-cmd">conary system init</span>
+					</div>
+					<div class="terminal-line">
+						<span class="t-prompt">$</span>
+						<span class="t-cmd">conary repo add remi https://remi.conary.io</span>
+					</div>
+					<div class="terminal-line">
+						<span class="t-prompt">$</span>
+						<span class="t-cmd">conary repo sync</span>
+					</div>
+					<div class="terminal-line">
+						<span class="t-prompt">$</span>
+						<span class="t-cmd">conary system adopt --system --dry-run</span>
+					</div>
+					<div class="terminal-line">
+						<span class="t-prompt">$</span>
+						<span class="t-cmd">conary system adopt --status</span>
+					</div>
+					<div class="terminal-line t-blank"></div>
+					<div class="terminal-line">
+						<span class="t-prompt">$</span>
+						<span class="t-cmd">conary --allow-live-system-mutation system adopt --system</span>
+					</div>
+					<div class="terminal-line t-output">The long flag marks the point where Conary changes the active host.</div>
+					<div class="terminal-line">
+						<span class="t-prompt">$</span>
+						<span class="t-cmd">conary system unadopt --all --dry-run</span>
+					</div>
+					<div class="terminal-line">
+						<span class="t-prompt">$</span>
+						<span class="t-cmd">conary --allow-live-system-mutation system unadopt --all</span>
+					</div>
+				</div>
+			</div>
+			<p class="install-note">
+				Before selecting a Conary generation, unadopt removes Conary tracking without
+				deleting native package files.
+			</p>
+		</div>
+
+		<!-- Build from source -->
+		<div class="install-block animate-in" style="--stagger: 5">
+			<h2>Developer Build</h2>
+			<p class="install-note">
+				Release binaries are not linked for this preview tag yet, so source builds are
+				the current developer path.
 				Requires Rust 1.94+, SQLite development headers, and Linux 6.2+ with
 				composefs and EROFS support. Conary uses Linux-specific kernel APIs
 				(composefs, fs-verity, namespaces, landlock, seccomp) and does not
@@ -53,8 +113,8 @@
 
 		<!-- First steps -->
 		<div class="install-block animate-in" style="--stagger: 9">
-			<h2>First Steps</h2>
-			<p class="install-note">Verify installation and start using Conary.</p>
+			<h2>Conary-Owned Package Check</h2>
+			<p class="install-note">After the adoption preview, try a Conary-owned dry-run before applying an install.</p>
 			<div class="terminal">
 				<div class="terminal-header">
 					<span class="terminal-dot" aria-hidden="true"></span>
@@ -84,11 +144,10 @@
 					<div class="terminal-line t-blank"></div>
 					<div class="terminal-line">
 						<span class="t-prompt">$</span>
-						<span class="t-cmd">conary install htop</span>
+						<span class="t-cmd">conary install htop --dry-run</span>
 					</div>
 					<div class="terminal-line t-output">Resolving dependencies...</div>
-					<div class="terminal-line t-output">Installing 1 package (156 KB)</div>
-					<div class="terminal-line t-output t-success">Transaction complete.</div>
+					<div class="terminal-line t-output t-success">No host files changed.</div>
 				</div>
 			</div>
 		</div>
@@ -96,11 +155,9 @@
 		<div class="install-block animate-in" style="--stagger: 11">
 			<h2>Distribution Packages</h2>
 			<p class="install-note">
-				Native RPM, DEB, and Arch packages are built by CI on each release and
-				published to the Remi package server. Direct repository integration is
-				in progress -- for now, download from
-				<a href="https://github.com/ConaryLabs/Conary/releases">GitHub Releases</a>
-				or build from source above.
+				The preview release matrix will link native RPM, DEB, and Arch artifacts
+				when they are published. Until that artifact/provenance matrix is ready,
+				use the developer build above.
 			</p>
 			<div class="distro-cards">
 				<div class="distro-card distro-fedora">

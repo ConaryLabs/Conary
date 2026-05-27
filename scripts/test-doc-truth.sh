@@ -19,7 +19,9 @@ make_good_repo() {
         "$root/crates/conary-core/src/db" \
         "$root/crates/conary-core/src" \
         "$root/docs/modules" \
-        "$root/docs/operations"
+        "$root/docs/operations" \
+        "$root/site/src/routes/about" \
+        "$root/site/src/routes/install"
 
     cat > "$root/crates/conary-core/src/db/schema.rs" <<'EOF'
 /// Current schema version
@@ -49,6 +51,14 @@ The 2026-05-21 Group O local QEMU evidence is recorded.
 The 2026-05-21 Group P local QEMU evidence is recorded.
 EOF
 
+    cat > "$root/CHANGELOG.md" <<'EOF'
+# Changelog
+
+## [Unreleased]
+
+- conaryd package install/remove/update routes queue package jobs.
+EOF
+
     cat > "$root/ROADMAP.md" <<'EOF'
 # Roadmap
 
@@ -64,6 +74,20 @@ EOF
 Remote Forge control-plane validation is temporarily paused pending a KVM-capable runner.
 Current Group O QEMU export evidence from 2026-05-21 is local evidence.
 Current Group P ISO export evidence from 2026-05-21 is local evidence.
+EOF
+
+    cat > "$root/site/src/routes/about/+page.svelte" <<'EOF'
+<section>
+	<p>SQLite (schema version 69, DB-first runtime state)</p>
+	<p>Generation builds produce EROFS images for complete-system rollback.</p>
+</section>
+EOF
+
+    cat > "$root/site/src/routes/install/+page.svelte" <<'EOF'
+<section>
+	<p>Start with the adoption-led limited preview on a VM or non-critical host.</p>
+	<p>Remi cold-start conversion can make first package use slower.</p>
+</section>
 EOF
 
     cat > "$root/apps/conary/src/cli/mod.rs" <<'EOF'
@@ -280,6 +304,26 @@ break_preview_status() {
     sed -i 's/adoption-led/feature-rich/' "$1/README.md"
 }
 
+break_conaryd_501_claim() {
+    printf '\nconaryd package install/remove/update routes return `501 Not Implemented`.\n' >> "$1/CHANGELOG.md"
+}
+
+break_site_schema_version() {
+    sed -i 's/schema version 69/schema version 65/' "$1/site/src/routes/about/+page.svelte"
+}
+
+break_every_install_erofs_claim() {
+    printf '\n<p>Every install builds a new EROFS image and switches the composefs mount.</p>\n' >> "$1/site/src/routes/about/+page.svelte"
+}
+
+break_under_a_minute_claim() {
+    printf '\n<p>Install Conary in under a minute.</p>\n' >> "$1/site/src/routes/install/+page.svelte"
+}
+
+break_atomic_takeover_claim() {
+    printf '\n<p>Conary atomically takes over native packages during adoption.</p>\n' >> "$1/site/src/routes/install/+page.svelte"
+}
+
 expect_pass
 expect_failure "schema drift" break_schema_version 'schema.*68.*SCHEMA_VERSION.*69'
 expect_failure "retired command doc" break_retired_command_doc 'retired command'
@@ -290,5 +334,10 @@ expect_failure "missing route doc" break_route_doc 'conaryd route'
 expect_failure "missing core publish guard" break_core_publish_guard 'publish = false'
 expect_failure "stable core API claim" break_core_api_claim 'stable.*conary-core'
 expect_failure "preview status drift" break_preview_status 'adoption-led'
+expect_failure "conaryd 501 claim" break_conaryd_501_claim 'claims conaryd package execution is still blanket 501'
+expect_failure "site schema drift" break_site_schema_version 'schema.*65.*SCHEMA_VERSION.*69'
+expect_failure "every install EROFS claim" break_every_install_erofs_claim 'every install builds an EROFS generation'
+expect_failure "under a minute claim" break_under_a_minute_claim 'under-a-minute preview claim'
+expect_failure "atomic takeover claim" break_atomic_takeover_claim 'atomically absorbed/taken over'
 
 echo "docs truth self-tests passed."

@@ -20,6 +20,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Clarified that conaryd package install/remove/update routes queue daemon
   package jobs while preserving the CLI's explicit live-host mutation
   acknowledgement boundary.
+- Reframed README and site onboarding around the reversible adoption preview,
+  the explicit live-host mutation acknowledgement, Remi cold-start caveats,
+  and sharper Nix/package-manager comparison language; added docs-truth checks
+  for the changelog and public site drift classes.
 
 ## [conary-test-v0.8.0] - 2026-04-10
 
