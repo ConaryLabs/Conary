@@ -40,8 +40,9 @@ use resolve::{
     resolve_package_path_with_policy,
 };
 use scriptlets::{
-    build_execution_mode, get_old_package_scriptlets, run_old_post_remove, run_old_pre_remove,
-    run_post_install, run_pre_install, to_scriptlet_format,
+    build_execution_mode, get_old_package_scriptlets, preflight_install_scriptlets,
+    preflight_old_remove_scriptlets, run_old_post_remove, run_old_pre_remove, run_post_install,
+    run_pre_install, to_scriptlet_format,
 };
 
 use super::create_state_snapshot;
@@ -1898,6 +1899,27 @@ fn ccs_has_post_hooks(hooks: &conary_core::ccs::manifest::Hooks) -> bool {
         || hooks.post_install.is_some()
 }
 
+fn enforce_ccs_scriptlet_capability_gate(
+    pkg: &conary_core::ccs::CcsPackage,
+    no_scripts: bool,
+    sandbox_mode: SandboxMode,
+) -> Result<()> {
+    if no_scripts || !pkg.manifest().scriptlets.has_capability_declarations() {
+        return Ok(());
+    }
+
+    if sandbox_mode == SandboxMode::None {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "scriptlet capability declarations are present but enforcement is not available; \
+         enable supported capability enforcement or run inside a VM. Dangerous legacy direct \
+         execution requires --sandbox=never plus the live-host mutation acknowledgement and \
+         records effective_sandbox=direct."
+    );
+}
+
 /// Run pre-install scriptlets and query old package scriptlets for upgrades.
 fn run_pre_install_phase(
     conn: &rusqlite::Connection,
@@ -1914,7 +1936,22 @@ fn run_pre_install_phase(
     // Scriptlets only run when :runtime or :lib is being installed
     let scriptlets = pkg.scriptlets();
     let run_scriptlets = should_run_scriptlets(installed_component_types);
+
+    // Query old package's scriptlets before any scriptlet runs. This lets us
+    // preflight both new and old package scriptlets before file/DB mutation.
+    let old_trove_id = ctx.old_trove.and_then(|t| t.id);
+    let old_package_scriptlets = get_old_package_scriptlets(conn, old_trove_id)?;
+
     if !ctx.no_scripts && !scriptlets.is_empty() && run_scriptlets {
+        preflight_install_scriptlets(
+            Path::new(ctx.root),
+            pkg.name(),
+            pkg.version(),
+            scriptlets,
+            scriptlet_format,
+            &execution_mode,
+            ctx.sandbox_mode,
+        )?;
         progress.set_phase(pkg.name(), InstallPhase::PreScript);
         run_pre_install(
             Path::new(ctx.root),
@@ -1935,10 +1972,19 @@ fn run_pre_install_phase(
         );
     }
 
-    // Query old package's scriptlets BEFORE we delete it from DB
-    // We need these for running pre-remove and post-remove during upgrade
-    let old_trove_id = ctx.old_trove.and_then(|t| t.id);
-    let old_package_scriptlets = get_old_package_scriptlets(conn, old_trove_id)?;
+    if !ctx.no_scripts
+        && let Some(old_trove) = ctx.old_trove
+    {
+        preflight_old_remove_scriptlets(
+            Path::new(ctx.root),
+            &old_trove.name,
+            &old_trove.version,
+            pkg.version(),
+            &old_package_scriptlets,
+            scriptlet_format,
+            ctx.sandbox_mode,
+        )?;
+    }
 
     // For RPM/DEB upgrades: run old package's pre-remove scriptlet
     if !ctx.no_scripts
@@ -2177,6 +2223,7 @@ pub(crate) fn install_ccs_package_transactionally(
 ) -> Result<CcsTransactionInstallResult> {
     let progress = InstallProgress::single("Installing");
     let semantics = InstallSemantics::ccs();
+    enforce_ccs_scriptlet_capability_gate(pkg, opts.no_scripts, opts.sandbox_mode)?;
     let upgrade =
         check_ccs_upgrade_status(conn, pkg, &semantics, opts.allow_downgrade, opts.reinstall)?;
     let old_trove = match &upgrade {
@@ -2365,11 +2412,13 @@ fn finalize_install_without_snapshot(
     tx_result: &InstallTransactionResult,
     progress: &InstallProgress,
 ) -> Result<()> {
+    let mut scriptlet_warnings = Vec::new();
+
     // For RPM/DEB upgrades: run old package's post-remove scriptlet
     if !scriptlet_ctx.no_scripts
         && let Some(old_trove) = scriptlet_ctx.old_trove
     {
-        run_old_post_remove(
+        scriptlet_warnings.extend(run_old_post_remove(
             Path::new(scriptlet_ctx.root),
             &old_trove.name,
             &old_trove.version,
@@ -2377,14 +2426,14 @@ fn finalize_install_without_snapshot(
             &pre_state.old_package_scriptlets,
             pre_state.scriptlet_format,
             scriptlet_ctx.sandbox_mode,
-        );
+        )?);
     }
 
     // Execute post-install scriptlet (after files are deployed)
     let scriptlets = pkg.scriptlets();
     if !scriptlet_ctx.no_scripts && !scriptlets.is_empty() && pre_state.run_scriptlets {
         progress.set_phase(pkg.name(), InstallPhase::PostScript);
-        run_post_install(
+        scriptlet_warnings.extend(run_post_install(
             Path::new(scriptlet_ctx.root),
             pkg.name(),
             pkg.version(),
@@ -2392,7 +2441,15 @@ fn finalize_install_without_snapshot(
             pre_state.scriptlet_format,
             &pre_state.execution_mode,
             scriptlet_ctx.sandbox_mode,
-        );
+        )?);
+    }
+
+    if !scriptlet_warnings.is_empty() {
+        crate::commands::append_scriptlet_warning_metadata(
+            conn,
+            tx_result.changeset_id,
+            scriptlet_warnings,
+        )?;
     }
 
     progress.set_phase(pkg.name(), InstallPhase::Triggers);

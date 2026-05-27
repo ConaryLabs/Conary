@@ -12,6 +12,7 @@ use conary_core::db::models::ScriptletEntry;
 use conary_core::packages::traits::{Scriptlet, ScriptletPhase};
 use conary_core::scriptlet::{
     ExecutionMode, PackageFormat as ScriptletPackageFormat, SandboxMode, ScriptletExecutor,
+    ScriptletFailureKind, ScriptletOutcome,
 };
 use rusqlite::Connection;
 use std::path::Path;
@@ -78,6 +79,47 @@ pub fn run_pre_install(
     Ok(())
 }
 
+/// Preflight install/upgrade scriptlets before any file or DB mutation.
+pub fn preflight_install_scriptlets(
+    root: &Path,
+    pkg_name: &str,
+    pkg_version: &str,
+    scriptlets: &[Scriptlet],
+    format: ScriptletPackageFormat,
+    execution_mode: &ExecutionMode,
+    sandbox_mode: SandboxMode,
+) -> Result<()> {
+    if scriptlets.is_empty() {
+        return Ok(());
+    }
+
+    let executor =
+        ScriptletExecutor::new(root, pkg_name, pkg_version, format).with_sandbox_mode(sandbox_mode);
+
+    let pre_phase = if format == ScriptletPackageFormat::Arch
+        && matches!(execution_mode, ExecutionMode::Upgrade { .. })
+    {
+        ScriptletPhase::PreUpgrade
+    } else {
+        ScriptletPhase::PreInstall
+    };
+    let post_phase = if format == ScriptletPackageFormat::Arch
+        && matches!(execution_mode, ExecutionMode::Upgrade { .. })
+    {
+        ScriptletPhase::PostUpgrade
+    } else {
+        ScriptletPhase::PostInstall
+    };
+
+    for phase in [pre_phase, post_phase] {
+        if let Some(scriptlet) = scriptlets.iter().find(|scriptlet| scriptlet.phase == phase) {
+            executor.preflight(scriptlet, execution_mode)?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Execute post-install scriptlet for a package
 ///
 /// For Arch packages during upgrade, uses PostUpgrade phase.
@@ -93,9 +135,10 @@ pub fn run_post_install(
     format: ScriptletPackageFormat,
     execution_mode: &ExecutionMode,
     sandbox_mode: SandboxMode,
-) {
+) -> Result<Vec<crate::commands::ScriptletWarning>> {
     let executor =
         ScriptletExecutor::new(root, pkg_name, pkg_version, format).with_sandbox_mode(sandbox_mode);
+    let mut warnings = Vec::new();
 
     // For Arch packages during upgrade, use PostUpgrade; for RPM/DEB always use PostInstall
     let post_phase = if format == ScriptletPackageFormat::Arch
@@ -110,15 +153,37 @@ pub fn run_post_install(
     // For RPM/DEB: post_install handles both cases via $1 argument
     if let Some(post) = scriptlets.iter().find(|s| s.phase == post_phase) {
         info!("Running {} scriptlet...", post.phase);
-        if let Err(e) = executor.execute(post, execution_mode) {
-            // Post-install failure is serious but files are already deployed
-            warn!(
-                "{} scriptlet failed: {}. Package files are installed.",
-                post.phase, e
-            );
-            eprintln!("WARNING: {} scriptlet failed: {}", post.phase, e);
+        match executor.execute_with_outcome(post, execution_mode) {
+            ScriptletOutcome::Success { .. } | ScriptletOutcome::Skipped { .. } => {}
+            ScriptletOutcome::Failure(failure)
+                if failure.failure_kind == ScriptletFailureKind::ScriptExited =>
+            {
+                // Post-install failure is serious but files are already deployed
+                warn!(
+                    "{} scriptlet failed: {}. Package files are installed.",
+                    post.phase, failure.message
+                );
+                eprintln!(
+                    "WARNING: {} scriptlet failed: {}",
+                    post.phase, failure.message
+                );
+                warnings.push(scriptlet_warning_from_failure(
+                    pkg_name,
+                    failure,
+                    "post-install scriptlet failed after package files were installed",
+                ));
+            }
+            ScriptletOutcome::Failure(failure) => {
+                return Err(anyhow::anyhow!(
+                    "{} scriptlet failed after commit with a non-degradable failure: {}",
+                    post.phase,
+                    failure.message
+                ));
+            }
         }
     }
+
+    Ok(warnings)
 }
 
 /// Query scriptlets for an existing package (for upgrade scenarios)
@@ -165,6 +230,38 @@ pub fn run_old_pre_remove(
     Ok(())
 }
 
+/// Preflight old-package remove scriptlets during upgrade before mutation.
+pub fn preflight_old_remove_scriptlets(
+    root: &Path,
+    old_name: &str,
+    old_version: &str,
+    new_version: &str,
+    old_scriptlets: &[ScriptletEntry],
+    format: ScriptletPackageFormat,
+    sandbox_mode: SandboxMode,
+) -> Result<()> {
+    if format == ScriptletPackageFormat::Arch || old_scriptlets.is_empty() {
+        return Ok(());
+    }
+
+    let executor =
+        ScriptletExecutor::new(root, old_name, old_version, format).with_sandbox_mode(sandbox_mode);
+    let upgrade_removal_mode = ExecutionMode::UpgradeRemoval {
+        new_version: new_version.to_string(),
+    };
+
+    for phase in ["pre-remove", "post-remove"] {
+        if let Some(scriptlet) = old_scriptlets
+            .iter()
+            .find(|scriptlet| scriptlet.phase == phase)
+        {
+            executor.preflight_entry(scriptlet, &upgrade_removal_mode)?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Execute post-remove scriptlet for old package during upgrade
 ///
 /// Only runs for RPM/DEB formats - Arch does NOT run removal scripts during upgrade.
@@ -177,14 +274,15 @@ pub fn run_old_post_remove(
     old_scriptlets: &[ScriptletEntry],
     format: ScriptletPackageFormat,
     sandbox_mode: SandboxMode,
-) {
+) -> Result<Vec<crate::commands::ScriptletWarning>> {
     // Arch does NOT run removal scripts during upgrade
     if format == ScriptletPackageFormat::Arch || old_scriptlets.is_empty() {
-        return;
+        return Ok(Vec::new());
     }
 
     let executor =
         ScriptletExecutor::new(root, old_name, old_version, format).with_sandbox_mode(sandbox_mode);
+    let mut warnings = Vec::new();
 
     let upgrade_removal_mode = ExecutionMode::UpgradeRemoval {
         new_version: new_version.to_string(),
@@ -193,14 +291,50 @@ pub fn run_old_post_remove(
     if let Some(post_remove) = old_scriptlets.iter().find(|s| s.phase == "post-remove") {
         info!("Running old package post-remove scriptlet (upgrade)...");
         // Post-remove failure during upgrade is not fatal - files are already replaced
-        if let Err(e) = executor.execute_entry(post_remove, &upgrade_removal_mode) {
-            warn!(
-                "Old package post-remove scriptlet failed: {}. Continuing anyway.",
-                e
-            );
-            eprintln!("WARNING: Old package post-remove scriptlet failed: {}", e);
+        match executor.execute_entry_with_outcome(post_remove, &upgrade_removal_mode) {
+            ScriptletOutcome::Success { .. } | ScriptletOutcome::Skipped { .. } => {}
+            ScriptletOutcome::Failure(failure)
+                if failure.failure_kind == ScriptletFailureKind::ScriptExited =>
+            {
+                warn!(
+                    "Old package post-remove scriptlet failed: {}. Continuing anyway.",
+                    failure.message
+                );
+                eprintln!(
+                    "WARNING: Old package post-remove scriptlet failed: {}",
+                    failure.message
+                );
+                warnings.push(scriptlet_warning_from_failure(
+                    old_name,
+                    failure,
+                    "old package post-remove scriptlet failed after package files were replaced",
+                ));
+            }
+            ScriptletOutcome::Failure(failure) => {
+                return Err(anyhow::anyhow!(
+                    "Old package post-remove scriptlet failed after commit with a non-degradable failure: {}",
+                    failure.message
+                ));
+            }
         }
     }
+
+    Ok(warnings)
+}
+
+pub fn scriptlet_warning_from_failure(
+    package: &str,
+    failure: conary_core::scriptlet::ScriptletFailureOutcome,
+    context: &str,
+) -> crate::commands::ScriptletWarning {
+    crate::commands::ScriptletWarning::new(
+        failure.phase,
+        package,
+        failure.failure_kind.as_str(),
+        failure.requested_sandbox_mode.as_str(),
+        failure.effective_sandbox.as_str(),
+        format!("{context}: {}", failure.message),
+    )
 }
 
 /// Check if scriptlets should run based on installed components

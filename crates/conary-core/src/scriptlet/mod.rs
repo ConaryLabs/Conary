@@ -26,8 +26,11 @@
 //! The target root must have a working shell and interpreter for scriptlets
 //! to execute successfully.
 
+use crate::capability::SyscallCapabilities;
 use crate::capability::enforcement::{EnforcementMode, EnforcementPolicy};
-use crate::container::{BindMount, ContainerConfig, Sandbox, ScriptRisk, analyze_script};
+use crate::container::{
+    BindMount, ContainerConfig, Sandbox, ScriptRisk, analyze_script, isolation_available,
+};
 use crate::db::models::ScriptletEntry;
 use crate::error::{Error, Result};
 use crate::packages::traits::{Scriptlet, ScriptletPhase};
@@ -66,6 +69,102 @@ impl SandboxMode {
             "auto" => Some(Self::Auto),
             "always" | "on" | "true" => Some(Self::Always),
             _ => None,
+        }
+    }
+
+    /// Stable string for diagnostics and changeset metadata.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "never",
+            Self::Auto => "auto",
+            Self::Always => "always",
+        }
+    }
+}
+
+/// Sandbox boundary actually used for a scriptlet execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffectiveSandbox {
+    /// Live-root protected mode with namespace isolation.
+    ProtectedLiveRoot,
+    /// Direct legacy execution on the live host.
+    Direct,
+    /// Alternate-root execution for bootstrap/offline targets.
+    TargetRoot,
+}
+
+impl EffectiveSandbox {
+    /// Stable string for diagnostics and changeset metadata.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ProtectedLiveRoot => "protected-live-root",
+            Self::Direct => "direct",
+            Self::TargetRoot => "target-root",
+        }
+    }
+}
+
+/// Typed failure classification for scriptlet execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScriptletFailureKind {
+    /// The script process ran and returned a non-zero exit status.
+    ScriptExited,
+    /// The script process exceeded the configured timeout.
+    ScriptTimedOut,
+    /// Namespace, mount, interpreter, or other sandbox setup failed.
+    SandboxSetupUnavailable,
+    /// Landlock/seccomp/capability enforcement setup failed.
+    EnforcementSetupFailed,
+}
+
+impl ScriptletFailureKind {
+    /// Stable string for diagnostics and changeset metadata.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ScriptExited => "ScriptExited",
+            Self::ScriptTimedOut => "ScriptTimedOut",
+            Self::SandboxSetupUnavailable => "SandboxSetupUnavailable",
+            Self::EnforcementSetupFailed => "EnforcementSetupFailed",
+        }
+    }
+}
+
+/// Failure details for a scriptlet execution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptletFailureOutcome {
+    pub phase: String,
+    pub failure_kind: ScriptletFailureKind,
+    pub requested_sandbox_mode: SandboxMode,
+    pub effective_sandbox: EffectiveSandbox,
+    pub message: String,
+}
+
+/// Structured result of a scriptlet attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScriptletOutcome {
+    /// The scriptlet was intentionally skipped, usually because a target-root
+    /// interpreter is not available during early bootstrap.
+    Skipped {
+        phase: String,
+        requested_sandbox_mode: SandboxMode,
+        effective_sandbox: EffectiveSandbox,
+    },
+    /// The scriptlet completed successfully.
+    Success {
+        phase: String,
+        requested_sandbox_mode: SandboxMode,
+        effective_sandbox: EffectiveSandbox,
+    },
+    /// The scriptlet failed with typed context.
+    Failure(ScriptletFailureOutcome),
+}
+
+impl ScriptletOutcome {
+    /// Convert an outcome back into the historical `Result<()>` API.
+    pub fn into_result(self) -> Result<()> {
+        match self {
+            Self::Skipped { .. } | Self::Success { .. } => Ok(()),
+            Self::Failure(failure) => Err(Error::ScriptletError(failure.message)),
         }
     }
 }
@@ -162,7 +261,16 @@ impl ScriptletExecutor {
 
     /// Execute a scriptlet from package parsing
     pub fn execute(&self, scriptlet: &Scriptlet, mode: &ExecutionMode) -> Result<()> {
-        self.execute_impl(
+        self.execute_with_outcome(scriptlet, mode).into_result()
+    }
+
+    /// Execute a scriptlet and return typed outcome metadata.
+    pub fn execute_with_outcome(
+        &self,
+        scriptlet: &Scriptlet,
+        mode: &ExecutionMode,
+    ) -> ScriptletOutcome {
+        self.execute_impl_with_outcome(
             &scriptlet.phase.to_string(),
             &scriptlet.interpreter,
             &scriptlet.content,
@@ -173,7 +281,16 @@ impl ScriptletExecutor {
 
     /// Execute a scriptlet from database entry
     pub fn execute_entry(&self, entry: &ScriptletEntry, mode: &ExecutionMode) -> Result<()> {
-        self.execute_impl(
+        self.execute_entry_with_outcome(entry, mode).into_result()
+    }
+
+    /// Execute a database scriptlet entry and return typed outcome metadata.
+    pub fn execute_entry_with_outcome(
+        &self,
+        entry: &ScriptletEntry,
+        mode: &ExecutionMode,
+    ) -> ScriptletOutcome {
+        self.execute_impl_with_outcome(
             &entry.phase,
             &entry.interpreter,
             &entry.content,
@@ -182,12 +299,28 @@ impl ScriptletExecutor {
         )
     }
 
+    /// Preflight a package-parsed scriptlet before any file/DB mutation.
+    pub fn preflight(&self, scriptlet: &Scriptlet, mode: &ExecutionMode) -> Result<()> {
+        self.preflight_impl(
+            &scriptlet.phase.to_string(),
+            &scriptlet.interpreter,
+            &scriptlet.content,
+            mode,
+        )
+    }
+
+    /// Preflight a database scriptlet entry before any file/DB mutation.
+    pub fn preflight_entry(&self, entry: &ScriptletEntry, mode: &ExecutionMode) -> Result<()> {
+        self.preflight_impl(&entry.phase, &entry.interpreter, &entry.content, mode)
+    }
+
     /// Check if we're operating on the live root
     fn is_live_root(&self) -> bool {
         self.root == Path::new("/")
     }
 
     /// Core execution implementation
+    #[cfg(test)]
     fn execute_impl(
         &self,
         phase: &str,
@@ -196,6 +329,18 @@ impl ScriptletExecutor {
         _flags: Option<&str>,
         mode: &ExecutionMode,
     ) -> Result<()> {
+        self.execute_impl_with_outcome(phase, interpreter, content, _flags, mode)
+            .into_result()
+    }
+
+    fn execute_impl_with_outcome(
+        &self,
+        phase: &str,
+        interpreter: &str,
+        content: &str,
+        _flags: Option<&str>,
+        mode: &ExecutionMode,
+    ) -> ScriptletOutcome {
         // Prepare script content (Arch needs wrapper generation)
         let script_content = if self.package_format == PackageFormat::Arch {
             self.prepare_arch_wrapper(content, phase)
@@ -215,6 +360,8 @@ impl ScriptletExecutor {
                 analysis.risk >= ScriptRisk::Medium
             }
         };
+        let effective_sandbox = self.effective_sandbox(use_sandbox);
+        let requested_sandbox_mode = self.sandbox_mode;
 
         if !analysis.patterns.is_empty() {
             info!(
@@ -242,10 +389,16 @@ impl ScriptletExecutor {
 
         if !interpreter_check_path.exists() {
             if self.is_live_root() {
-                return Err(Error::ScriptletError(format!(
-                    "Interpreter not found: {}. Cannot execute {} scriptlet.",
-                    interpreter_path, phase
-                )));
+                return self.failure_outcome(
+                    phase,
+                    ScriptletFailureKind::SandboxSetupUnavailable,
+                    requested_sandbox_mode,
+                    effective_sandbox,
+                    format!(
+                        "Interpreter not found: {}. Cannot execute {} scriptlet.",
+                        interpreter_path, phase
+                    ),
+                );
             } else {
                 // For target root, warn but don't fail - the scriptlet might not be needed
                 // or the target might be in early bootstrap (no shell yet)
@@ -255,7 +408,11 @@ impl ScriptletExecutor {
                     self.root.display(),
                     phase
                 );
-                return Ok(());
+                return ScriptletOutcome::Skipped {
+                    phase: phase.to_string(),
+                    requested_sandbox_mode,
+                    effective_sandbox,
+                };
             }
         }
 
@@ -279,9 +436,17 @@ impl ScriptletExecutor {
             use_sandbox
         );
 
-        if self.is_live_root() {
+        let result = if self.is_live_root() {
             // Live root execution
             if use_sandbox {
+                if let Err(error) = self.preflight_protected_live_sandbox() {
+                    return self.failure_from_error(
+                        phase,
+                        requested_sandbox_mode,
+                        effective_sandbox,
+                        error,
+                    );
+                }
                 self.execute_sandbox_live(phase, &interpreter_path, &script_content, &args, &env)
             } else {
                 self.execute_direct(phase, &interpreter_path, &script_content, &args, &env)
@@ -289,7 +454,147 @@ impl ScriptletExecutor {
         } else {
             // Target root execution - always use chroot/container
             self.execute_in_target(phase, &interpreter_path, &script_content, &args, &env)
+        };
+
+        match result {
+            Ok(()) => ScriptletOutcome::Success {
+                phase: phase.to_string(),
+                requested_sandbox_mode,
+                effective_sandbox,
+            },
+            Err(error) => {
+                self.failure_from_error(phase, requested_sandbox_mode, effective_sandbox, error)
+            }
         }
+    }
+
+    fn preflight_impl(
+        &self,
+        phase: &str,
+        interpreter: &str,
+        content: &str,
+        _mode: &ExecutionMode,
+    ) -> Result<()> {
+        let script_content = if self.package_format == PackageFormat::Arch {
+            self.prepare_arch_wrapper(content, phase)
+        } else {
+            content.to_string()
+        };
+        let use_sandbox = self.should_use_sandbox(&script_content);
+        let interpreter_path = if self.package_format == PackageFormat::Arch {
+            "/bin/bash".to_string()
+        } else {
+            interpreter.to_string()
+        };
+        let interpreter_check_path = if self.is_live_root() {
+            PathBuf::from(&interpreter_path)
+        } else {
+            self.root.join(interpreter_path.trim_start_matches('/'))
+        };
+
+        if !interpreter_check_path.exists() {
+            if self.is_live_root() {
+                return Err(Error::ScriptletError(format!(
+                    "Interpreter not found: {}. Cannot execute {} scriptlet.",
+                    interpreter_path, phase
+                )));
+            }
+            return Ok(());
+        }
+
+        if self.is_live_root() && use_sandbox {
+            self.preflight_protected_live_sandbox()?;
+        }
+
+        Ok(())
+    }
+
+    fn should_use_sandbox(&self, script_content: &str) -> bool {
+        match self.sandbox_mode {
+            SandboxMode::None => false,
+            SandboxMode::Always => true,
+            SandboxMode::Auto => analyze_script(script_content).risk >= ScriptRisk::Medium,
+        }
+    }
+
+    fn effective_sandbox(&self, use_sandbox: bool) -> EffectiveSandbox {
+        if !self.is_live_root() {
+            EffectiveSandbox::TargetRoot
+        } else if use_sandbox {
+            EffectiveSandbox::ProtectedLiveRoot
+        } else {
+            EffectiveSandbox::Direct
+        }
+    }
+
+    fn failure_outcome(
+        &self,
+        phase: &str,
+        failure_kind: ScriptletFailureKind,
+        requested_sandbox_mode: SandboxMode,
+        effective_sandbox: EffectiveSandbox,
+        message: String,
+    ) -> ScriptletOutcome {
+        ScriptletOutcome::Failure(ScriptletFailureOutcome {
+            phase: phase.to_string(),
+            failure_kind,
+            requested_sandbox_mode,
+            effective_sandbox,
+            message,
+        })
+    }
+
+    fn failure_from_error(
+        &self,
+        phase: &str,
+        requested_sandbox_mode: SandboxMode,
+        effective_sandbox: EffectiveSandbox,
+        error: Error,
+    ) -> ScriptletOutcome {
+        let message = match error {
+            Error::ScriptletError(message) => message,
+            other => other.to_string(),
+        };
+        self.failure_outcome(
+            phase,
+            classify_scriptlet_failure(&message),
+            requested_sandbox_mode,
+            effective_sandbox,
+            message,
+        )
+    }
+
+    fn preflight_protected_live_sandbox(&self) -> Result<()> {
+        if std::env::var_os("CONARY_TEST_FORCE_SCRIPTLET_SANDBOX_PREFLIGHT_UNAVAILABLE").is_some() {
+            return Err(protected_scriptlet_sandbox_unavailable(
+                "test override forced namespace preflight failure",
+            ));
+        }
+
+        let config = self.live_sandbox_config()?;
+        if !isolation_available() {
+            return Err(protected_scriptlet_sandbox_unavailable(
+                "mount/user namespace isolation is unavailable",
+            ));
+        }
+
+        if let Some(policy) = config.capability_policy.as_ref()
+            && policy.mode == EnforcementMode::Enforce
+            && policy.syscalls.is_some()
+        {
+            let support = crate::capability::enforcement::check_enforcement_support();
+            if !support.seccomp {
+                return Err(Error::ScriptletError(
+                    "Protected scriptlet sandboxing requires seccomp enforcement support. \
+                     Enable seccomp in the kernel/container runtime or run inside a VM. \
+                     Dangerous legacy direct execution is available only with --sandbox=never plus \
+                     the live-host mutation acknowledgement, and it records effective_sandbox=direct."
+                        .to_string(),
+                ));
+            }
+        }
+
+        Ok(())
     }
 
     /// Execute scriptlet in sandbox on live root
@@ -340,7 +645,11 @@ impl ScriptletExecutor {
         config.capability_policy = Some(EnforcementPolicy {
             mode: EnforcementMode::Enforce,
             filesystem: None,
-            syscalls: None,
+            syscalls: Some(SyscallCapabilities {
+                allow: Vec::new(),
+                deny: Vec::new(),
+                profile: Some("scriptlet".to_string()),
+            }),
             network_isolation: config.isolate_network,
         });
 
@@ -646,6 +955,31 @@ fn is_live_sandbox_private_target(target: &Path) -> bool {
         || target.starts_with("/etc/")
         || target == Path::new("/var")
         || target.starts_with("/var/")
+}
+
+fn protected_scriptlet_sandbox_unavailable(reason: &str) -> Error {
+    Error::ScriptletError(format!(
+        "Protected scriptlet sandboxing requires mount and user namespace support. \
+         Enable the required kernel/container namespace support or run inside a VM. \
+         Dangerous legacy direct execution is available only with --sandbox=never plus \
+         the live-host mutation acknowledgement, and it records effective_sandbox=direct. \
+         ({reason})"
+    ))
+}
+
+fn classify_scriptlet_failure(message: &str) -> ScriptletFailureKind {
+    if message.contains("failed with exit code") {
+        ScriptletFailureKind::ScriptExited
+    } else if message.contains("timed out") || message.contains("Timeout:") {
+        ScriptletFailureKind::ScriptTimedOut
+    } else if message.contains("Capability enforcement failed")
+        || message.contains("seccomp filter application failed")
+        || message.contains("requires seccomp enforcement support")
+    {
+        ScriptletFailureKind::EnforcementSetupFailed
+    } else {
+        ScriptletFailureKind::SandboxSetupUnavailable
+    }
 }
 
 pub fn set_seccomp_warn_override(enabled: bool) {
@@ -1072,6 +1406,84 @@ mod tests {
             .as_ref()
             .expect("protected live sandbox should carry enforce-mode metadata");
         assert_eq!(policy.mode, EnforcementMode::Enforce);
+    }
+
+    #[test]
+    fn test_live_sandbox_config_installs_scriptlet_seccomp_profile() {
+        let executor =
+            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm);
+
+        let config = executor.live_sandbox_config().expect("live sandbox config");
+
+        let syscalls = config
+            .capability_policy
+            .as_ref()
+            .and_then(|policy| policy.syscalls.as_ref())
+            .expect("protected live sandbox should install the scriptlet seccomp profile");
+        assert_eq!(syscalls.profile.as_deref(), Some("scriptlet"));
+        assert!(syscalls.allow.is_empty());
+        assert!(syscalls.deny.is_empty());
+    }
+
+    #[test]
+    fn test_protected_live_root_preflight_reports_operator_diagnostic() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var(
+                "CONARY_TEST_FORCE_SCRIPTLET_SANDBOX_PREFLIGHT_UNAVAILABLE",
+                "1",
+            );
+        }
+
+        let executor =
+            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm);
+        let scriptlet = Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: "echo ok".to_string(),
+            flags: None,
+        };
+
+        let err = executor
+            .preflight(&scriptlet, &ExecutionMode::Install)
+            .expect_err("forced protected sandbox preflight failure should be fatal");
+
+        unsafe {
+            std::env::remove_var("CONARY_TEST_FORCE_SCRIPTLET_SANDBOX_PREFLIGHT_UNAVAILABLE");
+        }
+
+        let message = err.to_string();
+        assert!(
+            message.contains(
+                "Protected scriptlet sandboxing requires mount and user namespace support"
+            ),
+            "unexpected error: {message}"
+        );
+        assert!(message.contains("--sandbox=never"));
+        assert!(message.contains("effective_sandbox=direct"));
+    }
+
+    #[test]
+    fn test_execute_with_outcome_records_requested_and_effective_sandbox() {
+        let executor =
+            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm)
+                .with_sandbox_mode(SandboxMode::None);
+        let scriptlet = Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: "exit 42".to_string(),
+            flags: None,
+        };
+
+        let outcome = executor.execute_with_outcome(&scriptlet, &ExecutionMode::Install);
+
+        let ScriptletOutcome::Failure(failure) = outcome else {
+            panic!("expected scriptlet failure outcome");
+        };
+        assert_eq!(failure.failure_kind, ScriptletFailureKind::ScriptExited);
+        assert_eq!(failure.requested_sandbox_mode, SandboxMode::None);
+        assert_eq!(failure.effective_sandbox, EffectiveSandbox::Direct);
+        assert!(failure.message.contains("failed with exit code 42"));
     }
 
     #[test]

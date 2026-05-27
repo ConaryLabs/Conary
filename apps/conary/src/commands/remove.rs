@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use conary_core::db::models::{FileEntry, ScriptletEntry, Trove};
 use conary_core::scriptlet::{
     ExecutionMode, PackageFormat as ScriptletPackageFormat, SandboxMode, ScriptletExecutor,
+    ScriptletFailureKind, ScriptletOutcome,
 };
 use conary_core::transaction::{TransactionConfig, TransactionEngine};
 use std::collections::HashSet;
@@ -17,6 +18,7 @@ use std::time::Duration;
 use tracing::{info, warn};
 
 pub(crate) struct RemoveInnerResult {
+    pub(crate) changeset_id: i64,
     pub(crate) snapshot: TroveSnapshot,
     trove: Trove,
     stored_scriptlets: Vec<ScriptletEntry>,
@@ -219,7 +221,14 @@ pub async fn cmd_remove(
         engine.release_lock();
         let (remove_result, stats) = result?;
 
-        run_post_remove_scriptlet(&remove_result, root, no_scripts, sandbox_mode, &progress);
+        run_post_remove_scriptlet(
+            &conn,
+            &remove_result,
+            root,
+            no_scripts,
+            sandbox_mode,
+            &progress,
+        )?;
         progress.finish(&format!(
             "Removed {} {}",
             remove_result.trove.name, remove_result.trove.version
@@ -299,7 +308,14 @@ pub async fn cmd_remove(
     engine.release_lock();
     post_commit_result?;
 
-    run_post_remove_scriptlet(&remove_result, root, no_scripts, sandbox_mode, &progress);
+    run_post_remove_scriptlet(
+        &conn,
+        &remove_result,
+        root,
+        no_scripts,
+        sandbox_mode,
+        &progress,
+    )?;
 
     progress.finish(&format!(
         "Removed {} {}",
@@ -350,15 +366,16 @@ fn remove_execution_path(db_path: &str) -> Result<RemoveExecutionPath> {
 }
 
 fn run_post_remove_scriptlet(
+    conn: &rusqlite::Connection,
     remove_result: &RemoveInnerResult,
     root: &str,
     no_scripts: bool,
     sandbox_mode: SandboxMode,
     progress: &RemoveProgress,
-) {
+) -> Result<()> {
     // Execute post-remove scriptlet (best effort - warn on failure, don't abort)
     if no_scripts || remove_result.stored_scriptlets.is_empty() {
-        return;
+        return Ok(());
     }
 
     progress.set_phase(RemovePhase::PostScript);
@@ -376,14 +393,51 @@ fn run_post_remove_scriptlet(
         .find(|s| s.phase == "post-remove")
     {
         info!("Running post-remove scriptlet...");
-        if let Err(e) = executor.execute_entry(post, &ExecutionMode::Remove) {
-            warn!(
-                "Post-remove scriptlet failed: {}. Package files already removed.",
-                e
-            );
-            eprintln!("WARNING: Post-remove scriptlet failed: {}", e);
+        match executor.execute_entry_with_outcome(post, &ExecutionMode::Remove) {
+            ScriptletOutcome::Success { .. } | ScriptletOutcome::Skipped { .. } => {}
+            ScriptletOutcome::Failure(failure)
+                if failure.failure_kind == ScriptletFailureKind::ScriptExited =>
+            {
+                warn!(
+                    "Post-remove scriptlet failed: {}. Package files already removed.",
+                    failure.message
+                );
+                eprintln!("WARNING: Post-remove scriptlet failed: {}", failure.message);
+                crate::commands::append_scriptlet_warning_metadata(
+                    conn,
+                    remove_result.changeset_id,
+                    vec![scriptlet_warning_from_failure(
+                        &remove_result.trove.name,
+                        failure,
+                        "post-remove scriptlet failed after package files were removed",
+                    )],
+                )?;
+            }
+            ScriptletOutcome::Failure(failure) => {
+                return Err(anyhow::anyhow!(
+                    "Post-remove scriptlet failed after commit with a non-degradable failure: {}",
+                    failure.message
+                ));
+            }
         }
     }
+
+    Ok(())
+}
+
+fn scriptlet_warning_from_failure(
+    package: &str,
+    failure: conary_core::scriptlet::ScriptletFailureOutcome,
+    context: &str,
+) -> crate::commands::ScriptletWarning {
+    crate::commands::ScriptletWarning::new(
+        failure.phase,
+        package,
+        failure.failure_kind.as_str(),
+        failure.requested_sandbox_mode.as_str(),
+        failure.effective_sandbox.as_str(),
+        format!("{context}: {}", failure.message),
+    )
 }
 
 fn print_remove_summary(remove_result: &RemoveInnerResult, stats: &crate::commands::LiveRootStats) {
@@ -521,6 +575,15 @@ fn prepare_remove(
         )
         .with_sandbox_mode(sandbox_mode);
 
+        for phase in ["pre-remove", "post-remove"] {
+            if let Some(scriptlet) = stored_scriptlets
+                .iter()
+                .find(|scriptlet| scriptlet.phase == phase)
+            {
+                executor.preflight_entry(scriptlet, &ExecutionMode::Remove)?;
+            }
+        }
+
         if let Some(pre) = stored_scriptlets.iter().find(|s| s.phase == "pre-remove") {
             info!("Running pre-remove scriptlet...");
             executor.execute_entry(pre, &ExecutionMode::Remove)?;
@@ -616,6 +679,7 @@ fn commit_remove_db(
     conary_core::db::models::Trove::delete(tx, trove_id)?;
 
     Ok(RemoveInnerResult {
+        changeset_id,
         snapshot: prepared.snapshot,
         trove: prepared.trove,
         stored_scriptlets: prepared.stored_scriptlets,

@@ -7,7 +7,7 @@ summary: Umbrella design for turning external model review findings into the nex
 # Limited Preview Release Hardening: Design Spec
 
 **Date:** 2026-05-26
-**Status:** Active umbrella; Plan A, Plan C, and Plan D landed, Plan B remains active
+**Status:** Complete; all four release-hardening plans landed and moved to archive
 **Goal:** Turn the DeepSeek, Gemini, GPT Pro deep research, and Codex review
 findings into a sequenced release-hardening program that protects Conary's
 limited-preview promise.
@@ -117,9 +117,8 @@ follow-up:
 3. **Release Evidence And Supportability**
 4. **Generation State Resilience**
 
-Plan A, Plan C, and Plan D have landed and moved to archive paths. Plan B
-remains active because scriptlet trust assurance is still the release-hardening
-blocker before widening beyond careful VM or non-critical-machine testers.
+All four plans have landed and moved to archive paths. The remaining work is
+roadmap follow-up rather than an active release-hardening plan in this queue.
 
 ## Plan A: Preview Truth And Onboarding
 
@@ -248,12 +247,11 @@ Before the limited tester post:
   issue template, and evidence command block current;
 - keep the Plan D adoption-lane checkpoints, non-generation recovery, and
   generation-bound DB backup verification green;
-- land the documentation and assurance portions of Plan B or explicitly narrow
-  the preview lanes if any scriptlet assurance work remains open.
+- keep the Plan B protected scriptlet preflight, warning metadata, history
+  surfacing, and capability-gating tests green.
 
 Before widening beta:
 
-- complete Plan B;
 - rerun local QEMU/KVM evidence and publish artifact/provenance status.
 
 Before making generation switching the headline ask:

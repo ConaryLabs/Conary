@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-14
-revision: 15
-summary: Refresh composefs atomic generation selection, recovery, and validation wording
+last_updated: 2026-05-26
+revision: 16
+summary: Refresh scriptlet sandbox assurance, post-scriptlet metadata, and CCS scriptlet capability declarations
 ---
 
 # Conaryopedia v2
@@ -486,7 +486,7 @@ When installing a legacy package (RPM/DEB/Arch), you can convert it to CCS forma
 conary install nginx --convert-to-ccs --allow-live-system-mutation
 ```
 
-This enables CAS deduplication, component selection, and atomic transactions for the installed package. Scriptlets are automatically captured and converted to declarative hooks. Use `--no-capture` to disable scriptlet capture (the scriptlets will run imperatively at install time instead).
+This enables CAS deduplication, component selection, and atomic transactions for the installed package. Scriptlets can be captured and converted to declarative hooks during conversion flows; imperative scriptlets that still run at install time use the scriptlet sandbox controls below.
 
 #### What Happens During Install
 
@@ -494,14 +494,18 @@ This enables CAS deduplication, component selection, and atomic transactions for
 2. **Dependency solving**: The SAT solver builds a complete dependency graph
 3. **Download**: Packages are fetched (from repository, CAS federation, or local file)
 4. **CAS storage**: File content is stored under the runtime CAS
-5. **Changeset creation**: An atomic changeset is opened (status: `pending`)
-6. **Generation build**: A complete composefs artifact is built from CAS and DB state
-7. **Selection**: `/conary/current` and boot entries are updated atomically for the next boot
-8. **Scriptlets**: Package install hooks run (optionally sandboxed)
-9. **Triggers**: File-pattern triggers fire (e.g., `ldconfig` for new `.so` files)
-10. **Commit**: The changeset is marked `applied` with the matching system state snapshot
+5. **Pre-scriptlet preflight**: Protected live-root scriptlets are checked before mutation
+6. **Pre-scriptlets**: Package pre-install hooks run before file/DB mutation
+7. **Changeset commit**: Package DB/file state is committed as an atomic changeset
+8. **Generation publication**: A complete composefs artifact is built from CAS and DB state
+9. **Post-scriptlets**: Package post hooks run with structured warning metadata for true nonzero exits
+10. **Triggers**: File-pattern triggers fire (e.g., `ldconfig` for new `.so` files)
 
-If any step fails, the entire operation rolls back automatically.
+If package file/DB mutation fails, the operation rolls back automatically. Legacy
+post-scriptlet side effects are outside the package-state rollback boundary; a
+nonzero post-scriptlet exit is recorded as `scriptlet_warning` metadata, while
+sandbox setup and enforcement failures fail the command instead of degrading to
+warning-only.
 
 ### 2.3 Removing Packages
 
@@ -1696,6 +1700,28 @@ Declarative hooks are safer than scriptlets because:
 2. They can be validated before execution
 3. They can be sandboxed with fine-grained control
 4. They can be reverted (users deleted, services disabled, etc.)
+
+CCS also has a narrow scriptlet capability declaration lane for packages that
+still need host integration while enforcement is being designed:
+
+```toml
+[[scriptlets.capabilities]]
+name = "systemd-service-registration"
+paths = ["/etc/systemd/system"]
+
+[[scriptlets.capabilities]]
+name = "tmpfiles-registration"
+paths = ["/usr/lib/tmpfiles.d", "/etc/tmpfiles.d"]
+
+[[scriptlets.capabilities]]
+name = "dbus-service-registration"
+paths = ["/usr/share/dbus-1/system-services", "/etc/dbus-1/system.d"]
+```
+
+These declarations are not a synonym for running the script unsandboxed. Unknown
+capabilities fail manifest validation. Supported declarations currently fail
+closed at install time until enforcement exists unless the operator explicitly
+chooses direct legacy execution with `--sandbox=never`.
 
 #### Configuration Files
 
@@ -4144,7 +4170,7 @@ fork()
     unshare(PID | UTS | IPC | MOUNT | NET)  // Create namespaces
     ip link set lo up                         // Bring up loopback
     sethostname("conary-sandbox")             // Set container hostname
-    setup_mount_namespace()                   // Bind mounts + chroot
+    setup_mount_namespace()                   // Bind mounts + root transition
     apply_resource_limits()                   // setrlimit calls
     apply_enforcement()                       // Landlock + seccomp (if policy set)
     chdir(workdir)
@@ -4157,12 +4183,27 @@ fork()
 
 The runtime capability policy (section 7.3) integrates with the container: if `config.capability_policy` is set, Landlock and seccomp filters are applied inside the container after namespace setup but before script execution. This provides defense-in-depth: namespaces isolate the environment, Landlock restricts filesystem access within the container, and seccomp limits available syscalls.
 
+Protected live-root scriptlets install the enforce-mode `scriptlet` seccomp
+profile. That profile excludes `chroot`, `mount`, `umount2`, `pivot_root`,
+kernel module loading, reboot, BPF, and other privileged escape primitives from
+the scriptlet process. Root/no-userns protected setup requires `pivot_root`;
+`chroot` fallback is fatal in enforce mode. When an unprivileged user namespace
+is available, setup may enter the prepared root with `chroot` after sandbox root
+maps to a non-host UID/GID, which is distinct from allowing the scriptlet to call
+`chroot`.
+
 ### Fallback Behavior
 
 If namespace isolation isn't available (non-root without `unprivileged_userns_clone`):
 - For standard containers: falls back to resource limits only (with a warning)
 - For protected scriptlet, hermetic, pristine, or network-isolated containers:
   **fails hard** rather than running unsafely
+
+Protected live-root scriptlets are preflighted before package file/DB mutation.
+The failure diagnostic recommends enabling the required kernel/container
+namespace support or using a VM. Direct legacy execution remains available only
+through `--sandbox=never` plus the live-host mutation acknowledgement and records
+`effective_sandbox=direct`.
 
 ## 7.7 Package DNA (Provenance)
 

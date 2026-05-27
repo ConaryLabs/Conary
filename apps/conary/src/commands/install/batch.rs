@@ -19,8 +19,9 @@ use super::super::open_db;
 use super::inner;
 use super::prepare::{UpgradeCheck, check_upgrade_status, parse_package};
 use super::scriptlets::{
-    build_execution_mode, get_old_package_scriptlets, run_old_post_remove, run_old_pre_remove,
-    run_post_install, run_pre_install, to_scriptlet_format,
+    build_execution_mode, get_old_package_scriptlets, preflight_install_scriptlets,
+    preflight_old_remove_scriptlets, run_old_post_remove, run_old_pre_remove, run_post_install,
+    run_pre_install, to_scriptlet_format,
 };
 use super::{
     InstallSemantics, PackageExecutionPath, PackageFormatType, RepositoryInstallProvenance,
@@ -388,12 +389,13 @@ impl<'a> BatchInstaller<'a> {
         // Phase 7: Run post-install scriptlets in topological order
         // Also run old package removal scriptlets for upgrades
         if !self.no_scripts {
+            let mut scriptlet_warnings = Vec::new();
             for pkg in &packages {
                 // Run old package post-remove for upgrades
                 if let Some(ref old_trove) = pkg.old_trove {
                     // Use cached scriptlets (queried before DB commit deleted the old trove)
                     let scriptlet_format = to_scriptlet_format(pkg.format);
-                    run_old_post_remove(
+                    scriptlet_warnings.extend(run_old_post_remove(
                         Path::new(self.root),
                         &old_trove.name,
                         &old_trove.version,
@@ -401,11 +403,18 @@ impl<'a> BatchInstaller<'a> {
                         &pkg.cached_old_scriptlets,
                         scriptlet_format,
                         self.sandbox_mode,
-                    );
+                    )?);
                 }
 
                 // Run post-install scriptlet
-                self.run_post_scripts(pkg);
+                scriptlet_warnings.extend(self.run_post_scripts(pkg)?);
+            }
+            if !scriptlet_warnings.is_empty() {
+                crate::commands::append_scriptlet_warning_metadata(
+                    &conn,
+                    changeset_id,
+                    scriptlet_warnings,
+                )?;
             }
         }
 
@@ -783,44 +792,67 @@ impl<'a> BatchInstaller<'a> {
 
     /// Run pre-install scriptlets for a package
     fn run_pre_scripts(&self, pkg: &PreparedPackage) -> Result<()> {
-        if pkg.scriptlets.is_empty() || !should_run_scriptlets(&pkg.installed_components) {
-            return Ok(());
-        }
-
+        let run_new_scriptlets = should_run_scriptlets(&pkg.installed_components);
         let scriptlet_format = to_scriptlet_format(pkg.format);
         let execution_mode =
             build_execution_mode(pkg.old_trove.as_ref().map(|t| t.version.as_str()));
 
+        if run_new_scriptlets && !pkg.scriptlets.is_empty() {
+            preflight_install_scriptlets(
+                Path::new(self.root),
+                &pkg.name,
+                &pkg.version,
+                &pkg.scriptlets,
+                scriptlet_format,
+                &execution_mode,
+                self.sandbox_mode,
+            )?;
+        }
+
         // For upgrades, run old package pre-remove first
         if let Some(ref old_trove) = pkg.old_trove {
-            let conn = open_db(self.db_path)?;
-            let old_scriptlets = get_old_package_scriptlets(&conn, old_trove.id)?;
+            preflight_old_remove_scriptlets(
+                Path::new(self.root),
+                &old_trove.name,
+                &old_trove.version,
+                &pkg.version,
+                &pkg.cached_old_scriptlets,
+                scriptlet_format,
+                self.sandbox_mode,
+            )?;
             run_old_pre_remove(
                 Path::new(self.root),
                 &old_trove.name,
                 &old_trove.version,
                 &pkg.version,
-                &old_scriptlets,
+                &pkg.cached_old_scriptlets,
                 scriptlet_format,
                 self.sandbox_mode,
             )?;
         }
 
-        run_pre_install(
-            Path::new(self.root),
-            &pkg.name,
-            &pkg.version,
-            &pkg.scriptlets,
-            scriptlet_format,
-            &execution_mode,
-            self.sandbox_mode,
-        )
+        if run_new_scriptlets && !pkg.scriptlets.is_empty() {
+            run_pre_install(
+                Path::new(self.root),
+                &pkg.name,
+                &pkg.version,
+                &pkg.scriptlets,
+                scriptlet_format,
+                &execution_mode,
+                self.sandbox_mode,
+            )?;
+        }
+
+        Ok(())
     }
 
     /// Run post-install scriptlets for a package
-    fn run_post_scripts(&self, pkg: &PreparedPackage) {
+    fn run_post_scripts(
+        &self,
+        pkg: &PreparedPackage,
+    ) -> Result<Vec<crate::commands::ScriptletWarning>> {
         if pkg.scriptlets.is_empty() || !should_run_scriptlets(&pkg.installed_components) {
-            return;
+            return Ok(Vec::new());
         }
 
         let scriptlet_format = to_scriptlet_format(pkg.format);
@@ -835,7 +867,7 @@ impl<'a> BatchInstaller<'a> {
             scriptlet_format,
             &execution_mode,
             self.sandbox_mode,
-        );
+        )
     }
 }
 
@@ -1236,6 +1268,38 @@ mod tests {
         assert!(
             preflight_pos < scripts_pos,
             "batch installs must validate generation state before dependency pre-install scriptlets"
+        );
+    }
+
+    #[test]
+    fn batch_upgrade_pre_remove_is_not_guarded_by_new_scriptlets() {
+        let source = include_str!("batch.rs");
+        let run_pre_start = source
+            .find("fn run_pre_scripts")
+            .expect("run_pre_scripts should exist");
+        let run_post_start = source[run_pre_start..]
+            .find("fn run_post_scripts")
+            .expect("run_post_scripts boundary should exist");
+        let run_pre_source = &source[run_pre_start..run_pre_start + run_post_start];
+
+        assert!(
+            !run_pre_source.contains("return Ok(())"),
+            "batch upgrade old-package pre-remove scriptlets must not be skipped just because the new package has no runnable scriptlets"
+        );
+        assert!(
+            run_pre_source.contains("&pkg.cached_old_scriptlets"),
+            "batch upgrade pre-remove must use the old scriptlets cached before DB mutation"
+        );
+
+        let old_pre_remove_pos = run_pre_source
+            .find("run_old_pre_remove(")
+            .expect("run_pre_scripts should execute old pre-remove for upgrades");
+        let new_pre_install_pos = run_pre_source
+            .find("run_pre_install(")
+            .expect("run_pre_scripts should execute new pre-install");
+        assert!(
+            old_pre_remove_pos < new_pre_install_pos,
+            "old package pre-remove must execute before new package pre-install in batch upgrades"
         );
     }
 

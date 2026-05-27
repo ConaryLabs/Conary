@@ -89,6 +89,38 @@ impl AdoptionWarning {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ScriptletWarning {
+    pub kind: String,
+    pub phase: String,
+    pub package: String,
+    pub failure_kind: String,
+    pub requested_sandbox_mode: String,
+    pub effective_sandbox: String,
+    pub message: String,
+}
+
+impl ScriptletWarning {
+    pub(crate) fn new(
+        phase: impl Into<String>,
+        package: impl Into<String>,
+        failure_kind: impl Into<String>,
+        requested_sandbox_mode: impl Into<String>,
+        effective_sandbox: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: "scriptlet_warning".to_string(),
+            phase: phase.into(),
+            package: package.into(),
+            failure_kind: failure_kind.into(),
+            requested_sandbox_mode: requested_sandbox_mode.into(),
+            effective_sandbox: effective_sandbox.into(),
+            message: message.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ChangesetMetadataEnvelope {
     pub schema: String,
     #[serde(default)]
@@ -97,29 +129,19 @@ pub(crate) struct ChangesetMetadataEnvelope {
     pub deferred_follow_up: Vec<DeferredFollowUp>,
     #[serde(default)]
     pub adoption_warnings: Vec<AdoptionWarning>,
+    #[serde(default)]
+    pub scriptlet_warnings: Vec<ScriptletWarning>,
 }
 
 pub(crate) fn metadata_with_removed_troves(snapshots: Vec<TroveSnapshot>) -> Result<String> {
-    serde_json::to_string(&ChangesetMetadataEnvelope {
-        schema: CHANGESET_METADATA_SCHEMA.to_string(),
-        removed_troves: snapshots,
-        deferred_follow_up: Vec::new(),
-        adoption_warnings: Vec::new(),
-    })
-    .map_err(Into::into)
+    metadata_with_full_envelope(snapshots, Vec::new(), Vec::new(), Vec::new())
 }
 
 pub(crate) fn metadata_with_deferred_follow_up(
     snapshots: Vec<TroveSnapshot>,
     deferred_follow_up: Vec<DeferredFollowUp>,
 ) -> Result<String> {
-    serde_json::to_string(&ChangesetMetadataEnvelope {
-        schema: CHANGESET_METADATA_SCHEMA.to_string(),
-        removed_troves: snapshots,
-        deferred_follow_up,
-        adoption_warnings: Vec::new(),
-    })
-    .map_err(Into::into)
+    metadata_with_full_envelope(snapshots, deferred_follow_up, Vec::new(), Vec::new())
 }
 
 pub(crate) fn metadata_with_adoption_warnings(
@@ -127,11 +149,21 @@ pub(crate) fn metadata_with_adoption_warnings(
     deferred_follow_up: Vec<DeferredFollowUp>,
     adoption_warnings: Vec<AdoptionWarning>,
 ) -> Result<String> {
+    metadata_with_full_envelope(snapshots, deferred_follow_up, adoption_warnings, Vec::new())
+}
+
+pub(crate) fn metadata_with_full_envelope(
+    snapshots: Vec<TroveSnapshot>,
+    deferred_follow_up: Vec<DeferredFollowUp>,
+    adoption_warnings: Vec<AdoptionWarning>,
+    scriptlet_warnings: Vec<ScriptletWarning>,
+) -> Result<String> {
     serde_json::to_string(&ChangesetMetadataEnvelope {
         schema: CHANGESET_METADATA_SCHEMA.to_string(),
         removed_troves: snapshots,
         deferred_follow_up,
         adoption_warnings,
+        scriptlet_warnings,
     })
     .map_err(Into::into)
 }
@@ -176,6 +208,14 @@ pub(crate) fn adoption_warnings(snapshot_json: Option<&str>) -> Vec<AdoptionWarn
         .unwrap_or_default()
 }
 
+pub(crate) fn scriptlet_warnings(snapshot_json: Option<&str>) -> Vec<ScriptletWarning> {
+    snapshot_json
+        .and_then(|raw| serde_json::from_str::<ChangesetMetadataEnvelope>(raw).ok())
+        .filter(|envelope| envelope.schema == CHANGESET_METADATA_SCHEMA)
+        .map(|envelope| envelope.scriptlet_warnings)
+        .unwrap_or_default()
+}
+
 pub(crate) fn append_deferred_follow_up_metadata(
     conn: &rusqlite::Connection,
     changeset_id: i64,
@@ -193,10 +233,11 @@ pub(crate) fn append_deferred_follow_up_metadata(
         .unwrap_or_default();
     let mut deferred = deferred_follow_up(existing.as_deref());
     deferred.push(follow_up);
-    let metadata = metadata_with_adoption_warnings(
+    let metadata = metadata_with_full_envelope(
         std::mem::take(&mut removed_troves),
         deferred,
         adoption_warnings(existing.as_deref()),
+        scriptlet_warnings(existing.as_deref()),
     )?;
     conn.execute(
         "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
@@ -227,7 +268,44 @@ pub(crate) fn append_adoption_warning_metadata(
     let deferred = deferred_follow_up(existing.as_deref());
     let mut existing_warnings = adoption_warnings(existing.as_deref());
     existing_warnings.extend(warnings);
-    let metadata = metadata_with_adoption_warnings(removed_troves, deferred, existing_warnings)?;
+    let metadata = metadata_with_full_envelope(
+        removed_troves,
+        deferred,
+        existing_warnings,
+        scriptlet_warnings(existing.as_deref()),
+    )?;
+    conn.execute(
+        "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
+        rusqlite::params![metadata, changeset_id],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn append_scriptlet_warning_metadata(
+    conn: &rusqlite::Connection,
+    changeset_id: i64,
+    warnings: Vec<ScriptletWarning>,
+) -> Result<()> {
+    if warnings.is_empty() {
+        return Ok(());
+    }
+
+    let existing: Option<String> = conn.query_row(
+        "SELECT metadata FROM changesets WHERE id = ?1",
+        [changeset_id],
+        |row| row.get(0),
+    )?;
+    let removed_troves = existing
+        .as_deref()
+        .map(parse_rollback_snapshots)
+        .transpose()?
+        .unwrap_or_default();
+    let deferred = deferred_follow_up(existing.as_deref());
+    let adoption = adoption_warnings(existing.as_deref());
+    let mut existing_warnings = scriptlet_warnings(existing.as_deref());
+    existing_warnings.extend(warnings);
+    let metadata =
+        metadata_with_full_envelope(removed_troves, deferred, adoption, existing_warnings)?;
     conn.execute(
         "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
         rusqlite::params![metadata, changeset_id],
@@ -389,5 +467,36 @@ mod tests {
             .unwrap();
         assert_eq!(parse_rollback_snapshots(&raw).unwrap()[0].name, "fixture");
         assert_eq!(deferred_follow_up(Some(&raw)).len(), 1);
+    }
+
+    #[test]
+    fn scriptlet_warning_metadata_preserves_existing_envelope_sections() {
+        let warning = ScriptletWarning {
+            kind: "scriptlet_warning".to_string(),
+            phase: "post-install".to_string(),
+            package: "fixture".to_string(),
+            failure_kind: "ScriptExited".to_string(),
+            requested_sandbox_mode: "auto".to_string(),
+            effective_sandbox: "direct".to_string(),
+            message: "post-install scriptlet failed after package files were installed".to_string(),
+        };
+        let deferred = DeferredFollowUp {
+            kind: "generation_publication".to_string(),
+            status: "pending".to_string(),
+            message: "publication pending".to_string(),
+            retry_command: None,
+        };
+        let raw = metadata_with_full_envelope(
+            vec![snapshot("fixture")],
+            vec![deferred.clone()],
+            vec![AdoptionWarning::partial_insert_failure("fixture", 2, 1)],
+            vec![warning.clone()],
+        )
+        .unwrap();
+
+        assert_eq!(parse_rollback_snapshots(&raw).unwrap()[0].name, "fixture");
+        assert_eq!(deferred_follow_up(Some(&raw)), vec![deferred]);
+        assert_eq!(scriptlet_warnings(Some(&raw)), vec![warning]);
+        assert_eq!(adoption_warnings(Some(&raw)).len(), 1);
     }
 }

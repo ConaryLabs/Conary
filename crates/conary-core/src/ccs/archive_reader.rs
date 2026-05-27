@@ -240,6 +240,7 @@ fn read_ccs_archive_with_limits<R: Read>(
             merged.package.authors = toml.package.authors;
             merged.suggests = toml.suggests;
             merged.components = toml.components;
+            merged.scriptlets = toml.scriptlets;
             merged.config = toml.config;
             merged.policy = toml.policy;
             merged.provenance = toml.provenance;

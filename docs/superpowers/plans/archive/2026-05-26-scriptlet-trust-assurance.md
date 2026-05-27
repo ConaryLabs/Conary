@@ -1,6 +1,6 @@
 # Scriptlet Trust Assurance Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Make Conary's scriptlet trust story precise, test-backed, and visible to operators before the preview widens.
 
@@ -15,10 +15,31 @@ integration.
 
 ---
 
+## Implementation Result
+
+Completed on 2026-05-26.
+
+- Protected live-root scriptlets install the enforce-mode `scriptlet` seccomp
+  profile, and the profile remains covered by a regression test that excludes
+  `chroot`.
+- Protected live-root scriptlets run a pre-mutation preflight for namespace,
+  private-layer, interpreter, and enforcement readiness.
+- Scriptlet execution now returns typed outcomes with `failure_kind`,
+  `requested_sandbox_mode`, and `effective_sandbox`.
+- Warning-only post-install/post-remove failures are limited to true nonzero
+  script exits, stored as `scriptlet_warning` changeset metadata, and surfaced
+  by `conary history`.
+- CCS manifests accept the narrow `[[scriptlets.capabilities]]` vocabulary,
+  preserve it through package archive parsing, reject unknown declarations, and
+  fail closed at install time until enforcement exists unless the operator
+  chooses `--sandbox=never`.
+- Security, README, Conaryopedia, CCS format, roadmap, and docs-audit metadata
+  were updated to match the implemented behavior.
+
 ## Scope
 
 This plan implements Plan B from
-`docs/superpowers/specs/2026-05-26-limited-preview-release-hardening-design.md`.
+`docs/superpowers/specs/archive/2026-05-26-limited-preview-release-hardening-design.md`.
 It does not replace the entire scriptlet system and does not make
 `--sandbox=never` safe. It makes protected mode and direct-mode failure
 semantics honest.
@@ -77,7 +98,7 @@ semantics honest.
 - Read: `crates/conary-core/src/capability/declaration.rs`
 - Read: `crates/conary-core/src/scriptlet/mod.rs`
 
-- [ ] **Step 1: Locate live-root protected execution**
+- [x] **Step 1: Locate live-root protected execution**
 
 Run:
 
@@ -85,7 +106,7 @@ Run:
 rg -n "execute_sandbox_live|pivot_root|chroot|SandboxMode|namespace|seccomp" crates/conary-core/src/container/mod.rs crates/conary-core/src/scriptlet/mod.rs crates/conary-core/src/capability/declaration.rs
 ```
 
-- [ ] **Step 2: Classify the actual root-transition mechanism**
+- [x] **Step 2: Classify the actual root-transition mechanism**
 
 Record the answer in the implementation PR description with separate cases:
 
@@ -104,7 +125,7 @@ If live-root protected mode does not install the scriptlet seccomp profile,
 either add it or make the docs explicit that live-root protection relies on
 namespace and mount isolation rather than seccomp.
 
-- [ ] **Step 3: Classify hardened-kernel and container failure modes**
+- [x] **Step 3: Classify hardened-kernel and container failure modes**
 
 Run the sandbox preflight or focused sandbox test in environments where
 namespace creation can be restricted:
@@ -126,7 +147,7 @@ Dangerous legacy direct execution is available only with --sandbox=never plus
 the live-host mutation acknowledgement, and it records effective_sandbox=direct.
 ```
 
-- [ ] **Step 4: Add an assurance note to the security doc**
+- [x] **Step 4: Add an assurance note to the security doc**
 
 Add a short section:
 
@@ -151,14 +172,14 @@ Adjust the wording if the audit proves a different current fact.
 - Modify: `apps/conary/src/commands/install/scriptlets.rs`
 - Modify: `apps/conary/src/commands/remove.rs`
 
-- [ ] **Step 1: Add a protected live-root preflight**
+- [x] **Step 1: Add a protected live-root preflight**
 
 Before package file/DB mutation for packages with runnable live-root scriptlets,
 verify that protected sandbox setup can create the required namespaces,
 writable layers, and enforcement handles. If preflight fails, abort before
 mutating package state.
 
-- [ ] **Step 2: Add typed outcomes**
+- [x] **Step 2: Add typed outcomes**
 
 Return or record outcomes equivalent to:
 
@@ -174,7 +195,7 @@ enum ScriptletOutcome {
 Only `ScriptExited` in post phases may degrade to warning-only after package
 state changes. Setup and enforcement failures must fail closed.
 
-- [ ] **Step 3: Record requested and effective sandbox mode**
+- [x] **Step 3: Record requested and effective sandbox mode**
 
 Structured metadata must include:
 
@@ -195,7 +216,7 @@ protected sandboxing.
 - Modify: `crates/conary-core/src/container/mod.rs`
 - Modify if needed: `crates/conary-core/src/scriptlet/mod.rs`
 
-- [ ] **Step 1: Add a scriptlet profile test**
+- [x] **Step 1: Add a scriptlet profile test**
 
 Add or keep a unit test equivalent to:
 
@@ -210,26 +231,26 @@ fn scriptlet_profile_does_not_allow_chroot() {
 }
 ```
 
-- [ ] **Step 2: Assert live-root enforcement matches the docs**
+- [x] **Step 2: Assert live-root enforcement matches the docs**
 
 If protected live-root mode claims seccomp enforcement, assert that
 `live_sandbox_config()` installs `SyscallCapabilities { profile:
 Some("scriptlet"), ... }` or the local equivalent. If it intentionally does not
 use seccomp, assert the docs say so explicitly.
 
-- [ ] **Step 3: Add a protected-mode setup test**
+- [x] **Step 3: Add a protected-mode setup test**
 
 If the container module exposes enough structure, add a test that asserts
 protected live-root setup uses the hardened path and fails closed when the
 required namespace operations are unavailable.
 
-- [ ] **Step 4: Add readable namespace-preflight diagnostics**
+- [x] **Step 4: Add readable namespace-preflight diagnostics**
 
 If current errors are generic `Operation not permitted` or low-level namespace
 errors, add a focused helper that maps them to the protected-sandbox diagnostic
 from Task 1.
 
-- [ ] **Step 5: Run focused tests**
+- [x] **Step 5: Run focused tests**
 
 Run:
 
@@ -249,7 +270,7 @@ Expected: both pass.
 - Modify: `apps/conary/src/commands/install/mod.rs`
 - Test: package-local unit tests or `apps/conary/tests/scriptlet_harness/`
 
-- [ ] **Step 1: Add metadata shape**
+- [x] **Step 1: Add metadata shape**
 
 Extend the existing metadata envelope with entries shaped like:
 
@@ -265,12 +286,12 @@ Extend the existing metadata envelope with entries shaped like:
 }
 ```
 
-- [ ] **Step 2: Return structured post-scriptlet outcomes**
+- [x] **Step 2: Return structured post-scriptlet outcomes**
 
 Change post-install and post-remove helpers so callers can append metadata
 when a warning-only scriptlet fails. Keep existing warning output.
 
-- [ ] **Step 3: Add regression coverage**
+- [x] **Step 3: Add regression coverage**
 
 Add tests for post-install, upgrade old post-remove, and remove post-remove.
 For each, cover both a script process that exits nonzero and a sandbox setup
@@ -282,7 +303,7 @@ failure. Assert:
 - history or changeset metadata records `scriptlet_warning`;
 - README atomicity wording remains accurate.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Run:
 
@@ -301,7 +322,7 @@ scriptlet test target.
 - Modify: `crates/conary-core/src/ccs/manifest.rs`
 - Modify: `crates/conary-core/src/capability/declaration.rs`
 
-- [ ] **Step 1: Define the minimal capability vocabulary**
+- [x] **Step 1: Define the minimal capability vocabulary**
 
 Start with only these capabilities:
 
@@ -319,7 +340,7 @@ name = "dbus-service-registration"
 paths = ["/usr/share/dbus-1/system-services", "/etc/dbus-1/system.d"]
 ```
 
-- [ ] **Step 2: Validate unknown capabilities fail closed**
+- [x] **Step 2: Validate unknown capabilities fail closed**
 
 Add manifest parsing tests where an unknown capability produces a clear error:
 
@@ -327,7 +348,7 @@ Add manifest parsing tests where an unknown capability produces a clear error:
 unknown scriptlet capability 'pam-live-edit'; declare a supported capability or run in a VM until enforcement exists
 ```
 
-- [ ] **Step 3: Fail closed until enforcement exists**
+- [x] **Step 3: Fail closed until enforcement exists**
 
 It is acceptable for this task to parse and validate declarations while leaving
 enforcement as a follow-up, but install execution must fail closed for packages
@@ -348,7 +369,7 @@ acknowledgement and records effective_sandbox=direct.
 - Modify: `README.md`
 - Modify: `docs/conaryopedia-v2.md`
 
-- [ ] **Step 1: Separate protected, target-root, and direct execution**
+- [x] **Step 1: Separate protected, target-root, and direct execution**
 
 Use three distinct headings:
 
@@ -358,7 +379,7 @@ Use three distinct headings:
 ### Direct Legacy Execution
 ```
 
-- [ ] **Step 2: State the degradation rule**
+- [x] **Step 2: State the degradation rule**
 
 Add:
 
@@ -370,7 +391,7 @@ scriptlet side effects and surfaces them in history/status. Sandbox setup and
 enforcement failures fail closed before mutation.
 ```
 
-- [ ] **Step 3: Run docs truth and audit**
+- [x] **Step 3: Run docs truth and audit**
 
 Run:
 

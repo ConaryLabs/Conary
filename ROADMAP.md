@@ -83,13 +83,13 @@ For limited-preview artifact, checksum, signature, SBOM, provenance, and source-
 The 2026-05-26 multi-model review pass agrees on the main direction: Conary's
 near-term advantage is not "replace every package manager now." The useful
 wedge is Nix-like safety on the Linux distribution a tester already uses,
-with adoption and unadoption as the low-risk entry point. Most of the review
-queue has now landed; the active release-hardening blocker is scriptlet trust
-assurance before the preview widens beyond careful VM or non-critical-machine
-testers.
+with adoption and unadoption as the low-risk entry point. The full review
+queue has now landed, including the scriptlet trust-assurance slice that was
+the last active blocker before widening beyond careful VM or non-critical-
+machine testers.
 
 Umbrella design:
-[Limited Preview Release Hardening](docs/superpowers/specs/2026-05-26-limited-preview-release-hardening-design.md).
+[Limited Preview Release Hardening](docs/superpowers/specs/archive/2026-05-26-limited-preview-release-hardening-design.md).
 
 1. **Preview truth and onboarding** -
    completed and
@@ -99,11 +99,13 @@ Umbrella design:
    single-package adoption dry-run routing, and first-run `system init`
    diagnostics are now in the active product/docs surface.
 2. **Scriptlet trust assurance** -
-   [plan](docs/superpowers/plans/2026-05-26-scriptlet-trust-assurance.md).
-   Resolve the protected-sandbox `chroot`/root-transition ambiguity, make
-   namespace failures readable on hardened kernels and containers, make direct
-   scriptlet failure semantics structured and visible, and design
-   capability-scoped integration hooks before relying on unsandboxed fallbacks.
+   completed and
+   [archived](docs/superpowers/plans/archive/2026-05-26-scriptlet-trust-assurance.md).
+   Protected live-root execution now installs the enforce-mode `scriptlet`
+   seccomp profile, preflights namespace/enforcement setup before mutation,
+   records warning-only post-scriptlet exits as structured metadata, surfaces
+   them in history, and validates narrow scriptlet capability declarations
+   while failing closed until enforcement exists.
 3. **Release evidence and supportability** -
    completed and
    [archived](docs/superpowers/plans/archive/2026-05-26-release-evidence-and-supportability.md).
@@ -131,19 +133,21 @@ Strategic follow-up after the preview queue:
 
 ## Near-Term Priorities
 
-1. Land the scriptlet trust-assurance plan before widening beyond careful VM or
-   non-critical-machine testers.
-2. Keep the five-minute preview path, release artifact matrix, support bundle,
+1. Keep the five-minute preview path, release artifact matrix, support bundle,
    beta feedback template, and docs-truth gates current as tester copy changes.
-3. Keep adoption-lane DB checkpoints, non-generation recovery, and
+2. Keep adoption-lane DB checkpoints, non-generation recovery, and
    generation-bound DB backup verification green before adoption/unadoption
    becomes part of the support story.
+3. Keep scriptlet warning metadata, protected-sandbox preflight diagnostics,
+   and CCS scriptlet capability gating green as more converted packages are
+   tested.
 4. Keep `conary system unadopt` and selected-generation `native-handoff` proof
    green for Fedora 44, Ubuntu 26.04 LTS, and Arch.
 5. Keep generation export, installed-runtime QEMU validation, and Group P ISO
    evidence green in rotation while remote KVM validation is paused.
-6. Add release evidence, support-bundle, and contributor-onboarding polish
-   before treating the limited preview as more than a small tester program.
+6. Keep release evidence, support-bundle, and contributor-onboarding polish
+   current before treating the limited preview as more than a small tester
+   program.
 7. Keep generation-state DB backup and recovery verification green before
    generation switching becomes the headline public ask.
 8. Keep daily-driver UX, shell completions, release polish, and operator

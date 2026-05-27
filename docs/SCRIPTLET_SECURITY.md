@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-05-20
-revision: 4
-summary: Clarify protected live-root sandbox filesystem isolation and fail-closed behavior
+last_updated: 2026-05-26
+revision: 5
+summary: Record protected live-root seccomp/root-transition assurance and structured scriptlet degradation metadata
 ---
 
 # Scriptlet Security Model
@@ -57,8 +57,16 @@ Configure via CLI or environment:
 
 ### 3. Container Isolation
 
-When protected sandboxing is enabled, scripts run in a lightweight Linux
-container with:
+Protected mode, target-root execution, and direct legacy execution are distinct
+boundaries. Changeset metadata records both the requested sandbox mode
+(`always`, `auto`, or `never`) and the effective sandbox (`protected-live-root`,
+`target-root`, or `direct`), so `--sandbox=auto` direct execution cannot be
+confused with protected sandboxing.
+
+### Protected Live-Root Execution
+
+When protected sandboxing is enabled for the live root (`/`), scripts run in a
+lightweight Linux container with:
 
 #### Namespace Isolation
 - **PID namespace**: Isolated process tree, script cannot see/signal host processes
@@ -69,7 +77,10 @@ container with:
 - **User namespace**: Privilege isolation is used when the host/kernel supports it
 
 #### Filesystem Isolation
-- **chroot**: Script sees only the container root
+- **Root transition**: Root/no-userns execution requires `pivot_root`; `chroot`
+  fallback is fatal in enforce mode. When an unprivileged user namespace is
+  available, setup may enter the prepared root with `chroot` only after sandbox
+  root maps to a non-host UID/GID.
 - **composefs mount**: On composefs-native systems, `/usr` is a read-only EROFS
   mount, providing an additional layer of protection -- scriptlets cannot modify
   system binaries even if they escape the sandbox
@@ -80,9 +91,29 @@ container with:
   - Private writable live-root layers: `/etc` and `/var` are backed by owned
     temporary directories, so protected scriptlet writes are discarded with the
     sandbox instead of mutating the host
+- **Seccomp profile**: Protected live-root scriptlets install the `scriptlet`
+  seccomp profile in enforce mode. That profile excludes `chroot`, `mount`,
+  `umount2`, `pivot_root`, kernel module loading, reboot, BPF, and other
+  privileged escape primitives from the scriptlet process.
 
-Target-root installs (`--root=/path`) remain the full chroot/container path for
-building or modifying an alternate filesystem.
+Protected live-root scriptlets are preflighted before package file/DB mutation.
+If namespace, private writable layer, or enforcement setup is unavailable, the
+operation aborts before mutation with an operator-facing diagnostic.
+
+### Target-Root Execution
+
+Target-root installs (`--root=/path`) use the alternate-root execution path for
+building or modifying another filesystem. That path can use chroot-style
+execution for the target root and is separate from the protected live-root
+sandbox boundary.
+
+### Direct Legacy Execution
+
+`--sandbox=never` runs scriptlets directly on the live host after stdin
+nullification and environment filtering. This is an explicit legacy escape
+hatch, not a filesystem sandbox. `--sandbox=auto` may also choose direct
+execution for low-risk live-root scripts; those runs record
+`effective_sandbox=direct`.
 
 #### Resource Limits (setrlimit)
 | Resource | Default Limit | Purpose |
@@ -181,9 +212,40 @@ Protected modes require namespace isolation. When the kernel cannot provide the
 needed mount/network/user namespace guarantees, Conary fails before running the
 scriptlet rather than silently falling back to direct host mutation.
 
+The diagnostic names the missing protected-sandbox requirement:
+
+```text
+Protected scriptlet sandboxing requires mount and user namespace support.
+Enable the required kernel/container namespace support or run inside a VM.
+Dangerous legacy direct execution is available only with --sandbox=never plus
+the live-host mutation acknowledgement, and it records effective_sandbox=direct.
+```
+
 Direct execution via `--sandbox=never` still uses stdin nullification,
 environment filtering, timeouts, and resource limits where available, but it is
 not a filesystem sandbox.
+
+## Post-Scriptlet Degradation
+
+Post-install and post-remove scriptlets from legacy packages can fail after
+package file state has changed only when the sandbox setup succeeded and the
+script process itself exited nonzero. Conary records those failures in changeset
+metadata as `scriptlet_warning` entries with `phase`, `failure_kind`,
+`requested_sandbox_mode`, and `effective_sandbox`, and `conary history` marks
+the changeset with `[scriptlet-warning]`.
+
+Sandbox setup, namespace preflight, interpreter setup, timeout, and enforcement
+failures do not degrade to warning-only scriptlet side effects. They fail the
+command instead of being recorded as successful package operations.
+
+## Assurance Notes
+
+Protected live-root scriptlets do not receive the `chroot` syscall in the
+enforced live-root seccomp profile. When unprivileged user namespaces are used,
+setup may enter the prepared root with chroot after root maps to a non-host
+UID/GID; that is distinct from allowing the scriptlet process to call `chroot`.
+Target-root build/install flows may still use chroot-style execution for
+alternate roots; that is not the protected live-root sandbox boundary.
 
 ## Security Recommendations
 
@@ -225,6 +287,12 @@ The following features, originally planned as future enhancements, are now imple
 - **Protected live-root writable layers** -- `/etc` and `/var` writes in
   protected scriptlet modes go to private sandbox directories instead of the
   live host
+- **Structured scriptlet warning metadata** -- warning-only legacy
+  post-scriptlet failures are stored on changesets and surfaced in history
+- **Scriptlet-scoped host integration declarations** -- CCS manifests can
+  declare the narrow `systemd-service-registration`, `tmpfiles-registration`,
+  and `dbus-service-registration` scriptlet capabilities; install fails closed
+  until enforcement exists unless the operator chooses direct legacy execution
 
 ## Future Enhancements
 

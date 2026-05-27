@@ -28,10 +28,22 @@ fn format_changeset_line(
     } else {
         " [deferred]"
     };
+    let scriptlet_warnings = crate::commands::scriptlet_warnings(changeset.metadata.as_deref());
+    let scriptlet_marker = if scriptlet_warnings.is_empty() {
+        ""
+    } else {
+        " [scriptlet-warning]"
+    };
     let publication_marker = publication_marker_for_changeset(publications, changeset.id);
     format!(
-        "  [{}] {} - {} ({:?}){}{}",
-        id, timestamp, changeset.description, changeset.status, deferred_marker, publication_marker
+        "  [{}] {} - {} ({:?}){}{}{}",
+        id,
+        timestamp,
+        changeset.description,
+        changeset.status,
+        deferred_marker,
+        scriptlet_marker,
+        publication_marker
     )
 }
 
@@ -43,6 +55,23 @@ fn format_deferred_follow_up_lines(changeset: &conary_core::db::models::Changese
             format!(
                 "      deferred {} {}: {}{}",
                 follow_up.kind, follow_up.status, follow_up.message, retry
+            )
+        })
+        .collect()
+}
+
+fn format_scriptlet_warning_lines(changeset: &conary_core::db::models::Changeset) -> Vec<String> {
+    crate::commands::scriptlet_warnings(changeset.metadata.as_deref())
+        .into_iter()
+        .map(|warning| {
+            format!(
+                "      scriptlet {} {} for {}: {} (requested_sandbox_mode={}, effective_sandbox={})",
+                warning.phase,
+                warning.failure_kind,
+                warning.package,
+                warning.message,
+                warning.requested_sandbox_mode,
+                warning.effective_sandbox
             )
         })
         .collect()
@@ -100,6 +129,9 @@ pub async fn cmd_history(db_path: &str) -> Result<()> {
             for line in format_deferred_follow_up_lines(changeset) {
                 println!("{line}");
             }
+            for line in format_scriptlet_warning_lines(changeset) {
+                println!("{line}");
+            }
         }
         println!("\nTotal: {} changeset(s)", changesets.len());
     }
@@ -124,6 +156,7 @@ mod tests {
             "  [7] 2026-05-14 12:00:00 - Install fixture-1.0.0 (Applied)"
         );
         assert!(format_deferred_follow_up_lines(&changeset).is_empty());
+        assert!(format_scriptlet_warning_lines(&changeset).is_empty());
     }
 
     #[test]
@@ -204,5 +237,38 @@ mod tests {
         assert_eq!(details.len(), 1);
         assert!(details[0].contains("system generation publish"));
         assert!(!details[0].contains("system generation build"));
+    }
+
+    #[test]
+    fn applied_changeset_with_scriptlet_warning_is_marked() {
+        let warning = crate::commands::ScriptletWarning::new(
+            "post-install",
+            "fixture",
+            "ScriptExited",
+            "auto",
+            "direct",
+            "post-install scriptlet failed after package files were installed",
+        );
+        let mut changeset = Changeset::new("Install fixture".to_string());
+        changeset.id = Some(9);
+        changeset.status = ChangesetStatus::Applied;
+        changeset.metadata = Some(
+            crate::commands::metadata_with_full_envelope(
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                vec![warning],
+            )
+            .unwrap(),
+        );
+
+        assert_eq!(
+            format_changeset_line(&changeset, &[]),
+            "  [9] pending - Install fixture (Applied) [scriptlet-warning]"
+        );
+        let details = format_scriptlet_warning_lines(&changeset);
+        assert_eq!(details.len(), 1);
+        assert!(details[0].contains("scriptlet post-install ScriptExited for fixture"));
+        assert!(details[0].contains("effective_sandbox=direct"));
     }
 }
