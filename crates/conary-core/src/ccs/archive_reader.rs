@@ -241,6 +241,7 @@ fn read_ccs_archive_with_limits<R: Read>(
             merged.suggests = toml.suggests;
             merged.components = toml.components;
             merged.scriptlets = toml.scriptlets;
+            merged.legacy_scriptlets = toml.legacy_scriptlets;
             merged.config = toml.config;
             merged.policy = toml.policy;
             merged.provenance = toml.provenance;
@@ -290,17 +291,154 @@ fn read_ccs_archive_with_limits<R: Read>(
 mod tests {
     use super::*;
     use crate::ccs::builder::{CcsBuilder, write_ccs_package};
+    use crate::ccs::legacy_scriptlets::{
+        DecisionCounts, EffectConfidence, EffectReplacement, EffectSource, ForeignReplayPolicy,
+        LegacyScriptletBundle, LegacyScriptletEntry, LifecyclePath, NativeInvocation,
+        PublicationPolicy, PublicationStatus, RpmTriggerMetadata, RpmTriggerTargetConstraint,
+        ScriptletDecision, ScriptletEffect, ScriptletFidelity, SourceFormat, TargetCompatibility,
+        TransactionOrder, VersionScheme, LEGACY_SCRIPTLET_SCHEMA_V1,
+    };
     use crate::ccs::manifest::CcsManifest;
+    use std::collections::BTreeMap;
     use std::fs;
     use tempfile::TempDir;
 
-    fn build_test_package() -> (TempDir, std::path::PathBuf) {
+    fn build_test_package_with_manifest(manifest: CcsManifest) -> (TempDir, std::path::PathBuf) {
         let temp = tempfile::tempdir().unwrap();
         let source_dir = temp.path().join("src");
         fs::create_dir_all(source_dir.join("usr/bin")).unwrap();
         fs::write(source_dir.join("usr/bin/hello"), b"hello world\n").unwrap();
 
-        let manifest = CcsManifest::parse(
+        let result = CcsBuilder::new(manifest, &source_dir).build().unwrap();
+        let package_path = temp.path().join("test-reader.ccs");
+        write_ccs_package(&result, &package_path).unwrap();
+        (temp, package_path)
+    }
+
+    fn build_test_package() -> (TempDir, std::path::PathBuf) {
+        build_test_package_with_manifest(
+            CcsManifest::parse(
+                r#"
+[package]
+name = "test-reader"
+version = "1.0.0"
+description = "archive reader test"
+license = "MIT"
+"#,
+            )
+            .unwrap(),
+        )
+    }
+
+    fn legacy_bundle_fixture() -> LegacyScriptletBundle {
+        let body = "ldconfig\n";
+        LegacyScriptletBundle {
+            schema: LEGACY_SCRIPTLET_SCHEMA_V1.to_string(),
+            schema_revision: 1,
+            source_format: SourceFormat::Rpm,
+            source_family: "fedora-rhel".to_string(),
+            source_distro: Some("fedora".to_string()),
+            source_release: Some("44".to_string()),
+            source_arch: Some("x86_64".to_string()),
+            source_package: "nginx".to_string(),
+            source_version: "1.28.0-1.fc44".to_string(),
+            source_checksum: Some(
+                "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+                    .to_string(),
+            ),
+            version_scheme: VersionScheme::Rpm,
+            conversion_tool: "remi".to_string(),
+            conversion_tool_version: "0.8.0".to_string(),
+            conversion_policy: "safe-or-legacy".to_string(),
+            adapter_registry_digest: None,
+            target_policy_digest: None,
+            evidence_digest: None,
+            target_compatibility: TargetCompatibility::SourceNative,
+            allowed_targets: vec!["rpm/fedora/44/x86_64".to_string()],
+            foreign_replay_policy: ForeignReplayPolicy::Deny,
+            publication_policy: PublicationPolicy::PublicIfNoBlocked,
+            publication_status: PublicationStatus::PrivateReview,
+            scriptlet_fidelity: ScriptletFidelity::LegacyReplay,
+            decision_counts: DecisionCounts {
+                replaced: 0,
+                legacy: 1,
+                blocked: 0,
+                review: 0,
+                extra: BTreeMap::new(),
+            },
+            unsupported_class_counts: BTreeMap::new(),
+            entries: vec![LegacyScriptletEntry {
+                id: "rpm:%post".to_string(),
+                native_slot: "%post".to_string(),
+                phase: LifecyclePath::PostInstall,
+                lifecycle_paths: vec!["install:first".to_string()],
+                interpreter: "/bin/sh".to_string(),
+                interpreter_args: vec!["-e".to_string()],
+                body_sha256: crate::hash::sha256_prefixed(body.as_bytes()),
+                body: body.to_string(),
+                body_encoding: None,
+                native_invocation: NativeInvocation {
+                    args: vec!["1".to_string()],
+                    environment: vec!["RPM_INSTALL_PREFIX=/".to_string()],
+                    stdin: Some("none".to_string()),
+                    chroot: Some("install-root".to_string()),
+                    extra: BTreeMap::new(),
+                },
+                transaction_order: TransactionOrder {
+                    position: "after-payload".to_string(),
+                    before: vec![],
+                    after: vec!["payload".to_string()],
+                    extra: BTreeMap::new(),
+                },
+                timeout_ms: 30_000,
+                sandbox: None,
+                capabilities: vec!["ldconfig".to_string()],
+                decision: ScriptletDecision::Legacy,
+                reason_code: "protected-replay-required".to_string(),
+                human_reason: None,
+                evidence_digest: None,
+                source_evidence_refs: vec![],
+                effects: vec![ScriptletEffect {
+                    kind: "ldconfig".to_string(),
+                    source: EffectSource::StaticSignal,
+                    confidence: EffectConfidence::Declared,
+                    replacement: EffectReplacement::Complete,
+                    adapter_id: Some("ldconfig/v1".to_string()),
+                    adapter_digest: None,
+                    command: Some("ldconfig".to_string()),
+                    args: vec![],
+                    path: None,
+                    reason_code: Some("ldconfig-cache-refresh".to_string()),
+                    extra: BTreeMap::new(),
+                }],
+                unknown_commands: vec![],
+                blocked_classes: vec![],
+                rpm_trigger: Some(RpmTriggerMetadata {
+                    kind: "file-trigger".to_string(),
+                    condition: Some("in".to_string()),
+                    target_constraints: vec![RpmTriggerTargetConstraint {
+                        package: "systemd".to_string(),
+                        operator: Some(">=".to_string()),
+                        version: Some("255".to_string()),
+                        extra: BTreeMap::new(),
+                    }],
+                    priority: Some(100),
+                    file_globs: vec!["/usr/lib/systemd/system/*.service".to_string()],
+                    stdin_contract: Some("paths".to_string()),
+                    transaction_order: Some("post-transaction".to_string()),
+                    extra: BTreeMap::new(),
+                }),
+                deb_maintainer: None,
+                arch_install: None,
+                residual_replay: None,
+                extra: BTreeMap::new(),
+            }],
+            extra: BTreeMap::new(),
+        }
+    }
+
+    fn build_test_package_with_legacy_bundle() -> (TempDir, std::path::PathBuf) {
+        let mut manifest = CcsManifest::parse(
             r#"
 [package]
 name = "test-reader"
@@ -310,11 +448,9 @@ license = "MIT"
 "#,
         )
         .unwrap();
+        manifest.legacy_scriptlets = Some(legacy_bundle_fixture());
 
-        let result = CcsBuilder::new(manifest, &source_dir).build().unwrap();
-        let package_path = temp.path().join("test-reader.ccs");
-        write_ccs_package(&result, &package_path).unwrap();
-        (temp, package_path)
+        build_test_package_with_manifest(manifest)
     }
 
     #[test]
@@ -328,6 +464,41 @@ license = "MIT"
         assert!(!contents.components.is_empty());
         assert!(!contents.blobs.is_empty());
         assert!(!contents.manifest_raw.is_empty());
+    }
+
+    #[test]
+    fn archive_reader_preserves_legacy_scriptlet_bundle_from_toml_overlay() {
+        let (_temp, path) = build_test_package_with_legacy_bundle();
+        let file = std::fs::File::open(&path).unwrap();
+
+        let contents = read_ccs_archive(file).unwrap();
+        let bundle = contents
+            .manifest
+            .legacy_scriptlets
+            .as_ref()
+            .expect("legacy scriptlet bundle from TOML overlay");
+
+        assert_eq!(bundle.source_package, "nginx");
+        assert_eq!(
+            bundle.entries[0]
+                .rpm_trigger
+                .as_ref()
+                .expect("rpm trigger metadata")
+                .file_globs,
+            vec!["/usr/lib/systemd/system/*.service"]
+        );
+    }
+
+    #[test]
+    fn builder_package_writer_preserves_legacy_scriptlet_bundle() {
+        let (_temp, path) = build_test_package_with_legacy_bundle();
+        let file = std::fs::File::open(&path).unwrap();
+
+        let contents = read_ccs_archive(file).unwrap();
+        let toml_raw = String::from_utf8(contents.toml_raw.expect("MANIFEST.toml raw")).unwrap();
+
+        assert!(toml_raw.contains("[legacy_scriptlets]"));
+        assert!(contents.manifest.legacy_scriptlets.is_some());
     }
 
     #[test]
