@@ -1132,7 +1132,22 @@ async fn dispatch_query_command(query_cmd: cli::QueryCommands) -> Result<()> {
             commands::cmd_list_components(&package_name, &db.db_path).await
         }
 
-        cli::QueryCommands::Scripts { package_path } => commands::cmd_scripts(&package_path).await,
+        cli::QueryCommands::Scripts {
+            package_path,
+            verbose,
+            entry,
+            json,
+        } => {
+            commands::cmd_scripts_with_options(
+                &package_path,
+                commands::ScriptQueryOptions {
+                    verbose,
+                    entry,
+                    json,
+                },
+            )
+            .await
+        }
 
         cli::QueryCommands::DeltaStats { db } => commands::cmd_delta_stats(&db.db_path).await,
 

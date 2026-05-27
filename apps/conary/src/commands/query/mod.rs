@@ -13,6 +13,7 @@ mod package;
 mod reason;
 mod repo;
 mod sbom;
+mod scripts;
 
 // Re-export all public commands
 pub use components::{cmd_list_components, cmd_query_component};
@@ -23,6 +24,7 @@ pub use package::cmd_query;
 pub use reason::cmd_query_reason;
 pub use repo::cmd_repquery;
 pub use sbom::cmd_sbom;
+pub use scripts::{ScriptQueryOptions, cmd_scripts, cmd_scripts_with_options};
 
 /// Options for the query command
 #[derive(Default)]

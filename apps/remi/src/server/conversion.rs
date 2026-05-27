@@ -2117,6 +2117,7 @@ mod tests {
             components: Default::default(),
             hooks: Hooks::default(),
             scriptlets: Default::default(),
+            legacy_scriptlets: None,
             config: Default::default(),
             build: None,
             legacy: None,

@@ -19,6 +19,7 @@ pub mod export;
 pub mod hooks;
 pub mod inspector;
 pub mod legacy;
+pub mod legacy_scriptlets;
 pub mod lockfile;
 pub mod manifest;
 pub mod package;
@@ -38,6 +39,9 @@ pub use enhancement::{
 };
 pub use hooks::{AppliedHook, HookExecutionResults, HookExecutor, HookResult, HookType};
 pub use inspector::InspectedPackage;
+pub use legacy_scriptlets::{
+    LEGACY_SCRIPTLET_SCHEMA_V1, LegacyScriptletBundle, LegacyScriptletEntry,
+};
 pub use lockfile::{
     DependencyKind, LOCKFILE_NAME, LOCKFILE_VERSION, LockedDependency, Lockfile, LockfileError,
 };
