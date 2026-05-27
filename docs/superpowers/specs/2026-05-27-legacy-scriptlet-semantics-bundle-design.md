@@ -252,8 +252,9 @@ triggers. The model must preserve at least:
 - pre-expansion macro source when available from source packages or curated
   rules, but never as a requirement for binary RPM fidelity;
 - install/remove/upgrade argument conventions;
-- trigger condition, trigger target package, trigger priority, and file-prefix
-  matches where the parser exposes them;
+- trigger condition, trigger target package constraints including name,
+  operator, and version, trigger priority, and file-matching glob patterns
+  where the parser exposes them;
 - stdin contract for file-trigger paths;
 - ordering relative to package payload mutation and transaction boundaries.
 
@@ -382,21 +383,35 @@ rewriting unrelated package metadata.
 
 Recommended logical shape:
 
+This is an abbreviated, non-normative sketch of the bundle shape. The exact v1
+field names, enum values, reserved metadata fields, and validation rules are
+defined in
+`docs/superpowers/specs/2026-05-27-legacy-scriptlet-bundle-schema-v1-passive-query-design.md`.
+
 ```toml
 [legacy_scriptlets]
 schema = "conary.legacy-scriptlets.v1"
+schema_revision = 1
 source_format = "rpm"
 source_family = "fedora"
 source_distro = "fedora"
 source_release = "44"
+source_arch = "x86_64"
 source_package = "nginx"
 source_version = "1.28.0-1.fc44"
 version_scheme = "rpm"
+conversion_tool = "remi"
+conversion_tool_version = "0.1.0"
+conversion_policy = "safe-or-legacy"
 target_compatibility = "source-native"
 allowed_targets = ["rpm/fedora/44/x86_64"]
 foreign_replay_policy = "deny"
-conversion_policy = "safe-or-legacy"
 publication_policy = "public-if-no-blocked"
+publication_status = "private-review"
+scriptlet_fidelity = "legacy-replay"
+
+[legacy_scriptlets.decision_counts]
+legacy = 1
 
 [[legacy_scriptlets.entries]]
 id = "rpm:%post"
@@ -408,15 +423,15 @@ interpreter_args = []
 body_sha256 = "..."
 body = "..."
 decision = "legacy"
-reason = "contains residual shell after modeled systemd reload"
+reason_code = "residual-shell-after-modeled-systemd-reload"
 timeout_ms = 30000
-transaction_order = "after-payload"
+transaction_order = { position = "after-payload" }
 
 [[legacy_scriptlets.entries.effects]]
 kind = "systemd-daemon-reload"
-source = "capture"
+source = "capture-log"
 confidence = "observed"
-replacement = "ccs-hook"
+replacement = "complete"
 adapter_id = "systemd-daemon-reload/v1"
 adapter_digest = "sha256:..."
 ```
@@ -459,8 +474,9 @@ Per-entry required fields:
 
 Deferred but reserved fields:
 
-- RPM trigger condition, target package, priority, file-prefix matches, stdin
-  path contract, and trigger ordering;
+- RPM trigger condition, target package constraints including name, operator,
+  and version, priority, file-matching glob patterns, stdin path contract, and
+  trigger ordering;
 - DEB maintainer-script invocation mode, old/new version arguments, control
   `triggers` content, debconf requirements, and purge/abort modes;
 - Arch function name, old/new version arguments, and `.INSTALL` source digest;
@@ -652,6 +668,14 @@ compatibility preflight:
 - verify required paths and service manager capabilities are target-compatible;
 - reject foreign replay unless the bundle and policy explicitly allow it;
 - record the compatibility decision and any operator override in the changeset.
+
+Install must persist the complete Legacy Scriptlet Semantics Bundle into local
+package state, because remove and upgrade operations may run after the original
+`.ccs` archive is no longer present. The replay engine must retrieve the stored
+bundle during remove and upgrade instead of falling back to the older raw
+scriptlet table alone. That stored bundle is what preserves target
+compatibility, sandbox requirements, per-entry decisions, timeouts, and evidence
+needed to apply the same safety boundary after install.
 
 The replay engine must avoid double application. If a raw scriptlet is replayed,
 Conary should not also run declarative replacements for effects inside that same

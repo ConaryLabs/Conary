@@ -87,6 +87,11 @@ Recommended objective:
 /goal Implement Goal 1: add the versioned legacy scriptlet semantics bundle data model, manifest round trips, and passive query rendering without changing install behavior. Stop when schema tests prove reserved trigger/purge fields round-trip and converted packages can carry passive bundle metadata.
 ```
 
+Design and detailed plan:
+
+- `docs/superpowers/specs/2026-05-27-legacy-scriptlet-bundle-schema-v1-passive-query-design.md`
+- `docs/superpowers/plans/2026-05-27-legacy-scriptlet-bundle-schema-v1-passive-query-plan.md`
+
 Files likely touched:
 
 - `crates/conary-core/src/ccs/manifest.rs`
@@ -94,13 +99,17 @@ Files likely touched:
 - `crates/conary-core/src/ccs/mod.rs`
 - `crates/conary-core/src/ccs/archive_reader.rs`
 - `crates/conary-core/src/ccs/builder/package_writer.rs`
-- `apps/conary/src/commands/query.rs`
+- `apps/conary/src/commands/mod.rs`
+- `apps/conary/src/commands/query/mod.rs`
+- `apps/conary/src/commands/query/scripts.rs`
 - `apps/conary/src/cli/query.rs`
+- `apps/conary/src/dispatch.rs`
 
 Done means:
 
 - `LegacyScriptletBundle` carries source metadata, target compatibility, entries, effects, reserved trigger fields, decisions, timeouts, adapter digests, and evidence digests.
-- TOML and binary CCS archive paths preserve the bundle.
+- TOML manifests and mixed CBOR+TOML CCS archives preserve the bundle; CBOR-only
+  manifests remain default-empty for Goal 1.
 - `conary query scripts <pkg>`, `--verbose`, `--entry`, and `--json` can render bundle metadata for a CCS package.
 - No install/update/remove behavior changes yet.
 
@@ -276,6 +285,10 @@ Files likely touched:
 Done means:
 
 - Partially converted packages are not served as ready.
+- Until Goal 6 client enforcement lands, packages requiring raw legacy replay
+  are not served as public-ready artifacts; keep them private-review,
+  local-only, or otherwise metadata-only even when conversion evidence is
+  complete.
 - Review artifacts remain private and carry evidence.
 - Blocked results are visible as structured negative conversion results.
 - Job status reports conversion phase and actionable blocked/review reasons.
@@ -296,7 +309,7 @@ git diff --check
 Recommended objective:
 
 ```text
-/goal Implement Goal 6: make install/update/remove consume legacy scriptlet bundles behind an explicit feature gate. Enforce target compatibility metadata and deny foreign legacy replay by default during preflight before live mutation. Stop when bundle-aware same-distro dry-run/install tests pass and cross-distro replay is rejected.
+/goal Implement Goal 6: make install/update/remove consume legacy scriptlet bundles behind an explicit feature gate. Persist installed bundle state for remove/upgrade, enforce target compatibility metadata, and deny foreign legacy replay by default during preflight before live mutation. Stop when bundle-aware same-distro dry-run/install/remove tests pass and cross-distro replay is rejected.
 ```
 
 Files likely touched:
@@ -304,6 +317,8 @@ Files likely touched:
 - `apps/conary/src/commands/ccs/install.rs`
 - `apps/conary/src/commands/install/scriptlets.rs`
 - `apps/conary/src/commands/remove.rs`
+- `crates/conary-core/src/db/migrations/`
+- `crates/conary-core/src/db/schema.rs`
 - `crates/conary-core/src/scriptlet/mod.rs`
 - `crates/conary-core/src/ccs/legacy_scriptlets.rs`
 - `crates/conary-core/src/repository/distro.rs`
@@ -313,11 +328,17 @@ Files likely touched:
 Done means:
 
 - `blocked` and `review` entries fail before mutation under bundle-aware mode.
+- No live legacy replay path is enabled until installed bundle state
+  persistence and remove/upgrade lookup tests pass.
 - `replaced` entries run only CCS declarative hooks.
 - `legacy` entries replay preserved native scriptlets with native-compatible args only after target compatibility preflight passes.
 - Target IDs use `<format>/<distro>/<release>/<arch>`.
 - `foreign_replay_policy = "deny"` is enforced by default before live mutation.
 - `strict`, `guarded`, and `permissive` policies behave as specified.
+- Install persists the complete `LegacyScriptletBundle` into local
+  installed-package state so remove and upgrade can enforce the same decisions,
+  target compatibility, sandbox requirements, and timeouts after the original
+  `.ccs` archive is no longer present.
 - Raw replay and generated hooks from the same entry do not both run.
 - The integration test plan for golden behavior fixtures is documented, even if the full native-versus-CCS corpus does not run until Goal 8a.
 
