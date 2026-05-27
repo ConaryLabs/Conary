@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-05-27
-revision: 2
-summary: Clean-room design for preserving and improving RPM, DEB, and Arch scriptlet behavior in converted CCS packages, including target compatibility gates and adapter-based command growth
+revision: 3
+summary: Clean-room design for preserving and improving RPM, DEB, and Arch scriptlet behavior in Remi-converted CCS packages, including target compatibility gates, adapter-based command growth, and cold-path latency budgets
 ---
 
 # Legacy Scriptlet Semantics Bundle: Design Spec
@@ -73,6 +73,77 @@ scriptlet slot has one of these outcomes:
 Regex analysis may remain as a temporary signal source, but it is not the
 authority. The authority is the bundle's explicit per-slot replay decision plus
 the test evidence that produced it.
+
+## Remi Default Conversion Contract
+
+Remi remains the default conversion authority for repository packages. A client
+request for an RPM, DEB, or Arch package should return a complete CCS package
+once conversion finishes, including payload, dependencies, provides, config-file
+semantics, scriptlet semantics bundle, target compatibility result, conversion
+evidence digest, and publication status.
+
+Client-side conversion should be reserved for explicit local-file workflows,
+developer diagnostics, or emergency compatibility modes. The normal repository
+path is:
+
+1. client asks Remi for a package;
+2. Remi returns an existing complete CCS package, or starts/joins one conversion
+   job;
+3. Remi performs conversion, scriptlet classification, adapter extraction,
+   bundle embedding, chunking, CAS storage, and DB publication;
+4. client downloads a complete CCS package and never has to reinterpret the
+   original native package format.
+
+Partially converted packages must not be served as ready. If the scriptlet
+bundle cannot be produced inside policy, Remi should publish a structured
+`review-required` or `blocked` result instead of returning an incomplete CCS
+artifact.
+
+## Cold-Path Latency Budget
+
+On-demand conversion has to be good enough for first-time use, but it does not
+have to do every expensive validation step synchronously. The request path must
+produce the complete CCS package and bundle; deeper corpus validation and native
+versus CCS golden comparisons belong in pre-warm, CI, or curator workflows.
+
+Target budgets for normal preview packages:
+
+- hot converted package: return metadata immediately from DB and serve chunks
+  from local/R2 cache;
+- cold small package: complete within about 5 seconds;
+- cold medium package with scriptlets: complete within about 30 seconds;
+- cold large package or dependency-heavy conversion: complete within the
+  existing client polling window, currently 5 minutes;
+- packages that cannot meet policy or budget should fail with `review-required`
+  or `blocked`, not degrade to a partial artifact.
+
+These are product SLOs, not claims about the current implementation. The
+implementation plan must add conversion timing telemetry before public claims
+use these numbers.
+
+The scriptlet bundle should add little overhead for common packages:
+
+- static native ABI extraction and adapter dispatch should be metadata-bound
+  and normally sub-second;
+- capture should run only for scriptlet entries that need observation evidence;
+- capture should execute with per-entry timeouts and deterministic mocked
+  helper commands;
+- adapter results should be cached by `(source package checksum, conversion
+  version, adapter registry version, target policy version)`;
+- repeated requests for the same package must join the same in-flight job;
+- dependency bursts should be queued and bounded by Remi's conversion
+  concurrency controls.
+
+The main latency risks are upstream package download size, archive extraction,
+CDC chunking, R2 write-through, and scriptlets that require capture. The design
+should optimize those before weakening scriptlet fidelity:
+
+- pre-warm popular packages and common dependency closures;
+- keep scriptlet extraction mostly metadata/adapter driven;
+- avoid behavioral golden comparison in the request path;
+- expose ETA and phase-specific progress when a conversion is queued;
+- publish aggregate unknown-command and timing reports so the next adapter work
+  is chosen by actual cold-path impact.
 
 ## Native ABI Model
 
