@@ -132,24 +132,25 @@ Design:
 Recommended objective:
 
 ```text
-/goal Implement Goal 2: convert current flattened scriptlets into native ABI entries for RPM, DEB, and Arch, preserving lifecycle paths and deferred trigger fields. Stop when parser fixture tests prove no native scriptlet slot is silently dropped.
+/goal Implement Goal 2: add byte-preserving native ABI entries beside the current flattened scriptlet API for RPM, DEB, and Arch, preserving lifecycle paths, parser support status, and deferred trigger artifacts. Stop when parser fixture tests prove no native scriptlet or control-artifact slot is silently dropped and current flattened scriptlet behavior remains compatible.
 ```
 
 Files likely touched:
 
 - `crates/conary-core/src/packages/traits.rs`
+- `crates/conary-core/src/packages/common.rs`
+- `crates/conary-core/src/packages/native_abi.rs`
 - `crates/conary-core/src/packages/rpm.rs`
 - `crates/conary-core/src/packages/deb.rs`
 - `crates/conary-core/src/packages/arch.rs`
-- `crates/conary-core/src/ccs/legacy_scriptlets.rs`
 - `crates/conary-core/tests/`
 
 Done means:
 
-- RPM entries preserve `%pre`, `%post`, `%preun`, `%postun`, `%pretrans`, `%posttrans`, and trigger metadata when available.
-- DEB entries preserve maintainer-script invocation modes and control `triggers` content when present.
+- RPM entries preserve lifecycle scriptlets including `%preuntrans` and `%postuntrans`, preserve non-empty `%verify` scriptlets as deferred evidence, and preserve package/file/transaction-file trigger metadata when available.
+- DEB entries preserve maintainer-script invocation modes, `config` scriptlets, control `triggers` content, and await/noawait trigger declarations when present.
 - Arch entries preserve full `.INSTALL` source plus callable function metadata.
-- Unsupported native slots become `review` or `blocked` evidence, not dropped data.
+- Unsupported but preservable native slots become `DeferredReview` parser evidence, and parser-visible unpreservable slots become `Unpreservable` parser evidence. Goal 2 does not emit bundle-level `review` or `blocked` decisions.
 
 Verification:
 
@@ -158,6 +159,8 @@ cargo test -p conary-core native_abi
 cargo test -p conary-core rpm_scriptlet
 cargo test -p conary-core deb_scriptlet
 cargo test -p conary-core arch_scriptlet
+cargo test -p conary-core
+cargo test -p conary
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 git diff --check

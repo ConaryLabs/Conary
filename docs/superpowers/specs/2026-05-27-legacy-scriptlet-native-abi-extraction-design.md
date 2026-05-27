@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-05-27
-revision: 3
-summary: Design for Goal 2 native ABI extraction for RPM, DEB, Arch, and RPM verification scriptlet preservation without Remi embedding, bundle conversion, or install behavior changes
+revision: 4
+summary: Design for Goal 2 native ABI extraction for RPM, DEB, Arch, byte-preserving parser facts, and RPM verification scriptlet preservation without Remi embedding, bundle conversion, or install behavior changes
 ---
 
 # Legacy Scriptlet Native ABI Extraction: Goal 2 Design Spec
@@ -71,12 +71,14 @@ Add native ABI metadata beside existing common package metadata.
 The preferred implementation shape is:
 
 ```rust
+// crates/conary-core/src/packages/common.rs
 pub struct PackageMetadata {
     pub scriptlets: Vec<Scriptlet>,
     pub native_scriptlet_abi: Vec<NativeScriptletEntry>,
     // existing fields...
 }
 
+// crates/conary-core/src/packages/traits.rs
 pub trait PackageFormat {
     fn scriptlets(&self) -> &[Scriptlet] {
         &[]
@@ -98,12 +100,14 @@ This is an additive parser API change. Do not replace `scriptlets()` or change
 its return type in Goal 2. Current callers should compile without needing to
 understand native ABI entries.
 
-The ABI layer should live near the existing package parser traits, either in
-`crates/conary-core/src/packages/traits.rs` for small types or in a focused
-`crates/conary-core/src/packages/native_abi.rs` module re-exported by
-`packages::traits`. Keep `ccs::legacy_scriptlets` from depending on parser
-internals in Goal 2; the bridge from native ABI to bundle entries belongs to a
-later conversion goal.
+The ABI layer should live in a focused
+`crates/conary-core/src/packages/native_abi.rs` module and be re-exported by
+`packages::traits` for current callers. `PackageMetadata` lives in
+`packages/common.rs`, so the plan should add the field and default constructor
+there and update existing `PackageMetadata` struct literals with an empty native
+ABI vector. Keep `ccs::legacy_scriptlets` from depending on parser internals in
+Goal 2; the bridge from native ABI to bundle entries belongs to a later
+conversion goal.
 
 ## Data Model
 
@@ -116,13 +120,14 @@ Recommended core types:
 pub struct NativeScriptletEntry {
     pub id: String,
     pub format: NativeScriptletFormat,
+    pub kind: NativeScriptletKind,
     pub native_slot: String,
     pub primary_lifecycle: NativeLifecyclePath,
     pub compatibility_phase: Option<ScriptletPhase>,
     pub lifecycle_paths: Vec<NativeLifecyclePath>,
-    pub interpreter: String,
+    pub interpreter: Option<String>,
     pub interpreter_args: Vec<String>,
-    pub body: String,
+    pub body: NativeScriptletBody,
     pub invocation: NativeInvocationContract,
     pub order: NativeTransactionOrder,
     pub support: NativeScriptletSupport,
@@ -130,10 +135,14 @@ pub struct NativeScriptletEntry {
 }
 ```
 
-The exact names can change during implementation, but the semantics should not:
+The names below are the implementation target. If implementation discovers a
+better local name, the plan must record the equivalent semantics before code
+lands:
 
 - `id` is stable and queryable, such as `rpm:%post`, `deb:postinst`, or
   `arch:post_install`.
+- `kind` distinguishes executable scriptlets from non-executable control
+  artifacts such as Debian `triggers`.
 - `native_slot` is the native slot name as close to the source package format
   as possible.
 - `primary_lifecycle` is the native lifecycle category, including native-only
@@ -143,9 +152,11 @@ The exact names can change during implementation, but the semantics should not:
 - `lifecycle_paths` records the native call paths that later classification or
   replay must consider.
 - `interpreter` and `interpreter_args` split the native interpreter vector or
-  shebang instead of storing all flags in one string.
-- `body` is the preserved source body needed by later bundle hashing and
-  wrapper work.
+  shebang instead of storing all flags in one string. `interpreter` is `None`
+  only for non-executable control artifacts.
+- `body` preserves the original bytes needed by later bundle hashing and
+  wrapper work. Text decoding is an additional convenience, not the source of
+  truth.
 - `invocation` records native arguments, environment assumptions, stdin
   contract, and chroot/install-root expectations.
 - `order` records whether the slot runs before payload mutation, after payload
@@ -162,10 +173,27 @@ pub enum NativeScriptletFormat {
     Arch,
 }
 
+pub enum NativeScriptletKind {
+    Executable,
+    ControlArtifact,
+}
+
+pub struct NativeScriptletBody {
+    pub bytes: Vec<u8>,
+    pub text: Option<String>,
+    pub encoding: NativeScriptletBodyEncoding,
+    pub sha256: String,
+}
+
+pub enum NativeScriptletBodyEncoding {
+    Utf8,
+    Binary,
+}
+
 pub enum NativeScriptletSupport {
     Parsed,
     DeferredReview { reason_code: String },
-    Blocked { reason_code: String },
+    Unpreservable { reason_code: String },
 }
 
 pub enum NativeScriptletMetadata {
@@ -193,11 +221,137 @@ pub enum NativeLifecyclePath {
     Purge,
     Abort,
 }
+
+pub struct RpmNativeScriptletMetadata {
+    pub slot: RpmScriptletSlot,
+    pub scriptlet_flags: Option<RpmScriptletFlagsMetadata>,
+    pub trigger: Option<RpmTriggerMetadata>,
+}
+
+pub enum RpmScriptletSlot {
+    Pre,
+    Post,
+    PreUn,
+    PostUn,
+    PreTrans,
+    PostTrans,
+    PreUnTrans,
+    PostUnTrans,
+    Verify,
+    Trigger,
+}
+
+pub struct RpmScriptletFlagsMetadata {
+    pub names: Vec<String>,
+    pub raw_bits: u32,
+}
+
+pub struct RpmTriggerMetadata {
+    pub family: RpmTriggerFamily,
+    pub conditions: Vec<RpmTriggerCondition>,
+}
+
+pub enum RpmTriggerFamily {
+    Package,
+    File,
+    TransactionFile,
+}
+
+pub enum RpmTriggerAction {
+    PreInstall,
+    Install,
+    Uninstall,
+    PostUninstall,
+}
+
+pub struct RpmTriggerCondition {
+    pub name: String,
+    pub action: RpmTriggerAction,
+    pub version: Option<String>,
+    pub comparison: Option<String>,
+    pub raw_flags: u32,
+}
+
+pub struct DebNativeScriptletMetadata {
+    pub control_member: DebControlMember,
+    pub maintainer_modes: Vec<DebMaintainerInvocation>,
+    pub trigger_declarations: Vec<DebTriggerDeclaration>,
+}
+
+pub enum DebControlMember {
+    Config,
+    Preinst,
+    Postinst,
+    Prerm,
+    Postrm,
+    Triggers,
+}
+
+pub struct DebMaintainerInvocation {
+    pub mode: DebMaintainerMode,
+    pub args: Vec<NativeArgumentContract>,
+    pub lifecycle_paths: Vec<NativeLifecyclePath>,
+}
+
+pub enum DebMaintainerMode {
+    Install,
+    Configure,
+    Upgrade,
+    Remove,
+    Purge,
+    Triggered,
+    Disappear,
+    Deconfigure,
+    FailedUpgrade,
+    AbortInstall,
+    AbortUpgrade,
+    AbortRemove,
+    AbortDeconfigure,
+}
+
+pub struct DebTriggerDeclaration {
+    pub directive: DebTriggerDirective,
+    pub trigger_name: String,
+    pub await_mode: DebTriggerAwaitMode,
+    pub raw_line: String,
+}
+
+pub enum DebTriggerDirective {
+    Interest,
+    Activate,
+}
+
+pub enum DebTriggerAwaitMode {
+    Default,
+    Await,
+    NoAwait,
+}
+
+pub struct ArchNativeScriptletMetadata {
+    pub install_source_sha256: String,
+    pub function_name: String,
+    pub function_body: Option<String>,
+    pub function_body_sha256: Option<String>,
+    pub extraction_status: ArchFunctionExtractionStatus,
+}
+
+pub enum ArchFunctionExtractionStatus {
+    Parsed,
+    DeferredReview { reason_code: String },
+}
 ```
 
 Use plain Rust data structures, not `toml::Value`, in the parser ABI model.
 `toml::Value` remains part of the serialized bundle schema, not the native
 parser contract.
+
+Native ABI body storage is byte-preserving. RPM currently exposes script bodies
+as Rust strings through the `rpm` crate, but DEB and Arch parsers should read
+control and `.INSTALL` members as bytes first, compute `sha256` over those raw
+bytes, and only fill `text` when UTF-8 decoding succeeds. Later bundle
+conversion can serialize non-UTF-8 bodies with `body_encoding = "base64"`; Goal
+2 should not lose bytes just because the flattened compatibility API uses
+`String`.
 
 `NativeLifecyclePath` is intentionally richer than the old `ScriptletPhase`
 compatibility enum. Goal 2 should not widen `ScriptletPhase` just to represent
@@ -211,15 +365,63 @@ assert exact parser output:
 
 ```rust
 pub struct NativeInvocationContract {
-    pub args: Vec<String>,
-    pub environment: Vec<String>,
-    pub stdin: Option<String>,
-    pub chroot: Option<String>,
+    pub args: Vec<NativeArgumentContract>,
+    pub environment: Vec<NativeEnvironmentFact>,
+    pub stdin: NativeStdinContract,
+    pub root: NativeRootExpectation,
 }
 
 pub struct NativeTransactionOrder {
-    pub position: String,
+    pub position: NativeTransactionPosition,
     pub relative_to: Option<String>,
+}
+
+pub struct NativeArgumentContract {
+    pub index: usize,
+    pub name: String,
+    pub value: NativeArgumentValue,
+    pub required: bool,
+}
+
+pub enum NativeArgumentValue {
+    Action,
+    OldVersion,
+    NewVersion,
+    PackageName,
+    TriggerName,
+    TriggerCount,
+    FilePath,
+    Raw(String),
+}
+
+pub struct NativeEnvironmentFact {
+    pub name: String,
+    pub value: Option<String>,
+}
+
+pub enum NativeStdinContract {
+    None,
+    Debconf,
+    Paths,
+    Unknown,
+}
+
+pub enum NativeRootExpectation {
+    PackageManagerDefault,
+    InstallRoot,
+    HostRoot,
+    Unknown,
+}
+
+pub enum NativeTransactionPosition {
+    BeforePayload,
+    AfterPayload,
+    BeforeTransaction,
+    AfterTransaction,
+    Untransaction,
+    Verification,
+    Trigger,
+    ControlArtifact,
 }
 ```
 
@@ -249,9 +451,13 @@ without claiming they belong to the install/update/remove replay surface.
 
 Required trigger families when present:
 
-- package triggers from `metadata.get_triggers()`
-- file triggers from `metadata.get_file_triggers()`
-- transaction file triggers from `metadata.get_trans_file_triggers()`
+- package triggers from `metadata.get_triggers()`: `%triggerprein`,
+  `%triggerin`, `%triggerun`, and `%triggerpostun`
+- file triggers from `metadata.get_file_triggers()`: `%filetriggerin`,
+  `%filetriggerun`, and `%filetriggerpostun`
+- transaction file triggers from `metadata.get_trans_file_triggers()`:
+  `%transfiletriggerin`, `%transfiletriggerun`, and
+  `%transfiletriggerpostun`
 
 The current workspace depends on an `rpm` crate version that exposes basic
 scriptlet flags, interpreter vectors, trigger scripts, interpreter vectors, and
@@ -260,11 +466,11 @@ trigger conditions through metadata methods. For every RPM scriptlet,
 `interpreter_args`; if no program is present, use `/bin/sh` and empty args.
 Preserve scriptlet flags such as `ScriptletFlags::EXPAND` in RPM-specific
 metadata so later goals can distinguish parser-provided binary bodies from
-future source-level macro evidence. Preserve trigger condition names, versions,
-and flags. Convert trigger flags into stable string comparison operators using
-the same logic as the parser's existing dependency flag handling, and preserve
-the raw flag bits or debug value where a complete semantic split is not yet
-implemented.
+future source-level macro evidence. Preserve both named flags and raw flag bits.
+Preserve trigger condition names, versions, action bits, and comparison flags.
+Convert comparison flags into stable string comparison operators using the same
+logic as the parser's existing dependency flag handling, and preserve raw flag
+bits for tests and future semantic refinement.
 
 RPM entries should record:
 
@@ -275,9 +481,17 @@ RPM entries should record:
 - trigger target constraints for package triggers;
 - file globs or monitored paths for file triggers;
 - transaction-file-trigger family when applicable;
+- trigger action form for every condition;
 - ordering relative to payload mutation or transaction boundary;
 - lifecycle paths for install, upgrade, remove, transaction, untransaction,
   verification, trigger, and file trigger paths.
+
+RPM invocation contracts should record the native `$1` meaning for lifecycle
+slots instead of collapsing install, upgrade, and erase paths. For example,
+`%pre` and `%post` can run for install or upgrade, `%preun` and `%postun` can
+run for erase or upgrade, and triggers receive trigger-specific package/count
+arguments. Goal 2 does not need to emulate those values, but tests should assert
+that the metadata records the possible argument kinds and lifecycle paths.
 
 Unsupported trigger semantics must become explicit `DeferredReview` entries
 with stable reason codes unless the parser can prove the entry is impossible to
@@ -301,12 +515,21 @@ DEB entries should record:
 
 - native script name as the slot;
 - shebang interpreter and arguments, falling back to `/bin/sh` when absent;
-- full maintainer script body;
-- native invocation modes relevant to that script, such as `install`,
-  `configure`, `upgrade`, `remove`, `purge`, and `abort-*`;
+- full maintainer script body bytes;
+- native invocation modes relevant to that script;
 - old/new version argument positions where the mode requires them;
 - noninteractive expectation for package-manager execution;
 - unpack, configure, remove, purge, and trigger lifecycle paths.
+
+Minimum maintainer invocation table:
+
+| Control member | Invocation modes to preserve |
+| --- | --- |
+| `config` | `configure` and any parser-visible debconf configuration mode |
+| `preinst` | `install`, `upgrade`, `abort-upgrade` |
+| `postinst` | `configure`, `triggered`, `abort-upgrade`, `abort-remove`, `abort-deconfigure` |
+| `prerm` | `remove`, `upgrade`, `deconfigure`, `failed-upgrade` |
+| `postrm` | `remove`, `purge`, `upgrade`, `disappear`, `failed-upgrade`, `abort-install`, `abort-upgrade` |
 
 Interpreter extraction must parse the shebang line. The first token after `#!`
 is the interpreter path and remaining tokens become `interpreter_args`; for
@@ -316,12 +539,20 @@ example, `#!/usr/bin/perl -w` becomes interpreter `/usr/bin/perl` and args
 The `triggers` artifact is a separate member of the DEB control tarball, not a
 field in the RFC822-style `control` file. `parse_control_tar_all()` should
 recognize a basename of `triggers`, preserve the raw file content, and parse
-trigger declarations such as `interest`, `interest-noawait`, `activate`, and
-`activate-noawait` into metadata when straightforward. The parsed trigger
-metadata must preserve whether the declaration was await or noawait because that
-affects later ordering decisions. Trigger content is deferred evidence in Goal
-2: preserve it and list trigger names, but mark complex trigger execution paths
-as review until later goals implement replay or publication gates.
+trigger declarations such as `interest`, `interest-await`, `interest-noawait`,
+`activate`, `activate-await`, and `activate-noawait` into metadata when
+straightforward. The parsed trigger metadata must preserve whether the
+declaration was default, await, or noawait because that affects later ordering
+decisions. Trigger content is deferred evidence in Goal 2: preserve it and list
+trigger names, but mark complex trigger execution paths as `DeferredReview`
+until later goals implement replay or publication gates.
+
+Because the Debian `triggers` member is not executable, represent it as a native
+ABI `ControlArtifact` entry with `id = "deb:triggers"`,
+`native_slot = "triggers"`, `primary_lifecycle = Trigger`,
+`compatibility_phase = None`, `interpreter = None`, and body bytes equal to the
+raw `triggers` file. Do not attach the triggers content only to package-level
+metadata; it must be queryable and testable as preserved native ABI evidence.
 
 The existing flattened projection can continue to expose one `Scriptlet` per
 package lifecycle maintainer script it already models. The DEB `config` script
@@ -356,6 +587,14 @@ Later replay should source the preserved `.INSTALL` file and call the function
 with native-compatible arguments. Goal 2 only preserves enough metadata for that
 future wrapper; it does not generate or execute the wrapper.
 
+Function extraction must not become a new silent-drop path. If a `.INSTALL`
+file exists and the parser recognizes a required function declaration but cannot
+extract the callable body, preserve a native ABI entry with the full `.INSTALL`
+body, `function_body = None`, and `support = DeferredReview` using a stable
+reason such as `arch-install-function-extraction-deferred`. The flattened
+compatibility API may omit that function body until extraction succeeds, but the
+native ABI list must retain evidence that the callable slot exists.
+
 ## Compatibility Projection
 
 The existing `scriptlets()` API must remain compatible.
@@ -371,6 +610,22 @@ but only if tests prove current behavior is unchanged. For Arch packages, the
 compatibility projection must extract individual callable function bodies from
 the preserved `.INSTALL` source with the parser's existing function-extraction
 logic, rather than returning the raw full file content.
+
+Compatibility output must preserve the current public API shape unless a test
+intentionally documents a narrower, approved behavior change:
+
+- RPM flattened scriptlets keep using the first RPM program component as
+  `Scriptlet.interpreter`, leave `flags` as `None`, and omit native-only
+  untransaction, verification, file-trigger, and transaction-file-trigger
+  entries by default.
+- DEB flattened scriptlets keep the current interpreter string behavior: the
+  `Scriptlet.interpreter` value is the full shebang tail after `#!` when present
+  and `/bin/sh` otherwise. Native ABI entries still split the shebang into
+  interpreter plus args.
+- Arch flattened scriptlets keep returning callable function bodies, not the
+  full `.INSTALL` source.
+- Non-UTF-8 bodies remain native-ABI-only unless an explicit compatibility
+  strategy is added; the old `Scriptlet` API is string-based.
 
 The flattened API may continue to omit native-only entries if that matches
 existing public behavior; the native ABI API must include them. If a native-only
@@ -410,10 +665,11 @@ package parse by default. Preserve the entry with explicit support metadata:
   classification.
 - `DeferredReview` when the parser preserved the body/metadata but later goals
   must decide semantics.
-- `Blocked` only for parser-visible semantics that are known impossible to
-  preserve as native ABI metadata. Unknown interpreters are not parser-level
-  blockers in Goal 2; preserve the interpreter string and let later sandbox or
-  replay gates decide safety.
+- `Unpreservable` only for parser-visible semantics that are known impossible
+  to preserve as native ABI metadata. This is not a publication, install, or
+  replay block; unknown interpreters are not parser-level blockers in Goal 2.
+  Preserve the interpreter string and let later sandbox or replay gates decide
+  safety.
 
 Empty or whitespace-only basic scriptlet bodies are not native ABI entries.
 They are equivalent to absent executable scriptlets for Goal 2 and should not be
@@ -429,6 +685,7 @@ Goal 2 should use stable reason codes, for example:
 - `rpm-verify-scriptlet-deferred`
 - `deb-trigger-semantics-deferred`
 - `arch-install-wrapper-deferred`
+- `arch-install-function-extraction-deferred`
 - `native-abi-parser-limitation`
 
 These reason codes are parser evidence only. They do not replace the later
@@ -438,25 +695,38 @@ bundle-level decision rubric.
 
 Prefer generated fixtures in tests over committed binary packages unless a
 format requires a binary fixture that cannot be assembled deterministically.
+End-to-end parser tests should write temporary package files because
+`PackageFormat::parse()` is path-based. In-memory buffers are fine for private
+helper tests, but the cross-format parser contract should exercise real temp
+`.rpm`, `.deb`, and `.pkg.tar.*` archives where practical.
 
 RPM tests can use the `rpm` crate builder because the local crate exposes
 scriptlet and trigger builder APIs. Build fixtures with:
 
 - all eight lifecycle scriptlets;
 - a `%verify` scriptlet;
-- at least one package trigger;
-- at least one file trigger;
-- at least one transaction file trigger.
+- every package trigger action: `%triggerprein`, `%triggerin`,
+  `%triggerun`, and `%triggerpostun`;
+- every file trigger action: `%filetriggerin`, `%filetriggerun`, and
+  `%filetriggerpostun`;
+- every transaction file trigger action: `%transfiletriggerin`,
+  `%transfiletriggerun`, and `%transfiletriggerpostun`.
 
 DEB tests should build minimal in-memory or temporary `.deb` archives with a
 control tar containing:
 
-- all four package lifecycle maintainer scripts plus `config`;
+- all five maintainer scripts: `config`, `preinst`, `postinst`, `prerm`, and
+  `postrm`;
 - a `triggers` file;
-- shebangs that prove interpreter and args are split.
+- shebangs that prove native interpreter and args are split while flattened
+  compatibility output remains unchanged;
+- a non-UTF-8 control member body if practical, to prove native ABI body bytes
+  are preserved even when the old `Scriptlet` projection cannot represent them.
 
 Arch tests can directly exercise `.INSTALL` parsing and, where practical, build
-a minimal package archive containing `.PKGINFO` and `.INSTALL`.
+a minimal package archive containing `.PKGINFO` and `.INSTALL`. Include one
+fixture where a recognizable function declaration cannot be safely extracted, so
+the native ABI fallback emits `DeferredReview` instead of dropping the slot.
 
 Tests must assert both sides of the contract:
 
@@ -473,6 +743,8 @@ cargo test -p conary-core native_abi
 cargo test -p conary-core rpm_scriptlet
 cargo test -p conary-core deb_scriptlet
 cargo test -p conary-core arch_scriptlet
+cargo test -p conary-core
+cargo test -p conary
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 git diff --check
@@ -485,11 +757,13 @@ must include the full set above.
 
 The detailed implementation plan should split Goal 2 into these tasks:
 
-1. Add the native ABI model and compatibility API with failing tests.
+1. Add the byte-preserving native ABI model, concrete per-format metadata
+   structs, and compatibility API with failing tests.
 2. Implement Arch `.INSTALL` full-source and callable-function ABI extraction.
 3. Implement DEB maintainer-script, `config`, and triggers-file ABI extraction.
 4. Implement RPM lifecycle scriptlet, `%verify`, package-trigger,
-   file-trigger, and transaction-file-trigger ABI extraction.
+   file-trigger, and transaction-file-trigger ABI extraction across every
+   exposed action form.
 5. Add cross-format native ABI fixture tests proving no native slot is silently
    dropped.
 6. Run final verification and update module docs if parser API documentation
