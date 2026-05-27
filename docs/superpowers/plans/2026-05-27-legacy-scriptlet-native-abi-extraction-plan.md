@@ -62,12 +62,23 @@ Modify:
 - `apps/remi/src/server/conversion.rs`
 - `crates/conary-core/src/ccs/convert/converter.rs`
 
-Struct literals found by this command must compile after adding the
-`native_scriptlet_abi` field:
+Only `conary_core::packages::common::PackageMetadata` receives the
+`native_scriptlet_abi` field. Use this command to audit name collisions, but do
+not edit repository metadata structs under `crates/conary-core/src/repository/`:
 
 ```bash
 rg -n "PackageMetadata \\{" apps crates -g '*.rs'
 ```
+
+Expected local package metadata literal sites to update in Task 1 are:
+
+- `crates/conary-core/src/packages/arch.rs`
+- `crates/conary-core/src/packages/deb.rs`
+- `crates/conary-core/src/packages/rpm.rs`
+- `apps/conary/src/commands/install/conversion.rs`
+- `apps/conary/tests/conversion_integration.rs`
+- `apps/remi/src/server/conversion.rs`
+- `crates/conary-core/src/ccs/convert/converter.rs`
 
 ## Safety Rules
 
@@ -91,8 +102,16 @@ rg -n "PackageMetadata \\{" apps crates -g '*.rs'
 - Modify: `crates/conary-core/src/packages/mod.rs`
 - Modify: `crates/conary-core/src/packages/traits.rs`
 - Modify: `crates/conary-core/src/packages/common.rs`
-- Modify: every `PackageMetadata { ... }` struct literal returned by:
-  `rg -n "PackageMetadata \\{" apps crates -g '*.rs'`
+- Modify: local package metadata literals in
+  `crates/conary-core/src/packages/arch.rs`,
+  `crates/conary-core/src/packages/deb.rs`,
+  `crates/conary-core/src/packages/rpm.rs`,
+  `apps/conary/src/commands/install/conversion.rs`,
+  `apps/conary/tests/conversion_integration.rs`,
+  `apps/remi/src/server/conversion.rs`, and
+  `crates/conary-core/src/ccs/convert/converter.rs`
+- Do not modify: `crates/conary-core/src/repository/metadata.rs` or
+  `crates/conary-core/src/repository/parsers/*.rs`
 
 - [ ] **Step 1: Write failing native ABI model tests**
 
@@ -419,6 +438,7 @@ pub struct RpmScriptletFlagsMetadata {
 pub struct RpmTriggerMetadata {
     pub family: RpmTriggerFamily,
     pub conditions: Vec<RpmTriggerCondition>,
+    pub file_globs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -565,6 +585,8 @@ pub struct ArchAlpmHookAction {
     pub needs_targets: bool,
 }
 
+// The typed ALPM action model follows the current alpm-hooks(5) fields.
+// Unknown or future directives remain preserved in NativeScriptletEntry::body.
 pub fn split_shebang(script_text: &str) -> (Option<String>, Vec<String>) {
     let Some(first_line) = script_text.lines().next() else {
         return (Some("/bin/sh".to_string()), Vec::new());
@@ -637,7 +659,23 @@ Run:
 rg -n "PackageMetadata \\{" apps crates -g '*.rs'
 ```
 
-For every literal that already sets `scriptlets`, add:
+Update only literals that construct
+`conary_core::packages::common::PackageMetadata`. Do not add
+`native_scriptlet_abi` to `crates/conary-core/src/repository/metadata.rs` or
+`crates/conary-core/src/repository/parsers/*.rs`; those are unrelated
+repository index metadata types with the same Rust name.
+
+For these package metadata literals, add:
+
+- `crates/conary-core/src/packages/arch.rs`
+- `crates/conary-core/src/packages/deb.rs`
+- `crates/conary-core/src/packages/rpm.rs`
+- `apps/conary/src/commands/install/conversion.rs`
+- `apps/conary/tests/conversion_integration.rs`
+- `apps/remi/src/server/conversion.rs`
+- `crates/conary-core/src/ccs/convert/converter.rs`
+
+For every package metadata literal that already sets `scriptlets`, add:
 
 ```rust
 native_scriptlet_abi: Vec::new(),
@@ -1500,6 +1538,28 @@ fn deb_new_version_arg(index: usize, required: bool) -> NativeArgumentContract {
     Self::deb_arg(index, "new-version", NativeArgumentValue::NewVersion, required)
 }
 
+fn deb_marker_arg(index: usize, marker: &str, required: bool) -> NativeArgumentContract {
+    Self::deb_arg(
+        index,
+        marker,
+        NativeArgumentValue::Raw(marker.to_string()),
+        required,
+    )
+}
+
+fn deb_package_arg(index: usize, name: &str, required: bool) -> NativeArgumentContract {
+    Self::deb_arg(index, name, NativeArgumentValue::PackageName, required)
+}
+
+fn deb_version_arg(
+    index: usize,
+    name: &str,
+    value: NativeArgumentValue,
+    required: bool,
+) -> NativeArgumentContract {
+    Self::deb_arg(index, name, value, required)
+}
+
 fn deb_invocation(
     mode: DebMaintainerMode,
     mut args: Vec<NativeArgumentContract>,
@@ -1565,10 +1625,23 @@ fn deb_maintainer_invocations(control_member: DebControlMember) -> Vec<DebMainta
                 vec![NativeLifecyclePath::Abort],
             ),
             Self::deb_invocation(
+                DebMaintainerMode::AbortRemove,
+                vec![
+                    Self::deb_marker_arg(2, "in-favour", true),
+                    Self::deb_package_arg(3, "package", true),
+                    Self::deb_new_version_arg(4, true),
+                ],
+                vec![NativeLifecyclePath::Abort],
+            ),
+            Self::deb_invocation(
                 DebMaintainerMode::AbortDeconfigure,
                 vec![
-                    Self::deb_arg(2, "in-favour-package", NativeArgumentValue::PackageName, true),
-                    Self::deb_arg(3, "in-favour-version", NativeArgumentValue::NewVersion, true),
+                    Self::deb_marker_arg(2, "in-favour", true),
+                    Self::deb_package_arg(3, "failed-install-package", true),
+                    Self::deb_version_arg(4, "failed-install-version", NativeArgumentValue::NewVersion, true),
+                    Self::deb_marker_arg(5, "removing", false),
+                    Self::deb_package_arg(6, "conflicting-package", false),
+                    Self::deb_version_arg(7, "conflicting-version", NativeArgumentValue::OldVersion, false),
                 ],
                 vec![NativeLifecyclePath::Abort],
             ),
@@ -1580,6 +1653,15 @@ fn deb_maintainer_invocations(control_member: DebControlMember) -> Vec<DebMainta
                 vec![NativeLifecyclePath::PreRemove],
             ),
             Self::deb_invocation(
+                DebMaintainerMode::Remove,
+                vec![
+                    Self::deb_marker_arg(2, "in-favour", true),
+                    Self::deb_package_arg(3, "package", true),
+                    Self::deb_new_version_arg(4, true),
+                ],
+                vec![NativeLifecyclePath::PreRemove],
+            ),
+            Self::deb_invocation(
                 DebMaintainerMode::Upgrade,
                 vec![Self::deb_new_version_arg(2, true)],
                 vec![NativeLifecyclePath::PreUpgrade],
@@ -1587,8 +1669,12 @@ fn deb_maintainer_invocations(control_member: DebControlMember) -> Vec<DebMainta
             Self::deb_invocation(
                 DebMaintainerMode::Deconfigure,
                 vec![
-                    Self::deb_arg(2, "in-favour-package", NativeArgumentValue::PackageName, true),
-                    Self::deb_arg(3, "in-favour-version", NativeArgumentValue::NewVersion, true),
+                    Self::deb_marker_arg(2, "in-favour", true),
+                    Self::deb_package_arg(3, "package-being-installed", true),
+                    Self::deb_version_arg(4, "package-being-installed-version", NativeArgumentValue::NewVersion, true),
+                    Self::deb_marker_arg(5, "removing", false),
+                    Self::deb_package_arg(6, "conflicting-package", false),
+                    Self::deb_version_arg(7, "conflicting-version", NativeArgumentValue::OldVersion, false),
                 ],
                 vec![NativeLifecyclePath::Abort],
             ),
@@ -1891,6 +1977,16 @@ fn rpm_native_abi_preserves_untransaction_verify_and_all_trigger_actions() {
         verify.support.reason_code(),
         Some("rpm-verify-scriptlet-deferred")
     );
+
+    let file_trigger = entries
+        .iter()
+        .find(|entry| entry.native_slot == "%filetriggerin")
+        .expect("file trigger entry");
+    let NativeScriptletMetadata::Rpm(meta) = &file_trigger.metadata else {
+        panic!("expected rpm metadata");
+    };
+    let trigger = meta.trigger.as_ref().expect("trigger metadata");
+    assert_eq!(trigger.file_globs, vec!["/usr/lib".to_string()]);
 }
 ```
 
@@ -2106,6 +2202,17 @@ fn add_rpm_triggers(
             RpmTriggerFamily::File => NativeLifecyclePath::FileTrigger,
             RpmTriggerFamily::TransactionFile => NativeLifecyclePath::TransactionFileTrigger,
         };
+        let file_globs = if family == RpmTriggerFamily::File
+            || family == RpmTriggerFamily::TransactionFile
+        {
+            trigger
+                .conditions
+                .iter()
+                .map(|condition| condition.name.clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
         let conditions = trigger
             .conditions
             .iter()
@@ -2174,7 +2281,11 @@ fn add_rpm_triggers(
             metadata: NativeScriptletMetadata::Rpm(RpmNativeScriptletMetadata {
                 slot: RpmScriptletSlot::Trigger,
                 scriptlet_flags: None,
-                trigger: Some(RpmTriggerMetadata { family, conditions }),
+                trigger: Some(RpmTriggerMetadata {
+                    family,
+                    conditions,
+                    file_globs,
+                }),
             }),
         });
     }
