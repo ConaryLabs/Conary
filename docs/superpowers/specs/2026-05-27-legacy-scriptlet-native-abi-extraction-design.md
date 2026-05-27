@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-05-27
-revision: 5
+revision: 6
 summary: Design for Goal 2 native ABI extraction for RPM, DEB, Arch install scriptlets and ALPM hook artifacts, byte-preserving parser facts, and RPM verification scriptlet preservation without Remi embedding, bundle conversion, or install behavior changes
 ---
 
@@ -88,12 +88,11 @@ Primary sources:
   `[Trigger]` and `[Action]` sections, package/path targets, stdin target lists,
   and pre/post-transaction ordering.
 
-Goal 2's current Arch implementation target covers `.INSTALL` scriptlets. Before
-implementation planning, decide whether packaged ALPM hook files under
-`/usr/share/libalpm/hooks/*.hook` should be added to Goal 2 as byte-preserved
-`ControlArtifact` entries or split into a follow-up goal. They are documented
-native transaction behavior and should not be silently ignored in the overall
-legacy-scriptlet program.
+Goal 2's Arch implementation target covers `.INSTALL` scriptlets and packaged
+ALPM hook files under `/usr/share/libalpm/hooks/*.hook`. Hooks are modeled as
+byte-preserved `ControlArtifact` entries with parsed trigger/action metadata
+where straightforward. They remain passive parser facts in Goal 2; execution,
+ordering reconciliation, and replay are later-goal work.
 
 ## Architecture
 
@@ -455,6 +454,7 @@ pub enum NativeArgumentValue {
     Action,
     OldVersion,
     NewVersion,
+    PackageInstanceCount,
     PackageName,
     TriggerName,
     TriggerCount,
@@ -759,8 +759,8 @@ Goal 2 should use stable reason codes, for example:
 - `rpm-trans-file-trigger-semantics-deferred`
 - `rpm-verify-scriptlet-deferred`
 - `deb-trigger-semantics-deferred`
-- `arch-install-wrapper-deferred`
 - `arch-install-function-extraction-deferred`
+- `arch-alpm-hook-semantics-deferred`
 - `native-abi-parser-limitation`
 
 These reason codes are parser evidence only. They do not replace the later

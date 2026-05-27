@@ -331,6 +331,7 @@ pub enum NativeArgumentValue {
     Action,
     OldVersion,
     NewVersion,
+    PackageInstanceCount,
     PackageName,
     TriggerName,
     TriggerCount,
@@ -776,6 +777,35 @@ NeedsTargets
 }
 
 #[test]
+fn arch_native_abi_falls_back_when_function_extraction_fails() {
+    let install = b"pre_install() {\necho '{' unbalanced\n";
+    let entries = ArchPackage::native_abi_from_install_bytes(install);
+
+    let pre = entries
+        .iter()
+        .find(|entry| entry.native_slot == "pre_install")
+        .expect("pre_install entry");
+
+    assert_eq!(
+        pre.support.reason_code(),
+        Some("arch-install-function-extraction-deferred")
+    );
+
+    let NativeScriptletMetadata::Arch(ArchNativeScriptletMetadata::Install(meta)) =
+        &pre.metadata
+    else {
+        panic!("expected arch install metadata");
+    };
+    assert_eq!(
+        meta.extraction_status,
+        ArchFunctionExtractionStatus::DeferredReview {
+            reason_code: "arch-install-function-extraction-deferred".to_string(),
+        }
+    );
+    assert_eq!(meta.function_body, None);
+}
+
+#[test]
 fn arch_compat_scriptlets_still_return_function_bodies() {
     let install = r#"
 post_install() {
@@ -798,10 +828,11 @@ Run:
 ```bash
 cargo test -p conary-core arch_native_abi_preserves_full_install_source_and_function_body
 cargo test -p conary-core arch_native_abi_preserves_alpm_hook_control_artifact
+cargo test -p conary-core arch_native_abi_falls_back_when_function_extraction_fails
 cargo test -p conary-core arch_compat_scriptlets_still_return_function_bodies
 ```
 
-Expected: the first two commands fail because the native ABI helpers do not
+Expected: the first three commands fail because the native ABI helpers do not
 exist. The compatibility test should pass before implementation and continue to
 pass afterward.
 
@@ -945,6 +976,8 @@ fn contains_function_declaration(source: &str, function_name: &str) -> bool {
 
 fn arch_invocation_for_function(function_name: &str) -> NativeInvocationContract {
     let args = match function_name {
+        // alpm-install-scriptlet(5) passes new version as $1 and old version as
+        // $2 for both pre_upgrade and post_upgrade.
         "pre_upgrade" | "post_upgrade" => vec![
             NativeArgumentContract {
                 index: 1,
@@ -1040,7 +1073,7 @@ fn parse_alpm_hook_metadata(text: &str) -> (Vec<ArchAlpmHookTrigger>, Option<Arc
     let mut current_trigger: Option<ArchAlpmHookTrigger> = None;
     let mut action = ArchAlpmHookAction {
         description: None,
-        when: NativeTransactionPosition::ControlArtifact,
+        when: NativeTransactionPosition::AfterTransaction,
         exec: String::new(),
         depends: Vec::new(),
         abort_on_fail: false,
@@ -1399,11 +1432,216 @@ fn flattened_scriptlet_from_control_member(name: &str, body: &[u8]) -> Option<Sc
 }
 ```
 
-Add `deb_lifecycle_paths()` and `deb_maintainer_invocations()` using the mapping
-from the design spec. Each `DebMaintainerInvocation` can start with an empty
-`args` vector except modes that need versions; for those, use index 2 for
-old-version and index 3 for new-version when both are present in the documented
-call mode.
+Add the static Debian Policy invocation table. The argument indexes are shell
+argument indexes: `$1` is the action word such as `upgrade`, so old/new version
+arguments appear at `$2` and `$3` when the documented call mode includes them.
+
+```rust
+fn deb_lifecycle_paths(control_member: DebControlMember) -> Vec<NativeLifecyclePath> {
+    match control_member {
+        DebControlMember::Config => vec![NativeLifecyclePath::Config],
+        DebControlMember::Preinst => vec![
+            NativeLifecyclePath::PreInstall,
+            NativeLifecyclePath::PreUpgrade,
+            NativeLifecyclePath::Abort,
+        ],
+        DebControlMember::Postinst => vec![
+            NativeLifecyclePath::PostInstall,
+            NativeLifecyclePath::PostUpgrade,
+            NativeLifecyclePath::Trigger,
+            NativeLifecyclePath::Abort,
+        ],
+        DebControlMember::Prerm => vec![
+            NativeLifecyclePath::PreRemove,
+            NativeLifecyclePath::PreUpgrade,
+            NativeLifecyclePath::Abort,
+        ],
+        DebControlMember::Postrm => vec![
+            NativeLifecyclePath::PostRemove,
+            NativeLifecyclePath::PostUpgrade,
+            NativeLifecyclePath::Purge,
+            NativeLifecyclePath::Abort,
+        ],
+        DebControlMember::Triggers => vec![NativeLifecyclePath::Trigger],
+    }
+}
+
+fn deb_action_arg() -> NativeArgumentContract {
+    NativeArgumentContract {
+        index: 1,
+        name: "action".to_string(),
+        value: NativeArgumentValue::Action,
+        required: true,
+    }
+}
+
+fn deb_arg(
+    index: usize,
+    name: &str,
+    value: NativeArgumentValue,
+    required: bool,
+) -> NativeArgumentContract {
+    NativeArgumentContract {
+        index,
+        name: name.to_string(),
+        value,
+        required,
+    }
+}
+
+fn deb_old_new_args(required: bool) -> Vec<NativeArgumentContract> {
+    vec![
+        Self::deb_arg(2, "old-version", NativeArgumentValue::OldVersion, required),
+        Self::deb_arg(3, "new-version", NativeArgumentValue::NewVersion, required),
+    ]
+}
+
+fn deb_new_version_arg(index: usize, required: bool) -> NativeArgumentContract {
+    Self::deb_arg(index, "new-version", NativeArgumentValue::NewVersion, required)
+}
+
+fn deb_invocation(
+    mode: DebMaintainerMode,
+    mut args: Vec<NativeArgumentContract>,
+    lifecycle_paths: Vec<NativeLifecyclePath>,
+) -> DebMaintainerInvocation {
+    let mut full_args = vec![Self::deb_action_arg()];
+    full_args.append(&mut args);
+    DebMaintainerInvocation {
+        mode,
+        args: full_args,
+        lifecycle_paths,
+    }
+}
+
+fn deb_maintainer_invocations(control_member: DebControlMember) -> Vec<DebMaintainerInvocation> {
+    match control_member {
+        DebControlMember::Config => vec![Self::deb_invocation(
+            DebMaintainerMode::Configure,
+            Vec::new(),
+            vec![NativeLifecyclePath::Config],
+        )],
+        DebControlMember::Preinst => vec![
+            Self::deb_invocation(
+                DebMaintainerMode::Install,
+                Self::deb_old_new_args(false),
+                vec![NativeLifecyclePath::PreInstall],
+            ),
+            Self::deb_invocation(
+                DebMaintainerMode::Upgrade,
+                Self::deb_old_new_args(true),
+                vec![NativeLifecyclePath::PreUpgrade],
+            ),
+            Self::deb_invocation(
+                DebMaintainerMode::AbortUpgrade,
+                vec![Self::deb_new_version_arg(2, true)],
+                vec![NativeLifecyclePath::Abort],
+            ),
+        ],
+        DebControlMember::Postinst => vec![
+            Self::deb_invocation(
+                DebMaintainerMode::Configure,
+                vec![Self::deb_arg(
+                    2,
+                    "most-recently-configured-version",
+                    NativeArgumentValue::Raw("most-recently-configured-version".to_string()),
+                    false,
+                )],
+                vec![NativeLifecyclePath::PostInstall, NativeLifecyclePath::PostUpgrade],
+            ),
+            Self::deb_invocation(
+                DebMaintainerMode::Triggered,
+                vec![Self::deb_arg(2, "trigger-name", NativeArgumentValue::TriggerName, true)],
+                vec![NativeLifecyclePath::Trigger],
+            ),
+            Self::deb_invocation(
+                DebMaintainerMode::AbortUpgrade,
+                vec![Self::deb_new_version_arg(2, true)],
+                vec![NativeLifecyclePath::Abort],
+            ),
+            Self::deb_invocation(
+                DebMaintainerMode::AbortRemove,
+                Vec::new(),
+                vec![NativeLifecyclePath::Abort],
+            ),
+            Self::deb_invocation(
+                DebMaintainerMode::AbortDeconfigure,
+                vec![
+                    Self::deb_arg(2, "in-favour-package", NativeArgumentValue::PackageName, true),
+                    Self::deb_arg(3, "in-favour-version", NativeArgumentValue::NewVersion, true),
+                ],
+                vec![NativeLifecyclePath::Abort],
+            ),
+        ],
+        DebControlMember::Prerm => vec![
+            Self::deb_invocation(
+                DebMaintainerMode::Remove,
+                Vec::new(),
+                vec![NativeLifecyclePath::PreRemove],
+            ),
+            Self::deb_invocation(
+                DebMaintainerMode::Upgrade,
+                vec![Self::deb_new_version_arg(2, true)],
+                vec![NativeLifecyclePath::PreUpgrade],
+            ),
+            Self::deb_invocation(
+                DebMaintainerMode::Deconfigure,
+                vec![
+                    Self::deb_arg(2, "in-favour-package", NativeArgumentValue::PackageName, true),
+                    Self::deb_arg(3, "in-favour-version", NativeArgumentValue::NewVersion, true),
+                ],
+                vec![NativeLifecyclePath::Abort],
+            ),
+            Self::deb_invocation(
+                DebMaintainerMode::FailedUpgrade,
+                Self::deb_old_new_args(true),
+                vec![NativeLifecyclePath::Abort],
+            ),
+        ],
+        DebControlMember::Postrm => vec![
+            Self::deb_invocation(
+                DebMaintainerMode::Remove,
+                Vec::new(),
+                vec![NativeLifecyclePath::PostRemove],
+            ),
+            Self::deb_invocation(
+                DebMaintainerMode::Purge,
+                Vec::new(),
+                vec![NativeLifecyclePath::Purge],
+            ),
+            Self::deb_invocation(
+                DebMaintainerMode::Upgrade,
+                vec![Self::deb_new_version_arg(2, true)],
+                vec![NativeLifecyclePath::PostUpgrade],
+            ),
+            Self::deb_invocation(
+                DebMaintainerMode::Disappear,
+                vec![
+                    Self::deb_arg(2, "overwriter-package", NativeArgumentValue::PackageName, true),
+                    Self::deb_arg(3, "overwriter-version", NativeArgumentValue::NewVersion, true),
+                ],
+                vec![NativeLifecyclePath::PostRemove],
+            ),
+            Self::deb_invocation(
+                DebMaintainerMode::FailedUpgrade,
+                Self::deb_old_new_args(true),
+                vec![NativeLifecyclePath::Abort],
+            ),
+            Self::deb_invocation(
+                DebMaintainerMode::AbortInstall,
+                Self::deb_old_new_args(false),
+                vec![NativeLifecyclePath::Abort],
+            ),
+            Self::deb_invocation(
+                DebMaintainerMode::AbortUpgrade,
+                Self::deb_old_new_args(true),
+                vec![NativeLifecyclePath::Abort],
+            ),
+        ],
+        DebControlMember::Triggers => Vec::new(),
+    }
+}
+```
 
 - [ ] **Step 5: Implement DEB trigger artifact parsing**
 
@@ -1567,8 +1805,7 @@ fn rpm_program_vector_splits_interpreter_and_args() {
 
 #[test]
 fn rpm_scriptlet_flags_preserve_names_and_bits() {
-    let flags = RpmPackage::rpm_scriptlet_flags_metadata(rpm::ScriptletFlags::EXPAND)
-        .expect("flags metadata");
+    let flags = RpmPackage::rpm_scriptlet_flags_metadata(rpm::ScriptletFlags::EXPAND);
 
     assert!(flags.names.contains(&"EXPAND".to_string()));
     assert_eq!(flags.raw_bits, rpm::ScriptletFlags::EXPAND.bits());
@@ -1579,7 +1816,7 @@ fn rpm_trigger_action_and_comparison_are_split_from_raw_flags() {
     let flags = rpm::DependencyFlags::TRIGGERPOSTUN | rpm::DependencyFlags::LE;
 
     assert_eq!(RpmPackage::rpm_trigger_action(flags), Some(RpmTriggerAction::PostUninstall));
-    assert_eq!(RpmPackage::rpm_trigger_comparison(flags), Some("<= ".to_string()));
+    assert_eq!(RpmPackage::rpm_trigger_comparison(flags), Some("<=".to_string()));
 }
 ```
 
@@ -1685,7 +1922,7 @@ fn rpm_scriptlet_program(scriptlet: &rpm::Scriptlet) -> (String, Vec<String>) {
 
 fn rpm_scriptlet_flags_metadata(
     flags: rpm::ScriptletFlags,
-) -> Option<RpmScriptletFlagsMetadata> {
+) -> RpmScriptletFlagsMetadata {
     let mut names = Vec::new();
     if flags.contains(rpm::ScriptletFlags::EXPAND) {
         names.push("EXPAND".to_string());
@@ -1697,10 +1934,10 @@ fn rpm_scriptlet_flags_metadata(
         names.push("CRITICAL".to_string());
     }
 
-    Some(RpmScriptletFlagsMetadata {
+    RpmScriptletFlagsMetadata {
         names,
         raw_bits: flags.bits(),
-    })
+    }
 }
 
 fn rpm_trigger_action(flags: rpm::DependencyFlags) -> Option<RpmTriggerAction> {
@@ -1718,7 +1955,7 @@ fn rpm_trigger_action(flags: rpm::DependencyFlags) -> Option<RpmTriggerAction> {
 }
 
 fn rpm_trigger_comparison(flags: rpm::DependencyFlags) -> Option<String> {
-    let operator = flags_to_operator(flags);
+    let operator = flags_to_operator(flags).trim();
     if operator.is_empty() {
         None
     } else {
@@ -1753,17 +1990,89 @@ fn extract_native_scriptlet_abi(pkg: &Package) -> Vec<NativeScriptletEntry> {
 }
 ```
 
-The helper must skip empty basic script bodies and mark `%verify` as
-`DeferredReview`:
+Add the helper functions used by `extract_native_scriptlet_abi()`. The entry
+helper skips empty basic script bodies, marks `%verify` as `DeferredReview`,
+preserves `ScriptletFlags`, and records RPM's documented `$1` package instance
+count contract.
 
 ```rust
-let support = if slot == RpmScriptletSlot::Verify {
-    NativeScriptletSupport::DeferredReview {
-        reason_code: "rpm-verify-scriptlet-deferred".to_string(),
+fn rpm_scriptlet_invocation() -> NativeInvocationContract {
+    NativeInvocationContract {
+        args: vec![NativeArgumentContract {
+            index: 1,
+            name: "package-instance-count".to_string(),
+            value: NativeArgumentValue::PackageInstanceCount,
+            required: true,
+        }],
+        environment: Vec::new(),
+        stdin: NativeStdinContract::None,
+        root: NativeRootExpectation::PackageManagerDefault,
     }
-} else {
-    NativeScriptletSupport::Parsed
-};
+}
+
+fn rpm_order_for_lifecycle(lifecycle: NativeLifecyclePath) -> NativeTransactionOrder {
+    NativeTransactionOrder::new(match lifecycle {
+        NativeLifecyclePath::PreInstall
+        | NativeLifecyclePath::PreUpgrade
+        | NativeLifecyclePath::PreRemove => NativeTransactionPosition::BeforePayload,
+        NativeLifecyclePath::PostInstall
+        | NativeLifecyclePath::PostUpgrade
+        | NativeLifecyclePath::PostRemove => NativeTransactionPosition::AfterPayload,
+        NativeLifecyclePath::PreTransaction => NativeTransactionPosition::BeforeTransaction,
+        NativeLifecyclePath::PostTransaction => NativeTransactionPosition::AfterTransaction,
+        NativeLifecyclePath::PreUntransaction | NativeLifecyclePath::PostUntransaction => {
+            NativeTransactionPosition::Untransaction
+        }
+        NativeLifecyclePath::Verify => NativeTransactionPosition::Verification,
+        _ => NativeTransactionPosition::ControlArtifact,
+    })
+}
+
+fn add_rpm_scriptlet_entry(
+    entries: &mut Vec<NativeScriptletEntry>,
+    native_slot: &str,
+    slot: RpmScriptletSlot,
+    lifecycle: NativeLifecyclePath,
+    compatibility_phase: Option<ScriptletPhase>,
+    scriptlet: std::result::Result<rpm::Scriptlet, rpm::Error>,
+) {
+    let Ok(scriptlet) = scriptlet else {
+        return;
+    };
+    if scriptlet.script.trim().is_empty() {
+        return;
+    }
+
+    let (interpreter, interpreter_args) = Self::rpm_scriptlet_program(&scriptlet);
+    let support = if slot == RpmScriptletSlot::Verify {
+        NativeScriptletSupport::DeferredReview {
+            reason_code: "rpm-verify-scriptlet-deferred".to_string(),
+        }
+    } else {
+        NativeScriptletSupport::Parsed
+    };
+
+    entries.push(NativeScriptletEntry {
+        id: format!("rpm:{native_slot}"),
+        format: NativeScriptletFormat::Rpm,
+        kind: NativeScriptletKind::Executable,
+        native_slot: native_slot.to_string(),
+        primary_lifecycle: lifecycle,
+        compatibility_phase,
+        lifecycle_paths: vec![lifecycle],
+        interpreter: Some(interpreter),
+        interpreter_args,
+        body: NativeScriptletBody::from_bytes(scriptlet.script.as_bytes().to_vec()),
+        invocation: Self::rpm_scriptlet_invocation(),
+        order: Self::rpm_order_for_lifecycle(lifecycle),
+        support,
+        metadata: NativeScriptletMetadata::Rpm(RpmNativeScriptletMetadata {
+            slot,
+            scriptlet_flags: scriptlet.flags.map(Self::rpm_scriptlet_flags_metadata),
+            trigger: None,
+        }),
+    });
+}
 ```
 
 Use `NativeScriptletBody::from_bytes(scriptlet.script.as_bytes().to_vec())` for
@@ -1783,7 +2092,7 @@ fn add_rpm_triggers(
         return;
     };
 
-    for trigger in triggers {
+    for (trigger_index, trigger) in triggers.into_iter().enumerate() {
         let native_slot = Self::rpm_trigger_slot_name(family, &trigger);
         let (interpreter, interpreter_args) = {
             let mut program = trigger.program.clone().into_iter();
@@ -1816,7 +2125,7 @@ fn add_rpm_triggers(
             .collect();
 
         entries.push(NativeScriptletEntry {
-            id: format!("rpm:{native_slot}:{}", entries.len()),
+            id: format!("rpm:{native_slot}:{trigger_index}"),
             format: NativeScriptletFormat::Rpm,
             kind: NativeScriptletKind::Executable,
             native_slot,
