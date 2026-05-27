@@ -192,7 +192,7 @@ conary --allow-live-system-mutation system db-backup recover --latest --yes
 The exact CLI names may change, but adoption-only recovery cannot depend on
 `system generation recover-db`.
 
-- [ ] **Step 6: Add verification**
+- [x] **Step 6: Add verification**
 
 After writing a backup, open the copied DB and run:
 
@@ -217,7 +217,7 @@ cargo test -p conary --lib adopt
 - Modify: `crates/conary-core/src/db/backup.rs`
 - Modify: `apps/conary/src/commands/generation/publication.rs`
 
-- [ ] **Step 1: Define the manifest envelope**
+- [x] **Step 1: Define the manifest envelope**
 
 The manifest is metadata only; it does not mirror database tables:
 
@@ -239,7 +239,7 @@ pub struct GenerationDbBackupManifest {
 
 Use `format = "conary.generation-db-backup.v1"`.
 
-- [ ] **Step 2: Add path convention**
+- [x] **Step 2: Add path convention**
 
 For generation directory `/conary/generations/<n>`, write:
 
@@ -252,7 +252,7 @@ For generation directory `/conary/generations/<n>`, write:
 If compression lands in the first slice, the backup file may be
 `conary.db.backup.gz`, and the manifest must name that compression.
 
-- [ ] **Step 3: Add module tests**
+- [x] **Step 3: Add module tests**
 
 Add tests proving manifest JSON round-trips and checksum verification fails
 when the backup file changes.
@@ -272,7 +272,7 @@ Expected: tests pass.
 - Modify: `crates/conary-core/src/db/backup.rs`
 - Modify: `crates/conary-core/src/filesystem/durable.rs`
 
-- [ ] **Step 1: Use the SQLite backup helper at the exact publication boundary**
+- [x] **Step 1: Use the SQLite backup helper at the exact publication boundary**
 
 Write the generation-bound backup after the generation artifact exists,
 `publish_generation_link` succeeds, and `mark_generation_state_active` records
@@ -284,12 +284,12 @@ The backup may therefore contain publication debt in the
 when the generation artifact, `/conary/current`, manifest, and checksum all
 agree, then complete or repair publication debt as part of recovery.
 
-- [ ] **Step 2: Use durable write helpers**
+- [x] **Step 2: Use durable write helpers**
 
 Write to a temporary file, fsync the file, rename into place, and fsync the
 parent directory.
 
-- [ ] **Step 3: Fail publication if backup write fails**
+- [x] **Step 3: Fail publication if backup write fails**
 
 If backup writing fails after DB package mutation committed, record
 generation publication debt rather than marking publication complete.
@@ -301,7 +301,7 @@ generation publication debt rather than marking publication complete.
 - Modify: `apps/conary/src/commands/generation/commands.rs`
 - Modify: `crates/conary-core/src/db/backup.rs`
 
-- [ ] **Step 1: Add CLI command**
+- [x] **Step 1: Add CLI command**
 
 Add:
 
@@ -310,7 +310,7 @@ conary system generation verify-db-backup --generation 3
 conary system generation verify-db-backup --current
 ```
 
-- [ ] **Step 2: Verification checks**
+- [x] **Step 2: Verification checks**
 
 Verification must check:
 
@@ -327,7 +327,7 @@ selected /conary/current agrees when --current is used
 publication debt state is complete or a valid CurrentPublished recovery state
 ```
 
-- [ ] **Step 3: Add tests**
+- [x] **Step 3: Add tests**
 
 Use tempdirs to create valid and corrupt backups. Assert corrupt checksums,
 bad manifests, and missing generation artifacts fail with clear errors.
@@ -339,7 +339,7 @@ bad manifests, and missing generation artifacts fail with clear errors.
 - Modify: `apps/conary/src/commands/generation/commands.rs`
 - Modify: `crates/conary-core/src/db/backup.rs`
 
-- [ ] **Step 1: Add dry-run command**
+- [x] **Step 1: Add dry-run command**
 
 Add:
 
@@ -355,7 +355,7 @@ supplied.
 It must not call the normal live-DB `db::open` path before verifying the backup,
 because the live DB may be missing, corrupt, or too damaged to migrate.
 
-- [ ] **Step 2: Require explicit apply**
+- [x] **Step 2: Require explicit apply**
 
 Applying to the live DB must require:
 
@@ -375,7 +375,7 @@ Acquire the command's normal mutation lock before quarantine, restore through a
 temporary file, fsync the restored DB and parent directory, and make sure stale
 WAL/SHM sidecars cannot be applied to the restored DB.
 
-- [ ] **Step 3: Fail closed on disagreement**
+- [x] **Step 3: Fail closed on disagreement**
 
 If the live DB exists and passes integrity checks, refuse apply unless the user
 adds an explicit `--replace-healthy-db` debug flag. Do not add that flag to
@@ -389,7 +389,7 @@ normal docs.
 - Modify: `docs/conaryopedia-v2.md`
 - Modify: `docs/operations/post-generation-export-follow-up-roadmap.md`
 
-- [ ] **Step 1: Document the recovery boundary**
+- [x] **Step 1: Document the recovery boundary**
 
 Add:
 
@@ -400,7 +400,7 @@ package payloads, private keys, remote repository history, or native
 package-manager transaction history.
 ```
 
-- [ ] **Step 2: Add operator commands**
+- [x] **Step 2: Add operator commands**
 
 Document:
 
@@ -417,7 +417,7 @@ conary system db-backup recover --latest --dry-run
 - Modify: `docs/superpowers/documentation-accuracy-audit-inventory.tsv`
 - Modify: `docs/superpowers/documentation-accuracy-audit-ledger.tsv`
 
-- [ ] **Step 1: Run focused tests**
+- [x] **Step 1: Run focused tests**
 
 Run:
 
@@ -426,7 +426,7 @@ cargo test -p conary-core db::backup
 cargo test -p conary generation::commands
 ```
 
-- [ ] **Step 2: Run workspace gates**
+- [x] **Step 2: Run workspace gates**
 
 Run:
 

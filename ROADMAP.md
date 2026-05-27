@@ -17,6 +17,9 @@ For limited-preview artifact, checksum, signature, SBOM, provenance, and source-
   adoption/unadoption and other first-wave live DB mutations, with
   non-generation recovery commands so the escape hatch remains recoverable even
   before a generation exists
+- Keep generation-bound SQLite backups and `verify-db-backup`/`recover-db`
+  commands in the validation loop so a damaged live DB does not blind the
+  manager when valid generation artifacts remain
 - Prove non-destructive unadoption for RPM, DEB, and Arch systems
 - Ensure Conary update paths never silently turn adopted packages into Conary-owned packages
 - Make takeover an explicit opt-in beyond the risk-free adoption lane
@@ -143,8 +146,8 @@ Strategic follow-up after the preview queue:
    evidence green in rotation while remote KVM validation is paused.
 7. Add release evidence, support-bundle, and contributor-onboarding polish
    before treating the limited preview as more than a small tester program.
-8. Add full generation-state DB backup and recovery before generation switching
-   becomes the headline public ask.
+8. Keep generation-state DB backup and recovery verification green before
+   generation switching becomes the headline public ask.
 9. Keep daily-driver UX, shell completions, release polish, and operator
    diagnostics current as preview feedback arrives.
 

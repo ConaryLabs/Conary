@@ -333,6 +333,27 @@ fn recovery_does_not_promote_generations_by_erofs_magic_only() {
 }
 
 #[test]
+fn publication_writes_generation_db_backup_before_marking_debt_complete() {
+    let publication_rs = fs::read_to_string(app_source("commands/generation/publication.rs"))
+        .expect("failed to read generation publication source");
+
+    let mark_active = publication_rs
+        .find("mark_generation_state_active")
+        .expect("publication must mark the selected generation active");
+    let backup = publication_rs
+        .find("create_generation_db_backup")
+        .expect("publication must write a generation-bound DB backup");
+    let mark_complete = publication_rs
+        .find("GenerationPublication::mark_complete_through")
+        .expect("publication must mark covered debt complete");
+
+    assert!(
+        mark_active < backup && backup < mark_complete,
+        "generation DB backup must be written after current generation/state activation but before publication debt is marked complete"
+    );
+}
+
+#[test]
 fn oci_generation_export_uses_generation_artifact_loader() {
     let export_rs = fs::read_to_string(app_source("commands/export.rs"))
         .expect("failed to read commands/export.rs");

@@ -931,6 +931,55 @@ mod tests {
     }
 
     #[test]
+    fn cli_accepts_generation_db_backup_verification_and_recovery() {
+        let verify = Cli::try_parse_from([
+            "conary",
+            "system",
+            "generation",
+            "verify-db-backup",
+            "--current",
+        ])
+        .expect("generation DB backup verification should parse");
+        match verify.command {
+            Some(Commands::System(SystemCommands::Generation(
+                GenerationCommands::VerifyDbBackup {
+                    current,
+                    generation,
+                    ..
+                },
+            ))) => {
+                assert!(current);
+                assert_eq!(generation, None);
+            }
+            _ => panic!("expected generation verify-db-backup command"),
+        }
+
+        let recover = Cli::try_parse_from([
+            "conary",
+            "system",
+            "generation",
+            "recover-db",
+            "--generation",
+            "7",
+            "--dry-run",
+        ])
+        .expect("generation DB recovery dry-run should parse");
+        match recover.command {
+            Some(Commands::System(SystemCommands::Generation(GenerationCommands::RecoverDb {
+                generation,
+                dry_run,
+                yes,
+                ..
+            }))) => {
+                assert_eq!(generation, 7);
+                assert!(dry_run);
+                assert!(!yes);
+            }
+            _ => panic!("expected generation recover-db command"),
+        }
+    }
+
+    #[test]
     fn cli_rejects_generation_export_path_and_number_together() {
         let err = match Cli::try_parse_from([
             "conary",

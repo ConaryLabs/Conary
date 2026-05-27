@@ -112,6 +112,13 @@ pub(crate) fn publish_current_db_state(
             conn,
             built.generation_number,
         )?;
+        conary_core::db::backup::create_generation_db_backup(
+            request.db_path,
+            runtime_root.generation_path(built.generation_number),
+            built.generation_number,
+            built.state_number,
+        )
+        .map_err(|error| anyhow!("failed to write generation DB backup: {error}"))?;
         Ok(BuiltForPublication {
             state_number: built.state_number,
             generation_number: built.generation_number,
