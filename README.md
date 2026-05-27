@@ -112,6 +112,14 @@ build path in the next subsection and use `./target/debug/conary`.
 ./target/debug/conary system adopt --status
 ```
 
+If `system init` fails, the error names the database parent and runtime root to
+check before retrying. The safe first move is to choose a writable `--db-path`
+for tests or fix the named directory; do not remove an existing `/conary` tree
+unless you have confirmed it is disposable. `system init` does not build a
+generation, so composefs/kernel prerequisites are checked by the generation and
+takeover commands that need them. Budget disk space before full adoption or
+generation work, especially when copying package files into CAS.
+
 The first install or dry-run that needs a package not already converted by Remi
 may spend extra time converting upstream RPM/DEB/Arch metadata into CCS. That
 cold-start latency is expected during the limited preview; reruns should be

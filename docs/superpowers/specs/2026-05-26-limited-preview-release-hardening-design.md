@@ -7,7 +7,7 @@ summary: Umbrella design for turning external model review findings into the nex
 # Limited Preview Release Hardening: Design Spec
 
 **Date:** 2026-05-26
-**Status:** Active design; split into four implementation plans
+**Status:** Active umbrella; Plan A, Plan C, and Plan D landed, Plan B remains active
 **Goal:** Turn the DeepSeek, Gemini, GPT Pro deep research, and Codex review
 findings into a sequenced release-hardening program that protects Conary's
 limited-preview promise.
@@ -109,18 +109,17 @@ It also found current risks that should shape the next queue:
 
 ## Decision
 
-Create four active implementation plans and keep broader ecosystem growth as
-roadmap follow-up:
+Create four implementation plans and keep broader ecosystem growth as roadmap
+follow-up:
 
 1. **Preview Truth And Onboarding**
 2. **Scriptlet Trust Assurance**
 3. **Release Evidence And Supportability**
 4. **Generation State Resilience**
 
-The first two plans are release hardening. The third makes the preview easier
-to support and contribute to. The fourth can land shortly after the first
-tester wave if the preview remains package-manager focused, but it becomes a
-release blocker before generation switching is marketed as the primary ask.
+Plan A, Plan C, and Plan D have landed and moved to archive paths. Plan B
+remains active because scriptlet trust assurance is still the release-hardening
+blocker before widening beyond careful VM or non-critical-machine testers.
 
 ## Plan A: Preview Truth And Onboarding
 
@@ -243,23 +242,24 @@ These remain important but should not crowd the release-hardening queue:
 
 Before the limited tester post:
 
-- land Plan A;
-- land the Plan D live-mutation inventory plus adoption-lane rollback,
-  post-success checkpoint, and non-generation recovery slice;
-- land the minimum Plan C supportability slice: artifact/source expectation
-  matrix, support bundle, beta issue template, and evidence command block;
+- keep the Plan A preview path, Remi cold-start caveat, first-run init
+  diagnostics, source-selection docs, and docs-truth checks current;
+- keep the Plan C artifact/source expectation matrix, support bundle, beta
+  issue template, and evidence command block current;
+- keep the Plan D adoption-lane checkpoints, non-generation recovery, and
+  generation-bound DB backup verification green;
 - land the documentation and assurance portions of Plan B or explicitly narrow
   the preview lanes if any scriptlet assurance work remains open.
 
 Before widening beta:
 
 - complete Plan B;
-- complete Plan C;
 - rerun local QEMU/KVM evidence and publish artifact/provenance status.
 
 Before making generation switching the headline ask:
 
-- complete Plan D;
+- keep Plan D verification/recovery evidence green under current generation
+  flows;
 - restore scheduled remote KVM validation or document a replacement gate with
   equivalent evidence quality.
 

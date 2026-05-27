@@ -83,19 +83,21 @@ For limited-preview artifact, checksum, signature, SBOM, provenance, and source-
 The 2026-05-26 multi-model review pass agrees on the main direction: Conary's
 near-term advantage is not "replace every package manager now." The useful
 wedge is Nix-like safety on the Linux distribution a tester already uses,
-with adoption and unadoption as the low-risk entry point. The active planning
-queue therefore protects the preview promise before adding more ecosystem
-breadth.
+with adoption and unadoption as the low-risk entry point. Most of the review
+queue has now landed; the active release-hardening blocker is scriptlet trust
+assurance before the preview widens beyond careful VM or non-critical-machine
+testers.
 
 Umbrella design:
 [Limited Preview Release Hardening](docs/superpowers/specs/2026-05-26-limited-preview-release-hardening-design.md).
 
 1. **Preview truth and onboarding** -
-   [plan](docs/superpowers/plans/2026-05-26-preview-truth-and-onboarding.md).
-   Fix public truth drift, make the bounded adoption/unadoption path impossible
-   to miss, sharpen the Nix comparison, include the site in truth checks,
-   explain the live-mutation acknowledgement flag, account for Remi cold-start
-   latency, and either implement or route single-package adoption dry-runs.
+   completed and
+   [archived](docs/superpowers/plans/archive/2026-05-26-preview-truth-and-onboarding.md).
+   The bounded five-minute path, live-mutation acknowledgement explanation,
+   Remi cold-start caveat, Nix comparison, source-selection documentation,
+   single-package adoption dry-run routing, and first-run `system init`
+   diagnostics are now in the active product/docs surface.
 2. **Scriptlet trust assurance** -
    [plan](docs/superpowers/plans/2026-05-26-scriptlet-trust-assurance.md).
    Resolve the protected-sandbox `chroot`/root-transition ambiguity, make
@@ -103,18 +105,17 @@ Umbrella design:
    scriptlet failure semantics structured and visible, and design
    capability-scoped integration hooks before relying on unsandboxed fallbacks.
 3. **Release evidence and supportability** -
-   [plan](docs/superpowers/plans/2026-05-26-release-evidence-and-supportability.md).
-   Publish the minimum artifact/source expectation matrix before first testers,
-   keep local KVM evidence honest while remote validation is paused, add beta
-   support-bundle/privacy guidance, and turn the limited preview into a
-   contributor funnel.
+   completed and
+   [archived](docs/superpowers/plans/archive/2026-05-26-release-evidence-and-supportability.md).
+   The artifact/source expectation matrix, release-matrix gate,
+   allowlist-only support bundle, beta feedback template, issue-template
+   privacy wording, and integration evidence block are now active.
 4. **Generation state resilience** -
-   [plan](docs/superpowers/plans/2026-05-26-generation-state-resilience.md).
-   Add live-mutation inventory plus adoption-lane rollback/post-success SQLite
-   backups and non-generation recovery before the first tester wave, then add
-   generation-bound SQLite-native backups and recovery commands so a damaged
-   live SQLite DB does not blind the manager when generation artifacts and
-   metadata are still intact.
+   completed and
+   [archived](docs/superpowers/plans/archive/2026-05-26-generation-state-resilience.md).
+   Live-mutation inventory, adoption-lane rollback/post-success SQLite
+   checkpoints, non-generation DB recovery, generation-bound SQLite-native
+   backups, verification, and copied-backup dry-run recovery are now in place.
 
 Strategic follow-up after the preview queue:
 
@@ -130,25 +131,22 @@ Strategic follow-up after the preview queue:
 
 ## Near-Term Priorities
 
-1. Land the preview truth/onboarding plan before inviting new public testers.
-2. Add adoption-lane rollback and post-success DB checkpoints plus
-   non-generation recovery before first-wave tester adoption/unadoption becomes
-   part of the support story.
-3. Land the minimum Plan C supportability slice before the first public tester
-   post if binaries or shared tester feedback are involved: the artifact matrix,
-   allowlist support bundle, beta feedback template, and release evidence
-   command block should stay current together.
-4. Land the scriptlet trust-assurance plan before widening beyond careful VM or
+1. Land the scriptlet trust-assurance plan before widening beyond careful VM or
    non-critical-machine testers.
-5. Keep `conary system unadopt` and selected-generation `native-handoff` proof
+2. Keep the five-minute preview path, release artifact matrix, support bundle,
+   beta feedback template, and docs-truth gates current as tester copy changes.
+3. Keep adoption-lane DB checkpoints, non-generation recovery, and
+   generation-bound DB backup verification green before adoption/unadoption
+   becomes part of the support story.
+4. Keep `conary system unadopt` and selected-generation `native-handoff` proof
    green for Fedora 44, Ubuntu 26.04 LTS, and Arch.
-6. Keep generation export, installed-runtime QEMU validation, and Group P ISO
+5. Keep generation export, installed-runtime QEMU validation, and Group P ISO
    evidence green in rotation while remote KVM validation is paused.
-7. Add release evidence, support-bundle, and contributor-onboarding polish
+6. Add release evidence, support-bundle, and contributor-onboarding polish
    before treating the limited preview as more than a small tester program.
-8. Keep generation-state DB backup and recovery verification green before
+7. Keep generation-state DB backup and recovery verification green before
    generation switching becomes the headline public ask.
-9. Keep daily-driver UX, shell completions, release polish, and operator
+8. Keep daily-driver UX, shell completions, release polish, and operator
    diagnostics current as preview feedback arrives.
 
 ---

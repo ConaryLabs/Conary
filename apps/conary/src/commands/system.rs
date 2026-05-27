@@ -7,7 +7,7 @@ use super::TroveSnapshot;
 use super::open_db;
 #[cfg(test)]
 use anyhow::Context;
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use conary_core::db::paths::objects_dir;
 use conary_core::filesystem::CasStore;
 use conary_core::runtime_root::ConaryRuntimeRoot;
@@ -20,7 +20,10 @@ use tracing::info;
 /// Initialize the Conary database and add default repositories
 pub async fn cmd_init(db_path: &str) -> Result<()> {
     info!("Initializing Conary database at: {}", db_path);
-    conary_core::db::init(db_path)?;
+    let db_path_ref = Path::new(db_path);
+    let runtime_root = ConaryRuntimeRoot::from_db_path(db_path_ref.to_path_buf());
+    conary_core::db::init(db_path)
+        .map_err(|err| init_failure_context(db_path_ref, &runtime_root, err))?;
     println!("Database initialized successfully at: {}", db_path);
 
     let mut conn = open_db(db_path)?;
@@ -103,6 +106,26 @@ pub async fn cmd_init(db_path: &str) -> Result<()> {
 
     println!("\nDefault repositories added. Use 'conary repo sync' to download metadata.");
     Ok(())
+}
+
+fn init_failure_context(
+    db_path: &Path,
+    runtime_root: &ConaryRuntimeRoot,
+    source: conary_core::Error,
+) -> anyhow::Error {
+    let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
+    anyhow!(
+        "could not initialize Conary database at {}: {}\n\
+         database parent: {}\n\
+         runtime root: {}\n\
+         safe next step: verify the database parent is a writable directory, \
+         or pass --db-path to a writable test location; do not remove existing \
+         Conary runtime state unless you have confirmed it is disposable",
+        db_path.display(),
+        source,
+        parent.display(),
+        runtime_root.root().display()
+    )
 }
 
 fn rollback_claim_statuses() -> [&'static str; 2] {
@@ -1199,6 +1222,20 @@ mod tests {
             Some("https://remi.conary.io")
         );
         assert_eq!(repo.default_strategy_distro.as_deref(), Some("fedora"));
+    }
+
+    #[tokio::test]
+    async fn init_error_names_unusable_database_parent() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let parent_file = temp_dir.path().join("not-a-directory");
+        std::fs::write(&parent_file, b"not a directory").unwrap();
+        let db_path = parent_file.join("conary.db");
+        let db_path_str = db_path.to_str().unwrap();
+
+        let err = cmd_init(db_path_str).await.unwrap_err().to_string();
+
+        assert!(err.contains(&parent_file.display().to_string()));
+        assert!(err.contains("safe next step"));
     }
 
     #[test]

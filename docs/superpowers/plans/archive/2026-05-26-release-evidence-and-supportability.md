@@ -67,7 +67,7 @@ All tester diagnostics are explicit and local-first.
 - Create or modify: support-bundle script/command chosen in Task 3
 - Modify: `docs/INTEGRATION-TESTING.md`
 
-- [ ] **Step 1: Decide binary or source-build first post**
+- [x] **Step 1: Decide binary or source-build first post**
 
 Before the tester post, publish one of these states:
 
@@ -79,7 +79,7 @@ source-build path: exact source commit, build commands, expected clean-VM build
 time, supported distros, and known caveats
 ```
 
-- [ ] **Step 2: Land the minimum support loop**
+- [x] **Step 2: Land the minimum support loop**
 
 The first tester post must link:
 
@@ -97,7 +97,7 @@ evidence command block
 - Modify: `README.md`
 - Modify: `ROADMAP.md`
 
-- [ ] **Step 1: Create the matrix doc**
+- [x] **Step 1: Create the matrix doc**
 
 Use this initial table:
 
@@ -112,7 +112,7 @@ Use this initial table:
 | `conary-test` | binary/package artifacts or source-build fallback | checksums, signature status, SBOM/provenance status, suite inventory parse, fixture manifest check | validation tooling |
 ```
 
-- [ ] **Step 2: Add provenance columns**
+- [x] **Step 2: Add provenance columns**
 
 Include columns for:
 
@@ -126,7 +126,7 @@ known caveats
 source-build fallback and expected build time if no binary is published
 ```
 
-- [ ] **Step 3: Link it from README and ROADMAP**
+- [x] **Step 3: Link it from README and ROADMAP**
 
 Add one sentence near release status:
 
@@ -142,7 +142,7 @@ Release artifact and provenance expectations are tracked in
 - Or create: `scripts/check-release-artifacts.sh`
 - Modify: `.github/workflows/pr-gate.yml` only if a new script is created
 
-- [ ] **Step 1: Parse product names from docs**
+- [x] **Step 1: Parse product names from docs**
 
 If creating a new script, start with product-name checks, then require each row
 to carry concrete URLs/paths or an explicit `source-build-only` caveat:
@@ -165,7 +165,7 @@ for product in conary remi conaryd conary-test; do
 done
 ```
 
-- [ ] **Step 2: Cross-check release matrix entries and sidecars**
+- [x] **Step 2: Cross-check release matrix entries and sidecars**
 
 Read the existing release matrix source used by `scripts/check-release-matrix.sh`
 and assert every documented product still exists there. For every row that
@@ -174,12 +174,12 @@ SBOM/provenance status, URL/path, and caveat fields are non-empty. If the
 workflow does not produce those sidecars yet, add workflow tasks or mark the row
 `source-build-only` until it does.
 
-- [ ] **Step 3: Add the check to PR gate**
+- [x] **Step 3: Add the check to PR gate**
 
 If the new script is separate, add it to the docs/release validation section in
 `.github/workflows/pr-gate.yml`.
 
-- [ ] **Step 4: Add workflow follow-up when matrix claims outpace artifacts**
+- [x] **Step 4: Add workflow follow-up when matrix claims outpace artifacts**
 
 If `.github/workflows/release-build.yml` only signs/checksums a subset of the
 matrix, either extend the workflow for the missing products or downgrade those
@@ -193,7 +193,7 @@ rows to source-build fallback before the first tester post.
 - Or create: `apps/conary/src/commands/diagnostics.rs`
 - Modify: `README.md`
 
-- [ ] **Step 1: Start with a script unless a CLI command is already nearby**
+- [x] **Step 1: Start with a script unless a CLI command is already nearby**
 
 Create `scripts/conary-support-bundle.sh` that writes to a local directory:
 
@@ -239,7 +239,7 @@ sqlite3 "$CONARY_DB" "SELECT name FROM sqlite_master WHERE type='table' ORDER BY
 Do not copy the DB into the bundle unless a future `--include-db` option is
 added with a separate redaction/review warning.
 
-- [ ] **Step 2: Use redaction only as a backstop**
+- [x] **Step 2: Use redaction only as a backstop**
 
 Pipe only the allowlisted command output through a redactor that masks:
 
@@ -258,7 +258,7 @@ https://user:password@example
 If the script ever needs a non-allowlisted source, add a new explicit command
 entry and test rather than widening the collector.
 
-- [ ] **Step 3: Add privacy wording**
+- [x] **Step 3: Add privacy wording**
 
 Document:
 
@@ -268,7 +268,7 @@ Do not include `/etc/conary/trust`, private keys, SSH keys, or host-local
 credential files.
 ```
 
-- [ ] **Step 4: Add support-bundle privacy tests**
+- [x] **Step 4: Add support-bundle privacy tests**
 
 Add tests or shell fixtures proving:
 
@@ -286,7 +286,7 @@ the reviewed-before-attach reminder is present
 - Modify: `.github/ISSUE_TEMPLATE/bug_report.md`
 - Modify: `CONTRIBUTING.md`
 
-- [ ] **Step 1: Add beta feedback template**
+- [x] **Step 1: Add beta feedback template**
 
 Include fields:
 
@@ -310,14 +310,14 @@ Include fields:
 - Support bundle reviewed before attach: yes/no
 ```
 
-- [ ] **Step 2: Replace raw-log bug report guidance**
+- [x] **Step 2: Replace raw-log bug report guidance**
 
 Update `.github/ISSUE_TEMPLATE/bug_report.md` so it prefers the reviewed support
 bundle over pasted raw `RUST_LOG=debug` output. Keep raw debug logs as
 maintainer-requested follow-up only, with warnings not to include credentials,
 `/etc/conary/trust`, DB files, or unreviewed environment dumps.
 
-- [ ] **Step 3: Add good first validation tasks**
+- [x] **Step 3: Add good first validation tasks**
 
 In `CONTRIBUTING.md`, add a short section listing concrete entry points:
 
@@ -336,7 +336,7 @@ docs/modules/source-selection.md: source-policy wording
 - Modify: `docs/INTEGRATION-TESTING.md`
 - Modify: `docs/operations/release-artifact-matrix.md`
 
-- [ ] **Step 1: Add a release evidence command block**
+- [x] **Step 1: Add a release evidence command block**
 
 Add:
 
@@ -349,7 +349,7 @@ bash scripts/check-release-matrix.sh
 bash scripts/release-cargo-audit.sh
 ```
 
-- [ ] **Step 2: Keep QEMU evidence dated**
+- [x] **Step 2: Keep QEMU evidence dated**
 
 Add a rule:
 
@@ -365,7 +365,7 @@ validation is paused.
 - Modify: `docs/superpowers/documentation-accuracy-audit-inventory.tsv`
 - Modify: `docs/superpowers/documentation-accuracy-audit-ledger.tsv`
 
-- [ ] **Step 1: Run checks**
+- [x] **Step 1: Run checks**
 
 Run:
 
