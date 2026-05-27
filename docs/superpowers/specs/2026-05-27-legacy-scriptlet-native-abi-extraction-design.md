@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-05-27
-revision: 6
+revision: 7
 summary: Design for Goal 2 native ABI extraction for RPM, DEB, Arch install scriptlets and ALPM hook artifacts, byte-preserving parser facts, and RPM verification scriptlet preservation without Remi embedding, bundle conversion, or install behavior changes
 ---
 
@@ -134,10 +134,11 @@ The ABI layer should live in a focused
 `crates/conary-core/src/packages/native_abi.rs` module and be re-exported by
 `packages::traits` for current callers. `PackageMetadata` lives in
 `packages/common.rs`, so the plan should add the field and default constructor
-there and update existing `PackageMetadata` struct literals with an empty native
-ABI vector. Keep `ccs::legacy_scriptlets` from depending on parser internals in
-Goal 2; the bridge from native ABI to bundle entries belongs to a later
-conversion goal.
+there and update only struct literals that construct
+`conary_core::packages::common::PackageMetadata`. Do not add the field to
+unrelated repository metadata structs in `crates/conary-core/src/repository/`.
+Keep `ccs::legacy_scriptlets` from depending on parser internals in Goal 2; the
+bridge from native ABI to bundle entries belongs to a later conversion goal.
 
 ## Data Model
 
@@ -279,6 +280,7 @@ pub struct RpmScriptletFlagsMetadata {
 pub struct RpmTriggerMetadata {
     pub family: RpmTriggerFamily,
     pub conditions: Vec<RpmTriggerCondition>,
+    pub file_globs: Vec<String>,
 }
 
 pub enum RpmTriggerFamily {
@@ -407,6 +409,11 @@ pub struct ArchAlpmHookAction {
     pub needs_targets: bool,
 }
 ```
+
+`ArchAlpmHookAction` intentionally models the action fields documented by the
+current `alpm-hooks(5)` manual. Nonstandard or future hook directives remain
+byte-preserved in `NativeScriptletEntry::body` and should not be projected into
+typed fields until an official source defines them.
 
 Use plain Rust data structures, not `toml::Value`, in the parser ABI model.
 `toml::Value` remains part of the serialized bundle schema, not the native
@@ -588,6 +595,11 @@ DEB entries should record:
 - old/new version argument positions where the mode requires them;
 - noninteractive expectation for package-manager execution;
 - unpack, configure, remove, purge, and trigger lifecycle paths.
+
+Argument contracts must be mode-specific. Do not assume all old/new version
+arguments live at the same index: complex Debian Policy calls such as
+`deconfigure in-favour ... [removing ...]` include literal marker arguments and
+package/version values at higher positions.
 
 Minimum maintainer invocation table:
 
