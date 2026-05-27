@@ -113,8 +113,20 @@ pub enum QueryCommands {
 
     /// Display scriptlets (install/remove hooks) from a package file
     Scripts {
-        /// Path to package file (RPM, DEB, or Arch)
+        /// Path to the package file to inspect
         package_path: String,
+
+        /// Show full bundle entry details
+        #[arg(long)]
+        verbose: bool,
+
+        /// Show only one bundle entry by ID
+        #[arg(long)]
+        entry: Option<String>,
+
+        /// Emit machine-readable JSON
+        #[arg(long)]
+        json: bool,
     },
 
     /// Show delta update statistics
