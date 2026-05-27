@@ -131,16 +131,15 @@ pub use provenance::{
 };
 pub use recipe_audit::cmd_recipe_audit;
 pub use remove::{cmd_autoremove, cmd_remove};
-// cmd_scripts is defined in this module, no need to re-export from submodule
 pub use federation::cmd_federation_scan;
 pub use federation::{
     cmd_federation_add_peer, cmd_federation_enable_peer, cmd_federation_peers,
     cmd_federation_remove_peer, cmd_federation_stats, cmd_federation_status, cmd_federation_test,
 };
 pub use query::{
-    QueryOptions, cmd_depends, cmd_deptree, cmd_history, cmd_list_components, cmd_query,
-    cmd_query_component, cmd_query_reason, cmd_rdepends, cmd_repquery, cmd_sbom, cmd_whatbreaks,
-    cmd_whatprovides,
+    QueryOptions, ScriptQueryOptions, cmd_depends, cmd_deptree, cmd_history, cmd_list_components,
+    cmd_query, cmd_query_component, cmd_query_reason, cmd_rdepends, cmd_repquery, cmd_sbom,
+    cmd_scripts, cmd_scripts_with_options, cmd_whatbreaks, cmd_whatprovides,
 };
 pub use redirect::{
     cmd_redirect_add, cmd_redirect_list, cmd_redirect_remove, cmd_redirect_resolve,
@@ -173,11 +172,6 @@ pub use update_channel::{
 };
 
 use anyhow::{Context, Result};
-use conary_core::packages::PackageFormat;
-use conary_core::packages::arch::ArchPackage;
-use conary_core::packages::deb::DebPackage;
-use conary_core::packages::rpm::RpmPackage;
-use conary_core::packages::traits::ScriptletPhase;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::Read;
@@ -271,61 +265,6 @@ pub fn detect_package_format(path: &str) -> Result<PackageFormatType> {
         "Unable to detect package format for: {}",
         path
     ))
-}
-
-/// Display scriptlets from a package file
-pub async fn cmd_scripts(package_path: &str) -> Result<()> {
-    let format = detect_package_format(package_path)?;
-
-    let package: Box<dyn PackageFormat> = match format {
-        PackageFormatType::Rpm => Box::new(RpmPackage::parse(package_path)?),
-        PackageFormatType::Deb => Box::new(DebPackage::parse(package_path)?),
-        PackageFormatType::Arch => Box::new(ArchPackage::parse(package_path)?),
-    };
-
-    let scriptlets = package.scriptlets();
-
-    if scriptlets.is_empty() {
-        println!(
-            "[INFO] {} v{} has no scriptlets",
-            package.name(),
-            package.version()
-        );
-        return Ok(());
-    }
-
-    println!("Package: {} v{}", package.name(), package.version());
-    println!("Scriptlets: {}", scriptlets.len());
-    println!();
-
-    for scriptlet in scriptlets {
-        let phase_name = match scriptlet.phase {
-            ScriptletPhase::PreInstall => "pre-install",
-            ScriptletPhase::PostInstall => "post-install",
-            ScriptletPhase::PreRemove => "pre-remove",
-            ScriptletPhase::PostRemove => "post-remove",
-            ScriptletPhase::PreUpgrade => "pre-upgrade",
-            ScriptletPhase::PostUpgrade => "post-upgrade",
-            ScriptletPhase::PreTransaction => "pre-transaction",
-            ScriptletPhase::PostTransaction => "post-transaction",
-            ScriptletPhase::Trigger => "trigger",
-        };
-
-        println!("=== {} ===", phase_name);
-        println!("Interpreter: {}", scriptlet.interpreter);
-        if let Some(flags) = &scriptlet.flags {
-            println!("Flags: {}", flags);
-        }
-        println!("---");
-        // Print script content
-        for line in scriptlet.content.lines() {
-            println!("{}", line);
-        }
-        println!("---");
-        println!();
-    }
-
-    Ok(())
 }
 
 /// Format a byte count as a human-readable string (e.g. "1.23 MB").
