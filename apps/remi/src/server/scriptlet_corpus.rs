@@ -24,7 +24,9 @@ impl ScriptletCorpusSummary {
         for scriptlet in scriptlets {
             for evidence in commands_from_scriptlet(&scriptlet.content, &scriptlet.interpreter) {
                 *command_counts.entry(evidence.command.clone()).or_insert(0) += 1;
-                *command_form_counts.entry(evidence.form.clone()).or_insert(0) += 1;
+                *command_form_counts
+                    .entry(evidence.form.clone())
+                    .or_insert(0) += 1;
                 for class in blocked_class_hints_for_command(&evidence.command, &evidence.form) {
                     blocked.insert(class);
                 }
@@ -74,9 +76,7 @@ fn commands_from_line(line: &str) -> Vec<CommandEvidence> {
         .replace("||", ";")
         .replace('|', ";")
         .replace("$(", ";")
-        .replace('(', ";")
-        .replace(')', ";")
-        .replace('`', ";");
+        .replace(['(', ')', '`'], ";");
 
     normalized
         .split(';')
@@ -94,7 +94,10 @@ fn command_from_segment(segment: &str) -> Option<CommandEvidence> {
             index += 1;
             continue;
         }
-        if matches!(token, "if" | "then" | "else" | "elif" | "fi" | "do" | "done") {
+        if matches!(
+            token,
+            "if" | "then" | "else" | "elif" | "fi" | "do" | "done"
+        ) {
             index += 1;
             continue;
         }
@@ -217,7 +220,9 @@ mod tests {
         let summary = ScriptletCorpusSummary::from_scriptlets(
             "arch",
             "bad-news",
-            &[scriptlet("pacman -Syu\ncurl https://example.invalid/script.sh\n")],
+            &[scriptlet(
+                "pacman -Syu\ncurl https://example.invalid/script.sh\n",
+            )],
         );
 
         assert!(
