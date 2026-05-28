@@ -11,8 +11,13 @@ use crate::hash;
 use crate::packages::archive_utils::{check_file_size, normalize_path};
 use crate::packages::common::PackageMetadata;
 use crate::packages::traits::{
-    ConfigFileInfo, Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat,
-    Scriptlet, ScriptletPhase,
+    ConfigFileInfo, DebControlMember, DebMaintainerInvocation, DebMaintainerMode,
+    DebNativeScriptletMetadata, DebTriggerAwaitMode, DebTriggerDeclaration, DebTriggerDirective,
+    Dependency, DependencyType, ExtractedFile, NativeArgumentContract, NativeArgumentValue,
+    NativeInvocationContract, NativeLifecyclePath, NativeRootExpectation, NativeScriptletBody,
+    NativeScriptletEntry, NativeScriptletFormat, NativeScriptletKind, NativeScriptletMetadata,
+    NativeScriptletSupport, NativeStdinContract, NativeTransactionOrder, NativeTransactionPosition,
+    PackageFile, PackageFormat, Scriptlet, ScriptletPhase, split_shebang,
 };
 use std::fs::File;
 use std::io::Read;
@@ -39,6 +44,8 @@ struct ControlTarContents {
     control_text: Option<String>,
     /// Maintainer scripts extracted from preinst/postinst/prerm/postrm
     scriptlets: Vec<Scriptlet>,
+    /// Byte-preserving native scriptlet ABI entries extracted from control.tar
+    native_scriptlet_abi: Vec<NativeScriptletEntry>,
     /// Config file paths extracted from conffiles
     config_files: Vec<ConfigFileInfo>,
 }
@@ -252,30 +259,29 @@ impl DebPackage {
                             .collect();
                     }
                 }
-                "preinst" | "postinst" | "prerm" | "postrm" => {
-                    let phase = match basename {
-                        "preinst" => ScriptletPhase::PreInstall,
-                        "postinst" => ScriptletPhase::PostInstall,
-                        "prerm" => ScriptletPhase::PreRemove,
-                        "postrm" => ScriptletPhase::PostRemove,
-                        _ => unreachable!(),
-                    };
-                    let mut script_content = String::new();
-                    if entry.read_to_string(&mut script_content).is_ok()
-                        && !script_content.is_empty()
+                "config" | "preinst" | "postinst" | "prerm" | "postrm" => {
+                    let mut body = Vec::new();
+                    entry.read_to_end(&mut body).map_err(|e| {
+                        Error::InitError(format!("Failed to read maintainer script: {}", e))
+                    })?;
+                    if let Some(native) = Self::native_abi_from_control_member(basename, &body) {
+                        contents.native_scriptlet_abi.push(native);
+                    }
+                    if let Some(flattened) =
+                        Self::flattened_scriptlet_from_control_member(basename, &body)
                     {
-                        let interpreter = script_content
-                            .lines()
-                            .next()
-                            .and_then(|line| line.strip_prefix("#!"))
-                            .map(|s| s.trim().to_string())
-                            .unwrap_or_else(|| "/bin/sh".to_string());
-                        contents.scriptlets.push(Scriptlet {
-                            phase,
-                            interpreter,
-                            content: script_content,
-                            flags: None,
-                        });
+                        contents.scriptlets.push(flattened);
+                    }
+                }
+                "triggers" => {
+                    let mut body = Vec::new();
+                    entry.read_to_end(&mut body).map_err(|e| {
+                        Error::InitError(format!("Failed to read triggers file: {}", e))
+                    })?;
+                    if !body.iter().all(|byte| byte.is_ascii_whitespace()) {
+                        contents
+                            .native_scriptlet_abi
+                            .push(Self::native_abi_from_triggers_file(&body));
                     }
                 }
                 _ => {}
@@ -358,6 +364,494 @@ impl DebPackage {
             })
             .collect()
     }
+
+    fn native_abi_from_control_member(name: &str, body: &[u8]) -> Option<NativeScriptletEntry> {
+        let (control_member, lifecycle, compatibility_phase, stdin) = match name {
+            "config" => (
+                DebControlMember::Config,
+                NativeLifecyclePath::Config,
+                None,
+                NativeStdinContract::Debconf,
+            ),
+            "preinst" => (
+                DebControlMember::Preinst,
+                NativeLifecyclePath::PreInstall,
+                Some(ScriptletPhase::PreInstall),
+                NativeStdinContract::None,
+            ),
+            "postinst" => (
+                DebControlMember::Postinst,
+                NativeLifecyclePath::PostInstall,
+                Some(ScriptletPhase::PostInstall),
+                NativeStdinContract::None,
+            ),
+            "prerm" => (
+                DebControlMember::Prerm,
+                NativeLifecyclePath::PreRemove,
+                Some(ScriptletPhase::PreRemove),
+                NativeStdinContract::None,
+            ),
+            "postrm" => (
+                DebControlMember::Postrm,
+                NativeLifecyclePath::PostRemove,
+                Some(ScriptletPhase::PostRemove),
+                NativeStdinContract::None,
+            ),
+            _ => return None,
+        };
+
+        if body.iter().all(|byte| byte.is_ascii_whitespace()) {
+            return None;
+        }
+
+        let text = String::from_utf8(body.to_vec()).ok();
+        let (interpreter, interpreter_args) = text
+            .as_deref()
+            .map(split_shebang)
+            .unwrap_or((Some("/bin/sh".to_string()), Vec::new()));
+        let order_position = match lifecycle {
+            NativeLifecyclePath::PreInstall | NativeLifecyclePath::PreRemove => {
+                NativeTransactionPosition::BeforePayload
+            }
+            NativeLifecyclePath::Config => NativeTransactionPosition::ControlArtifact,
+            _ => NativeTransactionPosition::AfterPayload,
+        };
+
+        Some(NativeScriptletEntry {
+            id: format!("deb:{name}"),
+            format: NativeScriptletFormat::Deb,
+            kind: NativeScriptletKind::Executable,
+            native_slot: name.to_string(),
+            primary_lifecycle: lifecycle,
+            compatibility_phase,
+            lifecycle_paths: Self::deb_lifecycle_paths(control_member),
+            interpreter,
+            interpreter_args,
+            body: NativeScriptletBody::from_bytes(body.to_vec()),
+            invocation: NativeInvocationContract {
+                args: Vec::new(),
+                environment: Vec::new(),
+                stdin,
+                root: NativeRootExpectation::PackageManagerDefault,
+            },
+            order: NativeTransactionOrder::new(order_position),
+            support: NativeScriptletSupport::Parsed,
+            metadata: NativeScriptletMetadata::Deb(DebNativeScriptletMetadata {
+                control_member,
+                maintainer_modes: Self::deb_maintainer_invocations(control_member),
+                trigger_declarations: Vec::new(),
+            }),
+        })
+    }
+
+    fn flattened_scriptlet_from_control_member(name: &str, body: &[u8]) -> Option<Scriptlet> {
+        let phase = match name {
+            "preinst" => ScriptletPhase::PreInstall,
+            "postinst" => ScriptletPhase::PostInstall,
+            "prerm" => ScriptletPhase::PreRemove,
+            "postrm" => ScriptletPhase::PostRemove,
+            _ => return None,
+        };
+        let content = String::from_utf8(body.to_vec()).ok()?;
+        if content.is_empty() {
+            return None;
+        }
+        let interpreter = content
+            .lines()
+            .next()
+            .and_then(|line| line.strip_prefix("#!"))
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| "/bin/sh".to_string());
+
+        Some(Scriptlet {
+            phase,
+            interpreter,
+            content,
+            flags: None,
+        })
+    }
+
+    fn deb_lifecycle_paths(control_member: DebControlMember) -> Vec<NativeLifecyclePath> {
+        match control_member {
+            DebControlMember::Config => vec![NativeLifecyclePath::Config],
+            DebControlMember::Preinst => vec![
+                NativeLifecyclePath::PreInstall,
+                NativeLifecyclePath::PreUpgrade,
+                NativeLifecyclePath::Abort,
+            ],
+            DebControlMember::Postinst => vec![
+                NativeLifecyclePath::PostInstall,
+                NativeLifecyclePath::PostUpgrade,
+                NativeLifecyclePath::Trigger,
+                NativeLifecyclePath::Abort,
+            ],
+            DebControlMember::Prerm => vec![
+                NativeLifecyclePath::PreRemove,
+                NativeLifecyclePath::PreUpgrade,
+                NativeLifecyclePath::Abort,
+            ],
+            DebControlMember::Postrm => vec![
+                NativeLifecyclePath::PostRemove,
+                NativeLifecyclePath::PostUpgrade,
+                NativeLifecyclePath::Purge,
+                NativeLifecyclePath::Abort,
+            ],
+            DebControlMember::Triggers => vec![NativeLifecyclePath::Trigger],
+        }
+    }
+
+    fn deb_action_arg() -> NativeArgumentContract {
+        NativeArgumentContract {
+            index: 1,
+            name: "action".to_string(),
+            value: NativeArgumentValue::Action,
+            required: true,
+        }
+    }
+
+    fn deb_arg(
+        index: usize,
+        name: &str,
+        value: NativeArgumentValue,
+        required: bool,
+    ) -> NativeArgumentContract {
+        NativeArgumentContract {
+            index,
+            name: name.to_string(),
+            value,
+            required,
+        }
+    }
+
+    fn deb_old_new_args(required: bool) -> Vec<NativeArgumentContract> {
+        vec![
+            Self::deb_arg(2, "old-version", NativeArgumentValue::OldVersion, required),
+            Self::deb_arg(3, "new-version", NativeArgumentValue::NewVersion, required),
+        ]
+    }
+
+    fn deb_new_version_arg(index: usize, required: bool) -> NativeArgumentContract {
+        Self::deb_arg(
+            index,
+            "new-version",
+            NativeArgumentValue::NewVersion,
+            required,
+        )
+    }
+
+    fn deb_installed_version_arg(index: usize, required: bool) -> NativeArgumentContract {
+        Self::deb_arg(
+            index,
+            "installed-version",
+            NativeArgumentValue::InstalledVersion,
+            required,
+        )
+    }
+
+    fn deb_marker_arg(index: usize, marker: &str, required: bool) -> NativeArgumentContract {
+        Self::deb_arg(
+            index,
+            marker,
+            NativeArgumentValue::Raw(marker.to_string()),
+            required,
+        )
+    }
+
+    fn deb_package_arg(index: usize, name: &str, required: bool) -> NativeArgumentContract {
+        Self::deb_arg(index, name, NativeArgumentValue::PackageName, required)
+    }
+
+    fn deb_version_arg(
+        index: usize,
+        name: &str,
+        value: NativeArgumentValue,
+        required: bool,
+    ) -> NativeArgumentContract {
+        Self::deb_arg(index, name, value, required)
+    }
+
+    fn deb_invocation(
+        mode: DebMaintainerMode,
+        mut args: Vec<NativeArgumentContract>,
+        lifecycle_paths: Vec<NativeLifecyclePath>,
+    ) -> DebMaintainerInvocation {
+        let mut full_args = vec![Self::deb_action_arg()];
+        full_args.append(&mut args);
+        DebMaintainerInvocation {
+            mode,
+            args: full_args,
+            lifecycle_paths,
+        }
+    }
+
+    fn deb_maintainer_invocations(
+        control_member: DebControlMember,
+    ) -> Vec<DebMaintainerInvocation> {
+        match control_member {
+            DebControlMember::Config => vec![
+                Self::deb_invocation(
+                    DebMaintainerMode::Configure,
+                    vec![Self::deb_installed_version_arg(2, false)],
+                    vec![NativeLifecyclePath::Config],
+                ),
+                Self::deb_invocation(
+                    DebMaintainerMode::Reconfigure,
+                    vec![Self::deb_installed_version_arg(2, false)],
+                    vec![NativeLifecyclePath::Config],
+                ),
+            ],
+            DebControlMember::Preinst => vec![
+                Self::deb_invocation(
+                    DebMaintainerMode::Install,
+                    Self::deb_old_new_args(false),
+                    vec![NativeLifecyclePath::PreInstall],
+                ),
+                Self::deb_invocation(
+                    DebMaintainerMode::Upgrade,
+                    Self::deb_old_new_args(true),
+                    vec![NativeLifecyclePath::PreUpgrade],
+                ),
+                Self::deb_invocation(
+                    DebMaintainerMode::AbortUpgrade,
+                    vec![Self::deb_new_version_arg(2, true)],
+                    vec![NativeLifecyclePath::Abort],
+                ),
+            ],
+            DebControlMember::Postinst => vec![
+                Self::deb_invocation(
+                    DebMaintainerMode::Configure,
+                    vec![Self::deb_arg(
+                        2,
+                        "most-recently-configured-version",
+                        NativeArgumentValue::Raw("most-recently-configured-version".to_string()),
+                        false,
+                    )],
+                    vec![
+                        NativeLifecyclePath::PostInstall,
+                        NativeLifecyclePath::PostUpgrade,
+                    ],
+                ),
+                Self::deb_invocation(
+                    DebMaintainerMode::Triggered,
+                    vec![Self::deb_arg(
+                        2,
+                        "trigger-names",
+                        NativeArgumentValue::TriggerNames,
+                        true,
+                    )],
+                    vec![NativeLifecyclePath::Trigger],
+                ),
+                Self::deb_invocation(
+                    DebMaintainerMode::AbortUpgrade,
+                    vec![Self::deb_new_version_arg(2, true)],
+                    vec![NativeLifecyclePath::Abort],
+                ),
+                Self::deb_invocation(
+                    DebMaintainerMode::AbortRemove,
+                    Vec::new(),
+                    vec![NativeLifecyclePath::Abort],
+                ),
+                Self::deb_invocation(
+                    DebMaintainerMode::AbortRemove,
+                    vec![
+                        Self::deb_marker_arg(2, "in-favour", true),
+                        Self::deb_package_arg(3, "package", true),
+                        Self::deb_new_version_arg(4, true),
+                    ],
+                    vec![NativeLifecyclePath::Abort],
+                ),
+                Self::deb_invocation(
+                    DebMaintainerMode::AbortDeconfigure,
+                    vec![
+                        Self::deb_marker_arg(2, "in-favour", true),
+                        Self::deb_package_arg(3, "failed-install-package", true),
+                        Self::deb_version_arg(
+                            4,
+                            "failed-install-version",
+                            NativeArgumentValue::NewVersion,
+                            true,
+                        ),
+                        Self::deb_marker_arg(5, "removing", false),
+                        Self::deb_package_arg(6, "conflicting-package", false),
+                        Self::deb_version_arg(
+                            7,
+                            "conflicting-version",
+                            NativeArgumentValue::OldVersion,
+                            false,
+                        ),
+                    ],
+                    vec![NativeLifecyclePath::Abort],
+                ),
+            ],
+            DebControlMember::Prerm => vec![
+                Self::deb_invocation(
+                    DebMaintainerMode::Remove,
+                    Vec::new(),
+                    vec![NativeLifecyclePath::PreRemove],
+                ),
+                Self::deb_invocation(
+                    DebMaintainerMode::Remove,
+                    vec![
+                        Self::deb_marker_arg(2, "in-favour", true),
+                        Self::deb_package_arg(3, "package", true),
+                        Self::deb_new_version_arg(4, true),
+                    ],
+                    vec![NativeLifecyclePath::PreRemove],
+                ),
+                Self::deb_invocation(
+                    DebMaintainerMode::Upgrade,
+                    vec![Self::deb_new_version_arg(2, true)],
+                    vec![NativeLifecyclePath::PreUpgrade],
+                ),
+                Self::deb_invocation(
+                    DebMaintainerMode::Deconfigure,
+                    vec![
+                        Self::deb_marker_arg(2, "in-favour", true),
+                        Self::deb_package_arg(3, "package-being-installed", true),
+                        Self::deb_version_arg(
+                            4,
+                            "package-being-installed-version",
+                            NativeArgumentValue::NewVersion,
+                            true,
+                        ),
+                        Self::deb_marker_arg(5, "removing", false),
+                        Self::deb_package_arg(6, "conflicting-package", false),
+                        Self::deb_version_arg(
+                            7,
+                            "conflicting-version",
+                            NativeArgumentValue::OldVersion,
+                            false,
+                        ),
+                    ],
+                    vec![NativeLifecyclePath::Abort],
+                ),
+                Self::deb_invocation(
+                    DebMaintainerMode::FailedUpgrade,
+                    Self::deb_old_new_args(true),
+                    vec![NativeLifecyclePath::Abort],
+                ),
+            ],
+            DebControlMember::Postrm => vec![
+                Self::deb_invocation(
+                    DebMaintainerMode::Remove,
+                    Vec::new(),
+                    vec![NativeLifecyclePath::PostRemove],
+                ),
+                Self::deb_invocation(
+                    DebMaintainerMode::Purge,
+                    Vec::new(),
+                    vec![NativeLifecyclePath::Purge],
+                ),
+                Self::deb_invocation(
+                    DebMaintainerMode::Upgrade,
+                    vec![Self::deb_new_version_arg(2, true)],
+                    vec![NativeLifecyclePath::PostUpgrade],
+                ),
+                Self::deb_invocation(
+                    DebMaintainerMode::Disappear,
+                    vec![
+                        Self::deb_arg(
+                            2,
+                            "overwriter-package",
+                            NativeArgumentValue::PackageName,
+                            true,
+                        ),
+                        Self::deb_arg(
+                            3,
+                            "overwriter-version",
+                            NativeArgumentValue::NewVersion,
+                            true,
+                        ),
+                    ],
+                    vec![NativeLifecyclePath::PostRemove],
+                ),
+                Self::deb_invocation(
+                    DebMaintainerMode::FailedUpgrade,
+                    Self::deb_old_new_args(true),
+                    vec![NativeLifecyclePath::Abort],
+                ),
+                Self::deb_invocation(
+                    DebMaintainerMode::AbortInstall,
+                    Self::deb_old_new_args(false),
+                    vec![NativeLifecyclePath::Abort],
+                ),
+                Self::deb_invocation(
+                    DebMaintainerMode::AbortUpgrade,
+                    Self::deb_old_new_args(true),
+                    vec![NativeLifecyclePath::Abort],
+                ),
+            ],
+            DebControlMember::Triggers => Vec::new(),
+        }
+    }
+
+    fn native_abi_from_triggers_file(body: &[u8]) -> NativeScriptletEntry {
+        let text = String::from_utf8(body.to_vec()).unwrap_or_default();
+        let declarations = Self::parse_deb_trigger_declarations(&text);
+
+        NativeScriptletEntry {
+            id: "deb:triggers".to_string(),
+            format: NativeScriptletFormat::Deb,
+            kind: NativeScriptletKind::ControlArtifact,
+            native_slot: "triggers".to_string(),
+            primary_lifecycle: NativeLifecyclePath::Trigger,
+            compatibility_phase: None,
+            lifecycle_paths: vec![NativeLifecyclePath::Trigger],
+            interpreter: None,
+            interpreter_args: Vec::new(),
+            body: NativeScriptletBody::from_bytes(body.to_vec()),
+            invocation: NativeInvocationContract {
+                args: Vec::new(),
+                environment: Vec::new(),
+                stdin: NativeStdinContract::None,
+                root: NativeRootExpectation::PackageManagerDefault,
+            },
+            order: NativeTransactionOrder::new(NativeTransactionPosition::ControlArtifact),
+            support: NativeScriptletSupport::DeferredReview {
+                reason_code: "deb-trigger-semantics-deferred".to_string(),
+            },
+            metadata: NativeScriptletMetadata::Deb(DebNativeScriptletMetadata {
+                control_member: DebControlMember::Triggers,
+                maintainer_modes: Vec::new(),
+                trigger_declarations: declarations,
+            }),
+        }
+    }
+
+    fn parse_deb_trigger_declarations(text: &str) -> Vec<DebTriggerDeclaration> {
+        text.lines()
+            .filter_map(|line| {
+                let raw_line = line.to_string();
+                let line = line.split('#').next().unwrap_or("").trim();
+                if line.is_empty() {
+                    return None;
+                }
+                let mut parts = line.split_whitespace();
+                let directive = parts.next()?;
+                let trigger_name = parts.next()?.to_string();
+                let (directive, await_mode) = match directive {
+                    "interest" => (DebTriggerDirective::Interest, DebTriggerAwaitMode::Default),
+                    "interest-await" => (DebTriggerDirective::Interest, DebTriggerAwaitMode::Await),
+                    "interest-noawait" => {
+                        (DebTriggerDirective::Interest, DebTriggerAwaitMode::NoAwait)
+                    }
+                    "activate" => (DebTriggerDirective::Activate, DebTriggerAwaitMode::Default),
+                    "activate-await" => (DebTriggerDirective::Activate, DebTriggerAwaitMode::Await),
+                    "activate-noawait" => {
+                        (DebTriggerDirective::Activate, DebTriggerAwaitMode::NoAwait)
+                    }
+                    _ => return None,
+                };
+
+                Some(DebTriggerDeclaration {
+                    directive,
+                    trigger_name,
+                    await_mode,
+                    raw_line,
+                })
+            })
+            .collect()
+    }
 }
 
 /// Parsed control file metadata
@@ -428,6 +922,7 @@ impl PackageFormat for DebPackage {
         let provides = Self::convert_dependencies(&control.provides, DependencyType::Runtime);
 
         let scriptlets = control_tar.scriptlets;
+        let native_scriptlet_abi = control_tar.native_scriptlet_abi;
         let config_files = control_tar.config_files;
 
         debug!(
@@ -450,7 +945,7 @@ impl PackageFormat for DebPackage {
             dependencies,
             provides,
             scriptlets,
-            native_scriptlet_abi: Vec::new(),
+            native_scriptlet_abi,
             config_files,
         };
 
@@ -593,6 +1088,10 @@ impl PackageFormat for DebPackage {
         self.meta.scriptlets()
     }
 
+    fn native_scriptlet_abi(&self) -> &[NativeScriptletEntry] {
+        self.meta.native_scriptlet_abi()
+    }
+
     fn config_files(&self) -> &[ConfigFileInfo] {
         self.meta.config_files()
     }
@@ -628,6 +1127,10 @@ impl DebPackage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::packages::traits::{
+        DebMaintainerMode, DebTriggerAwaitMode, DebTriggerDirective, NativeArgumentValue,
+        NativeLifecyclePath, NativeScriptletKind, NativeScriptletMetadata, NativeStdinContract,
+    };
 
     #[test]
     fn test_control_parsing() {
@@ -687,5 +1190,151 @@ Recommends: python3
         let (name, version) = DebPackage::parse_single_dependency("python3 | python2");
         assert_eq!(name, "python3");
         assert_eq!(version, None);
+    }
+
+    #[test]
+    fn deb_shebang_split_preserves_flattened_interpreter_behavior() {
+        let body = b"#!/usr/bin/perl -w\nprint qq(ok\\n);\n";
+        let native =
+            DebPackage::native_abi_from_control_member("postinst", body).expect("native postinst");
+
+        assert_eq!(native.interpreter.as_deref(), Some("/usr/bin/perl"));
+        assert_eq!(native.interpreter_args, vec!["-w".to_string()]);
+
+        let flattened = DebPackage::flattened_scriptlet_from_control_member("postinst", body)
+            .expect("flattened postinst");
+        assert_eq!(flattened.interpreter, "/usr/bin/perl -w");
+    }
+
+    #[test]
+    fn deb_native_abi_includes_config_as_native_only() {
+        let entry = DebPackage::native_abi_from_control_member(
+            "config",
+            b"#!/bin/sh\ndb_input high pkg/question\n",
+        )
+        .expect("config entry");
+
+        assert_eq!(entry.native_slot, "config");
+        assert_eq!(entry.primary_lifecycle, NativeLifecyclePath::Config);
+        assert_eq!(entry.compatibility_phase, None);
+        assert_eq!(entry.invocation.stdin, NativeStdinContract::Debconf);
+
+        let NativeScriptletMetadata::Deb(meta) = &entry.metadata else {
+            panic!("expected deb metadata");
+        };
+        assert!(
+            meta.maintainer_modes
+                .iter()
+                .any(|mode| mode.mode == DebMaintainerMode::Configure)
+        );
+        assert!(
+            meta.maintainer_modes
+                .iter()
+                .any(|mode| mode.mode == DebMaintainerMode::Reconfigure)
+        );
+    }
+
+    #[test]
+    fn deb_triggers_file_is_control_artifact_with_await_mode() {
+        let body = b"interest-noawait update-icon-caches\nactivate-await ldconfig\n";
+        let entry = DebPackage::native_abi_from_triggers_file(body);
+
+        assert_eq!(entry.kind, NativeScriptletKind::ControlArtifact);
+        assert_eq!(entry.native_slot, "triggers");
+        assert_eq!(entry.interpreter, None);
+        assert_eq!(entry.body.bytes, body);
+
+        let NativeScriptletMetadata::Deb(meta) = &entry.metadata else {
+            panic!("expected deb metadata");
+        };
+        assert_eq!(meta.trigger_declarations.len(), 2);
+        assert_eq!(
+            meta.trigger_declarations[0].directive,
+            DebTriggerDirective::Interest
+        );
+        assert_eq!(
+            meta.trigger_declarations[0].await_mode,
+            DebTriggerAwaitMode::NoAwait
+        );
+        assert_eq!(
+            meta.trigger_declarations[1].directive,
+            DebTriggerDirective::Activate
+        );
+        assert_eq!(
+            meta.trigger_declarations[1].await_mode,
+            DebTriggerAwaitMode::Await
+        );
+    }
+
+    #[test]
+    fn deb_maintainer_invocation_table_preserves_mode_specific_arguments() {
+        let preinst = DebPackage::native_abi_from_control_member("preinst", b"#!/bin/sh\n:")
+            .expect("preinst entry");
+        let NativeScriptletMetadata::Deb(preinst_meta) = &preinst.metadata else {
+            panic!("expected deb metadata");
+        };
+        let upgrade = preinst_meta
+            .maintainer_modes
+            .iter()
+            .find(|mode| mode.mode == DebMaintainerMode::Upgrade)
+            .expect("preinst upgrade mode");
+        assert_eq!(upgrade.args[0].name, "action");
+        assert_eq!(upgrade.args[1].name, "old-version");
+        assert_eq!(upgrade.args[1].index, 2);
+        assert_eq!(upgrade.args[2].name, "new-version");
+        assert_eq!(upgrade.args[2].index, 3);
+
+        let postinst = DebPackage::native_abi_from_control_member("postinst", b"#!/bin/sh\n:")
+            .expect("postinst entry");
+        let NativeScriptletMetadata::Deb(postinst_meta) = &postinst.metadata else {
+            panic!("expected deb metadata");
+        };
+        let triggered = postinst_meta
+            .maintainer_modes
+            .iter()
+            .find(|mode| mode.mode == DebMaintainerMode::Triggered)
+            .expect("postinst triggered mode");
+        assert_eq!(triggered.args[1].name, "trigger-names");
+        assert_eq!(triggered.args[1].value, NativeArgumentValue::TriggerNames);
+
+        let abort_deconfigure = postinst_meta
+            .maintainer_modes
+            .iter()
+            .find(|mode| mode.mode == DebMaintainerMode::AbortDeconfigure)
+            .expect("postinst abort-deconfigure mode");
+        assert_eq!(abort_deconfigure.args[1].name, "in-favour");
+        assert_eq!(abort_deconfigure.args[2].name, "failed-install-package");
+        assert_eq!(abort_deconfigure.args[3].index, 4);
+        assert_eq!(abort_deconfigure.args[5].name, "conflicting-package");
+        assert_eq!(abort_deconfigure.args[6].name, "conflicting-version");
+
+        let prerm = DebPackage::native_abi_from_control_member("prerm", b"#!/bin/sh\n:")
+            .expect("prerm entry");
+        let NativeScriptletMetadata::Deb(prerm_meta) = &prerm.metadata else {
+            panic!("expected deb metadata");
+        };
+        let deconfigure = prerm_meta
+            .maintainer_modes
+            .iter()
+            .find(|mode| mode.mode == DebMaintainerMode::Deconfigure)
+            .expect("prerm deconfigure mode");
+        assert_eq!(deconfigure.args[1].name, "in-favour");
+        assert_eq!(deconfigure.args[2].name, "package-being-installed");
+        assert_eq!(deconfigure.args[3].index, 4);
+        assert_eq!(deconfigure.args[5].name, "conflicting-package");
+        assert_eq!(deconfigure.args[6].name, "conflicting-version");
+
+        let postrm = DebPackage::native_abi_from_control_member("postrm", b"#!/bin/sh\n:")
+            .expect("postrm entry");
+        let NativeScriptletMetadata::Deb(postrm_meta) = &postrm.metadata else {
+            panic!("expected deb metadata");
+        };
+        let disappear = postrm_meta
+            .maintainer_modes
+            .iter()
+            .find(|mode| mode.mode == DebMaintainerMode::Disappear)
+            .expect("postrm disappear mode");
+        assert_eq!(disappear.args[1].name, "overwriter-package");
+        assert_eq!(disappear.args[2].name, "overwriter-version");
     }
 }
