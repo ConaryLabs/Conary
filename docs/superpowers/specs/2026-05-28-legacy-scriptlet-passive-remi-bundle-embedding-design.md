@@ -188,7 +188,7 @@ digesting:
 
 `source_release` follows the same rule and falls back to `unknown`.
 `source_arch` should use the explicit caller-provided architecture first, then
-`metadata.architecture.as_deref()`, then `unknown`.
+`source_metadata.architecture.as_deref()`, then `unknown`.
 
 The evidence digest may intentionally differ when Remi has authoritative distro
 context and local conversion does not. It must not differ because one path used
@@ -355,6 +355,10 @@ Native ABI body handling:
 - `body_sha256` must reuse `NativeScriptletBody.sha256`;
 - after building the bundle, call `LegacyScriptletBundle::validate()` so
   tampered or mismatched bodies fail conversion tests immediately.
+
+Native `ControlArtifact` entries such as ALPM hooks may not have an executable
+interpreter. For the required bundle `interpreter` field, use the stable
+placeholder `package-manager-control-artifact` rather than an empty string.
 
 Flattened fallback body handling:
 
@@ -552,6 +556,10 @@ crate::hash::sha256_prefixed(
 
 The result must be a prefixed `sha256:<64 hex>` string because bundle
 validation applies the same digest validation used by other CCS metadata.
+Compute the final digest after bundle entries, decisions, decision counts,
+`scriptlet_fidelity`, `target_compatibility`, and `publication_status` are
+settled. Then copy it to the bundle and to entries that do not yet have a more
+specific entry-local digest.
 
 The digest document should include:
 
@@ -667,9 +675,12 @@ That version bump is only effective where Remi checks it. Every Remi query over
 `converted_packages` that serves, advertises, indexes, or computes from
 converted artifacts must either filter `conversion_version >=
 CONVERSION_VERSION` or reject rows where `needs_reconversion()` is true. This
-includes package metadata/download paths, `/v1/:distro/metadata`, generated
-indexes, sparse metadata, OCI manifest/tag/catalog/digest lookups, and delta
-manifest queries.
+includes package metadata/download paths, package detail/version summaries,
+`/v1/:distro/metadata`, generated indexes, sparse metadata, OCI
+manifest/tag/catalog/digest lookups, and delta manifest queries. Cached
+`delta_manifests` rows are not sufficient by themselves: before serving a cached
+delta, Remi must verify that both endpoint versions still have current
+`converted_packages` rows.
 
 Avoid duplicating `ConvertedPackage` row mapping. The OCI digest lookup
 currently constructs a manual `ConvertedPackage { ... }` literal; Goal 4 should
@@ -762,8 +773,9 @@ but they must not refuse paths based on `publication_status` yet.
 
 1. classify scriptlets as it does today;
 2. build the manifest with the final metadata/files/hooks;
-3. build the legacy scriptlet bundle using the final metadata/files and the
-   classification report;
+3. build the legacy scriptlet bundle using original source metadata/files for
+   scriptlet entries, final metadata/files for payload and manifest context, and
+   the classification report;
 4. assign `manifest.legacy_scriptlets = Some(bundle.clone())`;
 5. validate the bundle through manifest validation/build;
 6. write the CCS package normally.
@@ -793,7 +805,7 @@ let scriptlet_bundle = build_legacy_scriptlet_bundle(ScriptletBundleInput {
     source_format: format,
     source_distro: self.source_distro.as_deref(),
     source_release: self.source_release.as_deref(),
-    source_arch: final_metadata.architecture.as_deref(),
+    source_arch: metadata.architecture.as_deref(),
     source_checksum: Some(checksum),
     classification: &scriptlet_classification,
     conversion_tool: self.conversion_tool.as_str(),
