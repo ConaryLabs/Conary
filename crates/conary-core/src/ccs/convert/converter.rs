@@ -721,6 +721,12 @@ mod tests {
     use crate::packages::native_abi::*;
     use crate::packages::traits::{Dependency, PackageFile, Scriptlet, ScriptletPhase};
 
+    #[test]
+    fn scriptlet_bundle_types_are_publicly_exported() {
+        let summary = crate::ccs::convert::ScriptletBundleSummary::default();
+        assert_eq!(summary.publication_status, "public");
+    }
+
     fn make_test_metadata() -> PackageMetadata {
         PackageMetadata {
             package_path: PathBuf::from("/tmp/test-1.0.0.rpm"),
