@@ -23,6 +23,7 @@
 //! 4. Assume scripts are idempotent (standard practice)
 
 mod analyzer;
+pub mod blocked_classes;
 pub mod capture;
 pub mod command_evidence;
 mod converter;
