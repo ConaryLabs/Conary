@@ -9,8 +9,13 @@ use crate::capability::inference::{
     PackageMetadataRef, infer_capabilities,
 };
 use crate::ccs::builder::{BuildResult, CcsBuilder, write_ccs_package};
+use crate::ccs::convert::adapters::AdapterRegistry;
 use crate::ccs::convert::analyzer::ScriptletAnalyzer;
 use crate::ccs::convert::capture::ScriptletCapturer;
+use crate::ccs::convert::command_evidence::{
+    extract_native_entry_invocations, extract_scriptlet_invocations,
+};
+use crate::ccs::convert::effects::{ScriptletClassification, ScriptletClassificationReport};
 use crate::ccs::convert::fidelity::{FidelityLevel, FidelityReport};
 use crate::ccs::convert::legacy_provenance::LegacyProvenance;
 use crate::ccs::convert::mock::CapturedIntent;
@@ -21,6 +26,10 @@ use crate::ccs::manifest::{
 use crate::ccs::policy::BuildPolicyConfig;
 use crate::dependencies::{DependencyClass, LanguageDepDetector};
 use crate::packages::common::PackageMetadata;
+use crate::packages::native_abi::{
+    ArchNativeScriptletMetadata, DebControlMember, NativeLifecyclePath, NativeScriptletEntry,
+    NativeScriptletMetadata, NativeScriptletSupport, RpmScriptletSlot,
+};
 use crate::packages::traits::{DependencyType, ExtractedFile, ScriptletPhase};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -81,6 +90,8 @@ pub struct ConversionResult {
     pub inference_error: Option<String>,
     /// Provenance information extracted from the legacy package
     pub legacy_provenance: Option<LegacyProvenance>,
+    /// Passive scriptlet classification evidence for later migration gates.
+    pub scriptlet_classification: ScriptletClassificationReport,
 }
 
 /// Converts legacy packages (RPM/DEB/Arch) to CCS format
@@ -120,6 +131,7 @@ impl LegacyConverter {
         format: &str,
         checksum: &str,
     ) -> Result<ConversionResult, ConversionError> {
+        let scriptlet_classification = classify_scriptlets(metadata);
         let mut final_metadata = metadata.clone();
         let mut final_files = files.to_vec();
         let mut captured_hooks = Hooks::default();
@@ -340,6 +352,7 @@ impl LegacyConverter {
             inferred_capabilities,
             inference_error,
             legacy_provenance,
+            scriptlet_classification,
         })
     }
 
@@ -590,9 +603,104 @@ fn pkgconfig_name(path: &str) -> Option<String> {
         .map(std::string::ToString::to_string)
 }
 
+fn classify_scriptlets(metadata: &PackageMetadata) -> ScriptletClassificationReport {
+    let registry = AdapterRegistry::default();
+    let mut report = ScriptletClassificationReport::default();
+
+    if metadata.scriptlets.is_empty() && metadata.native_scriptlet_abi.is_empty() {
+        report.push("package", registry.classify_native_free_package());
+        return report;
+    }
+
+    for entry in &metadata.native_scriptlet_abi {
+        if let Some(classification) = classify_native_support(entry) {
+            report.push(entry.id.clone(), classification);
+        }
+        for invocation in extract_native_entry_invocations(entry) {
+            report.push(entry.id.clone(), registry.classify_invocation(&invocation));
+        }
+    }
+
+    for (index, scriptlet) in metadata.scriptlets.iter().enumerate() {
+        let entry_id = format!("scriptlet:{index}:{}", scriptlet.phase);
+        for invocation in extract_scriptlet_invocations(&entry_id, scriptlet) {
+            report.push(entry_id.clone(), registry.classify_invocation(&invocation));
+        }
+    }
+
+    report
+}
+
+fn classify_native_support(entry: &NativeScriptletEntry) -> Option<ScriptletClassification> {
+    match &entry.support {
+        NativeScriptletSupport::Parsed => None,
+        NativeScriptletSupport::DeferredReview { reason_code } => {
+            Some(ScriptletClassification::Review {
+                reason_code: reason_code.clone(),
+                class_id: native_review_class_id(entry),
+            })
+        }
+        NativeScriptletSupport::Unpreservable { reason_code } => {
+            Some(ScriptletClassification::Blocked {
+                reason_code: reason_code.clone(),
+                class_id: "native-abi-unpreservable".to_string(),
+            })
+        }
+    }
+}
+
+fn native_review_class_id(entry: &NativeScriptletEntry) -> Option<String> {
+    match &entry.metadata {
+        NativeScriptletMetadata::Rpm(metadata) => {
+            if metadata.slot == RpmScriptletSlot::Verify
+                || entry.lifecycle_paths.contains(&NativeLifecyclePath::Verify)
+            {
+                return Some("rpm-verify".to_string());
+            }
+            if metadata.slot == RpmScriptletSlot::Trigger
+                || metadata.trigger.is_some()
+                || entry.lifecycle_paths.iter().any(|path| {
+                    matches!(
+                        path,
+                        NativeLifecyclePath::Trigger
+                            | NativeLifecyclePath::FileTrigger
+                            | NativeLifecyclePath::TransactionFileTrigger
+                    )
+                })
+            {
+                return Some("rpm-trigger".to_string());
+            }
+        }
+        NativeScriptletMetadata::Deb(metadata) => {
+            if metadata.control_member == DebControlMember::Triggers
+                || !metadata.trigger_declarations.is_empty()
+                || entry
+                    .lifecycle_paths
+                    .contains(&NativeLifecyclePath::Trigger)
+            {
+                return Some("deb-trigger".to_string());
+            }
+            if metadata.control_member == DebControlMember::Config
+                || entry.lifecycle_paths.contains(&NativeLifecyclePath::Config)
+            {
+                return Some("debconf".to_string());
+            }
+        }
+        NativeScriptletMetadata::Arch(ArchNativeScriptletMetadata::AlpmHook(_)) => {
+            return Some("arch-alpm-hook".to_string());
+        }
+        NativeScriptletMetadata::Arch(ArchNativeScriptletMetadata::Install(_)) => {
+            return Some("arch-install-function".to_string());
+        }
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::packages::native_abi::*;
     use crate::packages::traits::{Dependency, PackageFile, Scriptlet, ScriptletPhase};
 
     fn make_test_metadata() -> PackageMetadata {
@@ -636,6 +744,268 @@ mod tests {
             sha256: Some("abc123".to_string()),
             symlink_target: None,
         }]
+    }
+
+    fn rpm_native_entry(
+        id: &str,
+        slot_name: &str,
+        body: &str,
+        slot: RpmScriptletSlot,
+        lifecycle: NativeLifecyclePath,
+        position: NativeTransactionPosition,
+        support: NativeScriptletSupport,
+    ) -> NativeScriptletEntry {
+        NativeScriptletEntry {
+            id: id.to_string(),
+            format: NativeScriptletFormat::Rpm,
+            kind: NativeScriptletKind::Executable,
+            native_slot: slot_name.to_string(),
+            primary_lifecycle: lifecycle,
+            compatibility_phase: None,
+            lifecycle_paths: vec![lifecycle],
+            interpreter: Some("/bin/sh".to_string()),
+            interpreter_args: vec![],
+            body: NativeScriptletBody::from_bytes(body.as_bytes().to_vec()),
+            invocation: NativeInvocationContract::none(),
+            order: NativeTransactionOrder::new(position),
+            support,
+            metadata: NativeScriptletMetadata::Rpm(RpmNativeScriptletMetadata {
+                slot,
+                scriptlet_flags: None,
+                trigger: None,
+            }),
+        }
+    }
+
+    fn arch_alpm_entry(id: &str, support: NativeScriptletSupport) -> NativeScriptletEntry {
+        NativeScriptletEntry {
+            id: id.to_string(),
+            format: NativeScriptletFormat::Arch,
+            kind: NativeScriptletKind::ControlArtifact,
+            native_slot: "alpm-hook".to_string(),
+            primary_lifecycle: NativeLifecyclePath::Trigger,
+            compatibility_phase: None,
+            lifecycle_paths: vec![NativeLifecyclePath::Trigger],
+            interpreter: None,
+            interpreter_args: vec![],
+            body: NativeScriptletBody::from_bytes(
+                b"[Trigger]\nType = Package\nTarget = demo\n[Action]\nWhen = PostTransaction\nExec = /bin/true\n"
+                    .to_vec(),
+            ),
+            invocation: NativeInvocationContract::none(),
+            order: NativeTransactionOrder::new(NativeTransactionPosition::ControlArtifact),
+            support,
+            metadata: NativeScriptletMetadata::Arch(ArchNativeScriptletMetadata::AlpmHook(
+                ArchAlpmHookMetadata {
+                    hook_path: "/usr/share/libalpm/hooks/demo.hook".to_string(),
+                    triggers: vec![],
+                    action: None,
+                },
+            )),
+        }
+    }
+
+    fn passive_test_converter(output_dir: &Path) -> LegacyConverter {
+        LegacyConverter::new(ConversionOptions {
+            capture_scriptlets: false,
+            min_fidelity: FidelityLevel::Low,
+            output_dir: output_dir.to_path_buf(),
+            enable_inference: false,
+            ..ConversionOptions::default()
+        })
+    }
+
+    #[test]
+    fn conversion_result_carries_scriptlet_classification_report() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut metadata = make_test_metadata();
+        metadata.scriptlets = vec![Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: "/sbin/ldconfig\n".to_string(),
+            flags: None,
+        }];
+        let files = make_test_files();
+        let converter = passive_test_converter(temp_dir.path());
+
+        let result = converter
+            .convert(&metadata, &files, "rpm", "sha256:test")
+            .expect("conversion succeeds");
+
+        assert!(result.scriptlet_classification.known_count >= 1);
+        assert!(
+            result
+                .scriptlet_classification
+                .entries
+                .iter()
+                .any(|entry| entry.entry_id.contains("scriptlet"))
+        );
+        assert!(result.build_result.manifest.legacy_scriptlets.is_none());
+    }
+
+    #[test]
+    fn adapter_registry_does_not_remove_existing_detected_hooks() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut metadata = make_test_metadata();
+        metadata.scriptlets = vec![Scriptlet {
+            phase: ScriptletPhase::PostInstall,
+            interpreter: "/bin/sh".to_string(),
+            content: "systemctl enable demo.service\n".to_string(),
+            flags: None,
+        }];
+        let files = make_test_files();
+        let converter = passive_test_converter(temp_dir.path());
+
+        let result = converter
+            .convert(&metadata, &files, "rpm", "sha256:test")
+            .expect("conversion succeeds");
+
+        assert!(
+            result
+                .detected_hooks
+                .systemd
+                .iter()
+                .any(|hook| hook.unit == "demo.service")
+        );
+        assert!(result.scriptlet_classification.entries.iter().any(|entry| {
+            matches!(
+                &entry.classification,
+                crate::ccs::convert::effects::ScriptletClassification::Known { .. }
+            )
+        }));
+    }
+
+    #[test]
+    fn native_parser_support_status_is_preserved_in_classification_report() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut metadata = make_test_metadata();
+        metadata.scriptlets.clear();
+        metadata.native_scriptlet_abi = vec![
+            rpm_native_entry(
+                "rpm:%verify",
+                "%verify",
+                "echo verify\n",
+                RpmScriptletSlot::Verify,
+                NativeLifecyclePath::Verify,
+                NativeTransactionPosition::Verification,
+                NativeScriptletSupport::DeferredReview {
+                    reason_code: "rpm-verify-scriptlet-deferred".to_string(),
+                },
+            ),
+            rpm_native_entry(
+                "rpm:broken",
+                "%broken",
+                "echo broken\n",
+                RpmScriptletSlot::Verify,
+                NativeLifecyclePath::Verify,
+                NativeTransactionPosition::Verification,
+                NativeScriptletSupport::Unpreservable {
+                    reason_code: "native-abi-parser-limitation".to_string(),
+                },
+            ),
+        ];
+        let files = make_test_files();
+        let converter = passive_test_converter(temp_dir.path());
+
+        let result = converter
+            .convert(&metadata, &files, "rpm", "sha256:test")
+            .expect("conversion succeeds");
+
+        assert!(
+            result
+                .scriptlet_classification
+                .entries
+                .iter()
+                .any(|entry| matches!(
+                    &entry.classification,
+                    crate::ccs::convert::effects::ScriptletClassification::Review {
+                        reason_code,
+                        class_id,
+                    } if reason_code == "rpm-verify-scriptlet-deferred"
+                        && class_id.as_deref() == Some("rpm-verify")
+                ))
+        );
+        assert!(
+            result
+                .scriptlet_classification
+                .entries
+                .iter()
+                .any(|entry| matches!(
+                    &entry.classification,
+                    crate::ccs::convert::effects::ScriptletClassification::Blocked {
+                        reason_code,
+                        class_id,
+                    } if reason_code == "native-abi-parser-limitation"
+                        && class_id == "native-abi-unpreservable"
+                ))
+        );
+    }
+
+    #[test]
+    fn parsed_native_abi_body_is_classified_when_flattened_scriptlets_are_empty() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut metadata = make_test_metadata();
+        metadata.scriptlets.clear();
+        metadata.native_scriptlet_abi = vec![rpm_native_entry(
+            "rpm:%post",
+            "%post",
+            "/sbin/ldconfig\n",
+            RpmScriptletSlot::Post,
+            NativeLifecyclePath::PostInstall,
+            NativeTransactionPosition::AfterPayload,
+            NativeScriptletSupport::Parsed,
+        )];
+        let files = make_test_files();
+        let converter = passive_test_converter(temp_dir.path());
+
+        let result = converter
+            .convert(&metadata, &files, "rpm", "sha256:test")
+            .expect("conversion succeeds");
+
+        assert!(result.scriptlet_classification.entries.iter().any(|entry| {
+            entry.entry_id == "rpm:%post"
+                && matches!(
+                    &entry.classification,
+                    crate::ccs::convert::effects::ScriptletClassification::Known {
+                        reason_code,
+                        ..
+                    } if reason_code == "known-helper-requires-adapter-coverage"
+                )
+        }));
+    }
+
+    #[test]
+    fn arch_deferred_native_reason_is_preserved_with_arch_class_id() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut metadata = make_test_metadata();
+        metadata.scriptlets.clear();
+        metadata.native_scriptlet_abi = vec![arch_alpm_entry(
+            "arch:hook:demo",
+            NativeScriptletSupport::DeferredReview {
+                reason_code: "arch-alpm-hook-semantics-deferred".to_string(),
+            },
+        )];
+        let files = make_test_files();
+        let converter = passive_test_converter(temp_dir.path());
+
+        let result = converter
+            .convert(&metadata, &files, "arch", "sha256:test")
+            .expect("conversion succeeds");
+
+        assert!(
+            result
+                .scriptlet_classification
+                .entries
+                .iter()
+                .any(|entry| matches!(
+                    &entry.classification,
+                    crate::ccs::convert::effects::ScriptletClassification::Review {
+                        reason_code,
+                        class_id,
+                    } if reason_code == "arch-alpm-hook-semantics-deferred"
+                        && class_id.as_deref() == Some("arch-alpm-hook")
+                ))
+        );
     }
 
     #[test]
