@@ -355,9 +355,9 @@ impl ArchPackage {
 
     fn arch_invocation_for_function(function_name: &str) -> NativeInvocationContract {
         let args = match function_name {
-            // alpm-install-scriptlet(5) passes new version as $1 and old version
-            // as $2 for both pre_upgrade and post_upgrade.
-            "pre_upgrade" | "post_upgrade" => vec![
+            // alpm-install-scriptlet(5) reverses upgrade arguments between
+            // pre_upgrade and post_upgrade.
+            "pre_upgrade" => vec![
                 NativeArgumentContract {
                     index: 1,
                     name: "new-version".to_string(),
@@ -368,6 +368,20 @@ impl ArchPackage {
                     index: 2,
                     name: "old-version".to_string(),
                     value: NativeArgumentValue::OldVersion,
+                    required: true,
+                },
+            ],
+            "post_upgrade" => vec![
+                NativeArgumentContract {
+                    index: 1,
+                    name: "old-version".to_string(),
+                    value: NativeArgumentValue::OldVersion,
+                    required: true,
+                },
+                NativeArgumentContract {
+                    index: 2,
+                    name: "new-version".to_string(),
+                    value: NativeArgumentValue::NewVersion,
                     required: true,
                 },
             ],
@@ -1168,15 +1182,15 @@ post_upgrade() {
             .iter()
             .find(|entry| entry.native_slot == "post_upgrade")
             .expect("post_upgrade entry");
-        assert_eq!(post_upgrade.invocation.args[0].name, "new-version");
+        assert_eq!(post_upgrade.invocation.args[0].name, "old-version");
         assert_eq!(
             post_upgrade.invocation.args[0].value,
-            NativeArgumentValue::NewVersion
+            NativeArgumentValue::OldVersion
         );
-        assert_eq!(post_upgrade.invocation.args[1].name, "old-version");
+        assert_eq!(post_upgrade.invocation.args[1].name, "new-version");
         assert_eq!(
             post_upgrade.invocation.args[1].value,
-            NativeArgumentValue::OldVersion
+            NativeArgumentValue::NewVersion
         );
     }
 
