@@ -9,7 +9,7 @@ use crate::capability::inference::{
     PackageMetadataRef, infer_capabilities,
 };
 use crate::ccs::builder::{BuildResult, CcsBuilder, write_ccs_package};
-use crate::ccs::convert::adapters::AdapterRegistry;
+use crate::ccs::convert::adapters::{AdapterInput, AdapterRegistry};
 use crate::ccs::convert::analyzer::ScriptletAnalyzer;
 use crate::ccs::convert::capture::ScriptletCapturer;
 use crate::ccs::convert::command_evidence::{
@@ -19,6 +19,7 @@ use crate::ccs::convert::effects::{ScriptletClassification, ScriptletClassificat
 use crate::ccs::convert::fidelity::{FidelityLevel, FidelityReport};
 use crate::ccs::convert::legacy_provenance::LegacyProvenance;
 use crate::ccs::convert::mock::CapturedIntent;
+use crate::ccs::convert::payload_hints::PayloadHints;
 use crate::ccs::manifest::{
     Capability, CcsManifest, Components, Config, Hooks, Package, PackageDep, Platform, Provides,
     Redirects, Requires, Service, ServiceAction, Suggests, User,
@@ -131,7 +132,7 @@ impl LegacyConverter {
         format: &str,
         checksum: &str,
     ) -> Result<ConversionResult, ConversionError> {
-        let scriptlet_classification = classify_scriptlets(metadata);
+        let scriptlet_classification = classify_scriptlets(metadata, files);
         let mut final_metadata = metadata.clone();
         let mut final_files = files.to_vec();
         let mut captured_hooks = Hooks::default();
@@ -603,8 +604,12 @@ fn pkgconfig_name(path: &str) -> Option<String> {
         .map(std::string::ToString::to_string)
 }
 
-fn classify_scriptlets(metadata: &PackageMetadata) -> ScriptletClassificationReport {
+fn classify_scriptlets(
+    metadata: &PackageMetadata,
+    files: &[ExtractedFile],
+) -> ScriptletClassificationReport {
     let registry = AdapterRegistry::default();
+    let payload = PayloadHints::from_files(files);
     let mut report = ScriptletClassificationReport::default();
 
     if metadata.scriptlets.is_empty() && metadata.native_scriptlet_abi.is_empty() {
@@ -617,14 +622,26 @@ fn classify_scriptlets(metadata: &PackageMetadata) -> ScriptletClassificationRep
             report.push(entry.id.clone(), classification);
         }
         for invocation in extract_native_entry_invocations(entry) {
-            report.push(entry.id.clone(), registry.classify_invocation(&invocation));
+            report.push(
+                entry.id.clone(),
+                registry.classify_invocation_with_context(AdapterInput {
+                    invocation: &invocation,
+                    payload: &payload,
+                }),
+            );
         }
     }
 
     for (index, scriptlet) in metadata.scriptlets.iter().enumerate() {
         let entry_id = format!("scriptlet:{index}:{}", scriptlet.phase);
         for invocation in extract_scriptlet_invocations(&entry_id, scriptlet) {
-            report.push(entry_id.clone(), registry.classify_invocation(&invocation));
+            report.push(
+                entry_id.clone(),
+                registry.classify_invocation_with_context(AdapterInput {
+                    invocation: &invocation,
+                    payload: &payload,
+                }),
+            );
         }
     }
 

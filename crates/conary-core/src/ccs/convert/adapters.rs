@@ -3,17 +3,102 @@
 use crate::ccs::convert::blocked_classes::{BlockedClassOutcome, BlockedClassRegistry};
 use crate::ccs::convert::command_evidence::{CommandEvidenceSource, CommandInvocation};
 use crate::ccs::convert::effects::{ScriptletClassification, ScriptletEffectEvidence};
+use crate::ccs::convert::payload_hints::PayloadHints;
 use crate::ccs::legacy_scriptlets::{EffectConfidence, EffectReplacement, EffectSource};
 use std::collections::{BTreeMap, BTreeSet};
 
 const KNOWN_HELPER_REASON: &str = "known-helper-requires-adapter-coverage";
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BootstrapAdapterEvidence {
+    pub command: &'static str,
+    pub forms: &'static [&'static str],
+    pub package_count: u32,
+    pub invocation_count: u32,
+    pub coverage_ids: &'static [&'static str],
+}
+
+pub fn bootstrap_adapter_evidence() -> &'static [BootstrapAdapterEvidence] {
+    &[
+        BootstrapAdapterEvidence {
+            command: "ldconfig",
+            forms: &["ldconfig", "/sbin/ldconfig"],
+            package_count: 1,
+            invocation_count: 1,
+            coverage_ids: &["ldconfig/v2"],
+        },
+        BootstrapAdapterEvidence {
+            command: "systemctl",
+            forms: &[
+                "systemctl daemon-reload",
+                "systemctl enable",
+                "systemctl disable",
+                "systemctl preset",
+            ],
+            package_count: 1,
+            invocation_count: 3,
+            coverage_ids: &["systemd-daemon-reload/v2", "systemd-unit-state/v1"],
+        },
+        BootstrapAdapterEvidence {
+            command: "systemd-tmpfiles",
+            forms: &["systemd-tmpfiles --create"],
+            package_count: 1,
+            invocation_count: 1,
+            coverage_ids: &["systemd-tmpfiles-create/v1"],
+        },
+        BootstrapAdapterEvidence {
+            command: "systemd-sysusers",
+            forms: &["systemd-sysusers"],
+            package_count: 1,
+            invocation_count: 1,
+            coverage_ids: &["systemd-sysusers/v1"],
+        },
+        BootstrapAdapterEvidence {
+            command: "update-alternatives",
+            forms: &[
+                "update-alternatives --install",
+                "update-alternatives --remove",
+            ],
+            package_count: 1,
+            invocation_count: 1,
+            coverage_ids: &["alternatives-registration/v1"],
+        },
+        BootstrapAdapterEvidence {
+            command: "update-mime-database",
+            forms: &["update-mime-database /usr/share/mime"],
+            package_count: 1,
+            invocation_count: 1,
+            coverage_ids: &["cache-refresh/v1"],
+        },
+        BootstrapAdapterEvidence {
+            command: "install-info",
+            forms: &["install-info"],
+            package_count: 1,
+            invocation_count: 1,
+            coverage_ids: &["review-class-install-info"],
+        },
+        BootstrapAdapterEvidence {
+            command: "gconftool-2",
+            forms: &["gconftool-2 --makefile-install-rule"],
+            package_count: 1,
+            invocation_count: 1,
+            coverage_ids: &["review-class-gconf-schema"],
+        },
+    ]
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AdapterInput<'a> {
+    pub invocation: &'a CommandInvocation,
+    pub payload: &'a PayloadHints,
+}
+
 pub trait ScriptletEffectAdapter {
     fn id(&self) -> &'static str;
     fn digest(&self) -> String;
     fn command_names(&self) -> &'static [&'static str];
-    fn matches(&self, invocation: &CommandInvocation) -> bool;
-    fn classify(&self, invocation: &CommandInvocation) -> ScriptletClassification;
+    fn matches(&self, input: AdapterInput<'_>) -> bool;
+    fn classify(&self, input: AdapterInput<'_>) -> ScriptletClassification;
 }
 
 pub struct AdapterRegistry {
@@ -51,8 +136,11 @@ impl AdapterRegistry {
             .collect()
     }
 
-    pub fn classify_invocation(&self, invocation: &CommandInvocation) -> ScriptletClassification {
-        if let Some(class) = self.blocked_classes.match_invocation(invocation) {
+    pub fn classify_invocation_with_context(
+        &self,
+        input: AdapterInput<'_>,
+    ) -> ScriptletClassification {
+        if let Some(class) = self.blocked_classes.match_invocation(input.invocation) {
             return match class.default_outcome {
                 BlockedClassOutcome::Blocked => ScriptletClassification::Blocked {
                     reason_code: class.reason_code.to_string(),
@@ -67,14 +155,22 @@ impl AdapterRegistry {
 
         self.adapters
             .iter()
-            .find(|adapter| adapter.matches(invocation))
+            .find(|adapter| adapter.matches(input))
             .map_or_else(
                 || ScriptletClassification::Unknown {
                     reason_code: "unknown-command".to_string(),
-                    command: invocation.command.clone(),
+                    command: input.invocation.command.clone(),
                 },
-                |adapter| adapter.classify(invocation),
+                |adapter| adapter.classify(input),
             )
+    }
+
+    pub fn classify_invocation(&self, invocation: &CommandInvocation) -> ScriptletClassification {
+        let payload = PayloadHints::default();
+        self.classify_invocation_with_context(AdapterInput {
+            invocation,
+            payload: &payload,
+        })
     }
 
     /// Native-free classification is package-level evidence, not per-command
@@ -124,11 +220,11 @@ impl ScriptletEffectAdapter for NativeFreeAdapter {
         &[]
     }
 
-    fn matches(&self, _invocation: &CommandInvocation) -> bool {
+    fn matches(&self, _input: AdapterInput<'_>) -> bool {
         false
     }
 
-    fn classify(&self, _invocation: &CommandInvocation) -> ScriptletClassification {
+    fn classify(&self, _input: AdapterInput<'_>) -> ScriptletClassification {
         unreachable!("native-free is package-level evidence")
     }
 }
@@ -146,14 +242,14 @@ impl ScriptletEffectAdapter for LdconfigAdapter {
         &["ldconfig"]
     }
 
-    fn matches(&self, invocation: &CommandInvocation) -> bool {
-        invocation.command == "ldconfig"
+    fn matches(&self, input: AdapterInput<'_>) -> bool {
+        input.invocation.command == "ldconfig"
     }
 
-    fn classify(&self, invocation: &CommandInvocation) -> ScriptletClassification {
+    fn classify(&self, input: AdapterInput<'_>) -> ScriptletClassification {
         known_effect_classification(
             self,
-            invocation,
+            input.invocation,
             "dynamic-linker-cache",
             EffectReplacement::None,
             None,
@@ -174,18 +270,19 @@ impl ScriptletEffectAdapter for SystemdDaemonReloadAdapter {
         &["systemctl"]
     }
 
-    fn matches(&self, invocation: &CommandInvocation) -> bool {
-        invocation.command == "systemctl"
-            && invocation
+    fn matches(&self, input: AdapterInput<'_>) -> bool {
+        input.invocation.command == "systemctl"
+            && input
+                .invocation
                 .argv
                 .first()
                 .is_some_and(|action| action == "daemon-reload")
     }
 
-    fn classify(&self, invocation: &CommandInvocation) -> ScriptletClassification {
+    fn classify(&self, input: AdapterInput<'_>) -> ScriptletClassification {
         known_effect_classification(
             self,
-            invocation,
+            input.invocation,
             "systemd-daemon-reload",
             EffectReplacement::None,
             None,
@@ -206,16 +303,18 @@ impl ScriptletEffectAdapter for SystemdEnableDisableAdapter {
         &["systemctl"]
     }
 
-    fn matches(&self, invocation: &CommandInvocation) -> bool {
-        invocation.command == "systemctl"
-            && invocation
+    fn matches(&self, input: AdapterInput<'_>) -> bool {
+        input.invocation.command == "systemctl"
+            && input
+                .invocation
                 .argv
                 .first()
                 .is_some_and(|action| matches!(action.as_str(), "enable" | "disable"))
-            && invocation.argv.len() > 1
+            && input.invocation.argv.len() > 1
     }
 
-    fn classify(&self, invocation: &CommandInvocation) -> ScriptletClassification {
+    fn classify(&self, input: AdapterInput<'_>) -> ScriptletClassification {
+        let invocation = input.invocation;
         let action = invocation
             .argv
             .first()
@@ -278,6 +377,7 @@ mod tests {
     use super::*;
     use crate::ccs::convert::command_evidence::{CommandEvidenceSource, CommandInvocation};
     use crate::ccs::convert::effects::ScriptletClassification;
+    use crate::ccs::convert::payload_hints::PayloadHints;
 
     fn invocation(command: &str, argv: &[&str]) -> CommandInvocation {
         CommandInvocation {
@@ -367,6 +467,57 @@ mod tests {
             .into_iter()
             .find(|adapter| adapter.id() == "native-free/v1")
             .expect("native-free adapter present");
-        assert!(!native_free.matches(&invocation("true", &[])));
+        let payload = PayloadHints::default();
+        let command = invocation("true", &[]);
+        assert!(!native_free.matches(AdapterInput {
+            invocation: &command,
+            payload: &payload,
+        }));
+    }
+
+    #[test]
+    fn bootstrap_adapter_candidates_are_backed_by_corpus_evidence() {
+        let evidence = bootstrap_adapter_evidence();
+
+        for command in [
+            "ldconfig",
+            "systemctl",
+            "systemd-tmpfiles",
+            "systemd-sysusers",
+            "update-alternatives",
+            "update-mime-database",
+            "install-info",
+            "gconftool-2",
+        ] {
+            assert!(
+                evidence.iter().any(|entry| entry.command == command),
+                "missing bootstrap corpus evidence for {command}"
+            );
+        }
+
+        for entry in evidence {
+            assert!(entry.package_count > 0);
+            assert!(entry.invocation_count >= entry.package_count);
+            assert!(!entry.forms.is_empty());
+            assert!(!entry.coverage_ids.is_empty());
+        }
+    }
+
+    #[test]
+    fn adapter_registry_uses_payload_context_for_systemd_units() {
+        let registry = AdapterRegistry::default();
+        let mut payload = PayloadHints::default();
+        payload.systemd_units.insert("demo.service".to_string());
+
+        let classification = registry.classify_invocation_with_context(AdapterInput {
+            invocation: &invocation("systemctl", &["enable", "demo.service"]),
+            payload: &payload,
+        });
+
+        let ScriptletClassification::Known { effects, .. } = classification else {
+            panic!("systemctl enable should be known through context dispatch");
+        };
+        assert_eq!(effects[0].command.as_deref(), Some("systemctl"));
+        assert_eq!(effects[0].args, vec!["enable", "demo.service"]);
     }
 }
