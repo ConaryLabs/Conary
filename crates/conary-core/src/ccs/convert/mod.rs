@@ -33,9 +33,14 @@ mod fidelity;
 pub mod legacy_provenance;
 pub mod mock;
 pub mod payload_hints;
+pub mod scriptlet_bundle;
 pub mod support_matrix;
 
 pub use analyzer::{DetectedHook, ScriptletAnalyzer};
 pub use converter::{ConversionOptions, ConversionResult, LegacyConverter};
 pub use fidelity::{FidelityLevel, FidelityReport};
 pub use legacy_provenance::LegacyProvenance;
+pub use scriptlet_bundle::{
+    ScriptletBundleBuild, ScriptletBundleInput, ScriptletBundleSummary,
+    ScriptletDecisionCountsSummary, build_legacy_scriptlet_bundle,
+};
