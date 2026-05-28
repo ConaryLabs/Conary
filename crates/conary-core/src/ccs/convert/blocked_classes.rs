@@ -133,6 +133,61 @@ impl Default for BlockedClassRegistry {
                 &[],
                 "Add a native D-Bus service/policy adapter or prove the command is a harmless cache refresh.",
             ),
+            review_class(
+                "ldconfig-nonstandard",
+                "ldconfig forms with custom roots, caches, link-only modes, print modes, or explicit directories need review.",
+                "review-class-ldconfig-nonstandard",
+                &[],
+                &[
+                    "ldconfig -p*",
+                    "ldconfig -l*",
+                    "ldconfig -n*",
+                    "ldconfig -N*",
+                    "ldconfig -X*",
+                    "ldconfig -C*",
+                    "ldconfig -f*",
+                    "ldconfig -r*",
+                    "ldconfig /*",
+                ],
+                "Add a dynamic-linker adapter that models the specific root/cache/link semantics.",
+            ),
+            review_class(
+                "systemd-runtime-action",
+                "systemd runtime service actions signal a live manager and are not passive metadata changes.",
+                "review-class-systemd-runtime-action",
+                &["service", "invoke-rc.d"],
+                &[
+                    "systemctl start*",
+                    "systemctl stop*",
+                    "systemctl restart*",
+                    "systemctl try-restart*",
+                    "systemctl reload*",
+                    "systemctl reload-or-restart*",
+                    "systemctl enable --now*",
+                    "systemctl disable --now*",
+                    "systemctl preset --now*",
+                    "systemctl preset-all*",
+                    "service *",
+                    "invoke-rc.d *",
+                ],
+                "Add modeled service runtime semantics or keep the package review-only.",
+            ),
+            review_class(
+                "systemd-user-scope",
+                "systemd user/global scope enablement is target-user policy, not package-global metadata.",
+                "review-class-systemd-user-scope",
+                &[],
+                &["systemctl --user*", "systemctl --global*"],
+                "Add user-scope service policy and target compatibility checks.",
+            ),
+            review_class(
+                "deb-systemd-helper",
+                "DEB systemd helper state is dpkg-family private and must not require installing dpkg helpers on foreign targets.",
+                "review-class-deb-systemd-helper",
+                &["deb-systemd-helper", "deb-systemd-invoke"],
+                &[],
+                "Model DEB helper state explicitly or require same-family review policy.",
+            ),
             blocked_metadata_class(
                 "rpm-verify",
                 BlockedClassOutcome::Review,
@@ -392,6 +447,48 @@ mod tests {
         assert_eq!(
             chmod_mode.unwrap().reason_code,
             "blocked-class-setuid-setcap"
+        );
+    }
+
+    #[test]
+    fn blocked_classes_review_systemd_runtime_user_and_deb_helpers() {
+        let registry = BlockedClassRegistry::default();
+
+        let runtime =
+            registry.match_invocation(&invocation("systemctl", &["restart", "demo.service"]));
+        assert_eq!(
+            runtime.unwrap().reason_code,
+            "review-class-systemd-runtime-action"
+        );
+
+        let service_without_args = registry.match_invocation(&invocation("service", &[]));
+        assert_eq!(
+            service_without_args.unwrap().reason_code,
+            "review-class-systemd-runtime-action"
+        );
+
+        let invoke_rc_without_args = registry.match_invocation(&invocation("invoke-rc.d", &[]));
+        assert_eq!(
+            invoke_rc_without_args.unwrap().reason_code,
+            "review-class-systemd-runtime-action"
+        );
+
+        let user = registry.match_invocation(&invocation(
+            "systemctl",
+            &["--user", "enable", "demo.service"],
+        ));
+        assert_eq!(user.unwrap().reason_code, "review-class-systemd-user-scope");
+
+        let deb = registry.match_invocation(&invocation(
+            "deb-systemd-helper",
+            &["enable", "demo.service"],
+        ));
+        assert_eq!(deb.unwrap().reason_code, "review-class-deb-systemd-helper");
+
+        let preset_all = registry.match_invocation(&invocation("systemctl", &["preset-all"]));
+        assert_eq!(
+            preset_all.unwrap().reason_code,
+            "review-class-systemd-runtime-action"
         );
     }
 }

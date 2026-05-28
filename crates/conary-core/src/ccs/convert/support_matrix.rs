@@ -72,23 +72,23 @@ fn adapter_entry(adapter_id: &'static str) -> SupportMatrixEntry {
             "Package-level evidence for packages with no scriptlet entries.",
             &["adapter-registry-native-free"] as &'static [&'static str],
         ),
-        "ldconfig/v1" => (
+        "ldconfig/v2" => (
             Some("ldconfig"),
-            "known-helper-requires-adapter-coverage",
-            "Dynamic linker cache helper recognized without claiming replacement.",
+            "helper-complete-ldconfig",
+            "Simple dynamic linker cache refresh forms are complete passive replacement evidence.",
             &["adapter-registry-ldconfig"],
         ),
-        "systemd-daemon-reload/v1" => (
+        "systemd-daemon-reload/v2" => (
             Some("systemctl daemon-reload"),
-            "known-helper-requires-adapter-coverage",
-            "systemd daemon-reload helper recognized without claiming replacement.",
+            "helper-complete-systemd-daemon-reload",
+            "systemd daemon-reload reloads unit definitions without changing service state.",
             &["adapter-registry-systemd-daemon-reload"],
         ),
-        "systemd-enable-disable/v1" => (
-            Some("systemctl enable|disable"),
-            "known-helper-requires-adapter-coverage",
-            "systemd enable/disable helper recognized without claiming replacement.",
-            &["adapter-registry-systemd-enable-disable"],
+        "systemd-unit-state/v1" => (
+            Some("systemctl enable|disable|preset"),
+            "helper-complete-systemd-unit-state",
+            "systemd unit enable/disable/preset is complete only when package payload ships every referenced unit.",
+            &["adapter-registry-systemd-unit-state"],
         ),
         _ => panic!("missing support matrix adapter row definition for {adapter_id}"),
     };
@@ -128,6 +128,10 @@ fn fixture_names_for_class(class_id: &str) -> &'static [&'static str] {
         "legacy-init" => &["blocked-class-legacy-init"],
         "native-abi-unpreservable" => &["blocked-class-native-abi-unpreservable"],
         "dbus-policy" => &["review-class-dbus-policy"],
+        "ldconfig-nonstandard" => &["review-class-ldconfig-nonstandard"],
+        "systemd-runtime-action" => &["review-class-systemd-runtime-action"],
+        "systemd-user-scope" => &["review-class-systemd-user-scope"],
+        "deb-systemd-helper" => &["review-class-deb-systemd-helper"],
         "rpm-verify" => &["review-class-rpm-verify"],
         "rpm-trigger" => &["review-class-rpm-trigger"],
         "deb-trigger" => &["review-class-deb-trigger"],
