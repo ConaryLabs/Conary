@@ -13,6 +13,10 @@ const SYSTEMD_DAEMON_RELOAD_COMPLETE_REASON: &str = "helper-complete-systemd-dae
 const SYSTEMD_UNIT_STATE_COMPLETE_REASON: &str = "helper-complete-systemd-unit-state";
 const TMPFILES_CREATE_COMPLETE_REASON: &str = "helper-complete-tmpfiles-create";
 const SYSUSERS_COMPLETE_REASON: &str = "helper-complete-sysusers";
+const ALTERNATIVES_COMPLETE_REASON: &str = "helper-complete-alternatives-registration";
+const CACHE_REFRESH_COMPLETE_REASON: &str = "helper-complete-cache-refresh";
+const ALTERNATIVES_REVIEW_REASON: &str = "review-class-alternatives-interactive-or-broad";
+const CACHE_REFRESH_REVIEW_REASON: &str = "review-class-cache-refresh-nonstandard";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BootstrapAdapterEvidence {
@@ -120,6 +124,8 @@ impl Default for AdapterRegistry {
             Box::new(SystemdUnitStateAdapter),
             Box::new(SystemdTmpfilesCreateAdapter),
             Box::new(SystemdSysusersAdapter),
+            Box::new(AlternativesRegistrationAdapter),
+            Box::new(CacheRefreshAdapter),
         ];
         assert_unique_adapter_ids(&adapters);
 
@@ -215,6 +221,8 @@ struct SystemdDaemonReloadAdapter;
 struct SystemdUnitStateAdapter;
 struct SystemdTmpfilesCreateAdapter;
 struct SystemdSysusersAdapter;
+struct AlternativesRegistrationAdapter;
+struct CacheRefreshAdapter;
 
 impl ScriptletEffectAdapter for NativeFreeAdapter {
     fn id(&self) -> &'static str {
@@ -426,6 +434,97 @@ impl ScriptletEffectAdapter for SystemdSysusersAdapter {
     }
 }
 
+impl ScriptletEffectAdapter for AlternativesRegistrationAdapter {
+    fn id(&self) -> &'static str {
+        "alternatives-registration/v1"
+    }
+
+    fn digest(&self) -> String {
+        crate::hash::sha256_prefixed(
+            b"alternatives-registration/v1:alternatives:registration-remove",
+        )
+    }
+
+    fn command_names(&self) -> &'static [&'static str] {
+        &["update-alternatives", "alternatives"]
+    }
+
+    fn matches(&self, input: AdapterInput<'_>) -> bool {
+        is_alternatives_command(&input.invocation.command)
+    }
+
+    fn classify(&self, input: AdapterInput<'_>) -> ScriptletClassification {
+        match parse_alternatives_registration(&input.invocation.argv) {
+            Some(registration) => {
+                let path = registration.effect_path();
+                known_effect_classification(
+                    self,
+                    input.invocation,
+                    "alternatives",
+                    EffectReplacement::Complete,
+                    Some(path),
+                    ALTERNATIVES_COMPLETE_REASON,
+                    alternatives_extra(registration),
+                )
+            }
+            None => review_classification(
+                ALTERNATIVES_REVIEW_REASON,
+                "alternatives-interactive-or-broad",
+            ),
+        }
+    }
+}
+
+impl ScriptletEffectAdapter for CacheRefreshAdapter {
+    fn id(&self) -> &'static str {
+        "cache-refresh/v1"
+    }
+
+    fn digest(&self) -> String {
+        crate::hash::sha256_prefixed(b"cache-refresh/v1:cache-refresh:payload-gated")
+    }
+
+    fn command_names(&self) -> &'static [&'static str] {
+        &[
+            "update-mime-database",
+            "update-desktop-database",
+            "gtk-update-icon-cache",
+            "glib-compile-schemas",
+            "fc-cache",
+        ]
+    }
+
+    fn matches(&self, input: AdapterInput<'_>) -> bool {
+        is_cache_refresh_command(&input.invocation.command)
+    }
+
+    fn classify(&self, input: AdapterInput<'_>) -> ScriptletClassification {
+        let Some(refresh) = parse_cache_refresh(input.invocation, input.payload) else {
+            return review_classification(CACHE_REFRESH_REVIEW_REASON, "cache-refresh-nonstandard");
+        };
+
+        let replacement = cache_refresh_replacement(&refresh, input.payload);
+        let reason_code = if replacement == EffectReplacement::Complete {
+            CACHE_REFRESH_COMPLETE_REASON
+        } else {
+            PARTIAL_COVERAGE_REASON
+        };
+
+        known_effect_classification(
+            self,
+            input.invocation,
+            "cache-refresh",
+            replacement,
+            Some(refresh.root),
+            reason_code,
+            BTreeMap::from([(
+                "cache_kind".to_string(),
+                toml::Value::String(refresh.kind.to_string()),
+            )]),
+        )
+    }
+}
+
 fn is_simple_ldconfig_form(argv: &[String]) -> bool {
     argv.is_empty()
         || matches!(
@@ -532,6 +631,287 @@ fn configs_extra(configs: Vec<String>) -> BTreeMap<String, toml::Value> {
         "configs".to_string(),
         toml::Value::Array(configs.into_iter().map(toml::Value::String).collect()),
     )])
+}
+
+#[derive(Debug, Clone)]
+struct AlternativesRegistration {
+    action: &'static str,
+    link: Option<String>,
+    name: String,
+    target: String,
+    priority: Option<i32>,
+    slaves: Vec<String>,
+}
+
+impl AlternativesRegistration {
+    fn effect_path(&self) -> String {
+        self.link.clone().unwrap_or_else(|| self.target.clone())
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CacheRefresh {
+    kind: &'static str,
+    root: String,
+    roots: Vec<String>,
+}
+
+fn is_alternatives_command(command: &str) -> bool {
+    matches!(command, "update-alternatives" | "alternatives")
+}
+
+fn parse_alternatives_registration(argv: &[String]) -> Option<AlternativesRegistration> {
+    match argv.first().map(String::as_str) {
+        Some("--install") => parse_alternatives_install(argv),
+        Some("--remove") => parse_alternatives_remove(argv),
+        _ => None,
+    }
+}
+
+fn parse_alternatives_install(argv: &[String]) -> Option<AlternativesRegistration> {
+    if argv.len() < 5 {
+        return None;
+    }
+    let priority = argv.get(4)?.parse::<i32>().ok()?;
+    let mut index = 5;
+    let mut slaves = Vec::new();
+    while index < argv.len() {
+        if argv.get(index).map(String::as_str) != Some("--slave") || index + 3 >= argv.len() {
+            return None;
+        }
+        let slave_link = argv[index + 1].clone();
+        let slave_name = argv[index + 2].clone();
+        let slave_path = argv[index + 3].clone();
+        slaves.push(format!("{slave_link} {slave_name} {slave_path}"));
+        index += 4;
+    }
+
+    Some(AlternativesRegistration {
+        action: "install",
+        link: Some(argv[1].clone()),
+        name: argv[2].clone(),
+        target: argv[3].clone(),
+        priority: Some(priority),
+        slaves,
+    })
+}
+
+fn parse_alternatives_remove(argv: &[String]) -> Option<AlternativesRegistration> {
+    if argv.len() != 3 {
+        return None;
+    }
+    Some(AlternativesRegistration {
+        action: "remove",
+        link: None,
+        name: argv[1].clone(),
+        target: argv[2].clone(),
+        priority: None,
+        slaves: Vec::new(),
+    })
+}
+
+fn alternatives_extra(registration: AlternativesRegistration) -> BTreeMap<String, toml::Value> {
+    let mut extra = BTreeMap::from([
+        (
+            "action".to_string(),
+            toml::Value::String(registration.action.to_string()),
+        ),
+        ("name".to_string(), toml::Value::String(registration.name)),
+        (
+            "target".to_string(),
+            toml::Value::String(registration.target),
+        ),
+        (
+            "slaves".to_string(),
+            toml::Value::Array(
+                registration
+                    .slaves
+                    .into_iter()
+                    .map(toml::Value::String)
+                    .collect(),
+            ),
+        ),
+    ]);
+    if let Some(priority) = registration.priority {
+        extra.insert(
+            "priority".to_string(),
+            toml::Value::Integer(i64::from(priority)),
+        );
+    }
+    extra
+}
+
+fn is_cache_refresh_command(command: &str) -> bool {
+    matches!(
+        command,
+        "update-mime-database"
+            | "update-desktop-database"
+            | "gtk-update-icon-cache"
+            | "glib-compile-schemas"
+            | "fc-cache"
+    )
+}
+
+fn parse_cache_refresh(
+    invocation: &CommandInvocation,
+    _payload: &PayloadHints,
+) -> Option<CacheRefresh> {
+    match invocation.command.as_str() {
+        "update-mime-database" => {
+            parse_exact_cache_root(&invocation.argv, "mime-db", "/usr/share/mime", &[])
+        }
+        "update-desktop-database" => parse_exact_cache_root(
+            &invocation.argv,
+            "desktop-db",
+            "/usr/share/applications",
+            &["-q", "--quiet"],
+        ),
+        "gtk-update-icon-cache" => parse_icon_cache_refresh(&invocation.argv),
+        "glib-compile-schemas" => parse_glib_schema_refresh(&invocation.argv),
+        "fc-cache" => parse_font_cache_refresh(&invocation.argv),
+        _ => None,
+    }
+}
+
+fn parse_exact_cache_root(
+    argv: &[String],
+    kind: &'static str,
+    root: &str,
+    allowed_flags: &[&str],
+) -> Option<CacheRefresh> {
+    let paths: Vec<&str> = argv
+        .iter()
+        .map(String::as_str)
+        .filter(|arg| !allowed_flags.contains(arg))
+        .collect();
+    if paths.len() == 1 && paths[0] == root {
+        return Some(cache_refresh(kind, root, vec![root.to_string()]));
+    }
+    None
+}
+
+fn parse_icon_cache_refresh(argv: &[String]) -> Option<CacheRefresh> {
+    let mut roots = Vec::new();
+    for arg in argv {
+        if is_icon_cache_flag(arg) {
+            continue;
+        }
+        if arg.starts_with("/usr/share/icons/") && arg.len() > "/usr/share/icons/".len() {
+            roots.push(arg.clone());
+        } else {
+            return None;
+        }
+    }
+    if roots.len() == 1 {
+        let root = roots[0].clone();
+        Some(cache_refresh("icon-cache", &root, roots))
+    } else {
+        None
+    }
+}
+
+fn is_icon_cache_flag(arg: &str) -> bool {
+    matches!(
+        arg,
+        "-f" | "--force" | "-q" | "--quiet" | "--ignore-theme-index"
+    ) || short_flag_chars_are(arg, &['f', 'q'])
+}
+
+fn parse_glib_schema_refresh(argv: &[String]) -> Option<CacheRefresh> {
+    let paths: Vec<&str> = argv
+        .iter()
+        .map(String::as_str)
+        .filter(|arg| *arg != "--allow-any-name")
+        .collect();
+    match paths.as_slice() {
+        [] => Some(cache_refresh(
+            "gsettings",
+            "/usr/share/glib-2.0/schemas",
+            vec!["/usr/share/glib-2.0/schemas".to_string()],
+        )),
+        [path] if *path == "/usr/share/glib-2.0/schemas" => Some(cache_refresh(
+            "gsettings",
+            "/usr/share/glib-2.0/schemas",
+            vec!["/usr/share/glib-2.0/schemas".to_string()],
+        )),
+        _ => None,
+    }
+}
+
+fn parse_font_cache_refresh(argv: &[String]) -> Option<CacheRefresh> {
+    let mut roots = Vec::new();
+    for arg in argv {
+        if is_font_cache_flag(arg) {
+            continue;
+        }
+        if is_standard_font_dir(arg) {
+            roots.push(arg.clone());
+        } else {
+            return None;
+        }
+    }
+    if roots.is_empty() {
+        roots.push("/usr/share/fonts".to_string());
+    }
+    let root = roots[0].clone();
+    Some(cache_refresh("font-cache", &root, roots))
+}
+
+fn is_font_cache_flag(arg: &str) -> bool {
+    matches!(
+        arg,
+        "-s" | "--system-only" | "-f" | "--force" | "-r" | "--really-force" | "-v" | "--verbose"
+    ) || short_flag_chars_are(arg, &['s', 'f', 'r', 'v'])
+}
+
+fn short_flag_chars_are(arg: &str, allowed: &[char]) -> bool {
+    arg.starts_with('-')
+        && !arg.starts_with("--")
+        && arg.len() > 2
+        && arg[1..].chars().all(|flag| allowed.contains(&flag))
+}
+
+fn is_standard_font_dir(path: &str) -> bool {
+    path_is_under(path, "/usr/share/fonts") || path_is_under(path, "/usr/share/texmf/fonts")
+}
+
+fn cache_refresh(kind: &'static str, root: &str, roots: Vec<String>) -> CacheRefresh {
+    CacheRefresh {
+        kind,
+        root: root.to_string(),
+        roots,
+    }
+}
+
+fn cache_refresh_replacement(refresh: &CacheRefresh, payload: &PayloadHints) -> EffectReplacement {
+    let complete = refresh
+        .roots
+        .iter()
+        .all(|root| payload_has_cache_input_under(payload, refresh.kind, root));
+    if complete {
+        EffectReplacement::Complete
+    } else {
+        EffectReplacement::Partial
+    }
+}
+
+fn payload_has_cache_input_under(payload: &PayloadHints, kind: &str, root: &str) -> bool {
+    payload
+        .cache_inputs
+        .get(kind)
+        .is_some_and(|paths| paths.iter().any(|path| path_is_under(path, root)))
+}
+
+fn path_is_under(path: &str, root: &str) -> bool {
+    let root = root.trim_end_matches('/');
+    path == root || path.starts_with(&format!("{root}/"))
+}
+
+fn review_classification(reason_code: &str, class_id: &str) -> ScriptletClassification {
+    ScriptletClassification::Review {
+        reason_code: reason_code.to_string(),
+        class_id: Some(class_id.to_string()),
+    }
 }
 
 fn known_effect_classification(
@@ -658,14 +1038,16 @@ mod tests {
         let ids = registry.adapter_ids();
 
         assert_eq!(
-            &ids[..6],
-            &[
+            ids,
+            vec![
                 "native-free/v1",
                 "ldconfig/v2",
                 "systemd-daemon-reload/v2",
                 "systemd-unit-state/v1",
                 "systemd-tmpfiles-create/v1",
                 "systemd-sysusers/v1",
+                "alternatives-registration/v1",
+                "cache-refresh/v1",
             ]
         );
 
@@ -936,6 +1318,232 @@ mod tests {
                 ScriptletClassification::Review { reason_code, class_id }
                     if reason_code == "review-class-sysusers-nonstandard"
                         && class_id.as_deref() == Some("sysusers-nonstandard")
+            ));
+        }
+    }
+
+    #[test]
+    fn alternatives_install_and_remove_are_complete_when_parseable() {
+        let registry = AdapterRegistry::default();
+        let payload = PayloadHints::default();
+
+        let install = registry.classify_invocation_with_context(AdapterInput {
+            invocation: &invocation(
+                "update-alternatives",
+                &[
+                    "--install",
+                    "/usr/bin/editor",
+                    "editor",
+                    "/usr/bin/demo-editor",
+                    "50",
+                    "--slave",
+                    "/usr/share/man/man1/editor.1.gz",
+                    "editor.1.gz",
+                    "/usr/share/man/man1/demo-editor.1.gz",
+                    "--slave",
+                    "/usr/share/man/man1/view.1.gz",
+                    "view.1.gz",
+                    "/usr/share/man/man1/demo-view.1.gz",
+                ],
+            ),
+            payload: &payload,
+        });
+        let ScriptletClassification::Known {
+            reason_code,
+            effects,
+        } = install
+        else {
+            panic!("alternatives install should be known");
+        };
+        assert_eq!(reason_code, "helper-complete-alternatives-registration");
+        assert_eq!(effects[0].replacement, EffectReplacement::Complete);
+        assert_eq!(effects[0].kind, "alternatives");
+        assert_eq!(effects[0].path.as_deref(), Some("/usr/bin/editor"));
+
+        let remove = registry.classify_invocation_with_context(AdapterInput {
+            invocation: &invocation(
+                "alternatives",
+                &["--remove", "editor", "/usr/bin/demo-editor"],
+            ),
+            payload: &payload,
+        });
+        assert!(matches!(
+            remove,
+            ScriptletClassification::Known { reason_code, .. }
+                if reason_code == "helper-complete-alternatives-registration"
+        ));
+    }
+
+    #[test]
+    fn alternatives_interactive_and_broad_actions_are_review() {
+        let registry = AdapterRegistry::default();
+        let payload = PayloadHints::default();
+
+        for argv in [
+            vec!["--config", "editor"],
+            vec!["--remove-all", "editor"],
+            vec!["--remove", "editor"],
+        ] {
+            let classification = registry.classify_invocation_with_context(AdapterInput {
+                invocation: &invocation("update-alternatives", &argv),
+                payload: &payload,
+            });
+            assert!(matches!(
+                classification,
+                ScriptletClassification::Review { reason_code, class_id }
+                    if reason_code == "review-class-alternatives-interactive-or-broad"
+                        && class_id.as_deref() == Some("alternatives-interactive-or-broad")
+            ));
+        }
+    }
+
+    #[test]
+    fn cache_refresh_known_forms_are_complete_with_payload_inputs() {
+        let registry = AdapterRegistry::default();
+        let mut payload = PayloadHints::default();
+        payload
+            .cache_inputs
+            .entry("mime-db".to_string())
+            .or_default()
+            .insert("/usr/share/mime/packages/demo.xml".to_string());
+        payload
+            .cache_inputs
+            .entry("desktop-db".to_string())
+            .or_default()
+            .insert("/usr/share/applications/demo.desktop".to_string());
+        payload
+            .cache_inputs
+            .entry("icon-cache".to_string())
+            .or_default()
+            .insert("/usr/share/icons/hicolor/16x16/apps/demo.png".to_string());
+        payload
+            .cache_inputs
+            .entry("gsettings".to_string())
+            .or_default()
+            .insert("/usr/share/glib-2.0/schemas/org.example.demo.gschema.xml".to_string());
+        payload
+            .cache_inputs
+            .entry("font-cache".to_string())
+            .or_default()
+            .insert("/usr/share/fonts/demo/demo.ttf".to_string());
+
+        let mime = registry.classify_invocation_with_context(AdapterInput {
+            invocation: &invocation("update-mime-database", &["/usr/share/mime"]),
+            payload: &payload,
+        });
+        let ScriptletClassification::Known {
+            reason_code,
+            effects,
+        } = mime
+        else {
+            panic!("mime cache refresh should be known");
+        };
+        assert_eq!(reason_code, "helper-complete-cache-refresh");
+        assert_eq!(effects[0].replacement, EffectReplacement::Complete);
+        assert_eq!(effects[0].kind, "cache-refresh");
+        assert_eq!(
+            effects[0].extra["cache_kind"],
+            toml::Value::String("mime-db".to_string())
+        );
+
+        let desktop = registry.classify_invocation_with_context(AdapterInput {
+            invocation: &invocation(
+                "update-desktop-database",
+                &["-q", "/usr/share/applications"],
+            ),
+            payload: &payload,
+        });
+        assert!(matches!(
+            desktop,
+            ScriptletClassification::Known { reason_code, .. }
+                if reason_code == "helper-complete-cache-refresh"
+        ));
+
+        let icons = registry.classify_invocation_with_context(AdapterInput {
+            invocation: &invocation(
+                "gtk-update-icon-cache",
+                &["--force", "--quiet", "/usr/share/icons/hicolor"],
+            ),
+            payload: &payload,
+        });
+        assert!(matches!(
+            icons,
+            ScriptletClassification::Known { reason_code, .. }
+                if reason_code == "helper-complete-cache-refresh"
+        ));
+
+        let icons_combined_flags = registry.classify_invocation_with_context(AdapterInput {
+            invocation: &invocation(
+                "gtk-update-icon-cache",
+                &["-qf", "/usr/share/icons/hicolor"],
+            ),
+            payload: &payload,
+        });
+        assert!(matches!(
+            icons_combined_flags,
+            ScriptletClassification::Known { reason_code, .. }
+                if reason_code == "helper-complete-cache-refresh"
+        ));
+
+        let schemas = registry.classify_invocation_with_context(AdapterInput {
+            invocation: &invocation(
+                "glib-compile-schemas",
+                &["--allow-any-name", "/usr/share/glib-2.0/schemas"],
+            ),
+            payload: &payload,
+        });
+        assert!(matches!(
+            schemas,
+            ScriptletClassification::Known { reason_code, .. }
+                if reason_code == "helper-complete-cache-refresh"
+        ));
+
+        let schemas_default_path = registry.classify_invocation_with_context(AdapterInput {
+            invocation: &invocation("glib-compile-schemas", &[]),
+            payload: &payload,
+        });
+        assert!(matches!(
+            schemas_default_path,
+            ScriptletClassification::Known { reason_code, .. }
+                if reason_code == "helper-complete-cache-refresh"
+        ));
+
+        let fonts = registry.classify_invocation_with_context(AdapterInput {
+            invocation: &invocation("fc-cache", &["-fs"]),
+            payload: &payload,
+        });
+        assert!(matches!(
+            fonts,
+            ScriptletClassification::Known { reason_code, .. }
+                if reason_code == "helper-complete-cache-refresh"
+        ));
+
+        let fonts_with_dir = registry.classify_invocation_with_context(AdapterInput {
+            invocation: &invocation("fc-cache", &["-f", "/usr/share/fonts/demo"]),
+            payload: &payload,
+        });
+        assert!(matches!(
+            fonts_with_dir,
+            ScriptletClassification::Known { reason_code, .. }
+                if reason_code == "helper-complete-cache-refresh"
+        ));
+    }
+
+    #[test]
+    fn cache_refresh_nonstandard_paths_are_review() {
+        let registry = AdapterRegistry::default();
+        let payload = PayloadHints::default();
+
+        for path in ["/opt/vendor/mime", "/usr/local/share/mime"] {
+            let classification = registry.classify_invocation_with_context(AdapterInput {
+                invocation: &invocation("update-mime-database", &[path]),
+                payload: &payload,
+            });
+            assert!(matches!(
+                classification,
+                ScriptletClassification::Review { reason_code, class_id }
+                    if reason_code == "review-class-cache-refresh-nonstandard"
+                        && class_id.as_deref() == Some("cache-refresh-nonstandard")
             ));
         }
     }
