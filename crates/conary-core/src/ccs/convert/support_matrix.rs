@@ -90,6 +90,18 @@ fn adapter_entry(adapter_id: &'static str) -> SupportMatrixEntry {
             "systemd unit enable/disable/preset is complete only when package payload ships every referenced unit.",
             &["adapter-registry-systemd-unit-state"],
         ),
+        "systemd-tmpfiles-create/v1" => (
+            Some("systemd-tmpfiles --create"),
+            "helper-complete-tmpfiles-create",
+            "systemd tmpfiles create is complete only when every explicit config path is shipped by the package.",
+            &["adapter-tmpfiles-create"],
+        ),
+        "systemd-sysusers/v1" => (
+            Some("systemd-sysusers"),
+            "helper-complete-sysusers",
+            "systemd sysusers is complete only when every explicit config path is shipped by the package.",
+            &["adapter-sysusers"],
+        ),
         _ => panic!("missing support matrix adapter row definition for {adapter_id}"),
     };
 
@@ -132,6 +144,8 @@ fn fixture_names_for_class(class_id: &str) -> &'static [&'static str] {
         "systemd-runtime-action" => &["review-class-systemd-runtime-action"],
         "systemd-user-scope" => &["review-class-systemd-user-scope"],
         "deb-systemd-helper" => &["review-class-deb-systemd-helper"],
+        "tmpfiles-noncreate" => &["review-class-tmpfiles-noncreate"],
+        "sysusers-nonstandard" => &["review-class-sysusers-nonstandard"],
         "rpm-verify" => &["review-class-rpm-verify"],
         "rpm-trigger" => &["review-class-rpm-trigger"],
         "deb-trigger" => &["review-class-deb-trigger"],
