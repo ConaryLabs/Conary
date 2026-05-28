@@ -22,6 +22,7 @@
 //! 3. Run original scriptlet as-is (don't modify/strip)
 //! 4. Assume scripts are idempotent (standard practice)
 
+pub mod adapters;
 mod analyzer;
 pub mod blocked_classes;
 pub mod capture;
