@@ -32,6 +32,7 @@ pub mod effects;
 mod fidelity;
 pub mod legacy_provenance;
 pub mod mock;
+pub mod support_matrix;
 
 pub use analyzer::{DetectedHook, ScriptletAnalyzer};
 pub use converter::{ConversionOptions, ConversionResult, LegacyConverter};
