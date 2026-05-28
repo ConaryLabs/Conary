@@ -209,6 +209,11 @@ git diff --check
 
 ## Goal 3b: Bootstrap Adapters Driven By Corpus Evidence
 
+Design and detailed plan:
+
+- `docs/superpowers/specs/2026-05-28-legacy-scriptlet-bootstrap-adapters-design.md`
+- `docs/superpowers/plans/2026-05-28-legacy-scriptlet-bootstrap-adapters-plan.md`
+
 Recommended objective:
 
 ```text
