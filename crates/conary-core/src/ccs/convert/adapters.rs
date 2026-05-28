@@ -4,7 +4,7 @@ use crate::ccs::convert::blocked_classes::{BlockedClassOutcome, BlockedClassRegi
 use crate::ccs::convert::command_evidence::{CommandEvidenceSource, CommandInvocation};
 use crate::ccs::convert::effects::{ScriptletClassification, ScriptletEffectEvidence};
 use crate::ccs::legacy_scriptlets::{EffectConfidence, EffectReplacement, EffectSource};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 const KNOWN_HELPER_REASON: &str = "known-helper-requires-adapter-coverage";
 
@@ -100,6 +100,7 @@ impl AdapterRegistry {
                 args: vec![],
                 path: None,
                 reason_code: Some("native-free-no-scriptlets".to_string()),
+                extra: BTreeMap::new(),
             }],
         }
     }
@@ -246,6 +247,7 @@ fn known_effect_classification(
             args: invocation.argv.clone(),
             path,
             reason_code: Some(KNOWN_HELPER_REASON.to_string()),
+            extra: BTreeMap::new(),
         }],
     }
 }
