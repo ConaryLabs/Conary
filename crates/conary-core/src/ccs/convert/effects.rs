@@ -3,7 +3,7 @@
 use crate::ccs::legacy_scriptlets::{EffectConfidence, EffectReplacement, EffectSource};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ScriptletEffectEvidence {
     pub kind: String,
     pub source: EffectSource,
@@ -15,9 +15,10 @@ pub struct ScriptletEffectEvidence {
     pub args: Vec<String>,
     pub path: Option<String>,
     pub reason_code: Option<String>,
+    pub extra: BTreeMap<String, toml::Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ScriptletClassification {
     Known {
         reason_code: String,
@@ -37,7 +38,7 @@ pub enum ScriptletClassification {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ScriptletClassificationReport {
     pub entries: Vec<EntryClassification>,
     pub known_count: u32,
@@ -75,7 +76,7 @@ impl ScriptletClassificationReport {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct EntryClassification {
     pub entry_id: String,
     pub classification: ScriptletClassification,
@@ -109,6 +110,10 @@ mod tests {
                     args: vec![],
                     path: None,
                     reason_code: Some("known-helper-requires-adapter-coverage".to_string()),
+                    extra: BTreeMap::from([(
+                        "cache".to_string(),
+                        toml::Value::String("ld.so.cache".to_string()),
+                    )]),
                 }],
             },
         );

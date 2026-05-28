@@ -288,7 +288,7 @@ Expected compile failure until the field is added.
 Update the struct:
 
 ```rust
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ScriptletEffectEvidence {
     pub kind: String,
     pub source: EffectSource,
@@ -307,6 +307,10 @@ pub struct ScriptletEffectEvidence {
 Update every existing literal in `adapters.rs`, `effects.rs`, and
 `converter.rs` with `extra: BTreeMap::new()` unless the test intentionally
 asserts metadata content.
+
+Do not derive `Eq` for `ScriptletEffectEvidence` or the classification wrapper
+types after this field is added. `toml::Value` supports `PartialEq`, but not
+`Eq`.
 
 Current literal inventory to update:
 
