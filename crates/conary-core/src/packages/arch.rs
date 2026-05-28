@@ -11,8 +11,14 @@ use crate::hash;
 use crate::packages::archive_utils::{check_file_size, normalize_path};
 use crate::packages::common::PackageMetadata;
 use crate::packages::traits::{
-    ConfigFileInfo, Dependency, DependencyType, ExtractedFile, PackageFile, PackageFormat,
-    Scriptlet, ScriptletPhase,
+    ArchAlpmHookAction, ArchAlpmHookMetadata, ArchAlpmHookOperation, ArchAlpmHookTrigger,
+    ArchAlpmHookTriggerType, ArchFunctionExtractionStatus, ArchInstallScriptletMetadata,
+    ArchNativeScriptletMetadata, ConfigFileInfo, Dependency, DependencyType, ExtractedFile,
+    NativeArgumentContract, NativeArgumentValue, NativeInvocationContract, NativeLifecyclePath,
+    NativeRootExpectation, NativeScriptletBody, NativeScriptletEntry, NativeScriptletFormat,
+    NativeScriptletKind, NativeScriptletMetadata, NativeScriptletSupport, NativeStdinContract,
+    NativeTransactionOrder, NativeTransactionPosition, PackageFile, PackageFormat, Scriptlet,
+    ScriptletPhase,
 };
 use std::fs::File;
 use std::io::Read;
@@ -34,6 +40,39 @@ pub struct ArchPackage {
 
 /// Arch package metadata files that should be skipped during extraction
 const ARCH_METADATA_FILES: &[&str] = &[".PKGINFO", ".MTREE", ".BUILDINFO", ".INSTALL"];
+
+const ARCH_INSTALL_FUNCTIONS: &[(&str, ScriptletPhase, NativeLifecyclePath)] = &[
+    (
+        "pre_install",
+        ScriptletPhase::PreInstall,
+        NativeLifecyclePath::PreInstall,
+    ),
+    (
+        "post_install",
+        ScriptletPhase::PostInstall,
+        NativeLifecyclePath::PostInstall,
+    ),
+    (
+        "pre_upgrade",
+        ScriptletPhase::PreUpgrade,
+        NativeLifecyclePath::PreUpgrade,
+    ),
+    (
+        "post_upgrade",
+        ScriptletPhase::PostUpgrade,
+        NativeLifecyclePath::PostUpgrade,
+    ),
+    (
+        "pre_remove",
+        ScriptletPhase::PreRemove,
+        NativeLifecyclePath::PreRemove,
+    ),
+    (
+        "post_remove",
+        ScriptletPhase::PostRemove,
+        NativeLifecyclePath::PostRemove,
+    ),
+];
 
 impl ArchPackage {
     /// Detect compression format from file extension
@@ -117,20 +156,10 @@ impl ArchPackage {
     fn parse_install_script(content: &str) -> Vec<Scriptlet> {
         let mut scriptlets = Vec::new();
 
-        // Map function names to phases
-        let function_map = [
-            ("pre_install", ScriptletPhase::PreInstall),
-            ("post_install", ScriptletPhase::PostInstall),
-            ("pre_upgrade", ScriptletPhase::PreUpgrade),
-            ("post_upgrade", ScriptletPhase::PostUpgrade),
-            ("pre_remove", ScriptletPhase::PreRemove),
-            ("post_remove", ScriptletPhase::PostRemove),
-        ];
-
-        for (func_name, phase) in function_map {
+        for (func_name, phase, _) in ARCH_INSTALL_FUNCTIONS {
             if let Some(func_content) = Self::extract_function(content, func_name) {
                 scriptlets.push(Scriptlet {
-                    phase,
+                    phase: *phase,
                     interpreter: "/bin/sh".to_string(),
                     content: func_content,
                     flags: None,
@@ -218,6 +247,307 @@ impl ArchPackage {
         }
     }
 
+    fn native_abi_from_install_bytes(bytes: &[u8]) -> Vec<NativeScriptletEntry> {
+        let Ok(source) = std::str::from_utf8(bytes) else {
+            return vec![NativeScriptletEntry {
+                id: "arch:.INSTALL".to_string(),
+                format: NativeScriptletFormat::Arch,
+                kind: NativeScriptletKind::ControlArtifact,
+                native_slot: ".INSTALL".to_string(),
+                primary_lifecycle: NativeLifecyclePath::Trigger,
+                compatibility_phase: None,
+                lifecycle_paths: Vec::new(),
+                interpreter: Some("/bin/sh".to_string()),
+                interpreter_args: Vec::new(),
+                body: NativeScriptletBody::from_bytes(bytes.to_vec()),
+                invocation: NativeInvocationContract {
+                    args: Vec::new(),
+                    environment: Vec::new(),
+                    stdin: NativeStdinContract::None,
+                    root: NativeRootExpectation::InstallRoot,
+                },
+                order: NativeTransactionOrder::new(NativeTransactionPosition::ControlArtifact),
+                support: NativeScriptletSupport::DeferredReview {
+                    reason_code: "native-abi-parser-limitation".to_string(),
+                },
+                metadata: NativeScriptletMetadata::Arch(ArchNativeScriptletMetadata::Install(
+                    ArchInstallScriptletMetadata {
+                        install_source_sha256: crate::hash::sha256_prefixed(bytes),
+                        function_name: ".INSTALL".to_string(),
+                        function_body: None,
+                        function_body_sha256: None,
+                        extraction_status: ArchFunctionExtractionStatus::DeferredReview {
+                            reason_code: "native-abi-parser-limitation".to_string(),
+                        },
+                    },
+                )),
+            }];
+        };
+
+        ARCH_INSTALL_FUNCTIONS
+            .iter()
+            .filter(|(function_name, _, _)| {
+                Self::contains_function_declaration(source, function_name)
+            })
+            .map(|(function_name, phase, lifecycle)| {
+                let function_body = Self::extract_function(source, function_name);
+                let function_extracted = function_body.is_some();
+                let extraction_status = if function_extracted {
+                    ArchFunctionExtractionStatus::Parsed
+                } else {
+                    ArchFunctionExtractionStatus::DeferredReview {
+                        reason_code: "arch-install-function-extraction-deferred".to_string(),
+                    }
+                };
+                let function_body_sha256 = function_body
+                    .as_ref()
+                    .map(|body| crate::hash::sha256_prefixed(body.as_bytes()));
+
+                NativeScriptletEntry {
+                    id: format!("arch:{function_name}"),
+                    format: NativeScriptletFormat::Arch,
+                    kind: NativeScriptletKind::Executable,
+                    native_slot: (*function_name).to_string(),
+                    primary_lifecycle: *lifecycle,
+                    compatibility_phase: function_extracted.then_some(*phase),
+                    lifecycle_paths: vec![*lifecycle],
+                    interpreter: Some("/bin/sh".to_string()),
+                    interpreter_args: Vec::new(),
+                    body: NativeScriptletBody::from_bytes(bytes.to_vec()),
+                    invocation: Self::arch_invocation_for_function(function_name),
+                    order: NativeTransactionOrder::new(match *lifecycle {
+                        NativeLifecyclePath::PreInstall
+                        | NativeLifecyclePath::PreUpgrade
+                        | NativeLifecyclePath::PreRemove => {
+                            NativeTransactionPosition::BeforePayload
+                        }
+                        _ => NativeTransactionPosition::AfterPayload,
+                    }),
+                    support: if function_extracted {
+                        NativeScriptletSupport::Parsed
+                    } else {
+                        NativeScriptletSupport::DeferredReview {
+                            reason_code: "arch-install-function-extraction-deferred".to_string(),
+                        }
+                    },
+                    metadata: NativeScriptletMetadata::Arch(ArchNativeScriptletMetadata::Install(
+                        ArchInstallScriptletMetadata {
+                            install_source_sha256: crate::hash::sha256_prefixed(bytes),
+                            function_name: (*function_name).to_string(),
+                            function_body,
+                            function_body_sha256,
+                            extraction_status,
+                        },
+                    )),
+                }
+            })
+            .collect()
+    }
+
+    fn contains_function_declaration(source: &str, function_name: &str) -> bool {
+        source.lines().any(|line| {
+            let trimmed = line.trim_start();
+            trimmed.starts_with(&format!("{function_name}()"))
+                || trimmed.starts_with(&format!("{function_name} ()"))
+                || trimmed.starts_with(&format!("function {function_name}"))
+        })
+    }
+
+    fn arch_invocation_for_function(function_name: &str) -> NativeInvocationContract {
+        let args = match function_name {
+            // alpm-install-scriptlet(5) passes new version as $1 and old version
+            // as $2 for both pre_upgrade and post_upgrade.
+            "pre_upgrade" | "post_upgrade" => vec![
+                NativeArgumentContract {
+                    index: 1,
+                    name: "new-version".to_string(),
+                    value: NativeArgumentValue::NewVersion,
+                    required: true,
+                },
+                NativeArgumentContract {
+                    index: 2,
+                    name: "old-version".to_string(),
+                    value: NativeArgumentValue::OldVersion,
+                    required: true,
+                },
+            ],
+            "pre_install" | "post_install" => vec![NativeArgumentContract {
+                index: 1,
+                name: "new-version".to_string(),
+                value: NativeArgumentValue::NewVersion,
+                required: true,
+            }],
+            "pre_remove" | "post_remove" => vec![NativeArgumentContract {
+                index: 1,
+                name: "old-version".to_string(),
+                value: NativeArgumentValue::OldVersion,
+                required: true,
+            }],
+            _ => Vec::new(),
+        };
+
+        NativeInvocationContract {
+            args,
+            environment: Vec::new(),
+            stdin: NativeStdinContract::None,
+            root: NativeRootExpectation::InstallRoot,
+        }
+    }
+
+    fn native_abi_from_alpm_hook(path: &str, bytes: &[u8]) -> NativeScriptletEntry {
+        let text = std::str::from_utf8(bytes).unwrap_or_default();
+        let (triggers, action) = Self::parse_alpm_hook_metadata(text);
+
+        NativeScriptletEntry {
+            id: format!("arch:alpm-hook:{path}"),
+            format: NativeScriptletFormat::Arch,
+            kind: NativeScriptletKind::ControlArtifact,
+            native_slot: format!("alpm-hook:{path}"),
+            primary_lifecycle: NativeLifecyclePath::Trigger,
+            compatibility_phase: None,
+            lifecycle_paths: vec![NativeLifecyclePath::Trigger],
+            interpreter: None,
+            interpreter_args: Vec::new(),
+            body: NativeScriptletBody::from_bytes(bytes.to_vec()),
+            invocation: NativeInvocationContract {
+                args: Vec::new(),
+                environment: Vec::new(),
+                stdin: if action.as_ref().is_some_and(|action| action.needs_targets) {
+                    NativeStdinContract::Paths
+                } else {
+                    NativeStdinContract::None
+                },
+                root: NativeRootExpectation::InstallRoot,
+            },
+            order: NativeTransactionOrder::new(NativeTransactionPosition::ControlArtifact),
+            support: NativeScriptletSupport::DeferredReview {
+                reason_code: "arch-alpm-hook-semantics-deferred".to_string(),
+            },
+            metadata: NativeScriptletMetadata::Arch(ArchNativeScriptletMetadata::AlpmHook(
+                ArchAlpmHookMetadata {
+                    hook_path: path.to_string(),
+                    triggers,
+                    action,
+                },
+            )),
+        }
+    }
+
+    fn parse_alpm_hook_metadata(
+        text: &str,
+    ) -> (Vec<ArchAlpmHookTrigger>, Option<ArchAlpmHookAction>) {
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum Section {
+            None,
+            Trigger,
+            Action,
+        }
+
+        let mut section = Section::None;
+        let mut triggers = Vec::new();
+        let mut current_trigger: Option<ArchAlpmHookTrigger> = None;
+        let mut action = ArchAlpmHookAction {
+            description: None,
+            when: NativeTransactionPosition::AfterTransaction,
+            exec: String::new(),
+            depends: Vec::new(),
+            abort_on_fail: false,
+            needs_targets: false,
+        };
+
+        for raw_line in text.lines() {
+            let line = raw_line.split('#').next().unwrap_or("").trim();
+            if line.is_empty() {
+                continue;
+            }
+            match line {
+                "[Trigger]" => {
+                    if let Some(trigger) = current_trigger.take() {
+                        triggers.push(trigger);
+                    }
+                    current_trigger = Some(ArchAlpmHookTrigger {
+                        operations: Vec::new(),
+                        trigger_type: ArchAlpmHookTriggerType::Package,
+                        targets: Vec::new(),
+                    });
+                    section = Section::Trigger;
+                    continue;
+                }
+                "[Action]" => {
+                    if let Some(trigger) = current_trigger.take() {
+                        triggers.push(trigger);
+                    }
+                    section = Section::Action;
+                    continue;
+                }
+                "AbortOnFail" if section == Section::Action => {
+                    action.abort_on_fail = true;
+                    continue;
+                }
+                "NeedsTargets" if section == Section::Action => {
+                    action.needs_targets = true;
+                    continue;
+                }
+                _ => {}
+            }
+
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            let key = key.trim();
+            let value = value.trim().to_string();
+
+            match (section, key) {
+                (Section::Trigger, "Operation") => {
+                    if let Some(trigger) = current_trigger.as_mut() {
+                        match value.as_str() {
+                            "Install" => trigger.operations.push(ArchAlpmHookOperation::Install),
+                            "Upgrade" => trigger.operations.push(ArchAlpmHookOperation::Upgrade),
+                            "Remove" => trigger.operations.push(ArchAlpmHookOperation::Remove),
+                            _ => {}
+                        }
+                    }
+                }
+                (Section::Trigger, "Type") => {
+                    if let Some(trigger) = current_trigger.as_mut() {
+                        trigger.trigger_type = if value == "Path" || value == "File" {
+                            ArchAlpmHookTriggerType::Path
+                        } else {
+                            ArchAlpmHookTriggerType::Package
+                        };
+                    }
+                }
+                (Section::Trigger, "Target") => {
+                    if let Some(trigger) = current_trigger.as_mut() {
+                        trigger.targets.push(value);
+                    }
+                }
+                (Section::Action, "Description") => action.description = Some(value),
+                (Section::Action, "When") => {
+                    action.when = if value == "PreTransaction" {
+                        NativeTransactionPosition::BeforeTransaction
+                    } else {
+                        NativeTransactionPosition::AfterTransaction
+                    };
+                }
+                (Section::Action, "Exec") => action.exec = value,
+                (Section::Action, "Depends") => action.depends.push(value),
+                _ => {}
+            }
+        }
+
+        if let Some(trigger) = current_trigger {
+            triggers.push(trigger);
+        }
+
+        let action = if action.exec.is_empty() {
+            None
+        } else {
+            Some(action)
+        };
+        (triggers, action)
+    }
+
     /// Parse dependencies from strings like "glibc>=2.34" or "package: description"
     fn parse_dependencies(deps: &[String], dep_type: DependencyType) -> Vec<Dependency> {
         deps.iter()
@@ -280,7 +610,8 @@ impl PackageFormat for ArchPackage {
         // Single-pass: decompress once and extract all metadata + file list
         let mut archive = Self::open_archive(path)?;
         let mut pkginfo_content = None;
-        let mut install_content = None;
+        let mut install_bytes = None;
+        let mut alpm_hook_bytes: Vec<(String, Vec<u8>)> = Vec::new();
         let mut files = Vec::new();
         let mut entries_seen = 0usize;
 
@@ -309,10 +640,11 @@ impl PackageFormat for ArchPackage {
                     pkginfo_content = Some(content);
                 }
                 ".INSTALL" => {
-                    let mut content = String::new();
-                    if entry.read_to_string(&mut content).is_ok() {
-                        install_content = Some(content);
-                    }
+                    let mut content = Vec::new();
+                    entry
+                        .read_to_end(&mut content)
+                        .map_err(|e| Error::InitError(format!("Failed to read .INSTALL: {}", e)))?;
+                    install_bytes = Some(content);
                 }
                 name if ARCH_METADATA_FILES.contains(&name) => {
                     // Skip other metadata files (.MTREE, .BUILDINFO)
@@ -321,6 +653,9 @@ impl PackageFormat for ArchPackage {
                     let entry_type = entry.header().entry_type();
                     // Collect file list entry (regular files + symlinks, skip directories)
                     if !entry_type.is_dir() {
+                        let normalized_path = normalize_path(&entry_path).map_err(|e| {
+                            Error::InitError(format!("Path normalization failed: {}", e))
+                        })?;
                         let size = entry.header().size().map_err(|e| {
                             Error::InitError(format!("Failed to get file size: {}", e))
                         })?;
@@ -337,14 +672,22 @@ impl PackageFormat for ArchPackage {
                             None
                         };
                         files.push(PackageFile {
-                            path: normalize_path(&entry_path).map_err(|e| {
-                                Error::InitError(format!("Path normalization failed: {}", e))
-                            })?,
+                            path: normalized_path.clone(),
                             size: i64::try_from(size).unwrap_or(i64::MAX),
                             mode: mode as i32,
                             sha256: None,
                             symlink_target,
                         });
+
+                        let is_alpm_hook = normalized_path.starts_with("/usr/share/libalpm/hooks/")
+                            && normalized_path.ends_with(".hook");
+                        if is_alpm_hook && !entry_type.is_symlink() {
+                            let mut content = Vec::new();
+                            entry.read_to_end(&mut content).map_err(|e| {
+                                Error::InitError(format!("Failed to read ALPM hook: {}", e))
+                            })?;
+                            alpm_hook_bytes.push((normalized_path, content));
+                        }
                     }
                 }
             }
@@ -381,9 +724,20 @@ impl PackageFormat for ArchPackage {
         let provides = Self::parse_dependencies(&pkginfo.provides, DependencyType::Runtime);
 
         // Parse scriptlets from .INSTALL file (already extracted in single pass)
-        let scriptlets = install_content
-            .map(|content| Self::parse_install_script(&content))
+        let scriptlets = install_bytes
+            .as_ref()
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+            .map(Self::parse_install_script)
             .unwrap_or_default();
+        let mut native_scriptlet_abi = install_bytes
+            .as_ref()
+            .map(|bytes| Self::native_abi_from_install_bytes(bytes))
+            .unwrap_or_default();
+        native_scriptlet_abi.extend(
+            alpm_hook_bytes
+                .iter()
+                .map(|(path, bytes)| Self::native_abi_from_alpm_hook(path, bytes)),
+        );
 
         // Convert backup files to ConfigFileInfo
         // Arch backup format is "path\thash" but we just need the path
@@ -419,7 +773,7 @@ impl PackageFormat for ArchPackage {
             dependencies,
             provides,
             scriptlets,
-            native_scriptlet_abi: Vec::new(),
+            native_scriptlet_abi,
             config_files,
         };
 
@@ -571,6 +925,10 @@ impl PackageFormat for ArchPackage {
         self.meta.scriptlets()
     }
 
+    fn native_scriptlet_abi(&self) -> &[NativeScriptletEntry] {
+        self.meta.native_scriptlet_abi()
+    }
+
     fn config_files(&self) -> &[ConfigFileInfo] {
         self.meta.config_files()
     }
@@ -606,6 +964,12 @@ impl ArchPackage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::packages::traits::{
+        ArchAlpmHookOperation, ArchAlpmHookTriggerType, ArchFunctionExtractionStatus,
+        ArchNativeScriptletMetadata, NativeArgumentValue, NativeLifecyclePath,
+        NativeScriptletFormat, NativeScriptletKind, NativeScriptletMetadata,
+        NativeTransactionPosition,
+    };
 
     #[test]
     fn test_compression_detection() {
@@ -761,5 +1125,162 @@ pre_remove() {
         for s in &scriptlets {
             assert_eq!(s.interpreter, "/bin/sh");
         }
+    }
+
+    #[test]
+    fn arch_native_abi_preserves_full_install_source_and_function_body() {
+        let install = br#"
+pre_install() {
+    echo "before $1"
+}
+
+post_upgrade() {
+    echo "after $2 -> $1"
+}
+"#;
+
+        let entries = ArchPackage::native_abi_from_install_bytes(install);
+
+        assert_eq!(entries.len(), 2);
+        let pre = entries
+            .iter()
+            .find(|entry| entry.native_slot == "pre_install")
+            .expect("pre_install entry");
+        assert_eq!(pre.format, NativeScriptletFormat::Arch);
+        assert_eq!(pre.primary_lifecycle, NativeLifecyclePath::PreInstall);
+        assert_eq!(pre.compatibility_phase, Some(ScriptletPhase::PreInstall));
+        assert_eq!(pre.interpreter.as_deref(), Some("/bin/sh"));
+        assert_eq!(pre.body.bytes, install);
+
+        let NativeScriptletMetadata::Arch(ArchNativeScriptletMetadata::Install(meta)) =
+            &pre.metadata
+        else {
+            panic!("expected arch install metadata");
+        };
+        assert_eq!(meta.function_name, "pre_install");
+        assert_eq!(meta.function_body.as_deref(), Some("echo \"before $1\""));
+        assert_eq!(
+            meta.function_body_sha256.as_deref(),
+            Some(crate::hash::sha256_prefixed(b"echo \"before $1\"").as_str())
+        );
+
+        let post_upgrade = entries
+            .iter()
+            .find(|entry| entry.native_slot == "post_upgrade")
+            .expect("post_upgrade entry");
+        assert_eq!(post_upgrade.invocation.args[0].name, "new-version");
+        assert_eq!(
+            post_upgrade.invocation.args[0].value,
+            NativeArgumentValue::NewVersion
+        );
+        assert_eq!(post_upgrade.invocation.args[1].name, "old-version");
+        assert_eq!(
+            post_upgrade.invocation.args[1].value,
+            NativeArgumentValue::OldVersion
+        );
+    }
+
+    #[test]
+    fn arch_native_abi_preserves_alpm_hook_control_artifact() {
+        let hook = br#"
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Path
+Target = usr/share/mime/*
+
+[Action]
+Description = update mime cache
+When = PostTransaction
+Exec = /usr/bin/update-mime-database /usr/share/mime
+Depends = shared-mime-info
+NeedsTargets
+"#;
+
+        let entry = ArchPackage::native_abi_from_alpm_hook(
+            "/usr/share/libalpm/hooks/30-update-mime.hook",
+            hook,
+        );
+
+        assert_eq!(entry.kind, NativeScriptletKind::ControlArtifact);
+        assert_eq!(
+            entry.native_slot,
+            "alpm-hook:/usr/share/libalpm/hooks/30-update-mime.hook"
+        );
+        assert_eq!(entry.primary_lifecycle, NativeLifecyclePath::Trigger);
+        assert_eq!(
+            entry.order.position,
+            NativeTransactionPosition::ControlArtifact
+        );
+        assert_eq!(entry.interpreter, None);
+        assert_eq!(entry.body.bytes, hook);
+
+        let NativeScriptletMetadata::Arch(ArchNativeScriptletMetadata::AlpmHook(meta)) =
+            &entry.metadata
+        else {
+            panic!("expected arch alpm hook metadata");
+        };
+        assert_eq!(meta.triggers.len(), 1);
+        assert_eq!(
+            meta.triggers[0].operations,
+            vec![
+                ArchAlpmHookOperation::Install,
+                ArchAlpmHookOperation::Upgrade,
+            ]
+        );
+        assert_eq!(meta.triggers[0].trigger_type, ArchAlpmHookTriggerType::Path);
+        assert_eq!(
+            meta.triggers[0].targets,
+            vec!["usr/share/mime/*".to_string()]
+        );
+        assert_eq!(
+            meta.action.as_ref().expect("action").when,
+            NativeTransactionPosition::AfterTransaction
+        );
+        assert!(meta.action.as_ref().expect("action").needs_targets);
+    }
+
+    #[test]
+    fn arch_native_abi_falls_back_when_function_extraction_fails() {
+        let install = b"pre_install() {\necho '{' unbalanced\n";
+        let entries = ArchPackage::native_abi_from_install_bytes(install);
+
+        let pre = entries
+            .iter()
+            .find(|entry| entry.native_slot == "pre_install")
+            .expect("pre_install entry");
+
+        assert_eq!(
+            pre.support.reason_code(),
+            Some("arch-install-function-extraction-deferred")
+        );
+
+        let NativeScriptletMetadata::Arch(ArchNativeScriptletMetadata::Install(meta)) =
+            &pre.metadata
+        else {
+            panic!("expected arch install metadata");
+        };
+        assert_eq!(
+            meta.extraction_status,
+            ArchFunctionExtractionStatus::DeferredReview {
+                reason_code: "arch-install-function-extraction-deferred".to_string(),
+            }
+        );
+        assert_eq!(meta.function_body, None);
+    }
+
+    #[test]
+    fn arch_compat_scriptlets_still_return_function_bodies() {
+        let install = r#"
+post_install() {
+    echo "compat body"
+}
+"#;
+
+        let scriptlets = ArchPackage::parse_install_script(install);
+
+        assert_eq!(scriptlets.len(), 1);
+        assert_eq!(scriptlets[0].phase, ScriptletPhase::PostInstall);
+        assert_eq!(scriptlets[0].content, "echo \"compat body\"");
     }
 }
